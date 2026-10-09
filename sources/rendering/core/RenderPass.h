@@ -97,6 +97,10 @@ enum class RenderPass : uint16_t {
     // (glass, particles), after the fog, each fogging itself in its own shader exactly as UE's
     // translucency does. Splitting them is what makes ONE fog application possible at all.
     Main_Transparent,
+    // Ocean G-buffer plan S3/S4, UE's RenderSingleLayerWaterReflections: the water's screen-space
+    // trace (ssr_cs from the water's G-buffer layer), its temporal resolve and the composite that adds
+    // it into scene colour -- after the water draw, before the fog that fogs it.
+    Main_WaterReflection,
     Main_TransparentFog,
     Main_Translucent,
     Main_LightShafts,     // plan A7: UE LightShaftBloom added into scene colour after the transparents
@@ -193,6 +197,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_GlassReflections: return L"GlassReflections";
     case RenderPass::Main_RTDebug: return L"RTDebug";
     case RenderPass::Main_Transparent: return L"Transparent";
+    case RenderPass::Main_WaterReflection: return L"WaterReflection";
     case RenderPass::Main_TransparentFog: return L"TransparentFog";
     case RenderPass::Main_Translucent: return L"Translucent";
     case RenderPass::Main_LightShafts: return L"LightShafts";

@@ -1,7 +1,5 @@
 #define SSR_TEMPORAL_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
-// The plane-reprojection matrices below arrive from a row-major C++ mat4 (mul(v, M) convention).
-#pragma pack_matrix(row_major)
 // Temporal resolve for the screen-space reflection buffer.
 //
 // WHY IT EXISTS. A screen-space ray is violently sensitive to its own start: at a grazing angle the
@@ -39,7 +37,8 @@
 //
 // t0: this frame's raw reflection (premultiplied RGBA, reflection resolution)
 // t1: the previous frame's accumulated reflection -- Deferred[(frame-1)].reflectionHistory
-// t2: gbVelocity (render res); motion = currUv - prevUv
+// t2: gbVelocity (render res); motion = currUv - prevUv. The water's reflection (plan S3) is
+//     resolved AFTER the water draws, so the velocity under a water pixel is the water's own.
 // u0: accumulated reflection -> what the blur and compose consume, AND next frame's history
 
 Texture2D CurrTex : register(t0);
@@ -57,14 +56,6 @@ cbuffer SsrTemporalCB : register(b0)
     float  blendWeight;  // weight of THIS frame; small = long history
     uint   historyValid; // 0 on the first frame after a resize / level switch / stage toggle
     float  clampExpand;  // how much the neighbourhood box may be widened when the camera is still
-    // OCEAN MODE: reproject the water plane's own point under the pixel through last frame's camera.
-    // The ocean's reflection is resolved BEFORE the water draws, so gbVelocity still holds the opaque
-    // background's motion there (the sky's, mostly) -- the wrong parallax for a plane at planeParams.x.
-    uint   planeReproject;
-    float4 planeParams;   // x: plane height (world Y), yzw: camera position
-    float4x4 invViewProj;  // clip -> world, unjittered
-    float4x4 prevViewProj; // world -> previous frame's clip, unjittered
-    float4x4 viewProj;     // world -> THIS frame's clip, unjittered (the motion is the difference of the two projections)
 };
 
 // UE's scale on both velocity tests: a UV motion of 0.01 in one frame is already "fast" for the
@@ -159,47 +150,7 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     }
 
     const float2 uv = (float2(px) + 0.5f) * invTexSize;
-    float2 motion; // currUv - prevUv
-    if (planeReproject != 0u)
-    {
-        // The ray through this pixel (any clip Z in front of the camera gives a point on it; 0.5 is
-        // safely inside under reversed-Z), intersected with the water plane.
-        const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-        const float4 onRay = mul(float4(ndc, 0.5f, 1.0f), invViewProj);
-        const float3 dir = normalize(onRay.xyz / max(abs(onRay.w), 1.0e-8f) * sign(onRay.w) - planeParams.yzw);
-        const float dirY = abs(dir.y) > 1.0e-5f ? dir.y : 1.0e-5f;
-        const float t = (planeParams.x - planeParams.y) / dirY;
-        if (t <= 0.0f)
-        {
-            OutTex[px] = newC; // the ray never meets the plane: nothing to reproject
-            return;
-        }
-        // THE MOTION IS THE DIFFERENCE OF THE SAME POINT'S TWO PROJECTIONS, NOT uv MINUS THE
-        // REPROJECTED POINT. The plane point was rebuilt from a texel centre through the inverse
-        // matrix (a spot 0.2 m in front of a camera ~100 m from the origin, minus the camera,
-        // normalised): projecting it back through the SAME matrix does not land on the texel centre
-        // but hundredths of a texel off, in a rounding pattern. A still camera then resampled its
-        // history bilinearly at that offset every frame, and a long history blurs where the offset
-        // is near half a texel and stays sharp where it is zero -- a lattice of straight-edged
-        // tiles (found on the clouds 2026-09-12, cloud_temporal_cs.hlsl, the identical round trip).
-        // Projecting the point through both matrices and taking the difference cancels the trip:
-        // a still camera's motion is zero bit for bit.
-        const float3 planePoint = planeParams.yzw + dir * t;
-        const float4 prevClip = mul(float4(planePoint, 1.0f), prevViewProj);
-        const float4 currentClip = mul(float4(planePoint, 1.0f), viewProj);
-        if (prevClip.w <= 1.0e-4f || currentClip.w <= 1.0e-4f)
-        {
-            OutTex[px] = newC; // behind last frame's camera
-            return;
-        }
-        const float2 prevProjectedUv = (prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f;
-        const float2 currentProjectedUv = (currentClip.xy / currentClip.w) * float2(0.5f, -0.5f) + 0.5f;
-        motion = currentProjectedUv - prevProjectedUv;
-    }
-    else
-    {
-        motion = VelocityTex.SampleLevel(gSmpLinear, uv, 0).xy;
-    }
+    const float2 motion = VelocityTex.SampleLevel(gSmpLinear, uv, 0).xy; // currUv - prevUv
     const float2 prevUv = uv - motion;
 
     if (any(prevUv < 0.0f) || any(prevUv > 1.0f))
@@ -211,9 +162,8 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     // DISOCCLUSION: does the pixel we are about to read move the way we do? Sampling velocity at
     // the SOURCE answers that with no extra history channel -- a surface that was hidden behind
     // this one last frame carries different motion, so this fires on exactly the newly revealed
-    // band behind a moving occluder. A plane cannot be disoccluded by itself: in plane mode the
-    // source moves as we do by construction.
-    const float2 sourceMotion = planeReproject != 0u ? motion : VelocityTex.SampleLevel(gSmpLinear, prevUv, 0).xy;
+    // band behind a moving occluder.
+    const float2 sourceMotion = VelocityTex.SampleLevel(gSmpLinear, prevUv, 0).xy;
     const float agreement = 1.0f - saturate(length(motion - sourceMotion) * kVelocityScale);
 
     // The box WIDENS when the camera is still and closes to the plain neighbourhood as it moves.

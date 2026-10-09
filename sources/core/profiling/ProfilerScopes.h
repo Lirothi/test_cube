@@ -135,14 +135,16 @@ extern const Profiler::ScopeNameKey kPassReflectionSource;
 extern const Profiler::ScopeNameKey kPassRTTrace;
 extern const Profiler::ScopeNameKey kPassRTResolve;
 extern const Profiler::ScopeNameKey kPassReflectionTemporal;
-extern const Profiler::ScopeNameKey kOceanReflectionTemporal; // the ocean reflection's own resolve (inside Main_Transparent)
+extern const Profiler::ScopeNameKey kWaterReflectionTemporal; // the water reflection's resolve (inside Main_WaterReflection)
 extern const Profiler::ScopeNameKey kPassReflectionBlur;
 extern const Profiler::ScopeNameKey kPassCompose;
 extern const Profiler::ScopeNameKey kPassRTDebug;
 extern const Profiler::ScopeNameKey kPassGlassReflGbuffer;
 extern const Profiler::ScopeNameKey kPassGlassReflections;
 extern const Profiler::ScopeNameKey kPassTransparent;
-extern const Profiler::ScopeNameKey kPassOceanReflection;
+extern const Profiler::ScopeNameKey kPassWaterReflection;  // Main_WaterReflection (ocean G-buffer plan S3/S4)
+extern const Profiler::ScopeNameKey kWaterReflectionTrace; // its ssr_cs dispatch
+extern const Profiler::ScopeNameKey kWaterComposite;       // its composite into scene colour
 extern const Profiler::ScopeNameKey kPassDebugDraw;
 extern const Profiler::ScopeNameKey kPassExposureMetering;
 extern const Profiler::ScopeNameKey kPassTonemap;

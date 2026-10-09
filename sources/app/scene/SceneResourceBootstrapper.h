@@ -163,6 +163,7 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle ueUseRoughnessTexture, ueRoughnessOverride;
     Material::CBFieldHandle invPrevPreExposure;
     Material::CBFieldHandle preExposure;
+    Material::CBFieldHandle originMask;
 
     void Populate(Material* material);
 };
@@ -404,21 +405,11 @@ struct SsrTemporalConstants
     float blendWeight = 0.125f;
     uint32_t historyValid = 0u;
     float clampExpand = 0.5f;
-    // Ocean mode: reproject the WATER PLANE's point under the pixel through last frame's camera instead
-    // of reading gbVelocity (which, when the ocean resolve runs, still holds the opaque background's
-    // motion). 0 for the deferred reflection.
-    uint32_t planeReproject = 0u;
-    float4 planeParams{};    // x: plane height (world Y), yzw: camera position
-    mat4 invViewProj{};      // clip -> world, unjittered
-    mat4 prevViewProj{};     // world -> previous frame's clip, unjittered
-    mat4 viewProj{};         // world -> THIS frame's clip, unjittered: the shader takes the motion as the
-                             // difference of the plane point's two projections (see ssr_temporal_cs.hlsl)
 };
 
 struct SsrTemporalHandles
 {
     Material::CBFieldHandle texSize, invTexSize, blendWeight, historyValid, clampExpand;
-    Material::CBFieldHandle planeReproject, planeParams, invViewProj, prevViewProj, viewProj;
     void Populate(Material* material);
 };
 
@@ -814,6 +805,9 @@ struct SsrPassConstants
     // P16.1: 1 / the factor the SceneColor history was written with (1 = not pre-exposed).
     float invPrevPreExposure = 1.0f;
     float preExposure = 1.0f; // P16.8
+    // Ocean G-buffer plan S3: 1 = trace only where the origin depth differs from the march depth,
+    // i.e. the pixels the water covers (Main_WaterReflection); 0 for the opaque and glass passes.
+    uint32_t originMask = 0u;
 };
 
 struct BlurPassConstants
@@ -1037,7 +1031,7 @@ public:
     void WriteGtaoTemporalConstants(const GtaoFilterConstants& data, uint8_t* dest) const;
     void WriteGtaoUpsampleConstants(const GtaoFilterConstants& data, uint8_t* dest) const;
     std::shared_ptr<Material> GetSsrMaterial() const { return matSSR_; }
-    std::shared_ptr<Material> GetOceanReflectionMaterial() const { return matOceanReflection_; }
+    std::shared_ptr<Material> GetWaterCompositeMaterial() const { return matWaterComposite_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
     std::shared_ptr<Material> GetDebugMaterial() const { return matDebug_; }
     // RW: rt_wind_deform_cs PSO (null on non-RT HW / before Finalize).
@@ -1068,7 +1062,7 @@ public:
     UINT GetPointLightCBSizeBytes() const;
     UINT GetSpotLightCBSizeBytes() const;
     UINT GetSsrCBSizeBytes() const;
-    UINT GetOceanReflectionCBSizeBytes() const;
+    UINT GetWaterCompositeCBSizeBytes() const;
     UINT GetBlurCBSizeBytes() const;
     UINT GetComposeCBSizeBytes() const;
     UINT GetFxaaCBSizeBytes() const;
@@ -1144,7 +1138,7 @@ private:
     std::shared_ptr<Material> matLensFlare_;
     std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;
-    std::shared_ptr<Material> matOceanReflection_;
+    std::shared_ptr<Material> matWaterComposite_; // ocean G-buffer plan S4 (water_composite_cs.hlsl)
     std::shared_ptr<Material> matBlur_;
     std::shared_ptr<Material> matDebug_;
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW

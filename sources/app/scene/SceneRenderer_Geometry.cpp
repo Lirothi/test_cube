@@ -128,6 +128,7 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                         // Plan S1: the water's G-buffer layer, declared at Main_Transparent's `rebind`.
                         renderer->Transition(t.cl, D.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
                         renderer->Transition(t.cl, D.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+                        renderer->Transition(t.cl, D.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
                         renderer->Transition(t.cl, D.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
                         renderer->BindWaterTargets(t.cl);
                     }
@@ -392,7 +393,7 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     // pass-flow S7d: the driver names no resource and no state. Its four points were declared by
     // the Main_Transparent builder from the same decisions it captured here, and the inner graph
     // runs inline on this thread, so the markers resolve to the outer pass's compiled barriers.
-    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [this, renderer, &camera, pts](RenderGraphPassContext sub) {
+    rgTr.AddPass(RenderPass::Transparent_Driver, {}, [renderer, pts](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
@@ -409,10 +410,11 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
                 driver.cl->CopyResource(D.sceneOpaque.Get(), D.scene.Get());
             }
 
-            // 2/3. The ocean reflection compute and the pixel-readable hand-off it always ends on.
-            RecordOceanReflection(renderer, driver.cl, camera, pts);
+            // 2. The copies PS-readable for the water draw. (The reflection compute that used to run
+            // here traces after the draw now, in Main_WaterReflection.)
+            renderer->EmitPoint(driver.cl, pts.pixel);
 
-            // 4. Rebind the forward targets (with the water's G-buffer layer when the water draws).
+            // 3. Rebind the forward targets (with the water's G-buffer layer when the water draws).
             renderer->EmitPoint(driver.cl, pts.rebind);
             if (pts.water)
             {

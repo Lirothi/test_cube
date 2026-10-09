@@ -528,22 +528,29 @@ private:
     struct TransparentPoints
     {
         std::uint32_t copy = 0;    // depth/scene -> COPY_SOURCE, their copies -> COPY_DEST
-        std::uint32_t oceanRead = 0; // the copies -> NPS, HZB, ocean reflection -> UAV
-        std::uint32_t oceanTemporal = 0; // raw reflection NPS, its history UAV, last frame's history NPS, velocity NPS
-        std::uint32_t pixel = 0;   // ...and all three PS-readable for the forward draws
+        std::uint32_t pixel = 0;   // the copies (and the environment) PS-readable for the water draw
         std::uint32_t rebind = 0;  // scene/depth/velocity (+objectID) back to their draw states
         bool copyDepth = false;
         bool copyScene = false;
-        bool oceanReflect = false; // the reflection compute runs (targets + material + descriptors)
-        bool oceanTemporalRun = false; // ...and the temporal resolve after it (ssrTemporal + history ready)
-        // Plan S1: the water draws this frame, so its G-buffer layer (GB0, GB1, GBAux) is a render
-        // target from `rebind` on. The SAME predicate (WaterDrawsThisFrame) decides Main_TransparentFog's
-        // hand-back of those three to their resting state.
+        // Plan S1: the water draws this frame, so its G-buffer layer (GB0, GB1, GB2, GBAux) is a
+        // render target from `rebind` on. The SAME predicate (WaterDrawsThisFrame) decides
+        // Main_WaterReflection's hand-back of those four to their resting state.
         bool water = false;
     };
     bool WaterDrawsThisFrame() const;
-    void RecordOceanReflection(Renderer* r, ID3D12GraphicsCommandList* cl,
-        const Camera& camera, const TransparentPoints& pts);
+    // Ocean G-buffer plan S3/S4: Main_WaterReflection's points and the decisions they were declared
+    // from. `entry` is emitted on every path (it returns the water's G-buffer layer to rest).
+    struct WaterReflectionPoints
+    {
+        std::uint32_t entry = 0;     // layer -> NPS; origin/march depth, HZB, colour history NPS; trace target UAV
+        std::uint32_t temporal = 0;  // raw trace NPS, this frame's history UAV, last frame's NPS
+        std::uint32_t composite = 0; // the reflection to composite NPS, scene UAV
+        bool trace = false;          // the SSR dispatch runs (water drawn + material + targets)
+        bool temporalRun = false;    // ...and its temporal resolve (ssrTemporal + history ready)
+        bool compositeRun = false;   // ...and the composite into scene colour
+    };
+    void Pass_WaterReflection(Renderer* r, RenderGraphPassContext ctx,
+        const Camera& camera, const WaterReflectionPoints& pts);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView, const TransparentPoints& pts);
     void Pass_Translucent(Renderer* r, RenderGraphPassContext ctx,

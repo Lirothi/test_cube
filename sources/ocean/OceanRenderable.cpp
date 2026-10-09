@@ -981,12 +981,9 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     }
     pushSrv(shoreSdfSrv.ptr != 0 ? shoreSdfSrv : fallbackSrv);
 
-    // The temporally resolved reflection when this frame's resolve ran (render::g_oceanReflectionTemporal,
-    // set by the transparent pass's builder before any recording), else the raw buffer.
-    D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSrv =
-        (render::g_oceanReflectionTemporal && deferred.oceanReflectionHistorySRV.ptr != 0) ? deferred.oceanReflectionHistorySRV
-        : (deferred.oceanReflectionSRV.ptr != 0 ? deferred.oceanReflectionSRV : fallbackSrv);
-    pushSrv(oceanReflectionSrv.ptr != 0 ? oceanReflectionSrv : fallbackSrv);
+    // t15 RETIRED (ocean G-buffer plan S4): the reflection is traced after this draw and composited by
+    // Main_WaterReflection. The table is positional, so the slot keeps a readable stand-in.
+    pushSrv(fallbackSrv);
 
     // surf sim injection: t16 height + t17 foam. Fall back so the slots are never garbage; the
     // shader only samples them when surfSimParams.w says a debug view is active (S4 adds the
@@ -1072,13 +1069,13 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
 {
     RenderableObject::ConfigureGraphicsPipeline(renderer, desc);
 
-    // Plan S1 (docs/ocean_gbuffer_ssr_unification_plan.md): the water's G-buffer layer at RT2..RT4,
+    // Plan S1/S4 (docs/ocean_gbuffer_ssr_unification_plan.md): the water's G-buffer layer at RT2..RT5,
     // the order Renderer::BindWaterTargets binds. objectID goes LAST so the slots are the same in both
     // builds and the PS (which never writes it) needs no editor variant.
 #if WITH_EDITOR
-    desc.numRT = 6;
+    desc.numRT = 7;
 #else
-    desc.numRT = 5;
+    desc.numRT = 6;
 #endif
     if (renderer)
     {
@@ -1086,9 +1083,10 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
         desc.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
         desc.rtvFormats[2] = renderer->GetGBuffer0Format();
         desc.rtvFormats[3] = renderer->GetGBuffer1Format();
-        desc.rtvFormats[4] = renderer->GetGBufferAuxFormat();
+        desc.rtvFormats[4] = renderer->GetGBuffer2Format();
+        desc.rtvFormats[5] = renderer->GetGBufferAuxFormat();
 #if WITH_EDITOR
-        desc.rtvFormats[5] = renderer->GetObjectIdFormat();
+        desc.rtvFormats[6] = renderer->GetObjectIdFormat();
 #endif
         desc.dsvFormat = renderer->GetDsvFormat();
     }
@@ -1111,7 +1109,7 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.raster.CullMode = D3D12_CULL_MODE_NONE;
-    // RT5 is the editor object-ID target. Independent blending is required for its zero write
+    // RT6 is the editor object-ID target. Independent blending is required for its zero write
     // mask to apply; otherwise D3D12 replicates RT0's write mask to every bound target and the
     // ocean can overwrite per-pixel selection IDs.
     desc.blend.IndependentBlendEnable = TRUE;
@@ -1120,13 +1118,15 @@ void OceanRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::Gr
     // GB0: ALPHA only (roughness/metal); the opaque albedo under the water is left as it was.
     desc.blend.RenderTarget[2].BlendEnable = FALSE;
     desc.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALPHA;
-    desc.blend.RenderTarget[3].BlendEnable = FALSE;
-    desc.blend.RenderTarget[3].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
-    desc.blend.RenderTarget[4].BlendEnable = FALSE;
-    desc.blend.RenderTarget[4].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    // GB1 normal, GB2 the weighted sky (dead after compose, so the slot is free), GBAux.
+    for (int rt = 3; rt <= 5; ++rt)
+    {
+        desc.blend.RenderTarget[rt].BlendEnable = FALSE;
+        desc.blend.RenderTarget[rt].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    }
 #if WITH_EDITOR
-    desc.blend.RenderTarget[5].BlendEnable = FALSE;
-    desc.blend.RenderTarget[5].RenderTargetWriteMask = 0;
+    desc.blend.RenderTarget[6].BlendEnable = FALSE;
+    desc.blend.RenderTarget[6].RenderTargetWriteMask = 0;
 #endif
 }
 

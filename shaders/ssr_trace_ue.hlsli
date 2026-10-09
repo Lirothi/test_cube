@@ -19,7 +19,7 @@
 //
 // The hit carries NO visibility of its own -- Unreal modulate the resolved colour by the
 // reprojection vignette, the roughness fade and the intensity in SSRTReflections.usf, and the
-// hosts (ssr_cs.hlsl, ocean_reflection_cs.hlsl) now do exactly that. The LogMarch visibility
+// host (ssr_cs.hlsl, which also traces the glass and the water) now does exactly that. The LogMarch visibility
 // ladder (distance fade, grazing fade, thickness fade) that earlier versions of this port routed
 // hits through belongs to the LogMarch, not to UE, and was a large part of why the two
 // techniques could never be compared: they disagreed about MODULATION, not only about the search.

@@ -209,46 +209,17 @@ namespace scene_internal
         float4 csmSdsmParams;         // S15: x = active SDSM partitions, 0 = not SDSM mode
     };
 
-    // MIRRORS the OceanReflectionCB in shaders/ocean_reflection_cs.hlsl. This one is uploaded by
-    // raw memcpy rather than through named field handles, so the offsets have to agree: every
-    // block below is laid out to land on the same 16-byte rows HLSL packs it into.
-    struct OceanReflectionConstants
+    // MIRRORS WaterCompositeCB in shaders/water_composite_cs.hlsl (ocean G-buffer plan S4), uploaded
+    // by raw memcpy: one 16-byte row.
+    struct WaterCompositeConstants
     {
-        mat4 view{};
-        mat4 proj{};
-        mat4 invView{};
-        mat4 invProj{};
-        float depthA = 0.0f;
-        float depthB = 0.0f;
-        float2 screenSize{};
-        float2 invScreenSize{};
-        float2 outputSize{};
-        float3 camPosWS{};
-        float waterHeight = 0.0f;
-        // P13: the ocean plane traces with the same search the deferred SSR pass uses.
-        uint32_t technique = 0u;
-        uint32_t useHzb = 0u;
-        uint32_t hzbMipCount = 1u;
-        uint32_t frameIndexMod8 = 0u;
-        float2 hzbSize{};
-        float2 hzbInvSize{};
-        // Retired by the byte-for-byte UE port (hardcoded 1.0/4.0; the confirm/refine
-        // guard was never UE's). Pads keep the memcpy'd layout at 368 bytes.
-        float _ueRetired0 = 0.0f;
-        float _ueRetired1 = 0.0f;
-        uint32_t _ueRetired2 = 0u;
-        uint32_t _ueRetired3 = 0u;
-        uint32_t ueNumSteps = 8u;
+        float2 invRenderSize{};
+        float preExposure = 1.0f;
         uint32_t pad0 = 0u;
-        uint32_t pad1 = 0u;
-        uint32_t pad2 = 0u;
     };
-
-    // A memcpy'd constant buffer has no field names to bind by, so nothing but this catches a
-    // member added on one side only. 368 = 256 matrices + 48 scalars/vectors + 64 of P13 block.
-    static_assert(sizeof(OceanReflectionConstants) == 368,
-        "OceanReflectionConstants must stay byte-identical to OceanReflectionCB in "
-        "shaders/ocean_reflection_cs.hlsl -- it is uploaded by raw memcpy.");
+    static_assert(sizeof(WaterCompositeConstants) == 16,
+        "WaterCompositeConstants must stay byte-identical to WaterCompositeCB in "
+        "shaders/water_composite_cs.hlsl -- it is uploaded by raw memcpy.");
 
     template <typename T>
     D3D12_GPU_VIRTUAL_ADDRESS UploadFrameCB(Renderer* renderer, const T& data)

@@ -708,6 +708,7 @@
     <None Include="shaders\font_sdf.hlsl" />
     <None Include="shaders\gbuffer.hlsl" />
     <None Include="shaders\gbuffer_common.hlsli" />
+    <None Include="shaders\water_composite_cs.hlsl" />
     <None Include="shaders\wind.hlsli" />
     <None Include="shaders\gbuffer_csm.hlsl" />
     <None Include="shaders\gbuffer_inst.hlsl" />
@@ -723,7 +724,6 @@
     <None Include="shaders\ocean_shore_sdf.hlsl" />
     <None Include="shaders\ocean_surf_sim_cs.hlsl" />
     <None Include="shaders\ocean_foam_simulation.hlsl" />
-    <None Include="shaders\ocean_reflection_cs.hlsl" />
     <None Include="shaders\ocean_surface.hlsl" />
     <None Include="shaders\ocean_surface_surf_sim.hlsli" />
     <None Include="shaders\ocean_surface_runup.hlsli" />

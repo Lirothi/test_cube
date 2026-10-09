@@ -438,10 +438,11 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         // HDR format, the lit-HDR reuse uv in RG16_UNORM (see RenderTargetManager.h note).
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::RtPayload, DeferredSrvSlot::RtPayloadUAV, f, D.rtPayload, D.rtPayloadSRV, D.rtPayloadUAV, sizes.reflectionWidth, sizes.reflectionHeight);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, DXGI_FORMAT_R16G16_UNORM, DeferredSrvSlot::RtPayloadUv, DeferredSrvSlot::RtPayloadUvUAV, f, D.rtPayloadUv, D.rtPayloadUvSRV, D.rtPayloadUvUAV, sizes.reflectionWidth, sizes.reflectionHeight);
-        CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
-        // Its temporal history: same size and format; rests PIXEL like the buffer it resolves, because
-        // its last use in a frame is the water's pixel-shader read (the next frame's compute declares NPS).
-        CreateSrvUavTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflectionHistory, DeferredSrvSlot::OceanReflectionHistoryUAV, f, D.oceanReflectionHistory, D.oceanReflectionHistorySRV, D.oceanReflectionHistoryUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
+        // The water's screen-space reflection (ocean G-buffer plan S3): written, resolved and read by
+        // compute only (Main_WaterReflection), so both it and its history rest NON_PIXEL.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
+        // Its temporal history: same size and format.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflectionHistory, DeferredSrvSlot::OceanReflectionHistoryUAV, f, D.oceanReflectionHistory, D.oceanReflectionHistorySRV, D.oceanReflectionHistoryUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight);
 
         // S15 off-screen glass reflections (reflection res): a glass G-buffer (front-face
         // normal RTV + depth DSV) feeding a second rt_reflections_cs dispatch into glassReflection.
@@ -840,8 +841,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.reflectionScratch.Get(), L"ReflectionScratch", kNps);
         nameRes(D.reflectionHistory.Get(), L"ReflectionHistory", kNps);
         // Sampled by the forward ocean/glass draws, so they rest PIXEL-readable, not NPS.
-        nameRes(D.oceanReflection.Get(), L"OceanReflection", kPs);
-        nameRes(D.oceanReflectionHistory.Get(), L"OceanReflectionHistory", kPs);
+        nameRes(D.oceanReflection.Get(), L"OceanReflection", kNps);
+        nameRes(D.oceanReflectionHistory.Get(), L"OceanReflectionHistory", kNps);
         nameRes(D.glassReflNormal.Get(), L"GlassReflNormal", kNps);
         nameRes(D.glassReflDepth.Get(), L"GlassReflDepth", kNps);
         nameRes(D.glassReflection.Get(), L"GlassReflection", kPs);

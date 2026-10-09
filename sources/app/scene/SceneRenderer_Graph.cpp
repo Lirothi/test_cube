@@ -1859,14 +1859,6 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         TransparentPoints pts{};
         pts.copyDepth = DT.depthCopy.Get() != nullptr;
         pts.copyScene = DT.sceneOpaque.Get() != nullptr;
-        // The ocean reflection compute's FULL readiness, decided once. Both of the early-outs it
-        // used to make itself ran after this pass had declared the read point below.
-        pts.oceanReflect = pts.copyDepth && pts.copyScene && DT.oceanReflection.Get() != nullptr &&
-                           resources_.GetOceanReflectionMaterial() &&
-                           resources_.GetOceanReflectionCBSizeBytes() != 0 &&
-                           DT.sceneOpaqueSRV.ptr != 0 && DT.depthCopySRV.ptr != 0 &&
-                           DT.oceanReflectionUAV.ptr != 0;
-
         // 1. Snapshot depth + opaque colour for the refraction/reflection reads.
         pts.copy = p.usePoint ? *p.usePoint : 0u;
         if (pts.copyDepth)
@@ -1879,66 +1871,14 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             p.Use(DT.scene.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
             p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
         }
-        // 2. RecordOceanReflection's compute — declared only on the frames it runs.
-        p.NextPoint();
-        pts.oceanRead = p.usePoint ? *p.usePoint : 0u;
-        if (pts.oceanReflect)
-        {
-            p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            // P13: the UE search reads the furthest pyramid here too. Already its resting state,
-            // so this declares a fact rather than requesting a barrier -- and it is NOT
-            // re-declared at the next point, because nothing downstream reads the pyramid from a
-            // pixel shader.
-            if (DT.hzb.Get())
-            {
-                p.Use(DT.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            }
-            p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        }
-        // 2b. THE OCEAN REFLECTION'S TEMPORAL RESOLVE (2026-09-11, owner's request). The water's SSR
-        // buffer went to the forward pass raw and boiled under DLSS jitter exactly as the deferred one
-        // did before Main_ReflectionTemporal. Same kernel, same toggle and knobs (ssrTemporal), its own
-        // history at the ocean reflection's size, reprojected by the WATER PLANE's point rather than
-        // gbVelocity: this runs before the water draws, so the velocity buffer still holds the opaque
-        // background's motion -- the wrong parallax for a plane. Decided HERE, in the serial builder,
-        // because the ocean draw (recorded later) binds the history or the raw buffer on the same bit.
-        {
-            const auto& PT = p.renderer->GetDeferredForPrevFrame();
-            const UINT ow = p.renderer->GetOceanReflectionTextureWidth();
-            const UINT oh = p.renderer->GetOceanReflectionTextureHeight();
-            pts.oceanTemporalRun = pts.oceanReflect && frame_->settings.ssrTemporal &&
-                resources_.GetSsrTemporalMaterial() && resources_.GetSsrTemporalCBSizeBytes() != 0u &&
-                DT.oceanReflectionHistory.Get() != nullptr && DT.oceanReflectionHistoryUAV.ptr != 0 &&
-                PT.oceanReflectionHistorySRV.ptr != 0 && DT.oceanReflectionSRV.ptr != 0 && DT.gbSRV[3].ptr != 0;
-            const bool sameSize = oceanHistoryWidth_ == ow && oceanHistoryHeight_ == oh;
-            oceanHistoryValid_ = pts.oceanTemporalRun && oceanHistoryFrames_ > 0u && sameSize;
-            oceanHistoryFrames_ = pts.oceanTemporalRun ? (sameSize ? oceanHistoryFrames_ + 1u : 1u) : 0u;
-            oceanHistoryWidth_ = ow;
-            oceanHistoryHeight_ = oh;
-            render::g_oceanReflectionTemporal = pts.oceanTemporalRun;
-        }
-        p.NextPoint();
-        pts.oceanTemporal = p.usePoint ? *p.usePoint : 0u;
-        if (pts.oceanTemporalRun)
-        {
-            const auto& PT = p.renderer->GetDeferredForPrevFrame();
-            p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            p.Use(DT.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            p.Use(PT.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            p.Use(DT.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // bound, unread in plane mode
-        }
-        // 3. All three become PS-readable for the forward draws, on every path.
+        // 2. The copies become PS-readable for the water draw, on every path. (The reflection
+        // compute that used to sit between the copy and this point traces after the draw now, in
+        // Main_WaterReflection, from the water's G-buffer layer.)
         p.NextPoint();
         pts.pixel = p.usePoint ? *p.usePoint : 0u;
         if (frame_->skybox) frame_->skybox->DeclareEnvironment(p, kSrvAll);
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (pts.oceanTemporalRun)
-        {
-            p.Use(DT.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        }
         // Volumetric fog (plan A5): the ocean, glass and particles bind the integrated volume EVERY
         // frame (their tables must stay populated; the shaders gate on fogVolumeParams.x), so it is
         // declared PS-readable every frame too -- a descriptor over a NON_PIXEL resource is what GBV
@@ -1966,7 +1906,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
                 frame_->ocean->SetCloudShadow(mat4{}, float4(0.0f, 0.0f, 0.0f, 0.0f), {});
             }
         }
-        // 4. Rebind the forward targets. The fan-out chunks re-apply the velocity/objectID
+        // 3. Rebind the forward targets. The fan-out chunks re-apply the velocity/objectID
         // pair per chunk; same states, so one registration covers them.
         p.NextPoint();
         pts.rebind = p.usePoint ? *p.usePoint : 0u;
@@ -1977,18 +1917,20 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         p.Use(DT.objectID.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
 #endif
         // Plan S1 (docs/ocean_gbuffer_ssr_unification_plan.md): the water's G-buffer layer, UE's
-        // SingleLayerWater. Lighting and compose are done with these three, so the water overwrites
-        // them where it covers the opaque scene. Main_TransparentFog returns them to their resting
-        // state -- the out-of-graph peeks (texture inspector, debug preview) borrow from there.
+        // SingleLayerWater. Lighting and compose are done with these four, so the water overwrites
+        // them where it covers the opaque scene. Main_WaterReflection reads them and returns them
+        // to their resting state -- the out-of-graph peeks (texture inspector, debug preview)
+        // borrow from there.
         pts.water = WaterDrawsThisFrame();
         if (pts.water)
         {
             p.Use(DT.gb0.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             p.Use(DT.gb1.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
+            p.Use(DT.gb2.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
             p.Use(DT.gbAux.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         }
         p.Use(DT.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        // 5. Per-object reads (ocean displacement, particle sim buffers), on fan-out workers.
+        // 4. Per-object reads (ocean displacement, particle sim buffers), on fan-out workers.
         if (frame_->objects)
         {
             p.NextPoint();
@@ -2005,6 +1947,92 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         };
     });
 
+    // Ocean G-buffer plan S3/S4 (docs/ocean_gbuffer_ssr_unification_plan.md): the water's reflection,
+    // traced AFTER the water draw from its G-buffer layer, resolved and composited into scene colour
+    // before the fog. Its own OUTER pass and not points inside Main_Transparent: the trace reads the
+    // depth the water wrote, a DEPTH_WRITE -> shader-read flip that cannot sit between that pass's
+    // fan-out water chunks (the same reason Main_TransparentFog is a pass of its own, see below).
+    auto pWater = rg.AddPass2(RenderPass::Main_WaterReflection, { pTransp },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        RenderGraphPassContext& p = ctx;
+        const auto& DW = p.renderer->GetDeferredForFrame();
+        const auto& PW = p.renderer->GetDeferredForPrevFrame();
+        WaterReflectionPoints pts{};
+        const bool water = WaterDrawsThisFrame();
+        const auto ssr = resources_.GetSsrMaterial();
+        pts.trace = water && ssr && ssr->GetPipelineState() && resources_.GetSsrCBSizeBytes() != 0u &&
+                    DW.depthCopy.Get() != nullptr && DW.depthCopySRV.ptr != 0 &&
+                    DW.oceanReflection.Get() != nullptr && DW.oceanReflectionUAV.ptr != 0 &&
+                    PW.sceneSRV.ptr != 0;
+        // The resolve, with its own history at the water reflection's size (same rules as the opaque one).
+        {
+            const auto temporal = resources_.GetSsrTemporalMaterial();
+            const UINT ow = p.renderer->GetOceanReflectionTextureWidth();
+            const UINT oh = p.renderer->GetOceanReflectionTextureHeight();
+            pts.temporalRun = pts.trace && frame_->settings.ssrTemporal &&
+                temporal && temporal->GetPipelineState() && resources_.GetSsrTemporalCBSizeBytes() != 0u &&
+                DW.oceanReflectionHistory.Get() != nullptr && DW.oceanReflectionHistoryUAV.ptr != 0 &&
+                PW.oceanReflectionHistorySRV.ptr != 0 && DW.oceanReflectionSRV.ptr != 0;
+            const bool sameSize = oceanHistoryWidth_ == ow && oceanHistoryHeight_ == oh;
+            oceanHistoryValid_ = pts.temporalRun && oceanHistoryFrames_ > 0u && sameSize;
+            oceanHistoryFrames_ = pts.temporalRun ? (sameSize ? oceanHistoryFrames_ + 1u : 1u) : 0u;
+            oceanHistoryWidth_ = ow;
+            oceanHistoryHeight_ = oh;
+        }
+        const auto composite = resources_.GetWaterCompositeMaterial();
+        pts.compositeRun = pts.trace && composite && composite->GetPipelineState() &&
+                           resources_.GetWaterCompositeCBSizeBytes() != 0u && DW.sceneUAV.ptr != 0;
+
+        // 1. The layer back to rest (every frame the water drew -- also the frames nothing traces), and
+        // the trace's reads and target.
+        pts.entry = p.usePoint ? *p.usePoint : 0u;
+        if (water)
+        {
+            p.Use(DW.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.gb2.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.gbAux.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        if (pts.trace)
+        {
+            p.Use(DW.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.depthCopy.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            if (DW.hzb.Get()) { p.Use(DW.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+            p.Use(DW.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(PW.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.oceanReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
+        // 2. The resolve.
+        p.NextPoint();
+        pts.temporal = p.usePoint ? *p.usePoint : 0u;
+        if (pts.temporalRun)
+        {
+            p.Use(DW.oceanReflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            p.Use(DW.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            p.Use(PW.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        // 3. The composite -- and, whether or not it runs, both reflection targets back to rest.
+        p.NextPoint();
+        pts.composite = p.usePoint ? *p.usePoint : 0u;
+        if (pts.trace)
+        {
+            p.Use(DW.oceanReflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        if (pts.temporalRun)
+        {
+            p.Use(DW.oceanReflectionHistory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        if (pts.compositeRun)
+        {
+            p.Use(DW.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        }
+        return [this, renderer, pts](RenderGraphPassContext c) {
+            CPU_SCOPE(ProfilerScopes::kPassWaterReflection);
+            Pass_WaterReflection(renderer, c, *frame_->camera, pts);
+        };
+    });
+
     // B6.1: the alpha-blended forward draws, split out of Main_Transparent so that a screen-space fog
     // pass can sit between the two. Glass and particles neither write depth nor sit in the depth buffer,
     // so that pass cannot reach them -- they carry fog in their own shaders, as UE's translucency does,
@@ -2015,7 +2043,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
     // read and back -- a real state change, which the barrier compile expresses between passes but
     // not between two groups of fan-out chunks inside one (those resolve against a single current
     // point and can only ask for states already canonical there).
-    auto pFog = rg.AddPass2(RenderPass::Main_TransparentFog, { pTransp }, /*mtDeps=*/{},
+    auto pFog = rg.AddPass2(RenderPass::Main_TransparentFog, { pWater }, /*mtDeps=*/{},
         { { D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE },
           { D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE },
           { D.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET } },
@@ -2050,18 +2078,6 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             {
                 ctx.Use(skyAtmosphere_.AerialResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             }
-            // Plan S1 HAND-BACK: the water's G-buffer layer, a render target since Main_Transparent's
-            // `rebind`, back to its resting state. Here and not in Main_Transparent because a state
-            // change after that pass's fan-out water chunks is not expressible inside it (see this
-            // pass's header); this pass's point is emitted unconditionally. Moves to the water
-            // reflection pass when S3 adds it between the two.
-            if (WaterDrawsThisFrame())
-            {
-                const auto& DW = ctx.renderer->GetDeferredForFrame();
-                ctx.Use(DW.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                ctx.Use(DW.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                ctx.Use(DW.gbAux.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            }
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassTransparent);
@@ -2079,7 +2095,6 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         if (frame_->skybox) { frame_->skybox->DeclareEnvironment(p, kSrvAll); }
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        p.Use(DT.oceanReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         if (DT.fogIntegrated.Get())
         {
             p.Use(DT.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

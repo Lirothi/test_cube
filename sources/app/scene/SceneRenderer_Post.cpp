@@ -532,6 +532,10 @@ SceneRenderer::DebugTexPick SceneRenderer::PickDebugTexTarget(
     case 9: return { D.gb1.Get(), D.gbSRV[1] };
     case 10: return { D.gbAux.Get(), D.gbAuxSRV };
     case 11: return { D.gbAux.Get(), D.gbAuxSRV };
+    // Plan S3: the water's raw screen-space trace, ALPHA = did the ray hit (reflection resolution), and
+    // GB0 ALPHA = the packed roughness the water traced with (metal 0, so it reads as ~roughness).
+    case 12: return { D.oceanReflection.Get(), D.oceanReflectionSRV };
+    case 13: return { D.gb0.Get(), D.gbSRV[0] };
     default: return { D.shadow, D.shadowSRV }; // S3.5: non-owning alias, already a raw pointer
     }
 }
@@ -575,7 +579,8 @@ void SceneRenderer::Pass_Debug(Renderer* renderer, RenderGraphPassContext ctx,
         cb.depthStretch = depthLike ? 1u : 0u;
         // Reflection hit mask / water reflection weight are ALPHA, the normal is colour, and GBAux.b is
         // the shading model x5 (water = white). Everything else shows red.
-        cb.channel = (target == 8 || target == 11) ? 3u : (target == 9) ? 4u : (target == 10) ? 2u : 0u;
+        cb.channel = (target == 8 || target == 11 || target == 12 || target == 13) ? 3u
+                   : (target == 9) ? 4u : (target == 10) ? 2u : 0u;
         cb.gain = (target == 10) ? 5.0f : 1.0f;
         {
             auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(

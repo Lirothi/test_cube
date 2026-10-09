@@ -108,9 +108,9 @@ inline void ApplyUeSsrQualityPreset(UeSsrSettings& settings, UeSsrQualityPreset 
     }
 }
 
-// The clamped numbers the shaders actually receive. Two passes trace with this tracer now -- the
-// deferred SSR dispatch and the ocean's planar reflection -- and a second copy of these clamps is
-// a second thing to drift, so the resolve lives beside the settings it resolves.
+// The clamped numbers the shaders actually receive. Three dispatches trace with this tracer -- the
+// deferred SSR, the glass and the water (Main_WaterReflection) -- and a second copy of these clamps
+// is a second thing to drift, so the resolve lives beside the settings it resolves.
 // Deliberately carries NO defaults: ResolveUeSsrSettings assigns every field, and a second set of
 // initializers here would be a second place for a default to drift out of step with UeSsrSettings
 // above -- which is the only place a default actually lives.
@@ -139,16 +139,6 @@ inline ResolvedUeSsrSettings ResolveUeSsrSettings(const UeSsrSettings& s)
     const float maxRoughness = std::clamp(s.maxRoughness, 0.01f, 1.0f);
     r.roughnessMaskScale = (-2.0f / maxRoughness) * (s.glossyRays ? 1.0f : 2.0f);
     return r;
-}
-
-// SSRTReflections.usf collapses the whole multi-ray budget into ONE mirror ray below roughness 0.1
-// and caps that ray at 24 steps. A reflector that IS a plane is always that case, so a pass which
-// traces a plane resolves the rule here instead of carrying a ray count it can never use into the
-// shader. Same arithmetic as the roughness branch in ssr_cs.hlsl -- keep the two in step.
-inline uint32_t UeSsrMirrorRaySteps(const ResolvedUeSsrSettings& r)
-{
-    return (r.glossyRays != 0u && r.numRays > 1u) ? std::min(r.numSteps * r.numRays, 24u)
-                                                  : r.numSteps;
 }
 
 // P7 -- global analytic aerial perspective. SHIPS DISABLED: it is a real image change, and this

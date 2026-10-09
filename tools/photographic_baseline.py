@@ -43,7 +43,7 @@ CLIP_LEVEL = 254
 PROFILED_ROWS = [
     "CPU.Frame", "GPU.Frame",
     "Pass_Lighting", "Pass_Compose", "Pass_Tonemap", "Pass_Skybox",
-    "Pass_OceanReflection", "Pass_RTReflections", "Pass_GlassReflections",
+    "Pass_WaterReflection", "Pass_RTReflections", "Pass_GlassReflections",
     "Pass_Transparent", "Pass_VsmPageRender", "Ocean.Surface",
     "RenderObjectBatch", "ExecuteBundles",
 ]

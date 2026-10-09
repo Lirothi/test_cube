@@ -91,7 +91,6 @@ void SceneRenderer::Reset()
     oceanHistoryFrames_ = 0u;
     oceanHistoryWidth_ = 0u;
     oceanHistoryHeight_ = 0u;
-    render::g_oceanReflectionTemporal = false;
     ssrSceneColorHistoryValid_ = false;
     ssrSceneColorHistoryFrames_ = 0u;
     ssrSceneColorHistoryWidth_ = 0u;

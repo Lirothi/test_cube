@@ -33,14 +33,19 @@ struct OceanRenderConfig
     float sssHeightBias = 0.0f;
     float sssFadeDistance = 6.0f;
     float horizonFogDistanceScale = 2.5f;
-    float reflectionNormalStrength = 0.05f;
+    // How far the water's reflection normal is pulled toward +Y (1 = a flat mirror). ONE normal for both
+    // halves of the reflection: the sky sample and, since the ocean G-buffer plan's S3, the screen-space
+    // trace (GB1). Owner's call (2026-10-10): one knob, 0.1. Measured on wind_test's lagoon: higher
+    // values bring back the far beach's reflection (0.5 ~ the old plane trace, 1 a crisp mirror) but
+    // also flatten the sky's ripples.
+    float reflectionNormalStrength = 0.1f;
     // Horizon pull for the SKY reflection ray only (skyParams.w -> OceanSkyReflectDir). 1 = off,
     // which is the shipped default so an existing level looks byte-identical; below 1 compresses
     // the ray's Y so the water samples the band near the horizon instead of swinging into the
     // zenith. It exists because a clear-sky HDRI's dark zenith, sampled across a wave's facets,
     // reads as hard dark streaks along the crests — and IblClampToSharp's one-sided guard cancels
     // the prefilter blur exactly there (full reasoning in ocean_surface_surf_sim.hlsli). ~0.4-0.6 is
-    // the useful range; the planar reflection and the land IBL are untouched.
+    // the useful range; the screen-space reflection and the land IBL are untouched.
     float reflectionSkyHorizonPull = 1.0f;
     // How much of the sun still lights the water BODY (deep scatter, subsurface glow, diffuse) when
     // the sun sits on the horizon -- the floor of SunBodyEntry (ocean_surface_common.hlsli), which

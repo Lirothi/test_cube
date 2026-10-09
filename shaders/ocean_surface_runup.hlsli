@@ -121,7 +121,8 @@ Texture2D ShoreDepthTexture : register(t13);
 // window it has an answer everywhere. Nothing reads it for foam, run-up or normals: those want
 // DEPTH, which is what the shore map above is for.
 Texture2D ShoreSdfTexture : register(t14);
-Texture2D OceanReflectionTexture : register(t15);
+// t15 RETIRED (plan S4): the screen-space reflection is traced after this draw and composited by
+// Main_WaterReflection. The table is positional, so the slot stays and is filled with a stand-in.
 RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
@@ -1576,7 +1577,7 @@ float3 Specular(const LightingInput li, const BrunetonInputs bi, float roughness
 }
 
 // The normal the reflection is taken about: the shading normal tilted toward +Y by the reflection
-// normal strength. Also what this surface leaves in GB1 (OceanGBuffer, plan S1).
+// normal strength. The screen-space trace starts from the same one (GB1, OceanGBuffer, plan S3).
 float3 OceanReflectionNormal(const LightingInput li)
 {
     float reflectionNormalStrength = saturate(heightFogParams.w);
@@ -1604,13 +1605,9 @@ float3 Reflection(const LightingInput li, float roughness)
     {
         skySample = SkyboxTexture.SampleLevel(LinearClampSampler, reflectDir, roughness * kSkyRoughMaxMip).rgb * skyParams.x;
     }
-    float2 reflectionUV = li.screenUV + OceanReflectionUvOffset(li, adjustedNormal);
-    float edgeFade = OceanReflectionEdgeFade(reflectionUV);
-    // P16.1: the planar reflection is rendered from scene colour and is pre-exposed too.
-    float4 oceanReflection = OceanReflectionTexture.SampleLevel(LinearClampSampler, saturate(reflectionUV), 0);
-    oceanReflection.rgb /= max(skyParams.z, 1.0e-8f);
-    float visibility = saturate(oceanReflection.a) * edgeFade;
-    return oceanReflection.rgb * edgeFade + skySample * (1.0f - visibility);
+    // Plan S4: the sky alone. The screen-space hit replaces it later, in water_composite_cs.hlsl,
+    // using the weight and this very sample (GB2) that the G-buffer layer carries there.
+    return skySample;
 }
 
 float3 RefractionCoords(float refractionStrength, float4 positionNDC, float viewDepth, float3 normal)
@@ -1755,6 +1752,7 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
     gb.reflectionNormal = OceanReflectionNormal(macroLi);
     gb.reflectionRoughness = roughness;
     gb.reflectionWeight = fresnel * (1.0f - foamData.coverage.x);
+    gb.reflectionSky = reflected;
 
     // P7. The ocean's OWN horizon fade and the global aerial perspective are the same effect
     // authored twice, so exactly one of them runs. With fog off (density 0) this is byte-for-byte
@@ -1783,16 +1781,17 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
     return color;
 }
 
-// Plan S1: RT2..RT4 are the water's G-buffer layer (OceanGBuffer). The editor's objectID target sits
-// AFTER them (RT5, editor builds only) with a zero write mask and no output here, so one PS serves
-// both builds.
+// Plan S1/S4: RT2..RT5 are the water's G-buffer layer (OceanGBuffer). The editor's objectID target
+// sits AFTER them (RT6, editor builds only) with a zero write mask and no output here, so one PS
+// serves both builds.
 struct PSOut
 {
     float4 color : SV_Target0;
     float2 velocity : SV_Target1;
     float4 gb0 : SV_Target2;
     float4 gb1 : SV_Target3;
-    float4 gbAux : SV_Target4;
+    float4 gb2 : SV_Target4;
+    float4 gbAux : SV_Target5;
 };
 
 [earlydepthstencil]
@@ -2148,6 +2147,7 @@ PSOut PSMain(VSOutput input)
     o.velocity = motion;
     o.gb0 = OceanGBuffer0(gb);
     o.gb1 = OceanGBuffer1(gb);
+    o.gb2 = OceanGBuffer2(gb, skyParams.z);
     o.gbAux = OceanGBufferAux(gb);
     return o;
 }

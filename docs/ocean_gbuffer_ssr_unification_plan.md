@@ -1,7 +1,7 @@
 # План: океан в G-buffer и единый SSR-проход (схема UE SingleLayerWater)
 
-Дата: 2026-09-12, сверено с кодом 2026-10-09 (что поправлено — §8). Статус: **S0 + S1 DONE (2026-10-09, не
-закоммичено), дальше S2.**
+Дата: 2026-09-12, сверено с кодом 2026-10-09 (что поправлено — §8). Статус: **S0 + S1 DONE и закоммичены (`1e4c200`);
+S3 + S4 + почти весь S5 DONE 2026-10-10 (не закоммичено); S2 отложен по замеру; осталось S6.**
 Родился из разговора 11–12.09 про два SSR-пасса, `kShadingModelWater` и «вертексный шейдер воды один раз».
 Референс — UE `SingleLayerWaterRendering.cpp` (есть в дропе, `D:\Programming\ue_strip\Source\Runtime\Renderer\Private\`)
 и `Shaders/Private/SingleLayerWaterComposite.usf`, `SSRT/SSRTReflections.usf`.
@@ -194,6 +194,13 @@ BuildLists). Indirect-диспатча для CS в движке нет (§2) �
 тем более без неё: full-screen dispatch с ранним выходом по ID, замерить; UE тайлят, и при камере над сушей это
 отличает 0.00 от 0.05 мс.
 
+> **S2 ОТЛОЖЕН ПО ЗАМЕРУ (2026-10-10).** Первый срез — полноэкранные диспатчи с ранним выходом — и есть то,
+> что легло в S3/S4. Цена на трёх камерах S0: трейс 0.015–0.017 мс (не-вода выходит по маске глубины до
+> трейса), композит 0.012 мс (выход по ID). Тайлинг сэкономил бы ≤ 0.01 мс, а стоит indirect-диспатча для CS,
+> которого в движке нет (command signature + классификация + args) — не окупается. Когда воды в кадре нет,
+> `WaterDrawsThisFrame()` = false и проход не делает ничего (0.00 и без тайлов). Вернуться, если вода станет
+> маленькой частью большого разрешения (4K) и композит вырастет.
+
 **S3 — `Main_WaterReflection` + SSR(water) = вторая инвокация `ssr_cs` (1.5 дня).** Новый внешний проход между
 `Main_Transparent` и `Main_TransparentFog` (`RenderPass` + строка имени + профайлер-скоуп). Объявляет: depth NPS
 (OriginDepth), `depthCopy`/`sceneOpaque`/HZB/`gb0`/`gb1`/`gbAux`/`gbVelocity` NPS, `oceanReflection` UAV → NPS,
@@ -222,10 +229,54 @@ RENDER_TARGET и depth PSR — хвост выходит сам.
 `--sweep` в одном процессе, чтобы кадры шли подряд; см. §7); при SSR on — глазами, ожидаемые отличия только по
 параллаксу волн/берегу.
 
+> **S3 + S4 DONE 2026-10-10 (одним инкрементом: S3 без S4 оставил бы PS читать отражение, которое считается
+> уже после него).** Что легло в код и чем отличается от текста выше:
+> * **`Main_WaterReflection`** (`RenderPass.h`, между `Main_Transparent` и `Main_TransparentFog`; билдер в
+>   `SceneRenderer_Graph.cpp`, тело `SceneRenderer::Pass_WaterReflection` в `SceneRenderer_Reflections.cpp`).
+>   Три точки, все эмитятся всегда: `entry` (слой воды GB0/GB1/GB2/GBAux → NPS — сюда переехал возврат из
+>   `Main_TransparentFog`; глубина после воды, копия, HZB, light, прошлая сцена, velocity → NPS; цель трейса →
+>   UAV), `temporal`, `composite` (обе цели отражения → NPS при любом раскладе, scene → UAV).
+> * **Трейс** — `ssr_cs` с новым полем CB **`originMask`** (бывший `uePad0`): маска воды — **неравенство глубин**
+>   (`OriginDepth` после воды ≠ `Depth`-копия до неё; тот же признак, что у `fog_apply.hlsl`), а не ID из
+>   GBAux — t8 и правка позиционной таблицы не понадобились. t0 light, t1 GB1, t2 `depthCopy`, t3 `depth`,
+>   t4 HZB, t5 прошлая сцена, t6 velocity, t7 GB0; выход — `oceanReflection` (его размер, ручка `oceanResolution`).
+> * **Резолв** — `ssr_temporal_cs` без плоскостной ветки (удалены `planeReproject/planeParams/invViewProj/
+>   prevViewProj/viewProj` везде), репроекция по `gbVelocity` воды. История — те же `oceanHistory*_`.
+> * **Композит — НЕ как в UE и не как в тексте выше.** Небо осталось в PS воды: `Reflection()` возвращает только
+>   кубик, и PS кладёт в **GB2** (после compose мёртв, R11G11B10F) ровно то, что добавил: `W · sky · preExposure`.
+>   `water_composite_cs.hlsl`: `scene += W·preExposure·ssr.rgb − ssr.a·GB2` для ID 3. Без попадания SSR кадр —
+>   это вывод PS бит в бит **по построению** (паритетный A/B из §7 стал не нужен), код неба в одном месте,
+>   нормаль/roughness из G-buffer для кубика не квантуются. t15 у PS снят (слот позиционный — в нём теперь
+>   `sceneOpaque`), UV-сдвиг и `EdgeFade` планарного отражения удалены.
+> * **Нормаль трейса = нормаль неба, ОДНА ручка `reflectionNormalStrength`, дефолт 0.1** (решение владельца
+>   2026-10-10; дефолт в коде был 0.05, в пресете уже 0.1). GB1 = `OceanReflectionNormal`. Цена, измеренная перед
+>   решением: на скользящих углах трейс из почти полной волновой нормали разбрасывает лучи мимо узкой полосы
+>   берега — золотые блики дальнего пляжа в лагуне (камера уровня) слабее, чем в S0; маска попаданий
+>   (`debug.tex:12`) там — редкие точки, roughness воды ~0.03 (`debug.tex:13`). Серия на лагуне: 0.5 ≈ S0, 1.0 —
+>   чёткое зеркало, но та же ручка уплощает и рябь неба. Отдельная ручка для трейса пробовалась (0.5) и
+>   убрана. A/B: `--set=ocean.reflectionNormalStrength:` (новый ключ). Если вернуться к бликам: трейс из
+>   макро-нормали (у runup она есть, у surf_sim — нет) вместо второй ручки.
+> * Канон `oceanReflection`/`oceanReflectionHistory` → **NPS** (пиксельных читателей больше нет); PSR-объявления
+>   в `Main_Transparent` и `Main_Translucent` удалены.
+> * Удалено: `ocean_reflection_cs.hlsl` (и запись в check_shaders/vcxproj/filters), `RecordOceanReflection`,
+>   `OceanReflectionConstants`, материал ocean reflection, `UeSsrMirrorRaySteps`, точки `oceanRead/oceanTemporal`,
+>   `TransparentPoints::oceanReflect/oceanTemporalRun`, `render::g_oceanReflectionTemporal`; скоупы
+>   `Pass_OceanReflection*` → `Pass_WaterReflection`, `WaterReflection.Trace/Temporal/Composite`.
+> * Дебаг-блит: `debug.tex:12` — маска попаданий трейса воды (alpha `oceanReflection`), `:13` — GB0.a (≈ roughness).
+> * **Цена** (Release, те же камеры S0, мс GPU; S0 → после): копии+трейс+резолв в драйвере 0.053–0.054 →
+>   драйвер 0.022–0.024 + `Pass_WaterReflection` 0.053–0.063 (трейс 0.015–0.017, резолв 0.016–0.020, композит
+>   0.012–0.013). Итого ≈ **+0.02–0.03 мс**: трейс подешевел вдвое, добавились композит и барьеры прохода.
+> * **Проверено:** dxc 112/112 (+ отладочные варианты воды); три конфига; Debug `--scene-stress-gbv=20
+>   --barrier-cmp` — CLEAN, `barrier_diag.log` нет; Release `--scene-stress=150` — CLEAN; кадры трёх камер —
+>   берег и горизонт до/после совпадают на глаз (там отражается небо); лагуна при 0.1 — см. пункт про нормаль.
+
 **S5 — Уборка (0.5 дня).** `g_oceanReflectionTemporal` уходит (`RenderConstants.h:71`, `SceneRenderer.cpp:94`,
 `OceanRenderable.cpp:984-987` — PS воды больше не биндит отражение), TextureDebugViewer (`oceanReflection`
 остаётся как выход SSR(water)), профайлер-скоупы (`kPassOceanReflection`, `kOceanReflectionTemporal`),
 документация, память `ocean-reflection-temporal` → устарело.
+
+> **S5 почти весь сделан внутри S3/S4** (флаг, скоупы, описания в TextureDebugViewer, комментарии про
+> «planar reflection», память). Осталось по вкусу: переименовать `oceanReflection*`/`oceanHistory*` в `water*`.
 
 **S6 — Бонусы, отдельными шагами.** RT-отражения на воде (`rt_trace` по ID 3 — та же «вторая
 инвокация»); SSGI (Part D, не начат) игнорирует ID 3; дебаг-вью нормалей/roughness воды; единый
@@ -243,6 +294,9 @@ RENDER_TARGET и depth PSR — хвост выходит сам.
   рефракции. Композит ничего не пересчитывает.
 * **Точность W.** `gbAux` — 8 бит на канал: ошибка W ≤ 1/510, т.е. до 0.2 % от `reflected`. На паритете S4 это
   может оказаться видимым на ярком небе в отражении у горизонта (W ~ 1); если так — отдельная R16-цель под W.
+* **Точность GB2** (S4: взвешенное небо в R11G11B10F): ошибка округления ≤ 0.4 % (R, G) и ≤ 0.8 % (B) от неба
+  там, где SSR его заменяет (`ssr.a·GB2`). Без попадания композит не трогает пиксель, так что открытое море
+  точное; на глаз на трёх камерах не видно.
 * **Roughness воды** для размытия SSR: sigma → roughness → `gb0.a` (5 бит, шаг 1/31); mirror-случай < 0.1 = один
   луч, как сейчас у плоскости. Порог `ssr.maxRoughness` работает и на воду.
 * **Барьеры.** `scene`: RENDER_TARGET → UAV (композит) → RENDER_TARGET (`Main_TransparentFog`) — две транзакции
@@ -267,7 +321,8 @@ S1 0.75 + S2 0.5 + S3 1.5 + S4 0.75–1.25 + S5 0.5 = **4–4.5 дня с гей
 
 ## 7. Гейты
 
-* Паритет S4 при SSR off — на обеих поверхностях (`--ocean-surf-sim-shore`, `--ocean-runup-shore`) и с туманом,
+* ~~Паритет S4 при SSR off~~ — снят дизайном S4: без попадания SSR композит добавляет 0, и кадр — это вывод PS
+  бит в бит. Исходная формулировка: паритет при SSR off — на обеих поверхностях (`--ocean-surf-sim-shore`, `--ocean-runup-shore`) и с туманом,
   **A/B в одном процессе** (`--sweep` по рантайм-переключателю): между двумя прогонами на wind_test пол `--shot`
   10–13 % пикселей (S0), и пиксельная метрика там не различает ничего. Пол мерить тем же `--sweep` с двумя
   одинаковыми значениями.

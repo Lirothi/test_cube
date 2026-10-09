@@ -235,6 +235,7 @@ void SceneSsrCBHandles::Populate(Material* material)
     ueRoughnessOverride = material->ComputeCB0FieldHandle("ueRoughnessOverride");
     invPrevPreExposure = material->ComputeCB0FieldHandle("invPrevPreExposure");
     preExposure = material->ComputeCB0FieldHandle("preExposure");
+    originMask = material->ComputeCB0FieldHandle("originMask");
 }
 
 void SceneBlurCBHandles::Populate(Material* material)
@@ -758,14 +759,12 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         matSSR_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
-    if (!matOceanReflection_)
+    if (!matWaterComposite_)
     {
         Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/ocean_reflection_cs.hlsl";
+        cd.shaderFile = L"shaders/water_composite_cs.hlsl";
         cd.csEntry = "CSMain";
-        cd.defines.emplace_back("SSR_LOGMARCH_OPTIMIZED", "1");
-        cd.defines.emplace_back("SSR_LOGMARCH_BATCH4", "1");
-        matOceanReflection_ = mm->GetOrCreateCompute(renderer, cd);
+        matWaterComposite_ = mm->GetOrCreateCompute(renderer, cd);
     }
 
     if (!matBlur_)
@@ -963,9 +962,9 @@ UINT SceneResourceBootstrapper::GetSsrCBSizeBytes() const
     return matSSR_ ? matSSR_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
-UINT SceneResourceBootstrapper::GetOceanReflectionCBSizeBytes() const
+UINT SceneResourceBootstrapper::GetWaterCompositeCBSizeBytes() const
 {
-    return matOceanReflection_ ? matOceanReflection_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
+    return matWaterComposite_ ? matWaterComposite_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
 UINT SceneResourceBootstrapper::GetBlurCBSizeBytes() const
@@ -1320,11 +1319,6 @@ void SsrTemporalHandles::Populate(Material* material)
     blendWeight = material->ComputeCB0FieldHandle("blendWeight");
     historyValid = material->ComputeCB0FieldHandle("historyValid");
     clampExpand = material->ComputeCB0FieldHandle("clampExpand");
-    planeReproject = material->ComputeCB0FieldHandle("planeReproject");
-    planeParams = material->ComputeCB0FieldHandle("planeParams");
-    invViewProj = material->ComputeCB0FieldHandle("invViewProj");
-    prevViewProj = material->ComputeCB0FieldHandle("prevViewProj");
-    viewProj = material->ComputeCB0FieldHandle("viewProj");
 }
 
 UINT SceneResourceBootstrapper::GetSsrTemporalCBSizeBytes() const
@@ -1342,11 +1336,6 @@ void SceneResourceBootstrapper::WriteSsrTemporalConstants(const SsrTemporalConst
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.blendWeight, d.blendWeight, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.historyValid, d.historyValid, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.clampExpand, d.clampExpand, dest);
-    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.planeReproject, d.planeReproject, dest);
-    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.planeParams, d.planeParams, dest);
-    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.invViewProj, d.invViewProj, dest);
-    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.prevViewProj, d.prevViewProj, dest);
-    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.viewProj, d.viewProj, dest);
 }
 
 void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uint8_t* dest) const
@@ -1729,6 +1718,7 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.ueRoughnessOverride, data.ueRoughnessOverride, dest);
     matSSR_->UpdateCBField(handles.invPrevPreExposure, data.invPrevPreExposure, dest);
     matSSR_->UpdateCBField(handles.preExposure, data.preExposure, dest);
+    matSSR_->UpdateCBField(handles.originMask, data.originMask, dest);
 }
 
 void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const

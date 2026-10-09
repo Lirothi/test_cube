@@ -986,7 +986,7 @@ namespace
         // of only judged by eye in the GUI. `debug.tex` = 0 shadow atlas, 1 GTAO raw, 2 denoised,
         // 3 temporal, 4 upsampled, 5 HZB furthest, 6 scene depth, 7 HZB closest, 8 reflection hit
         // mask, 9 GB1 normal (colour), 10 shading model (GBAux.b x5: water white), 11 GBAux alpha
-        // (the water's reflection weight);
+        // (the water's reflection weight), 12 the water trace's hit mask, 13 GB0 alpha (~roughness);
         // `debug.texMode` turns the blit on.
         if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
         if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }
@@ -1032,6 +1032,22 @@ namespace
                 {
                     OceanRenderConfig cfg = sim->GetRenderConfig();
                     cfg.reflectionSkyHorizonPull = Math::Clamp(value, 0.05f, 1.0f);
+                    sim->SetRenderConfig(cfg);
+                }
+            }
+            return true;
+        }
+        // How far the water's reflection normal is pulled toward +Y (OceanRenderConfig::
+        // reflectionNormalStrength; 1 = a flat mirror) -- the sky sample's AND, since the ocean G-buffer
+        // plan's S3, the screen-space trace's, so this is the A/B for that look.
+        if (setting == "ocean.reflectionNormalStrength")
+        {
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    OceanRenderConfig cfg = sim->GetRenderConfig();
+                    cfg.reflectionNormalStrength = Math::Clamp(value, 0.0f, 1.0f);
                     sim->SetRenderConfig(cfg);
                 }
             }

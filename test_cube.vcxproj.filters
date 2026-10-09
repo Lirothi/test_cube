@@ -1499,6 +1499,9 @@
     <None Include="shaders\gbuffer_common.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\water_composite_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\wind.hlsli">
       <Filter>shaders</Filter>
     </None>
@@ -1542,9 +1545,6 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ocean_foam_simulation.hlsl">
-      <Filter>shaders</Filter>
-    </None>
-    <None Include="shaders\ocean_reflection_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ocean_surface.hlsl">

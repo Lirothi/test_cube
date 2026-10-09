@@ -4,7 +4,9 @@
 // t2: Depth  (R32F) marched against in screen space (the OPAQUE scene depth)
 // t3: OriginDepth (R32F) reconstructs the reflector surface position. For opaque this is the
 //     same texture as t2; for glass it is the glass front-face depth (origin) while t2 stays
-//     the opaque depth (march), so glass rays reflect the opaque scene.
+//     the opaque depth (march), so glass rays reflect the opaque scene. For the WATER (plan S3)
+//     it is the depth AFTER the water draw while t2 is the copy taken before it, and originMask
+//     keeps only the pixels where the two differ -- the ones the water covers.
 // t4: Hzb (P6C) -- the FURTHEST depth pyramid (min device Z), the same one GTAO reads. That is
 //     what Unreal's own SSR binds (EHZBType::FurthestHZB); it is used as cheap pre-filtered depth,
 //     not as a hierarchy. Built from the same opaque depth as t2.
@@ -51,7 +53,9 @@ cbuffer PerFrame : register(b0)
     // derived on the CPU from MaxRoughness exactly as ComputeSSRParams does.
     float    ueIntensity;
     float    ueRoughnessMaskScale;
-    uint     uePad0;
+    // 1 = trace only where the origin depth differs from the march depth (the water, plan S3; the
+    // same "water drew here" test fog_apply.hlsl uses), 0 = every pixel with a reflector.
+    uint     originMask;
     uint     uePad1;
     uint     ueUseRoughnessTexture;
     float    ueRoughnessOverride;
@@ -68,8 +72,8 @@ cbuffer PerFrame : register(b0)
 
 static const float kEps = 1e-6f;
 
-// SSR_TECHNIQUE_* moved into ssr_trace_logmarch.hlsli below -- the ocean's planar reflection picks
-// between the same two searches now. (A third option, a fixed-step screen-space march after
+// SSR_TECHNIQUE_* moved into ssr_trace_logmarch.hlsli below (the water's reflection is this same
+// shader since the ocean G-buffer plan's S3, so it follows the technique switch with everything else). (A third option, a fixed-step screen-space march after
 // Lettier's article, was removed with P6C step 6: LogMarch strictly dominated it and a third path
 // turned every SSR comparison into a three-way.)
 
@@ -163,8 +167,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // opaque pass (where t3 == t2). Pixels with no reflector (cleared depth 0) are skipped.
     float depth = OriginDepthT.SampleLevel(gSmpPoint, uv, 0).r;
     float4 result = float4(0, 0, 0, 0);
+    // Same texel, same point sampler: the copy is bit-identical wherever the water did not write.
+    const bool masked = originMask != 0u && depth == ReadDepth(uv);
 
-    if (depth > 1e-6f)
+    if (depth > 1e-6f && !masked)
     {
         // POINT sample on purpose: packed unit normals must not be bilinearly mixed for ray
         // generation — an edge blend yields a direction no actual surface has (and uv is snapped

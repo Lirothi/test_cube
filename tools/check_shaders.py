@@ -36,9 +36,8 @@ COMPUTE_ENTRIES = [
     ("compose_cs.hlsl", "CSMain"),
     ("lighting_cs.hlsl", "CSMain"),
     ("ssr_cs.hlsl", "CSMain"),
-    # Traces the same two SSR searches as ssr_cs, so a change to either tracer has to compile here
-    # too. (It was missing from this list until P13 put the UE march into it.)
-    ("ocean_reflection_cs.hlsl", "CSMain"),
+    # The water's reflection composite (ocean G-buffer plan S4): adds ssr_cs's water hit into scene.
+    ("water_composite_cs.hlsl", "CSMain"),
     ("gtao_cs.hlsl", "CSMain"),
     ("gtao_filter_cs.hlsl", "CSMain"),
     ("gtao_temporal_cs.hlsl", "CSMain"),

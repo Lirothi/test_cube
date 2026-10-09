@@ -28,24 +28,28 @@ float CloudSunVisibility(float3 worldPos)
     return CloudShadowTransmittance(worldPos, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, LinearClampSampler);
 }
 
-// THE WATER'S G-BUFFER LAYER (docs/ocean_gbuffer_ssr_unification_plan.md S1, UE SingleLayerWater):
-// what the forward draw leaves behind for the passes after it. Nothing reads it yet; S3's water SSR
-// traces from it and S4's composite adds the reflection back with it.
+// THE WATER'S G-BUFFER LAYER (docs/ocean_gbuffer_ssr_unification_plan.md S1/S4, UE SingleLayerWater):
+// what the forward draw leaves behind for Main_WaterReflection -- its screen-space trace reads the
+// normal and roughness, its composite (water_composite_cs.hlsl) the weight and the sky.
 //   GB0.a  = PackRM(the roughness the reflection is filtered with, metal 0) -- the PSO masks GB0.rgb,
 //            so the opaque albedo under the water survives;
-//   GB1    = the normal the reflection is taken about (not the shading normal: each surface tilts
-//            its reflection normal toward +Y by its own rule);
+//   GB1    = the normal the reflection is taken about (OceanReflectionNormal: the shading normal
+//            pulled toward +Y by the reflection normal strength) -- the sky sample and the screen-space
+//            trace use the same one;
+//   GB2    = weight * sky * preExposure: the sky half of the reflection exactly as this shader added
+//            it (`reflected` is the environment cube alone since S4), so the composite can swap it for
+//            the screen-space hit; GB2 is dead after compose, which is why the slot is free;
 //   GBAux  = (AO 1, indirect specular 1, kShadingModelWater, REFLECTION WEIGHT).
 // The weight is everything that multiplies `reflected` on its way into the scene colour except the
 // frame's pre-exposure: the Fresnel lerp, then every later lerp toward something else (foam, the
 // horizon fade, the refraction soft edge, debug overlays). Each of those is linear in the colour, so
-// final = rest + reflected * weight * skyParams.z EXACTLY, and S4 can move the reflected term out of
-// this shader without recomputing a Fresnel from G-buffer inputs that do not carry foam or the edge.
+// final = rest + reflected * weight * skyParams.z EXACTLY.
 struct OceanGBuffer
 {
     float3 reflectionNormal;
     float  reflectionRoughness;
     float  reflectionWeight;
+    float3 reflectionSky;
 };
 
 float4 OceanGBuffer0(const OceanGBuffer g)
@@ -56,6 +60,11 @@ float4 OceanGBuffer0(const OceanGBuffer g)
 float4 OceanGBuffer1(const OceanGBuffer g)
 {
     return float4(NrmTo01(normalize(g.reflectionNormal)), 0.0f);
+}
+
+float4 OceanGBuffer2(const OceanGBuffer g, float preExposure)
+{
+    return float4(max(g.reflectionSky, 0.0f.xxx) * saturate(g.reflectionWeight) * preExposure, 0.0f);
 }
 
 float4 OceanGBufferAux(const OceanGBuffer g)
@@ -504,30 +513,12 @@ float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
 // which is also where real water reflects from at these view angles. Sun glitter is unaffected while
 // the sun is low (this scene's is ~3 degrees) because the pull moves rays TOWARD it; a high sun would
 // have its specular handled by the direct term anyway. Only the ocean's env sample is touched --
-// the planar reflection, the land IBL and the sky itself are untouched.
+// the screen-space reflection, the land IBL and the sky itself are untouched.
 float3 OceanSkyReflectDir(float3 reflectDir)
 {
     const float pull = (skyParams.w > 0.0f) ? skyParams.w : 1.0f;
     if (pull >= 0.999f) { return reflectDir; }
     return normalize(float3(reflectDir.x, reflectDir.y * pull, reflectDir.z));
-}
-
-float2 OceanReflectionUvOffset(const LightingInput li, float3 adjustedNormal)
-{
-    float3 flatReflectDir = reflect(-li.viewDir, float3(0.0f, 1.0f, 0.0f));
-    float3 waveReflectDir = reflect(-li.viewDir, adjustedNormal);
-    float2 reflectionDelta = waveReflectDir.xz - flatReflectDir.xz;
-
-    float distanceFade = saturate(li.viewDist / max(specularParams.z, 1.0f));
-    float grazing = saturate(1.0f - abs(waveReflectDir.y));
-    float strength = lerp(0.08f, 0.025f, distanceFade) * lerp(0.45f, 1.0f, grazing) * 20;
-    return reflectionDelta * strength;
-}
-
-float OceanReflectionEdgeFade(float2 uv)
-{
-    float2 edgeDist = min(uv, float2(1.0f, 1.0f) - uv);
-    return saturate(min(edgeDist.x, edgeDist.y) * 64.0f);
 }
 
 float3 DeepScatterColor(float depthScale)

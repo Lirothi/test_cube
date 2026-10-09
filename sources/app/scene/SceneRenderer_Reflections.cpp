@@ -841,112 +841,106 @@ void SceneRenderer::Pass_RTDebug(Renderer* renderer, RenderGraphPassContext ctx,
     ctx.EndCL(t);
 }
 
-// ---- RecordOceanReflection ----
-void SceneRenderer::RecordOceanReflection(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const Camera& camera, const TransparentPoints& pts)
+// ---- Pass_WaterReflection (docs/ocean_gbuffer_ssr_unification_plan.md S3/S4) ----
+// UE's RenderSingleLayerWaterReflections, in three steps, all AFTER the water draw:
+//   1. the SAME ssr_cs as the opaque and glass passes, from the water's G-buffer layer: origin = the
+//      depth after the water (t3), march = the copy taken before it (t2) and the FURTHEST pyramid built
+//      from that copy -- the water marches the opaque scene and never reflects itself; originMask keeps
+//      only the pixels the water covers. This replaced a trace from the analytic plane y = 0, which got
+//      the wave parallax wrong and needed a land early-out and an underwater bias to hide it.
+//   2. the opaque reflection's own temporal resolve, reprojected by gbVelocity -- under a water pixel
+//      that is the water's motion now, so the plane reprojection it needed before is gone.
+//   3. water_composite_cs: swap the sky half the water already shaded for the hit.
+// Every point is emitted on every path; `entry` is also where the water's G-buffer layer goes back
+// to rest, and the out-of-graph peeks (texture inspector, debug preview) read it from there.
+void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassContext ctx,
+    const Camera& camera, const WaterReflectionPoints& pts)
 {
-    GPU_SCOPE(cl, ProfilerScopes::kPassOceanReflection);
-
-    const auto& D = renderer->GetDeferredForFrame();
-    // pass-flow S7d: `pts.oceanReflect` is the builder's single answer to "will this compute run"
-    // — targets present, material compiled, CB sized, all three descriptors staged. The two
-    // early-outs that used to ask those questions HERE both ran after the pass had declared the
-    // read point, and the second one had already performed its transitions.
-    if (!pts.oceanReflect)
+    auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
+    SetCommandListName(t.cl, ctx.pass);
     {
-        renderer->EmitPoint(cl, pts.pixel);
-        return;
-    }
-
-    // P13: the pyramid is already in its resting state, so its entry compiles to no barrier --
-    // declaring it is what keeps the pass's declaration and its command list telling one story.
-    renderer->EmitPoint(cl, pts.oceanRead);
-
-    auto material = resources_.GetOceanReflectionMaterial();
-    const UINT cbSize = resources_.GetOceanReflectionCBSizeBytes();
-
-    OceanReflectionConstants constants{};
-    const mat4& view = camera.GetViewMatrix();
-    const mat4& proj = camera.GetProjMatrix();
-    const mat4& invView = camera.GetInvViewMatrix();
-    const mat4& invProj = camera.GetInvProjMatrix();
-    const float zNear = camera.GetZNear();
-    const float zFar = camera.GetZFar();
-
-    constants.view = view;
-    constants.proj = proj;
-    constants.invView = invView;
-    constants.invProj = invProj;
-    constants.depthA = zNear / (zNear - zFar);
-    constants.depthB = (zNear * zFar) / (zFar - zNear);
-    constants.screenSize = float2(static_cast<float>(std::max(renderer->GetRenderWidth(), 1u)),
-        static_cast<float>(std::max(renderer->GetRenderHeight(), 1u)));
-    constants.invScreenSize = float2(
-        constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
-        constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
-    constants.outputSize = float2(static_cast<float>(renderer->GetOceanReflectionTextureWidth()),
-        static_cast<float>(renderer->GetOceanReflectionTextureHeight()));
-    constants.camPosWS = camera.GetPosition();
-    constants.waterHeight = 0.0f;
-
-    // P13. Same technique switch, same pyramid, same phase sequence as Pass_ScreenSpaceReflections
-    // -- so `ssr.technique` moves the ocean with everything else instead of leaving one surface on
-    // the old search. `useHzb` is "does a pyramid exist", which is what makes the log march the
-    // automatic fallback on the first frame.
-    const bool hzbReady = D.hzb.Get() != nullptr && D.hzbSRV.ptr != 0 && D.hzbMips > 0u;
-    const ResolvedUeSsrSettings ue = ResolveUeSsrSettings(frame_->settings.ssrUe);
-    constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
-    constants.useHzb = hzbReady ? 1u : 0u;
-    constants.hzbMipCount = std::max(1u, D.hzbMips);
-    constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
-    constants.hzbSize = float2(static_cast<float>(D.hzbWidth), static_cast<float>(D.hzbHeight));
-    constants.hzbInvSize = float2(D.hzbWidth > 0u ? 1.0f / static_cast<float>(D.hzbWidth) : 0.0f,
-        D.hzbHeight > 0u ? 1.0f / static_cast<float>(D.hzbHeight) : 0.0f);
-    constants.ueNumSteps = UeSsrMirrorRaySteps(ue);
-
-    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
-    RecordComputeDispatch(renderer, cl, material.get(), cbSize,
-        [&](uint8_t* dest) { std::memcpy(dest, &constants, sizeof(constants)); },
-        // t0 opaque scene colour, t1 opaque depth copy, t2 the FURTHEST pyramid (P13).
-        { D.sceneOpaqueSRV, D.depthCopySRV, hzbReady ? D.hzbSRV : D.depthCopySRV },
-        { D.oceanReflectionUAV },
-        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
-        renderer->GetOceanReflectionTextureWidth(), renderer->GetOceanReflectionTextureHeight(),
-        D.oceanReflection.Get());
-
-    // The temporal resolve, when the builder decided it (see the Main_Transparent builder): the same
-    // kernel and knobs as Main_ReflectionTemporal, reprojecting the water plane's own point.
-    if (pts.oceanTemporalRun)
-    {
-        GPU_SCOPE(cl, ProfilerScopes::kOceanReflectionTemporal);
-        renderer->EmitPoint(cl, pts.oceanTemporal);
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassWaterReflection);
+        const auto& D = renderer->GetDeferredForFrame();
         const auto& P = renderer->GetDeferredForPrevFrame();
-        auto temporal = resources_.GetSsrTemporalMaterial();
-        const UINT temporalCb = resources_.GetSsrTemporalCBSizeBytes();
         const UINT w = renderer->GetOceanReflectionTextureWidth();
         const UINT h = renderer->GetOceanReflectionTextureHeight();
-        SsrTemporalConstants tc{};
-        tc.texSize = float2(static_cast<float>(w), static_cast<float>(h));
-        tc.invTexSize = float2(w > 0 ? 1.0f / static_cast<float>(w) : 0.0f, h > 0 ? 1.0f / static_cast<float>(h) : 0.0f);
-        tc.blendWeight = std::clamp(frame_->settings.ssrTemporalBlendWeight, 0.01f, 1.0f);
-        tc.clampExpand = std::max(0.0f, frame_->settings.ssrTemporalClampExpand);
-        tc.historyValid = oceanHistoryValid_ ? 1u : 0u;
-        tc.planeReproject = 1u;
-        const float3 camPos = camera.GetPosition();
-        tc.planeParams = float4(constants.waterHeight, camPos.x, camPos.y, camPos.z);
-        tc.invViewProj = camera.GetInvProjMatrixNoJitter() * camera.GetInvViewMatrix();
-        tc.prevViewProj = camera.GetPrevViewProjMatrixNoJitter();
-        tc.viewProj = camera.GetViewProjMatrixNoJitter();
-        const auto temporalSamplers = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
-        RecordComputeDispatch(renderer, cl, temporal.get(), temporalCb,
-            [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(tc, dest); },
-            { D.oceanReflectionSRV, P.oceanReflectionHistorySRV, D.gbSRV[3] }, // t0 raw, t1 history, t2 velocity (unread: plane mode)
-            { D.oceanReflectionHistoryUAV },
-            renderer->GetSamplerManager()->GetTable(renderer, temporalSamplers),
-            w, h,
-            D.oceanReflectionHistory.Get());
-    }
+        renderer->EmitPoint(t.cl, pts.entry);
 
-    // All three become PS-readable for the forward draws — on every path out of this function.
-    renderer->EmitPoint(cl, pts.pixel);
+        if (pts.trace)
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kWaterReflectionTrace);
+            SsrPassConstants constants{};
+            const float zNear = camera.GetZNear();
+            const float zFar = camera.GetZFar();
+            constants.view = camera.GetViewMatrix();
+            constants.proj = camera.GetProjMatrix();
+            constants.invView = camera.GetInvViewMatrix();
+            constants.invProj = camera.GetInvProjMatrix();
+            constants.depthA = zNear / (zNear - zFar);
+            constants.depthB = (zNear * zFar) / (zFar - zNear);
+            constants.zNear = zNear;
+            constants.zFar = zFar;
+            constants.screenSize = float2(static_cast<float>(renderer->GetRenderWidth()), static_cast<float>(renderer->GetRenderHeight()));
+            constants.invScreenSize = float2(
+                constants.screenSize.x > 0.0f ? 1.0f / constants.screenSize.x : 0.0f,
+                constants.screenSize.y > 0.0f ? 1.0f / constants.screenSize.y : 0.0f);
+            constants.technique = static_cast<uint32_t>(frame_->settings.ssrTechnique);
+            constants.frameIndexMod8 = static_cast<uint32_t>(renderer->GetTotalFrameNumber() & 7ull);
+            FillSsrHzbConstants(renderer, constants);
+            FillSsrUeConstants(constants, true); // the water's reflection roughness is in GB0.a
+            FillSsrReprojectionConstants(camera, constants);
+            constants.originMask = 1u;
+
+            const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
+            RecordComputeDispatch(renderer, t.cl, resources_.GetSsrMaterial().get(), resources_.GetSsrCBSizeBytes(),
+                [&](uint8_t* dest) { resources_.WriteSsrConstants(constants, dest); },
+                // t0 lit, t1 the water's reflection normal, t2 opaque depth copy (march), t3 depth after
+                // the water (origin), t4 HZB (opaque), t5 previous scene colour, t6 velocity (the water's
+                // under it), t7 the water's reflection roughness.
+                { D.lightSRV, D.gbSRV[1], D.depthCopySRV, D.depthSRV, D.hzbSRV,
+                  P.sceneSRV, D.gbSRV[3], D.gbSRV[0] },
+                { D.oceanReflectionUAV },
+                renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+                w, h, D.oceanReflection.Get());
+        }
+
+        renderer->EmitPoint(t.cl, pts.temporal);
+        if (pts.temporalRun)
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kWaterReflectionTemporal);
+            SsrTemporalConstants tc{};
+            tc.texSize = float2(static_cast<float>(w), static_cast<float>(h));
+            tc.invTexSize = float2(w > 0 ? 1.0f / static_cast<float>(w) : 0.0f, h > 0 ? 1.0f / static_cast<float>(h) : 0.0f);
+            tc.blendWeight = std::clamp(frame_->settings.ssrTemporalBlendWeight, 0.01f, 1.0f);
+            tc.clampExpand = std::max(0.0f, frame_->settings.ssrTemporalClampExpand);
+            tc.historyValid = oceanHistoryValid_ ? 1u : 0u;
+            const auto temporalSamplers = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
+            RecordComputeDispatch(renderer, t.cl, resources_.GetSsrTemporalMaterial().get(), resources_.GetSsrTemporalCBSizeBytes(),
+                [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(tc, dest); },
+                { D.oceanReflectionSRV, P.oceanReflectionHistorySRV, D.gbSRV[3] }, // t0 raw, t1 history, t2 velocity
+                { D.oceanReflectionHistoryUAV },
+                renderer->GetSamplerManager()->GetTable(renderer, temporalSamplers),
+                w, h, D.oceanReflectionHistory.Get());
+        }
+
+        renderer->EmitPoint(t.cl, pts.composite);
+        if (pts.compositeRun)
+        {
+            GPU_SCOPE(t.cl, ProfilerScopes::kWaterComposite);
+            WaterCompositeConstants c{};
+            const UINT rw = renderer->GetRenderWidth();
+            const UINT rh = renderer->GetRenderHeight();
+            c.invRenderSize = float2(rw > 0 ? 1.0f / static_cast<float>(rw) : 0.0f, rh > 0 ? 1.0f / static_cast<float>(rh) : 0.0f);
+            c.preExposure = render::g_preExposure; // what the water's own draw scaled by (skyParams.z)
+            const auto compositeSamplers = std::array{ *SamplerManager::LinearClamp() };
+            RecordComputeDispatch(renderer, t.cl, resources_.GetWaterCompositeMaterial().get(), resources_.GetWaterCompositeCBSizeBytes(),
+                [&](uint8_t* dest) { std::memcpy(dest, &c, sizeof(c)); },
+                // t0 GBAux (ID, weight), t1 GB2 (the weighted sky), t2 the reflection to add.
+                { D.gbAuxSRV, D.gbSRV[2], pts.temporalRun ? D.oceanReflectionHistorySRV : D.oceanReflectionSRV },
+                { D.sceneUAV },
+                renderer->GetSamplerManager()->GetTable(renderer, compositeSamplers),
+                rw, rh, D.scene.Get());
+        }
+    }
+    renderer->EndThreadCommandList(t, ctx.batchIndex);
 }
