@@ -1510,13 +1510,24 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         // S5b.2: pass B's counts + the counters are zeroed by the same clear (placeholders bound
         // and `clearB = 0` when the two-pass occlusion is off this frame).
         const bool hzb = dec.hzb;
-        struct ClearCB { std::uint32_t countElems, numPages, clearB, p1; };
+        // 64 elements per 8x8 group, the groups in a 2-D grid at most kClearRowGroups wide. A 1-D
+        // (countElems, 1) dispatch is ceil(countElems / 8) groups in X -- 72192 on wind_test's 141
+        // mesh groups, past the 65535-per-dimension limit (debug layer 1296), and an invalid
+        // dispatch left the high pages' counters un-zeroed. The clear covers the page flags (and
+        // the 4 HZB counters) too, so it is sized by the largest of the three.
+        constexpr std::uint32_t kClearRowGroups = 4096u;
+        const std::uint32_t clearElems = std::max(countElems, vsm::kPoolPageCount);
+        const std::uint32_t clearGroups = (clearElems + 63u) / 64u;
+        const std::uint32_t clearGroupsX = std::min(clearGroups, kClearRowGroups);
+        const std::uint32_t clearGroupsY = (clearGroups + clearGroupsX - 1u) / clearGroupsX;
+        struct ClearCB { std::uint32_t countElems, numPages, clearB, groupsX; };
         RecordComputeDispatch(renderer, cl, pageScatterClearMat_.get(), sizeof(ClearCB),
-            [&](std::uint8_t* dst) { ClearCB c{ countElems, vsm::kPoolPageCount, hzb ? 1u : 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); },
+            [&](std::uint8_t* dst) { ClearCB c{ countElems, vsm::kPoolPageCount, hzb ? 1u : 0u, clearGroupsX }; std::memcpy(dst, &c, sizeof(c)); },
             {}, { pageGroupCountUav_, pageScatterDynUav_,
                   hzb ? pageGroupCountBUav_ : pageGroupCountUav_, hzb ? hzbCountersUav_ : pageScatterDynUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
-            countElems, 1, pageGroupCount_.Get());
+            clearGroupsX * kComputeDispatchGroupSize, clearGroupsY * kComputeDispatchGroupSize,
+            pageGroupCount_.Get());
         renderer->UAVBarrier(cl, pageScatterDyn_.Get());
         if (hzb)
         {

@@ -9,10 +9,10 @@
 
 cbuffer ClearCB : register(b0)
 {
-    uint gCountElems; // kPoolPageCount * gNumGroups
+    uint gCountElems; // kPoolPageCount * gNumGroups * kMaxShadowLods
     uint gNumPages;   // kPoolPageCount
     uint gClearB;     // S5b.2: 1 = clear PageGroupCountB + HzbCounters too
-    uint _pad1;
+    uint gGroupsX;    // the dispatch's row width in thread groups (VirtualShadowMap::RecordPageRender)
 };
 
 RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) count / append cursor
@@ -20,13 +20,16 @@ RWStructuredBuffer<uint> PageScatterDyn  : register(u1); // per page: a dynamic 
 RWStructuredBuffer<uint> PageGroupCountB : register(u2); // S5b.2: pass B's counts (same shape as u0)
 RWStructuredBuffer<uint> HzbCounters     : register(u3); // S5b.2: 4 uints
 
-// numthreads(8,8,1) to match RecordComputeDispatch's group size; the dispatch is 1-D so rows y>0 exit.
+// numthreads(8,8,1) to match RecordComputeDispatch's group size, and ALL 64 threads work: one element
+// per thread, the groups laid out row-major in a 2-D grid gGroupsX wide. It used to be a 1-D dispatch
+// with only row y == 0 alive, i.e. one group per 8 elements along X -- at 141 mesh groups that is
+// 1024*141*4/8 = 72192 groups, past D3D12's 65535-per-dimension limit (debug layer id 1296), and the
+// dispatch is then undefined: the counters of the high pages were never zeroed and kept growing.
 [numthreads(8, 8, 1)]
 [RootSignature(VSM_SCATTER_CLEAR_RS)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
+void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 {
-    if (dtid.y != 0u) { return; }
-    const uint i = dtid.x;
+    const uint i = (gid.y * gGroupsX + gid.x) * 64u + gi;
     if (i < gCountElems) { PageGroupCount[i] = 0u; }
     if (i < gNumPages) { PageScatterDyn[i] = 0u; }
     if (gClearB != 0u)

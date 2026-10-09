@@ -553,3 +553,17 @@ replacement only; never write assets without the user; `models/**` is gitignored
   deterministic capture protocol plus `logs/vsm_pages.log` residency.
 - `RecordComputeDispatch` divides both dispatch dims by 8 — the setup CS is `numthreads(8,8,1)`
   over `(kPoolPageCount, 1)`; don't "fix" that while editing.
+- **The cap's last casualty, found and fixed 2026-10-09: the page-scatter CLEAR.** It cleared
+  `kPoolPageCount * groups * kMaxShadowLods` counters as a 1-D `(countElems, 1)` dispatch with only
+  row y == 0 alive, i.e. `countElems / 8` groups in X — past D3D12's 65535 per dimension from **128
+  mesh groups** on. wind_test has 141 now: 1024 * 141 * 4 / 8 = **72192** groups, debug layer
+  `id=1296` every frame, an undefined dispatch, and the counters of the high pool pages (index
+  `p * groups * lods + vg`) never zeroed. Normal runs did not show it because they load SDSM from
+  `graphics_settings.json`; `--scene-stress` does not load that file and runs the compiled default,
+  VSM. Located with a temporary `case 1296` in `--barrier-msg-trace` (stack ->
+  `VirtualShadowMap::RecordPageRender`, the clear at `RecordComputeDispatch`). Fix: all 64 threads of
+  each 8x8 group work, the groups laid out row-major in a 2-D grid at most 4096 wide (`gGroupsX` in
+  the clear's CB, the former pad) — `vsm_page_scatter_clear_cs.hlsl` + the call site. Verified: Debug
+  wind_test `--shadow-mode=vsm` without 1296, cull validation PASS; the image matches by eye. Other 1-D
+  `(n, 1)` dispatches of the same shape stay far below the limit (page table 14322, casters ~3.8k,
+  views x groups ~6.5k) — the clear was the only one that scales with pages x groups x LODs.
