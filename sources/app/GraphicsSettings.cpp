@@ -63,6 +63,9 @@ namespace
         bool reflectionTemporal = true;
         float reflectionTemporalBlend = 0.125f;
         float reflectionTemporalStillInertia = 0.8f;
+        bool waterReflectionTemporal = false;
+        float waterReflectionTemporalBlend = 0.125f;
+        float waterReflectionTemporalStillInertia = 0.0f;
         float reflectionResolution = 0.5f;
         float oceanReflectionResolution = 0.5f;
         float reflectionGlossyScale = 1.0f;
@@ -292,6 +295,8 @@ namespace
         s.ssrUe.maxRoughness = std::clamp(finite(s.ssrUe.maxRoughness, 0.6f), 0.01f, 1.0f);
         s.reflectionTemporalBlend = std::clamp(finite(s.reflectionTemporalBlend, 0.125f), 0.02f, 1.0f);
         s.reflectionTemporalStillInertia = std::clamp(finite(s.reflectionTemporalStillInertia, 0.8f), 0.0f, 2.0f);
+        s.waterReflectionTemporalBlend = std::clamp(finite(s.waterReflectionTemporalBlend, 0.125f), 0.02f, 1.0f);
+        s.waterReflectionTemporalStillInertia = std::clamp(finite(s.waterReflectionTemporalStillInertia, 0.0f), 0.0f, 2.0f);
         s.reflectionResolution = std::clamp(finite(s.reflectionResolution, 0.5f), 0.25f, 1.0f);
         s.oceanReflectionResolution = std::clamp(finite(s.oceanReflectionResolution, 0.5f), 0.25f, 1.0f);
         s.reflectionGlossyScale = std::clamp(finite(s.reflectionGlossyScale, 1.0f), 0.0f, 24.0f);
@@ -428,6 +433,9 @@ namespace
         s.reflectionTemporal = settings.ssrTemporal;
         s.reflectionTemporalBlend = settings.ssrTemporalBlendWeight;
         s.reflectionTemporalStillInertia = settings.ssrTemporalClampExpand;
+        s.waterReflectionTemporal = settings.waterReflectionTemporal;
+        s.waterReflectionTemporalBlend = settings.waterReflectionTemporalBlend;
+        s.waterReflectionTemporalStillInertia = settings.waterReflectionTemporalStillInertia;
         s.reflectionResolution = renderer.GetReflectionTextureScale().x;
         s.oceanReflectionResolution = renderer.GetOceanReflectionTextureScale().x;
         s.reflectionGlossyScale = settings.reflectionGlossyScale;
@@ -572,6 +580,9 @@ namespace
         settings.ssrTemporal = s.reflectionTemporal;
         settings.ssrTemporalBlendWeight = s.reflectionTemporalBlend;
         settings.ssrTemporalClampExpand = s.reflectionTemporalStillInertia;
+        settings.waterReflectionTemporal = s.waterReflectionTemporal;
+        settings.waterReflectionTemporalBlend = s.waterReflectionTemporalBlend;
+        settings.waterReflectionTemporalStillInertia = s.waterReflectionTemporalStillInertia;
         settings.reflectionGlossyScale = s.reflectionGlossyScale;
         settings.sunMetalSpecInfluence = s.sunMetalSpecInfluence;
         settings.reflectionSource = s.reflectionSource;
@@ -745,6 +756,9 @@ namespace
                 { "temporal", s.reflectionTemporal },
                 { "temporalBlend", s.reflectionTemporalBlend },
                 { "temporalStillInertia", s.reflectionTemporalStillInertia },
+                { "waterTemporal", s.waterReflectionTemporal },
+                { "waterTemporalBlend", s.waterReflectionTemporalBlend },
+                { "waterTemporalStillInertia", s.waterReflectionTemporalStillInertia },
                 { "resolution", s.reflectionResolution },
                 { "oceanResolution", s.oceanReflectionResolution },
                 { "glossyBlur", s.reflectionGlossyScale },
@@ -926,6 +940,9 @@ namespace
         Read(reflections, "temporal", s.reflectionTemporal);
         Read(reflections, "temporalBlend", s.reflectionTemporalBlend);
         Read(reflections, "temporalStillInertia", s.reflectionTemporalStillInertia);
+        Read(reflections, "waterTemporal", s.waterReflectionTemporal);
+        Read(reflections, "waterTemporalBlend", s.waterReflectionTemporalBlend);
+        Read(reflections, "waterTemporalStillInertia", s.waterReflectionTemporalStillInertia);
         Read(reflections, "resolution", s.reflectionResolution);
         Read(reflections, "oceanResolution", s.oceanReflectionResolution);
         Read(reflections, "glossyBlur", s.reflectionGlossyScale);
@@ -1243,6 +1260,10 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::ReflectionTemporal:             current.reflectionTemporal = defaults.reflectionTemporal; break;
     case GraphicsControl::ReflectionTemporalBlend:        current.reflectionTemporalBlend = defaults.reflectionTemporalBlend; break;
     case GraphicsControl::ReflectionTemporalStillInertia: current.reflectionTemporalStillInertia = defaults.reflectionTemporalStillInertia; break;
+    case GraphicsControl::WaterReflectionTemporal:        current.waterReflectionTemporal = defaults.waterReflectionTemporal; break;
+    case GraphicsControl::WaterReflectionTemporalBlend:   current.waterReflectionTemporalBlend = defaults.waterReflectionTemporalBlend; break;
+    case GraphicsControl::WaterReflectionTemporalStillInertia:
+        current.waterReflectionTemporalStillInertia = defaults.waterReflectionTemporalStillInertia; break;
     case GraphicsControl::ReflectionResolution:           current.reflectionResolution = defaults.reflectionResolution; break;
     case GraphicsControl::ReflectionGlossyScale:          current.reflectionGlossyScale = defaults.reflectionGlossyScale; break;
     case GraphicsControl::SunMetalSpecInfluence:          current.sunMetalSpecInfluence = defaults.sunMetalSpecInfluence; break;

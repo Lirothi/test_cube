@@ -890,6 +890,7 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             FillSsrUeConstants(constants, true); // the water's reflection roughness is in GB0.a
             FillSsrReprojectionConstants(camera, constants);
             constants.originMask = 1u;
+            constants.flatNormal = 1u; // a smooth mirror; the composite breaks it up per pixel
 
             const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetSsrMaterial().get(), resources_.GetSsrCBSizeBytes(),
@@ -911,8 +912,9 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             SsrTemporalConstants tc{};
             tc.texSize = float2(static_cast<float>(w), static_cast<float>(h));
             tc.invTexSize = float2(w > 0 ? 1.0f / static_cast<float>(w) : 0.0f, h > 0 ? 1.0f / static_cast<float>(h) : 0.0f);
-            tc.blendWeight = std::clamp(frame_->settings.ssrTemporalBlendWeight, 0.01f, 1.0f);
-            tc.clampExpand = std::max(0.0f, frame_->settings.ssrTemporalClampExpand);
+            // The water's OWN blend and inertia (SceneRenderSettings::waterReflectionTemporal*).
+            tc.blendWeight = std::clamp(frame_->settings.waterReflectionTemporalBlend, 0.01f, 1.0f);
+            tc.clampExpand = std::max(0.0f, frame_->settings.waterReflectionTemporalStillInertia);
             tc.historyValid = oceanHistoryValid_ ? 1u : 0u;
             const auto temporalSamplers = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetSsrTemporalMaterial().get(), resources_.GetSsrTemporalCBSizeBytes(),
@@ -932,11 +934,16 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             const UINT rh = renderer->GetRenderHeight();
             c.invRenderSize = float2(rw > 0 ? 1.0f / static_cast<float>(rw) : 0.0f, rh > 0 ? 1.0f / static_cast<float>(rh) : 0.0f);
             c.preExposure = render::g_preExposure; // what the water's own draw scaled by (skyParams.z)
+            c.invViewProj = camera.GetInvProjMatrix() * camera.GetInvViewMatrix();
+            c.camPos = camera.GetPosition();
+            c.roughnessDistance = frame_->ocean ? frame_->ocean->GetRoughnessDistance() : 1.0f;
             const auto compositeSamplers = std::array{ *SamplerManager::LinearClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetWaterCompositeMaterial().get(), resources_.GetWaterCompositeCBSizeBytes(),
                 [&](uint8_t* dest) { std::memcpy(dest, &c, sizeof(c)); },
-                // t0 GBAux (ID, weight), t1 GB2 (the weighted sky), t2 the reflection to add.
-                { D.gbAuxSRV, D.gbSRV[2], pts.temporalRun ? D.oceanReflectionHistorySRV : D.oceanReflectionSRV },
+                // t0 GBAux (ID, weight), t1 GB1 (the reflection normal), t2 GB2 (the weighted sky),
+                // t3 depth after the water, t4 the reflection to add.
+                { D.gbAuxSRV, D.gbSRV[1], D.gbSRV[2], D.depthSRV,
+                  pts.temporalRun ? D.oceanReflectionHistorySRV : D.oceanReflectionSRV },
                 { D.sceneUAV },
                 renderer->GetSamplerManager()->GetTable(renderer, compositeSamplers),
                 rw, rh, D.scene.Get());

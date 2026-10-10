@@ -1969,7 +1969,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             const auto temporal = resources_.GetSsrTemporalMaterial();
             const UINT ow = p.renderer->GetOceanReflectionTextureWidth();
             const UINT oh = p.renderer->GetOceanReflectionTextureHeight();
-            pts.temporalRun = pts.trace && frame_->settings.ssrTemporal &&
+            pts.temporalRun = pts.trace && frame_->settings.waterReflectionTemporal &&
                 temporal && temporal->GetPipelineState() && resources_.GetSsrTemporalCBSizeBytes() != 0u &&
                 DW.oceanReflectionHistory.Get() != nullptr && DW.oceanReflectionHistoryUAV.ptr != 0 &&
                 PW.oceanReflectionHistorySRV.ptr != 0 && DW.oceanReflectionSRV.ptr != 0;

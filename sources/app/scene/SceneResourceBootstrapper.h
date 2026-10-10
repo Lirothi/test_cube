@@ -164,6 +164,7 @@ struct SceneSsrCBHandles
     Material::CBFieldHandle invPrevPreExposure;
     Material::CBFieldHandle preExposure;
     Material::CBFieldHandle originMask;
+    Material::CBFieldHandle flatNormal;
 
     void Populate(Material* material);
 };
@@ -808,6 +809,8 @@ struct SsrPassConstants
     // Ocean G-buffer plan S3: 1 = trace only where the origin depth differs from the march depth,
     // i.e. the pixels the water covers (Main_WaterReflection); 0 for the opaque and glass passes.
     uint32_t originMask = 0u;
+    // 1 = trace from a flat +Y normal (the water's smooth half-res mirror, broken up in its composite).
+    uint32_t flatNormal = 0u;
 };
 
 struct BlurPassConstants

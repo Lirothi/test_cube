@@ -183,6 +183,9 @@ public:
     // Plan C3: the cloud shadow map on the water -- the projection, (on, far depth km, 0, 0) and the
     // SRV, set by SceneRenderer's Main_Transparent builder from the frame's VolumetricCloud (a null
     // SRV means "no map this frame": the table gets the fallback and the shader's gate is 0).
+    // The preset's roughnessDistance (the surface's specularParams.z), for the water reflection composite's
+    // UV break-up, which fades with distance on the same scale (ocean G-buffer plan S4).
+    float GetRoughnessDistance() const;
     void SetCloudShadow(const Math::mat4& viewProj, const Math::float4& params, D3D12_CPU_DESCRIPTOR_HANDLE srv)
     {
         cloudShadowViewProj_ = viewProj;

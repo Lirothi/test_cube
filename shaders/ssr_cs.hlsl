@@ -56,7 +56,9 @@ cbuffer PerFrame : register(b0)
     // 1 = trace only where the origin depth differs from the march depth (the water, plan S3; the
     // same "water drew here" test fog_apply.hlsl uses), 0 = every pixel with a reflector.
     uint     originMask;
-    uint     uePad1;
+    // 1 = trace from a flat +Y normal instead of GB1 (the water: a smooth mirror at half res, broken
+    // up per full-res pixel by water_composite_cs.hlsl's UV offset), 0 = the surface's own normal.
+    uint     flatNormal;
     uint     ueUseRoughnessTexture;
     float    ueRoughnessOverride;
     // P16.1: 1 / the pre-exposure the PREVIOUS frame's scene colour was written with. This pass
@@ -175,7 +177,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // POINT sample on purpose: packed unit normals must not be bilinearly mixed for ray
         // generation — an edge blend yields a direction no actual surface has (and uv is snapped
         // to a texel centre above, so point is exact rather than a boundary coin flip).
-        float3 N_ws = normalize(GB1.SampleLevel(gSmpPoint, uv, 0).rgb * 2 - 1);
+        float3 N_ws = flatNormal != 0u ? float3(0.0f, 1.0f, 0.0f)
+                                       : normalize(GB1.SampleLevel(gSmpPoint, uv, 0).rgb * 2 - 1);
         float3 Pv   = ReconstructPosVS(uv, depth);
         float3 Nv   = normalize(mul(N_ws, (float3x3)view));
 

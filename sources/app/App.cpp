@@ -621,8 +621,8 @@ namespace
         // and on RT-capable hardware that means the screen-space path never runs -- so without this
         // key there is no headless way to exercise, measure or gate SSR at all. (Found the hard way
         // in P6C step 6: a "HiZ" capture that had quietly been tracing the TLAS.)
-        // Reflection trace resolution as a fraction of the DISPLAY (graphics_settings reflections.
-        // resolution; the RT and SSR traces run at it whatever the DLSS mode), for a 4K sweep.
+        // Reflection trace resolution as a fraction of the RENDER resolution, the one DLSS takes
+        // (graphics_settings reflections.resolution; the RT and SSR traces run at it), for a 4K sweep.
         if (setting == "reflections.resolution")
         {
             const float scale = std::clamp(value, 0.25f, 1.0f);
@@ -643,6 +643,9 @@ namespace
         // Despite the prefix this now gates the temporal resolve for BOTH reflection sources —
         // the RT reflection at half res boils under DLSS jitter just like the SSR buffer did.
         if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
+        if (setting == "ssr.waterTemporal") { renderSettings.waterReflectionTemporal = value != 0.0f; return true; }
+        if (setting == "ssr.waterTemporalBlend") { renderSettings.waterReflectionTemporalBlend = value; return true; }
+        if (setting == "ssr.waterTemporalInertia") { renderSettings.waterReflectionTemporalStillInertia = value; return true; }
         // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
         if (setting == "rt.alphaMissKeep") { renderSettings.rtAlphaMissKeep = value; return true; }
         // RT foliage alpha mode: 0 off (solid cards), 1 first-hit holes, 2 full candidates.

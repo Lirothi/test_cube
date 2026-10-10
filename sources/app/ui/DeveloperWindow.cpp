@@ -136,6 +136,7 @@ namespace
         case GraphicsControl::UeSsrGlossyRays:
         case GraphicsControl::UeSsrUseSurfaceRoughness:
         case GraphicsControl::ReflectionTemporal:
+        case GraphicsControl::WaterReflectionTemporal:
         case GraphicsControl::RtWindBlas:
         case GraphicsControl::LodEnabled:
         // ShadowMode is NOT here any more: S15 made it a three-way combo, and this list decides
@@ -931,7 +932,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     renderer.SetReflectionTextureScale(ssrScale);
                 }
-                ImGui::Text("Reflection target: %ux%u", renderer.GetReflectionTextureWidth(), renderer.GetReflectionTextureHeight());
+                DevHelp("Both reflection resolutions are fractions of the RENDER resolution -- what goes into "
+                        "DLSS, the display with DLSS off -- so a DLSS mode changes their cost with the rest "
+                        "of the frame. 1.0 = one trace per rendered pixel; more could not add detail.");
+                ImGui::Text("Reflection target: %ux%u (render %ux%u)", renderer.GetReflectionTextureWidth(),
+                            renderer.GetReflectionTextureHeight(), renderer.GetRenderWidth(), renderer.GetRenderHeight());
                 // S15b: glass off-screen reflections render into a glass G-buffer + glassReflection at
                 // this same reflection resolution and follow the reflection source below.
                 // Inspect them via Texture inspector [F4] -> "Glass Refl Normal/Depth" + "Glass Reflection".
@@ -944,6 +949,30 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     renderer.SetOceanReflectionTextureScale(oceanReflectionScale);
                 }
                 ImGui::Text("Ocean reflection target: %ux%u", renderer.GetOceanReflectionTextureWidth(), renderer.GetOceanReflectionTextureHeight());
+                GRAPHICS_CONTROL(WaterReflectionTemporal, "waterReflectionTemporal",
+                    ImGui::Checkbox("Water reflection temporal resolve", &settings.waterReflectionTemporal));
+                DevHelp("The water reflection's OWN temporal resolve, separate from the one below. Off by "
+                        "default: it judges stillness by the water SURFACE's motion, ~0 with a still "
+                        "camera, so any still inertia stretches the history while the waves change the "
+                        "reflection every frame -- it smears. Off = the raw trace (DLSS still "
+                        "accumulates the final image).");
+                ImGui::BeginDisabled(!settings.waterReflectionTemporal);
+                {
+                    GRAPHICS_CONTROL_WIDTH(WaterReflectionTemporalBlend, "waterReflectionTemporalBlend", 98.0f,
+                        ImGui::SliderFloat("Water temporal blend", &settings.waterReflectionTemporalBlend,
+                                           0.02f, 1.0f, "%.3f"));
+                    DevHelp("Weight of the CURRENT frame in the water reflection's resolve (1 = no "
+                            "accumulation). Same meaning as the deferred one's below, its own value.");
+                    GRAPHICS_CONTROL_WIDTH(WaterReflectionTemporalStillInertia,
+                        "waterReflectionTemporalStillInertia", 98.0f,
+                        ImGui::SliderFloat("Water temporal still inertia",
+                                           &settings.waterReflectionTemporalStillInertia, 0.0f, 2.0f, "%.2f"));
+                    DevHelp("Extra inertia for 'still' pixels -- but under water 'still' is the SURFACE's "
+                            "motion, so a still camera over moving waves gets the relaxed clamp and the "
+                            "long history: that is the smear. 0 (default) = the hard clamp and the plain "
+                            "blend above.");
+                }
+                ImGui::EndDisabled();
 
                 ImGui::SeparatorText("Filtering");
                 GRAPHICS_CONTROL(ReflectionTemporal, "reflectionTemporal",

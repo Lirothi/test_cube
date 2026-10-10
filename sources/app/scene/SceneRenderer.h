@@ -546,7 +546,7 @@ private:
         std::uint32_t temporal = 0;  // raw trace NPS, this frame's history UAV, last frame's NPS
         std::uint32_t composite = 0; // the reflection to composite NPS, scene UAV
         bool trace = false;          // the SSR dispatch runs (water drawn + material + targets)
-        bool temporalRun = false;    // ...and its temporal resolve (ssrTemporal + history ready)
+        bool temporalRun = false;    // ...and its temporal resolve (waterReflectionTemporal + history ready)
         bool compositeRun = false;   // ...and the composite into scene colour
     };
     void Pass_WaterReflection(Renderer* r, RenderGraphPassContext ctx,

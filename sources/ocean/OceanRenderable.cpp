@@ -1417,6 +1417,11 @@ Math::float4 OceanRenderable::GetFoamCascadeWeights() const
     return foam.cascadesWeights;
 }
 
+float OceanRenderable::GetRoughnessDistance() const
+{
+    return GetRenderConfig().roughnessDistance;
+}
+
 Math::float4 OceanRenderable::GetSpecularParams() const
 {
     const OceanRenderConfig& render = GetRenderConfig();

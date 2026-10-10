@@ -236,6 +236,7 @@ void SceneSsrCBHandles::Populate(Material* material)
     invPrevPreExposure = material->ComputeCB0FieldHandle("invPrevPreExposure");
     preExposure = material->ComputeCB0FieldHandle("preExposure");
     originMask = material->ComputeCB0FieldHandle("originMask");
+    flatNormal = material->ComputeCB0FieldHandle("flatNormal");
 }
 
 void SceneBlurCBHandles::Populate(Material* material)
@@ -1719,6 +1720,7 @@ void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, 
     matSSR_->UpdateCBField(handles.invPrevPreExposure, data.invPrevPreExposure, dest);
     matSSR_->UpdateCBField(handles.preExposure, data.preExposure, dest);
     matSSR_->UpdateCBField(handles.originMask, data.originMask, dest);
+    matSSR_->UpdateCBField(handles.flatNormal, data.flatNormal, dest);
 }
 
 void SceneResourceBootstrapper::WriteBlurConstants(const BlurPassConstants& data, uint8_t* dest) const

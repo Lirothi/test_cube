@@ -210,14 +210,17 @@ namespace scene_internal
     };
 
     // MIRRORS WaterCompositeCB in shaders/water_composite_cs.hlsl (ocean G-buffer plan S4), uploaded
-    // by raw memcpy: one 16-byte row.
+    // by raw memcpy: a matrix and two 16-byte rows.
     struct WaterCompositeConstants
     {
+        mat4 invViewProj{};
+        float3 camPos{};
+        float roughnessDistance = 1.0f;
         float2 invRenderSize{};
         float preExposure = 1.0f;
         uint32_t pad0 = 0u;
     };
-    static_assert(sizeof(WaterCompositeConstants) == 16,
+    static_assert(sizeof(WaterCompositeConstants) == 96,
         "WaterCompositeConstants must stay byte-identical to WaterCompositeCB in "
         "shaders/water_composite_cs.hlsl -- it is uploaded by raw memcpy.");
 

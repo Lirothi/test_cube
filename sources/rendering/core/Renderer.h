@@ -899,6 +899,7 @@ private:
     bool objectIdPickResultValid_ = false;
 #endif
 
+    // Reflection targets (this and the ocean's below) as a fraction of the RENDER resolution.
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT fogGridPixels_ = render::kFogGridPixels; // volumetric fog cell size the CURRENT ring was built with
     UINT fogGridZ_ = render::kFogGridZ;           // ... and its slice count

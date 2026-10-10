@@ -2526,16 +2526,23 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // Every per-resource cache in the engine is invalidated by this line; the log pairs with the
     // "rebuilt" lines those caches emit, so a skipped rebuild after a recreation is countable.
     ++s_deferredTargetsGeneration;
-    LOG_INFO(logging::LogCategory::Render,
-             "deferred targets created: render {}x{}, display {}x{}, generation {}",
-             rtWidth, rtHeight, displayWidth, displayHeight, s_deferredTargetsGeneration);
 
-    const auto reflectionSize = ComputeReflectionTextureSize(displayWidth, displayHeight);
+    // Both reflection scales are fractions of the RENDER resolution (what goes into DLSS; the display
+    // when DLSS is off): the traces read render-res depth/colour and land in scene colour before the
+    // upscaler, so more pixels than the render cannot add detail. Off the display, one value meant half
+    // the frame with DLSS off and 1.5x the input under Ultra Performance, and the DLSS mode never
+    // changed what the traces cost.
+    const auto reflectionSize = ComputeReflectionTextureSize(rtWidth, rtHeight);
     reflectionTextureWidth_ = reflectionSize.first > 0 ? reflectionSize.first : 1;
     reflectionTextureHeight_ = reflectionSize.second > 0 ? reflectionSize.second : 1;
-    const auto oceanReflectionSize = ComputeScaledTextureSize(displayWidth, displayHeight, oceanReflectionTextureScale_);
+    const auto oceanReflectionSize = ComputeScaledTextureSize(rtWidth, rtHeight, oceanReflectionTextureScale_);
     oceanReflectionTextureWidth_ = oceanReflectionSize.first > 0 ? oceanReflectionSize.first : 1;
     oceanReflectionTextureHeight_ = oceanReflectionSize.second > 0 ? oceanReflectionSize.second : 1;
+    LOG_INFO(logging::LogCategory::Render,
+             "deferred targets created: render {}x{}, display {}x{}, reflection {}x{}, ocean reflection {}x{}, "
+             "generation {}",
+             rtWidth, rtHeight, displayWidth, displayHeight, reflectionTextureWidth_, reflectionTextureHeight_,
+             oceanReflectionTextureWidth_, oceanReflectionTextureHeight_, s_deferredTargetsGeneration);
 
     RenderTargetManager::Formats formats{};
     formats.gb0 = render::kGBuffer0Format;

@@ -586,6 +586,17 @@ struct SceneRenderSettings
     float ssrTemporalBlendWeight = 0.125f;
     // How much the neighbourhood clamp box may widen when the camera is still (0 = never).
     float ssrTemporalClampExpand = 0.8f;
+    // The WATER reflection's own temporal resolve (Main_WaterReflection), separate from the one above.
+    // Off by default (owner, 2026-10-10: "дико все мажет"): the resolve decides stillness from
+    // gbVelocity, which under water is the SURFACE's motion -- ~0 with a still camera -- so the still
+    // inertia relaxes the clamp and stretches the history ~4x while the waves change the reflection
+    // every frame. Off = the trace's raw output; DLSS still accumulates the final image.
+    bool waterReflectionTemporal = false;
+    // Its own blend and still inertia (the deferred resolve's knobs above stay the deferred one's).
+    // Inertia defaults to 0 for the reason above: the surface's own motion reads as "still", and the
+    // inertia's relaxed clamp + longer history is exactly what smeared the waves.
+    float waterReflectionTemporalBlend = 0.125f;
+    float waterReflectionTemporalStillInertia = 0.0f;
     bool doFxaa = false;
     bool debugTexMode = false;
     // Which target the fullscreen debug blit shows. It used to be hardwired to the cascade shadow
