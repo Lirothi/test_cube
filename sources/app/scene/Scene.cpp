@@ -2300,10 +2300,9 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // box we are measuring is metres wide). Built by hand rather than through LookAtLH so the
     // sun-parallel-to-up degeneracy has an explicit fallback instead of a NaN matrix.
     //
-    // NO TEXEL SNAP, deliberately, and this is the one place it has to be said: Legacy snaps the
-    // cascade centre to whole texels to stop edge crawl, and SDSM cannot -- the box changes shape
-    // every frame, so there is no fixed grid to snap to. The plan takes that trade knowingly
-    // (S15 note: "стабильность даёт разрешение + EVSM"), and S16 is what pays for it.
+    // The texel snap is NOT here (S21): the box is a GPU result, so Finalize snaps it -- the size
+    // is held by hysteresis first, which is what gives the snap a fixed grid to snap to, and the
+    // grid is anchored to the world through this matrix's translation row.
     {
         const float3 fwd = dirLight_.GetDirection().Normalized();
         const float3 up(0.0f, 1.0f, 0.0f);
@@ -2352,6 +2351,9 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         cb.stability = (halfLife < 1.0f) ? 0.0f
                                          : std::pow(0.5f, 1.0f / halfLife);
     }
+    // S21: stable partitions (see Finalize).
+    cb.texelSnap = render::sdsm::g_texelSnap ? 1u : 0u;
+    cb.sizeHysteresis = std::clamp(render::sdsm::g_sizeHysteresis, 0.0f, 0.5f);
     cb.pancakeSlack = cascadeConfig_.pancakeSlackWS;
     cb.casterReach = cascadeConfig_.casterReachWS;
     cb.depthBiasTexels = cascadeConfig_.depthBiasInTexels;
@@ -2495,10 +2497,10 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         if (--s_readoutFrames == 0) { render::sdsm::g_dumpReadout = false; }
         const auto& parts = sdsm_.Readout();
         LOG_INFO(logging::LogCategory::RenderShadow,
-                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} stability={:.2f} cpuTailCasters={} hzb={} cache={} renders=0x{:x}",
+                 "SDSM readout frame {} partitions={} border={:.1f} dilation={:.3f} minScale={:.3f} stability={:.2f} cpuTailCasters={} hzb={} cache={} renders=0x{:x} snap={} hysteresis={:.3f}",
                  renderer->GetTotalFrameNumber(), cb.partitions, cb.borderTexels, cb.dilation,
                  cb.minScaleOverSphere, cb.stability, sdsm_.CpuCasterCount(), cb.hzbOn,
-                 render::sdsm::g_cacheFrames, cb.updateMask & 0xFu);
+                 render::sdsm::g_cacheFrames, cb.updateMask & 0xFu, cb.texelSnap, cb.sizeHysteresis);
         LOG_INFO(logging::LogCategory::RenderShadow,
                  "  evsm={} exponents {:.1f}/{:.1f} atlas {}x{} moments {:.1f} MB",
                  cb.evsmOn, cb.evsmPos, cb.evsmNeg, D.shadowRes, D.shadowRes,
@@ -2525,9 +2527,12 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
             const float ey = sp.boundsMax.y - sp.boundsMin.y;
             const float ez = sp.boundsMax.z - sp.boundsMin.z;
             LOG_INFO(logging::LogCategory::RenderShadow,
-                     "  p{} interval {:.2f}-{:.2f}  box {:.1f}x{:.1f}x{:.1f} m  texel {:.2f}/{:.2f} mm  "
+                     "  p{} interval {:.2f}-{:.2f}  box {:.1f}x{:.1f}x{:.1f} m at {:.4f},{:.4f}  texel {:.4f}/{:.4f} mm  "
                      "bias {:.2f} mm  samples {}  flags {}{}  legacyTexel {:.2f} mm",
                      p, sp.intervalBegin, sp.intervalEnd, ex, ey, ez,
+                     // The origin is light-space (camera-anchored): with a still camera and the
+                     // S21 snap on it must not move at all between frames.
+                     sp.boundsMin.x, sp.boundsMin.y,
                      sp.texelWS[0] * 1000.0f, sp.texelWS[1] * 1000.0f,
                      sp.depthBiasNDC * ez * 1000.0f, sp.sampleCount,
                      (sp.flags & render::sdsm::kPartitionFlagEmpty) ? "EMPTY " : "",

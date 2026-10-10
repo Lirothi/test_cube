@@ -358,6 +358,24 @@ namespace sdsm
     // re-renders at half of that.
     inline float g_cacheDilation = 0.05f;
 
+    // S21 STABLE PARTITIONS. The analyze re-measures every box from the depth buffer each frame,
+    // and that buffer carries the DLSS jitter, so with the camera and the scene standing still the
+    // box edges still wander by millimetres to centimetres and each re-render rasterises the
+    // casters on a slightly different texel grid -- every shadow edge shifts by up to a texel,
+    // about a screen pixel. Rendered every frame that is noise DLSS averages away; with the S20
+    // cache the shift is held for 2-4 frames and steps, and DLSS lets it through as trembling
+    // (owner: "оно зависит от sdsm.cacheFrames, при 1 все норм").
+    // On: per axis the texel is KEPT while the measured box fits into it with at most
+    // `g_sizeHysteresis` to spare (a fresh texel is placed mid-band), the box origin is snapped to a
+    // WORLD-anchored grid of that texel, and the depth range gets the same hysteresis (the atlas is
+    // D16, a wandering near plane re-quantises every stored depth). A still camera then renders the
+    // same tile bit for bit; a moving one slides it by whole texels. Off = the raw fit (the A/B).
+    inline bool g_texelSnap = true;
+    // The band, as a fraction of the measured size: how much larger than needed a kept texel (and a
+    // kept depth range) may be before it is refitted. Wider = rarer refits while the camera moves,
+    // at up to that much coarser shadows (half of it on average).
+    inline float g_sizeHysteresis = 0.1f;
+
     // NO `analyzeFullRes` KNOB, and that is a decision rather than an omission. The plan listed
     // one; it was written, wired to --set, and read by NOBODY -- a control that lies. The
     // reduction always walks EVERY depth pixel, because a min/max over a strided grid loses a

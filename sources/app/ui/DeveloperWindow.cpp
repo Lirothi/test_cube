@@ -2334,6 +2334,25 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "off its tile (off it, the next partition shadows it, and past the last one "
                         "nothing does). The camera guard re-renders at half of this margin. Wider = more "
                         "headroom and slightly coarser far shadows.");
+                GRAPHICS_CONTROL(SdsmTexelSnap, "sdsmTexelSnap",
+                    ImGui::Checkbox("Stable partitions (texel snap)", &render::sdsm::g_texelSnap));
+                DevHelp("Every box is re-measured from the depth buffer each frame, and the DLSS jitter "
+                        "makes its edges wander even when nothing moves, so each re-render puts the "
+                        "shadow edges up to a texel elsewhere. With the cache above that shift is held "
+                        "for several frames and reads as trembling. On: the texel size and the depth "
+                        "range are kept while the measured box still fits (see the hysteresis below) and "
+                        "the box is snapped to a world-anchored texel grid -- a still camera re-renders "
+                        "the same tile bit for bit, a moving one slides it by whole texels. Off = the raw "
+                        "per-frame fit.");
+                ImGui::BeginDisabled(!render::sdsm::g_texelSnap);
+                GRAPHICS_CONTROL(SdsmSizeHysteresis, "sdsmSizeHysteresis",
+                    ImGui::SliderFloat("Size hysteresis", &render::sdsm::g_sizeHysteresis, 0.0f, 0.3f, "%.3f"));
+                ImGui::EndDisabled();
+                DevHelp("How much larger than the measured box a kept texel (and a kept depth range) "
+                        "may be before the partition is refitted -- a fraction of the measured size. "
+                        "A refit re-rasterises the whole tile once, so wider = fewer of those while the "
+                        "camera moves, at up to this much coarser shadows (half of it on average). 0 = "
+                        "refit whenever the size changes at all, which brings the trembling back.");
 
                 // ---- S16: EVSM4 -------------------------------------------------------------
                 ImGui::SeparatorText("SDSM filter (EVSM4)");

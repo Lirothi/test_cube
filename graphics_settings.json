@@ -56,7 +56,10 @@
       "roughnessOverride": 0.0,
       "stepsPerRay": 8,
       "useSurfaceRoughness": true
-    }
+    },
+    "waterTemporal": true,
+    "waterTemporalBlend": 0.125,
+    "waterTemporalStillInertia": 0.0
   },
   "scope": "Global runtime graphics quality. Scene look stays in level environment data.",
   "shadows": {
@@ -80,7 +83,7 @@
       "accurateCasterCull": true,
       "atlasResolution": 4096,
       "autoSplits": false,
-      "blendFraction": 0.0,
+      "blendFraction": 0.125,
       "casterReach": 150.0,
       "depthBiasTexels": 1.0,
       "distanceFadeFraction": 0.0,
@@ -120,7 +123,9 @@
       "evsmPositiveExponent": 42.0,
       "minScaleOverSphere": 0.019999999552965164,
       "partitions": 4,
+      "sizeHysteresis": 0.10000000149011612,
       "stabilityFrames": 30.0,
+      "texelSnap": true,
       "zMargin": 25.0
     },
     "vsm": {

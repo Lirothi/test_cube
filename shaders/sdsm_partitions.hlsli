@@ -141,6 +141,11 @@ cbuffer SdsmAnalyzeCB : register(b0)
     uint2  gHzbSize;
     uint   gHzbOn;
     float  gCacheDilation; // S20: extra XY dilation of a partition that will be cached, 0 = cache off
+
+    // S21: stable partitions -- texel snap + size/depth hysteresis (see Finalize).
+    float  gSizeHysteresis;
+    uint   gTexelSnap;
+    uint2  gStablePad;
 };
 
 // Row-vector z flip, CascadeHzb.cpp's `FlipZ` transcribed: clip.z' = w - z. The atlas is

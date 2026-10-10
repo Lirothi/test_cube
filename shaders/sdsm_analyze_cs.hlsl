@@ -688,15 +688,78 @@ void Finalize(uint groupIndex : SV_GroupIndex)
     // samples (that is the D16 range this step buys) and the pancake clamp in the depth VS presses
     // anything in front of it onto the plane instead of clipping it. The CULL box below keeps the
     // wide near so those casters are still submitted.
-    const float nearProj = bmin.z - gPancakeSlack;
-    const float farProj = bmax.z + gZMargin;
+    float nearProj = bmin.z - gPancakeSlack;
+    float farProj = bmax.z + gZMargin;
     const float nearCull = bmin.z - gCasterReach;
+    float2 texelWS = (bmax.xy - bmin.xy) / max(1.0f, gContentRes);
+
+    // S21 -- STABLE PARTITIONS. The box above is re-measured from the depth buffer every frame,
+    // and that buffer carries the DLSS jitter: a pixel's sample moves by a fraction of its
+    // footprint each frame, so the box edges wander even with the camera and the scene standing
+    // still (readout on the owner's palm view, wind frozen: p1 23.0 <-> 22.9 m, p2 77.6 -> 77.8 ->
+    // 78.1 m). Every re-render then rasterises the casters on a slightly different texel grid and
+    // every shadow edge in the tile moves by up to a texel -- about a screen pixel. Re-rendered
+    // every frame that is noise the upscaler averages away; with the S20 cache the same shift is
+    // HELD for 2-4 frames and steps, and the upscaler lets it through as trembling.
+    //
+    // So the fit no longer follows the measurement exactly. Per axis the texel is KEPT while the
+    // measured box fits into it with at most gSizeHysteresis to spare; otherwise a fresh one is
+    // placed mid-band, so the next wobble either way stays inside. The origin is snapped to a
+    // WORLD-anchored grid of that texel -- the light frame rides the camera, and its translation row
+    // is exactly the camera's light-space offset -- so a box that slides leaves every texel where
+    // it was in the world and the tile is the same image moved by whole texels. The depth range
+    // gets the same hysteresis: the atlas is D16, and a near plane that wanders re-quantises every
+    // stored depth.
+    //
+    // Coverage cannot regress. The texel is never below tNeed = extent / (res - 1), and that one
+    // spare texel is exactly what floor() can take off the low side, so [bmin', bmin' + t * res]
+    // contains [bmin, bmax]. The kept depth range is used only when it contains this frame's. Last
+    // frame's numbers only CHOOSE among valid answers, so a stale or zero history (first frame, a
+    // new sun, a cached partition) costs a refit, never a hole.
+    if (gTexelSnap != 0u)
+    {
+        const float res = max(2.0f, gContentRes);
+        const float band = 1.0f + gSizeHysteresis;
+        const float3 anchor = -float3(gLightView._41, gLightView._42, gLightView._43);
+        const float2 tNeed = max(bmax.xy - bmin.xy, float2(1e-4f, 1e-4f)) / (res - 1.0f);
+        const float2 tPrev = PrevPartitions[p].texelWS;
+        const float2 tFresh = tNeed * (1.0f + 0.5f * gSizeHysteresis);
+        texelWS.x = (tPrev.x >= tNeed.x && tPrev.x <= tNeed.x * band) ? tPrev.x : tFresh.x;
+        texelWS.y = (tPrev.y >= tNeed.y && tPrev.y <= tNeed.y * band) ? tPrev.y : tFresh.y;
+        bmin.xy = floor((bmin.xy + anchor.xy) / texelWS) * texelWS - anchor.xy;
+        bmax.xy = bmin.xy + texelWS * res;
+
+        // Last render's [near, far], world-anchored, read back off its own matrix: an orthographic
+        // clip.z = dot(P, g) + c with |g| = 1 / (far - near), so near sits at -c / |g| along the
+        // light axis. Same axis as this frame's while the sun holds; when it moved the containment
+        // test below is still made on THIS frame's numbers, so the worst case is a refit.
+        const float4x4 prevVP = PrevPartitions[p].lightViewProj;
+        const float g = length(float3(prevVP._13, prevVP._23, prevVP._33));
+        const float wantNear = nearProj + anchor.z;
+        const float wantFar = farProj + anchor.z;
+        const float span = wantFar - wantNear;
+        bool keepDepth = false;
+        if (g > 1e-12f)
+        {
+            const float prevNear = -prevVP._43 / g;
+            const float prevFar = (1.0f - prevVP._43) / g;
+            keepDepth = prevNear <= wantNear && prevFar >= wantFar && (prevFar - prevNear) <= span * band;
+            if (keepDepth)
+            {
+                nearProj = prevNear - anchor.z;
+                farProj = prevFar - anchor.z;
+            }
+        }
+        if (!keepDepth)
+        {
+            const float pad = 0.25f * gSizeHysteresis * span;
+            nearProj -= pad;
+            farProj += pad;
+        }
+    }
 
     const float4x4 proj = SdsmOrthoOffCenterLH(bmin.x, bmax.x, bmin.y, bmax.y, nearProj, farProj);
     const float4x4 viewProj = mul(gLightView, proj);
-
-    const float2 texelWS = float2((bmax.x - bmin.x) / max(1.0f, gContentRes),
-                                  (bmax.y - bmin.y) / max(1.0f, gContentRes));
     // The bias is quoted in texels, and the box is anisotropic, so "a texel" has to be the bigger
     // of the two -- the smaller one would under-bias along the wide axis, which is where the
     // acne would be.

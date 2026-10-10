@@ -205,8 +205,14 @@ struct alignas(16) AnalyzeConstants
     // S20: the extra XY dilation of a partition that will be cached (render::sdsm::g_cacheDilation;
     // 0 with the cache off). The row's last slot, which was a pad.
     float cacheDilation = 0.0f;
+
+    // S21: stable partitions (render::sdsm::g_texelSnap / g_sizeHysteresis). A row of its own:
+    // the block had no pad left.
+    float sizeHysteresis = 0.0f;
+    std::uint32_t texelSnap = 0u;
+    std::uint32_t stablePad[2] = { 0u, 0u };
 };
-static_assert(sizeof(AnalyzeConstants) == 416,
+static_assert(sizeof(AnalyzeConstants) == 432,
               "sdsm::AnalyzeConstants must stay byte-identical to SdsmAnalyzeCB in "
               "shaders/sdsm_partitions.hlsli -- it is uploaded by raw memcpy");
 
