@@ -78,11 +78,26 @@ public:
     // never reddens. That is what lit the ocean cyan under a sunset sky.
     Math::float3 GetEffectiveColor() const
     {
+        return GetAboveCloudsColor() * cloudVisibility_;
+    }
+
+    // THE SUN ABOVE THE CLOUDS: through the atmosphere, not through the cloud deck. What lights the
+    // clouds themselves (VolumetricCloud) -- an overcast deck's top is in full sun however dark the
+    // ground under it is.
+    Math::float3 GetAboveCloudsColor() const
+    {
         const Math::float3 o = GetOuterSpaceIlluminance();
         return Math::float3(o.x * atmosphereTransmittance_.x,
                             o.y * atmosphereTransmittance_.y,
                             o.z * atmosphereTransmittance_.z);
     }
+
+    // Set once per frame by the scene: how much of the sun gets through the cloud deck to the ground,
+    // 1 under anything but a closing overcast (CloudSunGroundVisibility). The cloud shadow map does
+    // this per point inside its 20 km; this is the overcast's verdict for every consumer of
+    // GetEffectiveColor -- the lighting past the map, the fog's sun, the water's glints.
+    void SetCloudVisibility(float v) { cloudVisibility_ = v; }
+    float GetCloudVisibility() const { return cloudVisibility_; }
 
     // Set once per frame by the renderer: the atmosphere's transmittance from the ground toward this
     // light, or WHITE when the level has no procedural atmosphere -- UE's own fallback
@@ -227,6 +242,7 @@ private:
     float sunIlluminanceLux_ = 100000.0f; // P16.2; a sunny midday
     // White until a procedural atmosphere says otherwise, so an HDRI level is bit-identical.
     Math::float3 atmosphereTransmittance_{1.0f, 1.0f, 1.0f};
+    float cloudVisibility_ = 1.0f; // 1 = no overcast deck between the sun and the ground
     float skyFillIntensity_ = 1.0f;   // F8; 1 = the irradiance cube taken at face value
     // P16.12; a mid-neutral ground. Not zero: the term is physically present in every outdoor
     // scene and shipping it off would leave the defect it fixes as the default. Not sand-coloured

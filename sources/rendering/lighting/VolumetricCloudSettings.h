@@ -39,6 +39,11 @@ struct VolumetricCloudSettings
     float formationChangeSpeed = 1.0f;
     float macroVariation = 0.0f;
     float macroTileKm = 60.0f;
+    // Where the cover starts closing into an OVERCAST deck: from this coverage to 1 the erosion goes to
+    // its mean, the macro variation fades and the threshold drops, so coverage 1 is one sheet without a
+    // gap -- and the sun on the ground goes out with it (CloudOvercastAmount below). UDS do the same with
+    // their "simplified material when overcast" (fade 1.9 .. 2.1 of their 0..3 coverage).
+    float overcastFrom = 0.85f;
     // Fine tuning. Each default is UDS's value or a fit to their look (cloud_noise_cs.hlsl).
     float formationRoughness = 0.85f;     // the formation fBm's gain: higher = flatter, more broken-up formations (regenerates the volume)
     float floorVariationClear = 0.08f;    // how far the formation's B channel lifts cloud bases at partial cover ...
@@ -84,6 +89,11 @@ struct VolumetricCloudSettings
     // parts besides multi-scattering): higher = lighter AND bluer shadows, since that light is the
     // blue sky's. 1 = the atmosphere as computed. Ultra Dynamic Sky replaces it with authored colours.
     float skyLightIntensity = 1.0f;
+    // Ours: the sun's light DIFFUSED down through a cloud's depth (two-stream transmission of the column
+    // above each sample, cloud_march.hlsli) -- what lights a thick cloud's base and an overcast deck from
+    // below; without it both are lit by the blue sky alone and a closed deck reads as a clear sky.
+    // 1 = the physical estimate, 0 = off (the octaves alone, UE's model).
+    float diffuseLight = 1.0f;
 
     // --- Tracing. UE r.VolumetricCloud.ViewRaySampleMaxCount is 768 at its cinematic default and
     // DistanceToSampleMaxCount 15 km, i.e. a 19.5 m step; the step is distanceToSampleCountMaxKm /
@@ -149,11 +159,38 @@ struct VolumetricCloudConstants
     float shadowMap2[4];  // sample count, depth bias km, zw unused
     float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
     float profile[4];     // x: unused, y: 1 / LUT width, z: 1 / LUT height, w: unused
-    float lighting[4];    // x: lit extra multi-scattering octaves (0..2), y: sky light intensity, zw: unused
+    float lighting[4];    // x: lit extra multi-scattering octaves (0..2), y: sky light intensity, z: diffused light, w: overcast (0..1)
     float erosion[4];     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
-    float floorShape[4];  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w unused
+    float floorShape[4];  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's threshold lift
 };
 static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 21 * 16, "CloudCB layout");
+
+// HOW OVERCAST the cover is, 0..1: a smoothstep from overcastFrom to coverage 1. One function for every
+// consumer -- the density (erosion to its mean, macro variation faded, threshold lifted), the light
+// diffused through the deck, and the sun on the ground -- so they cannot disagree about where the deck
+// closes. 0 when the level has no clouds.
+inline float CloudOvercastAmount(const VolumetricCloudSettings& s)
+{
+    if (!s.enabled) { return 0.0f; }
+    const float from = s.overcastFrom >= 0.0f && s.overcastFrom < 0.999f ? s.overcastFrom : 0.999f;
+    float t = (s.coverage - from) / (1.0f - from);
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return t * t * (3.0f - 2.0f * t);
+}
+// How much the threshold's density rises at full overcast: UDS's coverage scale ends at a density of
+// 3; 4 (their own cap on the two-layer path) puts the threshold below the formation's lowest value
+// after erosion by its mean, so not one texel is left clear.
+constexpr float kCloudOvercastDensityLift = 1.0f;
+// THE SUN ON THE GROUND under the deck, 0..1 (DirectionalLight::SetCloudVisibility). Inside the cloud
+// shadow map's 20 km the map already darkens it; this takes the sun out everywhere -- past the map, in
+// the fog, in the water's glints -- over the last part of the closing (UDS: "Dim Directional Lights
+// with Cloud Coverage", and their directional shadows off once the clouds hide the light completely).
+inline float CloudSunGroundVisibility(const VolumetricCloudSettings& s)
+{
+    float t = (CloudOvercastAmount(s) - 0.8f) / 0.2f;
+    t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    return 1.0f - t * t * (3.0f - 2.0f * t);
+}
 
 // --- PROJECT-WIDE, not the level: graphics_settings.json "cloudShadow", Developer Controls > Sky,
 // `--set=cloudShadow.updateFrames`. A performance switch, the role UE gives a cvar

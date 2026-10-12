@@ -7,7 +7,7 @@
   },
   "cloudShadow": {
     "bilinearWeather": true,
-    "detailMean": true,
+    "detailMean": false,
     "updateFrames": 4
   },
   "frame": {

@@ -10,6 +10,9 @@
 #ifndef CLOUD_MARCH_HLSLI
 #define CLOUD_MARCH_HLSLI
 
+// The light diffused through a cloud (CloudMarch): a water cloud's asymmetry (Mie, ~0.85).
+static const float kCloudDiffusionG = 0.85f;
+
 struct CloudMarchInputs
 {
     float3 originMetres;    // world
@@ -85,11 +88,6 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
 
         CloudMedia m = CloudSetupMedia(albedo, s.extinction, basePhase);
 
-        // usf:864-869: the sky's light fades out towards the bottom of the layer. Scaled by the level's
-        // sky light intensity (cloudLighting.y): the light of the shadowed parts, so it sets how light
-        // and how blue they are.
-        const float3 ambient = distantSkyLight * (cloudLighting.y * saturate(cloudShadowTrace.z + normAlt));
-
         // usf:1101-1131: the shadow march towards the sun, x^2 sample distribution, no jitter
         // ("this one cannot be hidden well by TAA"), stopping when the ray leaves the layer.
         //
@@ -158,6 +156,48 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
         {
             m.transmittanceToSun[ms3] = exp(-extinctionAcc[ms3] * shadowMarchKm * CloudMetresPerKm);
         }
+
+        // usf:864-869: the sky's light fades out towards the bottom of the layer. Scaled by the level's
+        // sky light intensity (cloudLighting.y): the light of the shadowed parts, so it sets how light
+        // and how blue they are.
+        float skyVisibility = saturate(cloudShadowTrace.z + normAlt);
+        // THE LIGHT DIFFUSED THROUGH THE CLOUD (ours, 2026-10-13). The octaves carry the sun a short way
+        // in (the march above spans 156 m, UDS's); below that a thick cloud had no sunlight at all, and
+        // an overcast deck's underside rendered near BLACK -- hazed by the air in front of it into the
+        // sky's own blue, so coverage 1 looked like a clear sky. What lights a real deck from below is
+        // the sun's light diffused down through it: the two-stream (Eddington) transmission of a slab
+        // of optical depth tau to a beam at cos mu0, conservative scattering, asymmetry g,
+        //   T = ((1/2 + 3/4 mu0) + (1/2 - 3/4 mu0) exp(-tau/mu0)) / (1 + 3/4 (1 - g) tau),
+        // minus its direct part exp(-tau/mu0), which the octaves already carry. tau is the column
+        // ABOVE this sample (CloudColumnOpticalDepthAbove), at this model's own extinction. The term
+        // takes over where the deepest lit octave stops seeing the sun, so a sunlit flank is not lit
+        // twice; a thick cloud's base comes out darker than a thin one's. Under heavy cover the sky's
+        // light reaches the inside only through the same column (no open sky beside it), so its
+        // visibility moves to that transmission -- on UDS's own ramp, their "Floor Variation Color"
+        // (0.96 of the way, density 1.65 .. 2.65: their emissive dims at the cloud floor under heavy
+        // cover), and all the way as the deck closes. Without it a deck at coverage 0.9 still read as
+        // a blue sky, lit from beside by a sky it covers.
+        // MEASURED 2026-10-13 (wind_test, sun 45): at coverage 0.45-0.6 the look is kept -- the bases a
+        // shade greyer -- and coverage 1 is a dark grey deck instead of a sky-blue one. Taken at a REAL
+        // cloud's depth (1/8 of this extinction, the model's being ~8x one) the deck came out twice as
+        // bright and the dark undersides at 0.5 flattened into a pale lavender veil over the whole sky.
+        float3 diffused = 0.0f.xxx;
+        const float closing = max(saturate(cloudLighting.w), 0.96f * s.cloudiness);
+        [branch] if (cloudLighting.z > 0.0f || closing > 0.0f)
+        {
+            const float tauUp = CloudColumnOpticalDepthAbove(s, normAlt);
+            const float3 up = normalize(CloudWorldToPlanetKm(P));
+            const float mu0 = saturate(dot(cloudSun.xyz, up));
+            const float direct = exp(-tauUp / max(mu0, 0.05f));
+            const float spread = 1.0f / (1.0f + 0.75f * (1.0f - kCloudDiffusionG) * tauUp);
+            const float through = ((0.5f + 0.75f * mu0) + (0.5f - 0.75f * mu0) * direct) * spread;
+            const int deepest = min((int)cloudLighting.x, CLOUD_MS_COUNT - 1);
+            const float handOff = 1.0f - m.transmittanceToSun[deepest];
+            // flux mu0 E (through - direct), spread over the hemisphere it arrives from
+            diffused = sunIlluminance * (mu0 * max(through - direct, 0.0f) * handOff * cloudLighting.z / (2.0f * CloudPi));
+            skyVisibility = lerp(skyVisibility, spread, closing);
+        }
+        const float3 ambient = distantSkyLight * (cloudLighting.y * skyVisibility) + diffused;
 
         // usf:1223-1229: where the aerial perspective is evaluated -- the transmittance-weighted mean depth.
         tApWeighted += t * transmittance;

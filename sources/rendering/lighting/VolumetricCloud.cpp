@@ -638,10 +638,15 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
         / (static_cast<double>(std::max(s.weatherTileKm, 0.001f)) * kTilesPerCycle);
     c.formation[0] = 1.0f / std::max(s.weatherTileKm, 0.001f);
     c.formation[1] = std::isfinite(cycles) ? static_cast<float>(cycles - std::floor(cycles)) : 0.0f;
-    c.formation[2] = std::clamp(s.macroVariation, 0.0f, 1.0f);
+    // An overcast deck is one sheet: the macro variation fades with it (UDS scale theirs by 1 - lerp to simplified).
+    const float overcast = CloudOvercastAmount(s);
+    c.formation[2] = std::clamp(s.macroVariation, 0.0f, 1.0f) * (1.0f - overcast);
     c.formation[3] = 1.0f / std::max(s.macroTileKm, 0.1f);
     c.lighting[0] = static_cast<float>(std::min(s.msOctaves, 2u));
     c.lighting[1] = std::isfinite(s.skyLightIntensity) ? std::clamp(s.skyLightIntensity, 0.0f, 10.0f) : 1.0f;
+    c.lighting[2] = std::isfinite(s.diffuseLight) ? std::clamp(s.diffuseLight, 0.0f, 10.0f) : 1.0f;
+    c.lighting[3] = overcast;
+    c.floorShape[3] = kCloudOvercastDensityLift * overcast;
     const auto finite = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
     c.erosion[0] = std::clamp(finite(s.erosionStrength, 1.2f), 0.0f, 4.0f);
     c.erosion[1] = std::clamp(finite(s.erosionPower, 3.0f), 0.25f, 8.0f);

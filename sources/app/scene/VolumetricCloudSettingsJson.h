@@ -24,6 +24,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.formationChangeSpeed = std::clamp(j.value("formationChangeSpeed", s.formationChangeSpeed), 0.0f, 100.0f);
     s.macroVariation = std::clamp(j.value("macroVariation", s.macroVariation), 0.0f, 1.0f);
     s.macroTileKm = std::clamp(j.value("macroTileKm", s.macroTileKm), 1.0f, 1000.0f);
+    s.overcastFrom = std::clamp(j.value("overcastFrom", s.overcastFrom), 0.0f, 0.99f);
     s.formationRoughness = std::clamp(j.value("formationRoughness", s.formationRoughness), 0.3f, 0.9f);
     s.floorVariationClear = std::clamp(j.value("floorVariationClear", s.floorVariationClear), 0.0f, 2.0f);
     s.floorVariationCloudy = std::clamp(j.value("floorVariationCloudy", s.floorVariationCloudy), 0.0f, 2.0f);
@@ -57,6 +58,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.msOctaves = std::clamp(j.value("msOctaves", s.msOctaves), 0u, 2u);
     s.skyLightBottomOcclusion = std::clamp(j.value("skyLightBottomOcclusion", s.skyLightBottomOcclusion), 0.0f, 1.0f);
     s.skyLightIntensity = std::clamp(j.value("skyLightIntensity", s.skyLightIntensity), 0.0f, 10.0f);
+    s.diffuseLight = std::clamp(j.value("diffuseLight", s.diffuseLight), 0.0f, 10.0f);
     s.viewSampleCountMax = std::clamp(j.value("viewSampleCountMax", s.viewSampleCountMax), 4u, 768u);
     s.viewSampleCountMin = std::clamp(j.value("viewSampleCountMin", s.viewSampleCountMin), 1u, 64u);
     s.distanceToSampleCountMaxKm = std::clamp(j.value("distanceToSampleCountMaxKm", s.distanceToSampleCountMaxKm), 0.1f, 1000.0f);
@@ -87,6 +89,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["formationChangeSpeed"] = s.formationChangeSpeed;
     j["macroVariation"] = s.macroVariation;
     j["macroTileKm"] = s.macroTileKm;
+    j["overcastFrom"] = s.overcastFrom;
     j["formationRoughness"] = s.formationRoughness;
     j["floorVariationClear"] = s.floorVariationClear;
     j["floorVariationCloudy"] = s.floorVariationCloudy;
@@ -119,6 +122,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["msOctaves"] = s.msOctaves;
     j["skyLightBottomOcclusion"] = s.skyLightBottomOcclusion;
     j["skyLightIntensity"] = s.skyLightIntensity;
+    j["diffuseLight"] = s.diffuseLight;
     j["viewSampleCountMax"] = s.viewSampleCountMax;
     j["viewSampleCountMin"] = s.viewSampleCountMin;
     j["distanceToSampleCountMaxKm"] = s.distanceToSampleCountMaxKm;

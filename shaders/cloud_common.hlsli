@@ -48,9 +48,9 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), zw: unused
     float4 cloudShadowMap3;  // x: shadow-map texel stride this frame (1 = every texel), yz: the traced texel's offset in its stride x stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
     float4 cloudProfile;     // x: unused, y: 1 / LUT width, z: 1 / LUT height, w: unused
-    float4 cloudLighting;    // x: lit extra multi-scattering octaves (0..2, UE's count), y: sky light intensity, zw: unused
+    float4 cloudLighting;    // x: lit extra multi-scattering octaves (0..2, UE's count), y: sky light intensity, z: light diffused through the cloud (strength), w: overcast (0..1)
     float4 cloudErosion;     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
-    float4 cloudFloorShape;  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w unused
+    float4 cloudFloorShape;  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's lift of the threshold's density
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
@@ -271,6 +271,9 @@ struct CloudSample
 {
     float extinction; // 1/m, 0 = clear air
     float coverage;   // the formation field after the coverage threshold (debug view 1)
+    float column;     // the profile's column here (CloudColumnOpticalDepthAbove)
+    float floorLift;  // how far the floor variation lifts the profile here (B^2 times its knob)
+    float cloudiness; // UDS's heavy-cover ramp here, saturate(density - 1.65): coverage 0.55 .. 0.88
 };
 
 // The conservative half (UE's VolumeSampleConservativeDensity, usf:781-787): the formation field
@@ -285,8 +288,12 @@ struct CloudSample
 // four: the cloud shadow map's cheap option only (render::g_cloudShadowBilinearWeather). The facets the
 // B-spline exists to remove are a PERSPECTIVE artefact of the view; the map is an ortho grid, filtered
 // 3x3 afterwards. Every other caller passes a literal true.
+//
+// OVERCAST (cloudLighting.w, VolumetricCloudSettings.h CloudOvercastAmount): towards coverage 1 the
+// threshold's density is lifted past UDS's 3 (cloudFloorShape.w, up to 4 -- their own cap), so even
+// the formation's lowest values clear it and no gap is left; the macro variation is faded on the CPU.
 float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, out float coverageOut, out float columnOut,
-                       out float4 profileOut)
+                       out float floorLiftOut, out float cloudinessOut, out float4 profileOut)
 {
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm; // km, drifting
     const float4 formation = CloudFormationVolume.SampleLevel(CloudLinearWrap, float3(p.xz * cloudFormation.x, cloudFormation.y), 0);
@@ -304,14 +311,17 @@ float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, o
         coverageHere = saturate(coverageHere + cloudFormation.z * (macro * 2.0f - 1.0f));
     }
     const float density = 3.0f * coverageHere;
-    const float threshold = pow(1.0f - density / 6.5f, 3.0f) - 0.25f;
+    const float threshold = pow(saturate(1.0f - (density + cloudFloorShape.w) / 6.5f), 3.0f) - 0.25f;
     const float field = saturate(formation.r - threshold) / (1.0f - threshold);
     const float floorVariation = lerp(cloudFloorShape.x, cloudFloorShape.y, saturate(density - 1.5f));
-    const float profileHeight = saturate(lerp(normAlt, 1.0f, -formation.b * formation.b * floorVariation));
+    const float floorLift = formation.b * formation.b * floorVariation;
+    const float profileHeight = saturate(lerp(normAlt, 1.0f, -floorLift));
     const float column = saturate(density / 3.0f + cloudMedium.w);
     profileOut = CloudSampleProfile(column, profileHeight);
     coverageOut = field;
     columnOut = column;
+    floorLiftOut = floorLift;
+    cloudinessOut = saturate(density - 1.65f);
     return saturate(field - (1.0f - profileOut.r));
 }
 
@@ -342,15 +352,21 @@ float CloudMeanErosion(float power)
 CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight, bool bicubicWeather)
 {
     CloudSample s;
-    float coverage, column;
+    float coverage, column, floorLift, cloudiness;
     float4 profile;
-    const float base = CloudBaseDensity(worldMetres, normAlt, bicubicWeather, coverage, column, profile);
+    const float base = CloudBaseDensity(worldMetres, normAlt, bicubicWeather, coverage, column, floorLift, cloudiness, profile);
     s.coverage = coverage;
+    s.column = column;
+    s.floorLift = floorLift;
+    s.cloudiness = cloudiness;
     s.extinction = 0.0f;
     if (base <= 0.0f) { return s; }
     // The fine detail fades with the distance from the CAMERA (it would only shimmer further away).
     const float hfOctaves = min(1.0f / max(length(worldMetres - cloudCamera.xyz) / CloudMetresPerKm * cloudFloorShape.z, 1.0e-3f), 2.0f);
-    const float weight = saturate(detailWeight);
+    // An overcast deck erodes by the cells' MEAN (UDS's "simplified" overcast material: their erosion
+    // sample lerps to a constant with the overcast): a closed sheet keeps no holes, and a fully
+    // overcast sample fetches no cells at all.
+    const float weight = saturate(detailWeight) * (1.0f - saturate(cloudLighting.w));
     // The means (weight 0): the erosion's, and the fine detail's -- each octave adds (r - 0.55), whose
     // mean is kCloudCellsMean - 0.55, under the cells' B, whose mean is ~0.51.
     float erosion = CloudMeanErosion(cloudErosion.y);
@@ -395,6 +411,27 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight)
 CloudSample CloudSampleAt(float3 worldMetres, float normAlt)
 {
     return CloudSampleAt(worldMetres, normAlt, 1.0f, true);
+}
+
+// THE CLOUD ABOVE A POINT (ours): optical depth from normAlt straight up to the top of the layer, for
+// the light that DIFFUSES down through a cloud (cloud_march.hlsli). Cheap because the formation does
+// not change with height -- the field, the column and the floor's lift found at the point hold for the
+// whole column above it, and only the profile varies: four LUT taps, no 3D fetch. Erosion is taken at
+// its mean, as the view's far shadow samples do.
+float CloudColumnOpticalDepthAbove(CloudSample s, float normAlt)
+{
+    const float span = saturate(1.0f - normAlt);
+    const float meanErosion = CloudMeanErosion(cloudErosion.y) * cloudErosion.x;
+    float sum = 0.0f;
+    [unroll] for (int k = 0; k < 4; ++k)
+    {
+        const float h = normAlt + span * ((float)k + 0.5f) * 0.25f;
+        const float4 profile = CloudSampleProfile(s.column, saturate(lerp(h, 1.0f, -s.floorLift)));
+        const float shape = saturate(s.coverage - (1.0f - profile.r)) - meanErosion * profile.b;
+        sum += max(shape, 0.0f) * profile.g * profile.g * profile.g;
+    }
+    // x the layer's height in metres (cloudLayer.z is 1 / km) and the extinction scale
+    return sum * span * 0.25f * (CloudMetresPerKm / max(cloudLayer.z, 1.0e-6f)) * max(cloudMedium.x, 0.0f);
 }
 #endif // CLOUD_DENSITY
 

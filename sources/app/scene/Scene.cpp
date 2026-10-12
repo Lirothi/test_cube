@@ -1958,6 +1958,8 @@ void Scene::PrepareViews(Renderer* renderer)
             transmittance = Math::float3(t[0], t[1], t[2]);
         }
         dirLight_.SetAtmosphereTransmittance(transmittance);
+        // The overcast deck takes the sun off the ground (the clouds still get it, GetAboveCloudsColor).
+        dirLight_.SetCloudVisibility(CloudSunGroundVisibility(volumetricCloud_));
     }
     frameData_.cameraExposure = cameraExposure_;
     frameData_.colorPipeline = colorPipeline_;

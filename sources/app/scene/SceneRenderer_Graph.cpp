@@ -99,7 +99,7 @@ VolumetricCloud::FrameInputs SceneRenderer::MakeCloudInputs(Renderer* renderer) 
     in.projZ33 = projNoJitter.m._33;
     in.projZ43 = projNoJitter.m._43;
     in.sunDirection = frame_->dirLight->GetDirection();
-    in.sunIlluminance = frame_->dirLight->GetEffectiveColor();
+    in.sunIlluminance = frame_->dirLight->GetAboveCloudsColor(); // the deck's top is in full sun
     in.planetRadiusKm = frame_->settings.skyAtmosphere.parameters.radii[0];
     in.aerialBuilt = skyAtmosphere_.AerialBuilt();
     in.aerialStartKm = std::max(0.0f, frame_->settings.skyAtmosphere.aerialStartDepthMetres) / kMetresPerKm;
@@ -1469,7 +1469,20 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                                frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f, frame_->dirLight);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
-    const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, skyView,
+    // THE AIR UNDER AN OVERCAST DECK is in its shadow (UE: the cloud shadow on the atmosphere). The
+    // aerial perspective between the camera and everything it hazes -- the ground, the water, the
+    // deck's own underside -- is lit by what comes through the deck, not by the sun: without this a
+    // closed deck kept a bright blue horizon band, where a real overcast's horizon is a third of its
+    // zenith (the CIE overcast sky). The floor is the deck's diffuse transmission, two-stream, for this
+    // model's deck at coverage 1 (tau ~110 straight up): ~7.5 % of the beam (cloud_march.hlsli).
+    SkyViewFrameData aerialView = skyView;
+    {
+        constexpr float kOvercastDeckTransmission = 0.075f;
+        const float sunThrough = frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f;
+        const float scale = sunThrough + (1.0f - sunThrough) * kOvercastDeckTransmission;
+        for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; }
+    }
+    const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, aerialView,
         *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
     // Plan C2: the clouds' half-res march and resolve, after the depth it clamps to and the aerial
     // volume it hazes with (pAerial chains from the SkyView LUT and the distant light); compose
