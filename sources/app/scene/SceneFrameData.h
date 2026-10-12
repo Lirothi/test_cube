@@ -597,6 +597,16 @@ struct SceneRenderSettings
     // inertia's relaxed clamp + longer history is exactly what smeared the waves.
     float waterReflectionTemporalBlend = 0.125f;
     float waterReflectionTemporalStillInertia = 0.0f;
+    // EXPERIMENT (2026-10-12, UE's way): trace the water from its own reflection normal (GB1) and read
+    // the result at the pixel itself, instead of a flat mirror broken up by the planar UV offset.
+    // `--set=ssr.waterSurfaceNormal:1`, or `--sweep=ssr.waterExperiment:...` for the whole variant.
+    bool waterReflectionSurfaceNormal = false;
+    // How many FFT cascades (largest first) the water's reflection normal GB1 takes -- what the trace
+    // above casts its rays about, and what the UV break-up reads when it is off. 4 = all of them, the
+    // shading normal; 2 = the swell only (the owner's idea, 2026-10-12: the far ripples a pixel cannot
+    // resolve sent neighbouring rays apart). The sky in the reflection keeps the full normal.
+    // Handed to the ocean every frame (OceanRenderable::SetReflectionNormalCascades).
+    std::uint32_t waterReflectionNormalCascades = 4u;
     bool doFxaa = false;
     bool debugTexMode = false;
     // Which target the fullscreen debug blit shows. It used to be hardwired to the cascade shadow

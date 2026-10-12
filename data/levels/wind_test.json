@@ -32648,7 +32648,7 @@
         0.027450980618596077,
         1.0
       ],
-      "foamNormalStrength": 0.6000000238418579,
+      "foamNormalStrength": 0.0,
       "foamTint": [
         0.8936877250671387,
         0.9523184299468994,
@@ -32690,7 +32690,7 @@
       "shoreHorizontalFadeDepth": 5.0,
       "shoreHorizontalMin": 1.0,
       "shoreLegacyContactFoamStrength": 0.0,
-      "shoreLegacyDampFadeDepth": 5.0,
+      "shoreLegacyDampFadeDepth": 10.0,
       "shoreLegacyDissipationAmount": 0.5,
       "shoreLegacyDissipationContrast": 2.0,
       "shoreLegacyDissipationScale": 100.0,
@@ -32705,7 +32705,7 @@
       "shoreLegacyVerticalDampStrength": 0.9399999976158142,
       "shoreLegacyWindThinning": 0.949999988079071,
       "shoreLegacyXzDampStrength": 0.20000000298023224,
-      "shoreNormalFadeDepth": 5.0,
+      "shoreNormalFadeDepth": 10.0,
       "shoreNormalMinWeights": [
         0.25,
         0.44999998807907104,
@@ -32828,7 +32828,7 @@
       "sunRaysBundleWidthDeg": 12.0,
       "sunRaysBundles": 13,
       "sunRaysCount": 53,
-      "sunRaysHalo": 0.05999999865889549,
+      "sunRaysHalo": 0.10000000149011612,
       "sunRaysHaloRadiusDeg": 4.150000095367432,
       "sunRaysIntensity": 0.20000000298023224,
       "sunRaysLengthDeg": 2.0,

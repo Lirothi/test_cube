@@ -35,7 +35,7 @@
   },
   "reflections": {
     "glossyBlur": 1.0,
-    "oceanResolution": 0.5,
+    "oceanResolution": 1.0,
     "resolution": 0.5,
     "rtFoliageAlphaMode": 1,
     "rtFoliageFill": 0.15000000596046448,
@@ -57,7 +57,9 @@
       "stepsPerRay": 8,
       "useSurfaceRoughness": true
     },
-    "waterTemporal": true,
+    "waterNormalCascades": 3,
+    "waterSurfaceNormal": true,
+    "waterTemporal": false,
     "waterTemporalBlend": 0.125,
     "waterTemporalStillInertia": 0.0
   },

@@ -890,7 +890,8 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             FillSsrUeConstants(constants, true); // the water's reflection roughness is in GB0.a
             FillSsrReprojectionConstants(camera, constants);
             constants.originMask = 1u;
-            constants.flatNormal = 1u; // a smooth mirror; the composite breaks it up per pixel
+            // A smooth mirror the composite breaks up per pixel, or (experiment) the water's own normal.
+            constants.flatNormal = frame_->settings.waterReflectionSurfaceNormal ? 0u : 1u;
 
             const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetSsrMaterial().get(), resources_.GetSsrCBSizeBytes(),
@@ -937,6 +938,7 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             c.invViewProj = camera.GetInvProjMatrix() * camera.GetInvViewMatrix();
             c.camPos = camera.GetPosition();
             c.roughnessDistance = frame_->ocean ? frame_->ocean->GetRoughnessDistance() : 1.0f;
+            c.uvBreakup = frame_->settings.waterReflectionSurfaceNormal ? 0u : 1u;
             const auto compositeSamplers = std::array{ *SamplerManager::LinearClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetWaterCompositeMaterial().get(), resources_.GetWaterCompositeCBSizeBytes(),
                 [&](uint8_t* dest) { std::memcpy(dest, &c, sizeof(c)); },

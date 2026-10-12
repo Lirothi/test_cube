@@ -290,6 +290,15 @@ float3 NormalFromDerivatives(DerivativesSet derivatives, float4 normalWeights)
     return NormalFromCombinedDerivatives(combined);
 }
 
+// EXPERIMENT (2026-10-12): weights that keep the first `count` cascades (the largest waves) and drop
+// the rest, for the reflection normal (SceneRenderSettings::waterReflectionNormalCascades,
+// normalSamplingParams.z).
+float4 ReflectionCascadeMask(float count)
+{
+    return float4(count > 0.5f ? 1.0f : 0.0f, count > 1.5f ? 1.0f : 0.0f,
+                  count > 2.5f ? 1.0f : 0.0f, count > 3.5f ? 1.0f : 0.0f);
+}
+
 float4 SampleFoamCascade(float2 worldXZ, uint cascade)
 {
     float lengthScale = max(cascadeLengthScales[cascade], 1e-3f);

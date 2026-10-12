@@ -50,7 +50,8 @@ cbuffer WaterCompositeCB : register(b0)
     float    roughnessDistance; // the ocean preset's roughnessDistance (the water's specularParams.z)
     float2   invRenderSize;
     float    preExposure;
-    uint     pad0;
+    uint     uvBreakup;         // 1 = the flat mirror read at the UV offset; 0 = the trace already took
+                                //     the wave normal (UE's way), read at the pixel itself
 };
 
 // The planar reflection's UV offset, VERBATIM from the water shader it lived in until S4: how far the
@@ -94,8 +95,8 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
 
     // Bilinear: a texel the water does not cover (written 0 by the trace) fades the hit toward the
     // sky the forward draw already has, not to black.
-    const float2 reflectionUv = uv + OceanReflectionUvOffset(viewDir, viewDist, normal);
-    const float edgeFade = OceanReflectionEdgeFade(reflectionUv);
+    const float2 reflectionUv = uvBreakup != 0u ? uv + OceanReflectionUvOffset(viewDir, viewDist, normal) : uv;
+    const float edgeFade = uvBreakup != 0u ? OceanReflectionEdgeFade(reflectionUv) : 1.0f;
     const float4 ssr = WaterReflection.SampleLevel(gSmpLinear, saturate(reflectionUv), 0.0f) * edgeFade;
     const float3 skyWeighted = GB2.Load(int3(tid.xy, 0)).rgb;
 

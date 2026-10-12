@@ -42,7 +42,8 @@ cbuffer OceanCB : register(b0)
     float4 refractionParams;           // x: surface refraction strength, y: underwater refraction strength, z: absorption depth scale, w: fog density
     float4 subsurfaceParams;           // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
     float4 heightFogParams;            // x: SSS height bias, y: SSS fade distance, z: horizon fog distance scale, w: reflection normal strength
-    float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias
+    float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias,
+                                       // z: FFT cascades in the reflection normal (4 = all)
     float4 shoreBehaviorParams0;       // x: vertical fade depth, y: horizontal minimum, z: horizontal fade depth, w: normal fade depth
     float4 shoreBehaviorParams1;       // x: run-up depth, y: run-up strength, z: max wave height, w: bottom clearance
     float4 shoreNormalMinWeights;      // minimum normal/foam weight for each cascade at the shoreline
@@ -2009,6 +2010,15 @@ PSOut PSMain(VSOutput input)
 
     OceanGBuffer gb;
     float3 color = GetOceanColor(li, macroLi, foamData, gb);
+    // EXPERIMENT (2026-10-12): the reflection normal from the first N cascades only (of the macro set
+    // this surface reflects about); the sky sample keeps the full one. 4 = all.
+    [branch] if (normalSamplingParams.z < 3.5f)
+    {
+        LightingInput reflectionLi = macroLi;
+        reflectionLi.normal = NormalFromCombinedDerivatives(
+            CombineDerivatives(macroDeriv, normalWeights * ReflectionCascadeMask(normalSamplingParams.z)));
+        gb.reflectionNormal = OceanReflectionNormal(reflectionLi);
+    }
 
     float refractionEdgeWeight = refractionSoftEdge;
     [branch]

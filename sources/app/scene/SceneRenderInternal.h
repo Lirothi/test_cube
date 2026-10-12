@@ -218,7 +218,7 @@ namespace scene_internal
         float roughnessDistance = 1.0f;
         float2 invRenderSize{};
         float preExposure = 1.0f;
-        uint32_t pad0 = 0u;
+        uint32_t uvBreakup = 1u; // 1 = read the flat mirror at the planar UV offset, 0 = at the pixel itself
     };
     static_assert(sizeof(WaterCompositeConstants) == 96,
         "WaterCompositeConstants must stay byte-identical to WaterCompositeCB in "

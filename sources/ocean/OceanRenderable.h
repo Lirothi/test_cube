@@ -197,6 +197,9 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetCloudShadowSrv() const { return cloudShadowSrv_; }
     void SetFogDebugView(std::uint32_t v) { fogDebugView_ = v; }
     std::uint32_t GetFogDebugView() const { return fogDebugView_; }
+    // FFT cascades in the reflection normal GB1 (SceneRenderSettings::waterReflectionNormalCascades), a
+    // reflection setting handed over every frame like the fog; normalSamplingParams.z for the shader.
+    void SetReflectionNormalCascades(std::uint32_t n) { reflectionNormalCascades_ = n; }
 
 private:
     struct ClipLevel
@@ -295,6 +298,7 @@ private:
     Math::float4 fogParams1_{};
     Math::float4 fogParams2_{};
     std::uint32_t fogDebugView_ = 0u;
+    std::uint32_t reflectionNormalCascades_ = 4u;
     Math::float4 fogVolumeParams_{};    // x = 0: no volume (default)
     Math::float4 fogVolumeZParams_{};
     Math::mat4 cloudShadowViewProj_{};  // plan C3

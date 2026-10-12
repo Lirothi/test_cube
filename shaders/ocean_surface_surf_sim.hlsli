@@ -48,7 +48,8 @@ cbuffer OceanCB : register(b0)
     float4 refractionParams;           // x: surface refraction strength, y: underwater refraction strength, z: absorption depth scale, w: fog density
     float4 subsurfaceParams;           // x: sun scatter strength, y: sky scatter strength, z: scatter spread, w: view alignment strength
     float4 heightFogParams;            // x: SSS height bias, y: SSS fade distance, z: horizon fog distance scale, w: reflection normal strength
-    float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias
+    float4 normalSamplingParams;       // x: detail normal mip bias, y: active macro normal mip bias,
+                                       // z: FFT cascades in the reflection normal (4 = all)
     // P4: how bright this level's sky is. compose already scaled its sky samples by
     // `skyboxIntensity`; the ocean did not, so the water kept reflecting the raw cube and the
     // control meant two different things depending on which surface you looked at.
@@ -1009,6 +1010,15 @@ PSOut PSMain(VSOutput input)
 
     OceanGBuffer gb;
     float3 color = GetOceanColor(li, foamData, gb);
+    // EXPERIMENT (2026-10-12): the reflection normal from the first N cascades only; the sky sample
+    // inside GetOceanColor keeps the full one. 4 = all, and GB1 is what it always was.
+    [branch] if (normalSamplingParams.z < 3.5f)
+    {
+        LightingInput reflectionLi = li;
+        reflectionLi.normal = NormalFromCombinedDerivatives(
+            CombineDerivatives(deriv, normalWeights * ReflectionCascadeMask(normalSamplingParams.z)));
+        gb.reflectionNormal = OceanReflectionNormal(reflectionLi);
+    }
 
     // Refraction soft edge, PORTED FROM THE MODERN SURFACE: where the water sheet meets
     // geometry, the distorted refraction is faded back to the UNDISTORTED scene sample over

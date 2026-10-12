@@ -85,7 +85,8 @@ extern int g_windowSize[2];
 //   color.toneCurve         color.agxSlope           color.agxPower    color.agxSaturation
 //
 // Example: --shot=out.png --sweep=exposure.lowPercentile:0.02,0.35,0.5,0.65 --shot-interval=2
-// writes out_00..out_03.png. Empty = disabled.
+// writes out_00..out_03.png. With --profdump=p.txt it also writes p_00..p_03.txt, the profiler rows at
+// each shot, so every value's cost comes from the same process as its picture. Empty = disabled.
 extern std::string g_sweepSetting;
 extern std::vector<float> g_sweepValues;
 

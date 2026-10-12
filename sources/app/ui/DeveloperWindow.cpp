@@ -137,6 +137,7 @@ namespace
         case GraphicsControl::UeSsrUseSurfaceRoughness:
         case GraphicsControl::ReflectionTemporal:
         case GraphicsControl::WaterReflectionTemporal:
+        case GraphicsControl::WaterReflectionSurfaceNormal:
         case GraphicsControl::RtWindBlas:
         case GraphicsControl::LodEnabled:
         // ShadowMode is NOT here any more: S15 made it a three-way combo, and this list decides
@@ -949,6 +950,28 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     renderer.SetOceanReflectionTextureScale(oceanReflectionScale);
                 }
                 ImGui::Text("Ocean reflection target: %ux%u", renderer.GetOceanReflectionTextureWidth(), renderer.GetOceanReflectionTextureHeight());
+                GRAPHICS_CONTROL(WaterReflectionSurfaceNormal, "waterReflectionSurfaceNormal",
+                    ImGui::Checkbox("Water reflection: trace the surface normal (UE)",
+                                    &settings.waterReflectionSurfaceNormal));
+                DevHelp("Off (shipped): the water is traced as a flat mirror from the wave's own point and "
+                        "the wave shape comes back in the composite, which reads that mirror at the old planar "
+                        "UV offset. On: UE's way -- every pixel casts its ray about its own reflection normal "
+                        "and reads its own result. Measured 2026-10-12 on the lagoon: with all 4 cascades in "
+                        "the normal it is pixel grit; with 2 it gives clean wavy reflections. Pair it with "
+                        "the cascades below at 2 and ocean reflection resolution 1.0 (+0.009 ms at DLSS "
+                        "Balanced) or 0.75 (today's cost); 0.5 shows 2x2 texels without DLSS.");
+                int waterNormalCascades = static_cast<int>(settings.waterReflectionNormalCascades);
+                if (GRAPHICS_CONTROL(WaterReflectionNormalCascades, "waterReflectionNormalCascades",
+                    ImGui::SliderInt("Water reflection normal cascades", &waterNormalCascades, 1, 4)))
+                {
+                    settings.waterReflectionNormalCascades = static_cast<std::uint32_t>(waterNormalCascades);
+                }
+                DevHelp("How many FFT cascades, largest first, the water's reflection normal takes -- the "
+                        "normal the trace above casts about (and, with it off, what the UV offset reads). "
+                        "The default preset's patches are 600 / 56 / 5.3 / 0.5 m; the last one is already "
+                        "faded out ~20 m from the camera, so 3 looks like 4 on far water. 4 = the full "
+                        "shading normal; 2 = the swell only; 1 = an almost calm mirror. The sky in the "
+                        "reflection and the sun glints keep the full normal either way.");
                 GRAPHICS_CONTROL(WaterReflectionTemporal, "waterReflectionTemporal",
                     ImGui::Checkbox("Water reflection temporal resolve", &settings.waterReflectionTemporal));
                 DevHelp("The water reflection's OWN temporal resolve, separate from the one below. Off by "

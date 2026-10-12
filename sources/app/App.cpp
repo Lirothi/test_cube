@@ -648,6 +648,35 @@ namespace
         if (setting == "ssr.waterTemporal") { renderSettings.waterReflectionTemporal = value != 0.0f; return true; }
         if (setting == "ssr.waterTemporalBlend") { renderSettings.waterReflectionTemporalBlend = value; return true; }
         if (setting == "ssr.waterTemporalInertia") { renderSettings.waterReflectionTemporalStillInertia = value; return true; }
+        // EXPERIMENT (2026-10-12): the water traced from its own normal and read at the pixel (UE's way).
+        if (setting == "ssr.waterSurfaceNormal") { renderSettings.waterReflectionSurfaceNormal = value != 0.0f; return true; }
+        // FFT cascades in the water's reflection normal (4 = all, 2 = the swell only).
+        if (setting == "ssr.waterNormalCascades")
+        {
+            renderSettings.waterReflectionNormalCascades =
+                static_cast<uint32_t>(std::clamp(static_cast<int>(value + 0.5f), 1, 4));
+            return true;
+        }
+        if (setting == "reflections.oceanResolution")
+        {
+            const float scale = std::clamp(value, 0.25f, 1.0f);
+            Systems::GetRenderer().SetOceanReflectionTextureScale(Math::float2(scale, scale));
+            return true;
+        }
+        // The whole water-reflection variant in ONE value, so a single --sweep compares them:
+        // 0 = shipped (flat mirror + UV break-up, 0.5 of render, resolve off), 1 = UE (surface normal,
+        // full render res, resolve on with inertia 0), 2 = UE without the resolve, 3 = UE at 0.5 res.
+        if (setting == "ssr.waterExperiment")
+        {
+            const int variant = static_cast<int>(value + 0.5f);
+            renderSettings.waterReflectionSurfaceNormal = variant != 0;
+            renderSettings.waterReflectionTemporal = variant == 1 || variant == 3;
+            renderSettings.waterReflectionTemporalBlend = 0.125f;
+            renderSettings.waterReflectionTemporalStillInertia = 0.0f;
+            const float scale = (variant == 1 || variant == 2) ? 1.0f : 0.5f;
+            Systems::GetRenderer().SetOceanReflectionTextureScale(Math::float2(scale, scale));
+            return true;
+        }
         // Stochastic coverage inflation for the RT foliage alpha test (0 honest .. 1 solid cards).
         if (setting == "rt.alphaMissKeep") { renderSettings.rtAlphaMissKeep = value; return true; }
         // RT foliage alpha mode: 0 off (solid cards), 1 first-hit holes, 2 full candidates.
@@ -1833,6 +1862,26 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         const size_t dot = path.rfind('.');
                         if (dot != std::string::npos) { path.insert(dot, suffix); }
                         else { path += suffix; }
+                    }
+                    // A --sweep with a --profdump also writes the profiler rows AT each shot
+                    // (<dump>_NN), so every value's cost comes out of the same process as its picture;
+                    // the final dump below still covers the window after the last one.
+                    if (!g_profDumpPath.empty() && !g_sweepValues.empty())
+                    {
+                        std::string dumpPath = g_profDumpPath;
+                        char suffix[8];
+                        std::snprintf(suffix, sizeof(suffix), "_%02d", shotIndex);
+                        const size_t dot = dumpPath.rfind('.');
+                        if (dot != std::string::npos) { dumpPath.insert(dot, suffix); }
+                        else { dumpPath += suffix; }
+                        if (Profiler::Get().DumpOverlay(dumpPath))
+                        {
+                            LOG_INFO(logging::LogCategory::Profiling, "profiler overlay dump saved: {}", dumpPath);
+                        }
+                        else
+                        {
+                            LOG_ERROR(logging::LogCategory::Profiling, "profiler overlay dump FAILED: {}", dumpPath);
+                        }
                     }
                     const bool ok = Screenshot::SaveBackbufferPng(renderer, path);
                     if (ok)
