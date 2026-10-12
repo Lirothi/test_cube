@@ -49,6 +49,9 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudDistortion; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
     float4 cloudDistortionOffset; // xyz: distortion offset in texture UVW, w: unused
     float4 cloudShadowMap3;  // x: shadow-map texel stride this frame (1 = every texel), yz: the traced texel's offset in its stride x stride cell, w: cheap-density bits (1 bilinear weather, 2 detail mean)
+    float4 cloudProfile;     // x: profile LUT on (1/0), y: 1 / LUT width, z: 1 / LUT height, w: unused
+    float4 cloudFormation;   // x: formation volume on (bound as CloudBaseNoise), y: its time coordinate (0..1, wraps), z: macro variation (coverage +-), w: 1 / macro tile (1/km)
+    float4 cloudLighting;    // x: lit extra multi-scattering octaves (0..2, UE's count), yzw: unused
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
@@ -140,9 +143,10 @@ bool CloudLayerSegment(float3 originKm, float3 dir, out float tMin, out float tM
 
 // ---------------------------------------------------------------------------------------------
 // Phase. UE VolumetricCloud.usf:329-337 blend two Henyey-Greenstein lobes. Their HG takes +2g cos and
-// they negate the cosine at the call, so a NEGATIVE g is forward-scattering in their material node;
-// ours is the textbook form with cosTheta = dot(direction TO the sun, camera -> point), so a POSITIVE
-// g throws light forward -- the same pair fog_common.hlsli transcribes as a pair.
+// they negate the cosine at the call, of a light direction that points TO the sun
+// (SceneRendering.cpp:1546) -- the two flips cancel, so their node's g has the textbook sign, the
+// same as ours: cosTheta = dot(direction TO the sun, camera -> point), POSITIVE g throws light
+// forward. (This comment said the opposite until 2026-10-12; the code was always right.)
 float CloudHG(float g, float cosTheta)
 {
     g = clamp(g, -0.999f, 0.999f);
@@ -160,9 +164,12 @@ float CloudPhase(float cosTheta)
 // Multi-scattering octaves, UE VolumetricCloud.usf:368-424 (Wrenninge). Octave 0 is single scattering;
 // each further octave scales scattering by the contribution factor, extinction by the occlusion factor
 // and pulls the phase towards isotropic by the eccentricity factor -- each factor squared per octave.
-// Two octaves total: UE's material node ships with ZERO extra octaves (isotropic single scattering),
-// which no cloud material actually uses; the sample content uses one extra, so does this.
-#define CLOUD_MS_COUNT 2
+// Room for UE's maximum, two EXTRA octaves (MultiScatteringApproximationOctaveCount 0..2); how many
+// are lit is the level's `msOctaves` (cloudLighting.x), default 1 -- what this always did. Ultra
+// Dynamic Sky runs 2: its third octave is occluded by msOcclusion^2 (0.25 at 0.5), so sunlight reaches
+// the base of a dense cloud in the sun's colour -- what keeps their undersides grey instead of
+// sky-blue (owner, 2026-10-12: "низ облаков темный очень"). An unlit octave scatters exactly 0.
+#define CLOUD_MS_COUNT 3
 
 struct CloudMedia
 {
@@ -180,9 +187,10 @@ CloudMedia CloudSetupMedia(float albedo, float extinction, float basePhase)
     m.phase[0] = basePhase;
     m.transmittanceToSun[0] = 1.0f;
     float msS = saturate(cloudPhase.y), msE = saturate(cloudPhase.z), msP = saturate(cloudPhase.w);
+    const float litOctaves = cloudLighting.x;
     [unroll] for (int ms = 1; ms < CLOUD_MS_COUNT; ++ms)
     {
-        m.scattering[ms] = m.scattering[ms - 1] * msS;
+        m.scattering[ms] = (float)ms <= litOctaves ? m.scattering[ms - 1] * msS : 0.0f;
         m.extinction[ms] = m.extinction[ms - 1] * msE;
         m.phase[ms] = lerp(CloudIsotropicPhase(), m.phase[0], msP);
         m.transmittanceToSun[ms] = 1.0f;
@@ -197,10 +205,12 @@ CloudMedia CloudSetupMedia(float albedo, float extinction, float basePhase)
 //   CloudBaseNoise   128^3 RGBA8  r: Perlin-Worley, gba: Worley at 2x / 4x / 8x
 //   CloudDetailNoise 128^3 RGBA8  rgb: Worley at 1x / 2x / 4x (128^3, not Schneider's 32^3: see cloud_noise_cs.hlsl)
 //   CloudWeather     512^2 RGBA8  r: coverage field, g: cloud type field, b: unused
+// and one uploaded at load (VolumetricCloud::Prepare): the PROFILE LUT, used when cloudProfile.x.
 #ifdef CLOUD_DENSITY
 Texture3D<float4> CloudBaseNoise : register(CLOUD_T_BASE);
 Texture3D<float4> CloudDetailNoise : register(CLOUD_T_DETAIL);
 Texture2D<float4> CloudWeather : register(CLOUD_T_WEATHER);
+Texture2D<float4> CloudProfileLut : register(CLOUD_T_PROFILE);
 SamplerState CloudLinearWrap : register(CLOUD_S_WRAP);
 
 float CloudRemap(float v, float lo, float hi, float newLo, float newHi)
@@ -246,6 +256,21 @@ float CloudHeightGradient(float normAlt, float type)
     return lerp(lerp(stratus, stratocumulus, a), cumulus, b);
 }
 
+// THE PROFILE LUT, the alternative to the three gradients above (cloudProfile.x). The semantics are
+// Ultra Dynamic Sky's Cloud_Profile (decoded from its material, 2026-10-12): u is the cloud type --
+// UDS index it by coverage, we by the weather map's type field plus the cloudType bias, so 0 is the
+// flat, low fair-weather end and 1 the full-height end -- and v = 1 - height in the layer (row 0 is
+// the top). R is the ENVELOPE: the density is the coverage field minus (1 - R), so only the dense
+// middle of a cloud reaches the top of its profile (flat bases, domed tops). G scales the extinction,
+// cubed. B scales the detail erosion at that height (low near the base = a firm, flat underside).
+// Read with the set's wrap sampler, the coordinates held half a texel inside so neither axis wraps.
+float4 CloudSampleProfile(float type, float normAlt)
+{
+    const float2 halfTexel = 0.5f * cloudProfile.yz;
+    const float2 uv = clamp(float2(type, 1.0f - normAlt), halfTexel, 1.0f - halfTexel);
+    return CloudProfileLut.SampleLevel(CloudLinearWrap, uv, 0);
+}
+
 struct CloudSample
 {
     float extinction; // 1/m, 0 = clear air
@@ -277,9 +302,43 @@ float2 CloudWeatherCoordinates(float3 shapeKm, float2 weatherUV)
 // cheap option only (render::g_cloudShadowBilinearWeather). The facets the B-spline exists to
 // remove are a PERSPECTIVE artefact of the view; the map is an ortho grid of the same 78 m pitch as
 // the weather texel, filtered 3x3 afterwards. Every other caller passes a literal true.
-float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, out float coverageOut, out float typeOut)
+//
+// profileOut: the profile LUT's texel when cloudProfile.x is on, else (1,1,1,1) -- which leaves the
+// erosion and the extinction in CloudSampleAt multiplied by exactly 1, i.e. the old model bit for bit.
+float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, out float coverageOut, out float typeOut,
+                       out float4 profileOut)
 {
     const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm; // km, drifting
+    [branch] if (cloudFormation.x > 0.0f)
+    {
+        // THE FORMATION VOLUME (a test of Ultra Dynamic Sky's model, render::g_cloudFormationPath),
+        // bound in the base noise's slot: x/y = the field over one weather tile, z = time (it loops).
+        // UDS's Volumetric_Clouds_Conservative_Density, term for term: the coverage knob is their
+        // "Cloud Density" D / 3 (so it is also the profile's column, as theirs is), the threshold
+        // (1 - D/6.5)^3 - 0.25 on R, and the floor variation -- B squared lowers the height the
+        // profile is read at, by their Floor Variation Clear 0.08 .. Cloudy 0.64 -- so bases undulate.
+        const float4 formation = CloudBaseNoise.SampleLevel(CloudLinearWrap, float3(p.xz * cloudShape.z, cloudFormation.y), 0);
+        // MACRO VARIATION (UDS's, which is a sine product; ours is the weather map's coverage field,
+        // unused otherwise in this branch): the coverage moves +- cloudFormation.z over a much larger
+        // tile, so the sky has cloudy regions and clear ones -- and since the profile's column follows
+        // the coverage, the clouds in a cloudy region are also taller, as UDS's are.
+        float coverageHere = saturate(cloudMedium.z);
+        [branch] if (cloudFormation.z > 0.0f)
+        {
+            const float macro = CloudSampleWeather(p.xz * cloudFormation.w).r;
+            coverageHere = saturate(coverageHere + cloudFormation.z * (macro * 2.0f - 1.0f));
+        }
+        const float density = 3.0f * coverageHere;
+        const float threshold = pow(1.0f - density / 6.5f, 3.0f) - 0.25f;
+        const float field = saturate(formation.r - threshold) / (1.0f - threshold);
+        const float floorVariation = lerp(0.08f, 0.64f, saturate(density - 1.5f));
+        const float profileHeight = saturate(lerp(normAlt, 1.0f, -formation.b * formation.b * floorVariation));
+        const float column = saturate(density / 3.0f + cloudMedium.w);
+        profileOut = CloudSampleProfile(column, profileHeight);
+        coverageOut = field;
+        typeOut = column;
+        return saturate(field - (1.0f - profileOut.r));
+    }
     const float3 shapeKm = float3(p.x, p.y * cloudShadowMap2.z, p.z);
     const float3 baseCoordinates = shapeKm * cloudShape.x;
     // Warp before ALL weather interpretation: coverage, type and conservative density agree.
@@ -311,6 +370,16 @@ float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, o
     const float4 base = CloudBaseNoise.SampleLevel(CloudLinearWrap, baseCoordinates, 0);
     const float lowFreqFbm = base.g * 0.625f + base.b * 0.25f + base.a * 0.125f;
     float baseCloud = saturate(CloudRemap(base.r, -(1.0f - lowFreqFbm), 1.0f, 0.0f, 1.0f));
+    [branch] if (cloudProfile.x > 0.0f)
+    {
+        // UDS's Volumetric_Clouds_Conservative_Density: the thresholded field normalised to 0..1
+        // (no trailing "* coverage" -- the envelope does the thinning), minus what the profile takes
+        // away at this height.
+        profileOut = CloudSampleProfile(type, normAlt);
+        const float field = saturate(CloudRemap(baseCloud, 1.0f - coverage, 1.0f, 0.0f, 1.0f));
+        return saturate(field - (1.0f - profileOut.r));
+    }
+    profileOut = 1.0f.xxxx;
     baseCloud *= CloudHeightGradient(normAlt, type);
     return saturate(CloudRemap(baseCloud, 1.0f - coverage, 1.0f, 0.0f, 1.0f)) * coverage;
 }
@@ -329,10 +398,38 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight,
 {
     CloudSample s;
     float coverage, type;
-    const float base = CloudBaseDensity(worldMetres, normAlt, bicubicWeather, coverage, type);
+    float4 profile;
+    const float base = CloudBaseDensity(worldMetres, normAlt, bicubicWeather, coverage, type, profile);
     s.coverage = coverage;
     s.extinction = 0.0f;
     if (base <= 0.0f) { return s; }
+    [branch] if (cloudFormation.x > 0.0f)
+    {
+        // UDS's Volumetric_Clouds_Extinction, term for term, with THEIR erosion volume (3D_Cells,
+        // render::g_cloudCellsPath) bound in the detail slot: tiled 1.2 x 0.696 x 1.2 km (their 3D Noise
+        // Scale), R cubed times 1.2 (3D Erosion, Erosion Power 3) times the profile's B; then their
+        // high-frequency custom node -- two octaves at 3.5x the erosion's frequency, distorted by it
+        // (HF Distortion 0.21), faded out by 1.5 km from the camera (HF Octave Zero Distance) -- at
+        // 0.24 (High Frequency Noise) under the cells' B; then their extinction scale times G cubed.
+        const float3 p = (worldMetres + cloudWind.xyz) / CloudMetresPerKm;
+        const float3 q = float3(p.x / 1.2f, p.y / 0.696f, p.z / 1.2f);
+        const float3 cells = CloudDetailNoise.SampleLevel(CloudLinearWrap, q, 0).rgb;
+        float shape = base - cells.r * cells.r * cells.r * 1.2f * profile.b;
+        float octaves = min(1.5f / max(length(worldMetres - cloudCamera.xyz) / CloudMetresPerKm, 1.0e-3f), 2.0f);
+        float3 uvw = q * 3.5f + cells * 0.21f;
+        float highFrequency = 0.5f, strength = 1.0f;
+        [unroll] for (int octave = 0; octave < 2; ++octave)
+        {
+            [branch] if (octaves > 0.3f)
+            {
+                highFrequency += (CloudDetailNoise.SampleLevel(CloudLinearWrap, frac(uvw), 0).r - 0.55f) * strength * saturate(octaves * 4.0f);
+            }
+            strength *= 0.6f; uvw *= 2.0f; octaves -= 1.0f;
+        }
+        shape += (highFrequency - 0.55f) * 0.24f * cells.b;
+        s.extinction = max(shape, 0.0f) * max(cloudMedium.x, 0.0f) * (profile.g * profile.g * profile.g);
+        return s;
+    }
     // A sample that resolves NONE of the detail does not fetch it: lerp(mean, x, 0) is the mean
     // exactly, so this is bit-identical and saves a 3D fetch on every far self-shadow sample of
     // the view march and on every shadow-map sample in its detail-mean mode.
@@ -346,8 +443,8 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight,
     }
     // Wispy at the bottom of the cloud, billowy towards the top.
     const float modifier = lerp(highFreqFbm, 1.0f - highFreqFbm, saturate(normAlt * 10.0f));
-    const float eroded = saturate(CloudRemap(base, modifier * saturate(cloudShape.w), 1.0f, 0.0f, 1.0f));
-    s.extinction = eroded * max(cloudMedium.x, 0.0f);
+    const float eroded = saturate(CloudRemap(base, modifier * saturate(cloudShape.w) * profile.b, 1.0f, 0.0f, 1.0f));
+    s.extinction = eroded * max(cloudMedium.x, 0.0f) * (profile.g * profile.g * profile.g);
     return s;
 }
 

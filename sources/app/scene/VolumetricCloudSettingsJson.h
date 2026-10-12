@@ -22,7 +22,12 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.coverage = std::clamp(j.value("coverage", s.coverage), 0.0f, 1.0f);
     s.overcast = std::clamp(j.value("overcast", s.overcast), 0.0f, 1.0f);
     s.cloudType = std::clamp(j.value("cloudType", s.cloudType), -1.0f, 1.0f);
-    s.extinctionScale = std::clamp(j.value("extinctionScale", s.extinctionScale), 0.0f, 1.0f);
+    s.profile = j.value("profile", s.profile);
+    s.formationChangeSpeed = std::clamp(j.value("formationChangeSpeed", s.formationChangeSpeed), 0.0f, 100.0f);
+    s.macroVariation = std::clamp(j.value("macroVariation", s.macroVariation), 0.0f, 1.0f);
+    s.macroTileKm = std::clamp(j.value("macroTileKm", s.macroTileKm), 1.0f, 1000.0f);
+    // Up to 10: a profile's G is applied cubed, so the scale it needs is ~8x the gradient model's.
+    s.extinctionScale = std::clamp(j.value("extinctionScale", s.extinctionScale), 0.0f, 10.0f);
     s.albedo = std::clamp(j.value("albedo", s.albedo), 0.0f, 1.0f);
     s.detailStrength = std::clamp(j.value("detailStrength", s.detailStrength), 0.0f, 1.0f);
     s.weatherDistortionStrength = std::clamp(j.value("weatherDistortionStrength", s.weatherDistortionStrength), 0.0f, 1.0f);
@@ -40,6 +45,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.msContribution = std::clamp(j.value("msContribution", s.msContribution), 0.0f, 1.0f);
     s.msOcclusion = std::clamp(j.value("msOcclusion", s.msOcclusion), 0.0f, 1.0f);
     s.msEccentricity = std::clamp(j.value("msEccentricity", s.msEccentricity), 0.0f, 1.0f);
+    s.msOctaves = std::clamp(j.value("msOctaves", s.msOctaves), 0u, 2u);
     s.skyLightBottomOcclusion = std::clamp(j.value("skyLightBottomOcclusion", s.skyLightBottomOcclusion), 0.0f, 1.0f);
     s.viewSampleCountMax = std::clamp(j.value("viewSampleCountMax", s.viewSampleCountMax), 4u, 768u);
     s.viewSampleCountMin = std::clamp(j.value("viewSampleCountMin", s.viewSampleCountMin), 1u, 64u);
@@ -69,6 +75,10 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["coverage"] = s.coverage;
     j["overcast"] = s.overcast;
     j["cloudType"] = s.cloudType;
+    j["profile"] = s.profile;
+    j["formationChangeSpeed"] = s.formationChangeSpeed;
+    j["macroVariation"] = s.macroVariation;
+    j["macroTileKm"] = s.macroTileKm;
     j["extinctionScale"] = s.extinctionScale;
     j["albedo"] = s.albedo;
     j["detailStrength"] = s.detailStrength;
@@ -87,6 +97,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["msContribution"] = s.msContribution;
     j["msOcclusion"] = s.msOcclusion;
     j["msEccentricity"] = s.msEccentricity;
+    j["msOctaves"] = s.msOctaves;
     j["skyLightBottomOcclusion"] = s.skyLightBottomOcclusion;
     j["viewSampleCountMax"] = s.viewSampleCountMax;
     j["viewSampleCountMin"] = s.viewSampleCountMin;

@@ -30,8 +30,8 @@ struct SkyEnvironmentOverlay
     UINT cbBytes = 0;      // aligned size of the whole constant buffer
     UINT ownBytes = 0;     // the owner's blob at its head; the sky's params + view follow
     std::function<void(uint8_t* dst, unsigned mipSize)> writeConstants;
-    std::array<ID3D12Resource*, 4> reads{};            // declared at rest for the pass (null = none)
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{}; // t0..t3
+    std::array<ID3D12Resource*, 5> reads{};            // declared at rest for the pass (null = none)
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs{}; // t0..t4; the sky's two LUTs follow at t5, t6
     size_t dependency = static_cast<size_t>(-1);       // a pass the overlay's inputs come from
 };
 

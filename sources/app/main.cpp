@@ -36,6 +36,7 @@
 #include "rendering/core/CommandListBindState.h" // --no-bind-batching
 #include "text/TextManager.h"
 #include "vfx/WindState.h"                       // W8: g_windFreeze / g_windFrozenTime (--wind-freeze)
+#include "rendering/lighting/VolumetricCloud.h"  // render::g_cloudProfilePath (--cloud-profile)
 
 #include <algorithm>
 #include <cctype>
@@ -349,6 +350,37 @@ int WINAPI WinMain(
     // "--set=...": above the scene-stress branch too, so the harness can pin the setting a gate
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
+
+    // "--cloud-profile=<image>" / "--cloud-formation=<dds>" / "--cloud-cells=<dds>": the volumetric
+    // clouds' profile LUT, formation and erosion volumes (VolumetricCloud.h), read when the cloud
+    // resources are created; the level's `profile` switch (and `--set=cloudFormation.on`) decide if
+    // they are used. Above the scene-stress branch, so a GBV churn exercises the same uploads.
+    const auto widePathArg = [lpCmdLine](const char* name, std::wstring& out) {
+        const char* flag = lpCmdLine ? std::strstr(lpCmdLine, name) : nullptr;
+        if (!flag) { return; }
+        const char* p = flag + std::strlen(name);
+        std::string path;
+        while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
+        const int count = MultiByteToWideChar(CP_ACP, 0, path.c_str(), static_cast<int>(path.size()), nullptr, 0);
+        out.assign(static_cast<size_t>(std::max(count, 0)), L'\0');
+        if (count > 0) {
+            MultiByteToWideChar(CP_ACP, 0, path.c_str(), static_cast<int>(path.size()), out.data(), count);
+        }
+    };
+    widePathArg("--cloud-profile=", render::g_cloudProfilePath);
+    widePathArg("--cloud-formation=", render::g_cloudFormationPath);
+    widePathArg("--cloud-cells=", render::g_cloudCellsPath);
+    // Without the flags, files dropped in local_assets/clouds/ are used: a machine-local folder for
+    // textures that must not enter the repository (the Ultra Dynamic Sky look test, which runs on
+    // that asset's own textures). Absent files leave the built-in model as it was.
+    const auto localFallback = [](std::wstring& path, const wchar_t* file) {
+        if (!path.empty()) { return; }
+        const DWORD attributes = GetFileAttributesW(file);
+        if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) { path = file; }
+    };
+    localFallback(render::g_cloudProfilePath, L"local_assets/clouds/profile.png");
+    localFallback(render::g_cloudFormationPath, L"local_assets/clouds/formation.dds");
+    localFallback(render::g_cloudCellsPath, L"local_assets/clouds/cells.dds");
 
     // Barrier plan step 6: "--canonical-check" logs every resource that did not END the frame in
     // its declared canonical state (DBWIN "[canonical]" lines). Parsed above the scene-stress

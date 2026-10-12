@@ -20,7 +20,7 @@
 //
 // b0 CloudCB with the sky's SkyAtmosphereCB appended (CLOUD_WITH_SKY_CB, cloud_common.hlsli)
 // t0 CloudBaseNoise  t1 CloudDetailNoise  t2 CloudWeather  t3 DistantSkyLight (B5, raw luminance)
-// t4 Transmittance LUT  t5 MultiScatter LUT
+// t4 CloudProfileLut  t5 Transmittance LUT  t6 MultiScatter LUT  (t0..t4 the overlay's, t5..t6 the sky's)
 // u0 the radiance mip, six faces in the array     s0 linear wrap (noise)  s1 linear clamp (LUTs)
 #pragma pack_matrix(row_major)
 #define CLOUD_DENSITY
@@ -28,6 +28,7 @@
 #define CLOUD_T_BASE t0
 #define CLOUD_T_DETAIL t1
 #define CLOUD_T_WEATHER t2
+#define CLOUD_T_PROFILE t4
 #define CLOUD_S_WRAP s0
 #include "cloud_common.hlsli"
 #define SKY_VIEW
@@ -38,13 +39,13 @@
 
 #define CLOUD_CAPTURE_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D<float4> DistantSkyLight : register(t3);
-Texture2D<float4> TransmittanceLut : register(t4);
-Texture2D<float4> MultiScatterLut : register(t5);
+Texture2D<float4> TransmittanceLut : register(t5);
+Texture2D<float4> MultiScatterLut : register(t6);
 RWTexture2DArray<float4> Radiance : register(u0);
 SamplerState gSmpLinearClamp : register(s1);
 

@@ -24,6 +24,21 @@ struct VolumetricCloudSettings
     float coverage = 0.5f;          // threshold on the weather map's coverage field: 0 clear .. 1 the whole field as drawn
     float overcast = 0.0f;          // lifts the weather map's coverage field towards 1: 0 the map as drawn .. 1 no gaps (the base shape keeps its texture)
     float cloudType = 0.0f;         // bias on the weather map's type field: -1 all stratus .. +1 all cumulus
+    // The vertical shape from a PROFILE LUT (UDS's Cloud_Profile semantics, cloud_common.hlsli
+    // CloudSampleProfile) instead of the three Schneider gradients: u = the type field above, v =
+    // height; R the envelope, G the extinction (cubed -- a profile's G of 0.5 is 1/8 of the scale
+    // below), B the detail erosion. The LUT is the built-in one unless `--cloud-profile=<png>` names a file.
+    bool profile = false;
+    // The formation volume's knobs (used only while one is loaded, VolumetricCloud.h):
+    //   formationChangeSpeed -- how fast the shapes evolve RELATIVE TO THE DRIFT (UDS's Formation
+    //     Change Speed): 1 = one full cycle of the volume's time axis while the clouds drift 16
+    //     formation tiles; at 30 km/h over a 12 km tile that is a new slice every ~3 min, a cloud
+    //     living 15-30 min. No wind, no change.
+    //   macroVariation -- coverage +- this, from the weather map's coverage field over macroTileKm
+    //     (UDS's Macro Variation): cloudy regions and clear ones instead of an even scatter.
+    float formationChangeSpeed = 1.0f;
+    float macroVariation = 0.0f;
+    float macroTileKm = 60.0f;
     float extinctionScale = 0.05f;  // extinction at full density, 1/m (real cumulus 0.04-0.1)
     float albedo = 0.95f;           // single-scattering albedo of the droplets
     float detailStrength = 0.35f;   // how much the Worley detail erodes the base shape
@@ -46,14 +61,19 @@ struct VolumetricCloudSettings
 
     // --- Lighting. UE's VolumetricAdvancedMaterialOutput node defaults are isotropic (g 0 / 0 /
     // blend 0, zero extra octaves), which no shipped cloud material keeps; these are the sample
-    // content's shape. SIGN: ours is the textbook Henyey-Greenstein, POSITIVE g is forward
-    // scattering (UE's node negates the cosine, so theirs is the other way round).
+    // content's shape. SIGN: POSITIVE g is forward scattering, here AND in UE's node -- their HG takes
+    // +2g cos and they negate the cosine of a light direction that points TO the sun
+    // (VolumetricCloud.usf:332, SceneRendering.cpp:1546), which is the textbook form again. A UE or
+    // UDS value is entered as is.
     float phaseG = 0.6f;
     float phaseG2 = -0.3f;
     float phaseBlend = 0.25f;
     float msContribution = 0.5f;    // UE ConstMultiScatteringContribution
     float msOcclusion = 0.5f;       // UE ConstMultiScatteringOcclusion
     float msEccentricity = 0.5f;    // UE ConstMultiScatteringEclipse
+    // UE MultiScatteringApproximationOctaveCount: extra octaves beyond single scattering, 0..2. 1 is
+    // what this always was; UDS run 2, which carries the sun's light deeper into a dense cloud.
+    std::uint32_t msOctaves = 1u;
     float skyLightBottomOcclusion = 0.5f; // UE SkyLightCloudBottomOcclusion: the sky's light fades out towards the layer's bottom
 
     // --- Tracing. UE r.VolumetricCloud.ViewRaySampleMaxCount is 768 at its cinematic default and
@@ -120,8 +140,11 @@ struct VolumetricCloudConstants
     float distortion[4]; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
     float distortionOffset[4]; // xyz: wrapped distortion offset in texture UVW, w: unused
     float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear weather, 2 detail mean)
+    float profile[4];     // x: profile LUT on, y: 1 / LUT width, z: 1 / LUT height, w: unused
+    float formation[4];   // x: formation volume on (bound in the base noise's slot), y: its time coordinate (0..1, wraps), z: macro variation, w: 1 / macro tile (1/km)
+    float lighting[4];    // x: lit extra multi-scattering octaves (0..2), yzw: unused
 };
-static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 19 * 16, "CloudCB layout");
+static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 22 * 16, "CloudCB layout");
 
 // --- PROJECT-WIDE, not the level: graphics_settings.json "cloudShadow", Developer Controls > Sky,
 // `--set=cloudShadow.updateFrames`. A performance switch, the role UE gives a cvar

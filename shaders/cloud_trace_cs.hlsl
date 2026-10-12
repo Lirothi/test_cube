@@ -15,7 +15,7 @@
 //
 // b0 CloudCB (cloud_common.hlsli)
 // t0 CloudBaseNoise  t1 CloudDetailNoise  t2 CloudWeather  t3 Depth (render res)
-// t4 SkyAerialVolume (B3)  t5 DistantSkyLight (B5, raw luminance)
+// t4 SkyAerialVolume (B3)  t5 DistantSkyLight (B5, raw luminance)  t6 CloudProfileLut
 // u0 CloudColor (rgb pre-exposed luminance, a transmittance)  u1 CloudDepth (km, the front)
 // s0 linear wrap (noise)  s1 linear clamp (aerial volume)
 #pragma pack_matrix(row_major)
@@ -23,6 +23,7 @@
 #define CLOUD_T_BASE t0
 #define CLOUD_T_DETAIL t1
 #define CLOUD_T_WEATHER t2
+#define CLOUD_T_PROFILE t6
 #define CLOUD_S_WRAP s0
 #include "cloud_common.hlsli"
 #include "cloud_march.hlsli"
@@ -30,7 +31,7 @@
 
 #define CLOUD_TRACE_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 

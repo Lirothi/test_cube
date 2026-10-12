@@ -387,6 +387,8 @@ namespace
             return true;
         }
         if (setting == "cloudShadow.bilinearWeather") { render::g_cloudShadowBilinearWeather = value != 0.0f; return true; }
+        // The --cloud-formation test hook's switch (VolumetricCloud.h); inert without the file.
+        if (setting == "cloudFormation.on") { render::g_cloudFormationOn = value != 0.0f; return true; }
         if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean = value != 0.0f; return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
@@ -755,6 +757,8 @@ namespace
             if (key == "seed") { c.seed = static_cast<std::uint32_t>(std::max(value, 0.0f)); return true; }
             if (key == "temporal") { c.temporal = value != 0.0f; return true; }
             if (key == "shadowMap") { c.shadowMap = value != 0.0f; return true; }
+            if (key == "profile") { c.profile = value != 0.0f; return true; }
+            if (key == "msOctaves") { c.msOctaves = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
             if (key == "viewSampleCountMax") { c.viewSampleCountMax = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 768.0f)); return true; }
             if (key == "viewSampleCountMin") { c.viewSampleCountMin = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
             if (key == "shadowSampleCount") { c.shadowSampleCount = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 80.0f)); return true; }
@@ -763,7 +767,9 @@ namespace
             const FloatKnob knobs[] = {
                 { "layerBottomKm", &c.layerBottomKm, 0.1f, 20.0f }, { "layerHeightKm", &c.layerHeightKm, 0.1f, 20.0f },
                 { "coverage", &c.coverage, 0.0f, 1.0f }, { "overcast", &c.overcast, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
-                { "extinctionScale", &c.extinctionScale, 0.0f, 1.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
+                { "extinctionScale", &c.extinctionScale, 0.0f, 10.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
+                { "formationChangeSpeed", &c.formationChangeSpeed, 0.0f, 100.0f },
+                { "macroVariation", &c.macroVariation, 0.0f, 1.0f }, { "macroTileKm", &c.macroTileKm, 1.0f, 1000.0f },
                 { "weatherDistortionStrength", &c.weatherDistortionStrength, 0.0f, 1.0f },
                 { "shapeDistortionTileKm", &c.shapeDistortionTileKm, 0.1f, 1000.0f },
                 { "shapeDistortionSpeed", &c.shapeDistortionSpeed, 0.0f, 10.0f },

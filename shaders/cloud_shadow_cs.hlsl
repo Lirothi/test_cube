@@ -10,8 +10,8 @@
 // with the same depth rule -- a quarter of the density samples for a map that is read bilinearly
 // anyway. UE's optional temporal filter (off by default, NewFrameWeight 1) is not carried.
 //
-// Two entry points: CSTrace (b0 CloudCB, t0..t2 the noise set, u0 the raw map) and
-// CSFilter (t3 the raw map, u0 the filtered map).
+// Two entry points: CSTrace (b0 CloudCB, t0..t2 the noise set, t4 the profile LUT, u0 the raw map)
+// and CSFilter (t3 the raw map, u0 the filtered map). One table for both: t0..t4 every time.
 //
 // Time slicing (ours; render::g_cloudShadowUpdateFrames): CSTrace may trace only one texel of every
 // stride x stride cell (cloudShadowMap3.xyz), dispatched at resolution / stride; the rest of the raw
@@ -26,12 +26,13 @@
 #define CLOUD_T_BASE t0
 #define CLOUD_T_DETAIL t1
 #define CLOUD_T_WEATHER t2
+#define CLOUD_T_PROFILE t4
 #define CLOUD_S_WRAP s0
 #include "cloud_common.hlsli"
 
 #define CLOUD_SHADOW_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE))"
 

@@ -2221,8 +2221,28 @@ namespace
                           "gaps; the base shape keeps its own thick-and-thin texture, so the deck stays mottled.");
             dragF("Cloud Type", "cloudType", 0.0f, 0.01f, -1.0f, 1.0f, "%.2f");
             InspectorHelp("Bias on the weather map's type field: towards -1 everything is flat stratus, "
-                          "towards +1 towering cumulus; 0 lets the map decide per formation.");
-            dragF("Extinction (1/m)", "extinctionScale", 0.05f, 0.001f, 0.0f, 1.0f, "%.3f");
+                          "towards +1 towering cumulus; 0 lets the map decide per formation. With Profile LUT "
+                          "on, the type picks the LUT's column instead (0 low and flat .. 1 full height).");
+            checkB("Profile LUT", "profile", false);
+            InspectorHelp("Shapes the cloud vertically from a profile texture (Ultra Dynamic Sky's scheme) "
+                          "instead of the three built-in stratus/cumulus gradients: per type and height, how "
+                          "far up the dense middle reaches (flat bases, domed tops), how dense, how much the "
+                          "detail erodes. The LUT's density channel is applied cubed: the built-in LUT holds 1 "
+                          "through the body (Extinction keeps its meaning), a UDS-style one 0.5 at most (it wants "
+                          "~8x). The built-in LUT unless the app was started with --cloud-profile=<png>.");
+            dragF("Formation Change Speed", "formationChangeSpeed", 1.0f, 0.01f, 0.0f, 100.0f, "%.2f");
+            InspectorHelp("Only with a formation volume loaded (local_assets/clouds or --cloud-formation). How "
+                          "fast the cloud shapes evolve relative to their drift, as Ultra Dynamic Sky's: 1 runs "
+                          "the volume's whole time loop while the clouds travel 16 formation tiles -- at 30 km/h "
+                          "over a 12 km tile a cloud lives 15-30 minutes. No wind, no change.");
+            dragF("Macro Variation", "macroVariation", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("Only with a formation volume loaded. Moves Coverage up and down by this much over "
+                          "Macro Tile, so the sky has cloudy regions and clear ones instead of an even scatter "
+                          "(and the distance is not one continuous bank). Clouds in the cloudy regions are "
+                          "taller too, as the profile follows the coverage.");
+            dragF("Macro Tile (km)", "macroTileKm", 60.0f, 0.5f, 1.0f, 1000.0f, "%.0f");
+            InspectorHelp("Size of Macro Variation's regions: the world period of the field it reads.");
+            dragF("Extinction (1/m)", "extinctionScale", 0.05f, 0.001f, 0.0f, 10.0f, "%.3f");
             InspectorHelp("How dense the cloud is at full coverage, per metre. Real cumulus is 0.04 to "
                           "0.1; lower reads as thin haze, higher as a hard-edged wall.");
             dragF("Albedo", "albedo", 0.95f, 0.005f, 0.0f, 1.0f, "%.3f");
@@ -2293,6 +2313,18 @@ namespace
             dragF("Multi-scatter Eccentricity", "msEccentricity", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("UE MultiScatteringEclipse: how much each octave keeps the phase's "
                           "direction. Lower makes the extra light more even.");
+            {
+                int octaves = static_cast<int>(tgt().value("msOctaves", 1u));
+                if (ImGui::SliderInt("Multi-scatter Octaves", &octaves, 0, 2))
+                {
+                    nlohmann::json after = withField("msOctaves", static_cast<unsigned>(std::clamp(octaves, 0, 2)));
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            InspectorHelp("UE MultiScatteringApproximationOctaveCount: extra scattering octaves beyond the "
+                          "first bounce. Each is shadowed less (Occlusion squared), so the second carries the "
+                          "sun's own colour into the base of a dense cloud -- a lighter, greyer underside. "
+                          "Ultra Dynamic Sky runs 2; 1 is this engine's old behaviour.");
             dragF("Sky Light Bottom Occlusion", "skyLightBottomOcclusion", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("UE SkyLightCloudBottomOcclusion: how much of the sky's ambient the bottom "
                           "of the layer loses. 0 lights the underside like the top, 1 leaves it only "

@@ -652,7 +652,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                                     std::memcpy(dst + ov.ownBytes, &params, sizeof(params));
                                     std::memcpy(dst + ov.ownBytes + sizeof(params), &view, sizeof(view));
                                 },
-                                {ov.srvs[0], ov.srvs[1], ov.srvs[2], ov.srvs[3], srv_[0], srv_[1]},
+                                {ov.srvs[0], ov.srvs[1], ov.srvs[2], ov.srvs[3], ov.srvs[4], srv_[0], srv_[1]},
                                 {environmentUav_[mip]}, overlaySamplers, size, size*6);
                         }
                     }

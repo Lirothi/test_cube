@@ -87,6 +87,13 @@ public:
         // loads the cache turned into views, i.e. the GPU copies that were NOT made.
         static void CacheStats(std::uint32_t& saved, std::uint32_t& loaded, std::size_t& entries);
 
+        // Decode an image file (PNG/JPG/TIFF/BMP via WIC) to tightly packed RGBA8 on the CPU -- no
+        // GPU object, no cache -- for data a caller uploads itself (the cloud profile LUT).
+        static bool DecodeFileRGBA8(const std::wstring& path, std::vector<uint8_t>& rgba, UINT& width, UINT& height)
+        {
+                return LoadRGBA8_WIC_(path, rgba, width, height);
+        }
+
         // Legacy path: create from an RGBA8 buffer (kept for compatibility)
         // `debugLabel` identifies THIS texture (a font name, say). It matters beyond readability:
         // the canonical registry's leak check counts live entries per debug NAME, so several
