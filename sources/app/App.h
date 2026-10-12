@@ -87,8 +87,13 @@ extern int g_windowSize[2];
 // Example: --shot=out.png --sweep=exposure.lowPercentile:0.02,0.35,0.5,0.65 --shot-interval=2
 // writes out_00..out_03.png. With --profdump=p.txt it also writes p_00..p_03.txt, the profiler rows at
 // each shot, so every value's cost comes from the same process as its picture. Empty = disabled.
+//
+// "--sweep=<a>:<a0>,<a1>;<b>:<b0>,<b1>": further settings after a ';' advance IN STEP with the first
+// (shot i gets a_i AND b_i), so one run can photograph a grid of combined looks instead of one knob.
+// The FIRST list sets the shot count; a shorter list keeps its last value for the remaining shots.
 extern std::string g_sweepSetting;
 extern std::vector<float> g_sweepValues;
+extern std::vector<std::pair<std::string, std::vector<float>>> g_sweepExtra;
 
 // "--set=<name>:<value>[;<name>:<value>...]": pin settings for the whole run, using the SAME name
 // table --sweep uses. --sweep varies exactly one setting; anything else a measurement needs held at

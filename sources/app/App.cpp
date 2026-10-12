@@ -71,6 +71,7 @@ std::atomic<bool> g_modelBusyBackground{ false };
 // Single-process settings sweep; see App.h. Set by main.cpp from "--sweep=<setting>:<v0>,...".
 std::string g_sweepSetting;
 std::vector<float> g_sweepValues;
+std::vector<std::pair<std::string, std::vector<float>>> g_sweepExtra;
 // Fixed settings for the whole run; see App.h. Set by main.cpp from "--set=<name>:<value>;...".
 std::vector<std::pair<std::string, float>> g_fixedSettings;
 
@@ -1843,6 +1844,16 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     {
                         // Once per process: the sweep name never changes between shots.
                         LOG_WARNING_ONCE(logging::LogCategory::App, "--sweep {}: unknown setting", g_sweepSetting);
+                    }
+                    for (const auto& [extraSetting, extraValues] : g_sweepExtra)
+                    {
+                        if (shotIndex >= static_cast<int>(extraValues.size())) { continue; }
+                        const float extraValue = extraValues[static_cast<size_t>(shotIndex)];
+                        if (!ApplySweepValue(scene, appController_.SettingsRef(), extraSetting, extraValue))
+                        {
+                            LOG_WARNING_ONCE_PER_MESSAGE(logging::LogCategory::App, "--sweep {}: unknown setting", extraSetting);
+                        }
+                        LOG_INFO(logging::LogCategory::App, "--sweep shot {}: {} = {}", shotIndex, extraSetting, extraValue);
                     }
                     // The camera must not carry the previous value's adaptation into this shot.
                     renderer.Exposure().RequestReset();
