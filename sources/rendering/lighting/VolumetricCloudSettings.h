@@ -49,17 +49,17 @@ struct VolumetricCloudSettings
     float highFrequencyStrength = 0.24f;  // UDS High Frequency Noise: the fine near-camera detail
     float highFrequencyDistanceKm = 1.5f; // ... faded out by this distance (UDS HF Octave Zero Distance)
     // The generated profile LUT's shape (CSProfile; a --cloud-profile file replaces it). The defaults
-    // are a least-squares fit to Ultra Dynamic Sky's LUT over coverage 0.2 .. 0.7 (cloud_noise_cs.hlsl).
+    // are a least-squares fit to Ultra Dynamic Sky's LUT over coverage 0.2 .. 1 (cloud_noise_cs.hlsl).
     float profileHeight = 1.0f;           // scales how high formations reach at every coverage
-    float profileDome = 0.46f;            // how fast the envelope thins with height: 0 = flat-topped slabs, 1 = steep domes
-    float profileTopSoftness = 0.30f;     // the fraction of a formation's height its top closes over
+    float profileDome = 0.60f;            // how fast the envelope thins with height: 0 = flat-topped slabs, 1 = steep domes
+    float profileTopSoftness = 0.27f;     // the fraction of a formation's height its top closes over
     float profileBaseSoftness = 0.29f;    // the height over which the underside gains density (soft vs crisp bases)
     float profileSmallDensity = 0.09f;    // density at no coverage (the smallest clouds): low = thin and wispy
     float profileBodyDensity = 0.65f;     // density at full coverage (cubed: 0.65 = 0.27 of Extinction)
-    float profileBaseErosion = 0.12f;     // detail erosion at the floor: low = flat, firm undersides
+    float profileBaseErosion = 0.20f;     // detail erosion at the floor (none under heavy cover): low = flat, firm undersides
     float profileErosionRise = 0.53f;     // how far up (fraction of the top) erosion reaches full strength
-    float profileHeavyErosionCut = 0.41f; // how much less heavy cover erodes (smoother overcast)
-    float profileHeavyThinning = 0.74f;   // how much cover above ~0.4 thins with height
+    float profileHeavyErosionCut = 0.35f; // how much less heavy cover erodes (smoother overcast)
+    float profileHeavyThinning = 0.66f;   // how much cover above ~0.4 thins with height
     // Extinction at profile density 1, per metre. The profile's density is applied CUBED (a developed
     // cloud's ~0.5 is 1/8 of this), so it is ~8x a real cumulus' 0.04-0.1 /m; UDS run 10.
     float extinctionScale = 10.0f;

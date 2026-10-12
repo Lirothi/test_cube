@@ -2276,10 +2276,10 @@ namespace
                 dragF("Profile Height", "profileHeight", 1.0f, 0.01f, 0.2f, 2.0f, "%.2f");
                 InspectorHelp("How tall the formations grow at every coverage (1 = heavy cover reaches the top of "
                               "the layer).");
-                dragF("Dome", "profileDome", 0.46f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Dome", "profileDome", 0.60f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("How fast a formation narrows with height: 0 = flat-topped slabs, 1 = steep domes "
-                              "where only the dense core reaches up (towers).");
-                dragF("Top Softness", "profileTopSoftness", 0.30f, 0.005f, 0.01f, 1.0f, "%.3f");
+                              "where only the dense core reaches up (towers). Heavy cover flattens it on its own.");
+                dragF("Top Softness", "profileTopSoftness", 0.27f, 0.005f, 0.01f, 1.0f, "%.3f");
                 InspectorHelp("The fraction of a formation's height its top closes over: low = hard tops.");
                 dragF("Base Softness", "profileBaseSoftness", 0.29f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("The height over which the underside gains density: low = crisp flat bases, high = "
@@ -2290,14 +2290,15 @@ namespace
                 dragF("Body Density", "profileBodyDensity", 0.65f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("Density at full coverage (cubed: 0.65 = 0.27 of Extinction); a developed cumulus "
                               "field at coverage 0.45 is 80 % of the way there. Higher = darker cores.");
-                dragF("Base Erosion", "profileBaseErosion", 0.12f, 0.005f, 0.0f, 1.0f, "%.3f");
-                InspectorHelp("Erosion at the cloud floor: low = flat, firm undersides; high = ragged ones.");
+                dragF("Base Erosion", "profileBaseErosion", 0.20f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("Erosion at the cloud floor: low = flat, firm undersides; high = ragged ones. Heavy cover "
+                              "(above ~0.6) never erodes its floor: an overcast deck's underside is smooth.");
                 dragF("Erosion Rise", "profileErosionRise", 0.53f, 0.005f, 0.05f, 1.0f, "%.3f");
                 InspectorHelp("How far up (a fraction of the formation's top) the erosion reaches full strength: "
                               "low = cauliflower right above the base.");
-                dragF("Heavy Cover Erosion Cut", "profileHeavyErosionCut", 0.41f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Heavy Cover Erosion Cut", "profileHeavyErosionCut", 0.35f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("How much less heavy cover erodes: smoother overcast.");
-                dragF("Heavy Cover Thinning", "profileHeavyThinning", 0.74f, 0.005f, 0.0f, 1.0f, "%.3f");
+                dragF("Heavy Cover Thinning", "profileHeavyThinning", 0.66f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("How much cover above ~0.4 thins with height: a dense base under a softer top.");
                 ImGui::TreePop();
             }

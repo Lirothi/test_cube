@@ -160,9 +160,9 @@ float CloudWorleyFbmZ(float3 p, uint period, uint octaves, uint salt)
 
 // Standard score -> the channel's target distribution: 33 knots over z in [-3.5, 3.5], from the
 // offline quantile match (a Beta law with the channel's target mean and deviation; the cells' r and b
-// a shifted Gamma that also carries the target skew).
+// and the formation's b a shifted Gamma that also carries the target skew).
 static const float kFormationRRemap[33] = { 0.0275f, 0.0375f, 0.0479f, 0.0580f, 0.0685f, 0.0805f, 0.0931f, 0.1064f, 0.1205f, 0.1354f, 0.1508f, 0.1673f, 0.1843f, 0.2020f, 0.2205f, 0.2398f, 0.2598f, 0.2806f, 0.3020f, 0.3241f, 0.3466f, 0.3697f, 0.3937f, 0.4183f, 0.4433f, 0.4691f, 0.4952f, 0.5211f, 0.5468f, 0.5733f, 0.6003f, 0.6296f, 0.6545f };
-static const float kFormationBRemap[33] = { 0.1323f, 0.1452f, 0.1618f, 0.1800f, 0.2025f, 0.2217f, 0.2410f, 0.2611f, 0.2814f, 0.3015f, 0.3221f, 0.3424f, 0.3629f, 0.3830f, 0.4034f, 0.4243f, 0.4452f, 0.4662f, 0.4872f, 0.5089f, 0.5308f, 0.5527f, 0.5754f, 0.5980f, 0.6206f, 0.6429f, 0.6658f, 0.6889f, 0.7134f, 0.7397f, 0.7648f, 0.7974f, 0.8283f };
+static const float kFormationBRemap[33] = { 0.1955f, 0.2052f, 0.2185f, 0.2307f, 0.2443f, 0.2574f, 0.2706f, 0.2846f, 0.2992f, 0.3144f, 0.3303f, 0.3465f, 0.3634f, 0.3809f, 0.3989f, 0.4182f, 0.4380f, 0.4586f, 0.4799f, 0.5025f, 0.5263f, 0.5516f, 0.5781f, 0.6057f, 0.6360f, 0.6682f, 0.7024f, 0.7379f, 0.7768f, 0.8195f, 0.8635f, 0.9155f, 0.9775f };
 static const float kCellsRRemap[33] = { 0.0637f, 0.0637f, 0.0908f, 0.1187f, 0.1530f, 0.1845f, 0.2196f, 0.2499f, 0.2796f, 0.3088f, 0.3382f, 0.3676f, 0.3966f, 0.4258f, 0.4552f, 0.4852f, 0.5160f, 0.5474f, 0.5795f, 0.6127f, 0.6466f, 0.6824f, 0.7205f, 0.7598f, 0.8023f, 0.8457f, 0.8883f, 0.9305f, 0.9750f, 1.0000f, 1.0000f, 1.0000f, 1.0000f };
 static const float kCellsGRemap[33] = { 0.0489f, 0.0667f, 0.0972f, 0.1266f, 0.1555f, 0.1826f, 0.2127f, 0.2423f, 0.2719f, 0.3007f, 0.3300f, 0.3598f, 0.3896f, 0.4193f, 0.4496f, 0.4803f, 0.5114f, 0.5425f, 0.5737f, 0.6048f, 0.6359f, 0.6662f, 0.6968f, 0.7261f, 0.7548f, 0.7824f, 0.8101f, 0.8370f, 0.8624f, 0.8854f, 0.9096f, 0.9348f, 0.9752f };
 static const float kCellsBRemap[33] = { 0.0436f, 0.0436f, 0.0436f, 0.0436f, 0.0921f, 0.1252f, 0.1624f, 0.1899f, 0.2208f, 0.2527f, 0.2862f, 0.3209f, 0.3569f, 0.3924f, 0.4288f, 0.4658f, 0.5035f, 0.5425f, 0.5833f, 0.6257f, 0.6696f, 0.7166f, 0.7664f, 0.8191f, 0.8749f, 0.9355f, 1.0000f, 1.0000f, 1.0000f, 1.0000f, 1.0000f, 1.0000f, 1.0000f };
@@ -189,7 +189,24 @@ float CloudSmooth(float e0, float e1, float x)
 //      (edge / area 0.313, UDS 0.389) -- a peaked blob makes a tall round cloud, a flat ragged one the
 //      flat, stretched-looking clouds UDS has. 6 cells at 0.85: 0.151 / 0.374, blobs 117 px (UDS 122);
 //      at coverage 0.5 edge 0.249 (UDS 0.252).
-//   g: unused (UDS's layout); b: the floor variation -- 6 cells, 3 octaves, mean 0.447 / dev 0.097.
+//   g: unused (UDS's layout);
+//   b: the floor variation (how far a cloud's base is lifted, cloud_common.hlsli): 0.40 of the
+//      formation's OWN standard score + 0.92 of a Perlin fBm (7 cells, 4 octaves, gain 0.5), remapped
+//      to mean 0.447 / dev 0.097 / skew +0.62 (a shifted Gamma). UDS's B is not independent of R: it
+//      correlates 0.42 with it, so bases lift most UNDER the dense parts (0.468 inside a coverage-0.6
+//      cloud, 0.401 outside); the first version was an independent fBm (correlation 0.00, skew +0.09)
+//      that scattered the ragged bases at random. Measured on the generated volume (2026-10-12):
+//      correlation with R 0.415 (UDS 0.416), mean inside / outside a coverage-0.6 cloud 0.467 / 0.402
+//      (UDS 0.468 / 0.401), skew +0.56, xy autocorrelation at 2/4/8/16 texels 0.95/0.87/0.69/0.33
+//      (UDS 0.93/0.85/0.66/0.31), along the time axis at 1/4/8 slices 0.96/0.69/0.35 (0.94/0.68/0.33).
+//      THE SCALE IS WHAT THE EYE SEES: the floor is relief, and near the horizon it is seen edge-on.
+//      8 cells at gain 0.6 had the same moments and correlation but 27 % of its variance at 8-32
+//      cycles a tile (UDS 18 %) and too little at 2-4 (23 %, UDS 31 %), and at coverage 0.8 that fine
+//      relief drew dark "hills" along the horizon UDS never shows. Share of the variance per octave
+//      band 1-2 / 2-4 / 4-8 / 8-16 / 16-32 / 32-64 cycles: 0.083 0.301 0.424 0.134 0.045 0.013 (UDS
+//      0.059 0.308 0.427 0.135 0.043 0.019); fitted offline with a twin of this kernel (scratch
+//      formB_search.py, which reproduced the old kernel's bands to 0.006). The table and the seed were
+//      ruled out first: a symmetric table and another seed drew the hills too.
 [numthreads(8, 8, 1)]
 [RootSignature(CLOUD_NOISE_RS)]
 void CSFormation(uint3 id : SV_DispatchThreadID)
@@ -197,8 +214,10 @@ void CSFormation(uint3 id : SV_DispatchThreadID)
     const uint width = noiseParams.x, depth = noiseParams.z;
     if (any(id.xy >= width) || id.z >= depth) { return; }
     const float3 p = (float3(id) + 0.5f) / float3(width, width, depth);
-    const float r = CloudRemapZ(CloudPerlinFbmZ(p * 6.0f, 6u, 4u, formationParams.x, 0u), kFormationRRemap);
-    const float b = CloudRemapZ(CloudPerlinFbmZ(p * 6.0f, 6u, 3u, 0.6f, 1013u), kFormationBRemap);
+    const float zR = CloudPerlinFbmZ(p * 6.0f, 6u, 4u, formationParams.x, 0u);
+    const float r = CloudRemapZ(zR, kFormationRRemap);
+    const float zB = 0.40f * zR + 0.91652f * CloudPerlinFbmZ(p * 7.0f, 7u, 4u, 0.5f, 1013u); // 0.91652 = sqrt(1 - 0.40^2)
+    const float b = CloudRemapZ(zB, kFormationBRemap);
     OutVolume[id] = float4(r, 0.0f, b, 1.0f);
 }
 
@@ -249,23 +268,30 @@ void CSWeather(uint3 id : SV_DispatchThreadID)
 
 // THE PROFILE LUT (cloud_common.hlsli CloudSampleProfile), 64 x 256: u = coverage column, row 0 =
 // the top of the layer. Ours: a formula written from a design, its fixed constants and the knobs'
-// defaults FITTED to UDS's LUT (2026-10-12, least squares over coverage 0.2 .. 0.7; rms R 0.06, G 0.04,
-// B 0.06 -- heavy cover, where UDS closes the top with G alone, is where the shapes still differ).
+// defaults FITTED to UDS's LUT (2026-10-12, least squares over coverage 0.2 .. 1; rms vs their LUT, mid
+// 0.2-0.7 / heavy 0.75-1: R 0.029 / 0.029, G 0.026 / 0.029, B 0.036 / 0.019). The first fit covered
+// 0.2 .. 0.7 only and left heavy cover at R 0.137 / B 0.091: UDS's heavy columns do not close their
+// envelope at the layer top -- their density (G) shapes the top alone -- and their floor does not
+// erode, which a formula without heavy-cover terms could not follow.
 // Every named term is a level knob (VolumetricCloudSettings profile*):
-//   top(u)  how high a formation reaches, a fraction of the layer -- quadratic in coverage (0.18 at
-//           none, 0.5 at 0.33, the whole layer from 0.55), times the height scale: fair-weather puffs
+//   top(u)  how high a formation reaches, a fraction of the layer -- quadratic in coverage (0.20 at
+//           none, 0.5 at 0.30, the whole layer from 0.53), times the height scale: fair-weather puffs
 //           stay low, heavy cover fills the layer. Every shape below is a function of x = h / top,
 //           so a column is one cloud stretched to its top;
-//   R       the envelope, a DOME: whole over the lowest 15 % of x (a full base -- tapering it from
+//   R       the envelope, a DOME: whole over the lowest 11 % of x (a full base -- tapering it from
 //           the floor thinned every small cloud's footprint, 15 % less cloud at coverage 0.4), then
 //           declining by `dome` per unit of x, so only a formation's dense middle reaches up, and
-//           closing over the last `top softness` of x;
+//           closing over the last `top softness` of x. Under heavy cover (heavyR, from ~0.45) the
+//           whole part reaches up to 84 % of x, the dome flattens by up to 59 % and the closing
+//           fades out: an overcast deck is full to the top of the layer;
 //   G       density (cubed in the shader): `small density` at no coverage rising to `body density`
 //           at full (80 % of the way by 0.45 -- a developed cumulus field), a softer underside over
-//           `base softness` of the height (much softer under heavy cover), heavy cover thinning
-//           with height by up to `heavy thinning`, and a fade over the top fifth of x;
-//   B       detail erosion: `base erosion` at the floor rising to full by `erosion rise` of the top
-//           (a firm, flat underside), heavy cover eroding up to `heavy cut` less.
+//           `base softness` of the height (much softer under heavy cover), cover above ~0.4 thinning
+//           with height by up to `heavy thinning`, and a fade over the top quarter of x (a little
+//           lower under heavy cover);
+//   B       detail erosion: `base erosion` at the floor (none under heavy cover: a smooth deck's
+//           underside) rising to full by `erosion rise` of the top, heavy cover eroding up to `heavy
+//           cut` less.
 [numthreads(8, 8, 1)]
 [RootSignature(CLOUD_NOISE_RS)]
 void CSProfile(uint3 id : SV_DispatchThreadID)
@@ -274,21 +300,26 @@ void CSProfile(uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height) { return; }
     const float u = (float(id.x) + 0.5f) / float(width);
     const float h = 1.0f - (float(id.y) + 0.5f) / float(height);
-    const float top = min(max(profileA.x, 0.05f) * (0.18f + 0.30f * u + 2.18f * u * u), 1.0f);
+    const float top = min(max(profileA.x, 0.05f) * (0.20f + 0.25f * u + 2.54f * u * u), 1.0f);
     const float x = h / top;
-    const float r = CloudSmooth(0.0f, 0.01f, h) * saturate(1.0f - profileA.y * max(x - 0.15f, 0.0f))
-                  * pow(saturate((1.0f - x) / max(profileA.z, 0.01f)), 0.51f);
+    const float heavyR = CloudSmooth(0.42f, 1.37f, u);
+    const float closing = saturate((1.0f - x) / max(profileA.z, 0.01f));
+    const float r = CloudSmooth(0.0f, 0.01f, h)
+                  * saturate(1.0f - profileA.y * (1.0f - 0.59f * heavyR) * max(x - (0.11f + 0.73f * heavyR), 0.0f))
+                  * lerp(closing, 1.0f, heavyR);
     const float developed = 0.85f * min(u, 0.45f) + 0.4175f * CloudSmooth(0.15f, 0.45f, u) + 0.2f * CloudSmooth(0.45f, 0.8f, u);
     const float body = lerp(profileB.x, profileB.y, saturate(developed));
     const float heavy = CloudSmooth(0.5f, 1.0f, u);
     const float base = 0.31f + 0.69f * CloudSmooth(0.0f, profileA.w * min(top, 1.0f), h)
-                     - 0.51f * heavy * (1.0f - CloudSmooth(0.0f, 0.3f, h));
-    const float thinning = 1.0f - profileC.y * CloudSmooth(0.39f, 0.79f, u) * saturate(x);
-    float g = body * base * thinning * (1.0f - CloudSmooth(0.79f, 1.0f, x));
+                     - 0.46f * heavy * (1.0f - CloudSmooth(0.0f, 0.31f, h));
+    const float thinning = 1.0f - profileC.y * CloudSmooth(0.38f, 0.78f, u) * saturate(x);
+    const float fadeShift = 0.056f * CloudSmooth(0.58f, 0.83f, u);
+    float g = body * base * thinning * (1.0f - CloudSmooth(0.73f - fadeShift, 1.0f - fadeShift, x));
     if (h < 0.5f / float(height) + 1.0e-6f) { g = 0.05f; } // the floor row: barely there
-    const float erosionMax = 1.0f - profileC.x * CloudSmooth(0.4f, 0.85f, u);
-    const float rise = min(top, 1.0f) * (profileB.w + 0.31f * CloudSmooth(0.3f, 0.8f, u));
-    const float b = profileB.z + (erosionMax - profileB.z) * CloudSmooth(0.0f, rise, h);
+    const float erosionMax = 1.0f - profileC.x * CloudSmooth(0.43f, 0.83f, u);
+    const float rise = min(top, 1.0f) * (profileB.w + 0.39f * CloudSmooth(0.3f, 0.8f, u));
+    const float baseErosion = profileB.z * (1.0f - CloudSmooth(0.57f, 0.77f, u));
+    const float b = baseErosion + (erosionMax - baseErosion) * CloudSmooth(0.0f, rise, h);
     OutPlane[id.xy] = float4(saturate(r), saturate(g), saturate(b), 1.0f);
 }
 #endif // CLOUD_NOISE_2D
