@@ -287,6 +287,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     aerialParams = material->ComputeCB0FieldHandle("aerialParams");
     aerialViewProj = material->ComputeCB0FieldHandle("aerialViewProj");
     cloudParams = material->ComputeCB0FieldHandle("cloudParams");
+    cloudJitter = material->ComputeCB0FieldHandle("cloudJitter");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -1879,6 +1880,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.aerialParams, data.aerialParams, dest);
     matComposeCS_->UpdateCBField(handles.aerialViewProj, data.aerialViewProj, dest);
     matComposeCS_->UpdateCBField(handles.cloudParams, data.cloudParams, dest);
+    matComposeCS_->UpdateCBField(handles.cloudJitter, data.cloudJitter, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

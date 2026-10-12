@@ -85,8 +85,10 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
 
         CloudMedia m = CloudSetupMedia(albedo, s.extinction, basePhase);
 
-        // usf:864-869: the sky's light fades out towards the bottom of the layer.
-        const float3 ambient = distantSkyLight * saturate(cloudShadowTrace.z + normAlt);
+        // usf:864-869: the sky's light fades out towards the bottom of the layer. Scaled by the level's
+        // sky light intensity (cloudLighting.y): the light of the shadowed parts, so it sets how light
+        // and how blue they are.
+        const float3 ambient = distantSkyLight * (cloudLighting.y * saturate(cloudShadowTrace.z + normAlt));
 
         // usf:1101-1131: the shadow march towards the sun, x^2 sample distribution, no jitter
         // ("this one cannot be hidden well by TAA"), stopping when the ray leaves the layer.
@@ -126,8 +128,10 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
         // choice, ours: UE hands the distance to the material as ShadowSampleDistance (usf:1096,
         // MaterialTemplate.ush:2568) and leaves the same decision to the material author. By
         // distance, not by segment length, so that more samples refine the shadow instead of
-        // bringing the comb back.
-        const float detailFeatureKm = 0.25f / max(cloudShape.y, 1.0e-6f);
+        // bringing the comb back. A feature is one of the erosion's cells: an eighth of its tile
+        // (CSCells r: 8 cells a period), 150 m at the default 1.2 km -- so the default 156 m shadow
+        // march resolves all of it, and only a longer march falls back to the mean.
+        const float detailFeatureKm = 0.125f / max(cloudErosion.z, 1.0e-6f);
         float extinctionAcc[CLOUD_MS_COUNT];
         [unroll] for (int ms = 0; ms < CLOUD_MS_COUNT; ++ms) { extinctionAcc[ms] = 0.0f; }
         float previousNormT = 0.0f;

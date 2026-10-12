@@ -351,10 +351,11 @@ int WINAPI WinMain(
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
 
-    // "--cloud-profile=<image>" / "--cloud-formation=<dds>" / "--cloud-cells=<dds>": the volumetric
-    // clouds' profile LUT, formation and erosion volumes (VolumetricCloud.h), read when the cloud
-    // resources are created; the level's `profile` switch (and `--set=cloudFormation.on`) decide if
-    // they are used. Above the scene-stress branch, so a GBV churn exercises the same uploads.
+    // "--cloud-profile=<image>" / "--cloud-formation=<dds>" / "--cloud-cells=<dds>": FILE OVERRIDES
+    // for the volumetric clouds' generated profile LUT, formation and erosion volumes
+    // (VolumetricCloud.h), read when the cloud resources are created -- for an A/B against another
+    // set, which stays outside the repository; "--cloud-dump=<dir>" writes the generated set out.
+    // Above the scene-stress branch, so a GBV churn can exercise the same uploads.
     const auto widePathArg = [lpCmdLine](const char* name, std::wstring& out) {
         const char* flag = lpCmdLine ? std::strstr(lpCmdLine, name) : nullptr;
         if (!flag) { return; }
@@ -370,17 +371,7 @@ int WINAPI WinMain(
     widePathArg("--cloud-profile=", render::g_cloudProfilePath);
     widePathArg("--cloud-formation=", render::g_cloudFormationPath);
     widePathArg("--cloud-cells=", render::g_cloudCellsPath);
-    // Without the flags, files dropped in local_assets/clouds/ are used: a machine-local folder for
-    // textures that must not enter the repository (the Ultra Dynamic Sky look test, which runs on
-    // that asset's own textures). Absent files leave the built-in model as it was.
-    const auto localFallback = [](std::wstring& path, const wchar_t* file) {
-        if (!path.empty()) { return; }
-        const DWORD attributes = GetFileAttributesW(file);
-        if (attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) { path = file; }
-    };
-    localFallback(render::g_cloudProfilePath, L"local_assets/clouds/profile.png");
-    localFallback(render::g_cloudFormationPath, L"local_assets/clouds/formation.dds");
-    localFallback(render::g_cloudCellsPath, L"local_assets/clouds/cells.dds");
+    widePathArg("--cloud-dump=", render::g_cloudDumpDir);
 
     // Barrier plan step 6: "--canonical-check" logs every resource that did not END the frame in
     // its declared canonical state (DBWIN "[canonical]" lines). Parsed above the scene-stress

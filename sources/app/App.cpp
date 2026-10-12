@@ -387,8 +387,7 @@ namespace
             return true;
         }
         if (setting == "cloudShadow.bilinearWeather") { render::g_cloudShadowBilinearWeather = value != 0.0f; return true; }
-        // The --cloud-formation test hook's switch (VolumetricCloud.h); inert without the file.
-        if (setting == "cloudFormation.on") { render::g_cloudFormationOn = value != 0.0f; return true; }
+        if (setting == "cloudCompose.jitterScale") { render::g_cloudComposeJitterScale = std::clamp(value, -2.0f, 2.0f); return true; }
         if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean = value != 0.0f; return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
@@ -757,7 +756,6 @@ namespace
             if (key == "seed") { c.seed = static_cast<std::uint32_t>(std::max(value, 0.0f)); return true; }
             if (key == "temporal") { c.temporal = value != 0.0f; return true; }
             if (key == "shadowMap") { c.shadowMap = value != 0.0f; return true; }
-            if (key == "profile") { c.profile = value != 0.0f; return true; }
             if (key == "msOctaves") { c.msOctaves = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
             if (key == "viewSampleCountMax") { c.viewSampleCountMax = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 768.0f)); return true; }
             if (key == "viewSampleCountMin") { c.viewSampleCountMin = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
@@ -766,20 +764,26 @@ namespace
             struct FloatKnob { const char* name; float* field; float lo, hi; };
             const FloatKnob knobs[] = {
                 { "layerBottomKm", &c.layerBottomKm, 0.1f, 20.0f }, { "layerHeightKm", &c.layerHeightKm, 0.1f, 20.0f },
-                { "coverage", &c.coverage, 0.0f, 1.0f }, { "overcast", &c.overcast, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
-                { "extinctionScale", &c.extinctionScale, 0.0f, 10.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
+                { "coverage", &c.coverage, 0.0f, 1.0f }, { "cloudType", &c.cloudType, -1.0f, 1.0f },
+                { "extinctionScale", &c.extinctionScale, 0.0f, 20.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
                 { "formationChangeSpeed", &c.formationChangeSpeed, 0.0f, 100.0f },
                 { "macroVariation", &c.macroVariation, 0.0f, 1.0f }, { "macroTileKm", &c.macroTileKm, 1.0f, 1000.0f },
-                { "weatherDistortionStrength", &c.weatherDistortionStrength, 0.0f, 1.0f },
-                { "shapeDistortionTileKm", &c.shapeDistortionTileKm, 0.1f, 1000.0f },
-                { "shapeDistortionSpeed", &c.shapeDistortionSpeed, 0.0f, 10.0f },
-                { "detailStrength", &c.detailStrength, 0.0f, 1.0f }, { "baseTileKm", &c.baseTileKm, 0.1f, 100.0f },
-                { "baseVerticalTiles", &c.baseVerticalTiles, 0.1f, 100.0f },
-                { "detailTileKm", &c.detailTileKm, 0.01f, 10.0f }, { "weatherTileKm", &c.weatherTileKm, 1.0f, 1000.0f },
+                { "formationRoughness", &c.formationRoughness, 0.3f, 0.9f },
+                { "floorVariationClear", &c.floorVariationClear, 0.0f, 2.0f }, { "floorVariationCloudy", &c.floorVariationCloudy, 0.0f, 2.0f },
+                { "erosionStrength", &c.erosionStrength, 0.0f, 4.0f }, { "erosionPower", &c.erosionPower, 0.25f, 8.0f },
+                { "erosionTileKm", &c.erosionTileKm, 0.1f, 20.0f },
+                { "highFrequencyStrength", &c.highFrequencyStrength, 0.0f, 2.0f }, { "highFrequencyDistanceKm", &c.highFrequencyDistanceKm, 0.1f, 20.0f },
+                { "profileHeight", &c.profileHeight, 0.2f, 2.0f }, { "profileDome", &c.profileDome, 0.0f, 1.0f },
+                { "profileTopSoftness", &c.profileTopSoftness, 0.01f, 1.0f }, { "profileBaseSoftness", &c.profileBaseSoftness, 0.0f, 1.0f },
+                { "profileSmallDensity", &c.profileSmallDensity, 0.0f, 1.0f }, { "profileBodyDensity", &c.profileBodyDensity, 0.0f, 1.0f },
+                { "profileBaseErosion", &c.profileBaseErosion, 0.0f, 1.0f }, { "profileErosionRise", &c.profileErosionRise, 0.05f, 1.0f },
+                { "profileHeavyErosionCut", &c.profileHeavyErosionCut, 0.0f, 1.0f }, { "profileHeavyThinning", &c.profileHeavyThinning, 0.0f, 1.0f },
+                { "weatherTileKm", &c.weatherTileKm, 1.0f, 1000.0f },
                 { "windKmH", &c.windKmH, 0.0f, 500.0f }, { "phaseG", &c.phaseG, -0.99f, 0.99f },
                 { "phaseG2", &c.phaseG2, -0.99f, 0.99f }, { "phaseBlend", &c.phaseBlend, 0.0f, 1.0f },
                 { "msContribution", &c.msContribution, 0.0f, 1.0f }, { "msOcclusion", &c.msOcclusion, 0.0f, 1.0f },
                 { "msEccentricity", &c.msEccentricity, 0.0f, 1.0f }, { "skyLightBottomOcclusion", &c.skyLightBottomOcclusion, 0.0f, 1.0f },
+                { "skyLightIntensity", &c.skyLightIntensity, 0.0f, 10.0f },
                 { "distanceToSampleCountMaxKm", &c.distanceToSampleCountMaxKm, 0.1f, 1000.0f },
                 { "shadowTracingDistanceKm", &c.shadowTracingDistanceKm, 0.1f, 100.0f },
                 { "stopTracingTransmittance", &c.stopTracingTransmittance, 0.0f, 0.5f },

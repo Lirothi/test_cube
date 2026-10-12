@@ -1,4 +1,5 @@
-// Volumetric clouds, plan C2: the view ray march, at HALF the render resolution, one ray per texel.
+// Volumetric clouds, plan C2: the view ray march, at HALF the render resolution, one ray per texel
+// through ONE full-res pixel of its 2x2 block (cycling; cloud_temporal_cs.hlsl rebuilds full res).
 // Transcription of UE VolumetricCloud.usf MainCommon (:436-1740) minus the material system: the layer
 // intersection (:459-497), the depth-buffer clamp (:534-593), the sample distribution (:637-647),
 // the participating-media octaves and two-lobe phase (:368-424, :329-337), the x^2 shadow march to
@@ -10,18 +11,18 @@
 //     exactly as it fogs the sky, so the fog sits over sky and cloud alike with one model;
 //   * no ground contribution, no local lights, no second light, no per-sample atmosphere
 //     transmittance -- all off in UE's defaults too;
-//   * the half-res texel reads the FURTHEST of its four full-res depths (UE's min/max mode does
-//     the same at the tracing resolution), so a cloud behind a thin silhouette is still traced.
+//   * the depth is the traced full-res pixel's own (it used to be the furthest of the texel's four,
+//     when the texel's centre was traced).
 //
 // b0 CloudCB (cloud_common.hlsli)
-// t0 CloudBaseNoise  t1 CloudDetailNoise  t2 CloudWeather  t3 Depth (render res)
+// t0 CloudFormationVolume  t1 CloudCellsVolume  t2 CloudWeather  t3 Depth (render res)
 // t4 SkyAerialVolume (B3)  t5 DistantSkyLight (B5, raw luminance)  t6 CloudProfileLut
 // u0 CloudColor (rgb pre-exposed luminance, a transmittance)  u1 CloudDepth (km, the front)
 // s0 linear wrap (noise)  s1 linear clamp (aerial volume)
 #pragma pack_matrix(row_major)
 #define CLOUD_DENSITY
-#define CLOUD_T_BASE t0
-#define CLOUD_T_DETAIL t1
+#define CLOUD_T_FORMATION t0
+#define CLOUD_T_CELLS t1
 #define CLOUD_T_WEATHER t2
 #define CLOUD_T_PROFILE t6
 #define CLOUD_S_WRAP s0
@@ -63,6 +64,13 @@ float CloudStartNoise(uint2 pixel, float frame)
     return frac(ign + 0.61803398875f * frame);
 }
 
+// ONE FULL-RES PIXEL PER TEXEL (CloudTraceOffset, cloud_common.hlsli): this half-res texel traces
+// the render-resolution pixel 2 * id + this frame's offset in its 2x2 block, at that pixel's centre
+// and with that pixel's own depth; cloud_temporal_cs.hlsl rebuilds the full-res image over four
+// frames. It replaced a trace of the texel CENTRE (and briefly a sub-texel jitter of it): a texel
+// covers 3.4 display pixels under DLSS Balanced, and where it covers many cloud features -- the
+// horizon -- one point of it per texel read as texel-sized blocks (owner, 2026-10-12, with our
+// textures and UDS's alike), and the jittered point as noise. Same trace cost, four times the detail.
 [numthreads(8, 8, 1)]
 [RootSignature(CLOUD_TRACE_RS)]
 void CSMain(uint3 id : SV_DispatchThreadID)
@@ -70,7 +78,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const uint2 outSize = uint2(cloudOutput.xy);
     if (any(id.xy >= outSize)) { return; }
 
-    const float2 uv = (float2(id.xy) + 0.5f) / cloudOutput.xy;
+    const uint2 renderSize = uint2(cloudDepth.xy);
+    const uint2 pixel = min(id.xy * 2u + CloudTraceOffset(cloudTemporal.w), renderSize - 1u);
+    const float2 uv = (float2(pixel) + 0.5f) / cloudDepth.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float3 camPos = cloudCamera.xyz;
     const float3 rayDir = CloudViewRayDirection(ndc);
@@ -87,16 +97,12 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // usf:520-524: nothing to trace, or the layer starts too far away to be worth it.
     trace = trace && tMax > tMin && tMin <= cloudWind.w;
 
-    // usf:534-593: the depth buffer. The FURTHEST of the four full-res texels under this one; the
-    // sky is device z 0 and is left at the layer's far end.
+    // usf:534-593: the depth buffer, at the traced pixel itself; the sky is device z 0 and is left at
+    // the layer's far end.
     float tDepthKm = kCloudNoDepthKm;
     if (trace)
     {
-        const uint2 depthSize = uint2(cloudDepth.xy);
-        const uint2 base = min(id.xy * 2u, depthSize - 1u);
-        const uint2 next = min(base + 1u, depthSize - 1u);
-        const float z = min(min(DepthT.Load(int3(base, 0)), DepthT.Load(int3(next.x, base.y, 0))),
-                            min(DepthT.Load(int3(base.x, next.y, 0)), DepthT.Load(int3(next, 0))));
+        const float z = DepthT.Load(int3(pixel, 0));
         if (z > 1.0e-7f)
         {
             const float4 P = mul(float4(ndc, z, 1.0f), cloudInvViewProjNoJitter);
@@ -124,7 +130,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     mi.rayDir = rayDir;
     mi.tMinKm = tMin;
     mi.tMaxKm = tMax;
-    mi.startOffset = CloudStartNoise(id.xy, cloudTemporal.w);
+    // Per FULL-RES pixel, which is traced every fourth frame: its own golden-ratio sequence advances
+    // once per visit, not once per frame (every fourth step of the sequence is far less even).
+    mi.startOffset = CloudStartNoise(pixel, floor(cloudTemporal.w * 0.25f));
     mi.sampleCountMax = cloudTrace.x;
     mi.sampleCountMin = cloudTrace.y;
     mi.invDistanceToMax = cloudTrace.z;

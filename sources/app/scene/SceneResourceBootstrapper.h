@@ -201,6 +201,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle preExposure;
     Material::CBFieldHandle skyViewPlanet; // B6.2: the sky's own LUT, for the fog's sky colour
     Material::CBFieldHandle cloudParams;   // plan C2: the resolved clouds, applied under the fog
+    Material::CBFieldHandle cloudJitter;   // ... read at the jittered pixel's unjittered uv
 
     void Populate(Material* material);
 };
@@ -858,6 +859,9 @@ struct ComposePassConstants
     // Plan C2: x = the resolved cloud pair was built this frame, y = 1 / preExposure (the cloud's
     // luminance is stored pre-exposed, `lit` is raw), z = the cloud debug view, w = 0.
     float4 cloudParams{};
+    // xy = this frame's camera jitter in uv (the jittered pixel at uv looks where the unjittered
+    // frame's uv - xy does); the clouds are reconstructed unjittered and read there. zw = 0.
+    float4 cloudJitter{};
 };
 
 // B6.1. MIRROR of fog_apply.hlsl's `FogApply` cbuffer, field for field and in order: it is uploaded

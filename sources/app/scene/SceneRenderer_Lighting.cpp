@@ -1084,6 +1084,19 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.cloudParams = float4(decisions_.volumetricCloud ? 1.0f : 0.0f,
             1.0f / std::max(preExposure_, 1.e-8f),
             decisions_.volumetricCloud ? static_cast<float>(frame_->settings.volumetricCloud.debugView) : 0.0f, 0.0f);
+        // The camera's sub-pixel jitter, as the projection carries it (Camera.cpp: _31 / _32, an NDC
+        // offset under this w = view z projection), in uv: the clouds are traced and reconstructed
+        // UNJITTERED (their history must not chase the jitter), so compose reads them where this
+        // jittered pixel actually looks. Read at the pixel's own uv instead, the cloud layer sat
+        // still while the sky and the geometry around it jittered, and the upscaler, which un-jitters
+        // every input, smeared it by the jitter's span (owner, 2026-10-12: "DLSS smears the clouds").
+        {
+            const mat4& jittered = camera.GetProjMatrix();
+            const mat4& plain = camera.GetProjMatrixNoJitter();
+            const float scale = render::g_cloudComposeJitterScale;
+            constants.cloudJitter = float4((jittered.m._31 - plain.m._31) * 0.5f * scale,
+                                           -(jittered.m._32 - plain.m._32) * 0.5f * scale, 0.0f, 0.0f);
+        }
         // B6.2: the sky's own LUT, so the fog's in-scattering colour over a SKY pixel is the value
         // the skybox drew rather than the captured cube's 0.70-degree average of it. The same data
         // the sky pass was handed (Skybox::SetSkyAtmosphere), read back here so there is one source.

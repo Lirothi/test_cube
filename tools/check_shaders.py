@@ -76,8 +76,8 @@ COMPUTE_ENTRIES = [
     # Plan part C volumetric clouds: the noise set (the 2D weather kernel is a define permutation,
     # listed under GRAPHICS_ENTRIES because only that list carries defines), the half-res march,
     # its temporal resolve, the cloud shadow map and its filter.
-    ("cloud_noise_cs.hlsl", "CSBase"),
-    ("cloud_noise_cs.hlsl", "CSDetail"),
+    ("cloud_noise_cs.hlsl", "CSFormation"),
+    ("cloud_noise_cs.hlsl", "CSCells"),
     ("cloud_trace_cs.hlsl", "CSMain"),
     ("cloud_temporal_cs.hlsl", "CSMain"),
     ("cloud_shadow_cs.hlsl", "CSTrace"),
@@ -138,6 +138,7 @@ GRAPHICS_ENTRIES = [
     # Plan part C: the weather kernel sees a 2D target at u0 under this define (a compute shader,
     # listed here because this is the list that carries defines).
     ("cloud_noise_cs.hlsl", "cs_6_0", "CSWeather", ["CLOUD_NOISE_2D=1"], "weather"),
+    ("cloud_noise_cs.hlsl", "cs_6_0", "CSProfile", ["CLOUD_NOISE_2D=1"], "profile"),
     ("skybox.hlsl", "vs_6_0", "VSMain", [], ""),
     ("skybox.hlsl", "ps_6_0", "PSMain", [], ""),
     ("ocean_surface.hlsl", "vs_6_0", "VSMain", [], "runup"),

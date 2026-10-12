@@ -18,26 +18,34 @@ namespace vfx { struct WindState; }
 
 namespace render
 {
-// `--cloud-profile=<image>`: the profile LUT VolumetricCloudSettings::profile reads (a PNG of the
-// Cloud_Profile layout: u = type, v = 1 - height; R envelope, G extinction, B erosion). Empty = the
-// built-in LUT. Session-only, read once when the cloud resources are created.
+// FILE OVERRIDES for the density model's three textures, for an A/B against another set (they were
+// first used to run Ultra Dynamic Sky's own, which must never enter the repository). Each replaces
+// what the engine generates (cloud_noise_cs.hlsl CSProfile / CSFormation / CSCells); session-only,
+// read once when the cloud resources are created.
+//   `--cloud-profile=<image>`  the profile LUT (u = coverage column, v = 1 - height; R envelope,
+//                              G density, B erosion);
+//   `--cloud-formation=<dds>`  the formation volume (x/y the field over one tile, z a looping time
+//                              axis; R the formation, B the floor variation) -- only with --cloud-cells;
+//   `--cloud-cells=<dds>`      the erosion volume (R erosion, B the high-frequency mask).
+// `--cloud-dump=<dir>` writes the GENERATED set, once it exists, as <dir>/profile.dds,
+// formation.dds and cells.dds (8-bit RGBA, DX10 header -- the volumes load back through the flags
+// above): the generator's output measured against a reference, instead of guessed from renders.
 extern std::wstring g_cloudProfilePath;
-// `--cloud-formation=<dds>`: a FORMATION volume (UDS's FormationVolume layout: x/y the cloud field over
-// one weather tile, z a looping time axis; R the formation, B the floor variation) that replaces the
-// weather map and the base noise -- with the profile LUT on, the density is UDS's formula end to end
-// (cloud_common.hlsli). A test hook, session-only: no file = the switch does nothing.
-// `--set=cloudFormation.on:0` turns it off without restarting, for an A/B in one process.
 extern std::wstring g_cloudFormationPath;
-// `--cloud-cells=<dds>`: the erosion volume beside it (UDS's 3D_Cells layout), bound in the DETAIL
-// noise's slot while the formation is active -- the formation branch erodes with it the UDS way.
 extern std::wstring g_cloudCellsPath;
-extern bool g_cloudFormationOn;
+extern std::wstring g_cloudDumpDir;
+// Compose reads the (unjittered) clouds at uv - this x the camera jitter (SceneRenderer_Lighting.cpp).
+// 1 is right; `--set=cloudCompose.jitterScale:0` (the old read) and -1 (the wrong sign) are the A/B
+// that measured it (2026-10-12, DLSS Balanced vs the native shot of the same frozen pose, mid-sky
+// luminance RMS: 1 -> 1.38, 0 -> 1.57, -1 -> 2.70; a Laplacian "sharpness" ranked -1 FIRST -- it
+// counts the staircase edges a wrong shift leaves as detail).
+extern float g_cloudComposeJitterScale;
 }
 
 // Volumetric clouds (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part C), the SkyAtmosphere shape:
-// this owns the FIXED-SIZE resources -- the three noise textures (C1), the cloud shadow map and its
-// filtered copy (C3) -- their descriptors and materials, and registers the passes. The half-res
-// trace and its temporal history are render-size dependent and live in the Deferred ring
+// this owns the FIXED-SIZE resources -- the density model's four generated textures (C1), the cloud
+// shadow map and its filtered copy (C3) -- their descriptors and materials, and registers the passes.
+// The half-res trace and its full-res reconstruction are render-size dependent and live in the Deferred ring
 // (RenderTargetManager: cloudTrace / cloudTraceDepth / cloudResolved / cloudResolvedDepth), where
 // the previous slot is the history exactly as it is for the fog and the AO.
 //
@@ -82,7 +90,9 @@ public:
     bool Ready() const { return initialized_ && !failed_; }
     void Reset(); // caller has drained the GPU on level/device teardown
 
-    // C1: the noise set, rebuilt when the seed changes. kNone when nothing is registered.
+    // C1: the generated textures -- the weather map when the seed changes, the formation and cells
+    // volumes when the seed or the roughness does (unless files replaced them), the profile LUT when
+    // its shape knobs move. kNone when nothing is registered.
     size_t BuildNoise(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                       const VolumetricCloudSettings& settings);
     // C3: the shadow map from the sun. `after` = the noise pass (or kNone). Commits ShadowBuilt().
@@ -112,33 +122,54 @@ public:
     unsigned NoiseRevision() const { return noiseBuilds_; }
 
 private:
-    // The detail noise was 32^3 (Schneider's figure); at that size its finest Worley cells were one
-    // texel wide and trilinear filtering drew the texel lattice as streaks across the clouds. 128^3
-    // (8 MB) with the octaves capped at four texels per cell (cloud_noise_cs.hlsl) fixed it.
-    static constexpr UINT kBaseSize = 128, kDetailSize = 128, kWeatherSize = 512, kShadowSize = 512;
-    GpuResource base_, detail_, weather_, shadowRaw_, shadowFiltered_;
+    static constexpr UINT kWeatherSize = 512, kShadowSize = 512;
+    GpuResource weather_, shadowRaw_, shadowFiltered_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_;
-    D3D12_CPU_DESCRIPTOR_HANDLE baseSrv_{}, baseUav_{}, detailSrv_{}, detailUav_{}, weatherSrv_{}, weatherUav_{};
-    // The profile LUT (VolumetricCloudSettings::profile): uploaded once in Prepare, read-only after,
-    // at rest in NON_PIXEL like the noises (the shadow pass reads it on the async compute queue).
-    GpuResource profile_;
-    D3D12_CPU_DESCRIPTOR_HANDLE profileSrv_{};
-    float profileInvSize_[2] = {1.0f, 1.0f};
-    bool CreateProfile(Renderer* renderer, D3D12_CPU_DESCRIPTOR_HANDLE srv);
-    // The formation volume (render::g_cloudFormationPath), when one was loaded. While active it is
-    // bound in the BASE noise's slot -- the formation branch reads it there instead of the base.
-    GpuResource formation_, cells_;
-    D3D12_CPU_DESCRIPTOR_HANDLE formationSrv_{}, cellsSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE weatherSrv_{}, weatherUav_{};
+    // The density model's textures (cloud_common.hlsli). Each is GENERATED here (cloud_noise_cs.hlsl
+    // CSProfile / CSFormation / CSCells, again whenever its knobs or the seed change) unless a --cloud-*
+    // file replaced it (uploaded once when the resources are created). All rest in NON_PIXEL like the
+    // weather map: the shadow pass reads them on the async compute queue.
+    static constexpr UINT kProfileWidth = 64, kProfileHeight = 256, kFormationSize = 256, kFormationDepth = 128, kCellsSize = 64;
+    GpuResource profileGen_, formationGen_, cellsGen_;
+    D3D12_CPU_DESCRIPTOR_HANDLE profileGenSrv_{}, profileGenUav_{}, formationGenSrv_{}, formationGenUav_{}, cellsGenSrv_{}, cellsGenUav_{};
+    GpuResource profile_, formation_, cells_; // the file overrides
+    D3D12_CPU_DESCRIPTOR_HANDLE profileSrv_{}, formationSrv_{}, cellsSrv_{};
+    float profileInvSize_[2] = {1.0f / kProfileWidth, 1.0f / kProfileHeight};
+    std::shared_ptr<Material> noiseProfile_, noiseFormation_, noiseCells_;
+    bool profileGenReady_ = false, formationGenReady_ = false;
+    float profileGenKey_[10] = {};
+    std::uint32_t formationGenSeed_ = 0;
+    float formationGenRoughness_ = 0.0f;
+    bool CreateProfile(Renderer* renderer, D3D12_CPU_DESCRIPTOR_HANDLE srv); // the --cloud-profile file, if any
     // An 8-bit RGBA/BGRA volume DDS (DX10 header) into `target`; false (one warning) when it is not.
     bool LoadVolumeDds(Renderer* renderer, const std::wstring& path, GpuResource& target,
                        D3D12_CPU_DESCRIPTOR_HANDLE srv, const wchar_t* name);
-    bool FormationActive(const VolumetricCloudSettings& s) const
+    bool FormationFromFiles() const { return formation_.Get() != nullptr && cells_.Get() != nullptr; }
+    bool ProfileFromFile() const { return profile_.Get() != nullptr; }
+    // What the density code's three slots hold (every cloud pass binds them the same way): the
+    // generated textures, or the files that replaced them.
+    struct DensityBinding
     {
-        return s.profile && render::g_cloudFormationOn && formation_.Get() != nullptr && cells_.Get() != nullptr;
+        ID3D12Resource* formation; ID3D12Resource* cells; ID3D12Resource* profile;
+        D3D12_CPU_DESCRIPTOR_HANDLE formationSrv, cellsSrv, profileSrv;
+    };
+    DensityBinding Binding() const
+    {
+        const bool files = FormationFromFiles(), profileFile = ProfileFromFile();
+        return {files ? formation_.Get() : formationGen_.Get(), files ? cells_.Get() : cellsGen_.Get(),
+                profileFile ? profile_.Get() : profileGen_.Get(),
+                files ? formationSrv_ : formationGenSrv_, files ? cellsSrv_ : cellsGenSrv_,
+                profileFile ? profileSrv_ : profileGenSrv_};
     }
-    bool captureFormation_ = false, shadowKeyFormation_ = false;
+    void CreateResources(Renderer* renderer);
+    // render::g_cloudDumpDir: armed by the rebuild that generated the set, done in a LATER frame's
+    // Prepare (that rebuild has then been submitted; the dump waits for the GPU).
+    unsigned long long dumpArmedFrame_ = 0;
+    bool dumpArmed_ = false, dumpDone_ = false;
+    void DumpGenerated(Renderer* renderer);
     D3D12_CPU_DESCRIPTOR_HANDLE shadowRawSrv_{}, shadowRawUav_{}, shadowFilteredSrv_{}, shadowFilteredUav_{};
-    std::shared_ptr<Material> noiseBase_, noiseDetail_, noiseWeather_, trace_, temporal_, shadowTrace_, shadowFilter_;
+    std::shared_ptr<Material> noiseWeather_, trace_, temporal_, shadowTrace_, shadowFilter_;
     UINT cbBytes_ = 0;
     // C4: the environment capture material and the key of the last capture. The cube refreshes when
     // the settings, the noise or the distant light changed, and otherwise at most every

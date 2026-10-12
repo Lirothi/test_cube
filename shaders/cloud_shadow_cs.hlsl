@@ -10,21 +10,22 @@
 // with the same depth rule -- a quarter of the density samples for a map that is read bilinearly
 // anyway. UE's optional temporal filter (off by default, NewFrameWeight 1) is not carried.
 //
-// Two entry points: CSTrace (b0 CloudCB, t0..t2 the noise set, t4 the profile LUT, u0 the raw map)
-// and CSFilter (t3 the raw map, u0 the filtered map). One table for both: t0..t4 every time.
+// Two entry points: CSTrace (b0 CloudCB, t0 formation, t1 cells, t2 weather, t4 the profile LUT, u0
+// the raw map) and CSFilter (t3 the raw map, u0 the filtered map). One table for both: t0..t4 every time.
 //
 // Time slicing (ours; render::g_cloudShadowUpdateFrames): CSTrace may trace only one texel of every
 // stride x stride cell (cloudShadowMap3.xyz), dispatched at resolution / stride; the rest of the raw
 // map keeps what earlier frames traced. CSFilter always runs over the whole map.
 //
-// Cheap density (ours; cloudShadowMap3.w): bit 1 reads the weather map with one bilinear tap
-// instead of the view's B-spline, bit 2 erodes by the detail's MEAN without fetching it. Both
+// Cheap density (ours; cloudShadowMap3.w): bit 1 reads the macro variation's field with one bilinear
+// tap instead of the view's B-spline, bit 2 erodes by the cells' MEAN without fetching them (and
+// without the fine detail; cloud_common.hlsli CloudSampleAt). Both
 // change what the map sees, not what the view sees, so the shadow can drift slightly from the
 // cloud that casts it -- switchable so it is judged by eye (render::g_cloudShadow*).
 #pragma pack_matrix(row_major)
 #define CLOUD_DENSITY
-#define CLOUD_T_BASE t0
-#define CLOUD_T_DETAIL t1
+#define CLOUD_T_FORMATION t0
+#define CLOUD_T_CELLS t1
 #define CLOUD_T_WEATHER t2
 #define CLOUD_T_PROFILE t4
 #define CLOUD_S_WRAP s0

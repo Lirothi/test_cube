@@ -1535,6 +1535,18 @@ SSR-пасс: у UE один шейдер (`SSRTReflections.usf`) и два вы
 
 ## C. Объёмные облака (UE VolumetricCloud, шумы Schneider)
 
+> **2026-10-12: модель плотности заменена.** Всё ниже про шумы Schneider (base 128³ / detail 128³,
+> погодная карта как покрытие, три градиента высоты, `overcast`, `detailStrength`, искажение погоды,
+> `baseTileKm` / `baseVerticalTiles` / `detailTileKm`, флаги `profile` / `formation`) — история.
+> Теперь единственная модель — схема Ultra Dynamic Sky на НАШИХ сгенерированных текстурах
+> (`cloud_noise_cs.hlsl`: CSFormation 256×256×128, CSCells 64³, CSProfile 64×256, CSWeather 512²
+> для macro variation), константы и умолчания подогнаны под их вид по статистике и структуре
+> (связность, пиковость, LUT профиля МНК). Трасса: полразрешения, один пиксель из 2×2 за кадр,
+> реконструкция в полном разрешении рендера (UE VRT mode 1); композит читает облака в точке
+> джиттерованного пикселя (Catmull-Rom). Файлы `--cloud-profile/-formation/-cells` — только A/B,
+> `--cloud-dump=<dir>` выгружает сгенерированное. Ручки и их смысл: `VolumetricCloudSettings.h`,
+> Inspector → Volumetric Cloud (форма в свёрнутом «Fine tuning»).
+
 ### C1. Шумы и слой — [день]
 Compute при загрузке: Perlin-Worley 128³ RGBA8 (base), Worley 32³ (detail), curl 128² (3 канала),
 weather 512² (coverage, type, wetness) из seed'а; `cloud.bottomKm 1.5`, `cloud.topKm 4.0`,

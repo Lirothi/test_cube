@@ -2195,95 +2195,41 @@ namespace
             // Plan part C. Having this object is what gives the level clouds, as adding UE's
             // VolumetricCloud actor is; it needs the Sky Atmosphere object (the clouds are lit by its
             // distant light and hazed by its aerial perspective) and does nothing on a cubemap sky.
+            // Every default below is VolumetricCloudSettings.h's (shown when the level leaves a key out).
             checkB("Enabled", "enabled", true);
             InspectorHelp(
-                "A layer of volumetric clouds marched at half resolution every frame and resolved "
-                "over time, with their shadow on the island and in the fog. Needs the Sky Atmosphere "
-                "object: on a cubemap sky this stays off and the session log says so.\n\n"
+                "A layer of volumetric clouds, traced at half resolution one pixel of each 2x2 block a "
+                "frame and rebuilt at full resolution over four frames, with their shadow on the island "
+                "and in the fog. Ultra Dynamic Sky's density scheme on textures this engine generates. "
+                "Needs the Sky Atmosphere object: on a cubemap sky this stays off and the session log "
+                "says so.\n\n"
                 "--set=cloud.enabled overrides this for a headless run; every row below is "
                 "--set=cloud.<key> too.");
 
-            ImGui::SeparatorText("Layer");
-            dragF("Bottom Altitude (km)", "layerBottomKm", 1.5f, 0.05f, 0.1f, 20.0f, "%.2f");
-            InspectorHelp("Height of the layer's base above sea level. UE's default is 5 km for a big "
-                          "sky; 1.5 puts a fair-weather deck over an island.");
-            dragF("Layer Height (km)", "layerHeightKm", 2.5f, 0.05f, 0.1f, 20.0f, "%.2f");
-            InspectorHelp("Thickness of the layer. Cumulus grows into most of it, stratus hugs the bottom.");
-
-            ImGui::SeparatorText("Shape");
+            ImGui::SeparatorText("Clouds");
             dragF("Coverage", "coverage", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("A threshold on the weather map's coverage field: 0 is a clear sky, 1 lets "
-                          "every part of the field through in proportion -- gaps the map has stay gaps. "
-                          "The single most visible knob.");
-            dragF("Overcast", "overcast", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("Closes the gaps Coverage cannot: lifts the weather map's coverage field towards 1, "
-                          "as if the map were painted fuller. 0 leaves the map as drawn, 1 is a layer with no "
-                          "gaps; the base shape keeps its own thick-and-thin texture, so the deck stays mottled.");
+            InspectorHelp("How much of the sky is cloud: 0 clear .. 1 closed (Ultra Dynamic Sky's Cloud Density "
+                          "/ 3). It also sets how TALL the clouds grow -- light cover is low fair-weather puffs, "
+                          "heavy cover fills the layer. The single most visible knob.");
             dragF("Cloud Type", "cloudType", 0.0f, 0.01f, -1.0f, 1.0f, "%.2f");
-            InspectorHelp("Bias on the weather map's type field: towards -1 everything is flat stratus, "
-                          "towards +1 towering cumulus; 0 lets the map decide per formation. With Profile LUT "
-                          "on, the type picks the LUT's column instead (0 low and flat .. 1 full height).");
-            checkB("Profile LUT", "profile", false);
-            InspectorHelp("Shapes the cloud vertically from a profile texture (Ultra Dynamic Sky's scheme) "
-                          "instead of the three built-in stratus/cumulus gradients: per type and height, how "
-                          "far up the dense middle reaches (flat bases, domed tops), how dense, how much the "
-                          "detail erodes. The LUT's density channel is applied cubed: the built-in LUT holds 1 "
-                          "through the body (Extinction keeps its meaning), a UDS-style one 0.5 at most (it wants "
-                          "~8x). The built-in LUT unless the app was started with --cloud-profile=<png>.");
-            dragF("Formation Change Speed", "formationChangeSpeed", 1.0f, 0.01f, 0.0f, 100.0f, "%.2f");
-            InspectorHelp("Only with a formation volume loaded (local_assets/clouds or --cloud-formation). How "
-                          "fast the cloud shapes evolve relative to their drift, as Ultra Dynamic Sky's: 1 runs "
-                          "the volume's whole time loop while the clouds travel 16 formation tiles -- at 30 km/h "
-                          "over a 12 km tile a cloud lives 15-30 minutes. No wind, no change.");
+            InspectorHelp("Flatter (towards -1) or taller (towards +1) clouds at the same coverage: shifts which "
+                          "column of the height profile Coverage reads.");
             dragF("Macro Variation", "macroVariation", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("Only with a formation volume loaded. Moves Coverage up and down by this much over "
-                          "Macro Tile, so the sky has cloudy regions and clear ones instead of an even scatter "
-                          "(and the distance is not one continuous bank). Clouds in the cloudy regions are "
-                          "taller too, as the profile follows the coverage.");
+            InspectorHelp("Moves Coverage up and down by this much over Macro Tile, so the sky has cloudy "
+                          "regions and clear ones instead of an even scatter (and the distance is not one "
+                          "continuous bank). Clouds in the cloudy regions are taller too.");
             dragF("Macro Tile (km)", "macroTileKm", 60.0f, 0.5f, 1.0f, 1000.0f, "%.0f");
-            InspectorHelp("Size of Macro Variation's regions: the world period of the field it reads.");
-            dragF("Extinction (1/m)", "extinctionScale", 0.05f, 0.001f, 0.0f, 10.0f, "%.3f");
-            InspectorHelp("How dense the cloud is at full coverage, per metre. Real cumulus is 0.04 to "
-                          "0.1; lower reads as thin haze, higher as a hard-edged wall.");
-            dragF("Albedo", "albedo", 0.95f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("Single-scattering albedo of the droplets -- how much of the light a "
-                          "particle scatters rather than absorbs. Water is close to 1; lower darkens "
-                          "the shadowed sides.");
-            dragF("Detail Strength", "detailStrength", 0.35f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("How much the small Worley noise erodes the base shape: 0 keeps blobby "
-                          "primitives, higher carves wisps at the bottom and cauliflower at the top.");
-            dragF("Weather Distortion Strength", "weatherDistortionStrength", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("Bends the coverage and cloud-type map with a moving noise field, allowing "
-                          "the large cloud boundaries to change. Strength is horizontal "
-                          "displacement in weather-map tiles; try 0.1. 0 preserves the original map. "
-                          "Use Shape Distortion Tile and Speed to control its scale and animation. "
-                          "A fully uniform overcast coverage field has no gaps to deform.");
-            dragF("Shape Distortion Tile (km)", "shapeDistortionTileKm", 6.0f, 0.1f, 0.1f, 1000.0f, "%.1f");
-            InspectorHelp("Repeat distance of the distortion texture. Larger values make broader bends; "
-                          "smaller values break the shape into finer folds. Increasing this value does "
-                          "not increase strength. Follows Base Vertical Tiles "
-                          "so thin cloud layers also deform through their height.");
-            dragF("Shape Distortion Speed", "shapeDistortionSpeed", 0.15f, 0.01f, 0.0f, 10.0f, "%.2f tiles/min");
-            InspectorHelp("Animates the distortion field independently of wind. With nonzero Weather "
-                          "Distortion Strength this changes the large cloud boundaries. 0 holds a static warp "
-                          "that travels with the wind. Changing speed rephases the animation; "
-                          "--wind-freeze freezes it together with the cloud shadows and reflections.");
-            dragF("Base Tile (km)", "baseTileKm", 6.0f, 0.1f, 0.1f, 100.0f, "%.1f");
-            InspectorHelp("World period of the base noise, i.e. the size of the largest lumps.");
-            dragF("Base Vertical Tiles", "baseVerticalTiles", 1.0f, 0.05f, 0.1f, 100.0f, "%.2f");
-            InspectorHelp("How many layer heights one base tile spans vertically, at most. Left at the "
-                          "horizontal scale, a 6 km tile through a thin layer barely changes with height, "
-                          "the cloud becomes the weather map extruded into columns, and a grazing view "
-                          "smears those columns into radial streaks. 1 makes a thin layer out of flat "
-                          "cells the size of the layer instead; larger values move back towards columns.");
-            dragF("Detail Tile (km)", "detailTileKm", 0.5f, 0.01f, 0.01f, 10.0f, "%.2f");
-            InspectorHelp("World period of the detail noise -- the size of the smallest features.");
-            dragF("Weather Tile (km)", "weatherTileKm", 40.0f, 0.5f, 1.0f, 1000.0f, "%.0f");
-            InspectorHelp("World period of the weather map: the scale on which whole formations and "
-                          "clear gaps between them repeat.");
+            InspectorHelp("Size of Macro Variation's cloudy and clear regions.");
+            dragF("Formation Tile (km)", "weatherTileKm", 12.0f, 0.1f, 1.0f, 1000.0f, "%.1f");
+            InspectorHelp("The scale of the cloud field: the size of the formation volume on the ground, i.e. "
+                          "how far apart the cloud groups sit and how big they are. Ultra Dynamic Sky's is 12 km.");
             dragF("Wind Speed (km/h)", "windKmH", 20.0f, 0.5f, 0.0f, 500.0f, "%.0f");
             InspectorHelp("How fast the whole field drifts along the level's wind heading (the Wind "
                           "object), on the shared clock --wind-freeze pins.");
+            dragF("Formation Change Speed", "formationChangeSpeed", 1.0f, 0.01f, 0.0f, 100.0f, "%.2f");
+            InspectorHelp("How fast the cloud shapes evolve relative to their drift, as Ultra Dynamic Sky's: 1 "
+                          "runs the volume's whole time loop while the clouds travel 16 formation tiles -- at "
+                          "30 km/h over a 12 km tile a cloud lives 15-30 minutes. No wind, no change.");
             {
                 int seed = static_cast<int>(tgt().value("seed", 0u));
                 if (ImGui::DragInt("Seed", &seed, 1.0f, 0, 100000))
@@ -2292,29 +2238,110 @@ namespace
                     executeChange(std::move(after), historyLabel);
                 }
             }
-            InspectorHelp("Reseeds the three noise textures; a different sky, the same weather.");
+            InspectorHelp("Regenerates every cloud texture from another seed: a different sky, the same weather.");
+
+            // The shape knobs are FINE TUNING: their defaults are Ultra Dynamic Sky's values or fits to
+            // its look (VolumetricCloudSettings.h), and a level that leaves them alone looks like that.
+            // Folded, so the knobs above are what the panel shows.
+            if (ImGui::TreeNodeEx("Fine tuning (shape)", ImGuiTreeNodeFlags_SpanAvailWidth))
+            {
+                InspectorHelp("The density model's shape knobs. Their defaults reproduce Ultra Dynamic Sky's look; "
+                              "change them only to move away from it.");
+                dragF("Formation Roughness", "formationRoughness", 0.85f, 0.005f, 0.3f, 0.9f, "%.3f");
+                InspectorHelp("The formation field's fBm gain. Lower = smooth, peaked formations: tall, round "
+                              "clouds in big groups; higher = flatter, more ragged ones. Regenerates the 32 MB "
+                              "volume (a few ms).");
+                dragF("Floor Variation Clear", "floorVariationClear", 0.08f, 0.005f, 0.0f, 2.0f, "%.3f");
+                InspectorHelp("How much the cloud bases undulate at light cover (UDS Floor Variation Clear): 0 = "
+                              "every base on the layer floor, higher lifts some of them.");
+                dragF("Floor Variation Cloudy", "floorVariationCloudy", 0.64f, 0.005f, 0.0f, 2.0f, "%.3f");
+                InspectorHelp("The same at heavy cover (Coverage above 0.5): broken, ragged undersides.");
+                dragF("Erosion Strength", "erosionStrength", 1.2f, 0.01f, 0.0f, 4.0f, "%.2f");
+                InspectorHelp("UDS 3D Erosion: how deep the cells volume carves the formations -- the cauliflower. "
+                              "0 leaves smooth blobs.");
+                dragF("Erosion Power", "erosionPower", 3.0f, 0.05f, 0.25f, 8.0f, "%.2f");
+                InspectorHelp("UDS Erosion Power: higher = only the cells' brightest parts carve (rounder bulges "
+                              "with sharp gaps), lower = everything erodes a little (softer, fuzzier).");
+                dragF("Erosion Tile (km)", "erosionTileKm", 1.2f, 0.01f, 0.1f, 20.0f, "%.2f");
+                InspectorHelp("World size of the cells volume (vertically 0.58 of it): the size of the bulges.");
+                dragF("Fine Detail Strength", "highFrequencyStrength", 0.24f, 0.005f, 0.0f, 2.0f, "%.3f");
+                InspectorHelp("UDS High Frequency Noise: the fine, wispy detail on edges near the camera.");
+                dragF("Fine Detail Distance (km)", "highFrequencyDistanceKm", 1.5f, 0.05f, 0.1f, 20.0f, "%.2f");
+                InspectorHelp("The fine detail fades out by this distance (it would only shimmer further away).");
+
+                ImGui::SeparatorText("Height profile");
+                InspectorHelp("The generated profile LUT: per coverage (column) and height, how far up a formation "
+                              "reaches, how dense it is and how much it erodes. Each change regenerates it (cheap). "
+                              "--cloud-profile=<png> replaces it for the session.");
+                dragF("Profile Height", "profileHeight", 1.0f, 0.01f, 0.2f, 2.0f, "%.2f");
+                InspectorHelp("How tall the formations grow at every coverage (1 = heavy cover reaches the top of "
+                              "the layer).");
+                dragF("Dome", "profileDome", 0.46f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How fast a formation narrows with height: 0 = flat-topped slabs, 1 = steep domes "
+                              "where only the dense core reaches up (towers).");
+                dragF("Top Softness", "profileTopSoftness", 0.30f, 0.005f, 0.01f, 1.0f, "%.3f");
+                InspectorHelp("The fraction of a formation's height its top closes over: low = hard tops.");
+                dragF("Base Softness", "profileBaseSoftness", 0.29f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("The height over which the underside gains density: low = crisp flat bases, high = "
+                              "soft, hazy ones.");
+                dragF("Small Cloud Density", "profileSmallDensity", 0.09f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("Density at no coverage, i.e. of the smallest clouds (applied cubed): low = thin, wispy "
+                              "puffs; high = solid little cumulus.");
+                dragF("Body Density", "profileBodyDensity", 0.65f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("Density at full coverage (cubed: 0.65 = 0.27 of Extinction); a developed cumulus "
+                              "field at coverage 0.45 is 80 % of the way there. Higher = darker cores.");
+                dragF("Base Erosion", "profileBaseErosion", 0.12f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("Erosion at the cloud floor: low = flat, firm undersides; high = ragged ones.");
+                dragF("Erosion Rise", "profileErosionRise", 0.53f, 0.005f, 0.05f, 1.0f, "%.3f");
+                InspectorHelp("How far up (a fraction of the formation's top) the erosion reaches full strength: "
+                              "low = cauliflower right above the base.");
+                dragF("Heavy Cover Erosion Cut", "profileHeavyErosionCut", 0.41f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How much less heavy cover erodes: smoother overcast.");
+                dragF("Heavy Cover Thinning", "profileHeavyThinning", 0.74f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("How much cover above ~0.4 thins with height: a dense base under a softer top.");
+                ImGui::TreePop();
+            }
+
+            ImGui::SeparatorText("Layer");
+            dragF("Bottom Altitude (km)", "layerBottomKm", 0.6f, 0.05f, 0.1f, 20.0f, "%.2f");
+            InspectorHelp("Height of the cloud bases above sea level. Trade-wind cumulus over a tropical sea "
+                          "sits at ~0.6 km; UE's default 5 km is for a big continental sky.");
+            dragF("Layer Height (km)", "layerHeightKm", 0.7f, 0.05f, 0.1f, 20.0f, "%.2f");
+            InspectorHelp("Thickness of the layer: the tallest clouds (heavy cover) fill it, light cover uses the "
+                          "bottom fifth.");
+
+            ImGui::SeparatorText("Medium");
+            dragF("Extinction (1/m)", "extinctionScale", 10.0f, 0.05f, 0.0f, 20.0f, "%.2f");
+            InspectorHelp("How dense the cloud is at the height profile's density 1, per metre. The profile's "
+                          "density is applied cubed (a developed cloud's ~0.5 is 1/8 of this), so it sits ~8x a "
+                          "real cumulus' 0.04-0.1; Ultra Dynamic Sky runs 10. Lower reads as haze, higher as a "
+                          "hard-edged wall.");
+            dragF("Albedo", "albedo", 0.95f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("Single-scattering albedo of the droplets -- how much of the light a "
+                          "particle scatters rather than absorbs. Water is close to 1; lower darkens "
+                          "the shadowed sides.");
 
             ImGui::SeparatorText("Lighting");
-            dragF("Phase G", "phaseG", 0.6f, 0.005f, -0.99f, 0.99f, "%.3f");
-            InspectorHelp("Henyey-Greenstein anisotropy of the main lobe, POSITIVE forward: this is "
-                          "the silver lining when the sun is behind the cloud. (UE's material node "
-                          "uses the opposite sign.)");
-            dragF("Phase G2", "phaseG2", -0.3f, 0.005f, -0.99f, 0.99f, "%.3f");
-            InspectorHelp("The second lobe, usually slightly backward, which keeps the sunlit face "
-                          "from going flat.");
-            dragF("Phase Blend", "phaseBlend", 0.25f, 0.005f, 0.0f, 1.0f, "%.3f");
+            dragF("Phase G", "phaseG", 0.85f, 0.005f, -0.99f, 0.99f, "%.3f");
+            InspectorHelp("Henyey-Greenstein anisotropy of the main lobe, POSITIVE forward: the silver lining "
+                          "when the sun is behind the cloud. The same sign as UE's material node -- a UE or "
+                          "Ultra Dynamic Sky value is entered as is.");
+            dragF("Phase G2", "phaseG2", 0.4f, 0.005f, -0.99f, 0.99f, "%.3f");
+            InspectorHelp("A second, broader lobe blended in by Phase Blend: a gentler forward glow, or "
+                          "(negative) some light thrown back towards the sun-facing side.");
+            dragF("Phase Blend", "phaseBlend", 0.65f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("How much of the second lobe is mixed in. 0 = the main lobe alone.");
-            dragF("Multi-scatter Contribution", "msContribution", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            dragF("Multi-scatter Contribution", "msContribution", 0.85f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("UE MultiScatteringContribution: how much light each further scattering "
                           "octave adds. Brightens the thick, self-shadowed middle of a cloud.");
             dragF("Multi-scatter Occlusion", "msOcclusion", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("UE MultiScatteringOcclusion: how much less each octave is shadowed. "
                           "Lower lets light deeper into the cloud.");
-            dragF("Multi-scatter Eccentricity", "msEccentricity", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+            dragF("Multi-scatter Eccentricity", "msEccentricity", 0.4f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("UE MultiScatteringEclipse: how much each octave keeps the phase's "
                           "direction. Lower makes the extra light more even.");
             {
-                int octaves = static_cast<int>(tgt().value("msOctaves", 1u));
+                int octaves = static_cast<int>(tgt().value("msOctaves", 2u));
                 if (ImGui::SliderInt("Multi-scatter Octaves", &octaves, 0, 2))
                 {
                     nlohmann::json after = withField("msOctaves", static_cast<unsigned>(std::clamp(octaves, 0, 2)));
@@ -2324,26 +2351,33 @@ namespace
             InspectorHelp("UE MultiScatteringApproximationOctaveCount: extra scattering octaves beyond the "
                           "first bounce. Each is shadowed less (Occlusion squared), so the second carries the "
                           "sun's own colour into the base of a dense cloud -- a lighter, greyer underside. "
-                          "Ultra Dynamic Sky runs 2; 1 is this engine's old behaviour.");
-            dragF("Sky Light Bottom Occlusion", "skyLightBottomOcclusion", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
-            InspectorHelp("UE SkyLightCloudBottomOcclusion: how much of the sky's ambient the bottom "
-                          "of the layer loses. 0 lights the underside like the top, 1 leaves it only "
-                          "the sun.");
+                          "Ultra Dynamic Sky runs 2.");
+            dragF("Sky Light Bottom Occlusion", "skyLightBottomOcclusion", 0.0f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("UE SkyLightCloudBottomOcclusion: how much of the sky's light the bottom of the layer "
+                          "loses. 0 lights the underside like the top (Ultra Dynamic Sky), 1 leaves it only the "
+                          "sun.");
+            dragF("Sky Light Intensity", "skyLightIntensity", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("Scales the blue sky's light on the clouds -- the light their shadowed sides get. "
+                          "Higher = lighter AND bluer shading (weaker shadows), lower = darker, greyer "
+                          "undersides. 1 = the atmosphere as computed.");
 
             ImGui::SeparatorText("Tracing");
             {
-                int samples = static_cast<int>(tgt().value("viewSampleCountMax", 256u));
+                int samples = static_cast<int>(tgt().value("viewSampleCountMax", 128u));
                 if (ImGui::DragInt("View Samples (max)", &samples, 1.0f, 4, 768))
                 {
                     nlohmann::json after = withField("viewSampleCountMax", static_cast<unsigned>(std::clamp(samples, 4, 768)));
                     executeChange(std::move(after), historyLabel);
                 }
             }
-            InspectorHelp("Samples along a view ray that crosses the full 15 km; the step is 15 km "
-                          "divided by this and stays constant for shorter rays (256 = 58 m). UE run "
-                          "768 at cinematic quality; this is where the cost is.");
+            InspectorHelp("Samples along a view ray as long as Sample Distance; the step is that distance "
+                          "divided by this, constant for shorter rays (3 km / 128 = 23 m). This is where the "
+                          "cost is: 0.43 ms at 128, 0.71 at 256 (2560 x 1440, DLSS Balanced).");
+            dragF("Sample Distance (km)", "distanceToSampleCountMaxKm", 3.0f, 0.05f, 0.1f, 1000.0f, "%.2f");
+            InspectorHelp("UE DistanceToSampleMaxCount: the ray length View Samples are spread over (UE 15 km). "
+                          "Shorter = finer steps, the same count: sharper edges through a thin layer.");
             {
-                int samples = static_cast<int>(tgt().value("shadowSampleCount", 6u));
+                int samples = static_cast<int>(tgt().value("shadowSampleCount", 4u));
                 if (ImGui::DragInt("Sun Shadow Samples", &samples, 1.0f, 1, 80))
                 {
                     nlohmann::json after = withField("shadowSampleCount", static_cast<unsigned>(std::clamp(samples, 1, 80)));
@@ -2352,8 +2386,9 @@ namespace
             }
             InspectorHelp("Samples of the march towards the sun taken at EVERY lit view sample -- the "
                           "self-shadowing that gives a cloud its dark belly. Multiplies the cost.");
-            dragF("Sun Shadow Distance (km)", "shadowTracingDistanceKm", 15.0f, 0.1f, 0.1f, 100.0f, "%.1f");
-            InspectorHelp("UE ShadowTracingDistance: how far towards the sun the self-shadow march looks.");
+            dragF("Sun Shadow Distance (km)", "shadowTracingDistanceKm", 0.156f, 0.005f, 0.1f, 100.0f, "%.3f");
+            InspectorHelp("UE ShadowTracingDistance: how far towards the sun the self-shadow march looks (UE 15 km, "
+                          "Ultra Dynamic Sky 0.156). Longer = darker, deeper self-shadow.");
             dragF("Stop Transmittance", "stopTracingTransmittance", 0.005f, 0.0005f, 0.0f, 0.5f, "%.4f");
             InspectorHelp("UE StopTracingTransmittanceThreshold: the ray stops once this little light "
                           "would get through. Higher is cheaper and lets less light punch through.");
@@ -2363,10 +2398,10 @@ namespace
             InspectorHelp("UE TracingStartMaxDistance: a ray whose layer entry is further than this is "
                           "not traced at all.");
             checkB("Temporal", "temporal", true);
-            InspectorHelp("Accumulate the half-res march over frames (reprojected by the cloud's own "
-                          "depth). OFF shows the raw jittered trace.");
+            InspectorHelp("Blend each pixel's new sample into its history (reprojected by the cloud's own depth). "
+                          "OFF: every pixel shows its latest sample alone -- the trace's noise, unfiltered.");
             dragF("History Weight", "historyWeight", 0.9f, 0.005f, 0.0f, 0.99f, "%.2f");
-            InspectorHelp("How much of the previous frame survives: 0.9 is a ten-frame history, "
+            InspectorHelp("How much of the history survives each frame: 0.9 is about a ten-frame history, "
                           "lower follows a fast sun or wind more closely at the price of noise.");
 
             ImGui::SeparatorText("Shadow map");

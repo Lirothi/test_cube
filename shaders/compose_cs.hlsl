@@ -103,9 +103,44 @@ cbuffer PerFrame : register(b0)
     // Plan C2: x = the cloud pair was built this frame, y = 1 / preExposure (the cloud's luminance
     // is stored pre-exposed, `lit` is raw), z = the cloud debug view (replaces the frame), w = 0.
     float4 cloudParams;
+    // Plan C2: xy = this frame's camera jitter in uv. The clouds are reconstructed UNJITTERED; the
+    // jittered pixel at uv looks where the unjittered frame's uv - xy does, so they are read there
+    // (SceneRenderer_Lighting.cpp has the why). zw = 0.
+    float4 cloudJitter;
 }
 
 static const float kEps = 1e-6;
+
+// Plan C2: the resolved clouds at the jittered pixel's position, CATMULL-ROM (Jimenez's 5-tap form).
+// The clouds sit on the unjittered grid and every frame is read half a pixel off it in a new
+// direction; a bilinear read is a one-pixel tent averaged over those offsets, i.e. a blur the
+// upscaler then faithfully accumulated -- DLSS Quality measured no sharper than Balanced, both
+// well short of native. A cubic read is a near-lossless shift. The negative lobes can overshoot:
+// colour floored at 0, transmittance clamped to [0, 1].
+float4 SampleCloudCatmullRom(float2 uv)
+{
+    float2 size;
+    CloudTex.GetDimensions(size.x, size.y);
+    const float2 samplePos = uv * size;
+    const float2 texPos1 = floor(samplePos - 0.5f) + 0.5f;
+    const float2 f = samplePos - texPos1;
+    const float2 w0 = f * (-0.5f + f * (1.0f - 0.5f * f));
+    const float2 w1 = 1.0f + f * f * (-2.5f + 1.5f * f);
+    const float2 w2 = f * (0.5f + f * (2.0f - 1.5f * f));
+    const float2 w3 = f * f * (-0.5f + 0.5f * f);
+    const float2 w12 = w1 + w2;
+    const float2 texPos0 = (texPos1 - 1.0f) / size;
+    const float2 texPos3 = (texPos1 + 2.0f) / size;
+    const float2 texPos12 = (texPos1 + w2 / w12) / size;
+    float4 result = CloudTex.SampleLevel(gSmp, float2(texPos12.x, texPos0.y), 0) * (w12.x * w0.y);
+    result += CloudTex.SampleLevel(gSmp, float2(texPos0.x, texPos12.y), 0) * (w0.x * w12.y);
+    result += CloudTex.SampleLevel(gSmp, float2(texPos12.x, texPos12.y), 0) * (w12.x * w12.y);
+    result += CloudTex.SampleLevel(gSmp, float2(texPos3.x, texPos12.y), 0) * (w3.x * w12.y);
+    result += CloudTex.SampleLevel(gSmp, float2(texPos12.x, texPos3.y), 0) * (w12.x * w3.y);
+    result /= (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
+    return float4(max(result.rgb, 0.0f), saturate(result.a));
+}
+
 // How far a SKY pixel is shaded at, standing in for UE's ConvertFromDeviceZ(0) -- the far plane the
 // depth buffer's 0 decodes to. Only near-horizontal rays get anywhere near it: the height falloff
 // makes every other direction reach its asymptote long before, and the clamp beside its use keeps a
@@ -302,13 +337,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // silhouette from bleeding cloud onto the near side of it).
     if (cloudParams.x > 0.0f)
     {
-        const float4 cloud = CloudTex.SampleLevel(gSmp, uv, 0);
+        const float2 cloudUv = uv - cloudJitter.xy;
+        const float4 cloud = SampleCloudCatmullRom(cloudUv);
         bool applyCloud = !(z > kEps);
         if (!applyCloud)
         {
             const float3 cloudPos = ReconstructPosWS(uv, z, invProj, invView);
             const float surfaceKm = length(cloudPos - camPosWS) / 1000.0f;
-            applyCloud = surfaceKm > CloudDepthTex.SampleLevel(gSmpPoint, uv, 0);
+            applyCloud = surfaceKm > CloudDepthTex.SampleLevel(gSmpPoint, cloudUv, 0);
         }
         if (applyCloud)
         {

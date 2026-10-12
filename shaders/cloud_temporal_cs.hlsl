@@ -1,25 +1,29 @@
-// Volumetric clouds, plan C2: the temporal resolve of the half-res trace. THIS IS NOT A TRANSCRIPTION
-// OF UE's VolumetricRenderTarget.usf, and it is worth being exact about which parts are whose:
-//   * FROM UE's reconstruction (VolumetricRenderTarget.usf:205-218): the CLOUD'S OWN FRONT DEPTH
-//     reprojects the pixel -- the sky's velocity buffer only knows the camera's rotation, and a
-//     cloud 3 km out has parallax the sky does not -- and an off-screen reprojection falls back to
-//     the new sample.
-//   * NOT UE: the exponential blend (weight 1 - historyWeight), the 3x3 neighbourhood clamp and the
-//     still-camera relaxation/inertia. Those are ssr_temporal_cs.hlsl's, i.e. UE TemporalAA.usf's
-//     shape (AA_LERP, neighbourhood clamp) plus a measured still-camera rule of ours. UE's VRT does
-//     none of this: in its default mode 0 it traces ONE of four checkerboard texels per frame, takes
-//     that texel's new value outright and the reprojected history for the other three (no blend,
-//     no clamp -- the optional ReprojectionBoxConstraint AABB clamp is off by default), and leaves
-//     the stochastic noise to the frame's TAA/TSR at full resolution. We have no TAA pass of our
-//     own on the composed frame (DLSS plays that role only when it is on), and at a budget sample
-//     count our per-frame noise is several times UE's at 768, so the accumulation lives here.
+// Volumetric clouds, plan C2: the FULL-RES RECONSTRUCTION of the half-res trace, and its temporal
+// accumulation. Dispatched over the RENDER resolution; the trace (half res) holds, per 2x2 block,
+// this frame's sample of ONE of its four pixels (CloudTraceOffset, cloud_common.hlsli). Which parts
+// are UE's and which are ours:
+//   * FROM UE's VolumetricRenderTarget mode 1 ("trace half res + reconstruct full res"): the 2x2
+//     pattern, the traced pixel taking this frame's sample, the other three their REPROJECTED
+//     HISTORY, and the CLOUD'S OWN FRONT DEPTH reprojecting it (VolumetricRenderTarget.usf:205-218)
+//     -- the sky's velocity buffer only knows the camera's rotation, and a cloud 3 km out has
+//     parallax the sky does not; an off-screen or missing history falls back to this frame's trace,
+//     interpolated.
+//   * NOT UE: the traced pixel BLENDS into its history instead of replacing it (an exponential
+//     blend, the weight of four frames of the old per-frame one, since a pixel is visited every
+//     fourth frame), the 3x3 neighbourhood clamp on the history and the still-camera relaxation.
+//     UE leave the stochastic noise to the frame's TAA/TSR at full resolution; we have no TAA of our
+//     own (DLSS plays that role only when it is on), and at a budget sample count our per-frame
+//     noise is several times UE's at 768, so the accumulation lives here, as it did before.
 //   * NOT UE: any history rejection on CLOUD depth -- see the note at the test below.
+// The first version resolved at HALF res, every texel tracing its centre each frame: four times
+// fewer pixels than the frame, and at the horizon -- a texel = 3.4 display pixels under DLSS
+// Balanced -- texel-sized blocks (owner, 2026-10-12). Same trace cost now, four times the detail.
 // Depth is NOT filtered (the new trace's depth is kept where it saw cloud), which is what UE do for
 // the cloud shadow map for precision reasons and what keeps the next frame's reprojection honest.
 // The pre-exposure moved between frames: the history is rescaled by preExposure / previous.
 //
-// b0 CloudCB   t0 CloudTrace  t1 CloudTraceDepth  t2 PrevResolved  t3 PrevResolvedDepth
-// u0 Resolved  u1 ResolvedDepth   s0 linear clamp  s1 point clamp
+// b0 CloudCB   t0 CloudTrace (half)  t1 CloudTraceDepth (half)  t2 PrevResolved (full)
+// t3 PrevResolvedDepth (full)   u0 Resolved (full)  u1 ResolvedDepth (full)   s0 linear clamp  s1 point clamp
 #pragma pack_matrix(row_major)
 #include "cloud_common.hlsli"
 
@@ -38,15 +42,54 @@ RWTexture2D<float> ResolvedDepth : register(u1);
 SamplerState gSmpLinear : register(s0);
 SamplerState gSmpPoint : register(s1);
 
+// The history's colour, CATMULL-ROM (Jimenez's 5-tap form: 9 taps folded into 5 bilinear ones). A
+// moving camera resamples the history at a fractional offset every frame, and a bilinear tap
+// blurs it a little more each time -- the clouds went soft while turning and sharp again when the
+// camera stopped. The negative lobes can overshoot; the neighbourhood clamp after it bounds that.
+float4 CloudSampleHistory(float2 uv, float2 size)
+{
+    const float2 samplePos = uv * size;
+    const float2 texPos1 = floor(samplePos - 0.5f) + 0.5f;
+    const float2 f = samplePos - texPos1;
+    const float2 w0 = f * (-0.5f + f * (1.0f - 0.5f * f));
+    const float2 w1 = 1.0f + f * f * (-2.5f + 1.5f * f);
+    const float2 w2 = f * (0.5f + f * (2.0f - 1.5f * f));
+    const float2 w3 = f * f * (-0.5f + 0.5f * f);
+    const float2 w12 = w1 + w2;
+    const float2 offset12 = w2 / w12;
+    const float2 texPos0 = (texPos1 - 1.0f) / size;
+    const float2 texPos3 = (texPos1 + 2.0f) / size;
+    const float2 texPos12 = (texPos1 + offset12) / size;
+    float4 result = 0.0f;
+    result += PrevResolved.SampleLevel(gSmpLinear, float2(texPos12.x, texPos0.y), 0) * (w12.x * w0.y);
+    result += PrevResolved.SampleLevel(gSmpLinear, float2(texPos0.x, texPos12.y), 0) * (w0.x * w12.y);
+    result += PrevResolved.SampleLevel(gSmpLinear, float2(texPos12.x, texPos12.y), 0) * (w12.x * w12.y);
+    result += PrevResolved.SampleLevel(gSmpLinear, float2(texPos3.x, texPos12.y), 0) * (w3.x * w12.y);
+    result += PrevResolved.SampleLevel(gSmpLinear, float2(texPos12.x, texPos3.y), 0) * (w12.x * w3.y);
+    const float weight = (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
+    return max(result / weight, 0.0f);
+}
+
 [numthreads(8, 8, 1)]
 [RootSignature(CLOUD_TEMPORAL_RS)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
-    const uint2 size = uint2(cloudOutput.xy);
+    const uint2 size = uint2(cloudDepth.xy); // the render resolution
     if (any(id.xy >= size)) { return; }
     const int2 px = int2(id.xy);
-    const float4 current = CloudTrace.Load(int3(px, 0));
-    const float currentDepth = CloudTraceDepth.Load(int3(px, 0));
+    const uint2 traceSize = uint2(cloudOutput.xy);
+    const int2 maxTexel = int2(traceSize) - 1;
+    const uint2 offset = CloudTraceOffset(cloudTemporal.w);
+    const int2 texel = min(px / 2, maxTexel);
+    // The pixel this texel traced this frame (the trace clamps it to the render size the same way).
+    const bool fresh = all(uint2(px) == min(uint2(texel) * 2u + offset, size - 1u));
+
+    // This frame's samples sit on a grid of pitch 2, shifted by the offset: in trace-texel units the
+    // sample of texel t is at t, so this pixel's centre is at (px - offset) / 2 -- a bilinear tap
+    // there interpolates the four nearest samples of this frame.
+    const float2 traceUv = ((float2(px) - float2(offset)) * 0.5f + 0.5f) / cloudOutput.xy;
+    const float4 current = fresh ? CloudTrace.Load(int3(texel, 0)) : CloudTrace.SampleLevel(gSmpLinear, traceUv, 0);
+    const float currentDepth = CloudTraceDepth.Load(int3(texel, 0));
 
     // Nothing to accumulate against yet, or a debug view (which must show the raw trace).
     if (cloudTemporal.x == 0.0f || cloudAerial.w != 0.0f)
@@ -56,28 +99,27 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    // The 3x3 box of this frame: everything the history is allowed to be.
+    // The 3x3 box of this frame's samples around this pixel: everything the history is allowed to be.
     float4 boxMin = current, boxMax = current;
-    const int2 maxCoord = int2(size) - 1;
     [unroll] for (int y = -1; y <= 1; ++y)
     [unroll] for (int x = -1; x <= 1; ++x)
     {
-        const float4 s = CloudTrace.Load(int3(clamp(px + int2(x, y), int2(0, 0), maxCoord), 0));
+        const float4 s = CloudTrace.Load(int3(clamp(texel + int2(x, y), int2(0, 0), maxTexel), 0));
         boxMin = min(boxMin, s);
         boxMax = max(boxMax, s);
     }
 
-    // Reproject the cloud's front point through last frame's camera. A texel whose ray MISSED the
-    // cloud this frame (a thin wisp between the jittered samples) carries the far end of the traced
-    // range as its depth, not the wisp's: reprojecting with that would not hurt (kilometres away,
-    // a metre of camera motion is a fraction of a pixel either way), but COMPARING it with the
-    // history's depth is what tore the history down every frame on exactly the thin parts, and
-    // worse the fewer the samples -- the "pixel dance" the owner saw. So a miss reprojects with
-    // last frame's depth at this texel, and the depth test below only speaks when BOTH frames hold
-    // cloud.
-    const bool currentCloud = current.a < 0.99f;
+    // Reproject the cloud's front point through last frame's camera. A traced pixel whose ray MISSED
+    // the cloud this frame (a thin wisp between the jittered samples) carries the far end of the
+    // traced range as its depth, not the wisp's: reprojecting with that would not hurt (kilometres
+    // away, a metre of camera motion is a fraction of a pixel either way), but COMPARING it with the
+    // history's depth is what tore the history down every frame on exactly the thin parts, and worse
+    // the fewer the samples -- the "pixel dance" the owner saw. So a miss, and every pixel not traced
+    // this frame, reprojects with last frame's depth at this pixel, and the depth test below only
+    // speaks when BOTH frames hold cloud.
+    const bool currentCloud = fresh && current.a < 0.99f;
     const float reprojectDepth = currentCloud ? currentDepth : PrevResolvedDepth.Load(int3(px, 0));
-    const float2 uv = (float2(px) + 0.5f) / cloudOutput.xy;
+    const float2 uv = (float2(px) + 0.5f) / cloudDepth.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float3 rayDir = CloudViewRayDirection(ndc);
     const float3 P = cloudCamera.xyz + rayDir * (reprojectDepth * CloudMetresPerKm);
@@ -90,17 +132,14 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
     }
     // THE HISTORY IS FETCHED AT uv PLUS THE MOTION, NOT AT THE REPROJECTED POINT. The point P is
-    // rebuilt from a texel centre through the inverse matrix (then a spot 0.2 m in front of a camera
-    // 100 m from the origin, normalised; CloudViewRayDirection now takes it 1 km out, which shrinks
-    // the error but does not make it zero): projecting it back through the SAME matrix does not
-    // land on the texel centre but a few hundredths of a texel off, and the error is a rounding
-    // pattern, not noise. A still camera then resampled its history bilinearly every frame with
-    // that offset, and at historyWeight 0.9 thirty resamples blur where the offset is half a texel
-    // and keep sharp where it is zero: a lattice of tiles with straight edges across the whole sky
-    // (owner, 2026-09-12, pose -105.97,8.40,21.98 / -0.0053,0.1579,0.0009,0.9874; gone with the
-    // reprojection bypassed, gone at historyWeight 0.5, absent from the mean of raw frames). The
-    // motion vector formulation -- the same P through both matrices, the DIFFERENCE applied to uv --
-    // cancels the round trip: a still camera's history is fetched exactly at its own texel.
+    // rebuilt from a pixel centre through the inverse matrix: projecting it back through the SAME
+    // matrix does not land on the centre but a few hundredths of a pixel off, in a rounding pattern,
+    // and a still camera then resampled its history bilinearly every frame with that offset -- at
+    // historyWeight 0.9 thirty resamples blurred where the offset was half a texel and kept sharp
+    // where it was zero: a lattice of straight-edged tiles across the sky (owner, 2026-09-12, pose
+    // -105.97,8.40,21.98 / -0.0053,0.1579,0.0009,0.9874). The motion vector formulation -- the same
+    // P through both matrices, the DIFFERENCE applied to uv -- cancels the round trip: a still
+    // camera's history is fetched exactly at its own pixel.
     const float2 prevProjectedUv = (prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f;
     const float2 currentProjectedUv = (currentClip.xy / currentClip.w) * float2(0.5f, -0.5f) + 0.5f;
     const float2 prevUv = uv + (prevProjectedUv - currentProjectedUv);
@@ -111,7 +150,8 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float4 history = PrevResolved.SampleLevel(gSmpLinear, prevUv, 0);
+    float4 history = CloudSampleHistory(prevUv, cloudDepth.xy);
+    history.a = saturate(history.a);
     history.rgb *= cloudTemporal.z; // last frame's exposure -> this frame's
     const float historyDepth = PrevResolvedDepth.SampleLevel(gSmpLinear, prevUv, 0);
     const bool historyCloud = history.a < 0.99f;
@@ -139,10 +179,22 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float stillness = 1.0f - saturate(length(motion) * 100.0f);
     const float relax = 0.5f * stillness;
     const float4 clamped = lerp(clamp(history, boxMin, boxMax), history, relax);
+    if (!fresh)
+    {
+        // Not traced this frame: the history, as UE's reconstruction takes it. Clamped only as far as
+        // the camera moves -- this pixel learns nothing new this frame, and a still camera's clamp to
+        // its NEIGHBOURS' samples would only pull its own converged detail towards theirs.
+        Resolved[px] = lerp(clamp(history, boxMin, boxMax), history, stillness);
+        ResolvedDepth[px] = historyCloud ? historyDepth : currentDepth;
+        return;
+    }
+    // Traced this frame: blended in with the weight four frames of the per-frame blend would have,
+    // since this pixel is visited every fourth frame -- the same response time as a per-frame trace.
     const float frameWeight = (1.0f - saturate(cloudTemporal.y)) / (1.0f + 2.0f * stillness);
-    const float blendNew = lerp(1.0f, frameWeight, agreement);
+    const float visitWeight = 1.0f - pow(1.0f - frameWeight, 4.0f);
+    const float blendNew = lerp(1.0f, visitWeight, agreement);
     Resolved[px] = lerp(clamped, current, blendNew);
-    // The depth channel keeps the cloud's depth across the miss frames of a thin texel, so the next
+    // The depth channel keeps the cloud's depth across the miss frames of a thin pixel, so the next
     // frame reprojects and compares against the cloud, not against the far end of the range.
     ResolvedDepth[px] = currentCloud ? currentDepth : (historyCloud ? historyDepth : currentDepth);
 }

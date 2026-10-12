@@ -16,75 +16,85 @@ struct VolumetricCloudSettings
     bool enabled = false;
 
     // --- The layer. UE VolumetricCloudComponent: LayerBottomAltitude 5 km, LayerHeight 10 km are a
-    // big-sky default; the plan's 1.5 / 2.5 km puts a fair-weather cumulus deck over an island.
-    float layerBottomKm = 1.5f;
-    float layerHeightKm = 2.5f;
+    // big-sky default. Ours is a trade-wind cumulus deck over an island: bases at 600 m (where they sit
+    // over a tropical sea), 700 m of layer for the profile's tallest column to fill.
+    float layerBottomKm = 0.6f;
+    float layerHeightKm = 0.7f;
 
-    // --- The density model (ours, Schneider 2015 / Nubis; cloud_common.hlsli).
-    float coverage = 0.5f;          // threshold on the weather map's coverage field: 0 clear .. 1 the whole field as drawn
-    float overcast = 0.0f;          // lifts the weather map's coverage field towards 1: 0 the map as drawn .. 1 no gaps (the base shape keeps its texture)
-    float cloudType = 0.0f;         // bias on the weather map's type field: -1 all stratus .. +1 all cumulus
-    // The vertical shape from a PROFILE LUT (UDS's Cloud_Profile semantics, cloud_common.hlsli
-    // CloudSampleProfile) instead of the three Schneider gradients: u = the type field above, v =
-    // height; R the envelope, G the extinction (cubed -- a profile's G of 0.5 is 1/8 of the scale
-    // below), B the detail erosion. The LUT is the built-in one unless `--cloud-profile=<png>` names a file.
-    bool profile = false;
-    // The formation volume's knobs (used only while one is loaded, VolumetricCloud.h):
+    // --- The density model (cloud_common.hlsli): Ultra Dynamic Sky's scheme -- a formation volume
+    // thresholded by coverage, shaped by a profile LUT, eroded by a cells volume -- on OUR textures,
+    // generated at load (cloud_noise_cs.hlsl; --cloud-* files replace them for an A/B). The defaults
+    // reproduce UDS's look (fitted 2026-10-12); the knobs below them move away from it.
+    float coverage = 0.5f;          // UDS's "Cloud Density" / 3: 0 clear .. 1 closed; also picks the profile's column (how tall)
+    float cloudType = 0.0f;         // offsets the profile's column: -1 flatter .. +1 taller clouds at the same coverage
+    float weatherTileKm = 12.0f;    // the formation volume's tile: the spacing of the cloud groups (UDS's is 12 km)
+    float windKmH = 20.0f;          // drift speed along the level's wind heading (the shared wind clock)
+    std::uint32_t seed = 0u;        // reseeds every generated texture: a different sky, the same weather
     //   formationChangeSpeed -- how fast the shapes evolve RELATIVE TO THE DRIFT (UDS's Formation
     //     Change Speed): 1 = one full cycle of the volume's time axis while the clouds drift 16
     //     formation tiles; at 30 km/h over a 12 km tile that is a new slice every ~3 min, a cloud
     //     living 15-30 min. No wind, no change.
-    //   macroVariation -- coverage +- this, from the weather map's coverage field over macroTileKm
-    //     (UDS's Macro Variation): cloudy regions and clear ones instead of an even scatter.
+    //   macroVariation -- coverage +- this, from the weather map's field over macroTileKm (UDS's
+    //     Macro Variation): cloudy regions and clear ones instead of an even scatter.
     float formationChangeSpeed = 1.0f;
     float macroVariation = 0.0f;
     float macroTileKm = 60.0f;
-    float extinctionScale = 0.05f;  // extinction at full density, 1/m (real cumulus 0.04-0.1)
+    // Fine tuning. Each default is UDS's value or a fit to their look (cloud_noise_cs.hlsl).
+    float formationRoughness = 0.85f;     // the formation fBm's gain: higher = flatter, more broken-up formations (regenerates the volume)
+    float floorVariationClear = 0.08f;    // how far the formation's B channel lifts cloud bases at partial cover ...
+    float floorVariationCloudy = 0.64f;   // ... and at heavy cover (UDS Floor Variation Clear / Cloudy)
+    float erosionStrength = 1.2f;         // UDS 3D Erosion: how much the cells carve the formation
+    float erosionPower = 3.0f;            // UDS Erosion Power: higher = only the cells' brightest parts carve
+    float erosionTileKm = 1.2f;           // world period of the cells volume (vertically 0.58 of it, as UDS's 1200 x 696 m)
+    float highFrequencyStrength = 0.24f;  // UDS High Frequency Noise: the fine near-camera detail
+    float highFrequencyDistanceKm = 1.5f; // ... faded out by this distance (UDS HF Octave Zero Distance)
+    // The generated profile LUT's shape (CSProfile; a --cloud-profile file replaces it). The defaults
+    // are a least-squares fit to Ultra Dynamic Sky's LUT over coverage 0.2 .. 0.7 (cloud_noise_cs.hlsl).
+    float profileHeight = 1.0f;           // scales how high formations reach at every coverage
+    float profileDome = 0.46f;            // how fast the envelope thins with height: 0 = flat-topped slabs, 1 = steep domes
+    float profileTopSoftness = 0.30f;     // the fraction of a formation's height its top closes over
+    float profileBaseSoftness = 0.29f;    // the height over which the underside gains density (soft vs crisp bases)
+    float profileSmallDensity = 0.09f;    // density at no coverage (the smallest clouds): low = thin and wispy
+    float profileBodyDensity = 0.65f;     // density at full coverage (cubed: 0.65 = 0.27 of Extinction)
+    float profileBaseErosion = 0.12f;     // detail erosion at the floor: low = flat, firm undersides
+    float profileErosionRise = 0.53f;     // how far up (fraction of the top) erosion reaches full strength
+    float profileHeavyErosionCut = 0.41f; // how much less heavy cover erodes (smoother overcast)
+    float profileHeavyThinning = 0.74f;   // how much cover above ~0.4 thins with height
+    // Extinction at profile density 1, per metre. The profile's density is applied CUBED (a developed
+    // cloud's ~0.5 is 1/8 of this), so it is ~8x a real cumulus' 0.04-0.1 /m; UDS run 10.
+    float extinctionScale = 10.0f;
     float albedo = 0.95f;           // single-scattering albedo of the droplets
-    float detailStrength = 0.35f;   // how much the Worley detail erodes the base shape
-    // Animated domain warp of the weather map; independent of bulk wind.
-    float weatherDistortionStrength = 0.0f; // horizontal weather displacement in weather texture tiles; 0 disables
-    float shapeDistortionTileKm = 6.0f;   // distortion texture period, before the base's vertical compression
-    float shapeDistortionSpeed = 0.15f;   // relative distortion drift, texture tiles/minute; 0 holds the warp
-    float baseTileKm = 6.0f;        // world period of the 128^3 base noise (horizontally)
-    // How many layer heights one base tile spans VERTICALLY, at most. A 6 km tile through a 0.5 km
-    // layer barely changes with height, so the density is the weather map extruded into columns,
-    // and a ray at a grazing angle integrates those columns along itself into radial streaks
-    // (measured 2026-09-12: the streaks scaled with the weather tile and vanished only with a 2.5 km
-    // layer). With this the base noise is compressed vertically until a tile spans this many layer
-    // heights, so a thin layer is made of flat cells the size of the layer rather than columns.
-    float baseVerticalTiles = 1.0f;
-    float detailTileKm = 0.5f;      // world period of the 32^3 detail noise
-    float weatherTileKm = 40.0f;    // world period of the 512^2 weather map
-    float windKmH = 20.0f;          // drift speed along the level's wind heading (the shared wind clock)
-    std::uint32_t seed = 0u;        // reseeds all three noise textures
 
     // --- Lighting. UE's VolumetricAdvancedMaterialOutput node defaults are isotropic (g 0 / 0 /
-    // blend 0, zero extra octaves), which no shipped cloud material keeps; these are the sample
-    // content's shape. SIGN: POSITIVE g is forward scattering, here AND in UE's node -- their HG takes
-    // +2g cos and they negate the cosine of a light direction that points TO the sun
-    // (VolumetricCloud.usf:332, SceneRendering.cpp:1546), which is the textbook form again. A UE or
-    // UDS value is entered as is.
-    float phaseG = 0.6f;
-    float phaseG2 = -0.3f;
-    float phaseBlend = 0.25f;
-    float msContribution = 0.5f;    // UE ConstMultiScatteringContribution
+    // blend 0, zero extra octaves), which no shipped cloud material keeps; these are Ultra Dynamic
+    // Sky's. SIGN: POSITIVE g is forward scattering, here AND in UE's node -- their HG takes +2g cos and
+    // they negate the cosine of a light direction that points TO the sun (VolumetricCloud.usf:332,
+    // SceneRendering.cpp:1546), which is the textbook form again. A UE or UDS value is entered as is.
+    float phaseG = 0.85f;
+    float phaseG2 = 0.4f;
+    float phaseBlend = 0.65f;
+    float msContribution = 0.85f;   // UE ConstMultiScatteringContribution
     float msOcclusion = 0.5f;       // UE ConstMultiScatteringOcclusion
-    float msEccentricity = 0.5f;    // UE ConstMultiScatteringEclipse
-    // UE MultiScatteringApproximationOctaveCount: extra octaves beyond single scattering, 0..2. 1 is
-    // what this always was; UDS run 2, which carries the sun's light deeper into a dense cloud.
-    std::uint32_t msOctaves = 1u;
-    float skyLightBottomOcclusion = 0.5f; // UE SkyLightCloudBottomOcclusion: the sky's light fades out towards the layer's bottom
+    float msEccentricity = 0.4f;    // UE ConstMultiScatteringEclipse
+    // UE MultiScatteringApproximationOctaveCount: extra octaves beyond single scattering, 0..2. UDS run
+    // 2, which carries the sun's light deeper into a dense cloud (lighter, sun-coloured undersides).
+    std::uint32_t msOctaves = 2u;
+    float skyLightBottomOcclusion = 0.0f; // UE SkyLightCloudBottomOcclusion: the sky's light fades out towards the layer's bottom (UDS: none)
+    // Scales the sky's light on the clouds (the distant sky light, the only light in their shadowed
+    // parts besides multi-scattering): higher = lighter AND bluer shadows, since that light is the
+    // blue sky's. 1 = the atmosphere as computed. Ultra Dynamic Sky replaces it with authored colours.
+    float skyLightIntensity = 1.0f;
 
     // --- Tracing. UE r.VolumetricCloud.ViewRaySampleMaxCount is 768 at its cinematic default and
-    // DistanceToSampleMaxCount 15 km, i.e. a 19.5 m step; the step is 15 km / this, held constant
-    // below 15 km (cloud_trace_cs.hlsl). 256 = 58 m steps, the first count that resolves a
-    // kilometre-scale cumulus without a mushy edge; 128 (117 m) was the budget's starting point.
-    std::uint32_t viewSampleCountMax = 256u;
+    // DistanceToSampleMaxCount 15 km, i.e. a 19.5 m step; the step is distanceToSampleCountMaxKm /
+    // this, held constant below that distance (cloud_march.hlsli). 3 km / 128 = 23 m steps through
+    // the thin default layer (UDS raise UE's count 4x for the same reason); 0.71 ms at 256 (12 m) vs
+    // 0.43 at 128 on wind_test, 2560 x 1440 under DLSS Balanced (2026-10-12).
+    std::uint32_t viewSampleCountMax = 128u;
     std::uint32_t viewSampleCountMin = 2u;       // UE SampleMinCount
-    float distanceToSampleCountMaxKm = 15.0f;    // UE DistanceToSampleMaxCount
-    std::uint32_t shadowSampleCount = 6u;        // the march to the sun per lit sample (UE Shadow.ViewRaySampleMaxCount 80 -- dear)
-    float shadowTracingDistanceKm = 15.0f;       // UE ShadowTracingDistance
+    float distanceToSampleCountMaxKm = 3.0f;     // UE DistanceToSampleMaxCount (theirs 15)
+    std::uint32_t shadowSampleCount = 4u;        // the march to the sun per lit sample (UE Shadow.ViewRaySampleMaxCount 80 -- dear; UDS 4)
+    float shadowTracingDistanceKm = 0.156f;      // UE ShadowTracingDistance (theirs 15; UDS 0.156)
     float stopTracingTransmittance = 0.005f;     // UE StopTracingTransmittanceThreshold
     float tracingStartMaxDistanceKm = 350.0f;    // UE TracingStartMaxDistance
     float tracingMaxDistanceKm = 50.0f;          // UE TracingMaxDistance (mode: from the layer entry point)
@@ -107,7 +117,7 @@ struct VolumetricCloudSettings
     float shadowDepthBiasKm = 0.0f;    // UE CloudShadowDepthBias
     std::uint32_t shadowMapSampleCount = 16u; // UE CloudShadowRaySampleBaseCount 16 (x horizon factor)
 
-    // --- Session only (never in a level): 0 scene, 1 weather coverage over the sky, 2 the
+    // --- Session only (never in a level): 0 scene, 1 the coverage (the thresholded formation field) over the sky, 2 the
     // transmittance, 3 samples taken / max.
     unsigned debugView = 0;
 };
@@ -128,23 +138,22 @@ struct VolumetricCloudConstants
     float phase[4];       // blend, ms contribution, ms occlusion, ms eccentricity
     float trace[4];       // sample max, sample min, 1 / distance to max (1/km), stop transmittance
     float shadowTrace[4]; // shadow samples, shadow distance km, sky bottom visibility, tracing max distance km
-    float medium[4];      // extinction 1/m, albedo, coverage, type bias
-    float shape[4];       // 1/base tile, 1/detail tile, 1/weather tile, detail strength
+    float medium[4];      // extinction 1/m, albedo, coverage, cloud type bias
+    float formation[4];   // 1 / formation tile (1/km), its time coordinate (0..1, wraps), macro variation, 1 / macro tile (1/km)
     float wind[4];        // xyz world drift offset (m), w tracing start max distance km
     float output[4];      // width, height, preExposure, 1/preExposure
     float depth[4];       // depth width, depth height, proj._33, proj._43
     float aerial[4];      // aerial on, aerial start km, distant on, debug view
     float temporal[4];    // history valid, history weight, exposure ratio, frame index
     float shadowMap[4];   // resolution, 1/resolution, far depth km, strength
-    float shadowMap2[4];  // sample count, depth bias km, base vertical compression, overcast
-    float distortion[4]; // x: weather strength (UV), y: 1/distortion tile km, zw: unused
-    float distortionOffset[4]; // xyz: wrapped distortion offset in texture UVW, w: unused
-    float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear weather, 2 detail mean)
-    float profile[4];     // x: profile LUT on, y: 1 / LUT width, z: 1 / LUT height, w: unused
-    float formation[4];   // x: formation volume on (bound in the base noise's slot), y: its time coordinate (0..1, wraps), z: macro variation, w: 1 / macro tile (1/km)
-    float lighting[4];    // x: lit extra multi-scattering octaves (0..2), yzw: unused
+    float shadowMap2[4];  // sample count, depth bias km, zw unused
+    float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
+    float profile[4];     // x: unused, y: 1 / LUT width, z: 1 / LUT height, w: unused
+    float lighting[4];    // x: lit extra multi-scattering octaves (0..2), y: sky light intensity, zw: unused
+    float erosion[4];     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
+    float floorShape[4];  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w unused
 };
-static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 22 * 16, "CloudCB layout");
+static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 21 * 16, "CloudCB layout");
 
 // --- PROJECT-WIDE, not the level: graphics_settings.json "cloudShadow", Developer Controls > Sky,
 // `--set=cloudShadow.updateFrames`. A performance switch, the role UE gives a cvar
@@ -168,20 +177,22 @@ inline std::uint32_t SanitizeCloudShadowUpdateFrames(std::uint32_t frames)
 
 // Cheap density for the MAP's march only (the view, its self-shadow and the capture keep the full
 // model), same file / tab / --set family. Each drops texture taps from every map sample:
-//   bilinearWeather: the weather map in one bilinear tap instead of the view's 4-tap B-spline. The
-//     B-spline exists for a PERSPECTIVE artefact (facets drawn out into streaks along the view); the
-//     map is an ortho grid at the weather texel's own 78 m pitch, filtered 3x3 afterwards.
-//   detailMean: erode by the detail noise's mean (kCloudDetailMean) without fetching it -- what the
-//     view's own far self-shadow samples already do. Detail features are ~250 m, 3 map texels.
-// The price is a shadow that can differ slightly from the cloud casting it. Measured 2026-09-23,
-// wind_test from 400 m over the sea with overcast 0.35, the map traced whole every frame, one binary:
-//   GPU.Frame   both off 2.862 ms / bilinear 2.751 / mean 2.744 / both 2.575
-//   image vs both off: bilinear max 2 codes, 0.01 % of the shadow's own contribution;
-//   mean (and both) 0.39 % of pixels > 2 codes, max 13, all on sun glints at the edge of a
-//   partial shadow (the glints take the cloud shadow whole); 0.22 % of the shadow's contribution.
-// Hence both default ON; switching one off restores the view's model for that term exactly.
+//   bilinearWeather: the macro variation's field in one bilinear tap instead of the view's 4-tap
+//     B-spline (only while macroVariation > 0). The B-spline exists for a PERSPECTIVE artefact (facets
+//     drawn out into streaks along the view); the map is an ortho grid, filtered 3x3 afterwards.
+//   detailMean: erode by the cells' MEAN (cloud_common.hlsli CloudMeanErosion) without fetching them,
+//     and without the fine detail -- what the view's own far self-shadow samples do. The cells are
+//     150 m, ~4 map texels.
+// The price is a shadow that can differ slightly from the cloud casting it; switching one off restores
+// the view's model for that term exactly. Measured 2026-10-12 on wind_test (the owner's pose, the map
+// traced whole every frame, one binary; the old density model's numbers were -0.29 ms for both):
+//   Pass_CloudShadow  both off 0.167 / 0.164 ms (twice) / mean 0.157 / bilinear 0.154 / both 0.150
+//   below the horizon, pixels > 8 codes vs both off: floor 0.27 % (max 30), bilinear 0.25 % (max 29),
+//   mean 0.68 % (max 66)
+// So bilinear stays ON (free in the image), and mean erosion is OFF by default: for this density
+// model it buys 0.01 ms for a shadow that visibly leaves its cloud.
 inline bool g_cloudShadowBilinearWeather = true;
-inline bool g_cloudShadowDetailMean = true;
+inline bool g_cloudShadowDetailMean = false;
 inline std::uint32_t CloudShadowCheapBits()
 {
     return (g_cloudShadowBilinearWeather ? 1u : 0u) | (g_cloudShadowDetailMean ? 2u : 0u);

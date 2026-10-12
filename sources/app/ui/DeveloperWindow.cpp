@@ -1349,7 +1349,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                     clouds.enabled ? (sky.mode != 0u ? "on" : "authored, but the sky is a cubemap") : "none");
                 ImGui::BeginDisabled(!clouds.enabled || sky.mode == 0u);
                 int cloudView = static_cast<int>(clouds.debugView);
-                const char* cloudViews[] = { "Scene", "Weather coverage", "Transmittance", "Samples taken" };
+                const char* cloudViews[] = { "Scene", "Coverage (formation field)", "Transmittance", "Samples taken" };
                 if (ImGui::Combo("Cloud view", &cloudView, cloudViews, IM_ARRAYSIZE(cloudViews)))
                     clouds.debugView = static_cast<unsigned>(cloudView);
                 ImGui::EndDisabled();
@@ -1379,25 +1379,27 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // The map march's cheap density: each is a texture tap per sample the view keeps.
                 bool bilinearWeather = render::g_cloudShadowBilinearWeather;
                 if (GRAPHICS_CONTROL(CloudShadowBilinearWeather, "cloudShadowBilinearWeather",
-                        ImGui::Checkbox("Cloud shadow: bilinear weather", &bilinearWeather)))
+                        ImGui::Checkbox("Cloud shadow: bilinear macro variation", &bilinearWeather)))
                 {
                     render::g_cloudShadowBilinearWeather = bilinearWeather;
                 }
-                DevHelp("The shadow map reads the weather map with one bilinear tap instead of the "
-                        "view's 4-tap B-spline. The B-spline is there for a perspective artefact (facets "
-                        "drawn into streaks across distant clouds); the map is a top-down grid at the "
-                        "weather texel's own 78 m pitch, blurred 3x3 afterwards. Off = the map sees "
-                        "exactly the view's weather. --set=cloudShadow.bilinearWeather:0|1");
+                DevHelp("The shadow map reads the macro variation's field (the weather map) with one bilinear "
+                        "tap instead of the view's 4-tap B-spline; only matters while the level's Macro "
+                        "Variation is above 0. The B-spline is there for a perspective artefact (facets drawn "
+                        "into streaks across distant clouds); the map is a top-down grid blurred 3x3 "
+                        "afterwards. Off = the map sees exactly the view's coverage. "
+                        "--set=cloudShadow.bilinearWeather:0|1");
                 bool detailMean = render::g_cloudShadowDetailMean;
                 if (GRAPHICS_CONTROL(CloudShadowDetailMean, "cloudShadowDetailMean",
-                        ImGui::Checkbox("Cloud shadow: detail by its mean", &detailMean)))
+                        ImGui::Checkbox("Cloud shadow: erosion by its mean", &detailMean)))
                 {
                     render::g_cloudShadowDetailMean = detailMean;
                 }
-                DevHelp("The shadow map erodes the cloud by the detail noise's MEAN instead of fetching "
-                        "it -- what the clouds' own far self-shadow samples already do. Detail features "
-                        "are ~250 m, about three map texels. Off = the map sees the view's full detail. "
-                        "--set=cloudShadow.detailMean:0|1");
+                DevHelp("The shadow map erodes the cloud by the cells volume's MEAN erosion instead of "
+                        "fetching it, and leaves out the fine detail -- what the clouds' own far self-shadow "
+                        "samples do. The cells are ~150 m, about four map texels. Measured on wind_test: "
+                        "0.01 ms saved for a visibly different shadow, so off by default. Off = the map "
+                        "sees the view's full erosion. --set=cloudShadow.detailMean:0|1");
                 const render::CloudShadowUpdateStats& cloudStats = render::g_cloudShadowStats;
                 if (cloudStats.tracedTexels == 0u)
                 {

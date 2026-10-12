@@ -42,8 +42,8 @@ namespace
         int fogGridPixels = static_cast<int>(render::kFogGridPixels); // volumetric fog cell size, powers of two 4..64
         int fogGridZ = static_cast<int>(render::kFogGridZ);           // volumetric fog slices, 16..128
         std::uint32_t cloudShadowUpdateFrames = 4u; // 1 = the whole cloud shadow map every frame (UE), 4, 16
-        bool cloudShadowBilinearWeather = true;     // the map's march: 1 weather tap instead of the view's 4
-        bool cloudShadowDetailMean = true;          // the map's march: detail by its mean, no fetch
+        bool cloudShadowBilinearWeather = true;     // the map's march: 1 macro-variation tap instead of the view's 4
+        bool cloudShadowDetailMean = false;         // the map's march: erosion by its mean, no fetch (VolumetricCloudSettings.h: not worth it)
         // Texture streaming A3 (UE r.Streaming.*)
         bool streamingEnabled = true;
         int streamingPoolSizeMB = -1;   // -1 = 70 % of dedicated VRAM, 0 = unlimited

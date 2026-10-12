@@ -19,14 +19,14 @@
 //   * no depth buffer: the planet is the ground.
 //
 // b0 CloudCB with the sky's SkyAtmosphereCB appended (CLOUD_WITH_SKY_CB, cloud_common.hlsli)
-// t0 CloudBaseNoise  t1 CloudDetailNoise  t2 CloudWeather  t3 DistantSkyLight (B5, raw luminance)
+// t0 CloudFormationVolume  t1 CloudCellsVolume  t2 CloudWeather  t3 DistantSkyLight (B5, raw luminance)
 // t4 CloudProfileLut  t5 Transmittance LUT  t6 MultiScatter LUT  (t0..t4 the overlay's, t5..t6 the sky's)
 // u0 the radiance mip, six faces in the array     s0 linear wrap (noise)  s1 linear clamp (LUTs)
 #pragma pack_matrix(row_major)
 #define CLOUD_DENSITY
 #define CLOUD_WITH_SKY_CB
-#define CLOUD_T_BASE t0
-#define CLOUD_T_DETAIL t1
+#define CLOUD_T_FORMATION t0
+#define CLOUD_T_CELLS t1
 #define CLOUD_T_WEATHER t2
 #define CLOUD_T_PROFILE t4
 #define CLOUD_S_WRAP s0

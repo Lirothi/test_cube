@@ -2591,10 +2591,12 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     // grid as the AO -- the shafts describe the rendered image, not the display.
     sizes.lightShaftWidth = sizes.gtaoWidth;
     sizes.lightShaftHeight = sizes.gtaoHeight;
-    // Plan C2 volumetric clouds: half the RENDER resolution too (UE's VolumetricRenderTarget mode
-    // 0 traces at half and reconstructs at full).
+    // Plan C2 volumetric clouds: traced at half the RENDER resolution, one pixel of each 2x2 a
+    // frame, and reconstructed at the full render resolution (UE's VolumetricRenderTarget mode 1).
     sizes.cloudWidth = sizes.gtaoWidth;
     sizes.cloudHeight = sizes.gtaoHeight;
+    sizes.cloudResolvedWidth = std::max(1u, rtWidth);
+    sizes.cloudResolvedHeight = std::max(1u, rtHeight);
     // Volumetric fog: the froxel grid over the RENDER resolution (UE size theirs from the scene
     // textures for the same reason: the volume describes the rendered image, not the display).
     sizes.fogGridWidth = std::max(1u, (rtWidth + fogGridPixels_ - 1u) / fogGridPixels_);

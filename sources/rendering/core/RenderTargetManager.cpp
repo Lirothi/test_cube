@@ -633,9 +633,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         D.lightShaftWidth = std::max(1u, sizes.lightShaftWidth);
         D.lightShaftHeight = std::max(1u, sizes.lightShaftHeight);
 
-        // Plan C2 volumetric clouds: the half-res march (colour + front depth) and its temporal
-        // resolve (the same pair; the previous slot's is the history). Compute-written and
-        // compute-read, resting NON_PIXEL like the fog volumes.
+        // Plan C2 volumetric clouds: the half-res march (colour + front depth) and its full-res
+        // reconstruction (the same pair at the render size; the previous slot's is the history).
+        // Compute-written and compute-read, resting NON_PIXEL like the fog volumes.
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloud,
             DeferredSrvSlot::CloudTrace, DeferredSrvSlot::CloudTraceUAV, f,
             D.cloudTrace, D.cloudTraceSRV, D.cloudTraceUAV, sizes.cloudWidth, sizes.cloudHeight);
@@ -644,12 +644,14 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.cloudTraceDepth, D.cloudTraceDepthSRV, D.cloudTraceDepthUAV, sizes.cloudWidth, sizes.cloudHeight);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloud,
             DeferredSrvSlot::CloudResolved, DeferredSrvSlot::CloudResolvedUAV, f,
-            D.cloudResolved, D.cloudResolvedSRV, D.cloudResolvedUAV, sizes.cloudWidth, sizes.cloudHeight);
+            D.cloudResolved, D.cloudResolvedSRV, D.cloudResolvedUAV, sizes.cloudResolvedWidth, sizes.cloudResolvedHeight);
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.cloudDepth,
             DeferredSrvSlot::CloudResolvedDepth, DeferredSrvSlot::CloudResolvedDepthUAV, f,
-            D.cloudResolvedDepth, D.cloudResolvedDepthSRV, D.cloudResolvedDepthUAV, sizes.cloudWidth, sizes.cloudHeight);
+            D.cloudResolvedDepth, D.cloudResolvedDepthSRV, D.cloudResolvedDepthUAV, sizes.cloudResolvedWidth, sizes.cloudResolvedHeight);
         D.cloudWidth = std::max(1u, sizes.cloudWidth);
         D.cloudHeight = std::max(1u, sizes.cloudHeight);
+        D.cloudResolvedWidth = std::max(1u, sizes.cloudResolvedWidth);
+        D.cloudResolvedHeight = std::max(1u, sizes.cloudResolvedHeight);
 
         // P8: the bloom pyramid. Same construction as the HZB chain above -- one SRV over the whole
         // thing, one UAV per mip, built entirely in UNORDERED_ACCESS -- but sized off the DISPLAY

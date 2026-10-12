@@ -213,7 +213,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE cloudTraceDepthSRV{}, cloudTraceDepthUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE cloudResolvedSRV{}, cloudResolvedUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE cloudResolvedDepthSRV{}, cloudResolvedDepthUAV{};
-        UINT cloudWidth = 1, cloudHeight = 1;
+        UINT cloudWidth = 1, cloudHeight = 1;                 // the trace pair (half the render size)
+        UINT cloudResolvedWidth = 1, cloudResolvedHeight = 1; // the resolved pair (the render size)
         UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
         // Plan A7 light shafts (half the render resolution).
         D3D12_CPU_DESCRIPTOR_HANDLE lightShaftASRV{}, lightShaftAUAV{};
@@ -284,8 +285,10 @@ public:
         UINT fogGridWidth = 1, fogGridHeight = 1, fogGridDepth = 1;
         // Plan A7 light shafts: half the render resolution (UE r.LightShaftDownSampleFactor 2).
         UINT lightShaftWidth = 1, lightShaftHeight = 1;
-        // Plan C2 volumetric clouds: half the render resolution (UE r.VolumetricRenderTarget.Mode 0).
+        // Plan C2 volumetric clouds: traced at half the render resolution, one pixel of each 2x2 per
+        // frame, and reconstructed at the full render resolution (UE r.VolumetricRenderTarget.Mode 1).
         UINT cloudWidth = 1, cloudHeight = 1;
+        UINT cloudResolvedWidth = 1, cloudResolvedHeight = 1;
         // P8 mip 0, half the DISPLAY resolution: bloom runs after the upscaler, so it is sized off
         // the image the tonemap actually reads, not off the internal render target.
         UINT bloomWidth = 1, bloomHeight = 1;

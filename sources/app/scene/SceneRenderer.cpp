@@ -499,7 +499,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             D.cloudTraceUAV.ptr != 0 && D.cloudTraceDepthUAV.ptr != 0 && D.cloudResolvedUAV.ptr != 0 && D.cloudResolvedDepthUAV.ptr != 0 &&
             D.cloudTraceSRV.ptr != 0 && D.cloudTraceDepthSRV.ptr != 0 && D.cloudResolvedSRV.ptr != 0 && D.cloudResolvedDepthSRV.ptr != 0 &&
             P.cloudResolvedSRV.ptr != 0 && P.cloudResolvedDepthSRV.ptr != 0 && D.depthSRV.ptr != 0;
-        const UINT w = D.cloudWidth, h = D.cloudHeight;
+        const UINT w = D.cloudResolvedWidth, h = D.cloudResolvedHeight; // the history's own size
         const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
         const bool sameHistory = cloudHistoryWidth_ == w && cloudHistoryHeight_ == h && cloudHistoryRevision_ == rev;
         decisions_.cloudHistoryValid = decisions_.volumetricCloud && c.temporal && cloudHistoryFrames_ > 0u && sameHistory;
@@ -517,9 +517,10 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                 LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: the level authors clouds but its sky is a cubemap; "
                             "they need the Sky Atmosphere object (procedural sky) and stay off");
             }
-            LOG_INFO(logging::LogCategory::Render, "volumetric clouds: on={} history={} shadowMap={} trace={}x{} (frame {})",
+            LOG_INFO(logging::LogCategory::Render, "volumetric clouds: on={} history={} shadowMap={} trace={}x{} resolved={}x{} (frame {})",
                      decisions_.volumetricCloud ? 1 : 0, decisions_.cloudHistoryValid ? 1 : 0,
-                     (decisions_.volumetricCloud && c.shadowMap) ? 1 : 0, w, h, renderer->GetTotalFrameNumber());
+                     (decisions_.volumetricCloud && c.shadowMap) ? 1 : 0, D.cloudWidth, D.cloudHeight, w, h,
+                     renderer->GetTotalFrameNumber());
             cloudLogged_ = state;
         }
     }

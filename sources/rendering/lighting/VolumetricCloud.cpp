@@ -21,7 +21,8 @@ namespace render
 std::wstring g_cloudProfilePath;
 std::wstring g_cloudFormationPath;
 std::wstring g_cloudCellsPath;
-bool g_cloudFormationOn = true;
+std::wstring g_cloudDumpDir;
+float g_cloudComposeJitterScale = 1.0f;
 }
 
 namespace
@@ -55,35 +56,36 @@ void Dispatch3D(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* mat
     if (gx > 0 && gy > 0 && gz > 0) { cl->Dispatch(gx, gy, gz); }
 }
 
-// OUR profile LUT, authored to the Cloud_Profile semantics (cloud_common.hlsli CloudSampleProfile):
-// u = the cloud type, 0 low and flat .. 1 the whole layer; row 0 = the TOP of the layer. Unlike
-// UDS's, its density channel sits at 1 through the body, so the extinction scale keeps the meaning
-// it has in the gradient model.
-//   R: the envelope -- 0 on the layer floor, 1 from 4 % up through the lower third of the cloud's
-//      height, then down to 0 at its top (top = 20 % of the layer for type 0 .. 100 % for type 1);
-//   G: 0.6 at the base rising to 1 by 15 % (a soft underside), thinning over the top half;
-//   B: erosion 0.15 at the base rising to 1 by 30 % of the cloud's height -- a firm, flat underside
-//      under a cauliflower top.
-constexpr UINT kProfileWidth = 64, kProfileHeight = 256;
-std::vector<std::uint8_t> BuiltInCloudProfile()
+// A texture the noise passes write (2D or 3D, one mip, UAV-capable), created at rest in NON_PIXEL,
+// with its SRV and UAV written into the two given descriptors. Its bytes are added to `owned`.
+bool CreateStorageTexture(Renderer* renderer, GpuResource& target, D3D12_CPU_DESCRIPTOR_HANDLE srv,
+                          D3D12_CPU_DESCRIPTOR_HANDLE uav, UINT width, UINT height, UINT depth, DXGI_FORMAT format,
+                          const wchar_t* name, UINT64& owned)
 {
-    std::vector<std::uint8_t> px(static_cast<size_t>(kProfileWidth) * kProfileHeight * 4u);
-    const auto byte = [](float v) { return static_cast<std::uint8_t>(std::lround(std::clamp(v, 0.0f, 1.0f) * 255.0f)); };
-    for (UINT y = 0; y < kProfileHeight; ++y)
-    {
-        const float h = 1.0f - (static_cast<float>(y) + 0.5f) / static_cast<float>(kProfileHeight);
-        for (UINT x = 0; x < kProfileWidth; ++x)
-        {
-            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(kProfileWidth);
-            const float top = 0.2f + 0.8f * u;
-            const float envelope = std::min(h / 0.04f, (top - h) / (0.65f * top));
-            const float density = std::min(0.6f + 0.4f * h / 0.15f, 1.0f - 0.3f * std::max(0.0f, (h - 0.5f * top) / (0.5f * top)));
-            const float erosion = 0.15f + 0.85f * std::min(1.0f, h / (0.3f * top));
-            std::uint8_t* p = &px[(static_cast<size_t>(y) * kProfileWidth + x) * 4u];
-            p[0] = byte(envelope); p[1] = byte(density); p[2] = byte(erosion); p[3] = 255u;
-        }
-    }
-    return px;
+    auto* device = renderer->GetDevice();
+    const bool volume = depth > 1;
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = volume ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = width; desc.Height = height;
+    desc.DepthOrArraySize = static_cast<UINT16>(depth); desc.MipLevels = 1;
+    desc.Format = format; desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource))) { return false; }
+    owned += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+    target.Attach(renderer->Declarations(), resource, kRest, name);
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = format; sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.ViewDimension = volume ? D3D12_SRV_DIMENSION_TEXTURE3D : D3D12_SRV_DIMENSION_TEXTURE2D;
+    if (volume) { sd.Texture3D.MipLevels = 1; } else { sd.Texture2D.MipLevels = 1; }
+    device->CreateShaderResourceView(resource.Get(), &sd, srv);
+    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+    ud.Format = format;
+    ud.ViewDimension = volume ? D3D12_UAV_DIMENSION_TEXTURE3D : D3D12_UAV_DIMENSION_TEXTURE2D;
+    if (volume) { ud.Texture3D.WSize = depth; }
+    device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, uav);
+    return true;
 }
 
 // A read-only texture (2D or 3D, one mip, 4 bytes a texel, tightly packed source rows) created in
@@ -146,6 +148,76 @@ bool UploadToRest(Renderer* renderer, const D3D12_RESOURCE_DESC& desc, const std
     out = resource;
     return true;
 }
+
+// The inverse, for render::g_cloudDumpDir: an 8-bit RGBA texture at rest in NON_PIXEL copied out
+// through a readback buffer (full GPU wait) into an uncompressed DX10 DDS -- the layout
+// VolumetricCloud::LoadVolumeDds reads. Dev-time only.
+bool ReadbackToDds(Renderer* renderer, ID3D12Resource* texture, const std::wstring& path)
+{
+    auto* device = renderer->GetDevice();
+    const D3D12_RESOURCE_DESC desc = texture->GetDesc();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
+    UINT rows = 0; UINT64 rowBytes = 0, total = 0;
+    device->GetCopyableFootprints(&desc, 0, 1, 0, &fp, &rows, &rowBytes, &total);
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC bd{};
+    bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1; bd.DepthOrArraySize = 1;
+    bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+    Microsoft::WRL::ComPtr<ID3D12Resource> readback;
+    if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))))
+    {
+        return false;
+    }
+    renderer->WaitForPreviousFrame();
+    UploadBatch batch;
+    if (!batch.Begin(renderer)) { return false; }
+    D3D12_RESOURCE_BARRIER b{};
+    b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    b.Transition.pResource = texture;
+    b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    b.Transition.StateBefore = kRest; b.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    barriers::EmitOne(batch.CommandList(), b);
+    D3D12_TEXTURE_COPY_LOCATION src{}; src.pResource = texture; src.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    D3D12_TEXTURE_COPY_LOCATION dst{}; dst.pResource = readback.Get(); dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    dst.PlacedFootprint = fp;
+    batch.CommandList()->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
+    barriers::EmitOne(batch.CommandList(), b);
+    batch.KeepAlive()->push_back(readback);
+    batch.SubmitAndWait(renderer);
+
+    const UINT width = static_cast<UINT>(desc.Width), height = desc.Height;
+    const UINT depth = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? desc.DepthOrArraySize : 1u;
+    std::vector<std::uint8_t> file(148 + static_cast<size_t>(width) * height * depth * 4u, 0u);
+    const auto put = [&file](size_t at, std::uint32_t v) { std::memcpy(file.data() + at, &v, 4); };
+    std::memcpy(file.data(), "DDS ", 4);
+    put(4, 124u);
+    put(8, 0x1u | 0x2u | 0x4u | 0x1000u | (depth > 1 ? 0x800000u : 0u)); // CAPS HEIGHT WIDTH PIXELFORMAT [DEPTH]
+    put(12, height); put(16, width); put(20, width * 4u); put(24, depth); put(28, 1u);
+    put(76, 32u); put(80, 0x4u); std::memcpy(file.data() + 84, "DX10", 4);
+    put(108, 0x1000u); put(112, depth > 1 ? 0x200000u : 0u);
+    put(128, 28u); put(132, depth > 1 ? 4u : 3u); put(140, 1u); // R8G8B8A8_UNORM, TEXTURE3D / 2D, one
+    std::uint8_t* mapped = nullptr;
+    const D3D12_RANGE readRange{0, static_cast<SIZE_T>(total)};
+    if (FAILED(readback->Map(0, &readRange, reinterpret_cast<void**>(&mapped)))) { return false; }
+    const size_t row = static_cast<size_t>(width) * 4u;
+    for (UINT z = 0; z < depth; ++z)
+    {
+        for (UINT y = 0; y < height; ++y)
+        {
+            const size_t index = static_cast<size_t>(z) * height + y;
+            std::memcpy(file.data() + 148 + index * row, mapped + fp.Offset + index * fp.Footprint.RowPitch, row);
+        }
+    }
+    const D3D12_RANGE noWrite{0, 0};
+    readback->Unmap(0, &noWrite);
+    HANDLE out = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (out == INVALID_HANDLE_VALUE) { return false; }
+    DWORD written = 0;
+    const bool ok = WriteFile(out, file.data(), static_cast<DWORD>(file.size()), &written, nullptr) && written == file.size();
+    CloseHandle(out);
+    return ok;
+}
 } // namespace
 
 VolumetricCloud::VolumetricCloud()
@@ -162,16 +234,22 @@ VolumetricCloud::~VolumetricCloud()
 
 void VolumetricCloud::Reset()
 {
-    base_.Reset(); detail_.Reset(); weather_.Reset(); shadowRaw_.Reset(); shadowFiltered_.Reset(); profile_.Reset();
-    formation_.Reset(); cells_.Reset();
+    weather_.Reset(); shadowRaw_.Reset(); shadowFiltered_.Reset(); profile_.Reset();
+    formation_.Reset(); cells_.Reset(); profileGen_.Reset(); formationGen_.Reset(); cellsGen_.Reset();
     heap_.Reset();
-    baseSrv_ = baseUav_ = detailSrv_ = detailUav_ = weatherSrv_ = weatherUav_ = profileSrv_ = formationSrv_ = cellsSrv_ = {};
+    weatherSrv_ = weatherUav_ = profileSrv_ = formationSrv_ = cellsSrv_ = {};
+    profileGenSrv_ = profileGenUav_ = formationGenSrv_ = formationGenUav_ = cellsGenSrv_ = cellsGenUav_ = {};
+    profileInvSize_[0] = 1.0f / kProfileWidth; profileInvSize_[1] = 1.0f / kProfileHeight;
     shadowRawSrv_ = shadowRawUav_ = shadowFilteredSrv_ = shadowFilteredUav_ = {};
-    noiseBase_.reset(); noiseDetail_.reset(); noiseWeather_.reset(); trace_.reset(); temporal_.reset();
+    noiseWeather_.reset(); trace_.reset(); temporal_.reset();
+    noiseProfile_.reset(); noiseFormation_.reset(); noiseCells_.reset();
     shadowTrace_.reset(); shadowFilter_.reset(); capture_.reset();
     cbBytes_ = 0; captureCbBytes_ = 0; captureValid_ = false;
     initialized_ = failed_ = false;
     noiseReady_ = false; noiseSeed_ = 0; noiseBuilds_ = 0;
+    profileGenReady_ = formationGenReady_ = false;
+    dumpArmed_ = dumpDone_ = false; dumpArmedFrame_ = 0;
+    std::memset(profileGenKey_, 0, sizeof(profileGenKey_)); formationGenSeed_ = 0; formationGenRoughness_ = 0.0f;
     shadowBuilt_ = false; shadowViewProj_ = {}; shadowFarKm_ = 1.0f;
     shadowHistoryValid_ = false; shadowSlicePhase_ = 0;
     ownedBytes_ = 0;
@@ -180,7 +258,32 @@ void VolumetricCloud::Reset()
 // Fixed-size resources, allocated once the level asks for clouds and kept until Reset.
 void VolumetricCloud::Prepare(Renderer* renderer, const VolumetricCloudSettings& settings)
 {
-    if (!settings.enabled || failed_ || heap_) { return; }
+    if (!settings.enabled || failed_) { return; }
+    if (!heap_) { CreateResources(renderer); }
+    if (dumpArmed_ && !dumpDone_ && renderer->GetTotalFrameNumber() > dumpArmedFrame_) { DumpGenerated(renderer); }
+}
+
+// render::g_cloudDumpDir: the generated textures, read back and written (the formation and cells only
+// when files did not replace them -- those are not ours to dump).
+void VolumetricCloud::DumpGenerated(Renderer* renderer)
+{
+    dumpArmed_ = false;
+    const std::wstring& dir = render::g_cloudDumpDir;
+    CreateDirectoryW(dir.c_str(), nullptr);
+    const auto dump = [&](bool ready, ID3D12Resource* texture, const wchar_t* file) {
+        if (!ready || !texture) { return; }
+        const std::wstring path = dir + L"/" + file;
+        if (ReadbackToDds(renderer, texture, path)) { LOG_INFO(logging::LogCategory::Render, "volumetric clouds: dumped {}", path); }
+        else { LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: dump of {} failed", path); }
+    };
+    dump(profileGenReady_, profileGen_.Get(), L"profile.dds");
+    dump(formationGenReady_, formationGen_.Get(), L"formation.dds");
+    dump(formationGenReady_, cellsGen_.Get(), L"cells.dds");
+    dumpDone_ = true;
+}
+
+void VolumetricCloud::CreateResources(Renderer* renderer)
+{
     auto* device = renderer->GetDevice();
     const auto fail = [this](const char* what) {
         LOG_ERROR(logging::LogCategory::Render, "volumetric clouds: {} failed; clouds off", what);
@@ -188,56 +291,41 @@ void VolumetricCloud::Prepare(Renderer* renderer, const VolumetricCloudSettings&
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    hd.NumDescriptors = 13; // five textures x (SRV, UAV) + the profile LUT's, formation's and cells' SRVs
+    // Six written textures x (SRV, UAV) + the three file overrides' SRVs.
+    hd.NumDescriptors = 15;
     if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const auto base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     UINT next = 0;
     const auto handle = [&]() { return D3D12_CPU_DESCRIPTOR_HANDLE{base.ptr + (next++) * step}; };
 
-    // The three noise textures (C1) and the two shadow maps (C3). UNORM8 for the noises (Schneider's
-    // textures are 8-bit and the density model remaps them), FP16 for the shadow's km / (1/m) / unitless.
+    // The file overrides first (render::g_cloud*Path), for an A/B against another set: the formation
+    // and cells only as a pair, and a file that does not load leaves the generated texture in its
+    // place. A pair that loaded makes the generated volumes unnecessary (33 MB not allocated).
+    profileSrv_ = handle(); formationSrv_ = handle(); cellsSrv_ = handle();
+    CreateProfile(renderer, profileSrv_);
+    LoadVolumeDds(renderer, render::g_cloudFormationPath, formation_, formationSrv_, L"VolumetricCloud.FormationFile");
+    LoadVolumeDds(renderer, render::g_cloudCellsPath, cells_, cellsSrv_, L"VolumetricCloud.CellsFile");
+    const bool generateVolumes = !FormationFromFiles();
+
+    // The generated textures (C1), the two shadow maps (C3). UNORM8 for the generated ones (the
+    // density model remaps them), FP16 for the shadow's km / (1/m) / unitless.
     struct Tex { GpuResource* res; D3D12_CPU_DESCRIPTOR_HANDLE* srv; D3D12_CPU_DESCRIPTOR_HANDLE* uav;
-                 UINT width, height, depth; DXGI_FORMAT format; const wchar_t* name; };
+                 UINT width, height, depth; DXGI_FORMAT format; const wchar_t* name; bool wanted; };
     const Tex textures[] = {
-        {&base_, &baseSrv_, &baseUav_, kBaseSize, kBaseSize, kBaseSize, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.BaseNoise"},
-        {&detail_, &detailSrv_, &detailUav_, kDetailSize, kDetailSize, kDetailSize, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.DetailNoise"},
-        {&weather_, &weatherSrv_, &weatherUav_, kWeatherSize, kWeatherSize, 1, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.Weather"},
-        {&shadowRaw_, &shadowRawSrv_, &shadowRawUav_, kShadowSize, kShadowSize, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, L"VolumetricCloud.ShadowRaw"},
-        {&shadowFiltered_, &shadowFilteredSrv_, &shadowFilteredUav_, kShadowSize, kShadowSize, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, L"VolumetricCloud.Shadow"},
+        {&weather_, &weatherSrv_, &weatherUav_, kWeatherSize, kWeatherSize, 1, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.Weather", true},
+        {&shadowRaw_, &shadowRawSrv_, &shadowRawUav_, kShadowSize, kShadowSize, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, L"VolumetricCloud.ShadowRaw", true},
+        {&shadowFiltered_, &shadowFilteredSrv_, &shadowFilteredUav_, kShadowSize, kShadowSize, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, L"VolumetricCloud.Shadow", true},
+        {&profileGen_, &profileGenSrv_, &profileGenUav_, kProfileWidth, kProfileHeight, 1, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.Profile", true},
+        {&formationGen_, &formationGenSrv_, &formationGenUav_, kFormationSize, kFormationSize, kFormationDepth, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.Formation", generateVolumes},
+        {&cellsGen_, &cellsGenSrv_, &cellsGenUav_, kCellsSize, kCellsSize, kCellsSize, DXGI_FORMAT_R8G8B8A8_UNORM, L"VolumetricCloud.Cells", generateVolumes},
     };
     for (const Tex& t : textures)
     {
-        const bool volume = t.depth > 1;
-        D3D12_RESOURCE_DESC desc{};
-        desc.Dimension = volume ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        desc.Width = t.width; desc.Height = t.height;
-        desc.DepthOrArraySize = static_cast<UINT16>(t.depth); desc.MipLevels = 1;
-        desc.Format = t.format; desc.SampleDesc.Count = 1;
-        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-        Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
-        { fail("texture"); return; }
-        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
-        t.res->Attach(renderer->Declarations(), resource, kRest, t.name);
         *t.srv = handle(); *t.uav = handle();
-        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
-        sd.Format = desc.Format; sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sd.ViewDimension = volume ? D3D12_SRV_DIMENSION_TEXTURE3D : D3D12_SRV_DIMENSION_TEXTURE2D;
-        if (volume) { sd.Texture3D.MipLevels = 1; } else { sd.Texture2D.MipLevels = 1; }
-        device->CreateShaderResourceView(resource.Get(), &sd, *t.srv);
-        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
-        ud.Format = desc.Format;
-        ud.ViewDimension = volume ? D3D12_UAV_DIMENSION_TEXTURE3D : D3D12_UAV_DIMENSION_TEXTURE2D;
-        if (volume) { ud.Texture3D.WSize = t.depth; }
-        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, *t.uav);
+        if (t.wanted && !CreateStorageTexture(renderer, *t.res, *t.srv, *t.uav, t.width, t.height, t.depth, t.format, t.name, ownedBytes_))
+        { fail("texture"); return; }
     }
-    if (!CreateProfile(renderer, handle())) { fail("profile LUT"); return; }
-    // Optional test volumes: without both files the formation branch never runs.
-    formationSrv_ = handle(); cellsSrv_ = handle();
-    LoadVolumeDds(renderer, render::g_cloudFormationPath, formation_, formationSrv_, L"VolumetricCloud.Formation");
-    LoadVolumeDds(renderer, render::g_cloudCellsPath, cells_, cellsSrv_, L"VolumetricCloud.Cells");
 
     auto* mm = renderer->GetMaterialManager();
     const auto compute = [&](const wchar_t* file, const char* entry, bool plane = false) {
@@ -246,15 +334,17 @@ void VolumetricCloud::Prepare(Renderer* renderer, const VolumetricCloudSettings&
         auto m = mm->GetOrCreateCompute(renderer, cd);
         return (m && m->GetPipelineState()) ? m : nullptr;
     };
-    noiseBase_ = compute(L"shaders/cloud_noise_cs.hlsl", "CSBase");
-    noiseDetail_ = compute(L"shaders/cloud_noise_cs.hlsl", "CSDetail");
     noiseWeather_ = compute(L"shaders/cloud_noise_cs.hlsl", "CSWeather", true);
+    noiseProfile_ = compute(L"shaders/cloud_noise_cs.hlsl", "CSProfile", true);
+    noiseFormation_ = compute(L"shaders/cloud_noise_cs.hlsl", "CSFormation");
+    noiseCells_ = compute(L"shaders/cloud_noise_cs.hlsl", "CSCells");
     trace_ = compute(L"shaders/cloud_trace_cs.hlsl", "CSMain");
     temporal_ = compute(L"shaders/cloud_temporal_cs.hlsl", "CSMain");
     shadowTrace_ = compute(L"shaders/cloud_shadow_cs.hlsl", "CSTrace");
     shadowFilter_ = compute(L"shaders/cloud_shadow_cs.hlsl", "CSFilter");
     capture_ = compute(L"shaders/cloud_capture_cs.hlsl", "CSMain");
-    if (!noiseBase_ || !noiseDetail_ || !noiseWeather_ || !trace_ || !temporal_ || !shadowTrace_ || !shadowFilter_ || !capture_)
+    if (!noiseWeather_ || !noiseProfile_ || !noiseFormation_ || !noiseCells_
+        || !trace_ || !temporal_ || !shadowTrace_ || !shadowFilter_ || !capture_)
     { fail("compute PSO"); return; }
     // The constant buffer is uploaded as one blob: the shader's layout must be the mirror's.
     const UINT cbBytes = trace_->GetCBSizeBytes(0);
@@ -277,37 +367,28 @@ void VolumetricCloud::Prepare(Renderer* renderer, const VolumetricCloudSettings&
     }
     captureCbBytes_ = capture_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment);
     initialized_ = true;
-    LOG_INFO(logging::LogCategory::Render, "volumetric clouds: resources ready (base {}^3, detail {}^3, weather {}^2, shadow {}^2)",
-             kBaseSize, kDetailSize, kWeatherSize, kShadowSize);
+    LOG_INFO(logging::LogCategory::Render, "volumetric clouds: resources ready (formation {}x{}x{}{}, cells {}^3, profile {}x{}, weather {}^2, shadow {}^2)",
+             kFormationSize, kFormationSize, kFormationDepth, generateVolumes ? "" : " from files", kCellsSize,
+             kProfileWidth, kProfileHeight, kWeatherSize, kShadowSize);
 }
 
-// The profile LUT: the file `--cloud-profile=` names (render::g_cloudProfilePath), else the built-in
-// one. Uploaded here, once, with a full GPU wait (Prepare runs when a level first asks for clouds)
-// and left at rest in NON_PIXEL: Texture2D's own upload ends in PIXEL|NON_PIXEL, which the async
-// compute queue the shadow map runs on may not read from.
+// The profile LUT file `--cloud-profile=` names (render::g_cloudProfilePath), if any; without one
+// (or one that does not decode) the generated LUT stays in use. Uploaded here, once, with a full GPU
+// wait (Prepare runs when a level first asks for clouds) and left at rest in NON_PIXEL: Texture2D's
+// own upload ends in PIXEL|NON_PIXEL, which the async compute queue the shadow map runs on may not
+// read from.
 bool VolumetricCloud::CreateProfile(Renderer* renderer, D3D12_CPU_DESCRIPTOR_HANDLE srv)
 {
+    if (render::g_cloudProfilePath.empty()) { return false; }
     std::vector<std::uint8_t> pixels;
     UINT width = 0, height = 0;
-    std::wstring source = L"built-in";
-    if (!render::g_cloudProfilePath.empty())
+    if (!Texture2D::DecodeFileRGBA8(render::g_cloudProfilePath, pixels, width, height) || width < 2 || height < 2)
     {
-        if (Texture2D::DecodeFileRGBA8(render::g_cloudProfilePath, pixels, width, height) && width > 1 && height > 1)
-        {
-            source = render::g_cloudProfilePath;
-        }
-        else
-        {
-            LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: profile LUT '{}' did not decode; the built-in LUT instead",
-                        render::g_cloudProfilePath);
-            pixels.clear();
-        }
+        LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: profile LUT '{}' did not decode; the generated LUT instead",
+                    render::g_cloudProfilePath);
+        return false;
     }
-    if (pixels.empty())
-    {
-        pixels = BuiltInCloudProfile();
-        width = kProfileWidth; height = kProfileHeight;
-    }
+    const std::wstring& source = render::g_cloudProfilePath;
 
     auto* device = renderer->GetDevice();
     D3D12_RESOURCE_DESC desc{};
@@ -317,7 +398,7 @@ bool VolumetricCloud::CreateProfile(Renderer* renderer, D3D12_CPU_DESCRIPTOR_HAN
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
     if (!UploadToRest(renderer, desc, pixels.data(), resource)) { return false; }
     ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
-    profile_.Attach(renderer->Declarations(), resource, kRest, L"VolumetricCloud.Profile");
+    profile_.Attach(renderer->Declarations(), resource, kRest, L"VolumetricCloud.ProfileFile");
     profileSrv_ = srv;
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = desc.Format; sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -382,37 +463,93 @@ bool VolumetricCloud::LoadVolumeDds(Renderer* renderer, const std::wstring& path
 size_t VolumetricCloud::BuildNoise(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                                    const VolumetricCloudSettings& settings)
 {
-    if (!Ready() || (noiseReady_ && noiseSeed_ == settings.seed)) { return kNone; }
-    const std::uint32_t seed = settings.seed;
+    if (!Ready()) { return kNone; }
+    const VolumetricCloudSettings& s = settings;
+    const std::uint32_t seed = s.seed;
+    // Three independent keys: the seed for the weather map; the seed and the roughness for the
+    // formation and cells volumes (unless files replaced them); the profile knobs for the LUT (64 x
+    // 256, cheap enough to follow a slider frame by frame). A file override is never regenerated.
+    const float profileKey[10] = {s.profileHeight, s.profileDome, s.profileTopSoftness, s.profileBaseSoftness,
+                                  s.profileSmallDensity, s.profileBodyDensity, s.profileBaseErosion, s.profileErosionRise,
+                                  s.profileHeavyErosionCut, s.profileHeavyThinning};
+    const bool noise = !noiseReady_ || noiseSeed_ != seed;
+    const bool profile = !ProfileFromFile() && (!profileGenReady_ || std::memcmp(profileKey, profileGenKey_, sizeof(profileKey)) != 0);
+    const bool formation = !FormationFromFiles()
+        && (!formationGenReady_ || formationGenSeed_ != seed || formationGenRoughness_ != s.formationRoughness);
+    if (!noise && !profile && !formation) { return kNone; }
     // Committed at registration (the frame's serial build, before any worker records): the shadow
-    // and trace passes registered right after this one in the SAME frame must know the noise is
-    // on its way, and the graph orders them behind this pass.
+    // and trace passes registered right after this one in the SAME frame must know the textures are
+    // on their way, and the graph orders them behind this pass.
+    const bool firstFormation = formation && !formationGenReady_;
     noiseReady_ = true; noiseSeed_ = seed;
-    LOG_INFO(logging::LogCategory::Render, "volumetric clouds: noise rebuild {} (seed {})", ++noiseBuilds_, seed);
+    if (profile) { profileGenReady_ = true; std::memcpy(profileGenKey_, profileKey, sizeof(profileKey)); }
+    if (formation) { formationGenReady_ = true; formationGenSeed_ = seed; formationGenRoughness_ = s.formationRoughness; }
+    ++noiseBuilds_;
+    if (!render::g_cloudDumpDir.empty() && !dumpDone_)
+    {
+        dumpArmed_ = true; dumpArmedFrame_ = renderer->GetTotalFrameNumber();
+    }
+    // A slider drag regenerates every frame: those rebuilds are Debug, the ones a level load makes Info.
+    if (noise || firstFormation)
+    {
+        LOG_INFO(logging::LogCategory::Render, "volumetric clouds: noise rebuild {} (seed {}):{}{}{}", noiseBuilds_, seed,
+                 noise ? " weather" : "", formation ? " formation+cells" : "", profile ? " profile" : "");
+    }
+    else
+    {
+        LOG_DEBUG(logging::LogCategory::Render, "volumetric clouds: noise rebuild {} (seed {}):{}{}", noiseBuilds_, seed,
+                  formation ? " formation+cells" : "", profile ? " profile" : "");
+    }
+
+    struct NoiseCB
+    {
+        UINT size, seed, depth, pad;
+        float formationParams[4];
+        float profileA[4], profileB[4], profileC[4];
+    };
+    NoiseCB params{};
+    params.seed = seed;
+    params.formationParams[0] = std::clamp(s.formationRoughness, 0.3f, 0.9f);
+    params.profileA[0] = s.profileHeight; params.profileA[1] = s.profileDome;
+    params.profileA[2] = s.profileTopSoftness; params.profileA[3] = s.profileBaseSoftness;
+    params.profileB[0] = s.profileSmallDensity; params.profileB[1] = s.profileBodyDensity;
+    params.profileB[2] = s.profileBaseErosion; params.profileB[3] = s.profileErosionRise;
+    params.profileC[0] = s.profileHeavyErosionCut; params.profileC[1] = s.profileHeavyThinning;
     return graph.AddPass2(RenderPass::Main_CloudNoise, {},
-        [this, renderer, seed](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, params, noise, profile, formation](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            // Only what this rebuild writes is declared: the rest stays at rest, possibly being read.
+            const auto declare = [&](D3D12_RESOURCE_STATES state) {
+                if (noise) { ctx.Use(weather_.Get(), state); }
+                if (profile) { ctx.Use(profileGen_.Get(), state); }
+                if (formation) { ctx.Use(formationGen_.Get(), state); ctx.Use(cellsGen_.Get(), state); }
+            };
             const auto write = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(base_.Get(), kUav); ctx.Use(detail_.Get(), kUav); ctx.Use(weather_.Get(), kUav);
+            declare(kUav);
             ctx.NextPoint();
             const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(base_.Get(), kRest); ctx.Use(detail_.Get(), kRest); ctx.Use(weather_.Get(), kRest);
-            return [this, renderer, seed, write, restore](RenderGraphPassContext c) {
+            declare(kRest);
+            return [this, renderer, params, noise, profile, formation, write, restore](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudNoise);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
                     GPU_SCOPE(t.cl, ProfilerScopes::kPassCloudNoise);
                     renderer->EmitPoint(t.cl, write);
                     const auto sampler = renderer->GetSamplerManager()->GetTable(renderer, std::array{*SamplerManager::LinearWrap()});
-                    struct NoiseCB { UINT size, seed, pad0, pad1; };
-                    const auto dispatch = [&](Material* m, UINT size, UINT depth, D3D12_CPU_DESCRIPTOR_HANDLE uav) {
-                        const NoiseCB cb{size, seed, 0u, 0u};
+                    // numthreads(8, 8, 1): x and y in groups of 8, one group per slice.
+                    const auto dispatch = [&](Material* m, UINT width, UINT height, UINT depth, D3D12_CPU_DESCRIPTOR_HANDLE uav) {
+                        NoiseCB cb = params;
+                        cb.size = width; cb.depth = depth > 1u ? depth : height; // a volume's depth, a plane's height
                         Dispatch3D(renderer, t.cl, m, render::kConstantBufferAlignment,
                             [&cb](uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); }, {}, {uav}, sampler,
-                            (size + 7u) / 8u, (size + 7u) / 8u, depth);
+                            (width + 7u) / 8u, (height + 7u) / 8u, depth);
                     };
-                    dispatch(noiseBase_.get(), kBaseSize, kBaseSize, baseUav_);
-                    dispatch(noiseDetail_.get(), kDetailSize, kDetailSize, detailUav_);
-                    dispatch(noiseWeather_.get(), kWeatherSize, 1u, weatherUav_);
+                    if (noise) { dispatch(noiseWeather_.get(), kWeatherSize, kWeatherSize, 1u, weatherUav_); }
+                    if (profile) { dispatch(noiseProfile_.get(), kProfileWidth, kProfileHeight, 1u, profileGenUav_); }
+                    if (formation)
+                    {
+                        dispatch(noiseFormation_.get(), kFormationSize, kFormationSize, kFormationDepth, formationGenUav_);
+                        dispatch(noiseCells_.get(), kCellsSize, kCellsSize, kCellsSize, cellsGenUav_);
+                    }
                     renderer->EmitPoint(t.cl, restore);
                 }
                 c.EndCL(t);
@@ -475,28 +612,10 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     c.shadowTrace[2] = 1.0f - std::clamp(s.skyLightBottomOcclusion, 0.0f, 1.0f); // UE SkyLightCloudBottomVisibility
     c.shadowTrace[3] = s.tracingMaxDistanceKm;
     c.medium[0] = s.extinctionScale; c.medium[1] = s.albedo; c.medium[2] = s.coverage; c.medium[3] = s.cloudType;
-    c.shape[0] = 1.0f / std::max(s.baseTileKm, 0.001f); c.shape[1] = 1.0f / std::max(s.detailTileKm, 0.001f);
-    c.shape[2] = 1.0f / std::max(s.weatherTileKm, 0.001f); c.shape[3] = s.detailStrength;
     // The drift: the level's wind heading at the cloud's own speed, on the shared (freezable) clock.
     // The field moves WITH the wind, so the sample point moves against it.
     const float driftM = s.windKmH / 3.6f * in.windTime;
     c.wind[0] = -in.windDirXZ.x * driftM; c.wind[1] = 0.0f; c.wind[2] = -in.windDirXZ.y * driftM; c.wind[3] = s.tracingStartMaxDistanceKm;
-    c.distortion[1] = 1.0f / (std::isfinite(s.shapeDistortionTileKm) ? std::clamp(s.shapeDistortionTileKm, 0.1f, 1000.0f) : 6.0f);
-    c.distortion[0] = std::isfinite(s.weatherDistortionStrength) ? std::clamp(s.weatherDistortionStrength, 0.0f, 1.0f) : 0.0f;
-    // The weather warp moves relative to the wind-carried base and detail fields.
-    // Speed 0 keeps a static warp. All cloud passes use the same freezable clock.
-    // Wrap each coordinate in double before upload to keep the periodic animation continuous.
-    if (c.distortion[0] > 0.0f && s.shapeDistortionSpeed > 0.0f
-        && std::isfinite(s.shapeDistortionSpeed) && std::isfinite(in.windTime))
-    {
-        const double travel = static_cast<double>(in.windTime) * std::min(s.shapeDistortionSpeed, 10.0f) / 60.0;
-        constexpr double direction[3] = {0.80, 0.48, -0.36}; // unit length
-        for (unsigned axis = 0; axis < 3; ++axis)
-        {
-            const double offset = travel * direction[axis];
-            c.distortionOffset[axis] = static_cast<float>(offset - std::floor(offset));
-        }
-    }
     c.output[0] = static_cast<float>(in.outputWidth); c.output[1] = static_cast<float>(in.outputHeight);
     c.output[2] = in.preExposure; c.output[3] = 1.0f / std::max(in.preExposure, 1.0e-8f);
     c.depth[0] = static_cast<float>(in.depthWidth); c.depth[1] = static_cast<float>(in.depthHeight);
@@ -509,11 +628,6 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     c.shadowMap[0] = static_cast<float>(kShadowSize); c.shadowMap[1] = 1.0f / static_cast<float>(kShadowSize);
     c.shadowMap[2] = farPlane / 1000.0f; c.shadowMap[3] = s.shadowStrength;
     c.shadowMap2[0] = shadowSamples; c.shadowMap2[1] = s.shadowDepthBiasKm;
-    // The base noise's vertical compression: a tile may span at most `baseVerticalTiles` layer
-    // heights (never stretched the other way -- a thick layer keeps the isotropic noise).
-    c.shadowMap2[2] = std::max(1.0f, s.baseTileKm / std::max(s.layerHeightKm * s.baseVerticalTiles, 1.0e-3f));
-    c.shadowMap2[3] = std::clamp(s.overcast, 0.0f, 1.0f);
-    c.profile[0] = (s.profile && profile_.Get() != nullptr) ? 1.0f : 0.0f;
     c.profile[1] = profileInvSize_[0]; c.profile[2] = profileInvSize_[1];
     // The formation's time axis advances with the DRIFT, as UDS's does with their cloud movement:
     // formationChangeSpeed full cycles per 16 formation tiles travelled (VolumetricCloudSettings.h).
@@ -522,11 +636,20 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     const double driftKm = static_cast<double>(s.windKmH) * static_cast<double>(in.windTime) / 3600.0;
     const double cycles = static_cast<double>(std::max(s.formationChangeSpeed, 0.0f)) * driftKm
         / (static_cast<double>(std::max(s.weatherTileKm, 0.001f)) * kTilesPerCycle);
-    c.formation[0] = FormationActive(s) ? 1.0f : 0.0f;
+    c.formation[0] = 1.0f / std::max(s.weatherTileKm, 0.001f);
     c.formation[1] = std::isfinite(cycles) ? static_cast<float>(cycles - std::floor(cycles)) : 0.0f;
     c.formation[2] = std::clamp(s.macroVariation, 0.0f, 1.0f);
     c.formation[3] = 1.0f / std::max(s.macroTileKm, 0.1f);
     c.lighting[0] = static_cast<float>(std::min(s.msOctaves, 2u));
+    c.lighting[1] = std::isfinite(s.skyLightIntensity) ? std::clamp(s.skyLightIntensity, 0.0f, 10.0f) : 1.0f;
+    const auto finite = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
+    c.erosion[0] = std::clamp(finite(s.erosionStrength, 1.2f), 0.0f, 4.0f);
+    c.erosion[1] = std::clamp(finite(s.erosionPower, 3.0f), 0.25f, 8.0f);
+    c.erosion[2] = 1.0f / std::clamp(finite(s.erosionTileKm, 1.2f), 0.05f, 100.0f);
+    c.erosion[3] = std::clamp(finite(s.highFrequencyStrength, 0.24f), 0.0f, 2.0f);
+    c.floorShape[0] = std::clamp(finite(s.floorVariationClear, 0.08f), 0.0f, 2.0f);
+    c.floorShape[1] = std::clamp(finite(s.floorVariationCloudy, 0.64f), 0.0f, 2.0f);
+    c.floorShape[2] = 1.0f / std::clamp(finite(s.highFrequencyDistanceKm, 1.5f), 0.01f, 100.0f);
     return c;
 }
 
@@ -543,10 +666,8 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     const VolumetricCloudSettings& s = *in.settings;
     const Math::float2 probeXZ(in.cameraPos.x, in.cameraPos.z);
     const unsigned long long frame = renderer->GetTotalFrameNumber();
-    const bool formation = FormationActive(s);
     bool dirty = !captureValid_ || std::memcmp(&s, &captureSettings_, sizeof(s)) != 0
-        || noiseBuilds_ != captureNoiseRevision_ || distantRevision != captureDistantRevision_
-        || formation != captureFormation_;
+        || noiseBuilds_ != captureNoiseRevision_ || distantRevision != captureDistantRevision_;
     if (!dirty && frame >= captureFrame_ + kCaptureIntervalFrames)
     {
         const float dx = probeXZ.x - captureProbeXZ_.x, dz = probeXZ.y - captureProbeXZ_.y;
@@ -556,7 +677,7 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     {
         captureValid_ = true; captureSettings_ = s; captureNoiseRevision_ = noiseBuilds_;
         captureDistantRevision_ = distantRevision; captureFrame_ = frame;
-        captureProbeXZ_ = probeXZ; captureWindTime_ = in.windTime; captureFormation_ = formation;
+        captureProbeXZ_ = probeXZ; captureWindTime_ = in.windTime;
     }
 
     FrameInputs probe = in;
@@ -575,10 +696,9 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
         constants.output[0] = constants.output[1] = static_cast<float>(mipSize);
         std::memcpy(dst, &constants, sizeof(constants));
     };
-    overlay.reads = {formation ? formation_.Get() : base_.Get(), formation ? cells_.Get() : detail_.Get(), weather_.Get(),
-                     distant ? in.distantResource : nullptr, profile_.Get()};
-    overlay.srvs = {formation ? formationSrv_ : baseSrv_, formation ? cellsSrv_ : detailSrv_, weatherSrv_,
-                    distant ? in.distantSrv : renderer->VsmDummyTexSrv(), profileSrv_};
+    const DensityBinding bind = Binding();
+    overlay.reads = {bind.formation, bind.cells, weather_.Get(), distant ? in.distantResource : nullptr, bind.profile};
+    overlay.srvs = {bind.formationSrv, bind.cellsSrv, weatherSrv_, distant ? in.distantSrv : renderer->VsmDummyTexSrv(), bind.profileSrv};
     overlay.dependency = noisePass;
     return overlay;
 }
@@ -629,7 +749,6 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     else if (std::memcmp(constants.shadowViewProj, shadowKeyViewProj_, sizeof(shadowKeyViewProj_)) != 0) { forced = "map moved (sun or anchor)"; }
     else if (std::memcmp(in.settings, &shadowKeySettings_, sizeof(VolumetricCloudSettings)) != 0) { forced = "cloud settings"; }
     else if (noiseBuilds_ != shadowKeyNoise_) { forced = "noise rebuilt"; }
-    else if (FormationActive(*in.settings) != shadowKeyFormation_) { forced = "formation volume switched"; }
     else if (in.planetRadiusKm != shadowKeyPlanetKm_) { forced = "planet radius"; }
     else if (windDx * windDx + windDz * windDz > 0.0625f * texelMetres * texelMetres) { forced = "wind jumped"; }
 
@@ -668,7 +787,6 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     std::memcpy(shadowKeyViewProj_, constants.shadowViewProj, sizeof(shadowKeyViewProj_));
     std::memcpy(&shadowKeySettings_, in.settings, sizeof(VolumetricCloudSettings));
     shadowKeyNoise_ = noiseBuilds_;
-    shadowKeyFormation_ = FormationActive(*in.settings);
     shadowKeyPlanetKm_ = in.planetRadiusKm;
     shadowKeyFrames_ = updateFrames;
     shadowKeyCheap_ = cheapBits;
@@ -686,18 +804,14 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     // samples it in a pixel shader (`Main_Transparent`, SceneRenderer_Graph.cpp:1785) and hands it
     // to the NEXT frame's write in that state -- and no compute acquire may begin from it.
     // `Main_TransparentFog` hands it back; see the note there.
-    // The formation and cells volumes, when active, sit in the base and detail noises' slots.
-    const bool formation = FormationActive(*in.settings);
-    ID3D12Resource* const baseResource = formation ? formation_.Get() : base_.Get();
-    ID3D12Resource* const detailResource = formation ? cells_.Get() : detail_.Get();
-    const D3D12_CPU_DESCRIPTOR_HANDLE baseSrv = formation ? formationSrv_ : baseSrv_;
-    const D3D12_CPU_DESCRIPTOR_HANDLE detailSrv = formation ? cellsSrv_ : detailSrv_;
+    // The density model's textures: generated, or the files that replaced them.
+    const DensityBinding bind = Binding();
     return graph.AddPass2(RenderPass::Main_CloudShadow, RenderQueue::AsyncCompute, deps, {}, {},
-        [this, renderer, constants, traceSize, baseResource, detailResource, baseSrv, detailSrv](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, constants, traceSize, bind](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(baseResource, kRest); ctx.Use(detailResource, kRest); ctx.Use(weather_.Get(), kRest);
-            ctx.Use(profile_.Get(), kRest);
+            ctx.Use(bind.formation, kRest); ctx.Use(bind.cells, kRest); ctx.Use(weather_.Get(), kRest);
+            ctx.Use(bind.profile, kRest);
             ctx.Use(shadowRaw_.Get(), kUav);
             ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(shadowRaw_.Get(), kRest);
@@ -708,7 +822,7 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
             shadowBuilt_ = true;
             std::memcpy(&shadowViewProj_.m, constants.shadowViewProj, sizeof(float) * 16);
             shadowFarKm_ = constants.shadowMap[2];
-            return [this, renderer, constants, points, traceSize, baseSrv, detailSrv](RenderGraphPassContext c) {
+            return [this, renderer, constants, points, traceSize, bind](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudShadow);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
@@ -717,10 +831,10 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
                     const auto write = [&constants](uint8_t* dst) { std::memcpy(dst, &constants, sizeof(constants)); };
                     renderer->EmitPoint(t.cl, points[0]);
                     RecordComputeDispatch(renderer, t.cl, shadowTrace_.get(), cbBytes_, write,
-                        {baseSrv, detailSrv, weatherSrv_, renderer->VsmDummyTexSrv(), profileSrv_}, {shadowRawUav_}, sampler, traceSize, traceSize);
+                        {bind.formationSrv, bind.cellsSrv, weatherSrv_, renderer->VsmDummyTexSrv(), bind.profileSrv}, {shadowRawUav_}, sampler, traceSize, traceSize);
                     renderer->EmitPoint(t.cl, points[1]);
                     RecordComputeDispatch(renderer, t.cl, shadowFilter_.get(), cbBytes_, write,
-                        {baseSrv, detailSrv, weatherSrv_, shadowRawSrv_, profileSrv_}, {shadowFilteredUav_}, sampler, kShadowSize, kShadowSize);
+                        {bind.formationSrv, bind.cellsSrv, weatherSrv_, shadowRawSrv_, bind.profileSrv}, {shadowFilteredUav_}, sampler, kShadowSize, kShadowSize);
                     renderer->EmitPoint(t.cl, points[2]);
                 }
                 c.EndCL(t);
@@ -741,20 +855,16 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     ID3D12Resource* distantResource = distant ? in.distantResource : nullptr;
     const D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv = aerial ? in.aerialSrv : renderer->VsmDummyTexSrv();
     const D3D12_CPU_DESCRIPTOR_HANDLE distantSrv = distant ? in.distantSrv : renderer->VsmDummyTexSrv();
-    // The formation and cells volumes, when active, sit in the base and detail noises' slots.
-    const bool formation = FormationActive(*in.settings);
-    ID3D12Resource* const baseResource = formation ? formation_.Get() : base_.Get();
-    ID3D12Resource* const detailResource = formation ? cells_.Get() : detail_.Get();
-    const D3D12_CPU_DESCRIPTOR_HANDLE baseSrv = formation ? formationSrv_ : baseSrv_;
-    const D3D12_CPU_DESCRIPTOR_HANDLE detailSrv = formation ? cellsSrv_ : detailSrv_;
+    // The density model's textures: generated, or the files that replaced them.
+    const DensityBinding bind = Binding();
     return graph.AddPass2(RenderPass::Main_CloudTrace, list, {}, {},
-        [this, renderer, constants, aerialResource, distantResource, aerialSrv, distantSrv, baseResource, detailResource, baseSrv, detailSrv](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, constants, aerialResource, distantResource, aerialSrv, distantSrv, bind](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& D = renderer->GetDeferredForFrame();
             const auto& P = renderer->GetDeferredForPrevFrame();
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(baseResource, kRest); ctx.Use(detailResource, kRest); ctx.Use(weather_.Get(), kRest);
-            ctx.Use(profile_.Get(), kRest);
+            ctx.Use(bind.formation, kRest); ctx.Use(bind.cells, kRest); ctx.Use(weather_.Get(), kRest);
+            ctx.Use(bind.profile, kRest);
             // The sky's volume and distant light, at their rest; declared so the reads are named.
             if (aerialResource) { ctx.Use(aerialResource, kRest); }
             if (distantResource) { ctx.Use(distantResource, kRest); }
@@ -767,7 +877,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
             ctx.Use(D.cloudResolved.Get(), kUav); ctx.Use(D.cloudResolvedDepth.Get(), kUav);
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.cloudResolved.Get(), kRest); ctx.Use(D.cloudResolvedDepth.Get(), kRest);
-            return [this, renderer, constants, aerialSrv, distantSrv, points, baseSrv, detailSrv](RenderGraphPassContext c) {
+            return [this, renderer, constants, aerialSrv, distantSrv, points, bind](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudTrace);
                 const auto& DF = renderer->GetDeferredForFrame();
                 const auto& PF = renderer->GetDeferredForPrevFrame();
@@ -781,7 +891,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
                         const auto samplers = renderer->GetSamplerManager()->GetTable(renderer,
                             std::array{*SamplerManager::LinearWrap(), *SamplerManager::LinearClamp()});
                         RecordComputeDispatch(renderer, t.cl, trace_.get(), cbBytes_, write,
-                            {baseSrv, detailSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, profileSrv_},
+                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, bind.profileSrv},
                             {DF.cloudTraceUAV, DF.cloudTraceDepthUAV}, samplers, DF.cloudWidth, DF.cloudHeight);
                     }
                     renderer->EmitPoint(t.cl, points[1]);
@@ -791,7 +901,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
                             std::array{*SamplerManager::LinearClamp(), *SamplerManager::PointClamp()});
                         RecordComputeDispatch(renderer, t.cl, temporal_.get(), cbBytes_, write,
                             {DF.cloudTraceSRV, DF.cloudTraceDepthSRV, PF.cloudResolvedSRV, PF.cloudResolvedDepthSRV},
-                            {DF.cloudResolvedUAV, DF.cloudResolvedDepthUAV}, samplers, DF.cloudWidth, DF.cloudHeight);
+                            {DF.cloudResolvedUAV, DF.cloudResolvedDepthUAV}, samplers, DF.cloudResolvedWidth, DF.cloudResolvedHeight);
                     }
                     renderer->EmitPoint(t.cl, points[2]);
                 }
