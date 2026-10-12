@@ -72,9 +72,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float2 uv = (float2(id.xy) + 0.5f) / cloudOutput.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float3 camPos = cloudCamera.xyz;
-    // Any clip z in front of the camera gives a point on the pixel's ray (0.5 under reversed Z).
-    const float4 onRay = mul(float4(ndc, 0.5f, 1.0f), cloudInvViewProjNoJitter);
-    const float3 rayDir = normalize(onRay.xyz / onRay.w - camPos);
+    const float3 rayDir = CloudViewRayDirection(ndc);
     const float3 originKm = CloudWorldToPlanetKm(camPos);
     const float preExposure = cloudOutput.z;
     const uint debugView = (uint)cloudAerial.w;

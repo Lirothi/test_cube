@@ -91,6 +91,23 @@ float3 CloudWorldToPlanetKm(float3 worldMetres)
     return float3(worldMetres.x, worldMetres.y + cloudCamera.w * CloudMetresPerKm, worldMetres.z) / CloudMetresPerKm;
 }
 
+// The view ray through a screen point (ndc). THE POINT IT IS BUILT FROM IS 1 KM OUT, NOT AT THE NEAR
+// PLANE. Clip z 0.5 under this reverse-Z camera is 2 cm from the eye (zNear 0.01 m); rebuilt through
+// the inverse view-projection it is a WORLD position, and float spaces those 0.24 mm apart once the
+// camera is 2-4 km from the origin -- subtracting the camera left a 2 cm vector with 0.1 mm of
+// rounding in it, ~1e-2 rad of direction error in a pattern quantised across the screen. Every
+// cloud texel snapped to that lattice: blocky clouds that shimmer as the camera moves, worse the
+// further the camera is from the origin (owner, 2026-10-12, at 2.7 km; invisible near the island's
+// centre). At 1 km the same rounding is ~4e-7 rad. The device z of that distance comes from the
+// projection's own terms (viewZ = _43 / (z - _33)), so a finite or infinite far plane both work.
+static const float kCloudRayPointViewZ = 1000.0f; // metres
+float3 CloudViewRayDirection(float2 ndc)
+{
+    const float deviceZ = cloudDepth.z + cloudDepth.w / kCloudRayPointViewZ;
+    const float4 onRay = mul(float4(ndc, deviceZ, 1.0f), cloudInvViewProjNoJitter);
+    return normalize(onRay.xyz / onRay.w - cloudCamera.xyz);
+}
+
 // UE VolumetricCloud.usf:459-497 -- the segment of the view ray that lies inside the layer. Returns
 // false when the ray misses the top shell altogether. tMin/tMax in km along `dir`.
 bool CloudLayerSegment(float3 originKm, float3 dir, out float tMin, out float tMax, out float2 tBottom)

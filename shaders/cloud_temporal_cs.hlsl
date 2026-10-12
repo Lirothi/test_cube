@@ -79,8 +79,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float reprojectDepth = currentCloud ? currentDepth : PrevResolvedDepth.Load(int3(px, 0));
     const float2 uv = (float2(px) + 0.5f) / cloudOutput.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    const float4 onRay = mul(float4(ndc, 0.5f, 1.0f), cloudInvViewProjNoJitter);
-    const float3 rayDir = normalize(onRay.xyz / onRay.w - cloudCamera.xyz);
+    const float3 rayDir = CloudViewRayDirection(ndc);
     const float3 P = cloudCamera.xyz + rayDir * (reprojectDepth * CloudMetresPerKm);
     const float4 prevClip = mul(float4(P, 1.0f), cloudPrevViewProjNoJitter);
     const float4 currentClip = mul(float4(P, 1.0f), cloudViewProjNoJitter);
@@ -91,8 +90,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
     }
     // THE HISTORY IS FETCHED AT uv PLUS THE MOTION, NOT AT THE REPROJECTED POINT. The point P is
-    // rebuilt from a texel centre through the inverse matrix (a spot 0.2 m in front of a camera
-    // 100 m from the origin, then normalised): projecting it back through the SAME matrix does not
+    // rebuilt from a texel centre through the inverse matrix (then a spot 0.2 m in front of a camera
+    // 100 m from the origin, normalised; CloudViewRayDirection now takes it 1 km out, which shrinks
+    // the error but does not make it zero): projecting it back through the SAME matrix does not
     // land on the texel centre but a few hundredths of a texel off, and the error is a rounding
     // pattern, not noise. A still camera then resampled its history bilinearly every frame with
     // that offset, and at historyWeight 0.9 thirty resamples blur where the offset is half a texel
