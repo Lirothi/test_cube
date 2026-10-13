@@ -1814,10 +1814,10 @@ void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMe
         return;
     }
     const auto& handles = exposureHistogramHandles_;
-    const float range = ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum;
+    const float range = ExposureMeteringConstants::kHistogramMaxLogLum - ExposureMeteringConstants::kHistogramMinLogLum;
     matExposureBuildCS_->UpdateCBField(handles.sampleGridX, ExposureMeteringConstants::kSampleGridX, dest);
     matExposureBuildCS_->UpdateCBField(handles.sampleGridY, ExposureMeteringConstants::kSampleGridY, dest);
-    matExposureBuildCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    matExposureBuildCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kHistogramMinLogLum, dest);
     matExposureBuildCS_->UpdateCBField(handles.invPreExposure,
                                        1.0f / std::max(render::g_preExposure, 1.0e-8f), dest);
     matExposureBuildCS_->UpdateCBField(handles.invLogLumRange, 1.0f / range, dest);
@@ -1834,8 +1834,8 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
         return;
     }
     const auto& handles = exposureSolveHandles_;
-    const float range = ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum;
-    matExposureSolveCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kMinLogLum, dest);
+    const float range = ExposureMeteringConstants::kHistogramMaxLogLum - ExposureMeteringConstants::kHistogramMinLogLum;
+    matExposureSolveCS_->UpdateCBField(handles.minLogLum, ExposureMeteringConstants::kHistogramMinLogLum, dest);
     matExposureSolveCS_->UpdateCBField(handles.logLumRange, range, dest);
     matExposureSolveCS_->UpdateCBField(handles.lowPercentile, data.lowPercentile, dest);
     matExposureSolveCS_->UpdateCBField(handles.highPercentile, data.highPercentile, dest);

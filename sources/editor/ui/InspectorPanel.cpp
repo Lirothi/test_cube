@@ -715,7 +715,8 @@ namespace
                     if (ImGui::IsItemHovered())
                     {
                         ImGui::SetTooltip("What a level with a time of day wants: a day untouched, the end of "
-                                          "twilight 1.3 stops down, a full-moon night about 2, a moonless one 2.25.");
+                                          "twilight 1.3 stops down, a full-moon night about 2, a moonless one 4.5 "
+                                          "(with Min EV100 low enough for the eye to reach it, about -11).");
                     }
                     ImGui::PopID();
                 }
@@ -2223,12 +2224,60 @@ namespace
                 InspectorHelp("Turns the moon along its circle away from where the phase puts it.");
             }
 
+            // Time-of-day plan N2: the night sky's own layers.
+            groupKey = "nightSky";
+            ImGui::SeparatorText("Night sky");
+            {
+                const TimeOfDaySettings defaults{};
+                checkB("Night Sky", "enabled", defaults.nightSkyEnabled);
+                InspectorHelp("What a sky has without sun or moon -- the airglow, the stars, the Milky Way -- "
+                              "procedural, physical by default (a moonless sky far from any town). Drawn in "
+                              "the sky, in its picture the water and the probes see, and in the clouds' light "
+                              "from below; not while the sun stands above 10 degrees, where none of it can show.");
+                dragF("Airglow (cd/m2)", "airglowZenith", defaults.airglowZenith, 1.0e-6f, 0.0f, 1.0f, "%.6f",
+                      ImGuiSliderFlags_Logarithmic);
+                InspectorHelp("The night sky's own glow at the zenith: airglow and zodiacal light, ~1.2e-4 cd/m2 "
+                              "at a dark site. Brighter toward the horizon (a layer 90 km up seen edge-on, x6) "
+                              "until the air takes it back -- which is the warm band low over the sea.");
+                const Math::float3 ag = JsonFloat3(tgt(), "airglowColor",
+                    Math::float3(defaults.airglowColor[0], defaults.airglowColor[1], defaults.airglowColor[2]));
+                float av[3] = { ag.x, ag.y, ag.z };
+                const bool changed = ImGui::ColorEdit3("Airglow Colour", av);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["airglowColor"] = { av[0], av[1], av[2] }; }
+                trackContinuousEdit(changed);
+                InspectorHelp("Its hue only (used at unit luminance); the oxygen line makes it faintly green.");
+                dragF("Stars", "stars", defaults.starsBrightness, 0.01f, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+                InspectorHelp("A multiplier on the stars: 1 = the real sky's counts and brightness (~4500 brighter "
+                              "than magnitude 6, down to ~9.7). Each a point of exactly its light, so they do not "
+                              "grow with the resolution or flicker under DLSS.");
+                dragF("Milky Way", "milkyWay", defaults.milkyWayBrightness, 0.01f, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+                InspectorHelp("A multiplier on the galaxy's band (1 = physical: about the airglow's brightness, "
+                              "which is why it shows only far from towns and to an adapted eye).");
+                dragF("Twinkle", "twinkle", defaults.starTwinkle, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("Scintillation, 0..1, stronger toward the horizon. On the scene's wind clock: "
+                              "--wind-freeze stills it.");
+                if (!real)
+                {
+                    dragF("Sidereal Time at Midnight (h)", "siderealAtMidnight", defaults.siderealAtMidnightHours,
+                          0.05f, -48.0f, 48.0f, "%.2f");
+                    InspectorHelp("Which stars stand overhead at midnight in Simple mode (Real takes it from the "
+                                  "date and longitude). 18 = a southern winter's night, the galaxy's core high.");
+                    // The section's own latitude (Real mode's field), the only thing Simple mode reads it for.
+                    groupKey.clear();
+                    dragF("Latitude (deg)", "latitude", -16.5f, 0.05f, -90.0f, 90.0f, "%.2f");
+                    InspectorHelp("How high the celestial pole stands -- the stars turn about it. Real positions "
+                                  "use it for the sun and the moon as well.");
+                    groupKey = "nightSky";
+                }
+            }
+
             groupKey.clear();
             ImGui::SeparatorText("Night");
             dragF("Night Brightness", "nightBrightness", 1.0f, 0.01f, 0.0f, 1000.0f, "%.2f",
                   ImGuiSliderFlags_Logarithmic);
-            InspectorHelp("A manual multiplier on the night's light (the moon's now, the night sky's later). "
-                          "1 = physics.");
+            InspectorHelp("A manual multiplier on the night's light: the moon's and the night sky's (airglow, "
+                          "stars, the Milky Way). 1 = physics.");
             ImGui::SeparatorText("Cost");
             dragF("Light Update Threshold (deg)", "lightUpdateThresholdDeg", 0.05f, 0.005f, 0.0f, 5.0f, "%.3f");
             InspectorHelp("While the clock runs, the scene light (and with it every shadow) turns only once "

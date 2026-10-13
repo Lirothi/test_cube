@@ -153,8 +153,8 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
                 }
                 if (top >= 0)
                 {
-                    const float minLog = ExposureMeteringConstants::kMinLogLum;
-                    const float maxLog = ExposureMeteringConstants::kMaxLogLum;
+                    const float minLog = ExposureMeteringConstants::kHistogramMinLogLum;
+                    const float maxLog = ExposureMeteringConstants::kHistogramMaxLogLum;
                     const float f = (static_cast<float>(top) + 0.5f) /
                                     static_cast<float>(ExposureMetering::kHistogramBins - 1u);
                     const float logLum = minLog + f * (maxLog - minLog);

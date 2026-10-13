@@ -110,6 +110,24 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.moonPhase = s.moonPhase - std::floor(s.moonPhase);
         s.moonPhaseAuto = Flag(m, "phaseAuto", s.moonPhaseAuto);
     }
+    // N2: the night sky's layers.
+    if (const auto it = j.find("nightSky"); it != j.end() && it->is_object())
+    {
+        const nlohmann::json& n = *it;
+        s.nightSkyEnabled = Flag(n, "enabled", s.nightSkyEnabled);
+        s.airglowZenith = std::clamp(Number(n, "airglowZenith", s.airglowZenith), 0.0f, 1.0f);
+        if (const auto ac = n.find("airglowColor"); ac != n.end() && ac->is_array() && ac->size() >= 3)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                s.airglowColor[c] = (*ac)[c].is_number() ? std::max((*ac)[c].get<float>(), 0.0f) : s.airglowColor[c];
+            }
+        }
+        s.starsBrightness = std::clamp(Number(n, "stars", s.starsBrightness), 0.0f, 1000.0f);
+        s.milkyWayBrightness = std::clamp(Number(n, "milkyWay", s.milkyWayBrightness), 0.0f, 1000.0f);
+        s.starTwinkle = std::clamp(Number(n, "twinkle", s.starTwinkle), 0.0f, 1.0f);
+        s.siderealAtMidnightHours = Number(n, "siderealAtMidnight", s.siderealAtMidnightHours);
+    }
 }
 
 // T3: a level written before the time of day carries its sun as `directionalLight`. This builds the
@@ -204,6 +222,15 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "orbitOffsetDeg", s.moonOrbitOffsetDeg },
         { "phase", s.moonPhase },
         { "phaseAuto", s.moonPhaseAuto },
+    };
+    j["nightSky"] = {
+        { "enabled", s.nightSkyEnabled },
+        { "airglowZenith", s.airglowZenith },
+        { "airglowColor", { s.airglowColor[0], s.airglowColor[1], s.airglowColor[2] } },
+        { "stars", s.starsBrightness },
+        { "milkyWay", s.milkyWayBrightness },
+        { "twinkle", s.starTwinkle },
+        { "siderealAtMidnight", s.siderealAtMidnightHours },
     };
     return j;
 }

@@ -293,10 +293,14 @@ inline float EvaluateExposureCurve(const CameraExposureSettings& s, float ev100)
 // readable. Between the reference and a darker cut, both measured on one sheet: Ultra Dynamic Sky's
 // own (Exposure_Compensation_Curve_Physical, -1.7 at night, but -0.4 already at our 13 -- it would dim
 // an overcast day) and -2.7 at the full moon, which with the first night vision read as a black frame.
+// N2 added the moonless night the meter can now see (its window reaches 2^-16): the night sky's own
+// ~2e-4 cd/m2 puts the eye near EV -11, and -4.5 there leaves that sky about two stops under middle
+// grey -- dark, the Milky Way plain -- where -2.25 drew it as a dusk. (A level's minEv100 must reach
+// that low for it: -6 stops the camera at about the same place, the sky five stops under.)
 inline void SetEyeExposureCurve(CameraExposureSettings& s)
 {
-    static constexpr float kEv[] = {-6.0f, -3.0f, 2.0f, 8.0f, 12.0f};
-    static constexpr float kComp[] = {-2.25f, -2.0f, -1.4f, -0.6f, 0.0f};
+    static constexpr float kEv[] = {-11.0f, -6.0f, -3.0f, 2.0f, 8.0f, 12.0f};
+    static constexpr float kComp[] = {-4.5f, -2.25f, -2.0f, -1.4f, -0.6f, 0.0f};
     static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
     static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
     s.exposureCurvePoints = kPoints;

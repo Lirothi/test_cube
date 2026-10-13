@@ -46,6 +46,8 @@ void SkyAtmosphere::Reset()
 {
     moon_.Reset(); moonHeap_.Reset(); moonMaterial_.reset(); moonSrv_ = {}; moonUav_ = {};
     moonReady_ = moonFailed_ = false;
+    night_.Reset(); nightHeap_.Reset(); nightMaterial_.reset(); nightSrv_ = {}; nightNullSrv_ = {}; nightUav_ = {};
+    nightReady_ = nightFailed_ = nightWanted_ = false; environmentNightKey_ = {};
     distant_.Reset(); distantHeap_.Reset(); distantMaterial_.reset();
     for (auto& r : distantReadback_) r.Reset();
     distantSrv_ = {}; distantUav_ = {}; distantPending_ = {};
@@ -73,6 +75,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     ValidateDistant(renderer->GetCurrentFrameIndex());
     if (settings.mode && !failed_) PrepareDistant(renderer);
     if (settings.mode && !failed_) PrepareMoon(renderer);
+    if (settings.mode && !failed_ && nightWanted_) PrepareNight(renderer);
     if (settings.mode && settings.environmentLighting && !failed_) PrepareEnvironment(renderer);
     if ((!settings.mode && !settings.lutEnabled && !settings.lutDebugView) || failed_ || heap_) return;
     auto* device = renderer->GetDevice();
@@ -286,7 +289,7 @@ size_t SkyAtmosphere::BuildAerial(Renderer* renderer, RenderGraph<static_cast<si
         Math::mat4 invView, invProj;
         Math::float4 start;
     };
-    static_assert(sizeof(Constants) == 384);
+    static_assert(sizeof(Constants) == 400);
     const Constants data{settings.parameters, view, camera.GetInvViewMatrix(), camera.GetInvProjMatrixNoJitter(),
         Math::float4(std::max(0.0f, startDepthMetres) / kMetresPerKm,
                      std::clamp(settings.aerialViewDistanceScale, 0.01f, 100.0f), 0, 0)};
@@ -548,7 +551,7 @@ void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
 
 size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
     const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts,
-    const SkyEnvironmentOverlay* overlay)
+    const SkyEnvironmentOverlay* overlay, const NightSkyFrameData& nightIn, size_t nightPass)
 {
     constexpr size_t none = static_cast<size_t>(-1);
     if (sky) sky->SetEnvironment({}, {});
@@ -570,14 +573,21 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     // Plan C4: the overlay (the clouds) rebuilds the environment on its own schedule -- and once
     // more when it appears or disappears, so no cube keeps clouds that are gone or lacks new ones.
     const bool overlayActive = overlay && overlay->active && overlay->material && overlay->writeConstants;
+    // N2: the night sky as the picture holds it -- no twinkle (its clock and amount zeroed, so a still
+    // sky does not rebuild every frame), the Milky Way only once its map exists.
+    NightSkyFrameData night = nightIn;
+    night.layers[2] = night.layers[3] = 0.0f;
+    if (!nightReady_ || !night_.Get()) night.layers[1] = 0.0f;
     const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
         || std::memcmp(&view, &environmentKey_, sizeof(view)) != 0
+        || std::memcmp(&night, &environmentNightKey_, sizeof(night)) != 0
         || (overlayActive && overlay->dirty) || overlayActive != environmentOverlayActive_;
     // Select descriptors before any serial pass builder/worker consumes the frame's environment.
     sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()});
     if (!dirty) return luts;
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (luts != none) deps.push_back(luts);
+    if (nightPass != none) deps.push_back(nightPass);
     if (overlayActive && overlay->dependency != none) deps.push_back(overlay->dependency);
     const SkyEnvironmentOverlay ov = overlayActive ? *overlay : SkyEnvironmentOverlay{};
     // The ground's outgoing radiance for the probes' lower hemisphere, solved HERE rather than in
@@ -608,7 +618,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     const std::array<float, 3> groundAlbedo{params.groundAlbedo[0], params.groundAlbedo[1],
                                             params.groundAlbedo[2]};
     return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
-        [this, renderer, params, view, ov, groundSun, groundAlbedo](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, params, view, ov, groundSun, groundAlbedo, night](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             std::array<std::uint32_t, 4> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : lut_) ctx.Use(r.Get(), kRest);
@@ -616,6 +626,8 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(environmentView_.Get(), kRest);
             ctx.Use(environment_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            const bool nightMap = night.layers[1] > 0.0f;
+            if (nightMap) ctx.Use(night_.Get(), kRest);
             for (auto* r : ov.reads) { if (r) ctx.Use(r, kRest); } // the overlay's inputs, read beside the capture
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(environment_[0].Get(), kRest);
@@ -623,11 +635,11 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.Use(environment_[2].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.NextPoint(); points[3] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : environment_) ctx.Use(r.Get(), kRest);
-            environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view;
+            environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view; environmentNightKey_ = night;
             environmentOverlayActive_ = ov.material != nullptr;
             //LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
             //          ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
-            return [this, renderer, params, view, points, ov, groundSun, groundAlbedo](RenderGraphPassContext c) {
+            return [this, renderer, params, view, points, ov, groundSun, groundAlbedo, night, nightMap](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
@@ -646,13 +658,23 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                     {
                         const UINT size = 128u >> mip;
                         const UINT taps = (128u / size) < 8u ? (128u / size) : 8u;
-                        const std::array<float, 8> capture{view.planet[0], view.planet[1], 1024.0f,
-                            static_cast<float>(size), static_cast<float>(taps), 0.0f, 0.0f, 0.0f};
+                        // N2: the Milky Way's mip for this capture's sample spacing (90 degrees / (size x
+                        // taps) against the map's 360 / 2048): log2(512 / (size x taps)), within its chain.
+                        const float nightMip = std::clamp(std::log2(512.0f / static_cast<float>(size * taps)), 0.0f,
+                                                          static_cast<float>(kNightMips - 1u));
+                        const std::array<float, 28> capture{view.planet[0], view.planet[1], 1024.0f,
+                            static_cast<float>(size), static_cast<float>(taps), view.planet[2], nightMip, 0.0f,
+                            night.glow[0], night.glow[1], night.glow[2], night.glow[3],
+                            night.layers[0], night.layers[1], night.layers[2], night.layers[3],
+                            night.row0[0], night.row0[1], night.row0[2], night.row0[3],
+                            night.row1[0], night.row1[1], night.row1[2], night.row1[3],
+                            night.row2[0], night.row2[1], night.row2[2], night.row2[3]};
                         // The overlay below reads and rewrites the same mips: one UAV barrier after
                         // the last capture orders the two.
                         RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), render::kConstantBufferAlignment,
                             [&capture](uint8_t* dst) { std::memcpy(dst, capture.data(), sizeof(capture)); },
-                            {environmentViewSrv_}, {environmentUav_[mip]}, sampler, size, size*6,
+                            {environmentViewSrv_, srv_[0], nightMap ? nightSrv_ : (nightNullSrv_.ptr ? nightNullSrv_ : environmentViewSrv_)},
+                            {environmentUav_[mip]}, sampler, size, size*6,
                             (ov.material && mip == 7u) ? environment_[0].Get() : nullptr);
                     }
                     // Plan C4: the overlay -- the clouds -- composited into every radiance mip in
@@ -780,6 +802,92 @@ size_t SkyAtmosphere::BuildMoon(Renderer* renderer, RenderGraph<static_cast<size
                         RecordComputeDispatch(renderer, t.cl, moonMaterial_.get(), render::kConstantBufferAlignment,
                             [&cb](uint8_t* dst) { std::memcpy(dst, cb.data(), sizeof(cb)); },
                             {}, {moonUav_[mip]}, D3D12_GPU_DESCRIPTOR_HANDLE{}, std::max(size, 8u), std::max(size, 8u));
+                    }
+                    renderer->EmitPoint(t.cl, restore);
+                }
+                c.EndCL(t);
+            };
+        });
+}
+
+void SkyAtmosphere::PrepareNight(Renderer* renderer)
+{
+    if (nightHeap_ || nightFailed_) return;
+    auto* device = renderer->GetDevice();
+    const auto fail = [this](const char* what) {
+        nightFailed_ = true;
+        LOG_ERROR(logging::LogCategory::Render, "night sky: the Milky Way's map: {} failed; the night sky draws without it", what);
+    };
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 2 + kNightMips;
+    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&nightHeap_)))) { fail("heap"); return; }
+    const auto base = nightHeap_->GetCPUDescriptorHandleForHeapStart();
+    const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
+    // R11G11B10: radiance only, 4 bytes a texel -- 8 MB at 2048 x 1024 where RGBA16F would be 16. Its
+    // values are in kNightMapUnit (1e-4 cd/m2), which keeps them clear of its denormals.
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = kNightWidth; desc.Height = kNightHeight; desc.DepthOrArraySize = 1; desc.MipLevels = kNightMips;
+    desc.Format = DXGI_FORMAT_R11G11B10_FLOAT; desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+    { fail("texture"); return; }
+    night_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.NightSky");
+    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+    nightSrv_ = base;
+    nightNullSrv_ = {base.ptr + step};
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = desc.Format; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = kNightMips;
+    device->CreateShaderResourceView(resource.Get(), &sd, nightSrv_);
+    sd.Texture2D.MipLevels = 1;
+    device->CreateShaderResourceView(nullptr, &sd, nightNullSrv_);
+    for (UINT mip = 0; mip < kNightMips; ++mip)
+    {
+        nightUav_[mip] = {base.ptr + (2u + mip) * step};
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = desc.Format; ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; ud.Texture2D.MipSlice = mip;
+        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, nightUav_[mip]);
+    }
+    Material::ComputeDesc cd{}; cd.shaderFile = L"shaders/sky_night_cs.hlsl"; cd.csEntry = "CSMain";
+    nightMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    if (!nightMaterial_ || !nightMaterial_->GetPipelineState()) { fail("PSO"); return; }
+}
+
+size_t SkyAtmosphere::BuildNight(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph)
+{
+    constexpr size_t none = static_cast<size_t>(-1);
+    if (nightReady_ || nightFailed_) return none;
+    // Allocated by the next Prepare, not here: 8 MB that a level without a night never needs.
+    if (!nightMaterial_ || !night_.Get()) { nightWanted_ = true; return none; }
+    // Committed at registration, as the moon is: the readers registered later this frame are ordered
+    // behind this pass.
+    nightReady_ = true;
+    LOG_INFO(logging::LogCategory::Render, "night sky: generating the Milky Way's map, {}x{}, {} mips",
+             kNightWidth, kNightHeight, kNightMips);
+    return graph.AddPass2(RenderPass::Main_SkyNight, {}, {}, {},
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto write = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(night_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(night_.Get(), kRest);
+            return [this, renderer, write, restore](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyNight);
+                auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
+                {
+                    GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyNight);
+                    renderer->EmitPoint(t.cl, write);
+                    for (UINT mip = 0; mip < kNightMips; ++mip)
+                    {
+                        const UINT width = kNightWidth >> mip, height = kNightHeight >> mip;
+                        // fBm octaves this mip can hold: the finest of six is ~1 texel at mip 0.
+                        const std::array<UINT, 4> cb{width, height, mip < 6u ? 6u - mip : 1u, 0x9A1Au};
+                        RecordComputeDispatch(renderer, t.cl, nightMaterial_.get(), render::kConstantBufferAlignment,
+                            [&cb](uint8_t* dst) { std::memcpy(dst, cb.data(), sizeof(cb)); },
+                            {}, {nightUav_[mip]}, D3D12_GPU_DESCRIPTOR_HANDLE{}, std::max(width, 8u), std::max(height, 8u));
                     }
                     renderer->EmitPoint(t.cl, restore);
                 }

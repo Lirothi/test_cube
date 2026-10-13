@@ -30,6 +30,7 @@ cbuffer SkyAtmosphereCB : register(b0)
     float4 SkyLight1Illuminance; // outer-space RGB lux as lit now; w: earthshine fraction of the full disc
     float4 SkyMoonDisc;          // the FULL moon's outer-space RGB lux; w: phase angle (rad)
     float4 SkyMoonDisc2;         // x: the disc's lit scale; y: 1 = albedo/normal texture ready
+    float4 SkyNightGlow;         // N2: rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean
 #endif
 #ifdef SKY_AERIAL
     float4x4 AerialInvView;

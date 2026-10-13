@@ -148,7 +148,27 @@ struct SkyViewFrameData
     float light1Illuminance[4]{}; // outer-space RGB lux as lit now; w the earthshine fraction of the full disc
     float moonDisc[4]{};          // the FULL moon's outer-space RGB lux (the disc's reference); w the phase angle (rad)
     float moonDisc2[4]{};         // x the disc's lit scale (phase law / Lommel-Seeliger integral), y 1 = albedo/normal texture ready
+    // Time-of-day plan N2: the night sky's own light (night_sky.hlsli) for what reads the SKY as a whole --
+    // the distant light: rgb the airglow's zenith radiance (cd/m2), w the stars' and the Milky Way's mean
+    // radiance. Zero = no night sky.
+    float nightGlow[4]{};
 };
-static_assert(sizeof(SkyViewFrameData) == 128, "SkyView frame CB layout");
+static_assert(sizeof(SkyViewFrameData) == 144, "SkyView frame CB layout");
+
+// Time-of-day plan N2: the night sky as the sky PIXEL and its captured picture draw it (skybox.hlsl,
+// sky_ibl_capture_cs.hlsl): the rotation onto the celestial sphere and the layers' scales.
+struct NightSkyFrameData
+{
+    float glow[4]{};   // rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean radiance
+    float layers[4]{}; // x stars (x physical), y Milky Way (x physical, 0 = its map not ready), z twinkle, w time (s)
+    float row0[4]{};   // world direction (Y up) -> equatorial, by rows; row0.w 1 = the night sky is drawn
+    float row1[4]{};
+    float row2[4]{};
+};
+static_assert(sizeof(NightSkyFrameData) == 80, "night sky CB layout");
+// The stars' and the Milky Way's mean radiance over the sphere, cd/m2 -- what a picture too coarse to
+// hold a point sees of them (the capture, the distant light). Mirrors night_sky.hlsli.
+inline constexpr float kNightStarsMeanRadiance = 4.5e-5f;
+inline constexpr float kNightMilkyWayMeanRadiance = 1.0e-5f;
 
 inline constexpr float kMetresPerKm = 1000.0f;

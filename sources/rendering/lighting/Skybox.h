@@ -97,6 +97,11 @@ public:
                           D3D12_CPU_DESCRIPTOR_HANDLE moon = {})
     { skyViewFrame_ = view; skyViewSrv_ = skyView; transmittanceSrv_ = transmittance; moonSrv_ = moon; }
     const SkyViewFrameData& SkyViewFrame() const { return skyViewFrame_; }
+    // Time-of-day plan N2: the night sky's layers and the Milky Way's map (a null handle until it exists;
+    // night.layers[1] is then 0 and the map is not read).
+    void SetNightSky(const NightSkyFrameData& night, D3D12_CPU_DESCRIPTOR_HANDLE map)
+    { nightSky_ = night; nightMapSrv_ = map; }
+    const NightSkyFrameData& NightSky() const { return nightSky_; }
 
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
@@ -114,7 +119,8 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
     std::array<ID3D12Resource*, 3> environmentResource_{}; // owned by SkyAtmosphere; GPU-drained teardown
     SkyViewFrameData skyViewFrame_{};
-    D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, moonSrv_{}, nullSkyViewSrv_{};
+    NightSkyFrameData nightSky_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, moonSrv_{}, nightMapSrv_{}, nullSkyViewSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullSkyViewHeap_;
     TextureCube cube_;
     TextureCube specCube_;

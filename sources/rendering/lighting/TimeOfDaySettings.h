@@ -83,9 +83,31 @@ struct TimeOfDaySettings
     // The ashen light on the moon's dark side -- sunlight off the Earth -- as a multiplier on its
     // physical estimate (~1.2e-4 of the full disc at new moon, falling with the Earth's own phase).
     float moonEarthshine = 1.0f;
-    // The owner's manual multiplier on the night's light (1 = physics). T2: the moon's light; N2 adds
-    // the night sky's layers.
+    // The owner's manual multiplier on the night's light (1 = physics): the moon's light and the night
+    // sky's own layers below (N2).
     float nightBrightness = 1.0f;
+
+    // --- The night sky (plan N2) ---------------------------------------------------------------------
+    // What a sky has without sun or moon, procedural (the owner's decision: no catalogue, no downloaded
+    // maps): the AIRGLOW, the stars, the Milky Way. Physical by default -- a moonless sky far from any
+    // town, in cd/m2 and lux -- and drawn wherever the sky is (its pixels, its captured picture the water
+    // and the probes see, the clouds' light from below).
+    bool nightSkyEnabled = true;
+    // The natural night sky's own glow at the zenith, cd/m2: airglow and zodiacal light -- a dark site's
+    // 21.8-22 mag/arcsec2 less the integrated starlight the stars below already carry. It grows toward the
+    // horizon (van Rhijn: a layer ~90 km up seen edge-on, x6 at the horizon) before the air takes it back.
+    float airglowZenith = 1.2e-4f;
+    // Its hue (any scale: used at unit luminance). The 557.7 nm oxygen line makes it faintly green.
+    float airglowColor[3] = {0.95f, 1.0f, 0.9f};
+    // Multipliers on the stars (one per cell of a 6 x 256^2 sphere, magnitudes by the real counts: ~4500
+    // brighter than 6) and on the Milky Way's diffuse band: 1 = physical.
+    float starsBrightness = 1.0f;
+    float milkyWayBrightness = 1.0f;
+    float starTwinkle = 0.3f;      // 0..1 scintillation, stronger toward the horizon
+    // SIMPLE mode's sidereal time at local midnight, hours: 18 = a southern winter's night with the
+    // galaxy's core high at midnight. Real positions take it from the date and the longitude. Both use
+    // latitudeDeg for the pole's height.
+    float siderealAtMidnightHours = 18.0f;
 
     // --- Cost ----------------------------------------------------------------------------------------
     // The SCENE light turns only once the body has moved this far from where the light was last put
@@ -110,4 +132,20 @@ struct SkyMoonFrame
     // the disc's integral follows the phase law the light uses (MoonPhaseBrightness / the LS phase integral).
     float litScale = 1.0f;
     float earthshine = 0.0f;                // dark side, as a fraction of the full disc (Earth's phase applied)
+};
+
+// Time-of-day plan N2: the night sky's layers as the sky draws them this frame. Written by TimeOfDay,
+// carried by SceneFrameData to the skybox, the environment capture and the distant light. `present`
+// false = nothing to draw (no time of day, the layers off, or a sun high enough that they cannot show).
+struct NightSkyFrame
+{
+    bool present = false;
+    // World direction (Y up) -> equatorial (x toward RA 0h, y toward RA 6h, z the north celestial pole),
+    // row-major: the sky turns about the pole once a sidereal day.
+    float worldToEquatorial[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    float airglow[3] = {};       // zenith radiance, RGB cd/m2 (x nightBrightness)
+    float stars = 0.0f;          // x physical (x nightBrightness)
+    float milkyWay = 0.0f;       // x physical (x nightBrightness)
+    float twinkle = 0.0f;        // 0..1
+    float timeSeconds = 0.0f;    // drives the twinkle
 };

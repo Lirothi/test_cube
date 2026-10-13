@@ -1,12 +1,23 @@
 #include "sky_view_mapping.hlsli"
 #include "sky_ibl_common.hlsli"
-#define SKY_IBL_RS "CBV(b0), DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#include "night_sky.hlsli"
+#define SKY_IBL_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 cbuffer Capture : register(b0)
 {
     float4 planet;     // height, bottom, 1/fixed preExposure, target mip size
-    float4 captureMip; // x: supersample count per axis, yzw: unused
+    float4 captureMip; // x: supersample count per axis, y: the atmosphere's top radius (km), z: the Milky Way map's mip
+    // Time-of-day plan N2 (NightSkyFrameData): the night sky's own light, in the picture as in the sky
+    // pixel -- the airglow and the Milky Way, and the stars as their mean (a 0.7-degree texel cannot
+    // hold a point). nightRow0.w 0 = none.
+    float4 nightGlow;
+    float4 nightLayers;
+    float4 nightRow0;
+    float4 nightRow1;
+    float4 nightRow2;
 };
 Texture2D<float4> SkyView : register(t0);
+Texture2D<float4> Transmittance : register(t1); // N2: the air in front of the night sky
+Texture2D<float4> NightMap : register(t2);      // N2: the Milky Way (night_sky.hlsli units)
 RWTexture2DArray<float4> Output : register(u0);
 SamplerState LinearClamp : register(s0);
 // UE SkyAtmosphere.usf:956-974; :314-317 omits the sun disk during capture to avoid
@@ -61,6 +72,27 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             // and not a clamp on the direction: all three readers have to land on one texel or they
             // disagree at the only row where they meet.
             sum += SkyView.SampleLevel(LinearClamp, SkyViewDirToUvNoPlanet(dir, planet.x, planet.y), 0).rgb;
+            // N2: what the night sky adds. The airglow above the horizon and held at its horizon value
+            // below it, as the drawn sky is; the Milky Way and the stars' mean above it only.
+            [branch] if (nightRow0.w > 0.0f)
+            {
+                const float3 world = SkyCubeDirection(uv, face);
+                const float up = max(dir.z, 0.0f);
+                const float bottom = planet.y, top = captureMip.y, height = planet.x;
+                const float H = sqrt(top * top - bottom * bottom);
+                const float rho = sqrt(max(0.0f, height * height - bottom * bottom));
+                const float d = max(0.0f, -height * up + sqrt(max(0.0f, height * height * (up * up - 1.0f) + top * top)));
+                const float3 tr = Transmittance.SampleLevel(LinearClamp, float2((d - (top - height)) / max(1.e-6f, rho + H - (top - height)), rho / H), 0).rgb;
+                float3 night = nightGlow.rgb * NightAirglowVanRhijn(up);
+                if (dir.z > 0.0f)
+                {
+                    const float3 eq = float3(dot(nightRow0.xyz, world), dot(nightRow1.xyz, world), dot(nightRow2.xyz, world));
+                    night += NightMap.SampleLevel(LinearClamp, NightMapUv(eq), captureMip.z).rgb * (kNightMapUnit * nightLayers.y);
+                    night += kNightStarsMeanRadiance * nightLayers.x;
+                }
+                // The picture is stored like the LUT, pre-exposed by 1 / planet.z, and decoded below.
+                sum += night * tr / max(planet.z, 1.e-8f);
+            }
         }
     }
     const float3 L = sum * (invTaps * invTaps);

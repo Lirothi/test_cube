@@ -1,7 +1,8 @@
-#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "sky_view_mapping.hlsli"
+#include "night_sky.hlsli"
 
 cbuffer PerFrame : register(b0)
 {
@@ -21,6 +22,12 @@ cbuffer PerFrame : register(b0)
     float4 skyLight1Illuminance; // outer-space RGB lux as lit now; w the earthshine fraction of the full disc
     float4 skyMoonDisc;          // the FULL moon's outer-space RGB lux; w the phase angle (rad)
     float4 skyMoonDisc2;         // x the disc's lit scale; y 1 = the albedo/normal texture is ready
+    // Time-of-day plan N2: the night sky (NightSkyFrameData).
+    float4 nightGlow;            // rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean
+    float4 nightLayers;          // x stars, y Milky Way (0 = its map not ready), z twinkle 0..1, w time (s)
+    float4 nightRow0;            // world -> equatorial by rows; w 1 = the night sky is drawn
+    float4 nightRow1;
+    float4 nightRow2;
 }
 
 struct VSIn {
@@ -69,6 +76,7 @@ TextureCube sky : register(t0);
 Texture2D<float4> skyViewLut : register(t1);
 Texture2D<float4> transmittanceLut : register(t2);
 Texture2D<float4> moonTexture : register(t3); // N1: normal (xyz, the disc's frame) + relative albedo (w)
+Texture2D<float4> nightMap : register(t4);    // N2: the Milky Way, equatorial equirectangular (night_sky.hlsli)
 SamplerState samLinear : register(s0);
 
 // The atmosphere's transmittance from the eye toward `dir` (the LUT's local frame), as a disc takes it:
@@ -93,6 +101,9 @@ struct PSOut
 PSOut PSMain(VSOut i)
 {
     float3 c = sky.Sample(samLinear, i.dir).rgb * exposure;
+    // N2: one pixel's angular size, for the stars' point footprint -- taken here, in uniform flow.
+    const float3 worldDir = normalize(i.dir);
+    const float pixelAngle = max(length(ddx(worldDir)), length(ddy(worldDir)));
     if (skyPlanet.w != 0.0f)
     {
         float3 dir = normalize(i.dir.xzy);
@@ -194,6 +205,29 @@ PSOut PSMain(VSOut i)
             const float3 diskInRange = diskPeak > 65504.0f ? disk * (65504.0f / diskPeak) : disk;
             c += diskInRange * softEdge;
         }
+        // TIME-OF-DAY PLAN N2: THE NIGHT SKY'S OWN LIGHT (night_sky.hlsli) -- the airglow, the Milky Way and
+        // the stars, each through the air in front of it (the transmittance to the top of the atmosphere,
+        // the discs' own): they redden and fade toward the horizon. The airglow above the horizon is held
+        // at its horizon value below it, as the rest of the drawn sky is; the galaxy and the stars stop
+        // there. Added after the moon, which hides what is behind it.
+        float3 night = 0.0f;
+        [branch] if (nightRow0.w > 0.0f)
+        {
+            const float up = max(dir.z, 0.0f);
+            night = nightGlow.rgb * NightAirglowVanRhijn(up);
+            if (dir.z > 0.0f)
+            {
+                const float3 eq = float3(dot(nightRow0.xyz, worldDir), dot(nightRow1.xyz, worldDir), dot(nightRow2.xyz, worldDir));
+                const float3 galaxy = nightMap.SampleLevel(samLinear, NightMapUv(eq), 0).rgb * nightLayers.y;
+                night += galaxy * kNightMapUnit;
+                // The faint stars crowd toward the galaxy's plane: where its band is bright, all of them.
+                const float density = saturate(0.3f + 0.35f * dot(galaxy, float3(0.2126f, 0.7152f, 0.0722f)));
+                const float horizonWeight = 0.25f + 0.75f * (1.0f - dir.z) * (1.0f - dir.z);
+                night += NightStars(eq, pixelAngle, density, nightLayers.w, nightLayers.z, horizonWeight) * nightLayers.x;
+            }
+            night *= DiscTransmittance(normalize(float3(dir.xy, up)), height, bottom, top);
+        }
+        float moonCover = 0.0f;
         // TIME-OF-DAY PLAN N1: THE MOON'S DISC. UE draw a disc per atmosphere light
         // (SkyAtmosphere.usf:357 GetLightDiskLuminance(.., LightIndex)); theirs is a flat disc, ours
         // has a face and a phase:
@@ -260,8 +294,10 @@ PSOut PSMain(VSOut i)
                 const float3 moon = perUnit * (lommelSeeliger * skyMoonDisc2.x + 0.5f * skyLight1Illuminance.w);
                 const float coverage = saturate((1.0f - sqrt(rr)) / edgeWidth + 0.5f);
                 c += moon * DiscTransmittance(dir, height, bottom, top) * coverage;
+                moonCover = coverage;
             }
         }
+        c += night * (1.0f - moonCover);
         // The whole sky, clamped the same way: a per-channel min here would undo the disc's
         // hue again the moment any one channel touched the ceiling.
         const float cPeak = max(max(c.r, c.g), c.b);

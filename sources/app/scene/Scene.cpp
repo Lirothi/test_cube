@@ -1960,6 +1960,9 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.dirLight = &dirLight_;
     frameData_.skyLight = timeOfDay_.Present() ? &skySun_ : &dirLight_;
     frameData_.skyMoon = timeOfDay_.Present() ? timeOfDay_.GetSkyMoon() : SkyMoonFrame{};
+    frameData_.nightSky = timeOfDay_.Present() ? timeOfDay_.GetNightSky() : NightSkyFrame{};
+    // The stars twinkle on the scene's wind clock, so --wind-freeze stills them with everything else.
+    frameData_.nightSky.timeSeconds = windState_.time;
     frameData_.cascadeConfig = &cascadeConfig_;
     frameData_.shadowGpu = &shadowGpu_;
     frameData_.vsm = &vsm_;

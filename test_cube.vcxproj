@@ -750,6 +750,8 @@
     <None Include="shaders\sky_lut_debug_cs.hlsl" />
     <None Include="shaders\sky_lut_view_cs.hlsl" />
     <None Include="shaders\sky_moon_cs.hlsl" />
+    <None Include="shaders\sky_night_cs.hlsl" />
+    <None Include="shaders\night_sky.hlsli" />
     <None Include="shaders\sky_lut_aerial_cs.hlsl" />
     <None Include="shaders\sky_ibl_common.hlsli" />
     <None Include="shaders\sky_ibl_capture_cs.hlsl" />

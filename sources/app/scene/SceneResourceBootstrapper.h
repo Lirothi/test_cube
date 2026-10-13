@@ -924,8 +924,15 @@ struct ExposureMeteringConstants
 {
     static constexpr uint32_t kSampleGridX = 256;
     static constexpr uint32_t kSampleGridY = 144;
+    // The local exposure's bilateral grid (exposure_bilateral_cs, tonemap_cs).
     static constexpr float kMinLogLum = -10.0f; // log2 luminance
-    static constexpr float kMaxLogLum = 14.0f;  // 24 stops over 256 bins = 0.094 stops per bin
+    static constexpr float kMaxLogLum = 14.0f;  // 24 stops
+    // The METERING HISTOGRAM's window, wider at the bottom since time-of-day N2: a moonless sky is
+    // ~2e-4 cd/m2 (2^-12.3) and the scene under it darker still, so the old floor (2^-10, shared with the
+    // grid) put the whole night in the black bucket and the meter could not see it at all -- the camera
+    // stopped near EV -7 whatever minEv100 allowed. 30 stops over 256 bins = 0.117 stops per bin.
+    static constexpr float kHistogramMinLogLum = -16.0f;
+    static constexpr float kHistogramMaxLogLum = 14.0f;
 
     float compensationEv = -0.15f;
     float manualCompensationEv = 0.0f; // P16.13: manual mode's own trim

@@ -55,9 +55,11 @@ public:
     size_t BuildAerial(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                        const SkyAtmosphereSettings& settings, const SkyViewFrameData& view,
                        const Camera& camera, float startDepthMetres, size_t after);
+    // `night` (time-of-day N2): the night sky's layers, captured into the picture beside the LUT's sky;
+    // `nightPass` the pass that generates the Milky Way's map this frame, if one does.
     size_t BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                             const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts,
-                            const SkyEnvironmentOverlay* overlay = nullptr);
+                            const SkyEnvironmentOverlay* overlay, const NightSkyFrameData& night, size_t nightPass);
     unsigned EnvironmentRevision() const { return environmentBuilds_; }
     size_t BuildDistant(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                         const SkyAtmosphereSettings& settings, SkyViewFrameData view, size_t after);
@@ -89,6 +91,14 @@ public:
     bool MoonReady() const { return moonReady_; }
     ID3D12Resource* MoonResource() const { return moon_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE MoonSrv() const { return moonSrv_; }
+    // Time-of-day plan N2: the Milky Way, generated ONCE into an equirectangular map in equatorial
+    // coordinates (sky_night_cs.hlsl; night_sky.hlsli's units), every mip straight from the model the
+    // moon's way. kNone when nothing to do. NightNullSrv is a type-correct null for a table that must be full.
+    size_t BuildNight(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph);
+    bool NightReady() const { return nightReady_; }
+    ID3D12Resource* NightResource() const { return night_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE NightSrv() const { return nightSrv_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE NightNullSrv() const { return nightNullSrv_; }
     void Reset(); // caller has drained the GPU on level/device teardown
 
 private:
@@ -100,6 +110,16 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMoonMips> moonUav_{};
     std::shared_ptr<Material> moonMaterial_;
     bool moonReady_ = false, moonFailed_ = false;
+    void PrepareNight(Renderer* renderer);
+    static constexpr UINT kNightWidth = 2048, kNightHeight = 1024, kNightMips = 7;
+    GpuResource night_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nightHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE nightSrv_{}, nightNullSrv_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kNightMips> nightUav_{};
+    std::shared_ptr<Material> nightMaterial_;
+    bool nightReady_ = false, nightFailed_ = false;
+    bool nightWanted_ = false; // a frame asked for the map: the next Prepare allocates it (8 MB, so only then)
+    NightSkyFrameData environmentNightKey_{}; // what the last capture drew of the night sky (its clock zeroed)
     void PrepareDistant(Renderer* renderer);
     void ValidateDistant(UINT slot);
     GpuResource distant_;

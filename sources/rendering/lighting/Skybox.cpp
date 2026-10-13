@@ -116,6 +116,11 @@ public:
             light1IlluminanceHandle_ = material->ComputeCBFieldHandle(0, "skyLight1Illuminance");
             moonDiscHandle_ = material->ComputeCBFieldHandle(0, "skyMoonDisc");
             moonDisc2Handle_ = material->ComputeCBFieldHandle(0, "skyMoonDisc2");
+            nightGlowHandle_ = material->ComputeCBFieldHandle(0, "nightGlow");
+            nightLayersHandle_ = material->ComputeCBFieldHandle(0, "nightLayers");
+            nightRowHandle_[0] = material->ComputeCBFieldHandle(0, "nightRow0");
+            nightRowHandle_[1] = material->ComputeCBFieldHandle(0, "nightRow1");
+            nightRowHandle_[2] = material->ComputeCBFieldHandle(0, "nightRow2");
         }
     }
 
@@ -146,6 +151,14 @@ public:
         UpdateUniform(owner, light1IlluminanceHandle_, material, v.light1Illuminance, cbData);
         UpdateUniform(owner, moonDiscHandle_, material, v.moonDisc, cbData);
         UpdateUniform(owner, moonDisc2Handle_, material, v.moonDisc2, cbData);
+        // N2: the night sky; drawn only over the procedural sky (row0.w is 0 otherwise).
+        NightSkyFrameData night = owner_.NightSky();
+        if (v.planet[3] == 0.0f) { night.row0[3] = 0.0f; }
+        UpdateUniform(owner, nightGlowHandle_, material, night.glow, cbData);
+        UpdateUniform(owner, nightLayersHandle_, material, night.layers, cbData);
+        UpdateUniform(owner, nightRowHandle_[0], material, night.row0, cbData);
+        UpdateUniform(owner, nightRowHandle_[1], material, night.row1, cbData);
+        UpdateUniform(owner, nightRowHandle_[2], material, night.row2, cbData);
     }
 
 private:
@@ -159,6 +172,8 @@ private:
     Material::CBFieldHandle exposureHandle_{};
     Material::CBFieldHandle sunHandle_{}, illuminanceHandle_{}, planetHandle_{}, skyExposureHandle_{};
     Material::CBFieldHandle light1DirectionHandle_{}, light1IlluminanceHandle_{}, moonDiscHandle_{}, moonDisc2Handle_{};
+    Material::CBFieldHandle nightGlowHandle_{}, nightLayersHandle_{};
+    Material::CBFieldHandle nightRowHandle_[3]{};
 };
 } // namespace
 
@@ -270,10 +285,13 @@ bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, R
     // t3 (time-of-day N1): the moon's texture, or the same type-correct null as the LUTs -- the table is
     // always full, and the shader reads t3 only when skyMoonDisc2.y says the texture is ready.
     const bool moonTexture = skyViewFrame_.planet[3] != 0 && skyViewFrame_.moonDisc2[1] != 0.0f && moonSrv_.ptr != 0;
+    // t4 (N2): the Milky Way's map, read only when night.layers[1] says it exists.
+    const bool nightMap = skyViewFrame_.planet[3] != 0 && nightSky_.layers[1] > 0.0f && nightMapSrv_.ptr != 0;
     ctx.srvTable[0] = renderer->StageSrvUavTable({cube_.GetSRVCPU(),
         skyViewFrame_.planet[3] != 0 ? skyViewSrv_ : nullSkyViewSrv_,
         skyViewFrame_.planet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_,
-        moonTexture ? moonSrv_ : nullSkyViewSrv_}).gpu;
+        moonTexture ? moonSrv_ : nullSkyViewSrv_,
+        nightMap ? nightMapSrv_ : nullSkyViewSrv_}).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

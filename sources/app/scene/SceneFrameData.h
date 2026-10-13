@@ -731,6 +731,7 @@ struct SceneFrameData
     // Time-of-day plan N1: the moon as the sky sees it -- the atmosphere's second light and the drawn
     // disc (SkyViewFrameData light 1). `present` false without a time of day: light 1 is skipped.
     SkyMoonFrame skyMoon{};
+    NightSkyFrame nightSky{}; // time-of-day N2: stars, the Milky Way, the airglow
     // S8: the CSM knobs the lighting pass needs (receiver bias / sharpen / over-blur). Same object
     // the developer window edits, so a slider move reaches the shader the very next frame.
     const CascadeShadowConfig* cascadeConfig = nullptr;

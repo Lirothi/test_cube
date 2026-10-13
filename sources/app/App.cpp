@@ -823,6 +823,7 @@ namespace
             if (key == "moonEnabled") { t.moonEnabled = value != 0.0f; return true; }
             if (key == "moonPhaseAuto") { t.moonPhaseAuto = value != 0.0f; return true; }
             if (key == "moonPhase") { t.moonPhase = value - std::floor(value); return true; }
+            if (key == "nightSky") { t.nightSkyEnabled = value != 0.0f; return true; } // N2
             struct FloatKnob { const char* name; float* field; float lo, hi; };
             const FloatKnob knobs[] = {
                 { "dayLengthMin", &t.dayLengthMin, 0.01f, 10000.0f }, { "nightLengthMin", &t.nightLengthMin, 0.01f, 10000.0f },
@@ -840,6 +841,10 @@ namespace
                 { "moonEarthshine", &t.moonEarthshine, 0.0f, 100.0f },
                 { "nightBrightness", &t.nightBrightness, 0.0f, 1000.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
+                // N2: the night sky's layers (timeOfDay.nightSky.*).
+                { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },
+                { "milkyWay", &t.milkyWayBrightness, 0.0f, 1000.0f }, { "twinkle", &t.starTwinkle, 0.0f, 1.0f },
+                { "siderealAtMidnight", &t.siderealAtMidnightHours, -48.0f, 48.0f },
             };
             for (const FloatKnob& k : knobs)
             {

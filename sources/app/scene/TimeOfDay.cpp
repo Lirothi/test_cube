@@ -17,6 +17,8 @@ constexpr double kMoonMeanDistanceKm = 384400.0;
 // How far past the switching edge a body must be to TAKE the light: a frozen clock sitting exactly on
 // the edge must not hand it back and forth (each hand-over drops the shadow caches).
 constexpr double kHandOverHysteresisDeg = 0.05;
+// N2: above this sun elevation the night sky's layers are not drawn (they cannot show; see Tick).
+constexpr double kNightSkySunCutoffDeg = 10.0;
 
 double ElevationDeg(const Math::float3& toward)
 {
@@ -289,6 +291,47 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
             ? static_cast<float>(std::clamp(astro::MoonPhaseBrightness(phaseAngleDeg) / lommelSeeliger, 0.0, 10.0))
             : 0.0f;
         skyMoon_.earthshine = static_cast<float>(std::max(0.0f, s.moonEarthshine) * kEarthshineAtNewMoon * 0.5 * (1.0 - std::cos(alpha)));
+    }
+
+    // N2: the night sky's layers. Off while the sun stands above kNightSkySunCutoffDeg: the sky is then
+    // thousands of cd/m2 and the brightest star a few hundredths of it in its pixel -- invisible, and the
+    // pass skips the work. At the cutoff the sky is still ~3000 cd/m2, so nothing on screen steps.
+    nightSky_ = NightSkyFrame{};
+    if (s.nightSkyEnabled && sunElevation < kNightSkySunCutoffDeg)
+    {
+        const double siderealDeg = s.realPositions
+            ? astro::LocalSiderealDeg(s.longitudeDeg,
+                                      astro::JulianDayUtc(s.year, s.month, s.day, clockHours_ - s.utcOffsetHours))
+            : 15.0 * (clockHours_ + static_cast<double>(s.siderealAtMidnightHours));
+        // local (east, up, north) = M * equatorial, M orthonormal; world = the north yaw of local. So
+        // equatorial = M^T * yaw^-1 * world.
+        double m[9];
+        astro::CelestialToLocal(s.latitudeDeg, siderealDeg, m);
+        const double c = std::cos(static_cast<double>(s.northYawDeg) * kPi / 180.0);
+        const double sn = std::sin(static_cast<double>(s.northYawDeg) * kPi / 180.0);
+        // yaw^-1 rows: local = (c x - s z, y, s x + c z) of the world (LocalToWorld's inverse).
+        const double yawInv[9] = {c, 0.0, -sn, 0.0, 1.0, 0.0, sn, 0.0, c};
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int col = 0; col < 3; ++col)
+            {
+                double sum = 0.0;
+                for (int k = 0; k < 3; ++k) { sum += m[k * 3 + row] * yawInv[k * 3 + col]; }
+                nightSky_.worldToEquatorial[row * 3 + col] = static_cast<float>(sum);
+            }
+        }
+        const float bright = std::max(0.0f, s.nightBrightness);
+        const float* ac = s.airglowColor;
+        const float luma = 0.2126f * ac[0] + 0.7152f * ac[1] + 0.0722f * ac[2];
+        for (int k = 0; k < 3; ++k)
+        {
+            nightSky_.airglow[k] = std::max(0.0f, s.airglowZenith) * bright * (luma > 1e-6f ? ac[k] / luma : 1.0f);
+        }
+        nightSky_.stars = std::max(0.0f, s.starsBrightness) * bright;
+        nightSky_.milkyWay = std::max(0.0f, s.milkyWayBrightness) * bright;
+        nightSky_.twinkle = std::clamp(s.starTwinkle, 0.0f, 1.0f);
+        nightSky_.present = nightSky_.stars > 0.0f || nightSky_.milkyWay > 0.0f ||
+                            nightSky_.airglow[0] + nightSky_.airglow[1] + nightSky_.airglow[2] > 0.0f;
     }
 
     if (!logged_ || litBy != litBy_)

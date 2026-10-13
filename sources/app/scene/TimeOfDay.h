@@ -60,6 +60,8 @@ public:
     const Math::float3& MoonToward() const { return moonToward_; }
     // N1: the moon as the sky sees it (the atmosphere's second light and the disc), this frame.
     const SkyMoonFrame& GetSkyMoon() const { return skyMoon_; }
+    // N2: the night sky's layers this frame (its twinkle clock is the scene's, set by Scene).
+    const NightSkyFrame& GetNightSky() const { return nightSky_; }
 
 private:
     void AdvanceClock(double deltaSeconds);
@@ -87,6 +89,7 @@ private:
     Math::float3 sunToward_{0.0f, 1.0f, 0.0f};
     Math::float3 moonToward_{0.0f, -1.0f, 0.0f};
     SkyMoonFrame skyMoon_{};
+    NightSkyFrame nightSky_{};
 };
 
 // T4: what the editor's `setTime` / `setDate` accept (the command bar, MCP), resolved against the

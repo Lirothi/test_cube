@@ -94,6 +94,7 @@ const Profiler::ScopeNameKey kPassSkyView = Profiler::RegisterTraceLiteral(L"Pas
 const Profiler::ScopeNameKey kPassSkyAtmosphereLuts = Profiler::RegisterTraceLiteral(L"Pass_SkyAtmosphereLuts");
 const Profiler::ScopeNameKey kPassCloudNoise = Profiler::RegisterTraceLiteral(L"Pass_CloudNoise");
 const Profiler::ScopeNameKey kPassSkyMoon = Profiler::RegisterTraceLiteral(L"Pass_SkyMoon");
+const Profiler::ScopeNameKey kPassSkyNight = Profiler::RegisterTraceLiteral(L"Pass_SkyNight");
 const Profiler::ScopeNameKey kPassCloudShadow = Profiler::RegisterTraceLiteral(L"Pass_CloudShadow");
 const Profiler::ScopeNameKey kPassCloudTrace = Profiler::RegisterTraceLiteral(L"Pass_CloudTrace");
 const Profiler::ScopeNameKey kCloudTraceMarch = Profiler::RegisterTraceLiteral(L"CloudTrace.March");

@@ -404,6 +404,23 @@ int RunSelfTest()
             (void)north;
         }
     }
+    // ...and a star lands where the general equatorial -> horizontal transform puts it (N2 turns the
+    // star sphere with this rotation): Sirius over Bora Bora on the June solstice.
+    {
+        const double jd = JulianDayUtc(2026, 6, 21, 10.0), lat = -16.5, lon = -151.75;
+        const double raDeg = 101.287, decDeg = -16.716;
+        double m[9];
+        CelestialToLocal(lat, LocalSiderealDeg(lon, jd), m);
+        const double eq[3] = {std::cos(Rad(decDeg)) * std::cos(Rad(raDeg)), std::cos(Rad(decDeg)) * std::sin(Rad(raDeg)),
+                              std::sin(Rad(decDeg))};
+        double viaTransform[3];
+        HorizontalToLocal(EquatorialToHorizontal(raDeg, decDeg, lat, lon, jd), viaTransform);
+        for (int r = 0; r < 3; ++r)
+        {
+            const double viaMatrix = m[r * 3] * eq[0] + m[r * 3 + 1] * eq[1] + m[r * 3 + 2] * eq[2];
+            check("star via the celestial rotation", viaMatrix, viaTransform[r], 1.0e-9, false);
+        }
+    }
 
     // 4. The simple path: rise / top / set / bottom where its definition puts them.
     {

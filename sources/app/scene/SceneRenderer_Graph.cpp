@@ -58,7 +58,7 @@ namespace
 
     SkyViewFrameData MakeSkyView(const SkyAtmosphereSettings& skySettings, float heightMetres,
                                  float preExposure, float sunRadius, const DirectionalLight* light,
-                                 const SkyMoonFrame& moon)
+                                 const SkyMoonFrame& moon, const NightSkyFrame& night)
     {
         SkyViewFrameData skyView{};
         const auto& a = skySettings.parameters;
@@ -96,7 +96,34 @@ namespace
             skyView.moonDisc[3] = moon.phaseAngleRad;
             skyView.moonDisc2[0] = moon.litScale;
         }
+        // Time-of-day plan N2: the night sky's light as a whole, for the distant light.
+        if (night.present)
+        {
+            for (int c = 0; c < 3; ++c) { skyView.nightGlow[c] = night.airglow[c]; }
+            skyView.nightGlow[3] = kNightStarsMeanRadiance * night.stars + kNightMilkyWayMeanRadiance * night.milkyWay;
+        }
         return skyView;
+    }
+
+    // Time-of-day plan N2: the night sky as the sky pixel and its capture draw it. `mapReady`: the Milky
+    // Way's map exists (generated this frame or before), else its layer is 0 and the map is not read.
+    NightSkyFrameData MakeNightSky(const NightSkyFrame& night, bool mapReady)
+    {
+        NightSkyFrameData data{};
+        if (!night.present) { return data; }
+        for (int c = 0; c < 3; ++c) { data.glow[c] = night.airglow[c]; }
+        data.glow[3] = kNightStarsMeanRadiance * night.stars + kNightMilkyWayMeanRadiance * night.milkyWay;
+        data.layers[0] = night.stars;
+        data.layers[1] = mapReady ? night.milkyWay : 0.0f;
+        data.layers[2] = night.twinkle;
+        data.layers[3] = night.timeSeconds;
+        float* rows[3] = {data.row0, data.row1, data.row2};
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int c = 0; c < 3; ++c) { rows[r][c] = night.worldToEquatorial[r * 3 + c]; }
+        }
+        data.row0[3] = 1.0f;
+        return data;
     }
 }
 
@@ -158,6 +185,10 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // sky has a moon in it; the skybox that draws the disc is ordered behind it.
     gb.pSkyMoon = (frame_->settings.skyAtmosphere.mode != 0u && frame_->skyMoon.present)
         ? skyAtmosphere_.BuildMoon(renderer, rg) : GraphBuild::kNone;
+    // N2: the Milky Way's map, once, the first frame a procedural sky has a night sky to draw (the
+    // first such frame only asks for it; the next allocates and generates it).
+    gb.pSkyNight = (frame_->settings.skyAtmosphere.mode != 0u && frame_->nightSky.present && frame_->nightSky.milkyWay > 0.0f)
+        ? skyAtmosphere_.BuildNight(renderer, rg) : GraphBuild::kNone;
     SkyEnvironmentOverlay cloudOverlay{};
     if (decisions_.volumetricCloud)
     {
@@ -170,9 +201,10 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
         volumetricCloud_.ClearFrameState();
     }
     const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->skyLight,
-                                             frame_->skyMoon);
+                                             frame_->skyMoon, frame_->nightSky);
     const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
-        environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay);
+        environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay,
+        MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady()), gb.pSkyNight);
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
     const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
     if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
@@ -1499,7 +1531,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     const auto& skySettings = frame_->settings.skyAtmosphere;
     auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
                                frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight,
-                               frame_->skyMoon);
+                               frame_->skyMoon, frame_->nightSky);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective
@@ -1528,15 +1560,19 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList skyDeps;
     skyDeps.push_back(pAerial);
     if (gb.pSkyMoon != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyMoon); }
+    if (gb.pSkyNight != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyNight); }
     // The moon's texture is drawn from only once generated (or generating this frame, ordered above).
     SkyViewFrameData drawView = skyView;
     const bool moonTexture = skyView.planet[3] != 0 && skyView.light1Direction[3] > 0.0f && skyAtmosphere_.MoonReady();
     drawView.moonDisc2[1] = moonTexture ? 1.0f : 0.0f;
+    // N2: so is the Milky Way's map.
+    const NightSkyFrameData nightView = MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady());
+    const bool nightMap = skyView.planet[3] != 0 && nightView.layers[1] > 0.0f;
     gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, skyDeps, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ } },
-        [this, renderer, drawView, moonTexture](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, drawView, moonTexture, nightView, nightMap](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->skybox) { return {}; }
             ctx.UseDeclared();
             if (drawView.planet[3] != 0)
@@ -1544,9 +1580,11 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                 ctx.Use(skyAtmosphere_.ViewResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 ctx.Use(skyAtmosphere_.TransmittanceResource(), kSrvAll);
                 if (moonTexture) { ctx.Use(skyAtmosphere_.MoonResource(), kSrvAll); }
+                if (nightMap) { ctx.Use(skyAtmosphere_.NightResource(), kSrvAll); }
             }
             frame_->skybox->SetSkyAtmosphere(drawView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv(),
                                              moonTexture ? skyAtmosphere_.MoonSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
+            frame_->skybox->SetNightSky(nightView, nightMap ? skyAtmosphere_.NightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkybox);

@@ -1,5 +1,6 @@
 #define SKY_VIEW
 #include "sky_atmosphere.hlsli"
+#include "night_sky.hlsli"
 #define DISTANT_SKY_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 Texture2D<float4> Transmittance : register(t0);
 Texture2D<float4> MultiScatter : register(t1);
@@ -109,7 +110,18 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     }
     // SkyIlluminance.w = SkyAndAerialPerspectiveLuminanceFactor (usf:1393). UE also multiply SkyLuminanceFactor
     // in here (usf:1397); ours is a picture-only knob and stays out of the fog's light, deliberately.
-    SphereLuminance[lane] = L * SkyIlluminance.w; // the lights' illuminance is in L already (N1)
+    // N2: the night sky's own light -- the airglow, brighter toward the horizon, and the stars' and the
+    // Milky Way's mean -- from every direction above the horizon, through the air in front of it. Not a
+    // scattering of the lights, so the luminance factor that scales the atmosphere's leaves it alone.
+    float3 night = 0.0f;
+    [branch] if (dir.z > 0.0f && any(SkyNightGlow > 0.0f))
+    {
+        float2 uv;
+        getTransmittanceLutUvs(SkyPlanet.x, dir.z, AtmosphereRadii.x, AtmosphereRadii.y, uv);
+        const float3 tr = Transmittance.SampleLevel(LinearClamp, uv, 0).rgb;
+        night = (SkyNightGlow.rgb * NightAirglowVanRhijn(dir.z) + SkyNightGlow.w) * tr;
+    }
+    SphereLuminance[lane] = L * SkyIlluminance.w + night; // the lights' illuminance is in L already (N1)
     GroupMemoryBarrierWithGroupSync();
     // Full barriers at every level: do not assume UE's final lanes are implicitly lockstep.
     [unroll] for (uint stride = 32; stride > 0; stride >>= 1)

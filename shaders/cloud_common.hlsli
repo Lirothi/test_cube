@@ -72,6 +72,7 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 SkyLight1Illuminance;
     float4 SkyMoonDisc;
     float4 SkyMoonDisc2;
+    float4 SkyNightGlow;         // N2: the night sky's own light (SkyViewFrameData::nightGlow)
 #endif
 };
 
