@@ -2225,6 +2225,10 @@ namespace
                           "the erosion smooths out, Macro Variation fades and the gaps fill, so Coverage 1 is a "
                           "solid sheet -- and over the last of it the sun leaves the ground (no sunlight, no sun "
                           "shadows, no glints on the water). The clouds' tops stay in the sun.");
+            dragF("Overcast Evenness", "overcastEvenness", 0.7f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How evenly the closed deck covers the sky: 0 keeps the cloud field's thick and thin "
+                          "patches and the lumpy floor under the overcast, 1 is one uniform grey sheet with a "
+                          "flat base. Acts only as the cover closes (from Overcast From to 1).");
             dragF("Formation Tile (km)", "weatherTileKm", 12.0f, 0.1f, 1.0f, 1000.0f, "%.1f");
             InspectorHelp("The scale of the cloud field: the size of the formation volume on the ground, i.e. "
                           "how far apart the cloud groups sit and how big they are. Ultra Dynamic Sky's is 12 km.");
@@ -2367,11 +2371,12 @@ namespace
                           "Higher = lighter AND bluer shading (weaker shadows), lower = darker, greyer "
                           "undersides. 1 = the atmosphere as computed. Under a closing overcast it reaches the "
                           "inside only through the deck.");
-            dragF("Light Through Cloud", "diffuseLight", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("Light Through Cloud", "diffuseLight", 0.25f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("Sunlight diffused down through a cloud's depth -- what lights the base of a thick "
                           "cloud and an overcast deck from below (thick clouds get darker bases than thin ones). "
-                          "1 = the physical estimate; 0 = none, the scattering octaves alone (UE's model): thick "
-                          "bases are then lit by the blue sky only, and a closed deck reads as a blue sky.");
+                          "0.25 = Ultra Dynamic Sky's cool slate overcast and contrasty bases; 1 = the physical "
+                          "estimate (a lighter, warmer deck, paler bases); 0 = none, the scattering octaves alone "
+                          "(UE's model): a closed deck is then lit by the blue sky only and reads as a blue sky.");
 
             ImGui::SeparatorText("Tracing");
             {

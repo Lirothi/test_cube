@@ -99,6 +99,16 @@ void CSMain(uint3 id : SV_DispatchThreadID)
 
     // usf:534-593: the depth buffer, at the traced pixel itself; the sky is device z 0 and is left at
     // the layer's far end.
+    //
+    // GEOMETRY IN FRONT OF THE LAYER'S NEAR FACE IS TRACED AS SKY (ours; UE stop there). No cloud can
+    // lie in front of it, so its own texel is never applied to it (compose: only behind the cloud's
+    // front) -- but its NEIGHBOURS read it: the reconstruction's 2x2 / 3x3 and history, and compose's
+    // 4x4 Catmull-Rom. Left as UE leave it, "no cloud, transmittance 1", it bled the clear sky BEHIND
+    // the clouds into every sky pixel along a silhouette: a glowing rim around each palm frond under a
+    // dark overcast (owner, 2026-10-13), invisible under partial cover where that sky is the colour of
+    // the clouds' shading anyway. Traced past it, the cloud field is continuous behind near geometry.
+    // The cost is the sky the silhouettes hide above the horizon; a ray below it starts past
+    // tracingStartMaxDistance and stays an early-out.
     float tDepthKm = kCloudNoDepthKm;
     if (trace)
     {
@@ -107,8 +117,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         {
             const float4 P = mul(float4(ndc, z, 1.0f), cloudInvViewProjNoJitter);
             tDepthKm = length(P.xyz / P.w - camPos) / CloudMetresPerKm;
-            if (tDepthKm < tMin) { trace = false; } // geometry in front of the layer's near face
-            tMax = min(tMax, tDepthKm);
+            if (tDepthKm >= tMin) { tMax = min(tMax, tDepthKm); } // geometry inside or past the layer clamps the march
         }
     }
 

@@ -459,7 +459,10 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
         gb.pShadow = rg.AddPass2(RenderPass::Main_CSM, { pShadowCull }, /*mtDeps=*/{},
             { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                if (!frame_->cascadeViews) { return {}; }
+                // The sun under a closed deck casts nothing (FrameDecisions::sunShadowsOff): every
+                // pass of the sun's chain registers EMPTY rather than leaving the graph -- the same
+                // early-out a frame without cascades takes, so the barrier program keeps its shape.
+                if (!frame_->cascadeViews || decisions_.sunShadowsOff) { return {}; }
                 ctx.UseDeclared(); // the CSM atlas -> DEPTH_WRITE
                 const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
                 const bool indirect = IndirectShadowDrawsActive();
@@ -483,7 +486,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
         auto pCsmHzb = rg.AddPass2(RenderPass::Main_CsmHzb, { gb.pShadow },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ShadowGpuData* sg = frame_->shadowGpu;
-                if (!sg || !sg->CascadeHzbCullThisFrame()) { return {}; }
+                if (!sg || !sg->CascadeHzbCullThisFrame() || decisions_.sunShadowsOff) { return {}; }
                 render::CascadeHzb& hzb = sg->CascadeHzbRef();
                 const auto& DF = ctx.renderer->GetDeferredForFrame();
                 if (!hzb.Ready() || DF.shadow == nullptr || DF.shadowSRV.ptr == 0) { return {}; }
@@ -508,7 +511,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             });
         auto pCullPost = rg.AddPass2(RenderPass::Main_ShadowCullPost, { pCsmHzb },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                if (!frame_->shadowGpu) { return {}; }
+                if (!frame_->shadowGpu || decisions_.sunShadowsOff) { return {}; }
                 const ShadowGpuData::CullPostDecisions dec = frame_->shadowGpu->PrepareCullPostPass(ctx);
                 if (!dec.active) { return {}; }
                 return [this, renderer, dec](RenderGraphPassContext c) {
@@ -519,7 +522,8 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
         gb.pShadow = rg.AddPass2(RenderPass::Main_CSMPost, { pCullPost }, /*mtDeps=*/{},
             { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                if (!frame_->cascadeViews || !frame_->shadowGpu || !frame_->shadowGpu->CascadeHzbCullThisFrame()) { return {}; }
+                if (!frame_->cascadeViews || !frame_->shadowGpu || !frame_->shadowGpu->CascadeHzbCullThisFrame() ||
+                    decisions_.sunShadowsOff) { return {}; }
                 ctx.UseDeclared(); // the CSM atlas -> DEPTH_WRITE, back from the pyramid build's read
                 const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
                 ctx.NextPoint();
@@ -792,7 +796,10 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
     {
         gb.pSdsmAnalyze = rg.AddPass2(RenderPass::Main_SdsmAnalyze, { gb.pGbufDone },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                if (!frame_->sdsm) { return {}; }
+                // The sun under a closed deck (FrameDecisions::sunShadowsOff): the whole SDSM chain
+                // registers empty. The camera depth's hand-over to compute readers this pass would
+                // have made is Main_Hzb's too (as in Legacy, which has no analyze).
+                if (!frame_->sdsm || decisions_.sunShadowsOff) { return {}; }
                 const SdsmShadows::AnalyzeDecisions dec = frame_->sdsm->PrepareAnalyzePass(ctx);
                 if (!dec.active) { return {}; }
                 return [this, renderer, dec](RenderGraphPassContext c) {
@@ -803,7 +810,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
 
         gb.pSdsmCull = rg.AddPass2(RenderPass::Main_SdsmCull, { gb.pSdsmAnalyze },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                if (!frame_->sdsm || !frame_->shadowGpu) { return {}; }
+                if (!frame_->sdsm || !frame_->shadowGpu || decisions_.sunShadowsOff) { return {}; }
                 const ShadowGpuData::DirectionalCullDecisions dec =
                     frame_->shadowGpu->PrepareDirectionalCullPass(ctx, frame_->sdsm->FrustumSrv(),
                                                                   frame_->sdsm->FrameParams().partitions,
@@ -819,7 +826,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         gb.pSdsmShadow = rg.AddPass2(RenderPass::Main_SdsmShadow, { gb.pSdsmCull }, /*mtDeps=*/{},
             { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                if (!frame_->sdsm || !frame_->shadowGpu || !frame_->shadowGpu->SdsmDrawReady()) { return {}; }
+                if (!frame_->sdsm || !frame_->shadowGpu || !frame_->shadowGpu->SdsmDrawReady() || decisions_.sunShadowsOff) { return {}; }
                 ctx.UseDeclared(); // the CSM atlas -> DEPTH_WRITE
                 const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
                 ctx.NextPoint();
@@ -838,7 +845,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             auto pSdsmHzb = rg.AddPass2(RenderPass::Main_CsmHzb, { gb.pSdsmShadow },
                 [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                     ShadowGpuData* sg = frame_->shadowGpu;
-                    if (!sg || !sg->CascadeHzbCullThisFrame()) { return {}; }
+                    if (!sg || !sg->CascadeHzbCullThisFrame() || decisions_.sunShadowsOff) { return {}; }
                     render::CascadeHzb& hzb = sg->CascadeHzbRef();
                     const auto& DF = ctx.renderer->GetDeferredForFrame();
                     if (!hzb.Ready() || DF.shadow == nullptr || DF.shadowSRV.ptr == 0) { return {}; }
@@ -861,7 +868,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                 });
             auto pSdsmCullPost = rg.AddPass2(RenderPass::Main_ShadowCullPost, { pSdsmHzb },
                 [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                    if (!frame_->shadowGpu || !frame_->sdsm) { return {}; }
+                    if (!frame_->shadowGpu || !frame_->sdsm || decisions_.sunShadowsOff) { return {}; }
                     const ShadowGpuData::CullPostDecisions dec =
                         frame_->shadowGpu->PrepareSdsmCullPostPass(ctx, frame_->sdsm->CullCbAddress());
                     if (!dec.active) { return {}; }
@@ -873,7 +880,8 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             gb.pSdsmShadow = rg.AddPass2(RenderPass::Main_CSMPost, { pSdsmCullPost }, /*mtDeps=*/{},
                 { { D.shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE } },
                 [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                    if (!frame_->sdsm || !frame_->shadowGpu || !frame_->shadowGpu->CascadeHzbCullThisFrame()) { return {}; }
+                    if (!frame_->sdsm || !frame_->shadowGpu || !frame_->shadowGpu->CascadeHzbCullThisFrame() ||
+                        decisions_.sunShadowsOff) { return {}; }
                     ctx.UseDeclared(); // the atlas -> DEPTH_WRITE, back from the pyramid build's read
                     const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
                     ctx.NextPoint();
@@ -889,7 +897,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         {
             gb.pSdsmShadow = rg.AddPass2(RenderPass::Main_SdsmMoments, { gb.pSdsmShadow },
                 [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-                    if (!frame_->sdsm) { return {}; }
+                    if (!frame_->sdsm || decisions_.sunShadowsOff) { return {}; }
                     const SdsmShadows::MomentsDecisions dec = frame_->sdsm->PrepareMomentsPass(ctx);
                     if (!dec.active) { return {}; }
                     return [this, renderer, dec](RenderGraphPassContext c) {
@@ -1469,17 +1477,13 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                                frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f, frame_->dirLight);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
-    // THE AIR UNDER AN OVERCAST DECK is in its shadow (UE: the cloud shadow on the atmosphere). The
-    // aerial perspective between the camera and everything it hazes -- the ground, the water, the
-    // deck's own underside -- is lit by what comes through the deck, not by the sun: without this a
-    // closed deck kept a bright blue horizon band, where a real overcast's horizon is a third of its
-    // zenith (the CIE overcast sky). The floor is the deck's diffuse transmission, two-stream, for this
-    // model's deck at coverage 1 (tau ~110 straight up): ~7.5 % of the beam (cloud_march.hlsli).
+    // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective
+    // between the camera and everything it hazes -- the ground, the water, the deck's own underside --
+    // is lit by what comes through the deck, not by the sun: without this a closed deck kept a bright
+    // blue horizon band, where a real overcast's horizon is a third of its zenith (the CIE overcast sky).
     SkyViewFrameData aerialView = skyView;
     {
-        constexpr float kOvercastDeckTransmission = 0.075f;
-        const float sunThrough = frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f;
-        const float scale = sunThrough + (1.0f - sunThrough) * kOvercastDeckTransmission;
+        const float scale = CloudAirSunScale(frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f);
         for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; }
     }
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, aerialView,

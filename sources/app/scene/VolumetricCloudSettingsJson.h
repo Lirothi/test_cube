@@ -25,6 +25,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.macroVariation = std::clamp(j.value("macroVariation", s.macroVariation), 0.0f, 1.0f);
     s.macroTileKm = std::clamp(j.value("macroTileKm", s.macroTileKm), 1.0f, 1000.0f);
     s.overcastFrom = std::clamp(j.value("overcastFrom", s.overcastFrom), 0.0f, 0.99f);
+    s.overcastEvenness = std::clamp(j.value("overcastEvenness", s.overcastEvenness), 0.0f, 1.0f);
     s.formationRoughness = std::clamp(j.value("formationRoughness", s.formationRoughness), 0.3f, 0.9f);
     s.floorVariationClear = std::clamp(j.value("floorVariationClear", s.floorVariationClear), 0.0f, 2.0f);
     s.floorVariationCloudy = std::clamp(j.value("floorVariationCloudy", s.floorVariationCloudy), 0.0f, 2.0f);
@@ -90,6 +91,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["macroVariation"] = s.macroVariation;
     j["macroTileKm"] = s.macroTileKm;
     j["overcastFrom"] = s.overcastFrom;
+    j["overcastEvenness"] = s.overcastEvenness;
     j["formationRoughness"] = s.formationRoughness;
     j["floorVariationClear"] = s.floorVariationClear;
     j["floorVariationCloudy"] = s.floorVariationCloudy;

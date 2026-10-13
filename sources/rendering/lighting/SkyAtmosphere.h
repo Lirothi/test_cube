@@ -33,6 +33,10 @@ struct SkyEnvironmentOverlay
     std::array<ID3D12Resource*, 5> reads{};            // declared at rest for the pass (null = none)
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 5> srvs{}; // t0..t4; the sky's two LUTs follow at t5, t6
     size_t dependency = static_cast<size_t>(-1);       // a pass the overlay's inputs come from
+    // How much of the sun reaches the ground under the overlay's clouds (CloudSunGroundVisibility):
+    // the lower hemisphere's ground term takes it, or a closed deck kept a sunlit ground below the
+    // probes' horizon -- which the far sea's grazing reflection picked up as a glowing line.
+    float groundSunScale = 1.0f;
 };
 
 // Fixed-size transfer LUTs (parameter-dirty) and SkyView (per frame). Graphics queue only.

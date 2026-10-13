@@ -44,6 +44,11 @@ struct VolumetricCloudSettings
     // gap -- and the sun on the ground goes out with it (CloudOvercastAmount below). UDS do the same with
     // their "simplified material when overcast" (fade 1.9 .. 2.1 of their 0..3 coverage).
     float overcastFrom = 0.85f;
+    // How EVEN the closed deck is: 0 keeps the formation's thickness and the floor's relief under the
+    // overcast (light and dark lumps), 1 is one uniform sheet with a flat base. Scaled by how overcast
+    // the cover is, so partial cover is untouched. 0.7 matches the owner's Ultra Dynamic Sky overcast
+    // reference (2026-10-13): soft, broad, low-contrast waves; 0.9 was nearly a flat card.
+    float overcastEvenness = 0.7f;
     // Fine tuning. Each default is UDS's value or a fit to their look (cloud_noise_cs.hlsl).
     float formationRoughness = 0.85f;     // the formation fBm's gain: higher = flatter, more broken-up formations (regenerates the volume)
     float floorVariationClear = 0.08f;    // how far the formation's B channel lifts cloud bases at partial cover ...
@@ -92,8 +97,11 @@ struct VolumetricCloudSettings
     // Ours: the sun's light DIFFUSED down through a cloud's depth (two-stream transmission of the column
     // above each sample, cloud_march.hlsli) -- what lights a thick cloud's base and an overcast deck from
     // below; without it both are lit by the blue sky alone and a closed deck reads as a clear sky.
-    // 1 = the physical estimate, 0 = off (the octaves alone, UE's model).
-    float diffuseLight = 1.0f;
+    // 1 = the physical estimate, 0 = off (the octaves alone, UE's model). 0.25: Ultra Dynamic Sky's
+    // overcast (the owner's reference, 2026-10-13) is a cool slate grey, lit mostly by the sky; at 1 the
+    // deck went a light lavender (this level's warm 6500 K sun outweighing the sky) and at partial cover
+    // the dark undersides flattened -- 0.25 kept both: the slate deck, and the contrasty bases at 0.5.
+    float diffuseLight = 0.25f;
 
     // --- Tracing. UE r.VolumetricCloud.ViewRaySampleMaxCount is 768 at its cinematic default and
     // DistanceToSampleMaxCount 15 km, i.e. a 19.5 m step; the step is distanceToSampleCountMaxKm /
@@ -156,9 +164,9 @@ struct VolumetricCloudConstants
     float aerial[4];      // aerial on, aerial start km, distant on, debug view
     float temporal[4];    // history valid, history weight, exposure ratio, frame index
     float shadowMap[4];   // resolution, 1/resolution, far depth km, strength
-    float shadowMap2[4];  // sample count, depth bias km, zw unused
+    float shadowMap2[4];  // sample count, depth bias km, z the air's sun under the deck (CloudAirSunScale; the capture's aerial perspective), w unused
     float shadowMap3[4];  // x: shadow-map texel stride this frame (1 = all), yz: traced offset in the stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
-    float profile[4];     // x: unused, y: 1 / LUT width, z: 1 / LUT height, w: unused
+    float profile[4];     // x: the overcast's evenness (overcast x overcastEvenness), y: 1 / LUT width, z: 1 / LUT height, w: unused
     float lighting[4];    // x: lit extra multi-scattering octaves (0..2), y: sky light intensity, z: diffused light, w: overcast (0..1)
     float erosion[4];     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
     float floorShape[4];  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's threshold lift
@@ -185,11 +193,27 @@ constexpr float kCloudOvercastDensityLift = 1.0f;
 // shadow map's 20 km the map already darkens it; this takes the sun out everywhere -- past the map, in
 // the fog, in the water's glints -- over the last part of the closing (UDS: "Dim Directional Lights
 // with Cloud Coverage", and their directional shadows off once the clouds hide the light completely).
+// EXACTLY 0 at full overcast, not by a smoothstep's rounding: that zero is what switches the sun's
+// shadow passes off (SceneRenderer::DecideFrame, FrameDecisions::sunShadowsOff).
 inline float CloudSunGroundVisibility(const VolumetricCloudSettings& s)
 {
-    float t = (CloudOvercastAmount(s) - 0.8f) / 0.2f;
+    const float overcast = CloudOvercastAmount(s);
+    if (overcast >= 1.0f) { return 0.0f; }
+    float t = (overcast - 0.8f) / 0.2f;
     t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
     return 1.0f - t * t * (3.0f - 2.0f * t);
+}
+// THE AIR UNDER THE DECK is in its shadow too (UE: the cloud shadow on the atmosphere): what lights
+// the aerial perspective there is what comes through the deck, not the sun. The floor is the deck's
+// diffuse transmission, two-stream, for this model's deck at coverage 1 (tau ~110 straight up):
+// ~7.5 % of the beam (cloud_march.hlsli). One scale for both of the aerial perspective's integrals --
+// the camera's volume (SceneRenderer::BuildLighting) and the environment capture's own segment
+// (cloud_capture_cs.hlsl, cloudShadowMap2.z); without the second, the cube's horizon kept a bright
+// clear-sky haze and the far sea reflected it as a glowing line under a closed deck.
+constexpr float kOvercastDeckTransmission = 0.075f;
+inline float CloudAirSunScale(float sunGroundVisibility)
+{
+    return sunGroundVisibility + (1.0f - sunGroundVisibility) * kOvercastDeckTransmission;
 }
 
 // --- PROJECT-WIDE, not the level: graphics_settings.json "cloudShadow", Developer Controls > Sky,

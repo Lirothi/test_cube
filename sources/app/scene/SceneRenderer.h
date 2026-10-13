@@ -116,6 +116,12 @@ private:
         // the converter PSO and the moments atlas all present).
         bool sdsmEvsm = false;
         bool vsmSkipUpdate = false;    // nothing moved: keep last frame's pages (was vsmSkipUpdate_)
+        // The sun is under a closed overcast deck (DirectionalLight::GetCloudVisibility() == 0, i.e.
+        // coverage 1): no surface receives it, so the SUN's shadow passes (Legacy CSM, SDSM, VSM
+        // update) register empty and its three readers (lighting, fog, glass) skip the shadow lookup
+        // on lightRgb == 0. Spot and point shadows are untouched; so is Main_ShadowCull, which also
+        // culls the camera's indirect G-buffer.
+        bool sunShadowsOff = false;
         bool willDlss = false;         // the DLSS evaluate is predicted to run (was a local)
         // Occlusion plan S5: the camera's two-pass HZB occlusion inside the indirect G-buffer --
         // Main_HzbA, Main_CamCullPost and Main_GBufferB exist, and the G-buffer's consumers chain
@@ -687,6 +693,10 @@ private:
     mat4 vsmLastView_{};
     bool vsmHasRendered_ = false;
     std::uint32_t vsmStillFrames_ = 0;
+    // FrameDecisions::sunShadowsOff last frame (the change is logged once), and whether the VSM update
+    // was put to sleep for it: the frame after that drops every page (casters moved unrecorded).
+    bool sunShadowsWereOff_ = false;
+    bool vsmSlept_ = false;
     // Occlusion plan S5: per deferred slot, which frame built its camera pyramid, at what render
     // size, under which camera history -- the Main_Hzb builder (serial) stamps it, DecideFrame
     // reads the PREVIOUS slot's to decide whether last frame's pyramid may be tested against.

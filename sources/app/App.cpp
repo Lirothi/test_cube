@@ -768,7 +768,7 @@ namespace
                 { "extinctionScale", &c.extinctionScale, 0.0f, 20.0f }, { "albedo", &c.albedo, 0.0f, 1.0f },
                 { "formationChangeSpeed", &c.formationChangeSpeed, 0.0f, 100.0f },
                 { "macroVariation", &c.macroVariation, 0.0f, 1.0f }, { "macroTileKm", &c.macroTileKm, 1.0f, 1000.0f },
-                { "overcastFrom", &c.overcastFrom, 0.0f, 0.99f },
+                { "overcastFrom", &c.overcastFrom, 0.0f, 0.99f }, { "overcastEvenness", &c.overcastEvenness, 0.0f, 1.0f },
                 { "formationRoughness", &c.formationRoughness, 0.3f, 0.9f },
                 { "floorVariationClear", &c.floorVariationClear, 0.0f, 2.0f }, { "floorVariationCloudy", &c.floorVariationCloudy, 0.0f, 2.0f },
                 { "erosionStrength", &c.erosionStrength, 0.0f, 4.0f }, { "erosionPower", &c.erosionPower, 0.25f, 8.0f },

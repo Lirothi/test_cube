@@ -418,6 +418,39 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         vsmStillFrames_ = 0;
     }
 
+    // THE SUN UNDER A CLOSED DECK (VolumetricCloudSettings.h CloudSunGroundVisibility): exactly 0 at
+    // coverage 1, when nothing in the scene receives the sun -- so its shadows are not rendered at all
+    // (UDS: "Disable Directional Light Shadows when Fully Shadowed by Clouds", as an optimisation).
+    // Each sun-shadow builder returns empty on this flag; VSM goes through its own skip-when-still
+    // path -- but only with no shadowed spot or point light, since their pages share the pool and
+    // must keep updating. What is left in the atlas / pool is never read: the readers branch on
+    // lightRgb == 0. Coming back, the VSM pool is stale (casters moved unrecorded), so every page is
+    // dropped; the SDSM partition cache sees a frame it did not render and keeps nothing
+    // (Scene::UpdateSdsmFrameParams); the cascade pyramids were not built last frame, so the
+    // light-space cull tests nothing.
+    decisions_.sunShadowsOff = frame.dirLight != nullptr && frame.dirLight->GetCloudVisibility() <= 0.0f;
+    const bool localShadows = frame.lightManager != nullptr &&
+        (frame.lightManager->GetShadowedSpotCount() > 0 || frame.lightManager->GetShadowedPointCount() > 0);
+    const bool vsmSleeps = decisions_.sunShadowsOff && !localShadows;
+    if (vsmSleeps)
+    {
+        decisions_.vsmSkipUpdate = true;
+        vsmHasRendered_ = false;
+        vsmStillFrames_ = 0;
+    }
+    else if (vsmSlept_ && render::VsmActive() && frame.vsm && frame.vsm->IsAllocated())
+    {
+        frame.vsm->InvalidateAllPages();
+    }
+    vsmSlept_ = vsmSleeps;
+    if (decisions_.sunShadowsOff != sunShadowsWereOff_)
+    {
+        LOG_INFO(logging::LogCategory::RenderShadow, "sun shadows: {} (overcast deck, sun visibility {:.3f}) (frame {})",
+                 decisions_.sunShadowsOff ? "off" : "on", frame.dirLight ? frame.dirLight->GetCloudVisibility() : 1.0f,
+                 renderer->GetTotalFrameNumber());
+    }
+    sunShadowsWereOff_ = decisions_.sunShadowsOff;
+
     // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A). ONE decision: the
     // pass exists and compose reads the volume, or neither -- a compose that read a volume nobody
     // wrote would be the silent failure this rule exists for. History validity is the GTAO shape:

@@ -45,9 +45,9 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudAerial;      // x: aerial perspective on, y: aerial start depth (km), z: distant sky light on, w: debug view
     float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
     float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
-    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), zw: unused
+    float4 cloudShadowMap2;  // x: sample count, y: depth bias (km), z: the air's sun under the deck (the capture's aerial perspective), w: unused
     float4 cloudShadowMap3;  // x: shadow-map texel stride this frame (1 = every texel), yz: the traced texel's offset in its stride x stride cell, w: cheap-density bits (1 bilinear macro variation, 2 mean erosion)
-    float4 cloudProfile;     // x: unused, y: 1 / LUT width, z: 1 / LUT height, w: unused
+    float4 cloudProfile;     // x: the overcast's evenness (overcast x overcastEvenness), y: 1 / LUT width, z: 1 / LUT height, w: unused
     float4 cloudLighting;    // x: lit extra multi-scattering octaves (0..2, UE's count), y: sky light intensity, z: light diffused through the cloud (strength), w: overcast (0..1)
     float4 cloudErosion;     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
     float4 cloudFloorShape;  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's lift of the threshold's density
@@ -312,8 +312,14 @@ float CloudBaseDensity(float3 worldMetres, float normAlt, bool bicubicWeather, o
     }
     const float density = 3.0f * coverageHere;
     const float threshold = pow(saturate(1.0f - (density + cloudFloorShape.w) / 6.5f), 3.0f) - 0.25f;
-    const float field = saturate(formation.r - threshold) / (1.0f - threshold);
-    const float floorVariation = lerp(cloudFloorShape.x, cloudFloorShape.y, saturate(density - 1.5f));
+    // A CLOSED DECK IS EVEN (cloudProfile.x = overcast x the level's overcastEvenness): the field goes
+    // to full and the floor flat. Past the threshold the formation no longer makes gaps -- it makes
+    // the deck 3-4x thicker in one place than the next, and its B channel lifts the base by up to
+    // 0.64 of the layer, which from below read as light, lumpy bands instead of a covered sky (owner,
+    // 2026-10-13). A stratus base is flat: it is the condensation level.
+    const float evenness = saturate(cloudProfile.x);
+    const float field = lerp(saturate(formation.r - threshold) / (1.0f - threshold), 1.0f, evenness);
+    const float floorVariation = lerp(cloudFloorShape.x, cloudFloorShape.y, saturate(density - 1.5f)) * (1.0f - evenness);
     const float floorLift = formation.b * formation.b * floorVariation;
     const float profileHeight = saturate(lerp(normAlt, 1.0f, -floorLift));
     const float column = saturate(density / 3.0f + cloudMedium.w);

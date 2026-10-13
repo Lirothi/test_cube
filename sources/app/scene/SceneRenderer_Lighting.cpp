@@ -329,7 +329,10 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     // S15: in SDSM the six cascade fields just written are the CPU's Legacy fit and are WRONG --
     // the shader overwrites them from the partition buffer. Non-zero here is the only thing that
     // makes it do so, so it is also the switch: SDSM is decided once, in DecideFrame, and read here.
-    constants.csmSdsmPartitions = decisions_.sdsmActive && frame_->sdsm
+    // Not under a closed deck (FrameDecisions::sunShadowsOff): no analyze wrote the partitions this
+    // frame -- possibly none ever has, if the level opened overcast -- so even the cascade debug
+    // tint, the one read the lightRgb == 0 branch does not skip, stays on the CPU's finite fit.
+    constants.csmSdsmPartitions = decisions_.sdsmActive && frame_->sdsm && !decisions_.sunShadowsOff
         ? std::min<std::uint32_t>(frame_->sdsm->FrameParams().partitions, render::sdsm::kMaxPartitions)
         : 0u;
     const float width = static_cast<float>(std::max(renderer->GetRenderWidth(), 1u));

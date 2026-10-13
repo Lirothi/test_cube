@@ -192,7 +192,8 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
     // +2g*cos (ParticipatingMediaCommon.ush:96), so their forward peak sits at cos = -1; ours is
     // the textbook -2g*cos form (peak at +1), hence the argument is negated: dot(toSun, V) is +1
     // when the camera looks INTO the sun, which is where forward scattering (g > 0) must peak.
-    if (fogMedium1.w > 0.0f)
+    // No sun (a closed cloud deck), no shadow lookup: its passes did not run (lighting_cs.hlsl).
+    if (fogMedium1.w > 0.0f && any(lightRgb > 0.0f))
     {
         const float3 toSun = normalize(-sunDirWS);
         const float shadow = FogSunShadow(P);

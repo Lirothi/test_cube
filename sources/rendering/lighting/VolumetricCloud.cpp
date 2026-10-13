@@ -628,6 +628,8 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     c.shadowMap[0] = static_cast<float>(kShadowSize); c.shadowMap[1] = 1.0f / static_cast<float>(kShadowSize);
     c.shadowMap[2] = farPlane / 1000.0f; c.shadowMap[3] = s.shadowStrength;
     c.shadowMap2[0] = shadowSamples; c.shadowMap2[1] = s.shadowDepthBiasKm;
+    // Read by the environment capture only: the screen trace's aerial volume is scaled on the CPU.
+    c.shadowMap2[2] = CloudAirSunScale(CloudSunGroundVisibility(s));
     c.profile[1] = profileInvSize_[0]; c.profile[2] = profileInvSize_[1];
     // The formation's time axis advances with the DRIFT, as UDS's does with their cloud movement:
     // formationChangeSpeed full cycles per 16 formation tiles travelled (VolumetricCloudSettings.h).
@@ -644,9 +646,10 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     c.formation[3] = 1.0f / std::max(s.macroTileKm, 0.1f);
     c.lighting[0] = static_cast<float>(std::min(s.msOctaves, 2u));
     c.lighting[1] = std::isfinite(s.skyLightIntensity) ? std::clamp(s.skyLightIntensity, 0.0f, 10.0f) : 1.0f;
-    c.lighting[2] = std::isfinite(s.diffuseLight) ? std::clamp(s.diffuseLight, 0.0f, 10.0f) : 1.0f;
+    c.lighting[2] = std::isfinite(s.diffuseLight) ? std::clamp(s.diffuseLight, 0.0f, 10.0f) : 0.25f;
     c.lighting[3] = overcast;
     c.floorShape[3] = kCloudOvercastDensityLift * overcast;
+    c.profile[0] = overcast * (std::isfinite(s.overcastEvenness) ? std::clamp(s.overcastEvenness, 0.0f, 1.0f) : 0.7f);
     const auto finite = [](float v, float fallback) { return std::isfinite(v) ? v : fallback; };
     c.erosion[0] = std::clamp(finite(s.erosionStrength, 1.2f), 0.0f, 4.0f);
     c.erosion[1] = std::clamp(finite(s.erosionPower, 3.0f), 0.25f, 8.0f);
@@ -705,6 +708,7 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     overlay.reads = {bind.formation, bind.cells, weather_.Get(), distant ? in.distantResource : nullptr, bind.profile};
     overlay.srvs = {bind.formationSrv, bind.cellsSrv, weatherSrv_, distant ? in.distantSrv : renderer->VsmDummyTexSrv(), bind.profileSrv};
     overlay.dependency = noisePass;
+    overlay.groundSunScale = CloudSunGroundVisibility(s);
     return overlay;
 }
 

@@ -347,7 +347,8 @@ PSOut PSMain(VSOut i)
         bi.L = normalize(-sunDir);
 
         BRDFResult br = EvalBRDF(bi);
-        if (br.NdotL > 0.0f)
+        // No sun (a closed cloud deck), no shadow lookup: its passes did not run (lighting_cs.hlsl).
+        if (br.NdotL > 0.0f && any(sunColor > 0.0f))
         {
             float shadow = SampleShadowCSM(i.posWS, N, br.NdotL);
             float3 radiance = sunColor;

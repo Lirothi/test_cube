@@ -181,6 +181,8 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
         // shade greyer -- and coverage 1 is a dark grey deck instead of a sky-blue one. Taken at a REAL
         // cloud's depth (1/8 of this extinction, the model's being ~8x one) the deck came out twice as
         // bright and the dark undersides at 0.5 flattened into a pale lavender veil over the whole sky.
+        // The level's strength (cloudLighting.z) defaults to 0.25, not 1: matched to the owner's Ultra
+        // Dynamic Sky overcast reference (VolumetricCloudSettings.h diffuseLight).
         float3 diffused = 0.0f.xxx;
         const float closing = max(saturate(cloudLighting.w), 0.96f * s.cloudiness);
         [branch] if (cloudLighting.z > 0.0f || closing > 0.0f)

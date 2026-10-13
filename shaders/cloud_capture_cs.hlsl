@@ -65,7 +65,13 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const uint2 pixel = uint2(id.x, id.y % size);
     if (pixel.x >= size || face >= 6u) { return; }
     const float2 uv = (float2(pixel) + 0.5f) / (float)size;
-    const float3 dir = SkyCubeDirection(uv, face); // world Y-up, the frame the cube is read in
+    // MIRRORED THROUGH THE HORIZON, as the sky picture under it already is (sky_view_mapping.hlsli
+    // SkyViewDirToUvNoPlanet): below the horizon this cube shows the sky above, so it must show that
+    // sky's clouds too. Traced as it looked, a ray down found no cloud and left the mirrored CLEAR sky
+    // below the horizon -- under a closed deck the far sea's grazing reflection and the probe filter's
+    // horizon taps picked it up as a glowing line along the horizon (owner, 2026-10-13).
+    const float3 seen = SkyCubeDirection(uv, face); // world Y-up, the frame the cube is read in
+    const float3 dir = float3(seen.x, abs(seen.y), seen.z);
     const float3 originM = cloudCamera.xyz;        // the probe: sea level under the camera (C++)
     const float3 originKm = CloudWorldToPlanetKm(originM);
 
@@ -107,6 +113,10 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         SkyIntegrateSegment(p, dir.xzy, march.tApKm, kCaptureAerialSamples, 1.0f,
                             TransmittanceLut, MultiScatterLut, gSmpLinearClamp, apL, apT);
         apL *= SkyIlluminance.rgb * SkyIlluminance.w; // as the volume scales it (sky_lut_aerial_cs.hlsl)
+        // ...and as the CPU scales the volume's sun under an overcast deck (CloudAirSunScale): this
+        // segment runs below the deck too. Without it the cube's horizon kept a clear-sky haze and
+        // the far sea reflected it as a glowing line under a closed deck.
+        apL *= cloudShadowMap2.z;
     }
     const float apMeanT = saturate(dot(apT, 1.0f / 3.0f)); // the volume stores the mean; the trace blends by it
     const float3 cloudL = apL * (1.0f - march.transmittance) + apMeanT * march.luminance;

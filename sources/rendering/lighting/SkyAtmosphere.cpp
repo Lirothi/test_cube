@@ -578,7 +578,8 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     const float sinElevation = std::clamp(view.sunDirection[2], -1.0f, 1.0f);
     float sunTransmittance[3] = {1.0f, 1.0f, 1.0f};
     SkyTransmittanceTowardSun(params, std::asin(sinElevation), sunTransmittance);
-    const float groundCosine = std::max(0.0f, sinElevation);
+    // The overlay's clouds can take the sun off the ground (an overcast deck, SkyEnvironmentOverlay).
+    const float groundCosine = std::max(0.0f, sinElevation) * (overlayActive ? std::clamp(overlay->groundSunScale, 0.0f, 1.0f) : 1.0f);
     constexpr float kInvPi = 0.3183098861837907f;
     // w = the radiance cube's coarsest mip (1x1 per face), the sky's sphere average, which the
     // shader adds as the sky's half of the same ground irradiance.

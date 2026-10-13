@@ -367,6 +367,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // makes the tile-border ring visible. Costs nothing when the mode is off.
     int csmCascade = (csmDebugMode != 0u) ? CsmChooseCascade(MakeCsmParams(), P) : 0;
 
+    // NO SUN, NO SHADOW LOOKUP. Under a closed cloud deck the sun is exactly 0 (lightRgb, the light's
+    // GetEffectiveColor) and its shadow passes did not run -- the atlas or pool holds an older frame's
+    // depths, or nothing ever written if the level opened overcast, and NaN x 0 is NaN. Uniform branch.
+    const bool sunLit = any(lightRgb > 0.0f);
+
     // Caustics scale the sun's irradiance, so they multiply the direct term rather than being
     // added on top: a surface the sun cannot reach gets none, and the bright filaments ride the
     // same shadow and cosine as the light they come from. Clamped so a negative bias can dim the
@@ -386,7 +391,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         // Front hemisphere: the leaf face directly toward the sun (Lambert + GGX), same math
         // and same shadow as DefaultLit.
-        if (fr.NdotL > 0.0)
+        if (sunLit && fr.NdotL > 0.0)
         {
             float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
@@ -399,7 +404,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // front face self-shadows the transmission to black. This is the scoped transmission
         // shadow bias the plan (F4) calls for, not shadow disablement: a genuine occluder
         // between the sun and the leaf still darkens the sun-facing side and kills transmission.
-        if (any(fr.transBRDF > 0.0))
+        if (sunLit && any(fr.transBRDF > 0.0))
         {
             // Separate index, discarded: the transmission lobe samples with a flipped normal and
             // must not decide which cascade the debug tint reports for this pixel.
@@ -411,7 +416,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     else
     {
         BRDFResult br = EvalBRDF(bi, sunAngularSize);
-        if (br.NdotL > 0.0)
+        if (sunLit && br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
             float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);

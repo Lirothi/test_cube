@@ -1959,7 +1959,8 @@ void Scene::PrepareViews(Renderer* renderer)
         }
         dirLight_.SetAtmosphereTransmittance(transmittance);
         // The overcast deck takes the sun off the ground (the clouds still get it, GetAboveCloudsColor).
-        dirLight_.SetCloudVisibility(CloudSunGroundVisibility(volumetricCloud_));
+        // The clouds need the procedural sky: on a cubemap sky their pass does not run, so nor does this.
+        dirLight_.SetCloudVisibility(skyAtmosphere_.mode != 0u ? CloudSunGroundVisibility(volumetricCloud_) : 1.0f);
     }
     frameData_.cameraExposure = cameraExposure_;
     frameData_.colorPipeline = colorPipeline_;
@@ -2390,11 +2391,15 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         const std::uint32_t sunVersion = dirLight_.GetTransformVersion();
         const std::uint64_t camRevision = camera_.GetHistoryRevision();
         const void* atlas = D.shadow;
-        const bool keep = cacheFrames > 1u && sdsmCacheFrame_ + 1u == frame &&
+        // A frame whose sun is under a closed deck renders no partition at all (the shadow passes
+        // are off, FrameDecisions::sunShadowsOff) -- the "analyze did not run" case: the frame after
+        // it keeps nothing, however still the camera stayed while the tiles went unrendered.
+        const bool sunOff = dirLight_.GetCloudVisibility() <= 0.0f;
+        const bool keep = !sunOff && cacheFrames > 1u && sdsmCacheFrame_ + 1u == frame &&
             sunVersion == sdsmCacheSunVersion_ && camRevision == sdsmCacheCamRevision_ &&
             D.shadowRes == sdsmCacheAtlasRes_ && atlas == sdsmCacheAtlas_ &&
             cb.partitions == sdsmCachePartitions_ && staticSetVersion_ == sdsmCacheStaticSet_;
-        sdsmCacheFrame_ = frame;
+        sdsmCacheFrame_ = sunOff ? 0u : frame;
         sdsmCacheSunVersion_ = sunVersion;
         sdsmCacheCamRevision_ = camRevision;
         sdsmCacheAtlasRes_ = D.shadowRes;
