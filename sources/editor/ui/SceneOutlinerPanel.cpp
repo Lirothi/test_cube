@@ -137,7 +137,7 @@ namespace
 
     bool IsLightType(const std::string& type)
     {
-        return type == "pointLight" || type == "spotLight" || type == "directionalLight";
+        return type == "pointLight" || type == "spotLight";
     }
 
     bool SupportsEnvironmentEnable(const EditorObject& object)

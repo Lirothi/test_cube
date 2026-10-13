@@ -28,6 +28,8 @@
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
 #include "rendering/visibility/HzbCullSelfTest.h" // occlusion plan S2: --hzb-cull-selftest
+#include "rendering/lighting/Astronomy.h"          // time-of-day plan T1: --tod-selftest
+#include "rendering/lighting/TimeOfDaySettings.h"  // T3: --tod-legacy-light
 #include "rendering/shadows/VirtualShadowMap.h" // temporary VSM perf-harness tunables (--vsm-*)
 #include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
@@ -130,6 +132,43 @@ void ParseFixedSettingsArg(const char* lpCmdLine)
             if (itemEnd >= end) { break; }
             p = itemEnd + 1;
         }
+    }
+}
+
+// Time-of-day plan T2: "--time=HH:MM", "--date=YYYY-MM-DD", "--time-speed=<x>", "--time-freeze" --
+// spelled for people, carried as the ordinary `tod.*` numbers of --set (App::ApplySweepValue), so they
+// apply at the same point and log the same `--set` line. --time-speed starts the clock (x times the
+// level's rate); --time-freeze stops it, and wins.
+void ParseTimeOfDayArgs(const char* lpCmdLine)
+{
+    if (!lpCmdLine) { return; }
+    if (const char* flag = std::strstr(lpCmdLine, "--time=")) {
+        const char* p = flag + std::strlen("--time=");
+        const int hours = std::atoi(p);
+        const char* colon = std::strchr(p, ':');
+        const char* end = p;
+        while (*end && *end != ' ' && *end != '\t') { ++end; }
+        const int minutes = (colon && colon < end) ? std::atoi(colon + 1) : 0;
+        g_fixedSettings.emplace_back("tod.time", static_cast<float>(hours) + static_cast<float>(minutes) / 60.0f);
+    }
+    if (const char* flag = std::strstr(lpCmdLine, "--date=")) {
+        int year = 0, month = 0, day = 0;
+        if (sscanf_s(flag + std::strlen("--date="), "%d-%d-%d", &year, &month, &day) == 3) {
+            g_fixedSettings.emplace_back("tod.year", static_cast<float>(year));
+            g_fixedSettings.emplace_back("tod.month", static_cast<float>(month));
+            g_fixedSettings.emplace_back("tod.day", static_cast<float>(day));
+        }
+    }
+    if (const char* flag = std::strstr(lpCmdLine, "--time-speed=")) {
+        g_fixedSettings.emplace_back("tod.speed", static_cast<float>(std::atof(flag + std::strlen("--time-speed="))));
+        g_fixedSettings.emplace_back("tod.animate", 1.0f);
+    }
+    if (std::strstr(lpCmdLine, "--time-freeze")) {
+        g_fixedSettings.emplace_back("tod.animate", 0.0f);
+    }
+    // T3 rollback: a level without `timeOfDay` lights with its `directionalLight` as authored.
+    if (std::strstr(lpCmdLine, "--tod-legacy-light")) {
+        g_timeOfDayConvertsDirectionalLight = false;
     }
 }
 
@@ -288,6 +327,13 @@ int WINAPI WinMain(
         return RunHzbCullSelfTest();
     }
 
+    // "--tod-selftest" (time-of-day plan T1): the sun, the moon, the star frame and the simple paths
+    // against reference values. Per-case lines and the verdict go to the session log; exit code =
+    // failed checks. No renderer.
+    if (lpCmdLine && std::strstr(lpCmdLine, "tod-selftest") != nullptr) {
+        return astro::RunSelfTest();
+    }
+
     // "--rt-force-as-fail" (S13 test hook): make every acceleration-structure
     // allocation fail, so the graceful RT-disable → SSR-fallback path can be
     // exercised in the live app without actually exhausting VRAM.
@@ -350,6 +396,7 @@ int WINAPI WinMain(
     // "--set=...": above the scene-stress branch too, so the harness can pin the setting a gate
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
+    ParseTimeOfDayArgs(lpCmdLine);
 
     // "--cloud-profile=<image>" / "--cloud-formation=<dds>" / "--cloud-cells=<dds>": FILE OVERRIDES
     // for the volumetric clouds' generated profile LUT, formation and erosion volumes

@@ -142,13 +142,13 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     {
         gb.pCloudNoise = volumetricCloud_.BuildNoise(renderer, rg, frame_->settings.volumetricCloud);
         cloudOverlay = volumetricCloud_.MakeEnvironmentOverlay(renderer, MakeCloudInputs(renderer), gb.pCloudNoise,
-                                                               skyAtmosphere_.DistantRevision());
+                                                               skyAtmosphere_.DistantMajorRevision());
     }
     else
     {
         volumetricCloud_.ClearFrameState();
     }
-    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->dirLight);
+    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->skyLight);
     const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
         environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay);
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
@@ -1206,7 +1206,9 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         auto fogBuilder = [this, renderer, vsmShadows](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& DF = renderer->GetDeferredForFrame();
             const auto& PF = renderer->GetDeferredForPrevFrame();
-            const unsigned distantRevision = skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantRevision() : 0u;
+            // The MAJOR revision: a sun moving a little each frame rebuilds the distant light each frame,
+            // and the history must survive that (SkyAtmosphere::DistantMajorRevision).
+            const unsigned distantRevision = skyAtmosphere_.DistantActive() ? skyAtmosphere_.DistantMajorRevision() : 0u;
             if (fogDistantRevision_ != distantRevision) decisions_.fogHistoryValid = false;
             fogDistantRevision_ = distantRevision;
             if (skyAtmosphere_.DistantActive()) ctx.Use(skyAtmosphere_.DistantResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -1474,7 +1476,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // declarations were already made.
     const auto& skySettings = frame_->settings.skyAtmosphere;
     auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
-                               frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f, frame_->dirLight);
+                               frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective

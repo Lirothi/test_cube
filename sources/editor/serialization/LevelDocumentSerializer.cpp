@@ -39,10 +39,11 @@ namespace LevelDocumentSerializer
             bool haveOcean = false;
             bool haveSky = false;
             bool haveCloud = false;
+            bool haveTimeOfDay = false;
             for (const EditorObject& env : document.Environment())
             {
                 if (env.type == "camera") { out["camera"] = env.properties; }
-                else if (env.type == "directionalLight") { out["directionalLight"] = env.properties; }
+                else if (env.type == "timeOfDay") { out["timeOfDay"] = env.properties; haveTimeOfDay = true; } // T3
                 else if (env.type == "skybox") { out["skybox"] = env.properties; }
                 else if (env.type == "wind") { out["wind"] = env.properties; } // W2: round-trip the wind entity
                 else if (env.type == "skyAtmosphere") { out["skyAtmosphere"] = env.properties; haveSky = true; } // B6.2
@@ -93,6 +94,12 @@ namespace LevelDocumentSerializer
             // Volumetric Cloud object must not leave the loaded header's section to resurrect it.
             if (!haveSky && out.contains("skyAtmosphere")) { out.erase("skyAtmosphere"); }
             if (!haveCloud && out.contains("volumetricCloud")) { out.erase("volumetricCloud"); }
+            // And the light. The document converted the old `directionalLight` section into the Time
+            // of Day object on load (EditorSceneDocument), so the old key is ALWAYS erased: left beside
+            // the new one it would be a second copy of the sun with no rule about which wins. Without
+            // a Time of Day object the loaded section must not resurrect it either.
+            out.erase("directionalLight");
+            if (!haveTimeOfDay && out.contains("timeOfDay")) { out.erase("timeOfDay"); }
         }
 
         // Camera position is intentionally not persisted in level files; it lives

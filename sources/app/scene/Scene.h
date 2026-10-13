@@ -26,6 +26,7 @@
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 #include "vfx/WindState.h"
 #include "ocean/OceanBuoyancy.h"
+#include "app/scene/TimeOfDay.h"
 
 class Renderer;
 class UploadBatch;
@@ -42,6 +43,33 @@ public:
     // much of the level's `exposure` the auto-exposure silently cancels. Runtime only -- like the
     // camera settings above, nothing here writes the level.
     DirectionalLight& DirectionalLightRef() { return dirLight_; }
+    // Time-of-day plan T2: the level's clock (TimeOfDay.h). With a `timeOfDay` section it owns the
+    // directional light -- every Tick it hands it to the sun or the moon -- and the sky gets its own,
+    // always-the-sun light (SceneFrameData::skyLight). Set at level load; the light is placed at once.
+    void SetTimeOfDay(const TimeOfDaySettings& settings, const DirectionalLight& sun)
+    {
+        timeOfDay_.Reset(settings, sun);
+        timeOfDay_.Tick(0.0f, dirLight_, skySun_);
+    }
+    // An edit of the section (T3: the editor applies the Time of Day object through this): the running
+    // clock keeps its place unless the edit moved the authored time (TimeOfDay::Apply).
+    void ApplyTimeOfDay(const TimeOfDaySettings& settings, const DirectionalLight& sun)
+    {
+        timeOfDay_.Apply(settings, sun);
+        timeOfDay_.Tick(0.0f, dirLight_, skySun_);
+    }
+    TimeOfDay& TimeOfDayRef() { return timeOfDay_; }
+    // THE SUN'S PROPERTIES as the runtime knobs (--set light.* / lightShafts.* / sun.*, the developer
+    // window) should edit them: the time of day's sun template when the level has one -- the scene light
+    // is rewritten from it every Tick, so an edit of dirLight_ would be undone a frame later -- else the
+    // light itself.
+    DirectionalLight& SunLightRef() { return timeOfDay_.Present() ? timeOfDay_.SunTemplateRef() : dirLight_; }
+    // Where the sun is (unit, world, TOWARD it), and putting it somewhere: with a time of day that is a
+    // time and a path solved to stand the sun there exactly (astro::SolveSimpleTime -- simple positions,
+    // the clock left as it was), without one the light's direction.
+    Math::float3 GetSunToward() const;
+    void SetSunToward(const Math::float3& toward);
+    const TimeOfDay& GetTimeOfDay() const { return timeOfDay_; }
     // P1: the level's photographic camera settings. Dormant by default (enabled = false), so this
     // is pure state until P2 schedules the metering passes that read it.
     const render::CameraExposureSettings& GetCameraExposure() const { return cameraExposure_; }
@@ -357,6 +385,8 @@ private:
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
 
     DirectionalLight dirLight_;
+    TimeOfDay timeOfDay_{};    // T2: owns dirLight_ when the level has a `timeOfDay` section
+    DirectionalLight skySun_;  // T2: the sky's sun while the time of day runs (frameData_.skyLight)
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao

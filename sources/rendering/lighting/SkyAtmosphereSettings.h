@@ -54,6 +54,20 @@ inline void SkyTransmittanceTowardSun(const SkyAtmosphereParameters& a, float su
         tMax = t1 > 0.0f ? (t0 > 0.0f ? (t0 < t1 ? t0 : t1) : t1) : 0.0f;
     }
 
+    // THE PLANET IS IN THE WAY below this origin's horizon (time-of-day plan T0): the ray to the sun
+    // meets the ground before the top of the atmosphere, nothing gets through. Without the test the
+    // march ran on INSIDE the planet, where heights go negative and densities explode -- an answer of
+    // ~0 by accident, not by construction.
+    {
+        const float cBottom = originHeight * originHeight - bottom * bottom;
+        const float discBottom = b * b - 4.0f * cBottom;
+        if (discBottom >= 0.0f && 0.5f * (-b - std::sqrt(discBottom)) > 0.0f)
+        {
+            outTransmittance[0] = outTransmittance[1] = outTransmittance[2] = 0.0f;
+            return;
+        }
+    }
+
     double opticalDepth[3] = {0.0, 0.0, 0.0};
     if (tMax > 0.0f)
     {

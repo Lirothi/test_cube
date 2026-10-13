@@ -17,7 +17,7 @@ namespace
 
     bool IsSingletonEnvironment(const EditorObject& object)
     {
-        return object.type == "directionalLight" ||
+        return object.type == "timeOfDay" ||  // T3: one clock, one sun, one moon
             object.type == "skybox" ||
             object.type == "skyAtmosphere" || // B6.2: one atmosphere per level, as UE allow one actor
             object.type == "volumetricCloud" || // plan part C: one cloud layer per level, likewise

@@ -348,7 +348,8 @@ void DeveloperWindow::ApplySunElevation(Scene& scene) const
     const double elevation = (sunElevationMin_ +
         (sunElevationMax_ - sunElevationMin_) * sunElevationProgress_) * radians;
     // Double precision keeps cos(+/-90 degrees) nonnegative and preserves azimuth at the poles.
-    scene.DirectionalLightRef().SetDirection(-Math::float3(
+    // T3: through the scene, so a level with a Time of Day gets the time that puts the sun there.
+    scene.SetSunToward(Math::float3(
         static_cast<float>(std::cos(elevation) * std::sin(sunElevationAzimuth_)),
         static_cast<float>(std::sin(elevation)),
         static_cast<float>(std::cos(elevation) * std::cos(sunElevationAzimuth_))));
@@ -1264,11 +1265,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // are session state and have no business in a level file.
                 ImGui::TextDisabled("Sky: %s (level object: outliner > Sky Atmosphere)",
                                     sky.mode != 0u ? "procedural atmosphere" : "HDRI cubemap");
-                auto& sun = scene.DirectionalLightRef();
-                const auto d = -sun.GetDirection();
+                const auto d = scene.GetSunToward(); // T3: the time of day's sun, if the level has one
                 constexpr float degrees = 180.0f / 3.14159265358979323846f;
-                const float len = std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
-                float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f)) * degrees;
+                float elevation = std::asin(std::clamp(d.y, -1.0f, 1.0f)) * degrees;
                 float azimuth = std::atan2(d.x, d.z) * degrees;
                 bool sunChanged = ImGui::SliderFloat("Sun elevation", &elevation, -90.0f, 90.0f, "%.1f deg");
                 sunChanged |= ImGui::SliderFloat("Sun azimuth", &azimuth, -180.0f, 180.0f, "%.1f deg");
@@ -1277,7 +1276,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     sunElevationPlaying_ = false;
                     sunElevationProgress_ = 0.0;
                     const float e = elevation / degrees, a = azimuth / degrees;
-                    sun.SetDirection(-Math::float3(std::cos(e)*std::sin(a), std::sin(e), std::cos(e)*std::cos(a)));
+                    scene.SetSunToward(Math::float3(std::cos(e)*std::sin(a), std::sin(e), std::cos(e)*std::cos(a)));
                 }
                 ImGui::SeparatorText("Sun elevation animation");
                 ImGui::BeginDisabled(sunElevationPlaying_);
@@ -1300,7 +1299,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     else
                     {
                         if (sunElevationProgress_ >= 1.0) sunElevationProgress_ = 0.0;
-                        const auto toSun = -sun.GetDirection();
+                        const auto toSun = scene.GetSunToward();
                         sunElevationAzimuth_ = std::atan2(static_cast<double>(toSun.x), static_cast<double>(toSun.z));
                         sunElevationPlaying_ = true;
                         ApplySunElevation(scene);
@@ -1311,7 +1310,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     sunElevationPlaying_ = false;
                     sunElevationProgress_ = 0.0;
-                    const auto toSun = -sun.GetDirection();
+                    const auto toSun = scene.GetSunToward();
                     sunElevationAzimuth_ = std::atan2(static_cast<double>(toSun.x), static_cast<double>(toSun.z));
                     ApplySunElevation(scene);
                 }

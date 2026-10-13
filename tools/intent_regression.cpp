@@ -50,6 +50,8 @@
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/EditorMcpServer.h"
 #include "editor/intent/LlmIntentSource.h"
+#include "editor/serialization/LevelDocumentSerializer.h"
+#include "app/scene/TimeOfDaySettingsJson.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
 #include "rendering/renderables/GBufferRenderable.h"
@@ -725,8 +727,8 @@ void TestVocabularyOffersNothingUnreachable(const EditorSceneDocument& document,
     EditorSceneDocument withEnvironment = document;
     EditorObject sun;
     sun.id = EditorObjectId{ 9001 };
-    sun.name = "Sun";
-    sun.type = "directionalLight";
+    sun.name = "Time of Day";
+    sun.type = "timeOfDay";
     sun.properties = nlohmann::json::object();
     withEnvironment.Environment().push_back(sun);
 
@@ -2205,10 +2207,11 @@ EditorSceneDocument MakeEnvironmentDocument()
 
     EditorObject sun;
     sun.id.value = 902;
-    sun.type = "directionalLight";
-    sun.name = "Sun";
-    sun.properties = Json{ { "direction", Json::array({ 0.3, -0.9, 0.2 }) },
-                           { "sunIlluminanceLux", 100000.0 } };
+    sun.type = "timeOfDay";
+    sun.name = "Time of Day";
+    sun.properties = Json{ { "time", 15.0 },
+                           { "sun", Json{ { "color", Json::array({ 1.0, 0.9, 0.85 }) },
+                                          { "sunIlluminanceLux", 120000.0 } } } };
     document.Environment().push_back(sun);
 
     // A nested section, like the ocean's render block, to prove the walk goes in.
@@ -2223,6 +2226,68 @@ EditorSceneDocument MakeEnvironmentDocument()
     return document;
 }
 
+// Time-of-day plan T3: a level written with the old `directionalLight` opens as a Time of Day whose sun
+// stands EXACTLY where the old light pointed, every light property carried across, and it saves with
+// `timeOfDay` only -- a stale `directionalLight` beside it would be a second sun with no rule about
+// which wins.
+void TestOldSunBecomesTheTimeOfDay()
+{
+    const Json level = {
+        { "directionalLight", {
+            { "direction", Json::array({ -0.5066, -0.4695, -0.7232 }) },
+            { "color", Json::array({ 1.0, 0.9, 0.85 }) },
+            { "sunIntensity", 3.0 },            // P4's key: carried as lux, it is an assignment
+            { "lightSourceAngle", 2.0 },
+            { "skyFillIntensity", 2.0 },
+            { "ambientColor", Json::array({ 1.0, 0.0, 1.0 }) } } }, // retired by F8, read by nothing
+        { "objects", Json::array() } };
+    EditorSceneDocument document;
+    document.ResetFromLevelJson("regression_old_sun.json", level);
+    document.RebuildEnvironmentEntities(); // as JsonLevel does once the objects are in
+    const EditorObject* timeOfDay = nullptr;
+    int oldSuns = 0;
+    for (const EditorObject& entity : document.Environment())
+    {
+        if (entity.type == "timeOfDay") { timeOfDay = &entity; }
+        if (entity.type == "directionalLight") { ++oldSuns; }
+    }
+    Check(timeOfDay != nullptr && oldSuns == 0, "an old level's sun opens as the Time of Day, and only as that");
+    const Json& sun = timeOfDay->properties["sun"];
+    Check(sun.value("sunIlluminanceLux", 0.0) == 3.0, "the legacy intensity arrives as lux, unchanged");
+    Check(sun["color"] == level["directionalLight"]["color"] && sun.value("lightSourceAngle", 0.0) == 2.0 &&
+          sun.value("skyFillIntensity", 0.0) == 2.0, "the light's properties move across as they were");
+    Check(!sun.contains("direction") && !sun.contains("sunIntensity") && !sun.contains("ambientColor"),
+          "the direction is the clock's now, and the dead keys are left behind");
+
+    TimeOfDaySettings settings{};
+    DirectionalLight template_ = TimeOfDaySettingsJson::DefaultSun();
+    TimeOfDaySettingsJson::ApplyOverrides(timeOfDay->properties, settings, template_);
+    TimeOfDay clock;
+    DirectionalLight sceneLight;
+    DirectionalLight skySun;
+    clock.Reset(settings, template_);
+    clock.Tick(0.0f, sceneLight, skySun);
+    const Math::float3 authored = Math::float3(0.5066f, 0.4695f, 0.7232f).Normalized();
+    // The angle through the cross product: a float cosine of a thousandth of a degree is exactly 1.
+    const auto degreesOff = [&authored](const Math::float3& v) {
+        const Math::float3 c = Math::Cross(v.Normalized(), authored);
+        return std::atan2(std::sqrt(c.Dot(c)), v.Normalized().Dot(authored)) * 180.0f / 3.14159265f;
+    };
+    Check(degreesOff(clock.SunToward()) < 0.001f && degreesOff(-sceneLight.GetDirection()) < 0.001f,
+          "the sun stands where it was authored (to a thousandth of a degree), and lights from there");
+    Check(!settings.animate, "and the converted clock stands still");
+
+    const std::filesystem::path path = std::filesystem::temp_directory_path() / "intent_regression_old_sun.json";
+    Check(LevelDocumentSerializer::SaveToFile(document, path.string()), "the converted level saves");
+    std::ifstream in(path);
+    const Json saved = Json::parse(in, nullptr, false);
+    in.close();
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    Check(saved.is_object() && saved.contains("timeOfDay") && !saved.contains("directionalLight"),
+          "the saved level carries timeOfDay and no directionalLight");
+}
+
 void TestEnvironmentSettingsAreEnumeratedFromTheLevel()
 {
     const EditorSceneDocument document = MakeEnvironmentDocument();
@@ -2234,8 +2299,8 @@ void TestEnvironmentSettingsAreEnumeratedFromTheLevel()
     Check(Near(strength->current.get<float>(), 2.0f), "with its CURRENT value");
 
     Check(envsettings::Find(settings, "gtao.enabled") != nullptr, "booleans are enumerated");
-    const envsettings::Setting* direction = envsettings::Find(settings, "directionalLight.direction");
-    Check(direction && direction->kind == envsettings::ValueKind::Vec3,
+    const envsettings::Setting* color = envsettings::Find(settings, "timeOfDay.sun.color");
+    Check(color && color->kind == envsettings::ValueKind::Vec3,
         "a three-number array is a vector, not three settings");
 
     // Nesting is walked, but the arrays that are not vectors are left alone: there is no
@@ -2292,7 +2357,7 @@ void TestEnvironmentPreviewShowsBeforeAndAfter(const EditorActionContext& action
 
     EditorIntent scaledVector = MakeActionIntent("setEnvironment", Json{ { "scale", 2.0 } });
     scaledVector.target.kind = EditorTargetKind::Environment;
-    scaledVector.target.setting = "directionalLight.direction";
+    scaledVector.target.setting = "timeOfDay.sun.color";
     Check(!BuildIntentPreview(actionCtx, scaledVector).executable,
         "'scale' on a vector is refused rather than guessed at");
 
@@ -2898,14 +2963,15 @@ void TestShowingWhatIsShownUndoesToShown(const EditorActionContext& envActionCtx
     stack.Undo(ctx);
     Check(enabled(1), "a second undo still returns to shown");
 
-    // The Outliner's eye runs setEnabled over the whole selection: here a shown palm, the sun
-    // (lit) and a hidden palm. Only the hidden palm has anything to change. Before, the shown
-    // palm got a no-op command, the sun's no-op environment edit refused to run, the fold rolled
-    // back -- and the rollback's inverted Undo HID the palm that had been shown all along.
+    // The Outliner's eye runs setEnabled over the whole selection: here a shown palm, the ocean
+    // (shown) and a hidden palm. Only the hidden palm has anything to change. Before, the shown
+    // palm got a no-op command, the environment entity's no-op edit refused to run, the fold rolled
+    // back -- and the rollback's inverted Undo HID the palm that had been shown all along. (This was
+    // the sun until the Time of Day replaced the Directional Light: the clock has no on/off.)
     stack.Clear();
     ctx.document.Find({ 1 })->enabled = true;
     ctx.document.Find({ 2 })->enabled = false;
-    const std::vector<EditorObjectId> mixed{ EditorObjectId{ 1 }, EditorObjectId{ 902 }, EditorObjectId{ 2 } };
+    const std::vector<EditorObjectId> mixed{ EditorObjectId{ 1 }, EditorObjectId{ 903 }, EditorObjectId{ 2 } };
     Check(RunEditorAction(envActionCtx, stack, MakeActionIntent("setEnabled", Json{ { "enabled", true } }),
         mixed, status), "showing a mixed selection runs: " + status);
     Check(enabled(1) && enabled(2), "both palms are shown");
@@ -3102,6 +3168,7 @@ int main(int argc, char** argv)
         std::puts("Intent regression: questions OK");
 
         TestEnvironmentSettingsAreEnumeratedFromTheLevel();
+        TestOldSunBecomesTheTimeOfDay();
         {
             EditorSceneDocument envDocument = MakeEnvironmentDocument();
             EditorSelection envSelection;

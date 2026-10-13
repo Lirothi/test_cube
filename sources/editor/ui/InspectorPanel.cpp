@@ -30,7 +30,6 @@
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
-#include "editor/ui/EditorLightDirection.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "ocean/OceanRenderConfigJson.h"
@@ -112,7 +111,6 @@ namespace
         const EditorObject* environment = FindEnvironmentObject(document, id);
         if (!environment || (environment->type != "pointLight" &&
             environment->type != "spotLight" &&
-            environment->type != "directionalLight" &&
             environment->type != "ocean"))
         {
             return false;
@@ -455,7 +453,7 @@ namespace
         const std::string historyLabel =
             env.type == "pointLight" ? "Edit Point Light" :
             env.type == "spotLight" ? "Edit Spot Light" :
-            env.type == "directionalLight" ? "Edit Directional Light" :
+            env.type == "timeOfDay" ? "Edit Time of Day" :
             env.type == "camera" ? "Edit Camera" :
             env.type == "skyAtmosphere" ? "Edit Sky Atmosphere" :
             env.type == "volumetricCloud" ? "Edit Volumetric Cloud" :
@@ -519,8 +517,7 @@ namespace
         };
 
         const bool supportsEnable =
-            env.type == "pointLight" || env.type == "spotLight" ||
-            env.type == "directionalLight" || env.type == "ocean";
+            env.type == "pointLight" || env.type == "spotLight" || env.type == "ocean";
         if (showEnabled && supportsEnable)
         {
             bool enabled = tgt().value("enabled", true);
@@ -1859,60 +1856,96 @@ namespace
             dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
             dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f, "%.6f");
         }
-        else if (env.type == "directionalLight")
+        else if (env.type == "timeOfDay")
         {
-            Math::float3 rayDirection = EditorLightDirection::NormalizedRay(
-                JsonFloat3(tgt(), "direction", Math::float3(-1.0f, -1.0f, -1.0f)));
-            float sourceAzimuth = 0.0f;
-            float sourceElevation = 0.0f;
-            EditorLightDirection::SourceAngles(
-                rayDirection, sourceAzimuth, sourceElevation);
-
+            // Time-of-day plan T3: the level's light. The clock and the paths are the object's own
+            // properties; the sun's light is the `sun` sub-object (the keys of the old Directional
+            // Light, which a converted level carries over unchanged), the moon's the `moon` one.
             {
-                const bool changed = ImGui::DragFloat("Source azimuth (Y)",
-                    &sourceAzimuth, 0.5f, -180.0f, 180.0f, "%.1f deg",
-                    ImGuiSliderFlags_AlwaysClamp);
+                const TimeOfDay& live = ctx.scene.GetTimeOfDay();
+                const float now = live.Settings().timeHours;
+                const int minutes = static_cast<int>(now * 60.0f) % (24 * 60);
+                const char* lit = live.LitBy() == TimeOfDay::Body::Sun ? "the sun"
+                                : live.LitBy() == TimeOfDay::Body::Moon ? "the moon" : "nobody (both down)";
+                ImGui::TextDisabled("Now %02d:%02d - sun %.1f deg, moon %.1f deg (phase angle %.0f) - lit by %s",
+                                    minutes / 60, minutes % 60, live.SunElevationDeg(), live.MoonElevationDeg(),
+                                    live.MoonPhaseAngleDeg(), lit);
+            }
+
+            ImGui::SeparatorText("Clock");
+            dragF("Time (h)", "time", 12.0f, 0.01f, 0.0f, 24.0f, "%.2f");
+            {
+                const float t = JsonFloat(tgt(), "time", 12.0f);
+                const int m = static_cast<int>(t * 60.0f + 0.5f) % (24 * 60);
+                ImGui::SameLine();
+                ImGui::TextDisabled("%02d:%02d", m / 60, m % 60);
+            }
+            InspectorHelp("Local time, 0-24. The sun is placed on its path for this hour, the moon on "
+                          "its own; whichever is up lights the scene (the sun while any of its disc is "
+                          "above the horizon). --time=HH:MM on the command line, --set=tod.time:<h>.");
+            checkB("Animate", "animate", false);
+            InspectorHelp("Run the clock. Off, the level is one instant -- what is saved is what you see. "
+                          "On, edits that do not touch the time keep the running clock where it is.");
+            const bool real = tgt().value("realPositions", false);
+            if (!real)
+            {
+                dragF("Day Length (min)", "dayLengthMin", 30.0f, 0.1f, 0.01f, 10000.0f, "%.1f");
+                dragF("Night Length (min)", "nightLengthMin", 15.0f, 0.1f, 0.01f, 10000.0f, "%.1f");
+                InspectorHelp("Real minutes from dawn to dusk and from dusk to dawn while animating "
+                              "(Ultra Dynamic Sky's split: 30 and 15).");
+            }
+            else
+            {
+                dragF("Time Scale", "timeScale", 60.0f, 1.0f, 0.0f, 1.0e6f, "%.0f",
+                      ImGuiSliderFlags_Logarithmic);
+                InspectorHelp("Game seconds per real second while animating: 1 = real time, 60 = an hour "
+                              "a minute, 1440 = a day a minute.");
+            }
+
+            ImGui::SeparatorText("Where the sun and the moon are");
+            checkB("Real Positions", "realPositions", false);
+            InspectorHelp("OFF (Simple): the sun rides a tilted circle from Dawn to Dusk, the moon its own "
+                          "circle placed by the phase -- art-directable, and how an old level's authored "
+                          "sun is reproduced exactly. ON (Real): date, latitude and longitude, the sun from "
+                          "NOAA's calculator (as UE's SunPosition), the moon from Schlyter's elements with "
+                          "the parallax and its real phase.");
+            if (!real)
+            {
+                dragF("Dawn (h)", "dawn", 6.0f, 0.01f, 0.0f, 24.0f, "%.2f");
+                dragF("Dusk (h)", "dusk", 18.0f, 0.01f, 0.0f, 24.0f, "%.2f");
+                dragF("Path Yaw (deg)", "pathYawDeg", 180.0f, 0.5f, -360.0f, 360.0f, "%.1f");
+                InspectorHelp("The azimuth the path leans toward: the noon sun stands there (180 = south). "
+                              "It rises 90 degrees to the left of it and sets 90 degrees to the right.");
+                dragF("Path Tilt (deg)", "pathTiltDeg", 30.0f, 0.1f, -89.0f, 89.0f, "%.1f");
+                InspectorHelp("The path's tilt from the zenith: the noon sun stands 90 - tilt high.");
+                dragF("Height Offset", "heightOffset", 0.0f, 0.005f, -1.0f, 1.0f, "%.3f");
+                dragF("Extend Twilight", "extendTwilight", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("Flattens the path near the horizon, so dawn and dusk last longer.");
+            }
+            else
+            {
+                int date[3] = { 2026, 6, 21 };
+                if (const auto it = tgt().find("date"); it != tgt().end() && it->is_array() && it->size() >= 3)
+                {
+                    for (int i = 0; i < 3; ++i) { if ((*it)[i].is_number_integer()) { date[i] = (*it)[i].get<int>(); } }
+                }
+                const bool changed = ImGui::InputInt3("Date (Y M D)", date);
                 beginContinuousEdit(changed);
                 if (changed)
                 {
-                    rayDirection = EditorLightDirection::RayFromSourceAngles(
-                        sourceAzimuth, sourceElevation);
-                    tgt()["direction"] = {
-                        rayDirection.x, rayDirection.y, rayDirection.z };
+                    tgt()["date"] = { std::clamp(date[0], 1, 9999), std::clamp(date[1], 1, 12), std::clamp(date[2], 1, 31) };
                 }
                 trackContinuousEdit(changed);
+                dragF("Latitude (deg)", "latitude", -16.5f, 0.05f, -90.0f, 90.0f, "%.2f");
+                dragF("Longitude (deg, +E)", "longitude", -151.75f, 0.05f, -180.0f, 180.0f, "%.2f");
+                dragF("UTC Offset (h)", "utcOffset", -10.0f, 0.25f, -14.0f, 14.0f, "%.2f");
             }
-            {
-                const bool changed = ImGui::DragFloat("Source elevation",
-                    &sourceElevation, 0.5f, -89.0f, 89.0f, "%.1f deg",
-                    ImGuiSliderFlags_AlwaysClamp);
-                beginContinuousEdit(changed);
-                if (changed)
-                {
-                    rayDirection = EditorLightDirection::RayFromSourceAngles(
-                        sourceAzimuth, sourceElevation);
-                    tgt()["direction"] = {
-                        rayDirection.x, rayDirection.y, rayDirection.z };
-                }
-                trackContinuousEdit(changed);
-            }
+            dragF("North Yaw (deg)", "northYawDeg", 0.0f, 0.5f, -360.0f, 360.0f, "%.1f");
+            InspectorHelp("Which world direction is north, turned clockwise seen from above; 0 = +Z.");
 
-            rayDirection = EditorLightDirection::NormalizedRay(rayDirection);
-            ImGui::PushStyleColor(
-                ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-            ImGui::InputFloat3("Normalized ray", &rayDirection.x, "%.3f",
-                ImGuiInputTextFlags_ReadOnly);
-            ImGui::PopStyleColor();
-            if (ImGui::IsItemHovered())
-            {
-                ImGui::SetTooltip("World-space direction in which the light rays travel.");
-            }
-
+            groupKey = "sun";
+            ImGui::SeparatorText("Sun");
             colorEdit();
-            // P4. The default handed to the drag is the level's LEGACY `exposure`, which is exactly
-            // the value the migration folded in -- so the row opens showing what is on screen, and
-            // the first drag writes `sunIntensity` without the image jumping. Once that key exists
-            // the legacy field is ignored (JsonLevel and EnvironmentRuntime both branch on it).
             checkB("Use Colour Temperature", "useSunTemperature", false);
             if (tgt().value("useSunTemperature", false))
             {
@@ -1924,52 +1957,26 @@ namespace
                 "1700 candle, 2700 tungsten, 4000 cool white, 5500 midday sun, 6500 D65 (neutral "
                 "here), 7500+ overcast/shade blue.\n\n"
                 "The locus is Unreal's, minus its Stefan-Boltzmann brightness term, and the result "
-                "is renormalised to unit luminance -- so this changes HUE ONLY. Without that, 3000K "
-                "would arrive about a stop darker than 6500K and you would have to chase every "
-                "temperature change with an intensity change.\n\n"
+                "is renormalised to unit luminance -- so this changes HUE ONLY.\n\n"
                 "Valid 1000-15000K; outside that the fit bends back on itself, so it is clamped.");
-
-            // P16.2. The default handed to the drag walks the same chain the loader does --
-            // `sunIntensity` if this level went through P4, otherwise the original `exposure` --
-            // so the row opens showing what is on screen and the first drag writes the new key
-            // without the image jumping.
-            const float legacySun = JsonFloat(tgt(), "sunIntensity",
-                                              JsonFloat(tgt(), "exposure", 1.0f));
-            dragF("Sun Illuminance (lux)", "sunIlluminanceLux", legacySun, 1.0f, 0.0f, 200000.0f,
+            dragF("Sun Illuminance (lux)", "sunIlluminanceLux", 120000.0f, 1.0f, 0.0f, 200000.0f,
                   "%.0f", ImGuiSliderFlags_Logarithmic);
             InspectorHelp(
-                "How bright the sun is, in LUX, measured perpendicular to the beam. This is NOT a "
-                "camera control -- the camera lives on the Camera Exposure object and meters the "
-                "frame by itself.\n\n"
-                "100000 sunny midday (the default), 125000 full bright sun, 20000 heavy overcast, "
-                "1000 a very dark day, 400 sunrise/sunset, 0.25 full moon.\n\n"
-                "THE NUMBER DID NOT CHANGE WHEN THIS FIELD GOT ITS UNIT. The engine's linear light "
-                "unit was already photometric -- the shading carries the 1/PI and the metering "
-                "solves an EV100, which is defined against cd/m2 -- so a level that authored "
-                "'intensity 2' had been authoring two lux all along. If this row opens on a number "
-                "like that, the level is not mis-migrated: it is telling you its sun is authored at "
-                "twilight strength, which is exactly the defect P16 is working through.\n\n"
-                "Physical values need the photographic camera ON. With it off the exposure "
-                "multiplier is exactly 1.0 and a five-figure sun writes a white screen.");
+                "How bright the sun is OUTSIDE the atmosphere, in LUX, perpendicular to the beam: the "
+                "atmosphere and the cloud deck take their share on the way down, so the same number "
+                "gives a full midday and a red, dim sunset. ~127000 is the real solar constant; "
+                "100000-120000 is the usual range.\n\n"
+                "Physical values need the photographic camera ON (Post Process > Camera Exposure).");
             dragF("Ambient", "ambient", 0.05f, 0.005f, 0.0f, 10.0f);
-            InspectorHelp("Sky fill intensity -- the light everything gets from the sky rather than "
-                          "from the sun. Independent of Sun Intensity.");
-
+            InspectorHelp("The flat fallback fill as a fraction of the light's colour -- only on levels whose "
+                          "sky has no irradiance derivatives. Shared by the moon.");
             dragF("Sky Fill Intensity", "skyFillIntensity", 1.0f, 0.01f, 0.0f, 4.0f, "%.3f");
             InspectorHelp(
-                "How much of the SKY'S OWN measured irradiance reaches diffuse surfaces. Only "
-                "active when this level's sky was imported with its IBL derivatives -- check "
-                "the Session log window (the [ibl] line) if you are not sure which path a level took.\n\n"
-                "1 = the irradiance cube at face value, which is the physical answer. It is a "
-                "separate control from Ambient above on purpose: Ambient means 'this fraction of "
-                "the SUN colour bounces around', a number authored against a different equation "
-                "entirely, and reusing it here would bury the fill about twenty times too deep.\n\n"
-                "Ambient still drives the flat fallback fill on levels whose sky has no "
-                "derivatives.");
-
+                "How much of the SKY'S OWN measured irradiance reaches diffuse surfaces. 1 = the "
+                "irradiance cube at face value, the physical answer. Shared by the moon, so the fill "
+                "does not jump when the light changes hands.");
             {
-                const Math::float3 g = JsonFloat3(tgt(), "groundAlbedo",
-                                                  Math::float3(0.25f, 0.25f, 0.25f));
+                const Math::float3 g = JsonFloat3(tgt(), "groundAlbedo", Math::float3(0.25f, 0.25f, 0.25f));
                 float gv[3] = { g.x, g.y, g.z };
                 const bool changed = ImGui::ColorEdit3("Ground Bounce Albedo", gv);
                 beginContinuousEdit(changed);
@@ -1977,42 +1984,23 @@ namespace
                 trackContinuousEdit(changed);
             }
             InspectorHelp(
-                "P16.12. The DIFFUSE REFLECTANCE OF THE GROUND -- the light that comes back UP off "
-                "the floor and fills everything facing downward. Sky Fill above answers what "
-                "arrives from the sky; nothing answered this, because the irradiance cube's lower "
-                "hemisphere carries the HDRI's own ground, not the ground this scene is standing "
-                "on. Measured on wind_test: about 1.2 stops missing on shaded vertical surfaces "
-                "over sunlit sand, which is what makes a bright day look like it has dead shadows."
-                "\n\n"
-                "It is a REFLECTANCE, not a light: it only ever scales illuminance the scene "
-                "already has, so it follows the sun automatically and cannot brighten a night. "
-                "Black switches the whole term off. Physical values: dry sand 0.4, dead grass 0.3, "
-                "concrete 0.25, green grass 0.2, asphalt 0.1, water 0.06. TINT IT toward the ground "
-                "you actually have -- warm sand throwing warm light into the shadows is half of "
-                "what makes the effect read.\n\n"
-                "Applies to indirect DIFFUSE only, and it is occluded by the same AO the sky fill "
-                "is, so it does not light the inside of a closed room. FREE in GPU cost.");
+                "The DIFFUSE REFLECTANCE OF THE GROUND -- the light that comes back up off the floor "
+                "and fills everything facing downward. A reflectance, not a light: it follows the sun "
+                "(and the moon) and cannot brighten a night. Dry sand 0.4, grass 0.2, water 0.06.");
 
-            // Plan A7 light shafts: UE's per-light bloom properties.
-            ImGui::SeparatorText("Light Shafts");
+            ImGui::SeparatorText("Sun: Light Shafts");
             checkB("Light Shafts", "lightShaftsEnabled", true);
             InspectorHelp(
-                "Unreal's Light Shaft Bloom on this sun (plan A7): the bright sky and far pixels are radially "
-                "blurred towards the sun's screen position and added into the scene after the transparents -- the "
-                "god rays through the crowns on a clear day, which a volumetric fog cannot show at a clear-weather "
-                "density. Screen-space: runs only while the sun is in front of the camera, and needs a bright sky or "
-                "sun disc on screen to seed from. About 0.1 ms at 1440p. --set=lightShafts.enabled:0|1");
+                "Unreal's Light Shaft Bloom on the sun (plan A7): the bright sky near the sun is radially "
+                "blurred towards its screen position and added into the scene -- the god rays through the "
+                "crowns. Screen-space: runs only while the sun is in front of the camera. About 0.1 ms.");
             dragF("Bloom Scale", "lightShaftBloomScale", 0.2f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("UE BloomScale (their 0.2): the strength of the shafts. 0 switches them off.");
             dragF("Bloom Threshold", "lightShaftBloomThreshold", 2.0f, 0.05f, 0.0f, 50.0f, "%.2f");
             InspectorHelp("UE BloomThreshold: only pixels brighter than this seed the shafts, measured in the "
-                          "pre-exposed scene (after the camera's exposure), exactly as Unreal measure it. 1 = display "
-                          "white. UE default 0 -- then EVERY sky pixel seeds the blur and with the sun disc on screen the "
-                          "whole sky lifts about 20 % (a wash). Default 2 here: only the disc and its glow seed, so the "
-                          "rays through the crowns stay and the sky does not.");
+                          "pre-exposed scene. 1 = display white. Default 2: only the disc and its glow seed.");
             dragF("Bloom Max Brightness", "lightShaftBloomMaxBrightness", 100.0f, 1.0f, 0.0f, 1000.0f, "%.0f");
-            InspectorHelp("UE BloomMaxBrightness (their 100): caps one pixel's contribution so a blown-out sun disc "
-                          "does not saturate the shafts into a white fan.");
+            InspectorHelp("UE BloomMaxBrightness (their 100): caps one pixel's contribution.");
             {
                 const Math::float3 tint = JsonFloat3(tgt(), "lightShaftBloomTint", Math::float3(1.0f, 1.0f, 1.0f));
                 float tv[3] = { tint.x, tint.y, tint.z };
@@ -2023,33 +2011,54 @@ namespace
             }
             InspectorHelp("UE BloomTint: multiplies the shaft colour. White = the sky's own colour.");
             dragF("Occlusion Depth Range (m)", "lightShaftOcclusionDepthRange", 1000.0f, 10.0f, 1.0f, 20000.0f, "%.0f");
-            InspectorHelp("UE LightShaftOcclusionDepthRange (their 1000 m): only pixels in the FAR half of this range "
-                          "seed the shafts -- the sky and distant ground -- so nearby lit surfaces do not streak. Anything "
-                          "nearer stands in front of the rays and cuts them, which is what makes the crowns read.");
+            InspectorHelp("UE LightShaftOcclusionDepthRange (their 1000 m): only pixels in the FAR half of this "
+                          "range seed the shafts, so nearby lit surfaces do not streak.");
             dragF("Smoothing (s)", "lightShaftSmoothing", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
-            InspectorHelp("How slowly the shafts follow what the sun shines through: the time constant of a "
-                          "temporal blend of their mask (reprojected, so the camera can move). 0 = every frame "
-                          "as it is -- the rays then tremble with the sub-pixel camera jitter and with every "
-                          "leaf. Higher = more inertia: a swaying crown eases the rays over instead of "
-                          "flickering them. --set=lightShafts.smoothing:<s>");
-
-            ImGui::SeparatorText("Sun Disc");
+            InspectorHelp("The time constant of a temporal blend of the shafts' mask: 0 = every frame as it is "
+                          "(the rays tremble with every leaf); higher = more inertia.");
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.5357f, 0.005f, 0.0f, 10.0f, "%.4f");
-            InspectorHelp("UE LightSourceAngle: the sun's angular DIAMETER in degrees, 0.5357 for the real sun. "
-                          "It draws the disc in the procedural sky and floors the width of the analytic specular "
-                          "lobe, so a smooth surface shows a glint the size of the disc rather than a sub-pixel "
-                          "spike. Until the part-B review this was a project-wide graphics setting at 0.01 rad of "
-                          "RADIUS, a sun 2.1x wider than the real one; the level's sun owns it now, as in UE.");
+            InspectorHelp("UE LightSourceAngle: the sun's angular DIAMETER, 0.5357 for the real sun. It draws "
+                          "the disc and floors the width of the specular lobe; the sun sets when the whole "
+                          "disc is under the horizon.");
 
-            if (tgt().contains("sunIlluminanceLux") &&
-                (tgt().contains("sunIntensity") || tgt().contains("exposure")))
+            groupKey = "moon";
+            ImGui::SeparatorText("Moon");
+            checkB("Moon", "enabled", true);
+            InspectorHelp("Off, nobody lights the night: the scene is lit by the sky alone.");
+            dragF("Full Moon Illuminance (lux)", "illuminanceLux", 0.32f, 0.001f, 0.0f, 1000.0f, "%.3f",
+                  ImGuiSliderFlags_Logarithmic);
+            InspectorHelp("A FULL moon outside the atmosphere at its mean distance: the sun's 127 klx times the "
+                          "full moon's 14 magnitudes fainter = 0.32 lux (~0.27 on the ground with the moon "
+                          "overhead). The phase law scales it down (a quarter moon is ~0.1 of full); Real "
+                          "positions add the distance.");
+            dragF("Temperature (K)", "temperatureK", 4300.0f, 25.0f, 1000.0f, 20000.0f, "%.0f");
+            InspectorHelp("Moonlight is sunlight reddened by the regolith, ~4300 K. The blue of a moonlit "
+                          "night is the eye's, not the light's.");
+            dragF("Light Source Angle (deg)", "lightSourceAngle", 0.52f, 0.005f, 0.0f, 20.0f, "%.3f");
+            if (!real)
             {
-                ImGui::TextDisabled("legacy 'sunIntensity'/'exposure' present but ignored");
-                InspectorHelp("This object carries the new Sun Illuminance, so the older "
-                              "`sunIntensity` and whole-scene `exposure` fields no longer do "
-                              "anything. Delete them from the level JSON whenever you next "
-                              "hand-edit the file.");
+                dragF("Phase", "phase", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
+                InspectorHelp("0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter. Full stands opposite "
+                              "the sun: it rises at dusk.");
+                checkB("Phase Advances", "phaseAuto", true);
+                InspectorHelp("While the clock runs, the phase advances one cycle per 29.53 days.");
+                dragF("Moon Path Yaw (deg)", "pathYawDeg", 180.0f, 0.5f, -360.0f, 360.0f, "%.1f");
+                dragF("Moon Path Tilt (deg)", "pathTiltDeg", 35.0f, 0.1f, -89.0f, 89.0f, "%.1f");
+                dragF("Orbit Offset (deg)", "orbitOffsetDeg", 0.0f, 0.5f, -360.0f, 360.0f, "%.1f");
+                InspectorHelp("Turns the moon along its circle away from where the phase puts it.");
             }
+
+            groupKey.clear();
+            ImGui::SeparatorText("Night");
+            dragF("Night Brightness", "nightBrightness", 1.0f, 0.01f, 0.0f, 1000.0f, "%.2f",
+                  ImGuiSliderFlags_Logarithmic);
+            InspectorHelp("A manual multiplier on the night's light (the moon's now, the night sky's later). "
+                          "1 = physics.");
+            ImGui::SeparatorText("Cost");
+            dragF("Light Update Threshold (deg)", "lightUpdateThresholdDeg", 0.05f, 0.005f, 0.0f, 5.0f, "%.3f");
+            InspectorHelp("While the clock runs, the scene light (and with it every shadow) turns only once "
+                          "the body has moved this far; the sky follows exactly. 0.05 degrees is 12 s of a "
+                          "real sun.");
         }
         else if (env.type == "camera")
         {

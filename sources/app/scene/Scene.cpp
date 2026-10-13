@@ -1,5 +1,6 @@
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
+#include "rendering/lighting/Astronomy.h" // T3: Scene::SetSunToward solves the time of day
 
 #include <memory>
 #include <algorithm>
@@ -1155,6 +1156,7 @@ void Scene::UpdateClipmap(const Camera& camera)
 
 void Scene::SetDirectionalLight(DirectionalLight light)
 {
+    light.ContinueTransformVersion(dirLight_); // a fresh object must not reset the shadow caches' key
     dirLight_ = light;
 }
 
@@ -1530,6 +1532,36 @@ OceanRenderable* Scene::FindOceanRenderable()
     return nullptr;
 }
 
+Math::float3 Scene::GetSunToward() const
+{
+    return timeOfDay_.Present() ? timeOfDay_.SunToward() : (-dirLight_.GetDirection()).Normalized();
+}
+
+void Scene::SetSunToward(const Math::float3& toward)
+{
+    if (!timeOfDay_.Present())
+    {
+        dirLight_.SetDirection(-toward.Normalized());
+        return;
+    }
+    // World -> the clock's local frame (x east, z north): undo the north yaw, then solve.
+    TimeOfDaySettings& t = timeOfDay_.SettingsRef();
+    const double world[3] = {toward.x, toward.y, toward.z};
+    double local[3];
+    astro::LocalToWorld(world, -t.northYawDeg, local);
+    astro::SimplePath path;
+    path.riseHours = t.dawnHours;
+    path.setHours = t.duskHours;
+    path.tiltDeg = t.pathTiltDeg;
+    t.timeHours = static_cast<float>(astro::SolveSimpleTime(local, path));
+    t.pathYawDeg = static_cast<float>(path.yawDeg);
+    t.pathTiltDeg = static_cast<float>(path.tiltDeg);
+    t.heightOffset = 0.0f;
+    t.extendTwilight = 0.0f;
+    t.realPositions = false;
+    timeOfDay_.Tick(0.0f, dirLight_, skySun_);
+}
+
 void Scene::Tick(float deltaTime) {
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
@@ -1625,6 +1657,11 @@ void Scene::Tick(float deltaTime) {
                 ocean ? "yes" : "none", oceanDir, oceanForce, len);
         }
     }
+
+    // Time-of-day plan T2: its own clock (the wind's runs at another rate), then the sun or the moon into
+    // dirLight_ -- after everything else this Tick wrote the light (the editor's apply runs before it), so
+    // a level with a `timeOfDay` section always lights with the entity's light.
+    timeOfDay_.Tick(deltaTime, dirLight_, skySun_);
 }
 
 void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
@@ -1921,6 +1958,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.skybox = skyBox_.get();
     frameData_.objects = &objects_;
     frameData_.dirLight = &dirLight_;
+    frameData_.skyLight = timeOfDay_.Present() ? &skySun_ : &dirLight_;
     frameData_.cascadeConfig = &cascadeConfig_;
     frameData_.shadowGpu = &shadowGpu_;
     frameData_.vsm = &vsm_;
@@ -1947,16 +1985,32 @@ void Scene::PrepareViews(Renderer* renderer)
     // LUTs must NOT get this: they integrate the extinction themselves, which is why the light
     // exposes GetOuterSpaceIlluminance() separately and MakeSkyView takes that one.
     {
+        const auto d = -dirLight_.GetDirection();
+        const float len = std::sqrt(std::max(1.e-12f, d.x * d.x + d.y * d.y + d.z * d.z));
+        const float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f));
+        // THE SUN SETS (time-of-day plan T0), in either sky mode: the share of its disc still above the
+        // sea-level horizon, linear across the disc's angular diameter. Every shipped level's sun stands
+        // 13-65 degrees up, so this is 1 for all of them; it matters once the sun moves -- before it, a
+        // cubemap level kept a full white sun at any depth below the horizon and the procedural one
+        // relied on the transmittance march's accident (now an explicit planet test).
+        //
+        // The atmosphere is crossed by the part of the disc that is still UP: once the centre is down,
+        // the ray to it meets the planet and its transmittance is 0, though the disc's top still shines
+        // until the whole disc is under (T2: that is where the time of day hands the light to the moon,
+        // so there is no stretch in which neither lights). So it is taken at the middle of the visible
+        // part -- between the horizon and the disc's top -- which is the centre itself once the disc is
+        // wholly up.
+        const float radius = std::max(dirLight_.GetSunHalfApexRadians(), 1.0e-4f);
+        const float above = std::clamp(0.5f + 0.5f * elevation / radius, 0.0f, 1.0f);
         Math::float3 transmittance{1.0f, 1.0f, 1.0f};
         if (skyAtmosphere_.mode != 0u)
         {
-            const auto d = -dirLight_.GetDirection();
-            const float len = std::sqrt(std::max(1.e-12f, d.x * d.x + d.y * d.y + d.z * d.z));
-            const float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f));
+            const float throughElevation = elevation >= radius ? elevation : std::max(elevation, 0.5f * (elevation + radius));
             float t[3] = {1.0f, 1.0f, 1.0f};
-            SkyTransmittanceTowardSun(skyAtmosphere_.parameters, elevation, t);
+            SkyTransmittanceTowardSun(skyAtmosphere_.parameters, throughElevation, t);
             transmittance = Math::float3(t[0], t[1], t[2]);
         }
+        transmittance = transmittance * above;
         dirLight_.SetAtmosphereTransmittance(transmittance);
         // The overcast deck takes the sun off the ground (the clouds still get it, GetAboveCloudsColor).
         // The clouds need the procedural sky: on a cubemap sky their pass does not run, so nor does this.
@@ -2391,10 +2445,11 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         const std::uint32_t sunVersion = dirLight_.GetTransformVersion();
         const std::uint64_t camRevision = camera_.GetHistoryRevision();
         const void* atlas = D.shadow;
-        // A frame whose sun is under a closed deck renders no partition at all (the shadow passes
-        // are off, FrameDecisions::sunShadowsOff) -- the "analyze did not run" case: the frame after
-        // it keeps nothing, however still the camera stayed while the tiles went unrendered.
-        const bool sunOff = dirLight_.GetCloudVisibility() <= 0.0f;
+        // A frame whose light does not reach the ground (a closed deck, a body under the horizon)
+        // renders no partition at all (the shadow passes are off, FrameDecisions::sunShadowsOff) --
+        // the "analyze did not run" case: the frame after it keeps nothing, however still the camera
+        // stayed while the tiles went unrendered.
+        const bool sunOff = !dirLight_.ReachesGround();
         const bool keep = !sunOff && cacheFrames > 1u && sdsmCacheFrame_ + 1u == frame &&
             sunVersion == sdsmCacheSunVersion_ && camRevision == sdsmCacheCamRevision_ &&
             D.shadowRes == sdsmCacheAtlasRes_ && atlas == sdsmCacheAtlas_ &&

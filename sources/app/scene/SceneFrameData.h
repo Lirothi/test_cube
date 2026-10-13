@@ -723,6 +723,10 @@ struct SceneFrameData
     const std::vector<std::uint8_t>* spotLightOccluded = nullptr;
     const std::vector<std::uint8_t>* pointLightOccluded = nullptr;
     const DirectionalLight* dirLight = nullptr;
+    // Time-of-day plan T2: the light the SKY is lit by -- its LUTs, the sky pixel and disc, the capture,
+    // the distant light, the aerial perspective. The same object as dirLight unless the level's time of
+    // day has handed dirLight to the moon; the sky keeps the sun, so the twilight outlives the hand-over.
+    const DirectionalLight* skyLight = nullptr;
     // S8: the CSM knobs the lighting pass needs (receiver bias / sharpen / over-blur). Same object
     // the developer window edits, so a slider move reaches the shader the very next frame.
     const CascadeShadowConfig* cascadeConfig = nullptr;

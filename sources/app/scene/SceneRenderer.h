@@ -691,6 +691,7 @@ private:
     // moved the pool + page table persist and the whole VSM update is skipped — DecideFrame reads
     // these three and publishes the answer as FrameDecisions::vsmSkipUpdate.
     mat4 vsmLastView_{};
+    std::uint32_t vsmLastLightVersion_ = 0; // the sun's transformVersion at vsmLastView_ (time-of-day plan T0)
     bool vsmHasRendered_ = false;
     std::uint32_t vsmStillFrames_ = 0;
     // FrameDecisions::sunShadowsOff last frame (the change is logged once), and whether the VSM update

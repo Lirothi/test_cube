@@ -10,7 +10,7 @@ struct EditorObject;
 // Live-patch the running scene from an environment entity's `properties`, so
 // inspector edits and viewport gizmo drags both take effect immediately:
 //   pointLight / spotLight  -> LightManager light SetDesc
-//   directionalLight        -> Scene::SetDirectionalLight
+//   timeOfDay               -> Scene::ApplyTimeOfDay (the sun and the moon; T3)
 //   camera                  -> Scene camera (fov / near / far)
 //   skybox                  -> rebuild Scene skybox texture
 //   ocean                   -> Simulation wind overrides

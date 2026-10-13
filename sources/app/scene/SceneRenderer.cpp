@@ -388,7 +388,12 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // the camera is still.
     if (render::VsmActive() && frame.mainView)
     {
-        const bool viewStill = vsmHasRendered_ &&
+        // THE LIGHT IS PART OF THE VIEW (time-of-day plan T0): the clipmap's light-space frame is built
+        // from the sun's direction, so a still camera under a moving sun is NOT still -- without this
+        // the update was skipped after kFrameCount + 1 frames and the shadows froze while the sun went
+        // on (any sun animation: the dev window, --scene-stress-sky, time of day).
+        const std::uint32_t lightVersion = frame.dirLight ? frame.dirLight->GetTransformVersion() : 0u;
+        const bool viewStill = vsmHasRendered_ && lightVersion == vsmLastLightVersion_ &&
             std::memcmp(&frame.mainView->view, &vsmLastView_, sizeof(mat4)) == 0;
         // W5: a wind-swayed caster animates in the VERTEX shader, so its transform never changes and
         // MoverCount() stays 0 — without this the pool freezes after a few still frames and the palm
@@ -409,6 +414,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         {
             vsmStillFrames_ = 0;
             vsmLastView_ = frame.mainView->view;
+            vsmLastLightVersion_ = lightVersion;
             vsmHasRendered_ = true;
         }
     }
@@ -418,9 +424,10 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         vsmStillFrames_ = 0;
     }
 
-    // THE SUN UNDER A CLOSED DECK (VolumetricCloudSettings.h CloudSunGroundVisibility): exactly 0 at
-    // coverage 1, when nothing in the scene receives the sun -- so its shadows are not rendered at all
-    // (UDS: "Disable Directional Light Shadows when Fully Shadowed by Clouds", as an optimisation).
+    // THE LIGHT DOES NOT REACH THE GROUND (DirectionalLight::ReachesGround): the sun under a closed deck
+    // (VolumetricCloudSettings.h CloudSunGroundVisibility is exactly 0 at coverage 1), or the time of
+    // day's body wholly below the horizon at night -- nothing in the scene receives it, so its shadows
+    // are not rendered at all (UDS: "Disable Directional Light Shadows when Fully Shadowed by Clouds").
     // Each sun-shadow builder returns empty on this flag; VSM goes through its own skip-when-still
     // path -- but only with no shadowed spot or point light, since their pages share the pool and
     // must keep updating. What is left in the atlas / pool is never read: the readers branch on
@@ -428,7 +435,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // dropped; the SDSM partition cache sees a frame it did not render and keeps nothing
     // (Scene::UpdateSdsmFrameParams); the cascade pyramids were not built last frame, so the
     // light-space cull tests nothing.
-    decisions_.sunShadowsOff = frame.dirLight != nullptr && frame.dirLight->GetCloudVisibility() <= 0.0f;
+    decisions_.sunShadowsOff = frame.dirLight != nullptr && !frame.dirLight->ReachesGround();
     const bool localShadows = frame.lightManager != nullptr &&
         (frame.lightManager->GetShadowedSpotCount() > 0 || frame.lightManager->GetShadowedPointCount() > 0);
     const bool vsmSleeps = decisions_.sunShadowsOff && !localShadows;
@@ -445,9 +452,11 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     vsmSlept_ = vsmSleeps;
     if (decisions_.sunShadowsOff != sunShadowsWereOff_)
     {
-        LOG_INFO(logging::LogCategory::RenderShadow, "sun shadows: {} (overcast deck, sun visibility {:.3f}) (frame {})",
+        const Math::float3 t = frame.dirLight ? frame.dirLight->GetAtmosphereTransmittance() : Math::float3(1.0f, 1.0f, 1.0f);
+        LOG_INFO(logging::LogCategory::RenderShadow,
+                 "sun shadows: {} (cloud visibility {:.3f}, transmittance {:.4f} {:.4f} {:.4f}) (frame {})",
                  decisions_.sunShadowsOff ? "off" : "on", frame.dirLight ? frame.dirLight->GetCloudVisibility() : 1.0f,
-                 renderer->GetTotalFrameNumber());
+                 t.x, t.y, t.z, renderer->GetTotalFrameNumber());
     }
     sunShadowsWereOff_ = decisions_.sunShadowsOff;
 
@@ -565,7 +574,8 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         decisions_.lightShafts = false;
         decisions_.lightShaftHistoryValid = false;
         decisions_.lightShaftBlend = 1.0f;
-        const DirectionalLight* sun = frame.dirLight;
+        // The SKY's sun (T2): the shafts are seeded by its disc and glow, whoever lights the ground.
+        const DirectionalLight* sun = frame.skyLight;
         const auto& D = renderer->GetDeferredForFrame();
         const auto& P = renderer->GetDeferredForPrevFrame();
         const bool ready = sun != nullptr && frame.camera != nullptr && g_fogDebugView == 0u &&

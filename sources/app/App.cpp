@@ -395,8 +395,8 @@ namespace
         // P4: the SCENE-side brightness knobs, so a sweep can measure them against the camera-side
         // ones. `light.exposure` is the field P4 exists to retire -- it multiplies sun AND ambient
         // in lighting_cs, which is a camera control wearing a light's name.
-        if (setting == "light.exposure") { scene.DirectionalLightRef().SetExposure(value); return true; }
-        if (setting == "light.ambient")  { scene.DirectionalLightRef().SetAmbient(value);  return true; }
+        if (setting == "light.exposure") { scene.SunLightRef().SetExposure(value); return true; }
+        if (setting == "light.ambient")  { scene.SunLightRef().SetAmbient(value);  return true; }
         // P6B: the AO pass and its knobs, so a sweep can measure it before it is wired into
         // lighting. `gtao.enabled` is the A/B switch the plan requires before it becomes default.
         if (setting == "gtao.enabled")     { scene.GtaoRef().enabled = value != 0.0f; return true; }
@@ -732,17 +732,17 @@ namespace
         }
         if (setting == "ssr.ueIntensity") { renderSettings.ssrUe.intensity = value; return true; }
         if (setting == "ssr.ueMaxRoughness") { renderSettings.ssrUe.maxRoughness = value; return true; }
+        // Time-of-day plan T3: with a Time of Day these put the sun there by solving its time and path
+        // (Scene::SetSunToward), so they keep meaning what they say on a converted level.
         if (setting == "sun.elevation" || setting == "sun.azimuth")
         {
-            auto& sun = scene.DirectionalLightRef();
-            const auto d = -sun.GetDirection();
-            const float len = std::sqrt(std::max(1.e-12f, d.x*d.x + d.y*d.y + d.z*d.z));
-            float elevation = std::asin(std::clamp(d.y / len, -1.0f, 1.0f));
+            const auto d = scene.GetSunToward();
+            float elevation = std::asin(std::clamp(d.y, -1.0f, 1.0f));
             float azimuth = std::atan2(d.x, d.z);
             constexpr float rad = 3.14159265358979323846f / 180.0f;
             if (setting == "sun.elevation") elevation = std::clamp(value, -90.0f, 90.0f) * rad;
             else azimuth = value * rad;
-            sun.SetDirection(-Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
+            scene.SetSunToward(Math::float3(std::cos(elevation)*std::sin(azimuth), std::sin(elevation), std::cos(elevation)*std::cos(azimuth)));
             return true;
         }
         // Plan part C: the clouds, every level-authored knob plus the session debug view. The
@@ -800,13 +800,59 @@ namespace
             }
             return false;
         }
+        // Time-of-day plan T2: the level's clock. The names are the JSON keys of `timeOfDay`
+        // (TimeOfDaySettingsJson) where there is one; `speed` is the session's rate multiplier
+        // (--time-speed). `--time=HH:MM` / `--date=` / `--time-speed=` / `--time-freeze` land here too.
+        if (setting.rfind("tod.", 0) == 0)
+        {
+            TimeOfDay& tod = scene.TimeOfDayRef();
+            TimeOfDaySettings& t = tod.SettingsRef();
+            const std::string key = setting.substr(4);
+            if (!tod.Present())
+            {
+                LOG_WARNING_ONCE(logging::LogCategory::App,
+                                 "--set tod.*: this level has no timeOfDay section -- the clock does nothing here");
+            }
+            if (key == "time") { t.timeHours = value - 24.0f * std::floor(value / 24.0f); return true; }
+            if (key == "animate") { t.animate = value != 0.0f; return true; }
+            if (key == "speed") { tod.SetSpeed(std::max(value, 0.0f)); return true; }
+            if (key == "realPositions") { t.realPositions = value != 0.0f; return true; }
+            if (key == "year") { t.year = std::clamp(static_cast<int>(value), 1, 9999); return true; }
+            if (key == "month") { t.month = std::clamp(static_cast<int>(value), 1, 12); return true; }
+            if (key == "day") { t.day = std::clamp(static_cast<int>(value), 1, 31); return true; }
+            if (key == "moonEnabled") { t.moonEnabled = value != 0.0f; return true; }
+            if (key == "moonPhaseAuto") { t.moonPhaseAuto = value != 0.0f; return true; }
+            if (key == "moonPhase") { t.moonPhase = value - std::floor(value); return true; }
+            struct FloatKnob { const char* name; float* field; float lo, hi; };
+            const FloatKnob knobs[] = {
+                { "dayLengthMin", &t.dayLengthMin, 0.01f, 10000.0f }, { "nightLengthMin", &t.nightLengthMin, 0.01f, 10000.0f },
+                { "timeScale", &t.timeScale, 0.0f, 1.0e6f },
+                { "dawn", &t.dawnHours, 0.0f, 24.0f }, { "dusk", &t.duskHours, 0.0f, 24.0f },
+                { "pathYawDeg", &t.pathYawDeg, -360.0f, 360.0f }, { "pathTiltDeg", &t.pathTiltDeg, -89.0f, 89.0f },
+                { "heightOffset", &t.heightOffset, -1.0f, 1.0f }, { "extendTwilight", &t.extendTwilight, 0.0f, 1.0f },
+                { "latitude", &t.latitudeDeg, -90.0f, 90.0f }, { "longitude", &t.longitudeDeg, -180.0f, 180.0f },
+                { "utcOffset", &t.utcOffsetHours, -14.0f, 14.0f }, { "northYawDeg", &t.northYawDeg, -360.0f, 360.0f },
+                { "moonPathYawDeg", &t.moonPathYawDeg, -360.0f, 360.0f }, { "moonPathTiltDeg", &t.moonPathTiltDeg, -89.0f, 89.0f },
+                { "moonOrbitOffsetDeg", &t.moonOrbitOffsetDeg, -360.0f, 360.0f },
+                { "moonIlluminanceLux", &t.moonIlluminanceLux, 0.0f, 1000.0f },
+                { "moonTemperatureK", &t.moonTemperatureK, 1000.0f, 20000.0f },
+                { "moonAngleDeg", &t.moonAngleDeg, 0.0f, 20.0f },
+                { "nightBrightness", &t.nightBrightness, 0.0f, 1000.0f },
+                { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
+            };
+            for (const FloatKnob& k : knobs)
+            {
+                if (key == k.name) { *k.field = std::clamp(value, k.lo, k.hi); return true; }
+            }
+            return false;
+        }
         if (setting == "sky.environmentLighting") { scene.SkyAtmosphereRef().environmentLighting = value != 0.0f; return true; }
         if (setting == "sky.mode") { scene.SkyAtmosphereRef().mode = value >= 1.0f ? 1u : 0u; return true; }
         if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }
         if (setting == "sky.aerialDebugView") { scene.SkyAtmosphereRef().aerialDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
         if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
         // The sun's half-apex angle in radians (the disc and the specular floor), the level sun's property.
-        if (setting == "sun.angularSize") { scene.DirectionalLightRef().SetSunHalfApexRadians(std::clamp(value, 0.0f, 0.25f)); return true; }
+        if (setting == "sun.angularSize") { scene.SunLightRef().SetSunHalfApexRadians(std::clamp(value, 0.0f, 0.25f)); return true; }
         if (setting == "sky.skyLuminanceFactor") { scene.SkyAtmosphereRef().skyLuminanceFactor = std::clamp(value, 0.0f, 10.0f); return true; }
         if (setting == "sky.aerialStartDepth") { scene.SkyAtmosphereRef().aerialStartDepthMetres = std::clamp(value, 0.0f, 100000.0f); return true; }
         if (setting == "sky.aerialViewDistanceScale") { scene.SkyAtmosphereRef().aerialViewDistanceScale = std::clamp(value, 0.01f, 100.0f); return true; }
@@ -857,12 +903,12 @@ namespace
             return true;
         }
         // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), headless.
-        if (setting == "lightShafts.enabled") { scene.DirectionalLightRef().SetLightShaftsEnabled(value != 0.0f); return true; }
-        if (setting == "lightShafts.bloomScale") { scene.DirectionalLightRef().SetLightShaftBloomScale(value); return true; }
-        if (setting == "lightShafts.bloomThreshold") { scene.DirectionalLightRef().SetLightShaftBloomThreshold(value); return true; }
-        if (setting == "lightShafts.bloomMaxBrightness") { scene.DirectionalLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
-        if (setting == "lightShafts.smoothing") { scene.DirectionalLightRef().SetLightShaftSmoothingSec(std::max(value, 0.0f)); return true; }
-        if (setting == "lightShafts.occlusionDepthRange") { scene.DirectionalLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
+        if (setting == "lightShafts.enabled") { scene.SunLightRef().SetLightShaftsEnabled(value != 0.0f); return true; }
+        if (setting == "lightShafts.bloomScale") { scene.SunLightRef().SetLightShaftBloomScale(value); return true; }
+        if (setting == "lightShafts.bloomThreshold") { scene.SunLightRef().SetLightShaftBloomThreshold(value); return true; }
+        if (setting == "lightShafts.bloomMaxBrightness") { scene.SunLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
+        if (setting == "lightShafts.smoothing") { scene.SunLightRef().SetLightShaftSmoothingSec(std::max(value, 0.0f)); return true; }
+        if (setting == "lightShafts.occlusionDepthRange") { scene.SunLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
         if (setting == "fog.density") { scene.HeightFogRef().density = value; return true; }
         if (setting == "fog.debugView")
         {
@@ -1039,20 +1085,20 @@ namespace
         if (setting == "debug.texMip")     { renderSettings.debugTexMip = (int)value; return true; }
         if (setting == "light.sunTemperatureK")
         {
-            scene.DirectionalLightRef().SetUseSunTemperature(value > 0.0f);
-            if (value > 0.0f) { scene.DirectionalLightRef().SetSunTemperatureK(value); }
+            scene.SunLightRef().SetUseSunTemperature(value > 0.0f);
+            if (value > 0.0f) { scene.SunLightRef().SetSunTemperatureK(value); }
             return true;
         }
         // P16.12: one scalar drives all three channels, which is what a sweep needs; the level
         // and the inspector carry the full colour. 0 switches the bounce off.
         if (setting == "light.groundAlbedo")
         {
-            scene.DirectionalLightRef().SetGroundAlbedo(Math::float3(value, value, value));
+            scene.SunLightRef().SetGroundAlbedo(Math::float3(value, value, value));
             return true;
         }
         if (setting == "light.skyFillIntensity")
         {
-            scene.DirectionalLightRef().SetSkyFillIntensity(value);
+            scene.SunLightRef().SetSkyFillIntensity(value);
             return true;
         }
         if (setting == "light.skyIntensity")
@@ -1157,7 +1203,7 @@ namespace
         // recipe written down in the plan spells it that way.
         if (setting == "light.sunIlluminanceLux" || setting == "light.sunIntensity")
         {
-            scene.DirectionalLightRef().SetSunIlluminanceLux(value);
+            scene.SunLightRef().SetSunIlluminanceLux(value);
             return true;
         }
         // REMOVED (P16.2): `light.legacySplit`, the P4 equivalence probe. It claimed that putting

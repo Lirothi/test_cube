@@ -767,6 +767,28 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
             distantParameters_ = params; distantKey_ = view; distantReady_ = true;
             distantPending_[slot] = validate;
             LOG_DEBUG(logging::LogCategory::Render, "distant sky light rebuild {}: 64 rays x 10 samples, 6 km", ++distantBuilds_);
+            // The MAJOR revision (DistantMajorRevision): far from the last major key, or the first.
+            {
+                const auto& k = distantMajorKey_;
+                const float cosTurn = view.sunDirection[0] * k.sunDirection[0] + view.sunDirection[1] * k.sunDirection[1] +
+                                      view.sunDirection[2] * k.sunDirection[2];
+                bool lightChanged = false;
+                for (int c = 0; c < 3; ++c)
+                {
+                    const float a = view.illuminance[c], b = k.illuminance[c];
+                    lightChanged = lightChanged || std::fabs(a - b) > 0.1f * std::max(std::fabs(b), 1.0e-6f);
+                }
+                const bool major = !distantMajorValid_ ||
+                    std::memcmp(&params, &distantMajorParameters_, sizeof(params)) != 0 ||
+                    cosTurn < 0.99939083f /* cos 2 degrees */ || lightChanged ||
+                    view.illuminance[3] != k.illuminance[3] ||
+                    std::memcmp(view.planet, k.planet, sizeof(view.planet)) != 0;
+                if (major)
+                {
+                    distantMajorParameters_ = params; distantMajorKey_ = view; distantMajorValid_ = true;
+                    ++distantMajorBuilds_;
+                }
+            }
             return [this, renderer, params, view, validate, slot, points](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyDistant);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);

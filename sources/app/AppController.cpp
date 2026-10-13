@@ -254,6 +254,12 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
         L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, FXAA: %i",
         camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, camera.GetMoveSpeedMult(),
         renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique, (int)settings_.doFxaa);
+    // The level's clock, so a screenshot also carries its hour (`--time=HH:MM` reproduces it).
+    if (hudTimeOfDayHours_ >= 0.0f)
+    {
+        const int minutes = static_cast<int>(hudTimeOfDayHours_ * 60.0f) % (24 * 60);
+        tb->AddTextfShadow(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), true, L"Time: %02d:%02d", minutes / 60, minutes % 60);
+    }
 
     //tb->AddTextfShadow(8, 8 + 32 + 32, 32.0f, float4(1, 1, 1, 0.99f), true, L"A quick brown fox 1234567890 ABCDEEFG");
     //tb->AddTextfShadow(8, 8 + 32 + 32 + 32, 64.0f, float4(1, 1, 1, 0.75f), true, L"A quick brown fox 1234567890 ABCDEEFG");
@@ -285,6 +291,7 @@ void AppController::OnLevelChangeRequestCompleted(const LevelChangeRequest& requ
 void AppController::ScheduleHudBuild(Renderer& renderer, const Scene& scene)
 {
     WaitForHudBuild();
+    hudTimeOfDayHours_ = scene.GetTimeOfDay().Present() ? scene.GetTimeOfDay().Settings().timeHours : -1.0f;
     hudBuildTask_ = TaskSystem::Get().Submit([this, &renderer, &scene]()
     {
         BuildHud(renderer, scene);

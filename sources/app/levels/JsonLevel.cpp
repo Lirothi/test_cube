@@ -1,6 +1,7 @@
 #include "app/levels/JsonLevel.h"
 
 #include "core/diagnostics/BootProfile.h"
+#include "core/logging/Log.h"
 
 #include <chrono>
 
@@ -25,6 +26,8 @@
 #include "app/scene/BloomSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
 #include "app/scene/VolumetricCloudSettingsJson.h"
+#include "app/scene/DirectionalLightJson.h"
+#include "app/scene/TimeOfDaySettingsJson.h"
 
 // P8B: the level-wide look settings live under one "postProcess" section now. A level written
 // before that carries them as top-level sections, and must keep loading unchanged -- so this
@@ -369,57 +372,40 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         lightManager.EnsureSpotLightBuffer(&renderer, lightManager.GetSpotLightCount());
     }
 
-    if (j.contains("directionalLight"))
+    // Time-of-day plan: the level's light is its TIME OF DAY -- the entity hands the scene's one
+    // directional light to the sun by day and to the moon by night (app/scene/TimeOfDay.h). A level
+    // written before it (2026-10-13) carries its sun as `directionalLight`; that section is converted
+    // here, the sun solved onto the simple path exactly where it was authored, and the file takes the
+    // new section when it is next saved. This and EditorSceneDocument's section table are the ONLY two
+    // places that know the old key. `--tod-legacy-light` reads it as before (rollback, and the "before"
+    // of the conversion check). Reset on every load, so no level inherits the previous one's clock.
     {
-        const json& dl = j["directionalLight"];
-        const bool enabled = dl.value("enabled", true);
-        DirectionalLight dirLight;
-        dirLight.SetDirection(ToFloat3(dl.value("direction", json::array()), float3(0.0f, -1.0f, 0.0f)).Normalized());
-        // A disabled sun contributes nothing (direct color + ambient zeroed).
-        dirLight.SetColor(enabled ? ToFloat3(dl.value("color", json::array()), float3(1.0f, 1.0f, 1.0f)) : float3(0.0f, 0.0f, 0.0f));
-        dirLight.SetAmbient(enabled ? dl.value("ambient", 0.05f) : 0.0f);
-        // P16.2: `sunIlluminanceLux` is the field going forward, then P4's `sunIntensity`, then
-        // the original whole-scene `exposure` multiplier. Newest present wins, because a level that
-        // has been converted should not keep paying for the older semantics, and every step of the
-        // chain is LOSSLESS -- P4 folded the multiplier into the intensity for an identical product,
-        // and P16.2 changed only what the number is called (see DirectionalLight).
-        //
-        // ONLY the sun intensity branches. The fill fields below are read UNCONDITIONALLY: they are
-        // orthogonal to how the intensity was authored, and gating them on `sunIntensity` made them
-        // dead on every existing level -- ticking the boxes in the inspector did nothing at all,
-        // because every shipped level still carries the legacy field.
-        if (dl.contains("sunIlluminanceLux"))
+        TimeOfDaySettings timeOfDay{};
+        DirectionalLight sun = TimeOfDaySettingsJson::DefaultSun();
+        const auto todIt = j.find("timeOfDay");
+        const auto dlIt = j.find("directionalLight");
+        const bool haveTimeOfDay = todIt != j.end() && todIt->is_object();
+        const bool haveSun = dlIt != j.end() && dlIt->is_object();
+        if (haveTimeOfDay)
         {
-            dirLight.SetSunIlluminanceLux(dl.value("sunIlluminanceLux", 100000.0f));
+            TimeOfDaySettingsJson::ApplyOverrides(*todIt, timeOfDay, sun);
         }
-        else if (dl.contains("sunIntensity"))
+        else if (haveSun && g_timeOfDayConvertsDirectionalLight)
         {
-            dirLight.MigrateLegacySunIntensity(dl.value("sunIntensity", 1.0f));
+            const json converted = TimeOfDaySettingsJson::FromDirectionalLight(*dlIt);
+            TimeOfDaySettingsJson::ApplyOverrides(converted, timeOfDay, sun);
+            LOG_INFO(logging::LogCategory::Scene,
+                     "level light: directionalLight -> timeOfDay (time {:.4f} h, path yaw {:.3f}, tilt {:.2f})",
+                     timeOfDay.timeHours, timeOfDay.pathYawDeg, timeOfDay.pathTiltDeg);
         }
-        else
+        else if (haveSun)
         {
-            dirLight.MigrateLegacyExposure(dl.value("exposure", 1.0f));
+            DirectionalLight dirLight;
+            dirLight.SetDirection(DirectionalLightJson::Direction(*dlIt, float3(0.0f, -1.0f, 0.0f)));
+            DirectionalLightJson::ApplyOverrides(*dlIt, dirLight);
+            scene.SetDirectionalLight(dirLight);
         }
-        dirLight.SetSkyFillIntensity(dl.value("skyFillIntensity", 1.0f));
-        // P16.12: the ground's diffuse reflectance. Read unconditionally for the same reason the
-        // fill fields above are -- it is orthogonal to how the sun intensity was authored. A
-        // disabled sun still has a lit sky, so this is NOT gated on `enabled`; the term scales
-        // itself down through the illuminance it reads.
-        dirLight.SetGroundAlbedo(ToFloat3(dl.value("groundAlbedo", json::array()),
-                                          dirLight.GetGroundAlbedo()));
-        dirLight.SetUseSunTemperature(dl.value("useSunTemperature", false));
-        dirLight.SetSunTemperatureK(dl.value("sunTemperatureK", 6500.0f));
-        // Plan A7 light shafts: the sun's own bloom properties (UE ULightComponent fields), all optional.
-        dirLight.SetLightShaftsEnabled(dl.value("lightShaftsEnabled", dirLight.GetLightShaftsEnabled()));
-        dirLight.SetLightShaftBloomScale(dl.value("lightShaftBloomScale", dirLight.GetLightShaftBloomScale()));
-        dirLight.SetLightShaftBloomThreshold(dl.value("lightShaftBloomThreshold", dirLight.GetLightShaftBloomThreshold()));
-        dirLight.SetLightShaftBloomMaxBrightness(dl.value("lightShaftBloomMaxBrightness", dirLight.GetLightShaftBloomMaxBrightness()));
-        dirLight.SetLightShaftBloomTint(ToFloat3(dl.value("lightShaftBloomTint", json::array()), dirLight.GetLightShaftBloomTint()));
-        dirLight.SetLightShaftOcclusionDepthRange(dl.value("lightShaftOcclusionDepthRange", dirLight.GetLightShaftOcclusionDepthRange()));
-        dirLight.SetLightShaftSmoothingSec(dl.value("lightShaftSmoothing", dirLight.GetLightShaftSmoothingSec()));
-        // The sun's angular diameter in degrees (UE LightSourceAngle); drives the drawn disc and the specular lobe floor.
-        dirLight.SetLightSourceAngleDegrees(dl.value("lightSourceAngle", dirLight.GetLightSourceAngleDegrees()));
-        scene.SetDirectionalLight(dirLight);
+        scene.SetTimeOfDay(timeOfDay, sun);
     }
 
     // P1: photographic camera settings. A level without the section keeps the struct defaults,

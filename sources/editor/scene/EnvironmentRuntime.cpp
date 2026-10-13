@@ -5,6 +5,7 @@
 #include "app/scene/BloomSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
 #include "app/scene/VolumetricCloudSettingsJson.h"
+#include "app/scene/TimeOfDaySettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -207,45 +208,14 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         spots[i].SetDesc(d);
     }
-    else if (env.type == "directionalLight")
+    else if (env.type == "timeOfDay")
     {
-        // A disabled sun contributes nothing: zero both its direct color and its
-        // ambient term (the real values stay in `properties` for re-enable).
-        const bool enabled = p.value("enabled", true);
-        DirectionalLight dl;
-        dl.SetDirection(JF3(p, "direction", Math::float3(-1.0f, -1.0f, -1.0f)).Normalized());
-        dl.SetColor(enabled ? JF3(p, "color", Math::float3(1.0f, 1.0f, 1.0f)) : Math::float3(0.0f, 0.0f, 0.0f));
-        dl.SetAmbient(enabled ? JF(p, "ambient", 0.05f) : 0.0f);
-        // P16.2/P4: mirrors JsonLevel exactly -- newest field present means the level is converted and
-        // the legacy multiplier is ignored; absent means migrate it losslessly. ONLY the intensity
-        // branches; the fill fields are read unconditionally, because gating them here is what made
-        // the inspector checkboxes inert on every legacy level.
-        if (p.contains("sunIlluminanceLux"))
-        {
-            dl.SetSunIlluminanceLux(JF(p, "sunIlluminanceLux", 100000.0f));
-        }
-        else if (p.contains("sunIntensity"))
-        {
-            dl.MigrateLegacySunIntensity(JF(p, "sunIntensity", 1.0f));
-        }
-        else
-        {
-            dl.MigrateLegacyExposure(JF(p, "exposure", 1.0f));
-        }
-        dl.SetSkyFillIntensity(JF(p, "skyFillIntensity", 1.0f));
-        dl.SetGroundAlbedo(JF3(p, "groundAlbedo", dl.GetGroundAlbedo())); // P16.12
-        dl.SetUseSunTemperature(p.value("useSunTemperature", false));
-        dl.SetSunTemperatureK(JF(p, "sunTemperatureK", 6500.0f));
-        // Plan A7 light shafts (mirrors JsonLevel).
-        dl.SetLightShaftsEnabled(p.value("lightShaftsEnabled", dl.GetLightShaftsEnabled()));
-        dl.SetLightShaftBloomScale(JF(p, "lightShaftBloomScale", dl.GetLightShaftBloomScale()));
-        dl.SetLightShaftBloomThreshold(JF(p, "lightShaftBloomThreshold", dl.GetLightShaftBloomThreshold()));
-        dl.SetLightShaftBloomMaxBrightness(JF(p, "lightShaftBloomMaxBrightness", dl.GetLightShaftBloomMaxBrightness()));
-        dl.SetLightShaftBloomTint(JF3(p, "lightShaftBloomTint", dl.GetLightShaftBloomTint()));
-        dl.SetLightShaftOcclusionDepthRange(JF(p, "lightShaftOcclusionDepthRange", dl.GetLightShaftOcclusionDepthRange()));
-        dl.SetLightShaftSmoothingSec(JF(p, "lightShaftSmoothing", dl.GetLightShaftSmoothingSec()));
-        dl.SetLightSourceAngleDegrees(JF(p, "lightSourceAngle", dl.GetLightSourceAngleDegrees()));
-        ctx.scene.SetDirectionalLight(dl);
+        // T3: the same reader as the level's (TimeOfDaySettingsJson); a running clock keeps its place
+        // unless the edit moved the authored time (Scene::ApplyTimeOfDay).
+        TimeOfDaySettings settings{};
+        DirectionalLight sun = TimeOfDaySettingsJson::DefaultSun();
+        TimeOfDaySettingsJson::ApplyOverrides(p, settings, sun);
+        ctx.scene.ApplyTimeOfDay(settings, sun);
     }
     else if (env.type == "cameraExposure")
     {
@@ -472,14 +442,16 @@ void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
     {
         RebuildLights(ctx);
     }
-    else if (env.type == "directionalLight")
+    else if (env.type == "timeOfDay")
     {
-        DirectionalLight dl;
-        dl.SetDirection(JF3(env.properties, "direction", Math::float3(0.0f, -1.0f, 0.0f)).Normalized());
-        dl.SetColor(Math::float3(0.0f, 0.0f, 0.0f));
-        dl.SetExposure(1.0f);
-        dl.SetAmbient(0.0f);
-        ctx.scene.SetDirectionalLight(dl);
+        // No time of day: no sun, no moon -- the light goes dark where it stands (as removing the old
+        // Directional Light did), and the clock stops owning it.
+        DirectionalLight dark;
+        dark.SetDirection(ctx.scene.GetDirectionalLight().GetDirection());
+        dark.SetColor(Math::float3(0.0f, 0.0f, 0.0f));
+        dark.SetAmbient(0.0f);
+        ctx.scene.SetTimeOfDay(TimeOfDaySettings{}, TimeOfDaySettingsJson::DefaultSun());
+        ctx.scene.SetDirectionalLight(dark);
     }
     else if (env.type == "skybox")
     {

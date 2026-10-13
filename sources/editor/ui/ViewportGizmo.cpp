@@ -800,27 +800,19 @@ void ViewportGizmo::Update(EditorContext& ctx,
     // other is painted into the texture -- and when they disagree the shadows come from a sun that
     // is not the one on screen. Measured in wind_test: the light pointed at uv (0.638, 0.633) while
     // the sun sat at (0.341, 0.501), and nothing in the editor said so.
-    const auto DrawDirectionalLightProxy = [](EditorContext& c, EditorObject& env,
-                                              const Math::float4& col, DebugDrawSystem& dd)
+    // T3: the Time of Day's bodies, where the clock puts them (TimeOfDay::SunToward / MoonToward).
+    const auto DrawSkyBodyMarker = [](EditorContext& c, const Math::float3& toward,
+                                      const Math::float4& col, DebugDrawSystem& dd)
     {
-        Math::float3 dir(0.0f, -1.0f, 0.0f);
-        const auto dirIt = env.properties.find("direction");
-        if (dirIt != env.properties.end() && dirIt->is_array() && dirIt->size() >= 3u)
-        {
-            dir = Math::float3((*dirIt)[0].get<float>(), (*dirIt)[1].get<float>(),
-                               (*dirIt)[2].get<float>());
-        }
-        // The authored vector is where the light TRAVELS, so the sun is the other way -- the same
-        // negation the shaders apply to sunDirAmbient.
-        const Math::float3 toSun = (dir * -1.0f).Normalized();
+        const Math::float3 toSun = toward.Normalized();
 
-        // A directional light has no position, so the marker rides with the camera: that keeps it
-        // at a fixed place on screen for a given direction, which is what makes it comparable to
-        // the sky behind it. Well inside the 10000 far plane.
+        // A body in the sky has no position, so the marker rides with the camera: that keeps it at a
+        // fixed place on screen for a given direction, which is what makes it comparable to the sky
+        // behind it. Well inside the 10000 far plane.
         const Math::float3 eye = c.scene.CameraRef().GetPosition();
         const float kDistance = 3000.0f;
-        // THE SUN'S REAL ANGULAR DIAMETER, 0.53 degrees. Sizing the ring to it turns "close enough?"
-        // into a yes/no: the ring either covers the disc or it does not.
+        // THE SUN'S REAL ANGULAR DIAMETER, 0.53 degrees (the moon's is the same to a few percent).
+        // Sizing the ring to it turns "close enough?" into a yes/no: the ring covers the disc or not.
         const float kSunHalfAngle = 0.00462f;
         const Math::float3 centre = eye + toSun * kDistance;
         dd.AddSphere(centre, kDistance * kSunHalfAngle, col, /*wireframe=*/true);
@@ -843,13 +835,20 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 col = Math::float4((*colIt)[0].get<float>(), (*colIt)[1].get<float>(), (*colIt)[2].get<float>(), 1.0f);
             }
 
-            // BEFORE the position lookup, because a directional light HAS no position -- it is the
-            // one environment type EditorSceneDocument marks that way, and the guard below breaks
-            // out of the loop when `position` is missing. Putting the branch after it made it
-            // unreachable for the only object it was written for.
-            if (env.type == "directionalLight")
+            // BEFORE the position lookup, because the Time of Day HAS no position, and the guard
+            // below breaks out of the loop when `position` is missing. Putting the branch after it
+            // made it unreachable for the only object it was written for.
+            if (env.type == "timeOfDay")
             {
-                DrawDirectionalLightProxy(ctx, env, col, *dd);
+                const TimeOfDay& tod = ctx.scene.GetTimeOfDay();
+                if (tod.Present())
+                {
+                    DrawSkyBodyMarker(ctx, tod.SunToward(), Math::float4(1.0f, 0.85f, 0.25f, 1.0f), *dd);
+                    if (tod.Settings().moonEnabled)
+                    {
+                        DrawSkyBodyMarker(ctx, tod.MoonToward(), Math::float4(0.7f, 0.8f, 1.0f, 1.0f), *dd);
+                    }
+                }
                 break;
             }
 
@@ -998,8 +997,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
             for (EditorObject& environment : ctx.document.Environment())
             {
                 if (environment.id.value != id.value ||
-                    (environment.type != "pointLight" && environment.type != "spotLight" &&
-                        environment.type != "directionalLight"))
+                    (environment.type != "pointLight" && environment.type != "spotLight"))
                 {
                     continue;
                 }
@@ -1007,7 +1005,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
                 DragSnapshot snapshot;
                 snapshot.id = id;
                 snapshot.environment = true;
-                snapshot.hasPosition = environment.type != "directionalLight";
+                snapshot.hasPosition = true;
                 snapshot.hasDirection = environment.type != "pointLight";
                 snapshot.properties = environment.properties;
                 const Math::float3 pos = snapshot.hasPosition ?
@@ -1127,8 +1125,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
         for (EditorObject& environment : ctx.document.Environment())
         {
             if (environment.id.value == primary.value &&
-                (environment.type == "pointLight" || environment.type == "spotLight" ||
-                    environment.type == "directionalLight"))
+                (environment.type == "pointLight" || environment.type == "spotLight"))
             {
                 primaryEnvironment = &environment;
                 break;
@@ -1177,7 +1174,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
         }
         else
         {
-            primaryHasPosition = primaryEnvironment->type != "directionalLight";
+            primaryHasPosition = true;
             primaryHasDirection = primaryEnvironment->type != "pointLight";
             primaryPosition = primaryHasPosition ?
                 ReadFloat3(primaryEnvironment->properties, "position", Math::float3(0.0f, 0.0f, 0.0f)) :

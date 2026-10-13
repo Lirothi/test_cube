@@ -361,22 +361,28 @@ namespace
         return light;
     }
 
-    EditorObject BuildDirectionalLightObject()
+    // T3: the level's light is its Time of Day (the sun by day, the moon by night). A fresh one stands
+    // at mid-afternoon, still; the sun section is what the old Directional Light was created with, at
+    // the time of day's own outer-space illuminance (TimeOfDaySettingsJson::DefaultSun).
+    nlohmann::json TimeOfDayDefaults()
+    {
+        return {
+            { "time", 15.0f },
+            { "animate", false },
+            { "sun", {
+                { "enabled", true },
+                { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
+                { "sunIlluminanceLux", 120000.0f },
+                { "ambient", 0.05f } } },
+        };
+    }
+
+    EditorObject BuildTimeOfDayObject()
     {
         EditorObject light;
-        light.name = "Directional Light";
-        light.type = "directionalLight";
-        light.properties = {
-            { "enabled", true },
-            { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
-            { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
-            // P16.2: a freshly created sun is authored in the new model, at a physical sunny
-            // midday. The older `sunIntensity` and `exposure` keys are deliberately absent -- they
-            // are the same number under retired names, and writing one would only invite someone to
-            // tune a field the loader is about to ignore.
-            { "sunIlluminanceLux", 100000.0f },
-            { "ambient", 0.05f }
-        };
+        light.name = "Time of Day";
+        light.type = "timeOfDay";
+        light.properties = TimeOfDayDefaults();
         return light;
     }
 
@@ -1118,12 +1124,7 @@ namespace
             { "compensationEv", -0.15f }, // pairs with the default Filmic curve; see P3
             { "manualCompensationEv", 0.0f } // P16.13: manual trims from the EV the author solved
         };
-        root["directionalLight"] = {
-            { "direction", nlohmann::json::array({ -1.5f, -0.7f, -0.5f }) },
-            { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
-            { "sunIlluminanceLux", 100000.0f }, // P16.2, see BuildDirectionalLightObject
-            { "ambient", 0.05f }
-        };
+        root["timeOfDay"] = TimeOfDayDefaults(); // T3, see BuildTimeOfDayObject
         root["spotLights"] = nlohmann::json::array();
         root["pointLights"] = nlohmann::json::array();
         root["objects"] = nlohmann::json::array({
@@ -3760,7 +3761,7 @@ void EditorController::Draw(
                 }
                 if (ImGui::BeginMenu("Light"))
                 {
-                    const bool hasDirectionalLight = HasEnvironmentObject(document_, "directionalLight");
+                    const bool hasTimeOfDay = HasEnvironmentObject(document_, "timeOfDay");
                     if (ImGui::MenuItem("Point Light"))
                     {
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
@@ -3771,11 +3772,11 @@ void EditorController::Draw(
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
                             BuildSpotLightObject(scene)));
                     }
-                    if (MenuItemWithDisabledReason("Directional Light", !hasDirectionalLight,
-                            "Only one directional light is supported per level."))
+                    if (MenuItemWithDisabledReason("Time of Day", !hasTimeOfDay,
+                            "This level already has a Time of Day (it drives the sun and the moon)."))
                     {
                         commandStack_.Execute(ctx, std::make_unique<CreateEnvironmentCommand>(
-                            BuildDirectionalLightObject()));
+                            BuildTimeOfDayObject()));
                     }
                     ImGui::EndMenu();
                 }

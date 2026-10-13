@@ -383,7 +383,7 @@ private:
             if (phase < 32)
             {
                 const float angle = (5.0f + float(phase)) * 3.14159265358979323846f / 180.0f;
-                scene_.DirectionalLightRef().SetDirection(-Math::float3(std::cos(angle)*0.6f, std::sin(angle), std::cos(angle)*0.8f));
+                scene_.SetSunToward(Math::float3(std::cos(angle)*0.6f, std::sin(angle), std::cos(angle)*0.8f)); // T3: a time of day's time
             }
             if (phase >= 40 && phase < 48)
                 scene_.CameraExposureRef().compensationEv = float(phase - 44) * 0.125f;

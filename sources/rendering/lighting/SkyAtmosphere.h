@@ -63,6 +63,12 @@ public:
                         const SkyAtmosphereSettings& settings, SkyViewFrameData view, size_t after);
     bool DistantActive() const { return distantActive_; }
     unsigned DistantRevision() const { return distantBuilds_; }
+    // Bumps only when a rebuild's key moved FAR from the last such bump: other atmosphere parameters,
+    // the sun turned more than ~2 degrees, a light's illuminance changed by more than 10 %, the sky's
+    // scale or the planet changed (time-of-day plan T0). What drops HISTORY keys on this one -- the
+    // volumetric fog and the cloud capture: a sun moving a little every frame rebuilds the distant
+    // light every frame, and DistantRevision then threw both histories away every frame.
+    unsigned DistantMajorRevision() const { return distantMajorBuilds_; }
     ID3D12Resource* DistantResource() const { return distant_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE DistantSrv() const { return distantSrv_; }
     bool AerialBuilt() const { return aerialBuilt_; }
@@ -89,6 +95,10 @@ private:
     SkyViewFrameData distantKey_{};
     bool distantActive_ = false, distantReady_ = false, distantFailed_ = false;
     unsigned distantBuilds_ = 0;
+    SkyAtmosphereParameters distantMajorParameters_{};
+    SkyViewFrameData distantMajorKey_{};
+    bool distantMajorValid_ = false;
+    unsigned distantMajorBuilds_ = 0;
     void PrepareEnvironment(Renderer* renderer);
     void ValidateReadback(UINT slot);
     GpuResource environmentView_;

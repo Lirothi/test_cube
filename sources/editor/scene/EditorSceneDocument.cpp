@@ -1,4 +1,5 @@
 #include "editor/scene/EditorSceneDocument.h"
+#include "app/scene/TimeOfDaySettingsJson.h" // T3: the old `directionalLight` section converted on load
 #if WITH_EDITOR
 
 #include <exception>
@@ -312,7 +313,26 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
     };
 
     addSingleton("camera", "camera", "Camera");
-    addSingleton("directionalLight", "directionalLight", "Directional Light");
+    // Time-of-day plan T3: the level's light is its Time of Day, which drives the sun and the moon. A
+    // level written before it carries the sun as `directionalLight`; it is converted HERE, on load
+    // (TimeOfDaySettingsJson::FromDirectionalLight: every light property moves across, the clock is
+    // still, the path solved so the sun stands where it was authored), and the file takes the new
+    // section when it is saved -- the serializer erases the old one. This and JsonLevel are the ONLY
+    // two places that know the old key, as with `atmosphere` -> `heightFog`.
+    {
+        const auto timeOfDay = rootJson_.find("timeOfDay");
+        const auto sun = rootJson_.find("directionalLight");
+        EditorObject e;
+        if (timeOfDay != rootJson_.end() && timeOfDay->is_object()) { e.properties = *timeOfDay; }
+        else if (sun != rootJson_.end() && sun->is_object()) { e.properties = TimeOfDaySettingsJson::FromDirectionalLight(*sun); }
+        if (e.properties.is_object())
+        {
+            e.id = AllocateId();
+            e.type = "timeOfDay";
+            e.name = "Time of Day";
+            environment_.push_back(std::move(e));
+        }
+    }
     addArray("spotLights", "spotLight", "Spot Light");
     addArray("pointLights", "pointLight", "Point Light");
     addSingleton("skybox", "skybox", "Skybox");

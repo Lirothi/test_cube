@@ -36,6 +36,16 @@ public:
     // Rung 1 (Step 11) foundation: monotonic version bumped when the sun direction changes (it
     // drives the CSM projection); a directional-shadow cache compares it. No consumer yet.
     std::uint32_t GetTransformVersion() const { return transformVersion_; }
+    // A REPLACEMENT light (the editor and the level loader build a fresh object and set its direction
+    // once) restarts its version at 1, so a real direction change could leave the version equal to
+    // the cache's -- the SDSM partition cache and the VSM stillness test key on it. The scene carries
+    // the count forward: the previous light's version, +1 when the direction differs.
+    void ContinueTransformVersion(const DirectionalLight& previous)
+    {
+        const bool moved = direction_.x != previous.direction_.x || direction_.y != previous.direction_.y ||
+                           direction_.z != previous.direction_.z;
+        transformVersion_ = previous.transformVersion_ + (moved ? 1u : 0u);
+    }
 
     const Math::float3& GetColor() const;
     void SetColor(const Math::float3& color);
@@ -98,6 +108,17 @@ public:
     // GetEffectiveColor -- the lighting past the map, the fog's sun, the water's glints.
     void SetCloudVisibility(float v) { cloudVisibility_ = v; }
     float GetCloudVisibility() const { return cloudVisibility_; }
+
+    // Any of the light arrives: something is left after the atmosphere, the horizon and the cloud deck.
+    // False under a closed overcast, with the body wholly below the horizon, or with the light switched
+    // off -- then nothing receives it and its shadow passes are skipped (FrameDecisions::sunShadowsOff);
+    // the shadow readers branch on the same GetEffectiveColor() being zero, so they never read the
+    // atlas nobody wrote.
+    bool ReachesGround() const
+    {
+        const Math::float3 c = GetEffectiveColor();
+        return c.x > 0.0f || c.y > 0.0f || c.z > 0.0f;
+    }
 
     // Set once per frame by the renderer: the atmosphere's transmittance from the ground toward this
     // light, or WHITE when the level has no procedural atmosphere -- UE's own fallback

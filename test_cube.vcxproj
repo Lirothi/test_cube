@@ -312,10 +312,12 @@
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
+    <ClCompile Include="sources/rendering/lighting/Astronomy.cpp" />
     <ClCompile Include="sources/app/levels/JsonLevel.cpp" />
     <ClCompile Include="sources/app/levels/Level.cpp" />
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
     <ClCompile Include="sources/app/scene/Scene.cpp" />
+    <ClCompile Include="sources/app/scene/TimeOfDay.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp" />
     <ClCompile Include="sources/app/scene/SceneObjectRegistry.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderConfig.cpp" />
@@ -529,6 +531,7 @@
     <ClInclude Include="sources/ocean/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
+    <ClInclude Include="sources/rendering/lighting/Astronomy.h" />
     <ClInclude Include="sources/app/levels/JsonLevel.h" />
     <ClInclude Include="sources/app/levels/Level.h" />
     <ClInclude Include="sources/app/levels/LevelManager.h" />
@@ -657,7 +660,11 @@
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h" />
+    <ClInclude Include="sources/rendering/lighting/TimeOfDaySettings.h" />
     <ClInclude Include="sources/app/scene/VolumetricCloudSettingsJson.h" />
+    <ClInclude Include="sources/app/scene/TimeOfDay.h" />
+    <ClInclude Include="sources/app/scene/TimeOfDaySettingsJson.h" />
+    <ClInclude Include="sources/app/scene/DirectionalLightJson.h" />
     <ClInclude Include="sources/core/math/AABB.h" />
     <ClInclude Include="sources/core/math/OBB.h" />
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />

@@ -352,7 +352,6 @@ namespace
         const EditorObject* environment = FindEnvironmentObject(document, id);
         if (!environment || (environment->type != "pointLight" &&
             environment->type != "spotLight" &&
-            environment->type != "directionalLight" &&
             environment->type != "ocean"))
         {
             return nullptr;

@@ -25,6 +25,25 @@ know that: `JsonLevel::HeightFogSection` and `EditorSceneDocument`'s section tab
 alias any further; a level takes the new key the next time it is saved. An old `--set=atmosphere.*`
 is not silently dropped — it logs `UNKNOWN SETTING (ignored)`.
 
+## Time of Day Owns the Directional Light
+
+A level's light is its `timeOfDay` section (`app/scene/TimeOfDay.h`, plan
+`docs/time_of_day_night_sky_plan.md`): every frame it places the sun and the moon and hands the scene's
+ONE `DirectionalLight` to whichever has any of its disc above the horizon (else it stays on its body,
+lighting nothing, and the sun-shadow passes sleep). The sky -- its LUTs, disc, capture, aerial
+perspective, the bloom's corona and the light shafts -- always takes the SUN (`SceneFrameData::skyLight`),
+so the twilight outlives the hand-over. Anything that writes `Scene::DirectionalLightRef()` directly is
+overwritten on the next Tick: knobs go through `Scene::SunLightRef()`, a direction through
+`Scene::SetSunToward()` (which solves the time and the path).
+
+Levels written before 2026-10-13 carry the sun as `directionalLight`. Exactly two places know that:
+`JsonLevel` (the runtime reader) and `EditorSceneDocument`'s section table, both through
+`TimeOfDaySettingsJson::FromDirectionalLight`, which solves the simple path's time and yaw so the sun
+stands exactly where it was authored -- the frame does not change (measured, within noise). A level takes
+the new section the next time it is saved. `--tod-legacy-light` reads the old section as before (runtime
+only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--time-freeze`,
+`--set/--sweep=tod.<key>`; the HUD prints `Time: HH:MM` under `Cam:`.
+
 ## Line Endings
 
 - Preserve the existing line ending style of every edited file.

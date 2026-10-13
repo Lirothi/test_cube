@@ -46,6 +46,9 @@ private:
     SceneRenderSettings settings_{};
     GraphicsSettingsManager graphicsSettings_;
     TaskSystem::TaskHandle hudBuildTask_ = nullptr;
+    // The level's time of day for the HUD line, copied when the build is scheduled: the build runs
+    // beside Scene::Tick, which advances the clock. < 0 = the level has no time of day.
+    float hudTimeOfDayHours_ = -1.0f;
     DeveloperWindow developerWindow_;
 #if WITH_EDITOR
     EditorController editorController_;

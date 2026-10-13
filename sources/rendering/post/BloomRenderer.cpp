@@ -988,8 +988,10 @@ void BloomRenderer::FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandLis
 
 bool BloomRenderer::SunWorldDirection(Math::float3& toSun) const
 {
-    if (!frame_ || !frame_->dirLight) { return false; }
-    toSun = -frame_->dirLight->GetDirection();
+    // The SKY's sun (time-of-day T2): the glare and the corona belong to the drawn disc, which stays
+    // the sun's while the moon lights the ground.
+    if (!frame_ || !frame_->skyLight) { return false; }
+    toSun = -frame_->skyLight->GetDirection();
     const float len = std::sqrt(toSun.x * toSun.x + toSun.y * toSun.y + toSun.z * toSun.z);
     if (!(len > 0.0f)) { return false; }
     toSun = toSun * (1.0f / len);
@@ -1024,7 +1026,7 @@ bool BloomRenderer::SunInView(Math::float3& viewDir, float& projX, float& projY,
     {
         return false;
     }
-    discTan = std::tan(std::max(frame_->dirLight->GetSunHalfApexRadians(), 0.0025f));
+    discTan = std::tan(std::max(frame_->skyLight->GetSunHalfApexRadians(), 0.0025f));
     return true;
 }
 

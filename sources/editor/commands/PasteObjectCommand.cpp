@@ -28,7 +28,7 @@ namespace
     bool IsEnvironmentSingleton(std::string_view type)
     {
         return type == "camera" ||
-            type == "directionalLight" ||
+            type == "timeOfDay" ||
             type == "skybox" ||
             type == "ocean";
     }

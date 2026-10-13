@@ -378,6 +378,9 @@
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/Astronomy.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/levels/JsonLevel.cpp">
       <Filter>sources\app\levels</Filter>
     </ClCompile>
@@ -388,6 +391,9 @@
       <Filter>sources\app\levels</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/scene/Scene.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/TimeOfDay.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/scene/SceneObjectFactory.cpp">
@@ -962,6 +968,9 @@
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/Astronomy.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/levels/JsonLevel.h">
       <Filter>sources\app\levels</Filter>
     </ClInclude>
@@ -1328,7 +1337,19 @@
     <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/TimeOfDaySettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
     <ClInclude Include="sources/app/scene/VolumetricCloudSettingsJson.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/TimeOfDay.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/TimeOfDaySettingsJson.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/DirectionalLightJson.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/Skybox.h">

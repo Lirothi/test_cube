@@ -671,7 +671,7 @@ void SceneRenderer::Pass_LightShafts(Renderer* renderer, RenderGraphPassContext 
                                      const LightShaftPoints& pts)
 {
     const auto& D = renderer->GetDeferredForFrame();
-    const DirectionalLight& sun = *frame_->dirLight;
+    const DirectionalLight& sun = *frame_->skyLight; // the sky's sun, as DecideFrame gated it
     const UINT halfW = std::max(1u, D.lightShaftWidth);
     const UINT halfH = std::max(1u, D.lightShaftHeight);
     const UINT fullW = std::max(1u, renderer->GetRenderWidth());
