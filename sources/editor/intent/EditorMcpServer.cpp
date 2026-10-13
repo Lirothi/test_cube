@@ -579,12 +579,21 @@ namespace editormcp
                 result.text = (dryRun ? "Would run: " : "") + preview.summary;
                 if (dryRun)
                 {
-                    result.text += " (" + std::to_string(preview.targets.size()) + " targets";
+                    // The count is about OBJECTS. A verb with no noun (setTime, createZone) or a
+                    // setting edit has none, and "(0 targets)" after "time of day: 15:08 -> 06:15"
+                    // read as "and it will do nothing".
+                    const EditorActionDesc* desc = EditorActionRegistry::Builtin().Find(intent.action);
+                    const bool aboutObjects = !desc || desc->target == EditorTargetKind::Objects ||
+                                              !preview.targets.empty();
+                    std::string details = aboutObjects ? std::to_string(preview.targets.size()) + " targets" : "";
                     for (const EditorIntentPreview::Group& group : preview.groups)
                     {
-                        result.text += ", " + group.label + " x" + std::to_string(group.count);
+                        details += (details.empty() ? "" : ", ") + group.label + " x" + std::to_string(group.count);
                     }
-                    result.text += ")";
+                    if (!details.empty())
+                    {
+                        result.text += " (" + details + ")";
+                    }
                 }
                 return result;
             }

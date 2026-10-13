@@ -51,6 +51,7 @@
 #include "editor/intent/EditorMcpServer.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
+#include "editor/scene/EnvironmentRuntime.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
@@ -2276,6 +2277,9 @@ void TestOldSunBecomesTheTimeOfDay()
     Check(degreesOff(clock.SunToward()) < 0.001f && degreesOff(-sceneLight.GetDirection()) < 0.001f,
           "the sun stands where it was authored (to a thousandth of a degree), and lights from there");
     Check(!settings.animate, "and the converted clock stands still");
+    Check(envsettings::Find(envsettings::Enumerate(document), "timeOfDay.moon.illuminanceLux") != nullptr &&
+          envsettings::Find(envsettings::Enumerate(document), "timeOfDay.nightBrightness") != nullptr,
+          "every key of the section is in the document, so setEnvironment can name it (T4)");
 
     const std::filesystem::path path = std::filesystem::temp_directory_path() / "intent_regression_old_sun.json";
     Check(LevelDocumentSerializer::SaveToFile(document, path.string()), "the converted level saves");
@@ -2286,6 +2290,87 @@ void TestOldSunBecomesTheTimeOfDay()
     std::filesystem::remove(path, ignored);
     Check(saved.is_object() && saved.contains("timeOfDay") && !saved.contains("directionalLight"),
           "the saved level carries timeOfDay and no directionalLight");
+}
+
+// Time-of-day plan T4: setTime / setDate over MCP are the Inspector slider's road -- one
+// EditEnvironmentCommand on the Time of Day object, ONE undo entry, the scene's clock moved by the same
+// EnvironmentRuntime apply -- and a time is said the way people say it.
+void TestTimeOfDayActions(const EditorActionContext& actionCtx)
+{
+    using nlohmann::json;
+    EditorContext& ctx = actionCtx.editor;
+    EditorCommandStack stack;
+    DirectMcpHost host(actionCtx, stack);
+    int nextId = 100;
+    const auto call = [&](const std::string& tool, json command)
+    {
+        return editormcp::HandleMessage({ { "jsonrpc", "2.0" }, { "id", nextId++ }, { "method", "tools/call" },
+            { "params", { { "name", tool }, { "arguments", { { "command", std::move(command) } } } } } }, host);
+    };
+    const auto text = [](const std::optional<json>& reply)
+    {
+        return (*reply)["result"]["content"][0]["text"].get<std::string>();
+    };
+    const auto failed = [](const std::optional<json>& reply) { return (*reply)["result"]["isError"].get<bool>(); };
+    const auto setTime = [](const char* time)
+    {
+        return json{ { "action", "setTime" }, { "target", json::object() }, { "params", { { "time", time } } } };
+    };
+
+    EditorObject* timeOfDay = nullptr;
+    for (EditorObject& entity : ctx.document.Environment())
+    {
+        if (entity.type == "timeOfDay") { timeOfDay = &entity; }
+    }
+    Check(timeOfDay != nullptr, "the environment document has a Time of Day");
+    EnvironmentRuntime::Apply(ctx, *timeOfDay);
+    const auto documentTime = [&]() { return static_cast<float>(timeOfDay->properties.value("time", -1.0)); };
+    const auto sceneTime = [&]() { return ctx.scene.GetTimeOfDay().Settings().timeHours; };
+    const float authored = documentTime();
+
+    const std::optional<json> preview = call("preview_action", setTime("06:15"));
+    Check(text(preview).find("15:00 -> 06:15") != std::string::npos,
+        "the preview says which clock it will set: " + text(preview));
+    Check(text(preview).find("targets") == std::string::npos,
+        "and no object count -- a verb with no noun has none to report: " + text(preview));
+    Check(stack.HistorySize() == 0, "and sets nothing");
+
+    const std::optional<json> ran = call("run_action", setTime("06:15"));
+    Check(!failed(ran), "setTime 06:15 runs: " + text(ran));
+    Check(stack.HistorySize() == 1, "as ONE undo entry");
+    Check(Near(documentTime(), 6.25f), "the document holds 06:15");
+    Check(Near(sceneTime(), 6.25f), "and the scene's clock is there too -- the slider's own road");
+
+    Check(!failed(call("run_action", setTime("sunset"))) && Near(documentTime(), 18.0f),
+        "sunset on the simple path is its dusk");
+    Check(!failed(call("run_action", setTime("+2h"))) && Near(documentTime(), 20.0f), "+2h shifts from now");
+    Check(!failed(call("run_action", setTime("-30m"))) && Near(documentTime(), 19.5f), "-30m too");
+    Check(!failed(call("run_action", setTime("закат"))) && Near(documentTime(), 18.0f), "and it is said in Russian");
+
+    const std::size_t before = stack.HistorySize();
+    const std::optional<json> refused = call("run_action", setTime("когда-нибудь"));
+    Check(failed(refused) && text(refused).find("is not a time") != std::string::npos,
+        "a time it cannot read is refused, saying what it can: " + text(refused));
+    Check(stack.HistorySize() == before, "and records nothing");
+
+    const std::optional<json> dated = call("run_action",
+        json{ { "action", "setDate" }, { "target", json::object() }, { "params", { { "date", "2026-12-21" } } } });
+    Check(!failed(dated) && text(dated).find("real sun and moon positions on") != std::string::npos,
+        "setDate runs and says it switched to real positions: " + text(dated));
+    Check(timeOfDay->properties["date"] == json::array({ 2026, 12, 21 }) &&
+          timeOfDay->properties.value("realPositions", false), "the document holds the date, real positions on");
+    Check(ctx.scene.GetTimeOfDay().Settings().realPositions && ctx.scene.GetTimeOfDay().Settings().month == 12,
+        "and the scene computes that day");
+    // The real sunset is the date's own: Bora Bora in December sets after the simple path's 18:00.
+    Check(!failed(call("run_action", setTime("sunset"))) && documentTime() > 18.2f && documentTime() < 19.5f,
+        "with real positions sunset is that day's (" + std::to_string(documentTime()) + " h)");
+
+    while (stack.CanUndo())
+    {
+        stack.Undo(ctx);
+    }
+    Check(Near(documentTime(), authored) && Near(sceneTime(), authored) && !timeOfDay->properties.value("realPositions", false),
+        "undoing it all puts the clock back where it was authored");
 }
 
 void TestEnvironmentSettingsAreEnumeratedFromTheLevel()
@@ -3177,6 +3262,7 @@ int main(int argc, char** argv)
             TestEnvironmentPreviewShowsBeforeAndAfter(envActionCtx);
             TestEnvironmentEditsGoThroughUndo(envActionCtx);
             TestShowingWhatIsShownUndoesToShown(envActionCtx);
+            TestTimeOfDayActions(envActionCtx);
         }
         std::puts("Intent regression: environment OK");
 

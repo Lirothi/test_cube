@@ -327,6 +327,9 @@ void EditorSceneDocument::RebuildEnvironmentEntities()
         else if (sun != rootJson_.end() && sun->is_object()) { e.properties = TimeOfDaySettingsJson::FromDirectionalLight(*sun); }
         if (e.properties.is_object())
         {
+            // T4: every key present, at the value it already means -- setEnvironment (the command
+            // bar, MCP) can only name a key that is in the document.
+            e.properties = TimeOfDaySettingsJson::WithAllKeys(e.properties);
             e.id = AllocateId();
             e.type = "timeOfDay";
             e.name = "Time of Day";

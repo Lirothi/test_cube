@@ -1927,7 +1927,7 @@ namespace
                 int date[3] = { 2026, 6, 21 };
                 if (const auto it = tgt().find("date"); it != tgt().end() && it->is_array() && it->size() >= 3)
                 {
-                    for (int i = 0; i < 3; ++i) { if ((*it)[i].is_number_integer()) { date[i] = (*it)[i].get<int>(); } }
+                    for (int i = 0; i < 3; ++i) { if ((*it)[i].is_number()) { date[i] = static_cast<int>(std::lround((*it)[i].get<double>())); } }
                 }
                 const bool changed = ImGui::InputInt3("Date (Y M D)", date);
                 beginContinuousEdit(changed);

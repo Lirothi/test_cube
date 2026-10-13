@@ -39,6 +39,17 @@ inline DirectionalLight DefaultSun()
     return sun;
 }
 
+// The `sun` object: the keys of `directionalLight`, whose own default intensity is the time of day's
+// sun rather than the P16.2 field's 100 klx.
+inline void ApplySun(const nlohmann::json& j, DirectionalLight& sun)
+{
+    DirectionalLightJson::ApplyOverrides(j, sun);
+    if (!j.contains("sunIlluminanceLux") && !j.contains("sunIntensity") && !j.contains("exposure"))
+    {
+        sun.SetSunIlluminanceLux(DefaultSun().GetSunIlluminanceLux());
+    }
+}
+
 inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, DirectionalLight& sun)
 {
     using DirectionalLightJson::detail::Number;
@@ -57,12 +68,14 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
     s.pathTiltDeg = std::clamp(Number(j, "pathTiltDeg", s.pathTiltDeg), -89.0f, 89.0f);
     s.heightOffset = std::clamp(Number(j, "heightOffset", s.heightOffset), -1.0f, 1.0f);
     s.extendTwilight = std::clamp(Number(j, "extendTwilight", s.extendTwilight), 0.0f, 1.0f);
+    // Any numbers, rounded: an MCP setEnvironment writes [2026.0, 6.0, 21.0] as readily as integers,
+    // and a date that silently stopped being read would be a control that lies.
     if (const auto it = j.find("date"); it != j.end() && it->is_array() && it->size() >= 3 &&
-        (*it)[0].is_number_integer() && (*it)[1].is_number_integer() && (*it)[2].is_number_integer())
+        (*it)[0].is_number() && (*it)[1].is_number() && (*it)[2].is_number())
     {
-        s.year = std::clamp((*it)[0].get<int>(), 1, 9999);
-        s.month = std::clamp((*it)[1].get<int>(), 1, 12);
-        s.day = std::clamp((*it)[2].get<int>(), 1, 31);
+        s.year = std::clamp(static_cast<int>(std::lround((*it)[0].get<double>())), 1, 9999);
+        s.month = std::clamp(static_cast<int>(std::lround((*it)[1].get<double>())), 1, 12);
+        s.day = std::clamp(static_cast<int>(std::lround((*it)[2].get<double>())), 1, 31);
     }
     s.latitudeDeg = std::clamp(Number(j, "latitude", s.latitudeDeg), -90.0f, 90.0f);
     s.longitudeDeg = std::clamp(Number(j, "longitude", s.longitudeDeg), -180.0f, 180.0f);
@@ -73,12 +86,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
 
     if (const auto it = j.find("sun"); it != j.end() && it->is_object())
     {
-        DirectionalLightJson::ApplyOverrides(*it, sun);
-        // The section's own default is the time of day's sun, not the P16.2 field's 100 klx.
-        if (!it->contains("sunIlluminanceLux") && !it->contains("sunIntensity") && !it->contains("exposure"))
-        {
-            sun.SetSunIlluminanceLux(DefaultSun().GetSunIlluminanceLux());
-        }
+        ApplySun(*it, sun);
     }
     if (const auto it = j.find("moon"); it != j.end() && it->is_object())
     {
@@ -130,6 +138,100 @@ inline nlohmann::json FromDirectionalLight(const nlohmann::json& dl)
     t["pathTiltDeg"] = path.tiltDeg;
     t["sun"] = sun;
     return t;
+}
+
+// Every key the section has, at the values these settings hold (the `sun` object in the keys of
+// `directionalLight`). The editor's setEnvironment can only reach a key that is in the document, so
+// the document carries all of them (T4) -- see WithAllKeys.
+inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight& sun)
+{
+    const auto f3 = [](const Math::float3& v) { return nlohmann::json::array({ v.x, v.y, v.z }); };
+    nlohmann::json j = nlohmann::json::object();
+    j["time"] = s.timeHours;
+    j["animate"] = s.animate;
+    j["dayLengthMin"] = s.dayLengthMin;
+    j["nightLengthMin"] = s.nightLengthMin;
+    j["timeScale"] = s.timeScale;
+    j["realPositions"] = s.realPositions;
+    j["dawn"] = s.dawnHours;
+    j["dusk"] = s.duskHours;
+    j["pathYawDeg"] = s.pathYawDeg;
+    j["pathTiltDeg"] = s.pathTiltDeg;
+    j["heightOffset"] = s.heightOffset;
+    j["extendTwilight"] = s.extendTwilight;
+    j["date"] = nlohmann::json::array({ s.year, s.month, s.day });
+    j["latitude"] = s.latitudeDeg;
+    j["longitude"] = s.longitudeDeg;
+    j["utcOffset"] = s.utcOffsetHours;
+    j["northYawDeg"] = s.northYawDeg;
+    j["nightBrightness"] = s.nightBrightness;
+    j["lightUpdateThresholdDeg"] = s.lightUpdateThresholdDeg;
+    j["sun"] = {
+        { "enabled", true },
+        { "color", f3(sun.GetColor()) },
+        { "ambient", sun.GetAmbient() },
+        { "sunIlluminanceLux", sun.GetSunIlluminanceLux() },
+        { "skyFillIntensity", sun.GetSkyFillIntensity() },
+        { "groundAlbedo", f3(sun.GetGroundAlbedo()) },
+        { "useSunTemperature", sun.GetUseSunTemperature() },
+        { "sunTemperatureK", sun.GetSunTemperatureK() },
+        { "lightShaftsEnabled", sun.GetLightShaftsEnabled() },
+        { "lightShaftBloomScale", sun.GetLightShaftBloomScale() },
+        { "lightShaftBloomThreshold", sun.GetLightShaftBloomThreshold() },
+        { "lightShaftBloomMaxBrightness", sun.GetLightShaftBloomMaxBrightness() },
+        { "lightShaftBloomTint", f3(sun.GetLightShaftBloomTint()) },
+        { "lightShaftOcclusionDepthRange", sun.GetLightShaftOcclusionDepthRange() },
+        { "lightShaftSmoothing", sun.GetLightShaftSmoothingSec() },
+        { "lightSourceAngle", sun.GetLightSourceAngleDegrees() },
+    };
+    j["moon"] = {
+        { "enabled", s.moonEnabled },
+        { "illuminanceLux", s.moonIlluminanceLux },
+        { "temperatureK", s.moonTemperatureK },
+        { "lightSourceAngle", s.moonAngleDeg },
+        { "pathYawDeg", s.moonPathYawDeg },
+        { "pathTiltDeg", s.moonPathTiltDeg },
+        { "orbitOffsetDeg", s.moonOrbitOffsetDeg },
+        { "phase", s.moonPhase },
+        { "phaseAuto", s.moonPhaseAuto },
+    };
+    return j;
+}
+
+// The section with every key present (T4): what is written stays as written, a missing key is added
+// at the value the section ALREADY MEANS -- so nothing on screen changes, and setEnvironment can now
+// name it. The sun's light is read with `enabled` set aside: a switched-off sun parses black, and its
+// colour must not be filled in as black for the day it is switched back on.
+inline nlohmann::json WithAllKeys(const nlohmann::json& section)
+{
+    nlohmann::json out = section.is_object() ? section : nlohmann::json::object();
+    TimeOfDaySettings s{};
+    DirectionalLight sun = DefaultSun();
+    ApplyOverrides(out, s, sun);
+    if (const auto it = out.find("sun"); it != out.end() && it->is_object())
+    {
+        nlohmann::json lit = *it;
+        lit.erase("enabled");
+        sun = DefaultSun();
+        ApplySun(lit, sun);
+    }
+    const nlohmann::json full = ToJson(s, sun);
+    for (const auto& [key, value] : full.items())
+    {
+        const auto have = out.find(key);
+        if (have == out.end())
+        {
+            out[key] = value;
+        }
+        else if (value.is_object() && have->is_object())
+        {
+            for (const auto& [subKey, subValue] : value.items())
+            {
+                if (!have->contains(subKey)) { (*have)[subKey] = subValue; }
+            }
+        }
+    }
+    return out;
 }
 
 } // namespace TimeOfDaySettingsJson

@@ -42,7 +42,9 @@ Levels written before 2026-10-13 carry the sun as `directionalLight`. Exactly tw
 stands exactly where it was authored -- the frame does not change (measured, within noise). A level takes
 the new section the next time it is saved. `--tod-legacy-light` reads the old section as before (runtime
 only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--time-freeze`,
-`--set/--sweep=tod.<key>`; the HUD prints `Time: HH:MM` under `Cam:`.
+`--set/--sweep=tod.<key>`; the HUD prints `Time: HH:MM` under `Cam:`. In the editor (command bar, MCP):
+`setTime` ("18:30", "sunset", "+2h") and `setDate` ("2026-06-21", switches to real positions); every
+`timeOfDay.*` key is in the document, so `setEnvironment` reaches the rest.
 
 ## Line Endings
 

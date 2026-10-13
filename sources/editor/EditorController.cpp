@@ -5,6 +5,7 @@
 #include "app/scene/GtaoSettingsJson.h"
 #include "app/scene/SkyAtmosphereSettingsJson.h"
 #include "app/scene/VolumetricCloudSettingsJson.h"
+#include "app/scene/TimeOfDaySettingsJson.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -366,7 +367,7 @@ namespace
     // the time of day's own outer-space illuminance (TimeOfDaySettingsJson::DefaultSun).
     nlohmann::json TimeOfDayDefaults()
     {
-        return {
+        return TimeOfDaySettingsJson::WithAllKeys({
             { "time", 15.0f },
             { "animate", false },
             { "sun", {
@@ -374,7 +375,7 @@ namespace
                 { "color", nlohmann::json::array({ 1.0f, 0.9f, 0.85f }) },
                 { "sunIlluminanceLux", 120000.0f },
                 { "ambient", 0.05f } } },
-        };
+        });
     }
 
     EditorObject BuildTimeOfDayObject()

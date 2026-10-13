@@ -30,6 +30,8 @@
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
+#include "app/scene/TimeOfDay.h"              // T4: setTime / setDate
+#include "app/scene/TimeOfDaySettingsJson.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/scene/EditorZone.h"
@@ -2387,6 +2389,125 @@ namespace
             entity->id, entity->properties, std::move(after), "Set " + setting->path);
     }
 
+    // ---------------------------------------------------------- setTime / setDate
+
+    // Time-of-day plan T4. Both are edits of the Time of Day object's properties -- the same
+    // EditEnvironmentCommand the Inspector's slider issues, so the command bar, MCP and the slider are
+    // one road: one undo entry, the document dirty, the scene re-applied by EnvironmentRuntime. The
+    // build and the preview share one computation, so the preview shows the clock the run will set.
+    struct TimeOfDayEdit
+    {
+        const EditorObject* entity = nullptr;
+        nlohmann::json after;
+        std::string summary;
+    };
+
+    bool ComputeTimeOfDayEdit(const EditorContext& ctx, const EditorIntent& intent, bool date,
+        TimeOfDayEdit& out, std::string& outError)
+    {
+        for (const EditorObject& candidate : ctx.document.Environment())
+        {
+            if (candidate.type == "timeOfDay") { out.entity = &candidate; break; }
+        }
+        if (!out.entity)
+        {
+            outError = "This level has no Time of Day (Add > Light > Time of Day)";
+            return false;
+        }
+        TimeOfDaySettings settings{};
+        DirectionalLight sun = TimeOfDaySettingsJson::DefaultSun();
+        TimeOfDaySettingsJson::ApplyOverrides(out.entity->properties, settings, sun);
+        out.after = out.entity->properties;
+        if (!date)
+        {
+            const nlohmann::json spec = intent.params.value("time", nlohmann::json());
+            if (!spec.is_string())
+            {
+                outError = "setTime needs params.time, e.g. \"18:30\", \"sunset\" or \"+2h\"";
+                return false;
+            }
+            float hours = 0.0f;
+            if (!ResolveTimeOfDaySpec(spec.get<std::string>(), settings, hours, outError))
+            {
+                return false;
+            }
+            out.after["time"] = hours;
+            out.summary = "time of day: " + FormatTimeOfDay(settings.timeHours) + " -> " + FormatTimeOfDay(hours);
+            return true;
+        }
+        const nlohmann::json spec = intent.params.value("date", nlohmann::json());
+        int year = 0, month = 0, day = 0;
+        if (!spec.is_string() || !ParseTimeOfDayDate(spec.get<std::string>(), year, month, day, outError))
+        {
+            if (outError.empty()) { outError = "setDate needs params.date, e.g. \"2026-06-21\""; }
+            return false;
+        }
+        // A date means something only to the real sun and moon; switching them on is what asking for
+        // one says, and the summary says so.
+        out.after["date"] = nlohmann::json::array({ year, month, day });
+        out.after["realPositions"] = true;
+        char text[64];
+        std::snprintf(text, sizeof(text), "date: %04d-%02d-%02d -> %04d-%02d-%02d", settings.year, settings.month,
+                      settings.day, year, month, day);
+        out.summary = text;
+        if (!settings.realPositions) { out.summary += " (real sun and moon positions on)"; }
+        return true;
+    }
+
+    std::unique_ptr<EditorCommand> BuildTimeOfDayEdit(const EditorActionContext& actionCtx,
+        const EditorIntent& intent, bool date, std::string& outStatus)
+    {
+        TimeOfDayEdit edit;
+        if (!ComputeTimeOfDayEdit(actionCtx.editor, intent, date, edit, outStatus))
+        {
+            return nullptr;
+        }
+        if (edit.after == edit.entity->properties)
+        {
+            outStatus = "Already so -- " + edit.summary;
+            return nullptr;
+        }
+        outStatus = edit.summary;
+        return std::make_unique<EditEnvironmentCommand>(edit.entity->id, edit.entity->properties,
+            std::move(edit.after), date ? "Set Date" : "Set Time of Day");
+    }
+
+    std::unique_ptr<EditorCommand> BuildSetTime(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>&, const EditorIntent& intent, std::string& outStatus)
+    {
+        return BuildTimeOfDayEdit(actionCtx, intent, false, outStatus);
+    }
+
+    std::unique_ptr<EditorCommand> BuildSetDate(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>&, const EditorIntent& intent, std::string& outStatus)
+    {
+        return BuildTimeOfDayEdit(actionCtx, intent, true, outStatus);
+    }
+
+    void RefineTimeOfDayPreview(const EditorActionContext& actionCtx, const EditorIntent& intent,
+        EditorIntentPreview& preview, bool date)
+    {
+        TimeOfDayEdit edit;
+        std::string error;
+        if (!ComputeTimeOfDayEdit(actionCtx.editor, intent, date, edit, error))
+        {
+            preview.executable = false;
+            preview.problem = error;
+            return;
+        }
+        preview.summary = edit.summary;
+    }
+
+    void RefineSetTime(const EditorActionContext& actionCtx, const EditorIntent& intent, EditorIntentPreview& preview)
+    {
+        RefineTimeOfDayPreview(actionCtx, intent, preview, false);
+    }
+
+    void RefineSetDate(const EditorActionContext& actionCtx, const EditorIntent& intent, EditorIntentPreview& preview)
+    {
+        RefineTimeOfDayPreview(actionCtx, intent, preview, true);
+    }
+
     // ---------------------------------------------------------------------- spawn
 
     // Where a scatter is centred when the phrase did not say. Looking at a spot and saying
@@ -3602,6 +3723,43 @@ EditorActionRegistry::EditorActionRegistry()
               "multiply the current value instead (numbers only)" },
         },
         &BuildSetEnvironment,
+    });
+
+    // Time-of-day plan T4. Their own verbs rather than setEnvironment on `timeOfDay.time`: a time is
+    // said as "18:30", "закат", "+2 часа", and the hours-as-a-float that the setting holds is not how
+    // anybody says it -- nor is a sunset, which depends on the date and the place.
+    actions_.push_back({
+        "setTime",
+        "Set the level's time of day; the sun and the moon move with it (the sun lights the day, the "
+        "moon the night). params.time is a clock time \"HH:MM\" (\"06:15\", \"18:30\"), a moment "
+        "(\"sunrise\", \"sunset\", \"noon\", \"midnight\" -- with real positions the date's own), or a "
+        "shift from the current time (\"+2h\", \"-30m\", \"+1:30\"). This is the action for \"сделай "
+        "закат\", \"поставь утро\", \"на два часа позже\". One undo entry.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::None,
+        {
+            { "time", EditorParamKind::String, true,
+              "\"HH:MM\", sunrise / sunset / noon / midnight, or a shift like \"+2h\"" },
+        },
+        &BuildSetTime,
+        false,
+        &RefineSetTime,
+    });
+
+    actions_.push_back({
+        "setDate",
+        "Set the date the sun and the moon are computed for (params.date \"YYYY-MM-DD\"). Switches "
+        "the level to REAL positions -- the sun's path and the moon's phase for that day at the "
+        "level's latitude and longitude -- since a date means nothing to the simple path. For "
+        "\"сделай зимнее солнце\", \"какая луна будет 1 января\".",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::None,
+        {
+            { "date", EditorParamKind::String, true, "\"YYYY-MM-DD\"" },
+        },
+        &BuildSetDate,
+        false,
+        &RefineSetDate,
     });
 
     actions_.push_back({

@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <initializer_list>
 
 #include "core/logging/Log.h"
 #include "rendering/lighting/Astronomy.h"
@@ -251,4 +254,194 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     }
     litBy_ = litBy;
     lightBody_ = lightBody;
+}
+
+namespace
+{
+// The sun's geometric altitude at a local clock time on the section's date and place.
+double RealSunAltitudeDeg(const TimeOfDaySettings& s, double hours)
+{
+    const double jd = astro::JulianDayUtc(s.year, s.month, s.day, hours - s.utcOffsetHours);
+    return astro::SunPosition(s.latitudeDeg, s.longitudeDeg, jd).position.altitudeDeg;
+}
+
+// The minute-resolution crossing of the horizon on the date, refined linearly: rising or setting.
+bool RealHorizonCrossing(const TimeOfDaySettings& s, bool rising, double& outHours)
+{
+    double previous = RealSunAltitudeDeg(s, 0.0);
+    for (int minute = 1; minute <= 24 * 60; ++minute)
+    {
+        const double hours = minute / 60.0;
+        const double now = RealSunAltitudeDeg(s, hours);
+        const bool crossed = rising ? (previous < 0.0 && now >= 0.0) : (previous >= 0.0 && now < 0.0);
+        if (crossed)
+        {
+            const double t = previous / (previous - now);
+            outHours = hours - (1.0 - t) / 60.0;
+            return true;
+        }
+        previous = now;
+    }
+    return false;
+}
+
+std::string Lower(std::string_view text)
+{
+    std::string out;
+    for (const char ch : text)
+    {
+        if (ch == ' ' || ch == '\t') { continue; }
+        out.push_back(ch >= 'A' && ch <= 'Z' ? static_cast<char>(ch - 'A' + 'a') : ch);
+    }
+    return out;
+}
+
+bool StartsWith(const std::string& text, std::string_view prefix)
+{
+    return text.size() >= prefix.size() && text.compare(0, prefix.size(), prefix) == 0;
+}
+
+// "H", "H.5", "H:MM" -> hours. `allowUnits`: a trailing h/ч (hours) or m/min/м/мин (minutes).
+bool ParseClock(std::string text, bool allowUnits, double& outHours)
+{
+    double unit = 1.0;
+    if (allowUnits)
+    {
+        for (const std::string_view suffix : { "min", "мин", "m", "м" })
+        {
+            if (text.size() > suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0)
+            {
+                text.resize(text.size() - suffix.size());
+                unit = 1.0 / 60.0;
+                break;
+            }
+        }
+        if (unit == 1.0)
+        {
+            for (const std::string_view suffix : { "h", "ч" })
+            {
+                if (text.size() > suffix.size() && text.compare(text.size() - suffix.size(), suffix.size(), suffix) == 0)
+                {
+                    text.resize(text.size() - suffix.size());
+                    break;
+                }
+            }
+        }
+    }
+    if (text.empty()) { return false; }
+    const std::size_t colon = text.find(':');
+    char* end = nullptr;
+    if (colon == std::string::npos)
+    {
+        const double value = std::strtod(text.c_str(), &end);
+        if (end != text.c_str() + text.size()) { return false; }
+        outHours = value * unit;
+        return true;
+    }
+    if (unit != 1.0) { return false; } // "1:30m" means nothing
+    const std::string h = text.substr(0, colon);
+    const std::string m = text.substr(colon + 1);
+    if (h.empty() || m.size() != 2) { return false; }
+    const long hours = std::strtol(h.c_str(), &end, 10);
+    if (end != h.c_str() + h.size()) { return false; }
+    const long minutes = std::strtol(m.c_str(), &end, 10);
+    if (end != m.c_str() + m.size() || minutes < 0 || minutes > 59 || hours < 0) { return false; }
+    outHours = static_cast<double>(hours) + static_cast<double>(minutes) / 60.0;
+    return true;
+}
+}
+
+bool ResolveTimeOfDaySpec(std::string_view spec, const TimeOfDaySettings& s, float& outHours, std::string& outError)
+{
+    const std::string text = Lower(spec);
+    const auto wrap = [](double h) { h = std::fmod(h, 24.0); return static_cast<float>(h < 0.0 ? h + 24.0 : h); };
+    const auto oneOf = [&text](std::initializer_list<std::string_view> words) {
+        return std::find(words.begin(), words.end(), text) != words.end();
+    };
+    const bool sunrise = oneOf({ "sunrise", "dawn", "рассвет", "восход" });
+    const bool sunset = oneOf({ "sunset", "dusk", "закат" });
+    if (sunrise || sunset)
+    {
+        if (!s.realPositions)
+        {
+            outHours = wrap(sunrise ? s.dawnHours : s.duskHours);
+            return true;
+        }
+        double hours = 0.0;
+        if (!RealHorizonCrossing(s, sunrise, hours))
+        {
+            outError = std::string("the sun does not ") + (sunrise ? "rise" : "set") + " on " +
+                       std::to_string(s.year) + "-" + std::to_string(s.month) + "-" + std::to_string(s.day) +
+                       " at latitude " + std::to_string(static_cast<int>(std::lround(s.latitudeDeg)));
+            return false;
+        }
+        outHours = wrap(hours);
+        return true;
+    }
+    if (oneOf({ "noon", "midday", "полдень" }))
+    {
+        if (!s.realPositions)
+        {
+            double day = static_cast<double>(s.duskHours) - s.dawnHours;
+            if (day <= 0.0) { day += 24.0; }
+            outHours = wrap(s.dawnHours + 0.5 * day);
+            return true;
+        }
+        int best = 0;
+        double bestAltitude = -1.0e9;
+        for (int minute = 0; minute < 24 * 60; ++minute)
+        {
+            const double altitude = RealSunAltitudeDeg(s, minute / 60.0);
+            if (altitude > bestAltitude) { bestAltitude = altitude; best = minute; }
+        }
+        outHours = wrap(best / 60.0);
+        return true;
+    }
+    if (oneOf({ "midnight", "полночь" }))
+    {
+        outHours = 0.0f;
+        return true;
+    }
+    double hours = 0.0;
+    if (StartsWith(text, "+") || StartsWith(text, "-"))
+    {
+        if (ParseClock(text.substr(1), true, hours))
+        {
+            outHours = wrap(s.timeHours + (text[0] == '-' ? -hours : hours));
+            return true;
+        }
+    }
+    else if (ParseClock(text, false, hours) && hours >= 0.0 && hours <= 24.0)
+    {
+        outHours = wrap(hours);
+        return true;
+    }
+    outError = "'" + std::string(spec) + "' is not a time: give HH:MM (\"18:30\"), sunrise / sunset / noon / "
+               "midnight, or a shift like +2h, -30m, +1:30";
+    return false;
+}
+
+bool ParseTimeOfDayDate(std::string_view spec, int& year, int& month, int& day, std::string& outError)
+{
+    const std::string text = Lower(spec);
+    int y = 0, m = 0, d = 0;
+    char tail = 0;
+    if (sscanf_s(text.c_str(), "%d-%d-%d%c", &y, &m, &d, &tail, 1) != 3 || y < 1 || y > 9999 || m < 1 || m > 12 ||
+        d < 1 || d > 31)
+    {
+        outError = "'" + std::string(spec) + "' is not a date: give YYYY-MM-DD (\"2026-06-21\")";
+        return false;
+    }
+    year = y;
+    month = m;
+    day = d;
+    return true;
+}
+
+std::string FormatTimeOfDay(float hours)
+{
+    const int minutes = static_cast<int>(std::lround(static_cast<double>(hours) * 60.0)) % (24 * 60);
+    char text[8];
+    std::snprintf(text, sizeof(text), "%02d:%02d", minutes / 60, minutes % 60);
+    return text;
 }

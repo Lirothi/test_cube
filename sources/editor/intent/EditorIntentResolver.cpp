@@ -507,6 +507,12 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
             preview.summary += " " + std::to_string(count) + (count == 1 ? " object" : " objects");
         }
         preview.executable = true;
+        // A verb with no noun can still know what it will do: setTime says "15:08 -> 18:30" (and
+        // refuses a time it cannot read) here rather than leaving the button to say "setTime".
+        if (action->refinePreview)
+        {
+            action->refinePreview(actionCtx, preview.resolved, preview);
+        }
         return preview;
     }
 

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <string_view>
+
 #include "core/math/Math.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/TimeOfDaySettings.h"
@@ -82,3 +85,18 @@ private:
     Math::float3 sunToward_{0.0f, 1.0f, 0.0f};
     Math::float3 moonToward_{0.0f, -1.0f, 0.0f};
 };
+
+// T4: what the editor's `setTime` / `setDate` accept (the command bar, MCP), resolved against the
+// section's settings:
+//   * "18:30", "6:15", "18", "18.5"                      -- a clock time;
+//   * "sunrise"/"dawn", "sunset"/"dusk", "noon", "midnight" (and рассвет/восход, закат, полдень,
+//     полночь) -- with real positions the date's own sunrise / sunset (the sun's centre on the
+//     horizon) and the sun's highest point, on the simple path dawn / dusk / the path's top;
+//   * "+2h", "-30m", "+1:30", "+1.5"                     -- a shift from `settings.timeHours`.
+// False with a sentence that says what IS accepted.
+bool ResolveTimeOfDaySpec(std::string_view spec, const TimeOfDaySettings& settings, float& outHours,
+                          std::string& outError);
+// "YYYY-MM-DD".
+bool ParseTimeOfDayDate(std::string_view spec, int& year, int& month, int& day, std::string& outError);
+// "HH:MM", the minute rounded.
+std::string FormatTimeOfDay(float hours);
