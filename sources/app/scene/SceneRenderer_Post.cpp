@@ -274,6 +274,13 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             settings.apertureFStop, settings.shutterSpeedSec, settings.isoSensitivity);
         constants.autoExposure = settings.autoExposure ? 1u : 0u;
         constants.blackBucketInfluence = settings.blackBucketInfluence;
+        // Time-of-day E1: the compensation curve, points 0-3 in the A halves and 4-5 in the B halves.
+        constants.curvePoints = std::min(settings.exposureCurvePoints, render::CameraExposureSettings::kExposureCurveMaxPoints);
+        for (std::uint32_t i = 0; i < constants.curvePoints; ++i)
+        {
+            (i < 4u ? constants.curveEvA : constants.curveEvB)[i & 3u] = settings.exposureCurveEv[i];
+            (i < 4u ? constants.curveCompA : constants.curveCompB)[i & 3u] = settings.exposureCurveComp[i];
+        }
         constants.startDistance = settings.adaptationStartDistance;
         // Slope-match factors for the hybrid adaptation, derived exactly as UE derives them: make
         // the exponential's slope equal the linear's at the switch point so the two halves join

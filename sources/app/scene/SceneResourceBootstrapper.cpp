@@ -337,6 +337,7 @@ void SceneTonemapCBHandles::Populate(Material* material)
     bilateralMinLogLum = material->ComputeCB0FieldHandle("bilateralMinLogLum");
     bilateralInvLogLumRange = material->ComputeCB0FieldHandle("bilateralInvLogLumRange");
     nightVision = material->ComputeCB0FieldHandle("nightVision");
+    nightTint = material->ComputeCB0FieldHandle("nightTint");
     bloomSceneApply = material->ComputeCB0FieldHandle("bloomSceneApply");
     bloomScatterApply = material->ComputeCB0FieldHandle("bloomScatterApply");
     sunRaysDir = material->ComputeCB0FieldHandle("sunRaysDir");
@@ -419,6 +420,11 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
     exponentialUpM = material->ComputeCB0FieldHandle("exponentialUpM");
     exponentialDownM = material->ComputeCB0FieldHandle("exponentialDownM");
     blackBucketInfluence = material->ComputeCB0FieldHandle("blackBucketInfluence");
+    curvePoints = material->ComputeCB0FieldHandle("curvePoints");
+    curveEvA = material->ComputeCB0FieldHandle("curveEvA");
+    curveEvB = material->ComputeCB0FieldHandle("curveEvB");
+    curveCompA = material->ComputeCB0FieldHandle("curveCompA");
+    curveCompB = material->ComputeCB0FieldHandle("curveCompB");
 }
 
 #if WITH_EDITOR
@@ -1787,6 +1793,9 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     // Time-of-day E2: night vision. Only with the photographic camera on -- the shader also checks --
     // since without it the frame is not in luminance.
     matTonemapCS_->UpdateCBField(h.nightVision, camera.enabled ? std::clamp(camera.nightVision, 0.0f, 1.0f) : 0.0f, dest);
+    const float nightTint[4] = { std::max(camera.nightTint[0], 0.0f), std::max(camera.nightTint[1], 0.0f),
+                                 std::max(camera.nightTint[2], 0.0f), std::clamp(camera.nightDesaturation, 0.0f, 1.0f) };
+    matTonemapCS_->UpdateCBField(h.nightTint, nightTint, dest);
     matTonemapCS_->UpdateCBField(h.bloomSceneApply, bloomApply.sceneApply, dest);
     matTonemapCS_->UpdateCBField(h.bloomScatterApply, bloomApply.scatterApply, dest);
     matTonemapCS_->UpdateCBField(h.sunRaysDir, sunRays.dir, dest);
@@ -1844,6 +1853,11 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
     matExposureSolveCS_->UpdateCBField(handles.exponentialUpM, data.exponentialUpM, dest);
     matExposureSolveCS_->UpdateCBField(handles.exponentialDownM, data.exponentialDownM, dest);
     matExposureSolveCS_->UpdateCBField(handles.blackBucketInfluence, data.blackBucketInfluence, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curvePoints, data.curvePoints, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curveEvA, data.curveEvA, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curveEvB, data.curveEvB, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curveCompA, data.curveCompA, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curveCompB, data.curveCompB, dest);
 }
 
 void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const

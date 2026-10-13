@@ -106,6 +106,9 @@ cbuffer TonemapCB : register(b0)
     float4 sunRaysWidth;   // x: needle width, y: star spike width -- each the Gaussian's 1/e half-width (rad);
                            // z: bundle width (turns: a raised cosine's half-width, which is its FWHM);
                            // w: bundle strength 0-1 (how dark the gaps and how gathered the needles)
+    // Time-of-day E2: what the rods' vision looks like -- rgb the cold tint (any scale: used at unit
+    // luminance), w how much colour they take away (CameraExposureSettings::nightTint/nightDesaturation).
+    float4 nightTint;
 };
 
 #include "utils.hlsli"
@@ -504,26 +507,37 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     //   * the rods' signal is the scotopic luminance from XYZ (Larson, Rushmeier, Piatko 1997:
     //     V = Y (1.33 (1 + (Y + Z) / X) - 1.68)), scaled so white keeps its luminance -- the
     //     night's DARKNESS is exposure's business (plan E1), this changes colour only;
-    //   * its colour is a blue-cyan grey, unit luminance: the rods' signal reaches perception through
-    //     the S-cone (blue) pathway, perceived near 480 nm (Kirk & O'Brien 2011). Thompson, Shirley,
-    //     Ferwerda 2002's often-used shift (1.05, 0.97, 1.27) was tried first: its red above its green
-    //     read LAVENDER in this pipeline, not cold.
+    //   * what they see is the scene under a COLD TINT (nightTint, at unit luminance: a white-balance
+    //     shift, colour only) with PART of its colour taken (nightTint.w): the rods' signal reaches
+    //     perception through the S-cone (blue) pathway (Kirk & O'Brien 2011). Taking ALL of it -- the
+    //     rods' colourless grey, the first cut -- rendered a moonlit beach black and white, and the
+    //     owner wanted what Ultra Dynamic Sky shows: cold light with the colours kept. The cold LIGHT is
+    //     the moon's (moonLightColor, UDS's); this tint is the eye's milder cast on top. Thompson,
+    //     Shirley, Ferwerda 2002's (1.05, 0.97, 1.27) read LAVENDER in this pipeline.
     // Only with the photographic camera on (the host writes 0 otherwise): without it the frame is not
     // in luminance and there is no adaptation to read.
     if (nightVision > 0.0f && (preExposureActive != 0 || exposureEnabled != 0))
     {
         const float totalExposure = max(exposureMultiplier * ((preExposureActive != 0) ? preExposure : 1.0f), 1e-12f);
         const float Y = max(dot(hdr, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
-        // cd/m2: the pixel's luminance (Y / exposure) against the adaptation's (0.18 / exposure).
-        const float effective = sqrt(Y * 0.18f) / totalExposure;
+        // Time-of-day E1: the camera is exposed `compensation` stops off what the EYE is adapted to
+        // (the static trim plus the curve -- the curve darkens a night the eye still sees as a night),
+        // so the eye's adaptation is the camera's middle grey scaled back by it. The solve writes it;
+        // a value it has not written yet reads as none.
+        float compensation = asfloat(ExposureValue.Load(kExposureCompensationOffset));
+        compensation = (isnan(compensation) || isinf(compensation)) ? 0.0f : clamp(compensation, -16.0f, 16.0f);
+        // cd/m2: the pixel's luminance (Y / exposure) against the eye's adaptation (0.18 x 2^c / exposure).
+        const float effective = sqrt(Y * 0.18f * exp2(compensation)) / totalExposure;
         const float rods = nightVision *
             (1.0f - smoothstep(log10(0.005f), log10(3.0f), log10(max(effective, 1e-12f))));
         if (rods > 0.0f)
         {
+            const float3 tint = nightTint.rgb / max(dot(nightTint.rgb, float3(0.2126f, 0.7152f, 0.0722f)), 1e-6f);
             const float X = dot(hdr, float3(0.4124f, 0.3576f, 0.1805f));
             const float Z = dot(hdr, float3(0.0193f, 0.1192f, 0.9505f));
             const float scotopic = max(Y * (1.33f * (1.0f + (Y + Z) / max(X, 1e-12f)) - 1.68f), 0.0f) / 2.58f;
-            hdr = lerp(hdr, scotopic * float3(0.82f, 1.02f, 1.38f), rods);
+            const float3 rodsSee = lerp(hdr, scotopic.xxx, saturate(nightTint.w)) * tint;
+            hdr = lerp(hdr, rodsSee, rods);
         }
     }
 

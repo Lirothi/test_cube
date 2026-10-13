@@ -247,6 +247,7 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle bilateralMinLogLum;
     Material::CBFieldHandle bilateralInvLogLumRange;
     Material::CBFieldHandle nightVision; // time-of-day E2: rods' share of vision (Purkinje)
+    Material::CBFieldHandle nightTint;   // ... their cold cast (rgb) and how much colour they take (w)
     // P8C-2o: UE's split -- the scene's own factor and the flare's, which PARTITION the light
     // rather than adding to it. See the block comment in tonemap_cs.hlsl.
     Material::CBFieldHandle bloomSceneApply;
@@ -317,6 +318,8 @@ struct SceneExposureSolveCBHandles
     Material::CBFieldHandle exponentialUpM;
     Material::CBFieldHandle exponentialDownM;
     Material::CBFieldHandle blackBucketInfluence;
+    Material::CBFieldHandle curvePoints; // time-of-day E1
+    Material::CBFieldHandle curveEvA, curveEvB, curveCompA, curveCompB;
 
     void Populate(Material* material);
 };
@@ -946,6 +949,10 @@ struct ExposureMeteringConstants
     float exponentialUpM = 1.0f;
     float exponentialDownM = 1.0f;
     float blackBucketInfluence = 1.0f;
+    // Time-of-day E1: the compensation curve (CameraExposureSettings::exposureCurve*), as four float4s.
+    uint32_t curvePoints = 0;
+    float curveEvA[4] = {}, curveEvB[4] = {};
+    float curveCompA[4] = {}, curveCompB[4] = {};
 };
 
 #if WITH_EDITOR

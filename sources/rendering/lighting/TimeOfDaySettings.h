@@ -69,9 +69,16 @@ struct TimeOfDaySettings
     // to how this renderer draws the sun: white, at 6500 K. 154 + 29 mired = 5450 K, a white with a
     // touch of cream. (The first defaults were 4300 K, the moonlight AT THE GROUND with the air's
     // reddening the sky adds again, and then 4950 K, the shift applied to the real sun instead of to
-    // ours: both drew a yellow disc, and the owner said rightly that moonlight is not yellow.) The cold
-    // of a moonlit night is the eye's -- camera exposure's nightVision (plan E2) -- not the light's.
+    // ours: both drew a yellow disc, and the owner said rightly that moonlight is not yellow.) This is the
+    // colour of the moon ITSELF -- its disc and the sky's scattering of it; what it lights is below.
     float moonTemperatureK = 5450.0f;
+    // The colour the moon LIGHTS the scene in (the ground light only). The owner (2026-10-13), shown the
+    // physics -- a cream moonlight turned grey by the eye's rods: "a night must not be black and white,
+    // there must be cold light". That is Ultra Dynamic Sky's night, and its Moon Light Colour is the
+    // default: a beige beach lit by the warm physical moonlight stays beige (b/r 0.35 on wind_test), and
+    // no tint the eye stage can afford turns it cold. Linear RGB used at unit luminance, so the lux above
+    // stay physical and only the hue is the artist's.
+    float moonLightColor[3] = {0.446f, 0.557f, 0.865f};
     float moonAngleDeg = 0.52f;      // angular diameter (mean): the drawn disc and the light's size
     // The ashen light on the moon's dark side -- sunlight off the Earth -- as a multiplier on its
     // physical estimate (~1.2e-4 of the full disc at new moon, falling with the Earth's own phase).

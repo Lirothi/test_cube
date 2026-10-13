@@ -8,7 +8,11 @@
 // t0: histogram (raw, 256 uint bins)
 // u0: persistent exposure record (raw, 4 floats): adapted EV100, low percentile luminance,
 //     high percentile luminance, target EV100. (The same buffer carries the sun probe behind
-//     them -- sun_probe.hlsli -- which this pass never touches.)
+//     them -- sun_probe.hlsli -- which this pass never touches.) Time-of-day E1 adds a record
+//     behind the probe (kExposureCompensationOffset): the compensation in effect, and the EYE's
+//     adaptation before the curve, which is what adapts from frame to frame.
+
+#include "sun_probe.hlsli"
 
 #define EXPOSURE_SOLVE_CS_RS \
     "CBV(b0)," \
@@ -51,14 +55,64 @@ cbuffer ExposureSolveCB : register(b0)
     // the meter decided; in manual it offsets a number the author already chose by hand, so it is
     // a quick +/- on top of a solved shutter rather than a correction to a measurement.
     float manualCompensationEv;
-    float _padComp0;
+    // Time-of-day E1: the compensation CURVE (CameraExposureSettings::exposureCurve*), up to six
+    // points: x = the EV100 the eye is adapted to, ascending, y = compensation EV. 0 points = none.
+    uint  curvePoints;
     float _padComp1;
     float _padComp2;
+    float4 curveEvA;      // points 0-3
+    float4 curveEvB;      // points 4-5 in xy
+    float4 curveCompA;
+    float4 curveCompB;
 };
 
 static const uint kBins = 256u;
 
 groupshared uint gBins[kBins];
+
+// Time-of-day E1: piecewise linear through the curve's points, flat beyond its ends, 0 with none.
+// The GPU twin of render::EvaluateExposureCurve (PhotographicSettings.h); the two must agree. The
+// loop bound is the literal maximum -- a bound read from the constant buffer is a trap here.
+float ExposureCurve(float ev)
+{
+    const uint n = min(curvePoints, 6u);
+    if (n == 0u)
+    {
+        return 0.0f;
+    }
+    const float xs[6] = { curveEvA.x, curveEvA.y, curveEvA.z, curveEvA.w, curveEvB.x, curveEvB.y };
+    const float ys[6] = { curveCompA.x, curveCompA.y, curveCompA.z, curveCompA.w, curveCompB.x, curveCompB.y };
+    if (ev <= xs[0])
+    {
+        return ys[0];
+    }
+    float result = ys[n - 1u];
+    bool found = false;
+    [unroll]
+    for (uint i = 1u; i < 6u; ++i)
+    {
+        if (!found && i < n && ev <= xs[i])
+        {
+            const float span = xs[i] - xs[i - 1u];
+            const float t = span > 1e-6f ? (ev - xs[i - 1u]) / span : 1.0f;
+            result = ys[i - 1u] + t * (ys[i] - ys[i - 1u]);
+            found = true;
+        }
+    }
+    return result;
+}
+
+// Writes the frame's record. `eyeEv` is the adaptation BEFORE the curve (what the next frame adapts
+// from), `cameraEv` what the frame is exposed at, `compensation` everything between the scene the eye
+// is adapted to and the camera (the static trim plus the curve, EV, positive brightens) -- night
+// vision adds it back to the camera's exposure to find the eye (tonemap_cs.hlsl).
+void StoreExposure(float cameraEv, float targetEv, float eyeEv, float compensation)
+{
+    ExposureValue.Store(0, asuint(cameraEv));
+    ExposureValue.Store(12, asuint(targetEv));
+    ExposureValue.Store(kExposureCompensationOffset, asuint(compensation));
+    ExposureValue.Store(kExposureCompensationOffset + 4u, asuint(eyeEv));
+}
 
 [numthreads(8, 8, 1)]
 [RootSignature(EXPOSURE_SOLVE_CS_RS)]
@@ -91,16 +145,23 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         total += gBins[b];
     }
 
-    const float prevEv = asfloat(ExposureValue.Load(0));
+    // E1: the frame-to-frame state is the EYE's adaptation, before the curve -- the curve is applied on
+    // top of it every frame, so it never feeds back into the adaptation. Without a curve the two are
+    // the same number and this is what offset 0 always held.
+    const float prevEv = asfloat(ExposureValue.Load(kExposureCompensationOffset + 4u));
     const bool prevValid = !isnan(prevEv) && !isinf(prevEv);
+    const float prevCameraEv = asfloat(ExposureValue.Load(0));
+    const float prevCompensation = asfloat(ExposureValue.Load(kExposureCompensationOffset));
+    const bool prevCameraValid = prevValid && !isnan(prevCameraEv) && !isinf(prevCameraEv)
+        && !isnan(prevCompensation) && !isinf(prevCompensation);
 
     if (total == 0u)
     {
         // Nothing valid was sampled. Hold the previous value rather than inventing one; if even
         // that is unusable, fall back to the middle of the authored clamp.
         const float held = prevValid ? prevEv : clamp(0.0f, minEv100, maxEv100);
-        ExposureValue.Store(0, asuint(held));
-        ExposureValue.Store(12, asuint(held));
+        const float heldCamera = prevCameraValid ? prevCameraEv : held;
+        StoreExposure(heldCamera, heldCamera, held, prevCameraValid ? prevCompensation : 0.0f);
         return;
     }
 
@@ -164,8 +225,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (weight <= 0.0f)
     {
         const float held = prevValid ? prevEv : clamp(0.0f, minEv100, maxEv100);
-        ExposureValue.Store(0, asuint(held));
-        ExposureValue.Store(12, asuint(held));
+        const float heldCamera = prevCameraValid ? prevCameraEv : held;
+        StoreExposure(heldCamera, heldCamera, held, prevCameraValid ? prevCompensation : 0.0f);
         return;
     }
     const float meteredLogLum = weightedLogLum / weight;
@@ -220,8 +281,25 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
     adapted = clamp(adapted, minEv100, maxEv100);
 
-    ExposureValue.Store(0, asuint(adapted));
+    // Time-of-day E1: the compensation curve, keyed on the light the eye is ADAPTED to (the smoothed
+    // value plus the static trim it carries, i.e. the scene's own EV) and applied OUTSIDE the
+    // adaptation, like UE's EyeAdaptationCommon. Unlike UE it reads the smoothed value, not this
+    // frame's meter: walking into a dark room then darkens the picture as the eye adapts instead of
+    // jumping four stops on the frame the meter changed. Auto only -- a manual exposure is the author's.
+    // Clamped again so minEv100/maxEv100 keep bounding the CAMERA, as they always did.
+    float cameraEv = adapted;
+    float cameraTargetEv = targetEv;
+    float compensation = 0.0f;
+    if (autoExposure != 0u)
+    {
+        cameraEv = clamp(adapted - ExposureCurve(adapted + compensationEv), minEv100, maxEv100);
+        cameraTargetEv = clamp(targetEv - ExposureCurve(targetEv + compensationEv), minEv100, maxEv100);
+        // Everything between the scene the eye is adapted to (adapted + compensationEv) and the
+        // camera, as the camera finally applies it -- clamps included.
+        compensation = adapted + compensationEv - cameraEv;
+    }
+
+    StoreExposure(cameraEv, cameraTargetEv, adapted, compensation);
     ExposureValue.Store(4, asuint(exp2(loLogLum)));
     ExposureValue.Store(8, asuint(exp2(hiLogLum)));
-    ExposureValue.Store(12, asuint(targetEv));
 }

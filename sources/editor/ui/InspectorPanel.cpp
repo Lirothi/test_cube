@@ -1,5 +1,7 @@
 #include "editor/ui/InspectorPanel.h"
 #include "app/scene/GtaoSettingsJson.h"
+#include "rendering/core/PhotographicSettingsJson.h" // E1: the curve plot parses as the runtime does
+#include "rendering/lighting/TimeOfDaySettings.h"    // the moon's light colour default
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -614,8 +616,122 @@ namespace
                               "It is deliberately NOT the way to keep different lighting conditions "
                               "apart: percentile metering is scale-invariant, so a correctly "
                               "metered night and a correctly metered noon land on the same target, "
-                              "and clamping the result flattens rather than fixes that. The plan "
-                              "records an exposure-compensation CURVE as the real answer.");
+                              "and clamping the result flattens rather than fixes that. The "
+                              "compensation CURVE below is the real answer.");
+
+                // Time-of-day plan E1.
+                ImGui::SeparatorText("Compensation curve (by the light)");
+                {
+                    // The rows are the document's own pairs, in its order; the runtime sorts them by EV
+                    // (PhotographicSettingsJson::ApplyOverrides), so a row dragged past its neighbour
+                    // still evaluates in order.
+                    const auto curveIt = tgt().find("exposureCurve");
+                    const bool hasCurve = curveIt != tgt().end() && curveIt->is_array();
+                    const std::size_t count = hasCurve ? curveIt->size() : 0u;
+                    const auto pointOf = [](const nlohmann::json& p, float& ev, float& comp)
+                    {
+                        const bool ok = p.is_array() && p.size() >= 2 && p[0].is_number() && p[1].is_number();
+                        ev = ok ? p[0].get<float>() : 0.0f;
+                        comp = ok ? p[1].get<float>() : 0.0f;
+                    };
+                    std::size_t removeAt = count;
+                    ImGui::PushID("exposureCurve");
+                    for (std::size_t i = 0; i < count; ++i)
+                    {
+                        float v[2] = { 0.0f, 0.0f };
+                        pointOf((*curveIt)[i], v[0], v[1]);
+                        ImGui::PushID(static_cast<int>(i));
+                        const bool changed = ImGui::DragFloat2("EV100 -> EV", v, 0.05f, -16.0f, 24.0f, "%.2f");
+                        beginContinuousEdit(changed);
+                        if (changed)
+                        {
+                            tgt()["exposureCurve"][i] = nlohmann::json::array({ v[0], std::clamp(v[1], -10.0f, 10.0f) });
+                        }
+                        trackContinuousEdit(changed);
+                        ImGui::SameLine();
+                        if (ImGui::SmallButton("x")) { removeAt = i; }
+                        ImGui::PopID();
+                    }
+                    if (count == 0u)
+                    {
+                        ImGui::TextDisabled("None: the meter's middle grey at any light.");
+                    }
+                    else
+                    {
+                        // The curve as the solve will run it -- parsed (sorted, clamped) by the same
+                        // ApplyOverrides and evaluated by the CPU twin of the shader's ExposureCurve.
+                        render::CameraExposureSettings parsed;
+                        render::PhotographicSettingsJson::ApplyOverrides(tgt(), parsed);
+                        constexpr int kSamples = 49;
+                        constexpr float kLoEv = -8.0f, kHiEv = 16.0f;
+                        float samples[kSamples];
+                        float lo = -1.0f, hi = 0.0f; // always show 0 and a stop below it
+                        for (int s = 0; s < kSamples; ++s)
+                        {
+                            const float ev = kLoEv + (kHiEv - kLoEv) * static_cast<float>(s) / (kSamples - 1);
+                            samples[s] = render::EvaluateExposureCurve(parsed, ev);
+                            lo = std::min(lo, samples[s]);
+                            hi = std::max(hi, samples[s]);
+                        }
+                        ImGui::PlotLines("##curvePlot", samples, kSamples, 0, "EV100 -8 .. 16", lo - 0.5f, hi + 0.5f,
+                                         ImVec2(ImGui::GetContentRegionAvail().x, 50.0f));
+                    }
+                    if (removeAt < count)
+                    {
+                        nlohmann::json curve = *curveIt;
+                        curve.erase(removeAt);
+                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                    }
+                    else if (count < render::CameraExposureSettings::kExposureCurveMaxPoints &&
+                             ImGui::SmallButton("Add point"))
+                    {
+                        // Two stops of light past the last point at its compensation: a flat start.
+                        nlohmann::json curve = hasCurve ? *curveIt : nlohmann::json::array();
+                        float ev = 0.0f, comp = 0.0f;
+                        if (!curve.empty()) { pointOf(curve.back(), ev, comp); ev += 2.0f; }
+                        curve.push_back(nlohmann::json::array({ ev, comp }));
+                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                    }
+                    ImGui::PopID();
+
+                    ImGui::PushID("curvePresets");
+                    if (ImGui::SmallButton("None"))
+                    {
+                        executeChange(withField("exposureCurve", nlohmann::json::array()), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("No curve: every level renders as it did before E1."); }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("Eye"))
+                    {
+                        render::CameraExposureSettings eye;
+                        render::SetEyeExposureCurve(eye);
+                        nlohmann::json curve = nlohmann::json::array();
+                        for (std::uint32_t i = 0; i < eye.exposureCurvePoints; ++i)
+                        {
+                            curve.push_back(nlohmann::json::array({ eye.exposureCurveEv[i], eye.exposureCurveComp[i] }));
+                        }
+                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("What a level with a time of day wants: a day untouched, the end of "
+                                          "twilight 1.3 stops down, a full-moon night about 2, a moonless one 2.25.");
+                    }
+                    ImGui::PopID();
+                }
+                InspectorHelp("Extra compensation, in EV, by how much light the eye is adapted to -- the "
+                              "scene's EV100 in this renderer's numbers (log2 cd/m2 + 3; Live below shows it "
+                              "as Eye): wind_test's beach meters 15 at noon, 2.5 at the end of civil twilight, "
+                              "-3.5 under a full moon. NEGATIVE DARKENS, like the "
+                              "Compensation above, and adds to it.\n\n"
+                              "Why: percentile metering lands any correctly lit scene on the same middle "
+                              "grey, so under auto exposure a moonlit beach reads as a dim day. The eye "
+                              "adapts only part of the way and a night stays dark; this curve is the rest "
+                              "(UE's Exposure Compensation Curve). Piecewise linear through up to six "
+                              "points, flat past its ends. It follows the eye's SMOOTHED adaptation, so a "
+                              "dark room darkens the picture as the eye adapts rather than on one frame. "
+                              "Min/Max EV100 still bound the camera. Night vision reads the eye's "
+                              "adaptation, not the darkened camera. --set=exposure.curve:<0 none|1 eye>");
                 ImGui::SeparatorText("Metering (which pixels set the exposure)");
                 dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("The histogram window the meter averages between. Widening it makes "
@@ -788,13 +904,33 @@ namespace
             // Time-of-day plan E2.
             ImGui::SeparatorText("Night vision");
             dragF("Night Vision", "nightVision", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
-            InspectorHelp("The eye's rods taking over in the dark (the Purkinje shift): colours fade to a "
-                          "bluish grey and blues outlast reds -- why a moonlit night looks COLD although "
+            InspectorHelp("The eye's rods taking over in the dark (the Purkinje shift): a cold cast falls "
+                          "over the scene and its colours weaken -- why a moonlit night looks COLD although "
                           "moonlight is warmer than sunlight. How much follows the light by itself: none "
                           "above ~3 cd/m2 (a day and its shadows are untouched), full below ~0.005, per "
-                          "pixel against the adaptation, so the moon's disc keeps its colour. 1 = that "
-                          "physical estimate, 0 = a camera's colour vision at any light. Colour only -- how "
-                          "DARK the night reads is exposure's. --set=exposure.nightVision:<0..1>");
+                          "pixel against what the eye is adapted to, so the moon's disc and a lamp keep "
+                          "their colour. 1 = that estimate, 0 = a camera's colour vision at any light. "
+                          "Colour only -- how DARK the night reads is the compensation curve's. "
+                          "--set=exposure.nightVision:<0..1>");
+            {
+                const render::CameraExposureSettings defaults{};
+                const Math::float3 t = JsonFloat3(tgt(), "nightTint",
+                    Math::float3(defaults.nightTint[0], defaults.nightTint[1], defaults.nightTint[2]));
+                float tv[3] = { t.x, t.y, t.z };
+                const bool changed = ImGui::ColorEdit3("Night Tint", tv);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["nightTint"] = { tv[0], tv[1], tv[2] }; }
+                trackContinuousEdit(changed);
+                InspectorHelp("The cold cast of night vision. Only its HUE matters -- it is applied at unit "
+                              "luminance, so it never brightens or darkens. The default is the rods' "
+                              "blue-cyan, mild: the cold LIGHT itself is the moon's (Time of Day > Moon > "
+                              "Light Colour). White = no cast.");
+                dragF("Night Desaturation", "nightDesaturation", defaults.nightDesaturation, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("How much colour the rods take at full night vision. 0 = the cold tint alone, "
+                              "every hue kept (UDS's look: green palms stay green under blue light); 1 = "
+                              "the rods' colourless grey, the physiology taken literally -- which renders a "
+                              "moonlit night black and white. --set=exposure.nightDesaturation:<0..1>");
+            }
 
             // Live metering state and the histogram, the same readouts the developer window shows.
             // They belong here too: the percentile and mask sliders above are unreadable without
@@ -807,6 +943,13 @@ namespace
                 ImGui::Text("Adapted %+.3f EV100 (x%.5f)", readback.adaptedEv100,
                     render::ExposureMultiplierFromEv100(readback.adaptedEv100));
                 ImGui::Text("Target  %+.3f EV100", readback.targetEv100);
+                if (automatic)
+                {
+                    // E1: the curve's share is the solve's whole compensation less the static trim.
+                    ImGui::TextDisabled("Eye %+.3f EV100, curve %+.2f EV",
+                        readback.eyeEv100 + JsonFloat(tgt(), "compensationEv", 0.0f),
+                        readback.compensationEv - JsonFloat(tgt(), "compensationEv", 0.0f));
+                }
                 ImGui::TextDisabled("Metered low %.5f  high %.5f (scene linear)",
                     readback.lowLuminance, readback.highLuminance);
                 const float gap = readback.targetEv100 - readback.adaptedEv100;
@@ -2044,8 +2187,22 @@ namespace
             dragF("Temperature (K)", "temperatureK", 5450.0f, 25.0f, 1000.0f, 20000.0f, "%.0f");
             InspectorHelp("The moon's colour outside the atmosphere, in this renderer's terms: sunlight reddened by "
                           "the regolith (B-V 0.92 against the sun's 0.65, ~29 mired warmer) on top of a sun drawn "
-                          "white at 6500 K -- 5450 K, white with a touch of cream. The cold of a moonlit night "
-                          "is the eye's: Camera Exposure > Night Vision.");
+                          "white at 6500 K -- 5450 K, white with a touch of cream. The colour of the moon "
+                          "ITSELF: its disc and the sky's scattering of it. What it lights is the next row.");
+            {
+                const TimeOfDaySettings defaults{};
+                const Math::float3 lc = JsonFloat3(tgt(), "lightColor",
+                    Math::float3(defaults.moonLightColor[0], defaults.moonLightColor[1], defaults.moonLightColor[2]));
+                float lv[3] = { lc.x, lc.y, lc.z };
+                const bool changed = ImGui::ColorEdit3("Light Colour", lv);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["lightColor"] = { lv[0], lv[1], lv[2] }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("The colour the moon LIGHTS the scene in -- the cold light of a moonlit night. Only "
+                          "its hue counts (used at unit luminance; the lux stay physical). The default is "
+                          "Ultra Dynamic Sky's Moon Light Colour. White = the physical moonlight, cream like "
+                          "the disc, which reads warm on a beige beach.");
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.52f, 0.005f, 0.0f, 20.0f, "%.3f");
             InspectorHelp("The moon's angular DIAMETER: the drawn disc and the light's size (the specular "
                           "floor, the soft shadow). 0.52 is the real moon's mean.");

@@ -94,6 +94,13 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.moonEnabled = Flag(m, "enabled", s.moonEnabled);
         s.moonIlluminanceLux = std::clamp(Number(m, "illuminanceLux", s.moonIlluminanceLux), 0.0f, 1000.0f);
         s.moonTemperatureK = std::clamp(Number(m, "temperatureK", s.moonTemperatureK), 1000.0f, 20000.0f);
+        if (const auto lc = m.find("lightColor"); lc != m.end() && lc->is_array() && lc->size() >= 3)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                s.moonLightColor[c] = (*lc)[c].is_number() ? std::max((*lc)[c].get<float>(), 0.0f) : s.moonLightColor[c];
+            }
+        }
         s.moonAngleDeg = std::clamp(Number(m, "lightSourceAngle", s.moonAngleDeg), 0.0f, 20.0f);
         s.moonEarthshine = std::clamp(Number(m, "earthshine", s.moonEarthshine), 0.0f, 100.0f);
         s.moonPathYawDeg = Number(m, "pathYawDeg", s.moonPathYawDeg);
@@ -189,6 +196,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "enabled", s.moonEnabled },
         { "illuminanceLux", s.moonIlluminanceLux },
         { "temperatureK", s.moonTemperatureK },
+        { "lightColor", { s.moonLightColor[0], s.moonLightColor[1], s.moonLightColor[2] } },
         { "lightSourceAngle", s.moonAngleDeg },
         { "earthshine", s.moonEarthshine },
         { "pathYawDeg", s.moonPathYawDeg },

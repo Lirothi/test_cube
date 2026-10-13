@@ -10,5 +10,10 @@ static const uint kSunProbeOut = 32u;       // this frame's colour x gate x off-
                                             // visible share of the disc (0-1)
 static const uint kSunProbeCentroid = 48u;  // centroid of what shows of the disc: tangent-plane offset
                                             // from its centre (xy, y up) -- where the corona's rays leave
+// Time-of-day E1, behind the probe (ExposureMetering.cpp kCompensationRecordBytes), both written by
+// exposure_solve_cs.hlsl: the exposure COMPENSATION in effect this frame (EV, the static trim plus the
+// curve, positive brightens) -- night vision adds it to the camera's exposure to find what the eye is
+// adapted to -- and at +4 the eye's adaptation before the curve, the state the solve adapts from.
+static const uint kExposureCompensationOffset = 64u;
 
 #endif // SUN_PROBE_HLSLI

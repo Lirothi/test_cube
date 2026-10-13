@@ -16,9 +16,18 @@ namespace
     // 16-31 the last sun-disc colour and gate seen on screen, held while the disc is off it; 32-47
     // this frame's value the sun glare and the corona read, and the disc's visible share; 48-55 the
     // centroid of what shows of it (sun_probe.hlsli). It is metering too -- of the sun -- and this
-    // buffer is already bound to both readers. The readback copies the exposure record only.
+    // buffer is already bound to both readers. The readback skips it.
     constexpr UINT64 kSunProbeBytes = 48u;
-    constexpr UINT64 kMeteringBufferBytes = kExposureRecordBytes + kSunProbeBytes;
+    // Time-of-day E1: bytes 64-67 the COMPENSATION the solve applied this frame (the static trim plus
+    // the curve, EV), so night vision can recover what the eye is adapted to from what the camera
+    // shows (tonemap_cs.hlsl); 68-71 the eye's adaptation before the curve, which is the state the
+    // solve adapts from (offset kExposureCompensationOffset in sun_probe.hlsli). Read back beside the
+    // exposure record, for the Inspector's curve read-out.
+    constexpr UINT64 kCompensationOffset = kExposureRecordBytes + kSunProbeBytes;
+    constexpr UINT64 kCompensationRecordBytes = 16u;
+    constexpr UINT64 kMeteringBufferBytes = kCompensationOffset + kCompensationRecordBytes;
+    // One readback slot: the exposure record, then the compensation record.
+    constexpr UINT64 kReadbackSlotBytes = kExposureRecordBytes + kCompensationRecordBytes;
 
     ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes)
     {
@@ -201,7 +210,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
 
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = kExposureRecordBytes * kReadbackSlots;
+        rd.Width = kReadbackSlotBytes * kReadbackSlots;
         rd.Height = 1;
         rd.DepthOrArraySize = 1;
         rd.MipLevels = 1;
@@ -238,8 +247,10 @@ void ExposureMetering::RecordReadbackCopy(ID3D12GraphicsCommandList* cl)
         return;
     }
     const UINT64 slot = readbackFrame_ % kReadbackSlots;
-    cl->CopyBufferRegion(readback_.Get(), slot * kExposureRecordBytes,
+    cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes,
         exposure_.Get(), 0, kExposureRecordBytes);
+    cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes + kExposureRecordBytes,
+        exposure_.Get(), kCompensationOffset, kCompensationRecordBytes);
     if (histogramReadback_)
     {
         constexpr UINT64 kHistogramBytes =
@@ -289,11 +300,13 @@ ExposureMetering::Readback ExposureMetering::LatestReadback() const
     // Oldest slot: written kReadbackSlots-1 frames ago, so it has certainly retired. Reading the
     // newest one would race the GPU.
     const std::uint64_t slot = (readbackFrame_ + 1u) % kReadbackSlots;
-    const float* record = readbackPtr_ + slot * (kExposureRecordBytes / sizeof(float));
+    const float* record = readbackPtr_ + slot * (kReadbackSlotBytes / sizeof(float));
     out.adaptedEv100 = record[0];
     out.lowLuminance = record[1];
     out.highLuminance = record[2];
     out.targetEv100 = record[3];
+    out.compensationEv = record[4];
+    out.eyeEv100 = record[5];
     out.valid = true;
     return out;
 }

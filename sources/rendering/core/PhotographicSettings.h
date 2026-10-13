@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 
 // Photographic camera settings (docs/photographic_rendering_improvement_plan.md, section 6.1).
 //
@@ -102,6 +103,23 @@ struct CameraExposureSettings
     // stops higher in our numbers than in theirs** -- their -10 / 20 is our -7 / 23.
     float minEv100 = -6.0f;
     float maxEv100 = 16.0f;
+    // Time-of-day plan E1: the EXPOSURE COMPENSATION CURVE (UE AutoExposureBiasCurve,
+    // PostProcessEyeAdaptation.cpp:471-486): extra compensation, in EV, as a function of the EV100 the
+    // eye is ADAPTED to (the smoothed adaptation plus compensationEv, i.e. the scene's own light) --
+    // piecewise linear through up to kExposureCurveMaxPoints points sorted by EV, flat beyond the ends.
+    // Applied outside the adaptation, as UE does, but keyed on the smoothed value where UE reads this
+    // frame's meter: a dark room then darkens as the eye adapts, not on one frame. Auto exposure only.
+    // Same sign as compensationEv: negative darkens. Night vision reads the eye, not the darkened camera.
+    //
+    // Why it exists: percentile metering is scale-invariant, so a correctly metered moonlit beach and
+    // a correctly metered noon land on the same middle grey -- the night reads as a dim day. The eye
+    // does not do that: it adapts only part of the way, and a night stays dark. The curve is that
+    // "part of the way". NONE BY DEFAULT (0 points): every level renders exactly as it did; the
+    // "eye" preset (SetEyeExposureCurve) is what a level with a time of day wants.
+    static constexpr std::uint32_t kExposureCurveMaxPoints = 6;
+    std::uint32_t exposureCurvePoints = 0;
+    float exposureCurveEv[kExposureCurveMaxPoints] = {};   // scene EV100, ascending
+    float exposureCurveComp[kExposureCurveMaxPoints] = {}; // compensation EV at that scene EV
     // Histogram percentiles used to derive the metered luminance. Clipping the tails is what keeps
     // a sun glint or a patch of sky from dragging the whole frame, without hard-coding what water
     // or sky look like.
@@ -234,7 +252,56 @@ struct CameraExposureSettings
     // physical estimate, 0 = off (the camera's colour vision at any light). Needs the photographic
     // camera: without it the frame is not in luminance and there is nothing to adapt to.
     float nightVision = 1.0f;
+    // What the rods' vision looks like, once nightVision has decided how much of it there is. The owner
+    // (2026-10-13, after the first cut rendered a moonlit beach nearly black and white): "a night must not
+    // be B&W, it must be cold light". The cold LIGHT is the moon's (TimeOfDaySettings::moonLightColor,
+    // Ultra Dynamic Sky's); the eye adds a mild COLD TINT over what the rods see (nightTint, scaled to
+    // unit luminance in the shader so it moves colour only -- the blue-cyan of the rods' S-cone pathway,
+    // Kirk & O'Brien 2011) and takes only part of the colour away (nightDesaturation: 0 = the tint alone,
+    // every hue kept, 1 = the rods' colourless grey, the physiology taken literally -- what read as B&W).
+    // Measured on wind_test's full-moon beach (sand blue/red): UDS's own frame 1.3-2.2; this pair 2.3;
+    // the UDS colour here as well 2.7 (too saturated); a neutral eye 1.3; the warm physical moonlight 0.35.
+    float nightTint[3] = {0.82f, 1.02f, 1.38f};
+    float nightDesaturation = 0.2f;
 };
+
+// E1: the curve at an adapted EV100 -- piecewise linear, flat beyond the ends, 0 with no points.
+// The CPU twin of exposure_solve_cs.hlsl's ExposureCurve; the two must agree.
+inline float EvaluateExposureCurve(const CameraExposureSettings& s, float ev100)
+{
+    const std::uint32_t n = std::min(s.exposureCurvePoints, CameraExposureSettings::kExposureCurveMaxPoints);
+    if (n == 0u) { return 0.0f; }
+    if (ev100 <= s.exposureCurveEv[0]) { return s.exposureCurveComp[0]; }
+    for (std::uint32_t i = 1u; i < n; ++i)
+    {
+        if (ev100 <= s.exposureCurveEv[i])
+        {
+            const float span = s.exposureCurveEv[i] - s.exposureCurveEv[i - 1u];
+            const float t = span > 1e-6f ? (ev100 - s.exposureCurveEv[i - 1u]) / span : 1.0f;
+            return s.exposureCurveComp[i - 1u] + t * (s.exposureCurveComp[i] - s.exposureCurveComp[i - 1u]);
+        }
+    }
+    return s.exposureCurveComp[n - 1u];
+}
+
+// E1: the "eye" curve -- what a level with a time of day wants. The EV100s are this renderer's
+// (log2(L) + 3) as the meter reads wind_test's beach (2026-10-13): noon 15, the end of civil twilight
+// (18:30, the sun 6.5 degrees under) 2.5, the full moon at midnight -3.5, the same moon low at 19:30
+// -4.5, a new moon pinned at that level's minEv100 -6. The curve puts them 0, -1.3, -2.0, -2.1 and
+// -2.25 stops under the meter's middle grey: a day untouched (nothing at 12 and above, where the
+// level's days were tuned), a moonlit night a clear two stops down with its colours and the palms' shadows
+// readable. Between the reference and a darker cut, both measured on one sheet: Ultra Dynamic Sky's
+// own (Exposure_Compensation_Curve_Physical, -1.7 at night, but -0.4 already at our 13 -- it would dim
+// an overcast day) and -2.7 at the full moon, which with the first night vision read as a black frame.
+inline void SetEyeExposureCurve(CameraExposureSettings& s)
+{
+    static constexpr float kEv[] = {-6.0f, -3.0f, 2.0f, 8.0f, 12.0f};
+    static constexpr float kComp[] = {-2.25f, -2.0f, -1.4f, -0.6f, 0.0f};
+    static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
+    static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
+    s.exposureCurvePoints = kPoints;
+    for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
+}
 
 // Display transform (plan section 6.1 / step P3).
 enum class ToneCurve : std::uint32_t

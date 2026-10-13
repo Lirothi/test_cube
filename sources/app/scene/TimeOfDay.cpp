@@ -251,6 +251,15 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         lightPlaced_ = true;
     }
     DirectionalLight light = lightBody == Body::Sun ? sunTemplate_ : MoonLight(phaseAngleDeg, distanceScale);
+    if (lightBody == Body::Moon)
+    {
+        // The ground light in the moon's LIGHT colour (moonLightColor, unit luminance: the lux stay); the
+        // sky frame below keeps the body's own colour, so the disc and the night sky do not turn blue.
+        const float* c = s.moonLightColor;
+        const float luma = 0.2126f * c[0] + 0.7152f * c[1] + 0.0722f * c[2];
+        light.SetUseSunTemperature(false);
+        light.SetColor(luma > 1e-6f ? Math::float3(c[0] / luma, c[1] / luma, c[2] / luma) : Math::float3(1.0f, 1.0f, 1.0f));
+    }
     light.SetDirection(-lightToward_);
     light.ContinueTransformVersion(sceneLight); // +1 only when the direction actually changed
     sceneLight = light;

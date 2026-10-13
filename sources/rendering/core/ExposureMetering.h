@@ -94,6 +94,10 @@ public:
         float lowLuminance = 0.0f;
         float highLuminance = 0.0f;
         float targetEv100 = 0.0f;
+        // Time-of-day E1: everything between the scene the eye is adapted to and the camera (static
+        // trim plus curve, EV, positive brightens), and the eye's adaptation before the curve.
+        float compensationEv = 0.0f;
+        float eyeEv100 = 0.0f;
         bool valid = false;
     };
     Readback LatestReadback() const;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "rendering/core/PhotographicSettings.h"
 
@@ -79,6 +80,35 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     out.localBlurredBlend       = j.value("localBlurredBlend",       out.localBlurredBlend);
     out.localBlurredBlend       = std::clamp(out.localBlurredBlend,       0.0f, 1.0f);
     out.nightVision             = std::clamp(j.value("nightVision", out.nightVision), 0.0f, 1.0f); // time-of-day E2
+    out.nightDesaturation       = std::clamp(j.value("nightDesaturation", out.nightDesaturation), 0.0f, 1.0f);
+    if (const auto it = j.find("nightTint"); it != j.end() && it->is_array() && it->size() >= 3)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            out.nightTint[c] = (*it)[c].is_number() ? std::max((*it)[c].get<float>(), 0.0f) : out.nightTint[c];
+        }
+    }
+    // Time-of-day E1: "exposureCurve": [[sceneEv100, compensationEv], ...] -- up to six, sorted here by EV
+    // so a hand-edited file cannot hand the shader a curve that runs backwards.
+    if (const auto it = j.find("exposureCurve"); it != j.end() && it->is_array())
+    {
+        std::vector<std::pair<float, float>> points;
+        for (const nlohmann::json& p : *it)
+        {
+            if (p.is_array() && p.size() >= 2 && p[0].is_number() && p[1].is_number())
+            {
+                points.emplace_back(std::clamp(p[0].get<float>(), -16.0f, 24.0f), std::clamp(p[1].get<float>(), -10.0f, 10.0f));
+            }
+        }
+        std::sort(points.begin(), points.end());
+        out.exposureCurvePoints = static_cast<std::uint32_t>(
+            std::min<std::size_t>(points.size(), CameraExposureSettings::kExposureCurveMaxPoints));
+        for (std::uint32_t i = 0; i < out.exposureCurvePoints; ++i)
+        {
+            out.exposureCurveEv[i] = points[i].first;
+            out.exposureCurveComp[i] = points[i].second;
+        }
+    }
     out.localHighlightContrast  = std::clamp(out.localHighlightContrast,  0.1f, 2.0f);
     out.localShadowContrast     = std::clamp(out.localShadowContrast,     0.1f, 2.0f);
     out.localDetailStrength     = std::clamp(out.localDetailStrength,     0.0f, 3.0f);
@@ -197,7 +227,13 @@ inline nlohmann::json ToJson(const ColorPipelineSettings& s)
 
 inline nlohmann::json ToJson(const CameraExposureSettings& s)
 {
+    nlohmann::json curve = nlohmann::json::array();
+    for (std::uint32_t i = 0; i < std::min(s.exposureCurvePoints, CameraExposureSettings::kExposureCurveMaxPoints); ++i)
+    {
+        curve.push_back(nlohmann::json::array({ s.exposureCurveEv[i], s.exposureCurveComp[i] }));
+    }
     return nlohmann::json{
+        { "exposureCurve", std::move(curve) }, // time-of-day E1
         { "enabled",        s.enabled },
         { "autoExposure",   s.autoExposure },
         { "compensationEv", s.compensationEv },
@@ -209,6 +245,8 @@ inline nlohmann::json ToJson(const CameraExposureSettings& s)
         { "localShadowThreshold",    s.localShadowThreshold },
         { "localBlurredBlend",       s.localBlurredBlend },
         { "nightVision",             s.nightVision },
+        { "nightTint",               { s.nightTint[0], s.nightTint[1], s.nightTint[2] } },
+        { "nightDesaturation",       s.nightDesaturation },
         { "minEv100",       s.minEv100 },
         { "maxEv100",       s.maxEv100 },
         { "lowPercentile",  s.lowPercentile },
