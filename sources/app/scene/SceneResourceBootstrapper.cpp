@@ -336,6 +336,7 @@ void SceneTonemapCBHandles::Populate(Material* material)
     localBlurredBlend = material->ComputeCB0FieldHandle("localBlurredBlend");
     bilateralMinLogLum = material->ComputeCB0FieldHandle("bilateralMinLogLum");
     bilateralInvLogLumRange = material->ComputeCB0FieldHandle("bilateralInvLogLumRange");
+    nightVision = material->ComputeCB0FieldHandle("nightVision");
     bloomSceneApply = material->ComputeCB0FieldHandle("bloomSceneApply");
     bloomScatterApply = material->ComputeCB0FieldHandle("bloomScatterApply");
     sunRaysDir = material->ComputeCB0FieldHandle("sunRaysDir");
@@ -1783,6 +1784,9 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
     matTonemapCS_->UpdateCBField(h.bilateralMinLogLum, ExposureMeteringConstants::kMinLogLum, dest);
     matTonemapCS_->UpdateCBField(h.bilateralInvLogLumRange,
         1.0f / (ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum), dest);
+    // Time-of-day E2: night vision. Only with the photographic camera on -- the shader also checks --
+    // since without it the frame is not in luminance.
+    matTonemapCS_->UpdateCBField(h.nightVision, camera.enabled ? std::clamp(camera.nightVision, 0.0f, 1.0f) : 0.0f, dest);
     matTonemapCS_->UpdateCBField(h.bloomSceneApply, bloomApply.sceneApply, dest);
     matTonemapCS_->UpdateCBField(h.bloomScatterApply, bloomApply.scatterApply, dest);
     matTonemapCS_->UpdateCBField(h.sunRaysDir, sunRays.dir, dest);

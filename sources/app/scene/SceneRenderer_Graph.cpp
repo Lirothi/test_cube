@@ -57,7 +57,8 @@ namespace
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     SkyViewFrameData MakeSkyView(const SkyAtmosphereSettings& skySettings, float heightMetres,
-                                 float preExposure, float sunRadius, const DirectionalLight* light)
+                                 float preExposure, float sunRadius, const DirectionalLight* light,
+                                 const SkyMoonFrame& moon)
     {
         SkyViewFrameData skyView{};
         const auto& a = skySettings.parameters;
@@ -78,6 +79,22 @@ namespace
             // themselves, so the attenuated one would count the atmosphere twice.
             const auto color = light->GetOuterSpaceIlluminance();
             skyView.illuminance[0] = color.x; skyView.illuminance[1] = color.y; skyView.illuminance[2] = color.z;
+        }
+        // Time-of-day plan N1: the moon, the atmosphere's second light, in the same local frame (x, z, y).
+        if (moon.present)
+        {
+            skyView.light1Direction[0] = moon.toward[0];
+            skyView.light1Direction[1] = moon.toward[2];
+            skyView.light1Direction[2] = moon.toward[1];
+            skyView.light1Direction[3] = moon.halfApexRad;
+            for (int c = 0; c < 3; ++c)
+            {
+                skyView.light1Illuminance[c] = moon.illuminance[c];
+                skyView.moonDisc[c] = moon.fullIlluminance[c];
+            }
+            skyView.light1Illuminance[3] = moon.earthshine;
+            skyView.moonDisc[3] = moon.phaseAngleRad;
+            skyView.moonDisc2[0] = moon.litScale;
         }
         return skyView;
     }
@@ -137,6 +154,10 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     // BuildLighting, after the aerial volume it reads.
     gb.pCloudNoise = GraphBuild::kNone;
     gb.pCloudShadow = GraphBuild::kNone;
+    // Time-of-day N1: the moon's albedo + normal texture, generated once, the first frame a procedural
+    // sky has a moon in it; the skybox that draws the disc is ordered behind it.
+    gb.pSkyMoon = (frame_->settings.skyAtmosphere.mode != 0u && frame_->skyMoon.present)
+        ? skyAtmosphere_.BuildMoon(renderer, rg) : GraphBuild::kNone;
     SkyEnvironmentOverlay cloudOverlay{};
     if (decisions_.volumetricCloud)
     {
@@ -148,7 +169,8 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     {
         volumetricCloud_.ClearFrameState();
     }
-    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->skyLight);
+    const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->skyLight,
+                                             frame_->skyMoon);
     const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
         environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay);
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
@@ -1476,7 +1498,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // declarations were already made.
     const auto& skySettings = frame_->settings.skyAtmosphere;
     auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
-                               frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight);
+                               frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight,
+                               frame_->skyMoon);
     const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
     skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
     // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective
@@ -1486,7 +1509,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     SkyViewFrameData aerialView = skyView;
     {
         const float scale = CloudAirSunScale(frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f);
-        for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; }
+        // Both lights: the deck shades the air from the moon as from the sun.
+        for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; aerialView.light1Illuminance[c] *= scale; }
     }
     const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, aerialView,
         *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
@@ -1501,19 +1525,28 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         // No pass, no consumer: compose must not read a pair nobody wrote this frame.
         if (gb.pCloud == GraphBuild::kNone) { decisions_.volumetricCloud = false; }
     }
-    gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, { pAerial }, /*mtDeps=*/{},
+    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList skyDeps;
+    skyDeps.push_back(pAerial);
+    if (gb.pSkyMoon != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyMoon); }
+    // The moon's texture is drawn from only once generated (or generating this frame, ordered above).
+    SkyViewFrameData drawView = skyView;
+    const bool moonTexture = skyView.planet[3] != 0 && skyView.light1Direction[3] > 0.0f && skyAtmosphere_.MoonReady();
+    drawView.moonDisc2[1] = moonTexture ? 1.0f : 0.0f;
+    gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, skyDeps, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ } },
-        [this, renderer, skyView](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, drawView, moonTexture](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->skybox) { return {}; }
             ctx.UseDeclared();
-            if (skyView.planet[3] != 0)
+            if (drawView.planet[3] != 0)
             {
                 ctx.Use(skyAtmosphere_.ViewResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 ctx.Use(skyAtmosphere_.TransmittanceResource(), kSrvAll);
+                if (moonTexture) { ctx.Use(skyAtmosphere_.MoonResource(), kSrvAll); }
             }
-            frame_->skybox->SetSkyAtmosphere(skyView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv());
+            frame_->skybox->SetSkyAtmosphere(drawView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv(),
+                                             moonTexture ? skyAtmosphere_.MoonSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkybox);

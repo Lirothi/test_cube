@@ -112,7 +112,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         const float3 p = float3(0.0f, 0.0f, SkyPlanet.x);
         SkyIntegrateSegment(p, dir.xzy, march.tApKm, kCaptureAerialSamples, 1.0f,
                             TransmittanceLut, MultiScatterLut, gSmpLinearClamp, apL, apT);
-        apL *= SkyIlluminance.rgb * SkyIlluminance.w; // as the volume scales it (sky_lut_aerial_cs.hlsl)
+        apL *= SkyIlluminance.w; // as the volume scales it (sky_lut_aerial_cs.hlsl); the lights' illuminance is in already (N1)
         // ...and as the CPU scales the volume's sun under an overcast deck (CloudAirSunScale): this
         // segment runs below the deck too. Without it the cube's horizon kept a clear-sky haze and
         // the far sea reflected it as a glowing line under a closed deck.

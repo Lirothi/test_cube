@@ -13,6 +13,7 @@
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/lighting/LightManager.h"
 #include "rendering/lighting/SkyAtmosphereSettings.h"
+#include "rendering/lighting/TimeOfDaySettings.h" // N1: SkyMoonFrame
 #include "rendering/lighting/VolumetricCloudSettings.h"
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
 
@@ -727,6 +728,9 @@ struct SceneFrameData
     // the distant light, the aerial perspective. The same object as dirLight unless the level's time of
     // day has handed dirLight to the moon; the sky keeps the sun, so the twilight outlives the hand-over.
     const DirectionalLight* skyLight = nullptr;
+    // Time-of-day plan N1: the moon as the sky sees it -- the atmosphere's second light and the drawn
+    // disc (SkyViewFrameData light 1). `present` false without a time of day: light 1 is skipped.
+    SkyMoonFrame skyMoon{};
     // S8: the CSM knobs the lighting pass needs (receiver bias / sharpen / over-blur). Same object
     // the developer window edits, so a slider move reaches the shader the very next frame.
     const CascadeShadowConfig* cascadeConfig = nullptr;

@@ -77,7 +77,7 @@ static const float3 SphereDirections[64] = {
 groupshared float3 SphereLuminance[64];
 // UE SkyAtmosphere.usf:1360-1449, integrator :590-604,628-633,738-758.
 // 64 rays, 10 uniform steps at offset .3, 6km, isotropic phase, no ground bounce or disk.
-// One sun and no opaque/cloud shadows (same delta as the other atmosphere LUTs).
+// Two lights (N1: the sun and the moon) and no opaque/cloud shadows (same delta as the other atmosphere LUTs).
 [numthreads(8, 8, 1)]
 [RootSignature(DISTANT_SKY_RS)]
 void CSMain(uint3 id : SV_DispatchThreadID)
@@ -96,20 +96,20 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float3 up = q / height;
         MediumSampleRGB m = SampleAtmosphereMediumRGB(q);
         float3 tr = exp(-m.Extinction * dt);
-        float mu = dot(SkySunDirection.xyz, up);
-        float2 uv;
-        getTransmittanceLutUvs(height, mu, AtmosphereRadii.x, AtmosphereRadii.y, uv);
-        float3 lightT = Transmittance.SampleLevel(LinearClamp, uv, 0).rgb;
-        float planet = SkyRaySphereNearest(q, SkySunDirection.xyz, PlanetRadiusOffset * up, AtmosphereRadii.x);
-        float3 multi = MultiScatter.SampleLevel(LinearClamp,
-            saturate(float2(mu * 0.5f + 0.5f, (height - AtmosphereRadii.x) / (AtmosphereRadii.y - AtmosphereRadii.x))), 0).rgb;
-        float3 source = ((planet >= 0 ? 0.0f : 1.0f) * lightT / (4.0f * SkyPi) + multi) * m.Scattering;
+        // Isotropic phase, both lights (N1): SkyLightSource gives ((planet ? 0 : T) / 4pi + multi) * scattering.
+        float3 source = SkyLightSource(q, height, up, SkySunDirection.xyz, SkyIlluminance.rgb, SkyIsotropicPhase(), m,
+                                       Transmittance, MultiScatter, LinearClamp);
+        [branch] if (SkyHasLight1())
+        {
+            source += SkyLightSource(q, height, up, SkyLight1Direction.xyz, SkyLight1Illuminance.rgb, SkyIsotropicPhase(), m,
+                                     Transmittance, MultiScatter, LinearClamp);
+        }
         L += throughput * (source - source * tr) / max(m.Extinction, 1.e-9f);
         throughput *= tr;
     }
     // SkyIlluminance.w = SkyAndAerialPerspectiveLuminanceFactor (usf:1393). UE also multiply SkyLuminanceFactor
     // in here (usf:1397); ours is a picture-only knob and stays out of the fog's light, deliberately.
-    SphereLuminance[lane] = L * SkyIlluminance.rgb * SkyIlluminance.w;
+    SphereLuminance[lane] = L * SkyIlluminance.w; // the lights' illuminance is in L already (N1)
     GroupMemoryBarrierWithGroupSync();
     // Full barriers at every level: do not assume UE's final lanes are implicitly lockstep.
     [unroll] for (uint stride = 32; stride > 0; stride >>= 1)

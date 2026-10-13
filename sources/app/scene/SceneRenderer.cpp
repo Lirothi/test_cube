@@ -596,6 +596,13 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             // UE GetLightPositionForLightShafts for a directional light = ViewOrigin - Direction * WORLD_MAX
             // (DirectionalLightComponent.cpp:449-453): the point at infinity towards the sun, i.e. a homogeneous
             // DIRECTION (w = 0) through the unjittered view-projection. Row-vector convention, like the shaders.
+            // NOT THE MOON (time-of-day N1, tried and measured 2026-10-13): radiating the shafts from the moon
+            // at night turned its disc into a big BLOCKY glow. The shafts are a half-res radial blur of the
+            // pixels over the threshold; for the sun those are the disc AND the bright sky around it, so the
+            // blur's discrete steps vanish in a wide seed. At night the only seed is a 15-pixel disc on a
+            // black sky, and every step of the blur shows as its own copy -- the "pixelated halo" the owner
+            // asked about. With the shafts off it was gone and the bloom's own glow remained. The moon's
+            // shafts through the palms would need a smoother blur (more, jittered taps); until then, sun only.
             const float3 toSun = (-sun->GetDirection()).Normalized();
             const float4 clip = frame.camera->GetViewProjMatrixNoJitter().Transform(float4(toSun.x, toSun.y, toSun.z, 0.0f));
             if (clip.w > 1e-6f)

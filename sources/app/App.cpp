@@ -837,6 +837,7 @@ namespace
                 { "moonIlluminanceLux", &t.moonIlluminanceLux, 0.0f, 1000.0f },
                 { "moonTemperatureK", &t.moonTemperatureK, 1000.0f, 20000.0f },
                 { "moonAngleDeg", &t.moonAngleDeg, 0.0f, 20.0f },
+                { "moonEarthshine", &t.moonEarthshine, 0.0f, 100.0f },
                 { "nightBrightness", &t.nightBrightness, 0.0f, 1000.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
             };
@@ -1274,6 +1275,7 @@ namespace
         if (setting == "exposure.localDetailStrength" || setting == "color.localDetailStrength")
         { e.localDetailStrength = value; return true; }
         // P3B bilateral base: 1 = the pre-grid blur-only base (the A/B arm), UE's default 0.6.
+        if (setting == "exposure.nightVision") { e.nightVision = std::clamp(value, 0.0f, 1.0f); return true; } // E2
         if (setting == "exposure.localBlurredBlend")
         { e.localBlurredBlend = value; return true; }
         // Composite: both local contrast scales at once. The two are independent branches of the

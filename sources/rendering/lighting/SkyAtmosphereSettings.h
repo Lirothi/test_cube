@@ -142,7 +142,13 @@ struct SkyViewFrameData
     float illuminance[4]{}; // outer-space RGB lux; w sky-only luminance scale
     float exposure[4] = {1, 1, 0, 0}; // x: pre-exposure before FP16 storage; y: UE SkyLuminanceFactor (sky pixel, capture, distant light)
     float planet[4]{}; // view height, bottom radius, top radius (km), enabled
+    // Time-of-day plan N1: the atmosphere's SECOND light, the moon (UE NUM_ATMOSPHERE_LIGHTS 2,
+    // SkyAtmosphere.usf:1117/1403/1688 sum both). Zero illuminance = no second light; every LUT skips it.
+    float light1Direction[4]{};   // local XYZ to the moon; w its disc's angular radius (0 = no disc: the captures)
+    float light1Illuminance[4]{}; // outer-space RGB lux as lit now; w the earthshine fraction of the full disc
+    float moonDisc[4]{};          // the FULL moon's outer-space RGB lux (the disc's reference); w the phase angle (rad)
+    float moonDisc2[4]{};         // x the disc's lit scale (phase law / Lommel-Seeliger integral), y 1 = albedo/normal texture ready
 };
-static_assert(sizeof(SkyViewFrameData) == 64, "SkyView frame CB layout");
+static_assert(sizeof(SkyViewFrameData) == 128, "SkyView frame CB layout");
 
 inline constexpr float kMetresPerKm = 1000.0f;

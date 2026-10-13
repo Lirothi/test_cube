@@ -80,9 +80,26 @@ public:
     bool Ready() const { return initialized_ && !failed_; }
     D3D12_CPU_DESCRIPTOR_HANDLE TransmittanceSrv() const { return srv_[0]; }
     D3D12_CPU_DESCRIPTOR_HANDLE MultiScatterSrv() const { return srv_[1]; }
+    // Time-of-day plan N1: the moon's near side for the drawn disc -- its normal (xyz, the disc's own
+    // frame: x right, y up, z toward the viewer) and its relative albedo (w, mean ~1) -- procedural
+    // (the owner's decision: no downloaded maps), generated ONCE into a mipped texture. Every mip is
+    // computed straight from the generator at its own resolution, the craters too small for it left
+    // out, so no mip reads another and the chain is one barrier-free run. kNone when nothing to do.
+    size_t BuildMoon(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph);
+    bool MoonReady() const { return moonReady_; }
+    ID3D12Resource* MoonResource() const { return moon_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE MoonSrv() const { return moonSrv_; }
     void Reset(); // caller has drained the GPU on level/device teardown
 
 private:
+    void PrepareMoon(Renderer* renderer);
+    static constexpr UINT kMoonSize = 512, kMoonMips = 8;
+    GpuResource moon_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> moonHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE moonSrv_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMoonMips> moonUav_{};
+    std::shared_ptr<Material> moonMaterial_;
+    bool moonReady_ = false, moonFailed_ = false;
     void PrepareDistant(Renderer* renderer);
     void ValidateDistant(UINT slot);
     GpuResource distant_;

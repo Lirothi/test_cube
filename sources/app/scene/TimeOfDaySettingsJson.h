@@ -95,6 +95,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.moonIlluminanceLux = std::clamp(Number(m, "illuminanceLux", s.moonIlluminanceLux), 0.0f, 1000.0f);
         s.moonTemperatureK = std::clamp(Number(m, "temperatureK", s.moonTemperatureK), 1000.0f, 20000.0f);
         s.moonAngleDeg = std::clamp(Number(m, "lightSourceAngle", s.moonAngleDeg), 0.0f, 20.0f);
+        s.moonEarthshine = std::clamp(Number(m, "earthshine", s.moonEarthshine), 0.0f, 100.0f);
         s.moonPathYawDeg = Number(m, "pathYawDeg", s.moonPathYawDeg);
         s.moonPathTiltDeg = std::clamp(Number(m, "pathTiltDeg", s.moonPathTiltDeg), -89.0f, 89.0f);
         s.moonOrbitOffsetDeg = Number(m, "orbitOffsetDeg", s.moonOrbitOffsetDeg);
@@ -189,6 +190,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "illuminanceLux", s.moonIlluminanceLux },
         { "temperatureK", s.moonTemperatureK },
         { "lightSourceAngle", s.moonAngleDeg },
+        { "earthshine", s.moonEarthshine },
         { "pathYawDeg", s.moonPathYawDeg },
         { "pathTiltDeg", s.moonPathTiltDeg },
         { "orbitOffsetDeg", s.moonOrbitOffsetDeg },

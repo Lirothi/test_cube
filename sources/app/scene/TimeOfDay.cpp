@@ -38,6 +38,22 @@ int DaysInMonth(int year, int month)
     return month == 2 && leap ? 29 : kDays[std::clamp(month, 1, 12) - 1];
 }
 
+// The disc-integrated brightness of a Lommel-Seeliger sphere at phase angle `alpha` (radians),
+// relative to full: 1 - sin(a/2) tan(a/2) ln(cot(a/4)). The drawn disc is shaded by that law (the
+// real full moon shows no limb darkening, which Lambert would give it); dividing the phase law the
+// light follows by this makes the disc's integral agree with the light.
+double LommelSeeligerPhase(double alpha)
+{
+    if (alpha <= 1.0e-6) { return 1.0; }
+    if (alpha >= kPi - 1.0e-6) { return 0.0; }
+    return std::max(0.0, 1.0 - std::sin(0.5 * alpha) * std::tan(0.5 * alpha) * std::log(1.0 / std::tan(0.25 * alpha)));
+}
+
+// The ashen light: Earth's illuminance on the moon's night side against the sun's on its day side,
+// about 1.2e-4 at full Earth (new moon) -- ~15 lux of earthlight against 127 klx of sunlight, the
+// same albedo either way -- falling with the Earth's phase as seen from the moon, (1 - cos a) / 2.
+constexpr double kEarthshineAtNewMoon = 1.2e-4;
+
 const char* BodyName(TimeOfDay::Body body)
 {
     return body == TimeOfDay::Body::Sun ? "sun" : body == TimeOfDay::Body::Moon ? "moon" : "nobody";
@@ -243,6 +259,28 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     DirectionalLight sky = sunTemplate_;
     sky.SetDirection(-sunToward);
     skySun = sky;
+
+    // N1: the moon in the sky -- the atmosphere's second light and the disc -- whoever lights the ground.
+    skyMoon_ = SkyMoonFrame{};
+    if (s.moonEnabled)
+    {
+        const DirectionalLight now = MoonLight(phaseAngleDeg, distanceScale);
+        const DirectionalLight full = MoonLight(0.0, distanceScale);
+        const Math::float3 lit = now.GetOuterSpaceIlluminance();
+        const Math::float3 fullLit = full.GetOuterSpaceIlluminance();
+        const double alpha = phaseAngleDeg * kPi / 180.0;
+        const double lommelSeeliger = LommelSeeligerPhase(alpha);
+        skyMoon_.present = true;
+        skyMoon_.toward[0] = moonToward.x; skyMoon_.toward[1] = moonToward.y; skyMoon_.toward[2] = moonToward.z;
+        skyMoon_.illuminance[0] = lit.x; skyMoon_.illuminance[1] = lit.y; skyMoon_.illuminance[2] = lit.z;
+        skyMoon_.fullIlluminance[0] = fullLit.x; skyMoon_.fullIlluminance[1] = fullLit.y; skyMoon_.fullIlluminance[2] = fullLit.z;
+        skyMoon_.halfApexRad = now.GetSunHalfApexRadians();
+        skyMoon_.phaseAngleRad = static_cast<float>(alpha);
+        skyMoon_.litScale = lommelSeeliger > 1.0e-6
+            ? static_cast<float>(std::clamp(astro::MoonPhaseBrightness(phaseAngleDeg) / lommelSeeliger, 0.0, 10.0))
+            : 0.0f;
+        skyMoon_.earthshine = static_cast<float>(std::max(0.0f, s.moonEarthshine) * kEarthshineAtNewMoon * 0.5 * (1.0 - std::cos(alpha)));
+    }
 
     if (!logged_ || litBy != litBy_)
     {

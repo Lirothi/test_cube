@@ -108,6 +108,7 @@ extern const Profiler::ScopeNameKey kPassSkyAerial;
 extern const Profiler::ScopeNameKey kPassSkyView;
 extern const Profiler::ScopeNameKey kPassSkyAtmosphereLuts;
 extern const Profiler::ScopeNameKey kPassCloudNoise;    // plan C1: the noise set (seed-dirty)
+extern const Profiler::ScopeNameKey kPassSkyMoon;       // time-of-day N1: the moon's albedo + normal (once)
 extern const Profiler::ScopeNameKey kPassCloudShadow;   // plan C3: the cloud shadow map
 extern const Profiler::ScopeNameKey kPassCloudTrace;    // plan C2: the half-res march + resolve
 extern const Profiler::ScopeNameKey kCloudTraceMarch;   // ... its march dispatch

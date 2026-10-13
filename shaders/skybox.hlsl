@@ -1,4 +1,4 @@
-#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define SKYBOX_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "sky_view_mapping.hlsli"
@@ -16,6 +16,11 @@ cbuffer PerFrame : register(b0)
     float4 skyIlluminance;
     float4 skyExposure;
     float4 skyPlanet;
+    // Time-of-day plan N1: the moon (SkyViewFrameData light 1 and its disc).
+    float4 skyLight1Direction;   // local XYZ to the moon; w its disc's angular radius (0 = no disc)
+    float4 skyLight1Illuminance; // outer-space RGB lux as lit now; w the earthshine fraction of the full disc
+    float4 skyMoonDisc;          // the FULL moon's outer-space RGB lux; w the phase angle (rad)
+    float4 skyMoonDisc2;         // x the disc's lit scale; y 1 = the albedo/normal texture is ready
 }
 
 struct VSIn {
@@ -63,7 +68,20 @@ VSOut VSMain(VSIn i)
 TextureCube sky : register(t0);
 Texture2D<float4> skyViewLut : register(t1);
 Texture2D<float4> transmittanceLut : register(t2);
+Texture2D<float4> moonTexture : register(t3); // N1: normal (xyz, the disc's frame) + relative albedo (w)
 SamplerState samLinear : register(s0);
+
+// The atmosphere's transmittance from the eye toward `dir` (the LUT's local frame), as a disc takes it:
+// UE SkyAtmosphereCommon.ush:256-279 with the Bruneton mapping inline. The sun's and the moon's.
+float3 DiscTransmittance(float3 dir, float height, float bottom, float top)
+{
+    const float H = sqrt(top * top - bottom * bottom);
+    const float h = min(height, top);
+    const float rho = sqrt(max(0.0f, h * h - bottom * bottom));
+    const float d = max(0.0f, -h * dir.z + sqrt(max(0.0f, h*h*(dir.z*dir.z-1.0f)+top*top)));
+    const float2 uv = float2((d - (top-h)) / max(1.e-6f, rho+H-(top-h)), rho/H);
+    return height >= top ? 1.0f : transmittanceLut.SampleLevel(samLinear, uv, 0).rgb;
+}
 
 struct PSOut
 {
@@ -121,12 +139,7 @@ PSOut PSMain(VSOut i)
         float viewDotLight = dot(dir, skySunDirection.xyz);
         if (!ground && radius > 0.0f && viewDotLight > cosHalf)
         {
-            float H = sqrt(top * top - bottom * bottom);
-            float h = min(height, top);
-            float rho = sqrt(max(0.0f, h * h - bottom * bottom));
-            float d = max(0.0f, -h * dir.z + sqrt(max(0.0f, h*h*(dir.z*dir.z-1.0f)+top*top)));
-            float2 uv = float2((d - (top-h)) / max(1.e-6f, rho+H-(top-h)), rho/H);
-            float3 tr = height >= top ? 1.0f : transmittanceLut.SampleLevel(samLinear, uv, 0).rgb;
+            float3 tr = DiscTransmittance(dir, height, bottom, top);
             // 2*sin(radius/2)^2 avoids cancellation for very small disks.
             float oneMinusCos = 2.0f * pow(sin(0.5f * radius), 2.0f);
             float softEdge = saturate(2.0f * (viewDotLight - cosHalf) / max(oneMinusCos, 1.e-12f));
@@ -180,6 +193,74 @@ PSOut PSMain(VSOut i)
             const float diskPeak = max(max(disk.r, disk.g), disk.b);
             const float3 diskInRange = diskPeak > 65504.0f ? disk * (65504.0f / diskPeak) : disk;
             c += diskInRange * softEdge;
+        }
+        // TIME-OF-DAY PLAN N1: THE MOON'S DISC. UE draw a disc per atmosphere light
+        // (SkyAtmosphere.usf:357 GetLightDiskLuminance(.., LightIndex)); theirs is a flat disc, ours
+        // has a face and a phase:
+        //   * the surface is the procedural near side (sky_moon_cs.hlsl): its normal and its albedo;
+        //   * it is shaded by LOMMEL-SEELIGER, mu0 / (mu0 + mu), not Lambert -- the real full moon is as
+        //     bright at its limb as at its centre, and Lambert would darken the limb into a ball;
+        //   * the sun lights it from the PHASE ANGLE TimeOfDay computed (the simple path's phase knob,
+        //     or the real geometry), turned toward where the sun actually is, so the bright limb faces it;
+        //   * the disc integrates to the full moon's illuminance times the phase law the moon's LIGHT
+        //     follows (skyMoonDisc2.x = phase law / the Lommel-Seeliger integral) -- the disc and its
+        //     light cannot disagree about how bright the moon is;
+        //   * the dark side carries the earthshine;
+        //   * the air in front of it attenuates it by the full transmittance, as physics has it (the
+        //     moon sits far below the FP16 ceiling, so the sun's hue constant has nothing to do here).
+        // Opaque: it hides what is behind it (the stars, when N2 adds them); the in-scattering in
+        // front of it, already in `c`, stays.
+        {
+            const float moonRadius = skyLight1Direction.w;
+            const float3 f = skyLight1Direction.xyz; // eye -> moon
+            const float3 upRef = abs(f.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+            const float3 u = normalize(upRef - dot(upRef, f) * f);
+            const float3 r = cross(f, u);
+            const float invSin = 1.0f / max(sin(moonRadius), 1.e-6f);
+            const float2 disc = float2(dot(dir, r), dot(dir, u)) * invSin; // the unit disc, x right, y up
+            const float2 moonUv = disc * float2(0.5f, -0.5f) + 0.5f;
+            // Gradients taken HERE, in uniform flow, for the textured sample inside the branch.
+            const float2 uvDx = ddx(moonUv), uvDy = ddy(moonUv);
+            const float rr = dot(disc, disc);
+            const float edgeWidth = max(fwidth(sqrt(rr)), 1.e-4f);
+            if (!ground && moonRadius > 0.0f && dot(dir, f) > 0.0f && rr < 1.0f + 2.0f * edgeWidth)
+            {
+                float3 nDisc = float3(disc, sqrt(max(0.0f, 1.0f - rr)));
+                float albedo = 1.0f;
+                if (skyMoonDisc2.y > 0.0f)
+                {
+                    // (A telephoto shot of this disc at EV 14 comes out of DLSS posterized to whole
+                    // stops. Not the texture -- a smooth sphere does it too -- but NGX's own auto-
+                    // exposure, which DlssHandler keeps on for the water, metering a frame that is
+                    // black but for the disc. A real night frame is not that; test the disc with
+                    // --dlss=off.)
+                    const float4 t = moonTexture.SampleGrad(samLinear, moonUv, uvDx, uvDy);
+                    nDisc = normalize(t.xyz);
+                    albedo = t.w;
+                }
+                // A facet the viewer can see faces the viewer: a bent normal pointing away is the bump
+                // map overreaching, and with the sun behind the eye (full moon) it drew black dots on a
+                // disc that has no shadow at all. Keep every normal at least slightly toward the eye.
+                nDisc.z = max(nDisc.z, 0.2f);
+                nDisc = normalize(nDisc);
+                const float3 v = -f; // moon -> eye
+                const float3 n = nDisc.x * r + nDisc.y * u + nDisc.z * v;
+                float3 towardSun = skySunDirection.xyz - dot(skySunDirection.xyz, f) * f;
+                towardSun = dot(towardSun, towardSun) > 1.e-10f ? normalize(towardSun) : u;
+                const float alpha = skyMoonDisc.w;
+                const float3 s = cos(alpha) * v + sin(alpha) * towardSun; // moon -> sun, at the phase angle
+                // The relief bends the INCIDENCE only; the emergence is the sphere's own, so a crater
+                // wall near the limb cannot turn the surface away from the viewer into a black dot.
+                const float mu0 = dot(n, s), mu = max(sqrt(max(0.0f, 1.0f - rr)), 1.e-3f);
+                const float lommelSeeliger = mu0 > 0.0f ? mu0 / (mu0 + mu) : 0.0f;
+                // 2 pi (1 - cos r), cancellation-free. A full disc at LS 0.5 everywhere integrates to
+                // skyMoonDisc.rgb, hence the 2 / solid angle.
+                const float solidAngle = 4.0f * SkyViewPi * pow(sin(0.5f * moonRadius), 2.0f);
+                const float3 perUnit = skyMoonDisc.rgb * (2.0f / max(solidAngle, 1.e-12f)) * albedo;
+                const float3 moon = perUnit * (lommelSeeliger * skyMoonDisc2.x + 0.5f * skyLight1Illuminance.w);
+                const float coverage = saturate((1.0f - sqrt(rr)) / edgeWidth + 0.5f);
+                c += moon * DiscTransmittance(dir, height, bottom, top) * coverage;
+            }
         }
         // The whole sky, clamped the same way: a per-channel min here would undo the disc's
         // hue again the moment any one channel touched the ceiling.

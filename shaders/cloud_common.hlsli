@@ -68,6 +68,10 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 SkyIlluminance;
     float4 SkyExposure;
     float4 SkyPlanet;
+    float4 SkyLight1Direction;   // N1: the moon, the atmosphere's second light (SkyViewFrameData)
+    float4 SkyLight1Illuminance;
+    float4 SkyMoonDisc;
+    float4 SkyMoonDisc2;
 #endif
 };
 

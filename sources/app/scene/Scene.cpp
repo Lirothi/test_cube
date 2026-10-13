@@ -1959,6 +1959,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.objects = &objects_;
     frameData_.dirLight = &dirLight_;
     frameData_.skyLight = timeOfDay_.Present() ? &skySun_ : &dirLight_;
+    frameData_.skyMoon = timeOfDay_.Present() ? timeOfDay_.GetSkyMoon() : SkyMoonFrame{};
     frameData_.cascadeConfig = &cascadeConfig_;
     frameData_.shadowGpu = &shadowGpu_;
     frameData_.vsm = &vsm_;

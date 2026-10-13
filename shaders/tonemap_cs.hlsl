@@ -69,7 +69,8 @@ cbuffer TonemapCB : register(b0)
     float localBlurredBlend;
     float bilateralMinLogLum;
     float bilateralInvLogLumRange;
-    float tonemapPad6;
+    // Time-of-day E2: night vision, the rods' share (CameraExposureSettings::nightVision); 0 = off.
+    float nightVision;
     // P8C-2o -- UE'S CENTRE/SCATTER SPLIT (BloomFinalizeApplyConstants.usf).
     //
     // The bloom is no longer light ADDED on top of a scene that already has it. A kernel is the
@@ -490,6 +491,40 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (sunRaysShape.x > 0.0f)
     {
         hdr += SunRays(uv, (float)width) * exposureMultiplier;
+    }
+
+    // TIME-OF-DAY PLAN E2: NIGHT VISION (the Purkinje shift). In the dark the eye's rods take over:
+    // they see no colour, they are most sensitive at ~507 nm, so blues outlast reds, and what they
+    // report reads as a bluish grey. That -- not a blue moon -- is why a moonlit night looks cold.
+    //   * how much of the vision is the rods' follows the LUMINANCE, per pixel against what the eye
+    //     is adapted to (their geometric mean): photopic above ~3 cd/m2, scotopic below ~0.005
+    //     (the CIE mesopic range), so a day and its darkest shadows are untouched (bit-identical,
+    //     the block is skipped) while a moonlit beach goes grey-blue -- and the moon's own disc,
+    //     thousands of cd/m2, keeps its colour, as it does to the eye;
+    //   * the rods' signal is the scotopic luminance from XYZ (Larson, Rushmeier, Piatko 1997:
+    //     V = Y (1.33 (1 + (Y + Z) / X) - 1.68)), scaled so white keeps its luminance -- the
+    //     night's DARKNESS is exposure's business (plan E1), this changes colour only;
+    //   * its colour is a blue-cyan grey, unit luminance: the rods' signal reaches perception through
+    //     the S-cone (blue) pathway, perceived near 480 nm (Kirk & O'Brien 2011). Thompson, Shirley,
+    //     Ferwerda 2002's often-used shift (1.05, 0.97, 1.27) was tried first: its red above its green
+    //     read LAVENDER in this pipeline, not cold.
+    // Only with the photographic camera on (the host writes 0 otherwise): without it the frame is not
+    // in luminance and there is no adaptation to read.
+    if (nightVision > 0.0f && (preExposureActive != 0 || exposureEnabled != 0))
+    {
+        const float totalExposure = max(exposureMultiplier * ((preExposureActive != 0) ? preExposure : 1.0f), 1e-12f);
+        const float Y = max(dot(hdr, float3(0.2126f, 0.7152f, 0.0722f)), 0.0f);
+        // cd/m2: the pixel's luminance (Y / exposure) against the adaptation's (0.18 / exposure).
+        const float effective = sqrt(Y * 0.18f) / totalExposure;
+        const float rods = nightVision *
+            (1.0f - smoothstep(log10(0.005f), log10(3.0f), log10(max(effective, 1e-12f))));
+        if (rods > 0.0f)
+        {
+            const float X = dot(hdr, float3(0.4124f, 0.3576f, 0.1805f));
+            const float Z = dot(hdr, float3(0.0193f, 0.1192f, 0.9505f));
+            const float scotopic = max(Y * (1.33f * (1.0f + (Y + Z) / max(X, 1e-12f)) - 1.68f), 0.0f) / 2.58f;
+            hdr = lerp(hdr, scotopic * float3(0.82f, 1.02f, 1.38f), rods);
+        }
     }
 
     // P3C film curve / AgX / legacy ACES -- the selection lives in tone_curves.hlsli, shared with

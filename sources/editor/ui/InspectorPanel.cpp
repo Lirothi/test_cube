@@ -785,6 +785,16 @@ namespace
                 ImGui::PopID();
             }
 
+            // Time-of-day plan E2.
+            ImGui::SeparatorText("Night vision");
+            dragF("Night Vision", "nightVision", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("The eye's rods taking over in the dark (the Purkinje shift): colours fade to a "
+                          "bluish grey and blues outlast reds -- why a moonlit night looks COLD although "
+                          "moonlight is warmer than sunlight. How much follows the light by itself: none "
+                          "above ~3 cd/m2 (a day and its shadows are untouched), full below ~0.005, per "
+                          "pixel against the adaptation, so the moon's disc keeps its colour. 1 = that "
+                          "physical estimate, 0 = a camera's colour vision at any light. Colour only -- how "
+                          "DARK the night reads is exposure's. --set=exposure.nightVision:<0..1>");
 
             // Live metering state and the histogram, the same readouts the developer window shows.
             // They belong here too: the percentile and mask sliders above are unreadable without
@@ -2031,10 +2041,18 @@ namespace
                           "full moon's 14 magnitudes fainter = 0.32 lux (~0.27 on the ground with the moon "
                           "overhead). The phase law scales it down (a quarter moon is ~0.1 of full); Real "
                           "positions add the distance.");
-            dragF("Temperature (K)", "temperatureK", 4300.0f, 25.0f, 1000.0f, 20000.0f, "%.0f");
-            InspectorHelp("Moonlight is sunlight reddened by the regolith, ~4300 K. The blue of a moonlit "
-                          "night is the eye's, not the light's.");
+            dragF("Temperature (K)", "temperatureK", 5450.0f, 25.0f, 1000.0f, 20000.0f, "%.0f");
+            InspectorHelp("The moon's colour outside the atmosphere, in this renderer's terms: sunlight reddened by "
+                          "the regolith (B-V 0.92 against the sun's 0.65, ~29 mired warmer) on top of a sun drawn "
+                          "white at 6500 K -- 5450 K, white with a touch of cream. The cold of a moonlit night "
+                          "is the eye's: Camera Exposure > Night Vision.");
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.52f, 0.005f, 0.0f, 20.0f, "%.3f");
+            InspectorHelp("The moon's angular DIAMETER: the drawn disc and the light's size (the specular "
+                          "floor, the soft shadow). 0.52 is the real moon's mean.");
+            dragF("Earthshine", "earthshine", 1.0f, 0.05f, 0.0f, 100.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            InspectorHelp("The ashen light on the moon's dark side -- sunlight reflected by the Earth. 1 = the "
+                          "physical estimate (about 1/8000 of the full disc at new moon, fading as the Earth's "
+                          "own phase wanes toward full moon). Seen on a thin crescent.");
             if (!real)
             {
                 dragF("Phase", "phase", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");

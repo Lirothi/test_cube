@@ -25,6 +25,11 @@ cbuffer SkyAtmosphereCB : register(b0)
     float4 SkyIlluminance;
     float4 SkyExposure;
     float4 SkyPlanet;
+    // Time-of-day plan N1: light 1, the moon (SkyViewFrameData). Zero illuminance = no second light.
+    float4 SkyLight1Direction;   // w: disc angular radius (0 in the captures)
+    float4 SkyLight1Illuminance; // outer-space RGB lux as lit now; w: earthshine fraction of the full disc
+    float4 SkyMoonDisc;          // the FULL moon's outer-space RGB lux; w: phase angle (rad)
+    float4 SkyMoonDisc2;         // x: the disc's lit scale; y: 1 = albedo/normal texture ready
 #endif
 #ifdef SKY_AERIAL
     float4x4 AerialInvView;
@@ -170,23 +175,68 @@ void IntegrateSkyMulti(float3 p, float3 dir, float3 lightDir, out float3 L, out 
 #endif
 
 #ifdef SKY_VIEW
+// Time-of-day plan N1: the atmosphere's TWO lights, light 0 the sun and light 1 the moon (UE
+// NUM_ATMOSPHERE_LIGHTS 2; SkyAtmosphere.usf:1117, 1403, 1688 add light 1 beside light 0). Each brings its
+// own phase, its own transmittance down from the top of the atmosphere, its own planet shadow and its own
+// multiple scattering, at its own outer-space illuminance -- so their in-scattering sources simply add.
+// With no moon (no time of day, or the moon off) light 1's illuminance is zero and every LUT skips it on
+// a uniform branch, so those levels pay nothing and draw what they drew.
+bool SkyHasLight1() { return any(SkyLight1Illuminance.rgb > 0.0f); }
+
+struct SkyLightPhase { float mie; float ray; };
+// ParticipatingMediaCommon.ush:91-104; UE calls HG(g, -mu).
+SkyLightPhase SkyPhaseFor(float3 lightDir, float3 viewDir)
+{
+    const float mu = dot(lightDir, viewDir), g = MieScattering.w;
+    const float denom = max(1.e-6f, 1.0f + g*g - 2.0f*g*mu);
+    SkyLightPhase phase;
+    phase.mie = (1.0f-g*g) / (4.0f*SkyPi*denom*sqrt(denom));
+    phase.ray = 3.0f*(1.0f+mu*mu) / (16.0f*SkyPi);
+    return phase;
+}
+// The isotropic phase the distant sky light integrates with (UE usf:1393).
+SkyLightPhase SkyIsotropicPhase()
+{
+    SkyLightPhase phase;
+    phase.mie = 1.0f / (4.0f * SkyPi);
+    phase.ray = 1.0f / (4.0f * SkyPi);
+    return phase;
+}
+
+// One light's in-scattering source at a sample, AT ITS ILLUMINANCE: the single-scattered light (planet
+// shadow, transmittance from the top of the atmosphere, phase) plus the multiple-scattering LUT's.
+float3 SkyLightSource(float3 q, float height, float3 up, float3 lightDir, float3 illuminance, SkyLightPhase phase,
+                      MediumSampleRGB medium, Texture2D<float4> transmittanceLut, Texture2D<float4> multiScatterLut,
+                      SamplerState linearClamp)
+{
+    const float lightMu = dot(lightDir, up);
+    float2 tUv;
+    getTransmittanceLutUvs(height, lightMu, AtmosphereRadii.x, AtmosphereRadii.y, tUv);
+    const float3 toLight = transmittanceLut.SampleLevel(linearClamp, tUv, 0).rgb;
+    const float planet = SkyRaySphereNearest(q, lightDir, PlanetRadiusOffset * up, AtmosphereRadii.x);
+    const float3 multi = multiScatterLut.SampleLevel(linearClamp,
+        saturate(float2(lightMu*.5f+.5f, (height-AtmosphereRadii.x)/(AtmosphereRadii.y-AtmosphereRadii.x))), 0).rgb;
+    return illuminance * ((planet >= 0 ? 0.0f : 1.0f) * toLight
+        * (medium.ScatteringMie*phase.mie + medium.ScatteringRay*phase.ray) + multi*medium.Scattering);
+}
+
 // UE SkyAtmosphere.usf:590-606 and :1608: the in-scatter integral over ONE finite segment, exactly
 // as the aerial perspective volume takes it -- `samples` uniform steps at offset .3, the sun's
 // transmittance and the multi-scattering LUTs at every step, the planet shadow on the sun. Shared
 // by the volume (sky_lut_aerial_cs.hlsl) and the cloud capture, which needs the air between a
 // sea-level probe and a cloud front without a camera volume to read it from. `distanceScale` is
 // UE's AerialPespectiveViewDistanceScale (1 when the caller has none): it multiplies the optical
-// depth per sample and nothing else. Returns the UNSCALED luminance (the caller applies the sun's
-// illuminance and its exposure) and the RGB throughput.
+// depth per sample and nothing else. Returns the luminance AT BOTH LIGHTS' ILLUMINANCE (N1: the sun and
+// the moon summed inside the march; the caller applies the luminance factor and the exposure) and the
+// RGB throughput.
 void SkyIntegrateSegment(float3 p, float3 dir, float tMax, uint samples, float distanceScale,
                          Texture2D<float4> transmittanceLut, Texture2D<float4> multiScatterLut, SamplerState linearClamp,
                          out float3 L, out float3 throughput)
 {
     float dt = tMax / samples;
-    float mu = dot(SkySunDirection.xyz, dir), g = MieScattering.w;
-    float denom = max(1.e-6f, 1.0f + g*g - 2.0f*g*mu);
-    float phaseMie = (1.0f-g*g) / (4.0f*SkyPi*denom*sqrt(denom));
-    float phaseRay = 3.0f*(1.0f+mu*mu) / (16.0f*SkyPi);
+    const SkyLightPhase phase0 = SkyPhaseFor(SkySunDirection.xyz, dir);
+    const SkyLightPhase phase1 = SkyPhaseFor(SkyLight1Direction.xyz, dir);
+    const bool light1 = SkyHasLight1();
     L = 0; throughput = 1;
     [loop] for (uint i = 0; i < samples; ++i)
     {
@@ -197,15 +247,13 @@ void SkyIntegrateSegment(float3 p, float3 dir, float tMax, uint samples, float d
         // UE :601-606: the view-distance scale multiplies the optical depth per sample and nothing else
         // (the in-scatter step below keeps the unscaled extinction in its denominator, as UE do).
         float3 tr = exp(-medium.Extinction * dt * distanceScale);
-        float lightMu = dot(SkySunDirection.xyz, up);
-        float2 tUv;
-        getTransmittanceLutUvs(height, lightMu, AtmosphereRadii.x, AtmosphereRadii.y, tUv);
-        float3 toLight = transmittanceLut.SampleLevel(linearClamp, tUv, 0).rgb;
-        float planet = SkyRaySphereNearest(q, SkySunDirection.xyz, PlanetRadiusOffset * up, AtmosphereRadii.x);
-        float3 multi = multiScatterLut.SampleLevel(linearClamp,
-            saturate(float2(lightMu*.5f+.5f, (height-AtmosphereRadii.x)/(AtmosphereRadii.y-AtmosphereRadii.x))), 0).rgb;
-        float3 S = (planet >= 0 ? 0.0f : 1.0f) * toLight
-            * (medium.ScatteringMie*phaseMie + medium.ScatteringRay*phaseRay) + multi*medium.Scattering;
+        float3 S = SkyLightSource(q, height, up, SkySunDirection.xyz, SkyIlluminance.rgb, phase0, medium,
+                                  transmittanceLut, multiScatterLut, linearClamp);
+        [branch] if (light1)
+        {
+            S += SkyLightSource(q, height, up, SkyLight1Direction.xyz, SkyLight1Illuminance.rgb, phase1, medium,
+                                transmittanceLut, multiScatterLut, linearClamp);
+        }
         L += throughput * (S-S*tr) / max(medium.Extinction, 1.e-9f);
         throughput *= tr;
     }

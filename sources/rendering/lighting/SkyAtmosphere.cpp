@@ -3,6 +3,7 @@
 #include "app/camera/Camera.h"
 #include "rendering/lighting/Skybox.h"
 #include <algorithm>
+#include <iterator>
 #include <cmath>
 #include <cstring>
 #include "core/logging/Log.h"
@@ -43,6 +44,8 @@ SkyAtmosphere::~SkyAtmosphere()
 
 void SkyAtmosphere::Reset()
 {
+    moon_.Reset(); moonHeap_.Reset(); moonMaterial_.reset(); moonSrv_ = {}; moonUav_ = {};
+    moonReady_ = moonFailed_ = false;
     distant_.Reset(); distantHeap_.Reset(); distantMaterial_.reset();
     for (auto& r : distantReadback_) r.Reset();
     distantSrv_ = {}; distantUav_ = {}; distantPending_ = {};
@@ -69,6 +72,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     ValidateReadback(renderer->GetCurrentFrameIndex());
     ValidateDistant(renderer->GetCurrentFrameIndex());
     if (settings.mode && !failed_) PrepareDistant(renderer);
+    if (settings.mode && !failed_) PrepareMoon(renderer);
     if (settings.mode && settings.environmentLighting && !failed_) PrepareEnvironment(renderer);
     if ((!settings.mode && !settings.lutEnabled && !settings.lutDebugView) || failed_ || heap_) return;
     auto* device = renderer->GetDevice();
@@ -282,7 +286,7 @@ size_t SkyAtmosphere::BuildAerial(Renderer* renderer, RenderGraph<static_cast<si
         Math::mat4 invView, invProj;
         Math::float4 start;
     };
-    static_assert(sizeof(Constants) == 320);
+    static_assert(sizeof(Constants) == 384);
     const Constants data{settings.parameters, view, camera.GetInvViewMatrix(), camera.GetInvProjMatrixNoJitter(),
         Math::float4(std::max(0.0f, startDepthMetres) / kMetresPerKm,
                      std::clamp(settings.aerialViewDistanceScale, 0.01f, 100.0f), 0, 0)};
@@ -555,6 +559,11 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     view.planet[0] = settings.parameters.radii[0] + 0.001f;
     view.planet[3] = 1;
     view.sunDirection[3] = 0; // no solar disk in reflection captures (UE usf:314-317)
+    // ...nor a lunar one (N1): the disc's fields go too, so the moon's phase alone cannot dirty the cube.
+    view.light1Direction[3] = 0;
+    view.light1Illuminance[3] = 0;
+    std::fill(std::begin(view.moonDisc), std::end(view.moonDisc), 0.0f);
+    std::fill(std::begin(view.moonDisc2), std::end(view.moonDisc2), 0.0f);
     view.exposure[0] = 1.0f / 1024.0f;
     view.exposure[1] = 1.0f; // the sky-only PICTURE factor never reaches the probes (and must not rebuild them)
     const auto params = settings.parameters;
@@ -583,10 +592,19 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     constexpr float kInvPi = 0.3183098861837907f;
     // w = the radiance cube's coarsest mip (1x1 per face), the sky's sphere average, which the
     // shader adds as the sky's half of the same ground irradiance.
-    const std::array<float, 4> groundSun{view.illuminance[0] * sunTransmittance[0] * groundCosine * kInvPi,
-                                         view.illuminance[1] * sunTransmittance[1] * groundCosine * kInvPi,
-                                         view.illuminance[2] * sunTransmittance[2] * groundCosine * kInvPi,
-                                         7.0f};
+    // N1: the moon lights the same ground, through its own air and the same deck.
+    const float moonSinElevation = std::clamp(view.light1Direction[2], -1.0f, 1.0f);
+    float moonTransmittance[3] = {0.0f, 0.0f, 0.0f};
+    if (view.light1Illuminance[0] > 0.0f || view.light1Illuminance[1] > 0.0f || view.light1Illuminance[2] > 0.0f)
+    {
+        SkyTransmittanceTowardSun(params, std::asin(moonSinElevation), moonTransmittance);
+    }
+    const float moonCosine = std::max(0.0f, moonSinElevation) * (overlayActive ? std::clamp(overlay->groundSunScale, 0.0f, 1.0f) : 1.0f);
+    const std::array<float, 4> groundSun{
+        (view.illuminance[0] * sunTransmittance[0] * groundCosine + view.light1Illuminance[0] * moonTransmittance[0] * moonCosine) * kInvPi,
+        (view.illuminance[1] * sunTransmittance[1] * groundCosine + view.light1Illuminance[1] * moonTransmittance[1] * moonCosine) * kInvPi,
+        (view.illuminance[2] * sunTransmittance[2] * groundCosine + view.light1Illuminance[2] * moonTransmittance[2] * moonCosine) * kInvPi,
+        7.0f};
     const std::array<float, 3> groundAlbedo{params.groundAlbedo[0], params.groundAlbedo[1],
                                             params.groundAlbedo[2]};
     return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
@@ -691,6 +709,85 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
         });
 }
 
+void SkyAtmosphere::PrepareMoon(Renderer* renderer)
+{
+    if (moonHeap_ || moonFailed_) return;
+    auto* device = renderer->GetDevice();
+    const auto fail = [this](const char* what) {
+        moonFailed_ = true;
+        LOG_ERROR(logging::LogCategory::Render, "moon disc texture: {} failed; the disc is drawn as a smooth sphere", what);
+    };
+    D3D12_DESCRIPTOR_HEAP_DESC hd{};
+    hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1 + kMoonMips;
+    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&moonHeap_)))) { fail("heap"); return; }
+    const auto base = moonHeap_->GetCPUDescriptorHandleForHeapStart();
+    const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
+    D3D12_RESOURCE_DESC desc{};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = desc.Height = kMoonSize; desc.DepthOrArraySize = 1; desc.MipLevels = kMoonMips;
+    desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+    { fail("texture"); return; }
+    moon_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.Moon");
+    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+    moonSrv_ = base;
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+    sd.Format = desc.Format; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = kMoonMips;
+    device->CreateShaderResourceView(resource.Get(), &sd, moonSrv_);
+    for (UINT mip = 0; mip < kMoonMips; ++mip)
+    {
+        moonUav_[mip] = {base.ptr + (1u + mip) * step};
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = desc.Format; ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D; ud.Texture2D.MipSlice = mip;
+        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, moonUav_[mip]);
+    }
+    Material::ComputeDesc cd{}; cd.shaderFile = L"shaders/sky_moon_cs.hlsl"; cd.csEntry = "CSMain";
+    moonMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    if (!moonMaterial_ || !moonMaterial_->GetPipelineState()) { fail("PSO"); return; }
+}
+
+size_t SkyAtmosphere::BuildMoon(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph)
+{
+    constexpr size_t none = static_cast<size_t>(-1);
+    if (moonReady_ || moonFailed_ || !moonMaterial_ || !moon_.Get()) return none;
+    // Committed at registration, as the cloud noise is: the skybox registered later in THIS frame
+    // must already know the texture is on its way (the graph orders it behind this pass).
+    moonReady_ = true;
+    LOG_INFO(logging::LogCategory::Render, "moon disc texture: generating {}^2, {} mips (procedural maria + craters)",
+             kMoonSize, kMoonMips);
+    return graph.AddPass2(RenderPass::Main_SkyMoon, {}, {}, {},
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const auto write = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(moon_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(moon_.Get(), kRest);
+            return [this, renderer, write, restore](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyMoon);
+                auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
+                {
+                    GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyMoon);
+                    renderer->EmitPoint(t.cl, write);
+                    for (UINT mip = 0; mip < kMoonMips; ++mip)
+                    {
+                        const UINT size = kMoonSize >> mip;
+                        const std::array<UINT, 4> cb{size, mip, 0x5EA7u, 0u};
+                        // numthreads(8, 8, 1): the helper takes the thread counts.
+                        RecordComputeDispatch(renderer, t.cl, moonMaterial_.get(), render::kConstantBufferAlignment,
+                            [&cb](uint8_t* dst) { std::memcpy(dst, cb.data(), sizeof(cb)); },
+                            {}, {moonUav_[mip]}, D3D12_GPU_DESCRIPTOR_HANDLE{}, std::max(size, 8u), std::max(size, 8u));
+                    }
+                    renderer->EmitPoint(t.cl, restore);
+                }
+                c.EndCL(t);
+            };
+        });
+}
+
 void SkyAtmosphere::PrepareDistant(Renderer* renderer)
 {
     if (distantHeap_ || distantFailed_) return;
@@ -747,6 +844,10 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
     view.planet[0] = settings.parameters.radii[0] + 6.0f;
     view.planet[3] = 1.0f; view.sunDirection[3] = 0.0f; view.exposure[0] = 1.0f;
     view.exposure[1] = 1.0f; // picture-only factor: not the fog's light, not a rebuild key
+    // N1: the moon's disc is not light either -- only its direction and illuminance key a rebuild.
+    view.light1Direction[3] = 0.0f; view.light1Illuminance[3] = 0.0f;
+    std::fill(std::begin(view.moonDisc), std::end(view.moonDisc), 0.0f);
+    std::fill(std::begin(view.moonDisc2), std::end(view.moonDisc2), 0.0f);
     const auto params = settings.parameters;
     if (distantReady_ && std::memcmp(&params, &distantParameters_, sizeof(params)) == 0
         && std::memcmp(&view, &distantKey_, sizeof(view)) == 0) return after;
@@ -772,12 +873,24 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
                 const auto& k = distantMajorKey_;
                 const float cosTurn = view.sunDirection[0] * k.sunDirection[0] + view.sunDirection[1] * k.sunDirection[1] +
                                       view.sunDirection[2] * k.sunDirection[2];
+                // N1: the moon counts by its SHARE of the light. The test is on the two lights' sum, so
+                // a daytime moon (a millionth of the sun) cannot reset the fog's history by waxing; its
+                // turn counts only while it carries a tenth of the light or more -- the night.
+                const float cosMoonTurn = view.light1Direction[0] * k.light1Direction[0] +
+                                          view.light1Direction[1] * k.light1Direction[1] +
+                                          view.light1Direction[2] * k.light1Direction[2];
                 bool lightChanged = false;
+                bool moonMatters = false;
                 for (int c = 0; c < 3; ++c)
                 {
-                    const float a = view.illuminance[c], b = k.illuminance[c];
-                    lightChanged = lightChanged || std::fabs(a - b) > 0.1f * std::max(std::fabs(b), 1.0e-6f);
+                    const float total = std::fabs(k.illuminance[c]) + std::fabs(k.light1Illuminance[c]);
+                    const float change = std::fabs(view.illuminance[c] - k.illuminance[c]) +
+                                         std::fabs(view.light1Illuminance[c] - k.light1Illuminance[c]);
+                    lightChanged = lightChanged || change > 0.1f * std::max(total, 1.0e-6f);
+                    moonMatters = moonMatters || std::fabs(view.light1Illuminance[c]) > 0.1f * std::max(
+                        std::fabs(view.illuminance[c]) + std::fabs(view.light1Illuminance[c]), 1.0e-12f);
                 }
+                lightChanged = lightChanged || (moonMatters && cosMoonTurn < 0.99939083f);
                 const bool major = !distantMajorValid_ ||
                     std::memcmp(&params, &distantMajorParameters_, sizeof(params)) != 0 ||
                     cosTurn < 0.99939083f /* cos 2 degrees */ || lightChanged ||

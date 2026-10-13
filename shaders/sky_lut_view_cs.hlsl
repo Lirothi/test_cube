@@ -7,13 +7,8 @@ Texture2D<float4> MultiScatter : register(t1);
 SamplerState LinearClamp : register(s0);
 RWTexture2D<float4> SkyView : register(u0);
 
-float3 ViewTransmittance(float height, float mu)
-{
-    float2 uv;
-    getTransmittanceLutUvs(height, mu, AtmosphereRadii.x, AtmosphereRadii.y, uv);
-    return Transmittance.SampleLevel(LinearClamp, uv, 0).rgb;
-}
-// UE SkyAtmosphere.usf:1282-1338,519-758. One sun, no opaque/cloud shadows.
+// UE SkyAtmosphere.usf:1282-1338,519-758. Two lights (N1: the sun and the moon, SkyLightSource), no
+// opaque/cloud shadows.
 // Pre-exposed radiance like UE: prevents the solar disk overflowing our FP16 light target.
 [numthreads(8, 8, 1)]
 [RootSignature(SKY_VIEW_RS)]
@@ -35,12 +30,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float samples = lerp(4.0f, 32.0f, saturate(tMax / 150.0f));
     float countFloor = floor(samples);
     float tMaxFloor = tMax * countFloor / samples;
-    float mu = dot(SkySunDirection.xyz, dir);
-    // ParticipatingMediaCommon.ush:91-104; UE calls HG(g, -mu).
-    float g = MieScattering.w;
-    float denom = max(1.e-6f, 1.0f + g * g - 2.0f * g * mu);
-    float phaseMie = (1.0f - g * g) / (4.0f * SkyPi * denom * sqrt(denom));
-    float phaseRay = 3.0f * (1.0f + mu * mu) / (16.0f * SkyPi);
+    const SkyLightPhase phase0 = SkyPhaseFor(SkySunDirection.xyz, dir);
+    const SkyLightPhase phase1 = SkyPhaseFor(SkyLight1Direction.xyz, dir);
+    const bool light1 = SkyHasLight1();
     float3 L = 0, throughput = 1;
     [loop] for (float i = 0; i < samples; i += 1)
     {
@@ -53,12 +45,13 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float3 up = q / height;
         MediumSampleRGB m = SampleAtmosphereMediumRGB(q);
         float3 tr = exp(-m.Extinction * dt);
-        float lightMu = dot(SkySunDirection.xyz, up);
-        float planet = SkyRaySphereNearest(q, SkySunDirection.xyz, PlanetRadiusOffset * up, AtmosphereRadii.x);
-        float3 multi = MultiScatter.SampleLevel(LinearClamp,
-            saturate(float2(lightMu * 0.5f + 0.5f, (height - AtmosphereRadii.x) / (AtmosphereRadii.y - AtmosphereRadii.x))), 0).rgb;
-        float3 S = (planet >= 0 ? 0.0f : 1.0f) * ViewTransmittance(height, lightMu)
-            * (m.ScatteringMie * phaseMie + m.ScatteringRay * phaseRay) + multi * m.Scattering;
+        float3 S = SkyLightSource(q, height, up, SkySunDirection.xyz, SkyIlluminance.rgb, phase0, m,
+                                  Transmittance, MultiScatter, LinearClamp);
+        [branch] if (light1)
+        {
+            S += SkyLightSource(q, height, up, SkyLight1Direction.xyz, SkyLight1Illuminance.rgb, phase1, m,
+                                Transmittance, MultiScatter, LinearClamp);
+        }
         L += throughput * (S - S * tr) / max(m.Extinction, 1.e-9f);
         throughput *= tr;
     }
@@ -81,5 +74,6 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // RT hit shading, and the multi-scattering LUT keeps its own ground term exactly as UE do
     // (they pass Ground=true there). What disappears is only a painted plate in the camera's sky --
     // the thing UE expect real geometry to cover.
-    SkyView[id.xy] = float4(min(L * SkyIlluminance.rgb * SkyIlluminance.w * SkyExposure.x, 64000.0f), dot(throughput, 1.0f / 3.0f));
+    // L is already at the lights' illuminance (SkyLightSource); w = SkyAndAerialPerspectiveLuminanceFactor.
+    SkyView[id.xy] = float4(min(L * SkyIlluminance.w * SkyExposure.x, 64000.0f), dot(throughput, 1.0f / 3.0f));
 }

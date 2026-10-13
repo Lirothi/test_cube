@@ -216,6 +216,7 @@ private:
         size_t pSkyLuts = kNone; // B1 -> compose debug (later SkyView)
         size_t pFog = kNone;       // volumetric fog -> compose (plan part A)
         size_t pCloudNoise = kNone;  // plan C1: seed-dirty noise set -> shadow / trace
+        size_t pSkyMoon = kNone;     // time-of-day N1: the moon's texture, once -> the skybox
         size_t pCloudShadow = kNone; // plan C3: cloud shadow map -> lighting, fog
         size_t pCloud = kNone;       // plan C2: half-res trace + resolve -> compose
         size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)

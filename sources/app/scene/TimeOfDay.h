@@ -58,6 +58,8 @@ public:
     // the viewport marks them when the Time of Day object is selected.
     const Math::float3& SunToward() const { return sunToward_; }
     const Math::float3& MoonToward() const { return moonToward_; }
+    // N1: the moon as the sky sees it (the atmosphere's second light and the disc), this frame.
+    const SkyMoonFrame& GetSkyMoon() const { return skyMoon_; }
 
 private:
     void AdvanceClock(double deltaSeconds);
@@ -84,6 +86,7 @@ private:
     float moonPhaseAngleDeg_ = 0.0f;
     Math::float3 sunToward_{0.0f, 1.0f, 0.0f};
     Math::float3 moonToward_{0.0f, -1.0f, 0.0f};
+    SkyMoonFrame skyMoon_{};
 };
 
 // T4: what the editor's `setTime` / `setDate` accept (the command bar, MCP), resolved against the

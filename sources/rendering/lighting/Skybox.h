@@ -91,8 +91,11 @@ public:
     }
 
     // The SKY atmosphere's per-view data and its two LUTs -- nothing to do with the height fog.
-    void SetSkyAtmosphere(const SkyViewFrameData& view, D3D12_CPU_DESCRIPTOR_HANDLE skyView, D3D12_CPU_DESCRIPTOR_HANDLE transmittance)
-    { skyViewFrame_ = view; skyViewSrv_ = skyView; transmittanceSrv_ = transmittance; }
+    // `moon` (time-of-day N1): the moon's albedo + normal texture, or a null handle when it is not ready
+    // (the disc is then a smooth sphere of albedo 1; view.moonDisc2[1] says which).
+    void SetSkyAtmosphere(const SkyViewFrameData& view, D3D12_CPU_DESCRIPTOR_HANDLE skyView, D3D12_CPU_DESCRIPTOR_HANDLE transmittance,
+                          D3D12_CPU_DESCRIPTOR_HANDLE moon = {})
+    { skyViewFrame_ = view; skyViewSrv_ = skyView; transmittanceSrv_ = transmittance; moonSrv_ = moon; }
     const SkyViewFrameData& SkyViewFrame() const { return skyViewFrame_; }
 
     bool IsSimpleRender() const { return true; }
@@ -111,7 +114,7 @@ private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
     std::array<ID3D12Resource*, 3> environmentResource_{}; // owned by SkyAtmosphere; GPU-drained teardown
     SkyViewFrameData skyViewFrame_{};
-    D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, nullSkyViewSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, moonSrv_{}, nullSkyViewSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullSkyViewHeap_;
     TextureCube cube_;
     TextureCube specCube_;

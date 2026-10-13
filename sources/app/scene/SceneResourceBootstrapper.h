@@ -246,6 +246,7 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle localBlurredBlend;
     Material::CBFieldHandle bilateralMinLogLum;
     Material::CBFieldHandle bilateralInvLogLumRange;
+    Material::CBFieldHandle nightVision; // time-of-day E2: rods' share of vision (Purkinje)
     // P8C-2o: UE's split -- the scene's own factor and the flare's, which PARTITION the light
     // rather than adding to it. See the block comment in tonemap_cs.hlsl.
     Material::CBFieldHandle bloomSceneApply;

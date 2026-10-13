@@ -20,6 +20,7 @@ enum class RenderQueue : uint8_t {
 
 enum class RenderPass : uint16_t {
     Main_CloudNoise, // C1: the noise set, seed-dirty
+    Main_SkyMoon, // time-of-day N1: the moon's procedural albedo + normal, once
     Main_CloudShadow, // C3: the cloud shadow map from the sun, per frame
     Main_SkyDistant, // B5: isotropic ambient at 6 km
     Main_SkyEnvironment, // B4: dirty sky capture and IBL convolution
@@ -142,6 +143,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     switch (pass)
     {
     case RenderPass::Main_CloudNoise: return L"CloudNoise";
+    case RenderPass::Main_SkyMoon: return L"SkyMoon";
     case RenderPass::Main_CloudShadow: return L"CloudShadow";
     case RenderPass::Main_CloudTrace: return L"CloudTrace";
     case RenderPass::Main_SkyDistant: return L"SkyDistant";

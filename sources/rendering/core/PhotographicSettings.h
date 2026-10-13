@@ -226,6 +226,14 @@ struct CameraExposureSettings
     // blurred log-luminance against the bilateral grid. 1 = the pre-grid blur-only base, which
     // halos at a high-contrast edge (the horizon band of 2026-09-11); 0 = pure grid.
     float localBlurredBlend = 0.6f;
+    // Time-of-day plan E2: NIGHT VISION -- the eye's rods taking over in the dark (the Purkinje shift):
+    // colours fade toward a bluish grey and blues outlast reds. How far is decided by the LIGHT, not the
+    // knob: the share of rod vision follows the luminance the eye is adapted to (photopic above ~3 cd/m2,
+    // fully scotopic below ~0.005), per pixel against the adaptation, so a day and its shadows are
+    // untouched and a moonlit beach goes grey-blue while the moon itself keeps its colour. 1 = that
+    // physical estimate, 0 = off (the camera's colour vision at any light). Needs the photographic
+    // camera: without it the frame is not in luminance and there is nothing to adapt to.
+    float nightVision = 1.0f;
 };
 
 // Display transform (plan section 6.1 / step P3).

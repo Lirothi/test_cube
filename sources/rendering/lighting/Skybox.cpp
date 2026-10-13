@@ -112,6 +112,10 @@ public:
             illuminanceHandle_ = material->ComputeCBFieldHandle(0, "skyIlluminance");
             planetHandle_ = material->ComputeCBFieldHandle(0, "skyPlanet");
             skyExposureHandle_ = material->ComputeCBFieldHandle(0, "skyExposure");
+            light1DirectionHandle_ = material->ComputeCBFieldHandle(0, "skyLight1Direction");
+            light1IlluminanceHandle_ = material->ComputeCBFieldHandle(0, "skyLight1Illuminance");
+            moonDiscHandle_ = material->ComputeCBFieldHandle(0, "skyMoonDisc");
+            moonDisc2Handle_ = material->ComputeCBFieldHandle(0, "skyMoonDisc2");
         }
     }
 
@@ -138,6 +142,10 @@ public:
         UpdateUniform(owner, illuminanceHandle_, material, v.illuminance, cbData);
         UpdateUniform(owner, planetHandle_, material, v.planet, cbData);
         UpdateUniform(owner, skyExposureHandle_, material, v.exposure, cbData);
+        UpdateUniform(owner, light1DirectionHandle_, material, v.light1Direction, cbData);
+        UpdateUniform(owner, light1IlluminanceHandle_, material, v.light1Illuminance, cbData);
+        UpdateUniform(owner, moonDiscHandle_, material, v.moonDisc, cbData);
+        UpdateUniform(owner, moonDisc2Handle_, material, v.moonDisc2, cbData);
     }
 
 private:
@@ -150,6 +158,7 @@ private:
     Material::CBFieldHandle prevProjNoJitterHandle_{};
     Material::CBFieldHandle exposureHandle_{};
     Material::CBFieldHandle sunHandle_{}, illuminanceHandle_{}, planetHandle_{}, skyExposureHandle_{};
+    Material::CBFieldHandle light1DirectionHandle_{}, light1IlluminanceHandle_{}, moonDiscHandle_{}, moonDisc2Handle_{};
 };
 } // namespace
 
@@ -258,9 +267,13 @@ void Skybox::Init(Renderer* renderer,
 
 bool Skybox::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData)
 {
+    // t3 (time-of-day N1): the moon's texture, or the same type-correct null as the LUTs -- the table is
+    // always full, and the shader reads t3 only when skyMoonDisc2.y says the texture is ready.
+    const bool moonTexture = skyViewFrame_.planet[3] != 0 && skyViewFrame_.moonDisc2[1] != 0.0f && moonSrv_.ptr != 0;
     ctx.srvTable[0] = renderer->StageSrvUavTable({cube_.GetSRVCPU(),
         skyViewFrame_.planet[3] != 0 ? skyViewSrv_ : nullSkyViewSrv_,
-        skyViewFrame_.planet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_}).gpu;
+        skyViewFrame_.planet[3] != 0 ? transmittanceSrv_ : nullSkyViewSrv_,
+        moonTexture ? moonSrv_ : nullSkyViewSrv_}).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     RenderableObject::RecordGraphics(renderer, cl, ctx, camera, cbData);

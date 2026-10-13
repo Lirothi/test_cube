@@ -71,6 +71,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     float3 L, throughput;
     SkyIntegrateSegment(p, dir, tMax, samples, AerialStart.y, Transmittance, MultiScatter, LinearClamp, L, throughput);
     // UE :1618,1635-1636: luminance factor, pre-exposed RGB, mean RGB transmittance.
-    AerialVolume[cell] = float4(min(L*SkyIlluminance.rgb*SkyIlluminance.w*SkyExposure.x, 64000.0f),
+    // L is at both lights' illuminance already (SkyIntegrateSegment, N1).
+    AerialVolume[cell] = float4(min(L*SkyIlluminance.w*SkyExposure.x, 64000.0f),
         saturate(dot(throughput, 1.0f/3.0f)));
 }
