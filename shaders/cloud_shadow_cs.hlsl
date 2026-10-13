@@ -56,7 +56,9 @@ void CSTrace(uint3 id : SV_DispatchThreadID)
     const float4 nearClip = float4(uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), 0.0f, 1.0f);
     const float4 nearH = mul(nearClip, cloudShadowInvViewProj);
     const float3 nearWorld = nearH.xyz / nearH.w;
-    const float3 lightDir = -cloudSun.xyz;
+    // N3: the ground's light (cloudShadowSun) -- after sunset the clouds' own light can be the sun
+    // still, while the ground is the moon's.
+    const float3 lightDir = -cloudShadowSun.xyz;
 
     // usf:2119-2165: the segment of the light ray inside the layer.
     const float3 originKm = CloudWorldToPlanetKm(nearWorld);

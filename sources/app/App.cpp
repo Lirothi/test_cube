@@ -387,6 +387,7 @@ namespace
             return true;
         }
         if (setting == "cloudShadow.bilinearWeather") { render::g_cloudShadowBilinearWeather = value != 0.0f; return true; }
+        if (setting == "cloud.perSampleTransmittance") { render::g_cloudPerSampleTransmittance = value != 0.0f; return true; } // N3 A/B
         if (setting == "cloudCompose.jitterScale") { render::g_cloudComposeJitterScale = std::clamp(value, -2.0f, 2.0f); return true; }
         if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean = value != 0.0f; return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
@@ -785,6 +786,7 @@ namespace
                 { "msContribution", &c.msContribution, 0.0f, 1.0f }, { "msOcclusion", &c.msOcclusion, 0.0f, 1.0f },
                 { "msEccentricity", &c.msEccentricity, 0.0f, 1.0f }, { "skyLightBottomOcclusion", &c.skyLightBottomOcclusion, 0.0f, 1.0f },
                 { "skyLightIntensity", &c.skyLightIntensity, 0.0f, 10.0f }, { "diffuseLight", &c.diffuseLight, 0.0f, 10.0f },
+                { "reflectionHorizonFadeDeg", &c.reflectionHorizonFadeDeg, 0.0f, 45.0f },
                 { "distanceToSampleCountMaxKm", &c.distanceToSampleCountMaxKm, 0.1f, 1000.0f },
                 { "shadowTracingDistanceKm", &c.shadowTracingDistanceKm, 0.1f, 100.0f },
                 { "stopTracingTransmittance", &c.stopTracingTransmittance, 0.0f, 0.5f },

@@ -6,12 +6,36 @@
 // DENSITY is ours (cloud_common.hlsli, CLOUD_DENSITY). The caller owns the layer intersection, the
 // depth clamp, the start offset, the aerial perspective, the exposure and the output.
 //
-// Requires cloud_common.hlsli (with CLOUD_DENSITY) before it.
+// Requires cloud_common.hlsli (with CLOUD_DENSITY) before it, and the sky's transmittance LUT
+// declared as CloudTransmittanceLut with the linear-clamp sampler gSmpLinearClamp.
 #ifndef CLOUD_MARCH_HLSLI
 #define CLOUD_MARCH_HLSLI
 
 // The light diffused through a cloud (CloudMarch): a water cloud's asymmetry (Mie, ~0.85).
 static const float kCloudDiffusionG = 0.85f;
+
+// TIME-OF-DAY PLAN N3 (UE CLOUD_PER_SAMPLE_ATMOSPHERE_TRANSMITTANCE): the light at a sample is its
+// outer-space illuminance times the air between the sample and the light -- the sky's transmittance LUT
+// at the sample's OWN radius, nothing where the planet is in the way. A cloud 2 km up keeps the sun
+// for minutes after it has set at the ground, and reddens on its long, low path: the pink after
+// sunset. The planet's edge is softened over ~0.6 degrees, about the sun's disc. Off (cloudLight.y 0):
+// the light's colour is the one given, the air already applied at the camera.
+float3 CloudLightTransmittance(float3 planetKm)
+{
+    if (cloudLight.y <= 0.0f) { return 1.0f.xxx; }
+    const float r = length(planetKm);
+    const float mu = dot(planetKm / r, cloudSun.xyz);
+    const float bottom = cloudCamera.w, top = cloudLight.x;
+    const float horizonMu = -sqrt(saturate(1.0f - (bottom * bottom) / (r * r)));
+    const float planetEdge = saturate((mu - horizonMu) / 0.01f + 0.5f);
+    if (planetEdge <= 0.0f) { return 0.0f.xxx; }
+    const float H = sqrt(max(0.0f, top * top - bottom * bottom));
+    const float rho = sqrt(max(0.0f, r * r - bottom * bottom));
+    const float d = max(0.0f, -r * mu + sqrt(max(0.0f, r * r * (mu * mu - 1.0f) + top * top)));
+    const float dMin = max(top - r, 0.0f), dMax = rho + H;
+    const float2 uv = float2((d - dMin) / max(dMax - dMin, 1.0e-6f), rho / max(H, 1.0e-6f));
+    return CloudTransmittanceLut.SampleLevel(gSmpLinearClamp, uv, 0).rgb * planetEdge;
+}
 
 struct CloudMarchInputs
 {
@@ -87,6 +111,8 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
         if (s.extinction <= 0.0f) { t += stepT; continue; } // usf:781-787 conservative density
 
         CloudMedia m = CloudSetupMedia(albedo, s.extinction, basePhase);
+        // N3: the light as it reaches this sample through the air (CloudLightTransmittance).
+        const float3 lightHere = sunIlluminance * CloudLightTransmittance(CloudWorldToPlanetKm(P));
 
         // usf:1101-1131: the shadow march towards the sun, x^2 sample distribution, no jitter
         // ("this one cannot be hidden well by TAA"), stopping when the ray leaves the layer.
@@ -196,7 +222,7 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
             const int deepest = min((int)cloudLighting.x, CLOUD_MS_COUNT - 1);
             const float handOff = 1.0f - m.transmittanceToSun[deepest];
             // flux mu0 E (through - direct), spread over the hemisphere it arrives from
-            diffused = sunIlluminance * (mu0 * max(through - direct, 0.0f) * handOff * cloudLighting.z / (2.0f * CloudPi));
+            diffused = lightHere * (mu0 * max(through - direct, 0.0f) * handOff * cloudLighting.z / (2.0f * CloudPi));
             skyVisibility = lerp(skyVisibility, spread, closing);
         }
         const float3 ambient = distantSkyLight * (cloudLighting.y * skyVisibility) + diffused;
@@ -209,7 +235,7 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
         // transmittance advanced by octave 0 only (Frostbite's analytic segment integral).
         [unroll] for (int ms4 = CLOUD_MS_COUNT - 1; ms4 >= 0; --ms4)
         {
-            float3 sunSky = m.transmittanceToSun[ms4] * sunIlluminance * m.phase[ms4];
+            float3 sunSky = m.transmittanceToSun[ms4] * lightHere * m.phase[ms4];
             // The distant sky light is kept out of the multi-scattering approximation (usf:1339).
             sunSky += ms4 == 0 ? ambient : 0.0f.xxx;
             const float3 scattered = sunSky * m.scattering[ms4];

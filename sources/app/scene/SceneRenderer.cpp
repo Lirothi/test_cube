@@ -574,6 +574,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         decisions_.lightShafts = false;
         decisions_.lightShaftHistoryValid = false;
         decisions_.lightShaftBlend = 1.0f;
+        decisions_.lightShaftFade = 1.0f;
         // The SKY's sun (T2): the shafts are seeded by its disc and glow, whoever lights the ground.
         const DirectionalLight* sun = frame.skyLight;
         const auto& D = renderer->GetDeferredForFrame();
@@ -605,7 +606,15 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             // shafts through the palms would need a smoother blur (more, jittered taps); until then, sun only.
             const float3 toSun = (-sun->GetDirection()).Normalized();
             const float4 clip = frame.camera->GetViewProjMatrixNoJitter().Transform(float4(toSun.x, toSun.y, toSun.z, 0.0f));
-            if (clip.w > 1e-6f)
+            // BY THE SUN'S HEIGHT (time-of-day N3, ours): crepuscular rays are the shadows of clouds on air the
+            // sun still lights directly, and a few degrees down nothing overhead is. UE gate on the screen
+            // position alone, so the blur kept seeding on the twilight band -- lifted over the threshold by
+            // the auto exposure -- and drew rays out of a sun 10 degrees under the sea (wind_test, 18:40-18:50,
+            // 2026-10-13). Full while any of the disc is up, gone by -6 degrees, the end of civil twilight.
+            const float elevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) * 57.2957795f;
+            const float fadeT = std::clamp((elevationDeg + 6.0f) / (6.0f - 0.27f), 0.0f, 1.0f);
+            decisions_.lightShaftFade = fadeT * fadeT * (3.0f - 2.0f * fadeT);
+            if (clip.w > 1e-6f && decisions_.lightShaftFade > 0.0f)
             {
                 // LightShaftRendering.cpp:166-176: screen position -> uv -> aspect-corrected (v * H/W), so the blur
                 // is the same pixel distance in x and y.

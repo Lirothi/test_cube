@@ -715,7 +715,7 @@ namespace
                     if (ImGui::IsItemHovered())
                     {
                         ImGui::SetTooltip("What a level with a time of day wants: a day untouched, the end of "
-                                          "twilight 1.3 stops down, a full-moon night about 2, a moonless one 4.5 "
+                                          "twilight 1.3 stops down, a full-moon night about 3.6, a moonless one 5 "
                                           "(with Min EV100 low enough for the eye to reach it, about -11).");
                     }
                     ImGui::PopID();
@@ -2097,7 +2097,10 @@ namespace
             dragF("North Yaw (deg)", "northYawDeg", 0.0f, 0.5f, -360.0f, 360.0f, "%.1f");
             InspectorHelp("Which world direction is north, turned clockwise seen from above; 0 = +Z.");
 
+            // Each body's rows in their own ImGui ID scope: the sun and the moon share labels ("Light Source
+            // Angle (deg)", "Temperature (K)") and ImGui otherwise treats the two as one widget.
             groupKey = "sun";
+            ImGui::PushID("sun");
             ImGui::SeparatorText("Sun");
             colorEdit();
             checkB("Use Colour Temperature", "useSunTemperature", false);
@@ -2175,7 +2178,9 @@ namespace
                           "the disc and floors the width of the specular lobe; the sun sets when the whole "
                           "disc is under the horizon.");
 
+            ImGui::PopID();
             groupKey = "moon";
+            ImGui::PushID("moon");
             ImGui::SeparatorText("Moon");
             checkB("Moon", "enabled", true);
             InspectorHelp("Off, nobody lights the night: the scene is lit by the sky alone.");
@@ -2224,8 +2229,10 @@ namespace
                 InspectorHelp("Turns the moon along its circle away from where the phase puts it.");
             }
 
+            ImGui::PopID();
             // Time-of-day plan N2: the night sky's own layers.
             groupKey = "nightSky";
+            ImGui::PushID("nightSky");
             ImGui::SeparatorText("Night sky");
             {
                 const TimeOfDaySettings defaults{};
@@ -2271,6 +2278,7 @@ namespace
                     groupKey = "nightSky";
                 }
             }
+            ImGui::PopID();
 
             groupKey.clear();
             ImGui::SeparatorText("Night");
@@ -2610,6 +2618,11 @@ namespace
                           "0.25 = Ultra Dynamic Sky's cool slate overcast and contrasty bases; 1 = the physical "
                           "estimate (a lighter, warmer deck, paler bases); 0 = none, the scattering octaves alone "
                           "(UE's model): a closed deck is then lit by the blue sky only and reads as a blue sky.");
+            dragF("Reflection Horizon Fade (deg)", "reflectionHorizonFadeDeg", 5.0f, 0.1f, 0.0f, 45.0f, "%.1f");
+            InspectorHelp("The clouds in the sky's captured picture -- what the WATER reflects (and the probes and "
+                          "the fog's sky) -- fade out below this elevation, so the sea along the horizon reflects "
+                          "the clear haze instead of blotches of the far cloud band. Not under a closing deck, "
+                          "where the horizon is cloud. 0 = keep them all. The clouds on screen are not touched.");
 
             ImGui::SeparatorText("Tracing");
             {

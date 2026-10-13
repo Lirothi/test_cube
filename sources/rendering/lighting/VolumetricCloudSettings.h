@@ -102,6 +102,15 @@ struct VolumetricCloudSettings
     // deck went a light lavender (this level's warm 6500 K sun outweighing the sky) and at partial cover
     // the dark undersides flattened -- 0.25 kept both: the slate deck, and the contrasty bases at 0.5.
     float diffuseLight = 0.25f;
+    // The clouds in the sky's CAPTURED picture -- what the water, the probes and the fog's sky see -- fade
+    // out below this elevation (degrees; 0 = keep them all). The owner (2026-10-13): "spots in the water
+    // at the horizon, clouds reflecting -- clouds must not reflect at the horizon". The far cloud band
+    // just above the horizon is a few texels of a 128-texel cube face; the waves' grazing reflection
+    // scatters each water pixel across it and the band comes back as bright blotches along the waterline.
+    // Faded, the sea there reflects the clear horizon haze, as a real sea mostly does. NOT under a closing
+    // deck (it fades with the overcast): there the horizon IS cloud, and a clear band put back under it was
+    // the glowing line along the horizon the owner reported earlier. The sky on screen keeps its clouds.
+    float reflectionHorizonFadeDeg = 5.0f;
 
     // --- Tracing. UE r.VolumetricCloud.ViewRaySampleMaxCount is 768 at its cinematic default and
     // DistanceToSampleMaxCount 15 km, i.e. a 19.5 m step; the step is distanceToSampleCountMaxKm /
@@ -170,8 +179,13 @@ struct VolumetricCloudConstants
     float lighting[4];    // x: lit extra multi-scattering octaves (0..2), y: sky light intensity, z: diffused light, w: overcast (0..1)
     float erosion[4];     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
     float floorShape[4];  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's threshold lift
+    // Time-of-day plan N3: x the atmosphere's top radius (km), y 1 = the light reaches each sample through
+    // the air (sky transmittance LUT; `sun`/`sunColor` are then the light's OUTER-SPACE values), z which
+    // body lights the clouds (0 the sun, 1 the moon), w the sine of reflectionHorizonFadeDeg (the capture).
+    float light[4];
+    float shadowSun[4];   // xyz direction TO the light whose cloud shadow the map stores -- what lights the ground
 };
-static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 21 * 16, "CloudCB layout");
+static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 23 * 16, "CloudCB layout");
 
 // HOW OVERCAST the cover is, 0..1: a smoothstep from overcastFrom to coverage 1. One function for every
 // consumer -- the density (erosion to its mean, macro variation faded, threshold lifted), the light
@@ -254,6 +268,11 @@ inline std::uint32_t SanitizeCloudShadowUpdateFrames(std::uint32_t frames)
 // model it buys 0.01 ms for a shadow that visibly leaves its cloud.
 inline bool g_cloudShadowBilinearWeather = true;
 inline bool g_cloudShadowDetailMean = false;
+// Time-of-day plan N3: the clouds' light reaches each sample through the air (cloud_march.hlsli
+// CloudLightTransmittance) and is the sun until it leaves the layer, then the moon -- or, OFF, the
+// pre-N3 behaviour: the ground's light with the air applied once at the camera. The A/B switch
+// (`--set=cloud.perSampleTransmittance:0`), session only.
+inline bool g_cloudPerSampleTransmittance = true;
 inline std::uint32_t CloudShadowCheapBits()
 {
     return (g_cloudShadowBilinearWeather ? 1u : 0u) | (g_cloudShadowDetailMean ? 2u : 0u);

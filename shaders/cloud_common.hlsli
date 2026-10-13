@@ -51,6 +51,8 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudLighting;    // x: lit extra multi-scattering octaves (0..2, UE's count), y: sky light intensity, z: light diffused through the cloud (strength), w: overcast (0..1)
     float4 cloudErosion;     // x erosion strength, y erosion power, z 1 / erosion tile (1/km), w high-frequency strength
     float4 cloudFloorShape;  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's lift of the threshold's density
+    float4 cloudLight;       // N3: x atmosphere top radius (km), y 1 = per-sample transmittance to the light, z body (0 sun, 1 moon), w sin(the capture's horizon fade)
+    float4 cloudShadowSun;   // N3: xyz direction TO the ground's light (the shadow map's), w unused
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky

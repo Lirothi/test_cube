@@ -573,7 +573,10 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     const float extentM = std::max(s.shadowExtentKm, 0.001f) * 1000.0f;
     const float lightDistance = extentM * 2.0f;
     const float farPlane = lightDistance * 2.0f;
-    const Math::float3 lightDir = Math::Normalize(in.sunDirection);
+    // N3: the map is the GROUND's light's (the clouds' own light can be another body after sunset).
+    const Math::float3 cloudLightDir = Math::Normalize(in.sunDirection);
+    const Math::float3 lightDir = (in.shadowDirection.x != 0.0f || in.shadowDirection.y != 0.0f || in.shadowDirection.z != 0.0f)
+        ? Math::Normalize(in.shadowDirection) : cloudLightDir;
     const float snap = std::max(s.shadowSnapKm, 0.001f) * 1000.0f;
     Math::float3 lookAt(in.cameraPos.x, 0.0f, in.cameraPos.z);
     lookAt.x = std::floor((lookAt.x + 0.5f * snap) / snap) * snap;
@@ -600,7 +603,12 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     const float topRadius = bottomRadius + std::max(s.layerHeightKm, 0.001f);
     c.camera[0] = in.cameraPos.x; c.camera[1] = in.cameraPos.y; c.camera[2] = in.cameraPos.z; c.camera[3] = in.planetRadiusKm;
     c.layer[0] = bottomRadius; c.layer[1] = topRadius; c.layer[2] = 1.0f / (topRadius - bottomRadius); c.layer[3] = s.layerBottomKm;
-    c.sun[0] = -lightDir.x; c.sun[1] = -lightDir.y; c.sun[2] = -lightDir.z; c.sun[3] = s.phaseG;
+    c.sun[0] = -cloudLightDir.x; c.sun[1] = -cloudLightDir.y; c.sun[2] = -cloudLightDir.z; c.sun[3] = s.phaseG;
+    c.shadowSun[0] = -lightDir.x; c.shadowSun[1] = -lightDir.y; c.shadowSun[2] = -lightDir.z;
+    const bool perSample = in.perSampleTransmittance && in.atmosphereTopKm > in.planetRadiusKm;
+    c.light[0] = perSample ? in.atmosphereTopKm : 0.0f; c.light[1] = perSample ? 1.0f : 0.0f;
+    c.light[2] = static_cast<float>(in.lightBody);
+    c.light[3] = std::sin(std::clamp(std::isfinite(s.reflectionHorizonFadeDeg) ? s.reflectionHorizonFadeDeg : 5.0f, 0.0f, 45.0f) * 0.0174532925f);
     c.sunColor[0] = in.sunIlluminance.x; c.sunColor[1] = in.sunIlluminance.y; c.sunColor[2] = in.sunIlluminance.z; c.sunColor[3] = s.phaseG2;
     c.phase[0] = s.phaseBlend; c.phase[1] = s.msContribution; c.phase[2] = s.msOcclusion; c.phase[3] = s.msEccentricity;
     c.trace[0] = static_cast<float>(std::max(s.viewSampleCountMax, 1u));
@@ -864,10 +872,14 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     ID3D12Resource* distantResource = distant ? in.distantResource : nullptr;
     const D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv = aerial ? in.aerialSrv : renderer->VsmDummyTexSrv();
     const D3D12_CPU_DESCRIPTOR_HANDLE distantSrv = distant ? in.distantSrv : renderer->VsmDummyTexSrv();
+    // N3: the sky's transmittance LUT (t7), for the light at each sample; read only when constants say so.
+    const bool transmittance = constants.light[1] > 0.0f && in.transmittanceResource && in.transmittanceSrv.ptr != 0;
+    ID3D12Resource* transmittanceResource = transmittance ? in.transmittanceResource : nullptr;
+    const D3D12_CPU_DESCRIPTOR_HANDLE transmittanceSrv = transmittance ? in.transmittanceSrv : renderer->VsmDummyTexSrv();
     // The density model's textures: generated, or the files that replaced them.
     const DensityBinding bind = Binding();
     return graph.AddPass2(RenderPass::Main_CloudTrace, list, {}, {},
-        [this, renderer, constants, aerialResource, distantResource, aerialSrv, distantSrv, bind](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, constants, aerialResource, distantResource, transmittanceResource, aerialSrv, distantSrv, transmittanceSrv, bind](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& D = renderer->GetDeferredForFrame();
             const auto& P = renderer->GetDeferredForPrevFrame();
             std::array<std::uint32_t, 3> points{};
@@ -877,6 +889,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
             // The sky's volume and distant light, at their rest; declared so the reads are named.
             if (aerialResource) { ctx.Use(aerialResource, kRest); }
             if (distantResource) { ctx.Use(distantResource, kRest); }
+            if (transmittanceResource) { ctx.Use(transmittanceResource, kRest); }
             // The depth as every other reader takes it (both shader-visible states, one barrier).
             ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             ctx.Use(D.cloudTrace.Get(), kUav); ctx.Use(D.cloudTraceDepth.Get(), kUav);
@@ -886,7 +899,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
             ctx.Use(D.cloudResolved.Get(), kUav); ctx.Use(D.cloudResolvedDepth.Get(), kUav);
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.cloudResolved.Get(), kRest); ctx.Use(D.cloudResolvedDepth.Get(), kRest);
-            return [this, renderer, constants, aerialSrv, distantSrv, points, bind](RenderGraphPassContext c) {
+            return [this, renderer, constants, aerialSrv, distantSrv, transmittanceSrv, points, bind](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudTrace);
                 const auto& DF = renderer->GetDeferredForFrame();
                 const auto& PF = renderer->GetDeferredForPrevFrame();
@@ -900,7 +913,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
                         const auto samplers = renderer->GetSamplerManager()->GetTable(renderer,
                             std::array{*SamplerManager::LinearWrap(), *SamplerManager::LinearClamp()});
                         RecordComputeDispatch(renderer, t.cl, trace_.get(), cbBytes_, write,
-                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, bind.profileSrv},
+                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, bind.profileSrv, transmittanceSrv},
                             {DF.cloudTraceUAV, DF.cloudTraceDepthUAV}, samplers, DF.cloudWidth, DF.cloudHeight);
                     }
                     renderer->EmitPoint(t.cl, points[1]);

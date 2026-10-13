@@ -155,6 +155,7 @@ private:
         // at this size and camera history), and this frame's weight in the blend.
         bool lightShaftHistoryValid = false;
         float lightShaftBlend = 1.0f;
+        float lightShaftFade = 1.0f; // time-of-day N3: by the sun's height, 1 with the disc up, 0 by -6 degrees
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};

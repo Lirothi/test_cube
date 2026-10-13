@@ -291,6 +291,7 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
             ? static_cast<float>(std::clamp(astro::MoonPhaseBrightness(phaseAngleDeg) / lommelSeeliger, 0.0, 10.0))
             : 0.0f;
         skyMoon_.earthshine = static_cast<float>(std::max(0.0f, s.moonEarthshine) * kEarthshineAtNewMoon * 0.5 * (1.0 - std::cos(alpha)));
+        skyMoon_.lightsGround = lightBody == Body::Moon;
     }
 
     // N2: the night sky's layers. Off while the sun stands above kNightSkySunCutoffDeg: the sky is then

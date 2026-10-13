@@ -62,8 +62,18 @@ public:
         Math::mat4 invViewProjNoJitter{}, viewProjNoJitter{}, prevViewProjNoJitter{};
         Math::float3 cameraPos{};
         float projZ33 = 0.0f, projZ43 = 0.0f;
-        Math::float3 sunDirection{}; // the direction the light TRAVELS (DirectionalLight::GetDirection)
-        Math::float3 sunIlluminance{}; // post-transmittance effective colour
+        Math::float3 sunDirection{}; // the direction the CLOUDS' light TRAVELS (DirectionalLight::GetDirection)
+        // Its illuminance: outer space when `perSampleTransmittance` (the march applies the air at each
+        // sample), else the colour after the air at the camera (no sky LUT to take it from).
+        Math::float3 sunIlluminance{};
+        // Time-of-day plan N3: the clouds' light and the ground's can differ -- after sunset the clouds
+        // keep the sun while the moon lights the ground. The shadow map follows the GROUND's light.
+        Math::float3 shadowDirection{}; // zero = sunDirection
+        bool perSampleTransmittance = false;
+        float atmosphereTopKm = 0.0f;
+        ID3D12Resource* transmittanceResource = nullptr; // the sky's transmittance LUT (t7 of the trace)
+        D3D12_CPU_DESCRIPTOR_HANDLE transmittanceSrv{};
+        unsigned lightBody = 0; // 0 the sun, 1 the moon
         float planetRadiusKm = 6360.0f;
         // The sky's per-frame products the trace reads (B3 aerial volume, B5 distant light): the
         // resource for the declaration, the SRV for the table. Null / off when the sky did not build them.

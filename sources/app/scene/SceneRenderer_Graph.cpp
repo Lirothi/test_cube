@@ -142,9 +142,44 @@ VolumetricCloud::FrameInputs SceneRenderer::MakeCloudInputs(Renderer* renderer) 
     const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
     in.projZ33 = projNoJitter.m._33;
     in.projZ43 = projNoJitter.m._43;
-    in.sunDirection = frame_->dirLight->GetDirection();
-    in.sunIlluminance = frame_->dirLight->GetAboveCloudsColor(); // the deck's top is in full sun
     in.planetRadiusKm = frame_->settings.skyAtmosphere.parameters.radii[0];
+    // TIME-OF-DAY PLAN N3: THE CLOUDS' LIGHT. The sun while it can still reach the layer's top -- which
+    // it does for minutes after it has set at the ground: the earth's shadow climbs, covering heights
+    // below R (1 / cos d - 1) at a depression d (the layer's top, ~3.5 km, until ~1.9 degrees) -- then the
+    // moon, if the moon lights the ground. Its light reaches each sample through the air (the march's
+    // per-sample transmittance), so a cloud above the shadow is lit pink by a sun the beach has lost.
+    // ONE LIGHT AT A TIME, not UE's second-light permutation: when the sun leaves the layer's top its
+    // light there is already zero and the twilight sky outshines the moon a hundred times over, so the
+    // moon arriving then is invisible -- and the march pays for one shadow ray, at night as by day.
+    // The cloud shadow map stays the GROUND's light's. Without the sky's LUT (an HDRI sky) the clouds
+    // keep the ground's light with the air applied at the camera, as before.
+    {
+        const DirectionalLight* sun = frame_->skyLight ? frame_->skyLight : frame_->dirLight;
+        const DirectionalLight* ground = frame_->dirLight;
+        const bool moonLightsGround = frame_->skyMoon.present && frame_->skyMoon.lightsGround;
+        const DirectionalLight* cloudLight = ground;
+        in.shadowDirection = ground->GetDirection();
+        in.lightBody = moonLightsGround ? 1u : 0u;
+        const auto& sky = frame_->settings.skyAtmosphere;
+        if (render::g_cloudPerSampleTransmittance && sky.mode != 0u && skyAtmosphere_.Ready())
+        {
+            const float topKm = in.planetRadiusKm + frame_->settings.volumetricCloud.layerBottomKm +
+                                std::max(frame_->settings.volumetricCloud.layerHeightKm, 0.001f);
+            const float reachDeg = std::acos(std::clamp(in.planetRadiusKm / topKm, 0.0f, 1.0f)) * 57.2957795f + 0.3f;
+            const float sunElevationDeg = std::asin(std::clamp(-sun->GetDirection().y, -1.0f, 1.0f)) * 57.2957795f;
+            if (!moonLightsGround || sunElevationDeg > -reachDeg) { cloudLight = sun; in.lightBody = 0u; }
+            in.perSampleTransmittance = true;
+            in.atmosphereTopKm = sky.parameters.radii[1];
+            in.transmittanceResource = skyAtmosphere_.TransmittanceResource();
+            in.transmittanceSrv = skyAtmosphere_.TransmittanceSrv();
+            in.sunIlluminance = cloudLight->GetOuterSpaceIlluminance();
+        }
+        else
+        {
+            in.sunIlluminance = ground->GetAboveCloudsColor(); // the deck's top is in full sun
+        }
+        in.sunDirection = cloudLight->GetDirection();
+    }
     in.aerialBuilt = skyAtmosphere_.AerialBuilt();
     in.aerialStartKm = std::max(0.0f, frame_->settings.skyAtmosphere.aerialStartDepthMetres) / kMetresPerKm;
     in.aerialResource = skyAtmosphere_.AerialResource();

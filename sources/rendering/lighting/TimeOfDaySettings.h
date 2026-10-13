@@ -132,6 +132,7 @@ struct SkyMoonFrame
     // the disc's integral follows the phase law the light uses (MoonPhaseBrightness / the LS phase integral).
     float litScale = 1.0f;
     float earthshine = 0.0f;                // dark side, as a fraction of the full disc (Earth's phase applied)
+    bool lightsGround = false;              // the scene's light is the moon's now (N3: the clouds may take it)
 };
 
 // Time-of-day plan N2: the night sky's layers as the sky draws them this frame. Written by TimeOfDay,

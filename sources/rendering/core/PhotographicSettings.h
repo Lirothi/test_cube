@@ -297,10 +297,15 @@ inline float EvaluateExposureCurve(const CameraExposureSettings& s, float ev100)
 // ~2e-4 cd/m2 puts the eye near EV -11, and -4.5 there leaves that sky about two stops under middle
 // grey -- dark, the Milky Way plain -- where -2.25 drew it as a dusk. (A level's minEv100 must reach
 // that low for it: -6 stops the camera at about the same place, the sky five stops under.)
+// DARKER since (owner, 2026-10-13, with the cold moonlight and the colour-keeping night vision in): "at
+// -12 a moonlit night is super bright, I like it at minEv 0" -- a camera pinned at EV 0 puts the full
+// moon 3.5 stops under. So the night now follows that: the full moon -3.6, the moon low -3.8, a
+// moonless night -5 (the sky ~3 stops under middle grey, the stars and the galaxy still there, which
+// minEv 0 would have turned black); the twilight and the day as before.
 inline void SetEyeExposureCurve(CameraExposureSettings& s)
 {
-    static constexpr float kEv[] = {-11.0f, -6.0f, -3.0f, 2.0f, 8.0f, 12.0f};
-    static constexpr float kComp[] = {-4.5f, -2.25f, -2.0f, -1.4f, -0.6f, 0.0f};
+    static constexpr float kEv[] = {-11.0f, -3.0f, 2.0f, 8.0f, 12.0f};
+    static constexpr float kComp[] = {-5.0f, -3.5f, -1.4f, -0.6f, 0.0f};
     static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
     static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
     s.exposureCurvePoints = kPoints;

@@ -9,14 +9,17 @@
 //   * blue noise -> interleaved gradient noise rotated by the frame index (no blue-noise asset here);
 //   * the height fog is NOT applied here (:1548-1567): compose fogs the clouded pixel afterwards
 //     exactly as it fogs the sky, so the fog sits over sky and cloud alike with one model;
-//   * no ground contribution, no local lights, no second light, no per-sample atmosphere
-//     transmittance -- all off in UE's defaults too;
+//   * no ground contribution, no local lights, no second light -- all off in UE's defaults too; the
+//     per-sample atmosphere transmittance is ON since time-of-day N3 (UE's is off by default), so
+//     clouds stay lit after sunset; the moon is the clouds' light once the sun can no longer reach
+//     them (one light at a time, see SceneRenderer::MakeCloudInputs);
 //   * the depth is the traced full-res pixel's own (it used to be the furthest of the texel's four,
 //     when the texel's centre was traced).
 //
 // b0 CloudCB (cloud_common.hlsli)
 // t0 CloudFormationVolume  t1 CloudCellsVolume  t2 CloudWeather  t3 Depth (render res)
 // t4 SkyAerialVolume (B3)  t5 DistantSkyLight (B5, raw luminance)  t6 CloudProfileLut
+// t7 the sky's transmittance LUT (time-of-day N3: the light at each sample through the air)
 // u0 CloudColor (rgb pre-exposed luminance, a transmittance)  u1 CloudDepth (km, the front)
 // s0 linear wrap (noise)  s1 linear clamp (aerial volume)
 #pragma pack_matrix(row_major)
@@ -27,12 +30,14 @@
 #define CLOUD_T_PROFILE t6
 #define CLOUD_S_WRAP s0
 #include "cloud_common.hlsli"
+Texture2D<float4> CloudTransmittanceLut : register(t7);
+SamplerState gSmpLinearClamp : register(s1);
 #include "cloud_march.hlsli"
 #include "sky_aerial_common.hlsli"
 
 #define CLOUD_TRACE_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
@@ -41,7 +46,6 @@ Texture3D<float4> SkyAerialVolume : register(t4);
 Texture2D<float4> DistantSkyLight : register(t5);
 RWTexture2D<float4> CloudColor : register(u0);
 RWTexture2D<float> CloudDepth : register(u1);
-SamplerState gSmpLinearClamp : register(s1);
 
 // The value a texel with no cloud in front of anything carries: far, and inside FP16.
 static const float kCloudNoDepthKm = 60000.0f;

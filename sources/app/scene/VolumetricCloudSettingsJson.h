@@ -60,6 +60,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.skyLightBottomOcclusion = std::clamp(j.value("skyLightBottomOcclusion", s.skyLightBottomOcclusion), 0.0f, 1.0f);
     s.skyLightIntensity = std::clamp(j.value("skyLightIntensity", s.skyLightIntensity), 0.0f, 10.0f);
     s.diffuseLight = std::clamp(j.value("diffuseLight", s.diffuseLight), 0.0f, 10.0f);
+    s.reflectionHorizonFadeDeg = std::clamp(j.value("reflectionHorizonFadeDeg", s.reflectionHorizonFadeDeg), 0.0f, 45.0f);
     s.viewSampleCountMax = std::clamp(j.value("viewSampleCountMax", s.viewSampleCountMax), 4u, 768u);
     s.viewSampleCountMin = std::clamp(j.value("viewSampleCountMin", s.viewSampleCountMin), 1u, 64u);
     s.distanceToSampleCountMaxKm = std::clamp(j.value("distanceToSampleCountMaxKm", s.distanceToSampleCountMaxKm), 0.1f, 1000.0f);
@@ -125,6 +126,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["skyLightBottomOcclusion"] = s.skyLightBottomOcclusion;
     j["skyLightIntensity"] = s.skyLightIntensity;
     j["diffuseLight"] = s.diffuseLight;
+    j["reflectionHorizonFadeDeg"] = s.reflectionHorizonFadeDeg;
     j["viewSampleCountMax"] = s.viewSampleCountMax;
     j["viewSampleCountMin"] = s.viewSampleCountMin;
     j["distanceToSampleCountMaxKm"] = s.distanceToSampleCountMaxKm;

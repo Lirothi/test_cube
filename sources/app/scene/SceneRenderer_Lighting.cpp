@@ -681,7 +681,7 @@ void SceneRenderer::Pass_LightShafts(Renderer* renderer, RenderGraphPassContext 
     const float aspect = static_cast<float>(fullW) / static_cast<float>(fullH);
     c.origin = float4(decisions_.lightShaftOrigin.x, decisions_.lightShaftOrigin.y, aspect, 1.0f / aspect);
     c.bloom = float4(1.0f / std::max(sun.GetLightShaftOcclusionDepthRange(), 1e-3f),
-                     std::max(sun.GetLightShaftBloomScale(), 0.0f),
+                     std::max(sun.GetLightShaftBloomScale(), 0.0f) * decisions_.lightShaftFade, // N3: by the sun's height
                      std::max(sun.GetLightShaftBloomMaxBrightness(), 0.0f),
                      std::max(sun.GetLightShaftBloomThreshold(), 0.0f));
     const float3 tint = sun.GetLightShaftBloomTint();

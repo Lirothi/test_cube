@@ -34,6 +34,9 @@
 #define SKY_VIEW
 #define SKY_CB_EXTERNAL
 #include "sky_atmosphere.hlsli"
+Texture2D<float4> TransmittanceLut : register(t5);
+SamplerState gSmpLinearClamp : register(s1);
+#define CloudTransmittanceLut TransmittanceLut // N3: the march's light through the air (cloud_march.hlsli)
 #include "cloud_march.hlsli"
 #include "sky_ibl_common.hlsli"
 
@@ -44,10 +47,8 @@
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D<float4> DistantSkyLight : register(t3);
-Texture2D<float4> TransmittanceLut : register(t5);
 Texture2D<float4> MultiScatterLut : register(t6);
 RWTexture2DArray<float4> Radiance : register(u0);
-SamplerState gSmpLinearClamp : register(s1);
 
 // UE r.VolumetricCloud.ReflectionRaySampleMaxCount (80) at the default scale, independent of the
 // main view's budget. The shadow march keeps the level's count (UE: min(10 * scale, 24)) so the
@@ -122,5 +123,15 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float3 cloudL = apL * (1.0f - march.transmittance) + apMeanT * march.luminance;
     const uint3 texel = uint3(pixel, face);
     const float3 sky = Radiance[texel].rgb;
-    Radiance[texel] = float4(min(max(sky * march.transmittance + cloudL, 0.0f), 65504.0f), 1.0f);
+    // THE HORIZON KEEPS NO CLOUDS (VolumetricCloudSettings::reflectionHorizonFadeDeg): the far band is a
+    // few texels here, and the waves' grazing reflection turned it into blotches along the waterline
+    // (owner, 2026-10-13). Faded below the angle -- unless a deck is closing (cloudLighting.w), where
+    // the horizon is cloud and a clear band under it glows. dir.y is the sine of the elevation (mirrored).
+    float keep = 1.0f;
+    if (cloudLight.w > 0.0f)
+    {
+        keep = lerp(smoothstep(0.0f, cloudLight.w, dir.y), 1.0f, saturate(cloudLighting.w));
+    }
+    const float3 clouded = sky * march.transmittance + cloudL;
+    Radiance[texel] = float4(min(max(lerp(sky, clouded, keep), 0.0f), 65504.0f), 1.0f);
 }
