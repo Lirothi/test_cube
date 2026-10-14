@@ -4,43 +4,6 @@
     "zFar": 10000.0,
     "zNear": 0.009999999776482582
   },
-  "directionalLight": {
-    "ambient": 0.10000000149011612,
-    "ambientColor": [
-      0.6877076625823975,
-      0.027416912838816643,
-      0.61970454454422
-    ],
-    "ambientTintedBySun": true,
-    "color": [
-      1.0,
-      1.0,
-      1.0
-    ],
-    "direction": [
-      -0.5065910220146179,
-      -0.46947160363197327,
-      -0.7231611609458923
-    ],
-    "groundAlbedo": [
-      0.03322261571884155,
-      0.03322261571884155,
-      0.03322261571884155
-    ],
-    "lightShaftBloomMaxBrightness": 100.0,
-    "lightShaftBloomScale": 0.15000000596046448,
-    "lightShaftBloomThreshold": 2.0,
-    "lightShaftBloomTint": [
-      1.0,
-      1.0,
-      1.0
-    ],
-    "lightShaftsEnabled": true,
-    "lightSourceAngle": 2.0,
-    "skyFillIntensity": 2.0,
-    "sunIlluminanceLux": 120000.0,
-    "useSunTemperature": true
-  },
   "objects": [
     {
       "enabled": true,
@@ -32820,8 +32783,9 @@
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,
-      "sunGlareIntensity": 0.10000000149011612,
+      "sunGlareIntensity": 0.014999999664723873,
       "sunGlareRadiusDeg": 2.0,
+      "sunGlareSmoothingSec": 0.10000000149011612,
       "sunGlareVeil": 0.25,
       "sunGlareVeilRadiusDeg": 7.0,
       "sunRaysBundleStrength": 0.4000000059604645,
@@ -32848,6 +32812,28 @@
       "autoExposure": true,
       "compensationEv": 0.0,
       "enabled": true,
+      "exposureCurve": [
+        [
+          -11.0,
+          -4.0
+        ],
+        [
+          -3.0,
+          -3.5
+        ],
+        [
+          2.0,
+          -1.399999976158142
+        ],
+        [
+          8.0,
+          -0.6000000238418579
+        ],
+        [
+          12.0,
+          0.0
+        ]
+      ],
       "highPercentile": 0.949999988079071,
       "isoSensitivity": 100.0,
       "localBlurredBlend": 0.6000000238418579,
@@ -32859,10 +32845,10 @@
       "lowPercentile": 0.15000000596046448,
       "maxEv100": 16.0,
       "meterMaskStrength": 0.699999988079071,
-      "minEv100": 11.5,
+      "minEv100": -12.0,
       "shutterSpeedSec": 0.00798999983817339,
-      "speedDown": 1.0,
-      "speedUp": 3.0
+      "speedDown": 5.0,
+      "speedUp": 5.0
     },
     "colorPipeline": {
       "agxPower": 1.350000023841858,
@@ -32937,11 +32923,123 @@
     "texture": "textures/rustig_koppie_puresky_4k/rustig_koppie_puresky_4k.dds"
   },
   "spotLights": [],
+  "timeOfDay": {
+    "animate": false,
+    "date": [
+      2026,
+      6,
+      21
+    ],
+    "dawn": 6.0,
+    "dayLengthMin": 30.0,
+    "dusk": 18.0,
+    "extendTwilight": 0.0,
+    "heightOffset": 0.0,
+    "latitude": -16.5,
+    "lightUpdateThresholdDeg": 0.05000000074505806,
+    "longitude": -151.75,
+    "moon": {
+      "discAdaptation": 1.0,
+      "discColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "earthshine": 1.0,
+      "enabled": true,
+      "glintPhaseFalloff": 0.5,
+      "glow": 0.019999999552965164,
+      "glowRadiusDeg": 11.600000381469727,
+      "illuminanceLux": 0.3199999928474426,
+      "lightColor": [
+        0.44600000977516174,
+        0.5569999814033508,
+        0.8650000095367432
+      ],
+      "lightShaftBloomMaxBrightness": 0.15000000596046448,
+      "lightShaftBloomScale": 0.4000000059604645,
+      "lightShaftBloomThreshold": 0.15000000596046448,
+      "lightShaftBloomTint": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "lightShaftOpenSky": 0.5,
+      "lightShaftTint": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "lightShafts": 0.20000000298023224,
+      "lightSourceAngle": 2.0,
+      "orbitOffsetDeg": 0.0,
+      "pathTiltDeg": 35.0,
+      "pathYawDeg": 180.0,
+      "phase": 0.5,
+      "phaseAuto": true,
+      "temperatureK": 5450.0
+    },
+    "nightBrightness": 1.0,
+    "nightLengthMin": 15.0,
+    "nightSky": {
+      "airglowColor": [
+        0.949999988079071,
+        1.0,
+        0.8999999761581421
+      ],
+      "airglowZenith": 0.00011999999696854502,
+      "enabled": true,
+      "milkyWay": 1.0,
+      "siderealAtMidnight": 18.0,
+      "stars": 1.0,
+      "twinkle": 0.30000001192092896
+    },
+    "northYawDeg": 0.0,
+    "pathTiltDeg": 30.0,
+    "pathYawDeg": 322.8896076655306,
+    "realPositions": false,
+    "sun": {
+      "ambient": 0.10000000149011612,
+      "color": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "enabled": true,
+      "groundAlbedo": [
+        0.03322261571884155,
+        0.03322261571884155,
+        0.03322261571884155
+      ],
+      "lightShaftBloomMaxBrightness": 0.4000000059604645,
+      "lightShaftBloomScale": 0.25,
+      "lightShaftBloomThreshold": 0.699999988079071,
+      "lightShaftBloomTint": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "lightShaftGlareSeed": 4.0,
+      "lightShaftLength": 1.0,
+      "lightShaftOcclusionDepthRange": 1000.0,
+      "lightShaftOpenSky": 1.0,
+      "lightShaftSmoothing": 0.05000000074505806,
+      "lightShaftsEnabled": true,
+      "lightSourceAngle": 2.0,
+      "skyFillIntensity": 2.0,
+      "sunIlluminanceLux": 120000.0,
+      "sunTemperatureK": 6500.0,
+      "useSunTemperature": true
+    },
+    "time": 15.0,
+    "timeScale": 60.0,
+    "utcOffset": -10.0
+  },
   "volumetricCloud": {
     "albedo": 1.0,
     "baseTileKm": 6.0,
     "cloudType": 0.0,
-    "coverage": 0.35499998927116394,
+    "coverage": 0.30000001192092896,
     "detailStrength": 0.3499999940395355,
     "detailTileKm": 1.0,
     "distanceToSampleCountMaxKm": 3.0,
@@ -32976,10 +33074,10 @@
     "shapeDistortionSpeed": 0.10000000149011612,
     "shapeDistortionTileKm": 40.0,
     "skyLightBottomOcclusion": 0.0,
-    "skyLightIntensity": 2.0,
+    "skyLightIntensity": 1.0,
     "stopTracingTransmittance": 0.004999999888241291,
     "temporal": true,
-    "tracingMaxDistanceKm": 50.0,
+    "tracingMaxDistanceKm": 25.0,
     "tracingStartMaxDistanceKm": 350.0,
     "viewSampleCountMax": 128,
     "viewSampleCountMin": 2,

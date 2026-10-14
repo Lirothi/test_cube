@@ -70,8 +70,26 @@ struct TimeOfDaySettings
     // touch of cream. (The first defaults were 4300 K, the moonlight AT THE GROUND with the air's
     // reddening the sky adds again, and then 4950 K, the shift applied to the real sun instead of to
     // ours: both drew a yellow disc, and the owner said rightly that moonlight is not yellow.) This is the
-    // colour of the moon ITSELF -- its disc and the sky's scattering of it; what it lights is below.
+    // colour of the moon ITSELF as the SKY scatters it (the glow round it, its share of the night sky); the drawn
+    // disc has its own colour (moonDiscColor), and what it lights is below.
     float moonTemperatureK = 5450.0f;
+    // The colour the drawn DISC is seen in (owner, 2026-10-13: "the moon and its rays are still yellow"):
+    // linear RGB at unit luminance, in place of the temperature's on the disc only -- its brightness stays
+    // the light's (the light shafts grow out of it, then take the light's colour). White, as
+    // Ultra Dynamic Sky draws its moon (its Moon_Color texture is a neutral grey): the 5450 K cream disc read
+    // yellow against the blue night round it (sRGB 164/157/150 in a sky of 12/18/31, wind_test).
+    float moonDiscColor[3] = {1.0f, 1.0f, 1.0f};
+    // The GLOW round the disc (owner, 2026-10-13, with UDS's moon with its shafts off: "the halo is different,
+    // and look at the length"): Ultra Dynamic Sky's, (1 - angle / radius)^2 x the peak -- its Moon material
+    // function, live 0.05 of the moon's emissive (~16 % of the mean disc) out to 11.6 degrees. Its light shafts
+    // seed on it and only widen it; without it ours seeded on the disc alone and drew the whole halo
+    // themselves. The real moon's is the aureole of the haze in front of it. Peak: a fraction of the FULL
+    // moon's mean disc radiance, seen as the disc is (Disc Adaptation), times the phase law; 0 = none.
+    // 0.02, not UDS's ~0.16 of the disc: UDS's night sky is ~10x brighter on screen (sRGB 40/61/110 against
+    // our 10/16/31 under the Eye curve), and what reads is the glow against the sky -- at 0.02 it is UDS's
+    // ~3.6x the sky at the disc's edge (measured on the owner's UDS shots, 2026-10-14).
+    float moonGlow = 0.02f;
+    float moonGlowRadiusDeg = 11.6f;
     // The colour the moon LIGHTS the scene in (the ground light only). The owner (2026-10-13), shown the
     // physics -- a cream moonlight turned grey by the eye's rods: "a night must not be black and white,
     // there must be cold light". That is Ultra Dynamic Sky's night, and its Moon Light Colour is the
@@ -80,6 +98,35 @@ struct TimeOfDaySettings
     // stay physical and only the hue is the artist's.
     float moonLightColor[3] = {0.446f, 0.557f, 0.865f};
     float moonAngleDeg = 0.52f;      // angular diameter (mean): the drawn disc and the light's size
+    // The eye's local adaptation to the drawn disc (N4), 0..1: 1 = the disc scaled into the display's range so
+    // its maria and relief read and its edges blend (the eye sees the moon's face at night); 0 = the
+    // physical disc a camera records under a night exposure, clipped flat white.
+    float moonDiscAdaptation = 1.0f;
+    // The light shafts from the moon (N4): they take over when the sun's are gone and the moon lights the
+    // ground, with the MOON'S OWN bloom properties -- UE's per-light BloomScale / BloomThreshold /
+    // BloomMaxBrightness / BloomTint, in Ultra Dynamic Sky's RELATION (read from its actor, 2026-10-13: Moon
+    // Light Shaft Bloom Scale 0.4, Threshold 0.15, Max Brightness 0.15, Tint white). The low cap is the point:
+    // UDS's 0.15 sits at the level of its moon glow (~0.19 on screen next to the disc), so the seed is the
+    // glow AND the disc, wide and flat -- a soft halo and long soft rays through crowns, the shafts only
+    // widening the glow (+40 %). Borrowing the sun's (threshold 2 -> 0.75, cap 100) seeded the disc alone,
+    // and the blur's steps drew a BLOCKY halo of its copies; UDS's numbers as they are still seeded the disc
+    // alone, because our night is ~10x darker on screen and the glow far under 0.15: a concentrated bright
+    // halo (2026-10-14 grid). So the threshold sits just above our moonlit sky (~0.006 under the Eye curve)
+    // and the cap at our glow's level next to the disc (~0.03), and the scale makes up the lower cap. A much
+    // brighter night exposure lifts the sky over the threshold -- raise it then. Length, smoothing and depth
+    // range stay the sun's.
+    float moonLightShaftBloomScale = 1.0f;
+    float moonLightShaftBloomThreshold = 0.008f;
+    float moonLightShaftBloomMaxBrightness = 0.03f;
+    // Their tint, in place of the sun's: it multiplies the moon's LIGHT colour (moonLightColor's hue) -- the
+    // shafts are that light scattered by the air (grey shafts over dark crowns read olive).
+    float moonLightShaftTint[3] = {1.0f, 1.0f, 1.0f};
+    // The moon's glints on the water (N4), faded AGAIN by the phase law to this power: 0 = physics (the
+    // glitter path follows the moon's light alone), 1 = the light's fade once more. Physically a thin
+    // crescent's path is only ~3 stops dimmer than the full moon's on screen (its light is 6.6 stops
+    // down, but the night's exposure rises 4), and beside a sliver of a moon it read as far too strong
+    // (owner, 2026-10-13). 0.5: the full moon's path untouched, a quarter's 1.7 stops down, a crescent's 3.3.
+    float moonGlintPhaseFalloff = 0.5f;
     // The ashen light on the moon's dark side -- sunlight off the Earth -- as a multiplier on its
     // physical estimate (~1.2e-4 of the full disc at new moon, falling with the Earth's own phase).
     float moonEarthshine = 1.0f;
@@ -133,6 +180,20 @@ struct SkyMoonFrame
     float litScale = 1.0f;
     float earthshine = 0.0f;                // dark side, as a fraction of the full disc (Earth's phase applied)
     bool lightsGround = false;              // the scene's light is the moon's now (N3: the clouds may take it)
+    float discAdaptation = 1.0f;            // N4: the eye's adaptation to the drawn disc (moonDiscAdaptation)
+    float glow = 0.0f;                      // N4: the glow's peak (moonGlow x the phase law)
+    float glowRadiusRad = 0.0f;             // N4: and its radius
+    // N4: the moon's light shafts -- its own UE bloom properties (moonLightShaftBloom*), their colour (the
+    // light's hue x moonLightShaftTint). Bloom scale 0 = none.
+    float lightShaftBloomScale = 0.0f;
+    float lightShaftBloomThreshold = 0.15f;
+    float lightShaftBloomMaxBrightness = 0.15f;
+    float lightShaftTint[3] = {1.0f, 1.0f, 1.0f};
+    // N4: the bright limb's position angle on the disc (radians, in the sky shader's disc frame: 0 = right,
+    // pi/2 = up). Toward a VIRTUAL sun on the moon's own circle at the phase angle in Simple mode -- the
+    // moon no longer moves with the phase, so the real sun cannot tell a waxing moon from a waning one --
+    // and toward the real sun in Real mode.
+    float limbAngle = 0.0f;
 };
 
 // Time-of-day plan N2: the night sky's layers as the sky draws them this frame. Written by TimeOfDay,

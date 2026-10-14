@@ -62,6 +62,9 @@ public:
     const SkyMoonFrame& GetSkyMoon() const { return skyMoon_; }
     // N2: the night sky's layers this frame (its twinkle clock is the scene's, set by Scene).
     const NightSkyFrame& GetNightSky() const { return nightSky_; }
+    // N4: what the water's glints of the scene light are scaled by -- 1 for the sun, the moon's phase law
+    // to moonGlintPhaseFalloff for the moon (OceanRenderable::GetSpecularParams).
+    float GlintScale() const { return glintScale_; }
 
 private:
     void AdvanceClock(double deltaSeconds);
@@ -90,6 +93,7 @@ private:
     Math::float3 moonToward_{0.0f, -1.0f, 0.0f};
     SkyMoonFrame skyMoon_{};
     NightSkyFrame nightSky_{};
+    float glintScale_ = 1.0f;
 };
 
 // T4: what the editor's `setTime` / `setDate` accept (the command bar, MCP), resolved against the

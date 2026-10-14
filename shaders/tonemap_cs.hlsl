@@ -280,10 +280,11 @@ float3 SunCoronaGlare(float theta, float turn, float pixel, float len, float hal
 float3 SunRays(float2 uv, float outputWidth)
 {
     if (sunRaysDir.z <= 0.02f) { return 0.0f.xxx; }
-    // The rays leave from WHAT SHOWS of the disc -- the centroid the sun probe measured -- not from
-    // its centre: a disc half behind a palm trunk, or half under the sea, threw a centred star out
-    // of the trunk ("лучи из ниоткуда").
-    const float2 originTan = sunRaysDir.xy / sunRaysDir.z + asfloat(ExposureValue.Load2(kSunProbeCentroid));
+    // The rays leave from the disc's CENTRE (owner, 2026-10-14: "pin it to the disc's centre"). They left
+    // from the centroid of what shows of it, so a disc half behind a palm trunk did not throw a star out of
+    // the trunk ("лучи из ниоткуда", 2026-09) -- but under swaying leaves that centroid ran about with every
+    // leaf, and the whole star danced with it. The probe still measures the centroid; nothing draws by it.
+    const float2 originTan = sunRaysDir.xy / sunRaysDir.z;
     const float3 sunDir = normalize(float3(originTan, 1.0f));
     const float2 sunNdc = originTan * sunRaysProj.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
@@ -357,12 +358,11 @@ float3 SunRays(float2 uv, float outputWidth)
         glare += (sunRaysShape.w * ws / wsDrawn * spikeFade) * exp(-across * across) / (1.0f + along * along);
     }
 
-    // Rays from UNDER the disc's edge: fading in from one disc radius to two left a dark ring
-    // between the disc and the corona ("зазор между диском и стартом лучей"). The radius is that
-    // of what shows -- area-equivalent, from the probe's visible share.
-    const float shownRadius = sunRaysLook.z * sqrt(saturate(asfloat(ExposureValue.Load(kSunProbeOut + 12u))));
-    const float rim = smoothstep(0.5f * shownRadius, shownRadius, theta);
-    return seen * (sunRaysShape.x * glare * rim);
+    // From the very centre, no hole (owner, 2026-10-14: "remove the hole in the middle"). The corona used to
+    // fade in from half the radius of what shows of the disc to all of it -- over a clear disc unseen (the
+    // disc is white there anyway), but with leaves over the disc that hole sat dark on them, and its radius
+    // followed the visible share frame by frame. Its strength still follows what shows (`seen`).
+    return seen * (sunRaysShape.x * glare);
 }
 
 // Stable, cheap hash based on the pixel coordinate

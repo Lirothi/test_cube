@@ -680,16 +680,40 @@ void SceneRenderer::Pass_LightShafts(Renderer* renderer, RenderGraphPassContext 
     LightShaftConstants c{};
     const float aspect = static_cast<float>(fullW) / static_cast<float>(fullH);
     c.origin = float4(decisions_.lightShaftOrigin.x, decisions_.lightShaftOrigin.y, aspect, 1.0f / aspect);
+    // N4: from the moon, the moon's own UE bloom properties (TimeOfDaySettings::moonLightShaftBloom*).
+    const bool fromMoon = decisions_.lightShaftFromMoon;
+    const SkyMoonFrame& moon = frame_->skyMoon;
     c.bloom = float4(1.0f / std::max(sun.GetLightShaftOcclusionDepthRange(), 1e-3f),
-                     std::max(sun.GetLightShaftBloomScale(), 0.0f) * decisions_.lightShaftFade, // N3: by the sun's height
-                     std::max(sun.GetLightShaftBloomMaxBrightness(), 0.0f),
-                     std::max(sun.GetLightShaftBloomThreshold(), 0.0f));
-    const float3 tint = sun.GetLightShaftBloomTint();
+                     std::max(fromMoon ? moon.lightShaftBloomScale : sun.GetLightShaftBloomScale(), 0.0f) *
+                         decisions_.lightShaftFade, // N3: by the light's height
+                     std::max(fromMoon ? moon.lightShaftBloomMaxBrightness : sun.GetLightShaftBloomMaxBrightness(), 0.0f),
+                     std::max(fromMoon ? moon.lightShaftBloomThreshold : sun.GetLightShaftBloomThreshold(), 0.0f));
+    // N4: from the moon, the moon's own tint (UE's BloomTint on its light; UDS's Moon Light Shaft Bloom Tint).
+    const float3 tint = fromMoon ? float3(moon.lightShaftTint[0], moon.lightShaftTint[1], moon.lightShaftTint[2])
+                                 : sun.GetLightShaftBloomTint();
     c.tint = float4(std::max(tint.x, 0.0f), std::max(tint.y, 0.0f), std::max(tint.z, 0.0f), 0.1f); // GLightShaftFirstPassDistance
     // The engine's linearisation pair (the GTAO's), device Z -> view depth in metres.
     const float zNear = camera.GetZNear();
     const float zFar = camera.GetZFar();
-    c.depth = float4(zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear), 0.0f, 0.0f);
+    // z, w: the sun's Shaft Length (the moon's shafts borrow it, N4) -- z the blur's reach as a fraction of the
+    // way to the light (lengths under 1), w the fall-off the apply lifts (lengths over 1).
+    const float shaftLength = std::clamp(sun.GetLightShaftLength(), 0.0f, 2.0f);
+    c.depth = float4(zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear),
+                     std::min(shaftLength, 1.0f), std::max(shaftLength - 1.0f, 0.0f));
+    // The SUN GLARE in the seed (DirectionalLight::GetLightShaftGlareSeed; the sun's shafts only): the glare
+    // stage 9 draws, from the sun probe's read-back disc colour -- a few frames old, and smoothed itself.
+    if (!fromMoon && sun.GetLightShaftGlareSeed() > 0.0f)
+    {
+        const ExposureMetering::Readback probe = renderer->Exposure().LatestReadback();
+        BloomRenderer::SunGlareSeed seed;
+        if (probe.valid && bloom_.SunGlareSeedFor(probe.sunProbe, seed))
+        {
+            const float k = sun.GetLightShaftGlareSeed();
+            c.glareColor = float4(seed.color.x * k, seed.color.y * k, seed.color.z * k, seed.coreRad);
+            c.glareDir = float4(seed.viewDir.x, seed.viewDir.y, seed.viewDir.z, seed.veil);
+            c.glareProj = float4(seed.projX, seed.projY, seed.veilRad, 0.0f);
+        }
+    }
     // The history was stored at last frame's pre-exposure; scale it into this frame's.
     c.temporal = float4(decisions_.lightShaftBlend,
                         prevPreExposure_ > 0.0f ? preExposure_ / prevPreExposure_ : 1.0f,

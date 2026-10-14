@@ -217,12 +217,16 @@ public:
     // Plan A7 light shafts -- UE's per-light bloom properties (ULightComponent: bEnableLightShaftBloom,
     // BloomScale .2, BloomThreshold 0, BloomMaxBrightness 100, BloomTint white -- LightComponent.cpp:483-487;
     // LightShaftOcclusionDepthRange 100000 cm on the directional light). The threshold and the cap are in
-    // the PRE-EXPOSED scene units, as UE's are. Two defaults differ from UE's, both measured (plan A7):
+    // the PRE-EXPOSED scene units, as UE's are. The defaults are not UE's:
     //   * enabled = true (UE off): the pass costs nothing with the sun behind the camera, and the shafts
     //     are the whole point of the plan;
-    //   * threshold = 2 (UE 0): at 0 EVERY sky pixel seeds the blur, and with the sun disc on screen the
-    //     whole sky lifts x1.2 (wind_test, palm-ring camera) -- a wash, not rays. At 2 (twice display
-    //     white) only the disc and its glow seed, the sky stays x1.00 and the rays through the crowns keep.
+    //   * scale 0.3, threshold 0.75, max brightness 0.35: ULTRA DYNAMIC SKY'S sun (read from its actor,
+    //     2026-10-13; the owner: "do the sun like theirs, and their length"). The LOW CAP is what gives their
+    //     look: the bright sky round the sun seeds wide but flat, so the blur carries the crowns' shadows
+    //     far across the scene -- long rays over the sand -- and no single pixel dominates. Before, at
+    //     threshold 2 and UE's cap of 100, the disc alone seeded at thousands: a starburst over the crowns
+    //     (+100 sRGB at the sun, palm view) and rays that ended near it. The sky's lift stays small: +1..3 sRGB
+    //     across the frame at a pinned exposure. (Threshold 0, UE's, lifted the whole sky x1.2 -- a wash.)
     bool GetLightShaftsEnabled() const { return lightShaftsEnabled_; }
     void SetLightShaftsEnabled(bool on) { lightShaftsEnabled_ = on; }
     float GetLightShaftBloomScale() const { return lightShaftBloomScale_; }
@@ -240,6 +244,21 @@ public:
     float GetLightShaftSmoothingSec() const { return lightShaftSmoothingSec_; }
     void SetLightShaftSmoothingSec(float v) { lightShaftSmoothingSec_ = v; }
     void SetLightShaftOcclusionDepthRange(float metres) { lightShaftOcclusionDepthRange_ = metres; }
+    // Not UE's, 0..2, 1 = UE's. UNDER 1: how far towards the light the radial blur reaches, as a fraction of
+    // the way -- every blur pass's vector is scaled by it, so the passes still tile the ray; a ray ends
+    // sooner past the gap it comes through (at 0.5 about 3x the gap's distance from the light, at 0.3 about
+    // 1.7x). OVER 1 (owner, 2026-10-13: "I wanted them longer"): UE's rays end where their brightness has
+    // fallen as 1/distance from the light (every pixel averages the whole way back to it); the apply lifts
+    // that fall-off to 1/distance^(2 - length) -- 2 = rays that do not fade at all (light_shafts_cs.hlsl).
+    float GetLightShaftLength() const { return lightShaftLength_; }
+    void SetLightShaftLength(float v) { lightShaftLength_ = v; }
+    // Not UE's: how much of the SUN GLARE (Bloom > Sun glare) joins the shafts' seed (owner, 2026-10-14:
+    // "blur after the glare is laid"). UE's seed is the scene over the threshold; Ultra Dynamic Sky's bright
+    // sky lets a wide disc of it through, and its rays run long through crowns, while our darker sky let
+    // only the disc through. The glare is that bright sky round the sun as the picture shows it, so with
+    // it in the seed the gaps in the crowns seed too. 0 = UE's seed, 1 = the glare as drawn. The sun only.
+    float GetLightShaftGlareSeed() const { return lightShaftGlareSeed_; }
+    void SetLightShaftGlareSeed(float v) { lightShaftGlareSeed_ = v; }
 
     // THE SUN'S ANGULAR SIZE -- UE's LightSourceAngle (DirectionalLightComponent.cpp:1024: 0.5357 deg,
     // "Angle of earth's sun"), an APEX angle in degrees, i.e. the disc's angular diameter; the renderer
@@ -272,14 +291,16 @@ private:
     bool  useSunTemperature_ = false; // off = the authored colour is used as-is
     float sunTemperatureK_ = 6500.0f; // ~D65, i.e. a no-op hue once normalised
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDirection
-    // Plan A7 light shafts (UE defaults, see the accessors).
+    // Plan A7 light shafts (Ultra Dynamic Sky's sun, see the accessors).
     bool  lightShaftsEnabled_ = true;
-    float lightShaftBloomScale_ = 0.2f;
-    float lightShaftBloomThreshold_ = 2.0f; // UE 0, see the accessors
-    float lightShaftBloomMaxBrightness_ = 100.0f;
+    float lightShaftBloomScale_ = 0.3f;          // UDS's sun (UE 0.2), see the accessors
+    float lightShaftBloomThreshold_ = 0.75f;     // UDS's sun (UE 0)
+    float lightShaftBloomMaxBrightness_ = 0.35f; // UDS's sun (UE 100)
     Math::float3 lightShaftBloomTint_{ 1.0f, 1.0f, 1.0f };
     float lightShaftOcclusionDepthRange_ = 1000.0f; // metres (UE 100000 cm)
     float lightShaftSmoothingSec_ = 0.15f;
+    float lightShaftLength_ = 1.0f; // UE's reach, see the accessors
+    float lightShaftGlareSeed_ = 1.0f; // the glare as drawn joins the seed, see the accessors
     float lightSourceAngleDeg_ = 0.5357f; // UE's LightSourceAngle: the real sun's angular diameter
 };
 

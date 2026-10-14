@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "core/logging/Log.h" // P8C-2o kernel survey verdict, lens-flare readiness
+#include "core/Helpers.h" // GetTimeSeconds: the sun probe's temporal blend
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/ComputeDispatch.h"
@@ -1039,9 +1040,8 @@ SunRaysConstants BloomRenderer::SunRays() const
     float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
     if (!(settings.sunRaysIntensity > 0.0f) || !SunInView(v, sx, sy, discTan)) { return c; }
     constexpr float kDeg = 3.14159265f / 180.0f;
-    // Where the rays leave from -- the centroid of what shows of the disc above the horizon and
-    // behind whatever stands in front of it -- is the sun probe's (bloom_conv_cs.hlsl stage 10);
-    // this hands over the disc's centre. A sun wholly under the sea throws nothing.
+    // The rays leave from the disc's centre (pinned there 2026-10-14: the probe's centroid of what shows
+    // ran about with every leaf over the disc). A sun wholly under the sea throws nothing.
     const float discRadius = std::atan(discTan);
     if (Math::float3 toSun; SunWorldDirection(toSun) && std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) <= -discRadius)
     {
@@ -1098,7 +1098,14 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     BloomConvConstants g{};
     g.convStage = 10u;
     g.sourceSize = uint2{ 1u, 1u };
-    g.sunGlareDir = Math::float4(v.x, v.y, v.z, 0.0f);
+    // w: the temporal blend of the probe's output (stage 10), 1 - exp(-dt / smoothing) on a delta capped
+    // like the light shafts' -- a frame the probe did not run in (sun out of view) restarts it softly.
+    const double now = GetTimeSeconds();
+    const double dt = probeLastSeconds_ >= 0.0 ? std::clamp(now - probeLastSeconds_, 0.0, 0.1) : 0.1;
+    probeLastSeconds_ = now;
+    const float smoothing = std::max(settings.sunGlareSmoothingSec, 0.0f);
+    const float blend = smoothing > 0.0f ? std::max(1.0f - std::exp(-static_cast<float>(dt) / smoothing), 1.0e-3f) : 1.0f;
+    g.sunGlareDir = Math::float4(v.x, v.y, v.z, blend);
     g.sunGlareProj = Math::float4(sx, sy, 0.5f * sx * discTan, 0.5f * sy * discTan);
     // yzw: world up in view space, so the probe can tell the taps above the horizon from the sea.
     const Math::float3 upView = ToView(Math::float3(0.0f, 1.0f, 0.0f));
@@ -1112,6 +1119,47 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
         samplerTable, 1u, 1u, metering.ExposureResource());
 }
 
+float BloomRenderer::SunGlareStrength() const
+{
+    if (!frame_) { return 0.0f; }
+    const BloomSettings& settings = frame_->settings.bloom;
+    if (!(settings.sunGlareIntensity > 0.0f)) { return 0.0f; }
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    // A LOW sun's glare eases down to its floor (BloomSettings::sunGlareLowSun*).
+    float lowSun = 1.0f;
+    if (Math::float3 toSun; settings.sunGlareLowSunDeg > 0.0f && SunWorldDirection(toSun))
+    {
+        const float elevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) / kDeg;
+        const float t = std::clamp(elevationDeg / settings.sunGlareLowSunDeg, 0.0f, 1.0f);
+        const float atHorizon = std::clamp(settings.sunGlareLowSunFloor, 0.0f, 1.0f);
+        lowSun = atHorizon + (1.0f - atHorizon) * t * t * (3.0f - 2.0f * t);
+    }
+    return settings.sunGlareIntensity * lowSun;
+}
+
+bool BloomRenderer::SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) const
+{
+    if (!frame_) { return false; }
+    const BloomSettings& settings = frame_->settings.bloom;
+    Math::float3 v;
+    float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
+    if (!SunInView(v, sx, sy, discTan)) { return false; }
+    // Stage 9's glare in the SCENE's units: its bloom-target value times what the tone curve adds the
+    // bloom target back with (exposureMultiplier is 1 under pre-exposure).
+    const float k = SunGlareStrength() * TonemapBloomScale();
+    if (!(k > 0.0f)) { return false; }
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    out.color = Math::float3(std::max(probeRgb[0], 0.0f) * k, std::max(probeRgb[1], 0.0f) * k,
+                             std::max(probeRgb[2], 0.0f) * k);
+    out.viewDir = v;
+    out.projX = sx;
+    out.projY = sy;
+    out.coreRad = std::max(settings.sunGlareRadiusDeg, 0.05f) * kDeg;
+    out.veil = std::max(settings.sunGlareVeil, 0.0f);
+    out.veilRad = std::max(settings.sunGlareVeilRadiusDeg, 0.1f) * kDeg;
+    return out.color.x > 0.0f || out.color.y > 0.0f || out.color.z > 0.0f;
+}
+
 void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                       D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
 {
@@ -1123,16 +1171,7 @@ void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandL
         return;
     }
     constexpr float kDeg = 3.14159265f / 180.0f;
-    // A LOW sun's glare eases down to its floor (BloomSettings::sunGlareLowSun*).
-    float lowSun = 1.0f;
-    if (Math::float3 toSun; settings.sunGlareLowSunDeg > 0.0f && SunWorldDirection(toSun))
-    {
-        const float elevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) / kDeg;
-        const float t = std::clamp(elevationDeg / settings.sunGlareLowSunDeg, 0.0f, 1.0f);
-        const float atHorizon = std::clamp(settings.sunGlareLowSunFloor, 0.0f, 1.0f);
-        lowSun = atHorizon + (1.0f - atHorizon) * t * t * (3.0f - 2.0f * t);
-    }
-    const float intensity = settings.sunGlareIntensity * lowSun;
+    const float intensity = SunGlareStrength();
     if (!(intensity > 0.0f)) { return; }
 
     const auto& D = renderer->GetDeferredForFrame();

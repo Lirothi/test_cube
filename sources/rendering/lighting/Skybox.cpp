@@ -116,6 +116,7 @@ public:
             light1IlluminanceHandle_ = material->ComputeCBFieldHandle(0, "skyLight1Illuminance");
             moonDiscHandle_ = material->ComputeCBFieldHandle(0, "skyMoonDisc");
             moonDisc2Handle_ = material->ComputeCBFieldHandle(0, "skyMoonDisc2");
+            moonGlowHandle_ = material->ComputeCBFieldHandle(0, "skyMoonGlow");
             nightGlowHandle_ = material->ComputeCBFieldHandle(0, "nightGlow");
             nightLayersHandle_ = material->ComputeCBFieldHandle(0, "nightLayers");
             nightRowHandle_[0] = material->ComputeCBFieldHandle(0, "nightRow0");
@@ -151,6 +152,7 @@ public:
         UpdateUniform(owner, light1IlluminanceHandle_, material, v.light1Illuminance, cbData);
         UpdateUniform(owner, moonDiscHandle_, material, v.moonDisc, cbData);
         UpdateUniform(owner, moonDisc2Handle_, material, v.moonDisc2, cbData);
+        UpdateUniform(owner, moonGlowHandle_, material, owner_.MoonGlow(), cbData);
         // N2: the night sky; drawn only over the procedural sky (row0.w is 0 otherwise).
         NightSkyFrameData night = owner_.NightSky();
         if (v.planet[3] == 0.0f) { night.row0[3] = 0.0f; }
@@ -172,6 +174,7 @@ private:
     Material::CBFieldHandle exposureHandle_{};
     Material::CBFieldHandle sunHandle_{}, illuminanceHandle_{}, planetHandle_{}, skyExposureHandle_{};
     Material::CBFieldHandle light1DirectionHandle_{}, light1IlluminanceHandle_{}, moonDiscHandle_{}, moonDisc2Handle_{};
+    Material::CBFieldHandle moonGlowHandle_{};
     Material::CBFieldHandle nightGlowHandle_{}, nightLayersHandle_{};
     Material::CBFieldHandle nightRowHandle_[3]{};
 };

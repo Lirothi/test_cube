@@ -156,6 +156,7 @@ private:
         bool lightShaftHistoryValid = false;
         float lightShaftBlend = 1.0f;
         float lightShaftFade = 1.0f; // time-of-day N3: by the sun's height, 1 with the disc up, 0 by -6 degrees
+        bool lightShaftFromMoon = false;   // N4: the shafts radiate from the moon (its own bloom, SkyMoonFrame)
     };
     void DecideFrame(Renderer* renderer, const SceneFrameData& frame);
     FrameDecisions decisions_{};

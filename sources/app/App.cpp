@@ -841,6 +841,18 @@ namespace
                 { "moonTemperatureK", &t.moonTemperatureK, 1000.0f, 20000.0f },
                 { "moonAngleDeg", &t.moonAngleDeg, 0.0f, 20.0f },
                 { "moonEarthshine", &t.moonEarthshine, 0.0f, 100.0f },
+                { "moonDiscAdaptation", &t.moonDiscAdaptation, 0.0f, 1.0f },
+                { "moonLightShaftBloomScale", &t.moonLightShaftBloomScale, 0.0f, 10.0f },
+                { "moonLightShaftBloomThreshold", &t.moonLightShaftBloomThreshold, 0.0f, 50.0f },
+                { "moonLightShaftBloomMaxBrightness", &t.moonLightShaftBloomMaxBrightness, 0.0f, 1000.0f },
+                { "moonGlintPhaseFalloff", &t.moonGlintPhaseFalloff, 0.0f, 1.0f },
+                { "moonGlow", &t.moonGlow, 0.0f, 10.0f }, { "moonGlowRadiusDeg", &t.moonGlowRadiusDeg, 0.1f, 90.0f },
+                // N4: the disc's colour and the moon shafts' tint, by component (timeOfDay.moon.discColor / lightShaftTint).
+                { "moonDiscColorR", &t.moonDiscColor[0], 0.0f, 10.0f }, { "moonDiscColorG", &t.moonDiscColor[1], 0.0f, 10.0f },
+                { "moonDiscColorB", &t.moonDiscColor[2], 0.0f, 10.0f },
+                { "moonLightShaftTintR", &t.moonLightShaftTint[0], 0.0f, 10.0f },
+                { "moonLightShaftTintG", &t.moonLightShaftTint[1], 0.0f, 10.0f },
+                { "moonLightShaftTintB", &t.moonLightShaftTint[2], 0.0f, 10.0f },
                 { "nightBrightness", &t.nightBrightness, 0.0f, 1000.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
                 // N2: the night sky's layers (timeOfDay.nightSky.*).
@@ -916,6 +928,8 @@ namespace
         if (setting == "lightShafts.bloomThreshold") { scene.SunLightRef().SetLightShaftBloomThreshold(value); return true; }
         if (setting == "lightShafts.bloomMaxBrightness") { scene.SunLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
         if (setting == "lightShafts.smoothing") { scene.SunLightRef().SetLightShaftSmoothingSec(std::max(value, 0.0f)); return true; }
+        if (setting == "lightShafts.glareSeed") { scene.SunLightRef().SetLightShaftGlareSeed(std::clamp(value, 0.0f, 4.0f)); return true; }
+        if (setting == "lightShafts.length") { scene.SunLightRef().SetLightShaftLength(std::clamp(value, 0.0f, 2.0f)); return true; }
         if (setting == "lightShafts.occlusionDepthRange") { scene.SunLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
         if (setting == "fog.density") { scene.HeightFogRef().density = value; return true; }
         if (setting == "fog.debugView")
@@ -1045,6 +1059,7 @@ namespace
         if (setting == "bloom.sunGlareVeil") { scene.BloomRef().sunGlareVeil = std::max(0.0f, value); return true; }
         if (setting == "bloom.sunGlareLowSun") { scene.BloomRef().sunGlareLowSunDeg = std::clamp(value, 0.0f, 90.0f); return true; }
         if (setting == "bloom.sunGlareLowSunFloor") { scene.BloomRef().sunGlareLowSunFloor = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "bloom.sunGlareSmoothing") { scene.BloomRef().sunGlareSmoothingSec = std::clamp(value, 0.0f, 2.0f); return true; }
         if (setting == "bloom.sunGlareVeilRadius") { scene.BloomRef().sunGlareVeilRadiusDeg = std::max(0.1f, value); return true; }
         // The sun's corona (BloomSettings::sunRays*).
         if (setting == "bloom.sunRays") { scene.BloomRef().sunRaysIntensity = std::max(0.0f, value); return true; }

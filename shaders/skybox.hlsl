@@ -21,7 +21,8 @@ cbuffer PerFrame : register(b0)
     float4 skyLight1Direction;   // local XYZ to the moon; w its disc's angular radius (0 = no disc)
     float4 skyLight1Illuminance; // outer-space RGB lux as lit now; w the earthshine fraction of the full disc
     float4 skyMoonDisc;          // the FULL moon's outer-space RGB lux; w the phase angle (rad)
-    float4 skyMoonDisc2;         // x the disc's lit scale; y 1 = the albedo/normal texture is ready
+    float4 skyMoonDisc2;         // x the disc's lit scale; y 1 = the albedo/normal texture is ready; z the eye's adaptation to the disc (0..1); w the bright limb's position angle (rad, 0 = r, pi/2 = u)
+    float4 skyMoonGlow;          // N4: x the glow's peak, a fraction of the FULL moon's mean disc radiance (phase law applied); y its radius (rad); zw 0
     // Time-of-day plan N2: the night sky (NightSkyFrameData).
     float4 nightGlow;            // rgb the airglow's zenith radiance (cd/m2); w the stars' + Milky Way's mean
     float4 nightLayers;          // x stars, y Milky Way (0 = its map not ready), z twinkle 0..1, w time (s)
@@ -78,6 +79,17 @@ Texture2D<float4> transmittanceLut : register(t2);
 Texture2D<float4> moonTexture : register(t3); // N1: normal (xyz, the disc's frame) + relative albedo (w)
 Texture2D<float4> nightMap : register(t4);    // N2: the Milky Way, equatorial equirectangular (night_sky.hlsli)
 SamplerState samLinear : register(s0);
+
+// THE EYE'S LOCAL ADAPTATION TO THE MOON (N4, skyMoonDisc2.z, 0..1): the scale that brings the FULL moon's
+// mean disc radiance to kMoonDiscDisplay of the exposed scale (middle grey 0.18) -- the disc's and its glow's.
+// Blended in log2 by the knob; 1 when the moon is under it already or the knob is 0. See the disc below.
+static const float kMoonDiscDisplay = 1.5f;
+float MoonDiscAdaptation(float3 fullMeanRadiance)
+{
+    const float fullMean = dot(fullMeanRadiance, float3(0.2126f, 0.7152f, 0.0722f)) * skyExposure.x;
+    const float adapt = saturate(skyMoonDisc2.z);
+    return (adapt > 0.0f && fullMean > kMoonDiscDisplay) ? exp2(adapt * log2(kMoonDiscDisplay / fullMean)) : 1.0f;
+}
 
 // The atmosphere's transmittance from the eye toward `dir` (the LUT's local frame), as a disc takes it:
 // UE SkyAtmosphereCommon.ush:256-279 with the Bruneton mapping inline. The sun's and the moon's.
@@ -209,12 +221,14 @@ PSOut PSMain(VSOut i)
         // the stars, each through the air in front of it (the transmittance to the top of the atmosphere,
         // the discs' own): they redden and fade toward the horizon. The airglow above the horizon is held
         // at its horizon value below it, as the rest of the drawn sky is; the galaxy and the stars stop
-        // there. Added after the moon, which hides what is behind it.
-        float3 night = 0.0f;
+        // there. Added after the moon, which hides the stars and the galaxy behind it -- but not the
+        // airglow: that layer is 90 km up, IN FRONT of the moon, and hidden by it the dark side of a
+        // crescent showed as a disc darker than the sky (owner, 2026-10-13).
+        float3 night = 0.0f, airglow = 0.0f;
         [branch] if (nightRow0.w > 0.0f)
         {
             const float up = max(dir.z, 0.0f);
-            night = nightGlow.rgb * NightAirglowVanRhijn(up);
+            airglow = nightGlow.rgb * NightAirglowVanRhijn(up);
             if (dir.z > 0.0f)
             {
                 const float3 eq = float3(dot(nightRow0.xyz, worldDir), dot(nightRow1.xyz, worldDir), dot(nightRow2.xyz, worldDir));
@@ -225,7 +239,9 @@ PSOut PSMain(VSOut i)
                 const float horizonWeight = 0.25f + 0.75f * (1.0f - dir.z) * (1.0f - dir.z);
                 night += NightStars(eq, pixelAngle, density, nightLayers.w, nightLayers.z, horizonWeight) * nightLayers.x;
             }
-            night *= DiscTransmittance(normalize(float3(dir.xy, up)), height, bottom, top);
+            const float3 nightTr = DiscTransmittance(normalize(float3(dir.xy, up)), height, bottom, top);
+            night *= nightTr;
+            airglow *= nightTr;
         }
         float moonCover = 0.0f;
         // TIME-OF-DAY PLAN N1: THE MOON'S DISC. UE draw a disc per atmosphere light
@@ -257,6 +273,27 @@ PSOut PSMain(VSOut i)
             const float2 uvDx = ddx(moonUv), uvDy = ddy(moonUv);
             const float rr = dot(disc, disc);
             const float edgeWidth = max(fwidth(sqrt(rr)), 1.e-4f);
+            // THE MOON'S GLOW (N4; owner, 2026-10-13, with Ultra Dynamic Sky's moon shot with its shafts OFF:
+            // "the halo is different, and look at the length"). UDS draws round its moon an additive glow,
+            // (1 - angle / Moon Glow Scale)^2 x Moon Glow Intensity of the moon's emissive (its Moon material
+            // function; live 0.05 of the emissive -- ~16 % of the mean disc -- out to 11.6 degrees), and its light
+            // shafts seed on THAT: they only widen it by ~40 %. Ours stood on a bare sky, the disc alone seeded
+            // the shafts and the whole halo was theirs -- concentrated, three times UDS's contrast. The real
+            // moon's is the aureole of the haze and ice in front of it (the sky's Mie term with UE's clean-air
+            // aerosol gives ~1.3x the sky there). skyMoonGlow.x of the full moon's mean disc radiance (the phase
+            // law applied on the CPU), in the disc's colour and in the scale the eye sees the disc in, through
+            // the air like the disc.
+            if (!ground && moonRadius > 0.0f && skyMoonGlow.x > 0.0f && skyMoonGlow.y > 0.0f)
+            {
+                const float glowT = saturate(1.0f - acos(clamp(dot(dir, f), -1.0f, 1.0f)) / skyMoonGlow.y);
+                if (glowT > 0.0f)
+                {
+                    const float glowSolidAngle = 4.0f * SkyViewPi * pow(sin(0.5f * moonRadius), 2.0f);
+                    const float3 fullMeanRadiance = skyMoonDisc.rgb / max(glowSolidAngle, 1.e-12f);
+                    c += fullMeanRadiance * (skyMoonGlow.x * glowT * glowT) * MoonDiscAdaptation(fullMeanRadiance) *
+                         DiscTransmittance(dir, height, bottom, top);
+                }
+            }
             if (!ground && moonRadius > 0.0f && dot(dir, f) > 0.0f && rr < 1.0f + 2.0f * edgeWidth)
             {
                 float3 nDisc = float3(disc, sqrt(max(0.0f, 1.0f - rr)));
@@ -279,25 +316,49 @@ PSOut PSMain(VSOut i)
                 nDisc = normalize(nDisc);
                 const float3 v = -f; // moon -> eye
                 const float3 n = nDisc.x * r + nDisc.y * u + nDisc.z * v;
-                float3 towardSun = skySunDirection.xyz - dot(skySunDirection.xyz, f) * f;
-                towardSun = dot(towardSun, towardSun) > 1.e-10f ? normalize(towardSun) : u;
+                // The bright limb's direction across the disc, by its position angle (TimeOfDay: toward a
+                // virtual sun on the moon's own circle in Simple mode -- the moon no longer moves with the
+                // phase, and the real sun behind the viewer could not tell waxing from waning -- the real
+                // sun in Real mode).
+                const float3 towardSun = cos(skyMoonDisc2.w) * r + sin(skyMoonDisc2.w) * u;
                 const float alpha = skyMoonDisc.w;
                 const float3 s = cos(alpha) * v + sin(alpha) * towardSun; // moon -> sun, at the phase angle
                 // The relief bends the INCIDENCE only; the emergence is the sphere's own, so a crater
                 // wall near the limb cannot turn the surface away from the viewer into a black dot.
                 const float mu0 = dot(n, s), mu = max(sqrt(max(0.0f, 1.0f - rr)), 1.e-3f);
-                const float lommelSeeliger = mu0 > 0.0f ? mu0 / (mu0 + mu) : 0.0f;
+                // THE TERMINATOR OVER A PIXEL AND A HALF (N4): Lommel-Seeliger rises from zero at its steepest,
+                // so the lit edge stepped in one pixel and stair-stepped along a quarter moon's straight
+                // terminator (owner, 2026-10-13). mu0 goes through a smooth maximum with 0 over the disc's own
+                // pixel width (edgeWidth: the unit disc per pixel, as the limb's coverage uses), so the
+                // terminator blends across ~1.5 pixels at any size the disc is drawn -- and the result is
+                // cut by a smooth step over the same width, so past the terminator it is exactly dark (alone,
+                // the smooth maximum never reaches 0, and where mu falls to 0 at the limb it lit a bright
+                // ring round the whole dark side).
+                const float terminatorWidth = 1.5f * edgeWidth;
+                const float mu0Soft = 0.5f * (mu0 + sqrt(mu0 * mu0 + terminatorWidth * terminatorWidth));
+                const float lommelSeeliger = mu0Soft / (mu0Soft + mu) * smoothstep(-terminatorWidth, terminatorWidth, mu0);
                 // 2 pi (1 - cos r), cancellation-free. A full disc at LS 0.5 everywhere integrates to
                 // skyMoonDisc.rgb, hence the 2 / solid angle.
                 const float solidAngle = 4.0f * SkyViewPi * pow(sin(0.5f * moonRadius), 2.0f);
                 const float3 perUnit = skyMoonDisc.rgb * (2.0f / max(solidAngle, 1.e-12f)) * albedo;
-                const float3 moon = perUnit * (lommelSeeliger * skyMoonDisc2.x + 0.5f * skyLight1Illuminance.w);
+                float3 moon = perUnit * (lommelSeeliger * skyMoonDisc2.x + 0.5f * skyLight1Illuminance.w);
+                // THE EYE'S LOCAL ADAPTATION TO THE DISC (skyMoonDisc2.z, 0..1). Under a night exposure the
+                // lit moon is ~10^4 times the display's white: the whole of it clipped flat, the maria
+                // gone, and every pixel the limb or the terminator only partly covers still white -- the
+                // edge cannot antialias and stair-steps (owner, 2026-10-13: "the terminator is very
+                // pixelated, the moon's pattern is not visible"). The eye adapts to the bright disc on its
+                // own and sees its face; so the disc is scaled, uniformly, until the FULL moon's mean
+                // radiance sits at kMoonDiscDisplay of the exposed scale (middle grey 0.18) -- the maria
+                // and the relief read, the edges blend. Blended in log2 by the knob (0 = the physical,
+                // clipped disc a camera records). A crescent keeps its surface brightness against the
+                // full moon, and a low moon its reddening and dimming by the air.
+                moon *= MoonDiscAdaptation(skyMoonDisc.rgb / max(solidAngle, 1.e-12f));
                 const float coverage = saturate((1.0f - sqrt(rr)) / edgeWidth + 0.5f);
                 c += moon * DiscTransmittance(dir, height, bottom, top) * coverage;
                 moonCover = coverage;
             }
         }
-        c += night * (1.0f - moonCover);
+        c += airglow + night * (1.0f - moonCover);
         // The whole sky, clamped the same way: a per-channel min here would undo the disc's
         // hue again the moment any one channel touched the ceiling.
         const float cPeak = max(max(c.r, c.g), c.b);

@@ -377,6 +377,14 @@ struct BloomSettings
     // was: the lowest sun among them is demo's 13.5.
     float sunGlareLowSunDeg = 12.0f;
     float sunGlareLowSunFloor = 0.2f;
+    // The time constant (seconds) of the sun probe's temporal blend -- what the glare AND the corona read
+    // of the disc (bloom_conv_cs.hlsl stage 10). Leaves crossing the disc made both dance (owner,
+    // 2026-10-14); 0 = this frame's taps as they are. Measured on the owner's palm view (wind live, 24
+    // frames 0.05 s apart, mean frame-to-frame change 40-120 px round the sun): 0 -> 3.5 %, 0.12 -> no
+    // better, 0.5 -> 2.3 % against the swaying leaves' own 1.9 % -- but 0.5 was too slow ("the corona
+    // fades on a disc already covered"); with the corona pinned to the disc's centre and its hole gone
+    // (tonemap_cs.hlsl SunRays), only its strength follows the leaves.
+    float sunGlareSmoothingSec = 0.1f;
     // THE SUN'S CORONA, drawn by the tone curve pass at output resolution (tonemap_cs.hlsl SunRays),
     // after Ritschel's "Temporal Glare": dense bright BUNDLES with dim gaps between them, fine
     // NEEDLES inside them, a power-law fall-off with warm tips, a faint lenticular HALO ring, and an

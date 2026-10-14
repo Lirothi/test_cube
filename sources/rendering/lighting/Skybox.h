@@ -102,6 +102,10 @@ public:
     void SetNightSky(const NightSkyFrameData& night, D3D12_CPU_DESCRIPTOR_HANDLE map)
     { nightSky_ = night; nightMapSrv_ = map; }
     const NightSkyFrameData& NightSky() const { return nightSky_; }
+    // Time-of-day N4: the moon's glow round its disc (skybox.hlsl) -- the peak as a fraction of the full
+    // moon's mean disc radiance, the phase law applied, and its radius in radians; 0 = none.
+    void SetMoonGlow(float peak, float radiusRad) { moonGlow_ = { peak, radiusRad, 0.0f, 0.0f }; }
+    const std::array<float, 4>& MoonGlow() const { return moonGlow_; }
 
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
@@ -120,6 +124,7 @@ private:
     std::array<ID3D12Resource*, 3> environmentResource_{}; // owned by SkyAtmosphere; GPU-drained teardown
     SkyViewFrameData skyViewFrame_{};
     NightSkyFrameData nightSky_{};
+    std::array<float, 4> moonGlow_{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, moonSrv_{}, nightMapSrv_{}, nullSkyViewSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullSkyViewHeap_;
     TextureCube cube_;

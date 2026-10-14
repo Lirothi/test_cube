@@ -486,14 +486,17 @@ struct LightShaftConstants
     float4 origin{};   // xy = TextureSpaceBlurOrigin (aspect-corrected uv), z = W/H, w = H/W
     float4 bloom{};    // 1/OcclusionDepthRange, BloomScale, BloomMaxBrightness, BloomThreshold
     float4 tint{};     // rgb = BloomTint, w = FirstPassDistance
-    float4 depth{};    // depthA, depthB, 0, 0
+    float4 depth{};    // depthA, depthB, the blur's reach (fraction of the way to the light; 1 = UE's), fall-off lift (0 = UE's)
     uint32_t size[4] = { 1u, 1u, 0u, 0u }; // target size, blur pass index, 0
     float4 invSize{};  // 1/size.xy, half a SOURCE texel (UE's UVMinMax bilinear inset)
     float4 temporal{ 1.0f, 1.0f, 0.0f, 0.0f }; // this frame's weight, history pre-exposure rescale, history valid, 0
+    float4 glareColor{};                     // the sun glare in the seed: rgb at the sun, w the core's angle (rad)
+    float4 glareDir{ 0.0f, 0.0f, 1.0f, 0.0f }; // to the sun (view space), w the veil's weight
+    float4 glareProj{ 1.0f, 1.0f, 0.0f, 0.0f }; // projection x/y scales, the veil's angle (rad), 0
 };
 struct LightShaftHandles
 {
-    Material::CBFieldHandle origin, bloom, tint, depth, size, invSize, temporal;
+    Material::CBFieldHandle origin, bloom, tint, depth, size, invSize, temporal, glareColor, glareDir, glareProj;
     void Populate(Material* material);
 };
 

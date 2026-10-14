@@ -216,7 +216,13 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         astro::SimplePath moonPath = sunPath;
         moonPath.yawDeg = s.moonPathYawDeg;
         moonPath.tiltDeg = s.moonPathTiltDeg;
-        astro::SimpleMoonDirection(moonPath, sunPath, clockHours_, s.moonPhase, s.moonOrbitOffsetDeg, moonLocal);
+        // THE PHASE CHANGES THE MOON'S FACE, NOT ITS PLACE (owner, 2026-10-13: "when the phase changes the
+        // moon must not roll across the sky"), as Ultra Dynamic Sky's simple moon does: it rides opposite
+        // the sun, turned along its circle by the orbit offset, whatever the phase -- which then sets only
+        // the disc's lit shape and the light's brightness. (Placed by the phase, as the real moon is, a
+        // first quarter stood 90 degrees from the sun and every phase change slid it across the sky.)
+        // Real positions keep the real place and the real phase, both from the date.
+        astro::SimpleMoonDirection(moonPath, sunPath, clockHours_, 0.5, s.moonOrbitOffsetDeg, moonLocal);
         // Phase cycle 0 new .. 0.5 full .. 1 new -> the sun-moon-earth angle, 180 at new, 0 at full.
         phaseAngleDeg = 180.0 * std::fabs(1.0 - 2.0 * s.moonPhase);
     }
@@ -284,7 +290,19 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         skyMoon_.present = true;
         skyMoon_.toward[0] = moonToward.x; skyMoon_.toward[1] = moonToward.y; skyMoon_.toward[2] = moonToward.z;
         skyMoon_.illuminance[0] = lit.x; skyMoon_.illuminance[1] = lit.y; skyMoon_.illuminance[2] = lit.z;
-        skyMoon_.fullIlluminance[0] = fullLit.x; skyMoon_.fullIlluminance[1] = fullLit.y; skyMoon_.fullIlluminance[2] = fullLit.z;
+        // The full disc's reference in the DISC's colour (moonDiscColor at the full moon's luminance): only the
+        // hue is the artist's, the disc stays exactly as bright as the light it sheds. The sky's light 1 above
+        // keeps the temperature's colour.
+        {
+            const float* dc = s.moonDiscColor;
+            const float discLuma = 0.2126f * dc[0] + 0.7152f * dc[1] + 0.0722f * dc[2];
+            const float fullLuma = 0.2126f * fullLit.x + 0.7152f * fullLit.y + 0.0722f * fullLit.z;
+            const float fullRgb[3] = {fullLit.x, fullLit.y, fullLit.z};
+            for (int c = 0; c < 3; ++c)
+            {
+                skyMoon_.fullIlluminance[c] = discLuma > 1e-6f ? fullLuma * dc[c] / discLuma : fullRgb[c];
+            }
+        }
         skyMoon_.halfApexRad = now.GetSunHalfApexRadians();
         skyMoon_.phaseAngleRad = static_cast<float>(alpha);
         skyMoon_.litScale = lommelSeeliger > 1.0e-6
@@ -292,6 +310,61 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
             : 0.0f;
         skyMoon_.earthshine = static_cast<float>(std::max(0.0f, s.moonEarthshine) * kEarthshineAtNewMoon * 0.5 * (1.0 - std::cos(alpha)));
         skyMoon_.lightsGround = lightBody == Body::Moon;
+        skyMoon_.discAdaptation = std::clamp(s.moonDiscAdaptation, 0.0f, 1.0f);
+        skyMoon_.glow = static_cast<float>(std::max(s.moonGlow, 0.0f) * astro::MoonPhaseBrightness(phaseAngleDeg));
+        skyMoon_.glowRadiusRad = static_cast<float>(std::clamp(s.moonGlowRadiusDeg, 0.1f, 90.0f) * kPi / 180.0);
+        // The bright limb (SkyMoonFrame::limbAngle): toward the real sun in Real mode; in Simple mode toward
+        // a virtual one on the moon's own circle, where the phase would have put the sun had it placed the
+        // moon (theta + 2 pi phase -- SimpleMoonDirection's phaseCycle 0.5 - phase), so a waxing and a
+        // waning moon light opposite limbs. In the sky's local frame (x, z, y of the world) and the disc
+        // basis skybox.hlsl builds: u = up projected, r = f x u.
+        {
+            double litWorld[3] = {sunToward.x, sunToward.y, sunToward.z};
+            if (!s.realPositions)
+            {
+                astro::SimplePath sunPath;
+                sunPath.riseHours = s.dawnHours; sunPath.setHours = s.duskHours; sunPath.yawDeg = s.pathYawDeg;
+                sunPath.tiltDeg = s.pathTiltDeg; sunPath.heightOffset = s.heightOffset; sunPath.flatten = s.extendTwilight;
+                astro::SimplePath moonPath = sunPath;
+                moonPath.yawDeg = s.moonPathYawDeg;
+                moonPath.tiltDeg = s.moonPathTiltDeg;
+                double virtualLocal[3];
+                astro::SimpleMoonDirection(moonPath, sunPath, clockHours_, 0.5 - s.moonPhase, s.moonOrbitOffsetDeg, virtualLocal);
+                const Math::float3 virtualWorld = ToWorld(virtualLocal, s.northYawDeg);
+                litWorld[0] = virtualWorld.x; litWorld[1] = virtualWorld.y; litWorld[2] = virtualWorld.z;
+            }
+            const double f[3] = {moonToward.x, moonToward.z, moonToward.y};
+            const double sun[3] = {litWorld[0], litWorld[2], litWorld[1]};
+            double upRef[3] = {0.0, 0.0, 1.0};
+            if (std::fabs(f[2]) >= 0.999) { upRef[0] = 1.0; upRef[2] = 0.0; }
+            const double ud = upRef[0] * f[0] + upRef[1] * f[1] + upRef[2] * f[2];
+            double u[3] = {upRef[0] - ud * f[0], upRef[1] - ud * f[1], upRef[2] - ud * f[2]};
+            const double ul = std::sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            for (double& c : u) { c /= std::max(ul, 1.0e-12); }
+            const double r[3] = {f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]};
+            const double sd = sun[0] * f[0] + sun[1] * f[1] + sun[2] * f[2];
+            const double t[3] = {sun[0] - sd * f[0], sun[1] - sd * f[1], sun[2] - sd * f[2]};
+            const double tu = t[0] * u[0] + t[1] * u[1] + t[2] * u[2];
+            const double tr = t[0] * r[0] + t[1] * r[1] + t[2] * r[2];
+            // Almost exactly behind the viewer the direction is undefined: the lit side then turns down.
+            skyMoon_.limbAngle = (tu * tu + tr * tr) > 1.0e-10 ? static_cast<float>(std::atan2(tu, tr)) : static_cast<float>(-0.5 * kPi);
+        }
+        skyMoon_.lightShaftBloomScale = std::max(s.moonLightShaftBloomScale, 0.0f);
+        skyMoon_.lightShaftBloomThreshold = std::max(s.moonLightShaftBloomThreshold, 0.0f);
+        skyMoon_.lightShaftBloomMaxBrightness = std::max(s.moonLightShaftBloomMaxBrightness, 0.0f);
+        // The shafts are the moon's LIGHT scattered by the air, so they start in the light's colour
+        // (moonLightColor at unit luminance, the cold light on the ground) and the owner's tint multiplies
+        // that. Seeded by the drawn disc alone they were the disc's cream: "the rays from the moon must not
+        // be yellow" (owner, 2026-10-13); a neutral grey over dark green crowns still read olive.
+        {
+            const float* lc = s.moonLightColor;
+            const float lightLuma = 0.2126f * lc[0] + 0.7152f * lc[1] + 0.0722f * lc[2];
+            for (int c = 0; c < 3; ++c)
+            {
+                const float hue = lightLuma > 1e-6f ? lc[c] / lightLuma : 1.0f;
+                skyMoon_.lightShaftTint[c] = std::max(s.moonLightShaftTint[c], 0.0f) * hue;
+            }
+        }
     }
 
     // N2: the night sky's layers. Off while the sun stands above kNightSkySunCutoffDeg: the sky is then
@@ -334,6 +407,12 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         nightSky_.present = nightSky_.stars > 0.0f || nightSky_.milkyWay > 0.0f ||
                             nightSky_.airglow[0] + nightSky_.airglow[1] + nightSky_.airglow[2] > 0.0f;
     }
+
+    // N4: the moon's glints on the water, faded again by the phase law (moonGlintPhaseFalloff).
+    glintScale_ = lightBody == Body::Moon
+        ? static_cast<float>(std::pow(std::max(astro::MoonPhaseBrightness(phaseAngleDeg), 1.0e-6),
+                                      std::clamp(static_cast<double>(s.moonGlintPhaseFalloff), 0.0, 1.0)))
+        : 1.0f;
 
     if (!logged_ || litBy != litBy_)
     {

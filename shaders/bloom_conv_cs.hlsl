@@ -516,6 +516,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         float gate = asfloat(ExposureValue.Load(kSunProbeHeld + 12u));
         float share = asfloat(ExposureValue.Load(kSunProbeOut + 12u));
         float2 shownAt = asfloat(ExposureValue.Load2(kSunProbeCentroid));
+        // Last frame's OUTPUT, for the temporal blend at the end.
+        const float3 prevOut = asfloat(ExposureValue.Load3(kSunProbeOut));
+        const float prevShare = share;
+        const float2 prevShownAt = shownAt;
         float fade = 0.0f;
         const float3 sunDir = sunGlareDir.xyz;
         if (sunDir.z > 0.02f)
@@ -602,9 +606,24 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             const float2 past = max(atan(abs(sunDir.xy) / sunDir.z) - atan(1.0f / sunGlareProj.xy), 0.0f);
             fade = 1.0f - smoothstep(0.0f, max(sunGlareParams.x, 1.0e-4f), length(past));
         }
+        // TEMPORAL SMOOTHING of what the glare and the corona read (owner, 2026-10-14: "the corona starts
+        // dancing when moving leaves partly cover the sun"). Leaves crossing the disc change its 32 taps
+        // frame to frame, and the glare and the corona, which scale with them, flickered: a mean 3.6 %
+        // frame-to-frame change 40-120 px round the sun (steps to 10.8 %) against the swaying leaves' own
+        // 1.8 % -- the light shafts, smoothed by their own time constant, added nothing. An exponential
+        // blend of this frame's value into the last, frame-rate independent: sunGlareDir.w =
+        // 1 - exp(-dt / BloomSettings::sunGlareSmoothingSec), 1 = none. The HELD colour and gate stay raw.
+        float3 outColour = held * (gate * fade);
+        const float blend = saturate(sunGlareDir.w);
+        if (blend < 1.0f && all(isfinite(prevOut)) && isfinite(prevShare) && all(isfinite(prevShownAt)))
+        {
+            outColour = lerp(max(prevOut, 0.0f.xxx), outColour, blend);
+            share = lerp(prevShare, share, blend);
+            shownAt = lerp(prevShownAt, shownAt, blend);
+        }
         ExposureValue.Store3(kSunProbeHeld, asuint(held));
         ExposureValue.Store(kSunProbeHeld + 12u, asuint(gate));
-        ExposureValue.Store3(kSunProbeOut, asuint(held * (gate * fade)));
+        ExposureValue.Store3(kSunProbeOut, asuint(outColour));
         ExposureValue.Store(kSunProbeOut + 12u, asuint(share));
         ExposureValue.Store2(kSunProbeCentroid, asuint(shownAt));
         return;

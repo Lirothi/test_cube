@@ -95,6 +95,8 @@ namespace
             skyView.light1Illuminance[3] = moon.earthshine;
             skyView.moonDisc[3] = moon.phaseAngleRad;
             skyView.moonDisc2[0] = moon.litScale;
+            skyView.moonDisc2[2] = moon.discAdaptation; // N4: the eye's adaptation to the disc
+            skyView.moonDisc2[3] = moon.limbAngle;      // N4: the bright limb's position angle
         }
         // Time-of-day plan N2: the night sky's light as a whole, for the distant light.
         if (night.present)
@@ -1620,6 +1622,10 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             frame_->skybox->SetSkyAtmosphere(drawView, skyAtmosphere_.ViewSrv(), skyAtmosphere_.TransmittanceSrv(),
                                              moonTexture ? skyAtmosphere_.MoonSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
             frame_->skybox->SetNightSky(nightView, nightMap ? skyAtmosphere_.NightSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
+            // N4: the moon's glow, drawn with its disc (none over an HDRI sky or with no moon).
+            const SkyMoonFrame& moon = frame_->skyMoon;
+            const bool glow = drawView.planet[3] != 0 && moon.present;
+            frame_->skybox->SetMoonGlow(glow ? moon.glow : 0.0f, glow ? moon.glowRadiusRad : 0.0f);
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkybox);

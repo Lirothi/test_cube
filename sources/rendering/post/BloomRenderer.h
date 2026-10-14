@@ -84,6 +84,18 @@ public:
     // or the sun is behind the camera / well off screen.
     SunRaysConstants SunRays() const;
     float TonemapBloomScale() const;
+    // The SUN GLARE as the light shafts' seed sees it (owner, 2026-10-14: "blur after the glare is laid"):
+    // stage 9's analytic halo in the scene's own pre-exposed units, from a sun-probe colour (the caller's
+    // read-back one: the shafts run before this frame's probe). False when the glare is off, the bloom is
+    // off (the glare is then not in the picture either) or the sun is out of view.
+    struct SunGlareSeed
+    {
+        Math::float3 color{};   // at the sun's centre, before the core / veil fall-off
+        Math::float3 viewDir{}; // to the sun, view space
+        float projX = 1.0f, projY = 1.0f;
+        float coreRad = 0.0f, veil = 0.0f, veilRad = 0.0f;
+    };
+    bool SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) const;
 
 private:
     void Downsample(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -102,6 +114,8 @@ private:
     // either method's own output. Records nothing when it is off or the sun is not in view.
     void SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                            D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+    // The glare's strength this frame: sunGlareIntensity eased down on a low sun; 0 = off.
+    float SunGlareStrength() const;
     // The sun in this frame's view: its direction in view space, the projection's x/y scales and
     // the tangent of the disc's half angle. False when it is behind the camera or further past the
     // frame's edge than kSunOffFrameFadeDeg.
@@ -116,6 +130,7 @@ private:
 
     SceneResourceBootstrapper* resources_ = nullptr;
     const SceneFrameData* frame_ = nullptr;
+    double probeLastSeconds_ = -1.0; // the sun probe's temporal blend: when it last ran
 
     // ---- the decisions, taken once per frame in Decide() ----
     bool bloomActive_ = false;

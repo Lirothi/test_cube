@@ -98,6 +98,10 @@ public:
         // trim plus curve, EV, positive brightens), and the eye's adaptation before the curve.
         float compensationEv = 0.0f;
         float eyeEv100 = 0.0f;
+        // The sun probe's output (bloom_conv_cs.hlsl stage 10): the disc colour the glare reads (rgb,
+        // pre-exposed, gate and off-frame fade applied) and the disc's visible share.
+        float sunProbe[3] = {};
+        float sunProbeShare = 0.0f;
         bool valid = false;
     };
     Readback LatestReadback() const;

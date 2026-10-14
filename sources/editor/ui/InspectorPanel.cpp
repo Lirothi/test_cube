@@ -625,9 +625,14 @@ namespace
                     // The rows are the document's own pairs, in its order; the runtime sorts them by EV
                     // (PhotographicSettingsJson::ApplyOverrides), so a row dragged past its neighbour
                     // still evaluates in order.
+                    // A COPY, read once: releasing a row's drag commits an EditEnvironmentCommand that
+                    // replaces the object's properties under this loop, and an iterator into them dangled --
+                    // the next row dereferenced it (nlohmann invalid_iterator, owner 2026-10-13). Writes go
+                    // through a fresh lookup each time, checked.
                     const auto curveIt = tgt().find("exposureCurve");
                     const bool hasCurve = curveIt != tgt().end() && curveIt->is_array();
-                    const std::size_t count = hasCurve ? curveIt->size() : 0u;
+                    const nlohmann::json curveNow = hasCurve ? *curveIt : nlohmann::json::array();
+                    const std::size_t count = curveNow.size();
                     const auto pointOf = [](const nlohmann::json& p, float& ev, float& comp)
                     {
                         const bool ok = p.is_array() && p.size() >= 2 && p[0].is_number() && p[1].is_number();
@@ -639,13 +644,17 @@ namespace
                     for (std::size_t i = 0; i < count; ++i)
                     {
                         float v[2] = { 0.0f, 0.0f };
-                        pointOf((*curveIt)[i], v[0], v[1]);
+                        pointOf(curveNow[i], v[0], v[1]);
                         ImGui::PushID(static_cast<int>(i));
                         const bool changed = ImGui::DragFloat2("EV100 -> EV", v, 0.05f, -16.0f, 24.0f, "%.2f");
                         beginContinuousEdit(changed);
                         if (changed)
                         {
-                            tgt()["exposureCurve"][i] = nlohmann::json::array({ v[0], std::clamp(v[1], -10.0f, 10.0f) });
+                            const auto live = tgt().find("exposureCurve");
+                            if (live != tgt().end() && live->is_array() && i < live->size())
+                            {
+                                (*live)[i] = nlohmann::json::array({ v[0], std::clamp(v[1], -10.0f, 10.0f) });
+                            }
                         }
                         trackContinuousEdit(changed);
                         ImGui::SameLine();
@@ -678,7 +687,7 @@ namespace
                     }
                     if (removeAt < count)
                     {
-                        nlohmann::json curve = *curveIt;
+                        nlohmann::json curve = curveNow;
                         curve.erase(removeAt);
                         executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
                     }
@@ -686,7 +695,7 @@ namespace
                              ImGui::SmallButton("Add point"))
                     {
                         // Two stops of light past the last point at its compensation: a flat start.
-                        nlohmann::json curve = hasCurve ? *curveIt : nlohmann::json::array();
+                        nlohmann::json curve = curveNow;
                         float ev = 0.0f, comp = 0.0f;
                         if (!curve.empty()) { pointOf(curve.back(), ev, comp); ev += 2.0f; }
                         curve.push_back(nlohmann::json::array({ ev, comp }));
@@ -1781,6 +1790,10 @@ namespace
             dragF("Low-Sun Floor", "sunGlareLowSunFloor", 0.2f, 0.005f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("What is left of the glare with the sun on the horizon, as a fraction of "
                           "Sun Glare (1 = no fade).");
+            dragF("Glare Smoothing", "sunGlareSmoothingSec", 0.1f, 0.005f, 0.0f, 2.0f, "%.3f s");
+            InspectorHelp("How slowly the glare AND the corona follow what shows of the sun disc: the time "
+                          "constant of a temporal blend of the disc's metering. Leaves crossing the disc "
+                          "made both dance; 0 = every frame as it is.");
 
             ImGui::SeparatorText("Sun corona");
             dragF("Corona", "sunRaysIntensity", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
@@ -2151,13 +2164,16 @@ namespace
                 "Unreal's Light Shaft Bloom on the sun (plan A7): the bright sky near the sun is radially "
                 "blurred towards its screen position and added into the scene -- the god rays through the "
                 "crowns. Screen-space: runs only while the sun is in front of the camera. About 0.1 ms.");
-            dragF("Bloom Scale", "lightShaftBloomScale", 0.2f, 0.01f, 0.0f, 10.0f, "%.2f");
-            InspectorHelp("UE BloomScale (their 0.2): the strength of the shafts. 0 switches them off.");
-            dragF("Bloom Threshold", "lightShaftBloomThreshold", 2.0f, 0.05f, 0.0f, 50.0f, "%.2f");
-            InspectorHelp("UE BloomThreshold: only pixels brighter than this seed the shafts, measured in the "
-                          "pre-exposed scene. 1 = display white. Default 2: only the disc and its glow seed.");
-            dragF("Bloom Max Brightness", "lightShaftBloomMaxBrightness", 100.0f, 1.0f, 0.0f, 1000.0f, "%.0f");
-            InspectorHelp("UE BloomMaxBrightness (their 100): caps one pixel's contribution.");
+            dragF("Bloom Scale", "lightShaftBloomScale", 0.3f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("UE BloomScale: the strength of the shafts (Ultra Dynamic Sky 0.3, UE 0.2; ~1 for rays "
+                          "you cannot miss). 0 switches them off.");
+            dragF("Bloom Threshold", "lightShaftBloomThreshold", 0.75f, 0.01f, 0.0f, 50.0f, "%.2f");
+            InspectorHelp("UE BloomThreshold: only pixels brighter than this seed the shafts, on the pre-exposed "
+                          "scale (1 = display white). UDS 0.75: the disc and the bright sky round it.");
+            dragF("Bloom Max Brightness", "lightShaftBloomMaxBrightness", 0.35f, 0.01f, 0.0f, 1000.0f, "%.2f");
+            InspectorHelp("UE BloomMaxBrightness: caps one pixel's part. UDS 0.35 -- the cap makes their look: "
+                          "the sky round the sun seeds wide but flat, so the rays run long across the scene and "
+                          "the disc does not burst into a star. UE's 100 = a starburst and short rays.");
             {
                 const Math::float3 tint = JsonFloat3(tgt(), "lightShaftBloomTint", Math::float3(1.0f, 1.0f, 1.0f));
                 float tv[3] = { tint.x, tint.y, tint.z };
@@ -2173,6 +2189,17 @@ namespace
             dragF("Smoothing (s)", "lightShaftSmoothing", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
             InspectorHelp("The time constant of a temporal blend of the shafts' mask: 0 = every frame as it is "
                           "(the rays tremble with every leaf); higher = more inertia.");
+            dragF("Glare Seed", "lightShaftGlareSeed", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
+            InspectorHelp("How much of the Sun Glare (Post Process > Bloom) joins the shafts' seed. Unreal seeds on "
+                          "the scene over the threshold, and Ultra Dynamic Sky's bright sky lets a wide disc of it "
+                          "through -- its rays run long through crowns; our darker sky lets only the disc through. "
+                          "The glare is that bright sky as the picture shows it, so with it the gaps in the leaves "
+                          "seed too. 0 = Unreal's seed, 1 = the glare as drawn.");
+            dragF("Shaft Length", "lightShaftLength", 1.0f, 0.01f, 0.05f, 2.0f, "%.2f");
+            InspectorHelp("1 = Unreal's rays. Over 1 = LONGER: Unreal's fade as 1/distance from the sun, and this "
+                          "slows the fade -- 1.5 as 1/sqrt(distance), 2 not at all (Bloom Scale may then want "
+                          "lowering). Under 1 = shorter: the blur stops short of the sun, at 0.5 a ray ends about "
+                          "3x its gap's distance from it, at 0.3 about 1.7x. The moon's shafts use it too.");
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.5357f, 0.005f, 0.0f, 10.0f, "%.4f");
             InspectorHelp("UE LightSourceAngle: the sun's angular DIAMETER, 0.5357 for the real sun. It draws "
                           "the disc and floors the width of the specular lobe; the sun sets when the whole "
@@ -2193,8 +2220,29 @@ namespace
             dragF("Temperature (K)", "temperatureK", 5450.0f, 25.0f, 1000.0f, 20000.0f, "%.0f");
             InspectorHelp("The moon's colour outside the atmosphere, in this renderer's terms: sunlight reddened by "
                           "the regolith (B-V 0.92 against the sun's 0.65, ~29 mired warmer) on top of a sun drawn "
-                          "white at 6500 K -- 5450 K, white with a touch of cream. The colour of the moon "
-                          "ITSELF: its disc and the sky's scattering of it. What it lights is the next row.");
+                          "white at 6500 K -- 5450 K, white with a touch of cream. The colour the SKY scatters: "
+                          "the glow round the moon, its share of the night sky. The disc and the light it sheds "
+                          "have their own rows.");
+            {
+                const TimeOfDaySettings defaults{};
+                const Math::float3 dc = JsonFloat3(tgt(), "discColor",
+                    Math::float3(defaults.moonDiscColor[0], defaults.moonDiscColor[1], defaults.moonDiscColor[2]));
+                float dv[3] = { dc.x, dc.y, dc.z };
+                const bool changed = ImGui::ColorEdit3("Disc Colour", dv);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["discColor"] = { dv[0], dv[1], dv[2] }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("The colour the drawn DISC is seen in (its light shafts grow out of it). Only "
+                          "its hue counts (unit luminance: the disc stays as bright as its light). White, as Ultra "
+                          "Dynamic Sky draws its moon; a touch of blue reads silver against the night.");
+            dragF("Glow", "glow", 0.02f, 0.001f, 0.0f, 2.0f, "%.3f");
+            InspectorHelp("A soft glow round the disc, as Ultra Dynamic Sky draws one (its Moon Glow): the peak, as a "
+                          "fraction of the full moon's mean brightness, fading to nothing at the radius below; it "
+                          "follows the phase. The real moon's is the aureole of the haze in front of it. The light "
+                          "shafts seed on it -- without it they drew the whole halo themselves. 0 = none.");
+            dragF("Glow Radius (deg)", "glowRadiusDeg", 11.6f, 0.1f, 0.1f, 90.0f, "%.1f");
+            InspectorHelp("How far the glow reaches from the moon's centre (UDS 11.6).");
             {
                 const TimeOfDaySettings defaults{};
                 const Math::float3 lc = JsonFloat3(tgt(), "lightColor",
@@ -2212,6 +2260,41 @@ namespace
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.52f, 0.005f, 0.0f, 20.0f, "%.3f");
             InspectorHelp("The moon's angular DIAMETER: the drawn disc and the light's size (the specular "
                           "floor, the soft shadow). 0.52 is the real moon's mean.");
+            dragF("Disc Adaptation", "discAdaptation", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How the drawn disc is seen. 1 = by the eye, which adapts to it: brought into the "
+                          "display's range, its maria and relief visible, its edge and terminator smooth. 0 = "
+                          "by a camera under the night's exposure: ten thousand times the white, clipped flat "
+                          "and hard-edged. Only the disc -- the light it sheds is physical either way.");
+            dragF("Shaft Bloom Scale", "lightShaftBloomScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("The moon's light shafts, which take over once the sun's are gone and the moon lights the "
+                          "ground: their strength (Unreal BloomScale on the moon's light). 0 = none. The length, "
+                          "smoothing and depth range are the Sun's; Sun > Light Shafts switches both.");
+            dragF("Shaft Bloom Threshold", "lightShaftBloomThreshold", 0.008f, 0.001f, 0.0f, 50.0f, "%.3f");
+            InspectorHelp("Only pixels brighter than this seed them, on the exposed scale: just above the moonlit "
+                          "sky, so the disc AND its glow seed (as Ultra Dynamic Sky's 0.15 does on its ~10x "
+                          "brighter night). A brighter night exposure may want it higher -- or the whole sky seeds.");
+            dragF("Shaft Max Brightness", "lightShaftBloomMaxBrightness", 0.03f, 0.001f, 0.0f, 1000.0f, "%.3f");
+            InspectorHelp("Caps one pixel's part -- at the glow's level next to the disc, as UDS's 0.15 is at its "
+                          "glow's: the seed is wide and flat, a soft halo and long soft rays. High (100) = the "
+                          "disc alone seeds and the blur draws its copies.");
+            {
+                const TimeOfDaySettings defaults{};
+                const Math::float3 st = JsonFloat3(tgt(), "lightShaftBloomTint",
+                    Math::float3(defaults.moonLightShaftTint[0], defaults.moonLightShaftTint[1], defaults.moonLightShaftTint[2]));
+                float sv[3] = { st.x, st.y, st.z };
+                const bool changed = ImGui::ColorEdit3("Shaft Tint", sv);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["lightShaftBloomTint"] = { sv[0], sv[1], sv[2] }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("The moon's shafts are its light scattered by the air, so they come in the Light "
+                          "Colour above; this multiplies that, in place of the sun's Bloom Tint (Unreal's "
+                          "BloomTint on the moon's light; Ultra Dynamic Sky's Moon Light Shaft Bloom Tint).");
+            dragF("Glint Phase Falloff", "glintPhaseFalloff", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("The moon's glints on the water, faded again by its phase: 0 = physics (the path follows "
+                          "the moon's light alone -- a crescent's only ~3 stops dimmer on screen, the night's "
+                          "exposure rising), 1 = faded once more by the phase law. 0.5: the full moon's path as "
+                          "it is, a quarter's 1.7 stops down, a thin crescent's 3.3.");
             dragF("Earthshine", "earthshine", 1.0f, 0.05f, 0.0f, 100.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
             InspectorHelp("The ashen light on the moon's dark side -- sunlight reflected by the Earth. 1 = the "
                           "physical estimate (about 1/8000 of the full disc at new moon, fading as the Earth's "
@@ -2219,14 +2302,16 @@ namespace
             if (!real)
             {
                 dragF("Phase", "phase", 0.5f, 0.005f, 0.0f, 1.0f, "%.3f");
-                InspectorHelp("0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter. Full stands opposite "
-                              "the sun: it rises at dusk.");
+                InspectorHelp("0 new, 0.25 first quarter, 0.5 full, 0.75 last quarter. It changes the moon's FACE "
+                              "and its light, not its place: the moon rides opposite the sun (turned by Orbit "
+                              "Offset) at any phase, as Ultra Dynamic Sky's does. Real positions take both from "
+                              "the date.");
                 checkB("Phase Advances", "phaseAuto", true);
                 InspectorHelp("While the clock runs, the phase advances one cycle per 29.53 days.");
                 dragF("Moon Path Yaw (deg)", "pathYawDeg", 180.0f, 0.5f, -360.0f, 360.0f, "%.1f");
                 dragF("Moon Path Tilt (deg)", "pathTiltDeg", 35.0f, 0.1f, -89.0f, 89.0f, "%.1f");
                 dragF("Orbit Offset (deg)", "orbitOffsetDeg", 0.0f, 0.5f, -360.0f, 360.0f, "%.1f");
-                InspectorHelp("Turns the moon along its circle away from where the phase puts it.");
+                InspectorHelp("Turns the moon along its circle away from opposite the sun.");
             }
 
             ImGui::PopID();

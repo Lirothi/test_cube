@@ -1521,10 +1521,13 @@ float3 SkyFillRadiance(float3 normal)
     const float3 sky = (skyParams.y > 0.0f)
         ? SkyIrradiance.SampleLevel(LinearClampSampler, normal, 0).rgb * skyParams.x
         : SkyboxTexture.SampleLevel(LinearClampSampler, normal, kSkyRoughMaxMip).rgb * skyParams.x;
-    // A black or absent cubemap falls back to the old constant, so a level without a skybox keeps
-    // lit foam instead of losing its surf entirely.
+    // An ABSENT cubemap falls back to the old constant, so a level without a skybox keeps lit foam
+    // instead of losing its surf entirely. Only absent (no measured irradiance, skyParams.y 0): a
+    // measured sky that is BLACK is the truth -- a moonless night's is ~1e-6 -- and the constant it
+    // used to get lit the sea at night as if under a day sky, the glowing blue water of the new moon
+    // (time-of-day N4, 2026-10-13).
     const float lum = dot(sky, float3(0.2126f, 0.7152f, 0.0722f));
-    return (lum > 1e-5f) ? sky : kLegacyFoamSkyColor;
+    return (skyParams.y > 0.0f || lum > 1e-5f) ? sky : kLegacyFoamSkyColor;
 }
 
 float3 LitFoamColor(const LightingInput li, const FoamData foamData)

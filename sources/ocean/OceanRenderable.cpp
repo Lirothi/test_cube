@@ -1425,8 +1425,10 @@ float OceanRenderable::GetRoughnessDistance() const
 Math::float4 OceanRenderable::GetSpecularParams() const
 {
     const OceanRenderConfig& render = GetRenderConfig();
+    // Time-of-day N4: the moon's glints fade with its phase beyond its light (TimeOfDay::GlintScale).
+    const float glint = (scene_ && scene_->GetTimeOfDay().Present()) ? scene_->GetTimeOfDay().GlintScale() : 1.0f;
     return Math::float4(
-        render.specularStrength,
+        render.specularStrength * glint,
         render.roughnessScale,
         render.roughnessDistance,
         render.horizonFogStrength);

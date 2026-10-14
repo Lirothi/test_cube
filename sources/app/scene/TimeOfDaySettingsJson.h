@@ -101,7 +101,30 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
                 s.moonLightColor[c] = (*lc)[c].is_number() ? std::max((*lc)[c].get<float>(), 0.0f) : s.moonLightColor[c];
             }
         }
+        if (const auto dc = m.find("discColor"); dc != m.end() && dc->is_array() && dc->size() >= 3)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                s.moonDiscColor[c] = (*dc)[c].is_number() ? std::max((*dc)[c].get<float>(), 0.0f) : s.moonDiscColor[c];
+            }
+        }
+        if (const auto st = m.find("lightShaftBloomTint"); st != m.end() && st->is_array() && st->size() >= 3)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                s.moonLightShaftTint[c] = (*st)[c].is_number() ? std::max((*st)[c].get<float>(), 0.0f) : s.moonLightShaftTint[c];
+            }
+        }
         s.moonAngleDeg = std::clamp(Number(m, "lightSourceAngle", s.moonAngleDeg), 0.0f, 20.0f);
+        s.moonGlow = std::clamp(Number(m, "glow", s.moonGlow), 0.0f, 10.0f);
+        s.moonGlowRadiusDeg = std::clamp(Number(m, "glowRadiusDeg", s.moonGlowRadiusDeg), 0.1f, 90.0f);
+        s.moonDiscAdaptation = std::clamp(Number(m, "discAdaptation", s.moonDiscAdaptation), 0.0f, 1.0f);
+        // The moon's own UE bloom properties, named as the sun's are (DirectionalLightJson).
+        s.moonLightShaftBloomScale = std::clamp(Number(m, "lightShaftBloomScale", s.moonLightShaftBloomScale), 0.0f, 10.0f);
+        s.moonLightShaftBloomThreshold = std::clamp(Number(m, "lightShaftBloomThreshold", s.moonLightShaftBloomThreshold), 0.0f, 50.0f);
+        s.moonLightShaftBloomMaxBrightness =
+            std::clamp(Number(m, "lightShaftBloomMaxBrightness", s.moonLightShaftBloomMaxBrightness), 0.0f, 1000.0f);
+        s.moonGlintPhaseFalloff = std::clamp(Number(m, "glintPhaseFalloff", s.moonGlintPhaseFalloff), 0.0f, 1.0f);
         s.moonEarthshine = std::clamp(Number(m, "earthshine", s.moonEarthshine), 0.0f, 100.0f);
         s.moonPathYawDeg = Number(m, "pathYawDeg", s.moonPathYawDeg);
         s.moonPathTiltDeg = std::clamp(Number(m, "pathTiltDeg", s.moonPathTiltDeg), -89.0f, 89.0f);
@@ -208,6 +231,8 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "lightShaftBloomTint", f3(sun.GetLightShaftBloomTint()) },
         { "lightShaftOcclusionDepthRange", sun.GetLightShaftOcclusionDepthRange() },
         { "lightShaftSmoothing", sun.GetLightShaftSmoothingSec() },
+        { "lightShaftLength", sun.GetLightShaftLength() },
+        { "lightShaftGlareSeed", sun.GetLightShaftGlareSeed() },
         { "lightSourceAngle", sun.GetLightSourceAngleDegrees() },
     };
     j["moon"] = {
@@ -215,7 +240,16 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "illuminanceLux", s.moonIlluminanceLux },
         { "temperatureK", s.moonTemperatureK },
         { "lightColor", { s.moonLightColor[0], s.moonLightColor[1], s.moonLightColor[2] } },
+        { "discColor", { s.moonDiscColor[0], s.moonDiscColor[1], s.moonDiscColor[2] } },
+        { "glow", s.moonGlow },
+        { "glowRadiusDeg", s.moonGlowRadiusDeg },
+        { "lightShaftBloomScale", s.moonLightShaftBloomScale },
+        { "lightShaftBloomThreshold", s.moonLightShaftBloomThreshold },
+        { "lightShaftBloomMaxBrightness", s.moonLightShaftBloomMaxBrightness },
+        { "lightShaftBloomTint", { s.moonLightShaftTint[0], s.moonLightShaftTint[1], s.moonLightShaftTint[2] } },
         { "lightSourceAngle", s.moonAngleDeg },
+        { "discAdaptation", s.moonDiscAdaptation },
+        { "glintPhaseFalloff", s.moonGlintPhaseFalloff },
         { "earthshine", s.moonEarthshine },
         { "pathYawDeg", s.moonPathYawDeg },
         { "pathTiltDeg", s.moonPathTiltDeg },

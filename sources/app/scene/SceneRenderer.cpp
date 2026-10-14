@@ -575,12 +575,13 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         decisions_.lightShaftHistoryValid = false;
         decisions_.lightShaftBlend = 1.0f;
         decisions_.lightShaftFade = 1.0f;
+        decisions_.lightShaftFromMoon = false;
         // The SKY's sun (T2): the shafts are seeded by its disc and glow, whoever lights the ground.
         const DirectionalLight* sun = frame.skyLight;
         const auto& D = renderer->GetDeferredForFrame();
         const auto& P = renderer->GetDeferredForPrevFrame();
         const bool ready = sun != nullptr && frame.camera != nullptr && g_fogDebugView == 0u &&
-            sun->GetLightShaftsEnabled() && sun->GetLightShaftBloomScale() > 0.0f &&
+            sun->GetLightShaftsEnabled() && // each light's bloom scale is checked with its fade below
             (sun->GetColor().x > 0.0f || sun->GetColor().y > 0.0f || sun->GetColor().z > 0.0f) &&
             resources_.GetLightShaftMaterial(0u) && resources_.GetLightShaftMaterial(1u) && resources_.GetLightShaftMaterial(2u) &&
             resources_.GetLightShaftCBSizeBytes(0u) != 0u && resources_.GetLightShaftCBSizeBytes(1u) != 0u &&
@@ -602,10 +603,12 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             // pixels over the threshold; for the sun those are the disc AND the bright sky around it, so the
             // blur's discrete steps vanish in a wide seed. At night the only seed is a 15-pixel disc on a
             // black sky, and every step of the blur shows as its own copy -- the "pixelated halo" the owner
-            // asked about. With the shafts off it was gone and the bloom's own glow remained. The moon's
-            // shafts through the palms would need a smoother blur (more, jittered taps); until then, sun only.
-            const float3 toSun = (-sun->GetDirection()).Normalized();
-            const float4 clip = frame.camera->GetViewProjMatrixNoJitter().Transform(float4(toSun.x, toSun.y, toSun.z, 0.0f));
+            // asked about. With the shafts off it was gone and the bloom's own glow remained.
+            // ...UNTIL N4 (owner, 2026-10-13: "make the moon's shafts light ones"): once the sun's are gone and
+            // the moon lights the ground, the shafts radiate from the moon with the MOON'S OWN bloom properties at
+            // Ultra Dynamic Sky's values (TimeOfDaySettings::moonLightShaftBloom*): the cap of 0.15 makes the disc
+            // no brighter in the seed than its glow, and the halo smooth -- the copies were a disc seeded at 100.
+            float3 toSun = (-sun->GetDirection()).Normalized();
             // BY THE SUN'S HEIGHT (time-of-day N3, ours): crepuscular rays are the shadows of clouds on air the
             // sun still lights directly, and a few degrees down nothing overhead is. UE gate on the screen
             // position alone, so the blur kept seeding on the twilight band -- lifted over the threshold by
@@ -613,7 +616,19 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             // 2026-10-13). Full while any of the disc is up, gone by -6 degrees, the end of civil twilight.
             const float elevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) * 57.2957795f;
             const float fadeT = std::clamp((elevationDeg + 6.0f) / (6.0f - 0.27f), 0.0f, 1.0f);
-            decisions_.lightShaftFade = fadeT * fadeT * (3.0f - 2.0f * fadeT);
+            const float sunFade = fadeT * fadeT * (3.0f - 2.0f * fadeT);
+            decisions_.lightShaftFade = sun->GetLightShaftBloomScale() > 0.0f ? sunFade : 0.0f;
+            const SkyMoonFrame& moon = frame.skyMoon;
+            if (sunFade <= 0.0f && moon.present && moon.lightsGround && moon.lightShaftBloomScale > 0.0f)
+            {
+                toSun = float3(moon.toward[0], moon.toward[1], moon.toward[2]).Normalized();
+                // From the moon's disc on the horizon up to a few degrees, as the sun's from its own.
+                const float moonElevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) * 57.2957795f;
+                const float moonT = std::clamp((moonElevationDeg + 0.27f) / 3.0f, 0.0f, 1.0f);
+                decisions_.lightShaftFade = moonT * moonT * (3.0f - 2.0f * moonT);
+                decisions_.lightShaftFromMoon = true;
+            }
+            const float4 clip = frame.camera->GetViewProjMatrixNoJitter().Transform(float4(toSun.x, toSun.y, toSun.z, 0.0f));
             if (clip.w > 1e-6f && decisions_.lightShaftFade > 0.0f)
             {
                 // LightShaftRendering.cpp:166-176: screen position -> uv -> aspect-corrected (v * H/W), so the blur

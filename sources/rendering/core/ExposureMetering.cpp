@@ -26,8 +26,12 @@ namespace
     constexpr UINT64 kCompensationOffset = kExposureRecordBytes + kSunProbeBytes;
     constexpr UINT64 kCompensationRecordBytes = 16u;
     constexpr UINT64 kMeteringBufferBytes = kCompensationOffset + kCompensationRecordBytes;
-    // One readback slot: the exposure record, then the compensation record.
-    constexpr UINT64 kReadbackSlotBytes = kExposureRecordBytes + kCompensationRecordBytes;
+    // One readback slot: the exposure record, then the compensation record, then the sun probe's OUTPUT
+    // (its bytes 32-47: the disc colour the glare reads, and its visible share) -- the light shafts seed
+    // on the sun glare, and they run before this frame's probe (BloomRenderer::SunGlareSeedFor).
+    constexpr UINT64 kSunProbeOutOffset = kExposureRecordBytes + 16u;
+    constexpr UINT64 kSunProbeOutBytes = 16u;
+    constexpr UINT64 kReadbackSlotBytes = kExposureRecordBytes + kCompensationRecordBytes + kSunProbeOutBytes;
 
     ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes)
     {
@@ -251,6 +255,8 @@ void ExposureMetering::RecordReadbackCopy(ID3D12GraphicsCommandList* cl)
         exposure_.Get(), 0, kExposureRecordBytes);
     cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes + kExposureRecordBytes,
         exposure_.Get(), kCompensationOffset, kCompensationRecordBytes);
+    cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes + kExposureRecordBytes + kCompensationRecordBytes,
+        exposure_.Get(), kSunProbeOutOffset, kSunProbeOutBytes);
     if (histogramReadback_)
     {
         constexpr UINT64 kHistogramBytes =
@@ -307,6 +313,10 @@ ExposureMetering::Readback ExposureMetering::LatestReadback() const
     out.targetEv100 = record[3];
     out.compensationEv = record[4];
     out.eyeEv100 = record[5];
+    out.sunProbe[0] = record[8];
+    out.sunProbe[1] = record[9];
+    out.sunProbe[2] = record[10];
+    out.sunProbeShare = record[11];
     out.valid = true;
     return out;
 }

@@ -1209,6 +1209,9 @@ void LightShaftHandles::Populate(Material* material)
     size = material->ComputeCB0FieldHandle("lsSize");
     invSize = material->ComputeCB0FieldHandle("lsInvSize");
     temporal = material->ComputeCB0FieldHandle("lsTemporal");
+    glareColor = material->ComputeCB0FieldHandle("lsGlareColor");
+    glareDir = material->ComputeCB0FieldHandle("lsGlareDir");
+    glareProj = material->ComputeCB0FieldHandle("lsGlareProj");
 }
 
 UINT SceneResourceBootstrapper::GetLightShaftCBSizeBytes(UINT kernel) const
@@ -1229,6 +1232,9 @@ void SceneResourceBootstrapper::WriteLightShaftConstants(UINT kernel, const Ligh
     material->UpdateCBField(h.size, d.size, dest);
     material->UpdateCBField(h.invSize, d.invSize, dest);
     material->UpdateCBField(h.temporal, d.temporal, dest);
+    material->UpdateCBField(h.glareColor, d.glareColor, dest);
+    material->UpdateCBField(h.glareDir, d.glareDir, dest);
+    material->UpdateCBField(h.glareProj, d.glareProj, dest);
 }
 
 UINT SceneResourceBootstrapper::GetHzbCBSizeBytes() const
