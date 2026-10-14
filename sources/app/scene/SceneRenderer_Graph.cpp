@@ -201,6 +201,9 @@ VolumetricCloud::FrameInputs SceneRenderer::MakeCloudInputs(Renderer* renderer) 
     in.outputHeight = D.cloudHeight;
     in.depthWidth = renderer->GetRenderWidth();
     in.depthHeight = renderer->GetRenderHeight();
+    in.resolveWidth = D.cloudResolvedWidth;
+    in.resolveHeight = D.cloudResolvedHeight;
+    in.resolveScale = renderer->GetCloudTraceMode() == 0u ? 2u : 1u;
     in.historyValid = decisions_.cloudHistoryValid;
     in.frameIndex = static_cast<unsigned>(renderer->GetTotalFrameNumber() & 1023ull);
     in.debugView = frame_->settings.volumetricCloud.debugView;
@@ -1280,6 +1283,44 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     auto& rg = gb.rg;
     const auto& D = gb.D;
 
+    // THE SKY VIEW, THE AERIAL VOLUME AND THE CLOUDS' VIEW TRACE COME FIRST, ahead of the fog and the
+    // lights. None of them reads anything the lighting writes -- the sky's LUTs, the camera, the depth
+    // -- and they used to be registered after the point lights only by position (the SkyView LUT took
+    // `pPointLights` as its "after"). That position is what kept the cloud trace off the async compute
+    // queue: its prereq chain (aerial <- sky view <- point lights) would have started it after all the
+    // lighting, with nothing left to hide behind. Here, the trace (compute queue) starts as soon as the
+    // aerial volume is written and runs beside the fog, the lights, the sky and the reflections, until
+    // compose waits for it (VolumetricCloud::BuildTrace has the measured result: -0.15..-0.20 ms).
+    const auto& skySettings = frame_->settings.skyAtmosphere;
+    auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
+                               frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight,
+                               frame_->skyMoon, frame_->nightSky);
+    const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, gb.pGbufDone, gb.pSkyLuts);
+    skyView.planet[3] = pSkyView != gb.pGbufDone ? 1.0f : 0.0f;
+    // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective
+    // between the camera and everything it hazes -- the ground, the water, the deck's own underside --
+    // is lit by what comes through the deck, not by the sun: without this a closed deck kept a bright
+    // blue horizon band, where a real overcast's horizon is a third of its zenith (the CIE overcast sky).
+    SkyViewFrameData aerialView = skyView;
+    {
+        const float scale = CloudAirSunScale(frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f);
+        // Both lights: the deck shades the air from the moon as from the sun.
+        for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; aerialView.light1Illuminance[c] *= scale; }
+    }
+    const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, aerialView,
+        *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
+    // Plan C2: the clouds' march and resolve, after the depth it clamps to and the aerial volume it
+    // hazes with (pAerial chains from the SkyView LUT and the distant light); compose applies the
+    // result, and that edge rides the reflection group's first member (withFog in BuildReflections).
+    gb.pCloud = GraphBuild::kNone;
+    if (decisions_.volumetricCloud)
+    {
+        gb.pCloud = volumetricCloud_.BuildTrace(renderer, rg, MakeCloudInputs(renderer),
+            { pAerial, gb.pGbufDone, gb.pCloudNoise, GraphBuild::kNone }, 3);
+        // No pass, no consumer: compose must not read a pair nobody wrote this frame.
+        if (gb.pCloud == GraphBuild::kNone) { decisions_.volumetricCloud = false; }
+    }
+
     // pass-flow S5: ONE builder shared by both variants below (VSM vs Legacy declare different
     // first-use sets, but the readiness decision and the record are identical). It owns the
     // gate Pass_Lighting used to repeat AFTER declaring — a missing material, a zero CB size or a
@@ -1564,38 +1605,11 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // can land on a pass index that aliases somebody else's.
 
     // pass-flow S5: the builder owns the `frame_->skybox` gate the body used to repeat after the
-    // declarations were already made.
-    const auto& skySettings = frame_->settings.skyAtmosphere;
-    auto skyView = MakeSkyView(skySettings, frame_->camera->GetPosition().y, preExposure_,
-                               frame_->skyLight ? frame_->skyLight->GetSunHalfApexRadians() : 0.0f, frame_->skyLight,
-                               frame_->skyMoon, frame_->nightSky);
-    const auto pSkyView = skyAtmosphere_.BuildView(renderer, rg, skySettings, skyView, pPointLights, gb.pSkyLuts);
-    skyView.planet[3] = pSkyView != pPointLights ? 1.0f : 0.0f;
-    // THE AIR UNDER AN OVERCAST DECK is in its shadow (CloudAirSunScale). The aerial perspective
-    // between the camera and everything it hazes -- the ground, the water, the deck's own underside --
-    // is lit by what comes through the deck, not by the sun: without this a closed deck kept a bright
-    // blue horizon band, where a real overcast's horizon is a third of its zenith (the CIE overcast sky).
-    SkyViewFrameData aerialView = skyView;
-    {
-        const float scale = CloudAirSunScale(frame_->dirLight ? frame_->dirLight->GetCloudVisibility() : 1.0f);
-        // Both lights: the deck shades the air from the moon as from the sun.
-        for (int c = 0; c < 3; ++c) { aerialView.illuminance[c] *= scale; aerialView.light1Illuminance[c] *= scale; }
-    }
-    const auto pAerial = skyAtmosphere_.BuildAerial(renderer, rg, skySettings, aerialView,
-        *frame_->camera, skySettings.aerialStartDepthMetres, pSkyView);
-    // Plan C2: the clouds' half-res march and resolve, after the depth it clamps to and the aerial
-    // volume it hazes with (pAerial chains from the SkyView LUT and the distant light); compose
-    // applies the result, and that edge rides the reflection group's first member (withFog below).
-    gb.pCloud = GraphBuild::kNone;
-    if (decisions_.volumetricCloud)
-    {
-        gb.pCloud = volumetricCloud_.BuildTrace(renderer, rg, MakeCloudInputs(renderer),
-            { pAerial, gb.pGbufDone, gb.pCloudNoise, GraphBuild::kNone }, 3);
-        // No pass, no consumer: compose must not read a pair nobody wrote this frame.
-        if (gb.pCloud == GraphBuild::kNone) { decisions_.volumetricCloud = false; }
-    }
+    // declarations were already made. The sky view and the aerial volume are built at the top of
+    // this function now (see there), so the lights are named here: the sky draws after them.
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList skyDeps;
     skyDeps.push_back(pAerial);
+    skyDeps.push_back(pPointLights);
     if (gb.pSkyMoon != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyMoon); }
     if (gb.pSkyNight != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyNight); }
     // The moon's texture is drawn from only once generated (or generating this frame, ordered above).
@@ -1843,6 +1857,12 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             {
                 ctx.Use(DC.cloudResolved.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 ctx.Use(DC.cloudResolvedDepth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
+            // The furthest HZB (t18, trace mode 0's bilateral upsampling): bound on every frame, so
+            // declared on every frame -- at its rest, which Main_Hzb left it in.
+            if (DC.hzb.Get())
+            {
+                ctx.Use(DC.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
             ctx.NextPoint();
             const std::uint32_t handBack = ctx.usePoint ? *ctx.usePoint : 0u;

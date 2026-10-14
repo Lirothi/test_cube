@@ -388,8 +388,12 @@ namespace
         }
         if (setting == "cloudShadow.bilinearWeather") { render::g_cloudShadowBilinearWeather = value != 0.0f; return true; }
         if (setting == "cloud.perSampleTransmittance") { render::g_cloudPerSampleTransmittance = value != 0.0f; return true; } // N3 A/B
+        if (setting == "cloud.blueNoise") { render::g_cloudBlueNoise = value != 0.0f; return true; } // start-offset noise A/B
         if (setting == "cloudCompose.jitterScale") { render::g_cloudComposeJitterScale = std::clamp(value, -2.0f, 2.0f); return true; }
         if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean = value != 0.0f; return true; }
+        // The view trace's resolutions (project-wide, graphics_settings.json "cloudTrace"), UE's
+        // r.VolumetricRenderTarget.Mode numbers: 1 half-res trace (ours), 0 quarter-res (UE's default).
+        if (setting == "cloudTrace.mode") { render::g_cloudTraceMode = render::SanitizeCloudTraceMode(static_cast<std::uint32_t>(std::max(value, 0.0f))); return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();
 
@@ -759,7 +763,7 @@ namespace
             if (key == "shadowMap") { c.shadowMap = value != 0.0f; return true; }
             if (key == "msOctaves") { c.msOctaves = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
             if (key == "viewSampleCountMax") { c.viewSampleCountMax = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 768.0f)); return true; }
-            if (key == "viewSampleCountMin") { c.viewSampleCountMin = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
+            if (key == "viewSampleCountMin") { c.viewSampleCountMin = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 768.0f)); return true; }
             if (key == "shadowSampleCount") { c.shadowSampleCount = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 80.0f)); return true; }
             if (key == "shadowMapSampleCount") { c.shadowMapSampleCount = static_cast<std::uint32_t>(std::clamp(value, 4.0f, 128.0f)); return true; }
             struct FloatKnob { const char* name; float* field; float lo, hi; };

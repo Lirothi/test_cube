@@ -28,6 +28,7 @@
 #include "rendering/shadows/ShadowSettings.h" // S5: kCascadeAtlasBorder
 #include "rendering/core/RasterSettings.h"    // A6: raster.bindless -> material PSO rebuild
 #include "rendering/core/RenderStats.h"       // GPU pipeline statistics per direct list
+#include "rendering/lighting/VolumetricCloudSettings.h" // render::g_cloudTraceMode
 #include "streamline/include/sl.h"
 
 #pragma comment(lib, "dxguid.lib")
@@ -695,6 +696,10 @@ void Renderer::BeginFrame() {
     if (fogGridZ_ != render::g_fogGridZ)
     {
         SetFogGridZ(render::g_fogGridZ);
+    }
+    if (cloudTraceMode_ != render::SanitizeCloudTraceMode(render::g_cloudTraceMode))
+    {
+        SetCloudTraceMode(render::g_cloudTraceMode);
     }
 
     // A device removal can surface anywhere — a failed Present, a fence wait that never completes,
@@ -2592,11 +2597,13 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
     sizes.lightShaftWidth = sizes.gtaoWidth;
     sizes.lightShaftHeight = sizes.gtaoHeight;
     // Plan C2 volumetric clouds: traced at half the RENDER resolution, one pixel of each 2x2 a
-    // frame, and reconstructed at the full render resolution (UE's VolumetricRenderTarget mode 1).
-    sizes.cloudWidth = sizes.gtaoWidth;
-    sizes.cloudHeight = sizes.gtaoHeight;
-    sizes.cloudResolvedWidth = std::max(1u, rtWidth);
-    sizes.cloudResolvedHeight = std::max(1u, rtHeight);
+    // frame, and reconstructed at the full render resolution (UE's VolumetricRenderTarget mode 1) --
+    // or, in trace mode 0 (UE's mode 0), the same one level down: a quarter-res trace reconstructed at
+    // half res. Each trace is half its resolved pair, rounded up (render::g_cloudTraceMode).
+    sizes.cloudResolvedWidth = cloudTraceMode_ == 0u ? sizes.gtaoWidth : std::max(1u, rtWidth);
+    sizes.cloudResolvedHeight = cloudTraceMode_ == 0u ? sizes.gtaoHeight : std::max(1u, rtHeight);
+    sizes.cloudWidth = std::max(1u, (sizes.cloudResolvedWidth + 1u) / 2u);
+    sizes.cloudHeight = std::max(1u, (sizes.cloudResolvedHeight + 1u) / 2u);
     // Volumetric fog: the froxel grid over the RENDER resolution (UE size theirs from the scene
     // textures for the same reason: the volume describes the rendered image, not the display).
     sizes.fogGridWidth = std::max(1u, (rtWidth + fogGridPixels_ - 1u) / fogGridPixels_);
@@ -2734,6 +2741,19 @@ void Renderer::SetFogGridZ(UINT slices)
     const UINT sanitized = std::clamp(slices, 16u, 128u);
     if (sanitized == fogGridZ_) { return; }
     fogGridZ_ = sanitized;
+    if (rtManager_.IsCreated())
+    {
+        RecreateDeferredTargets();
+    }
+}
+
+void Renderer::SetCloudTraceMode(UINT mode)
+{
+    const UINT sanitized = render::SanitizeCloudTraceMode(mode);
+    if (sanitized == cloudTraceMode_) { return; }
+    cloudTraceMode_ = sanitized;
+    LOG_INFO(logging::LogCategory::Render, "volumetric clouds: trace mode {} ({})", sanitized,
+             sanitized == 0u ? "quarter-res trace, half-res reconstruction" : "half-res trace, render-res reconstruction");
     if (rtManager_.IsCreated())
     {
         RecreateDeferredTargets();

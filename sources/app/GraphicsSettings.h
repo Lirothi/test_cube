@@ -58,6 +58,7 @@ enum class GraphicsControl
     CloudShadowUpdateFrames,      // Sky ...
     CloudShadowBilinearWeather,
     CloudShadowDetailMean,
+    CloudTraceMode,
     LodEnabled,                   // LOD ...
     LodBound0,
     LodBound1,

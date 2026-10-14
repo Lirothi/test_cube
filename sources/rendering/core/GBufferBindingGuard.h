@@ -2,7 +2,9 @@
 
 #include "rendering/core/RenderContext.h"
 
+#include <atomic>
 #include <cstddef>
+#include <string>
 
 // gbuffer.hlsl's root signature declares root parameter 3 as the material's SRV table (t0..t2) and
 // root parameter 4 as its sampler table. A mesh slot with NO MaterialData -- or a material with no
@@ -41,7 +43,14 @@ void ReportMissingGBufferBindings(const void* owner, std::size_t slot, const cha
 // nothing if it is silent on the bug that motivated the gate, and "it probably still catches it"
 // is not something to hand someone who is deciding what to trust.
 //
-// Never armed by default; the flag is Debug-only and the counter is one-shot.
-inline int g_gbvSelfTestDraws = 0;
+// Never armed by default; the flag is Debug-only and the counter is one-shot. Atomic because passes
+// record on several threads at once, and a plain decrement could inject one draw too many. Each
+// injected draw logs the command list it landed in (`gbv self-test: injected ...`), so a verdict
+// about `--gbv-passes` names the pass instead of assuming it.
+inline std::atomic<int> g_gbvSelfTestDraws{ 0 };
+// `--gbv-selftest=N@Pass`: inject only into lists named Pass (RenderPassToWString, case-insensitive)
+// -- the deterministic form, since passes record in parallel and "the first N binds" lands wherever
+// the scheduler puts it. Empty = the first N graphics binds anywhere. Set once before the device.
+inline std::wstring g_gbvSelfTestPass;
 
 } // namespace render

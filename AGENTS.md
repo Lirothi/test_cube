@@ -135,6 +135,47 @@ declaring the mode — `PerRunTruncate` (first open per process truncates, later
 reach the writer), `--log-no-file`, `--log-file=<path>`. `--log-stress` runs the logging harness
 (verdict `logs/log_stress.log`, exit = failed checks). Design and status: `docs/logging_system_plan.md`.
 
+## GPU-Based Validation (GBV) — How to Run It
+
+Debug only (the debug layer exists only there). GBV rewrites each shader on the CPU the first time
+its pipeline is bound, so the cost is minutes, not milliseconds: a full wind_test frame waits
+**155-161 s** for its first frame, Lighting alone ~150 s of it. Pick the run by the question:
+
+- **"Is the pass I changed clean?"** -- narrow it:
+
+  ```bash
+  test_cube.exe --level=data/levels/wind_test.json --gbv --gbv-passes=CloudTrace --no-streamline --shot=out.png --shot-delay=3
+  ```
+
+  Guarded validation on the listed passes' command lists, STATE_TRACKING_ONLY on the rest: **16 s**
+  to the first frame. Names are `RenderPassToWString`'s (CloudTrace, Compose, Lighting, RTTrace, ...),
+  case-insensitive; `GBuffer` also covers `GBuffer.*`; a CL group's members are patched together
+  (logged). It says NOTHING about the unlisted passes -- their shaders are not validated.
+- **"Is the frame clean?"** -- the gate is `--scene-stress-gbv` (guarded, every pass, level churn;
+  it ignores `--gbv-passes`), or a plain `--gbv` without `--gbv-passes` for one level with your
+  `--set`s. Minutes; run it before trusting a pass/barrier/resource change.
+- **Never gate on `--gbv-mode=state`**: it is falsely clean on uninitialized root arguments (the bug
+  class that stalled the queue). `--gbv-rest=none` is the fastest narrowed smoke; the runtime then
+  calls its state tracking "possibly imprecise" (id=1044) from the first unpatched list on.
+- **Prove a mode catches before trusting its silence**: `--gbv-selftest=1@<Pass>` injects an
+  uninitialized-root-argument draw into that pass. Listed -> `ERROR id=935`. The line
+  `gbv self-test: injected ... into command list '<Pass>'` must be in the log; without it nothing was
+  injected and the silence proves nothing.
+
+Reading it: errors land in the session log as `[ERROR][render.validation] ERROR id=...` (and in
+`logs/gbv.log`); `[render.rhi] [gbv] requested patch mode = ... device default = ...` and the
+`--gbv-passes:` line say what was actually patched. On wind_test every run, full or narrowed, also
+carries one `id=1044` (the ExecuteIndirect of `GBuffer.Indirect`) and the exit-time live-object report
+(id=274/577/582) -- those are not findings. A Debug run whose log just STOPS with an odd exit code is the debug layer's
+break-on-error with no debugger: rerun the same line with `--gbv --gbv-mode=none` and the message
+lands in the log.
+
+Timing GBV: consecutive runs warm a patched-shader cache, so alternate A and B and compare second
+runs. Look at the `--shot` before trusting a time -- a frame missing a mesh measures a different
+frame (a worktree without `import_staging/sandy_gravel_1k/textures/*.dds` skips the island's draw).
+Run it in a normal visible window: a minimized one has a degenerate backbuffer, so neither its time
+nor its shot is the frame you think. Numbers and the trade-offs: `docs/gbv_startup_profile.md`.
+
 ## Reproducing a Camera View From a Screenshot
 
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:

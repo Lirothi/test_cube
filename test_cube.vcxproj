@@ -372,6 +372,7 @@
     <ClCompile Include="sources/rendering/core/DlssHandler.cpp" />
     <ClCompile Include="sources/rendering/core/FrameScheduler.cpp" />
     <ClCompile Include="sources/rendering/core/GraphicsDevice.cpp" />
+    <ClCompile Include="sources/rendering/core/GbvPassFilter.cpp" />
     <ClCompile Include="sources/rendering/core/BarrierTranslation.cpp" />
     <ClCompile Include="sources/rendering/core/TextureCreate.cpp" />
     <ClCompile Include="sources/rendering/core/ExposureMetering.cpp" />
@@ -609,6 +610,7 @@
     <ClInclude Include="sources/rendering/core/MemoryReport.h" />
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
+    <ClInclude Include="sources/rendering/core/GbvPassFilter.h" />
     <ClInclude Include="sources/rendering/core/BarrierTranslation.h" />
     <ClInclude Include="sources/rendering/core/TextureCreate.h" />
     <ClInclude Include="sources/rendering/core/ExposureMetering.h" />

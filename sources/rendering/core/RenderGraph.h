@@ -15,6 +15,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GbvPassFilter.h"
 #include "core/task/TaskSystem.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -99,6 +100,9 @@ inline bool g_dumpBarriers = false;
 // list a body records into is named after the pass that opened it. Call right after BeginCL.
 // R4: lives here rather than in the SceneRenderer's internal header because the RT AS build
 // moved out of sources/app/scene/ and records a pass of its own.
+// Also where `--gbv-passes` gives the list its GBV patch mode: this is the one call that every
+// list a pass records into goes through -- BeginCL's, a body's own BeginThreadCommandList, and each
+// fan-out worker's -- so naming the list and choosing what validates it cannot disagree.
 inline void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
 {
     const auto nameW = RenderPassToWString(pass);
@@ -106,6 +110,7 @@ inline void SetCommandListName(ID3D12GraphicsCommandList* cl, RenderPass pass)
     {
         cl->SetName(nameW.data());
     }
+    render::gbv::ApplyPassPatchMode(cl, pass);
 }
 
 namespace render {
@@ -182,10 +187,15 @@ struct RenderGraphPassContext {
             if (!groupCL->opened) {
                 groupCL->shared = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT, initialPSO);
                 groupCL->opened = true;
+                // --gbv-passes: one list, one mode. EndCLGroup made every member listed if any was,
+                // so the first member's verdict is the group's.
+                render::gbv::ApplyPassPatchMode(groupCL->shared.cl, pass);
             }
             return groupCL->shared;
         }
-        return renderer->BeginThreadCommandList(CommandListType(), initialPSO);
+        Renderer::ThreadCL t = renderer->BeginThreadCommandList(CommandListType(), initialPSO);
+        render::gbv::ApplyPassPatchMode(t.cl, pass); // also on a body that never names its list
+        return t;
     }
 
     void EndCL(Renderer::ThreadCL& t) const
@@ -635,6 +645,13 @@ public:
                 assert(inGroup && "grouped pass (non-first) has a prereq from outside the group");
                 (void)inGroup;
             }
+        }
+        // --gbv-passes: the members record into ONE list, which can carry only one patch mode.
+        if (render::gbv::g_passFilterArmed) {
+            std::array<RenderPass, kMaxGroupMembers> names{};
+            const size_t count = members.size() < names.size() ? members.size() : names.size();
+            for (size_t i = 0; i < count; ++i) { names[i] = passes_[members[i]].name; }
+            render::gbv::JoinCLGroup(names.data(), count);
         }
         currentGroup_ = kNoGroup;
     }
@@ -1656,11 +1673,12 @@ private:
         if (render::g_noAsyncCompute) { queue = RenderQueue::Graphics; }
         // Per-pass narrowing (--async-pass=...). Same single decision point, same rule: a pass
         // forced back to Graphics also DECLARES, COMPILES and SUBMITS as Graphics, so the three
-        // can never disagree. Only the three passes that ask for the compute queue are listed.
+        // can never disagree. Main_CloudShadow is not listed (always allowed).
         if (queue == RenderQueue::AsyncCompute) {
             const bool allowed = (name == RenderPass::Main_BuildAS)       ? render::g_asyncPassBuildAS
                                : (name == RenderPass::Main_ObjectCompute) ? render::g_asyncPassObjectCompute
                                : (name == RenderPass::Main_RTTrace)       ? render::g_asyncPassRtTrace
+                               : (name == RenderPass::Main_CloudTrace)    ? render::g_asyncPassCloudTrace
                                                                          : true;
             if (!allowed) { queue = RenderQueue::Graphics; }
         }

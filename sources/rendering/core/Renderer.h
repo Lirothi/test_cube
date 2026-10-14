@@ -169,8 +169,9 @@ inline bool g_dumpSubmitOrder = false;
 //     queue it had last frame.
 // The ON->OFF direction is already exercised mid-session by `--rt-force-as-fail` (step 11): both
 // async passes vanish from the graph while the two-queue machinery stays live.
-// "--async-pass=<list>": which passes are ALLOWED on the async compute queue, by name. Only three
-// passes ever ask for it (Main_BuildAS, Main_ObjectCompute, Main_RTTrace), and `--no-async-compute`
+// "--async-pass=<list>": which passes are ALLOWED on the async compute queue, by name. Four of the
+// passes that ask for it are listed (Main_BuildAS, Main_ObjectCompute, Main_RTTrace, Main_CloudTrace;
+// Main_CloudShadow is not), and `--no-async-compute`
 // is all-or-nothing -- which proves the second queue is involved in a hang but not WHICH pair of
 // passes. This narrows that in one repro each instead of by argument.
 // Empty string = the default, every pass keeps whatever queue it asked for.
@@ -178,6 +179,7 @@ inline bool g_dumpSubmitOrder = false;
 inline bool g_asyncPassBuildAS = true;
 inline bool g_asyncPassObjectCompute = true;
 inline bool g_asyncPassRtTrace = true;
+inline bool g_asyncPassCloudTrace = true;
 
 inline bool g_noAsyncCompute = false;
 
@@ -709,6 +711,10 @@ public:
     UINT GetFogGridPixels() const { return fogGridPixels_; }
     void SetFogGridZ(UINT slices);
     UINT GetFogGridZ() const { return fogGridZ_; }
+    // Volumetric clouds: the view trace's resolutions, UE's r.VolumetricRenderTarget.Mode numbers
+    // (render::g_cloudTraceMode). A change recreates the deferred ring, as the fog grid does.
+    void SetCloudTraceMode(UINT mode);
+    UINT GetCloudTraceMode() const { return cloudTraceMode_; }
     void SetReflectionTextureScale(float scale) { SetReflectionTextureScale(Math::float2(scale, scale)); }
     Math::float2 GetReflectionTextureScale() const { return reflectionTextureScale_; }
     UINT GetReflectionTextureWidth() const;
@@ -903,6 +909,7 @@ private:
     Math::float2 reflectionTextureScale_ = Math::float2(0.5f, 0.5f);
     UINT fogGridPixels_ = render::kFogGridPixels; // volumetric fog cell size the CURRENT ring was built with
     UINT fogGridZ_ = render::kFogGridZ;           // ... and its slice count
+    UINT cloudTraceMode_ = 1u;                    // the cloud trace mode the CURRENT ring was built with
     UINT reflectionTextureWidth_ = 1;
     UINT reflectionTextureHeight_ = 1;
     Math::float2 oceanReflectionTextureScale_ = Math::float2(0.5f, 0.5f);

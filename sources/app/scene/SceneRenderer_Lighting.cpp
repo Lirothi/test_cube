@@ -1110,7 +1110,8 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         // Plan C2: the resolved clouds, applied under the fog; the debug view replaces the frame.
         constants.cloudParams = float4(decisions_.volumetricCloud ? 1.0f : 0.0f,
             1.0f / std::max(preExposure_, 1.e-8f),
-            decisions_.volumetricCloud ? static_cast<float>(frame_->settings.volumetricCloud.debugView) : 0.0f, 0.0f);
+            decisions_.volumetricCloud ? static_cast<float>(frame_->settings.volumetricCloud.debugView) : 0.0f,
+            renderer->GetCloudTraceMode() == 0u ? 2.0f : 1.0f); // trace mode 0: half-res clouds, bilateral upsampling
         // The camera's sub-pixel jitter, as the projection carries it (Camera.cpp: _31 / _32, an NDC
         // offset under this w = view z projection), in uv: the clouds are traced and reconstructed
         // UNJITTERED (their history must not chase the jitter), so compose reads them where this
@@ -1170,7 +1171,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               skyAtmosphere_.ViewSrv().ptr != 0 ? skyAtmosphere_.ViewSrv() : renderer->VsmDummyTexSrv(),
               // t16/t17: plan C2 resolved clouds + front depth, gated by `cloudParams.x`.
               decisions_.volumetricCloud ? D.cloudResolvedSRV : renderer->VsmDummyTexSrv(),
-              decisions_.volumetricCloud ? D.cloudResolvedDepthSRV : renderer->VsmDummyTexSrv() },
+              decisions_.volumetricCloud ? D.cloudResolvedDepthSRV : renderer->VsmDummyTexSrv(),
+              // t18: the furthest HZB, trace mode 0's bilateral upsampling (gated by `cloudParams.w`).
+              D.hzbSRV.ptr != 0 ? D.hzbSRV : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

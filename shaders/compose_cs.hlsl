@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=19, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -47,6 +47,9 @@ Texture2D<float4> SkyViewLut : register(t15);
 // the cloud's front depth in km, gated by `cloudParams.x`; dummies keep the range populated otherwise.
 Texture2D<float4> CloudTex : register(t16);
 Texture2D<float> CloudDepthTex : register(t17);
+// t18: the FURTHEST HZB (mip 0 = half the render resolution), read only by trace mode 0's bilateral
+// upsampling (cloudParams.w 2) -- the scene depth each half-res cloud texel was traced against.
+Texture2D<float> CloudHzbTex : register(t18);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -101,7 +104,8 @@ cbuffer PerFrame : register(b0)
     // w = 1 / the LUT's storage pre-exposure. Mirrors what Skybox.cpp hands the sky pass.
     float4 skyViewPlanet;
     // Plan C2: x = the cloud pair was built this frame, y = 1 / preExposure (the cloud's luminance
-    // is stored pre-exposed, `lit` is raw), z = the cloud debug view (replaces the frame), w = 0.
+    // is stored pre-exposed, `lit` is raw), z = the cloud debug view (replaces the frame), w = render
+    // pixels per resolved cloud pixel (1; 2 in trace mode 0 = the bilateral upsampling).
     float4 cloudParams;
     // Plan C2: xy = this frame's camera jitter in uv. The clouds are reconstructed UNJITTERED; the
     // jittered pixel at uv looks where the unjittered frame's uv - xy does, so they are read there
@@ -139,6 +143,68 @@ float4 SampleCloudCatmullRom(float2 uv)
     result += CloudTex.SampleLevel(gSmp, float2(texPos12.x, texPos3.y), 0) * (w12.x * w3.y);
     result /= (w12.x * w0.y) + (w0.x * w12.y) + (w12.x * w12.y) + (w3.x * w12.y) + (w12.x * w3.y);
     return float4(max(result.rgb, 0.0f), saturate(result.a));
+}
+
+// TRACE MODE 0 (UE's r.VolumetricRenderTarget.Mode 0; cloudParams.w = 2): the clouds are resolved at HALF
+// the render resolution, and this is UE's BILATERAL UPSAMPLING (VolumetricRenderTarget.usf
+// ComposeVolumetricRTOverScenePS, UpsamplingMode 4 without the min/max depth trace, :1106-1219): the
+// 2x2 resolved texels around the pixel, each with the scene depth it was traced against; where one of
+// them is more than 10 % off this pixel's depth, each is weighted 1 / (|difference| in metres + 1), and
+// elsewhere the soft filter. Ours, deliberately:
+//   * the traced depth is not stored but re-derived: the trace took the FURTHEST of each half-res
+//     pixel's four render pixels (cloud_trace_cs.hlsl), and that is the furthest HZB's mip 0, texel
+//     for texel (hzb_build_cs.hlsl: the same clamped 2x2, on the same half-res grid) -- so one Gather
+//     of it gives all four (four Gathers of the depth buffer measured ~20 us more on the owner's view);
+//   * the soft filter is the Catmull-Rom above (UE: one bilinear tap), for the reason given there;
+//   * the front depth the caller tests against is the heaviest texel's.
+static const float kCloudSkyKm = 1.0e6f; // a sky pixel's distance (UE: device z clamped to 1e-12)
+float CloudSceneKm(float z, float rayScale)
+{
+    if (z <= kEps) { return kCloudSkyKm; }
+    // View z from device z: under a perspective projection (jittered or not) view.z and view.w depend
+    // on clip z and w alone.
+    const float viewZ = (z * invProj._33 + invProj._43) / (z * invProj._34 + invProj._44);
+    return viewZ * rayScale / 1000.0f;
+}
+void SampleCloudBilateral(float2 uv, float2 cloudUv, float z, out float4 cloud, out float frontKm)
+{
+    float2 size;
+    CloudTex.GetDimensions(size.x, size.y);
+    const int2 maxTexel = int2(size) - 1;
+    const int2 c0 = int2(floor(cloudUv * size - 0.5f));
+    const int2 t0 = clamp(c0, 0, maxTexel);
+    const int2 t1 = clamp(c0 + int2(1, 0), 0, maxTexel);
+    const int2 t2 = clamp(c0 + int2(0, 1), 0, maxTexel);
+    const int2 t3 = clamp(c0 + int2(1, 1), 0, maxTexel);
+    // Distance along the ray per unit of view z, this pixel's (the texels are a pixel or two away).
+    const float4 ray = mul(float4(UVtoNDC(uv), 0.5f, 1.0f), invProj);
+    const float3 rayView = ray.xyz / ray.w;
+    const float rayScale = length(rayView) / max(rayView.z, kEps);
+    // The four texels' traced depths in ONE Gather at their shared corner (order w (0,0), z (1,0),
+    // x (0,1), y (1,1); the sampler's clamp is the texel clamp above).
+    const float4 hzb = CloudHzbTex.GatherRed(gSmpPoint, (float2(c0) + 1.0f) / size);
+    const float4 traced = float4(CloudSceneKm(hzb.w, rayScale), CloudSceneKm(hzb.z, rayScale),
+                                 CloudSceneKm(hzb.x, rayScale), CloudSceneKm(hzb.y, rayScale));
+    // usf:1116: clamped to the furthest traced depth, so a pixel beyond all four still finds its match.
+    const float pixelKm = min(CloudSceneKm(z, rayScale), max(max(traced.x, traced.y), max(traced.z, traced.w)));
+    const float4 diff = abs(pixelKm - traced);
+    if (max(max(diff.x, diff.y), max(diff.z, diff.w)) > pixelKm * 0.1f)
+    {
+        float4 w = 1.0f / (diff * 1000.0f + 1.0f);
+        w /= dot(w, 1.0f);
+        cloud = CloudTex.Load(int3(t0, 0)) * w.x + CloudTex.Load(int3(t1, 0)) * w.y
+              + CloudTex.Load(int3(t2, 0)) * w.z + CloudTex.Load(int3(t3, 0)) * w.w;
+        cloud = float4(max(cloud.rgb, 0.0f), saturate(cloud.a));
+        int2 heaviest = t0;
+        float heaviestWeight = w.x;
+        if (w.y > heaviestWeight) { heaviest = t1; heaviestWeight = w.y; }
+        if (w.z > heaviestWeight) { heaviest = t2; heaviestWeight = w.z; }
+        if (w.w > heaviestWeight) { heaviest = t3; }
+        frontKm = CloudDepthTex.Load(int3(heaviest, 0));
+        return;
+    }
+    cloud = SampleCloudCatmullRom(cloudUv);
+    frontKm = CloudDepthTex.SampleLevel(gSmpPoint, cloudUv, 0);
 }
 
 // How far a SKY pixel is shaded at, standing in for UE's ConvertFromDeviceZ(0) -- the far plane the
@@ -338,13 +404,23 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (cloudParams.x > 0.0f)
     {
         const float2 cloudUv = uv - cloudJitter.xy;
-        const float4 cloud = SampleCloudCatmullRom(cloudUv);
+        float4 cloud;
+        float cloudFrontKm;
+        if (cloudParams.w > 1.5f)
+        {
+            SampleCloudBilateral(uv, cloudUv, z, cloud, cloudFrontKm);
+        }
+        else
+        {
+            cloud = SampleCloudCatmullRom(cloudUv);
+            cloudFrontKm = CloudDepthTex.SampleLevel(gSmpPoint, cloudUv, 0);
+        }
         bool applyCloud = !(z > kEps);
         if (!applyCloud)
         {
             const float3 cloudPos = ReconstructPosWS(uv, z, invProj, invView);
             const float surfaceKm = length(cloudPos - camPosWS) / 1000.0f;
-            applyCloud = surfaceKm > CloudDepthTex.SampleLevel(gSmpPoint, cloudUv, 0);
+            applyCloud = surfaceKm > cloudFrontKm;
         }
         if (applyCloud)
         {

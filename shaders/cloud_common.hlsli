@@ -40,8 +40,8 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudMedium;      // x: extinction at density 1 (1/m), y: albedo, z: coverage, w: cloud type bias (the profile column's offset)
     float4 cloudFormation;   // x: 1 / formation tile (1/km), y: the formation's time coordinate (0..1, wraps), z: macro variation (coverage +-), w: 1 / macro tile (1/km)
     float4 cloudWind;        // xyz: world drift offset (m) added to every sample, w: tracing start max distance (km)
-    float4 cloudOutput;      // x: trace width, y: trace height (half the render size), z: preExposure, w: 1 / preExposure
-    float4 cloudDepth;       // x: depth width, y: depth height (the render size, = the resolved clouds'), z: proj._33, w: proj._43 (reverse-Z: viewZ = w / (z - z33))
+    float4 cloudOutput;      // x: trace width, y: trace height (half the resolved size), z: preExposure, w: 1 / preExposure
+    float4 cloudDepth;       // x: depth width, y: depth height (the render size), z: proj._33, w: proj._43 (reverse-Z: viewZ = w / (z - z33))
     float4 cloudAerial;      // x: aerial perspective on, y: aerial start depth (km), z: distant sky light on, w: debug view
     float4 cloudTemporal;    // x: history valid, y: history weight, z: preExposure / previous preExposure, w: frame index
     float4 cloudShadowMap;   // x: resolution, y: 1 / resolution, z: far depth (km), w: strength
@@ -53,6 +53,7 @@ cbuffer CloudCB : register(CLOUD_B_CB)
     float4 cloudFloorShape;  // x floor variation clear, y cloudy, z 1 / high-frequency distance (1/km), w the overcast's lift of the threshold's density
     float4 cloudLight;       // N3: x atmosphere top radius (km), y 1 = per-sample transmittance to the light, z body (0 sun, 1 moon), w sin(the capture's horizon fade)
     float4 cloudShadowSun;   // N3: xyz direction TO the ground's light (the shadow map's), w unused
+    float4 cloudResolve;     // xy: the resolved clouds' size, z: render pixels per resolved pixel (1; 2 in trace mode 0, VolumetricCloudSettings.h), w: 1 = the start offset from the blue-noise mask (cloud_trace_cs.hlsl)
 #ifdef CLOUD_WITH_SKY_CB
     // The sky's SkyAtmosphereCB (sky_atmosphere.hlsli, its SKY_VIEW layout), appended for the one
     // pass that needs both -- the environment capture composites the cloud INTO the sky
@@ -105,6 +106,8 @@ float3 CloudWorldToPlanetKm(float3 worldMetres)
 // the render size), cycling through the block's four pixels in this order -- diagonal first, so two
 // consecutive frames never trace neighbours. cloud_temporal_cs.hlsl reconstructs the full-res image
 // from the traced pixel and every other pixel's reprojected history. `frame` is cloudTemporal.w.
+// Trace mode 0 (UE's mode 0) is the same pattern one level up: a quarter-res texel, a HALF-res
+// resolved pixel (cloudResolve).
 uint2 CloudTraceOffset(float frame)
 {
     const uint phase = (uint)frame & 3u;
@@ -281,6 +284,7 @@ struct CloudSample
     float column;     // the profile's column here (CloudColumnOpticalDepthAbove)
     float floorLift;  // how far the floor variation lifts the profile here (B^2 times its knob)
     float cloudiness; // UDS's heavy-cover ramp here, saturate(density - 1.65): coverage 0.55 .. 0.88
+    float conservative; // the density before the erosion (UE's conservative density): 0 = outside every cloud's envelope
 };
 
 // The conservative half (UE's VolumeSampleConservativeDensity, usf:781-787): the formation field
@@ -372,6 +376,7 @@ CloudSample CloudSampleAt(float3 worldMetres, float normAlt, float detailWeight,
     s.column = column;
     s.floorLift = floorLift;
     s.cloudiness = cloudiness;
+    s.conservative = base;
     s.extinction = 0.0f;
     if (base <= 0.0f) { return s; }
     // The fine detail fades with the distance from the CAMERA (it would only shimmer further away).

@@ -1441,11 +1441,31 @@ bool Material::Bind(ID3D12GraphicsCommandList* cmdList, const RenderContext& ctx
 
     bool selfTestDraw = false;
 #ifdef _DEBUG
-    if (!isCompute_ && render::g_gbvSelfTestDraws > 0) {
-        --render::g_gbvSelfTestDraws;
-        selfTestDraw = true;
-        cmdList->SetGraphicsRootSignature(rs);
-        if (batch) { cache.rs = rs; cache.isCompute = isCompute_; cache.OnRootSignatureChanged(); }
+    if (!isCompute_ && render::g_gbvSelfTestDraws.load(std::memory_order_relaxed) > 0) {
+        // The list carries its pass's name (SetCommandListName). `N@Pass` aims the injection at that
+        // pass; without it the first N graphics binds take it, i.e. whichever pass records first.
+        wchar_t listName[64] = {};
+        UINT nameBytes = sizeof(listName) - sizeof(wchar_t);
+        if (FAILED(cmdList->GetPrivateData(WKPDID_D3DDebugObjectNameW, &nameBytes, listName))) { listName[0] = 0; }
+        const bool aimed = render::g_gbvSelfTestPass.empty() ||
+                           _wcsicmp(listName, render::g_gbvSelfTestPass.c_str()) == 0;
+        if (aimed && render::g_gbvSelfTestDraws.fetch_sub(1, std::memory_order_relaxed) > 0) {
+            selfTestDraw = true;
+            cmdList->SetGraphicsRootSignature(rs);
+            if (batch) { cache.rs = rs; cache.isCompute = isCompute_; cache.OnRootSignatureChanged(); }
+            // WHERE it landed: a verdict about `--gbv-passes` is only worth something if the pass is
+            // known, not assumed. No such line = nothing was injected, and silence proves nothing.
+            auto narrow = [](const wchar_t* w) {
+                std::string s;
+                for (; w && *w; ++w) { s.push_back((*w > 0 && *w < 128) ? static_cast<char>(*w) : '?'); }
+                return s;
+            };
+            LOG_INFO(logging::LogCategory::RenderValidation,
+                     "gbv self-test: injected an unbound-root-argument draw into command list '{}' (shader {}); "
+                     "GBV must report id=935 if that list is patched",
+                     listName[0] ? narrow(listName) : std::string("<unnamed>"),
+                     narrow(cachedGfxDesc_.shaderFile.c_str()));
+        }
     }
 #endif
 

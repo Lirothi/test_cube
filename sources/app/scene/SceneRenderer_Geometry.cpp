@@ -94,6 +94,9 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
 
         if (useBundles) {
             auto b = renderer->BeginThreadCommandBundle(nullptr);
+            // Bundles are never named, so they take --gbv-passes' verdict here: a listed pass's
+            // bundle draws are validated with the rest of the pass.
+            render::gbv::ApplyPassPatchMode(b.cl, pass);
             for (size_t i = begin; i < end; ++i) {
                 if (auto* obj = objects[i]) {
                     obj->Render(renderer, b.cl, camera, viewCB);

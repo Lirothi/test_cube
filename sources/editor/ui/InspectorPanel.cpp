@@ -2721,6 +2721,19 @@ namespace
             InspectorHelp("Samples along a view ray as long as Sample Distance; the step is that distance "
                           "divided by this, constant for shorter rays (3 km / 128 = 23 m). This is where the "
                           "cost is: 0.43 ms at 128, 0.71 at 256 (2560 x 1440, DLSS Balanced).");
+            {
+                int samples = static_cast<int>(tgt().value("viewSampleCountMin", 2u));
+                if (ImGui::DragInt("View Samples (min)", &samples, 1.0f, 1, 768))
+                {
+                    nlohmann::json after = withField("viewSampleCountMin", static_cast<unsigned>(std::clamp(samples, 1, 768)));
+                    executeChange(std::move(after), historyLabel);
+                }
+            }
+            InspectorHelp("UE SampleMinCount: no ray takes fewer samples, however short its path through the layer "
+                          "-- the step shrinks instead. Ultra Dynamic Sky sets 135 (UE 2). It is what removes the "
+                          "\"snow\" beside the sun: wisps thinner than a step, caught by a ray now and then. On "
+                          "wind_test (2026-10-14, a ~1.7 km path = ~72 steps at 23 m): specks in the hole by the sun "
+                          "5.5 -> 0 a frame in trace mode 0, 15.5 -> 2.4 in mode 1, for +0.12 / +0.19 ms of GPU frame.");
             dragF("Sample Distance (km)", "distanceToSampleCountMaxKm", 3.0f, 0.05f, 0.1f, 1000.0f, "%.2f");
             InspectorHelp("UE DistanceToSampleMaxCount: the ray length View Samples are spread over (UE 15 km). "
                           "Shorter = finer steps, the same count: sharper edges through a thin layer.");

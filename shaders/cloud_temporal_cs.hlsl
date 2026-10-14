@@ -1,7 +1,8 @@
 // Volumetric clouds, plan C2: the FULL-RES RECONSTRUCTION of the half-res trace, and its temporal
 // accumulation. Dispatched over the RENDER resolution; the trace (half res) holds, per 2x2 block,
-// this frame's sample of ONE of its four pixels (CloudTraceOffset, cloud_common.hlsli). Which parts
-// are UE's and which are ours:
+// this frame's sample of ONE of its four pixels (CloudTraceOffset, cloud_common.hlsli). In trace
+// mode 0 (UE's mode 0) every size here is halved: a quarter-res trace reconstructed at HALF res
+// (cloudResolve), which compose then upsamples. Which parts are UE's and which are ours:
 //   * FROM UE's VolumetricRenderTarget mode 1 ("trace half res + reconstruct full res"): the 2x2
 //     pattern, the traced pixel taking this frame's sample, the other three their REPROJECTED
 //     HISTORY, and the CLOUD'S OWN FRONT DEPTH reprojecting it (VolumetricRenderTarget.usf:205-218)
@@ -74,7 +75,7 @@ float4 CloudSampleHistory(float2 uv, float2 size)
 [RootSignature(CLOUD_TEMPORAL_RS)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
-    const uint2 size = uint2(cloudDepth.xy); // the render resolution
+    const uint2 size = uint2(cloudResolve.xy); // the render resolution (half of it in trace mode 0)
     if (any(id.xy >= size)) { return; }
     const int2 px = int2(id.xy);
     const uint2 traceSize = uint2(cloudOutput.xy);
@@ -119,7 +120,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     // speaks when BOTH frames hold cloud.
     const bool currentCloud = fresh && current.a < 0.99f;
     const float reprojectDepth = currentCloud ? currentDepth : PrevResolvedDepth.Load(int3(px, 0));
-    const float2 uv = (float2(px) + 0.5f) / cloudDepth.xy;
+    const float2 uv = (float2(px) + 0.5f) / cloudResolve.xy;
     const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
     const float3 rayDir = CloudViewRayDirection(ndc);
     const float3 P = cloudCamera.xyz + rayDir * (reprojectDepth * CloudMetresPerKm);
@@ -150,7 +151,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         return;
     }
 
-    float4 history = CloudSampleHistory(prevUv, cloudDepth.xy);
+    float4 history = CloudSampleHistory(prevUv, cloudResolve.xy);
     history.a = saturate(history.a);
     history.rgb *= cloudTemporal.z; // last frame's exposure -> this frame's
     const float historyDepth = PrevResolvedDepth.SampleLevel(gSmpLinear, prevUv, 0);

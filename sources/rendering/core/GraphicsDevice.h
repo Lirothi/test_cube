@@ -29,7 +29,9 @@ public:
     // GBV shader patch mode, as D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE (0 none,
     // 1 state-tracking-only, 2 unguarded, 3 guarded = the D3D12 default we keep). Only read when
     // GBV is on. `--gbv-mode=` sets it; see the comment on g_gbvPatchMode in the .cpp for why this
-    // is the knob that decides whether a GBV run takes seconds or minutes.
+    // is the knob that decides whether a GBV run takes seconds or minutes. Under `--gbv-passes` it
+    // is the mode of the LISTED passes' command lists and the device default is the rest mode,
+    // `--gbv-rest` (rendering/core/GbvPassFilter.h).
     static void SetGbvShaderPatchMode(int mode);
     // Barrier plan step 15: log a MODULE-attributed stack for every barrier-interop message the
     // debug layer raises (1350/1334/527/538). The enhanced work reached a point where the message

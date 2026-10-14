@@ -1356,6 +1356,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                    "ramp on top; the temporal resolve is bypassed while one is shown. "
                                    "--set=cloud.debugView:0..3");
 
+                // Project-wide, UE's r.VolumetricRenderTarget.Mode by its own numbers; index 0 = mode 1.
+                static const char* const kCloudTraceModes[] = {
+                    "Half-res trace, full-res resolve (ours)", "Quarter-res trace, half-res resolve (UE mode 0)" };
+                int traceMode = render::g_cloudTraceMode == 0u ? 1 : 0;
+                if (GRAPHICS_CONTROL(CloudTraceMode, "cloudTraceMode",
+                        ImGui::Combo("Cloud trace", &traceMode, kCloudTraceModes, IM_ARRAYSIZE(kCloudTraceModes))))
+                {
+                    render::g_cloudTraceMode = traceMode == 1 ? 0u : 1u;
+                }
+                DevHelp("Where the clouds' view march runs. Ours: a ray per half-res texel through one render "
+                        "pixel of its 2x2 a frame, rebuilt at the render resolution over four frames. UE mode 0 "
+                        "(their default): the same one level down -- a ray per quarter-res texel, rebuilt at half "
+                        "res, then upsampled bilaterally by depth over the scene. A quarter of the rays and of "
+                        "the rebuild, half the detail per axis. Recreates the cloud targets. "
+                        "--set=cloudTrace.mode:1|0");
+
                 // Project-wide (graphics_settings.json), unlike the level-authored look above: a
                 // performance switch, UE's cvar role. The readout under it is what the last frame
                 // actually traced -- the proof the switch reached the GPU.

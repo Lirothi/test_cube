@@ -21,6 +21,7 @@
 #include "rendering/core/BarrierTranslation.h"
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
+#include "rendering/core/GbvPassFilter.h"
 #include "rendering/core/GraphicsDevice.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
@@ -55,6 +56,7 @@ int ForceMi() { return mi_version(); }
 namespace
 {
 void ApplyGbvModeArg(const char* cmd);
+void ApplyGbvPassesArg(const char* cmd);
 void ApplyGbvSelfTestArg(const char* cmd);
 
 // Extract a CLI value for `key`, accepting both "key=value" and "key value" (optionally quoted
@@ -76,12 +78,30 @@ std::string ExtractArgValue(const char* cmd, const char* key)
 }
 
 
-// `--gbv-selftest=N`: deliberately issue N draws with unbound descriptor tables, to find out what
-// a given --gbv-mode actually CATCHES. Debug only; see GBufferBindingGuard.h.
+// `--gbv-selftest=N[@Pass]`: deliberately issue N draws with unbound descriptor tables, to find out
+// what a given --gbv-mode (or --gbv-passes) actually CATCHES. `@Pass` aims them at one pass's lists
+// (RenderPassToWString's name, e.g. 1@Skybox); without it they go to the first N graphics binds,
+// wherever the scheduler puts them. `@`, not a second flag: ExtractArgValue is a strstr, and a
+// `--gbv-selftest-pass` would be found by the `--gbv-selftest` lookup. Debug only; see
+// GBufferBindingGuard.h. Each injected draw logs the list it landed in.
 void ApplyGbvSelfTestArg(const char* cmd)
 {
-    const std::string n = ExtractArgValue(cmd, "--gbv-selftest");
-    if (!n.empty()) { render::g_gbvSelfTestDraws = std::atoi(n.c_str()); }
+    const std::string value = ExtractArgValue(cmd, "--gbv-selftest");
+    if (value.empty()) { return; }
+    render::g_gbvSelfTestDraws = std::atoi(value.c_str());
+    const size_t at = value.find('@');
+    if (at == std::string::npos) { return; }
+    const std::string pass = value.substr(at + 1);
+    render::g_gbvSelfTestPass.assign(pass.begin(), pass.end()); // ASCII names
+    bool known = false;
+    for (uint16_t i = 0; i < static_cast<uint16_t>(RenderPass::Count) && !known; ++i) {
+        const std::wstring_view name = RenderPassToWString(static_cast<RenderPass>(i)); // literal: NUL-terminated
+        known = !name.empty() && _wcsicmp(name.data(), render::g_gbvSelfTestPass.c_str()) == 0;
+    }
+    if (!known) {
+        LOG_WARNING(logging::LogCategory::RenderValidation,
+                    "--gbv-selftest: '{}' names no render pass -- nothing will be injected", pass);
+    }
 }
 
 // `--gbv-mode=guarded|unguarded|state|none` -- how much shader rewriting GBV does.
@@ -103,6 +123,34 @@ void ApplyGbvModeArg(const char* cmd)
     else if (mode == "state")     { GraphicsDevice::SetGbvShaderPatchMode(1); }
     else if (mode == "unguarded") { GraphicsDevice::SetGbvShaderPatchMode(2); }
     else if (mode == "guarded")   { GraphicsDevice::SetGbvShaderPatchMode(3); }
+}
+
+// `--gbv-passes=<name,name,...>` -- the --gbv-mode above on the LISTED passes' command lists only;
+// every other list gets the rest mode below, i.e. its shaders are not validated. The answer to
+// "2.5 minutes to the first frame to check one pass": only the listed shaders pay the full rewrite
+// (wind_test: 155 s -> 16-20 s).
+// Names are RenderPassToWString's (CloudTrace, Compose, Lighting, GBuffer, ...), case-insensitive;
+// a name also covers its dotted sub-passes (GBuffer -> GBuffer.Driver, ...), and a CL group's
+// members are patched together because they share one list. Implies --gbv (the substring matches).
+// What it gives up is measured in docs/gbv_startup_profile.md: an error in an UNLISTED pass is not
+// reported. A narrowing knob, never a gate -- `--scene-stress-gbv` ignores it. Debug only.
+//
+// `--gbv-rest=state|none` -- what the UNLISTED lists (and the device default) get.
+// STATE_TRACKING_ONLY (default) keeps GBV's resource-state tracking as exact as a full run's, for a
+// light rewrite of every shader: +1..3.5 s on wind_test. NONE is the fastest, and the runtime then
+// calls state tracking "possibly imprecise" (id=1044) from the first unpatched list on. Its own name,
+// not `--gbv-passes-...`: ExtractArgValue is a strstr.
+void ApplyGbvPassesArg(const char* cmd)
+{
+    std::string list = ExtractArgValue(cmd, "--gbv-passes");
+    if (!list.empty()) { render::gbv::RequestPassFilter(std::move(list)); }
+    const std::string rest = ExtractArgValue(cmd, "--gbv-rest");
+    if (rest == "none")       { render::gbv::RequestRestPatchMode(0); }
+    else if (rest == "state") { render::gbv::RequestRestPatchMode(1); }
+    else if (!rest.empty()) {
+        LOG_WARNING(logging::LogCategory::RenderRhi,
+                    "--gbv-rest={} not understood (state|none) -- the unlisted lists keep STATE_TRACKING_ONLY", rest);
+    }
 }
 
 // "--set=<name>:<value>[;<name>:<value>...]": hold settings at fixed values for the run, from the
@@ -545,8 +593,8 @@ int WINAPI WinMain(
         render::g_bindBatchingEnabled = false;
     }
 
-    // "--async-pass=<names>": narrow which passes may use the async compute queue. Only three ever
-    // ask for it. `--no-async-compute` proves the second queue is involved in a hang but not WHICH
+    // "--async-pass=<names>": narrow which passes may use the async compute queue (BuildAS,
+    // ObjectCompute, RTTrace, CloudTrace). `--no-async-compute` proves the second queue is involved in a hang but not WHICH
     // pass, and bisecting that by rebuild is a rebuild per guess.
     //   --async-pass=none                 every pass back on graphics (same as --no-async-compute)
     //   --async-pass=BuildAS              only BuildAS stays async
@@ -561,6 +609,7 @@ int WINAPI WinMain(
             render::g_asyncPassBuildAS = has("BuildAS");
             render::g_asyncPassObjectCompute = has("ObjectCompute");
             render::g_asyncPassRtTrace = has("RTTrace");
+            render::g_asyncPassCloudTrace = has("CloudTrace");
         }
     }
 
@@ -641,6 +690,12 @@ int WINAPI WinMain(
                 GraphicsDevice::EnableGbvForStress(true);
                 ApplyGbvModeArg(lpCmdLine);
                 ApplyGbvSelfTestArg(lpCmdLine);
+                // The gate's verdict covers the whole frame; a narrowed one would be a false CLEAN
+                // for every pass left out.
+                if (std::strstr(lpCmdLine, "--gbv-passes") != nullptr) {
+                    LOG_WARNING(logging::LogCategory::RenderRhi,
+                                "--gbv-passes ignored under --scene-stress-gbv: the gate patches every pass");
+                }
             }
             const bool roughnessEdits = std::strstr(lpCmdLine, "--scene-stress-roughness") != nullptr;
             const bool skyEdits = std::strstr(lpCmdLine, "--scene-stress-sky") != nullptr;
@@ -659,6 +714,10 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--gbv") != nullptr) {
             GraphicsDevice::EnableGbvForStress(true);
             ApplyGbvModeArg(lpCmdLine);
+            ApplyGbvPassesArg(lpCmdLine);
+            // The injector on an ordinary run too: what `--gbv-passes` gives up can only be
+            // measured where the flag is accepted.
+            ApplyGbvSelfTestArg(lpCmdLine);
             boot::SetFrameProfiling(true);
         }
 
@@ -698,7 +757,10 @@ int WINAPI WinMain(
             g_shotStepSec = std::atof(flag + std::strlen("--shot-step="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--shot-interval=")) {
-            g_shotIntervalSec = std::max(std::atof(flag + std::strlen("--shot-interval=")), 0.1);
+            // 0 = CONSECUTIVE frames (the save is synchronous, so the next loop iteration shoots the
+            // next frame) -- what a temporal flicker needs; with --wind-freeze + --shot-step each frame
+            // still advances the clock by exactly the step.
+            g_shotIntervalSec = std::max(std::atof(flag + std::strlen("--shot-interval=")), 0.0);
         }
         // "--cam-pos=x,y,z --cam-rot=x,y,z,w": reproduce the exact view a screenshot was taken
         // from. Both are printed verbatim by the on-screen HUD, so a shot round-trips into a

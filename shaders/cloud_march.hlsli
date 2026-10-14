@@ -60,6 +60,9 @@ struct CloudMarchResult
     float debugCoverage;    // the first sample's weather coverage (debug view 1)
 };
 
+// The empty-space stride's cap, in regular steps (CloudMarch).
+static const float kCloudEmptyStrideMax = 4.0f;
+
 CloudMarchResult CloudMarch(CloudMarchInputs mi)
 {
     const float3 camPos = mi.originMetres;
@@ -98,7 +101,17 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
     uint stepsTaken = 0u;
     float debugCoverage = 0.0f;
 
-    [loop] for (uint i = 0; i < stepCount; ++i)
+    // EMPTY-SPACE SKIPPING (ours, perf 2026-10-14). On the owner's palm view the march cost ~430 us, ~190 of
+    // it stepping through EMPTY layer (measured at coverage 0) at the same 23 m step as inside a cloud.
+    // Outside every cloud's envelope (the density before the erosion is 0 -- UE's conservative density) the
+    // stride grows 1 -> 2 -> 4 steps; on meeting an envelope the march backs up to the regular step after
+    // the last empty sample and walks the skipped stretch at one step. Every sample taken is one the regular
+    // grid had (the jittered start is kept), so inside envelopes the integral is the same; only an envelope
+    // shorter along the ray than the skipped gap (< 3 steps, ~70 m) can be stepped over. The loop bound
+    // counts samples, with room for the back-ups.
+    float stride = 1.0f, lastAdvance = 1.0f, refineUntilT = -1.0f;
+    const uint iterationCap = stepCount + stepCount / 2u + 2u;
+    [loop] for (uint i = 0; i < iterationCap; ++i)
     {
         if (t >= tMax) { break; } // the jittered start can push the last sample past the end
         const float dtMetres = min(stepT, tMax - t) * CloudMetresPerKm; // the last segment is partial
@@ -108,6 +121,24 @@ CloudMarchResult CloudMarch(CloudMarchInputs mi)
         ++stepsTaken;
         const CloudSample s = CloudSampleAt(P, normAlt);
         if (i == 0u || debugCoverage == 0.0f) { debugCoverage = s.coverage; }
+        if (s.conservative <= 0.0f)
+        {
+            if (t < refineUntilT) { t += stepT; continue; } // walking back up to where an envelope was met
+            lastAdvance = stride;
+            t += stepT * stride;
+            stride = min(stride * 2.0f, kCloudEmptyStrideMax);
+            continue;
+        }
+        if (lastAdvance > 1.0f)
+        {
+            // Into an envelope after a long stride: back to the regular step after the last empty sample.
+            refineUntilT = t;
+            t -= stepT * (lastAdvance - 1.0f);
+            stride = 1.0f;
+            lastAdvance = 1.0f;
+            continue;
+        }
+        stride = 1.0f;
         if (s.extinction <= 0.0f) { t += stepT; continue; } // usf:781-787 conservative density
 
         CloudMedia m = CloudSetupMedia(albedo, s.extinction, basePhase);

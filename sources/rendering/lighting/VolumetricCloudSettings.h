@@ -118,7 +118,7 @@ struct VolumetricCloudSettings
     // the thin default layer (UDS raise UE's count 4x for the same reason); 0.71 ms at 256 (12 m) vs
     // 0.43 at 128 on wind_test, 2560 x 1440 under DLSS Balanced (2026-10-12).
     std::uint32_t viewSampleCountMax = 128u;
-    std::uint32_t viewSampleCountMin = 2u;       // UE SampleMinCount
+    std::uint32_t viewSampleCountMin = 2u;       // UE SampleMinCount (2; Ultra Dynamic Sky 135 -- see the Inspector's help)
     float distanceToSampleCountMaxKm = 3.0f;     // UE DistanceToSampleMaxCount (theirs 15)
     std::uint32_t shadowSampleCount = 4u;        // the march to the sun per lit sample (UE Shadow.ViewRaySampleMaxCount 80 -- dear; UDS 4)
     float shadowTracingDistanceKm = 0.156f;      // UE ShadowTracingDistance (theirs 15; UDS 0.156)
@@ -184,8 +184,9 @@ struct VolumetricCloudConstants
     // body lights the clouds (0 the sun, 1 the moon), w the sine of reflectionHorizonFadeDeg (the capture).
     float light[4];
     float shadowSun[4];   // xyz direction TO the light whose cloud shadow the map stores -- what lights the ground
+    float resolve[4];     // xy the resolved clouds' size, z render pixels per resolved pixel (1, or 2 in trace mode 0), w 1 = blue-noise start offset
 };
-static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 23 * 16, "CloudCB layout");
+static_assert(sizeof(VolumetricCloudConstants) == 5 * 64 + 24 * 16, "CloudCB layout");
 
 // HOW OVERCAST the cover is, 0..1: a smoothstep from overcastFrom to coverage 1. One function for every
 // consumer -- the density (erosion to its mean, macro variation faded, threshold lifted), the light
@@ -250,6 +251,17 @@ inline std::uint32_t SanitizeCloudShadowUpdateFrames(std::uint32_t frames)
     return frames >= 16u ? 16u : (frames >= 4u ? 4u : 1u);
 }
 
+// THE VIEW TRACE'S RESOLUTIONS, UE's r.VolumetricRenderTarget.Mode by its own numbers (graphics_settings.json
+// "cloudTrace", Developer Controls > Sky, `--set=cloudTrace.mode`), project-wide like the map's slicing:
+//   1 (ours, the default): trace at HALF the render resolution, each texel one render pixel of its 2x2 a
+//     frame, reconstructed at the RENDER resolution (cloud_temporal_cs.hlsl);
+//   0 (UE's default): trace at a QUARTER, each texel one HALF-res pixel of its 2x2 a frame, reconstructed
+//     at HALF res; compose upsamples it (Catmull-Rom, as it reads any size). A quarter of the rays, a
+//     quarter of the reconstruction's pixels; the detail is half as fine in each axis.
+// A change recreates the cloud targets at the frame boundary (Renderer::BeginFrame), GPU idle.
+inline std::uint32_t g_cloudTraceMode = 1u;
+inline std::uint32_t SanitizeCloudTraceMode(std::uint32_t mode) { return mode == 0u ? 0u : 1u; }
+
 // Cheap density for the MAP's march only (the view, its self-shadow and the capture keep the full
 // model), same file / tab / --set family. Each drops texture taps from every map sample:
 //   bilinearWeather: the macro variation's field in one bilinear tap instead of the view's 4-tap
@@ -273,6 +285,10 @@ inline bool g_cloudShadowDetailMean = false;
 // pre-N3 behaviour: the ground's light with the air applied once at the camera. The A/B switch
 // (`--set=cloud.perSampleTransmittance:0`), session only.
 inline bool g_cloudPerSampleTransmittance = true;
+// The view march's start offset from the spatiotemporal blue-noise mask (UE's way; textures/noise, made by
+// tools/gen_stbn.py) -- or, OFF, our earlier interleaved gradient noise + golden ratio. The A/B switch
+// (`--set=cloud.blueNoise:0`), session only; without the file the mask is off either way.
+inline bool g_cloudBlueNoise = true;
 inline std::uint32_t CloudShadowCheapBits()
 {
     return (g_cloudShadowBilinearWeather ? 1u : 0u) | (g_cloudShadowDetailMean ? 2u : 0u);

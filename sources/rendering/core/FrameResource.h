@@ -9,6 +9,7 @@
 #include <mutex>
 #include <vector>
 #include "rendering/descriptors/DescriptorAllocator.h"
+#include "rendering/core/GbvPassFilter.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -228,6 +229,9 @@ private:
                     static_cast<unsigned int>(resetHr), static_cast<unsigned int>(removedReason));
                 throw std::runtime_error(msg);
             }
+            // --gbv-passes: a pooled list forgets the pass that patched it last; its new owner
+            // (SetCommandListName) decides again.
+            render::gbv::ResetListPatchMode(cl);
             return cl;
         }
     };

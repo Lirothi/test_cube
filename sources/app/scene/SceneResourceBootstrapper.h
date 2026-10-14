@@ -864,7 +864,8 @@ struct ComposePassConstants
     // w 1 / the SkyView LUT's storage pre-exposure.
     float4 skyViewPlanet{};
     // Plan C2: x = the resolved cloud pair was built this frame, y = 1 / preExposure (the cloud's
-    // luminance is stored pre-exposed, `lit` is raw), z = the cloud debug view, w = 0.
+    // luminance is stored pre-exposed, `lit` is raw), z = the cloud debug view, w = render pixels per
+    // resolved cloud pixel (1; 2 in trace mode 0, which compose upsamples bilaterally).
     float4 cloudParams{};
     // xy = this frame's camera jitter in uv (the jittered pixel at uv looks where the unjittered
     // frame's uv - xy does); the clouds are reconstructed unjittered and read there. zw = 0.

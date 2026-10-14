@@ -389,6 +389,9 @@ import_staging/
 /textures/**
 !/textures/ocean/
 !/textures/ocean/ShoreFoamAlbedo.png
+# The clouds' march start offset (blue-noise mask, 1 MB; tools/gen_stbn.py regenerates it).
+!/textures/noise/
+!/textures/noise/stbn_scalar_128x128x64.dds
 
 # Exclusions
 !/third_party/**

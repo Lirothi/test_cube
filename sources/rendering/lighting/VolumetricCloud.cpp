@@ -88,7 +88,7 @@ bool CreateStorageTexture(Renderer* renderer, GpuResource& target, D3D12_CPU_DES
     return true;
 }
 
-// A read-only texture (2D or 3D, one mip, 4 bytes a texel, tightly packed source rows) created in
+// A read-only texture (2D or 3D, one mip, 4 bytes a texel -- 1 for R8 -- tightly packed source rows) created in
 // COPY_DEST, filled through an upload batch with a full GPU wait, and left at rest in NON_PIXEL --
 // where the async compute queue the shadow map runs on can read it (Texture2D's uploads end in
 // PIXEL|NON_PIXEL). Load-time only.
@@ -117,7 +117,7 @@ bool UploadToRest(Renderer* renderer, const D3D12_RESOURCE_DESC& desc, const std
     std::uint8_t* mapped = nullptr;
     const D3D12_RANGE noRead{0, 0};
     if (FAILED(upload->Map(0, &noRead, reinterpret_cast<void**>(&mapped)))) { return false; }
-    const size_t sourceRow = static_cast<size_t>(desc.Width) * 4u;
+    const size_t sourceRow = static_cast<size_t>(desc.Width) * (desc.Format == DXGI_FORMAT_R8_UNORM ? 1u : 4u);
     const UINT depth = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? desc.DepthOrArraySize : 1u;
     for (UINT z = 0; z < depth; ++z)
     {
@@ -236,6 +236,7 @@ void VolumetricCloud::Reset()
 {
     weather_.Reset(); shadowRaw_.Reset(); shadowFiltered_.Reset(); profile_.Reset();
     formation_.Reset(); cells_.Reset(); profileGen_.Reset(); formationGen_.Reset(); cellsGen_.Reset();
+    blueNoise_.Reset(); blueNoiseSrv_ = {};
     heap_.Reset();
     weatherSrv_ = weatherUav_ = profileSrv_ = formationSrv_ = cellsSrv_ = {};
     profileGenSrv_ = profileGenUav_ = formationGenSrv_ = formationGenUav_ = cellsGenSrv_ = cellsGenUav_ = {};
@@ -291,8 +292,8 @@ void VolumetricCloud::CreateResources(Renderer* renderer)
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    // Six written textures x (SRV, UAV) + the three file overrides' SRVs.
-    hd.NumDescriptors = 15;
+    // Six written textures x (SRV, UAV) + the three file overrides' SRVs + the blue-noise mask's.
+    hd.NumDescriptors = 16;
     if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const auto base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
@@ -307,6 +308,14 @@ void VolumetricCloud::CreateResources(Renderer* renderer)
     LoadVolumeDds(renderer, render::g_cloudFormationPath, formation_, formationSrv_, L"VolumetricCloud.FormationFile");
     LoadVolumeDds(renderer, render::g_cloudCellsPath, cells_, cellsSrv_, L"VolumetricCloud.CellsFile");
     const bool generateVolumes = !FormationFromFiles();
+    // UE's view-march start offset: a spatiotemporal blue-noise mask (tools/gen_stbn.py; cloud_trace_cs.hlsl
+    // CloudStartNoise). Missing, the trace keeps its own interleaved-gradient + golden-ratio noise.
+    blueNoiseSrv_ = handle();
+    if (!LoadVolumeDds(renderer, kBlueNoisePath, blueNoise_, blueNoiseSrv_, L"VolumetricCloud.BlueNoise"))
+    {
+        LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: no blue-noise mask; the march start offset falls back to "
+                    "interleaved gradient noise (python tools/gen_stbn.py writes it)");
+    }
 
     // The generated textures (C1), the two shadow maps (C3). UNORM8 for the generated ones (the
     // density model remaps them), FP16 for the shadow's km / (1/m) / unitless.
@@ -438,10 +447,13 @@ bool VolumetricCloud::LoadVolumeDds(Renderer* renderer, const std::wstring& path
     { return refuse("not a DX10 DDS"); }
     const UINT height = u32(12), width = u32(16), depth = u32(24);
     const std::uint32_t format = u32(128), dimension = u32(132);
-    const DXGI_FORMAT dxgi = format == 87u ? DXGI_FORMAT_B8G8R8A8_UNORM : (format == 28u ? DXGI_FORMAT_R8G8B8A8_UNORM : DXGI_FORMAT_UNKNOWN);
+    // 8-bit RGBA / BGRA (the density volumes UE's exporter writes) or 8-bit R (tools/gen_stbn.py's mask).
+    const DXGI_FORMAT dxgi = format == 87u ? DXGI_FORMAT_B8G8R8A8_UNORM
+                           : (format == 28u ? DXGI_FORMAT_R8G8B8A8_UNORM : (format == 61u ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_UNKNOWN));
+    const std::uint32_t texelBytes = dxgi == DXGI_FORMAT_R8_UNORM ? 1u : 4u;
     if (dimension != 4u || dxgi == DXGI_FORMAT_UNKNOWN || width < 2 || height < 2 || depth < 2 || depth > 2048)
-    { return refuse("not an 8-bit RGBA volume"); }
-    if (bytes.size() < 148ull + static_cast<std::uint64_t>(width) * height * depth * 4u) { return refuse("truncated"); }
+    { return refuse("not an 8-bit RGBA or R volume"); }
+    if (bytes.size() < 148ull + static_cast<std::uint64_t>(width) * height * depth * texelBytes) { return refuse("truncated"); }
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE3D;
@@ -628,6 +640,9 @@ VolumetricCloudConstants VolumetricCloud::MakeConstants(const FrameInputs& in) c
     c.output[2] = in.preExposure; c.output[3] = 1.0f / std::max(in.preExposure, 1.0e-8f);
     c.depth[0] = static_cast<float>(in.depthWidth); c.depth[1] = static_cast<float>(in.depthHeight);
     c.depth[2] = in.projZ33; c.depth[3] = in.projZ43;
+    c.resolve[0] = static_cast<float>(std::max(in.resolveWidth, 1u)); c.resolve[1] = static_cast<float>(std::max(in.resolveHeight, 1u));
+    c.resolve[2] = static_cast<float>(std::max(in.resolveScale, 1u));
+    c.resolve[3] = (blueNoise_.Get() != nullptr && render::g_cloudBlueNoise) ? 1.0f : 0.0f;
     c.aerial[0] = in.aerialBuilt ? 1.0f : 0.0f; c.aerial[1] = in.aerialStartKm;
     c.aerial[2] = in.distantActive ? 1.0f : 0.0f; c.aerial[3] = static_cast<float>(in.debugView);
     c.temporal[0] = in.historyValid ? 1.0f : 0.0f; c.temporal[1] = s.temporal ? std::clamp(s.historyWeight, 0.0f, 0.99f) : 0.0f;
@@ -791,6 +806,10 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
         {
             ++render::g_cloudShadowStats.forcedFullTraces;
             render::g_cloudShadowStats.lastForcedReason = forced;
+            // Which key forced a FULL re-trace while slicing -- one line per reason as it changes. A key
+            // that moves every frame turns the slicing off without a word (the dev window's counter only).
+            LOG_INFO_ONCE_PER_MESSAGE(logging::LogCategory::Render, "cloud shadow map: full re-trace forced: {}",
+                                      forced ? forced : "?");
         }
     }
     constants.shadowMap3[0] = static_cast<float>(stride);
@@ -878,20 +897,35 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     const D3D12_CPU_DESCRIPTOR_HANDLE transmittanceSrv = transmittance ? in.transmittanceSrv : renderer->VsmDummyTexSrv();
     // The density model's textures: generated, or the files that replaced them.
     const DensityBinding bind = Binding();
-    return graph.AddPass2(RenderPass::Main_CloudTrace, list, {}, {},
-        [this, renderer, constants, aerialResource, distantResource, transmittanceResource, aerialSrv, distantSrv, transmittanceSrv, bind](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+    // t8: the blue-noise mask (read only when the constants say so; a placeholder otherwise).
+    ID3D12Resource* blueNoiseResource = blueNoise_.Get();
+    const D3D12_CPU_DESCRIPTOR_HANDLE blueNoiseSrv = blueNoiseResource ? blueNoiseSrv_ : renderer->VsmDummyTexSrv();
+    // ON THE ASYNC COMPUTE QUEUE (`--async-pass` name CloudTrace). The march is latency-bound -- a
+    // long serial loop per ray, and in trace mode 0 too few rays to fill the GPU -- which is the
+    // character that overlaps (docs/async_compute_plan.md: BuildAS won, GTAO lost to a saturating
+    // partner). SceneRenderer::BuildLighting registers it before the fog and the lights, so it runs
+    // beside them; compose's wait is the one fence back. Everything it reads is left compute-legal by
+    // its last graphics user: the depth NON_PIXEL by Main_Hzb, the transmittance LUT at rest by
+    // Main_SkyAerial (which drops the PIXEL bit Main_SkyView adds for the sky's disc). Measured
+    // 2026-10-14 on the owner's view (wind_test 15:00, DLSS Balanced, --profdump, one binary, the A arm
+    // `--async-pass=BuildAS,ObjectCompute,RTTrace`, interleaved x3, no overlap between the arms):
+    // GPU.Frame trace mode 1 2.994 -> 2.795 ms, mode 0 2.803 -> 2.656; pixels within the run-to-run floor.
+    return graph.AddPass2(RenderPass::Main_CloudTrace, RenderQueue::AsyncCompute, list, {}, {},
+        [this, renderer, constants, aerialResource, distantResource, transmittanceResource, aerialSrv, distantSrv, transmittanceSrv, bind,
+         blueNoiseResource, blueNoiseSrv](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& D = renderer->GetDeferredForFrame();
             const auto& P = renderer->GetDeferredForPrevFrame();
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(bind.formation, kRest); ctx.Use(bind.cells, kRest); ctx.Use(weather_.Get(), kRest);
             ctx.Use(bind.profile, kRest);
+            if (blueNoiseResource) { ctx.Use(blueNoiseResource, kRest); }
             // The sky's volume and distant light, at their rest; declared so the reads are named.
             if (aerialResource) { ctx.Use(aerialResource, kRest); }
             if (distantResource) { ctx.Use(distantResource, kRest); }
             if (transmittanceResource) { ctx.Use(transmittanceResource, kRest); }
-            // The depth as every other reader takes it (both shader-visible states, one barrier).
-            ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            // The depth NON_PIXEL only: the PIXEL bit is illegal on the compute queue.
+            ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             ctx.Use(D.cloudTrace.Get(), kUav); ctx.Use(D.cloudTraceDepth.Get(), kUav);
             ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.cloudTrace.Get(), kRest); ctx.Use(D.cloudTraceDepth.Get(), kRest);
@@ -899,7 +933,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
             ctx.Use(D.cloudResolved.Get(), kUav); ctx.Use(D.cloudResolvedDepth.Get(), kUav);
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.cloudResolved.Get(), kRest); ctx.Use(D.cloudResolvedDepth.Get(), kRest);
-            return [this, renderer, constants, aerialSrv, distantSrv, transmittanceSrv, points, bind](RenderGraphPassContext c) {
+            return [this, renderer, constants, aerialSrv, distantSrv, transmittanceSrv, points, bind, blueNoiseSrv](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudTrace);
                 const auto& DF = renderer->GetDeferredForFrame();
                 const auto& PF = renderer->GetDeferredForPrevFrame();
@@ -913,7 +947,8 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
                         const auto samplers = renderer->GetSamplerManager()->GetTable(renderer,
                             std::array{*SamplerManager::LinearWrap(), *SamplerManager::LinearClamp()});
                         RecordComputeDispatch(renderer, t.cl, trace_.get(), cbBytes_, write,
-                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, bind.profileSrv, transmittanceSrv},
+                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, bind.profileSrv, transmittanceSrv,
+                             blueNoiseSrv},
                             {DF.cloudTraceUAV, DF.cloudTraceDepthUAV}, samplers, DF.cloudWidth, DF.cloudHeight);
                     }
                     renderer->EmitPoint(t.cl, points[1]);

@@ -15,6 +15,7 @@
 #include "core/diagnostics/ArtifactWriter.h"
 #include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GbvPassFilter.h"
 #include "rendering/core/TextureCreate.h"
 
 namespace
@@ -296,6 +297,12 @@ void GraphicsDevice::InitDevice()
     // run never touches the debug device.
     if (gbvStress) {
         const int requested = g_gbvPatchMode.load(std::memory_order_relaxed);
+        // `--gbv-passes`: the requested mode moves from the device to the listed passes' command
+        // lists (render::gbv), and the device default becomes the rest mode (`--gbv-rest`,
+        // STATE_TRACKING_ONLY unless asked) so nothing else is fully rewritten. Armed only if a name matched;
+        // otherwise the device keeps patching everything.
+        const bool narrowed = render::gbv::ArmPassFilter(requested);
+        const int deviceMode = narrowed ? render::gbv::RestPatchMode() : requested;
         Microsoft::WRL::ComPtr<ID3D12DebugDevice1> debugDevice;
         const HRESULT qiHr = device_.As(&debugDevice);
         HRESULT setHr = E_NOINTERFACE;
@@ -303,7 +310,7 @@ void GraphicsDevice::InitDevice()
             D3D12_DEBUG_DEVICE_GPU_BASED_VALIDATION_SETTINGS settings{};
             settings.MaxMessagesPerCommandList = 256;
             settings.DefaultShaderPatchMode =
-                static_cast<D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE>(requested);
+                static_cast<D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE>(deviceMode);
             settings.PipelineStateCreateFlags = D3D12_GPU_BASED_VALIDATION_PIPELINE_STATE_CREATE_FLAG_NONE;
             setHr = debugDevice->SetDebugParameter(
                 D3D12_DEBUG_DEVICE_PARAMETER_GPU_BASED_VALIDATION_SETTINGS,
@@ -318,9 +325,11 @@ void GraphicsDevice::InitDevice()
                                                 "UNGUARDED_VALIDATION", "GUARDED_VALIDATION" };
             char line[256];
             std::snprintf(line, sizeof(line),
-                          "[gbv] requested patch mode = %s | QueryInterface(ID3D12DebugDevice1)=0x%08X"
+                          "[gbv] requested patch mode = %s%s%s | QueryInterface(ID3D12DebugDevice1)=0x%08X"
                           " | SetDebugParameter=0x%08X | APPLIED=%s\n",
                           (requested >= 0 && requested <= 3) ? kModeNames[requested] : "?",
+                          narrowed ? " on --gbv-passes lists only, device default = " : "",
+                          narrowed ? ((deviceMode >= 0 && deviceMode <= 3) ? kModeNames[deviceMode] : "?") : "",
                           static_cast<unsigned>(qiHr), static_cast<unsigned>(setHr),
                           SUCCEEDED(setHr) ? "yes" : "NO");
             logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderRhi, line);
@@ -333,6 +342,7 @@ void GraphicsDevice::InitDevice()
             // only be read from a file which may or may not have been written is not evidence, and
             // this one has to answer "did the knob reach the device" for a run that costs minutes.
             boot::AddCount("gbv: patch mode requested", requested);
+            boot::AddCount("gbv: device default patch mode", deviceMode);
             boot::AddCount("gbv: SetDebugParameter succeeded", SUCCEEDED(setHr) ? 1 : 0);
             boot::AddCount("gbv: debug-device QI succeeded", SUCCEEDED(qiHr) ? 1 : 0);
         }

@@ -62,7 +62,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.diffuseLight = std::clamp(j.value("diffuseLight", s.diffuseLight), 0.0f, 10.0f);
     s.reflectionHorizonFadeDeg = std::clamp(j.value("reflectionHorizonFadeDeg", s.reflectionHorizonFadeDeg), 0.0f, 45.0f);
     s.viewSampleCountMax = std::clamp(j.value("viewSampleCountMax", s.viewSampleCountMax), 4u, 768u);
-    s.viewSampleCountMin = std::clamp(j.value("viewSampleCountMin", s.viewSampleCountMin), 1u, 64u);
+    s.viewSampleCountMin = std::clamp(j.value("viewSampleCountMin", s.viewSampleCountMin), 1u, 768u);
     s.distanceToSampleCountMaxKm = std::clamp(j.value("distanceToSampleCountMaxKm", s.distanceToSampleCountMaxKm), 0.1f, 1000.0f);
     s.shadowSampleCount = std::clamp(j.value("shadowSampleCount", s.shadowSampleCount), 1u, 80u);
     s.shadowTracingDistanceKm = std::clamp(j.value("shadowTracingDistanceKm", s.shadowTracingDistanceKm), 0.1f, 100.0f);
