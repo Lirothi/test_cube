@@ -79,6 +79,9 @@ cbuffer PointLightFrame : register(b0)
     // map (the map is not even sampled). 2 = contacts only where the light has no shadow slot.
     // Stacking both on a small-range light darkens the same contact twice and buys nothing.
     uint  contactShadowLocalMode;
+    // The light target is PRE-EXPOSED (lighting_cb.hlsli lightPreExposure): what this pass adds is
+    // scaled by it, the base it reads already is.
+    float lightPreExposure;
 }
 ContactShadowParams MakeContactParams()
 {
@@ -219,7 +222,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     float4 base = LightTarget[dispatchThreadId.xy];
-    float3 accum = base.rgb;
+    float3 accum = 0.0f.xxx;   // this pass's lights, in radiance; pre-exposed into `base` at the end
 
     uint count = (uint)lightCount;
     for (uint i = 0; i < count; ++i)
@@ -307,5 +310,5 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
     }
 
-    LightTarget[dispatchThreadId.xy] = float4(accum, base.a);
+    LightTarget[dispatchThreadId.xy] = float4(base.rgb + accum * lightPreExposure, base.a);
 }

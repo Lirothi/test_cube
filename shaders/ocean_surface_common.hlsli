@@ -506,6 +506,31 @@ float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
     return saturate(fresnel);
 }
 
+// The SUN on the water, the way every other surface takes it (2026-10-15): GGX with UE's sphere light
+// (utils.hlsli EvalBRDF at the light's angular radius) and water's F0 0.02 by Schlick. It REPLACED an
+// unnormalised Blinn-Phong, pow(N.H, 64..512) x strength x E, whose peak was E x 1 whatever the
+// roughness: a facet mirroring the sun showed ~1/1000 of the disc (the glitter path at 17:30 peaked at
+// 3.5 pre-exposed under a disc of ~4000), so no glint on the sea could ever reach the bloom. Now a
+// mirroring facet shows the disc at its own radiance x F, as the chrome sphere does.
+// The roughness is the quantity the Bruneton model already carries: the variance of the slopes the
+// normal does NOT resolve (bi.slopeVarianceSquared, per wind axis -- ~0 at the camera, growing with
+// distance, scaled by specularParams.y). The mean squared slope is the two axes' sum, and that is a
+// Beckmann alpha^2, which GGX takes as it stands (Walter et al. 2007, alpha_b ~ alpha_g).
+// specularParams.x is a plain multiplier on it: 1 = physical.
+float3 OceanSunSpecular(const LightingInput li, const BrunetonInputs bi)
+{
+    const float alpha = sqrt(max(bi.slopeVarianceSquared.x + bi.slopeVarianceSquared.y, 0.0f));
+    BRDFInput brdf;
+    brdf.albedo = 0.02f.xxx; // water's F0 (n 1.33), through the metal path: F0 = albedo, no diffuse
+    brdf.metal = 1.0f;
+    brdf.rough = sqrt(alpha); // EvalBRDF squares it back (and floors it at kMinAlpha)
+    brdf.N = li.normal;
+    brdf.V = li.viewDir;
+    brdf.L = -li.mainLight.direction;
+    const BRDFResult r = EvalBRDF(brdf, sunShapeParams.x, sunShapeParams.y);
+    return r.specBRDF * r.NdotL * li.mainLight.color * (specularParams.x * li.mainLight.shadowAttenuation);
+}
+
 // Horizon pull for the ENVIRONMENT reflection ray (skyParams.w; 1 = identity, the shipped default).
 //
 // A wave crest swings the reflected ray between "just above the horizon" (bright) and "high into the

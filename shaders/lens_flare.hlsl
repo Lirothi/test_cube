@@ -1,7 +1,7 @@
-#define LENS_FLARE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define LENS_FLARE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 // P8C-2 step 5a -- the lens-flare BOKEH SCATTER, transcribed from UE's LensFlareBlurVS/PS
-// (PostProcessLensFlares.usf). One instanced quad per TILE of the thresholded downsampled scene;
+// (PostProcessLensFlares.usf). One instanced quad per TILE of the downsampled scene;
 // a quad whose tile is dark collapses to zero size and rasterizes nothing, so the pass costs what
 // the bright pixels cost, not what the screen costs.
 //
@@ -15,8 +15,9 @@
 // a source OFF the screen edge still lands inside the flare target and its ghosts still sweep
 // through the frame. The composite un-does the scale and pays back the energy (x4).
 
-Texture2D FlareSource : register(t0);   // thresholded half-res scene (the bloom DOWN chain, mip 0)
+Texture2D FlareSource : register(t0);   // the HDR scene, pre-exposed, full resolution
 Texture2D BokehSprite : register(t1);   // the iris shape, baked from the blade controls at load
+Texture2D<float> SceneDepth : register(t2); // the scene's depth (reverse-Z, sky 0): the art split's sky test
 SamplerState gSmp : register(s0);
 
 cbuffer LensFlareCB : register(b0)
@@ -28,7 +29,25 @@ cbuffer LensFlareCB : register(b0)
     float  kernelSizePx;     // bokeh sprite width in flare-target pixels
     float  threshold;        // collapse tiles whose dot(rgb,1) is below this
     float  kernelAreaInverse;// 1 / max(1, kernelSizePx^2) -- same light over more area
+    // The ART split (BloomSettings::convSunGhostScale): the sun's own share of the ghosts.
+    // sunDirView: xyz the direction TO the sun, view space, w 1 = in view; sunShare: x the scale, y the
+    // sun's radius (rad: the disc and the sky round it), zw the projection's _11 / _22.
+    float4 sunDirView;
+    float4 sunShare;
 };
+
+// 1 on the sun -- the disc and the bright SKY round it -- 0 elsewhere: bloom_conv_cs.hlsl's
+// SunShareMask term for term, so a glint on geometry next to the sun keeps the common share.
+float SunShareMask(float2 uv)
+{
+    if (sunDirView.w < 0.5f) { return 0.0f; }
+    if (SceneDepth.SampleLevel(gSmp, uv, 0.0f) > 0.0f) { return 0.0f; }
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float3 dir = normalize(float3(ndc / sunShare.zw, 1.0f));
+    const float angle = acos(clamp(dot(dir, sunDirView.xyz), -1.0f, 1.0f));
+    const float r = max(sunShare.y, 1.0e-4f);
+    return 1.0f - smoothstep(0.5f * r, r, angle);
+}
 
 // UE's screen-border falloff; the scatter fades a tile's CONTRIBUTION by where its source sits.
 float DiscMask(float2 screenPos)
@@ -88,29 +107,22 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
         FlareSource.SampleLevel(gSmp, srcUV + float2(-q.x,  q.y), 0.0f).rgb +
         FlareSource.SampleLevel(gSmp, srcUV + float2( q.x,  q.y), 0.0f).rgb);
 
-    // The source's TRUE screen position, and the shrunk one the splat is placed at.
-    const float2 screenPos = float2(srcUV.x * 2.0f - 1.0f, 1.0f - srcUV.y * 2.0f);
-    float2 pos = screenPos * 0.5f;   // the guard-band shrink, positions only
-    // UE's own mask, on the shrunk position, unchanged -- the gentle centre bias of their look.
-    color *= DiscMask(pos);
-    // PLUS a border fade on the TRUE screen position, which UE have no equivalent of and this
-    // engine needs: the flare source is the ON-SCREEN image, so a source sitting on the frame
-    // border is a disc CUT BY THE FRAME and every ghost in its chain came out a crescent
-    // (observed). This takes the chain to zero exactly where the source stops being fully
-    // visible. Full strength until 60% out so a sun merely high in the frame keeps its chain --
-    // masking the true position with UE's disc instead cost 82% at 63% out, which killed the
-    // ghosts outright (measured).
-    const float border = max(abs(screenPos.x), abs(screenPos.y));
-    color *= 1.0f - smoothstep(0.6f, 1.0f, border);
+    // The art split: the sun disc's tiles at their own share, before the gate (a sun dimmed under the
+    // threshold drops out of the ghosts, as any source that dim would).
+    color *= lerp(1.0f, max(sunShare.x, 0.0f), SunShareMask(srcUV));
 
-    // SOFT KNEE ABOVE THE THRESHOLD, which UE do not do -- their gate is binary, and a binary
-    // gate passes a large region that is barely over the line at FULL strength. That is what put
-    // recognisable mirrored copies of the sun's corona and of the water's glitter path in the sky
-    // (observed): both are wide and only just above the threshold. Scaling by the EXCESS keeps
-    // the hue, drops a source at the threshold to nothing and a source ten times over it to 90%,
-    // so ghosts come from cores and not from haze.
-    const float lum = color.r + color.g + color.b;   // UE: dot(rgb, 1)
-    color.rgb *= max(lum - threshold, 0.0f) / max(lum, 1.0e-6f);
+    // The source's screen position, shrunk by the guard band -- where the splat is placed.
+    const float2 screenPos = float2(srcUV.x * 2.0f - 1.0f, 1.0f - srcUV.y * 2.0f);
+    float2 pos = screenPos * 0.5f;
+    // UE's mask, on the shrunk position (LensFlareBlurVS: `OutColor.rgb *= DiscMask(OutPosition.xy)`),
+    // BEFORE the threshold test, as theirs is.
+    color *= DiscMask(pos);
+
+    // UE's gate, verbatim: BINARY on dot(rgb, 1) in the pre-exposed units the source holds. A tile
+    // under it collapses to a zero-size quad; one over it splats at full strength. With the sun's disc
+    // physical (thousands of times the sky around it) the disc is what clears it, so the ghost is the
+    // disc defocused through the iris -- the bokeh shape -- and not the sky's bright zone.
+    const float lum = color.r + color.g + color.b;
     const float alive = (lum < threshold || !inGrid) ? 0.0f : 1.0f;
 
     const float2 cornerDelta = corner - 0.5f;

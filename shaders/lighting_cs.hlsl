@@ -387,7 +387,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (isFoliage)
     {
         FoliageResult fr = EvalFoliageBRDF(
-            bi, subsurface, sunAngularSize, transmissionNormalWeight);
+            bi, subsurface, sunAngularSize, transmissionNormalWeight, sunSoftRadius);
 
         // Front hemisphere: the leaf face directly toward the sun (Lambert + GGX), same math
         // and same shadow as DefaultLit.
@@ -415,7 +415,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
     else
     {
-        BRDFResult br = EvalBRDF(bi, sunAngularSize);
+        BRDFResult br = EvalBRDF(bi, sunAngularSize, sunSoftRadius);
         if (sunLit && br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
@@ -463,5 +463,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                       IblSpecularWeight(BrdfLut, gSmpLinearClamp, F0, cosT, rough, skySpecMipCount);
     }
 
-    LightTarget[dispatchThreadId.xy] = float4(color * exposure + skySpecular, 1.0);
+    // PRE-EXPOSED, as UE write it (View.PreExposure): in raw cd/m2 an FP16 target clips at 65504,
+    // which put every sun glint on a glossy surface at the same white ~2.1 after exposure.
+    LightTarget[dispatchThreadId.xy] = float4((color * exposure + skySpecular) * lightPreExposure, 1.0);
 }

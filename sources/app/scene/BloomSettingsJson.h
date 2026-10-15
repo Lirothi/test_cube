@@ -46,6 +46,11 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.convPreFilterMult = j.value("convPreFilterMult", s.convPreFilterMult);
     s.convSize = j.value("convSize", s.convSize);
     s.convPercent = j.value("convPercent", s.convPercent);
+    s.convBeforeUpscale = j.value("convBeforeUpscale", s.convBeforeUpscale);
+    s.convTemporalWeight = std::clamp(j.value("convTemporalWeight", s.convTemporalWeight), 0.01f, 1.0f);
+    s.convSunKernelScale = std::clamp(j.value("convSunKernelScale", s.convSunKernelScale), 0.0f, 10.0f);
+    s.convSunGhostScale = std::clamp(j.value("convSunGhostScale", s.convSunGhostScale), 0.0f, 10.0f);
+    s.convSunSplitRadiusDeg = std::clamp(j.value("convSunSplitRadiusDeg", s.convSunSplitRadiusDeg), 0.1f, 45.0f);
     s.convBlades = j.value("convBlades", s.convBlades);
     s.convAnamorphicIntensity = j.value("convAnamorphicIntensity", s.convAnamorphicIntensity);
     s.convAnamorphicLength = j.value("convAnamorphicLength", s.convAnamorphicLength);
@@ -70,7 +75,8 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.sunGlareVeilRadiusDeg = std::max(0.1f, j.value("sunGlareVeilRadiusDeg", s.sunGlareVeilRadiusDeg));
     s.sunGlareSmoothingSec = std::clamp(j.value("sunGlareSmoothingSec", s.sunGlareSmoothingSec), 0.0f, 2.0f);
     s.sunGlareLowSunDeg = std::clamp(j.value("sunGlareLowSunDeg", s.sunGlareLowSunDeg), 0.0f, 90.0f);
-    s.sunGlareLowSunFloor = std::clamp(j.value("sunGlareLowSunFloor", s.sunGlareLowSunFloor), 0.0f, 1.0f);    s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
+    s.sunGlareLowSunFloor = std::clamp(j.value("sunGlareLowSunFloor", s.sunGlareLowSunFloor), 0.0f, 1.0f);
+    s.sunRaysIntensity = std::max(0.0f, j.value("sunRaysIntensity", s.sunRaysIntensity));
     s.sunRaysCount = std::clamp(j.value("sunRaysCount", s.sunRaysCount), 16u, 2000u);
     s.sunRaysBundles = std::clamp(j.value("sunRaysBundles", s.sunRaysBundles), 1u, 128u);
     s.sunRaysBundleWidthDeg = std::clamp(j.value("sunRaysBundleWidthDeg", s.sunRaysBundleWidthDeg), 0.1f, 360.0f);
@@ -105,6 +111,11 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["convPreFilterMult"] = s.convPreFilterMult;
     j["convSize"] = s.convSize;
     j["convPercent"] = s.convPercent;
+    j["convBeforeUpscale"] = s.convBeforeUpscale;
+    j["convTemporalWeight"] = s.convTemporalWeight;
+    j["convSunKernelScale"] = s.convSunKernelScale;
+    j["convSunGhostScale"] = s.convSunGhostScale;
+    j["convSunSplitRadiusDeg"] = s.convSunSplitRadiusDeg;
     j["convBlades"] = s.convBlades;
     j["convAnamorphicIntensity"] = s.convAnamorphicIntensity;
     j["convAnamorphicLength"] = s.convAnamorphicLength;
@@ -123,7 +134,8 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["sunGlareVeilRadiusDeg"] = s.sunGlareVeilRadiusDeg;
     j["sunGlareSmoothingSec"] = s.sunGlareSmoothingSec;
     j["sunGlareLowSunDeg"] = s.sunGlareLowSunDeg;
-    j["sunGlareLowSunFloor"] = s.sunGlareLowSunFloor;    j["sunRaysIntensity"] = s.sunRaysIntensity;
+    j["sunGlareLowSunFloor"] = s.sunGlareLowSunFloor;
+    j["sunRaysIntensity"] = s.sunRaysIntensity;
     j["sunRaysCount"] = s.sunRaysCount;
     j["sunRaysLengthDeg"] = s.sunRaysLengthDeg;
     j["sunRaysBundles"] = s.sunRaysBundles;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 
 #include "core/math/Math.h"
@@ -274,6 +275,15 @@ public:
     float GetSunHalfApexRadians() const { return 0.5f * lightSourceAngleDeg_ * 3.14159265358979323846f / 180.0f; }
     void SetSunHalfApexRadians(float radians) { lightSourceAngleDeg_ = 2.0f * radians * 180.0f / 3.14159265358979323846f; }
 
+    // UE's LightSourceSoftAngle (DirectionalLightComponent: default 0; Ultra Dynamic Sky's sun 0.5, its moon
+    // 0.285), an apex angle in degrees. The renderer takes SoftSourceRadius = sin(half of it) (:403), and
+    // the specular widens the surface's own roughness by it before the sphere light acts
+    // (ShadingModels.ush EnergyNormalization: a2 += SoftRadius^2 / (3.6 VoH + 0.4)) -- a softer glint
+    // edge with the energy kept. Specular only, as in UE (their shadow penumbra use is not ported).
+    float GetLightSourceSoftAngleDegrees() const { return lightSourceSoftAngleDeg_; }
+    void SetLightSourceSoftAngleDegrees(float apexDegrees) { lightSourceSoftAngleDeg_ = apexDegrees; }
+    float GetSoftSourceRadius() const { return std::sin(0.5f * lightSourceSoftAngleDeg_ * 3.14159265358979323846f / 180.0f); }
+
 private:
     Math::float3 direction_;
     Math::float3 color_;
@@ -302,5 +312,6 @@ private:
     float lightShaftLength_ = 1.0f; // UE's reach, see the accessors
     float lightShaftGlareSeed_ = 1.0f; // the glare as drawn joins the seed, see the accessors
     float lightSourceAngleDeg_ = 0.5357f; // UE's LightSourceAngle: the real sun's angular diameter
+    float lightSourceSoftAngleDeg_ = 0.0f; // UE's LightSourceSoftAngle (their default 0)
 };
 

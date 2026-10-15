@@ -75,4 +75,18 @@ bool SkyViewIntersectsGround(float3 dir, float height, float bottom)
 {
     return dir.z < 0.0f && height * height * (dir.z * dir.z - 1.0f) + bottom * bottom >= 0.0f;
 }
+
+// The atmosphere's transmittance from the eye toward `dir` (the LUT's local frame, Z up), as a disc
+// takes it: UE SkyAtmosphereCommon.ush:256-279 with the Bruneton mapping inline. The sun's disc
+// (compose_cs.hlsl) and the moon's and the night layers' (skybox.hlsl).
+float3 SkyTransmittanceToSpace(Texture2D<float4> transmittanceLut, SamplerState smp, float3 dir,
+                               float height, float bottom, float top)
+{
+    const float H = sqrt(top * top - bottom * bottom);
+    const float h = min(height, top);
+    const float rho = sqrt(max(0.0f, h * h - bottom * bottom));
+    const float d = max(0.0f, -h * dir.z + sqrt(max(0.0f, h*h*(dir.z*dir.z-1.0f)+top*top)));
+    const float2 uv = float2((d - (top-h)) / max(1.e-6f, rho+H-(top-h)), rho/H);
+    return height >= top ? 1.0f : transmittanceLut.SampleLevel(smp, uv, 0).rgb;
+}
 #endif

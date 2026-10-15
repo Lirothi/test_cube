@@ -2,6 +2,10 @@
   "albedo": "models/fishing_boat/textures/Bucket_baseColor.png",
   "ambientOcclusion": 1.0,
   "indirectSpecularScale": 1.0,
+  "metalRough": [
+    0.7699999809265137,
+    0.09000000357627869
+  ],
   "mr": "models/fishing_boat/textures/Bucket_metallicRoughness.png",
   "normal": "models/fishing_boat/textures/Bucket_normal.png",
   "normalIsRG": false,
@@ -14,5 +18,6 @@
   "transmissionAlbedoPower": 0.6000000238418579,
   "transmissionNormalWeight": 0.3499999940395355,
   "transmissionStrength": 0.0,
-  "twoSided": true
+  "twoSided": true,
+  "useMR": true
 }

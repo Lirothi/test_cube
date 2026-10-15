@@ -2645,6 +2645,10 @@ void Renderer::CreateDeferredTargets(UINT width, UINT height)
         // levels 1..N packed into the other, and the halving widths always fit.
         sizes.streakWidth = sizes.lensFlareWidth;
         sizes.streakHeight = sizes.lensFlareHeight;
+        // The bloom's temporal input (bloom_conv_cs.hlsl stage 12): half the RENDER resolution, the
+        // jittered image it accumulates -- a 2x2 box of it per texel, as the light shafts' history.
+        sizes.bloomHistoryWidth = sizes.gtaoWidth;
+        sizes.bloomHistoryHeight = sizes.gtaoHeight;
     }
 
     rtManager_.Create(GetDevice(), formats, sizes, Declarations());

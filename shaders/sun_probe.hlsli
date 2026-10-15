@@ -15,5 +15,10 @@ static const uint kSunProbeCentroid = 48u;  // centroid of what shows of the dis
 // curve, positive brightens) -- night vision adds it to the camera's exposure to find what the eye is
 // adapted to -- and at +4 the eye's adaptation before the curve, the state the solve adapts from.
 static const uint kExposureCompensationOffset = 64u;
+// THE PIXEL PROBE (ExposureMetering.cpp kPixelProbeBytes, bloom_conv_cs.hlsl stage 11), behind the
+// compensation record: +0 the brightest pixel's rgb (pre-exposed) and +12 its luminance after the
+// FFT input's local exposure; +16 the window's mean rgb and +28 the luminance of a 4x4 box at the
+// brightest pixel. A debug read-out (editor MCP get_readouts), written only while it is asked for.
+static const uint kPixelProbeOffset = 80u;
 
 #endif // SUN_PROBE_HLSLI

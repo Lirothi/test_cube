@@ -341,6 +341,9 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     constants.invScreenSize = float2(width > 0.f ? (1.0f / width) : 0.0f, height > 0.f ? (1.0f / height) : 0.0f);
     constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
     constants.sunAngularSize = frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f;
+    constants.sunSoftRadius = frame_->dirLight ? frame_->dirLight->GetSoftSourceRadius() : 0.0f;
+    // The light target is pre-exposed (lighting_cb.hlsli lightPreExposure); 1 when pre-exposure is off.
+    constants.lightPreExposure = render::g_preExposure;
 
     // Underwater caustics. Everything comes from the ocean: no water in the level means the
     // whole block stays zeroed and the shader skips it (causticsTint.w == 0).
@@ -907,6 +910,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
                                        camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
         constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();
+        constants.lightPreExposure = render::g_preExposure;   // the light target is pre-exposed
 
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
         RecordComputeDispatch(renderer, t.cl, spotMaterial.get(), cbSize,
@@ -976,6 +980,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
                                        camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
         constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();
+        constants.lightPreExposure = render::g_preExposure;   // the light target is pre-exposed
 
         // s2 = comparison sampler for the point shadow cube (B3).
         const auto samplerDescs = std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp(), *SamplerManager::ComparisonLinearClamp() };
@@ -1134,6 +1139,17 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             constants.skyViewPlanet = float4(sv.planet[0], sv.planet[1],
                 (lutReady && sv.planet[3] != 0.0f) ? 1.0f : 0.0f,
                 sv.exposure[0] > 0.0f ? 1.0f / sv.exposure[0] : 1.0f);
+            // THE SUN'S DISC, drawn here pre-exposed (compose_cs.hlsl SunDiscRaw), from the same frame data
+            // the sky pass used to draw it from. UE GetLightDiskLuminance: outer-space illuminance over the
+            // disc's solid angle, 2 pi (1 - cos half-apex) -- written 4 pi sin^2(r/2), no cancellation.
+            const bool disc = lutReady && sv.planet[3] != 0.0f && sv.sunDirection[3] > 0.0f &&
+                              skyAtmosphere_.TransmittanceSrv().ptr != 0;
+            const float halfApex = sv.sunDirection[3];
+            const float solidAngle = 4.0f * 3.14159265f * std::sin(0.5f * halfApex) * std::sin(0.5f * halfApex);
+            const float invSolid = solidAngle > 0.0f ? 1.0f / solidAngle : 0.0f;
+            constants.sunDiscDir = float4(sv.sunDirection[0], sv.sunDirection[1], sv.sunDirection[2], disc ? halfApex : 0.0f);
+            constants.sunDiscLuminance = float4(sv.illuminance[0] * invSolid, sv.illuminance[1] * invSolid,
+                                                sv.illuminance[2] * invSolid, sv.planet[2]);
         }
         D3D12_CPU_DESCRIPTOR_HANDLE wetnessSrv = D.depthSRV;
         if (frame_->ocean)
@@ -1173,7 +1189,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               decisions_.volumetricCloud ? D.cloudResolvedSRV : renderer->VsmDummyTexSrv(),
               decisions_.volumetricCloud ? D.cloudResolvedDepthSRV : renderer->VsmDummyTexSrv(),
               // t18: the furthest HZB, trace mode 0's bilateral upsampling (gated by `cloudParams.w`).
-              D.hzbSRV.ptr != 0 ? D.hzbSRV : renderer->VsmDummyTexSrv() },
+              D.hzbSRV.ptr != 0 ? D.hzbSRV : renderer->VsmDummyTexSrv(),
+              // t19: the sky's transmittance LUT, the sun's disc (gated by `sunDiscDir.w`).
+              skyAtmosphere_.TransmittanceSrv().ptr != 0 ? skyAtmosphere_.TransmittanceSrv() : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

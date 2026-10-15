@@ -233,37 +233,32 @@ struct HeightFogSettings
 struct BloomSettings
 {
     bool enabled = false;
-    // Weight of the bloom added back to the scene, in scene units. UE's BloomIntensity default is
-    // 0.675 against their own extraction; ours is deliberately lower until it has been judged on the
-    // canonical views, because the plan's own warning for this step is that ocean glints must not
-    // turn the frame into a white fog bank.
-    float intensity = 0.25f;
-    // Luminance AFTER exposure at which bloom starts, in the units the viewer sees -- which is what
-    // stops a darker scene from silently losing its bloom.
+    // UE's BloomIntensity, default 0.675. For the convolution it is their ScatterDispersionIntensity
+    // (ScatterDispersion and ConvolutionIntensity at their default 1): how much of the kernel's
+    // scatter the light is moved into. For the pyramid it scales UE's six Gaussian weights (I / 6).
+    // It also scales the ghosts, as UE's LensFlareIntensity * BloomIntensity.
+    float intensity = 0.675f;
+    // THE PYRAMID'S threshold only -- UE's FFT bloom has none, and neither does the convolution here
+    // (its FilterPixel is convPreFilter*). Luminance in the units the viewer sees, as UE's
+    // BloomThreshold.
     //
     // NEGATIVE MEANS NO THRESHOLD AT ALL, and -1 is UE's own default
-    // (`FPostProcessSettings::BloomThreshold`, Scene.cpp:423), described there as "all pixels affect
+    // (`FPostProcessSettings::BloomThreshold`, Scene.cpp:457), described there as "all pixels affect
     // bloom equally (physically correct)". A lens scatters light from everything in front of it, so
     // thresholding is an artistic choice; it also makes bloom grow FASTER than exposure does,
     // because raising exposure both scales the pixels already over the line and pushes new ones
-    // over it. At -1 the response is exactly linear in exposure.
-    // SHIPPED POSITIVE, EVEN THOUGH -1 IS UE'S DEFAULT, and the reason is this project's CONTENT.
-    // Measured on wind_test/sun_glint: the sun region is only about 20x the sky region, where a real
-    // HDR sky puts the solar disc thousands of times above it. The sky fills half the frame, so at
-    // -1 its TOTAL energy swamps the sun even though each of its pixels is dimmer -- the convolution
-    // then reads as a uniform veil and the rays disappear (measured: veil on darks 8.3 vs lift near
-    // the sun 6.6, i.e. the wrong way round). -1 is the physically correct setting and stays
-    // available; it needs a sky with a real solar disc to look like anything.
-    float threshold = 1.0f;
+    // over it. At -1 the response is exactly linear in exposure. (This shipped positive while the
+    // sun's disc was clamped to ~20x the sky; the disc is physical now, thousands of times it.)
+    float threshold = -1.0f;
     // Slope of the ramp above the threshold. 0.5 is UE's hardwired value.
     float softKnee = 0.5f;
     // Tap spacing of the tent upsample, in destination texels. Wider = a broader, softer halo at the
     // same intensity; it does not change the total energy, only how far it is spread.
     float radius = 1.0f;
-    // Karis average on the first downsample: weight each tap by 1/(1+luma) so a single blown-out
-    // texel cannot dominate its tile. This is what keeps moving sun glints on water from pumping the
-    // whole bloom, and it is why this defaults ON.
-    bool fireflyClamp = true;
+    // Karis average on the pyramid's first downsample: weight each tap by 1/(1+luma) so a single
+    // blown-out texel cannot dominate its tile. OURS -- UE's downsample chain has none
+    // (PostProcessDownsample.usf), so it defaults OFF; on for moving glints that pump the bloom.
+    bool fireflyClamp = false;
 
     // P8C: which method FILLS the bloom texture. The tonemap is unaware of this -- it samples one
     // texture either way, and `intensity` scales both.
@@ -285,37 +280,58 @@ struct BloomSettings
     // photograph swaps the entire look of the glare with nothing else to retune. UE's own
     // DefaultBloomKernel.dds ships beside the derived star and is one pick away.
     std::string convKernel = "textures/BloomKernelStar.dds";
-    // P8C-6: a colour multiplier on the kernel IMAGE, applied where it is resampled into the grid.
-    // It survives the DC divide: that normalises by the LARGEST channel sum, precisely so a
-    // kernel's own colour balance is not washed out, so tinting the kernel tints the glare. This
-    // is the runtime equivalent of re-authoring the photograph, and it costs nothing -- the kernel
-    // spectrum is rebuilt only when its key moves, and the tint is part of that key.
+    // OURS, UE have no such control: a per-channel ScatterDispersion -- how strongly each channel
+    // scatters, so a bluish tint gives a bluish flare and what a channel does not scatter stays in
+    // the scene (BloomRenderer FinalizeApply). It cannot live in the kernel image any more: the FFT
+    // normalises each channel by its own sum, as UE's does, which would cancel it.
     float convKernelTint[3] = { 1.0f, 1.0f, 1.0f };
-    // P8C-5 -- UE'S BRIGHT-PIXEL GAIN, WHICH IS WHAT THEIR FFT BLOOM HAS INSTEAD OF A THRESHOLD.
+    // UE'S BRIGHT-PIXEL GAIN, WHICH IS WHAT THEIR FFT BLOOM HAS INSTEAD OF A THRESHOLD.
     //
     // `BloomConvolutionPreFilterMin/Max/Mult`, applied in GPUFastFourierTransform.usf's FilterPixel
-    // on the forward transform only:
+    // on the forward transform only, in the PRE-EXPOSED units the scene colour is stored in:
     //
     //     if (Luma > Min) { Target = Mult * (Luma - Min) + Min; Target = min(Target, Max);
     //                       rgb *= Target / Luma; }
     //
-    // Nothing is CUT. A pixel below Min passes through untouched -- which is why an open sun keeps
-    // its glow no matter how the auto-exposure moves -- and a pixel above Min is REWEIGHTED, with
-    // `Max` as a ceiling so a frame full of bright gaps cannot run away. That ceiling is the whole
-    // reason one setting can serve a beach and a palm grove; a threshold has no such thing, it can
-    // only decide membership, and both frames then move together (measured: at 5 both bloomed, at 6
-    // both died).
-    //
-    // Mult <= 0 deactivates it, which is UE's own default state.
-    float convPreFilterMin = 1.5f;
-    float convPreFilterMax = 6.0f;
-    float convPreFilterMult = 0.0f;
+    // Nothing is CUT. A pixel below Min passes through untouched and a pixel above it is
+    // REWEIGHTED, with `Max` as a ceiling so a frame full of bright gaps -- or a physical sun disc --
+    // cannot run away. Active when Min < Max (UE's gate) and Mult > 0 (under theirs Mult 0 clamps
+    // everything above Min to Min; here, as this engine's levels have always meant it, it is off).
+    // UE's defaults 7 / 15000 / 15 (Scene.cpp:480-482).
+    float convPreFilterMin = 7.0f;
+    float convPreFilterMax = 15000.0f;
+    float convPreFilterMult = 15.0f;
     float convSize = 1.0f;
     // Resolution of the convolution as a percent of the DISPLAY resolution -- UE's
     // r.Bloom.ScreenPercentage (their default is 100; 50 is this engine's grid ceiling, and going
     // below buys the transform cost back). The 640x360 grid the first P8C ran on is 12.5 here,
     // and it is what made a 1-2 texel ray a dashed line of squares.
     float convPercent = 50.0f;
+    // Feed the convolution the scene BEFORE the upscaler (2026-10-15). DLSS treats a glint of a few
+    // pixels as aliasing and flattens it: a chrome sphere's sun glint kept ~10 % of its energy (the
+    // MCP pixel probe, before vs after DLSS), so the kernel's star never formed, while UE's TSR keeps
+    // it. The grid is a fraction of the display either way and samples by UV, so the render-resolution
+    // image only changes what reaches it. No effect without DLSS.
+    bool convBeforeUpscale = true;
+    // What the scene before the upscaler costs: it is JITTERED, so a glint under a pixel lands in it or
+    // not frame by frame and the star on a chrome glint flickered 40-50 % frame to frame. The bloom's
+    // light (the FFT, the ghosts, the streak) is therefore accumulated over frames first, reprojected by
+    // the G-buffer velocity (bloom_conv_cs.hlsl stage 12) -- the averaging UE gets from TSR, whose output
+    // their bloom reads. This frame's weight: 1 = no accumulation.
+    float convTemporalWeight = 0.1f;
+    // ART CONTROLS, not physics (owner, 2026-10-15: "dim the sun's kernel while raising it for the rest").
+    // The sun disc carries thousands of times a glint's light, so with one Intensity its star and ghosts
+    // dominate while a glint's barely show. These scale the DISC's own share -- its tiles of the
+    // convolution's input after FilterPixel, its tiles of the ghost scatter -- found by direction (the
+    // disc and 1.25-2 radii round it), so Intensity / Ghost Intensity can be raised for everything and
+    // the sun held back. 1 = the sun like any other source.
+    float convSunKernelScale = 1.0f;
+    float convSunGhostScale = 1.0f;
+    // What "the sun" is to those two: the SKY within this many degrees of it (full to half of it). The
+    // disc alone is not enough -- the bright sky round it makes as much of the halo and the ghosts --
+    // and geometry never counts, so a glint next to the sun on screen keeps the common share. At least
+    // the disc's own diameter.
+    float convSunSplitRadiusDeg = 8.0f;
     // The iris. Only the GHOST BOKEH SPRITE is built from these now -- the sprite is baked at
     // load from the blade controls, which is where they survived the aperture kernel's removal.
     // P8C-2d: `convBladeRotation` was REMOVED, not hidden. Measured against a two-run noise floor
@@ -341,7 +357,7 @@ struct BloomSettings
     // and being pointwise it has no window to hang off a frame edge. `convAnamorphicNarrow` (a
     // vertical min-filter) was DELETED with the cascade -- a min cannot taper at a border, which
     // is what put first a fat band and then a straight horizontal cut across the streak.
-    float convAnamorphicThreshold = 1.5f; // absolute units too -- see convGhostThreshold
+    float convAnamorphicThreshold = 1.5f; // pre-exposed units, as convGhostThreshold
     float convAnamorphicChroma = 0.5f;
     float convAnamorphicTint[3] = { 1.0f, 1.0f, 1.0f };
     // Lens ghosts, UE's mechanism (P8C-2 step 5): a bokeh SCATTER over the thresholded scene
@@ -351,22 +367,21 @@ struct BloomSettings
     uint32_t convGhosts = 0u;
     // Sprite radius as a PERCENT of frame width -- UE's LensFlareBokehSize, default 3.
     float convGhostBokeh = 3.0f;
-    float convGhostIntensity = 0.6f;
-    // The scatter's OWN threshold -- UE's LensFlareThreshold, in ABSOLUTE units: authored as
-    // stored brightness at EV100 = 14, rescaled by the frame's pre-exposure at dispatch (P8C-2c),
-    // so the same source crosses it from any viewpoint. Ghosts are images of SOURCES; too low and
-    // sunlit foliage or bright clouds become ones (both observed). On wind_test's scale (sky ~1,
-    // corona 4-6, sun core 10-12) the default takes the core only: one clean disc ghost.
-    float convGhostThreshold = 10.0f;
+    // UE's LensFlareIntensity, default 1; the ghosts get it times `intensity` (BloomIntensity).
+    float convGhostIntensity = 1.0f;
+    // UE's LensFlareThreshold, default 8: a BINARY gate on dot(rgb, 1) of the pre-exposed scene
+    // (LensFlareBlurVS). Ghosts are images of SOURCES; the physical sun disc clears it by thousands.
+    float convGhostThreshold = 8.0f;
     // FAKE SUN GLARE -- the corona the convolution does not give (its kernel is the size of the
     // bloom image's percent and the photographed star has no wide veil). An analytic halo about
     // the sun's direction: an exponential core plus a wide veil, both in DEGREES, so its size does
     // not follow the resolution or the field of view. Its colour and strength are the frame's own
     // pixels over the sun disc, so whatever hides or tints the sun (a palm, a cloud, a sunset)
     // hides or tints the glare. Runs with either bloom method, into the same target.
-    // 0 = off. 0.05 from a sweep of 0-0.1 at a 28-degree and a 4-degree sun: a soft corona at noon,
-    // a wide warm glow at sunset; 0.1 washes a low sun out.
-    float sunGlareIntensity = 0.05f;
+    // The SHARE OF THE DISC'S LIGHT in the glare (BloomRenderer::SunGlareScale): the disc's radiance
+    // times its solid angle, spread over the profile's integral. 0 = off. 0.005 matched the pre-
+    // physical-disc look on wind_test (three views against the d1b6183 build, within 2/255).
+    float sunGlareIntensity = 0.005f;
     float sunGlareRadiusDeg = 2.0f;      // the core's e-folding angle
     float sunGlareVeil = 0.15f;          // the wide veil's weight, relative to the core's peak
     float sunGlareVeilRadiusDeg = 12.0f; // the veil's half-strength angle
@@ -389,9 +404,10 @@ struct BloomSettings
     // after Ritschel's "Temporal Glare": dense bright BUNDLES with dim gaps between them, fine
     // NEEDLES inside them, a power-law fall-off with warm tips, a faint lenticular HALO ring, and an
     // optional regular star. Same colour source as the glare: the frame's pixels over the sun disc.
-    // 0 = off. 0.15 from a sweep of 0.1-0.6 at a 28-degree and a 4-degree sun (the low sun reads
-    // stronger: the exposure is higher there).
-    float sunRaysIntensity = 0.15f;
+    // Scaled by the disc's ENERGY (its solid angle over the corona's nominal area, 2 pi length^2 --
+    // BloomRenderer::SunRays), so it follows the disc's light rather than its radiance. 0 = off.
+    // 0.008 matched the pre-physical-disc look, as sunGlareIntensity's 0.005.
+    float sunRaysIntensity = 0.008f;
     uint32_t sunRaysCount = 100u;        // needles around the full circle
     uint32_t sunRaysBundles = 12u;       // bright bundles around the full circle
     float sunRaysBundleWidthDeg = 5.0f;  // a bundle's FWHM as an ANGLE around the sun (at most ~its spacing)
@@ -630,6 +646,20 @@ struct SceneRenderSettings
     int debugTexTarget = 0;
     // Mip shown for a target that has a chain (P6C HZB). Ignored by single-level targets.
     int debugTexMip = 0;
+    // THE PIXEL PROBE (editor MCP get_readouts; `--set=debug.probeU/probeV/probeRadius`): the
+    // brightest pre-exposed HDR pixel inside a window of `debugProbeRadiusPx` around (u, v) of the
+    // frame the tonemap reads, the window's mean, a 4x4 box at the brightest pixel (what one texel of
+    // the bloom's FFT grid at 25 % averages) and the brightest pixel after the local exposure the FFT
+    // input gets -- read back with the exposure record (bloom_conv_cs.hlsl stage 11). It measures
+    // what a screenshot cannot: the tone curve has already clipped a glint to white there.
+    // Radius 0 = off, nothing is dispatched.
+    float debugProbeU = 0.5f;
+    float debugProbeV = 0.5f;
+    float debugProbeRadiusPx = 0.0f;
+    // Which frame the probe reads: 0 the one the tonemap and the bloom read (the upscaler's output
+    // when DLSS runs), 1 the scene BEFORE the upscaler (render resolution; the same image without DLSS),
+    // 2 the bloom target the tone curve adds (pre-exposed, its own resolution).
+    std::uint32_t debugProbeSource = 0u;
     bool showProfiler = false;
     // S8: the reflection source. Default RT (today's behavior). RT runs the
     // Tier-1 ray-traced pass instead of SSR; SkyOnly clears the reflection buffer

@@ -49,6 +49,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     invScreenSize = material->ComputeCB0FieldHandle("invScreenSize");
     sunMetalSpec = material->ComputeCB0FieldHandle("sunMetalSpec");
     sunAngularSize = material->ComputeCB0FieldHandle("sunAngularSize");
+    sunSoftRadius = material->ComputeCB0FieldHandle("sunSoftRadius");
+    lightPreExposure = material->ComputeCB0FieldHandle("lightPreExposure");
     useVsm = material->ComputeCB0FieldHandle("useVsm");
     vsmDepthBias = material->ComputeCB0FieldHandle("vsmDepthBias");
     clipmapBaseExtent = material->ComputeCB0FieldHandle("clipmapBaseExtent");
@@ -163,6 +165,7 @@ void ScenePointLightCBHandles::Populate(Material* material)
     contactShadowThickness = material->ComputeCB0FieldHandle("contactShadowThickness");
     contactShadowFrameId = material->ComputeCB0FieldHandle("contactShadowFrameId");
     contactShadowLocalMode = material->ComputeCB0FieldHandle("contactShadowLocalMode");
+    lightPreExposure = material->ComputeCB0FieldHandle("lightPreExposure");
 }
 
 void SceneSpotLightCBHandles::Populate(Material* material)
@@ -198,6 +201,7 @@ void SceneSpotLightCBHandles::Populate(Material* material)
     contactShadowThickness = material->ComputeCB0FieldHandle("contactShadowThickness");
     contactShadowFrameId = material->ComputeCB0FieldHandle("contactShadowFrameId");
     contactShadowLocalMode = material->ComputeCB0FieldHandle("contactShadowLocalMode");
+    lightPreExposure = material->ComputeCB0FieldHandle("lightPreExposure");
 }
 
 void SceneSsrCBHandles::Populate(Material* material)
@@ -288,6 +292,8 @@ void SceneComposeCBHandles::Populate(Material* material)
     aerialViewProj = material->ComputeCB0FieldHandle("aerialViewProj");
     cloudParams = material->ComputeCB0FieldHandle("cloudParams");
     cloudJitter = material->ComputeCB0FieldHandle("cloudJitter");
+    sunDiscDir = material->ComputeCB0FieldHandle("sunDiscDir");
+    sunDiscLuminance = material->ComputeCB0FieldHandle("sunDiscLuminance");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -376,6 +382,8 @@ void SceneExposureBaseLumCBHandles::Populate(Material* material)
     baseWidth = material->ComputeCB0FieldHandle("baseWidth");
     invPreExposure = material->ComputeCB0FieldHandle("invPreExposure");
     baseHeight = material->ComputeCB0FieldHandle("baseHeight");
+    baseStage = material->ComputeCB0FieldHandle("baseStage");
+    blurRadius = material->ComputeCB0FieldHandle("blurRadius");
 }
 
 void SceneExposureBilateralCBHandles::Populate(Material* material)
@@ -1253,6 +1261,8 @@ void BloomHandles::Populate(Material* material)
     softKnee = material->ComputeCB0FieldHandle("softKnee");
     radius = material->ComputeCB0FieldHandle("radius");
     fireflyClamp = material->ComputeCB0FieldHandle("fireflyClamp");
+    levelWeight = material->ComputeCB0FieldHandle("levelWeight");
+    srcWeight = material->ComputeCB0FieldHandle("srcWeight");
 }
 
 UINT SceneResourceBootstrapper::GetBloomCBSizeBytes() const
@@ -1282,17 +1292,24 @@ void BloomConvHandles::Populate(Material* material)
     transformSize = material->ComputeCB0FieldHandle("transformSize");
     imageSize = material->ComputeCB0FieldHandle("imageSize");
     sourceSize = material->ComputeCB0FieldHandle("sourceSize");
-    threshold = material->ComputeCB0FieldHandle("threshold");
-    softKnee = material->ComputeCB0FieldHandle("softKnee");
     preFilterMin = material->ComputeCB0FieldHandle("preFilterMin");
     preFilterMax = material->ComputeCB0FieldHandle("preFilterMax");
     preFilterMult = material->ComputeCB0FieldHandle("preFilterMult");
-    kernelTint = material->ComputeCB0FieldHandle("kernelTint");
     kernelSpanTexels = material->ComputeCB0FieldHandle("kernelSpanTexels");
     kernelBoxTaps = material->ComputeCB0FieldHandle("kernelBoxTaps");
     kernelBoxStep = material->ComputeCB0FieldHandle("kernelBoxStep");
-    kernelCoreRingUV = material->ComputeCB0FieldHandle("kernelCoreRingUV");
+    kernelClampLevel = material->ComputeCB0FieldHandle("kernelClampLevel");
     kernelCenterUV = material->ComputeCB0FieldHandle("kernelCenterUV");
+    resolveScale = material->ComputeCB0FieldHandle("resolveScale");
+    leHighlightContrast = material->ComputeCB0FieldHandle("leHighlightContrast");
+    leShadowContrast = material->ComputeCB0FieldHandle("leShadowContrast");
+    leDetailStrength = material->ComputeCB0FieldHandle("leDetailStrength");
+    leBlurredBlend = material->ComputeCB0FieldHandle("leBlurredBlend");
+    leHighlightThreshold = material->ComputeCB0FieldHandle("leHighlightThreshold");
+    leShadowThreshold = material->ComputeCB0FieldHandle("leShadowThreshold");
+    leMinLogLum = material->ComputeCB0FieldHandle("leMinLogLum");
+    leInvLogLumRange = material->ComputeCB0FieldHandle("leInvLogLumRange");
+    leExposure = material->ComputeCB0FieldHandle("leExposure");
     anamorphicIntensity = material->ComputeCB0FieldHandle("anamorphicIntensity");
     anamorphicLength = material->ComputeCB0FieldHandle("anamorphicLength");
     anamorphicSigma = material->ComputeCB0FieldHandle("anamorphicSigma");
@@ -1307,6 +1324,8 @@ void BloomConvHandles::Populate(Material* material)
     sunGlareDir = material->ComputeCB0FieldHandle("sunGlareDir");
     sunGlareProj = material->ComputeCB0FieldHandle("sunGlareProj");
     sunGlareParams = material->ComputeCB0FieldHandle("sunGlareParams");
+    historyParams = material->ComputeCB0FieldHandle("historyParams");
+    sunShare = material->ComputeCB0FieldHandle("sunShare");
 }
 
 void LensFlareHandles::Populate(Material* material)
@@ -1319,6 +1338,8 @@ void LensFlareHandles::Populate(Material* material)
     kernelSizePx = material->ComputeCB0FieldHandle("kernelSizePx");
     threshold = material->ComputeCB0FieldHandle("threshold");
     kernelAreaInverse = material->ComputeCB0FieldHandle("kernelAreaInverse");
+    sunDirView = material->ComputeCB0FieldHandle("sunDirView");
+    sunShare = material->ComputeCB0FieldHandle("sunShare");
 }
 
 UINT SceneResourceBootstrapper::GetBloomConvCBSizeBytes() const
@@ -1380,19 +1401,26 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.transformSize, d.transformSize, dest);
     matBloomConvCS_->UpdateCBField(h.imageSize, d.imageSize, dest);
     matBloomConvCS_->UpdateCBField(h.sourceSize, d.sourceSize, dest);
-    matBloomConvCS_->UpdateCBField(h.threshold, d.threshold, dest);
-    matBloomConvCS_->UpdateCBField(h.softKnee, d.softKnee, dest);
     matBloomConvCS_->UpdateCBField(h.preFilterMin, d.preFilterMin, dest);
     matBloomConvCS_->UpdateCBField(h.preFilterMax, d.preFilterMax, dest);
     matBloomConvCS_->UpdateCBField(h.preFilterMult, d.preFilterMult, dest);
-    matBloomConvCS_->UpdateCBField(h.kernelTint,
-        Math::float3(d.kernelTint[0], d.kernelTint[1], d.kernelTint[2]), dest);
     matBloomConvCS_->UpdateCBField(h.kernelSpanTexels, d.kernelSpanTexels, dest);
     matBloomConvCS_->UpdateCBField(h.kernelBoxTaps, d.kernelBoxTaps, dest);
     matBloomConvCS_->UpdateCBField(h.kernelBoxStep, d.kernelBoxStep, dest);
-    matBloomConvCS_->UpdateCBField(h.kernelCoreRingUV, d.kernelCoreRingUV, dest);
+    matBloomConvCS_->UpdateCBField(h.kernelClampLevel, d.kernelClampLevel, dest);
     matBloomConvCS_->UpdateCBField(h.kernelCenterUV,
         Math::float2(d.kernelCenterUV[0], d.kernelCenterUV[1]), dest);
+    matBloomConvCS_->UpdateCBField(h.resolveScale,
+        Math::float3(d.resolveScale[0], d.resolveScale[1], d.resolveScale[2]), dest);
+    matBloomConvCS_->UpdateCBField(h.leHighlightContrast, d.leHighlightContrast, dest);
+    matBloomConvCS_->UpdateCBField(h.leShadowContrast, d.leShadowContrast, dest);
+    matBloomConvCS_->UpdateCBField(h.leDetailStrength, d.leDetailStrength, dest);
+    matBloomConvCS_->UpdateCBField(h.leBlurredBlend, d.leBlurredBlend, dest);
+    matBloomConvCS_->UpdateCBField(h.leHighlightThreshold, d.leHighlightThreshold, dest);
+    matBloomConvCS_->UpdateCBField(h.leShadowThreshold, d.leShadowThreshold, dest);
+    matBloomConvCS_->UpdateCBField(h.leMinLogLum, d.leMinLogLum, dest);
+    matBloomConvCS_->UpdateCBField(h.leInvLogLumRange, d.leInvLogLumRange, dest);
+    matBloomConvCS_->UpdateCBField(h.leExposure, d.leExposure, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicIntensity, d.anamorphicIntensity, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicLength, d.anamorphicLength, dest);
     matBloomConvCS_->UpdateCBField(h.anamorphicSigma, d.anamorphicSigma, dest);
@@ -1410,6 +1438,8 @@ void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants
     matBloomConvCS_->UpdateCBField(h.sunGlareDir, d.sunGlareDir, dest);
     matBloomConvCS_->UpdateCBField(h.sunGlareProj, d.sunGlareProj, dest);
     matBloomConvCS_->UpdateCBField(h.sunGlareParams, d.sunGlareParams, dest);
+    matBloomConvCS_->UpdateCBField(h.historyParams, d.historyParams, dest);
+    matBloomConvCS_->UpdateCBField(h.sunShare, d.sunShare, dest);
 }
 
 UINT SceneResourceBootstrapper::GetFogApplyCBSizeBytes() const
@@ -1433,6 +1463,8 @@ void SceneResourceBootstrapper::WriteLensFlareConstants(const LensFlareConstants
     matLensFlare_->UpdateCBField(h.kernelSizePx, d.kernelSizePx, dest);
     matLensFlare_->UpdateCBField(h.threshold, d.threshold, dest);
     matLensFlare_->UpdateCBField(h.kernelAreaInverse, d.kernelAreaInverse, dest);
+    matLensFlare_->UpdateCBField(h.sunDirView, d.sunDirView, dest);
+    matLensFlare_->UpdateCBField(h.sunShare, d.sunShare, dest);
 }
 
 void SceneResourceBootstrapper::WriteBloomConstants(const BloomPassConstants& d, uint8_t* dest) const
@@ -1446,6 +1478,8 @@ void SceneResourceBootstrapper::WriteBloomConstants(const BloomPassConstants& d,
     matBloomCS_->UpdateCBField(bloomHandles_.softKnee, d.softKnee, dest);
     matBloomCS_->UpdateCBField(bloomHandles_.radius, d.radius, dest);
     matBloomCS_->UpdateCBField(bloomHandles_.fireflyClamp, d.fireflyClamp, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.levelWeight, d.levelWeight, dest);
+    matBloomCS_->UpdateCBField(bloomHandles_.srcWeight, d.srcWeight, dest);
 }
 
 UINT SceneResourceBootstrapper::GetGtaoFilterCBSizeBytes() const
@@ -1483,7 +1517,8 @@ UINT SceneResourceBootstrapper::GetExposureBaseLumCBSizeBytes() const
     return matExposureBaseLumCS_ ? matExposureBaseLumCS_->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) : 0u;
 }
 
-void SceneResourceBootstrapper::WriteExposureBaseLumConstants(uint8_t* dest) const
+void SceneResourceBootstrapper::WriteExposureBaseLumConstants(uint8_t* dest, uint32_t stage,
+                                                              float blurRadiusTexels) const
 {
     if (!matExposureBaseLumCS_ || !dest)
     {
@@ -1495,6 +1530,8 @@ void SceneResourceBootstrapper::WriteExposureBaseLumConstants(uint8_t* dest) con
         ExposureMetering::kBaseLumHeight, dest);
     matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.invPreExposure,
         1.0f / std::max(render::g_preExposure, 1.0e-8f), dest);
+    matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.baseStage, stage, dest);
+    matExposureBaseLumCS_->UpdateCBField(exposureBaseLumHandles_.blurRadius, blurRadiusTexels, dest);
 }
 
 UINT SceneResourceBootstrapper::GetExposureBilateralCBSizeBytes() const
@@ -1574,6 +1611,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.invScreenSize, data.invScreenSize, dest);
     matLighting_->UpdateCBField(handles.sunMetalSpec, data.sunMetalSpec, dest);
     matLighting_->UpdateCBField(handles.sunAngularSize, data.sunAngularSize, dest);
+    matLighting_->UpdateCBField(handles.sunSoftRadius, data.sunSoftRadius, dest);
+    matLighting_->UpdateCBField(handles.lightPreExposure, data.lightPreExposure, dest);
     matLighting_->UpdateCBField(handles.useVsm, data.useVsm, dest);
     matLighting_->UpdateCBField(handles.vsmDepthBias, data.vsmDepthBias, dest);
     matLighting_->UpdateCBField(handles.clipmapBaseExtent, data.clipmapBaseExtent, dest);
@@ -1661,6 +1700,7 @@ void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassCon
     matPointLightCS_->UpdateCBField(handles.contactShadowThickness, data.contactShadowThickness, dest);
     matPointLightCS_->UpdateCBField(handles.contactShadowFrameId, data.contactShadowFrameId, dest);
     matPointLightCS_->UpdateCBField(handles.contactShadowLocalMode, data.contactShadowLocalMode, dest);
+    matPointLightCS_->UpdateCBField(handles.lightPreExposure, data.lightPreExposure, dest);
 }
 
 void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConstants& data, uint8_t* dest) const
@@ -1696,6 +1736,7 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.contactShadowThickness, data.contactShadowThickness, dest);
     matSpotLightCS_->UpdateCBField(handles.contactShadowFrameId, data.contactShadowFrameId, dest);
     matSpotLightCS_->UpdateCBField(handles.contactShadowLocalMode, data.contactShadowLocalMode, dest);
+    matSpotLightCS_->UpdateCBField(handles.lightPreExposure, data.lightPreExposure, dest);
 }
 
 void SceneResourceBootstrapper::WriteSsrConstants(const SsrPassConstants& data, uint8_t* dest) const
@@ -1905,6 +1946,8 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.aerialViewProj, data.aerialViewProj, dest);
     matComposeCS_->UpdateCBField(handles.cloudParams, data.cloudParams, dest);
     matComposeCS_->UpdateCBField(handles.cloudJitter, data.cloudJitter, dest);
+    matComposeCS_->UpdateCBField(handles.sunDiscDir, data.sunDiscDir, dest);
+    matComposeCS_->UpdateCBField(handles.sunDiscLuminance, data.sunDiscLuminance, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

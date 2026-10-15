@@ -289,6 +289,15 @@ each and are not obvious:
 
 ### Claude Code drives the editor (MCP)
 
+**ALWAYS CHECK THE MCP FIRST, AND EXTEND IT WHEN IT IS NOT ENOUGH** (owner, 2026-10-15). Anything
+that looks at or tunes the RUNNING renderer -- an A/B of a look, a knob sweep, "does this control
+move the picture", a readout -- goes through one open editor and these tools, not through dozens of
+headless launches: a launch is ~15 s of boot and warm-up for ONE picture, and fifty of them is a
+quarter of an hour the owner sits waiting for. If the MCP cannot do what the check needs, ADD it
+(`EditorMcpServer.cpp` tool + its case in `tools/intent_regression.cpp`
+`TestMcpDrivesTheSameRoad`, built in Debug for the gate and in Release_Editor to use it) rather than
+working around it. Headless `--shot` / `--sweep` stay for gates and for builds without the editor.
+
 The running Level Editor is an MCP server at `http://127.0.0.1:8128/mcp` (streamable HTTP,
 localhost only; `sources/editor/intent/EditorMcpServer.*`), registered for Claude Code by
 `.mcp.json` in the repo root. Tools: `editor_guide` (the local model's own system prompt, rebuilt
@@ -296,6 +305,37 @@ from the open level: every action, query and name — read it first), `run_actio
 `preview_action` (the same `{action, target, params}` JSON the local model emits, through the same
 `ParseAnswer` → `BuildIntentPreview` → `ExecuteIntent`), `query`, `get_camera`, `set_camera`,
 `screenshot` (the editor window as a PNG, taken at the `--shot` safe point), `undo`.
+
+The look-dev loop (2026-10-15): `set_settings {set: "bloom.intensity:0.03;tod.time:17.8"}` changes
+the running scene through `--set`'s own name table (App.cpp `ApplySweepValue`) -- TRANSIENT: no undo
+entry, nothing to save, an Inspector edit of the same object re-applies the document over it -- and
+re-meters the exposure; `screenshot {clean: true, path: "...png", settleFrames: 60}` writes the
+frame WITHOUT the editor's panels (scene + HUD, comparable with a headless `--shot`) at full size and
+sends no picture back unless `image`; `reset_settings` puts every environment object back to the open
+document (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*` -- are not in the
+document and stay as last set); `get_readouts` returns the metered/adapted EV100, the pre-exposure,
+the sun probe (disc colour, visible share) and the frame rate; `set_camera {lookAt: "sun",
+offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has it (`position`
+optional). Kill the editor afterwards (`Stop-Process`), as for any live MCP check.
+
+MEASURE, DON'T READ A SCREENSHOT: the tone curve clips a glint to white, so "how bright is it" is
+unanswerable from a PNG. `set_settings {set: "debug.probeU:0.537;debug.probeV:0.469;debug.probeRadius:40"}`
+(UV of the frame, radius in px; `debug.probeSource:1` = the scene before DLSS, `2` = the bloom target
+the tone curve adds) and `get_readouts` then
+carries `pixelProbe`: the brightest PRE-EXPOSED pixel of the window (rgb), the same after the bloom
+input's local exposure, a 4x4 box at it and the window's mean (bloom_conv_cs.hlsl stage 11, read back
+with the exposure record). That is how the 65504-nit clip of the light target was found (2026-10-15).
+`run_action setSurface {metal, roughness}` makes an object chrome/lacquer/matte live (undo restores).
+`set_settings {set: "wind.freeze:1"}` holds the wind + ocean pose (`--wind-freeze` for a running
+editor; `0` releases it, `reset_settings` does not): without it two looks of the sea are two different
+seas. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
+-- set `bloom.ghostIntensity:0` for that read.
+A FLICKER IS READ FRAME BY FRAME: two `get_readouts` calls land ~10 frames apart and see a drift, never
+a flicker. `get_readouts {history: N}` (N <= 512) adds the newest N frames, one row EACH (frame,
+adapted/metered EV100, pre-exposure, the probe's window mean rgb and max luminance, the sun probe) --
+ExposureMetering's ring, filled as each readback slot retires. That is how the chrome star's 45 %
+frame-to-frame flicker and the ghosts' DLSS ringing were found (2026-10-15). `set_settings` with
+`resetExposure: false` changes a knob the way the Inspector does, without re-metering.
 
 - **There is no save.** The level is saved by the person, and nothing over MCP can do it.
 - Each edit is one undo entry and shows in the command bar's transcript under **claude**.

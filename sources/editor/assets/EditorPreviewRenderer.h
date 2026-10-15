@@ -81,6 +81,7 @@ public:
         // the model; how much light and of what colour is the level's.
         Math::float3 sunIlluminance{};  // lux, DirectionalLight::GetEffectiveColor()
         float sunHalfApex = 0.0f;       // DirectionalLight::GetSunHalfApexRadians()
+        float sunSoftRadius = 0.0f;     // DirectionalLight::GetSoftSourceRadius()
         float flatAmbient = 0.0f;       // DirectionalLight::GetAmbient(); only without irradiance
         float lightExposure = 1.0f;     // DirectionalLight::GetExposure(); 1.0 once migrated
         Math::float3 groundAlbedo{};    // DirectionalLight::GetGroundAlbedo(), for the bounce

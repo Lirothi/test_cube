@@ -234,13 +234,25 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         if (auto baseLumMat = pts.baseLum ? resources_.GetExposureBaseLumMaterial() : nullptr)
         {
             // Its UAV state was declared at `apply` and emitted with it, so there is nothing to
-            // ask for here.
-            RecordComputeDispatch(renderer, t.cl, baseLumMat.get(),
-                resources_.GetExposureBaseLumCBSizeBytes(),
-                [this](uint8_t* dest) { resources_.WriteExposureBaseLumConstants(dest); },
-                { D.sceneSRV }, { metering.BaseLumUav() }, samplerTable,
-                ExposureMetering::kBaseLumWidth, ExposureMetering::kBaseLumHeight,
-                metering.BaseLumResource());
+            // ask for here. UE's blurred log luminance in three dispatches (exposure_baselum_cs):
+            // log2 of the linear mean, then their Gaussian along x into the intermediate and along
+            // y back. The radius is their GetBlurRadius in this grid's texels:
+            // width * LocalExposureBlurredLuminanceKernelSizePercent / 100 * 0.5.
+            const float blurRadius = static_cast<float>(ExposureMetering::kBaseLumWidth) *
+                std::clamp(settings.localBlurredKernelPercent, 0.0f, 100.0f) * 0.01f * 0.5f;
+            const auto baseLumStage = [&](uint32_t stage, ID3D12Resource* written) {
+                RecordComputeDispatch(renderer, t.cl, baseLumMat.get(),
+                    resources_.GetExposureBaseLumCBSizeBytes(),
+                    [this, stage, blurRadius](uint8_t* dest) {
+                        resources_.WriteExposureBaseLumConstants(dest, stage, blurRadius);
+                    },
+                    { D.sceneSRV }, { metering.BaseLumUav(), metering.BaseLumBlurUav() }, samplerTable,
+                    ExposureMetering::kBaseLumWidth, ExposureMetering::kBaseLumHeight,
+                    written);
+            };
+            baseLumStage(0u, metering.BaseLumResource());
+            baseLumStage(1u, metering.BaseLumBlurResource());
+            baseLumStage(2u, metering.BaseLumResource());
             // 2c) P3B bilateral grid, UE's LocalExposure texture: one 8x8 group per 64x64 tile of
             // the fixed virtual input, so the dispatch is (tiles x 8) wide -- RecordComputeDispatch
             // divides by 8 and lands on exactly one group per tile.
@@ -405,6 +417,8 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
         // the bloom below) and the corona (the tone curve) to read -- before both, bloom or not.
         // It writes the exposure buffer, which this pass already declares at UNORDERED_ACCESS.
         bloom_.RecordSunProbe(renderer, t.cl, tonemapSrc);
+        // The debug pixel probe (MCP get_readouts) writes the same record; off unless asked for.
+        bloom_.RecordPixelProbe(renderer, t.cl, tonemapSrc, /*afterBloom*/ false);
         // P8: build the bloom pyramid off whatever the tonemap is about to read — the upscaled
         // image when DLSS runs, which the submission order guarantees is finished on the GPU
         // before this list executes.
@@ -417,7 +431,14 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
             // R3: which method runs is the subsystem's own decision, the one its points were
             // declared from — this body no longer chooses.
             CPU_SCOPE(ProfilerScopes::kTonemapBloomRecord);
+            bloom_.SetLocalExposureGrid(pts.bilateral);
+            // The convolution reads the scene before DLSS when asked (BloomSettings::convBeforeUpscale);
+            // the graph declares that read (SceneRenderer_Graph.cpp, the tonemap's source).
+            bloom_.SetConvolutionInput((pts.ranDlss && frame_->settings.bloom.convBeforeUpscale)
+                                           ? D.sceneSRV : tonemapSrc);
             bloom_.Record(renderer, t.cl, tonemapSrc, pts.bloom_);
+            // Probe source 2: the bloom target the tone curve is about to add (shader-readable here).
+            bloom_.RecordPixelProbe(renderer, t.cl, D.bloomUpSRV, /*afterBloom*/ true);
         }
         const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable = renderer->GetSamplerManager()->GetTable(renderer, tonemapSamplers);
         // P2: exposure is applied here — after the DLSS resolve above, before the tone curve.

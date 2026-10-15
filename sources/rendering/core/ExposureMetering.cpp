@@ -2,6 +2,7 @@
 
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderConstants.h" // g_preExposure, noted per readback slot for the history
 #include "rendering/core/TextureCreate.h" // P3B base log-luminance texture
 
 using Microsoft::WRL::ComPtr;
@@ -25,13 +26,19 @@ namespace
     // exposure record, for the Inspector's curve read-out.
     constexpr UINT64 kCompensationOffset = kExposureRecordBytes + kSunProbeBytes;
     constexpr UINT64 kCompensationRecordBytes = 16u;
-    constexpr UINT64 kMeteringBufferBytes = kCompensationOffset + kCompensationRecordBytes;
+    // Bytes 80-111: the PIXEL PROBE (bloom_conv_cs.hlsl stage 11, sun_probe.hlsli kPixelProbeOffset),
+    // a debug read-out of the HDR frame around one screen position, read back for get_readouts.
+    constexpr UINT64 kPixelProbeOffset = kCompensationOffset + kCompensationRecordBytes;
+    constexpr UINT64 kPixelProbeBytes = 32u;
+    constexpr UINT64 kMeteringBufferBytes = kPixelProbeOffset + kPixelProbeBytes;
     // One readback slot: the exposure record, then the compensation record, then the sun probe's OUTPUT
     // (its bytes 32-47: the disc colour the glare reads, and its visible share) -- the light shafts seed
-    // on the sun glare, and they run before this frame's probe (BloomRenderer::SunGlareSeedFor).
+    // on the sun glare, and they run before this frame's probe (BloomRenderer::SunGlareSeedFor) -- and
+    // last the pixel probe's 32 bytes (get_readouts).
     constexpr UINT64 kSunProbeOutOffset = kExposureRecordBytes + 16u;
     constexpr UINT64 kSunProbeOutBytes = 16u;
-    constexpr UINT64 kReadbackSlotBytes = kExposureRecordBytes + kCompensationRecordBytes + kSunProbeOutBytes;
+    constexpr UINT64 kReadbackSlotBytes =
+        kExposureRecordBytes + kCompensationRecordBytes + kSunProbeOutBytes + kPixelProbeBytes;
 
     ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes)
     {
@@ -81,7 +88,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Value");
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 8; // histogram, exposure, base-lum, bilateral grid: SRV/UAV each
+    heapDesc.NumDescriptors = 9; // histogram, exposure, base-lum, bilateral grid: SRV/UAV each; blur UAV
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
@@ -162,6 +169,15 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         baseUav.Format = DXGI_FORMAT_R16_FLOAT;
         baseUav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         device->CreateUnorderedAccessView(baseLum_.Get(), nullptr, &baseUav, baseLumUav_);
+
+        // The blur's intermediate: same shape, UAV only, resting in UNORDERED_ACCESS.
+        ComPtr<ID3D12Resource> blur;
+        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blur));
+        baseLumBlur_.Attach(renderer->Declarations(), std::move(blur),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.BaseLogLumBlur");
+        baseLumBlurUav_ = next();
+        device->CreateUnorderedAccessView(baseLumBlur_.Get(), nullptr, &baseUav, baseLumBlurUav_);
     }
 
     // P3B bilateral grid: UE's PF_G32R32F Texture3D (tiles x tiles x bins). RG32_FLOAT because
@@ -251,12 +267,34 @@ void ExposureMetering::RecordReadbackCopy(ID3D12GraphicsCommandList* cl)
         return;
     }
     const UINT64 slot = readbackFrame_ % kReadbackSlots;
+    // The history row for the frame that last used this slot, read BEFORE this frame's copy is
+    // recorded over it: kReadbackSlots frames old, so retired, and one row per frame in order.
+    if (readbackPtr_ && readbackFrame_ >= kReadbackSlots)
+    {
+        const Readback rb = ReadSlot(slot);
+        HistoryRow row;
+        row.frame = slotFrame_[slot];
+        row.adaptedEv100 = rb.adaptedEv100;
+        row.targetEv100 = rb.targetEv100;
+        row.preExposure = slotPreExposure_[slot];
+        for (int i = 0; i < 3; ++i) { row.probeMean[i] = rb.pixelProbeMean[i]; }
+        row.probeMaxLuma = 0.2126f * rb.pixelProbeMax[0] + 0.7152f * rb.pixelProbeMax[1] + 0.0722f * rb.pixelProbeMax[2];
+        row.sunProbeLuma = 0.2126f * rb.sunProbe[0] + 0.7152f * rb.sunProbe[1] + 0.0722f * rb.sunProbe[2];
+        std::lock_guard<std::mutex> lock(historyMutex_);
+        history_[historyWritten_ % kHistoryRows] = row;
+        ++historyWritten_;
+    }
+    slotFrame_[slot] = readbackFrame_;
+    slotPreExposure_[slot] = render::g_preExposure;
     cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes,
         exposure_.Get(), 0, kExposureRecordBytes);
     cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes + kExposureRecordBytes,
         exposure_.Get(), kCompensationOffset, kCompensationRecordBytes);
     cl->CopyBufferRegion(readback_.Get(), slot * kReadbackSlotBytes + kExposureRecordBytes + kCompensationRecordBytes,
         exposure_.Get(), kSunProbeOutOffset, kSunProbeOutBytes);
+    cl->CopyBufferRegion(readback_.Get(),
+        slot * kReadbackSlotBytes + kExposureRecordBytes + kCompensationRecordBytes + kSunProbeOutBytes,
+        exposure_.Get(), kPixelProbeOffset, kPixelProbeBytes);
     if (histogramReadback_)
     {
         constexpr UINT64 kHistogramBytes =
@@ -305,7 +343,24 @@ ExposureMetering::Readback ExposureMetering::LatestReadback() const
     }
     // Oldest slot: written kReadbackSlots-1 frames ago, so it has certainly retired. Reading the
     // newest one would race the GPU.
-    const std::uint64_t slot = (readbackFrame_ + 1u) % kReadbackSlots;
+    return ReadSlot((readbackFrame_ + 1u) % kReadbackSlots);
+}
+
+std::size_t ExposureMetering::History(HistoryRow* out, std::size_t maxRows) const
+{
+    std::lock_guard<std::mutex> lock(historyMutex_);
+    const std::size_t available = (historyWritten_ < kHistoryRows) ? historyWritten_ : kHistoryRows;
+    const std::size_t count = (maxRows < available) ? maxRows : available;
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        out[i] = history_[(historyWritten_ - count + i) % kHistoryRows];
+    }
+    return count;
+}
+
+ExposureMetering::Readback ExposureMetering::ReadSlot(std::uint64_t slot) const
+{
+    Readback out{};
     const float* record = readbackPtr_ + slot * (kReadbackSlotBytes / sizeof(float));
     out.adaptedEv100 = record[0];
     out.lowLuminance = record[1];
@@ -317,6 +372,13 @@ ExposureMetering::Readback ExposureMetering::LatestReadback() const
     out.sunProbe[1] = record[9];
     out.sunProbe[2] = record[10];
     out.sunProbeShare = record[11];
+    for (int i = 0; i < 3; ++i)
+    {
+        out.pixelProbeMax[i] = record[12 + i];
+        out.pixelProbeMean[i] = record[16 + i];
+    }
+    out.pixelProbeMaxLocalExposed = record[15];
+    out.pixelProbeBox4 = record[19];
     out.valid = true;
     return out;
 }
@@ -330,6 +392,8 @@ void ExposureMetering::Release()
     baseLum_.Reset();
     baseLumUav_ = {};
     baseLumSrv_ = {};
+    baseLumBlur_.Reset();
+    baseLumBlurUav_ = {};
     bilateralGrid_.Reset();
     bilateralGridUav_ = {};
     bilateralGridSrv_ = {};

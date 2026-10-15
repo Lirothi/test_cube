@@ -244,6 +244,12 @@ struct CameraExposureSettings
     // blurred log-luminance against the bilateral grid. 1 = the pre-grid blur-only base, which
     // halos at a high-contrast edge (the horizon band of 2026-09-11); 0 = pure grid.
     float localBlurredBlend = 0.6f;
+    // UE LocalExposureBlurredLuminanceKernelSizePercent (default 50): the width of the Gaussian that
+    // makes the blurred half of that base, as a percent of the view (exposure_baselum_cs.hlsl). Wide
+    // is what keeps one tiny, very bright source -- the physical sun disc, 19 stops over the sky --
+    // from lifting the base round itself, which drew a dark ring round the sun at the ~2 % the
+    // base used to be.
+    float localBlurredKernelPercent = 50.0f;
     // Time-of-day plan E2: NIGHT VISION -- the eye's rods taking over in the dark (the Purkinje shift):
     // colours fade toward a bluish grey and blues outlast reds. How far is decided by the LIGHT, not the
     // knob: the share of rod vision follows the luminance the eye is adapted to (photopic above ~3 cd/m2,

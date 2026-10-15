@@ -193,6 +193,7 @@ InspectorMultiEdit::Snapshot InspectorMultiEdit::Capture(
             values["normalStrength"] = mp.texFlags.w;
             values["windStrength"] = gb->GetWindStrength();
             values["useMR"] = mp.texFlags.y > 0.5f;
+            values["useAlbedo"] = mp.texFlags.x > 0.5f;
             values["metalRough"] = { mp.metalRough.x, mp.metalRough.y };
             values["baseColor"] = { mp.baseColor.x, mp.baseColor.y, mp.baseColor.z };
             values["materials"] = Json::array();
@@ -298,6 +299,13 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
             if (changed("normalStrength")) { gb->MaterialParamsRef().SetNormalStrength(values["normalStrength"].get<float>()); }
             if (changed("windStrength")) { gb->SetWindStrength(values["windStrength"].get<float>()); }
             if (changed("useMR")) { gb->MaterialParamsRef().SetUseMR(values["useMR"].get<bool>()); }
+            // The albedo texture off (a flat colour) -- or back on, but only where the material has one.
+            if (changed("useAlbedo"))
+            {
+                const MaterialData* md = gb->GetMaterialData();
+                gb->MaterialParamsRef().SetUseAlbedo(values["useAlbedo"].get<bool>() && md && md->hasAlbedo);
+                gb->MarkMaterialParamOverride(GBufferRenderable::MaterialParamField::UseAlbedo);
+            }
             if (changed("metalRough"))
             {
                 gb->MaterialParamsRef().metalRough = Math::float2(

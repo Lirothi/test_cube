@@ -40,7 +40,8 @@ public:
     // indices into the TONEMAP's barrier program — the bloom does not own a program of its own.
     struct Points
     {
-        std::uint32_t write = 0;     // the chains (and the streak pair) -> UAV
+        std::uint32_t history = 0;   // the temporal input (stage 12): this slot's history -> UAV
+        std::uint32_t write = 0;     // the chains (and the streak pair) -> UAV; the history -> read
         std::uint32_t flareRt = 0;   // lens flare -> RENDER_TARGET
         std::uint32_t flareRead = 0; // lens flare -> shader-readable
         std::uint32_t read = 0;      // the chains back to shader-readable for the tone curve
@@ -61,13 +62,20 @@ public:
     bool Flares() const { return flares_; }
 
     // The tonemap builder calls this between its source point and its FXAA point. It advances the
-    // point cursor four times whatever the decisions are — a point is a POSITION in the pass's
+    // point cursor five times whatever the decisions are — a point is a POSITION in the pass's
     // program, so only its CONTENT is gated.
     void Declare(RenderGraphPassContext& ctx, Points& out) const;
 
     // The tonemap body, on the tonemap's list, with whatever the tone curve is about to read.
     void Record(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                 D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const Points& pts);
+    // Whether local exposure's bilateral grid was built this frame (the metering builder's gate):
+    // the convolution's input gets local exposure as UE's does, and an unbuilt grid is never sliced.
+    void SetLocalExposureGrid(bool built) { localGridBuilt_ = built; }
+    // What the convolution's setup (stage 0) reads: the scene before the upscaler when
+    // BloomSettings::convBeforeUpscale asks for it, else the tonemap's source. A null handle = the
+    // tonemap's source. Set before Record, every frame.
+    void SetConvolutionInput(D3D12_CPU_DESCRIPTOR_HANDLE h) { convInput_ = h; }
 
     // Stage 10, the SUN PROBE: meters the sun disc once into the metering record (sun_probe.hlsli)
     // for the glare and the corona, holding its last value while the disc is off the frame. On the
@@ -75,15 +83,21 @@ public:
     // the sun is not in view.
     void RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                         D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+    // Stage 11, the PIXEL PROBE (SceneRenderSettings::debugProbe*): a debug read-out of the HDR frame
+    // around one screen position into the metering record, read back for the editor MCP's
+    // get_readouts. Same list as the sun probe; nothing while its radius is 0. Sources 0/1 are read
+    // before the bloom is built (`afterBloom` false), source 2 -- the bloom target -- after it.
+    void RecordPixelProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                          D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, bool afterBloom);
     // How far past the frame's edge (degrees) the sun glare and the corona fade out over.
     static constexpr float kSunOffFrameFadeDeg = 8.0f;
 
-    // Read by the tone curve: how much of the chain to add back, and the scale it is added with.
+    // Read by the tone curve: the kernel centre's share of the scene (UE's SceneColorApply) and the
+    // scale the bloom target is added with (1: it already holds scene units).
     BloomApplyConstants ApplyConstants() const;
     // The sun's star for the tone curve pass (BloomSettings::sunRays*); off when the setting is 0
     // or the sun is behind the camera / well off screen.
     SunRaysConstants SunRays() const;
-    float TonemapBloomScale() const;
     // The SUN GLARE as the light shafts' seed sees it (owner, 2026-10-14: "blur after the glare is laid"):
     // stage 9's analytic halo in the scene's own pre-exposed units, from a sun-probe colour (the caller's
     // read-back one: the shafts run before this frame's probe). False when the glare is off, the bloom is
@@ -116,6 +130,15 @@ private:
                            D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
     // The glare's strength this frame: sunGlareIntensity eased down on a low sun; 0 = off.
     float SunGlareStrength() const;
+    // What the glare's core term is multiplied by, per unit of the probe's disc colour: the strength
+    // times the disc's solid angle over the profile's integral, so `sunGlareIntensity` is the share
+    // of the disc's light that the glare carries. `discTan` from SunInView.
+    float SunGlareScale(float discTan) const;
+    // The convolution resolve's per-channel scale: UE's FFTMultiply (Tint * the scatter's share of
+    // the kernel at this intensity) times the kernel tint. Neutral when the survey has not run.
+    std::array<float, 3> ConvolutionScatterScale() const;
+    // The local-exposure fields of the convolution's constants (stage 0 and the pixel probe).
+    void FillLocalExposure(BloomConvConstants& conv) const;
     // The sun in this frame's view: its direction in view space, the projection's x/y scales and
     // the tangent of the disc's half angle. False when it is behind the camera or further past the
     // frame's edge than kSunOffFrameFadeDeg.
@@ -126,11 +149,13 @@ private:
     Math::float3 ToView(const Math::float3& world) const;
     void BakeFlareBokeh(Renderer* renderer, uint32_t blades);
     bool ReadKernelPixels(const wchar_t* path);
-    void SurveyKernel(float ratio);
+    // UE's survey at a kernel drawn `spanTexels` grid texels wide (see the definition).
+    void SurveyKernel(float spanTexels);
 
     SceneResourceBootstrapper* resources_ = nullptr;
     const SceneFrameData* frame_ = nullptr;
     double probeLastSeconds_ = -1.0; // the sun probe's temporal blend: when it last ran
+    bool localGridBuilt_ = false;    // SetLocalExposureGrid
 
     // ---- the decisions, taken once per frame in Decide() ----
     bool bloomActive_ = false;
@@ -143,6 +168,17 @@ private:
     bool flaresGhosts_ = false;
     bool flaresStreak_ = false;
     bool flares_ = false; // ghosts || streak, the form the declarations and the bodies use
+    // The temporal input (stage 12, BloomSettings::convTemporalWeight): on while the bloom reads the
+    // scene BEFORE an upscaler that runs (the jittered image), and its history's bookkeeping -- valid
+    // only after a frame that wrote it at this size and camera history (the light shafts' rule), with
+    // the pre-exposure it was written under so a moving exposure rescales it.
+    bool temporal_ = false;
+    bool historyValid_ = false;
+    std::uint32_t historyFrames_ = 0u;
+    std::uint32_t historyWidth_ = 0u, historyHeight_ = 0u;
+    std::uint64_t historyRevision_ = 0u;
+    float historyPreExposure_ = 1.0f;
+    void RecordTemporalInput(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_CPU_DESCRIPTOR_HANDLE scene);
 
     // The kernel's spectrum is a pure function of these, so it is only rebuilt when one moves.
     // P8C-2: the shape controls died with the generated aperture; what remains is the kernel
@@ -152,10 +188,11 @@ private:
         uint32_t width = 0u, height = 0u;          // the ACTIVE grid
         uint32_t imageWidth = 0u, imageHeight = 0u; // the span depends on the image's major axis
         float convSize = -1.0f;
-        // P8C-6: the TINT is part of the key. The spectrum is cached and rebuilt only when the key
-        // moves, so a tint left out of it would be a colour picker that does nothing until
-        // something else happens to force a rebuild -- which is worse than no picker at all.
-        float tint[3] = { -1.0f, -1.0f, -1.0f };
+        // The survey's clamp level and the kernel's centre texel shape the resampled kernel too.
+        // (The kernel TINT is not in the key any more: it is applied by the resolve, after the
+        // per-channel normalisation that would otherwise cancel it.)
+        float clampLevel = -1.0f;
+        float centerU = -1.0f, centerV = -1.0f;
         // THE TARGETS' GENERATION IS PART OF THE KEY, and leaving it out is the bug behind
         // "toggling DLSS breaks bloom". Every other field describes the kernel's CONTENT, and all
         // of them are derived from the DISPLAY resolution, which a DLSS toggle does not move. But
@@ -180,7 +217,7 @@ private:
             return width == o.width && height == o.height &&
                    imageWidth == o.imageWidth && imageHeight == o.imageHeight &&
                    convSize == o.convSize && generation == o.generation &&
-                   tint[0] == o.tint[0] && tint[1] == o.tint[1] && tint[2] == o.tint[2];
+                   clampLevel == o.clampLevel && centerU == o.centerU && centerV == o.centerV;
         }
     };
     // ONE KEY PER FRAME SLOT, not one for the renderer. The kernel spectrum lives in
@@ -194,6 +231,7 @@ private:
     // than falling back to a procedural kernel that no longer exists.
     Texture2D bloomKernelTex_;
     bool bloomKernelReady_ = false;
+    D3D12_CPU_DESCRIPTOR_HANDLE convInput_{};   // SetConvolutionInput
     // The conv shader's t2 slot for EVERY conv dispatch site -- the table is positional, so the
     // slot is always staged, but the kernel photograph is resident only once the CONVOLUTION
     // method has loaded it. The streak/ghost stages never sample t2, yet CopyDescriptors
@@ -229,11 +267,15 @@ private:
     // itself, once per kernel key, with nothing to race.
     std::vector<float> bloomKernelPixels_;      // RGB triples, row-major, square
     uint32_t bloomKernelPixelDim_ = 0u;
-    // Sums from the last survey, and the `ratio` they were taken at. Energy, not colour -- the
-    // apply constants are formed from these every frame because they also depend on the intensity.
+    // Sums from the last survey, and the view-texel diameter (in kernel texels) they were taken at.
+    // Energy, not colour -- the apply constants are formed from these every frame because they also
+    // depend on the intensity.
     std::array<float, 3> bloomKernelCenterEnergy_{};
     std::array<float, 3> bloomKernelScatterEnergy_{};
     float bloomSurveyRatio_ = -1.0f;
+    // UE's MaxScatterDispersion (one grey level) and FindKernelCenter (the brightest texel).
+    float bloomKernelClampLevel_ = 1.0e30f;
+    uint32_t bloomKernelCenterX_ = 0u, bloomKernelCenterY_ = 0u;
     // P8C-2 step 5a: the ghost BOKEH SPRITE -- the iris polygon the scatter splats. Baked on the
     // CPU from the blade count (its new home after the aperture kernel's retirement) and rebaked
     // when it moves.

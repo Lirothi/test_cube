@@ -65,7 +65,10 @@ public:
         // could mark it as authored per-object, so no level could set it and the command
         // bar answered "покрась пальмы в красный" with needs_api -- twice, which in this
         // project's own reading is a feature rather than a mood.
-        BaseColor = 1u << 6
+        BaseColor = 1u << 6,
+        // The albedo TEXTURE switched off per object, so baseColor alone is the colour -- a flat
+        // material, what a chrome or a painted test sphere needs (setSurface `albedo`).
+        UseAlbedo = 1u << 7
     };
     void MarkMaterialParamOverride(MaterialParamField field)
     {
@@ -158,7 +161,7 @@ public:
         // Slot 0 represents the object in RT (single albedo per TLAS instance; refine later).
         MaterialData* md = GetMaterialData();
         const MaterialParams& mp = matParamses_[0];
-        if (md && md->hasAlbedo)
+        if (md && md->hasAlbedo && mp.texFlags.x > 0.5f)   // off when the object went flat (useAlbedo)
         {
             out.albedoTex = md->albedo.GetResource();
             out.albedoSrv = md->albedo.GetSRVCPU();

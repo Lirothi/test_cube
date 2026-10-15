@@ -187,10 +187,13 @@ struct RtReflectConstants
     float depthA = 0.0f;    float depthB = 0.0f;   uint32_t outWidth = 0;  uint32_t outHeight = 0;
     uint32_t tlasIndex = 0; uint32_t lightIndex = 0; uint32_t gb1Index = 0; uint32_t depthIndex = 0;
     uint32_t reflectionUavIndex = 0; uint32_t geomInfoIndex = 0; uint32_t skyboxIndex = 0; float skyboxIntensity = 1.0f;
-    uint32_t skyIrradianceIndex = 0; float skyIrradianceScale = 1.0f; uint32_t rtPad0 = 0, rtPad1 = 0; // P16.9
+    uint32_t skyIrradianceIndex = 0; float skyIrradianceScale = 1.0f; // P16.9
+    float lightInvPreExposure = 1.0f; // the light target is pre-exposed: 1 / g_preExposure
+    float sunAngularRadius = 0.0f;    // the sun's disc radius (rad): UE's sphere light in the re-shade
     // P16.12: mirrors lighting_cs. Off-screen hits are re-shaded in the RT pass, so the bounce has
     // to reach both or a reflection is about a stop darker than the surface it reflects.
-    Math::float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f }; float rtPadGround = 0.0f;
+    Math::float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f };
+    float sunSoftRadius = 0.0f;       // UE's SoftSourceRadius of the sun, as lighting_cs (EvalBRDF)
     uint32_t spotLightIndex = 0; uint32_t spotCount = 0; uint32_t pointLightIndex = 0; uint32_t pointCount = 0;
     // alphaMissKeep/frameSeed: stochastic coverage inflation for the RT foliage alpha test —
     // see RtAlphaCandidatePasses in rt_geometry.hlsli.
@@ -271,6 +274,8 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
         c.sunDirWS = dl.GetDirection();
         c.ambientIntensity = dl.GetAmbient();
         c.lightRgb = dl.GetEffectiveColor(); // P4: sun intensity folded in, see lighting_cs
+        c.sunAngularRadius = dl.GetSunHalfApexRadians(); // UE's sphere light, as lighting_cs
+        c.sunSoftRadius = dl.GetSoftSourceRadius();
         c.exposure = dl.GetExposure();
         c.depthA = zNear / (zNear - zFar);
         c.depthB = (zNear * zFar) / (zFar - zNear);
@@ -365,6 +370,7 @@ void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ct
         c.outWidth = renderer->GetReflectionTextureWidth();
         c.outHeight = renderer->GetReflectionTextureHeight();
         c.lightIndex = rtAs_.Bindless().SceneIndex(frameIndex, 1);
+        c.lightInvPreExposure = 1.0f / std::max(render::g_preExposure, 1.0e-30f); // the light target is pre-exposed
         c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 4);
         c.payloadRadianceIndex = rtAs_.Bindless().SceneIndex(frameIndex, 11);
         c.payloadUvIndex = rtAs_.Bindless().SceneIndex(frameIndex, 12);
@@ -509,6 +515,8 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.sunDirWS = dl.GetDirection();
         c.ambientIntensity = dl.GetAmbient();
         c.lightRgb = dl.GetEffectiveColor(); // P4: sun intensity folded in, see lighting_cs
+        c.sunAngularRadius = dl.GetSunHalfApexRadians(); // UE's sphere light, as lighting_cs
+        c.sunSoftRadius = dl.GetSoftSourceRadius();
         c.exposure = dl.GetExposure();
         c.depthA = zNear / (zNear - zFar);
         c.depthB = (zNear * zFar) / (zFar - zNear);
@@ -516,6 +524,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.outHeight = renderer->GetReflectionTextureHeight();
         c.tlasIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 0);
         c.lightIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 1);
+        c.lightInvPreExposure = 1.0f / std::max(render::g_preExposure, 1.0e-30f); // the light target is pre-exposed
         c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, B + 2);
         c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 3);        // primary = glass depth
         c.screenDepthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 8);  // visibility match = opaque depth

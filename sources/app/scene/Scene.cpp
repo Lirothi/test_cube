@@ -16,6 +16,7 @@
 #include "app/Systems.h"
 #include "core/Helpers.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/core/RenderConstants.h" // g_cleanCapture
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias (shadow caster LOD)
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
@@ -2025,8 +2026,9 @@ void Scene::PrepareViews(Renderer* renderer)
 #if WITH_EDITOR
     frameData_.selectedEditorObjectIds =
         selectedEditorObjectIds_.empty() ? nullptr : selectedEditorObjectIds_.data();
-    frameData_.selectedEditorObjectCount =
-        static_cast<std::uint32_t>(selectedEditorObjectIds_.size());
+    // A clean MCP capture draws no selection outline (render::g_cleanCapture).
+    frameData_.selectedEditorObjectCount = render::g_cleanCapture.load(std::memory_order_relaxed)
+        ? 0u : static_cast<std::uint32_t>(selectedEditorObjectIds_.size());
     frameData_.selectionOutlineRadius = std::clamp<std::uint32_t>(selectionOutlineRadius_, 1u, 8u);
 #else
     frameData_.selectedEditorObjectIds = nullptr;

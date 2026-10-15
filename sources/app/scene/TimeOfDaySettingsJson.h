@@ -116,6 +116,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
             }
         }
         s.moonAngleDeg = std::clamp(Number(m, "lightSourceAngle", s.moonAngleDeg), 0.0f, 20.0f);
+        s.moonSoftAngleDeg = std::clamp(Number(m, "lightSourceSoftAngle", s.moonSoftAngleDeg), 0.0f, 20.0f);
         s.moonGlow = std::clamp(Number(m, "glow", s.moonGlow), 0.0f, 10.0f);
         s.moonGlowRadiusDeg = std::clamp(Number(m, "glowRadiusDeg", s.moonGlowRadiusDeg), 0.1f, 90.0f);
         s.moonDiscAdaptation = std::clamp(Number(m, "discAdaptation", s.moonDiscAdaptation), 0.0f, 1.0f);
@@ -234,6 +235,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "lightShaftLength", sun.GetLightShaftLength() },
         { "lightShaftGlareSeed", sun.GetLightShaftGlareSeed() },
         { "lightSourceAngle", sun.GetLightSourceAngleDegrees() },
+        { "lightSourceSoftAngle", sun.GetLightSourceSoftAngleDegrees() },
     };
     j["moon"] = {
         { "enabled", s.moonEnabled },
@@ -248,6 +250,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "lightShaftBloomMaxBrightness", s.moonLightShaftBloomMaxBrightness },
         { "lightShaftBloomTint", { s.moonLightShaftTint[0], s.moonLightShaftTint[1], s.moonLightShaftTint[2] } },
         { "lightSourceAngle", s.moonAngleDeg },
+        { "lightSourceSoftAngle", s.moonSoftAngleDeg },
         { "discAdaptation", s.moonDiscAdaptation },
         { "glintPhaseFalloff", s.moonGlintPhaseFalloff },
         { "earthshine", s.moonEarthshine },

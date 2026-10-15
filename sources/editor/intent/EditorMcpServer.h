@@ -84,9 +84,29 @@ namespace editormcp
     };
     void SetImportHost(ImportHost* host);
 
-    // Runs one tool that touches the DOCUMENT, on the frame thread -- everything except
-    // `screenshot`, which needs the frame loop's safe point instead. Public so the gate can
-    // drive it directly.
+    // The running app's own knobs, for set_settings / get_readouts: the `--set` name table (App.cpp
+    // ApplySweepValue) and what the renderer measured. App registers it -- it owns both -- and a
+    // host without one (the gate) answers those tools with a refusal. Frame thread only.
+    //
+    // This is how a look is A/B'd without relaunching: one editor process, set_settings, a clean
+    // screenshot to a file, reset_settings, the next variant. A relaunch costs ~15 s of boot and
+    // warm-up for one picture.
+    class RuntimeHost
+    {
+    public:
+        virtual ~RuntimeHost() = default;
+        // One `--set` name and value through the SAME table `--set` / `--sweep` use; false = unknown.
+        virtual bool Apply(const std::string& name, float value) = 0;
+        // Re-meter from scratch, so a changed scene does not inherit the previous adaptation.
+        virtual void ResetExposure() = 0;
+        // What the frame measured (exposure, the sun probe, frame rate), as a JSON object; with
+        // `historyRows` > 0 also that many of the newest per-frame rows (ExposureMetering::History).
+        virtual std::string Readouts(int historyRows) = 0;
+    };
+    void SetRuntimeHost(RuntimeHost* host);
+
+    // Runs one tool on the frame thread -- everything except `screenshot`, which needs the frame
+    // loop's safe point instead. Public so the gate can drive it directly.
     ToolResult RunDocumentTool(const EditorActionContext& actionCtx,
         EditorCommandStack& commandStack,
         const std::string& name,

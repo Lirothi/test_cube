@@ -179,6 +179,7 @@ DirectionalLight TimeOfDay::MoonLight(double phaseAngleDeg, double distanceScale
                        settings_.nightBrightness;
     moon.SetSunIlluminanceLux(static_cast<float>(lux));
     moon.SetLightSourceAngleDegrees(settings_.moonAngleDeg);
+    moon.SetLightSourceSoftAngleDegrees(settings_.moonSoftAngleDeg);
     return moon;
 }
 

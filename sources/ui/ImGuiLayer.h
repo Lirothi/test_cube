@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +15,11 @@
 
 class Renderer;
 struct ImGui_ImplDX12_InitInfo;
+
+// While set, the UI is built as usual (input, state, the editor's own bookkeeping) but not DRAWN: the
+// presented frame is the scene and the HUD only, as a headless --shot shows it. The editor MCP's
+// screenshot sets it for a `clean` capture and clears it once the picture is taken.
+inline std::atomic<bool> g_suppressImGuiDraw{ false };
 
 class ImGuiLayer
 {

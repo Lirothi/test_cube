@@ -35,6 +35,8 @@ cbuffer GlassView : register(b1)
     float4x4 clipmapUvNormal;     // P16.16: receiver-plane transform, must match lighting_cs
     // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
     // transparent pass, which runs AFTER compose, so compose's own scaling never reaches it.
+    // y = the sun disc's angular radius (rad): the sun as UE's sphere light (utils.hlsli EvalBRDF);
+    // z = its soft radius (UE SoftSourceRadius).
     float4 preExposureParams;
     // S8: x = 0 legacy 3x3 SampleCmp box, 1 = soft-occlusion ramp + 4x4 Gather tent. APPENDED at the
     // tail on purpose -- inserting anywhere else shifts every offset after it.

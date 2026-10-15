@@ -44,6 +44,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle invScreenSize;
     Material::CBFieldHandle sunMetalSpec;
     Material::CBFieldHandle sunAngularSize;
+    Material::CBFieldHandle sunSoftRadius;           // UE SoftSourceRadius of the light (EvalBRDF)
+    Material::CBFieldHandle lightPreExposure;        // the light target is pre-exposed (lighting_cb.hlsli)
     Material::CBFieldHandle useVsm;           // Step 24f: directional clipmap sampling
     Material::CBFieldHandle vsmDepthBias;
     Material::CBFieldHandle clipmapBaseExtent;
@@ -114,6 +116,7 @@ struct ScenePointLightCBHandles
                             contactShadowGrazingFade, contactShadowMinDist, contactShadowMaxDist,
                             contactShadowFadeBand, contactShadowThickness, contactShadowFrameId,
                             contactShadowLocalMode;
+    Material::CBFieldHandle lightPreExposure;  // the light target is pre-exposed (lighting_cb.hlsli)
 
     void Populate(Material* material);
 };
@@ -137,6 +140,7 @@ struct SceneSpotLightCBHandles
                             contactShadowGrazingFade, contactShadowMinDist, contactShadowMaxDist,
                             contactShadowFadeBand, contactShadowThickness, contactShadowFrameId,
                             contactShadowLocalMode;
+    Material::CBFieldHandle lightPreExposure;  // the light target is pre-exposed (lighting_cb.hlsli)
 
     void Populate(Material* material);
 };
@@ -202,6 +206,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle skyViewPlanet; // B6.2: the sky's own LUT, for the fog's sky colour
     Material::CBFieldHandle cloudParams;   // plan C2: the resolved clouds, applied under the fog
     Material::CBFieldHandle cloudJitter;   // ... read at the jittered pixel's unjittered uv
+    Material::CBFieldHandle sunDiscDir, sunDiscLuminance; // the sun's disc, drawn pre-exposed in compose
 
     void Populate(Material* material);
 };
@@ -278,6 +283,8 @@ struct SceneExposureBaseLumCBHandles
     Material::CBFieldHandle baseWidth;
     Material::CBFieldHandle baseHeight;
     Material::CBFieldHandle invPreExposure;   // P16.1
+    Material::CBFieldHandle baseStage;        // 0 setup, 1 blur x, 2 blur y
+    Material::CBFieldHandle blurRadius;       // UE's Gaussian radius, in base texels
 
     void Populate(Material* material);
 };
@@ -512,13 +519,16 @@ struct BloomPassConstants
     float softKnee = 0.5f;
     float radius = 1.0f;
     uint32_t fireflyClamp = 1u;
-    uint32_t pad0 = 0u, pad1 = 0u;
+    // Stage 2: this level's share of UE's Gaussian weights, and the seed's (bloom_cs.hlsl).
+    float levelWeight = 1.0f;
+    float srcWeight = 1.0f;
 };
 
 struct BloomHandles
 {
     Material::CBFieldHandle stage, exposureEnabled, dstSize, srcSize;
     Material::CBFieldHandle threshold, softKnee, radius, fireflyClamp;
+    Material::CBFieldHandle levelWeight, srcWeight;
     void Populate(Material* material);
 };
 
@@ -547,20 +557,29 @@ struct BloomConvConstants
     uint2 transformSize{ 1u, 1u };
     uint2 imageSize{ 1u, 1u };
     uint2 sourceSize{ 1u, 1u };
-    float threshold = 1.0f;
-    float softKnee = 0.5f;
-    // P8C-5: UE's BloomConvolutionPreFilterMin/Max/Mult, all three ABSOLUTE
-    // (EV14 units) like every other threshold in the bloom. Mult <= 0 = inactive.
+    // UE's BloomConvolutionPreFilterMin/Max/Mult, in pre-exposed units. Active when Min < Max, Mult > 0.
     float preFilterMin = 0.0f;
     float preFilterMax = 0.0f;
     float preFilterMult = 0.0f;
-    float kernelTint[3] = { 1.0f, 1.0f, 1.0f };   // P8C-6
     // P8C-2: the kernel is an image; these place it in the grid. See bloom_conv_cs.hlsl.
     float kernelSpanTexels = 1024.0f;
     uint32_t kernelBoxTaps = 1u;
     float kernelBoxStep = 0.0f;
-    float kernelCoreRingUV = 0.0f;
+    // UE's MaxScatterDispersion: the kernel is clamped to it texel by texel before it is resampled.
+    float kernelClampLevel = 1.0e30f;
     float kernelCenterUV[2] = { 0.5f, 0.5f };
+    // The resolve's per-channel scale (UE's FFTMultiply, times the kernel tint).
+    float resolveScale[3] = { 1.0f, 1.0f, 1.0f };
+    // Stage 0's local exposure (bloom_conv_cs.hlsl ApplyLocalExposure). Neutral by default.
+    float leHighlightContrast = 1.0f;
+    float leShadowContrast = 1.0f;
+    float leDetailStrength = 1.0f;
+    float leBlurredBlend = 1.0f;
+    float leHighlightThreshold = 0.0f;
+    float leShadowThreshold = 0.0f;
+    float leMinLogLum = 0.0f;
+    float leInvLogLumRange = 1.0f;
+    float leExposure = 0.0f;
     float anamorphicIntensity = 0.0f;
     float anamorphicLength = 0.28f;
     float anamorphicSigma = 1.5f;
@@ -576,21 +595,28 @@ struct BloomConvConstants
     Math::float4 sunGlareDir{ 0.0f, 0.0f, 1.0f, 0.0f };
     Math::float4 sunGlareProj{ 1.0f, 1.0f, 0.0f, 0.0f };
     Math::float4 sunGlareParams{ 0.0f, 0.03f, 0.0f, 0.2f };
+    // Stage 12, the bloom's light over frames: x this frame's weight, y the history's pre-exposure
+    // rescale (this frame's / last frame's), z 1 = the history is valid, w unused.
+    Math::float4 historyParams{ 1.0f, 1.0f, 0.0f, 0.0f };
+    // Stage 0, the art split: x the sun disc's share of the kernel's light, y its half apex (rad),
+    // z 1 = the sun is in view (sunGlareDir / sunGlareProj then carry its direction and the projection).
+    Math::float4 sunShare{ 1.0f, 0.0f, 0.0f, 0.0f };
 };
 
 struct BloomConvHandles
 {
     Material::CBFieldHandle convStage, exposureEnabled, transformSize, imageSize, sourceSize;
-    Material::CBFieldHandle threshold, softKnee;
     Material::CBFieldHandle preFilterMin, preFilterMax, preFilterMult;
-    Material::CBFieldHandle kernelTint;   // P8C-6
     Material::CBFieldHandle kernelSpanTexels, kernelBoxTaps, kernelBoxStep;
-    Material::CBFieldHandle kernelCoreRingUV, kernelCenterUV;
+    Material::CBFieldHandle kernelClampLevel, kernelCenterUV, resolveScale;
+    Material::CBFieldHandle leHighlightContrast, leShadowContrast, leDetailStrength, leBlurredBlend;
+    Material::CBFieldHandle leHighlightThreshold, leShadowThreshold, leMinLogLum, leInvLogLumRange, leExposure;
     Material::CBFieldHandle anamorphicIntensity, anamorphicLength, anamorphicSigma;
     Material::CBFieldHandle anamorphicThreshold, anamorphicChroma;
     Material::CBFieldHandle anamorphicTint, streakWeight, streakSrcWeight, streakOffsets;
     Material::CBFieldHandle ghostCount, ghostIntensity;
     Material::CBFieldHandle sunGlareDir, sunGlareProj, sunGlareParams;
+    Material::CBFieldHandle historyParams, sunShare;
     void Populate(Material* material);
 };
 
@@ -604,12 +630,16 @@ struct LensFlareConstants
     float kernelSizePx = 16.0f;
     float threshold = 1.0e-4f;
     float kernelAreaInverse = 1.0f;
+    // The art split: the sun disc's share of the ghosts (lens_flare.hlsl SunDiscMask).
+    Math::float4 sunDirView{ 0.0f, 0.0f, 1.0f, 0.0f }; // xyz to the sun (view space), w 1 = in view
+    Math::float4 sunShare{ 1.0f, 0.0f, 1.0f, 1.0f };   // x the scale, y the half apex (rad), zw proj _11/_22
 };
 
 struct LensFlareHandles
 {
     Material::CBFieldHandle tileCount, flareRTSize, srcInvSize, tileSizeTexels;
     Material::CBFieldHandle kernelSizePx, threshold, kernelAreaInverse;
+    Material::CBFieldHandle sunDirView, sunShare;
     void Populate(Material* material);
 };
 
@@ -651,6 +681,8 @@ struct LightingPassConstants
     float2 invScreenSize{};
     float sunMetalSpec = 0.0f;
     float sunAngularSize = 0.0f;
+    float sunSoftRadius = 0.0f;                   // DirectionalLight::GetSoftSourceRadius
+    float lightPreExposure = 1.0f;                // render::g_preExposure: the light target is pre-exposed
     uint32_t useVsm = 0;                          // Step 24f: 1 = sample the directional VSM clipmap
     float vsmDepthBias = 0.0f;
     float clipmapBaseExtent = 0.0f;               // finest clipmap level's world extent
@@ -741,6 +773,7 @@ struct PointLightPassConstants
     float contactShadowThickness = 0.5f;
     uint32_t contactShadowFrameId = 0;
     uint32_t contactShadowLocalMode = 1;    // local lights only; see render::contact::g_localMode
+    float lightPreExposure = 1.0f;          // render::g_preExposure: what this pass adds is pre-exposed
     float _vsmPad0 = 0.0f;
     float _vsmPad1 = 0.0f;
     float _vsmPad2 = 0.0f;
@@ -775,6 +808,7 @@ struct SpotLightPassConstants
     float contactShadowThickness = 0.5f;
     uint32_t contactShadowFrameId = 0;
     uint32_t contactShadowLocalMode = 1;    // local lights only; see render::contact::g_localMode
+    float lightPreExposure = 1.0f;          // render::g_preExposure: what this pass adds is pre-exposed
     float _vsmPad0 = 0.0f;
     float _vsmPad1 = 0.0f;
 };
@@ -870,6 +904,11 @@ struct ComposePassConstants
     // xy = this frame's camera jitter in uv (the jittered pixel at uv looks where the unjittered
     // frame's uv - xy does); the clouds are reconstructed unjittered and read there. zw = 0.
     float4 cloudJitter{};
+    // THE SUN'S DISC, drawn by compose pre-exposed as UE do (compose_cs.hlsl SunDiscRaw): xyz the direction
+    // to the sun in the sky LUT's frame, w its angular radius (0 = none); rgb the disc's outer-space
+    // luminance (illuminance / solid angle), w the atmosphere's top radius (km).
+    float4 sunDiscDir{};
+    float4 sunDiscLuminance{};
 };
 
 // B6.1. MIRROR of fog_apply.hlsl's `FogApply` cbuffer, field for field and in order: it is uploaded
@@ -900,10 +939,11 @@ struct FxaaPassConstants
     float edgeThresholdMin = 0.0625f;
 };
 
-// P8C-2o: how the tonemap combines the scene with the bloom. These are UE's
-// SceneColorApplyParameters and FFTMulitplyParameters (BloomFinalizeApplyConstants.usf), and they
-// PARTITION the light rather than adding to it -- the defaults below are the pyramid's neutral
-// case, where the scene passes through untouched and the flare is a plain additive term.
+// P8C-2o: how the tonemap combines the scene with the bloom: `hdr * sceneApply + bloom * scatterApply`.
+// `sceneApply` is UE's SceneColorApplyParameters (BloomFinalizeApplyConstants.usf), the kernel centre's
+// share of the light; their FFTMulitplyParameters is applied by the convolution's resolve, so the bloom
+// target already holds scene units and `scatterApply` is 1 whenever a bloom ran (0 = none, the
+// tonemap reads nothing) -- UE add their bloom texture as it is too.
 struct BloomApplyConstants
 {
     std::array<float, 3> sceneApply{ 1.0f, 1.0f, 1.0f };
@@ -1121,7 +1161,7 @@ public:
                                uint8_t* dest) const;
     void WriteExposureHistogramConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
     void WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const;
-    void WriteExposureBaseLumConstants(uint8_t* dest) const;
+    void WriteExposureBaseLumConstants(uint8_t* dest, uint32_t stage, float blurRadiusTexels) const;
     void WriteExposureBilateralConstants(uint8_t* dest) const;
 #if WITH_EDITOR
     void WriteSelectionOutlineConstants(const SelectionOutlinePassConstants& data, uint8_t* dest) const;

@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <mutex>
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -66,6 +69,10 @@ public:
     ID3D12Resource* BaseLumResource() const { return baseLum_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE BaseLumUav() const { return baseLumUav_; }
     D3D12_CPU_DESCRIPTOR_HANDLE BaseLumSrv() const { return baseLumSrv_; }
+    // The separable Gaussian's intermediate (exposure_baselum_cs.hlsl stage 1 writes it, stage 2
+    // reads it). Only ever a UAV, so it rests in UNORDERED_ACCESS and costs no barrier.
+    ID3D12Resource* BaseLumBlurResource() const { return baseLumBlur_.Get(); }
+    D3D12_CPU_DESCRIPTOR_HANDLE BaseLumBlurUav() const { return baseLumBlurUav_; }
 
     // P3B bilateral grid (2026-09-12), UE's LocalExposure texture: (tilesX, tilesY, 32 bins) of
     // (sum log-luminance, sum weight), written by exposure_bilateral_cs and sliced by the tonemap.
@@ -102,9 +109,35 @@ public:
         // pre-exposed, gate and off-frame fade applied) and the disc's visible share.
         float sunProbe[3] = {};
         float sunProbeShare = 0.0f;
+        // The pixel probe (bloom_conv_cs.hlsl stage 11; SceneRenderSettings::debugProbe*): the
+        // brightest pre-exposed pixel of the window (rgb) and its luminance after the FFT input's
+        // local exposure, the window's mean, and the luminance of a 4x4 box at the brightest pixel.
+        // Zero until a probe has been asked for.
+        float pixelProbeMax[3] = {};
+        float pixelProbeMaxLocalExposed = 0.0f;
+        float pixelProbeMean[3] = {};
+        float pixelProbeBox4 = 0.0f;
         bool valid = false;
     };
     Readback LatestReadback() const;
+
+    // One row per metered frame (MCP get_readouts {history}): the adapted and metered EV100 the
+    // record held, the pre-exposure that frame rendered with, the pixel probe's window mean (rgb)
+    // and brightest luminance, the sun probe's luminance. A flicker is a frame-to-frame thing, and
+    // one LatestReadback per MCP call lands ~10 frames apart -- it sees a drift, never a flicker.
+    struct HistoryRow
+    {
+        std::uint64_t frame = 0;     // the metering's own frame count
+        float adaptedEv100 = 0.0f;
+        float targetEv100 = 0.0f;
+        float preExposure = 0.0f;
+        float probeMean[3] = {};
+        float probeMaxLuma = 0.0f;
+        float sunProbeLuma = 0.0f;
+    };
+    // The newest `maxRows` rows (at most kHistoryRows), oldest first; returns how many were written.
+    std::size_t History(HistoryRow* out, std::size_t maxRows) const;
+    static constexpr std::size_t kHistoryRows = 512;
 
     // Records the copies into this frame's ring slot: the 16-byte exposure record and the 256-bin
     // histogram. Called by the metering pass right after the solve; the resource state round-trip
@@ -133,6 +166,8 @@ private:
     GpuResource baseLum_;
     D3D12_CPU_DESCRIPTOR_HANDLE baseLumUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE baseLumSrv_{};
+    GpuResource baseLumBlur_;
+    D3D12_CPU_DESCRIPTOR_HANDLE baseLumBlurUav_{};
     // P3B bilateral grid, same lifecycle and resting state as the base layer.
     GpuResource bilateralGrid_;
     D3D12_CPU_DESCRIPTOR_HANDLE bilateralGridUav_{};
@@ -154,6 +189,17 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> histogramReadback_;
     const std::uint32_t* histogramReadbackPtr_ = nullptr; // 4 slots x kHistogramBins uints
     std::uint64_t readbackFrame_ = 0;
+    Readback ReadSlot(std::uint64_t slot) const;
+
+    // The history ring (HistoryRow). Each RecordReadbackCopy reads the slot it is about to
+    // overwrite -- written kReadbackSlots frames ago, so retired -- before recording the new copy,
+    // with the frame number and pre-exposure noted when THAT slot was recorded. The mutex because
+    // the copy is recorded wherever the metering pass is, and the MCP reads on the frame thread.
+    std::array<HistoryRow, kHistoryRows> history_{};
+    std::size_t historyWritten_ = 0;
+    std::uint64_t slotFrame_[kReadbackSlots] = {};
+    float slotPreExposure_[kReadbackSlots] = {};
+    mutable std::mutex historyMutex_;
 
     bool created_ = false;
     // Starts true: the buffers are created with undefined contents, so the very first solve in P2

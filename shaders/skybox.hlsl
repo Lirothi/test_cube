@@ -13,6 +13,9 @@ cbuffer PerFrame : register(b0)
     float4x4 projNoJitter;
     float4x4 prevProjNoJitter;
     float exposure;
+    // The light target is PRE-EXPOSED (lighting_cb.hlsli lightPreExposure): the sky is written with it.
+    // Sits in the padding before the next float4, so nothing below moves.
+    float lightPreExposure;
     float4 skySunDirection;
     float4 skyIlluminance;
     float4 skyExposure;
@@ -91,16 +94,11 @@ float MoonDiscAdaptation(float3 fullMeanRadiance)
     return (adapt > 0.0f && fullMean > kMoonDiscDisplay) ? exp2(adapt * log2(kMoonDiscDisplay / fullMean)) : 1.0f;
 }
 
-// The atmosphere's transmittance from the eye toward `dir` (the LUT's local frame), as a disc takes it:
-// UE SkyAtmosphereCommon.ush:256-279 with the Bruneton mapping inline. The sun's and the moon's.
+// The atmosphere's transmittance from the eye toward `dir` (sky_view_mapping.hlsli): the moon's disc and
+// the night layers. (The SUN's disc is drawn in compose_cs.hlsl, pre-exposed -- see there.)
 float3 DiscTransmittance(float3 dir, float height, float bottom, float top)
 {
-    const float H = sqrt(top * top - bottom * bottom);
-    const float h = min(height, top);
-    const float rho = sqrt(max(0.0f, h * h - bottom * bottom));
-    const float d = max(0.0f, -h * dir.z + sqrt(max(0.0f, h*h*(dir.z*dir.z-1.0f)+top*top)));
-    const float2 uv = float2((d - (top-h)) / max(1.e-6f, rho+H-(top-h)), rho/H);
-    return height >= top ? 1.0f : transmittanceLut.SampleLevel(samLinear, uv, 0).rgb;
+    return SkyTransmittanceToSpace(transmittanceLut, samLinear, dir, height, bottom, top);
 }
 
 struct PSOut
@@ -145,8 +143,8 @@ PSOut PSMain(VSOut i)
         // never dimmed at any negative sun elevation. UE guard it twice, SkyAtmosphere.usf:315-317
         // and SkyAtmosphereCommon.ush:241-245.
         const bool ground = SkyViewIntersectsGround(dir, height, bottom);
-        // The LUT is pre-exposed for storage; LightTarget is RAW radiance for HDRI
-        // and surface lighting alike. Decode here so compose uses one exposure path.
+        // The LUT is pre-exposed for STORAGE (skyExposure.x); decoded to radiance here so the HDRI and
+        // the LUT reach the one pre-exposure below together (`lightPreExposure`, the light target's).
         // skyExposure.y = the sky PICTURE's own brightness, applied at draw time and NOWHERE else: not the
         // capture the probes are built from, not the distant light, not the disc. UE's SkyLuminanceFactor
         // (SkyAtmosphere.usf:919-922) also reaches their sky-light capture; ours deliberately does not,
@@ -154,69 +152,11 @@ PSOut PSMain(VSOut i)
         // carries SkyAndAerialPerspectiveLuminanceFactor (`luminanceScale`), which is the one that lights.
         c = skyViewLut.SampleLevel(samLinear, SkyViewDirToUvNoPlanet(dir, height, bottom), 0).rgb
             / max(skyExposure.x, 1.e-8f) * skyExposure.y;
-        // UE SkyAtmosphereCommon.ush:256-279, Rendering.cpp:445-446.
-        // skySunDirection.w = the sun's HALF-APEX angle in radians (DirectionalLight::GetSunHalfApexRadians,
-        // UE GetSunLightHalfApexAngleRadian): the level sun's LightSourceAngle, 0.5357 deg apex by default.
-        float radius = skySunDirection.w;
-        float cosHalf = cos(radius);
-        float viewDotLight = dot(dir, skySunDirection.xyz);
-        if (!ground && radius > 0.0f && viewDotLight > cosHalf)
-        {
-            float3 tr = DiscTransmittance(dir, height, bottom, top);
-            // 2*sin(radius/2)^2 avoids cancellation for very small disks.
-            float oneMinusCos = 2.0f * pow(sin(0.5f * radius), 2.0f);
-            float softEdge = saturate(2.0f * (viewDotLight - cosHalf) / max(oneMinusCos, 1.e-12f));
-            // UE applies SkyAndAerialPerspectiveLuminanceFactor to scattering, not the disk.
-            // The FP16 radiance range is matched BEFORE exposure: a procedural-only pre-exposure
-            // bypass gave bloom thousands of times more energy than an equally bright HDRI sun or
-            // specular highlight. Coverage stays outside the limit so the soft edge is antialiased.
-            // HOW MUCH OF THE TRANSMITTANCE THE DISC SHOWS IS A LOOK CONSTANT, and it is one only
-            // because the FP16 ceiling took the physics away. UE clamp the disc nowhere -- not in
-            // the shader (`SkyAtmosphereCommon.ush:271` returns transmittance * luminance * softEdge
-            // raw) and not on the CPU (`SkyAtmosphereRendering.cpp:444-446`) -- because they
-            // pre-expose, so the value lands near the display's white point and per-channel clipping
-            // does the rest: white core, coloured falloff. We store RAW radiance in FP16, and at this
-            // project's illuminance the disc is about 7e7 against a ceiling of 65504.
-            //
-            // A thousand times over the ceiling leaves no middle ground. Clamping per channel pins
-            // all three and the disc is pure white at every sun angle -- which is what it did, and is
-            // why it never reddened at sunset. Clamping by the peak keeps the hue but applies it to
-            // the WHOLE disc at once, since the peak scale is uniform, so it reads as a coloured
-            // plate rather than an over-exposed highlight -- far too yellow. Moving the clamp after
-            // `softEdge` does not help either: the core is still a thousand times over, so it clips
-            // to white and the tinted rim is a sliver a fraction of a pixel wide.
-            //
-            // So the amount is chosen, and named. The proper fix is to pre-expose this path as UE do,
-            // at which point this constant goes away and the clipping decides again.
-            //
-            // WHAT THIS CONSTANT MAY AND MAY NOT DECIDE. Only the HUE, because the peak clamp two
-            // lines down erases everything else: the disc arrives about a thousand times over the
-            // ceiling, so `disk * (65504 / diskPeak)` renormalises it and any scale applied here
-            // cancels exactly. Writing the knob as if it also controlled brightness would be a
-            // control that lies.
-            //
-            // IT IS NOT `lerp(1, tr, k)` ANY MORE, and that shape was backwards. A lerp towards
-            // white leaves a floor of (1 - k) white under every channel, so the redder the true sun
-            // gets the more that floor dominates -- the coloured part shrinks towards zero while the
-            // white part stays put. Measured on this level's parameters (rayleigh x0.70), the hue it
-            // produced ran 1.00 : 0.90 : 0.82 at 7.8 deg of elevation and 1.00 : 0.93 : 0.91 at the
-            // horizon: the disc went WHITER as it set, while the physical transmittance went
-            // 1.00 : 0.63 : 0.31 -> 1.00 : 0.16 : 0.00 the other way.
-            //
-            // An exponent on the peak-normalised transmittance keeps the hue's DIRECTION and only
-            // shortens how far it travels, which is monotone in elevation the way the physics is.
-            // k = 1 is UE exactly (SkyAtmosphereCommon.ush:271 applies the full transmittance and
-            // clamps nowhere); k = 0 is a white disc. At 0.25 the sun above reads as it did before
-            // -- 1.00 : 0.89 : 0.74 -- and the same sun on the horizon reaches 1.00 : 0.63 : 0.16
-            // instead of staying white.
-            const float kSunDiscTint = 0.25f;
-            const float trPeak = max(max(max(tr.r, tr.g), tr.b), 1.e-6f);
-            const float3 discTransmittance = pow(saturate(tr / trPeak), kSunDiscTint);
-            float3 disk = discTransmittance * skyIlluminance.rgb / max(2.0f * SkyViewPi * oneMinusCos, 1.e-12f);
-            const float diskPeak = max(max(disk.r, disk.g), disk.b);
-            const float3 diskInRange = diskPeak > 65504.0f ? disk * (65504.0f / diskPeak) : disk;
-            c += diskInRange * softEdge;
-        }
+        // THE SUN'S DISC IS NOT DRAWN HERE ANY MORE (2026-10-14): compose_cs.hlsl draws it, PRE-EXPOSED, as UE
+        // do (SkyAtmosphere.usf:357-377). This target holds RAW radiance in FP16, and at this project's
+        // illuminance the disc is ~7e7 against a ceiling of 65504 -- it used to be clamped there BEFORE the
+        // exposure, ~1000x under the physics: only ~10x the sky, ~2x a bright cloud beside it, so bloom, glare
+        // and the lens ghosts could not tell the sun from the cloud. The moon's disc fits and stays below.
         // TIME-OF-DAY PLAN N2: THE NIGHT SKY'S OWN LIGHT (night_sky.hlsli) -- the airglow, the Milky Way and
         // the stars, each through the air in front of it (the transmittance to the top of the atmosphere,
         // the discs' own): they redden and fade toward the horizon. The airglow above the horizon is held
@@ -359,11 +299,13 @@ PSOut PSMain(VSOut i)
             }
         }
         c += airglow + night * (1.0f - moonCover);
-        // The whole sky, clamped the same way: a per-channel min here would undo the disc's
-        // hue again the moment any one channel touched the ceiling.
-        const float cPeak = max(max(c.r, c.g), c.b);
-        c = cPeak > 65504.0f ? c * (65504.0f / cPeak) : c;
     }
+    // PRE-EXPOSED, like everything in the light target (UE's View.PreExposure), then the whole sky
+    // clamped to FP16 by its PEAK: a per-channel min here would undo the disc's hue again the moment
+    // any one channel touched the ceiling.
+    c *= lightPreExposure;
+    const float cPeak = max(max(c.r, c.g), c.b);
+    c = cPeak > 65504.0f ? c * (65504.0f / cPeak) : c;
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPos);
     float2 motion = currUv - prevUv;

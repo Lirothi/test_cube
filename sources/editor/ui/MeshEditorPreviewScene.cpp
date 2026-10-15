@@ -94,7 +94,7 @@ bool SameLight(const MeshEditorPreviewLight& a,
             a.sunIlluminance.x == b.sunIlluminance.x &&
             a.sunIlluminance.y == b.sunIlluminance.y &&
             a.sunIlluminance.z == b.sunIlluminance.z &&
-            a.sunHalfApex == b.sunHalfApex && a.flatAmbient == b.flatAmbient &&
+            a.sunHalfApex == b.sunHalfApex && a.sunSoftRadius == b.sunSoftRadius && a.flatAmbient == b.flatAmbient &&
             a.lightExposure == b.lightExposure &&
             a.groundAlbedo.x == b.groundAlbedo.x &&
             a.groundAlbedo.y == b.groundAlbedo.y &&

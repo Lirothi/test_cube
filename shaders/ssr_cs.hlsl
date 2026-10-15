@@ -130,9 +130,10 @@ float4 SampleUeScreenColor(float3 hitUVz)
     }
     else
     {
-        // No history yet (first frame after a resize / level switch): the current lit target,
-        // brought into current-pre-exposed space so the tail correction below stays uniform.
-        c = LightTarget.SampleLevel(gSmp, hitUVz.xy, 0.0f).rgb * preExposure;
+        // No history yet (first frame after a resize / level switch): the current lit target, which
+        // is already in current-pre-exposed space (lighting_cb.hlsli lightPreExposure), so the tail
+        // correction below stays uniform.
+        c = LightTarget.SampleLevel(gSmp, hitUVz.xy, 0.0f).rgb;
     }
     c = -min(-c, 0.0f);
     return float4(c, 1.0f) * hitVignette;
@@ -292,7 +293,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 // texel of frond-green against sky whenever jitter nudges the hit sub-texel — the
                 // measured tremble of reflected palm crowns at grazing views was exactly that.
                 // NaN/negative guard verbatim from UE.
-                float3 c = LightTarget.SampleLevel(gSmp, ssr.uv, 0.0f).rgb;
+                // The light target is pre-exposed; the reflection buffer holds radiance for compose.
+                float3 c = LightTarget.SampleLevel(gSmp, ssr.uv, 0.0f).rgb * rcp(max(preExposure, 1.0e-12f));
                 c = -min(-c, 0.0f);
                 result = float4(c * ssr.visibility, ssr.visibility);
             }

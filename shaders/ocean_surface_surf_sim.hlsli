@@ -100,6 +100,7 @@ cbuffer OceanCB : register(b0)
     // deferred lighting and the fog get (SceneRenderer sets them from the frame's VolumetricCloud).
     float4x4 cloudShadowViewProj;
     float4 cloudShadowParams;          // x: on, y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
+    float4 sunShapeParams;             // x: the light's angular RADIUS (rad, UE's half apex) for the sphere-light glint (OceanSunSpecular), y: its soft radius (UE SoftSourceRadius), zw: reserved
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -234,8 +235,6 @@ struct BrunetonInputs
 // here deliberately and on request -- with `g_shoreRunup = false` as the compiled default this is
 // the surface that actually ships, and a "baseline" nobody renders is not worth a hardcoded sky.
 static const float3 kLegacyFoamSkyColor = float3(0.24f, 0.38f, 0.55f);
-static const float kSpecularMinPower = 64.0f;
-static const float kSpecularMaxPower = 512.0f;
 // Keep the presentation boundary in step with the compute shader's 24-texel absorber. The
 // camera-following window eventually discards persistent wave/foam data in Relocate; fading the
 // sampled result first prevents that loss from reading as a moving square cut.
@@ -712,17 +711,6 @@ BrunetonInputs BuildBrunetonInputs(const LightingInput li)
     return bi;
 }
 
-float3 Specular(const LightingInput li, const BrunetonInputs bi)
-{
-    //(void)bi;
-    float3 halfDir = normalize(-li.mainLight.direction + li.viewDir);
-    float roughness = saturate(specularParams.y * (1.0f + li.roughnessMap * 0.3f));
-    float specPower = lerp(kSpecularMinPower, kSpecularMaxPower, 1.0f - roughness);
-    float spec = pow(saturate(dot(li.normal, halfDir)), specPower);
-    spec *= specularParams.x * li.mainLight.shadowAttenuation;
-    return spec * li.mainLight.color;
-}
-
 // P5: takes a roughness now. The legacy surface has no per-pixel roughness of its own -- it is a
 // Bruneton model -- but it does carry the physical quantity roughness stands for: the slope
 // VARIANCE of the microfacet distribution. sqrt of it is an RMS slope, which is what maps onto a
@@ -869,7 +857,7 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData, out OceanG
     float3 foamLitColor = LitFoamColor(li, foamData);
 
     float fresnel = EffectiveFresnel(li, bi);
-    float3 specular = Specular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.x));
+    float3 specular = OceanSunSpecular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.x));
     // Bruneton slope variance -> an RMS slope -> a GGX-ish roughness for the shared environment.
     // Clamped low: open water is a near-mirror and the variance can spike on wave crests.
     const float oceanRoughness = clamp(sqrt(max(bi.slopeVarianceSquared.x, 0.0f)), 0.02f, 0.6f);

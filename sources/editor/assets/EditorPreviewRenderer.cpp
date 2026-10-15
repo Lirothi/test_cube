@@ -855,7 +855,7 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
             std::max(0.0f, physical->flatAmbient) };
         cb.groundAlbedo = dx::XMFLOAT4{ physical->groundAlbedo.x, physical->groundAlbedo.y,
             physical->groundAlbedo.z, physical->irradiance.ptr != 0 ? 1.0f : 0.0f };
-        cb.sunParams = dx::XMFLOAT4{ physical->sunHalfApex, physical->lightExposure, 0.0f, 0.0f };
+        cb.sunParams = dx::XMFLOAT4{ physical->sunHalfApex, physical->lightExposure, physical->sunSoftRadius, 0.0f };
         cb.camera = dx::XMFLOAT4{ physical->exposure, static_cast<float>(physical->toneCurve),
             0.0f, 0.0f };
         cb.grade = dx::XMFLOAT4{ physical->gradeSaturation, physical->gradeContrast,

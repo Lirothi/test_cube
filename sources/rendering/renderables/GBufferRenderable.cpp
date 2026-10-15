@@ -346,6 +346,10 @@ void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams&
     {
         matParamses_[slot].texFlags.y = explicitValues.texFlags.y;
     }
+    if (overridden(MaterialParamField::UseAlbedo))
+    {
+        matParamses_[slot].texFlags.x = explicitValues.texFlags.x;
+    }
     if (overridden(MaterialParamField::EmissiveColor))
     {
         matParamses_[slot].emissiveColor = explicitValues.emissiveColor;
@@ -413,7 +417,10 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
             // A missing preset (including a material that was just created but not registered
             // yet) must render as a flat fallback. Leaving the default texture flags enabled
             // would sample the descriptor table from an unrelated preceding draw.
-            matParamses_[i].SetUseAlbedo(matDatas_[i] && matDatas_[i]->hasAlbedo);
+            // An object may have switched its albedo texture off (useAlbedo false); it can never
+            // switch on a texture the material does not have.
+            const bool wantsAlbedo = matParamses_[i].texFlags.x > 0.5f;
+            matParamses_[i].SetUseAlbedo(matDatas_[i] && matDatas_[i]->hasAlbedo && wantsAlbedo);
             const bool wantsMR = matParamses_[i].texFlags.y > 0.5f;
             matParamses_[i].SetUseMR(matDatas_[i] && matDatas_[i]->hasMR && wantsMR);
             matParamses_[i].SetUseNormal(matDatas_[i] && matDatas_[i]->hasNormal);

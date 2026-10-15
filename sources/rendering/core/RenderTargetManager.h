@@ -154,6 +154,11 @@ public:
         // what lets either bloom method drive it. Levels 1..N are packed side by side inside B.
         GpuResource streakA;
         GpuResource streakB;
+        // The bloom's light accumulated over frames (bloom_conv_cs.hlsl stage 12): the scene before the
+        // upscaler is jittered, and a glint under a pixel lands in it or not frame by frame -- the FFT,
+        // the ghosts and the streak read this instead. Half the RENDER resolution; this slot writes it,
+        // the next frame reads it as the previous slot's.
+        GpuResource bloomHistory;
         // The texture inspector's preview surface. ImGui can only tint an image by a value it
         // packs to 8 bits, so anything needing to BRIGHTEN a target has to happen before ImGui
         // sees it; the inspector resamples into this and ImGui draws it untinted.
@@ -240,6 +245,8 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE streakASRV{}, streakAUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE streakBSRV{}, streakBUAV{};
         UINT streakWidth = 1, streakHeight = 1;
+        D3D12_CPU_DESCRIPTOR_HANDLE bloomHistorySRV{}, bloomHistoryUAV{};
+        UINT bloomHistoryWidth = 1, bloomHistoryHeight = 1;
 
         UINT shadowRes = 4096; // atlas edge; tile = half, content = tile - 2 * gutter. See render::g_csmAtlasRes.
         UINT spotShadowRes = 512;
@@ -301,6 +308,8 @@ public:
         UINT lensFlareWidth = 1, lensFlareHeight = 1;
         // P8C-2l: the streak pyramid, also a quarter of the display.
         UINT streakWidth = 1, streakHeight = 1;
+        // The bloom's temporal input, half the render resolution.
+        UINT bloomHistoryWidth = 1, bloomHistoryHeight = 1;
     };
 
     void Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls);
@@ -360,6 +369,8 @@ private:
     LensFlareAccum,
     // P8C-2l: the anamorphic streak's own pyramid.
     StreakA, StreakAUAV, StreakB, StreakBUAV,
+    // The bloom's light accumulated over frames.
+    BloomHistory, BloomHistoryUAV,
     // RT gather-then-shade payload (async prep).
     RtPayload, RtPayloadUAV, RtPayloadUv, RtPayloadUvUAV,
     // Volumetric fog froxel volumes (3D).

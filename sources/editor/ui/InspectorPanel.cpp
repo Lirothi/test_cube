@@ -876,6 +876,12 @@ namespace
                           "bright sky does not lift the base of the water just under the horizon "
                           "(the dark band). 1 = a plain blur only, which bleeds across every "
                           "high-contrast edge -- what shipped before the grid.");
+            dragF("Local Blur Size %", "localBlurredKernelPercent", 50.0f, 0.5f, 0.0f, 100.0f, "%.1f %%");
+            InspectorHelp("The width of that blur as a percent of the view (UE Blurred Luminance "
+                          "Kernel Size Percent, default 50). Narrow makes the operator more local; "
+                          "it also lets one tiny, very bright source -- the sun's disc -- lift the "
+                          "neighbourhood round itself, and the highlight compression then draws a "
+                          "dark ring round it (seen at the ~2 % this used to be).");
             {
                 // Mirrors the dev window's local-exposure presets exactly, including "Expand",
                 // which is the one measured against docs/ref/ref_wind_test.png.
@@ -1440,73 +1446,9 @@ namespace
                 if (changed) { tgt()["enabled"] = bloomEnabled; }
                 trackContinuousEdit(changed);
             }
-            InspectorHelp("Exposure-aware HDR bloom: a threshold pass, a half-resolution pyramid "
-                          "and a tent reconstruction, composited into the image BEFORE the tone "
-                          "curve. Off schedules no pass at all rather than a pass that adds zero, "
-                          "so off genuinely costs nothing.");
-
-            ImGui::SeparatorText("Extraction");
-            dragF("Threshold", "threshold", 1.0f, 0.01f, -1.0f, 16.0f, "%.2f");
-            InspectorHelp("Luminance at which bloom starts, measured AFTER exposure - UE's "
-                          "BloomThreshold, in the same units. Being post-exposure is what makes one "
-                          "number mean the same thing across a sunset and a noon.\n\n"
-                          "NEGATIVE DISABLES IT, and that is UE's own default (-1 in Scene.cpp), "
-                          "documented there as \"all pixels affect bloom equally (physically "
-                          "correct)\". A lens scatters light from EVERYTHING in front of it, not "
-                          "only from whatever passes a brightness test.\n\n"
-                          "It also decides how bloom answers to EXPOSURE. With a threshold, raising "
-                          "exposure both scales the pixels already over the line and pushes new "
-                          "ones over it, so bloom grows faster than the image does. At -1 the "
-                          "response is exactly linear: twice the exposure, twice the bloom, no "
-                          "step.\n\n"
-                          "ON THIS PROJECT'S CONTENT, -1 COSTS YOU THE RAYS. Measured on "
-                          "sun_glint: the sun region is only about 20x the sky region, where a real "
-                          "HDR sky puts the solar disc thousands of times above it. The sky fills "
-                          "half the frame, so its TOTAL energy swamps the sun and the convolution "
-                          "reads as a uniform veil -- the veil lifted the DARKS by 8.3/255 while "
-                          "lifting the area around the sun by only 6.6. A positive threshold is "
-                          "what isolates the point source, and it is why this ships at 1.0 rather "
-                          "than at UE's default.\n\n"
-                          "UNITS CAVEAT (P16): the buffers are pre-exposed, so this compares "
-                          "against ADAPTED values and one number reads differently as the camera "
-                          "adapts. The ghost and streak thresholds below were moved to absolute "
-                          "units for exactly that reason; this one keeps UE's semantics for now.");
-            dragF("Soft Knee", "softKnee", 0.5f, 0.01f, 0.05f, 4.0f, "%.2f");
-            InspectorHelp("Slope of the ramp above the threshold; UE hardwire 0.5, which is the "
-                          "default here. Lower = a longer shoulder, so highlights ease into the "
-                          "bloom instead of switching on at a fixed brightness.");
-            {
-                bool firefly = tgt().value("fireflyClamp", true);
-                const bool changed = ImGui::Checkbox("Firefly Clamp", &firefly);
-                beginContinuousEdit(changed);
-                if (changed) { tgt()["fireflyClamp"] = firefly; }
-                trackContinuousEdit(changed);
-            }
-            InspectorHelp("Karis average on the FIRST downsample only: each tap is weighted by "
-                          "1/(1+luma), so one blown-out texel is averaged DOWN instead of surviving "
-                          "the whole pyramid. This is the setting that decides whether moving sun "
-                          "glints on water sparkle or pump the entire frame, which is the specific "
-                          "failure this step was warned about. Deeper levels do not use it - there "
-                          "it would only eat energy the tent needs.");
-
-            ImGui::SeparatorText("Reconstruction");
-            dragF("Intensity", "intensity", 0.25f, 0.02f, 0.0f, 64.0f, "%.3f");
-            InspectorHelp("Weight of the bloom added back. It receives the same GLOBAL exposure "
-                          "the scene does, but not the local exposure and not the colour grade -- a "
-                          "halo that spread from elsewhere is not part of this pixel's "
-                          "neighbourhood. 0 is an exact no-op and skips the chain.\n\n"
-                          "ON THE CONVOLUTION IT IS UE'S ScatterDispersionIntensity: the multiplier "
-                          "on the fraction of the kernel's energy that SCATTERS. That fraction is a "
-                          "property of the kernel image (7.5% for BloomKernelStar, 2.1% for UE's "
-                          "own), so the same number is dimmer on a kernel that scatters less -- "
-                          "which is the point, not a quirk. With Threshold below zero the scene is "
-                          "dimmed by whatever the flare takes, and the knob saturates once ALL of "
-                          "the light has moved into the flare.");
-            dragF("Radius", "radius", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
-            InspectorHelp("Tap spacing of the tent upsample, in DESTINATION texels, so it means the "
-                          "same thing at every level and at every resolution. It spreads the same "
-                          "energy wider rather than adding any: widen it and the halo gets larger "
-                          "and fainter, it does not get brighter.");
+            InspectorHelp("HDR bloom composited into the image BEFORE the tone curve, in either of UE's "
+                          "two forms (Method). Off schedules no pass at all rather than a pass that "
+                          "adds zero, so off genuinely costs nothing.");
 
             ImGui::SeparatorText("Method");
             {
@@ -1517,15 +1459,65 @@ namespace
                 if (changed) { tgt()["method"] = static_cast<std::uint32_t>(method < 0 ? 0 : method); }
                 trackContinuousEdit(changed);
             }
-            InspectorHelp("STANDARD is the mip pyramid: cheap, symmetric, and structurally incapable "
-                          "of a streak -- a stack of Gaussians has no shape to give.\n\n"
-                          "CONVOLUTION replaces every bright pixel with a copy of an aperture image, "
-                          "via two Fourier transforms and one complex multiply. Halo, starburst and "
-                          "the rays from the iris blades all come out of that ONE kernel and are "
-                          "consistent with each other by construction, instead of being three "
-                          "effects tuned into agreement. It costs more and runs at Resolution % "
-                          "of the display (50 by default); a scene with no bright highlights "
-                          "cannot tell them apart, which is why Standard is the default.");
+            InspectorHelp("STANDARD is UE's Gaussian bloom on a mip pyramid: cheap, symmetric, and "
+                          "structurally incapable of a streak -- a stack of Gaussians has no shape "
+                          "to give.\n\n"
+                          "CONVOLUTION is UE's FFT bloom: the whole scene convolved with a kernel "
+                          "IMAGE. Halo, starburst and rays all come out of that ONE kernel. It costs "
+                          "more and runs at Resolution % of the display.\n\n"
+                          "Only the knobs of the chosen method are shown.");
+
+            dragF("Intensity", "intensity", 0.675f, 0.0005f, 0.0f, 64.0f, "%.4f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+            InspectorHelp("UE's BloomIntensity, default 0.675. 0 is an exact no-op and skips the "
+                          "chain. It also scales the lens ghosts (UE: LensFlareIntensity * "
+                          "BloomIntensity). Logarithmic: the useful range spans orders of magnitude.\n\n"
+                          "STANDARD: the weight of UE's six Gaussians, Bloom{n}Tint * Intensity / 6, "
+                          "laid on the pyramid's levels by their sizes.\n\n"
+                          "CONVOLUTION: UE's ScatterDispersionIntensity, the multiplier on the "
+                          "fraction of the kernel's energy that SCATTERS. That fraction is a "
+                          "property of the kernel IMAGE; every kernel in textures/ scatters what UE's "
+                          "DefaultBloomKernel does (~1.75 % at the default size -- "
+                          "tools/bloom_kernel_delta.py), so 0.1-1 is the range for all of them. The "
+                          "light is PARTITIONED, not added: the scene is dimmed by exactly what the "
+                          "flare takes.");
+
+            if (tgt().value("method", 0u) == 0u)
+            {
+            ImGui::SeparatorText("Standard (pyramid) only");
+            dragF("Threshold", "threshold", -1.0f, 0.01f, -1.0f, 16.0f, "%.2f");
+            InspectorHelp("UE's FFT bloom has no threshold, and neither does the Convolution here "
+                          "(its filter is the bright-pixel gain).\n\n"
+                          "Luminance at which bloom starts, in the units the viewer sees -- UE's "
+                          "BloomThreshold. NEGATIVE DISABLES IT, and that is UE's own default "
+                          "(-1 in Scene.cpp), documented there as \"all pixels affect bloom "
+                          "equally (physically correct)\". A lens scatters light from EVERYTHING "
+                          "in front of it, not only from whatever passes a brightness test.\n\n"
+                          "It also decides how bloom answers to EXPOSURE. With a threshold, raising "
+                          "exposure both scales the pixels already over the line and pushes new "
+                          "ones over it, so bloom grows faster than the image does. At -1 the "
+                          "response is exactly linear: twice the exposure, twice the bloom.");
+            dragF("Soft Knee", "softKnee", 0.5f, 0.01f, 0.05f, 4.0f, "%.2f");
+            InspectorHelp("Slope of the ramp above the threshold; UE hardwire 0.5, which is the "
+                          "default here. Lower = a longer shoulder, so highlights ease into the "
+                          "bloom instead of switching on at a fixed brightness.");
+            {
+                bool firefly = tgt().value("fireflyClamp", false);
+                const bool changed = ImGui::Checkbox("Firefly Clamp", &firefly);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["fireflyClamp"] = firefly; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("OURS, off by default -- UE's bloom downsample has none. A Karis average on "
+                          "the FIRST downsample only: each tap is weighted by 1/(1+luma), so one "
+                          "blown-out texel is averaged DOWN instead of surviving the whole pyramid. "
+                          "Turn it on if moving sun glints on water pump the entire frame.");
+            dragF("Radius", "radius", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
+            InspectorHelp("Tap spacing of the tent upsample, in DESTINATION texels, so it means the "
+                          "same thing at every level and at every resolution. It spreads the same "
+                          "energy wider rather than adding any: widen it and the halo gets larger "
+                          "and fainter, it does not get brighter.");
+            }
 
             if (tgt().value("method", 0u) == 1u)
             {
@@ -1603,43 +1595,58 @@ namespace
                     if (changed) { tgt()["convKernelTint"] = { ktint[0], ktint[1], ktint[2] }; }
                     trackContinuousEdit(changed);
                 }
-                InspectorHelp("A colour multiplier on the kernel IMAGE, the runtime equivalent of "
-                              "re-authoring the photograph. It survives the normalisation: the DC "
-                              "divide is by the LARGEST channel sum, exactly so a kernel's own "
-                              "colour balance is not washed out -- so tinting the kernel tints the "
-                              "glare rather than being divided back out.\n\n"
-                              "It costs nothing per frame: the kernel spectrum is rebuilt only when "
-                              "its key moves, and the tint is part of that key.");
+                InspectorHelp("How strongly each channel SCATTERS (ours; UE's ScatterDispersion is "
+                              "one number): a bluish tint gives a bluish flare, and the light a "
+                              "channel does not scatter stays in the scene, so the frame's colour "
+                              "balance is kept. It cannot sit in the kernel image: the transform "
+                              "normalises each channel by its own sum, as UE's does.");
 
                 ImGui::SeparatorText("Bright-pixel gain (UE's prefilter)");
-                dragF("Gain Slope", "convPreFilterMult", 0.0f, 0.05f, 0.0f, 32.0f, "%.2f");
-                InspectorHelp("UE's BloomConvolutionPreFilterMult, and the ONLY filtering their FFT "
-                              "bloom has -- there is no threshold anywhere in that path.\n\n"
-                              "0 turns it off and the Threshold above takes over. Anything above 0 "
-                              "REPLACES the threshold: nothing is cut, a pixel below Min passes "
-                              "through untouched, and a pixel above Min has its luminance remapped "
-                              "with this slope. That is the difference that matters -- a threshold "
-                              "decides MEMBERSHIP, so every source in the frame moves together and "
-                              "one number cannot serve two shots; measured on this level, at 5 both "
-                              "a beach sun and a palm grove bloomed and at 6 both died.\n\n"
-                              "Pair it with Threshold below zero, which is how UE ship it: no "
-                              "threshold, this gain, and the centre/scatter split for the energy.");
-                dragF("Gain Min", "convPreFilterMin", 1.5f, 0.05f, 0.0f, 64.0f, "%.2f");
-                InspectorHelp("Where the boost starts, in the same ABSOLUTE units as every other "
-                              "threshold here: brightness at EV100 = 14, so it means the same thing "
-                              "from any viewpoint. Below it, pixels are left exactly as they are.");
-                dragF("Gain Max", "convPreFilterMax", 6.0f, 0.25f, 0.0f, 512.0f, "%.1f");
-                InspectorHelp("The CEILING the boosted luminance is clamped to -- the reason one "
-                              "setting can serve an open sun and a grove full of bright gaps. A "
-                              "threshold has no such thing: it can only include or exclude, so a "
-                              "frame with a thousand medium-bright sources runs away. This caps "
-                              "what any single source can contribute, however bright it gets.");
+                dragF("Gain Slope", "convPreFilterMult", 15.0f, 0.05f, 0.0f, 64.0f, "%.2f");
+                InspectorHelp("UE's BloomConvolutionPreFilterMult (default 15), and the ONLY "
+                              "filtering their FFT bloom has -- there is no threshold anywhere in "
+                              "that path. Nothing is cut: a pixel below Min passes untouched, a "
+                              "pixel above Min has its luminance remapped with this slope and "
+                              "clamped at Max. 0 = off (under UE's own gate 0 would clamp every "
+                              "pixel above Min to Min).");
+                dragF("Gain Min", "convPreFilterMin", 7.0f, 0.05f, 0.0f, 1000.0f, "%.2f",
+                      ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+                InspectorHelp("Where the boost starts (UE default 7), in the PRE-EXPOSED units the "
+                              "scene is stored in -- UE's FilterPixel runs on the pre-exposed scene "
+                              "colour too. Below it, pixels are left exactly as they are. Off when "
+                              "Min >= Max (UE's gate).");
+                dragF("Gain Max", "convPreFilterMax", 15000.0f, 10.0f, 0.0f, 65504.0f, "%.1f",
+                      ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+                InspectorHelp("The CEILING the boosted luminance is clamped to (UE default 15000, "
+                              "pre-exposed) -- what any single pixel can contribute, however bright "
+                              "it gets. The physical sun disc sits far above everything else in "
+                              "the frame; this is what bounds its flare.");
                 dragF("Resolution %", "convPercent", 50.0f, 0.5f, 10.0f, 50.0f, "%.0f %%");
                 InspectorHelp("Resolution of the convolution as a percent of the display -- UE's "
                               "r.Bloom.ScreenPercentage (their default is 100; 50 is this "
                               "engine's grid ceiling). The first P8C ran at 12.5, and a 1-2 texel "
                               "diffraction ray upscaled 4x per axis is a dashed line of squares "
                               "-- the 'ragged crown'. Lowering this buys the transform cost back.");
+                checkB("Before the upscaler", "convBeforeUpscale", true);
+                InspectorHelp("Convolve the scene BEFORE DLSS. DLSS takes a glint of a few pixels "
+                              "for aliasing and flattens it -- a chrome sphere's sun glint kept about "
+                              "a tenth of its energy, so the kernel's star never formed. No effect "
+                              "without DLSS.");
+                dragF("Temporal Weight", "convTemporalWeight", 0.1f, 0.005f, 0.01f, 1.0f, "%.3f");
+                InspectorHelp("With Before the upscaler: the bloom's light (the convolution, the ghosts, "
+                              "the streak) is accumulated over frames, and this is the new frame's share. "
+                              "The scene before DLSS is jittered, so a glint smaller than a pixel lands in "
+                              "it one frame and misses the next -- its star flickered. UE's bloom reads "
+                              "TSR's output, which does this averaging. Lower = steadier, and a moving "
+                              "glint's flare lags more. 1 = off.");
+                dragF("Sun Kernel Scale", "convSunKernelScale", 1.0f, 0.005f, 0.0f, 10.0f, "%.3f",
+                      ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+                InspectorHelp("ART, not physics: the sun disc's own share of the kernel's light (its "
+                              "star, halo and rays). The disc carries thousands of times a glint's "
+                              "light, so with one Intensity the sun's star dominates and a glint's "
+                              "barely shows -- raise Intensity for everything and pull the sun back "
+                              "here. The sun is the sky within Sun Radius of it (with the ghosts), "
+                              "applied after Boost. 1 = the sun like any other source.");
             }
 
             // P8C-2l: THE FLARES ARE NOT PART OF EITHER BLOOM METHOD. They read the HDR image
@@ -1652,18 +1659,15 @@ namespace
             // and runs with both.
             dragF("Anamorphic Intensity", "convAnamorphicIntensity", 0.0f, 0.02f, 0.0f, 8.0f, "%.2f");
             InspectorHelp("Direct brightness of the streak. 0 = off (the passes do not run).");
-            dragF("Anamorphic Threshold", "convAnamorphicThreshold", 1.5f, 0.05f, 0.1f, 24.0f, "%.2f");
+            dragF("Anamorphic Threshold", "convAnamorphicThreshold", 1.5f, 0.05f, 0.1f, 10000.0f, "%.2f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
             InspectorHelp("The streak's OWN threshold, and since P8C-2h the ONLY narrowing "
-                              "control -- the vertical erosion that used to sit below was deleted "
-                              "with the cascade (a min-filter cannot taper at a frame edge). In "
-                              "ABSOLUTE units: authored as stored "
-                          "brightness at EV100 = 14 and rescaled by the frame's pre-exposure, "
-                          "so the same sun crosses it from any viewpoint -- being a light "
-                          "source is a property of the scene, not the camera. On this level: "
-                          "sky ~1, sun corona 4-6, sun core 10-12, glints above that. This is "
-                          "also the narrowness control that actually works: higher values "
-                          "take only the CORE of a source, so the corona stops throwing a "
-                          "screen-tall band.");
+                          "control -- the vertical erosion that used to sit below was deleted "
+                          "with the cascade (a min-filter cannot taper at a frame edge). In the "
+                          "PRE-EXPOSED units the scene is stored in, as the ghost threshold and "
+                          "UE's LensFlareThreshold. Higher values take only the CORE of a "
+                          "source, so a bright sky round the sun stops throwing a screen-tall "
+                          "band; the physical sun disc clears any sensible value by thousands.");
             dragF("Anamorphic Length", "convAnamorphicLength", 0.28f, 0.005f, 0.01f, 1.0f, "%.3f");
             InspectorHelp("How far the band reaches, as a fraction of the screen width -- "
                           "the VISIBLE extent, so 0.1 draws a band about a tenth of the "
@@ -1749,31 +1753,44 @@ namespace
                           "and the water's glitter path came out as recognisable mirrored "
                           "smears in the sky. At UE's 3 the sprite dominates and the chain "
                           "reads as bokeh discs again.");
-            dragF("Ghost Intensity", "convGhostIntensity", 0.6f, 0.01f, 0.0f, 3.0f, "%.2f");
-            InspectorHelp("Brightness of the chain. The colour comes from the sources "
+            dragF("Ghost Intensity", "convGhostIntensity", 1.0f, 0.001f, 0.0f, 1000.0f, "%.4f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+            InspectorHelp("UE's LensFlareIntensity (default 1); the chain gets it times the "
+                          "bloom Intensity, as theirs does. The colour comes from the sources "
                           "themselves, so a dimmer sun throws dimmer ghosts and a sky with "
                           "nothing above the threshold throws none at all.");
-            dragF("Ghost Threshold", "convGhostThreshold", 7.0f, 0.05f, 0.0f, 24.0f, "%.2f");
-            InspectorHelp("UE's LensFlareThreshold, in the same ABSOLUTE units as the streak "
-                          "threshold above (stored brightness at EV100 = 14, rescaled by the "
-                          "frame's pre-exposure). Ghosts are images of SOURCES -- too low and "
-                          "sunlit foliage becomes one (upside-down palms in the sky, "
-                          "observed).\n\n"
-                          "SOFT KNEE, unlike UE's binary gate: a source's ghost is scaled by "
-                          "how far it sits ABOVE this, so one at the threshold contributes "
-                          "nothing and one ten times over it 90%. That is what stops a chain "
-                          "popping into existence as the sun brightens -- and it means this "
-                          "number wants to be LOWER than a binary gate's: 7 here matches what "
-                          "10 gave before the knee. Raising it also cuts the scatter's cost "
-                          "directly: collapsed quads rasterize nothing.");
+            dragF("Ghost Threshold", "convGhostThreshold", 8.0f, 0.05f, 0.0f, 65504.0f, "%.2f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+            InspectorHelp("UE's LensFlareThreshold (default 8): a BINARY gate on R+G+B of the "
+                          "pre-exposed scene, as theirs. Ghosts are images of SOURCES -- too low "
+                          "and sunlit foliage becomes one (upside-down palms in the sky, "
+                          "observed). The physical sun disc clears it by thousands, so its ghost "
+                          "is the disc defocused through the iris. Raising it also cuts the "
+                          "scatter's cost directly: collapsed quads rasterize nothing.");
+            dragF("Sun Ghost Scale", "convSunGhostScale", 1.0f, 0.005f, 0.0f, 10.0f, "%.3f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
+            InspectorHelp("ART, not physics: the sun disc's own share of the ghosts. The disc outshines "
+                          "a glint by thousands, so its chain is what you see while a glint's barely "
+                          "shows -- raise Ghost Intensity for everything and pull the sun back here. "
+                          "Found by direction (see Sun Radius). 1 = the sun like any other source.");
+            dragF("Sun Radius (deg)", "convSunSplitRadiusDeg", 8.0f, 0.05f, 0.1f, 45.0f, "%.1f");
+            InspectorHelp("What Sun Kernel Scale and Sun Ghost Scale call the sun: the SKY within this "
+                          "angle of it (fully to half of it, fading out to all of it). The disc alone is "
+                          "not enough -- the bright sky round it makes as much of its halo and ghosts. "
+                          "Geometry never counts, so a glint next to the sun on screen (the sea under "
+                          "a low sun) keeps the common share.");
 
             ImGui::SeparatorText("Sun glare");
-            dragF("Sun Glare", "sunGlareIntensity", 0.0f, 0.001f, 0.0f, 1.0f, "%.3f");
+            dragF("Sun Glare", "sunGlareIntensity", 0.005f, 0.0002f, 0.0f, 1.0f, "%.4f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
             InspectorHelp("A corona around the sun that the convolution cannot give: an analytic "
                           "halo about the sun's direction, added to the bloom. 0 = off.\n\n"
-                          "Its colour and strength are the frame's own pixels over the sun disc, "
-                          "so a palm in front of the sun, a cloud over it or a sunset dims and "
-                          "tints it by itself. Works with either bloom method.");
+                          "The SHARE OF THE SUN DISC'S LIGHT it carries: the disc's brightness "
+                          "times its solid angle, spread over the halo -- so the radii change its "
+                          "size, not its total. Its colour and strength are the "
+                          "frame's own pixels over the disc, so a palm in front of the sun, a "
+                          "cloud over it or a sunset dims and tints it by itself. Works with "
+                          "either bloom method.");
             dragF("Glare Radius", "sunGlareRadiusDeg", 2.0f, 0.05f, 0.05f, 30.0f, "%.2f deg");
             InspectorHelp("The bright core's size, in degrees from the sun's centre (its "
                           "e-folding angle). Degrees, not pixels: the same at any resolution "
@@ -1796,13 +1813,16 @@ namespace
                           "made both dance; 0 = every frame as it is.");
 
             ImGui::SeparatorText("Sun corona");
-            dragF("Corona", "sunRaysIntensity", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
+            dragF("Corona", "sunRaysIntensity", 0.008f, 0.0002f, 0.0f, 2.0f, "%.4f",
+                  ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
             InspectorHelp("The glare structure around the sun, drawn at full resolution in the tone "
                           "curve pass after Ritschel's \"Temporal Glare\": dense bright bundles with "
                           "dim gaps, fine needles inside them, warm tips, a faint rainbow halo ring. "
                           "0 = off.\n\n"
-                          "Colour and strength are the frame's own pixels over the sun disc, so "
-                          "anything in front of the sun takes the corona with it.");
+                          "Scaled by the sun disc's ENERGY (its solid angle over the corona's "
+                          "nominal area), so it follows the disc's light, not its brightness per "
+                          "pixel. Colour and strength are the frame's own pixels over the sun "
+                          "disc, so anything in front of the sun takes the corona with it.");
             {
                 static std::vector<std::string> coronaImages;
                 static bool coronaScanned = false;
@@ -2204,6 +2224,11 @@ namespace
             InspectorHelp("UE LightSourceAngle: the sun's angular DIAMETER, 0.5357 for the real sun. It draws "
                           "the disc and floors the width of the specular lobe; the sun sets when the whole "
                           "disc is under the horizon.");
+            dragF("Light Source Soft Angle (deg)", "lightSourceSoftAngle", 0.0f, 0.005f, 0.0f, 10.0f, "%.3f");
+            InspectorHelp("UE LightSourceSoftAngle (0 by default; Ultra Dynamic Sky's sun 0.5): softens the edge "
+                          "of the sun's glint on glossy surfaces -- the roughness is widened by it before the disc "
+                          "acts -- with the glint's energy kept. Specular only; the disc and the shadows keep "
+                          "Light Source Angle.");
 
             ImGui::PopID();
             groupKey = "moon";
@@ -2260,6 +2285,9 @@ namespace
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.52f, 0.005f, 0.0f, 20.0f, "%.3f");
             InspectorHelp("The moon's angular DIAMETER: the drawn disc and the light's size (the specular "
                           "floor, the soft shadow). 0.52 is the real moon's mean.");
+            dragF("Light Source Soft Angle (deg)", "lightSourceSoftAngle", 0.0f, 0.005f, 0.0f, 10.0f, "%.3f");
+            InspectorHelp("UE LightSourceSoftAngle of the moon light (Ultra Dynamic Sky's moon 0.285): softens "
+                          "the edge of its glint on glossy surfaces, the energy kept. 0 = Unreal's default.");
             dragF("Disc Adaptation", "discAdaptation", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("How the drawn disc is seen. 1 = by the eye, which adapts to it: brought into the "
                           "display's range, its maria and relief visible, its edge and terminator smooth. 0 = "

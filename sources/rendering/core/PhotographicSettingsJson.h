@@ -79,6 +79,7 @@ inline void ApplyOverrides(const nlohmann::json& j, CameraExposureSettings& out)
     out.localShadowThreshold    = j.value("localShadowThreshold",    out.localShadowThreshold);
     out.localBlurredBlend       = j.value("localBlurredBlend",       out.localBlurredBlend);
     out.localBlurredBlend       = std::clamp(out.localBlurredBlend,       0.0f, 1.0f);
+    out.localBlurredKernelPercent = std::clamp(j.value("localBlurredKernelPercent", out.localBlurredKernelPercent), 0.0f, 100.0f);
     out.nightVision             = std::clamp(j.value("nightVision", out.nightVision), 0.0f, 1.0f); // time-of-day E2
     out.nightDesaturation       = std::clamp(j.value("nightDesaturation", out.nightDesaturation), 0.0f, 1.0f);
     if (const auto it = j.find("nightTint"); it != j.end() && it->is_array() && it->size() >= 3)
@@ -244,6 +245,7 @@ inline nlohmann::json ToJson(const CameraExposureSettings& s)
         { "localHighlightThreshold", s.localHighlightThreshold },
         { "localShadowThreshold",    s.localShadowThreshold },
         { "localBlurredBlend",       s.localBlurredBlend },
+        { "localBlurredKernelPercent", s.localBlurredKernelPercent },
         { "nightVision",             s.nightVision },
         { "nightTint",               { s.nightTint[0], s.nightTint[1], s.nightTint[2] } },
         { "nightDesaturation",       s.nightDesaturation },

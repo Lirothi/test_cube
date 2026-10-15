@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=19, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=20, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -50,6 +50,8 @@ Texture2D<float> CloudDepthTex : register(t17);
 // t18: the FURTHEST HZB (mip 0 = half the render resolution), read only by trace mode 0's bilateral
 // upsampling (cloudParams.w 2) -- the scene depth each half-res cloud texel was traced against.
 Texture2D<float> CloudHzbTex : register(t18);
+// t19: the sky's transmittance LUT, for the sun's disc (gated by `sunDiscDir.w`).
+Texture2D<float4> SunTransmittanceLut : register(t19);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -111,6 +113,12 @@ cbuffer PerFrame : register(b0)
     // jittered pixel at uv looks where the unjittered frame's uv - xy does, so they are read there
     // (SceneRenderer_Lighting.cpp has the why). zw = 0.
     float4 cloudJitter;
+    // THE SUN'S DISC, drawn here pre-exposed (SunDiscRaw below): xyz the direction TO the sun in the sky
+    // LUT's local frame (Z up), w its angular radius (rad; 0 = no disc). Only over the procedural sky.
+    float4 sunDiscDir;
+    // rgb the disc's outer-space luminance -- UE GetLightDiskLuminance, illuminance / solid angle
+    // (SkyAtmosphereRendering.cpp:577-582) -- w the atmosphere's top radius (km).
+    float4 sunDiscLuminance;
 }
 
 static const float kEps = 1e-6;
@@ -205,6 +213,37 @@ void SampleCloudBilateral(float2 uv, float2 cloudUv, float z, out float4 cloud, 
     }
     cloud = SampleCloudCatmullRom(cloudUv);
     frontKm = CloudDepthTex.SampleLevel(gSmpPoint, cloudUv, 0);
+}
+
+// THE SUN'S DISC, as UE draw it (SkyAtmosphere.usf:357-377 + SkyAtmosphereCommon.ush:269-287): the
+// transmittance toward the sun times the disc's outer-space luminance times a soft edge, EXPOSED, then
+// clamped to 64000 per channel ("exposed 64000 luminance is already crazy high, solar system sun is
+// 1.6x10^9. Also this removes +inf float and helps TAA"). Drawn HERE and not in the sky pass because
+// that pass writes RAW radiance into an FP16 target -- this project's disc is ~7e7 raw against a
+// 65504 ceiling, and clamping it there left the sun ~1000x under the physics (only ~10x the sky), so
+// nothing downstream could tell it from a bright cloud. Compose is where our frame becomes
+// pre-exposed (it multiplies everything it writes by `preExposure`), i.e. UE's OutputPreExposure, so
+// this returns the clamped value back in raw units for that one multiply. Full transmittance per
+// channel -- UE's hue: a white core and a coloured falloff from the tonemap's clipping, red at sunset.
+// The direction is built in VIEW space and only rotated into the world: the sky's usual probe point
+// (z 0.5, 2 cm out) loses the 0.27-degree disc to float rounding once the camera is km from the origin.
+float3 SunDiscRaw(float2 uv)
+{
+    if (skyViewPlanet.z <= 0.0f || sunDiscDir.w <= 0.0f) { return 0.0f.xxx; }
+    const float4 pv = mul(float4(UVtoNDC(uv), 0.5f, 1.0f), invProj);
+    const float3 worldDir = normalize(mul(float4(pv.xyz / pv.w, 0.0f), invView).xyz);
+    const float3 dir = worldDir.xzy; // the LUT's local frame, Z up (skybox.hlsl does the same)
+    const float radius = sunDiscDir.w;
+    const float cosHalf = cos(radius);
+    const float viewDotLight = dot(dir, sunDiscDir.xyz);
+    const float height = skyViewPlanet.x, bottom = skyViewPlanet.y, top = sunDiscLuminance.w;
+    if (viewDotLight <= cosHalf || SkyViewIntersectsGround(dir, height, bottom)) { return 0.0f.xxx; }
+    // 2*sin(radius/2)^2 = 1 - cos(radius) without the cancellation, for a disc this small.
+    const float oneMinusCos = 2.0f * pow(sin(0.5f * radius), 2.0f);
+    const float softEdge = saturate(2.0f * (viewDotLight - cosHalf) / max(oneMinusCos, 1.e-12f));
+    const float3 tr = SkyTransmittanceToSpace(SunTransmittanceLut, gSmp, dir, height, bottom, top);
+    const float3 exposed = min(tr * sunDiscLuminance.rgb * softEdge * preExposure, 64000.0f.xxx);
+    return exposed / max(preExposure, 1.0e-30f);
 }
 
 // How far a SKY pixel is shaded at, standing in for UE's ConvertFromDeviceZ(0) -- the far plane the
@@ -379,7 +418,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     float2 uv = (float2(dispatchThreadId.xy) + 0.5f) * invScreenSize;
 
-    float3 lit = LightTarget.SampleLevel(gSmp, uv, 0).rgb;
+    // The light target is PRE-EXPOSED (lighting_cb.hlsli lightPreExposure, UE's View.PreExposure) so a
+    // glint above 65504 cd/m2 survives FP16; back to radiance here, in fp32, and everything below is as
+    // it was -- this pass applies `preExposure` once, to what it writes.
+    float3 lit = LightTarget.SampleLevel(gSmp, uv, 0).rgb / max(preExposure, 1.0e-30f);
     float3 payload = GB2.SampleLevel(gSmp, uv, 0).rgb;
     float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
     float indirectSpecularScale = saturate(gbAux.g);
@@ -393,6 +435,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     float z = ReadDepth(uv);
+
+    // The sun's disc (SunDiscRaw): behind the clouds below, then into `color` and NOT `lit` -- the fog
+    // takes a sky pixel's in-scattering colour from `lit` (the identity blend further down), so a disc in
+    // `lit` would be its own fog colour and never dim; in `color` it is attenuated like any background.
+    float3 sunDisc = !(z > kEps) ? SunDiscRaw(uv) : 0.0f.xxx;
 
     // Plan C2: THE CLOUDS, composed over what the sky pass drew and under everything this pass
     // adds -- the height fog, the froxel volume and the aerial perspective all sit on top, exactly
@@ -427,8 +474,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             const float3 delta = lit * (cloud.a - 1.0f) + cloud.rgb * cloudParams.y;
             lit += delta;
             color += delta;
+            sunDisc *= cloud.a;
         }
     }
+    color += sunDisc;
 
     if (z > kEps)
     {

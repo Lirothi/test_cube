@@ -257,6 +257,7 @@ private:
     Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;
     Math::float4 GetSunColorExposure() const;
+    Math::float4 GetSunShapeParams() const; // x: the light's angular radius (OceanSunSpecular)
     // P4: the level's sky intensity, so the water scales its skybox samples by the same number
     // compose does. x = intensity, yzw reserved.
     Math::float4 GetSkyParams() const;

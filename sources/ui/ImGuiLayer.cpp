@@ -255,6 +255,10 @@ void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
 
     ImGui::Render();
     frameBegun_ = false;
+    if (g_suppressImGuiDraw.load(std::memory_order_relaxed))
+    {
+        return; // the frame is still closed, only its draw data goes unrecorded
+    }
     ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
     commandList->SetDescriptorHeaps(1, heaps);
     ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);

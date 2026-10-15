@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>       // g_cleanCapture
 #include <dxgiformat.h> // DXGI_FORMAT
 
 // Rendering-wide compile-time constants, in the render:: namespace. Single
@@ -65,6 +66,10 @@ inline bool g_preExposureEnabled = true;
 // glass, particles) that have no path to the scene renderer, and they must all use the SAME number
 // or the frame comes out in pieces at different brightnesses. 1.0 while the gate is off.
 inline float g_preExposure = 1.0f;
+// Set by the editor MCP's `clean` screenshot (beside ImGuiLayer's g_suppressImGuiDraw) until the picture
+// is taken: the frame is drawn as a headless --shot would be, so the editor's own overlays drawn INTO
+// the scene -- the selection outline -- stay out of it too (Scene::BuildFrameData reads it).
+inline std::atomic<bool> g_cleanCapture{ false };
 // P16.10 -- REFLECTIONS CARRY RADIANCE, SO THEY NEED A FLOAT TARGET.
 //
 // This was R8G8B8A8_UNORM, an LDR format, and it worked only while scene colour happened to sit

@@ -1618,6 +1618,7 @@ bool MeshEditorPanel::BuildPreviewLighting(EditorContext& ctx,
     // preview's own.
     out.sunIlluminance = sun.GetEffectiveColor();
     out.sunHalfApex = sun.GetSunHalfApexRadians();
+    out.sunSoftRadius = sun.GetSoftSourceRadius();
     out.flatAmbient = sun.GetAmbient();
     out.lightExposure = sun.GetExposure();
     out.groundAlbedo = sun.GetGroundAlbedo();

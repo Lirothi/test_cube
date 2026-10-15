@@ -98,6 +98,7 @@ struct TimeOfDaySettings
     // stay physical and only the hue is the artist's.
     float moonLightColor[3] = {0.446f, 0.557f, 0.865f};
     float moonAngleDeg = 0.52f;      // angular diameter (mean): the drawn disc and the light's size
+    float moonSoftAngleDeg = 0.0f;   // UE LightSourceSoftAngle of the moon light (DirectionalLight's), 0 = UE default
     // The eye's local adaptation to the drawn disc (N4), 0..1: 1 = the disc scaled into the display's range so
     // its maria and relief read and its edges blend (the eye sees the moon's face at night); 0 = the
     // physical disc a camera records under a night exposure, clipped flat white.

@@ -19,6 +19,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <future>
 #include <iterator>
@@ -34,7 +35,10 @@
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentPrompt.h"
 #include "editor/intent/IntentSchema.h"
+#include "editor/scene/EnvironmentRuntime.h"
+#include "rendering/core/RenderConstants.h" // g_cleanCapture: no selection outline in a `clean` shot
 #include "rendering/core/Screenshot.h"
+#include "ui/ImGuiLayer.h" // g_suppressImGuiDraw: the `clean` screenshot
 
 namespace
 {
@@ -125,6 +129,7 @@ namespace
         int framesLeft = 0;
         unsigned maxWidth = 0;
         std::string path;
+        bool clean = false;   // the UI is not drawn until the capture (g_suppressImGuiDraw)
     };
 
     ShotRequest& Shot()
@@ -152,9 +157,27 @@ namespace
     // stopped smearing it.
     ToolResult TakeScreenshot(const json& args)
     {
-        const int requested = args.is_object() ? args.value("maxWidth", 1280) : 1280;
-        const unsigned maxWidth = static_cast<unsigned>(std::clamp(requested, 320, 3840));
-        const std::string path = ShotPath();
+        // `path`: keep the PNG there (full size unless maxWidth says otherwise) and, unless `image`
+        // asks for it, send no picture back -- a measurement is diffed from the file, and a 2560-wide
+        // PNG is megabytes the conversation does not need. Without it: the old behaviour, a
+        // downscaled picture to look at, the temp file removed.
+        const std::string keepPath = args.is_object() ? args.value("path", std::string()) : std::string();
+        if (!keepPath.empty() && (keepPath.size() < 5 || Lower(keepPath.substr(keepPath.size() - 4)) != ".png"))
+        {
+            return Error("`path` must name a .png file.");
+        }
+        const bool keep = !keepPath.empty();
+        const bool sendImage = args.is_object() ? args.value("image", !keep) : true;
+        const int requested = args.is_object() ? args.value("maxWidth", keep ? 0 : 1280) : 1280;
+        const unsigned maxWidth = requested <= 0 ? 0u : static_cast<unsigned>(std::clamp(requested, 320, 3840));
+        // How many frames to let pass first: the default suits a placement; after set_settings the
+        // exposure, the temporal filters and the clouds' history want ~60.
+        const int settle = std::clamp(args.is_object() ? args.value("settleFrames", kScreenshotSettleFrames)
+                                                       : kScreenshotSettleFrames, 1, 600);
+        // `clean`: the frame without the editor's panels or the selection outline -- the scene and
+        // the HUD, as a headless --shot shows it, so the picture can be compared with one.
+        const bool clean = args.is_object() && args.value("clean", false);
+        const std::string path = keep ? keepPath : ShotPath();
         std::remove(path.c_str());
 
         ShotRequest& shot = Shot();
@@ -167,16 +190,25 @@ namespace
             shot.pending = true;
             shot.done = false;
             shot.ok = false;
-            shot.framesLeft = kScreenshotSettleFrames;
+            shot.framesLeft = settle;
             shot.maxWidth = maxWidth;
             shot.path = path;
+            shot.clean = clean;
+        }
+        if (clean)
+        {
+            g_suppressImGuiDraw.store(true);
+            render::g_cleanCapture.store(true);   // and no selection outline in the frame
         }
 
         std::unique_lock<std::mutex> lock(shot.mutex);
-        if (!shot.changed.wait_for(lock, std::chrono::seconds(15), [&] { return shot.done; }))
+        const auto timeout = std::chrono::seconds(15 + settle / 10);
+        if (!shot.changed.wait_for(lock, timeout, [&] { return shot.done; }))
         {
             shot.pending = false;
-            return Error("The editor did not present a frame for 15 s -- is the window "
+            g_suppressImGuiDraw.store(false);
+            render::g_cleanCapture.store(false);
+            return Error("The editor did not present enough frames in time -- is the window "
                 "minimised, or is the editor closed?");
         }
         const bool ok = shot.ok;
@@ -189,7 +221,10 @@ namespace
         std::ifstream file(path, std::ios::binary);
         std::string png((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
         file.close();
-        std::remove(path.c_str());
+        if (!keep)
+        {
+            std::remove(path.c_str());
+        }
         if (png.size() < 24)
         {
             return Error("The capture produced no image.");
@@ -203,11 +238,17 @@ namespace
                 static_cast<unsigned>(static_cast<unsigned char>(png[at + 3]));
         };
         ToolResult result;
-        result.text = "The whole editor window, " + std::to_string(be32(16)) + "x" +
-            std::to_string(be32(20)) + ", captured " + std::to_string(kScreenshotSettleFrames) +
-            " frames after this call arrived. The 3D view is the large pane in the middle; the "
-            "panels around it are the editor's own.";
-        result.pngBase64 = Base64(png);
+        result.text = std::string(clean ? "The frame without the editor's panels or selection outline (scene + HUD), "
+                                        : "The whole editor window, ") +
+            std::to_string(be32(16)) + "x" + std::to_string(be32(20)) + ", captured " +
+            std::to_string(settle) + " frames after this call arrived." +
+            (clean ? "" : " The 3D view is the large pane in the middle; the panels around it are "
+                          "the editor's own.") +
+            (keep ? " Saved to " + path + "." : "");
+        if (sendImage)
+        {
+            result.pngBase64 = Base64(png);
+        }
         return result;
     }
 
@@ -279,11 +320,17 @@ namespace editormcp
     namespace
     {
         ImportHost* g_importHost = nullptr; // frame thread only, like every document tool
+        RuntimeHost* g_runtimeHost = nullptr; // the same
     }
 
     void SetImportHost(ImportHost* host)
     {
         g_importHost = host;
+    }
+
+    void SetRuntimeHost(RuntimeHost* host)
+    {
+        g_runtimeHost = host;
     }
 
     json ToolList()
@@ -350,27 +397,89 @@ namespace editormcp
                 { "name", "set_camera" },
                 { "description",
                   "Put the camera somewhere, so a screenshot shows what you want to look at. "
-                  "Give `lookAt` to aim at a point (the easy way), or yawDeg/pitchDeg; with "
-                  "neither it keeps its heading. It moves the person's view too, and they will "
-                  "see it move -- so move it when you need to look, not for fun." },
+                  "Give `lookAt` to aim at a point (the easy way) -- or \"sun\" to face the sky's "
+                  "sun wherever the time of day has it, with offsetYawDeg/offsetPitchDeg to put it "
+                  "off-centre -- or yawDeg/pitchDeg; with none it keeps its heading, and without "
+                  "`position` its place. It moves the person's view too, and they will see it move "
+                  "-- so move it when you need to look, not for fun." },
                 { "inputSchema", ObjectSchema({
-                    { "position", Vec3Schema("world position [x, y, z]; y is up") },
-                    { "lookAt", Vec3Schema("a world point to face") },
+                    { "position", Vec3Schema("world position [x, y, z]; y is up (default: where it is)") },
+                    { "lookAt", { { "description",
+                        "a world point to face [x, y, z], or the string \"sun\"" } } },
+                    { "offsetYawDeg", { { "type", "number" },
+                        { "description", "with lookAt \"sun\": turn the view this far RIGHT of the sun" } } },
+                    { "offsetPitchDeg", { { "type", "number" },
+                        { "description", "with lookAt \"sun\": tilt the view this far BELOW the sun" } } },
                     { "yawDeg", { { "type", "number" },
                         { "description", "heading, 0 = +z, 90 = +x" } } },
                     { "pitchDeg", { { "type", "number" },
-                        { "description", "positive looks DOWN" } } } },
-                    json::array({ "position" })) },
+                        { "description", "positive looks DOWN" } } } }) },
             },
             {
                 { "name", "screenshot" },
                 { "description",
                   "A picture of the editor window as it is now, a few frames after the call so "
                   "the last change is drawn. The way to see whether what you placed looks "
-                  "right. Point the camera first with set_camera." },
-                { "inputSchema", ObjectSchema({ { "maxWidth", { { "type", "integer" },
-                    { "description", "downscale to at most this many pixels wide, 320-3840 "
-                                     "(default 1280)" } } } }) },
+                  "right. Point the camera first with set_camera. For MEASURING a look (an A/B "
+                  "of set_settings variants, a diff against a headless --shot): `clean` drops "
+                  "the editor's panels (scene + HUD only), `path` keeps the full-size PNG there "
+                  "and sends no picture back unless `image`, `settleFrames` ~60 lets exposure, "
+                  "the temporal filters and the clouds settle after a change." },
+                { "inputSchema", ObjectSchema({
+                    { "maxWidth", { { "type", "integer" },
+                        { "description", "downscale to at most this many pixels wide, 320-3840; "
+                                         "0 = full size (default 1280, or full size with `path`)" } } },
+                    { "path", { { "type", "string" },
+                        { "description", "keep the PNG at this .png path (relative = the repo root)" } } },
+                    { "image", { { "type", "boolean" },
+                        { "description", "send the picture back too (default: true without `path`, "
+                                         "false with it)" } } },
+                    { "clean", { { "type", "boolean" },
+                        { "description", "the frame without the editor's panels or the selection outline (default false)" } } },
+                    { "settleFrames", { { "type", "integer" },
+                        { "description", "frames to wait before the capture, 1-600 (default 6)" } } } }) },
+            },
+            {
+                { "name", "set_settings" },
+                { "description",
+                  "Change the running scene's settings the way `--set` does, through the SAME name "
+                  "table (bloom.*, exposure.*, color.*, cloud.*, fog.*, sky.*, tod.*, light.*, "
+                  "cloudTrace.*, frame.* ... -- App.cpp ApplySweepValue). For A/B'ing a look without "
+                  "relaunching: set, screenshot {clean, path, settleFrames}, reset_settings, next. "
+                  "TRANSIENT: it does not touch the document (no undo entry, nothing to save) and "
+                  "an Inspector edit of the same object re-applies the document over it. The "
+                  "exposure re-meters from scratch afterwards unless `resetExposure` is false. "
+                  "Answers which names were applied and which are unknown." },
+                { "inputSchema", ObjectSchema({
+                    { "set", { { "type", "string" },
+                        { "description", "\"name:value;name:value\", exactly --set's syntax" } } },
+                    { "resetExposure", { { "type", "boolean" },
+                        { "description", "re-meter the exposure from scratch (default true)" } } } },
+                    json::array({ "set" })) },
+            },
+            {
+                { "name", "reset_settings" },
+                { "description",
+                  "Put the scene's settings back to what the open DOCUMENT says (the level as "
+                  "edited, unsaved edits included): time of day, camera exposure, colour, GTAO, "
+                  "height fog, bloom, sky atmosphere, clouds and the ocean's look -- every object "
+                  "set_settings can reach in the level. Project-wide switches (cloudTrace.*, "
+                  "cloudShadow.*, frame.*, the cloud A/B globals) are NOT in the document and stay "
+                  "as last set." },
+                { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "get_readouts" },
+                { "description",
+                  "What the renderer measured on the latest read-back frame: the metered and the "
+                  "adapted EV100, the pre-exposure, the sun probe's disc colour (pre-exposed) and "
+                  "visible share, the frame rate. The numbers behind a look, without a picture. "
+                  "`history` adds that many of the newest frames, one row EACH (frame, adapted and "
+                  "metered EV100, pre-exposure, pixel-probe mean rgb and max luminance, sun-probe "
+                  "luminance) -- how a flicker is read: two calls land ~10 frames apart." },
+                { "inputSchema", ObjectSchema({
+                    { "history", { { "type", "integer" },
+                        { "description", "per-frame rows to add, newest last, 0-512 (default 0)" } } } }) },
             },
             {
                 { "name", "undo" },
@@ -636,16 +745,27 @@ namespace editormcp
 
         if (name == "set_camera")
         {
-            Math::float3 position;
-            if (!ReadVec3(arguments, "position", position))
+            Camera& camera = ctx.scene.CameraRef();
+            Math::float3 position = camera.GetPosition();
+            if (arguments.contains("position") && !ReadVec3(arguments, "position", position))
             {
                 return Error("`position` must be [x, y, z].");
             }
-            Camera& camera = ctx.scene.CameraRef();
             float yaw = camera.GetYaw();
             float pitch = camera.GetPitch();
             Math::float3 target;
-            if (ReadVec3(arguments, "lookAt", target))
+            const bool atSun = arguments.contains("lookAt") && arguments["lookAt"].is_string() &&
+                               Lower(arguments["lookAt"].get<std::string>()) == "sun";
+            if (atSun)
+            {
+                // The SKY's sun (time of day), wherever it is now -- above the horizon or not. The
+                // offsets put it off the view's centre, where a lens flare chain has room to show.
+                const Math::float3 d = ctx.scene.GetSunToward();
+                yaw = std::atan2(d.x, d.z) + arguments.value("offsetYawDeg", 0.0f) * kPi / 180.0f;
+                pitch = std::atan2(-d.y, std::sqrt(d.x * d.x + d.z * d.z)) +
+                        arguments.value("offsetPitchDeg", 0.0f) * kPi / 180.0f;
+            }
+            else if (ReadVec3(arguments, "lookAt", target))
             {
                 const Math::float3 d = target - position;
                 const float flat = std::sqrt(d.x * d.x + d.z * d.z);
@@ -729,6 +849,109 @@ namespace editormcp
             outRecord.show = true;
             result.text = text;
             result.isError = !started;
+            return result;
+        }
+
+        if (name == "set_settings" || name == "get_readouts")
+        {
+            if (!g_runtimeHost)
+            {
+                return Error("There is no running app here to set or read (this host has none).");
+            }
+            if (name == "get_readouts")
+            {
+                ToolResult result;
+                const int history = std::clamp(arguments.value("history", 0), 0, 512);
+                result.text = g_runtimeHost->Readouts(history);
+                return result;
+            }
+            // "name:value;name:value", --set's own syntax.
+            const std::string spec = arguments.value("set", std::string());
+            std::vector<std::string> applied;
+            std::vector<std::string> unknown;
+            std::size_t at = 0;
+            while (at <= spec.size())
+            {
+                std::size_t end = spec.find(';', at);
+                if (end == std::string::npos) { end = spec.size(); }
+                const std::string pair = spec.substr(at, end - at);
+                at = end + 1;
+                const std::size_t colon = pair.rfind(':');
+                if (pair.find_first_not_of(" \t") == std::string::npos) { continue; }
+                if (colon == std::string::npos || colon == 0)
+                {
+                    unknown.push_back(pair + " (not name:value)");
+                    continue;
+                }
+                std::string key = pair.substr(0, colon);
+                key.erase(0, key.find_first_not_of(" \t"));
+                key.erase(key.find_last_not_of(" \t") + 1);
+                char* stop = nullptr;
+                const std::string number = pair.substr(colon + 1);
+                const float value = std::strtof(number.c_str(), &stop);
+                if (stop == number.c_str())
+                {
+                    unknown.push_back(pair + " (the value is not a number)");
+                    continue;
+                }
+                if (g_runtimeHost->Apply(key, value))
+                {
+                    applied.push_back(key + " = " + number);
+                }
+                else
+                {
+                    unknown.push_back(key + " (unknown setting)");
+                }
+            }
+            if (!applied.empty() && arguments.value("resetExposure", true))
+            {
+                g_runtimeHost->ResetExposure();
+            }
+            std::string text = "Applied " + std::to_string(applied.size()) + ":";
+            for (const std::string& a : applied) { text += " " + a + ";"; }
+            if (!unknown.empty())
+            {
+                text += " NOT applied:";
+                for (const std::string& u : unknown) { text += " " + u + ";"; }
+            }
+            outRecord.title = "set_settings";
+            outRecord.verdict = text;
+            outRecord.failed = applied.empty();
+            outRecord.show = true;
+            ToolResult result;
+            result.text = text;
+            result.isError = applied.empty();
+            return result;
+        }
+
+        if (name == "reset_settings")
+        {
+            // Every environment object a setting reaches, re-applied from the document through
+            // EnvironmentRuntime -- the road an Inspector edit takes. Lights, the camera's lens, the
+            // skybox image and the wind are left alone: nothing in set_settings reaches them, and
+            // re-applying a skybox rebuilds its texture.
+            static const char* kTypes[] = { "timeOfDay", "cameraExposure", "colorPipeline", "gtao",
+                "heightFog", "postProcess", "bloom", "skyAtmosphere", "volumetricCloud", "ocean" };
+            int count = 0;
+            for (const EditorObject& env : ctx.document.Environment())
+            {
+                if (std::find_if(std::begin(kTypes), std::end(kTypes),
+                        [&](const char* t) { return env.type == t; }) != std::end(kTypes))
+                {
+                    EnvironmentRuntime::Apply(ctx, env);
+                    ++count;
+                }
+            }
+            if (g_runtimeHost)
+            {
+                g_runtimeHost->ResetExposure();
+            }
+            outRecord.title = "reset_settings";
+            outRecord.verdict = "settings back to the document (" + std::to_string(count) + " objects)";
+            outRecord.show = true;
+            ToolResult result;
+            result.text = "Re-applied " + std::to_string(count) + " environment objects from the open "
+                "document; the exposure re-meters from scratch.";
             return result;
         }
 
@@ -1206,6 +1429,13 @@ namespace editormcp
         shot.ok = ok;
         shot.done = true;
         shot.pending = false;
+        if (shot.clean)
+        {
+            // The panels come back with the next frame; the picture already has what it needed.
+            g_suppressImGuiDraw.store(false);
+            render::g_cleanCapture.store(false);
+            shot.clean = false;
+        }
         lock.unlock();
         shot.changed.notify_all();
     }

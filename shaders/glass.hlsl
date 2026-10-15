@@ -346,7 +346,7 @@ PSOut PSMain(VSOut i)
         bi.V = V;
         bi.L = normalize(-sunDir);
 
-        BRDFResult br = EvalBRDF(bi);
+        BRDFResult br = EvalBRDF(bi, preExposureParams.y, preExposureParams.z);   // the sun's disc (UE sphere light)
         // No sun (a closed cloud deck), no shadow lookup: its passes did not run (lighting_cs.hlsl).
         if (br.NdotL > 0.0f && any(sunColor > 0.0f))
         {

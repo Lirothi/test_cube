@@ -98,6 +98,7 @@ public:
         projNoJitterHandle_ = {};
         prevProjNoJitterHandle_ = {};
         exposureHandle_ = {};
+        lightPreExposureHandle_ = {};
 
         if (Material* material = owner.GetGraphicsMaterial())
         {
@@ -108,6 +109,7 @@ public:
             projNoJitterHandle_ = material->ComputeCBFieldHandle(0, "projNoJitter");
             prevProjNoJitterHandle_ = material->ComputeCBFieldHandle(0, "prevProjNoJitter");
             exposureHandle_ = material->ComputeCBFieldHandle(0, "exposure");
+            lightPreExposureHandle_ = material->ComputeCBFieldHandle(0, "lightPreExposure");
             sunHandle_ = material->ComputeCBFieldHandle(0, "skySunDirection");
             illuminanceHandle_ = material->ComputeCBFieldHandle(0, "skyIlluminance");
             planetHandle_ = material->ComputeCBFieldHandle(0, "skyPlanet");
@@ -136,13 +138,13 @@ public:
         UpdateUniform(owner, prevProjHandle_, material, camera.GetPrevProjMatrix(), cbData);
         UpdateUniform(owner, projNoJitterHandle_, material, camera.GetProjMatrixNoJitter(), cbData);
         UpdateUniform(owner, prevProjNoJitterHandle_, material, camera.GetPrevProjMatrixNoJitter(), cbData);
-        // P16.1: the HDRI path is NOT pre-exposed here. The sky is drawn before compose, and compose scales
-        // everything it writes -- including the sky pixels it passes through -- so applying the
-        // factor here too squared it, and the sky came out 2.8x too dark while the ground was
-        // right. THE RULE: compose applies it to everything it writes; only writers that run AFTER
-        // compose apply it themselves. B2 decodes its pre-exposed LUT in the skybox shader,
-        // then uses the same raw FP16 range as HDRI and surface lighting.
+        // THE LIGHT TARGET IS PRE-EXPOSED (2026-10-15, UE's View.PreExposure): the sky is written into it
+        // multiplied by the frame's pre-exposure, like the lighting, spot and point passes; compose reads
+        // it back to radiance in fp32 and applies the factor once to everything it writes. (P16.1 had the
+        // sky stay raw because compose squared it otherwise -- compose now divides it out.) Raw, an FP16
+        // target clipped every sun glint at 65504 cd/m2. B2 decodes its storage-exposed LUT first.
         UpdateUniform(owner, exposureHandle_, material, owner_.GetExposure(), cbData);
+        UpdateUniform(owner, lightPreExposureHandle_, material, render::g_preExposure, cbData);
         const auto& v = owner_.SkyViewFrame();
         UpdateUniform(owner, sunHandle_, material, v.sunDirection, cbData);
         UpdateUniform(owner, illuminanceHandle_, material, v.illuminance, cbData);
@@ -172,6 +174,7 @@ private:
     Material::CBFieldHandle projNoJitterHandle_{};
     Material::CBFieldHandle prevProjNoJitterHandle_{};
     Material::CBFieldHandle exposureHandle_{};
+    Material::CBFieldHandle lightPreExposureHandle_{};
     Material::CBFieldHandle sunHandle_{}, illuminanceHandle_{}, planetHandle_{}, skyExposureHandle_{};
     Material::CBFieldHandle light1DirectionHandle_{}, light1IlluminanceHandle_{}, moonDiscHandle_{}, moonDisc2Handle_{};
     Material::CBFieldHandle moonGlowHandle_{};

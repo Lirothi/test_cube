@@ -295,6 +295,7 @@ public:
             shoreSamplingParamsHandle_ = material->ComputeCBFieldHandle(0, "shoreSamplingParams");
             sunDirAmbientHandle_ = material->ComputeCBFieldHandle(0, "sunDirAmbient");
             sunColorExposureHandle_ = material->ComputeCBFieldHandle(0, "sunColorExposure");
+            sunShapeParamsHandle_ = material->ComputeCBFieldHandle(0, "sunShapeParams");
             fogParams0Handle_ = material->ComputeCBFieldHandle(0, "fogParams0");
             fogParams1Handle_ = material->ComputeCBFieldHandle(0, "fogParams1");
             fogParams2Handle_ = material->ComputeCBFieldHandle(0, "fogParams2");
@@ -371,6 +372,7 @@ public:
             shoreSamplingParamsHandle_ = {};
             sunDirAmbientHandle_ = {};
             sunColorExposureHandle_ = {};
+            sunShapeParamsHandle_ = {};
             fogParams0Handle_ = {};
             fogParams1Handle_ = {};
             fogParams2Handle_ = {};
@@ -459,6 +461,7 @@ public:
         UpdateUniform(owner, shoreSamplingParamsHandle_, material, owner_.GetShoreSamplingParams(), cbData);
         UpdateUniform(owner, sunDirAmbientHandle_, material, owner_.GetSunDirAmbient(), cbData);
         UpdateUniform(owner, sunColorExposureHandle_, material, owner_.GetSunColorExposure(), cbData);
+        UpdateUniform(owner, sunShapeParamsHandle_, material, owner_.GetSunShapeParams(), cbData);
         UpdateUniform(owner, fogParams0Handle_, material, owner_.GetFogParams0(), cbData);
         UpdateUniform(owner, fogParams1Handle_, material, owner_.GetFogParams1(), cbData);
         UpdateUniform(owner, fogParams2Handle_, material, owner_.GetFogParams2(), cbData);
@@ -555,6 +558,7 @@ private:
     Material::CBFieldHandle shoreSamplingParamsHandle_{};
     Material::CBFieldHandle sunDirAmbientHandle_{};
     Material::CBFieldHandle sunColorExposureHandle_{};
+    Material::CBFieldHandle sunShapeParamsHandle_{};
     Material::CBFieldHandle skyParamsHandle_{};
     Material::CBFieldHandle deepScatterColorHandle_{};
     Material::CBFieldHandle sssColorHandle_{};
@@ -1825,6 +1829,17 @@ Math::float4 OceanRenderable::GetSunColorExposure() const
         exposure = light.GetExposure();
     }
     return Math::float4(color.x, color.y, color.z, exposure);
+}
+
+Math::float4 OceanRenderable::GetSunShapeParams() const
+{
+    // x: the angular radius of the light the water glints with -- the same DirectionalLight and the
+    // same number lighting_cs gives EvalBRDF (UE's sphere light), so a wave facet shows the disc at
+    // its own radiance x F instead of a Blinn-Phong spot of ~1/1000 of it.
+    // y: its soft radius (UE SoftSourceRadius), which widens the glint's roughness as lighting_cs does.
+    const float radius = scene_ ? scene_->GetDirectionalLight().GetSunHalfApexRadians() : 0.0f;
+    const float softRadius = scene_ ? scene_->GetDirectionalLight().GetSoftSourceRadius() : 0.0f;
+    return Math::float4(radius, softRadius, 0.0f, 0.0f);
 }
 
 Math::float4 OceanRenderable::GetDeepScatterColor() const

@@ -41,7 +41,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             if (tr.reuseScreen)
             {
                 Texture2D lightT = ResourceDescriptorHeap[lightIndex];
-                radiance += lightT.SampleLevel(gSmp, tr.reuseUv, 0).rgb; // exact lit HDR
+                // exact lit HDR; the light target is pre-exposed, the reflection buffer holds radiance
+                radiance += lightT.SampleLevel(gSmp, tr.reuseUv, 0).rgb * lightInvPreExposure;
             }
             result = float4(radiance, 1.0f); // premultiplied, full coverage
         }

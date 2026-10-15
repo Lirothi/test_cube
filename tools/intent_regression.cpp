@@ -959,6 +959,72 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     Check((*noImporter)["result"]["isError"].get<bool>(),
         "list_staging without an Import window is refused: " + text(noImporter));
 
+    // The runtime door (set_settings / reset_settings / get_readouts): listed; refused without an app
+    // behind it; with one, --set's own syntax reaches it name by name, an unknown name is reported
+    // rather than swallowed, and the exposure is re-metered after a change.
+    for (const char* tool : { "set_settings", "reset_settings", "get_readouts" })
+    {
+        bool listed = false;
+        for (const json& t : (*list)["result"]["tools"])
+        {
+            listed = listed || t.value("name", "") == tool;
+        }
+        Check(listed, std::string("the tool list offers ") + tool);
+    }
+    const std::optional<json> noRuntime = call(10, "tools/call", { { "name", "set_settings" },
+        { "arguments", { { "set", "bloom.intensity:0.5" } } } });
+    Check((*noRuntime)["result"]["isError"].get<bool>(),
+        "set_settings without an app behind it is refused: " + text(noRuntime));
+    struct FakeRuntime final : editormcp::RuntimeHost
+    {
+        std::vector<std::pair<std::string, float>> applied;
+        int resets = 0;
+        bool Apply(const std::string& name, float value) override
+        {
+            if (name.rfind("bloom.", 0) != 0) { return false; }
+            applied.emplace_back(name, value);
+            return true;
+        }
+        void ResetExposure() override { ++resets; }
+        int historyAsked = -1;
+        std::string Readouts(int historyRows) override { historyAsked = historyRows; return "{\"fake\":true}"; }
+    } runtime;
+    editormcp::SetRuntimeHost(&runtime);
+    const std::optional<json> set = call(11, "tools/call", { { "name", "set_settings" },
+        { "arguments", { { "set", "bloom.intensity:0.25; bloom.sunGlare:0.01;nope.knob:3;bloom.bad:x" } } } });
+    Check(!(*set)["result"]["isError"].get<bool>(), "set_settings applies what it knows: " + text(set));
+    Check(runtime.applied.size() == 2 && runtime.applied[0].first == "bloom.intensity" &&
+          runtime.applied[0].second == 0.25f && runtime.applied[1].first == "bloom.sunGlare",
+        "name by name, in order, with the values as written");
+    Check(text(set).find("nope.knob") != std::string::npos && text(set).find("bloom.bad") != std::string::npos,
+        "and names what it did NOT apply (an unknown name, a value that is not a number)");
+    Check(runtime.resets == 1, "the exposure re-meters after a change");
+    const std::optional<json> readouts = call(12, "tools/call", { { "name", "get_readouts" } });
+    Check(text(readouts) == "{\"fake\":true}", "get_readouts answers what the app measured");
+    Check(runtime.historyAsked == 0, "and adds no per-frame rows unless asked");
+    call(1201, "tools/call", { { "name", "get_readouts" }, { "arguments", { { "history", 2000 } } } });
+    Check(runtime.historyAsked == 512, "`history` reaches the app, clamped to the ring's 512 rows");
+    const std::optional<json> reset = call(13, "tools/call", { { "name", "reset_settings" } });
+    Check(!(*reset)["result"]["isError"].get<bool>() && runtime.resets == 2,
+        "reset_settings re-applies the document and re-meters: " + text(reset));
+    editormcp::SetRuntimeHost(nullptr);
+
+    // set_camera {lookAt: "sun"}: the view faces the sky's sun, wherever the time of day has it. A
+    // known low sun first -- the fixture's may stand at the zenith, past the camera's pitch clamp.
+    {
+        const Math::float3 previousSun = ctx.scene.GetSunToward();
+        ctx.scene.SetSunToward(Math::float3(0.4f, 0.3f, 0.8660f).Normalized());
+        const std::optional<json> atSun = call(14, "tools/call", { { "name", "set_camera" },
+            { "arguments", { { "lookAt", "sun" } } } });
+        Check(!(*atSun)["result"]["isError"].get<bool>(), "set_camera faces the sun: " + text(atSun));
+        const Math::float3 toSun = ctx.scene.GetSunToward();
+        const Math::float3 forward = ctx.scene.CameraRef().GetDirection();
+        const float dot = toSun.x * forward.x + toSun.y * forward.y + toSun.z * forward.z;
+        Check(dot > 0.999f, "and the camera's forward IS the direction to the sun (dot " +
+              std::to_string(dot) + ")");
+        ctx.scene.SetSunToward(previousSun);
+    }
+
     const std::optional<json> noTool = call(7, "tools/call", { { "name", "save_level" } });
     Check(noTool && (*noTool)["error"]["code"] == -32602, "a tool that does not exist is a protocol error");
     const std::optional<json> noMethod = call(8, "resources/list", json::object());
@@ -1333,6 +1399,90 @@ void TestBuoyancyIsAFlagThatUndoes(const EditorActionContext& actionCtx)
     {
         Check(object.properties.find("buoyant") == object.properties.end(),
             "undo takes the key away -- the level saves exactly as before");
+    }
+}
+
+// setSurface and setColor go through the Inspector's live path (InspectorMultiEdit::ApplySnapshot),
+// not a document-only property edit: the document carries the value, ONE undo entry covers the
+// group, and undo takes the keys away again. (The runtime half is checked live over MCP -- this
+// harness has no GPU objects.)
+void TestSurfaceAndColourUndo(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    Check(EditorActionRegistry::Builtin().Find("setSurface") != nullptr, "setSurface is a registered action");
+    const auto run = [&](const char* answer, EditorCommandStack& stack, std::string& status)
+    {
+        std::string error;
+        EditorIntent intent;
+        Check(intentschema::ParseAnswer(answer, intent, error), std::string("parses: ") + error);
+        const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+        Check(preview.executable && preview.targets.size() == 3, "previews the three palms: " + preview.problem);
+        Check(ExecuteIntent(actionCtx, stack, preview, status), status);
+    };
+
+    EditorCommandStack stack;
+    std::string status;
+    run(R"({"kind":"command","action":"setSurface","target":{"filter":["palm"]},"params":{"metal":1,"roughness":0.02}})",
+        stack, status);
+    Check(stack.HistorySize() == 1, "a shiny group is ONE history entry");
+    Check(status.find("TEXTURE is off") != std::string::npos, "and it says the MR texture went: " + status);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        const auto mr = object.properties.find("metalRough");
+        const bool shiny = mr != object.properties.end() && mr->is_array() && mr->size() == 2 &&
+            (*mr)[0].get<float>() == 1.0f && std::abs((*mr)[1].get<float>() - 0.02f) < 1.0e-6f &&
+            object.properties.value("useMR", true) == false;
+        Check(shiny == (object.id.value <= 3), "the palms are chrome and the rock is not");
+    }
+    stack.Undo(ctx);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(object.properties.find("metalRough") == object.properties.end() &&
+            object.properties.find("useMR") == object.properties.end(),
+            "undo takes metalRough and useMR away -- the level saves exactly as before");
+    }
+
+    // normalStrength alone touches only that key: the metal/rough pair stays as it was.
+    EditorCommandStack normals;
+    run(R"({"kind":"command","action":"setSurface","target":{"filter":["palm"]},"params":{"normalStrength":0}})",
+        normals, status);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        const bool flat = object.properties.value("normalStrength", 1.0f) == 0.0f;
+        Check(flat == (object.id.value <= 3) && object.properties.find("metalRough") == object.properties.end(),
+            "normalStrength 0 on the palms only, and no metal/rough written with it");
+    }
+    normals.Undo(ctx);
+
+    // albedo: a flat colour -- baseColor written and the texture switched off; undo takes both away.
+    EditorCommandStack albedos;
+    run(R"({"kind":"command","action":"setSurface","target":{"filter":["palm"]},"params":{"albedo":[0.95,0.93,0.88]}})",
+        albedos, status);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        const bool flatColour = object.properties.contains("baseColor") &&
+            object.properties.value("useAlbedo", true) == false;
+        Check(flatColour == (object.id.value <= 3), "albedo makes the palms a flat colour and nothing else");
+    }
+    albedos.Undo(ctx);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(!object.properties.contains("useAlbedo") && !object.properties.contains("baseColor"),
+            "undo takes useAlbedo and baseColor away");
+    }
+
+    EditorCommandStack colours;
+    run(R"({"kind":"command","action":"setColor","target":{"filter":["palm"]},"params":{"color":[1,0,0]}})",
+        colours, status);
+    Check(colours.HistorySize() == 1, "a red group is ONE history entry");
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(object.properties.contains("baseColor") == (object.id.value <= 3), "the palms carry the colour");
+    }
+    colours.Undo(ctx);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(!object.properties.contains("baseColor"), "undo takes the colour away");
     }
 }
 
@@ -3207,6 +3357,7 @@ int main(int argc, char** argv)
         TestSpawnPlacement(actionCtx);
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
+        TestSurfaceAndColourUndo(actionCtx);
         TestRestPose();
         TestPivotToBase();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);

@@ -40,12 +40,16 @@ cbuffer Probe : register(b0)
     uint reflectionUavIndex;    uint geomInfoIndex;  uint skyboxIndex;     float skyboxIntensity;
     // P16.9: the sky's cosine-convolved irradiance and the scale lighting_cs applies to it.
     // `skyIrradianceIndex == 0` means this sky has no F7 derivatives and the flat fallback stands.
-    uint skyIrradianceIndex; float skyIrradianceScale; uint _rtPad0; uint _rtPad1;
+    // lightInvPreExposure: the light target (lightIndex) is PRE-EXPOSED (lighting_cb.hlsli
+    // lightPreExposure); a reused on-screen hit is brought back to radiance with this.
+    // sunAngularRadius: the sun as UE's sphere light in the off-screen re-shade, as lighting_cs has it.
+    uint skyIrradianceIndex; float skyIrradianceScale; float lightInvPreExposure; float sunAngularRadius;
     // P16.12: the ground's diffuse reflectance, mirroring lighting_cs. An off-screen hit is
     // re-shaded HERE, so leaving it out would make every reflection of a shaded surface about a
     // stop darker than the same surface seen directly -- the same half-a-pair defect P16.9 fixed
     // for the sky fill itself.
-    float3 groundAlbedoRgb; float _rtPadGround;
+    // sunSoftRadius: UE's SoftSourceRadius of the sun, as lighting_cs has it (EvalBRDF).
+    float3 groundAlbedoRgb; float sunSoftRadius;
     uint spotLightIndex; uint spotCount;      uint pointLightIndex; uint pointCount;
     // depthIndex reconstructs the PRIMARY surface (the reflector). screenDepthIndex is
     // the on-screen opaque depth used only for the fast-path visibility/depth-match — the
@@ -250,7 +254,7 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
         float shadow = (dot(N, L) > 0.0f) ? RtTraceShadow(tlas, hitOrigin, L, 1e4f, shadowTMin) : 1.0f;
         BRDFInput bi;
         bi.albedo = albedo; bi.rough = rough; bi.metal = metal; bi.N = N; bi.V = V; bi.L = L;
-        BRDFResult br = EvalBRDF(bi);
+        BRDFResult br = EvalBRDF(bi, sunAngularRadius, sunSoftRadius);   // the sun's disc, as lighting_cs
         // P16.9 -- THE SAME SKY FILL THE MAIN PASS USES.
         //
         // This branch re-shades a hit that is OFF SCREEN, and it was the ONLY lighting path that

@@ -298,6 +298,12 @@ namespace SceneObjectFactory
             mp.SetUseMR(o["useMR"].get<bool>());
             mesh.MarkMaterialParamOverride(ParamField::UseMR);
         }
+        // false = the albedo texture is off and baseColor is the colour (a flat material).
+        if (o.contains("useAlbedo"))
+        {
+            mp.SetUseAlbedo(o["useAlbedo"].get<bool>());
+            mesh.MarkMaterialParamOverride(ParamField::UseAlbedo);
+        }
         // Self-illumination on slot 0 (glowing embers etc). The override mask keeps explicitly
         // authored object values while unrelated fields continue to inherit from the material.
         // A flat tint multiplied into the albedo, per object. [r, g, b] keeps the material's

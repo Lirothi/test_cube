@@ -387,7 +387,11 @@ namespace scene_internal
         // P16.1: glass draws in the transparent pass, after compose, so compose's scaling never
         // reaches it and it applies the factor itself -- and its refraction tap reads the opaque
         // scene copy, which already has the factor on it. Both halves live in glass.hlsl.
-        vc.preExposureParams = float4(render::g_preExposure, 0.0f, 0.0f, 0.0f);
+        // y: the sun disc's angular radius (rad) -- glass lights the sun as UE's sphere light, as lighting_cs;
+        // z: its soft radius (UE SoftSourceRadius).
+        vc.preExposureParams = float4(render::g_preExposure,
+                                      frame.dirLight ? frame.dirLight->GetSunHalfApexRadians() : 0.0f,
+                                      frame.dirLight ? frame.dirLight->GetSoftSourceRadius() : 0.0f, 0.0f);
         // Volumetric fog plan A5: the volume the opaque compose samples, and the analytic medium
         // packed by the SAME function compose uses -- glass and particles sit in the sand's air.
         vc.fogVolumeParams = fogVolumeParams;

@@ -53,11 +53,12 @@ cbuffer PerFrame : register(b0)
     // metal=1 amplifies the sun highlight so it reads against the environment reflection
     // that would otherwise swamp it. 0 = pure physical.
     float sunMetalSpec;
-    // Sun angular size, added to the GGX alpha for the analytic sun only (see EvalBRDF).
-    // Floors the specular lobe width so a smooth surface shows a finite, bright,
-    // sample-able sun glint instead of a sub-pixel spike. 0 = punctual (no change).
+    // The light's angular RADIUS (rad) -- UE's sphere light for the analytic sun only (see EvalBRDF):
+    // a smooth surface shows the disc at its own radiance x F. 0 = punctual (no change).
     float sunAngularSize;
-    float2 _padSun;
+    // UE's SoftSourceRadius, sin(half of LightSourceSoftAngle): widens the glint's roughness (EvalBRDF).
+    float sunSoftRadius;
+    float _padSun;
     // Rung 2 / Step 24f: sample directional shadows from the VSM clipmap (VSM mode) instead of the
     // CSM cascades. clipmapViewProj[i] = clipmap level i's camera-centered ortho viewProj.
     uint useVsm;
@@ -127,7 +128,11 @@ cbuffer PerFrame : register(b0)
     uint enableSkySpecular;
     uint skySpecMipCount;
     float skyboxIntensity;
-    float _padSkySpec;
+    // UE's View.PreExposure (render::g_preExposure, 1 when off): the light target is written
+    // PRE-EXPOSED -- by this pass, the spot and point lights and the sky -- so a sun glint far above
+    // FP16's 65504 cd/m2 keeps its value instead of clipping to white; the passes that need
+    // radiance back (compose, SSR, the RT resolves) divide it out in fp32.
+    float lightPreExposure;
     // Plan C3: the cloud shadow map (cloud_shadow_common.hlsli), multiplied into the sun's
     // visibility wherever it is sampled. cloudShadowParams.x 0 = no map this frame; y = far depth km.
     float4x4 cloudShadowViewProj;

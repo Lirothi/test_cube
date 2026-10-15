@@ -43,6 +43,7 @@
 #include "editor/assets/MeshRestPose.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "editor/ui/InspectorMultiEdit.h"
 #include "ocean/OceanRenderable.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/renderables/RenderableObject.h"
@@ -951,6 +952,61 @@ namespace
         return replace;
     }
 
+    // ---------------------------------------------------------------- live material params
+
+    // A per-object material value -- `baseColor`, `metalRough`, `useMR` -- edited the way the
+    // Inspector edits it. EditObjectPropertiesCommand writes the DOCUMENT only, and the runtime
+    // reads these keys when the object is CREATED (SceneObjectFactory), so an action built on it
+    // changed nothing on screen until the level was reloaded: setColor shipped that way, its
+    // comment claiming an "inspector live path" that nothing called. This IS that path:
+    // InspectorMultiEdit::ApplySnapshot writes the properties and the runtime MaterialParams
+    // together, and Undo applies the snapshot captured before -- runtime values included, so a
+    // key the object never authored still comes back as it was.
+    class LiveObjectEditCommand final : public EditorCommand
+    {
+    public:
+        LiveObjectEditCommand(InspectorMultiEdit::Snapshot before,
+            InspectorMultiEdit::Snapshot after, std::string label)
+            : before_(std::move(before)), after_(std::move(after)), label_(std::move(label))
+        {
+        }
+        bool Execute(EditorContext& ctx) override
+        {
+            InspectorMultiEdit::ApplySnapshot(ctx, after_);
+            return true;
+        }
+        void Undo(EditorContext& ctx) override { InspectorMultiEdit::ApplySnapshot(ctx, before_); }
+        std::string_view HistoryLabel() const override { return label_; }
+
+    private:
+        InspectorMultiEdit::Snapshot before_;
+        InspectorMultiEdit::Snapshot after_;
+        std::string label_;
+    };
+
+    // Null when `patch` changes nothing -- an entry Ctrl+Z appears to ignore is not an edit.
+    std::unique_ptr<EditorCommand> MakeLiveObjectEdit(EditorContext& ctx,
+        const EditorObject& object, const nlohmann::json& patch, const char* label)
+    {
+        InspectorMultiEdit::Snapshot before = InspectorMultiEdit::Capture(ctx, object, false);
+        InspectorMultiEdit::Snapshot after = before;
+        if (!after.object.properties.is_object())
+        {
+            after.object.properties = nlohmann::json::object();
+        }
+        for (auto it = patch.begin(); it != patch.end(); ++it)
+        {
+            after.object.properties[it.key()] = *it;
+            after.authored[it.key()] = *it;
+            after.effective[it.key()] = *it;
+        }
+        if (after.object.properties == before.object.properties)
+        {
+            return nullptr;
+        }
+        return std::make_unique<LiveObjectEditCommand>(std::move(before), std::move(after), label);
+    }
+
     // ---------------------------------------------------------------- setColor
 
     // THE ONE GENUINE GAP IN THE REFUSAL LOG. "покрась пальмы в ярко-красный" was answered
@@ -960,9 +1016,8 @@ namespace
     // albedo and reaches the shader every frame -- but nothing could mark it as authored
     // per object, so no level could carry the value and no action could set it.
     //
-    // Written through EditObjectPropertiesCommand, like `group`: the property is the level's
-    // own JSON, the runtime picks it up through the inspector's live path, and Ctrl+Z puts
-    // the old colour back.
+    // The property is the level's own JSON; MakeLiveObjectEdit puts it on screen in the same
+    // frame and Ctrl+Z puts the old colour back.
     std::unique_ptr<EditorCommand> BuildSetColor(const EditorActionContext& actionCtx,
         const std::vector<EditorObjectId>& targets,
         const EditorIntent& intent,
@@ -996,16 +1051,13 @@ namespace
             {
                 continue;
             }
-            nlohmann::json before = object->properties.is_object()
-                ? object->properties : nlohmann::json::object();
-            nlohmann::json after = before;
-            after["baseColor"] = nlohmann::json::array({ rgb.x, rgb.y, rgb.z });
-            if (after == before)
+            const nlohmann::json patch = {
+                { "baseColor", nlohmann::json::array({ rgb.x, rgb.y, rgb.z }) } };
+            if (std::unique_ptr<EditorCommand> edit =
+                    MakeLiveObjectEdit(ctx, *object, patch, "Set Colour"))
             {
-                continue;
+                commands.push_back(std::move(edit));
             }
-            commands.push_back(std::make_unique<EditObjectPropertiesCommand>(
-                id, std::move(before), std::move(after), "Set Colour"));
         }
         if (commands.empty())
         {
@@ -1014,6 +1066,107 @@ namespace
         }
         outStatus = "Coloured " + std::to_string(commands.size()) + " objects";
         return FoldIntoOneEntry(std::move(commands), "Set Colour");
+    }
+
+    // ---------------------------------------------------------------- setSurface
+
+    // HOW SHINY, per object: metalness and roughness as flat values. The bloom work needed it
+    // first (2026-10-15) -- whether a highlight throws the kernel's star depends on how sharp the
+    // reflected sun is, and no material in the project was smooth enough to show it. A flat
+    // value means the MR texture is switched off for that object (`useMR` false), which is the
+    // only way the numbers mean what they say; the status line says so. Either key may be left
+    // out and keeps the object's current value.
+    std::unique_ptr<EditorCommand> BuildSetSurface(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        EditorContext& ctx = actionCtx.editor;
+        if (targets.empty())
+        {
+            outStatus = "Nothing to change";
+            return nullptr;
+        }
+        const bool hasMetal = intent.params.contains("metal") && intent.params["metal"].is_number();
+        const bool hasRough =
+            intent.params.contains("roughness") && intent.params["roughness"].is_number();
+        // The normal map's strength: a mirror with its material's bumps on it shatters the reflected
+        // sun into noise (a chrome sphere's glint fell from ~1500 to 12 that way), so a clean
+        // reflector needs 0 here.
+        const bool hasNormal =
+            intent.params.contains("normalStrength") && intent.params["normalStrength"].is_number();
+        // A flat colour in place of the albedo texture: a metal's reflection takes its colour from the
+        // albedo, so a "chrome" over a bronze texture reflects the blue sky as near-black orange.
+        const auto albedoIt = intent.params.find("albedo");
+        const bool hasAlbedo = albedoIt != intent.params.end() && albedoIt->is_array() &&
+            albedoIt->size() == 3 && (*albedoIt)[0].is_number() && (*albedoIt)[1].is_number() &&
+            (*albedoIt)[2].is_number();
+        if (!hasMetal && !hasRough && !hasNormal && !hasAlbedo)
+        {
+            outStatus = "setSurface needs metal, roughness, normalStrength and/or albedo";
+            return nullptr;
+        }
+
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(targets.size());
+        bool droppedTexture = false;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* object = ctx.document.Find(id);
+            if (!object || object->type != "staticMesh")
+            {
+                continue;
+            }
+            // The current pair, from the runtime when there is one (Capture), else the authored
+            // key, else the defaults a placed mesh gets (ContentBrowserPanel: 0 / 0.5).
+            const InspectorMultiEdit::Snapshot now = InspectorMultiEdit::Capture(ctx, *object, false);
+            float metal = 0.0f;
+            float rough = 0.5f;
+            const auto current = now.effective.find("metalRough");
+            if (current != now.effective.end() && current->is_array() && current->size() == 2)
+            {
+                metal = (*current)[0].get<float>();
+                rough = (*current)[1].get<float>();
+            }
+            nlohmann::json patch = nlohmann::json::object();
+            if (hasMetal || hasRough)
+            {
+                const auto useMR = now.effective.find("useMR");
+                droppedTexture |= useMR == now.effective.end() || !useMR->is_boolean() || useMR->get<bool>();
+                if (hasMetal) { metal = std::clamp(intent.params["metal"].get<float>(), 0.0f, 1.0f); }
+                if (hasRough) { rough = std::clamp(intent.params["roughness"].get<float>(), 0.0f, 1.0f); }
+                patch["metalRough"] = nlohmann::json::array({ metal, rough });
+                patch["useMR"] = false;
+            }
+            if (hasNormal)
+            {
+                patch["normalStrength"] = std::clamp(intent.params["normalStrength"].get<float>(), 0.0f, 4.0f);
+            }
+            if (hasAlbedo)
+            {
+                patch["baseColor"] = nlohmann::json::array({
+                    std::clamp((*albedoIt)[0].get<float>(), 0.0f, 1.0f),
+                    std::clamp((*albedoIt)[1].get<float>(), 0.0f, 1.0f),
+                    std::clamp((*albedoIt)[2].get<float>(), 0.0f, 1.0f) });
+                patch["useAlbedo"] = false;
+            }
+            if (std::unique_ptr<EditorCommand> edit =
+                    MakeLiveObjectEdit(ctx, *object, patch, "Set Surface"))
+            {
+                commands.push_back(std::move(edit));
+            }
+        }
+        if (commands.empty())
+        {
+            outStatus = "They have that surface already";
+            return nullptr;
+        }
+        outStatus = "Surface of " + std::to_string(commands.size()) + " objects set";
+        if (droppedTexture)
+        {
+            outStatus += " (their metal/rough TEXTURE is off now: flat values)";
+        }
+        return FoldIntoOneEntry(std::move(commands), "Set Surface");
     }
 
     // ---------------------------------------------------------------- group
@@ -3546,6 +3699,28 @@ EditorActionRegistry::EditorActionRegistry()
             { "color", EditorParamKind::Vec3, true, "[r, g, b], each 0..1" },
         },
         &BuildSetColor,
+    });
+
+    actions_.push_back({
+        "setSurface",
+        "How shiny the matching objects are: \"сделай гладким/зеркальным/матовым\", \"make it "
+        "chrome\", \"metallic\". Metalness and roughness as flat values, each 0..1; either may be "
+        "left out and keeps the current value. Chrome or a mirror: metal 1, roughness 0.02. "
+        "Glossy paint or wet plastic: metal 0, roughness 0.05. Matte: roughness 0.8. The "
+        "object's metal/rough texture is switched off (flat values), and its colour and "
+        "material stay as they are. normalStrength scales the material's normal map (0 = a "
+        "perfectly smooth shape -- what a mirror needs, or its bumps break the reflection up). "
+        "albedo [r, g, b] replaces the albedo TEXTURE with a flat colour -- a metal reflects in "
+        "that colour, so chrome needs a light grey like [0.95, 0.93, 0.88].",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        {
+            { "metal", EditorParamKind::Number, false, "0 = dielectric, 1 = metal" },
+            { "roughness", EditorParamKind::Number, false, "0 = mirror, 1 = fully rough" },
+            { "normalStrength", EditorParamKind::Number, false, "normal map strength, 0 = none, 1 = as authored" },
+            { "albedo", EditorParamKind::Vec3, false, "[r, g, b] 0..1, a flat colour instead of the albedo texture" },
+        },
+        &BuildSetSurface,
     });
 
     // WHAT THE PREVIEW SAYS WHEN THE ANSWER IS "into what". "group 621 objects" is true

@@ -79,17 +79,17 @@ cbuffer TonemapCB : register(b0)
     //
     //     out = scene * sceneApply + bloom * scatterApply
     //
-    // -- with `scatterApply = Tint * saturate(Scatter * s / Total)` and
-    // `sceneApply = Tint * saturate((Total - Scatter * s) / Total)`, exactly as their
-    // FinalizeApplyConstants writes SceneColorApplyOutput and FFTMulitplyOutput. `s` is their
-    // ScatterDispersionIntensity (BloomConvolutionScatterDispersion * BloomIntensity). The two
-    // sum to Tint by construction, so pushing `s` up does not create light -- it MOVES it out of
-    // the source and into the flare, which is the only way a star ever outshines its own
-    // highlight. `Tint` is the kernel's own colour balance, normalised by its largest channel.
+    // -- with `sceneApply = Tint * saturate((Total - Scatter * s) / Total)`, exactly as their
+    // FinalizeApplyConstants writes SceneColorApplyOutput. Its other half, FFTMultiply =
+    // `Tint * saturate(Scatter * s / Total)`, is applied by the convolution's resolve as UE's
+    // ApplyTint does, so the bloom target already holds scene units and `scatterApply` is 1 -- UE
+    // add their bloom texture as it is. `s` is their ScatterDispersionIntensity
+    // (BloomConvolutionScatterDispersion * BloomIntensity). The two halves sum to Tint by
+    // construction, so pushing `s` up does not create light -- it MOVES it out of the source and
+    // into the flare. `Tint` is the kernel's own colour balance, normalised by its largest channel.
     //
-    // The pyramid method has no kernel to survey, so it passes sceneApply = 1 and
-    // scatterApply = its plain intensity, which is bit-identical to what it did before.
-    // Zero scatterApply is the interface contract's exact no-op: no bloom is read at all.
+    // The pyramid method has no kernel to survey: sceneApply = 1, its levels carry UE's Gaussian
+    // weights. Zero scatterApply is the contract's exact no-op: no bloom is read at all.
     float3 bloomSceneApply;
     float  tonemapPad4;
     float3 bloomScatterApply;

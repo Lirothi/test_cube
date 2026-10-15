@@ -37,6 +37,42 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h" // the ghost sprite sheet is uploaded once, lazily
 
+// UE'S GAUSSIAN BLOOM, as weights on the pyramid's levels. UE sum six blurs of the scene
+// (PostProcessBloomSetup.cpp, AddGaussianBloomPasses), each Bloom{n}Size percent of the view width
+// times BloomSizeScale (4) and weighted Bloom{n}Tint * Intensity / 6 -- their defaults, Scene.cpp:459-471.
+// The blur is exp(-16.7 (x / R)^2) with R = width * size% / 2 (PostProcessWeightedSampleSum.cpp), so
+// its sigma is R / sqrt(2 * 16.7). Each of the six lands on the pyramid level whose own blur is
+// nearest, split linearly between the two around it in octaves; a level's blur is taken as
+// kLevelSigma of its texels (the 13-tap downsample chain's, estimated), and a size past the coarsest
+// level is held there -- at 1440p UE's two widest (30 and 64 %) both sit on the last level, narrower
+// than theirs. The WEIGHTS are theirs exactly: the pyramid's total is UE's, sum(Tint) * I / 6.
+static std::array<float, kBloomMaxMips> GaussianLevelWeights(UINT levels, float bloomTexelPx,
+                                                             float viewWidthPx, float intensity)
+{
+    struct Stage { float sizePercent; float tint; };
+    static constexpr Stage kStages[6] = {
+        { 0.3f, 0.3465f }, { 1.0f, 0.138f }, { 2.0f, 0.1176f },
+        { 10.0f, 0.066f }, { 30.0f, 0.066f }, { 64.0f, 0.061f } };
+    constexpr float kSizeScale = 4.0f;      // BloomSizeScale
+    constexpr float kLevelSigma = 1.2f;     // a level's blur, in its own texels
+    std::array<float, kBloomMaxMips> w{};
+    const int top = static_cast<int>(std::clamp<UINT>(levels, 1u, kBloomMaxMips)) - 1;
+    const float sigmaPerRadius = 1.0f / std::sqrt(2.0f * 16.7f);
+    for (const Stage& s : kStages)
+    {
+        const float sigmaPx = viewWidthPx * s.sizePercent * kSizeScale * 0.01f * 0.5f * sigmaPerRadius;
+        const float t = std::clamp(std::log2(std::max(sigmaPx / (kLevelSigma * bloomTexelPx), 1.0f)),
+                                   0.0f, static_cast<float>(top));
+        const int lo = static_cast<int>(std::floor(t));
+        const int hi = std::min(lo + 1, top);
+        const float f = t - static_cast<float>(lo);
+        const float weight = s.tint * intensity / 6.0f;
+        w[static_cast<size_t>(lo)] += weight * (1.0f - f);
+        w[static_cast<size_t>(hi)] += weight * f;
+    }
+    return w;
+}
+
 // ---- the three entry points, moved out of SceneRenderer with the state they read ----
 
 void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
@@ -201,6 +237,24 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                    resources_->GetBloomCBSizeBytes() > 0u &&
                    DB.bloomMips > 0u && DB.bloomDown.Get() != nullptr &&
                    DB.bloomUp.Get() != nullptr;
+
+    // The temporal input (stage 12): only while the bloom reads the JITTERED scene before an upscaler
+    // that runs -- without DLSS the source is the tonemap's own, steady image. Its history holds after
+    // a frame that wrote it at this size and camera history (a cut resets it), the light shafts' rule.
+    const auto& PB = renderer->GetDeferredForPrevFrame();
+    temporal_ = bloomActive_ && frame.settings.bloom.convBeforeUpscale &&
+                frame.settings.bloom.convTemporalWeight < 0.999f && renderer->WillEvaluateDlss() &&
+                convMaterial != nullptr && convMaterial->GetPipelineState() != nullptr &&
+                resources_->GetBloomConvCBSizeBytes() > 0u &&
+                DB.bloomHistory.Get() != nullptr && PB.bloomHistory.Get() != nullptr;
+    const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
+    const bool sameHistory = historyWidth_ == DB.bloomHistoryWidth && historyHeight_ == DB.bloomHistoryHeight &&
+                             historyRevision_ == rev;
+    historyValid_ = temporal_ && historyFrames_ > 0u && sameHistory;
+    historyFrames_ = temporal_ ? (sameHistory ? historyFrames_ + 1u : 1u) : 0u;
+    historyWidth_ = DB.bloomHistoryWidth;
+    historyHeight_ = DB.bloomHistoryHeight;
+    historyRevision_ = rev;
 }
 
 void BloomRenderer::Declare(RenderGraphPassContext& ctx, Points& out) const
@@ -208,8 +262,28 @@ void BloomRenderer::Declare(RenderGraphPassContext& ctx, Points& out) const
     constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const auto& D = ctx.renderer->GetDeferredForFrame();
 
+    // The temporal input (stage 12): last frame's history (the previous slot's, at rest) and the
+    // G-buffer velocity read, this slot's history written -- then read at the write point by the
+    // setup, the ghosts and the streak.
+    ctx.NextPoint();
+    out.history = ctx.usePoint ? *ctx.usePoint : 0u;
+    if (temporal_)
+    {
+        const auto& P = ctx.renderer->GetDeferredForPrevFrame();
+        ctx.Use(P.bloomHistory.Get(), kNps);
+        ctx.Use(D.gbVelocity.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(D.bloomHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
     ctx.NextPoint();
     out.write = ctx.usePoint ? *ctx.usePoint : 0u;
+    if (temporal_) { ctx.Use(D.bloomHistory.Get(), kNps); }
+    // The scene's depth, for the art split's sky test: the setup (stage 0, t1) and the ghost scatter
+    // (t2) bind it on every frame -- the tables are positional -- so it is declared readable whenever
+    // the bloom runs. Already at rest there: DLSS hands it back readable, and without DLSS the tonemap
+    // pass declared it the same way at its source point.
+    ctx.Use(D.depth.Get(), kNps);
     // ONE point layout for both methods: write / flare RT / flare read / read. The pyramid path
     // used to fold the flare's render-target barrier into its write point, which is why the shared
     // FlaresBuild had to know which method called it. Both P8C-2l and P8C-2m were a point moving or
@@ -276,11 +350,44 @@ void BloomRenderer::Declare(RenderGraphPassContext& ctx, Points& out) const
 void BloomRenderer::Record(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                            D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const Points& pts)
 {
+    // The temporal input first: it replaces what the setup, the ghosts and the streak read.
+    renderer->EmitPoint(cl, pts.history);
+    if (temporal_) { RecordTemporalInput(renderer, cl, convInput_.ptr != 0 ? convInput_ : hdrSource); }
     // The METHOD is the decision Declare() built its points from — asking the settings again here
     // is what let a frame with an unready convolution record one method against the other's
     // declarations.
     if (bloomConvolution_) { Convolve(renderer, cl, hdrSource, pts); }
     else { Build(renderer, cl, hdrSource, pts); }
+}
+
+// Stage 12 into this slot's history from last slot's, reprojected by the G-buffer velocity (see the
+// stage). Positional tables: t0 the scene, t1 the velocity, t2 last frame's history, t3/t4 the local
+// exposure pair as every conv dispatch binds them; u0 = u1 = this frame's history, u2 the exposure
+// record. Afterwards the convolution's input IS the history.
+void BloomRenderer::RecordTemporalInput(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                        D3D12_CPU_DESCRIPTOR_HANDLE scene)
+{
+    const auto& D = renderer->GetDeferredForFrame();
+    const auto& P = renderer->GetDeferredForPrevFrame();
+    auto convMaterial = resources_->GetBloomConvMaterial();
+    const UINT convCb = resources_->GetBloomConvCBSizeBytes();
+    BloomConvConstants c{};
+    c.convStage = 12u;
+    c.sourceSize = uint2{ D.bloomHistoryWidth, D.bloomHistoryHeight };
+    const float pe = std::max(render::g_preExposure, 1.0e-30f);
+    c.historyParams = Math::float4(std::clamp(frame_->settings.bloom.convTemporalWeight, 0.01f, 1.0f),
+                                   historyValid_ ? pe / std::max(historyPreExposure_, 1.0e-30f) : 1.0f,
+                                   historyValid_ ? 1.0f : 0.0f, 0.0f);
+    historyPreExposure_ = pe;
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+    RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
+        [&](uint8_t* dest) { resources_->WriteBloomConvConstants(c, dest); },
+        { scene, D.gbSRV[3], P.bloomHistorySRV,
+          renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
+        { D.bloomHistoryUAV, D.bloomHistoryUAV, renderer->Exposure().ExposureUav() },
+        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
+        D.bloomHistoryWidth, D.bloomHistoryHeight, D.bloomHistory.Get());
+    convInput_ = D.bloomHistorySRV;
 }
 
 void BloomRenderer::Downsample(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -384,12 +491,13 @@ void BloomRenderer::Build(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         FlaresBuild(renderer, cl, hdrSource, flareConv, pts);
     }
 
-    // P8C-4: the same ABSOLUTE scaling the convolution now uses, so switching method is not also a
-    // threshold change. See the note in bloom_conv_cs.hlsl stage 0.
-    const float absThreshold = (settings.threshold < 0.0f)
-        ? 0.0f
-        : settings.threshold * (render::g_preExposure / render::ExposureMultiplierFromEv100(14.0f));
-    Downsample(renderer, cl, hdrSource, absThreshold, 0u);
+    // UE's BloomThreshold, in the units the viewer sees (bloom_cs.hlsl Setup); negative = none.
+    Downsample(renderer, cl, hdrSource, settings.threshold, 0u);
+    const std::array<float, kBloomMaxMips> levelWeight = GaussianLevelWeights(
+        D.bloomMips,
+        static_cast<float>(std::max(renderer->GetWidth(), 1u)) / static_cast<float>(std::max(D.bloomWidth, 1u)),
+        static_cast<float>(std::max(renderer->GetWidth(), 1u)),
+        std::max(0.0f, settings.intensity));
 
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
     const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
@@ -428,13 +536,16 @@ void BloomRenderer::Build(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         c.exposureEnabled = 0u;
         c.dstSize = dst;
         c.srcSize = mipSize(m + 1u);
-        c.threshold = absThreshold;
+        c.threshold = settings.threshold;
         c.softKnee = settings.softKnee;
         c.radius = std::max(settings.radius, 0.0f);
         c.fireflyClamp = 0u;
         // The source is the coarser level of the UP chain -- except at the top, where the UP chain
         // holds nothing yet and the DOWN chain's coarsest level is the seed.
         const bool seeding = (m + 1u == D.bloomMips - 1u);
+        // Each level enters the sum at its share of UE's weights; the seed carries the coarsest's.
+        c.levelWeight = levelWeight[m];
+        c.srcWeight = seeding ? levelWeight[m + 1u] : 1.0f;
         const D3D12_CPU_DESCRIPTOR_HANDLE src =
             seeding ? D.bloomDownMipUAV[m + 1u] : D.bloomUpMipUAV[m + 1u];
         dispatch(c, dst.x, dst.y, src, D.bloomUpMipUAV[m], D.bloomDownMipUAV[m], D.bloomUp.Get());
@@ -461,17 +572,10 @@ static constexpr int kStreakMaxLevels = 8;
 static constexpr uint32_t kStreakMinLevelWidth = 10u;
 
 // The flare fields both halves need, filled in ONE place so the two bloom methods cannot drift.
-// `render::g_preExposure` is what makes the thresholds absolute -- see the comment on them.
-// P8C-2o: what the TONEMAP multiplies the bloom target by. The flares composite into that same
-// target after the resolve, so both of their intensity knobs have to divide this back out to mean
-// "fraction of the source's own brightness" -- and under the centre/scatter split it is no longer
-// `bloom.intensity`, it is the surveyed scatter fraction.
-float BloomRenderer::TonemapBloomScale() const
-{
-    const BloomApplyConstants a = ApplyConstants();
-    return std::max(a.scatterApply[0], std::max(a.scatterApply[1], a.scatterApply[2]));
-}
-
+// Every composite lands in the bloom target AFTER the method's own output is final (the
+// convolution's resolve applies its scale, the pyramid's levels carry theirs) and the tonemap adds
+// that target as it is, so these intensities are in the scene's own units -- as UE's lens flares,
+// which are composited into the bloom texture after the FFT's ApplyTint.
 BloomConvConstants BloomRenderer::FlareConstants(Renderer* renderer) const
 {
     const auto& D = renderer->GetDeferredForFrame();
@@ -479,33 +583,21 @@ BloomConvConstants BloomRenderer::FlareConstants(Renderer* renderer) const
     const float displayW = static_cast<float>(std::max(renderer->GetWidth(), 1u));
     BloomConvConstants c{};
     c.exposureEnabled = 0u;
-    // INTENSITY MEANS "FRACTION OF THE SOURCE'S OWN BRIGHTNESS": the pyramid's up-chain is a
-    // convex combination, so the band arrives at roughly the source's amplitude, and the
-    // composite adds it after the bloom target is written -- only the tonemap's bloom.intensity
-    // is still ahead of it, so compensating that alone makes the knob mean what it says.
-    c.anamorphicIntensity = std::max(0.0f, settings.convAnamorphicIntensity) /
-                            std::max(TonemapBloomScale(), 0.01f);
+    // "Fraction of the source's own brightness": the streak's up-chain is a convex combination, so
+    // the band arrives at roughly the source's amplitude.
+    c.anamorphicIntensity = std::max(0.0f, settings.convAnamorphicIntensity);
     c.anamorphicLength = std::max(0.0005f, settings.convAnamorphicLength);
     c.anamorphicSigma = std::max(0.5f, settings.convAnamorphicWidth) *
                         (static_cast<float>(D.bloomWidth) / displayW);
-    // ABSOLUTE units: "is this a light source" is a property of the SCENE, not the camera, but
-    // the buffers hold PRE-EXPOSED values. The authored number means stored brightness at
-    // EV100 = 14, rescaled by the frame's own pre-exposure.
-    const float thresholdScale = render::g_preExposure / render::ExposureMultiplierFromEv100(14.0f);
-    c.anamorphicThreshold = std::max(0.05f, settings.convAnamorphicThreshold) * thresholdScale;
+    // Pre-exposed units, as the ghosts' threshold and UE's LensFlareThreshold.
+    c.anamorphicThreshold = std::max(0.05f, settings.convAnamorphicThreshold);
     c.anamorphicChroma = std::clamp(settings.convAnamorphicChroma, 0.0f, 1.0f);
     c.anamorphicTint[0] = std::max(0.0f, settings.convAnamorphicTint[0]);
     c.anamorphicTint[1] = std::max(0.0f, settings.convAnamorphicTint[1]);
     c.anamorphicTint[2] = std::max(0.0f, settings.convAnamorphicTint[2]);
-    // ABSOLUTE, for the same two reasons the streak's intensity is. (1) The composite used to be
-    // folded INSIDE the convolution's resolve, so the ghosts were multiplied by
-    // kConvolutionGain (8) on their way into the target; lifting it into its own stage dropped
-    // exactly that factor, which is the "ghost intensity fell sharply" this fixes. (2) The
-    // tonemap still scales the target by bloom.intensity, and that number means very different
-    // things to the two bloom methods -- the pyramid's output is about the level count brighter
-    // per unit -- so a ghost knob that rides it cannot mean one thing on both.
-    c.ghostIntensity = std::max(0.0f, settings.convGhostIntensity) /
-                       std::max(TonemapBloomScale(), 0.01f);
+    // UE's `LensFlareIntensity * BloomIntensity` (PostProcessLensFlares.cpp:441); the composite then
+    // divides by the guard band's area and tints per ghost, as their LensFlareHDRColor does.
+    c.ghostIntensity = std::max(0.0f, settings.convGhostIntensity) * std::max(0.0f, settings.intensity);
     return c;
 }
 
@@ -571,152 +663,184 @@ bool BloomRenderer::ReadKernelPixels(const wchar_t* path)
     return true;
 }
 
-// P8C-2o -- THE SURVEY, transcribed from BloomSurveyKernelCenterEnergy.usf and its siblings.
+// P8C-2o -- THE SURVEY, transcribed from UE's (PostProcessFFTBloom.cpp:393-540 and the shaders it
+// runs: BloomFindKernelCenter, BloomSurveyMaxScatterDispersion, BloomSurveyKernelCenterEnergy,
+// BloomSumScatterDispersionEnergy). The definitions are theirs, not mine:
 //
-// Three quantities, and the definitions are theirs, not mine:
+//   * the CENTRE is the kernel's brightest texel (by luminance);
+//   * D = ViewTexelDiameterInKernelTexels = max(kernel width / its width in grid texels, 1) -- the
+//     kernel texels one output pixel covers -- and R = D / 2;
+//   * MaxScatterDispersion -- the level the kernel is CLAMPED to: the max over a square annulus
+//     around the centre, Chebyshev distance between 2R + 1 and 2R + 4 (soft-edged, as their
+//     saturate()s are), of each texel's LARGEST channel. One grey value, so the clamp cannot tint;
+//   * CenterEnergy -- the sum, over the centre square of Chebyshev radius R + 0.5 (soft-edged), of
+//     `max(kernel - MaxScatterDispersion, 0)`: the EXCESS above the clamp, which is the delta spike,
+//     the light that never scattered;
+//   * ScatterDispersionEnergy -- the whole clamped kernel, `clamp(kernel, 0, MaxScatterDispersion)`.
 //
-//   * MaxScatterDispersion -- the level the kernel is CLAMPED to, measured on the ring just
-//     outside the centre zone. Stage 3 computes the same thing from the same eight ring taps.
-//   * CenterEnergy -- the sum, over the centre zone, of `max(kernel - MaxScatterDispersion, 0)`.
-//     Not the kernel's value there: the EXCESS above the clamp. That excess IS the delta spike,
-//     and the delta is precisely the light that never scattered.
-//   * ScatterDispersionEnergy -- the total of the clamped kernel, i.e. everything else.
-//
-// The centre zone is a SQUARE of Chebyshev radius `ViewTexelRadiusInKernelTexels` -- the kernel
-// texels one output pixel covers, which is `ratio`. A square, not a disc, because that is the
-// footprint of a pixel.
-void BloomRenderer::SurveyKernel(float ratio)
+// On the CPU from the texture's own pixels rather than on the GPU as theirs is: a readback the
+// tonemap cannot wait for, for numbers that move only when the kernel or its size does.
+void BloomRenderer::SurveyKernel(float spanTexels)
 {
     if (bloomKernelPixelDim_ == 0u) { return; }
-    // THE EARLY-OUT IS THE WHOLE PERFORMANCE STORY. `ratio` moves only when convSize, the bloom
-    // resolution or the kernel image changes, so the loop below runs a handful of times per
-    // session and never inside a steady frame. Timed into the log rather than asserted.
-    if (bloomSurveyRatio_ == ratio) { return; }
-    const auto surveyStart = std::chrono::steady_clock::now();
-
     const int dim = static_cast<int>(bloomKernelPixelDim_);
-    const auto at = [this, dim](int x, int y, int c) {
-        const int cx = std::clamp(x, 0, dim - 1);
-        const int cy = std::clamp(y, 0, dim - 1);
-        return bloomKernelPixels_[(static_cast<size_t>(cy) * dim + cx) * 3u +
-                                  static_cast<size_t>(c)];
-    };
-    // The kernel's centre is the texture's centre: this asset is authored centred, and stage 3
-    // sets kernelCenterUV to (0.5, 0.5) rather than searching for it the way UE's
-    // FindKernelCenterCS must for an arbitrary import.
-    const float centre = 0.5f * static_cast<float>(dim) - 0.5f;
-    // P8C-2v: the same FIXED ring the shader uses -- these two must agree or the split would
-    // weigh a different kernel than the one being convolved.
-    const float ringTexels = 2.0f;
+    const float diameter = std::max(static_cast<float>(dim) / std::max(spanTexels, 1.0f), 1.0f);
+    // THE EARLY-OUT IS THE WHOLE PERFORMANCE STORY. `diameter` moves only when convSize, the bloom
+    // resolution or the kernel image changes, so the loops below run a handful of times per session
+    // and never inside a steady frame. Timed into the log rather than asserted.
+    if (bloomSurveyRatio_ == diameter) { return; }
+    const auto surveyStart = std::chrono::steady_clock::now();
+    const float radius = 0.5f * diameter;
 
-    std::array<float, 3> clampLevel{ 0.0f, 0.0f, 0.0f };
-    for (int r = 0; r < 8; ++r)
+    const auto at = [this, dim](int x, int y, int c) {
+        // Their survey reads `(centre + offset) % size`: the kernel wraps.
+        const int cx = ((x % dim) + dim) % dim;
+        const int cy = ((y % dim) + dim) % dim;
+        return bloomKernelPixels_[(static_cast<size_t>(cy) * dim + cx) * 3u + static_cast<size_t>(c)];
+    };
+
+    // FindKernelCenter: the brightest texel. The first one found on a tie, scanning rows.
+    int cx = dim / 2, cy = dim / 2;
     {
-        const float ang = 6.28318530718f * (static_cast<float>(r) / 8.0f);
-        const int sx = static_cast<int>(std::lround(centre + std::cos(ang) * ringTexels));
-        const int sy = static_cast<int>(std::lround(centre + std::sin(ang) * ringTexels));
-        for (int c = 0; c < 3; ++c) { clampLevel[c] = std::max(clampLevel[c], at(sx, sy, c)); }
+        float best = -1.0f;
+        for (int y = 0; y < dim; ++y)
+        {
+            for (int x = 0; x < dim; ++x)
+            {
+                const float l = 0.2126f * at(x, y, 0) + 0.7152f * at(x, y, 1) + 0.0722f * at(x, y, 2);
+                if (l > best) { best = l; cx = x; cy = y; }
+            }
+        }
+    }
+
+    // MaxScatterDispersion over the annulus. Their survey runs a grid of 8x8 groups sized for R + 4
+    // (`SurveyGroupGridSize = 2 * DivideAndRoundUp(ceil(R) + 4, 8)`), offsets [-4G, 4G - 1], while the
+    // annulus reaches 2R + 4 -- so past R ~ 4 they crop its outer edge. Kept, for the same number.
+    float clampLevel = 0.0f;
+    {
+        const int groups = 2 * ((static_cast<int>(std::ceil(radius)) + 4 + 7) / 8);
+        const int lo = -4 * groups, hi = 4 * groups - 1;
+        const int reach = static_cast<int>(std::ceil(2.0f * radius + 4.0f));
+        for (int oy = std::max(-reach, lo); oy <= std::min(reach, hi); ++oy)
+        {
+            for (int ox = std::max(-reach, lo); ox <= std::min(reach, hi); ++ox)
+            {
+                const float cheb = static_cast<float>(std::max(std::abs(ox), std::abs(oy)));
+                const float isCentre = std::clamp(2.0f * radius + 1.0f - cheb, 0.0f, 1.0f);
+                const float isEdgeOrCentre = std::clamp(2.0f * radius + 4.0f - cheb, 0.0f, 1.0f);
+                const float zone = std::clamp(1.0f - isCentre, 0.0f, 1.0f) * isEdgeOrCentre;
+                if (zone <= 0.0f) { continue; }
+                const float m = std::max(at(cx + ox, cy + oy, 0), std::max(at(cx + ox, cy + oy, 1), at(cx + ox, cy + oy, 2)));
+                clampLevel = std::max(clampLevel, m * zone);
+            }
+        }
     }
 
     std::array<float, 3> centerEnergy{ 0.0f, 0.0f, 0.0f };
+    {
+        const int reach = static_cast<int>(std::ceil(radius + 0.5f));
+        for (int oy = -reach; oy <= reach; ++oy)
+        {
+            for (int ox = -reach; ox <= reach; ++ox)
+            {
+                const float cheb = static_cast<float>(std::max(std::abs(ox), std::abs(oy)));
+                const float zone = std::clamp(radius + 0.5f - cheb, 0.0f, 1.0f);
+                if (zone <= 0.0f) { continue; }
+                for (int c = 0; c < 3; ++c)
+                {
+                    centerEnergy[c] += std::max(at(cx + ox, cy + oy, c) - clampLevel, 0.0f) * zone;
+                }
+            }
+        }
+    }
     std::array<float, 3> scatterEnergy{ 0.0f, 0.0f, 0.0f };
-    const int centreRadius = static_cast<int>(std::floor(std::max(ratio, 1.0f) + 0.5f));
-    const int ci = static_cast<int>(std::lround(centre));
     for (int y = 0; y < dim; ++y)
     {
-        const bool nearY = std::abs(y - ci) <= centreRadius;
         for (int x = 0; x < dim; ++x)
         {
-            const bool inCentre = nearY && std::abs(x - ci) <= centreRadius;
-            for (int c = 0; c < 3; ++c)
-            {
-                const float v = at(x, y, c);
-                scatterEnergy[c] += std::min(v, clampLevel[c]);
-                if (inCentre) { centerEnergy[c] += std::max(v - clampLevel[c], 0.0f); }
-            }
+            for (int c = 0; c < 3; ++c) { scatterEnergy[c] += std::clamp(at(x, y, c), 0.0f, clampLevel); }
         }
     }
 
     bloomKernelCenterEnergy_ = centerEnergy;
     bloomKernelScatterEnergy_ = scatterEnergy;
-    bloomSurveyRatio_ = ratio;
+    bloomKernelClampLevel_ = clampLevel;
+    bloomKernelCenterX_ = static_cast<uint32_t>(cx);
+    bloomKernelCenterY_ = static_cast<uint32_t>(cy);
+    bloomSurveyRatio_ = diameter;
     const float total = centerEnergy[1] + scatterEnergy[1];
     LOG_INFO(logging::LogCategory::Render,
-             "[p8c-2o] bloom kernel survey ratio {:.3f}  clamp {}  centre {} ({:.2f}% of total)  scatter {}  took {:.2f} ms",
-             ratio, clampLevel[1], centerEnergy[1],
+             "bloom kernel survey: texel diameter {:.3f}, centre ({}, {}), clamp {:.1f}, centre energy {:.1f} ({:.2f}% of total), scatter {:.1f}, took {:.2f} ms",
+             diameter, cx, cy, clampLevel, centerEnergy[1],
              (total > 0.0f) ? (centerEnergy[1] / total * 100.0f) : 0.0f, scatterEnergy[1],
              std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - surveyStart).count());
 }
 
-// P8C-2o -- BloomFinalizeApplyConstants.usf, line for line.
+// P8C-2o -- BloomFinalizeApplyConstants.usf, line for line:
 //
-// The pyramid method has no kernel to survey, so it keeps the old additive meaning exactly: the
-// scene passes through at 1 and the flare is added at `intensity`. Only the convolution partitions.
+//     Tint          = saturate(Total / max3(Total))          Total = Centre + Scatter
+//     FinalScatter  = Scatter * ScatterDispersion * BloomIntensity * ConvolutionIntensity
+//     SceneApply    = Tint * saturate((Total - FinalScatter) / Total)
+//     FFTMultiply   = Tint * saturate(FinalScatter / Total)
+//
+// ScatterDispersion and ConvolutionIntensity are UE's defaults, 1, and are not separate knobs here:
+// `intensity` is BloomIntensity. The two halves PARTITION the light: the convolution's input is the
+// whole scene (no threshold -- UE's FFT bloom has none), so what SceneApply takes off the scene comes
+// back through FFTMultiply, spread by the kernel. Returned per channel: [0] SceneApply, [1] FFTMultiply.
+// The kernel tint is ours (UE have none) and enters HERE, as a per-channel ScatterDispersion: a
+// bluish tint scatters more of the blue, and what a channel does not scatter stays in the scene, so
+// the partition still sums to Tint in every channel. (Inside the kernel image the per-channel
+// normalisation would cancel it; on the scattered light alone it would darken and colour the scene.)
+static std::array<std::array<float, 3>, 2> FinalizeApply(const std::array<float, 3>& centre,
+                                                         const std::array<float, 3>& scatter,
+                                                         float intensity, const float kernelTint[3])
+{
+    std::array<std::array<float, 3>, 2> out{};
+    std::array<float, 3> total{};
+    for (int c = 0; c < 3; ++c) { total[c] = centre[c] + scatter[c]; }
+    const float maxTotal = std::max(total[0], std::max(total[1], total[2]));
+    for (int c = 0; c < 3; ++c)
+    {
+        const float s = intensity * std::max(0.0f, kernelTint[c]);
+        if (!(maxTotal > 0.0f)) { out[0][c] = 1.0f; out[1][c] = s; continue; }
+        if (!(total[c] > 0.0f)) { out[0][c] = 0.0f; out[1][c] = 0.0f; continue; }
+        const float tint = std::clamp(total[c] / maxTotal, 0.0f, 1.0f);
+        const float finalScatter = scatter[c] * s;
+        out[0][c] = tint * std::clamp((total[c] - finalScatter) / total[c], 0.0f, 1.0f);
+        out[1][c] = tint * std::clamp(finalScatter / total[c], 0.0f, 1.0f);
+    }
+    return out;
+}
+
 BloomApplyConstants BloomRenderer::ApplyConstants() const
+{
+    BloomApplyConstants out{};
+    // The bloom target already holds the scene's units (the resolve applied FFTMultiply, the
+    // pyramid's levels carry UE's Gaussian weights), so the tonemap adds it as it is -- UE's
+    // `FinalLinearColor += Bloom * exposure`. Only the scene is scaled, by the kernel centre's share.
+    out.scatterApply = { 1.0f, 1.0f, 1.0f };
+    if (bloomConvolution_ && bloomSurveyRatio_ >= 0.0f)
+    {
+        const BloomSettings& settings = frame_->settings.bloom;
+        out.sceneApply = FinalizeApply(bloomKernelCenterEnergy_, bloomKernelScatterEnergy_,
+                                       std::max(0.0f, settings.intensity), settings.convKernelTint)[0];
+    }
+    return out;
+}
+
+std::array<float, 3> BloomRenderer::ConvolutionScatterScale() const
 {
     const BloomSettings& settings = frame_->settings.bloom;
     const float s = std::max(0.0f, settings.intensity);
-
-    BloomApplyConstants out{};
-    // P8C-2o/p -- A THRESHOLD AND A PARTITION ARE MUTUALLY EXCLUSIVE, and getting this wrong is
-    // what made the first cut of the split darken the frame for nothing.
-    //
-    // The split is an identity over the WHOLE image: every photon the scene loses to `sceneApply`
-    // comes back through the convolution, because the convolution's input IS the scene. Threshold
-    // that input and the identity breaks -- the scene still dims by the full centre fraction while
-    // only the above-threshold light returns, and the difference is simply destroyed. So a
-    // thresholded bloom is additive BY CONSTRUCTION: it is an extraction, not a partition, and it
-    // leaves the scene alone. UE never meet this because their FFT bloom does not threshold.
-    const bool partition = bloomConvolution_ && frame_->settings.bloom.threshold < 0.0f;
-    if (!partition || bloomSurveyRatio_ < 0.0f)
+    if (bloomSurveyRatio_ >= 0.0f)
     {
-        // UNIT MATCHING, and it lives HERE now rather than in the resolve. The convolution
-        // conserves energy -- its kernel is normalised through the DC divide, so its output carries
-        // the thresholded image's total light, redistributed. The pyramid does not: its tent
-        // upsample ADDS its levels, so it comes out roughly the level count brighter. kBloomMaxMips
-        // is the structural reason for the measured factor and is used instead of the measurement
-        // because it is the thing that would change if the pyramid gained or lost a level.
-        //
-        // The reason it moved out of the shader is that it only means something on THIS path. On
-        // the partition below the scale is a fraction of the kernel's own energy, and an arbitrary
-        // 8 on top of that would be the one number in the chain meaning nothing -- but deleting it
-        // outright, as the first cut of the split did, left the additive path 8x dimmer than the
-        // pyramid at the same `intensity`, which is a unit break dressed up as a tuning problem.
-        const float match = bloomConvolution_ ? static_cast<float>(kBloomMaxMips) : 1.0f;
-        // P8C-2v: there is NO clamp-compensation factor here any more. One was added while the
-        // clamp ring still moved with convSize, and pinning that ring made it identically 1.000
-        // at every ratio -- an inert multiply is worse than none, because the next reader has to
-        // prove it does nothing. `intensity` therefore means exactly what it always did.
-        const float a = s * match;
-        out.sceneApply = { 1.0f, 1.0f, 1.0f };
-        out.scatterApply = { a, a, a };
-        return out;
+        return FinalizeApply(bloomKernelCenterEnergy_, bloomKernelScatterEnergy_, s, settings.convKernelTint)[1];
     }
-
-    std::array<float, 3> total{};
-    for (int c = 0; c < 3; ++c)
-    {
-        total[c] = bloomKernelCenterEnergy_[c] + bloomKernelScatterEnergy_[c];
-    }
-    const float maxTotal = std::max(total[0], std::max(total[1], total[2]));
-    if (maxTotal <= 0.0f)
-    {
-        out.sceneApply = { 1.0f, 1.0f, 1.0f };
-        out.scatterApply = { s, s, s };
-        return out;
-    }
-
-    for (int c = 0; c < 3; ++c)
-    {
-        // Tint is the kernel's own colour balance, normalised by its largest channel -- their
-        // `saturate(RefTotalEnergy / MaxEnergy)`.
-        const float tint = std::clamp(total[c] / maxTotal, 0.0f, 1.0f);
-        const float finalScatter = bloomKernelScatterEnergy_[c] * s;
-        const float finalCentre = total[c] - finalScatter;
-        out.sceneApply[c] = tint * std::clamp(finalCentre / total[c], 0.0f, 1.0f);
-        out.scatterApply[c] = tint * std::clamp(finalScatter / total[c], 0.0f, 1.0f);
-    }
-    return out;
+    // Without a survey (the kernel's pixels could not be read on the CPU) there is no split to
+    // make: the scene passes untouched and the convolution adds at `intensity`, tinted.
+    std::array<float, 3> scale{};
+    for (int c = 0; c < 3; ++c) { scale[c] = s * std::max(0.0f, settings.convKernelTint[c]); }
+    return scale;
 }
 
 void BloomRenderer::FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -734,12 +858,19 @@ void BloomRenderer::FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* c
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
     const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
         renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+    // The ghosts and the streak read the same scene as the convolution (SetConvolutionInput): before
+    // the upscaler when convBeforeUpscale. DLSS rings on a disc thousands of times its sky, a little
+    // differently every frame; the ghosts sum the disc's tiles, and on a still frame they flickered
+    // 3 % frame to frame (spikes of 12-30 %) while the FFT bloom beside them held to four digits.
+    // Their tile grid is in UV, so the render-resolution source needs no other change.
+    hdrSource = convInput_.ptr != 0 ? convInput_ : hdrSource;
     const auto convDispatchTo = [&](const BloomConvConstants& c, D3D12_CPU_DESCRIPTOR_HANDLE gridUav,
                                     D3D12_CPU_DESCRIPTOR_HANDLE dstUav,
                                     UINT w, UINT h, ID3D12Resource* barrierRes) {
         RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
             [&](uint8_t* dest) { resources_->WriteBloomConvConstants(c, dest); },
-            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
+              renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
             { gridUav, dstUav, renderer->Exposure().ExposureUav() },
             samplerTable, w, h, barrierRes);
     };
@@ -908,22 +1039,31 @@ void BloomRenderer::FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* c
         // UE's LensFlareBokehSize: a percent of the flare view's width.
         fc.kernelSizePx = std::max(settings.convGhostBokeh, 0.05f) * 0.01f *
                           static_cast<float>(D.lensFlareWidth);
-        // UE's LensFlareThreshold, verbatim mechanism: the VS collapses every tile below it. The
-        // bloom extraction's own threshold is NOT enough -- at bloom.threshold -1 the source is
-        // unthresholded and sunlit foliage splats bokehs, which the composite then mirrors into
-        // the sky as upside-down palms. This is also the pass's whole cost model: quads that
-        // collapse rasterize nothing.
-        // Absolute units, same EV14 reference as the streak threshold -- see that comment.
-        fc.threshold = std::max(settings.convGhostThreshold, 1.0e-4f) *
-                       (render::g_preExposure / render::ExposureMultiplierFromEv100(14.0f));
+        // UE's LensFlareThreshold, verbatim: the VS collapses every tile whose dot(rgb, 1) is
+        // below it, in the pre-exposed units the source holds (default 8). This is also the
+        // pass's whole cost model: quads that collapse rasterize nothing.
+        fc.threshold = std::max(settings.convGhostThreshold, 1.0e-4f);
         fc.kernelAreaInverse = 1.0f / std::max(1.0f, fc.kernelSizePx * fc.kernelSizePx);
+        // The art split (BloomSettings::convSunGhostScale): off at 1 and while the sun is not in view.
+        {
+            Math::float3 v;
+            float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
+            const float scale = std::clamp(settings.convSunGhostScale, 0.0f, 10.0f);
+            if (scale != 1.0f && SunInView(v, sx, sy, discTan))
+            {
+                fc.sunDirView = Math::float4(v.x, v.y, v.z, 1.0f);
+                const float radius = std::max(settings.convSunSplitRadiusDeg * 3.14159265f / 180.0f,
+                                              2.0f * std::atan(discTan));
+                fc.sunShare = Math::float4(scale, radius, sx, sy);
+            }
+        }
 
         auto cbAlloc = renderer->GetFrameResource()->AllocDynamic(
             resources_->GetLensFlareCBSizeBytes(), render::kConstantBufferAlignment);
         resources_->WriteLensFlareConstants(fc, static_cast<uint8_t*>(cbAlloc.cpu));
         rc.cbv[0] = cbAlloc.gpu;
         rc.srvTable[0] = renderer->StageSrvUavTable(
-            { hdrSource, flareBokeh_[flareBokehSlot_].GetSRVCPU() }).gpu;
+            { hdrSource, flareBokeh_[flareBokehSlot_].GetSRVCPU(), D.depthSRV }).gpu;
         const auto flareSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, flareSamplers);
 
@@ -960,7 +1100,8 @@ void BloomRenderer::FlaresComposite(Renderer* renderer, ID3D12GraphicsCommandLis
                                     UINT w, UINT h, ID3D12Resource* barrierRes) {
         RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
             [&](uint8_t* dest) { resources_->WriteBloomConvConstants(c, dest); },
-            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
+              renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
             { gridUav, dstUav, renderer->Exposure().ExposureUav() },
             samplerTable, w, h, barrierRes);
     };
@@ -1050,8 +1191,17 @@ SunRaysConstants BloomRenderer::SunRays() const
     c.dir = Math::float4(v.x, v.y, v.z, std::max(settings.sunRaysHalo, 0.0f));
     // zw unused since the sun probe took the disc taps.
     c.proj = Math::float4(sx, sy, 0.0f, 0.0f);
-    c.shape = Math::float4(settings.sunRaysIntensity, static_cast<float>(std::max(settings.sunRaysCount, 16u)),
-        std::max(settings.sunRaysLengthDeg, 0.1f) * kDeg, std::max(settings.sunRaysSpikes, 0.0f));
+    // THE CORONA FOLLOWS THE DISC'S ENERGY, NOT ITS RADIANCE: glare is the eye's point-spread
+    // function, so its light is the disc's ILLUMINANCE (radiance times solid angle) spread over the
+    // corona. Since the disc became physical (thousands of times the sky round it, where it had been
+    // clamped to a few times) a radiance-scaled corona whited the frame out. The intensity is
+    // therefore a share of the disc's light over the corona's nominal area, 2 pi length^2 -- not an
+    // exact energy fraction (the needle pattern is not normalised), but a physical scaling.
+    const float coronaLen = std::max(settings.sunRaysLengthDeg, 0.1f) * kDeg;
+    const float discSolidAngle = 6.28318530718f * (1.0f - std::cos(discRadius));
+    const float coronaScale = settings.sunRaysIntensity * discSolidAngle / (6.28318530718f * coronaLen * coronaLen);
+    c.shape = Math::float4(coronaScale, static_cast<float>(std::max(settings.sunRaysCount, 16u)),
+        coronaLen, std::max(settings.sunRaysSpikes, 0.0f));
     c.look = Math::float4(std::clamp(settings.sunRaysSpikeLengthDeg, 0.1f, 60.0f) * kDeg, settings.sunRaysRotationDeg * kDeg,
         discRadius, static_cast<float>(std::max(settings.sunRaysSpikeCount, 2u)));
     c.extra = Math::float4(static_cast<float>(std::max(settings.sunRaysBundles, 1u)),
@@ -1094,6 +1244,15 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
         renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
 
+    // What the glare and the corona are fed, in the pre-exposed units the knobs act on -- the number
+    // to tune them against (a few frames old: the metering record's read-back).
+    if (const ExposureMetering::Readback rb = metering.LatestReadback(); rb.valid)
+    {
+        LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::Render,
+            "sun probe: disc ({:.2f}, {:.2f}, {:.2f}) pre-exposed, visible share {:.2f}, EV100 {:.2f}",
+            rb.sunProbe[0], rb.sunProbe[1], rb.sunProbe[2], rb.sunProbeShare, rb.eyeEv100);
+    }
+
     constexpr float kDeg = 3.14159265f / 180.0f;
     BloomConvConstants g{};
     g.convStage = 10u;
@@ -1114,7 +1273,61 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     // tone curve after it. u0/u1 are only there because the table is positional.
     RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
         [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
-        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
+              renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
+        { D.streakAUAV, D.bloomUpMipUAV[0], metering.ExposureUav() },
+        samplerTable, 1u, 1u, metering.ExposureResource());
+}
+
+// UE apply local exposure to the FFT's input (PostProcessFFTBloom.cpp:826-850): the tone curve's own
+// parameters and base, under the tonemap's own rules -- a grid not built this frame is never sliced
+// (blend 1), and the exposure is the one the stored value already carries. Stage 0 and the pixel
+// probe read the same fields.
+void BloomRenderer::FillLocalExposure(BloomConvConstants& conv) const
+{
+    const render::CameraExposureSettings& cam = frame_->cameraExposure;
+    conv.leHighlightContrast = cam.localHighlightContrast;
+    conv.leShadowContrast = cam.localShadowContrast;
+    conv.leDetailStrength = cam.localDetailStrength;
+    conv.leBlurredBlend = localGridBuilt_ ? std::clamp(cam.localBlurredBlend, 0.0f, 1.0f) : 1.0f;
+    conv.leHighlightThreshold = cam.localHighlightThreshold;
+    conv.leShadowThreshold = cam.localShadowThreshold;
+    conv.leMinLogLum = ExposureMeteringConstants::kMinLogLum;
+    conv.leInvLogLumRange = 1.0f / (ExposureMeteringConstants::kMaxLogLum - ExposureMeteringConstants::kMinLogLum);
+    conv.leExposure = render::g_preExposureEnabled ? render::g_preExposure : 0.0f;
+}
+
+void BloomRenderer::RecordPixelProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                     D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, bool afterBloom)
+{
+    if (!frame_ || !(frame_->settings.debugProbeRadiusPx > 0.0f)) { return; }
+    // Source 2 reads the bloom target and is called after the bloom's build; 0 and 1 before it.
+    if (afterBloom != (frame_->settings.debugProbeSource == 2u)) { return; }
+    ExposureMetering& metering = renderer->Exposure();
+    if (!metering.IsReady()) { return; }
+    const auto& D = renderer->GetDeferredForFrame();
+    auto convMaterial = resources_->GetBloomConvMaterial();
+    if (!convMaterial) { return; }
+    const UINT convCb = resources_->GetBloomConvCBSizeBytes();
+    const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
+    const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
+        renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+
+    BloomConvConstants g{};
+    g.convStage = 11u;
+    g.sourceSize = uint2{ 1u, 1u };
+    // Stage 11 reads its window from sunGlareDir: xy the centre (UV), z the radius (px).
+    g.sunGlareDir = Math::float4(frame_->settings.debugProbeU, frame_->settings.debugProbeV,
+                                 frame_->settings.debugProbeRadiusPx, 0.0f);
+    FillLocalExposure(g);
+    // Source 1: the scene before the upscaler (the graph declares it for this read).
+    const D3D12_CPU_DESCRIPTOR_HANDLE source =
+        frame_->settings.debugProbeSource == 1u ? D.sceneSRV : hdrSource;
+    // One group of 64; same table as the sun probe, which runs just before it in this pass.
+    RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
+        [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
+        { source, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
+              renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
         { D.streakAUAV, D.bloomUpMipUAV[0], metering.ExposureUav() },
         samplerTable, 1u, 1u, metering.ExposureResource());
 }
@@ -1137,6 +1350,26 @@ float BloomRenderer::SunGlareStrength() const
     return settings.sunGlareIntensity * lowSun;
 }
 
+float BloomRenderer::SunGlareScale(float discTan) const
+{
+    const float strength = SunGlareStrength();
+    if (!(strength > 0.0f)) { return 0.0f; }
+    const BloomSettings& settings = frame_->settings.bloom;
+    constexpr float kDeg = 3.14159265f / 180.0f;
+    constexpr float kPi = 3.14159265f;
+    // THE GLARE IS A SHARE OF THE DISC'S LIGHT, as the corona is (SunRays): radiance x solid angle,
+    // spread over the profile's own integral on the sky -- the core exp(-a / rc) integrates to
+    // 2 pi rc^2, the veil v / (1 + (a / rv)^2) to v pi rv^2 ln(1 + (pi / rv)^2) out to the antipode.
+    // So `sunGlareIntensity` is the fraction of the disc's light in the glare,
+    // whatever its radii, and the veil keeps its meaning: its weight relative to the core's peak.
+    const float rc = std::max(settings.sunGlareRadiusDeg, 0.05f) * kDeg;
+    const float rv = std::max(settings.sunGlareVeilRadiusDeg, 0.1f) * kDeg;
+    const float veil = std::max(settings.sunGlareVeil, 0.0f);
+    const float profile = 2.0f * kPi * rc * rc + veil * kPi * rv * rv * std::log(1.0f + (kPi / rv) * (kPi / rv));
+    const float discSolidAngle = 2.0f * kPi * (1.0f - std::cos(std::atan(discTan)));
+    return strength * discSolidAngle / std::max(profile, 1.0e-12f);
+}
+
 bool BloomRenderer::SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) const
 {
     if (!frame_) { return false; }
@@ -1144,9 +1377,9 @@ bool BloomRenderer::SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) 
     Math::float3 v;
     float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
     if (!SunInView(v, sx, sy, discTan)) { return false; }
-    // Stage 9's glare in the SCENE's units: its bloom-target value times what the tone curve adds the
-    // bloom target back with (exposureMultiplier is 1 under pre-exposure).
-    const float k = SunGlareStrength() * TonemapBloomScale();
+    // Stage 9's glare in the SCENE's units: the bloom target is added by the tone curve as it is
+    // (exposureMultiplier is 1 under pre-exposure).
+    const float k = SunGlareScale(discTan);
     if (!(k > 0.0f)) { return false; }
     constexpr float kDeg = 3.14159265f / 180.0f;
     out.color = Math::float3(std::max(probeRgb[0], 0.0f) * k, std::max(probeRgb[1], 0.0f) * k,
@@ -1171,7 +1404,7 @@ void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandL
         return;
     }
     constexpr float kDeg = 3.14159265f / 180.0f;
-    const float intensity = SunGlareStrength();
+    const float intensity = SunGlareScale(discTan);
     if (!(intensity > 0.0f)) { return; }
 
     const auto& D = renderer->GetDeferredForFrame();
@@ -1193,7 +1426,8 @@ void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandL
         std::max(settings.sunGlareVeilRadiusDeg, 0.1f) * kDeg);
     RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
         [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
-        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
+              renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
         { D.streakAUAV, D.bloomUpMipUAV[0], renderer->Exposure().ExposureUav() },
         samplerTable, D.bloomWidth, D.bloomHeight, D.bloomUp.Get());
 }
@@ -1325,18 +1559,12 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     conv.exposureEnabled = (applyExposure && !render::g_preExposureEnabled) ? 1u : 0u;  // P16.1
     conv.transformSize = grid;
     conv.imageSize = image;
-    // P8C-4: ABSOLUTE, the same EV14 reference the streak and ghost thresholds already use. A
-    // threshold in viewer units answers "is this pixel bright ON SCREEN", which moves with the
-    // auto-exposure; this one answers "is this a light source", which does not.
-    const float absScale = render::g_preExposure / render::ExposureMultiplierFromEv100(14.0f);
-    conv.threshold = (settings.threshold < 0.0f) ? -1.0f : settings.threshold * absScale;
-    // P8C-5: UE's prefilter, in the SAME absolute units -- Min and Max are luminances, so they get
-    // the same scaling every other threshold in the bloom gets; Mult is a slope and is unitless.
-    // A non-zero Mult turns the threshold cut above OFF inside the shader.
-    conv.preFilterMin = std::max(0.0f, settings.convPreFilterMin) * absScale;
-    conv.preFilterMax = std::max(0.0f, settings.convPreFilterMax) * absScale;
+    // UE's FilterPixel (BloomConvolutionPreFilterMin/Max/Mult), in the pre-exposed units the
+    // scene colour is stored in -- theirs runs on the pre-exposed scene too. No threshold: UE's FFT
+    // bloom has none, and the partition below needs the whole scene as its input.
+    conv.preFilterMin = std::max(0.0f, settings.convPreFilterMin);
+    conv.preFilterMax = std::max(0.0f, settings.convPreFilterMax);
     conv.preFilterMult = std::max(0.0f, settings.convPreFilterMult);
-    conv.softKnee = std::max(settings.softKnee, 1.0e-4f);
     // Kernel placement: the photograph's full width spans convSize x the image's major axis in
     // grid texels (UE's KernelSupportScale rule), and the mip whose texel density matches that
     // span stands in for UE's downsample-chain prefilter.
@@ -1372,31 +1600,33 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         const float footprint = std::max(ratio, 1.0f);
         conv.kernelBoxTaps = kKernelBoxTaps;
         conv.kernelBoxStep = (footprint / static_cast<float>(kKernelBoxTaps)) / kernelTexels;
-        // P8C-2v -- THE CLAMP RING IS FIXED, AND THAT IS A DELIBERATE DEPARTURE FROM UE.
-        //
-        // Theirs is `ViewTexelRadiusInKernelTexels + 1`, i.e. it grows with the kernel texels one
-        // output pixel covers. That is safe for them because the energy the clamp removes is not
-        // discarded -- it becomes their CENTRE term and comes back as scene colour, so moving the
-        // clamp moves light between two places and the total is untouched.
-        //
-        // Here the clamped-off energy is simply gone, and the convolution is normalised by what is
-        // LEFT. So a moving ring changes the divisor under the whole image, and on a kernel that is
-        // 98% one texel that is violent: over convSize 0.7 -> 0.8 the ring shrinks 2.14 -> 2.00
-        // texels, the clamp rises, and the glare lost 45% of its brightness at every radius
-        // (measured against a bloom-off baseline: 151 -> 84 at r 40-100). A fixed ring makes the
-        // clamp level a property of the IMAGE alone, which is what the normalisation already
-        // assumes, and convSize goes back to meaning size.
-        conv.kernelCoreRingUV = 2.0f / kernelTexels;
-        // P8C-2o: the survey shares that same `ratio` -- the centre zone the clamp is measured
-        // against and the centre zone whose energy is weighed MUST be the same zone, or the split
-        // would hand the tonemap a fraction of a different kernel than the one being convolved.
-        SurveyKernel(ratio);
+        // UE's survey at this size: the clamp level the kernel is cut to before it is resampled,
+        // the centre texel it is laid out around, and the centre/scatter energies the tonemap's
+        // partition is formed from -- one survey, so the split weighs the kernel being convolved.
+        // (The clamp moves with convSize, as theirs does: the light it takes out of the kernel is
+        // not lost, it stays in the scene through the centre term.)
+        SurveyKernel(conv.kernelSpanTexels);
     }
-    conv.kernelTint[0] = std::max(0.0f, settings.convKernelTint[0]);
-    conv.kernelTint[1] = std::max(0.0f, settings.convKernelTint[1]);
-    conv.kernelTint[2] = std::max(0.0f, settings.convKernelTint[2]);
-    conv.kernelCenterUV[0] = 0.5f;
-    conv.kernelCenterUV[1] = 0.5f;
+    if (bloomSurveyRatio_ >= 0.0f && bloomKernelPixelDim_ > 0u)
+    {
+        conv.kernelClampLevel = bloomKernelClampLevel_;
+        conv.kernelCenterUV[0] = (static_cast<float>(bloomKernelCenterX_) + 0.5f) / static_cast<float>(bloomKernelPixelDim_);
+        conv.kernelCenterUV[1] = (static_cast<float>(bloomKernelCenterY_) + 0.5f) / static_cast<float>(bloomKernelPixelDim_);
+    }
+    else
+    {
+        // No survey: the kernel as it is, centred -- the split falls back to additive too.
+        conv.kernelClampLevel = 1.0e30f;
+        conv.kernelCenterUV[0] = 0.5f;
+        conv.kernelCenterUV[1] = 0.5f;
+    }
+    {
+        const std::array<float, 3> scale = ConvolutionScatterScale();
+        conv.resolveScale[0] = scale[0];
+        conv.resolveScale[1] = scale[1];
+        conv.resolveScale[2] = scale[2];
+    }
+    FillLocalExposure(conv);
     // P8C-2l: the flare fields come from the shared builder -- assembling them in two places is
     // exactly how the two bloom methods would drift apart.
     {
@@ -1410,6 +1640,21 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         conv.anamorphicTint[1] = f.anamorphicTint[1];
         conv.anamorphicTint[2] = f.anamorphicTint[2];
         conv.ghostIntensity = f.ghostIntensity;
+    }
+    // The art split for stage 0 (BloomSettings::convSunKernelScale): off at 1 -- an exact no-op -- and
+    // while the sun is not in view.
+    {
+        Math::float3 v;
+        float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
+        const float scale = std::clamp(settings.convSunKernelScale, 0.0f, 10.0f);
+        if (scale != 1.0f && SunInView(v, sx, sy, discTan))
+        {
+            conv.sunGlareDir = Math::float4(v.x, v.y, v.z, 0.0f);
+            conv.sunGlareProj = Math::float4(sx, sy, 0.0f, 0.0f);
+            const float radius = std::max(settings.convSunSplitRadiusDeg * 3.14159265f / 180.0f,
+                                          2.0f * std::atan(discTan));
+            conv.sunShare = Math::float4(scale, radius, 1.0f, 0.0f);
+        }
     }
     conv.ghostCount = ghosts ? std::min(settings.convGhosts, 8u) : 0u;
 
@@ -1427,7 +1672,12 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
             // POSITIONAL, so both are bound on every stage rather than left as holes. The kernel
             // is guaranteed resident here (bloomConvolution_ requires bloomKernelReady_), but the
             // slot still comes through KernelSrv: one assembly helper for the shared table.
-            { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV) },
+            // t0: only the setup (stage 0) reads it -- the scene before the upscaler when asked for.
+            // The setup takes the scene's DEPTH in t1 instead of the flare image it never reads: the
+            // art split's sky test (SunShareMask).
+            { convInput_.ptr != 0 ? convInput_ : hdrSource, c.convStage == 0u ? D.depthSRV : D.lensFlareSRV,
+              KernelSrv(D.lensFlareSRV),
+              renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
             { gridUav, dstUav, metering.ExposureUav() },
             samplerTable, w, h, barrierRes);
     };
@@ -1469,7 +1719,7 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     // is cached and one left out is a control that appears to do nothing until something else
     // forces a rebuild. ----
     const BloomKernelKey key{ grid.x, grid.y, image.x, image.y, convSizeFrac,
-                              { conv.kernelTint[0], conv.kernelTint[1], conv.kernelTint[2] },
+                              conv.kernelClampLevel, conv.kernelCenterUV[0], conv.kernelCenterUV[1],
                               renderer->GetDeferredTargetsGeneration() };
     const UINT slot = renderer->GetCurrentFrameIndex() % render::kFrameCount;
     BloomKernelKey& slotKey = bloomKernelKeys_[slot];

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "third_party/json/json.hpp"
 
 #include "rendering/lighting/DirectionalLight.h"
@@ -85,6 +87,8 @@ inline void ApplyOverrides(const nlohmann::json& j, DirectionalLight& dl)
     dl.SetLightShaftGlareSeed(Number(j, "lightShaftGlareSeed", dl.GetLightShaftGlareSeed()));
     // The angular diameter in degrees (UE LightSourceAngle); drives the drawn disc and the specular floor.
     dl.SetLightSourceAngleDegrees(Number(j, "lightSourceAngle", dl.GetLightSourceAngleDegrees()));
+    // UE LightSourceSoftAngle (degrees, apex): softens the specular glint's edge; 0 = UE's default.
+    dl.SetLightSourceSoftAngleDegrees(std::clamp(Number(j, "lightSourceSoftAngle", dl.GetLightSourceSoftAngleDegrees()), 0.0f, 20.0f));
 }
 
 inline Math::float3 Direction(const nlohmann::json& j, const Math::float3& def)

@@ -46,7 +46,8 @@ cbuffer PreviewCB : register(b0)
     float4 gSunIlluminance;     // rgb = lux (DirectionalLight::GetEffectiveColor), w = the flat
                                 // ambient fraction, used only when there is no irradiance cube
     float4 gGroundAlbedo;       // rgb = ground albedo for the bounce, w = irradiance cube present
-    float4 gSunParams;          // x = sun half-apex (radians), y = the light's legacy exposure
+    float4 gSunParams;          // x = sun half-apex (radians), y = the light's legacy exposure,
+                                // z = its soft radius (UE SoftSourceRadius)
     float4 gCamera;             // x = exposure multiplier, y = tone curve (0 ACES, 1 AgX, 2 film)
     float4 gGrade;              // saturation, contrast, gamma, gain
     float4 gGradeOffsetAgx;     // x = grade offset, yzw = AgX slope, power, saturation
@@ -318,7 +319,7 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         if (foliageModel)
         {
             FoliageResult foliage = EvalFoliageBRDF(
-                bi, subsurfacePayload, gSunParams.x, saturate(gSurfaceFlags.z));
+                bi, subsurfacePayload, gSunParams.x, saturate(gSurfaceFlags.z), gSunParams.z);
             if (foliage.NdotL > 0.0)
             {
                 hdr += (foliage.diffBRDF + foliage.specBRDF) * foliage.NdotL * sunLux;
@@ -327,7 +328,7 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         }
         else
         {
-            BRDFResult brdf = EvalBRDF(bi, gSunParams.x);
+            BRDFResult brdf = EvalBRDF(bi, gSunParams.x, gSunParams.z);
             if (brdf.NdotL > 0.0)
             {
                 hdr += (brdf.diffBRDF + brdf.specBRDF) * brdf.NdotL * sunLux;

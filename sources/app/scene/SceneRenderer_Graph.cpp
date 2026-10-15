@@ -1864,6 +1864,12 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             {
                 ctx.Use(DC.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             }
+            // The sky's transmittance LUT (t19, the sun's disc): bound whenever it exists, so declared then
+            // -- in the state the skybox leaves it, so no barrier between them.
+            if (skyAtmosphere_.TransmittanceResource() != nullptr)
+            {
+                ctx.Use(skyAtmosphere_.TransmittanceResource(), kSrvAll);
+            }
             ctx.NextPoint();
             const std::uint32_t handBack = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(DC.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -2455,6 +2461,9 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
             {
                 // P3B: the base layer leaves its resting read state only for this pass...
                 ctx.Use(metering.BaseLumResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                // ...beside the blur's intermediate, which rests in UNORDERED_ACCESS: declared so it
+                // is legal to touch, no barrier.
+                ctx.Use(metering.BaseLumBlurResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 if (pts.bilateral)
                 {
                     ctx.Use(metering.BilateralGridResource(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -2586,6 +2595,16 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
         // running; the DLSS pass leaves `dlssOutput` shader-readable for the other case, and
         // declaring it here as well costs nothing and keeps the read legal for the compile.
         p.Use(willDlss ? DTM.dlssOutput.Get() : DTM.scene.Get(), kNps);
+        // The scene BEFORE the upscaler is read here too: by the bloom's light when
+        // BloomSettings::convBeforeUpscale -- the convolution's setup (DLSS flattens small glints) and
+        // the ghosts and the streak of either method (DLSS rings on the sun disc's edge differently
+        // every frame, and the ghosts flickered with it) -- and by the debug pixel probe
+        // (debugProbeSource 1).
+        if (willDlss && ((pts.bloom && frame_->settings.bloom.convBeforeUpscale) ||
+                         (frame_->settings.debugProbeRadiusPx > 0.0f && frame_->settings.debugProbeSource == 1u)))
+        {
+            p.Use(DTM.scene.Get(), kNps);
+        }
         // P8: the bloom pyramid, built between the upscale above and the tone curve below. Both
         // chains go to UNORDERED_ACCESS for the build and come back shader-readable -- the same
         // shape as the HZB pyramid, and for the same reason: a level reads the level above it

@@ -93,6 +93,7 @@ cbuffer OceanCB : register(b0)
     // deferred lighting and the fog get (SceneRenderer sets them from the frame's VolumetricCloud).
     float4x4 cloudShadowViewProj;
     float4 cloudShadowParams;          // x: on, y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
+    float4 sunShapeParams;             // x: the light's angular RADIUS (rad, UE's half apex) for the sphere-light glint (OceanSunSpecular), y: its soft radius (UE SoftSourceRadius), zw: reserved
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -233,8 +234,6 @@ struct BrunetonInputs
 // in the real sky changes the HUE and the response to the environment without changing the overall
 // foam brightness that the shore was tuned at.
 static const float3 kLegacyFoamSkyColor = float3(0.24f, 0.38f, 0.55f);
-static const float kSpecularMinPower = 64.0f;
-static const float kSpecularMaxPower = 512.0f;
 static const uint kGradientMaxKeys = 8u;
 
 struct Gradient
@@ -1570,16 +1569,6 @@ float OceanSurfaceRoughness(const LightingInput li)
     return saturate(specularParams.y * (1.0f + li.roughnessMap * 0.3f));
 }
 
-float3 Specular(const LightingInput li, const BrunetonInputs bi, float roughness)
-{
-    //(void)bi;
-    float3 halfDir = normalize(-li.mainLight.direction + li.viewDir);
-    float specPower = lerp(kSpecularMinPower, kSpecularMaxPower, 1.0f - roughness);
-    float spec = pow(saturate(dot(li.normal, halfDir)), specPower);
-    spec *= specularParams.x * li.mainLight.shadowAttenuation;
-    return spec * li.mainLight.color;
-}
-
 // The normal the reflection is taken about: the shading normal tilted toward +Y by the reflection
 // normal strength. The screen-space trace starts from the same one (GB1, OceanGBuffer, plan S3).
 float3 OceanReflectionNormal(const LightingInput li)
@@ -1740,7 +1729,7 @@ float3 GetOceanColor(const LightingInput li, const LightingInput macroLi, const 
     float roughness = OceanSurfaceRoughness(li);
 
     float fresnel = EffectiveFresnel(macroLi, bi);
-    float3 specular = Specular(li, bi, roughness) * Pow5(1.0f - saturate(foamData.coverage.y));
+    float3 specular = OceanSunSpecular(li, bi) * Pow5(1.0f - saturate(foamData.coverage.y));
     float3 reflected = Reflection(macroLi, roughness);
     //return reflected;
     float3 refracted = Refraction(macroLi, foamData, sss, foamLitColor);

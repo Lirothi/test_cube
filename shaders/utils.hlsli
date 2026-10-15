@@ -7,7 +7,7 @@
 static const float kEpsilon = 1e-6f;
 static const float kPi = 3.14159265359f;
 static const float kInvPi = 1.0f / kPi;
-static const float kMinRoughness = 0.03f;
+static const float kMinRoughness = 0.02f; // UE's SUBSTRATE_MIN_GGX_ROUGHNESS (SubstrateDefinitions.h:52)
 static const float kMinAlpha = kMinRoughness * kMinRoughness;
 static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR ~1.5 for dielectrics
 
@@ -218,11 +218,74 @@ inline float D_GGX(float NdotH, float a)
 {
 	float a2 = a * a;
 	float d = (NdotH * NdotH) * (a2 - 1.0f) + 1.0f;
-	return a2 / max(kEpsilon, kPi * d * d);
+	// UE's form (BRDF.ush D_GGX) has no floor: d >= a2 > 0 here (a >= kMinAlpha). An ABSOLUTE floor
+	// of kEpsilon (1e-6) on pi*d^2 capped the peak of every alpha below ~0.024 -- a chrome glint at a
+	// third of its value and a smooth surface under a point light at 0.8 instead of ~4e5 (2026-10-15).
+	return a2 / max(kPi * d * d, 1.0e-30f);
 }
-inline float G_SchlickGGX(float NdotX, float k)
+
+// UE's SPHERE-LIGHT specular for a light of angular radius `sinAlpha` (BRDF.ush SphereMaxNoH, after
+// de Carpentier 2017 "Decima Engine: Advances in Lighting and AA", with the Newton step): N.H and V.H
+// taken at the light's point that maximises N.H, so inside the reflected disc the lobe's peak is flat.
+// Inputs are the plain dots N.L, N.V, V.L; NoH/VoH are replaced.
+inline void SphereMaxNoH(float NoL, float NoV, float VoL, float sinAlpha, inout float NoH, inout float VoH)
 {
-	return NdotX / max(kEpsilon, NdotX * (1.0f - k) + k);
+	if (sinAlpha <= 0.0f) { return; }
+	const float cosAlpha = sqrt(1.0f - sinAlpha * sinAlpha);
+	const float RoL = 2.0f * NoL * NoV - VoL;
+	if (RoL >= cosAlpha)
+	{
+		NoH = 1.0f;
+		VoH = abs(NoV);
+		return;
+	}
+	const float rInvLengthT = sinAlpha * rsqrt(max(1.0f - RoL * RoL, 1.0e-12f));
+	float NoTr = rInvLengthT * (NoV - RoL * NoL);
+	float VoTr = rInvLengthT * (2.0f * NoV * NoV - 1.0f - RoL * VoL);
+	// dot(cross(N, L), V)
+	const float NxLoV = sqrt(saturate(1.0f - NoL * NoL - NoV * NoV - VoL * VoL + 2.0f * NoL * NoV * VoL));
+	const float NoBr = rInvLengthT * NxLoV;
+	const float VoBr = rInvLengthT * NxLoV * 2.0f * NoV;
+	const float NoLVTr = NoL * cosAlpha + NoV + NoTr;
+	const float VoLVTr = VoL * cosAlpha + 1.0f + VoTr;
+	const float p = NoBr * VoLVTr;
+	const float q = NoLVTr * VoLVTr;
+	const float s = VoBr * NoLVTr;
+	const float xNum = q * (-0.5f * p + 0.25f * VoBr * NoLVTr);
+	const float xDenom = p * p + s * (s - 2.0f * p) +
+		NoLVTr * ((NoL * cosAlpha + NoV) * VoLVTr * VoLVTr + q * (-0.5f * (VoLVTr + VoL * cosAlpha) - 0.5f));
+	const float twoX1 = 2.0f * xNum / max(xDenom * xDenom + xNum * xNum, 1.0e-30f);
+	const float sinTheta = twoX1 * xDenom;
+	const float cosTheta = 1.0f - twoX1 * xNum;
+	NoTr = cosTheta * NoTr + sinTheta * NoBr;
+	VoTr = cosTheta * VoTr + sinTheta * VoBr;
+	const float sNoL = NoL * cosAlpha + NoTr;
+	const float sVoL = VoL * cosAlpha + VoTr;
+	const float invLenH = rsqrt(max(2.0f + 2.0f * sVoL, 1.0e-12f));
+	NoH = saturate((sNoL + NoV) * invLenH);
+	VoH = saturate(invLenH + invLenH * sVoL);
+}
+
+// UE's energy normalisation of that widened lobe (ShadingModels.ush New_a2 / EnergyNormalization):
+// D is evaluated with the surface's own a2 at the maximised N.H and scaled by a2 / Sphere_a2, so the
+// reflected disc comes out at the light's own radiance x F, neither brighter nor dimmer.
+inline float SphereEnergyNormalization(float a2, float VoH, float sinAlpha)
+{
+	if (sinAlpha <= 0.0f) { return 1.0f; }
+	const float sphereA2 = a2 + 0.25f * sinAlpha * (3.0f * sqrt(a2) + sinAlpha) / (VoH + 0.001f);
+	return a2 / sphereA2;
+}
+// UE's visibility term, G / (4 N.L N.V) in one: the exact joint Smith (BRDF.ush Vis_SmithJoint, Heitz
+// 2014) -- what a Substrate slab uses at r.Substrate.ShadingQuality 1 (SubstrateEvaluation.ush
+// Substrate_Vis_GGX), the owner's UE 5.8 project's setting; DefaultLit and quality 0 take its linear
+// approximation, Vis_SmithJointApprox. Takes a2. It REPLACED Schlick-GGX with k = (a+1)^2 / 8
+// (2026-10-15), Karis 2013's remap for analytic lights, which keeps k >= 1/8 however smooth the surface:
+// a near-mirror lost ~17 % at 60 degrees and ~3x at grazing (the sea's glints with a low sun).
+inline float Vis_SmithJoint(float a2, float NdotV, float NdotL)
+{
+	const float visV = NdotL * sqrt(NdotV * (NdotV - NdotV * a2) + a2);
+	const float visL = NdotV * sqrt(NdotL * (NdotL - NdotL * a2) + a2);
+	return 0.5f / max(visV + visL, 1.0e-12f);
 }
 inline float3 F_Schlick(float cosT, float3 F0)
 {
@@ -272,14 +335,26 @@ struct BRDFResult
 	float NdotV;
 };
 
-// lightAngularSize: GGX-alpha widening for the analytic light's finite angular size
-// (default 0 = punctual). It floors the NDF lobe width so a near-mirror surface produces
-// a finite, sample-able highlight disk instead of a sub-pixel spike whose bright peak
-// never lands on a pixel center. Widening only (no (a/aSpec)^2 energy renormalization):
-// with a dim punctual sun (radiance ~1) strict conservation would leave the glint
-// invisible, so we let the smooth-surface peak stay bright. Geometry/visibility (G) keeps
-// the true surface roughness; only the NDF is widened.
-inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f)
+// lightAngularSize: the analytic light's angular RADIUS in radians (0 = punctual). A finite light
+// is UE's sphere light (2026-10-15, replacing an alpha widening without renormalisation that put a
+// mirror's glint at a quarter of the disc's radiance and twice its size): SphereSinAlpha =
+// sin(radius) * (1 - alpha) (CapsuleLightIntegrate.ush:98), N.H and V.H at the disc's best point
+// (SphereMaxNoH) and D scaled by a2 / Sphere_a2 (EnergyNormalization) -- a near-mirror shows the
+// reflected disc at its own radiance x F, sample-able because it has the disc's size. Vis takes UE's
+// N.V = saturate(|N.V| + 1e-5) (ShadingModels.ush:252): a normal-mapped texel turned away from the eye
+// gets a finite term rather than a 1/0, the way a 0 * G used to hide it.
+//
+// lightSoftRadius: UE's SoftSourceRadius, sin(half of LightSourceSoftAngle) (DirectionalLight). It
+// widens the surface's a2 BEFORE the sphere light acts, and D and Vis both take the widened one
+// (ShadingModels.ush EnergyNormalization, `inout a2`).
+//
+// The whole term is a Substrate slab as the owner's UE 5.8 project renders one (2026-10-15, read off its
+// cvars): r.Substrate 1 with the blendable GBuffer, so the energy conservation is COMPILED OUT
+// (ShadingEnergyConservation.ush:20-30) -- diffuse is plain Lambert of the diffuse colour, no (1 - F)
+// (SubstrateEvaluation.ush:565, its transmission weight is 1); r.Substrate.ShadingQuality 1 -> the
+// exact Vis_SmithJoint; F = F_Schlick(F0, F90) with F90 = saturate(50 max3(F0)), the micro-occlusion
+// that only touches an F0 under 2 %; roughness floored at SUBSTRATE_MIN_GGX_ROUGHNESS 0.02.
+inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f, float lightSoftRadius = 0.0f)
 {
 	BRDFResult o;
 	o.NdotL = saturate(dot(bi.N, bi.L));
@@ -292,17 +367,32 @@ inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f)
 	float VdotH = saturate(dot(bi.V, H));
 
 	float3 F0 = lerp(kF0Dielectric, bi.albedo, bi.metal);
+	const float F90 = saturate(50.0f * max(F0.r, max(F0.g, F0.b))); // ShadingCommon.ush F0RGBToMicroOcclusion
 	float a = max(kMinAlpha, bi.rough * bi.rough);
-	float aSpec = saturate(a + lightAngularSize);
-	float kv = (a + 1.0f) * (a + 1.0f) * 0.125f; // (a+1)^2 / 8
+	float a2 = a * a;
 
-	float3 F = F_Schlick(VdotH, F0);
-	float D = D_GGX(NdotH, aSpec);
-	float G = G_SchlickGGX(o.NdotV, kv) * G_SchlickGGX(o.NdotL, kv);
+	// The specular's N.H / V.H: at the light's best point when it has a size (UE sphere light).
+	float specNdotH = NdotH;
+	float specVdotH = VdotH;
+	float sphereEnergy = 1.0f;
+	if (lightAngularSize > 0.0f || lightSoftRadius > 0.0f)
+	{
+		const float sinAlpha = saturate(sin(lightAngularSize) * (1.0f - a));
+		SphereMaxNoH(dot(bi.N, bi.L), dot(bi.N, bi.V), dot(bi.V, bi.L), sinAlpha, specNdotH, specVdotH);
+		if (lightSoftRadius > 0.0f)
+		{
+			a2 = saturate(a2 + lightSoftRadius * lightSoftRadius / (specVdotH * 3.6f + 0.4f));
+		}
+		sphereEnergy = SphereEnergyNormalization(a2, specVdotH, sinAlpha);
+	}
 
-	float3 kd = (1.0f - F) * (1.0f - bi.metal);
-	o.diffBRDF = kd * bi.albedo * kInvPi;
-	o.specBRDF = (D * G * F) / max(kEpsilon, 4.0f * o.NdotL * o.NdotV);
+	const float Fc = pow(1.0f - specVdotH, 5.0f);
+	float3 F = F90 * Fc + (1.0f - Fc) * F0;
+	float D = D_GGX(specNdotH, sqrt(a2)) * sphereEnergy;
+	float Vis = Vis_SmithJoint(a2, saturate(abs(dot(bi.N, bi.V)) + 1.0e-5f), o.NdotL);
+
+	o.diffBRDF = (1.0f - bi.metal) * bi.albedo * kInvPi;
+	o.specBRDF = D * Vis * F;
 
 	return o;
 }
@@ -329,17 +419,18 @@ struct FoliageResult
 };
 
 // subsurfacePayload = GB2.rgb = subsurfaceColor * transmissionStrength * albedoTransmission.
-// lightAngularSize widens the analytic sun GGX lobe (see EvalBRDF). normalWeight blends broad
-// thin-sheet wrap with projected-area weighting without assigning a privileged side to the leaf.
+// lightAngularSize / lightSoftRadius: the light's size and soft radius (see EvalBRDF). normalWeight
+// blends broad thin-sheet wrap with projected-area weighting without assigning a privileged side to the leaf.
 inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload,
 	float lightAngularSize = 0.0f,
-	float normalWeight = kFoliageTransmissionNormalWeight)
+	float normalWeight = kFoliageTransmissionNormalWeight,
+	float lightSoftRadius = 0.0f)
 {
 	FoliageResult o;
 
 	// Front side is byte-for-byte the DefaultLit response (Lambert + GGX). This keeps a
 	// front-lit leaf indistinguishable from DefaultLit and lets local lights / RT hits reuse it.
-	BRDFResult br = EvalBRDF(bi, lightAngularSize);
+	BRDFResult br = EvalBRDF(bi, lightAngularSize, lightSoftRadius);
 	o.diffBRDF = br.diffBRDF;
 	o.specBRDF = br.specBRDF;
 	o.NdotL = br.NdotL;

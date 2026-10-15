@@ -1,9 +1,9 @@
-#define BLOOM_CONV_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define BLOOM_CONV_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 // P8C / P8C-2 -- the non-transform stages of convolution bloom. The transform itself is
 // bloom_fft_cs.hlsl, which since P8C-2 also owns the Hermitian spectral multiply.
 //
-//   stage 0 SETUP    HDR frame -> the padded complex grid, thresholded, downscaled.
+//   stage 0 SETUP    HDR frame -> the padded complex grid, through UE's FilterPixel, downscaled.
 //   stage 3 KERNEL   the PHOTOGRAPHED kernel image resampled into the grid, centre folded to the
 //                    DC corner. P8C-2: this replaced the generated aperture -- a 2-wavelength
 //                    |FT{aperture}|^2 is sinc^2 interference WITH ZEROS, physically dashed at any
@@ -33,22 +33,27 @@ Texture2D FlareBlur : register(t1);
 // The photographed convolution kernel (UE's DefaultBloomKernel), FP16 with a mip chain. The mips
 // stand in for UE's successive-downsample prefilter when the kernel is drawn small.
 Texture2D BloomKernel : register(t2);
+// Local exposure's base (the tonemap's t3 / t1): UE apply local exposure to the FFT's input
+// (PostProcessFFTBloom.cpp:826-850, AddApplyLocalExposurePass), so the bloom is spread from the
+// scene as the tone curve will show it. Stage 0 only; bound on every stage, the table is positional.
+Texture3D<float2> LocalExposureGrid : register(t3);
+Texture2D<float> LocalExposureBase : register(t4);
 RWTexture2D<float4> Grid : register(u0);        // the complex grid, transformSize
 RWTexture2D<float4> BloomOut : register(u1);    // mip 0 of the bloom UP chain, resolve only
 SamplerState gSmp : register(s0);
 
 #include "sun_probe.hlsli"
+#include "local_exposure.hlsli"
 
 cbuffer BloomConvCB : register(b0)
 {
-    uint  convStage;        // 0 setup, 2 resolve, 3 kernel resample, 4-7 anamorphic streak, 8 ghosts, 9 sun glare, 10 sun probe
+    uint  convStage;        // 0 setup, 2 resolve, 3 kernel resample, 4-7 anamorphic streak, 8 ghosts, 9 sun glare, 10 sun probe, 11 pixel probe, 12 temporal input
     uint  exposureEnabled;
     uint2 transformSize;    // the ACTIVE padded power-of-two grid (may be a sub-grid of the texture)
     uint2 imageSize;        // how much of it the frame occupies; the rest is the zero pad
     uint2 sourceSize;       // the HDR image being read (setup) or written (resolve)
-    float threshold;
-    float softKnee;
-    // P8C-5: UE's BloomConvolutionPreFilterMin/Max/Mult. Mult <= 0 = inactive.
+    // UE's BloomConvolutionPreFilterMin/Max/Mult, in the PRE-EXPOSED units the buffers hold (UE's
+    // FilterPixel runs on the pre-exposed scene colour). Active when Min < Max and Mult > 0.
     float preFilterMin;
     float preFilterMax;
     float preFilterMult;
@@ -63,16 +68,30 @@ cbuffer BloomConvCB : register(b0)
     float kernelSpanTexels;
     uint  kernelBoxTaps;
     float kernelBoxStep;
-    // P8C-2j: radius, in kernel UV, of the ring just outside the kernel's CENTRE ZONE. UE define
-    // that zone as one output pixel's worth of kernel texels (ViewTexelDiameterInKernelTexels,
-    // floored at one) and clamp the kernel to what they measure around it -- see the stage below.
-    float kernelCoreRingUV;
-    // Where the kernel's centre sits in ITS texture. 0.5 for the stock EXR; kept for a
-    // photographed kernel whose hot spot is off-centre (UE find it with a shader).
+    // UE's MaxScatterDispersion (BloomSurveyMaxScatterDispersion.usf): the kernel is clamped to this
+    // level texel by texel BEFORE it is filtered and resampled (BloomClampKernel.usf). Measured on
+    // the CPU from the same pixels (BloomRenderer::SurveyKernel), one grey value as theirs is.
+    float kernelClampLevel;
+    // The centre of the kernel's brightest texel, in ITS texture's UV -- UE's FindKernelCenter.
     float2 kernelCenterUV;
-    // P8C-6: colour multiplier on the kernel image itself. Survives the DC divide, which normalises
-    // by the LARGEST channel sum precisely so a kernel's colour balance is not washed out.
-    float3 kernelTint;
+    // The resolve's per-channel scale: UE's FFTMultiply, Tint * saturate(Scatter * s / Total)
+    // (BloomFinalizeApplyConstants.usf), applied to the convolution's output as their ApplyTint does.
+    // Everything composited into the bloom target after it (ghosts, streak, glare) is therefore in
+    // the scene's own units, and the tonemap adds the target as it is.
+    float3 resolveScale;
+    // Stage 0's local exposure, the tonemap's own parameters (CameraExposureSettings::local*).
+    // `leBlurredBlend` is 1 when the grid was not built this frame (never sliced then); `leExposure`
+    // is the exposure the stored value already carries (the pre-exposure), 0 = none, the frame's
+    // metered one is applied here instead (ExposureMultiplier).
+    float leHighlightContrast;
+    float leShadowContrast;
+    float leDetailStrength;
+    float leBlurredBlend;
+    float leHighlightThreshold;
+    float leShadowThreshold;
+    float leMinLogLum;
+    float leInvLogLumRange;
+    float leExposure;
     // P8C-2h: THE ANAMORPHIC STREAK IS AN ANISOTROPIC PYRAMID, the structure keijiro's KinoStreak
     // uses (github.com/keijiro/KinoStreak, Unlicense) and the one this engine should have started
     // from. Width halves per level, height is untouched; every tap is ~1 texel OF ITS OWN LEVEL,
@@ -91,7 +110,7 @@ cbuffer BloomConvCB : register(b0)
     float anamorphicIntensity;   // direct brightness multiplier of the composite
     float anamorphicLength;      // the band's visible extent, fraction of the SCREEN width
     float anamorphicSigma;       // composite's vertical Gaussian sigma, in DST texels
-    float anamorphicThreshold;   // prefilter threshold, absolute units (see the CPU side)
+    float anamorphicThreshold;   // prefilter threshold, pre-exposed units (as the ghosts' and UE's)
     float anamorphicChroma;      // 0..1: how far the per-channel level weights spread
     float3 anamorphicTint;
     float3 streakWeight;         // this level's own per-channel weight in the up-chain
@@ -112,11 +131,14 @@ cbuffer BloomConvCB : register(b0)
     float4 sunGlareProj;     // xy: projection _11/_22; zw: the sun disc's radius in source UV
     float4 sunGlareParams;   // stage 9: x intensity, y core radius (rad), z veil weight, w veil radius (rad)
                              // stage 10: x the off-frame fade angle (rad), yzw world up in view space
+    float4 historyParams;    // stage 12: x this frame's weight, y the history's pre-exposure rescale, z 1 = valid
+    // Stage 0, the ART split (BloomSettings::convSunKernelScale): the sun's own share of the kernel's
+    // light. x the scale, y the sun's radius (rad: the disc and the sky round it), z 1 = the sun is in
+    // view (its direction and the projection then ride in sunGlareDir.xyz / sunGlareProj.xy).
+    float4 sunShare;
 };
 
-// The exposure record, read to put `threshold` in the units the viewer sees. Same buffer and same
-// arithmetic as tonemap_cs.hlsl and bloom_cs.hlsl -- a threshold measured against a different
-// exposure than the image is not a threshold. It also carries the sun probe (sun_probe.hlsli).
+// The exposure record. It carries the sun probe (sun_probe.hlsli).
 RWByteAddressBuffer ExposureValue : register(u2);
 
 static const float3 kLumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
@@ -127,6 +149,94 @@ float ExposureMultiplier()
     const float ev100 = asfloat(ExposureValue.Load(0));
     if (isnan(ev100) || isinf(ev100)) { return 1.0f; }
     return (0.18f * 8.0f) / exp2(ev100);
+}
+
+// UE's FilterPixel (GPUFastFourierTransform.usf), the only filtering their FFT bloom has -- there is
+// no threshold anywhere in that path. Below Min nothing is touched; above it the luminance is
+// remapped with slope Mult and CLAMPED at Max. Active when Min < Max, UE's gate -- and Mult > 0:
+// under theirs Mult 0 clamps every pixel above Min TO Min, which no one wants, and this engine's
+// levels have always meant "off" by it.
+// The art split's mask: 1 on the SUN -- the disc AND the bright sky round it, whose light makes the
+// sun's halo and ghosts as much as the disc's does -- 0 elsewhere and while the sun is not in view
+// (sunShare.z). SKY ONLY (reverse-Z depth 0; stage 0 binds the depth in t1, which only the resolve
+// reads as the flare image): a glint on geometry is never the sun's, however close to it on screen --
+// the sea's glitter path stands right under a low sun. Angles, not UV, so the aspect cannot squash it:
+// full to half the radius sunShare.y, gone by all of it.
+float SunShareMask(float2 uv)
+{
+    if (sunShare.z < 0.5f) { return 0.0f; }
+    if (FlareBlur.SampleLevel(gSmp, uv, 0).r > 0.0f) { return 0.0f; }
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float3 dir = normalize(float3(ndc / sunGlareProj.xy, 1.0f));
+    const float angle = acos(clamp(dot(dir, sunGlareDir.xyz), -1.0f, 1.0f));
+    const float r = max(sunShare.y, 1.0e-4f);
+    return 1.0f - smoothstep(0.5f * r, r, angle);
+}
+
+float3 BrightPixelGain(float3 c)
+{
+    if (!(preFilterMin < preFilterMax) || !(preFilterMult > 0.0f)) { return c; }
+    const float luma = dot(c, kLumaWeights);
+    if (luma > preFilterMin)
+    {
+        const float target = min(preFilterMult * (luma - preFilterMin) + preFilterMin, preFilterMax);
+        c *= target / luma;
+    }
+    return c;
+}
+
+// UE's AddApplyLocalExposurePass on the FFT's input: the tone curve's local exposure, term for term
+// (tonemap_cs.hlsl, local_exposure.hlsli), so a highlight the tonemap will compress blooms as it
+// will be shown. `c` is the stored value; `uv` the screen position.
+float3 ApplyLocalExposure(float3 c, float2 uv)
+{
+    LocalExposureParams p;
+    p.highlightContrastScale = leHighlightContrast;
+    p.shadowContrastScale = leShadowContrast;
+    p.detailStrength = leDetailStrength;
+    p.blurredBlend = leBlurredBlend;
+    p.highlightThreshold = leHighlightThreshold;
+    p.shadowThreshold = leShadowThreshold;
+    if (LocalExposureIsNeutral(p)) { return c; }
+    const float lum = dot(c, kLumaWeights);
+    if (!(lum > 1e-8f)) { return c; }
+    // The exposure the pixel receives in the tonemap: the pre-exposure it already carries, or the
+    // metered one the tonemap would apply (exactly its `totalExposure`).
+    const float exposure = (leExposure > 0.0f) ? leExposure : ExposureMultiplier();
+    const float logLum = log2(lum * ((leExposure > 0.0f) ? 1.0f : exposure));
+    const float logExposure = log2(max(exposure, 1e-8f));
+    const float baseLog = LocalExposureBaseLogLum(LocalExposureGrid, gSmp, uv, logLum - logExposure,
+                                                  leMinLogLum, leInvLogLumRange,
+                                                  LocalExposureBase.SampleLevel(gSmp, uv, 0), leBlurredBlend)
+                        + logExposure;
+    return c * LocalExposureMultiplier(logLum, baseLog, log2(0.18f), p);
+}
+
+// UE's ScrubNaNs on the forward transform's input, `-min(-v, 0)`: a NaN or a negative becomes 0. One
+// NaN would otherwise spread through the whole spectrum and blank the frame's bloom. An FP16 +Inf is
+// held at the format's largest finite value too: FilterPixel would turn it into Inf * 0 = NaN.
+float3 ScrubNaNs(float3 c)
+{
+    c = float3(c.r > 0.0f ? c.r : 0.0f, c.g > 0.0f ? c.g : 0.0f, c.b > 0.0f ? c.b : 0.0f);
+    return min(c, 65504.0f.xxx);
+}
+
+// The kernel CLAMPED texel by texel, then bilinearly filtered -- UE clamp the whole photograph
+// (BloomClampKernel.usf) before they downsample and resize it, so the delta spike never smears into
+// its neighbours. A hardware bilinear tap would blend the spike in first and clamp after.
+float3 ClampedKernelBilinear(float2 uv)
+{
+    uint kw, kh;
+    BloomKernel.GetDimensions(kw, kh);
+    const float2 p = uv * float2(kw, kh) - 0.5f;
+    const int2 b = int2(floor(p));
+    const float2 f = p - floor(p);
+    const int2 hi = int2(kw, kh) - 1;
+    const float3 s00 = min(BloomKernel.Load(int3(clamp(b, 0, hi), 0)).rgb, kernelClampLevel.xxx);
+    const float3 s10 = min(BloomKernel.Load(int3(clamp(b + int2(1, 0), 0, hi), 0)).rgb, kernelClampLevel.xxx);
+    const float3 s01 = min(BloomKernel.Load(int3(clamp(b + int2(0, 1), 0, hi), 0)).rgb, kernelClampLevel.xxx);
+    const float3 s11 = min(BloomKernel.Load(int3(clamp(b + int2(1, 1), 0, hi), 0)).rgb, kernelClampLevel.xxx);
+    return max(lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y), 0.0f.xxx);
 }
 
 // UE's screen-border falloff (PostProcessCommon.ush): 0 at the border, 1 in the centre. The
@@ -178,11 +288,46 @@ static const float4 kFlareTints[8] = {
     float4(0.9f, 0.7f, 0.7f, 0.15f)
 };
 
+// Stage 11 (the pixel probe): each of the group's 64 threads' share of the window, reduced by thread 0.
+groupshared float4 gProbeBest[64];    // rgb of the brightest pixel the thread saw, w its luminance
+groupshared int2 gProbeBestAt[64];
+groupshared float4 gProbeSum[64];     // rgb sum, w the number of pixels
+
 [numthreads(8, 8, 1)]
 [RootSignature(BLOOM_CONV_CS_RS)]
 void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 {
     const uint2 pixel = dispatchThreadId.xy;
+
+    // ---- stage 12: the bloom's light over frames (BloomSettings::convTemporalWeight) ----
+    //
+    // The scene before the upscaler is JITTERED: a glint smaller than a pixel lands on a pixel centre
+    // one frame and between them the next, so what the FFT, the ghosts and the streak took from it
+    // jumped frame to frame -- the star on a chrome glint flickered 40-50 %. UE's bloom reads TSR's
+    // output, which has done this averaging; here it is an exponential average at half the render
+    // resolution (a 2x2 box of the scene per texel), reprojected by the G-buffer velocity (every pixel
+    // has one, the sky included: currUv - prevUv), the light shafts' temporal step term for term. No
+    // neighbourhood clamp: the glint IS the outlier a clamp would cut, and a lagging flare is a soft
+    // trail, not a broken edge. Slots, positional: t0 the scene, t1 the velocity, t2 last frame's
+    // history; u0 this frame's. Off the frame, or without a valid history, this frame as it is.
+    if (convStage == 12u)
+    {
+        if (pixel.x >= sourceSize.x || pixel.y >= sourceSize.y) { return; }
+        const float2 uv = (float2(pixel) + 0.5f) / float2(sourceSize);
+        const float3 current = ScrubNaNs(HDRColor.SampleLevel(gSmp, uv, 0).rgb);
+        float3 result = current;
+        if (historyParams.z > 0.5f)
+        {
+            const float2 prevUv = uv - FlareBlur.SampleLevel(gSmp, uv, 0).xy;
+            if (all(prevUv >= 0.0f) && all(prevUv <= 1.0f))
+            {
+                const float3 history = BloomKernel.SampleLevel(gSmp, prevUv, 0).rgb * historyParams.y;
+                result = lerp(history, current, saturate(historyParams.x));
+            }
+        }
+        Grid[pixel] = float4(result, 1.0f);
+        return;
+    }
 
     if (convStage == 0u)
     {
@@ -209,50 +354,15 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // highlight instead of clamping it, and the convolution has nothing left to spread.
         const float3 color = (t0 + t1 + t2 + t3) * 0.25f;
 
-        // threshold < 0 = no threshold, which is UE's default -- see the note in bloom_cs.hlsl.
-        float3 lit = color;
-        if (threshold >= 0.0f)
-        {
-            // P8C-4 -- ABSOLUTE, i.e. a property of the SCENE and not of the
-            // camera. It used to be measured in the units the viewer sees -- luminance times the
-            // exposure -- which holds the bloom steady relative to the IMAGE but makes the same
-            // light source cross the line differently depending on what else is in frame.
-            // Measured on this level, that failure is not subtle: on the open beach the sun's
-            // exposed luminance sits between 1.3 and 3, while in the palm grove -- where the dark
-            // foliage drives the exposure up -- the sky gaps sit between 3 and 6. One number
-            // cannot serve both, and the user hits it as "raise it for the grove and lose the sun,
-            // lower it for the sun and blow out the grove".
-            //
-            // The CPU scales `threshold` by preExposure / ExposureMultiplierFromEv100(14) before
-            // it arrives, so what is compared here is the STORED value against a threshold in the
-            // same stored units -- exactly what the streak and the ghosts already do. All four
-            // thresholds in the bloom now mean one thing: brightness at EV100 = 14.
-            const float lum = dot(color, kLumaWeights);
-            const float amount = saturate((lum - threshold) * max(softKnee, 1.0e-4f));
-            lit = amount * color;
-        }
-
-        // P8C-5 -- UE'S BRIGHT-PIXEL GAIN, and when it is on it REPLACES the threshold above.
-        //
-        // Transcribed from GPUFastFourierTransform.usf's FilterPixel, which is the only filtering
-        // their FFT bloom has -- there is no threshold anywhere in that path. The difference is not
-        // a detail: a threshold DECIDES MEMBERSHIP, so every source in the frame moves together and
-        // one number cannot serve two shots (measured on this level: at 5 both a beach sun and a
-        // palm grove bloomed, at 6 both died). This REWEIGHTS instead. Below Min nothing is touched,
-        // which is why an open sun keeps its glow; above Min the luminance is remapped with slope
-        // Mult and CLAMPED at Max, and that ceiling is what stops a grove full of bright gaps from
-        // running away while the same setting still lights a single sun.
-        if (preFilterMult > 0.0f)
-        {
-            lit = color;
-            const float lum = dot(color, kLumaWeights);
-            if (lum > preFilterMin)
-            {
-                float target = preFilterMult * (lum - preFilterMin) + preFilterMin;
-                target = min(target, preFilterMax);
-                lit = color * (target / max(lum, 1.0e-6f));
-            }
-        }
+        // NO THRESHOLD: UE's FFT bloom has none. The convolution's input IS the scene, which is
+        // what lets the tonemap PARTITION the light -- scene x the kernel's centre fraction plus
+        // this x its scatter fraction (BloomFinalizeApplyConstants) -- instead of adding a glow on
+        // top. Their order: local exposure on the input, then on the forward transform ScrubNaNs
+        // and FilterPixel.
+        // The art split AFTER FilterPixel: before it, Boost's ceiling would hand the dimmed sun its
+        // light straight back.
+        const float3 lit = BrightPixelGain(ScrubNaNs(ApplyLocalExposure(color, uv))) *
+                           lerp(1.0f, max(sunShare.x, 0.0f), SunShareMask(uv));
 
         Grid[pixel] = float4(lit.r, lit.g, lit.b, 0.0f);
         return;
@@ -269,49 +379,26 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // P8C-2h -- MINIFICATION IS BOX-FILTERED HERE, ON DEMAND. The asset carries no mip chain
         // (UE's does not either); UE generate a downsample chain at runtime with
         // FBloomDownsampleKernelCS, and this is the same box, computed where the ratio is already
-        // known and stored nowhere. Note we deliberately do NOT copy UE's kernel CLAMP: their
-        // clamp is only safe because they split the kernel into a centre term applied directly to
-        // scene colour and a scatter term through the convolution -- we carry the whole kernel
-        // through the convolution, so clamping the core would turn the bloom into pure haze.
+        // known and stored nowhere.
+        //
+        // THE KERNEL IS CLAMPED FIRST, as UE's is (BloomClampKernel.usf, before the downsample and
+        // the resize). Measured on the stock kernel: 98% of its energy sits within one texel of the
+        // centre, and that spike is a delta -- convolving with it reproduces the source image. UE
+        // SPLIT it out: the clamp leaves the scatter in the kernel, and the tonemap scales the scene
+        // by the CENTRE's energy fraction and the convolution by the SCATTER's
+        // (BloomFinalizeApplyConstants, applied in tonemap_cs.hlsl), so the light the clamp takes
+        // out of the kernel is not lost -- it stays in the scene image, unblurred.
         if (pixel.x >= transformSize.x || pixel.y >= transformSize.y) { return; }
 
         const float2 offset = DcFoldedOffset(pixel);
         const float2 uv = kernelCenterUV + offset / max(kernelSpanTexels, 1.0f);
-
-        // ---- THE CENTRE SPIKE IS NOT BLOOM, AND UE DO NOT CONVOLVE WITH IT ----
-        //
-        // Measured on this kernel: 98.18% of its energy sits within ONE texel of the centre. That
-        // spike is a delta -- convolving with it reproduces the source image, so an ADDITIVE bloom
-        // built from the raw kernel is 98% a blurred copy of the scene and 2% the starburst. That
-        // is the "blurry blobs instead of stars" this pass existed to fix.
-        //
-        // UE never see it because they SPLIT the kernel: `SceneColorApplyParameters` scales scene
-        // colour by the CENTRE's energy fraction and `FFTMulitplyParameters` scales the
-        // convolution by the SCATTER's (PostProcessTonemap.usf: `SceneColorTint = ColorScale0 *
-        // SceneColorApplyParamaters[0]`), so what the convolution contributes is scatter alone.
-        // We take the same split at its source, the way their FBloomClampKernelCS does: clamp the
-        // kernel to what it measures just outside the centre zone. Our DC-divide then renormalises
-        // the remainder, so the star comes back at full strength and `intensity` keeps its
-        // meaning. What we do NOT copy is their scene DIMMING -- our bloom is additive and the
-        // direct light is already in the image; re-adding it is the double-count we are removing.
-        float3 clampLevel = 0.0f.xxx;
-        {
-            [unroll]
-            for (int ring = 0; ring < 8; ++ring)
-            {
-                const float ang = 6.28318530718f * (float(ring) / 8.0f);
-                const float2 o = float2(cos(ang), sin(ang)) * kernelCoreRingUV;
-                clampLevel = max(clampLevel,
-                    BloomKernel.SampleLevel(gSmp, kernelCenterUV + o, 0.0f).rgb);
-            }
-        }
 
         float3 k = 0.0f.xxx;
         if (all(uv >= 0.0f) && all(uv <= 1.0f))
         {
             if (kernelBoxTaps <= 1u)
             {
-                k = BloomKernel.SampleLevel(gSmp, uv, 0.0f).rgb;
+                k = ClampedKernelBilinear(uv);
             }
             else
             {
@@ -324,17 +411,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                     for (uint sx = 0u; sx < kernelBoxTaps; ++sx)
                     {
                         const float2 o = first + float2(sx, sy) * kernelBoxStep;
-                        k += BloomKernel.SampleLevel(gSmp, uv + o, 0.0f).rgb;
+                        k += ClampedKernelBilinear(uv + o);
                         count += 1.0f;
                     }
                 }
                 k /= max(count, 1.0f);
             }
         }
-        k = min(k, clampLevel);
-        // P8C-6: tint the kernel, AFTER the clamp so the clamp level stays a property of the image
-        // and a tint cannot change how much of the delta core is cut.
-        k *= kernelTint;
         // Packed exactly as the image is: lane 1 = (R + iG) in .xy, lane 2 = (B + i0) in .zw.
         Grid[pixel] = float4(k.r, k.g, k.b, 0.0f);
         return;
@@ -487,6 +570,61 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         return;
     }
 
+    if (convStage == 11u)
+    {
+        // ---- stage 11: THE PIXEL PROBE, one group, a debug read-out (editor MCP get_readouts) ----
+        //
+        // The brightest PRE-EXPOSED pixel in a square window of the frame the tonemap reads, the
+        // window's mean, the 4x4 box at that pixel (one texel of the FFT grid at 25 % averages that
+        // many) and the pixel after the local exposure the FFT input gets (ApplyLocalExposure, as
+        // stage 0). A screenshot cannot say any of it: the tone curve has clipped a glint to white.
+        // sunGlareDir carries this stage's fields: xy the window's centre (UV), z its radius (px).
+        // One group of 64, so `pixel` is the thread's place in it.
+        uint w, h;
+        HDRColor.GetDimensions(w, h);
+        const int2 centre = int2(sunGlareDir.xy * float2(w, h));
+        const int radius = clamp(int(sunGlareDir.z), 0, 128);
+        const int side = 2 * radius + 1;
+        const uint lane = pixel.y * 8u + pixel.x;
+        float4 best = float4(0.0f, 0.0f, 0.0f, -1.0f);
+        int2 bestAt = centre;
+        float4 sum = 0.0f.xxxx;
+        for (int i = int(lane); i < side * side; i += 64)
+        {
+            const int2 p = centre + int2(i % side - radius, i / side - radius);
+            if (any(p < 0) || p.x >= int(w) || p.y >= int(h)) { continue; }
+            const float3 c = HDRColor.Load(int3(p, 0)).rgb;
+            const float l = dot(c, kLumaWeights);
+            sum += float4(c, 1.0f);
+            if (l > best.w) { best = float4(c, l); bestAt = p; }
+        }
+        gProbeBest[lane] = best;
+        gProbeBestAt[lane] = bestAt;
+        gProbeSum[lane] = sum;
+        GroupMemoryBarrierWithGroupSync();
+        if (lane != 0u) { return; }
+        for (uint t = 1u; t < 64u; ++t)
+        {
+            if (gProbeBest[t].w > best.w) { best = gProbeBest[t]; bestAt = gProbeBestAt[t]; }
+            sum += gProbeSum[t];
+        }
+        float3 box = 0.0f.xxx;
+        for (int by = -2; by < 2; ++by)
+        {
+            for (int bx = -2; bx < 2; ++bx)
+            {
+                box += HDRColor.Load(int3(clamp(bestAt + int2(bx, by), int2(0, 0), int2(w, h) - 1), 0)).rgb;
+            }
+        }
+        const float2 bestUV = (float2(bestAt) + 0.5f) / float2(w, h);
+        const float exposedLuma = dot(ApplyLocalExposure(max(best.rgb, 0.0f.xxx), bestUV), kLumaWeights);
+        ExposureValue.Store3(kPixelProbeOffset, asuint(max(best.rgb, 0.0f.xxx)));
+        ExposureValue.Store(kPixelProbeOffset + 12u, asuint(exposedLuma));
+        ExposureValue.Store3(kPixelProbeOffset + 16u, asuint(sum.rgb / max(sum.w, 1.0f)));
+        ExposureValue.Store(kPixelProbeOffset + 28u, asuint(dot(box / 16.0f, kLumaWeights)));
+        return;
+    }
+
     if (convStage == 10u)
     {
         // ---- stage 10: THE SUN PROBE, one thread, before the glare and the tone curve ----
@@ -593,7 +731,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             }
             if (discTaps > 0.0f)
             {
-                held = max(disc / discTaps, 0.0f.xxx);
+                // The disc as it is -- physical since 2026-10-14, thousands of times the sky round
+                // it -- with no FilterPixel: the glare and the corona scale with the disc's ENERGY
+                // (BloomRenderer::SunGlareScale / SunRays), so a disc dimmed by a thin cloud or a
+                // sunset dims them in proportion, where a capped value would stay pinned at the cap.
+                held = max(min(disc / discTaps, 65504.0f.xxx), 0.0f.xxx);
                 if (ringTaps > 0.0f)
                 {
                     const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
@@ -726,12 +868,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     const float2 uv = (float2(pixel) + 0.5f) / float2(sourceSize);
     float4 c = SampleGridBilinear(uv);
 
-    // P8C-2o: THE UNIT-MATCHING GAIN IS GONE. It existed so `intensity` meant the same in both
-    // methods -- the convolution conserves energy through the DC divide while the pyramid's tent
-    // upsample adds its levels, so the pyramid ran ~8x hotter per unit. Under the centre/scatter
-    // split the convolution's scale is no longer a free multiplier to match against: it is a
-    // FRACTION OF THE KERNEL'S OWN ENERGY, computed by the survey, and an arbitrary 8 on top of it
-    // would be the one number in the chain that means nothing. The output is left at unit energy,
-    // which is what BloomFinalizeApplyConstants' fractions are defined against.
-    BloomOut[pixel] = float4(max(c.x, 0.0f), max(c.y, 0.0f), max(c.z, 0.0f), 1.0f);
+    // The convolution leaves the grid at unit energy per channel (the per-channel DC divide); the
+    // scatter's share of the kernel, its tint and `intensity` arrive here in one multiply, the way
+    // UE apply FFTMultiply after the inverse transform.
+    const float3 scatter = float3(max(c.x, 0.0f), max(c.y, 0.0f), max(c.z, 0.0f)) * max(resolveScale, 0.0f.xxx);
+    BloomOut[pixel] = float4(scatter, 1.0f);
 }

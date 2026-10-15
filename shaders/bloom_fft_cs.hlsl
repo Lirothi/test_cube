@@ -139,22 +139,21 @@ void CSMain(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThreadID)
             const float2 kr = (w.xy + wc) * 0.5f;
             const float2 kg = float2(w.y - wc.y, wc.x - w.x) * 0.5f;
 
-            // ENERGY NORMALISATION, still free: the kernel spectrum's DC texel holds the
-            // per-channel sums -- (Sr, Sg) packed in .xy of lane 1, Sb in .z of lane 2. UE
-            // normalise per channel and then re-tint by the kernel's own colour balance
-            // (BloomFinalizeApplyConstants.usf), and the two steps collapse to dividing every
-            // channel by the LARGEST channel sum: brightness is bounded and the kernel's tint
-            // survives. Per-channel division instead would bleach the photograph's colour cast.
+            // ENERGY NORMALISATION, PER CHANNEL, as UE's GetKernelSum does (GPUFastFourierTransform
+            // .usf, "Normalize R & G" / "Normalize B & A"): the kernel spectrum's DC texel holds the
+            // per-channel sums -- (Sr, Sg) packed in .xy of lane 1, Sb in .z of lane 2 -- and each
+            // channel is divided by its own. The kernel's colour balance comes back afterwards, once,
+            // through the Tint the resolve applies (BloomFinalizeApplyConstants' FFTMultiply).
             const float4 dc = KernelSpectrum[uint2(0u, 0u)];
-            const float invNorm = 1.0f / max(max(dc.x, max(dc.y, dc.z)), 1.0e-6f);
+            const float3 invNorm = 1.0f / max(dc.xyz, 1.0e-6f.xxx);
 
-            const float2 pr = ComplexMul(fr, kr);
-            const float2 pg = ComplexMul(fg, kg);
+            const float2 pr = ComplexMul(fr, kr) * invNorm.x;
+            const float2 pg = ComplexMul(fg, kg) * invNorm.y;
 
             float4 outV;
             outV.xy = float2(pr.x - pg.y, pr.y + pg.x);        // Fr*Kr + i*(Fg*Kg)
-            outV.zw = ComplexMul(z.zw, w.zw);
-            DstSpectrum[p] = outV * invNorm;
+            outV.zw = ComplexMul(z.zw, w.zw) * invNorm.z;
+            DstSpectrum[p] = outV;
         }
         return;
     }

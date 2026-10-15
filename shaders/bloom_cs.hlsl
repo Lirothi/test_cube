@@ -50,8 +50,13 @@ cbuffer BloomCB : register(b0)
     // pumping the entire bloom, and it is deliberately not applied deeper in the chain, where it
     // would just eat energy.
     uint  fireflyClamp;
-    uint  bloomPad0;
-    uint  bloomPad1;
+    // Stage 2: UE's Gaussian bloom is a SUM of six blurs, each weighted Bloom{n}Tint * Intensity / 6
+    // (PostProcessBloomSetup.cpp, AddGaussianBloomPasses). Here the levels of the pyramid are the
+    // blurs: `levelWeight` is this level's share of those weights (the CPU spreads UE's six over the
+    // octaves by their sizes), `srcWeight` the coarsest level's on the first pass up -- the seed would
+    // otherwise enter the sum unweighted. 1 on every later pass.
+    float levelWeight;
+    float srcWeight;
 };
 
 static const float3 kLumaWeights = float3(0.2126f, 0.7152f, 0.0722f);
@@ -106,14 +111,15 @@ float3 Setup(uint2 pixel)
     // the pass exists. The box already breaks the sampling correlation that made the flicker
     // visible; the first downsample then applies Karis to data that has been averaged rather than
     // point-sampled, which is where it belongs.
-    const float3 color = (t0 + t1 + t2 + t3) * 0.25f;
+    // A NaN or a negative is dropped and an FP16 +Inf held at the format's largest finite value: the
+    // chain adds every level into the next, and one bad texel would spread through all of them.
+    float3 color = (t0 + t1 + t2 + t3) * 0.25f;
+    color = min(float3(color.r > 0.0f ? color.r : 0.0f, color.g > 0.0f ? color.g : 0.0f,
+                       color.b > 0.0f ? color.b : 0.0f), 65504.0f.xxx);
 
-    // P8C-4: no exposure factor here any more -- the threshold arrives ABSOLUTE, scaled on the CPU
-    // by preExposure / ExposureMultiplierFromEv100(14), so it is compared against the STORED value.
-    // See the long note in bloom_conv_cs.hlsl stage 0: measuring in viewer units made the same sun
-    // cross the line at 1.3 on an open beach and at 6 inside a palm grove, purely because the
-    // auto-exposure moved. Both methods changed together, or switching method would also be a
-    // threshold change.
+    // THE THRESHOLD IS IN THE UNITS THE VIEWER SEES, as UE's is (BloomSetupCommon: `Luminance *
+    // ExposureScale - BloomThreshold`). Pre-exposed, the stored value already is; without
+    // pre-exposure the frame's exposure is applied here (`exposureEnabled`).
 
     // THRESHOLD < 0 MEANS NO THRESHOLD, and that is UE's DEFAULT, not an escape hatch.
     // `FPostProcessSettings::BloomThreshold` ships at -1.0 (Scene.cpp:423) and their own
@@ -130,7 +136,13 @@ float3 Setup(uint2 pixel)
     {
         return color;
     }
-    const float exposedLuma = Luma(color);
+    float exposure = 1.0f;
+    if (exposureEnabled != 0u)
+    {
+        const float ev100 = asfloat(ExposureValue.Load(0));
+        if (!isnan(ev100) && !isinf(ev100)) { exposure = (0.18f * 8.0f) / exp2(ev100); }
+    }
+    const float exposedLuma = Luma(color) * exposure;
     const float amount = saturate((exposedLuma - threshold) * max(softKnee, 1.0e-4f));
     return amount * color;
 }
@@ -205,7 +217,7 @@ float3 Upsample(uint2 pixel)
             sum += w * LoadSrc(int2(round(srcPos + float2(x, y) * r)));
         }
     }
-    return sum + AddMip[int2(pixel)].rgb;
+    return sum * srcWeight + AddMip[int2(pixel)].rgb * levelWeight;
 }
 
 [numthreads(8, 8, 1)]

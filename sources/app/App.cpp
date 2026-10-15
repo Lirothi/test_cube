@@ -379,6 +379,9 @@ namespace
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync = value != 0.0f; return true; }
         if (setting == "frame.maxFps") { render::g_maxFps = render::ClampMaxFps(static_cast<int>(value)); return true; }
+        // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
+        // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
+        if (setting == "wind.freeze") { vfx::g_windFreeze = value != 0.0f; return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
         // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
         if (setting == "cloudShadow.updateFrames")
@@ -844,6 +847,7 @@ namespace
                 { "moonIlluminanceLux", &t.moonIlluminanceLux, 0.0f, 1000.0f },
                 { "moonTemperatureK", &t.moonTemperatureK, 1000.0f, 20000.0f },
                 { "moonAngleDeg", &t.moonAngleDeg, 0.0f, 20.0f },
+                { "moonSoftAngleDeg", &t.moonSoftAngleDeg, 0.0f, 20.0f },
                 { "moonEarthshine", &t.moonEarthshine, 0.0f, 100.0f },
                 { "moonDiscAdaptation", &t.moonDiscAdaptation, 0.0f, 1.0f },
                 { "moonLightShaftBloomScale", &t.moonLightShaftBloomScale, 0.0f, 10.0f },
@@ -877,6 +881,8 @@ namespace
         if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
         // The sun's half-apex angle in radians (the disc and the specular floor), the level sun's property.
         if (setting == "sun.angularSize") { scene.SunLightRef().SetSunHalfApexRadians(std::clamp(value, 0.0f, 0.25f)); return true; }
+        // UE's LightSourceSoftAngle of the sun, degrees (apex): softens the specular glint's edge.
+        if (setting == "sun.softAngle") { scene.SunLightRef().SetLightSourceSoftAngleDegrees(std::clamp(value, 0.0f, 20.0f)); return true; }
         if (setting == "sky.skyLuminanceFactor") { scene.SkyAtmosphereRef().skyLuminanceFactor = std::clamp(value, 0.0f, 10.0f); return true; }
         if (setting == "sky.aerialStartDepth") { scene.SkyAtmosphereRef().aerialStartDepthMetres = std::clamp(value, 0.0f, 100000.0f); return true; }
         if (setting == "sky.aerialViewDistanceScale") { scene.SkyAtmosphereRef().aerialViewDistanceScale = std::clamp(value, 0.01f, 100.0f); return true; }
@@ -1026,6 +1032,12 @@ namespace
         if (setting == "bloom.kernelTintB") { scene.BloomRef().convKernelTint[2] = value; return true; }
         if (setting == "bloom.convSize") { scene.BloomRef().convSize = value; return true; }
         if (setting == "bloom.convPercent") { scene.BloomRef().convPercent = value; return true; }
+        if (setting == "bloom.convBeforeUpscale") { scene.BloomRef().convBeforeUpscale = value != 0.0f; return true; }
+        if (setting == "bloom.convTemporalWeight") { scene.BloomRef().convTemporalWeight = std::clamp(value, 0.01f, 1.0f); return true; }
+        // The art split: the sun disc's own share of the kernel and of the ghosts (1 = like any source).
+        if (setting == "bloom.sunKernelScale") { scene.BloomRef().convSunKernelScale = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "bloom.sunGhostScale") { scene.BloomRef().convSunGhostScale = std::clamp(value, 0.0f, 10.0f); return true; }
+        if (setting == "bloom.sunSplitRadiusDeg") { scene.BloomRef().convSunSplitRadiusDeg = std::clamp(value, 0.1f, 45.0f); return true; }
         if (setting == "bloom.anamorphicIntensity")
         {
             scene.BloomRef().convAnamorphicIntensity = value;
@@ -1110,6 +1122,13 @@ namespace
         if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
         if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }
         if (setting == "debug.texMip")     { renderSettings.debugTexMip = (int)value; return true; }
+        // The pixel probe (SceneRenderSettings::debugProbe*), read through get_readouts.
+        if (setting == "debug.probeU")      { renderSettings.debugProbeU = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "debug.probeV")      { renderSettings.debugProbeV = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "debug.probeRadius") { renderSettings.debugProbeRadiusPx = std::clamp(value, 0.0f, 128.0f); return true; }
+        if (setting == "debug.probeSource") { renderSettings.debugProbeSource = value >= 1.5f ? 2u : (value >= 0.5f ? 1u : 0u); return true; }
+        // (1 + metal * this) on the analytic sun specular (graphics_settings reflections.sunMetalSpec).
+        if (setting == "light.sunMetalSpec") { renderSettings.sunMetalSpecInfluence = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "light.sunTemperatureK")
         {
             scene.SunLightRef().SetUseSunTemperature(value > 0.0f);
@@ -1167,6 +1186,22 @@ namespace
                 {
                     OceanRenderConfig cfg = sim->GetRenderConfig();
                     cfg.reflectionNormalStrength = Math::Clamp(value, 0.0f, 1.0f);
+                    sim->SetRenderConfig(cfg);
+                }
+            }
+            return true;
+        }
+        // The sun's glint on the water (OceanSunSpecular): its brightness multiplier and the unresolved
+        // roughness scale (the Bruneton slope variance it takes its GGX alpha from).
+        if (setting == "ocean.specularStrength" || setting == "ocean.roughnessScale")
+        {
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    OceanRenderConfig cfg = sim->GetRenderConfig();
+                    if (setting == "ocean.specularStrength") { cfg.specularStrength = std::clamp(value, 0.0f, 100.0f); }
+                    else { cfg.roughnessScale = Math::Saturate(value); }
                     sim->SetRenderConfig(cfg);
                 }
             }
@@ -1312,6 +1347,9 @@ namespace
         // P3B bilateral base: 1 = the pre-grid blur-only base (the A/B arm), UE's default 0.6.
         if (setting == "exposure.localBlurredBlend")
         { e.localBlurredBlend = value; return true; }
+        // UE's LocalExposureBlurredLuminanceKernelSizePercent (default 50).
+        if (setting == "exposure.localBlurredKernelPercent")
+        { e.localBlurredKernelPercent = std::clamp(value, 0.0f, 100.0f); return true; }
         // Composite: both local contrast scales at once. The two are independent branches of the
         // same function (base above / below middle grey), so sweeping them together is the only way
         // to measure the base EXPANSION the plan's P3B target needs -- one knob alone can move only
@@ -1602,6 +1640,87 @@ void App::ReleaseLoadingScreen()
     loadingBitmapInfo_ = {};
 }
 
+#if WITH_EDITOR
+namespace
+{
+    // Claude Code's runtime door (editor MCP set_settings / get_readouts): the `--set` name table and
+    // the renderer's metering, used from the frame thread the MCP tools run on. One editor process
+    // then serves any number of A/B variants instead of one boot per picture.
+    class McpRuntimeHost final : public editormcp::RuntimeHost
+    {
+    public:
+        McpRuntimeHost(Scene& scene, SceneRenderSettings& settings, Renderer& renderer)
+            : scene_(scene), settings_(settings), renderer_(renderer) {}
+        bool Apply(const std::string& name, float value) override
+        {
+            const bool known = ApplySweepValue(scene_, settings_, name, value);
+            if (known)
+            {
+                LOG_INFO(logging::LogCategory::Editor, "MCP set_settings {} = {}", name, value);
+            }
+            return known;
+        }
+        void ResetExposure() override { renderer_.Exposure().RequestReset(); }
+        std::string Readouts(int historyRows) override
+        {
+            const ExposureMetering::Readback rb = renderer_.Exposure().LatestReadback();
+            char text[1024];
+            int n = std::snprintf(text, sizeof(text),
+                "{\"valid\":%s,\"adaptedEv100\":%.3f,\"targetEv100\":%.3f,\"eyeEv100\":%.3f,"
+                "\"compensationEv\":%.3f,\"preExposure\":%.6g,\"sunProbe\":[%.4g,%.4g,%.4g],"
+                "\"sunProbeVisibleShare\":%.3f,\"fps\":%.1f,\"frame\":%llu",
+                rb.valid ? "true" : "false", rb.adaptedEv100, rb.targetEv100, rb.eyeEv100,
+                rb.compensationEv, static_cast<double>(render::g_preExposure),
+                rb.sunProbe[0], rb.sunProbe[1], rb.sunProbe[2], rb.sunProbeShare,
+                renderer_.GetFPS(), static_cast<unsigned long long>(renderer_.GetTotalFrameNumber()));
+            // The pixel probe, while one is asked for (`debug.probeU/probeV/probeRadius`): pre-exposed
+            // HDR, a few frames old (the record's read-back ring).
+            if (n > 0 && n < static_cast<int>(sizeof(text)) && settings_.debugProbeRadiusPx > 0.0f)
+            {
+                n += std::snprintf(text + n, sizeof(text) - static_cast<size_t>(n),
+                    ",\"pixelProbe\":{\"uv\":[%.4f,%.4f],\"radiusPx\":%.0f,\"max\":[%.4g,%.4g,%.4g],"
+                    "\"maxAfterLocalExposure\":%.4g,\"box4x4\":%.4g,\"mean\":[%.4g,%.4g,%.4g]}",
+                    settings_.debugProbeU, settings_.debugProbeV, settings_.debugProbeRadiusPx,
+                    rb.pixelProbeMax[0], rb.pixelProbeMax[1], rb.pixelProbeMax[2],
+                    rb.pixelProbeMaxLocalExposed, rb.pixelProbeBox4,
+                    rb.pixelProbeMean[0], rb.pixelProbeMean[1], rb.pixelProbeMean[2]);
+            }
+            if (n > 0 && n < static_cast<int>(sizeof(text)) - 1)
+            {
+                text[n] = '}';
+                text[n + 1] = '\0';
+            }
+            if (historyRows <= 0 || n <= 0 || n >= static_cast<int>(sizeof(text)) - 1)
+            {
+                return text;
+            }
+            // Per-frame rows, oldest first: a flicker is read here, not across calls.
+            std::vector<ExposureMetering::HistoryRow> rows(static_cast<size_t>(historyRows));
+            rows.resize(renderer_.Exposure().History(rows.data(), rows.size()));
+            std::string out(text, static_cast<size_t>(n)); // without the closing brace
+            out += ",\"history\":{\"columns\":[\"frame\",\"adaptedEv100\",\"targetEv100\",\"preExposure\","
+                   "\"probeMeanR\",\"probeMeanG\",\"probeMeanB\",\"probeMaxLuma\",\"sunProbeLuma\"],\"rows\":[";
+            char row[256];
+            for (size_t i = 0; i < rows.size(); ++i)
+            {
+                const ExposureMetering::HistoryRow& r = rows[i];
+                std::snprintf(row, sizeof(row), "%s[%llu,%.4f,%.4f,%.6g,%.5g,%.5g,%.5g,%.5g,%.5g]",
+                    i ? "," : "", static_cast<unsigned long long>(r.frame), r.adaptedEv100, r.targetEv100,
+                    static_cast<double>(r.preExposure), r.probeMean[0], r.probeMean[1], r.probeMean[2],
+                    r.probeMaxLuma, r.sunProbeLuma);
+                out += row;
+            }
+            out += "]}}";
+            return out;
+        }
+    private:
+        Scene& scene_;
+        SceneRenderSettings& settings_;
+        Renderer& renderer_;
+    };
+}
+#endif
+
 void App::ApplyFixedSettings(Scene& scene)
 {
     for (const auto& kv : g_fixedSettings)
@@ -1724,6 +1843,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         // Project-wide quality settings are applied after the renderer and level exist, so the
         // exact same live setters used by the developer window can rebuild dependent targets.
         appController_.InitializeGraphicsSettings(renderer, scene);
+#if WITH_EDITOR
+        // The editor MCP's set_settings / get_readouts reach the app through this; it outlives every
+        // frame that could call it and is withdrawn before the systems go away.
+        static McpRuntimeHost mcpRuntimeHost(scene, appController_.SettingsRef(), renderer);
+        editormcp::SetRuntimeHost(&mcpRuntimeHost);
+#endif
 
         // Dumped HERE, not only at exit: under Debug + GBV a boot takes minutes, and a run that is
         // abandoned (or that hangs in frame 1) must still have produced its boot timing. Dumped
@@ -2138,6 +2263,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         }
 
         timeEndPeriod(1);
+#if WITH_EDITOR
+        editormcp::SetRuntimeHost(nullptr);
+#endif
         appController_.FlushGraphicsSettings(renderer, scene);
         TaskSystem::Get().Stop();
 

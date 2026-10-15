@@ -8,7 +8,10 @@
   "cloudShadow": {
     "bilinearWeather": true,
     "detailMean": false,
-    "updateFrames": 4
+    "updateFrames": 16
+  },
+  "cloudTrace": {
+    "mode": 0
   },
   "frame": {
     "maxFps": 0,
