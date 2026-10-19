@@ -65,6 +65,15 @@ public:
     // N4: what the water's glints of the scene light are scaled by -- 1 for the sun, the moon's phase law
     // to moonGlintPhaseFalloff for the moon (OceanRenderable::GetSpecularParams).
     float GlintScale() const { return glintScale_; }
+    // The twilight (TimeOfDaySettings::sunSkyStartDeg ..): the share of the sun's light the sky gets this
+    // frame, and what the frame's atmosphere multiplies its Rayleigh scattering by (Scene::PrepareViews).
+    float SunSkyShare() const { return sunSkyShare_; }
+    const float* RayleighTint() const { return rayleighTint_; }
+    const float* OzoneTint() const { return ozoneTint_; }
+    // What the frame's sky luminance scale is multiplied by (TimeOfDaySettings::daySkyBrightness at the day blend).
+    float SkyLuminanceScale() const { return skyLuminanceScale_; }
+    // The scene light's share through the hand-over cross-fade (TimeOfDaySettings::lightHandOverDeg), 0..1.
+    float HandOverFade() const { return handOverFade_; }
 
 private:
     void AdvanceClock(double deltaSeconds);
@@ -94,6 +103,11 @@ private:
     SkyMoonFrame skyMoon_{};
     NightSkyFrame nightSky_{};
     float glintScale_ = 1.0f;
+    float sunSkyShare_ = 1.0f;
+    float rayleighTint_[3] = {1.0f, 1.0f, 1.0f};
+    float ozoneTint_[3] = {1.0f, 1.0f, 1.0f};
+    float skyLuminanceScale_ = 1.0f;
+    float handOverFade_ = 1.0f;
 };
 
 // T4: what the editor's `setTime` / `setDate` accept (the command bar, MCP), resolved against the

@@ -1024,6 +1024,27 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
               std::to_string(dot) + ")");
         ctx.scene.SetSunToward(previousSun);
     }
+    // ...and {lookAt: "moon"}: the time of day's moon, or a tool error on a level without one.
+    {
+        const std::optional<json> atMoon = call(15, "tools/call", { { "name", "set_camera" },
+            { "arguments", { { "lookAt", "moon" } } } });
+        if (ctx.scene.GetTimeOfDay().Present())
+        {
+            Check(!(*atMoon)["result"]["isError"].get<bool>(), "set_camera faces the moon: " + text(atMoon));
+            const Math::float3 toMoon = ctx.scene.GetTimeOfDay().MoonToward();
+            const Math::float3 forward = ctx.scene.CameraRef().GetDirection();
+            const float flat = std::sqrt(toMoon.x * toMoon.x + toMoon.z * toMoon.z);
+            // The camera's pitch is clamped short of the poles: compare the heading when the moon is overhead.
+            const float dot = toMoon.x * forward.x + toMoon.y * forward.y + toMoon.z * forward.z;
+            Check(flat < 0.05f || dot > 0.999f, "and the camera's forward IS the direction to the moon (dot " +
+                  std::to_string(dot) + ")");
+        }
+        else
+        {
+            Check((*atMoon)["result"]["isError"].get<bool>(), "no time of day: lookAt moon is a tool error: " +
+                  text(atMoon));
+        }
+    }
 
     const std::optional<json> noTool = call(7, "tools/call", { { "name", "save_level" } });
     Check(noTool && (*noTool)["error"]["code"] == -32602, "a tool that does not exist is a protocol error");

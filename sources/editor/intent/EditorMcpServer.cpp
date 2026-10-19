@@ -397,19 +397,19 @@ namespace editormcp
                 { "name", "set_camera" },
                 { "description",
                   "Put the camera somewhere, so a screenshot shows what you want to look at. "
-                  "Give `lookAt` to aim at a point (the easy way) -- or \"sun\" to face the sky's "
-                  "sun wherever the time of day has it, with offsetYawDeg/offsetPitchDeg to put it "
-                  "off-centre -- or yawDeg/pitchDeg; with none it keeps its heading, and without "
+                  "Give `lookAt` to aim at a point (the easy way) -- or \"sun\" / \"moon\" to face the "
+                  "sky's sun or moon wherever the time of day has it, with offsetYawDeg/offsetPitchDeg to "
+                  "put it off-centre -- or yawDeg/pitchDeg; with none it keeps its heading, and without "
                   "`position` its place. It moves the person's view too, and they will see it move "
                   "-- so move it when you need to look, not for fun." },
                 { "inputSchema", ObjectSchema({
                     { "position", Vec3Schema("world position [x, y, z]; y is up (default: where it is)") },
                     { "lookAt", { { "description",
-                        "a world point to face [x, y, z], or the string \"sun\"" } } },
+                        "a world point to face [x, y, z], or the string \"sun\" or \"moon\"" } } },
                     { "offsetYawDeg", { { "type", "number" },
-                        { "description", "with lookAt \"sun\": turn the view this far RIGHT of the sun" } } },
+                        { "description", "with lookAt \"sun\"/\"moon\": turn the view this far RIGHT of it" } } },
                     { "offsetPitchDeg", { { "type", "number" },
-                        { "description", "with lookAt \"sun\": tilt the view this far BELOW the sun" } } },
+                        { "description", "with lookAt \"sun\"/\"moon\": tilt the view this far BELOW it" } } },
                     { "yawDeg", { { "type", "number" },
                         { "description", "heading, 0 = +z, 90 = +x" } } },
                     { "pitchDeg", { { "type", "number" },
@@ -754,13 +754,17 @@ namespace editormcp
             float yaw = camera.GetYaw();
             float pitch = camera.GetPitch();
             Math::float3 target;
-            const bool atSun = arguments.contains("lookAt") && arguments["lookAt"].is_string() &&
-                               Lower(arguments["lookAt"].get<std::string>()) == "sun";
-            if (atSun)
+            const std::string body = arguments.contains("lookAt") && arguments["lookAt"].is_string()
+                ? Lower(arguments["lookAt"].get<std::string>()) : std::string();
+            if (body == "moon" && !ctx.scene.GetTimeOfDay().Present())
             {
-                // The SKY's sun (time of day), wherever it is now -- above the horizon or not. The
-                // offsets put it off the view's centre, where a lens flare chain has room to show.
-                const Math::float3 d = ctx.scene.GetSunToward();
+                return Error("This level has no time of day, so no moon to face.");
+            }
+            if (body == "sun" || body == "moon")
+            {
+                // The SKY's sun (time of day) or the moon, wherever it is now -- above the horizon or not.
+                // The offsets put it off the view's centre, where a lens flare chain has room to show.
+                const Math::float3 d = body == "sun" ? ctx.scene.GetSunToward() : ctx.scene.GetTimeOfDay().MoonToward();
                 yaw = std::atan2(d.x, d.z) + arguments.value("offsetYawDeg", 0.0f) * kPi / 180.0f;
                 pitch = std::atan2(-d.y, std::sqrt(d.x * d.x + d.z * d.z)) +
                         arguments.value("offsetPitchDeg", 0.0f) * kPi / 180.0f;

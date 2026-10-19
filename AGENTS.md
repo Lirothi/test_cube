@@ -32,7 +32,12 @@ A level's light is its `timeOfDay` section (`app/scene/TimeOfDay.h`, plan
 ONE `DirectionalLight` to whichever has any of its disc above the horizon (else it stays on its body,
 lighting nothing, and the sun-shadow passes sleep). The sky -- its LUTs, disc, capture, aerial
 perspective, the bloom's corona and the light shafts -- always takes the SUN (`SceneFrameData::skyLight`),
-so the twilight outlives the hand-over. Anything that writes `Scene::DirectionalLightRef()` directly is
+so the twilight outlives the hand-over -- until `timeOfDay.twilight` (Ultra Dynamic Sky's curves, the
+defaults since 2026-10-15) takes it out of the atmosphere: 0 at -9.03 degrees, full from -6.49; the same
+section tints the FRAME's Rayleigh and ozone by sun height (the level's `skyAtmosphere` scales stay as
+written). Unit tints and `-90/-90` = physics. The hand-over itself is cross-faded (`twilight.lightHandOverDeg`,
+3 degrees of sun elevation each side, 0 = the hard switch): one light at a time, the outgoing body faded to 0
+before the switch, the incoming one from 0 after it. Anything that writes `Scene::DirectionalLightRef()` directly is
 overwritten on the next Tick: knobs go through `Scene::SunLightRef()`, a direction through
 `Scene::SetSunToward()` (which solves the time and the path).
 
@@ -316,7 +321,10 @@ document (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*` --
 document and stay as last set); `get_readouts` returns the metered/adapted EV100, the pre-exposure,
 the sun probe (disc colour, visible share) and the frame rate; `set_camera {lookAt: "sun",
 offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has it (`position`
-optional). Kill the editor afterwards (`Stop-Process`), as for any live MCP check.
+optional; `lookAt: "moon"` the moon; positive offsetPitchDeg tilts DOWN, so a view 4 degrees over the horizon
+toward a sun at elevation e is `offsetPitchDeg: e - 4`). An exposure curve is shaped live with
+`exposure.curvePoints` / `exposure.curveEv<i>` / `exposure.curveComp<i>` (`exposure.curve:0|1|2` = none/Eye/UDS).
+The Level Editor closed (F2) still serves every call. Kill the editor afterwards (`Stop-Process`), as for any live MCP check.
 
 MEASURE, DON'T READ A SCREENSHOT: the tone curve clips a glint to white, so "how bright is it" is
 unanswerable from a PNG. `set_settings {set: "debug.probeU:0.537;debug.probeV:0.469;debug.probeRadius:40"}`

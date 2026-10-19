@@ -318,6 +318,24 @@ inline void SetEyeExposureCurve(CameraExposureSettings& s)
     for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
 }
 
+// ULTRA DYNAMIC SKY'S CURVE (owner, 2026-10-16: "raise the moon and fit the curve, as theirs"), for a level whose
+// moon is UDS's -- 1/33 of the sun, `timeOfDay.nightBrightness` ~11400 -- so a night meters ~5.5 EV under the
+// day instead of ~19, and the curve is all that keeps it darker. Their `Exposure_Compensation_Curve` (read off
+// the owner's editor 2026-10-13: -1.511 below EV -10, -0.4 at -4, 0.596 at 0, 0.976 at 1, 1.0 from 9) is keyed
+// on THEIR scene EV, lit by a 5-lux sun against our 120 klx: +14.55 EV onto ours. Shifted by its value at our
+// noon (EV 15.4 -> 0.919) so the day stays as it was. Six points fit it to 0.07 EV. Measured on wind_test
+// (sun-azimuth view, the sky's luminance relative to the sun at +9.7 degrees, stops): UDS -0.44 / -1.59 / -2.50 /
+// -2.88 at 0 / -3.3 / -6.5 / -19.4 degrees, ours -0.76 / -1.69 / -2.68 / -2.21.
+inline void SetUdsExposureCurve(CameraExposureSettings& s)
+{
+    static constexpr float kEv[] = {4.55f, 8.55f, 10.55f, 12.55f, 14.55f, 15.55f};
+    static constexpr float kComp[] = {-2.43f, -1.75f, -1.32f, -0.85f, -0.32f, 0.06f};
+    static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
+    static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
+    s.exposureCurvePoints = kPoints;
+    for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
+}
+
 // Display transform (plan section 6.1 / step P3).
 enum class ToneCurve : std::uint32_t
 {

@@ -727,6 +727,25 @@ namespace
                                           "twilight 1.3 stops down, a full-moon night about 3.6, a moonless one 5 "
                                           "(with Min EV100 low enough for the eye to reach it, about -11).");
                     }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("UDS"))
+                    {
+                        render::CameraExposureSettings uds;
+                        render::SetUdsExposureCurve(uds);
+                        nlohmann::json curve = nlohmann::json::array();
+                        for (std::uint32_t i = 0; i < uds.exposureCurvePoints; ++i)
+                        {
+                            curve.push_back(nlohmann::json::array({ uds.exposureCurveEv[i], uds.exposureCurveComp[i] }));
+                        }
+                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("Ultra Dynamic Sky's curve, for UDS's moon (Time of Day > Night Brightness "
+                                          "~11400: the moon 1/33 of the sun): a night ~1.5 stops under the day, the "
+                                          "dawn a moonlit blue until the sun is nearly up. With the physical moon "
+                                          "(Night Brightness 1) it leaves the night far too dark -- that one wants Eye.");
+                    }
                     ImGui::PopID();
                 }
                 InspectorHelp("Extra compensation, in EV, by how much light the eye is adapted to -- the "
@@ -741,7 +760,7 @@ namespace
                               "points, flat past its ends. It follows the eye's SMOOTHED adaptation, so a "
                               "dark room darkens the picture as the eye adapts rather than on one frame. "
                               "Min/Max EV100 still bound the camera. Night vision reads the eye's "
-                              "adaptation, not the darkened camera. --set=exposure.curve:<0 none|1 eye>");
+                              "adaptation, not the darkened camera. --set=exposure.curve:<0 none|1 eye|2 uds>");
                 ImGui::SeparatorText("Metering (which pixels set the exposure)");
                 dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("The histogram window the meter averages between. Widening it makes "
@@ -2057,6 +2076,10 @@ namespace
                 ImGui::TextDisabled("Now %02d:%02d - sun %.1f deg, moon %.1f deg (phase angle %.0f) - lit by %s",
                                     minutes / 60, minutes % 60, live.SunElevationDeg(), live.MoonElevationDeg(),
                                     live.MoonPhaseAngleDeg(), lit);
+                if (live.HandOverFade() < 1.0f)
+                {
+                    ImGui::TextDisabled("Hand-over: its light at %.0f %%", 100.0f * live.HandOverFade());
+                }
             }
 
             ImGui::SeparatorText("Clock");
@@ -2242,12 +2265,13 @@ namespace
                           "full moon's 14 magnitudes fainter = 0.32 lux (~0.27 on the ground with the moon "
                           "overhead). The phase law scales it down (a quarter moon is ~0.1 of full); Real "
                           "positions add the distance.");
-            dragF("Temperature (K)", "temperatureK", 5450.0f, 25.0f, 1000.0f, 20000.0f, "%.0f");
-            InspectorHelp("The moon's colour outside the atmosphere, in this renderer's terms: sunlight reddened by "
-                          "the regolith (B-V 0.92 against the sun's 0.65, ~29 mired warmer) on top of a sun drawn "
-                          "white at 6500 K -- 5450 K, white with a touch of cream. The colour the SKY scatters: "
-                          "the glow round the moon, its share of the night sky. The disc and the light it sheds "
-                          "have their own rows.");
+            dragF("New Moon Brightness", "newMoonBrightness", 0.0f, 0.001f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("The least the moon's LIGHT falls to with the phase, as a share of the full moon's. 0 = "
+                          "physics: a new moon sheds nothing and the night is the airglow and the stars. Ultra "
+                          "Dynamic Sky's New Moon Light Brightness is 0.015 -- its moonless night stays a dark blue "
+                          "sky. The drawn disc follows the bare phase law either way.");
+            // No Temperature row (removed 2026-10-15): every hue it set has its own row below
+            // (TimeOfDaySettings, "NO MOON TEMPERATURE").
             {
                 const TimeOfDaySettings defaults{};
                 const Math::float3 dc = JsonFloat3(tgt(), "discColor",
@@ -2278,10 +2302,11 @@ namespace
                 if (changed) { tgt()["lightColor"] = { lv[0], lv[1], lv[2] }; }
                 trackContinuousEdit(changed);
             }
-            InspectorHelp("The colour the moon LIGHTS the scene in -- the cold light of a moonlit night. Only "
-                          "its hue counts (used at unit luminance; the lux stay physical). The default is "
-                          "Ultra Dynamic Sky's Moon Light Colour. White = the physical moonlight, cream like "
-                          "the disc, which reads warm on a beige beach.");
+            InspectorHelp("The colour the moon LIGHTS the scene AND the sky in -- the cold light of a moonlit night, "
+                          "the hue of the moonlit sky (with Twilight > Night Rayleigh Tint, as Ultra Dynamic Sky's "
+                          "moon lights its atmosphere). Only its hue counts (used at unit luminance; the lux stay "
+                          "physical). The default is UDS's Moon Light Colour. White = the physical moonlight, "
+                          "which reads warm on a beige beach.");
             dragF("Light Source Angle (deg)", "lightSourceAngle", 0.52f, 0.005f, 0.0f, 20.0f, "%.3f");
             InspectorHelp("The moon's angular DIAMETER: the drawn disc and the light's size (the specular "
                           "floor, the soft shadow). 0.52 is the real moon's mean.");
@@ -2393,12 +2418,75 @@ namespace
             }
             ImGui::PopID();
 
+            // The twilight as Ultra Dynamic Sky draws it.
+            groupKey = "twilight";
+            ImGui::PushID("twilight");
+            ImGui::SeparatorText("Twilight");
+            {
+                const TimeOfDaySettings defaults{};
+                dragF("Sun Leaves Sky From (deg)", "sunSkyStartDeg", defaults.sunSkyStartDeg, 0.05f, -90.0f, 90.0f, "%.2f");
+                dragF("Sun Fully In Sky At (deg)", "sunSkyFullDeg", defaults.sunSkyFullDeg, 0.05f, -90.0f, 90.0f, "%.2f");
+                InspectorHelp("The sun's light INTO THE SKY -- the glow of the twilight, the haze, the ambient the "
+                              "sky sheds, the clouds -- is 0 with the sun at or below the first elevation and full "
+                              "from the second, linear between. Ultra Dynamic Sky's: -9.03 and -6.49. Physics keeps "
+                              "a glow down to -18, which over a physical moonlit sky draws a bright band low over "
+                              "a black sky; UDS's moon is far brighter and its sun is gone. Both -90 = physics. The "
+                              "ground's light is not this: the sun lights it only while its disc is up.");
+                const Math::float3 rt = JsonFloat3(tgt(), "rayleighNightTint",
+                    Math::float3(defaults.rayleighNightTint[0], defaults.rayleighNightTint[1], defaults.rayleighNightTint[2]));
+                float rv[3] = { rt.x, rt.y, rt.z };
+                const bool changed = ImGui::DragFloat3("Night Rayleigh Tint", rv, 0.005f, 0.0f, 10.0f, "%.3f");
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["rayleighNightTint"] = { rv[0], rv[1], rv[2] }; }
+                trackContinuousEdit(changed);
+                InspectorHelp("The atmosphere's Rayleigh scattering, per channel, times this while the sun is down: "
+                              "UDS's night Rayleigh colour against its day one (1.43, 0.85, 0.61) -- less blue "
+                              "scattered, a paler moonlit sky and a less purple twilight. The sun's own reddening "
+                              "follows, as in UDS. (1, 1, 1) = none. A multiplier, not a colour: it may exceed 1.");
+                dragF("Day Rayleigh From (deg)", "rayleighDayStartDeg", defaults.rayleighDayStartDeg, 0.05f, -90.0f, 90.0f, "%.2f");
+                dragF("Day Rayleigh Full At (deg)", "rayleighDayFullDeg", defaults.rayleighDayFullDeg, 0.05f, -90.0f, 90.0f, "%.2f");
+                InspectorHelp("Where the night tint gives way to the authored Rayleigh: from the first sun elevation, "
+                              "gone by the second, easing out (UDS's blend: -2.07 to 3.68).");
+                const auto tint3 = [&](const char* label, const char* key, const float* fallback) {
+                    const Math::float3 v = JsonFloat3(tgt(), key, Math::float3(fallback[0], fallback[1], fallback[2]));
+                    float ov[3] = { v.x, v.y, v.z };
+                    const bool edited = ImGui::DragFloat3(label, ov, 0.01f, 0.0f, 20.0f, "%.2f");
+                    beginContinuousEdit(edited);
+                    if (edited) { tgt()[key] = { ov[0], ov[1], ov[2] }; }
+                    trackContinuousEdit(edited);
+                };
+                tint3("Night Ozone Tint", "ozoneNightTint", defaults.ozoneNightTint);
+                tint3("Sunrise Ozone Tint", "ozoneSunriseTint", defaults.ozoneSunriseTint);
+                dragF("Ozone Blend (deg)", "ozoneBlendDeg", defaults.ozoneBlendDeg, 0.01f, 0.001f, 90.0f, "%.2f");
+                InspectorHelp("The atmosphere's ozone, per channel, times the night tint with the sun at or below minus "
+                              "this many degrees, the sunrise tint at 0, the level's own ozone from plus this up. "
+                              "Earth's ozone absorbs green most, so a twilight sky -- lit by light that crossed the "
+                              "ozone layer edge-on -- comes out magenta; UDS's absorbs red as hard and its twilight "
+                              "is blue. UDS's values: x(6.15, 1.81, 1.43) at night, x(4.62, 1.56, 4.03) at sunrise, "
+                              "1.95 degrees. (1, 1, 1) twice = none.");
+                dragF("Light Hand-over (deg)", "lightHandOverDeg", defaults.lightHandOverDeg, 0.05f, 0.0f, 20.0f, "%.2f");
+                InspectorHelp("When the light passes between the moon and the sun (the sun's disc wholly under the "
+                              "horizon), the body that has it fades out over this many degrees of the sun's height "
+                              "before, and the one taking it fades in over as many after -- one light at a time, "
+                              "no jump of the glint on the water. The sun's disc and the sky are not faded. 0 = the "
+                              "hard switch.");
+            }
+            ImGui::PopID();
+
             groupKey.clear();
             ImGui::SeparatorText("Night");
-            dragF("Night Brightness", "nightBrightness", 1.0f, 0.01f, 0.0f, 1000.0f, "%.2f",
+            dragF("Night Brightness", "nightBrightness", 1.0f, 0.01f, 0.0f, 100000.0f, "%.2f",
                   ImGuiSliderFlags_Logarithmic);
             InspectorHelp("A manual multiplier on the night's light: the moon's and the night sky's (airglow, "
-                          "stars, the Milky Way). 1 = physics.");
+                          "stars, the Milky Way). 1 = physics: the full moon 1/375000 of the sun. Ultra Dynamic "
+                          "Sky's moon is 1/33 of its sun -- about 11400 here -- and that is what makes its dawn a "
+                          "moonlit blue sky until the sun is nearly up; pair it with an exposure curve that keeps "
+                          "the night darker than the day (Camera Exposure > Compensation curve).");
+            dragF("Day Sky Brightness", "daySkyBrightness", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("A manual multiplier on the sky BY DAY: the sky, its haze on distant things, its "
+                          "reflections and the light it sheds, together (the sky's luminance scale). It comes in "
+                          "with the day sky -- Twilight > Day Rayleigh From / Full At -- so the night and the "
+                          "moonlit dawn keep their darkness. 1 = as the atmosphere gives it.");
             ImGui::SeparatorText("Cost");
             dragF("Light Update Threshold (deg)", "lightUpdateThresholdDeg", 0.05f, 0.005f, 0.0f, 5.0f, "%.3f");
             InspectorHelp("While the clock runs, the scene light (and with it every shadow) turns only once "
@@ -4235,8 +4323,7 @@ void InspectorPanel::DrawZoneEditor(EditorContext& ctx, EditorCommandStack& comm
                     ImGui::SetTooltip(points.size() <= 2 ? "A spline needs at least two points"
                                                          : "Remove this point");
                 }
-                ImGui::PopID();
-                if (changed)
+                ImGui::PopID(); 
                 {
                     break;   // the list just changed shape; redraw it next frame
                 }

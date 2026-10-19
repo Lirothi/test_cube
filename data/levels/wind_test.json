@@ -32815,24 +32815,28 @@
       "enabled": true,
       "exposureCurve": [
         [
-          -11.0,
-          -4.0
+          4.55,
+          -2.43
         ],
         [
-          -3.0,
-          -3.5
+          8.55,
+          -1.75
         ],
         [
-          2.0,
-          -1.399999976158142
+          10.55,
+          -1.32
         ],
         [
-          8.0,
-          -0.6000000238418579
+          12.55,
+          -0.35
         ],
         [
-          12.0,
-          0.0
+          14.55,
+          0.1
+        ],
+        [
+          16.0,
+          0.35
         ]
       ],
       "highPercentile": 0.949999988079071,
@@ -32844,7 +32848,7 @@
       "localShadowContrast": 0.8999999761581421,
       "localShadowThreshold": 0.5,
       "lowPercentile": 0.15000000596046448,
-      "maxEv100": 16.0,
+      "maxEv100": 17.0,
       "meterMaskStrength": 0.699999988079071,
       "minEv100": -12.0,
       "shutterSpeedSec": 0.00798999983817339,
@@ -32915,7 +32919,7 @@
     "mieScale": 1.0,
     "multiScatteringFactor": 1.0,
     "ozoneScale": 1.0,
-    "rayleighScale": 0.699999988079071,
+    "rayleighScale": 1.21,
     "skyLuminanceFactor": 1.0
   },
   "skybox": {
@@ -32974,20 +32978,21 @@
       "lightShafts": 0.20000000298023224,
       "lightSourceAngle": 2.0,
       "lightSourceSoftAngle": 0.0,
+      "newMoonBrightness": 0.015,
       "orbitOffsetDeg": 0.0,
       "pathTiltDeg": 35.0,
       "pathYawDeg": 180.0,
       "phase": 0.5,
-      "phaseAuto": true,
-      "temperatureK": 5450.0
+      "phaseAuto": true
     },
-    "nightBrightness": 1.0,
+    "nightBrightness": 11364.0,
+    "daySkyBrightness": 2.0,
     "nightLengthMin": 15.0,
     "nightSky": {
       "airglowColor": [
-        0.949999988079071,
-        1.0,
-        0.8999999761581421
+        0.093,
+        0.142,
+        0.255
       ],
       "airglowZenith": 0.00011999999696854502,
       "enabled": true,
@@ -33036,6 +33041,13 @@
     },
     "time": 15.0,
     "timeScale": 60.0,
+    "twilight": {
+      "rayleighNightTint": [
+        0.825,
+        0.4906,
+        0.3523
+      ]
+    },
     "utcOffset": -10.0
   },
   "volumetricCloud": {

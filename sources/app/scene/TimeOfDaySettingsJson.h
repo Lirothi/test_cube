@@ -20,8 +20,11 @@
 //     "date": [2026, 6, 21], "latitude": -16.5, "longitude": -151.75, "utcOffset": -10, "northYawDeg": 0,
 //     "nightBrightness": 1, "lightUpdateThresholdDeg": 0.05,
 //     "sun":  { ...the keys of `directionalLight`, without "direction"... },
-//     "moon": { "enabled": true, "illuminanceLux": 0.32, "temperatureK": 4300, "lightSourceAngle": 0.52,
-//               "pathYawDeg": 180, "pathTiltDeg": 35, "orbitOffsetDeg": 0, "phase": 0.5, "phaseAuto": true }
+//     "moon": { "enabled": true, "illuminanceLux": 0.32, "lightColor": [0.446, 0.557, 0.865], "lightSourceAngle": 0.52,
+//               "pathYawDeg": 180, "pathTiltDeg": 35, "orbitOffsetDeg": 0, "phase": 0.5, "phaseAuto": true },
+//     "twilight": { "sunSkyStartDeg": -9.03, "sunSkyFullDeg": -6.49, "rayleighNightTint": [1.426, 0.848, 0.609],
+//                   "rayleighDayStartDeg": -2.07, "rayleighDayFullDeg": 3.68, "ozoneNightTint": [6.154, 1.806, 1.428],
+//                   "ozoneSunriseTint": [4.615, 1.557, 4.031], "ozoneBlendDeg": 1.95 }
 //   }
 //
 // Every key is optional; an absent one keeps the struct default.
@@ -81,7 +84,8 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
     s.longitudeDeg = std::clamp(Number(j, "longitude", s.longitudeDeg), -180.0f, 180.0f);
     s.utcOffsetHours = std::clamp(Number(j, "utcOffset", s.utcOffsetHours), -14.0f, 14.0f);
     s.northYawDeg = Number(j, "northYawDeg", s.northYawDeg);
-    s.nightBrightness = std::clamp(Number(j, "nightBrightness", s.nightBrightness), 0.0f, 1000.0f);
+    s.nightBrightness = std::clamp(Number(j, "nightBrightness", s.nightBrightness), 0.0f, 100000.0f);
+    s.daySkyBrightness = std::clamp(Number(j, "daySkyBrightness", s.daySkyBrightness), 0.0f, 10.0f);
     s.lightUpdateThresholdDeg = std::clamp(Number(j, "lightUpdateThresholdDeg", s.lightUpdateThresholdDeg), 0.0f, 5.0f);
 
     if (const auto it = j.find("sun"); it != j.end() && it->is_object())
@@ -93,7 +97,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         const nlohmann::json& m = *it;
         s.moonEnabled = Flag(m, "enabled", s.moonEnabled);
         s.moonIlluminanceLux = std::clamp(Number(m, "illuminanceLux", s.moonIlluminanceLux), 0.0f, 1000.0f);
-        s.moonTemperatureK = std::clamp(Number(m, "temperatureK", s.moonTemperatureK), 1000.0f, 20000.0f);
+        s.moonNewBrightness = std::clamp(Number(m, "newMoonBrightness", s.moonNewBrightness), 0.0f, 1.0f);
         if (const auto lc = m.find("lightColor"); lc != m.end() && lc->is_array() && lc->size() >= 3)
         {
             for (int c = 0; c < 3; ++c)
@@ -151,6 +155,36 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.milkyWayBrightness = std::clamp(Number(n, "milkyWay", s.milkyWayBrightness), 0.0f, 1000.0f);
         s.starTwinkle = std::clamp(Number(n, "twinkle", s.starTwinkle), 0.0f, 1.0f);
         s.siderealAtMidnightHours = Number(n, "siderealAtMidnight", s.siderealAtMidnightHours);
+    }
+    // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
+    if (const auto it = j.find("twilight"); it != j.end() && it->is_object())
+    {
+        const nlohmann::json& w = *it;
+        s.sunSkyStartDeg = std::clamp(Number(w, "sunSkyStartDeg", s.sunSkyStartDeg), -90.0f, 90.0f);
+        s.sunSkyFullDeg = std::clamp(Number(w, "sunSkyFullDeg", s.sunSkyFullDeg), -90.0f, 90.0f);
+        if (const auto rt = w.find("rayleighNightTint"); rt != w.end() && rt->is_array() && rt->size() >= 3)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                s.rayleighNightTint[c] = (*rt)[c].is_number() ? std::clamp((*rt)[c].get<float>(), 0.0f, 10.0f)
+                                                              : s.rayleighNightTint[c];
+            }
+        }
+        s.rayleighDayStartDeg = std::clamp(Number(w, "rayleighDayStartDeg", s.rayleighDayStartDeg), -90.0f, 90.0f);
+        s.rayleighDayFullDeg = std::clamp(Number(w, "rayleighDayFullDeg", s.rayleighDayFullDeg), -90.0f, 90.0f);
+        const auto tint3 = [&w](const char* key, float* out) {
+            if (const auto t = w.find(key); t != w.end() && t->is_array() && t->size() >= 3)
+            {
+                for (int c = 0; c < 3; ++c)
+                {
+                    out[c] = (*t)[c].is_number() ? std::clamp((*t)[c].get<float>(), 0.0f, 20.0f) : out[c];
+                }
+            }
+        };
+        tint3("ozoneNightTint", s.ozoneNightTint);
+        tint3("ozoneSunriseTint", s.ozoneSunriseTint);
+        s.ozoneBlendDeg = std::clamp(Number(w, "ozoneBlendDeg", s.ozoneBlendDeg), 0.001f, 90.0f);
+        s.lightHandOverDeg = std::clamp(Number(w, "lightHandOverDeg", s.lightHandOverDeg), 0.0f, 20.0f);
     }
 }
 
@@ -215,6 +249,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
     j["utcOffset"] = s.utcOffsetHours;
     j["northYawDeg"] = s.northYawDeg;
     j["nightBrightness"] = s.nightBrightness;
+    j["daySkyBrightness"] = s.daySkyBrightness;
     j["lightUpdateThresholdDeg"] = s.lightUpdateThresholdDeg;
     j["sun"] = {
         { "enabled", true },
@@ -240,7 +275,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
     j["moon"] = {
         { "enabled", s.moonEnabled },
         { "illuminanceLux", s.moonIlluminanceLux },
-        { "temperatureK", s.moonTemperatureK },
+        { "newMoonBrightness", s.moonNewBrightness },
         { "lightColor", { s.moonLightColor[0], s.moonLightColor[1], s.moonLightColor[2] } },
         { "discColor", { s.moonDiscColor[0], s.moonDiscColor[1], s.moonDiscColor[2] } },
         { "glow", s.moonGlow },
@@ -269,6 +304,17 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "twinkle", s.starTwinkle },
         { "siderealAtMidnight", s.siderealAtMidnightHours },
     };
+    j["twilight"] = {
+        { "sunSkyStartDeg", s.sunSkyStartDeg },
+        { "sunSkyFullDeg", s.sunSkyFullDeg },
+        { "rayleighNightTint", { s.rayleighNightTint[0], s.rayleighNightTint[1], s.rayleighNightTint[2] } },
+        { "rayleighDayStartDeg", s.rayleighDayStartDeg },
+        { "rayleighDayFullDeg", s.rayleighDayFullDeg },
+        { "ozoneNightTint", { s.ozoneNightTint[0], s.ozoneNightTint[1], s.ozoneNightTint[2] } },
+        { "ozoneSunriseTint", { s.ozoneSunriseTint[0], s.ozoneSunriseTint[1], s.ozoneSunriseTint[2] } },
+        { "ozoneBlendDeg", s.ozoneBlendDeg },
+        { "lightHandOverDeg", s.lightHandOverDeg },
+    };
     return j;
 }
 
@@ -279,6 +325,9 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
 inline nlohmann::json WithAllKeys(const nlohmann::json& section)
 {
     nlohmann::json out = section.is_object() ? section : nlohmann::json::object();
+    // Retired keys go (TimeOfDaySettings: the moon's temperature, 2026-10-15), so a saved level stops
+    // carrying a number nothing reads.
+    if (const auto moon = out.find("moon"); moon != out.end() && moon->is_object()) { moon->erase("temperatureK"); }
     TimeOfDaySettings s{};
     DirectionalLight sun = DefaultSun();
     ApplyOverrides(out, s, sun);

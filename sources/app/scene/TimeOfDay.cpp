@@ -60,6 +60,20 @@ const char* BodyName(TimeOfDay::Body body)
 {
     return body == TimeOfDay::Body::Sun ? "sun" : body == TimeOfDay::Body::Moon ? "moon" : "nobody";
 }
+
+// The twilight's ramps (TimeOfDaySettings::sunSkyStartDeg ..): 0 at and below `startDeg` of sun elevation,
+// 1 at and above `fullDeg`, linear between; a range of (almost) nothing is a step at `startDeg`.
+float TwilightRamp(double elevationDeg, float startDeg, float fullDeg)
+{
+    const double span = static_cast<double>(fullDeg) - static_cast<double>(startDeg);
+    if (span < 1.0e-3) { return elevationDeg >= startDeg ? 1.0f : 0.0f; }
+    return static_cast<float>(std::clamp((elevationDeg - startDeg) / span, 0.0, 1.0));
+}
+// The twilight's atmosphere blends (night Rayleigh, ozone) are held to steps of 1/64: every new value
+// rebuilds the atmosphere's LUTs and restarts the volumetric fog's history (a MAJOR distant-light revision),
+// and a running clock would otherwise do both every frame of the hour it takes. A step moves the blue
+// scattering by under 1 %.
+constexpr float kTwilightBlendSteps = 64.0f;
 }
 
 void TimeOfDay::Reset(const TimeOfDaySettings& settings, const DirectionalLight& sun)
@@ -172,11 +186,15 @@ DirectionalLight TimeOfDay::MoonLight(double phaseAngleDeg, double distanceScale
     // The sun's scene-wide fields (ambient fraction, sky fill, ground albedo, shafts) stay, so the fill
     // cannot jump when the light changes hands; the moon brings its brightness, colour and size.
     DirectionalLight moon = sunTemplate_;
+    // White at unit luminance: each of its hues is set where it is used (the ground's and the sky's
+    // moonLightColor, the disc's moonDiscColor -- Tick).
     moon.SetColor(Math::float3(1.0f, 1.0f, 1.0f));
-    moon.SetUseSunTemperature(true);
-    moon.SetSunTemperatureK(settings_.moonTemperatureK);
-    const double lux = settings_.moonIlluminanceLux * astro::MoonPhaseBrightness(phaseAngleDeg) * distanceScale *
-                       settings_.nightBrightness;
+    moon.SetUseSunTemperature(false);
+    // The phase law, lifted off zero by moonNewBrightness (UDS's New Moon Light Brightness): the LIGHT only --
+    // the drawn disc keeps the bare law (litScale), dark at new moon as UDS's is.
+    const double floor = std::clamp(static_cast<double>(settings_.moonNewBrightness), 0.0, 1.0);
+    const double lux = settings_.moonIlluminanceLux * (floor + (1.0 - floor) * astro::MoonPhaseBrightness(phaseAngleDeg)) *
+                       distanceScale * settings_.nightBrightness;
     moon.SetSunIlluminanceLux(static_cast<float>(lux));
     moon.SetLightSourceAngleDegrees(settings_.moonAngleDeg);
     moon.SetLightSourceSoftAngleDegrees(settings_.moonSoftAngleDeg);
@@ -269,14 +287,54 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         light.SetUseSunTemperature(false);
         light.SetColor(luma > 1e-6f ? Math::float3(c[0] / luma, c[1] / luma, c[2] / luma) : Math::float3(1.0f, 1.0f, 1.0f));
     }
+    // The hand-over cross-fade (TimeOfDaySettings::lightHandOverDeg), by the sun's elevation from the edge it
+    // changes hands at: the moon is out by then, the sun comes in from 0 -- one light, never a jump.
+    {
+        const double span = std::max(static_cast<double>(s.lightHandOverDeg), 0.0);
+        const double fromEdge = sunElevation + sunRadius; // > 0: the sun's disc is (partly) up
+        double fade = 1.0;
+        if (span > 1.0e-3)
+        {
+            const double x = std::clamp((lightBody == Body::Sun ? fromEdge : -fromEdge) / span, 0.0, 1.0);
+            fade = x * x * (3.0 - 2.0 * x);
+        }
+        handOverFade_ = static_cast<float>(fade);
+        if (fade < 1.0) { light.SetSunIlluminanceLux(static_cast<float>(light.GetSunIlluminanceLux() * fade)); }
+    }
     light.SetDirection(-lightToward_);
     light.ContinueTransformVersion(sceneLight); // +1 only when the direction actually changed
     sceneLight = light;
 
-    // The sky's sun: exact, every frame.
+    // The sky's sun: exact, every frame -- and leaving the atmosphere as Ultra Dynamic Sky's does, between
+    // sunSkyStartDeg and sunSkyFullDeg (the twilight's glow; the disc is under the horizon by then).
     DirectionalLight sky = sunTemplate_;
     sky.SetDirection(-sunToward);
+    sunSkyShare_ = TwilightRamp(sunElevation, s.sunSkyStartDeg, s.sunSkyFullDeg);
+    if (sunSkyShare_ < 1.0f) { sky.SetSunIlluminanceLux(sky.GetSunIlluminanceLux() * sunSkyShare_); }
     skySun = sky;
+    // UDS's night Rayleigh: the tint while the sun is down, easing out to none by rayleighDayFullDeg.
+    {
+        const float t = TwilightRamp(sunElevation, s.rayleighDayStartDeg, s.rayleighDayFullDeg);
+        const float day = std::round((1.0f - (1.0f - t) * (1.0f - t)) * kTwilightBlendSteps) / kTwilightBlendSteps;
+        for (int c = 0; c < 3; ++c)
+        {
+            rayleighTint_[c] = std::max(s.rayleighNightTint[c], 0.0f) * (1.0f - day) + day;
+        }
+        // The day sky's brightness comes in with UDS's day sky, on the same (stepped) blend.
+        skyLuminanceScale_ = 1.0f + (std::max(s.daySkyBrightness, 0.0f) - 1.0f) * day;
+    }
+    // UDS's twilight ozone: night -> sunrise (at 0) -> the authored ozone, across +-ozoneBlendDeg, in the same
+    // 1/64 steps (of each half).
+    {
+        const float w = std::max(s.ozoneBlendDeg, 1.0e-3f);
+        const float u = std::round(static_cast<float>(std::clamp(sunElevation / w, -1.0, 1.0)) * kTwilightBlendSteps) /
+                        kTwilightBlendSteps;
+        for (int c = 0; c < 3; ++c)
+        {
+            const float night = std::max(s.ozoneNightTint[c], 0.0f), sunrise = std::max(s.ozoneSunriseTint[c], 0.0f);
+            ozoneTint_[c] = u < 0.0f ? night + (sunrise - night) * (1.0f + u) : sunrise + (1.0f - sunrise) * u;
+        }
+    }
 
     // N1: the moon in the sky -- the atmosphere's second light and the disc -- whoever lights the ground.
     skyMoon_ = SkyMoonFrame{};
@@ -290,10 +348,24 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         const double lommelSeeliger = LommelSeeligerPhase(alpha);
         skyMoon_.present = true;
         skyMoon_.toward[0] = moonToward.x; skyMoon_.toward[1] = moonToward.y; skyMoon_.toward[2] = moonToward.z;
-        skyMoon_.illuminance[0] = lit.x; skyMoon_.illuminance[1] = lit.y; skyMoon_.illuminance[2] = lit.z;
+        // The moon lights the ATMOSPHERE in its light colour too (moonLightColor at the light's luminance), as
+        // Ultra Dynamic Sky's moon -- a directional light of that colour -- lights its SkyAtmosphere. It used to
+        // keep a cream temperature so the disc would not turn blue; the disc and its glow have their own
+        // colour since N4 (moonDiscColor, below), and UDS's night Rayleigh (twilight.rayleighNightTint)
+        // scatters less blue -- under the cream light the moonlit sky went grey (b/r 2.1 -> 1.35 at the
+        // probe), under UDS's light it keeps its hue, as UDS's does.
+        {
+            const float* lc = s.moonLightColor;
+            const float lightLuma = 0.2126f * lc[0] + 0.7152f * lc[1] + 0.0722f * lc[2];
+            const float litLuma = 0.2126f * lit.x + 0.7152f * lit.y + 0.0722f * lit.z;
+            const float litRgb[3] = {lit.x, lit.y, lit.z};
+            for (int c = 0; c < 3; ++c)
+            {
+                skyMoon_.illuminance[c] = lightLuma > 1e-6f ? litLuma * std::max(lc[c], 0.0f) / lightLuma : litRgb[c];
+            }
+        }
         // The full disc's reference in the DISC's colour (moonDiscColor at the full moon's luminance): only the
-        // hue is the artist's, the disc stays exactly as bright as the light it sheds. The sky's light 1 above
-        // keeps the temperature's colour.
+        // hue is the artist's, the disc stays exactly as bright as the light it sheds.
         {
             const float* dc = s.moonDiscColor;
             const float discLuma = 0.2126f * dc[0] + 0.7152f * dc[1] + 0.0722f * dc[2];

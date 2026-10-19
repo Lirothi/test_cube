@@ -845,7 +845,7 @@ namespace
                 { "moonPathYawDeg", &t.moonPathYawDeg, -360.0f, 360.0f }, { "moonPathTiltDeg", &t.moonPathTiltDeg, -89.0f, 89.0f },
                 { "moonOrbitOffsetDeg", &t.moonOrbitOffsetDeg, -360.0f, 360.0f },
                 { "moonIlluminanceLux", &t.moonIlluminanceLux, 0.0f, 1000.0f },
-                { "moonTemperatureK", &t.moonTemperatureK, 1000.0f, 20000.0f },
+                { "moonNewBrightness", &t.moonNewBrightness, 0.0f, 1.0f },
                 { "moonAngleDeg", &t.moonAngleDeg, 0.0f, 20.0f },
                 { "moonSoftAngleDeg", &t.moonSoftAngleDeg, 0.0f, 20.0f },
                 { "moonEarthshine", &t.moonEarthshine, 0.0f, 100.0f },
@@ -861,12 +861,29 @@ namespace
                 { "moonLightShaftTintR", &t.moonLightShaftTint[0], 0.0f, 10.0f },
                 { "moonLightShaftTintG", &t.moonLightShaftTint[1], 0.0f, 10.0f },
                 { "moonLightShaftTintB", &t.moonLightShaftTint[2], 0.0f, 10.0f },
-                { "nightBrightness", &t.nightBrightness, 0.0f, 1000.0f },
+                { "nightBrightness", &t.nightBrightness, 0.0f, 100000.0f },
+                { "daySkyBrightness", &t.daySkyBrightness, 0.0f, 10.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
                 // N2: the night sky's layers (timeOfDay.nightSky.*).
                 { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },
+                { "airglowColorR", &t.airglowColor[0], 0.0f, 10.0f }, { "airglowColorG", &t.airglowColor[1], 0.0f, 10.0f },
+                { "airglowColorB", &t.airglowColor[2], 0.0f, 10.0f },
                 { "milkyWay", &t.milkyWayBrightness, 0.0f, 1000.0f }, { "twinkle", &t.starTwinkle, 0.0f, 1.0f },
                 { "siderealAtMidnight", &t.siderealAtMidnightHours, -48.0f, 48.0f },
+                // The twilight as Ultra Dynamic Sky draws it (timeOfDay.twilight.*).
+                { "sunSkyStartDeg", &t.sunSkyStartDeg, -90.0f, 90.0f }, { "sunSkyFullDeg", &t.sunSkyFullDeg, -90.0f, 90.0f },
+                { "rayleighNightTintR", &t.rayleighNightTint[0], 0.0f, 10.0f },
+                { "rayleighNightTintG", &t.rayleighNightTint[1], 0.0f, 10.0f },
+                { "rayleighNightTintB", &t.rayleighNightTint[2], 0.0f, 10.0f },
+                { "rayleighDayStartDeg", &t.rayleighDayStartDeg, -90.0f, 90.0f },
+                { "rayleighDayFullDeg", &t.rayleighDayFullDeg, -90.0f, 90.0f },
+                { "ozoneNightTintR", &t.ozoneNightTint[0], 0.0f, 20.0f }, { "ozoneNightTintG", &t.ozoneNightTint[1], 0.0f, 20.0f },
+                { "ozoneNightTintB", &t.ozoneNightTint[2], 0.0f, 20.0f },
+                { "ozoneSunriseTintR", &t.ozoneSunriseTint[0], 0.0f, 20.0f },
+                { "ozoneSunriseTintG", &t.ozoneSunriseTint[1], 0.0f, 20.0f },
+                { "ozoneSunriseTintB", &t.ozoneSunriseTint[2], 0.0f, 20.0f },
+                { "ozoneBlendDeg", &t.ozoneBlendDeg, 0.001f, 90.0f },
+                { "lightHandOverDeg", &t.lightHandOverDeg, 0.0f, 20.0f },
             };
             for (const FloatKnob& k : knobs)
             {
@@ -1337,12 +1354,33 @@ namespace
         { e.localDetailStrength = value; return true; }
         if (setting == "exposure.nightVision") { e.nightVision = std::clamp(value, 0.0f, 1.0f); return true; } // E2
         if (setting == "exposure.nightDesaturation") { e.nightDesaturation = std::clamp(value, 0.0f, 1.0f); return true; }
-        // Time-of-day E1: the compensation curve, 0 = none, 1 = the eye preset (the A/B of a night).
+        // Time-of-day E1: the compensation curve, 0 = none, 1 = the eye preset (the A/B of a night), 2 = UDS's.
         if (setting == "exposure.curve")
         {
-            if (value != 0.0f) { render::SetEyeExposureCurve(e); }
+            if (value >= 1.5f) { render::SetUdsExposureCurve(e); }
+            else if (value != 0.0f) { render::SetEyeExposureCurve(e); }
             else { e.exposureCurvePoints = 0u; }
             return true;
+        }
+        // ...and point by point, so a running editor's set_settings can shape one live:
+        // `exposure.curvePoints` (0..6), `exposure.curveEv<i>` / `exposure.curveComp<i>`. The points must stay
+        // in ascending EV, as the level's own are -- the caller's job, here as in the Inspector's rows.
+        if (setting == "exposure.curvePoints")
+        {
+            e.exposureCurvePoints = static_cast<std::uint32_t>(std::clamp(
+                value, 0.0f, static_cast<float>(render::CameraExposureSettings::kExposureCurveMaxPoints)));
+            return true;
+        }
+        for (const auto& [prefix, field] : { std::pair{ std::string_view("exposure.curveEv"), e.exposureCurveEv },
+                                             std::pair{ std::string_view("exposure.curveComp"), e.exposureCurveComp } })
+        {
+            if (setting.size() == prefix.size() + 1u && setting.compare(0, prefix.size(), prefix) == 0)
+            {
+                const int i = setting.back() - '0';
+                if (i < 0 || i >= static_cast<int>(render::CameraExposureSettings::kExposureCurveMaxPoints)) { return false; }
+                field[i] = std::clamp(value, -20.0f, 30.0f);
+                return true;
+            }
         }
         // P3B bilateral base: 1 = the pre-grid blur-only base (the A/B arm), UE's default 0.6.
         if (setting == "exposure.localBlurredBlend")

@@ -64,15 +64,17 @@ struct TimeOfDaySettings
     // the full moon's 14.0 magnitudes fainter (-12.74 against -26.74): 0.32 lux, ~0.27 at the ground
     // with the moon at the zenith. The phase law and (real) the distance scale it from there.
     float moonIlluminanceLux = 0.32f;
-    // Moonlight is sunlight reddened by the regolith: the full moon's B-V is 0.92 against the sun's 0.65,
-    // ~4950 K against 5780 K (Ballesteros) -- a shift of ~29 mired. What matters is that SHIFT, applied
-    // to how this renderer draws the sun: white, at 6500 K. 154 + 29 mired = 5450 K, a white with a
-    // touch of cream. (The first defaults were 4300 K, the moonlight AT THE GROUND with the air's
-    // reddening the sky adds again, and then 4950 K, the shift applied to the real sun instead of to
-    // ours: both drew a yellow disc, and the owner said rightly that moonlight is not yellow.) This is the
-    // colour of the moon ITSELF as the SKY scatters it (the glow round it, its share of the night sky); the drawn
-    // disc has its own colour (moonDiscColor), and what it lights is below.
-    float moonTemperatureK = 5450.0f;
+    // The least the moon's LIGHT falls to with the phase, as a share of the full moon's: 0 = physics (a new moon
+    // sheds nothing). Ultra Dynamic Sky's New Moon Light Brightness is 0.015 -- read off its moon (2026-10-16):
+    // 0.15 full, 0.0265 at the quarter, 0.00225 new -- and with its constant blue Night Sky Glow that is why its
+    // moonless night is a dark blue sky, 1.3 stops under its full moon on screen, where ours went black-olive.
+    float moonNewBrightness = 0.0f;
+    // NO MOON TEMPERATURE (removed 2026-10-15). It was the moon's colour as the sky scattered it -- 5450 K,
+    // sunlight reddened by the regolith (B-V 0.92 against the sun's 0.65) shifted onto our 6500 K white sun.
+    // Every hue it fed now has its own: the disc and its glow moonDiscColor, the ground and, with Ultra
+    // Dynamic Sky's night Rayleigh, the atmosphere moonLightColor (TimeOfDay::Tick). A temperature only
+    // sets a hue (unit luminance), so the control could no longer move a pixel. Old levels' `temperatureK`
+    // is dropped by WithAllKeys.
     // The colour the drawn DISC is seen in (owner, 2026-10-13: "the moon and its rays are still yellow"):
     // linear RGB at unit luminance, in place of the temperature's on the disc only -- its brightness stays
     // the light's (the light shafts grow out of it, then take the light's colour). White, as
@@ -90,7 +92,8 @@ struct TimeOfDaySettings
     // ~3.6x the sky at the disc's edge (measured on the owner's UDS shots, 2026-10-14).
     float moonGlow = 0.02f;
     float moonGlowRadiusDeg = 11.6f;
-    // The colour the moon LIGHTS the scene in (the ground light only). The owner (2026-10-13), shown the
+    // The colour the moon LIGHTS the scene in -- the ground and, since 2026-10-15, the atmosphere (UDS's moon
+    // lights its SkyAtmosphere in this colour, under its night Rayleigh; see twilight below). The owner (2026-10-13), shown the
     // physics -- a cream moonlight turned grey by the eye's rods: "a night must not be black and white,
     // there must be cold light". That is Ultra Dynamic Sky's night, and its Moon Light Colour is the
     // default: a beige beach lit by the warm physical moonlight stays beige (b/r 0.35 on wind_test), and
@@ -134,6 +137,57 @@ struct TimeOfDaySettings
     // The owner's manual multiplier on the night's light (1 = physics): the moon's light and the night
     // sky's own layers below (N2).
     float nightBrightness = 1.0f;
+    // The owner's manual multiplier on the SKY BY DAY (1 = as the atmosphere gives it): the sky's light into every
+    // LUT -- the sky itself, the aerial perspective, the distant light and the capture, so the sky, its
+    // reflections and the ambient it sheds stay one sky (SkyAtmosphereSettings::luminanceScale, the frame's copy).
+    // It comes in with the day: the twilight's day blend (rayleighDayStartDeg .. rayleighDayFullDeg, UDS's own
+    // switch from its night sky to its day one), so the night and the moonlit dawn keep their darkness. The owner
+    // (2026-10-16): "our sky is darker than theirs by day, but I like our darkness at night". Measured on
+    // wind_test at noon: sky 2380 cd/m2 at 75 degrees from the sun against a CIE clear sky's ~3300-4900, sunlit
+    // sand 12540 (albedo 0.4 at ~100 klx, right).
+    float daySkyBrightness = 1.0f;
+
+    // --- Twilight, as Ultra Dynamic Sky draws it -----------------------------------------------------
+    // THE SUN LEAVES THE ATMOSPHERE before the night falls: its light into the sky -- the sky's LUTs, the
+    // aerial perspective, the distant light and the environment capture, the clouds -- is 0 at and below
+    // `sunSkyStartDeg` of elevation and rises linearly to full at `sunSkyFullDeg`. UDS's own sun intensity,
+    // read off its actor (2026-10-15): 0 from -9.03 degrees down, 2.45 of 5 at -7.79, 5 from -6.49 up.
+    // Physics keeps a glow to -18, and over our physical moonlit sky (the moon 1/375000 of the sun; UDS's
+    // is 1/33 of its sun, so its moonlit sky outshines the glow) a sun at -13 drew a red band over a black
+    // sky that UDS never shows (owner, 2026-10-15). The ground's light is not this: the sun lights it only
+    // while its disc is up. Both at -90 = physics.
+    float sunSkyStartDeg = -9.03f;
+    float sunSkyFullDeg = -6.49f;
+    // UDS's NIGHT RAYLEIGH: the atmosphere's Rayleigh scattering, per channel, times this tint while the
+    // sun is down -- the ratio of UDS's night Rayleigh colour (0.241, 0.347, 0.609) to its day one (0.169,
+    // 0.409, 1.0), read off its SkyAtmosphere component -- and back to the authored colour from
+    // `rayleighDayStartDeg` to `rayleighDayFullDeg`, easing out (UDS's blend, read at 15 elevations, is
+    // 1 - (1 - t)^2 over that range to 0.01). Less blue scattered: a paler moonlit sky and a less purple
+    // twilight. The FRAME's atmosphere only (the level keeps its Rayleigh scale as written), and all of it,
+    // the sun's own reddening included, as UDS's component is. (1, 1, 1) = none.
+    float rayleighNightTint[3] = {1.426f, 0.848f, 0.609f};
+    float rayleighDayStartDeg = -2.07f;
+    float rayleighDayFullDeg = 3.68f;
+    // UDS's TWILIGHT OZONE ("Other Absorption"): the atmosphere's ozone, per channel, times `ozoneNightTint`
+    // with the sun at or below -ozoneBlendDeg, `ozoneSunriseTint` at 0, the authored ozone from +ozoneBlendDeg
+    // up, linear between. UDS's live values over the range (2026-10-15) against Earth's ozone (UE's default,
+    // 0.00065 / 0.001881 / 0.000085 per km): night (1, 0.849, 0.030) x 0.004 = x(6.15, 1.81, 1.43), sunrise
+    // (1, 0.976, 0.114) x 0.003 = x(4.62, 1.56, 4.03), each step of their blend within 5 % of these keys.
+    // Earth's ozone absorbs GREEN most, so the long-path light of a twilight leaves a MAGENTA sky; UDS's
+    // absorbs red as hard, and its twilight sky is blue. The day keeps the level's own ozone (UDS's day,
+    // x(2.76, 1.06, 2.24), is not ported: the day's look is the level's). (1, 1, 1) twice = none.
+    float ozoneNightTint[3] = {6.154f, 1.806f, 1.428f};
+    float ozoneSunriseTint[3] = {4.615f, 1.557f, 4.031f};
+    float ozoneBlendDeg = 1.95f;
+    // THE HAND-OVER, ONE LIGHT AT A TIME, CROSS-FADED: the scene light's body fades out over this many degrees
+    // of SUN elevation before the light changes hands (the sun's disc wholly under the horizon) and the
+    // incoming body fades in over as many after -- smoothstep, so both meet at 0. At dawn the moon fades
+    // from -(sun radius + this) to -(sun radius), the sun from there to +this; at dusk the reverse. Measured
+    // on wind_test (moon 1/33 of the sun, 2-degree sun, the water's glint in pre-exposed screen units): the
+    // moon's glint fell 8.8 -> 0 and the sun's rose 0 -> 27 -> 107 within 1.3 degrees of each other (owner,
+    // 2026-10-19: "a sharp jump from the moon's specular straight to the sun's"). Only the scene light: the
+    // sky's sun (its disc, glare, the sky) is untouched. 0 = the hard switch.
+    float lightHandOverDeg = 3.0f;
 
     // --- The night sky (plan N2) ---------------------------------------------------------------------
     // What a sky has without sun or moon, procedural (the owner's decision: no catalogue, no downloaded

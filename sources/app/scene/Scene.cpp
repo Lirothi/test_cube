@@ -1977,6 +1977,20 @@ void Scene::PrepareViews(Renderer* renderer)
     // takes the source directly.
     frameData_.settings.heightFog = heightFog_;
     frameData_.settings.skyAtmosphere = skyAtmosphere_;
+    // Ultra Dynamic Sky's night Rayleigh and twilight ozone (TimeOfDaySettings, "twilight"), on the FRAME's
+    // atmosphere: the Inspector, --set and the level file keep the scales as written.
+    if (timeOfDay_.Present())
+    {
+        const float* rayleigh = timeOfDay_.RayleighTint();
+        const float* ozone = timeOfDay_.OzoneTint();
+        for (int c = 0; c < 3; ++c)
+        {
+            frameData_.settings.skyAtmosphere.parameters.rayleigh[c] *= rayleigh[c];
+            frameData_.settings.skyAtmosphere.parameters.ozone[c] *= ozone[c];
+        }
+        // ...and the day sky's brightness (TimeOfDaySettings::daySkyBrightness), the same way.
+        frameData_.settings.skyAtmosphere.luminanceScale *= timeOfDay_.SkyLuminanceScale();
+    }
     frameData_.settings.volumetricCloud = volumetricCloud_;
     // B6.2: THE SUN'S TRANSMITTANCE, here because this is where the frame's light is still mutable
     // and because every consumer downstream reads it through GetEffectiveColor(). UE do the same
@@ -2012,7 +2026,7 @@ void Scene::PrepareViews(Renderer* renderer)
         {
             const float throughElevation = elevation >= radius ? elevation : std::max(elevation, 0.5f * (elevation + radius));
             float t[3] = {1.0f, 1.0f, 1.0f};
-            SkyTransmittanceTowardSun(skyAtmosphere_.parameters, throughElevation, t);
+            SkyTransmittanceTowardSun(frameData_.settings.skyAtmosphere.parameters, throughElevation, t);
             transmittance = Math::float3(t[0], t[1], t[2]);
         }
         transmittance = transmittance * above;

@@ -2966,6 +2966,20 @@ void EditorController::Draw(
     scene.SetSelectedEditorObjectIds(selectedSceneObjects);
     if (!open_)
     {
+        // Claude Code's calls (MCP) are served with the editor CLOSED too. Closing the panels is how
+        // the bare frame is looked at, and every call made then used to sit out its 60 s timeout
+        // waiting for the editor to reopen -- four in a row on 2026-10-15 while the owner looked at a
+        // dawn sky, the screenshots (served by the frame loop) the only thing still answering. Once
+        // the editor has been open (its extensions are registered), the same document road serves
+        // them; the panel callbacks a closed editor has not set answer with an error, not a crash.
+        if (extensionsRegistered_)
+        {
+            EditorContext closedCtx{ renderer, scene, levelManager, document_, selection_ };
+            const EditorActionContext closedActionCtx{ closedCtx, assetRegistry_, extensions_ };
+            editormcp::SetImportHost(&mcpImportHost_);
+            mcpImportHost_.Tick();
+            commandBar_.ServiceMcp(closedActionCtx, commandStack_);
+        }
         return;
     }
 
