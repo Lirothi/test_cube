@@ -25,6 +25,7 @@
 #include "csm_sample.hlsli"
 #include "fog_common.hlsli"
 #include "rt_lights.hlsli" // SpotLightData / PointLightData (the light passes' layout)
+#include "local_shadow_bias.hlsli" // plan S1: the point light's receiver bias, the light pass's own
 #include "cloud_shadow_common.hlsli" // plan C3: the cloud's shadow on the sun in the air
 
 #define FOG_SCATTER_RS \
@@ -139,12 +140,12 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
                               light.shadowParams.w, camPosWS, fogLocalParams.w, 0.0f,
                               VsmPageTable, VsmPool, gSmpLinear);
     }
-    // pointlight_cs.hlsl's cube compare: the face's view-space depth with a WORLD-space bias.
+    // pointlight_cs.hlsl's cube compare: the face's view-space depth with its bias (no surface: NoL = 1).
     const float3 d = P - light.position;
     const float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
     const float nearP = light.shadowParams.z;
     const float farP = max(light.shadowParams.w, nearP + 1e-3f);
-    const float mBiased = max(m - light.shadowParams.y, nearP);
+    const float mBiased = PointShadowCompareDistance(m, light.shadowParams, light.volumetric.y, 1.0f);
     const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
     return PointShadowCube.SampleCmpLevelZero(gSmpLinear, float4(d, light.shadowParams.x), zc);
 }

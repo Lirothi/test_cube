@@ -14,6 +14,7 @@ struct SpotLightData
     float4   shadowParams;      // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
     float4   shadowParams2;     // x = normal bias
     float4x4 viewProj;
+    float4   shadowParams3;     // local-light shadows S2: x = near, y = soft-transition scale, z = sharpen, w = filter
 };
 
 struct PointLightData

@@ -123,6 +123,15 @@ inline const char* ShadowModeLabel(ShadowMode m)
     return (m == ShadowMode::Legacy) ? "Legacy CSM" : (m == ShadowMode::Sdsm) ? "SDSM" : "VSM";
 }
 
+// Local-light shadow plan S1 (docs/local_light_shadows_plan.md): the atlas spot / point shadows biased as UE does --
+// a spot's in its DEPTH PASS (world metres, constant + slope: ShadowRendering.cpp:2037-2056), a point's at projection
+// as a fraction of the distance (:1962-1983). false = the old receiver biases (a spot's NDC shadowDepthBias, a point's
+// 0.10 m + 0.05 m normal), for the A/B in one binary: `--set shadow.localBiasUe:0`.
+inline bool g_localShadowBiasUe = true;
+// Plan S2: UE's filters on the atlases -- a spot's Manual5x5PCF (6x6 tent, soft occlusion ramp), a point's 29-tap
+// CubemapHardwarePCF, both sharpened and squared. false = the old 3x3 boxes: `--set shadow.localFilterUe:0`.
+inline bool g_localShadowFilterUe = true;
+
 // S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
 // 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the
 // sample RESOLVED to (not the one the split picked): that difference is the point, because it is

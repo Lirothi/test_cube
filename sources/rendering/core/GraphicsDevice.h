@@ -25,6 +25,9 @@ public:
     // it doesn't hide the device-hang race DRED is meant to catch.
     static void EnableDredForStress(bool enable);
     static void EnableGbvForStress(bool enable);
+    // True when GPU-based validation is on (Debug, `--gbv` / `--scene-stress-gbv`). Paths GBV cannot track take their
+    // trackable twin under it -- the G-buffer's merged bindless ExecuteIndirect (ShadowGpuData).
+    static bool GbvEnabled();
 
     // GBV shader patch mode, as D3D12_GPU_BASED_VALIDATION_SHADER_PATCH_MODE (0 none,
     // 1 state-tracking-only, 2 unguarded, 3 guarded = the D3D12 default we keep). Only read when

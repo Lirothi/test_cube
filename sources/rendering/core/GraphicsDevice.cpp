@@ -58,6 +58,18 @@ namespace
     diag::ArtifactFile g_gbvLog;
     diag::ArtifactFile g_barrierTrace;
 
+    // The exit-time live-object report (ReportLiveObjects), held back while it runs and judged as a whole. A clean
+    // shutdown still reports ONE object, the device -- the report's own ID3D12DebugDevice and the info queue that
+    // delivers these lines hold it -- and printing that as two WARNINGs made every clean run look leaky, so a real
+    // leak line was one more among the expected ones (owner, 2026-10-20: "I need a clean GBV"). Only the device
+    // alive = one Info line; anything else alive = every line as a Warning, as before.
+    std::atomic<bool> g_liveReportActive{ false };
+    std::atomic_flag g_liveReportLock = ATOMIC_FLAG_INIT;
+    constexpr int kLiveReportMaxLines = 64;
+    int g_liveReportCount = 0;
+    int g_liveReportIds[kLiveReportMaxLines] = {};
+    char g_liveReportText[kLiveReportMaxLines][512] = {};
+
     // The barrier-interop family. Deliberately NOT every message: the point is to attribute the
     // legacy/enhanced mixing errors to a MODULE, and a trace of all debug-layer chatter would be
     // unreadable and would slow the run enough to change what it reproduces.
@@ -175,6 +187,19 @@ namespace
             return;
         }
 
+        // The live-object report is judged as a whole when it ends (GraphicsDevice::ReportLiveObjects).
+        if (g_liveReportActive.load(std::memory_order_acquire)) {
+            while (g_liveReportLock.test_and_set(std::memory_order_acquire)) {}
+            if (g_liveReportCount < kLiveReportMaxLines) {
+                g_liveReportIds[g_liveReportCount] = static_cast<int>(id);
+                std::snprintf(g_liveReportText[g_liveReportCount], sizeof(g_liveReportText[0]), "%s",
+                              description ? description : "");
+                ++g_liveReportCount;
+            }
+            g_liveReportLock.clear(std::memory_order_release);
+            return;
+        }
+
         static std::atomic_flag lock = ATOMIC_FLAG_INIT;
         while (lock.test_and_set(std::memory_order_acquire)) {}
         {
@@ -233,6 +258,15 @@ void GraphicsDevice::SetGbvShaderPatchMode(int mode)
 void GraphicsDevice::EnableGbvForStress(bool enable)
 {
     g_gbvForStress.store(enable, std::memory_order_relaxed);
+}
+
+bool GraphicsDevice::GbvEnabled()
+{
+#ifdef _DEBUG
+    return g_gbvForStress.load(std::memory_order_relaxed); // InitDevice enables it from this very flag
+#else
+    return false; // no debug layer, no GBV: nothing to make trackable
+#endif
 }
 
 void GraphicsDevice::EnableBarrierMessageTrace(bool enable)
@@ -516,6 +550,8 @@ void GraphicsDevice::ReportLiveObjects()
     if (!ddev && device_) {
         device_.As(&ddev); // only reachable if someone calls this while the renderer is up
     }
+    g_liveReportCount = 0;
+    g_liveReportActive.store(true, std::memory_order_release); // GbvMessageCallback holds the lines back
     if (ddev) {
         ddev->ReportLiveDeviceObjects(D3D12_RLDO_DETAIL | D3D12_RLDO_IGNORE_INTERNAL);
     }
@@ -528,6 +564,31 @@ void GraphicsDevice::ReportLiveObjects()
                 (DXGI_DEBUG_RLO_FLAGS)(DXGI_DEBUG_RLO_DETAIL | DXGI_DEBUG_RLO_IGNORE_INTERNAL));
         }
     }
+    g_liveReportActive.store(false, std::memory_order_release);
+
+    // Judge it: only the device itself alive is the report's own references (see g_liveReportActive); anything else is
+    // a leak and keeps its Warning per line, into gbv.log too.
+    while (g_liveReportLock.test_and_set(std::memory_order_acquire)) {}
+    bool onlyDevice = true;
+    for (int i = 0; i < g_liveReportCount; ++i) {
+        onlyDevice = onlyDevice && g_liveReportIds[i] == static_cast<int>(D3D12_MESSAGE_ID_LIVE_DEVICE);
+    }
+    if (onlyDevice) {
+        if (g_liveReportCount > 0) {
+            LOG_INFO(logging::LogCategory::RenderValidation,
+                     "live objects at exit: none -- only the device, held by the report's own debug interfaces "
+                     "({} report line(s): {})", g_liveReportCount, g_liveReportText[0]);
+        }
+    } else {
+        for (int i = 0; i < g_liveReportCount; ++i) {
+            char msg[640];
+            std::snprintf(msg, sizeof(msg), "[gbv] WARNING id=%d: %s\n", g_liveReportIds[i], g_liveReportText[i]);
+            g_gbvLog.Write(msg);
+            logging::WriteRaw(logging::LogLevel::Warning, logging::LogCategory::RenderValidation, std::string_view(msg + 6));
+        }
+    }
+    g_liveReportCount = 0;
+    g_liveReportLock.clear(std::memory_order_release);
 #endif
 }
 

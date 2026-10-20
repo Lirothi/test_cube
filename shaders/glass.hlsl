@@ -7,6 +7,8 @@
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
 #include "vsm_sample.hlsli"
 #include "csm_sample.hlsli"
+#include "local_shadow_bias.hlsli" // plan S1: the point light's receiver bias, the light pass's own
+#include "local_shadow_filter.hlsli" // plan S2: the light passes' spot / point filters
 #include "height_fog.hlsli" // plan A5: the analytic medium beyond the fog volume
 #include "fog_common.hlsli"  // plan A5: the froxel volume
 
@@ -28,6 +30,7 @@ struct SpotLightData
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
     float4 shadowParams2;      // x = normal bias (world units)
     float4x4 viewProj;
+    float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
 };
 
 // Per-object data (unique per glass instance).
@@ -71,8 +74,7 @@ SamplerState EnvSampler : register(s2);
 // in pointlight_cs.hlsl: normal-offset receiver, WORLD-space depth bias subtracted from the
 // compare distance before projecting to the standard-projection depth (render is
 // PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far), then SampleCmpLevelZero on
-// the cube-array slice (.w = cube index/slot). 1 = lit, 0 = shadowed.
-static const float kPointNormalBias = 0.05f;  // world units, along the surface normal (B4)
+// the cube-array slice (.w = cube index/slot). 1 = lit, 0 = shadowed. The bias is local_shadow_bias.hlsli's.
 static const float kPointPcfRadius  = 0.015f; // PCF disk radius as a fraction of the light distance
 static const float3 kPointPcfOffsets[8] = {
     float3( 1,  1,  1), float3( 1, -1,  1), float3(-1, -1,  1), float3(-1,  1,  1),
@@ -81,12 +83,14 @@ static const float3 kPointPcfOffsets[8] = {
 float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; }
-    float3 Poff = P + N * kPointNormalBias;
+    float3 Poff = P + N * PointShadowNormalOffset(Ld.shadowParams);
     // Rung 2 / Step 21: sample the VSM page pool (matches pointlight_cs.hlsl's VSM branch).
     if (vsmParams.x != 0.0f)
     {
+        // The push toward the light the atlas path compares at (local_shadow_bias.hlsli), as metres here.
         float3 toLight = Ld.position - Poff;
-        Poff += normalize(toLight) * Ld.shadowParams.y;
+        const float dist = length(toLight);
+        Poff += (toLight / max(dist, 1e-4f)) * (dist - PointShadowCompareDistance(dist, Ld.shadowParams, Ld.volumetric.y, 1.0f));
         return VsmPointShadow((uint)Ld.shadowParams.x, Poff, Ld.position, Ld.shadowParams.z,
                               Ld.shadowParams.w, camPosSky.xyz, vsmParams.y, 0.0f,
                               VsmPageTable, VsmPool, ShadowSampler);
@@ -95,7 +99,7 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
     float nearP = Ld.shadowParams.z;
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
-    float mBiased = max(m - Ld.shadowParams.y, nearP);
+    float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, dot(N, normalize(Ld.position - P)));
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
     // PCF: 8 cube taps, offset scaled by m for a ~constant world-space footprint (mirrors
     // PointShadowFactor in pointlight_cs.hlsl).
@@ -276,6 +280,14 @@ float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndot
 
     float3 uvw = float3(uv, light.shadowParams.y);
     float2 texel = spotShadowInfo.zw;
+    if (light.shadowParams3.w != 0.0f) // plan S2: the spot pass's own filter (local_shadow_filter.hlsli)
+    {
+        const float n = light.shadowParams3.x;
+        const float f = max(light.positionRange.w, n + 0.1f);
+        const float ts = light.shadowParams3.y * lerp(0.5f, 1.0f, saturate(dot(N, normalize(light.positionRange.xyz - P))));
+        return LocalShadowFinish(SpotShadowTent6x6(SpotShadowAtlas, LinearSampler, uv, light.shadowParams.y, clip.w, ts,
+                                                   n, f, 1.0f / texel, texel), light.shadowParams3.z);
+    }
     return ShadowPCF3x3Array(SpotShadowAtlas, uvw, depth - depthBias, texel);
 }
 

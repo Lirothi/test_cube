@@ -858,6 +858,8 @@
     <None Include="shaders\vsm_page_scatter_cs.hlsl" />
     <None Include="shaders\vsm_page_setup_cs.hlsl" />
     <None Include="shaders\vsm_sample.hlsli" />
+    <None Include="shaders\local_shadow_bias.hlsli" />
+    <None Include="shaders\local_shadow_filter.hlsli" />
     <None Include="shaders\vsm_screen_ray.hlsli" />
     <None Include="shaders\contact_shadow.hlsli" />
     <None Include="shaders\vsm_smrt.hlsli" />

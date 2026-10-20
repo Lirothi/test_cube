@@ -607,6 +607,10 @@ namespace
             return true;
         }
         if (setting == "shadow.indirect") { render::g_indirectShadowsEnabled = value != 0.0f; return true; }
+        // Local-light shadow plan S1: 1 = UE's spot / point biases, 0 = the old ones (the A/B).
+        if (setting == "shadow.localBiasUe") { render::g_localShadowBiasUe = value != 0.0f; return true; }
+        // Plan S2: 1 = UE's spot / point filters, 0 = the old 3x3 boxes.
+        if (setting == "shadow.localFilterUe") { render::g_localShadowFilterUe = value != 0.0f; return true; }
         // The Ctrl-G toggle, headless: GI casters folded into the indirect cull. OFF is what lets the
         // one-shot GPU-vs-CPU cull validator run (its CPU reference covers static casters only), so
         // a headless gate can read its PASS/MISMATCH verdict from the session log.

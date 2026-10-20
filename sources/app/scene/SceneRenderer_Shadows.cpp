@@ -713,7 +713,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, D.spotShadowRes); // S1
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -763,7 +763,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
 
             const SceneView& view = spotViews[lightIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, frame_->wind, D.spotShadowRes); // S1
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];

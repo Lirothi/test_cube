@@ -200,6 +200,13 @@ void Renderer::Shutdown()
     // downstream depends on them surviving this far.
     vsmDummyHeap_.Reset();
     drawIndexedCmdSig_.Reset();
+    // ...and the bindless G-buffer command signatures (A6), for the same reason: each holds its root signature, so a
+    // debug run ended with id=582 (Renderer.BindlessGBufferIndirectSig) + id=577 (its root signature) and the device's
+    // refcount two higher (2026-10-20).
+    {
+        std::lock_guard<std::mutex> lock(bindlessCmdSigMtx_);
+        bindlessCmdSigs_.clear();
+    }
 
     // 7) Fence/Queue
     frameScheduler_.ReleaseFence();

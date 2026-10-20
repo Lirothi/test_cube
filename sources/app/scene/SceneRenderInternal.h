@@ -279,6 +279,25 @@ namespace scene_internal
         return UploadFrameCB(renderer, vc);
     }
 
+    // Local-light shadow plan S1: a SPOT view's depth-pass bias, UE's (ShadowRendering.cpp:2037-2056; CVars :120-130 and
+    // :203-208 -- r.Shadow.SpotLightDepthBias 3, SpotLightSlopeDepthBias 3, ShadowMaxSlopeScaleDepthBias 1). UE's
+    // constant is 3*512/((MaxZ-MinZ)*Res)*2*ShadowBias of a [0,1] linear depth over the subject range: 1536/Res of its
+    // units (cm), 15.36/Res metres -- 3 cm at our 512, whatever the distance -- clamped to 0.1 of the range (:2053).
+    // The slope part is that x 3 x ShadowSlopeBias x tan(angle to the light's axis), the tan clamped to 1. Our depth is
+    // perspective, so it goes in as world metres with -n*f/(f-n) in the clampNear slot (ApplyShadowDepthBias).
+    inline D3D12_GPU_VIRTUAL_ADDRESS BuildSpotShadowViewCB(Renderer* renderer, const SceneView& view,
+                                                           const vfx::WindState* wind, std::uint32_t atlasRes)
+    {
+        if (!render::g_localShadowBiasUe) { return BuildShadowViewCB(renderer, view.view, view.proj, wind); }
+        const float n = view.zNear, f = view.zFar;
+        const float k = f > n ? n * f / (f - n) : 0.0f;
+        const float constMetres = std::min(15.36f / static_cast<float>(std::max(atlasRes, 1u)) * 2.0f *
+                                               std::max(view.shadowBias.x, 0.0f),
+                                           0.1f * std::max(f - n, 0.0f));
+        const float slopeMetres = constMetres * 3.0f * std::max(view.shadowBias.y, 0.0f);
+        return BuildShadowViewCB(renderer, view.view, view.proj, wind, constMetres, slopeMetres, 1.0f, -k);
+    }
+
 
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame,
                                                      const float4& fogVolumeParams, const float4& fogVolumeZParams,

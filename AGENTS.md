@@ -174,9 +174,12 @@ its pipeline is bound, so the cost is minutes, not milliseconds: a full wind_tes
 
 Reading it: errors land in the session log as `[ERROR][render.validation] ERROR id=...` (and in
 `logs/gbv.log`); `[render.rhi] [gbv] requested patch mode = ... device default = ...` and the
-`--gbv-passes:` line say what was actually patched. On wind_test every run, full or narrowed, also
-carries one `id=1044` (the ExecuteIndirect of `GBuffer.Indirect`) and the exit-time live-object report
-(id=274/577/582) -- those are not findings. A Debug run whose log just STOPS with an odd exit code is the debug layer's
+`--gbv-passes:` line say what was actually patched. **A clean run has NO `render.validation` warnings**
+(2026-10-20, owner: "I need a clean GBV"): under GBV the G-buffer draws its groups one ExecuteIndirect each
+(`GraphicsDevice::GbvEnabled`, ShadowGpuData -- the merged bindless commands change VB/IB/root bindings per draw,
+which GBV cannot track: that was the old `id=1044` on `GBuffer.Indirect`), and the exit report collapses to one Info
+line `live objects at exit: none` when only the device, held by the report's own interfaces, is alive. So any
+`id=1044` or `Live ...` WARNING is now a finding. A Debug run whose log just STOPS with an odd exit code is the debug layer's
 break-on-error with no debugger: rerun the same line with `--gbv --gbv-mode=none` and the message
 lands in the log.
 

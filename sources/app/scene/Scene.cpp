@@ -2291,6 +2291,7 @@ void Scene::PrepareViews(Renderer* renderer)
         view.zNear = nearPlane;
         view.zFar = farPlane;
         view.hfov = 0.0f;
+        view.shadowBias = float2(desc.shadowBias, desc.shadowSlopeBias); // local-light shadows S1
         view.requiresDepthCheck = false;
     }
 

@@ -18,6 +18,7 @@
 #include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/CommandListBindState.h" // A6: the merged draws bypass the bind cache
 #include "rendering/core/RasterSettings.h"       // A6: raster.bindless gates the merged path
+#include "rendering/core/GraphicsDevice.h"       // GbvEnabled: GBV takes the per-group path (id=1044)
 #include <chrono>                                // A6: the throttled readout
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
@@ -1255,6 +1256,18 @@ bool ShadowGpuData::FillGBufferCommandsForFrame(Renderer* renderer)
 {
     cmdFrameReady_ = false;
     cmdCountFrame_ = 0;
+    // UNDER GBV, NO MERGED COMMANDS: they change the VB, the IB and two root arguments per draw inside one
+    // ExecuteIndirect, which GPU-based validation cannot follow -- it says so with D3D12 id=1044 on 'GBuffer.Indirect'
+    // and from then on calls its own state tracking imprecise for the rest of the frame. The per-group path below in
+    // RecordIndirectGBufferDraws draws the same groups with the same PSOs and a DRAW_INDEXED-only signature, every
+    // binding set on the CPU where GBV sees it. So a GBV run validates these shaders exactly instead of half-blind.
+    if (GraphicsDevice::GbvEnabled())
+    {
+        LOG_INFO_ONCE(logging::LogCategory::RenderShadow,
+                      "[gbuffer.indirect] GBV on: one ExecuteIndirect per group (merged bindless commands change VB/IB/root "
+                      "bindings per draw, which GBV cannot track -- D3D12 id=1044)");
+        return false;
+    }
     if (!renderer || !render::g_rasterBindless || !gbufferIndirectFrame_ || cmdOrder_.empty() ||
         !gbufferCmdExpandMat_ || !gbufferCmdExpandMat_->GetPipelineState() ||
         !cmdStatic_.Valid() || !camCmds_.Valid())

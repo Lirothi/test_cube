@@ -16,6 +16,8 @@
 #include "utils.hlsli"
 #include "vsm_sample.hlsli"
 #include "contact_shadow.hlsli"
+#include "local_shadow_bias.hlsli"
+#include "local_shadow_filter.hlsli" // plan S2: UE's spot filter
 
 struct SpotLightData
 {
@@ -25,6 +27,7 @@ struct SpotLightData
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
     float4 shadowParams2;      // x = normal bias (world units)
     float4x4 viewProj;
+    float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
 };
 
 Texture2D GB0 : register(t0);
@@ -180,6 +183,19 @@ float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndo
         return 1.0f;
     }
 
+    // Plan S2: UE's Manual5x5PCF with its soft transition, the ramp narrowed toward the light by the receiver's NoL
+    // (UE: TransitionScale x lerp(1 - SpotLightReceiverBias 0.5, 1, NoL), ShadowProjectionPixelShader.usf:248), then
+    // sharpen and square. clip.w is the receiver's linear depth along the light's axis.
+    if (light.shadowParams3.w != 0.0f)
+    {
+        const float n = light.shadowParams3.x;
+        const float f = max(light.positionRange.w, n + 0.1f); // SpotLight::UpdateCachedData's far
+        const float NoL = saturate(dot(N, normalize(light.positionRange.xyz - P)));
+        const float ts = light.shadowParams3.y * lerp(0.5f, 1.0f, NoL);
+        const float s = SpotShadowTent6x6(SpotShadowAtlas, gSmpPoint, uv, light.shadowParams.y, clip.w, ts, n, f,
+                                          1.0f / invShadowSize, invShadowSize);
+        return LocalShadowFinish(s, light.shadowParams3.z);
+    }
     float3 uvw = float3(uv, light.shadowParams.y);
     return SampleShadowPCF(uvw, depth - depthBias, invShadowSize);
 }

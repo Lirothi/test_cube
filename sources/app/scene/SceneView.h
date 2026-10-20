@@ -33,6 +33,9 @@ struct SceneView
     float hfov = 0.0f;
     float zNear = 0.0f;
     float zFar = 0.0f;
+    // Local-light shadow plan S1: a SPOT shadow view's UE biases (shadowBias, shadowSlopeBias) -- Pass_SpotShadows
+    // turns them into its depth pass's world-metre bias at the atlas's resolution. Zero on every other view.
+    float2 shadowBias = float2(0.0f, 0.0f);
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

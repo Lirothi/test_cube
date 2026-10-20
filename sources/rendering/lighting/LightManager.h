@@ -37,7 +37,8 @@ public:
         Math::float3 color;
         float intensity;
         Math::float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
-        Math::float4 volumetric;   // x = volumetric scattering intensity (plan A4d), yzw reserved
+        Math::float4 volumetric;   // x = volumetric scattering intensity (plan A4d); local-light shadows: y = UE's slope
+                                   // scale (S1), z = UE's sharpen 7s+1 (S2), w = 1: UE's 29-tap disc, 0: the old 3x3
     };
 
     struct alignas(16) SpotLightGpu
@@ -48,6 +49,10 @@ public:
         Math::float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
         Math::float4 shadowParams2;      // x = normal bias (WS), y = volumetric scattering intensity (plan A4d)
         Math::mat4   viewProj;
+        // Local-light shadow plan S2: x = the projection's near plane, y = UE's soft-transition scale (1/m), z = UE's
+        // sharpen (7 x ShadowSharpen + 1), w = 1: UE's 6x6 tent filter, 0: the old 3x3 box. Mirrored by
+        // spotlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
+        Math::float4 shadowParams3;
     };
 
     LightManager() = default;

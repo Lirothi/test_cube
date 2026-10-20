@@ -15,7 +15,8 @@
 //            (ShadowDepthVertexShader.usf:77-79) — their matrix chain happens to leave that column
 //            unit. Ours does not: OrthoOffCenterLH puts 1/(far-near) there. So normalize, which is
 //            correct for BOTH and cannot silently turn NoL into 1/zRange.
-// params   — (constBias, slopeBias, maxSlope, clampToNear).
+// params   — (constBias, slopeBias, maxSlope, clampToNear). clampToNear < 0 is NOT a clamp: it marks a
+//            perspective view (a spot light) and carries -n*f/(f-n); the biases are then world metres (below).
 //
 // The atlas is DIRECT Z (cleared to 1, DepthFunc LESS_EQUAL), so the bias is ADDED: that pushes the
 // written depth AWAY from the light, which is the direction that stops a receiver shadowing itself.
@@ -34,7 +35,12 @@ float4 ApplyShadowDepthBias(float4 H, float3 normalWS, float4x4 lightVP, float4 
         // the required bias goes to infinity. Verbatim UE (ShadowDepthVertexShader.usf:84).
         const float  slope = clamp(NoL > 1e-4f ? sqrt(saturate(1.0f - NoL * NoL)) / NoL : maxSlope,
                                    0.0f, maxSlope);
-        H.z += params.x + params.y * slope;
+        const float  bias = params.x + params.y * slope;
+        // params.w < 0: a PERSPECTIVE view (a spot light, local-light plan S1). The bias is then in WORLD metres along
+        // the light's axis -- UE's spot bias, which it applies to a linear depth -- and -params.w is n*f/(f-n) of the
+        // projection: an LH perspective's NDC depth moves by n*f/((f-n) w^2) per metre at view depth w, so the clip z
+        // moves by that times w. A constant clip-z offset would instead grow ~w in the world.
+        H.z += params.w < 0.0f ? (-params.w) * bias / max(H.w, 1e-4f) : bias;
     }
 
     // S7 pancaking: a caster in front of the near plane is pressed onto it instead of being clipped.

@@ -175,11 +175,23 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 spotCPU[i].directionCosOuter = Math::float4(light.GetDirection(), light.GetCosOuter());
                 spotCPU[i].colorIntensity =
                     Math::float4(desc.color, render::CandelaFromLumens(light.EffectiveFluxLm())); // P16.5; plan L's level
+                // .w = the OLD receiver bias (NDC): 0 under UE's, which lives in the depth pass (plan S1,
+                // BuildSpotShadowViewCB) -- the receivers (spot pass, glass, fog) subtract whatever is here.
                 spotCPU[i].shadowParams = Math::float4(light.GetCosInner(),
                     static_cast<float>(lm.GetSpotShadowSlot(i)), light.GetInvAngleRange(),
-                    light.GetShadowDepthBias());
+                    (render::g_localShadowBiasUe && !render::VsmActive()) ? 0.0f : light.GetShadowDepthBias()); // VSM: as before
                 spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f), 0.0f, 0.0f);
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
+                // Plan S2: the filter's inputs (local_shadow_filter.hlsli). UE's soft transition for a spot is
+                // 1/SpotLightTransitionScale (60) x 2 x ShadowBias of its normalised depth (ShadowRendering.cpp:2059-2075),
+                // which spans the light's range: the ramp is that many METRES here, (f - n) / 60 at the default bias.
+                {
+                    const float nearP = std::max(desc.nearPlane, 0.01f);
+                    const float farP = std::max(desc.range, nearP + 0.1f);
+                    const float transitionScale = 60.0f / std::max((farP - nearP) * 2.0f * std::max(desc.shadowBias, 0.0f), 1.0e-4f);
+                    spotCPU[i].shadowParams3 = Math::float4(nearP, transitionScale, 7.0f * std::max(desc.shadowSharpen, 0.0f) + 1.0f,
+                                                            render::g_localShadowFilterUe ? 1.0f : 0.0f);
+                }
                 // S3a.6: an occluded influence volume can light no visible pixel -- zero range and
                 // intensity, keep the entry in place (the shadow slot mapping is by index). Plan L: a lamp
                 // switched off (by day, or before it comes on) costs the same nothing.
@@ -201,15 +213,23 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 pointCPU[i].radius = desc.radius;
                 pointCPU[i].color = desc.color;
                 pointCPU[i].intensity = render::CandelaFromLumens(desc.luminousFluxLm); // P16.5
-                pointCPU[i].volumetric = Math::float4(std::max(desc.volumetricIntensity, 0.0f), 0.0f, 0.0f, 0.0f); // plan A4d
-                // Per-light cube-shadow params = (slot/-1, worldDepthBias, near, far=radius).
-                // near MUST match Scene.cpp's cube-face projection EXACTLY — PointShadowFactor
-                // reconstructs the compare depth from it. Bias is WORLD-space (B4 tuning).
+                // Per-light cube-shadow params = (slot/-1, bias, near, far=radius); near MUST match Scene.cpp's
+                // cube-face projection EXACTLY -- PointShadowFactor reconstructs the compare depth from it.
+                // The bias (local_shadow_bias.hlsli): UE's (plan S1) = -DepthBias, the fraction of the distance
+                // 0.02 x 512/Res x 2 x shadowBias (ShadowRendering.cpp:1977-1979, r.Shadow.PointLightDepthBias 0.02),
+                // its slope scale 3 x shadowSlopeBias (r.Shadow.PointLightSlopeScaleDepthBias 3) in volumetric.y;
+                // or the old +0.10 world metres (B4) with shadow.localBiasUe off.
                 const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
-                constexpr float kPointShadowBias = 0.10f; // world units
+                const float pointRes = static_cast<float>(std::max(renderer->GetDeferredForFrame().pointShadowRes, 1u));
+                const float ueDepthBias = 0.02f * 512.0f / pointRes * 2.0f * std::max(desc.shadowBias, 0.0f);
+                pointCPU[i].volumetric = Math::float4(std::max(desc.volumetricIntensity, 0.0f), // plan A4d
+                                                      3.0f * std::max(desc.shadowSlopeBias, 0.0f),
+                                                      7.0f * std::max(desc.shadowSharpen, 0.0f) + 1.0f, // S2: UE's sharpen
+                                                      render::g_localShadowFilterUe ? 1.0f : 0.0f);      // S2: UE's disc
                 pointCPU[i].shadowParams = Math::float4(
                     static_cast<float>(lm.GetPointShadowSlot(i)),
-                    kPointShadowBias, pointShadowNear, desc.radius);
+                    (render::g_localShadowBiasUe && !render::VsmActive()) ? -std::max(ueDepthBias, 1.0e-9f) : 0.10f, // VSM: as before
+                    pointShadowNear, desc.radius);
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {

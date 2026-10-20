@@ -2037,6 +2037,15 @@ namespace
             dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             checkB("Cast Shadows", "shadowsEnabled", false);
+            dragF("Shadow Bias", "shadowBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("Shadow Slope Bias", "shadowSlopeBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("UE's Shadow Bias / Shadow Slope Bias (0.5 each). A point light's shadow is looked up "
+                          "nearer the light by a FRACTION of the distance: 0.02 x 512/Res x 2 x Shadow Bias (4 % "
+                          "at the atlas's 256 per face), times 1 + 3 x Slope Bias x (1 - N.L) on surfaces turned "
+                          "away from it. Larger = no acne, but the shadow starts further from its caster.");
+            dragF("Shadow Sharpen", "shadowSharpen", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("UE's Shadow Sharpen: narrows the filtered penumbra -- the 29-tap disc's result is "
+                          "stretched about its middle by 7 x this + 1. 0 = UE's soft edge.");
             onAtCombo();
 
             bool flickerEnabled = tgt().contains("flicker") && tgt()["flicker"].is_object();
@@ -2110,8 +2119,18 @@ namespace
             dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
             checkB("Cast Shadows", "shadowsEnabled", false);
             onAtCombo();
+            dragF("Shadow Bias", "shadowBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
+            dragF("Shadow Slope Bias", "shadowSlopeBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("UE's Shadow Bias / Shadow Slope Bias (0.5 each). The shadow map is written pushed away "
+                          "from the light by 15.36/Res metres x 2 x Shadow Bias -- 3 cm at the atlas's 512 -- plus "
+                          "that x 3 x Slope Bias on surfaces steep to the light, so a surface does not shadow itself "
+                          "(acne). Larger = cleaner but the shadow starts further from its caster.");
+            dragF("Shadow Sharpen", "shadowSharpen", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("UE's Shadow Sharpen: narrows the filtered penumbra -- the 6x6 tent's result is stretched "
+                          "about its middle by 7 x this + 1. 0 = UE's soft edge.");
             dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
-            dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f, "%.6f");
+            InspectorHelp("Ours, on top of UE's: the receiver is looked up this many metres off its surface, along "
+                          "the normal.");
         }
         else if (env.type == "timeOfDay")
         {

@@ -21,6 +21,13 @@ struct SpotLightDesc {
     float        nearPlane = 0.1f;
     bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow
     LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
+    // Local-light shadow plan S1: UE's ShadowBias / ShadowSlopeBias (LightComponent.cpp:466-467, both 0.5). The depth
+    // pass's constant is 15.36/Res m x 2 x shadowBias, its slope part that x 3 x shadowSlopeBias x tan (<= 1).
+    // `shadowDepthBias` above is the OLD receiver bias (NDC), read only with shadow.localBiasUe off.
+    float        shadowBias = 0.5f;
+    float        shadowSlopeBias = 0.5f;
+    // Plan S2: UE's ShadowSharpen (LightComponent.cpp:468, 0): narrows the filtered penumbra, x (7 x this + 1).
+    float        shadowSharpen = 0.0f;
 };
 
 class SpotLight {

@@ -16,6 +16,8 @@
 #include "utils.hlsli"
 #include "vsm_sample.hlsli"
 #include "contact_shadow.hlsli"
+#include "local_shadow_bias.hlsli"
+#include "local_shadow_filter.hlsli" // plan S2: UE's point filter
 
 struct PointLightData
 {
@@ -112,8 +114,8 @@ void LocalShadowSources(bool hasSlot, out bool useMap, out bool useContact)
 // Omnidirectional (cube) point shadow, depth-cube approach (B3). Reconstructs the
 // standard-projection compare depth from the world offset (matches the render:
 // PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far — NOT reverse-Z), then
-// SampleCmpLevelZero on the cube-array slice. Returns 1 (lit) .. 0 (fully shadowed).
-static const float kPointNormalBias = 0.05f; // world units, along the surface normal (B4)
+// SampleCmpLevelZero on the cube-array slice. Returns 1 (lit) .. 0 (fully shadowed). The bias is
+// local_shadow_bias.hlsli's (UE's, plan S1; the old world-unit one behind --set shadow.localBiasUe:0).
 // PCF mirrors the spot path (spotlight_cs.hlsl SampleShadowPCF): a 3x3 texel grid, /9. Spot
 // offsets the UV by `invShadowSize`; here the coord is a direction, so we step in the tangent
 // plane of d by one texel = 2*m*invRes world units — a 90-deg cube face spans 2*m at view
@@ -122,7 +124,7 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
 
-    float3 Poff = P + N * kPointNormalBias; // normal-offset receiver
+    float3 Poff = P + N * PointShadowNormalOffset(Ld.shadowParams); // normal-offset receiver (the old bias only)
     // Rung 2 / Step 21: sample the VSM page pool. Reconstructs the cube face's view-proj + looks up
     // the page table. World-space bias = pull the receiver toward the light before projecting (like
     // the atlas path, avoiding the crushed-perspective-depth bias problem).
@@ -151,10 +153,17 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float invRes)
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));     // view-space Z on the selected face
     float nearP = Ld.shadowParams.z;
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
-    // WORLD-space depth bias: pull the compare distance toward the light BEFORE projecting.
-    // A constant NDC bias is unusable — perspective depth is crushed into [~0.95,1] at any
-    // real distance, so a fixed NDC bias is huge up close (no shadow) and nil far away.
-    float mBiased = max(m - Ld.shadowParams.y, nearP);
+    // The bias pulls the compare distance toward the light BEFORE projecting -- never a constant
+    // NDC bias: perspective depth is crushed into [~0.95,1] at any real distance. UE's is a fraction
+    // of the distance, slope-scaled by the receiver's NoL (local_shadow_bias.hlsli).
+    const float NoL = dot(N, normalize(Ld.position - P));
+    // Plan S2: UE's 29-tap disc (its bias per tap, so only with UE's bias), sharpened and squared.
+    if (Ld.volumetric.w != 0.0f && Ld.shadowParams.y < 0.0f)
+    {
+        return LocalShadowFinish(PointShadowDisc29(PointShadowCube, gSmpShadowCmp, d, m, Ld.shadowParams, Ld.volumetric.y,
+                                                   NoL, invRes), Ld.volumetric.z);
+    }
+    float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased); // standard LH NDC depth
 
     // Tangent basis perpendicular to d (seed with the smallest-magnitude axis to avoid a
