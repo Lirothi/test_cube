@@ -20,6 +20,7 @@
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetBuoyantCommand.h"
+#include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
 #include "editor/commands/SetParticlePresetCommand.h"
@@ -585,9 +586,52 @@ namespace
             }
 
             DrawBuoyancy(ctx, commandStack, obj, runtime);
+            DrawGlowOnAt(ctx, commandStack, obj, gb);
         }
 
     private:
+        // Plan L: offered only on a mesh that glows -- on any other the switch would move nothing.
+        static void DrawGlowOnAt(EditorContext& ctx, EditorCommandStack& commandStack,
+            const EditorObject& obj, const GBufferRenderable* gb)
+        {
+            if (!gb || !gb->HasEmissive()) { return; }
+            ImGui::SeparatorText("Night Lamp");
+            const LampSwitch current = gb->GetLampSwitch();
+            static const char* const kLabels[] = { "Always", "At night", "By day" };
+            int index = static_cast<int>(current);
+            if (ImGui::Combo("Glow On At", &index, kLabels, 3) && index != static_cast<int>(current))
+            {
+                // Every selected glowing static mesh, one undo entry.
+                const LampSwitch lampSwitch = static_cast<LampSwitch>(index);
+                auto composite = std::make_unique<CompositeCommand>("Set Glow On At");
+                for (const EditorObjectId id : ctx.selection.Ordered())
+                {
+                    const EditorObject* selected = ctx.document.Find(id);
+                    RenderableObjectBase* runtime = selected ? ctx.scene.FindEditorObject(id.value) : nullptr;
+                    const GBufferRenderable* other = runtime ? runtime->AsGBufferRenderable() : nullptr;
+                    if (selected && selected->type == "staticMesh" && other && other->HasEmissive())
+                    {
+                        composite->Add(std::make_unique<SetLampSwitchCommand>(id, lampSwitch));
+                    }
+                }
+                if (composite->Empty()) { composite->Add(std::make_unique<SetLampSwitchCommand>(obj.id, lampSwitch)); }
+                commandStack.Execute(ctx, std::move(composite));
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "This mesh's glow (its emissive: a bulb, a lit window) comes on with the night lamps: when the\n"
+                    "sun goes down past Time of Day > Lamps > Switch At, after the same delay and warm-up as a light\n"
+                    "standing beside it. By day = the opposite.");
+            }
+            if (current != LampSwitch::Always)
+            {
+                const NightLamps& lamps = ctx.scene.GetNightLamps();
+                ImGui::TextDisabled("Now: %s, glow at %.0f %%", lamps.Night() ? "night" : "day",
+                                    lamps.Level(current, gb->GetPosition()) * 100.0f);
+            }
+        }
+
         // Offered only in a level that HAS an ocean: a switch with nothing to float on is not shown.
         static void DrawBuoyancy(EditorContext& ctx, EditorCommandStack& commandStack,
             const EditorObject& obj, RenderableObjectBase* runtime)

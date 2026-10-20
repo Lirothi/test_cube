@@ -36,6 +36,7 @@
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/commands/SetBuoyantCommand.h"
+#include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
@@ -47,6 +48,7 @@
 #include "ocean/OceanRenderable.h"
 #include "rendering/meshes/Mesh.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/renderables/GBufferRenderable.h" // plan L: setOnAt offers a mesh's glow only when it has one
 
 // Works out what a setting BECOMES: an absolute `value`, or `scale` times what it is now.
 // Exactly one of the two, because "make the fog thicker" and "set the fog to 0.02" are
@@ -448,6 +450,57 @@ namespace
         }
         return FoldIntoOneEntry(std::move(commands),
             std::string(buoyant ? "Float " : "Stop Floating ") + std::to_string(count) + " Objects");
+    }
+
+    // ------------------------------------------------------------------ setOnAt
+
+    // Plan L: lamps that come on at night. A light takes "onAt" in its environment properties (its runtime is rebuilt
+    // from them); a mesh in the document plus its runtime switch, and only a mesh that glows -- on anything else the
+    // key would be a control that moves nothing.
+    std::unique_ptr<EditorCommand> BuildSetOnAt(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const LampSwitch lampSwitch = LampSwitchFromName(StringOr(intent.params, "onAt", "night"));
+        const EditorSceneDocument& document = actionCtx.editor.document;
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t lights = 0, meshes = 0, skipped = 0;
+        for (const EditorObjectId id : targets)
+        {
+            if (const EditorObject* environment = FindEnvironmentObject(document, id))
+            {
+                if (environment->type != "pointLight" && environment->type != "spotLight") { ++skipped; continue; }
+                nlohmann::json after = environment->properties;
+                if (lampSwitch != LampSwitch::Always) { after["onAt"] = LampSwitchName(lampSwitch); }
+                else { after.erase("onAt"); }
+                commands.push_back(std::make_unique<EditEnvironmentCommand>(id, environment->properties, std::move(after),
+                                                                            "Set Light On At"));
+                ++lights;
+                continue;
+            }
+            const EditorObject* obj = document.Find(id);
+            RenderableObjectBase* runtime = obj ? actionCtx.editor.scene.FindEditorObject(id.value) : nullptr;
+            const GBufferRenderable* gb = runtime ? runtime->AsGBufferRenderable() : nullptr;
+            if (!obj || obj->type != "staticMesh" || !gb || !gb->HasEmissive())
+            {
+                ++skipped; // a mesh that does not glow, a zone, the ocean: nothing to switch
+                continue;
+            }
+            commands.push_back(std::make_unique<SetLampSwitchCommand>(id, lampSwitch));
+            ++meshes;
+        }
+        if (commands.empty())
+        {
+            outStatus = "Nothing to switch: onAt is for point and spot lights and for meshes that glow (emissive)";
+            return nullptr;
+        }
+        const char* when = lampSwitch == LampSwitch::Night ? "at night" : lampSwitch == LampSwitch::Day ? "by day" : "always";
+        outStatus = std::string("On ") + when + ": " + std::to_string(lights) + " light(s), " + std::to_string(meshes) +
+                    " glowing mesh(es)";
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not lights, no glow)"; }
+        const std::size_t count = commands.size();
+        return FoldIntoOneEntry(std::move(commands), std::string("Set On At (") + when + ") " + std::to_string(count) + " Objects");
     }
 
     // ------------------------------------------------------------------ rename
@@ -3390,6 +3443,19 @@ EditorActionRegistry::EditorActionRegistry()
         EditorTargetKind::Objects,
         { { "enabled", EditorParamKind::Bool, true, "true floats the meshes, false puts them back where the level placed them" } },
         &BuildSetBuoyant,
+    });
+
+    actions_.push_back({
+        "setOnAt",
+        "Make the matching lamps come on at night (or only by day, or always): point and spot lights, and meshes "
+        "that glow (a bulb, a lit window -- their emissive). They switch when the sun goes down and comes up, "
+        "warming up over a second or two, each a little after the next. Lights are reached through the selection "
+        "(target scope \"selected\"); meshes by name too.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "onAt", EditorParamKind::Enum, true, "night = on after sunset, day = on after sunrise, always = never switched",
+            { "night", "day", "always" } } },
+        &BuildSetOnAt,
     });
 
     actions_.push_back({

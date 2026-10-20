@@ -135,7 +135,8 @@ struct TimeOfDaySettings
     // physical estimate (~1.2e-4 of the full disc at new moon, falling with the Earth's own phase).
     float moonEarthshine = 1.0f;
     // The owner's manual multiplier on the night's light (1 = physics): the moon's light and the night
-    // sky's own layers below (N2).
+    // sky's own layers below (N2) -- and the night lamps' (plan L: lights and glows "onAt": "night"), so a lamp
+    // keeps its outdoor ratio to the moonlight (~100x under it) whatever the night is lifted by.
     float nightBrightness = 1.0f;
     // The owner's manual multiplier on the SKY BY DAY (1 = as the atmosphere gives it): the sky's light into every
     // LUT -- the sky itself, the aerial perspective, the distant light and the capture, so the sky, its
@@ -152,6 +153,20 @@ struct TimeOfDaySettings
     // only: the light, the meter, the curve's key (the scene's own EV) and the night vision (the eye) stay as they
     // are, so it moves the night's picture and nothing else. Negative darkens; 0 = none.
     float nightExposureEv = 0.0f;
+
+    // --- Night lamps (plan L, rendering/lighting/NightLamps.h) ---------------------------------------
+    // Lights and glowing meshes marked "onAt": "night" (or "day") switch when the SUN crosses this elevation:
+    // 0 = its centre at the horizon, the moment Ultra Dynamic Sky fires Sunset / Sunrise (its Sunset Event
+    // Offset is a time; ours an elevation, the same in simple and real positions). Each comes on after a delay
+    // of up to `lampRandomDelaySec` (a smooth noise of its position: a street's lamps one by one, a lamp and its
+    // bulb together), over `lampTurnOnSec` along t^`lampTurnOnExponent`, flickering by up to `lampTurnOnFlicker`
+    // while it warms; it goes out at once. UDS's Light Day/Night Toggle defaults, read off the owner's editor
+    // (2026-10-20): Random Delay 1, Turn On Animation Length 1.5, Flicker 0.2, Intensity Curve Exponent 0.6.
+    float lampSunElevationDeg = 0.0f;
+    float lampRandomDelaySec = 1.0f;
+    float lampTurnOnSec = 1.5f;
+    float lampTurnOnFlicker = 0.2f;
+    float lampTurnOnExponent = 0.6f;
 
     // --- Twilight, as Ultra Dynamic Sky draws it -----------------------------------------------------
     // THE SUN LEAVES THE ATMOSPHERE before the night falls: its light into the sky -- the sky's LUTs, the

@@ -74,8 +74,21 @@ public:
     float SkyLuminanceScale() const { return skyLuminanceScale_; }
     // Stops added to the frame camera's compensation (TimeOfDaySettings::nightExposureEv by the night's share).
     float NightExposureEv() const { return nightExposureEv_; }
+    // The night's share, 0 with the sun above -6 degrees (civil twilight's end), 1 from -12 (nautical's), smoothstep:
+    // what the night exposure and the night lamps' Night Brightness come in by.
+    float NightShare() const { return nightShare_; }
     // The scene light's share through the hand-over cross-fade (TimeOfDaySettings::lightHandOverDeg), 0..1.
     float HandOverFade() const { return handOverFade_; }
+    // Plan L: the clock was SET rather than run since the last call -- a level load, an edit of the authored time or
+    // date, a write of `timeHours` from outside (--set, the editor's slider, setTime) -- so what it switches (the
+    // night lamps) switches at once, the way Ultra Dynamic Sky's Instant Time of Day Change does. Read-and-clear:
+    // the zero-length Ticks of SetTimeOfDay / ApplyTimeOfDay must not use it up before the lamps see it.
+    bool TakeClockSetByHand()
+    {
+        const bool set = clockSetUnread_;
+        clockSetUnread_ = false;
+        return set;
+    }
 
 private:
     void AdvanceClock(double deltaSeconds);
@@ -110,7 +123,13 @@ private:
     float ozoneTint_[3] = {1.0f, 1.0f, 1.0f};
     float skyLuminanceScale_ = 1.0f;
     float nightExposureEv_ = 0.0f;
+    float nightShare_ = 0.0f;
     float handOverFade_ = 1.0f;
+    bool clockSetPending_ = true;  // Reset/Apply moved the clock; the next Tick reports it
+    bool clockSetByHand_ = false;  // this Tick's (the sunrise / sunset event says so)
+    bool clockSetUnread_ = true;   // since TakeClockSetByHand
+    float lastSunElevationDeg_ = 0.0f;
+    bool sunElevationKnown_ = false; // the sunrise / sunset events need a previous frame
 };
 
 // T4: what the editor's `setTime` / `setDate` accept (the command bar, MCP), resolved against the

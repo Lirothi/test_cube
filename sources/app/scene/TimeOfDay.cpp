@@ -86,6 +86,8 @@ void TimeOfDay::Reset(const TimeOfDaySettings& settings, const DirectionalLight&
     litBy_ = Body::Sun;
     lightPlaced_ = false;
     logged_ = false;
+    clockSetPending_ = true;
+    sunElevationKnown_ = false;
     authoredTime_ = settings.timeHours;
     authoredYear_ = settings.year;
     authoredMonth_ = settings.month;
@@ -111,6 +113,8 @@ void TimeOfDay::Apply(const TimeOfDaySettings& settings, const DirectionalLight&
     const bool sameClock = settings.timeHours == authoredTime_ && settings.year == authoredYear_ &&
                            settings.month == authoredMonth_ && settings.day == authoredDay_;
     const bool samePhase = settings.moonPhase == authoredMoonPhase_;
+    // A moved clock (a still one shows what is authored, so any edit of it is a move too) switches at once.
+    if (!sameClock || !settings.animate || settings.realPositions != settings_.realPositions) { clockSetPending_ = true; }
     settings_ = settings;
     sunTemplate_ = sun;
     // Still: what is on screen is what is authored. Running: keep its place unless the edit moved it.
@@ -139,6 +143,7 @@ void TimeOfDay::AdvanceClock(double deltaSeconds)
     if (s.timeHours != clockWritten_)
     {
         clockHours_ = s.timeHours;
+        clockSetByHand_ = true;
     }
     if (s.animate && deltaSeconds > 0.0 && speed_ > 0.0f)
     {
@@ -204,6 +209,8 @@ DirectionalLight TimeOfDay::MoonLight(double phaseAngleDeg, double distanceScale
 void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, DirectionalLight& skySun)
 {
     if (!settings_.present) { return; }
+    clockSetByHand_ = clockSetPending_;
+    clockSetPending_ = false;
     AdvanceClock(deltaSeconds);
     const TimeOfDaySettings& s = settings_;
 
@@ -252,6 +259,26 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     sunElevationDeg_ = static_cast<float>(sunElevation);
     moonElevationDeg_ = static_cast<float>(moonElevation);
     moonPhaseAngleDeg_ = static_cast<float>(phaseAngleDeg);
+    // Plan L: sunrise and sunset as events (UDS's Sunrise / Sunset dispatchers): the sun's centre crossing the
+    // horizon, once per crossing -- a transition, so it needs no per-frame gate.
+    if (sunElevationKnown_ && (lastSunElevationDeg_ < 0.0f) != (sunElevationDeg_ < 0.0f))
+    {
+        const int minutes = static_cast<int>(std::floor(std::fmod(clockHours_, 24.0) * 60.0 + 0.5)) % (24 * 60);
+        if (s.realPositions)
+        {
+            LOG_INFO(logging::LogCategory::Scene, "{} at {:02}:{:02} on {:04}-{:02}-{:02}{}",
+                     sunElevationDeg_ < 0.0f ? "sunset" : "sunrise", minutes / 60, minutes % 60, s.year, s.month, s.day,
+                     clockSetByHand_ ? " (clock set)" : "");
+        }
+        else
+        {
+            LOG_INFO(logging::LogCategory::Scene, "{} at {:02}:{:02}{}", sunElevationDeg_ < 0.0f ? "sunset" : "sunrise",
+                     minutes / 60, minutes % 60, clockSetByHand_ ? " (clock set)" : "");
+        }
+    }
+    lastSunElevationDeg_ = sunElevationDeg_;
+    sunElevationKnown_ = true;
+    if (clockSetByHand_) { clockSetUnread_ = true; }
     sunToward_ = sunToward;
     moonToward_ = moonToward;
 
@@ -326,7 +353,8 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     // The owner's night exposure (TimeOfDaySettings::nightExposureEv): none above -6 degrees, all of it from -12.
     {
         const float x = std::clamp(static_cast<float>((-6.0 - sunElevation) / 6.0), 0.0f, 1.0f);
-        nightExposureEv_ = s.nightExposureEv * x * x * (3.0f - 2.0f * x);
+        nightShare_ = x * x * (3.0f - 2.0f * x);
+        nightExposureEv_ = s.nightExposureEv * nightShare_;
     }
     // UDS's twilight ozone: night -> sunrise (at 0) -> the authored ozone, across +-ozoneBlendDeg, in the same
     // 1/64 steps (of each half).

@@ -283,6 +283,7 @@
     <ClCompile Include="sources/editor/commands/RenameObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetMaterialCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetMeshAssetCommand.cpp" />
@@ -313,6 +314,7 @@
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Astronomy.cpp" />
+    <ClCompile Include="sources/rendering/lighting/NightLamps.cpp" />
     <ClCompile Include="sources/app/levels/JsonLevel.cpp" />
     <ClCompile Include="sources/app/levels/Level.cpp" />
     <ClCompile Include="sources/app/levels/LevelManager.cpp" />
@@ -516,6 +518,7 @@
     <ClInclude Include="sources/editor/commands/RenameObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h" />
+    <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />
     <ClInclude Include="sources/editor/commands/SetMaterialCommand.h" />
     <ClInclude Include="sources/editor/commands/SetMeshAssetCommand.h" />
@@ -663,6 +666,7 @@
     <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h" />
     <ClInclude Include="sources/rendering/lighting/TimeOfDaySettings.h" />
+    <ClInclude Include="sources/rendering/lighting/NightLamps.h" />
     <ClInclude Include="sources/app/scene/VolumetricCloudSettingsJson.h" />
     <ClInclude Include="sources/app/scene/TimeOfDay.h" />
     <ClInclude Include="sources/app/scene/TimeOfDaySettingsJson.h" />

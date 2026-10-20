@@ -24,7 +24,8 @@
 //               "pathYawDeg": 180, "pathTiltDeg": 35, "orbitOffsetDeg": 0, "phase": 0.5, "phaseAuto": true },
 //     "twilight": { "sunSkyStartDeg": -9.03, "sunSkyFullDeg": -6.49, "rayleighNightTint": [1.426, 0.848, 0.609],
 //                   "rayleighDayStartDeg": -2.07, "rayleighDayFullDeg": 3.68, "ozoneNightTint": [6.154, 1.806, 1.428],
-//                   "ozoneSunriseTint": [4.615, 1.557, 4.031], "ozoneBlendDeg": 1.95 }
+//                   "ozoneSunriseTint": [4.615, 1.557, 4.031], "ozoneBlendDeg": 1.95 },
+//     "lamps": { "sunElevationDeg": 0, "randomDelaySec": 1, "turnOnSec": 1.5, "turnOnFlicker": 0.2, "turnOnExponent": 0.6 }
 //   }
 //
 // Every key is optional; an absent one keeps the struct default.
@@ -156,6 +157,16 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.milkyWayBrightness = std::clamp(Number(n, "milkyWay", s.milkyWayBrightness), 0.0f, 1000.0f);
         s.starTwinkle = std::clamp(Number(n, "twinkle", s.starTwinkle), 0.0f, 1.0f);
         s.siderealAtMidnightHours = Number(n, "siderealAtMidnight", s.siderealAtMidnightHours);
+    }
+    // Plan L: the night lamps' switch.
+    if (const auto it = j.find("lamps"); it != j.end() && it->is_object())
+    {
+        const nlohmann::json& l = *it;
+        s.lampSunElevationDeg = std::clamp(Number(l, "sunElevationDeg", s.lampSunElevationDeg), -90.0f, 90.0f);
+        s.lampRandomDelaySec = std::clamp(Number(l, "randomDelaySec", s.lampRandomDelaySec), 0.0f, 600.0f);
+        s.lampTurnOnSec = std::clamp(Number(l, "turnOnSec", s.lampTurnOnSec), 0.0f, 600.0f);
+        s.lampTurnOnFlicker = std::clamp(Number(l, "turnOnFlicker", s.lampTurnOnFlicker), 0.0f, 1.0f);
+        s.lampTurnOnExponent = std::clamp(Number(l, "turnOnExponent", s.lampTurnOnExponent), 0.01f, 10.0f);
     }
     // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
     if (const auto it = j.find("twilight"); it != j.end() && it->is_object())
@@ -316,6 +327,13 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "ozoneSunriseTint", { s.ozoneSunriseTint[0], s.ozoneSunriseTint[1], s.ozoneSunriseTint[2] } },
         { "ozoneBlendDeg", s.ozoneBlendDeg },
         { "lightHandOverDeg", s.lightHandOverDeg },
+    };
+    j["lamps"] = {
+        { "sunElevationDeg", s.lampSunElevationDeg },
+        { "randomDelaySec", s.lampRandomDelaySec },
+        { "turnOnSec", s.lampTurnOnSec },
+        { "turnOnFlicker", s.lampTurnOnFlicker },
+        { "turnOnExponent", s.lampTurnOnExponent },
     };
     return j;
 }

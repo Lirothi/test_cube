@@ -174,15 +174,17 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 spotCPU[i].positionRange = Math::float4(desc.position, desc.range);
                 spotCPU[i].directionCosOuter = Math::float4(light.GetDirection(), light.GetCosOuter());
                 spotCPU[i].colorIntensity =
-                    Math::float4(desc.color, render::CandelaFromLumens(desc.luminousFluxLm)); // P16.5
+                    Math::float4(desc.color, render::CandelaFromLumens(light.EffectiveFluxLm())); // P16.5; plan L's level
                 spotCPU[i].shadowParams = Math::float4(light.GetCosInner(),
                     static_cast<float>(lm.GetSpotShadowSlot(i)), light.GetInvAngleRange(),
                     light.GetShadowDepthBias());
                 spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f), 0.0f, 0.0f);
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
                 // S3a.6: an occluded influence volume can light no visible pixel -- zero range and
-                // intensity, keep the entry in place (the shadow slot mapping is by index).
-                if (frame_->spotLightOccluded && i < frame_->spotLightOccluded->size() && (*frame_->spotLightOccluded)[i])
+                // intensity, keep the entry in place (the shadow slot mapping is by index). Plan L: a lamp
+                // switched off (by day, or before it comes on) costs the same nothing.
+                if ((frame_->spotLightOccluded && i < frame_->spotLightOccluded->size() && (*frame_->spotLightOccluded)[i]) ||
+                    light.EffectiveFluxLm() <= 0.0f)
                 {
                     spotCPU[i].positionRange.w = 0.0f;
                     spotCPU[i].colorIntensity.w = 0.0f;
@@ -208,10 +210,11 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 pointCPU[i].shadowParams = Math::float4(
                     static_cast<float>(lm.GetPointShadowSlot(i)),
                     kPointShadowBias, pointShadowNear, desc.radius);
-                if (frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i])
+                if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
+                    desc.luminousFluxLm <= 0.0f)
                 {
                     pointCPU[i].radius = 0.0f;
-                    pointCPU[i].intensity = 0.0f; // S3a.6, see the spot loop
+                    pointCPU[i].intensity = 0.0f; // S3a.6 / plan L, see the spot loop
                 }
             }
         }

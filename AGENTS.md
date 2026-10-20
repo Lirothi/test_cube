@@ -51,6 +51,11 @@ only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--tim
 `setTime` ("18:30", "sunset", "+2h") and `setDate` ("2026-06-21", switches to real positions); every
 `timeOfDay.*` key is in the document, so `setEnvironment` reaches the rest.
 
+Night lamps (plan L, `rendering/lighting/NightLamps.h`): a point/spot light or a glowing mesh with `"onAt": "night"`
+(or `"day"`) switches when the sun crosses `timeOfDay.lamps.sunElevationDeg` (0 = UDS's Sunset), UDS-style delay and
+warm-up, instant when the clock is set by hand; a night lamp takes `nightBrightness` as the night comes in. Brightness,
+never `enabled` (that rebuilds the lights behind a GPU wait). MCP: `setOnAt` -- lights through the selection.
+
 ## Line Endings
 
 - Preserve the existing line ending style of every edited file.

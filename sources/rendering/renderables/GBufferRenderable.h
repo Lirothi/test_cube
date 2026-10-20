@@ -4,6 +4,7 @@
 
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
+#include "rendering/lighting/NightLamps.h"
 #include "materials/MaterialData.h"
 
 class GBufferRenderable : public RenderableObject, public IInstanceable
@@ -12,6 +13,7 @@ public:
     GBufferRenderable(const std::string& matPreset,
         const std::string& inputLayout,
         const std::wstring& graphicsShader);
+    ~GBufferRenderable() override;
 
     void Init(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
@@ -90,6 +92,18 @@ public:
         materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
     }
     float GetWindStrength() const { return windStrength_; }
+
+    // Plan L: a glowing mesh (a bulb, a lit window) that comes on at night -- the level object's "onAt"
+    // (NightLamps.h). Anything but Always registers it with NightLamps, which sets the emissive scale each frame.
+    void SetLampSwitch(LampSwitch lampSwitch);
+    LampSwitch GetLampSwitch() const { return lampSwitch_; }
+    // Every slot's emissive times this (1 = as authored). A change bumps the material version (the GPU instance
+    // mirror re-uploads) and the slot identity (a multi-slot batch shares its lead's slot params), so the
+    // frames it does not change cost nothing.
+    void SetEmissiveScale(float scale);
+    float InstanceEmissiveScale() const override { return emissiveScale_.load(std::memory_order_relaxed); }
+    // True when any slot glows at all -- the Inspector offers the switch only then.
+    bool HasEmissive() const;
 
     // Per-ASSET wind tuning (mesh.json, overridable per object in the level JSON).
     // windTrunkStiffness divides the main bend: >1 stiffer trunk, <1 whippier.
@@ -294,6 +308,8 @@ private:
     std::vector<std::string> slotPresets_;
     uint32_t currentDrawSlot_ = 0;
     uint32_t materialParamOverrideMask_ = 0;
+    LampSwitch lampSwitch_ = LampSwitch::Always; // plan L
+    std::atomic<float> emissiveScale_{ 1.0f };   // plan L, NightLamps' level (atomic: the recording workers read it)
     float windStrength_ = 0.0f; // W3: per-object sway strength, applied to every slot at Init
     float windTrunkStiffness_ = 1.0f;       // per-object; divides the main bend
     std::vector<float> windFoliageWeights_; // per-slot; empty => derive from alphaMask

@@ -391,6 +391,12 @@ namespace SceneObjectFactory
                 mesh.SetBuoyancySettings(std::move(settings));
             }
         }
+        // Plan L: "onAt": "night" (or "day") -- the mesh's emissive (a bulb, a lit window) comes on with the night
+        // lamps (rendering/lighting/NightLamps.h); absent = always.
+        if (o.contains("onAt") && o["onAt"].is_string())
+        {
+            mesh.SetLampSwitch(LampSwitchFromName(o["onAt"].get<std::string>()));
+        }
     }
 
     std::unique_ptr<RenderableObjectBase> CreateStaticMeshFromJson(const json& oIn)

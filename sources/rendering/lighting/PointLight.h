@@ -2,6 +2,7 @@
 #include <cstdint>
 #include "core/math/Math.h"
 #include "rendering/meshes/Mesh.h"
+#include "rendering/lighting/NightLamps.h"
 #include "materials/Material.h"
 
 class Renderer;
@@ -24,6 +25,7 @@ struct PointLightDesc {
     float        volumetricIntensity = 1.0f; // plan A4d: UE VolumetricScatteringIntensity -- this light's weight in the fog volume
     bool         shadowsEnabled = false; // if false, the point lights the scene but never casts a shadow (honored once Part B point shadows land)
     PointLightFlickerDesc flicker{};
+    LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
 };
 
 class PointLight {
@@ -37,6 +39,11 @@ public:
     // Smooth, deterministic modulation for fire-like lights. This deliberately uses
     // layered sine waves rather than frame-random values, which would visibly strobe.
     void Tick(float deltaTime);
+
+    // Plan L: the night lamps' level (NightLamps::Level), multiplied into the effective flux with the flicker.
+    // GetDesc() is that effective desc; the authored one stays as SetDesc gave it.
+    void SetLampLevel(float level);
+    float GetLampLevel() const { return lampLevel_; }
 
     // Rung 1 (Step 11) foundation: monotonic version bumped on any SetDesc (conservative — a
     // shadow cache compares it to detect a moved/changed light). PointLight has no dirty_, so
@@ -96,5 +103,6 @@ private:
     PointLightDesc baseDesc_{};
     PointLightDesc desc_{}; // effective desc after flicker modulation
     float flickerTime_ = 0.0f;
+    float lampLevel_ = 1.0f; // plan L
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDesc
 };

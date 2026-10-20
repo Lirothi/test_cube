@@ -58,9 +58,9 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     {
         const SpotLight& spot = spotLights_[i];
         const SpotLightDesc& desc = spot.GetDesc();
-        if (!desc.shadowsEnabled)
+        if (!desc.shadowsEnabled || spot.EffectiveFluxLm() <= 0.0f)
         {
-            continue; // lights the scene, but opted out of casting shadows
+            continue; // lights the scene, but opted out of casting shadows -- or lights nothing now (plan L, by day)
         }
         const AABB& influenceBounds = spot.GetConeBounds();
         if (!cameraFrustum.Intersects(influenceBounds))
@@ -137,9 +137,9 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     for (size_t i = 0; i < candidateCount; ++i)
     {
         const PointLightDesc& desc = pointLights_[i].GetDesc();
-        if (!desc.shadowsEnabled || desc.radius <= 0.0f)
+        if (!desc.shadowsEnabled || desc.radius <= 0.0f || desc.luminousFluxLm <= 0.0f)
         {
-            continue; // lights the scene, but never a cube-shadow caster
+            continue; // lights the scene, but never a cube-shadow caster -- or lights nothing now (plan L)
         }
         if (!cameraFrustum.Intersects(desc.position, desc.radius))
         {

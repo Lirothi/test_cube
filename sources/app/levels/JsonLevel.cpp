@@ -323,6 +323,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.volumetricIntensity = sl.value("volumetricIntensity", desc.volumetricIntensity); // plan A4d
             desc.shadowDepthBias = sl.value("shadowDepthBias", desc.shadowDepthBias);
             desc.shadowsEnabled = sl.value("shadowsEnabled", desc.shadowsEnabled);
+            desc.onAt = LampSwitchFromName(sl.value("onAt", std::string())); // plan L
             lightManager.SpotLights().push_back({});
             lightManager.SpotLights().back().SetDesc(desc);
         }
@@ -347,6 +348,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.shadowsEnabled = pl.value("shadowsEnabled", desc.shadowsEnabled);
             desc.volumetricIntensity = pl.value("volumetricIntensity", desc.volumetricIntensity); // plan A4d
             ParsePointLightFlicker(pl, desc);
+            desc.onAt = LampSwitchFromName(pl.value("onAt", std::string())); // plan L
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);
         }

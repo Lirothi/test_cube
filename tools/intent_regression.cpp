@@ -53,6 +53,8 @@
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "app/scene/TimeOfDaySettingsJson.h"
+#include "app/scene/TimeOfDay.h"
+#include "rendering/lighting/NightLamps.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
 #include "rendering/renderables/GBufferRenderable.h"
@@ -1435,6 +1437,128 @@ void TestBuoyancyIsAFlagThatUndoes(const EditorActionContext& actionCtx)
         Check(object.properties.find("buoyant") == object.properties.end(),
             "undo takes the key away -- the level saves exactly as before");
     }
+}
+
+// Plan L: the night lamps' switch on its own -- no editor. Settled at the first frame, a delay and a warm-up after
+// the sun crosses, out at once, instant when the clock is set by hand, and the delay continuous in position (a lamp
+// and its bulb together).
+void TestNightLampsSwitch()
+{
+    NightLamps lamps;
+    NightLamps::Params p;
+    p.randomDelaySec = 0.0f;
+    p.turnOnFlicker = 0.0f;
+    const Math::float3 here(3.0f, 1.0f, -7.0f);
+    Check(lamps.Tick(0.016, 20.0f, false, p) && !lamps.Night(), "the first frame settles: day");
+    Check(lamps.Level(LampSwitch::Night, here) == 0.0f && lamps.Level(LampSwitch::Day, here) == 1.0f &&
+          lamps.Level(LampSwitch::Always, here) == 1.0f, "by day a night lamp is off, a day lamp and an always one on");
+    Check(!lamps.Tick(0.016, 0.5f, false, p), "nothing switches while the sun is above the switch elevation");
+    Check(lamps.Tick(0.016, -0.5f, false, p) && lamps.Night(), "the sun under the horizon switches to night");
+    Check(lamps.Level(LampSwitch::Night, here) == 0.0f, "a night lamp starts its warm-up from 0");
+    Check(lamps.Level(LampSwitch::Day, here) == 0.0f, "a day lamp goes out at once");
+    lamps.Tick(0.75, -1.0f, false, p);
+    const float half = lamps.Level(LampSwitch::Night, here);
+    Check(std::fabs(half - std::pow(0.5f, p.turnOnExponent)) < 1.0e-4f,
+          "half-way through Turn On it stands at 0.5^exponent: " + std::to_string(half));
+    lamps.Tick(1.0, -1.5f, false, p);
+    Check(lamps.Level(LampSwitch::Night, here) == 1.0f, "and is full once Turn On has passed");
+    Check(lamps.Tick(0.016, 5.0f, true, p) && !lamps.Night() && lamps.Level(LampSwitch::Night, here) == 0.0f &&
+          lamps.Level(LampSwitch::Day, here) == 1.0f, "a clock set by hand switches everything at once");
+
+    // The delay: up to randomDelaySec, a smooth function of where the lamp stands.
+    NightLamps delayed;
+    p.randomDelaySec = 1.0f;
+    delayed.Tick(0.016, 10.0f, false, p);
+    delayed.Tick(0.016, -1.0f, false, p);
+    delayed.Tick(1.0, -1.0f, false, p); // 1 s in: mid warm-up for most
+    float maxLevelAfterTurnOn = 1.0f, maxGap = 0.0f;
+    for (int i = 0; i < 40; ++i)
+    {
+        const Math::float3 lamp(static_cast<float>(i) * 7.3f, 0.0f, static_cast<float>(i) * -3.1f);
+        const Math::float3 bulb = lamp + Math::float3(0.2f, 0.25f, 0.1f);
+        maxGap = std::max(maxGap, std::fabs(delayed.Level(LampSwitch::Night, lamp) - delayed.Level(LampSwitch::Night, bulb)));
+    }
+    float spread = 0.0f; // do lamps along a street come on at different moments?
+    {
+        NightLamps probe;
+        probe.Tick(0.016, 10.0f, false, p);
+        probe.Tick(0.016, -1.0f, false, p);
+        probe.Tick(1.2, -1.0f, false, p); // 1.2 s in: each lamp is somewhere in its warm-up
+        float lo = 1.0f, hi = 0.0f;
+        for (int i = 0; i < 40; ++i)
+        {
+            const float l = probe.Level(LampSwitch::Night, Math::float3(static_cast<float>(i) * 20.0f, 0.0f, 0.0f));
+            lo = std::min(lo, l);
+            hi = std::max(hi, l);
+        }
+        spread = hi - lo;
+        probe.Tick(1.5, -1.0f, false, p); // 2.7 s: past the longest delay (1) plus Turn On (1.5)
+        for (int i = 0; i < 40; ++i)
+        {
+            maxLevelAfterTurnOn = std::min(maxLevelAfterTurnOn,
+                probe.Level(LampSwitch::Night, Math::float3(static_cast<float>(i) * 20.0f, 0.0f, 0.0f)));
+        }
+    }
+    Check(maxGap < 0.1f, "a lamp and the bulb 0.3 m from it warm up together: gap " + std::to_string(maxGap));
+    Check(spread > 0.3f, "a street's lamps 20 m apart do not: spread " + std::to_string(spread));
+    Check(maxLevelAfterTurnOn == 1.0f, "every lamp is full after the longest delay and the warm-up");
+
+    // The time of day's hand-set flag survives the zero-length Ticks SetTimeOfDay / ApplyTimeOfDay make.
+    TimeOfDay tod;
+    TimeOfDaySettings s;
+    s.present = true;
+    s.timeHours = 17.0f;
+    s.animate = true;
+    DirectionalLight scene, sky;
+    tod.Reset(s, TimeOfDaySettingsJson::DefaultSun());
+    tod.Tick(0.0f, scene, sky);
+    Check(tod.TakeClockSetByHand(), "a level load is a clock set by hand -- seen after the load's own zero Tick");
+    tod.Tick(0.016f, scene, sky);
+    Check(!tod.TakeClockSetByHand(), "a running clock is not");
+    tod.SettingsRef().timeHours = 21.0f;
+    tod.Tick(0.016f, scene, sky);
+    Check(tod.TakeClockSetByHand(), "a time written from outside (--set, the slider) is");
+}
+
+// Plan L: setOnAt writes "onAt" on lights (their environment properties) and only there it means something here --
+// the palms do not glow, so they are refused and the refusal says why; one undo entry; undo takes the key away.
+// Lights are environment objects: an action reaches them through the selection, as every other one does.
+void TestLampsComeOnAtNight(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    Check(EditorActionRegistry::Builtin().Find("setOnAt") != nullptr, "setOnAt is a registered action");
+    ctx.selection.SetOrdered({ EditorObjectId{ 920 }, EditorObjectId{ 921 } }, EditorObjectId{ 920 });
+    std::string error;
+    EditorIntent intent;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"setOnAt","target":{"scope":"selected"},"params":{"onAt":"night"}})",
+        intent, error), "a setOnAt answer parses: " + error);
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable && preview.targets.size() == 2, "setOnAt previews the two lights: " + preview.problem);
+    EditorCommandStack stack;
+    std::string status;
+    Check(ExecuteIntent(actionCtx, stack, preview, status), status);
+    Check(stack.HistorySize() == 1, "two lamps are ONE history entry");
+    Check(status.find("2 light") != std::string::npos, "and it says what it switched: " + status);
+    for (const EditorObject& light : ctx.document.Environment())
+    {
+        Check(light.properties.value("onAt", std::string()) == "night", "each light now comes on at night: " + light.name);
+    }
+    stack.Undo(ctx);
+    for (const EditorObject& light : ctx.document.Environment())
+    {
+        Check(light.properties.find("onAt") == light.properties.end(), "undo takes the key away: " + light.name);
+    }
+
+    ctx.selection.Clear();
+    EditorIntent palms;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"setOnAt","target":{"filter":["palm"]},"params":{"onAt":"night"}})",
+        palms, error), "setOnAt on the palms parses: " + error);
+    const EditorIntentPreview palmPreview = BuildIntentPreview(actionCtx, palms);
+    status.clear();
+    Check(!ExecuteIntent(actionCtx, stack, palmPreview, status) && status.find("glow") != std::string::npos,
+          "palms that do not glow are refused, and the refusal says why: " + status);
 }
 
 // setSurface and setColor go through the Inspector's live path (InspectorMultiEdit::ApplySnapshot),
@@ -3392,6 +3516,28 @@ int main(int argc, char** argv)
         TestSpawnPlacement(actionCtx);
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
+        TestNightLampsSwitch();
+        {
+            // Plan L: the palm document with two lamps beside it (the palm one has no environment).
+            EditorSceneDocument lampDocument = MakePalmDocument();
+            EditorObject point;
+            point.id.value = 920;
+            point.type = "pointLight";
+            point.name = "Porch Light";
+            point.properties = Json{ { "enabled", true }, { "position", Json::array({ 1.0, 2.0, 3.0 }) },
+                                     { "radius", 6.0 }, { "luminousFluxLm", 3000.0 } };
+            lampDocument.Environment().push_back(point);
+            EditorObject spot = point;
+            spot.id.value = 921;
+            spot.type = "spotLight";
+            spot.name = "Street Light";
+            spot.properties["range"] = 14.0;
+            lampDocument.Environment().push_back(spot);
+            EditorSelection lampSelection;
+            EditorContext lampCtx{ *renderer, *scene, levels, lampDocument, lampSelection };
+            const EditorActionContext lampActionCtx{ lampCtx, assets, extensions };
+            TestLampsComeOnAtNight(lampActionCtx);
+        }
         TestSurfaceAndColourUndo(actionCtx);
         TestRestPose();
         TestPivotToBase();

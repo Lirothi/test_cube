@@ -1148,6 +1148,48 @@ Day > Twilight»), по умолчанию значения UDS:
 ожиданием GPU — EnvironmentRuntime.cpp:413-423, поэтому яркость, а не включение). События
 восхода/заката — в журнал (`scene`).
 
+#### Что сделано (2026-10-20), не закоммичено
+
+**Сначала UDS.** Его утилита `Blueprints/Utilities/Light_Day-Night_Toggle` (компонент на свете; прочитано в открытом
+UE владельца): `Light On At Night` (иначе наоборот), переключение по событиям UDS Sunset / Sunrise («солнце ушло под
+горизонт», `Sunset/Sunrise Event Offset` 0), `Random Delay` 1 с, `Animate Light Turning On` с `Turn On Animation
+Length` 1.5 с, `Turn On Animation Flicker` 0.2 (PerlinNoise1D), `Animation Intensity Curve Exponent` 0.6, скалярный
+параметр списка материалов (свечение), мгновенно при `Instant Time of Day Change`. Гаснет без анимации.
+
+**У нас** (`rendering/lighting/NightLamps.h/.cpp`):
+- ключ **`"onAt": "night" | "day"`** (нет ключа = всегда) у `pointLights` / `spotLights` и у мешей — у меша он
+  включает свечение (emissive). JsonLevel, EnvironmentRuntime (Apply и RebuildLights), SceneObjectFactory.
+- переключение — когда ЦЕНТР солнца пересекает **`timeOfDay.lamps.sunElevationDeg`** (0 = момент Sunset/Sunrise
+  UDS; у UDS сдвиг временем, у нас высотой — одинаково в simple и real); задержка до `randomDelaySec` (1), разгорание
+  `turnOnSec` (1.5) по t^`turnOnExponent` (0.6) с мерцанием `turnOnFlicker` (0.2) — дефолты UDS; гаснет сразу.
+- **задержка — гладкий шум позиции** (ячейка 10 м), не случайное число на лампу: фонари улицы зажигаются вразнобой,
+  а лампа и её плафон в 0.3 м — вместе (у нас они не связаны, у UDS компонент сам ведёт материалы). Тест: разрыв
+  лампа/плафон < 0.1, разброс фонарей через 20 м > 0.3.
+- **часы, переставленные руками** (загрузка, правка времени/даты, слайдер, `setTime`, `--set tod.time`) переключают
+  всё сразу: `TimeOfDay::TakeClockSetByHand` — флаг «до прочтения», иначе нулевой Tick из `SetTimeOfDay` /
+  `ApplyTimeOfDay` съедал его раньше, чем Scene его видел.
+- **яркость, не `enabled`**: `PointLight::SetLampLevel` (в эффективный поток вместе с мерцанием),
+  `SpotLight::EffectiveFluxLm`, `GBufferRenderable::SetEmissiveScale` (бамп версии материала и ключа слотов — только
+  в кадры, когда уровень меняется). Погашенная лампа: нулевая дальность в буфере (как перекрытая, S3a.6) и не берёт
+  слот тени. Излучение вошло в ключ совместимости многослотовых батчей (раньше его там не было — две копии с разным
+  пообъектным emissive делили CB лида).
+- **ночная лампа — ночной свет**: её уровень × `nightBrightness`^доля ночи (`TimeOfDay::NightShare`, солнце −6 → −12,
+  та же, что у `nightExposureEv`). Без этого при луне UDS (×11364, ~3600 лк) фонарь 4000 лм давал под собой ~35 лк — 1 %
+  лунного, на кадре ничего (замер: A/B «лампы / никогда» при закреплённой EV 12 — max 12 кодов на земле). Множитель
+  сразу на закате дал слепящие пятна на сумерках, которые светит НЕумноженное небо солнца, — поэтому он входит с ночью.
+- события `sunrise/sunset at HH:MM [on YYYY-MM-DD] [(clock set)]` и `lamps: night|day (sun X deg), N lights and M
+  glowing meshes switch [at once (clock set)]` — `scene`, по переходу.
+- Inspector: у ламп «On At» + строка «Now: night, at N %», у меша — «Night Lamp > Glow On At» (только если меш светится),
+  у Time of Day — группа «Lamps». `--set tod.lampSunElevationDeg` / `lampRandomDelaySec` / `lampTurnOnSec` /
+  `lampTurnOnFlicker` / `lampTurnOnExponent`. Действие **`setOnAt {onAt}`** (MCP / строка команд): лампы — через
+  выделение (объекты окружения резолвер не ищет по имени, как и во всех действиях), меши — и по имени; меш без
+  свечения пропускается с причиной. Тесты `TestNightLampsSwitch`, `TestLampsComeOnAtNight` (intent_regression).
+
+Замер вживую (копия wind_test в scratchpad с 4 точечными, прожектором с тенью и 2 плафонами; Франкфурт 27.09):
+день → ночь руками → день — мгновенно; живой закат — `sunset at 19:07`, лампы переключились по себе. При пороге 0°
+фонари загораются на закате, но против сумеречного неба их не видно (как в жизни), проступают к −8°, во всю силу к
+−11°; при пороге −8° видно само зажигание вразнобой. Debug с отладочным слоем — чисто.
+
 ---
 
 ## Гейты (сводно)

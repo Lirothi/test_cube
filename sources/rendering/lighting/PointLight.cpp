@@ -82,9 +82,17 @@ void PointLight::Tick(float deltaTime)
     ApplyFlicker();
 }
 
+void PointLight::SetLampLevel(float level)
+{
+    if (level == lampLevel_) { return; }
+    lampLevel_ = level;
+    ApplyFlicker();
+}
+
 void PointLight::ApplyFlicker()
 {
     desc_ = baseDesc_;
+    desc_.luminousFluxLm = baseDesc_.luminousFluxLm * lampLevel_; // plan L
     const PointLightFlickerDesc& flicker = baseDesc_.flicker;
     const float amplitude = std::clamp(flicker.amplitude, 0.0f, 1.0f);
     const float frequencyHz = std::max(flicker.frequencyHz, 0.0f);
@@ -100,7 +108,7 @@ void PointLight::ApplyFlicker()
         0.58f * std::sin(cycle + SeedPhase(flicker.seed, 0x68bc21ebu)) +
         0.28f * std::sin(cycle * 1.73f + SeedPhase(flicker.seed, 0x02e5be93u)) +
         0.14f * std::sin(cycle * 0.37f + SeedPhase(flicker.seed, 0x9e3779b9u));
-    desc_.luminousFluxLm = std::max(0.0f, baseDesc_.luminousFluxLm * (1.0f + amplitude * signal));
+    desc_.luminousFluxLm = std::max(0.0f, baseDesc_.luminousFluxLm * lampLevel_ * (1.0f + amplitude * signal));
 }
 
 mat4 PointLight::BuildModel() const

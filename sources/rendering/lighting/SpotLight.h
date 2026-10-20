@@ -5,6 +5,7 @@
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 #include "core/math/OBB.h"
+#include "rendering/lighting/NightLamps.h"
 
 struct SpotLightDesc {
     Math::float3 position = Math::float3(0.0f, 0.0f, 0.0f);
@@ -19,6 +20,7 @@ struct SpotLightDesc {
     float        shadowDepthBias = 0.001f;
     float        nearPlane = 0.1f;
     bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow
+    LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
 };
 
 class SpotLight {
@@ -38,6 +40,12 @@ public:
     void SetNearPlane(float nearPlane);
 
     const SpotLightDesc& GetDesc() const { return desc_; }
+
+    // Plan L: the night lamps' level (NightLamps::Level). The desc keeps the authored flux; what lights the frame
+    // and earns a shadow slot is EffectiveFluxLm.
+    void SetLampLevel(float level) { lampLevel_ = level; }
+    float GetLampLevel() const { return lampLevel_; }
+    float EffectiveFluxLm() const { return desc_.luminousFluxLm * lampLevel_; }
 
     const Math::float3& GetDirection() const { return direction_; }
     float GetInnerAngle() const { return innerAngle_; }
@@ -89,6 +97,7 @@ private:
     AABB  coneBounds_{};
     OBB   coneObb_{};
     bool         dirty_ = true;
+    float        lampLevel_ = 1.0f; // plan L
     std::uint32_t transformVersion_ = 0; // bumped in UpdateCachedData on an actual change (Step 11)
 };
 

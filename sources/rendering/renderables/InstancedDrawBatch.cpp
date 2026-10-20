@@ -118,7 +118,7 @@ void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer)
         sp->mrMultiply = p.mrMultiply;
         sp->texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
         sp->texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
-        const auto e = p.EmissiveLinear();
+        const auto e = p.EmissiveLinear() * leadInst_->InstanceEmissiveScale(); // plan L (the key keeps the run's equal)
         sp->emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
         sp->windFoliage = p.windFoliage;
         const MaterialData* slotData = leadInst_->InstanceSlotData(slot);

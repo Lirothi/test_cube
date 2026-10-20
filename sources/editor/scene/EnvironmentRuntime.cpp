@@ -185,6 +185,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
         ParsePointLightFlicker(p, d);
+        d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
         points[i].SetDesc(d);
     }
     else if (env.type == "spotLight")
@@ -206,6 +207,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
         d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
+        d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
         spots[i].SetDesc(d);
     }
     else if (env.type == "timeOfDay")
@@ -534,6 +536,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.shadowDepthBias = JF(p, "shadowDepthBias", d.shadowDepthBias);
             d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
+            d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
         }
@@ -549,6 +552,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
             d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
             ParsePointLightFlicker(p, d);
+            d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
         }

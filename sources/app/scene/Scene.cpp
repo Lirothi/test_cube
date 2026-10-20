@@ -22,6 +22,7 @@
 #include "rendering/debug/LodDebugView.h" // render::DrawLodDebug (LOD selection debug view)
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/renderables/InstancedDrawBatch.h" // S14 readout: count a batch's members, not the batch
+#include "rendering/renderables/GBufferRenderable.h"  // plan L: the glowing meshes' emissive scale
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0: per-view visibility counters
 #include "rendering/core/RenderStats.h"     // occlusion plan S0: draw/primitive totals in the readout
 #include "core/diagnostics/ArtifactWriter.h" // S7: headless cascade readout dump
@@ -1663,6 +1664,74 @@ void Scene::Tick(float deltaTime) {
     // dirLight_ -- after everything else this Tick wrote the light (the editor's apply runs before it), so
     // a level with a `timeOfDay` section always lights with the entity's light.
     timeOfDay_.Tick(deltaTime, dirLight_, skySun_);
+    // Plan L: then the lamps, by where the time of day has just put the sun.
+    TickNightLamps(deltaTime);
+}
+
+void Scene::TickNightLamps(float deltaTime)
+{
+    // The sun's height: the time of day's, else the level's own directional light's (a level without a clock
+    // still has a day or a night).
+    float sunElevationDeg = 90.0f;
+    bool clockSetByHand = false;
+    if (timeOfDay_.Present())
+    {
+        sunElevationDeg = timeOfDay_.SunElevationDeg();
+        clockSetByHand = timeOfDay_.TakeClockSetByHand();
+    }
+    else
+    {
+        const Math::float3 d = -dirLight_.GetDirection();
+        const float len = std::sqrt(std::max(1.e-12f, d.x * d.x + d.y * d.y + d.z * d.z));
+        sunElevationDeg = std::asin(std::clamp(d.y / len, -1.0f, 1.0f)) * 57.2957795f;
+    }
+    const TimeOfDaySettings& t = timeOfDay_.Settings();
+    NightLamps::Params params;
+    params.sunElevationDeg = t.lampSunElevationDeg;
+    params.randomDelaySec = t.lampRandomDelaySec;
+    params.turnOnSec = t.lampTurnOnSec;
+    params.turnOnFlicker = t.lampTurnOnFlicker;
+    params.turnOnExponent = t.lampTurnOnExponent;
+    const bool switched = nightLamps_.Tick(deltaTime, sunElevationDeg, clockSetByHand, params);
+
+    // A NIGHT lamp is night light, and takes Night Brightness as the moon and the night sky do
+    // (TimeOfDaySettings::nightBrightness): at UDS's moon (x11364, ~3600 lux of moonlight) a 4000-lm lamp's own
+    // ~35 lux under it was 1 % of the moonlight and lit nothing visible; scaled, lamp and moon keep the ratio they
+    // have outdoors (~100x under the lamp), and the lumens in the Inspector stay a bulb's. 1 = physics.
+    // It comes in with the NIGHT, not with the switch: at sunset the scene is lit by the sun's sky, which is not
+    // multiplied, and a lamp at x11364 there outshone the dusk (measured: blown pools at -0.3 degrees). So it rises in
+    // stops by the night's share (TimeOfDay::NightShare, sun -6 -> -12): a physical lamp at sunset, faint against
+    // the sky as street lights are, the full multiplier once the night is the moon's.
+    const float nightLight = timeOfDay_.Present()
+        ? std::pow(std::max(t.nightBrightness, 1.0e-6f), timeOfDay_.NightShare()) : 1.0f;
+    const auto scaleOf = [&](LampSwitch lampSwitch, const Math::float3& position) {
+        const float level = nightLamps_.Level(lampSwitch, position); // Always = 1, a no-op once there
+        return lampSwitch == LampSwitch::Night ? level * nightLight : level;
+    };
+    std::size_t lights = 0;
+    for (PointLight& light : lightManager_.PointLights())
+    {
+        const PointLightDesc& desc = light.GetDesc();
+        if (desc.onAt != LampSwitch::Always) { ++lights; }
+        light.SetLampLevel(scaleOf(desc.onAt, desc.position));
+    }
+    for (SpotLight& light : lightManager_.SpotLights())
+    {
+        const SpotLightDesc& desc = light.GetDesc();
+        if (desc.onAt != LampSwitch::Always) { ++lights; }
+        light.SetLampLevel(scaleOf(desc.onAt, desc.position));
+    }
+    const std::vector<GBufferRenderable*>& glowing = NightLamps::Registered();
+    for (GBufferRenderable* object : glowing)
+    {
+        object->SetEmissiveScale(scaleOf(object->GetLampSwitch(), object->GetPosition()));
+    }
+    if (switched && (lights > 0 || !glowing.empty()))
+    {
+        LOG_INFO(logging::LogCategory::Scene, "lamps: {} (sun {:.1f} deg), {} lights and {} glowing meshes switch{}",
+                 nightLamps_.Night() ? "night" : "day", sunElevationDeg, lights, glowing.size(),
+                 clockSetByHand ? " at once (clock set)" : "");
+    }
 }
 
 void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)

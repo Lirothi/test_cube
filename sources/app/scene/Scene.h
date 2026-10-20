@@ -27,6 +27,7 @@
 #include "vfx/WindState.h"
 #include "ocean/OceanBuoyancy.h"
 #include "app/scene/TimeOfDay.h"
+#include "rendering/lighting/NightLamps.h"
 
 class Renderer;
 class UploadBatch;
@@ -70,6 +71,8 @@ public:
     Math::float3 GetSunToward() const;
     void SetSunToward(const Math::float3& toward);
     const TimeOfDay& GetTimeOfDay() const { return timeOfDay_; }
+    // Plan L: the night lamps' switch (NightLamps.h) -- Night(), and an item's Level -- for the Inspector's read-out.
+    const NightLamps& GetNightLamps() const { return nightLamps_; }
     // P1: the level's photographic camera settings. Dormant by default (enabled = false), so this
     // is pure state until P2 schedules the metering passes that read it.
     const render::CameraExposureSettings& GetCameraExposure() const { return cameraExposure_; }
@@ -387,6 +390,8 @@ private:
     DirectionalLight dirLight_;
     TimeOfDay timeOfDay_{};    // T2: owns dirLight_ when the level has a `timeOfDay` section
     DirectionalLight skySun_;  // T2: the sky's sun while the time of day runs (frameData_.skyLight)
+    NightLamps nightLamps_{};  // plan L: lights / glowing meshes with "onAt" (TickNightLamps, after the time of day)
+    void TickNightLamps(float deltaTime);
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao

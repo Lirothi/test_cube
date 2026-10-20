@@ -40,6 +40,8 @@ public:
     // Non-zero stable key for the slot identity tested by SameInstanceSlots. Implementations may
     // cache it; the default keeps the exact field-by-field fallback for other renderable types.
     virtual std::uint64_t InstanceSlotsCompatibilityKey() const { return 0; }
+    // Plan L: what this object's emissive is multiplied by now (a lamp's bulb at night); part of the slot identity.
+    virtual float InstanceEmissiveScale() const { return 1.0f; }
 
     // True when `other` can join a run led by this object (slot sets + params identical).
     // Single-slot pairs always pass: their params ride the per-instance array instead.

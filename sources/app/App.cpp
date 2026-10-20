@@ -874,6 +874,12 @@ namespace
                 { "nightBrightness", &t.nightBrightness, 0.0f, 100000.0f },
                 { "daySkyBrightness", &t.daySkyBrightness, 0.0f, 10.0f },
                 { "nightExposureEv", &t.nightExposureEv, -10.0f, 10.0f },
+                // Plan L: the night lamps' switch (timeOfDay.lamps.*).
+                { "lampSunElevationDeg", &t.lampSunElevationDeg, -90.0f, 90.0f },
+                { "lampRandomDelaySec", &t.lampRandomDelaySec, 0.0f, 600.0f },
+                { "lampTurnOnSec", &t.lampTurnOnSec, 0.0f, 600.0f },
+                { "lampTurnOnFlicker", &t.lampTurnOnFlicker, 0.0f, 1.0f },
+                { "lampTurnOnExponent", &t.lampTurnOnExponent, 0.01f, 10.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
                 // N2: the night sky's layers (timeOfDay.nightSky.*).
                 { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },

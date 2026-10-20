@@ -79,7 +79,8 @@ public:
         UpdateUniform(owner, cbHandles_.mrMultiply, material, p.mrMultiply, cbData);
         UpdateUniform(owner, cbHandles_.texOffsScale, material, p.texOffsScale, cbData);
         UpdateUniform(owner, cbHandles_.texFlags, material, p.texFlags, cbData);
-        UpdateUniform(owner, cbHandles_.emissive, material, p.EmissiveLinear(), cbData);
+        UpdateUniform(owner, cbHandles_.emissive, material,
+                      p.EmissiveLinear() * (gb ? gb->InstanceEmissiveScale() : 1.0f), cbData); // plan L's level
         UpdateUniform(owner, cbHandles_.windStrength, material,
                       gb ? gb->EffectiveWindStrength(p.windStrength) : p.windStrength, cbData);
         UpdateUniform(owner, cbHandles_.windFoliage, material, p.windFoliage, cbData); // per-slot
@@ -170,9 +171,11 @@ bool IInstanceable::SameInstanceSlots(const IInstanceable& other) const
         const MaterialParams* a = InstanceSlotParams(i);
         const MaterialParams* b = other.InstanceSlotParams(i);
         if (!a || !b) { if (a != b) { return false; } continue; }
+        const float3 ea = a->EmissiveLinear() * InstanceEmissiveScale();
+        const float3 eb = b->EmissiveLinear() * other.InstanceEmissiveScale();
         if (!eq4(a->baseColor, b->baseColor) || !eq2(a->metalRough, b->metalRough) ||
             a->mrMultiply != b->mrMultiply || !eq4(a->texOffsScale, b->texOffsScale) ||
-            !eq4(a->texFlags, b->texFlags))
+            !eq4(a->texFlags, b->texFlags) || ea.x != eb.x || ea.y != eb.y || ea.z != eb.z)
         {
             return false;
         }
@@ -207,11 +210,47 @@ std::uint64_t GBufferRenderable::InstanceSlotsCompatibilityKey() const
         mixFloat(p.texOffsScale.z); mixFloat(p.texOffsScale.w);
         mixFloat(p.texFlags.x); mixFloat(p.texFlags.y);
         mixFloat(p.texFlags.z); mixFloat(p.texFlags.w);
+        // The per-slot CB carries the emissive too (InstancedDrawBatch::PrepareSlotBindings), so two copies glowing
+        // differently -- an authored override, or plan L's lamps mid-warm-up -- must not share one.
+        const Math::float3 e = p.EmissiveLinear() * InstanceEmissiveScale();
+        mixFloat(e.x); mixFloat(e.y); mixFloat(e.z);
     }
 
     if (h == 0) { h = 1; } // zero is the uncached/fallback sentinel
     instanceSlotsCompatibilityKey_.store(h, std::memory_order_relaxed);
     return h;
+}
+
+GBufferRenderable::~GBufferRenderable()
+{
+    if (lampSwitch_ != LampSwitch::Always) { NightLamps::Unregister(this); }
+}
+
+void GBufferRenderable::SetLampSwitch(LampSwitch lampSwitch)
+{
+    if (lampSwitch == lampSwitch_) { return; }
+    if (lampSwitch_ != LampSwitch::Always) { NightLamps::Unregister(this); }
+    lampSwitch_ = lampSwitch;
+    if (lampSwitch_ != LampSwitch::Always) { NightLamps::Register(this); }
+    else { SetEmissiveScale(1.0f); } // back to as authored at once; nobody sets it from here on
+}
+
+void GBufferRenderable::SetEmissiveScale(float scale)
+{
+    if (scale == emissiveScale_.load(std::memory_order_relaxed)) { return; }
+    emissiveScale_.store(scale, std::memory_order_relaxed);
+    instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
+    materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool GBufferRenderable::HasEmissive() const
+{
+    for (const MaterialParams& p : matParamses_)
+    {
+        const Math::float3 e = p.EmissiveLinear();
+        if (e.x > 0.0f || e.y > 0.0f || e.z > 0.0f) { return true; }
+    }
+    return false;
 }
 
 GBufferRenderable::GBufferRenderable(const std::string& matPreset,
@@ -638,7 +677,7 @@ void GBufferRenderable::FillInstanceDataForSlot(render::InstancePerObject& out, 
     out.texOffsScale = DirectX::XMFLOAT4(p.texOffsScale.x, p.texOffsScale.y, p.texOffsScale.z, p.texOffsScale.w);
     out.texFlags = DirectX::XMFLOAT4(p.texFlags.x, p.texFlags.y, p.texFlags.z, p.texFlags.w);
     out.objectId = ToObjectId32(GetEditorObjectId());
-    const auto e = p.EmissiveLinear();
+    const auto e = p.EmissiveLinear() * InstanceEmissiveScale(); // plan L's level
     out.emissive = DirectX::XMFLOAT3(e.x, e.y, e.z);
     out.windStrength = EffectiveWindStrength(p.windStrength); // W3 uniform per object; W8 distance fade
     out.windLeafScale = GetWindLeafScaleWorld();

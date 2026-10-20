@@ -572,6 +572,32 @@ namespace
                 executeChange(std::move(after), historyLabel);
             }
         };
+        // Plan L: when a light comes on (rendering/lighting/NightLamps.h); the key is absent while it is "always".
+        auto onAtCombo = [&]()
+        {
+            const LampSwitch current = LampSwitchFromName(tgt().value("onAt", std::string()));
+            static const char* const kLabels[] = { "Always", "At night", "By day" };
+            int index = static_cast<int>(current);
+            if (ImGui::Combo("On At", &index, kLabels, 3) && index != static_cast<int>(current))
+            {
+                nlohmann::json after = props;
+                if (index == 0) { after.erase("onAt"); }
+                else { after["onAt"] = LampSwitchName(static_cast<LampSwitch>(index)); }
+                executeChange(std::move(after), "Set Light On At");
+            }
+            InspectorHelp("A lamp that comes on at night: it switches when the sun goes down past Time of Day > "
+                          "Lamps > Switch At (0 = sunset, as Ultra Dynamic Sky's Sunset event), after a delay of "
+                          "up to Random Delay, warming up over Turn On with a flicker; it goes out at once at "
+                          "sunrise. By day = the opposite. Setting the clock by hand switches it at once. Off, "
+                          "it costs no shading and takes no shadow slot. A night lamp is night light: Time of Day > "
+                          "Night Brightness multiplies it as it does the moon, so the lumens stay a bulb's.");
+            if (current != LampSwitch::Always)
+            {
+                const NightLamps& lamps = ctx.scene.GetNightLamps();
+                const float level = lamps.Level(current, JsonFloat3(tgt(), "position", Math::float3(0.0f, 0.0f, 0.0f)));
+                ImGui::TextDisabled("Now: %s, at %.0f %%", lamps.Night() ? "night" : "day", level * 100.0f);
+            }
+        };
 
         // P8B: the five level-wide look groups, lifted out of the type chain so they can be
         // drawn EITHER as their own legacy object or as a section of the folded "postProcess"
@@ -2011,6 +2037,7 @@ namespace
             dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             checkB("Cast Shadows", "shadowsEnabled", false);
+            onAtCombo();
 
             bool flickerEnabled = tgt().contains("flicker") && tgt()["flicker"].is_object();
             if (ImGui::Checkbox("Flicker", &flickerEnabled))
@@ -2082,6 +2109,7 @@ namespace
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             dragF3("Direction", "direction", Math::float3(0.0f, -1.0f, 0.0f), 0.01f);
             checkB("Cast Shadows", "shadowsEnabled", false);
+            onAtCombo();
             dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
             dragF("Shadow Depth Bias", "shadowDepthBias", 0.0001f, 0.00005f, 0.0f, 1.0f, "%.6f");
         }
@@ -2496,12 +2524,39 @@ namespace
             }
             ImGui::PopID();
 
+            // Plan L: when the lamps marked "On At: night" (lights, glowing meshes) switch, and how they come on.
+            groupKey = "lamps";
+            ImGui::PushID("lamps");
+            ImGui::SeparatorText("Lamps");
+            {
+                const TimeOfDaySettings defaults{};
+                dragF("Switch At Sun (deg)", "sunElevationDeg", defaults.lampSunElevationDeg, 0.05f, -90.0f, 90.0f, "%.2f");
+                InspectorHelp("The lamps marked On At: night (lights, and meshes that glow) come on when the sun's centre "
+                              "goes under this elevation and go out when it comes back over it. 0 = sunset and "
+                              "sunrise, the moment Ultra Dynamic Sky fires its Sunset / Sunrise events; -3 = a little "
+                              "into the dusk, as a street's light sensors do.");
+                dragF("Random Delay (s)", "randomDelaySec", defaults.lampRandomDelaySec, 0.01f, 0.0f, 600.0f, "%.2f");
+                InspectorHelp("Each lamp switches up to this many seconds after the sun crosses -- a smooth noise of where "
+                              "it stands, so a street's lamps come on one by one while a light and the glowing bulb "
+                              "beside it come on together. UDS's Random Delay: 1. 0 = all at once.");
+                dragF("Turn On (s)", "turnOnSec", defaults.lampTurnOnSec, 0.01f, 0.0f, 600.0f, "%.2f");
+                dragF("Turn On Flicker", "turnOnFlicker", defaults.lampTurnOnFlicker, 0.01f, 0.0f, 1.0f, "%.2f");
+                dragF("Turn On Exponent", "turnOnExponent", defaults.lampTurnOnExponent, 0.01f, 0.01f, 10.0f, "%.2f");
+                InspectorHelp("How a lamp comes on: over Turn On seconds, its brightness along t^Exponent, flickering by "
+                              "up to Flicker while it warms (UDS's Light Day/Night Toggle: 1.5 s, 0.6, 0.2). It goes "
+                              "out at once. A clock set by hand -- the time slider, setTime -- switches every lamp at "
+                              "once.");
+                ImGui::TextDisabled("Now: %s", ctx.scene.GetNightLamps().Night() ? "night (lamps on)" : "day (lamps off)");
+            }
+            ImGui::PopID();
+
             groupKey.clear();
             ImGui::SeparatorText("Night");
             dragF("Night Brightness", "nightBrightness", 1.0f, 0.01f, 0.0f, 100000.0f, "%.2f",
                   ImGuiSliderFlags_Logarithmic);
-            InspectorHelp("A manual multiplier on the night's light: the moon's and the night sky's (airglow, "
-                          "stars, the Milky Way). 1 = physics: the full moon 1/375000 of the sun. Ultra Dynamic "
+            InspectorHelp("A manual multiplier on the night's light: the moon's, the night sky's (airglow, "
+                          "stars, the Milky Way) and the night lamps' (lights and glows set On At: night), so a "
+                          "lamp keeps its place against the moonlight. 1 = physics: the full moon 1/375000 of the sun. Ultra Dynamic "
                           "Sky's moon is 1/33 of its sun -- about 11400 here -- and that is what makes its dawn a "
                           "moonlit blue sky until the sun is nearly up; pair it with an exposure curve that keeps "
                           "the night darker than the day (Camera Exposure > Compensation curve).");

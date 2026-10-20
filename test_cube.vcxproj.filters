@@ -288,6 +288,9 @@
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -379,6 +382,9 @@
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/lighting/Astronomy.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/NightLamps.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/levels/JsonLevel.cpp">
@@ -917,6 +923,9 @@
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
@@ -1344,6 +1353,9 @@
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/TimeOfDaySettings.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/NightLamps.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/VolumetricCloudSettingsJson.h">
