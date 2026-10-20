@@ -1,6 +1,7 @@
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/diagnostics/ArtifactWriter.h"
 #include "core/task/TaskSystem.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <atomic>
@@ -8,6 +9,9 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <latch>
+#include <stdexcept>
+#include <unordered_set>
 #include <thread>
 #include <vector>
 
@@ -59,7 +63,7 @@ void Check(bool ok, const char* what)
 }
 
 // Concurrent create/submit/recycle churn from external threads. Exercises the
-// tagged freelists (acquire/recycle race from many threads), detached lambda
+// task caches (acquire/recycle race from many threads), detached lambda
 // tasks, range tasks, and Wait() on non-worker threads.
 void ScenarioConcurrentChurn(unsigned workerCount, unsigned externalThreads, int iterations)
 {
@@ -167,7 +171,7 @@ void ScenarioFanOutAtCapacity(unsigned workerCount, int iterations)
 }
 
 // Repeated Start/Stop with in-flight detached and tracked work. Exercises the
-// shutdown path (WaitForAll + sentinel drain) that the lost-wakeup fix touched.
+// shutdown path (WaitForAll + queued-reference drain) that the lost-wakeup fix touched.
 void ScenarioStartStopCycles(unsigned workerCount, int cycles)
 {
     ScopedSeconds timing(gStartStopSeconds);
@@ -191,6 +195,226 @@ void ScenarioStartStopCycles(unsigned workerCount, int cycles)
     std::snprintf(what, sizeof(what), "start/stop cycles workers=%u cycles=%d (sum %lld == %lld)",
         workerCount, cycles, sum.load(), expected);
     Check(sum.load() == expected, what);
+}
+
+// Each deterministic regression has a deadline so a scheduling regression fails
+// the gate instead of leaving a hung harness behind. Diagnostics use the session.
+class ScenarioDeadline {
+public:
+    explicit ScenarioDeadline(const char* name) : thread_([this, name]() {
+        std::unique_lock lock(mutex_);
+        if (!cv_.wait_for(lock, std::chrono::seconds(30), [this] { return done_; })) {
+            LOG_FATAL(logging::LogCategory::Task, "task regression timed out: {}", name);
+            std::_Exit(98);
+        }
+    }) {}
+    ~ScenarioDeadline()
+    {
+        {
+            std::lock_guard lock(mutex_);
+            done_ = true;
+        }
+        cv_.notify_one();
+        thread_.join();
+    }
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    std::thread thread_;
+};
+
+void RegressionCheck(bool ok, const char* name)
+{
+    Check(ok, name); // retain the existing stress artifact's summary
+    if (ok) {
+        LOG_INFO(logging::LogCategory::Task, "task regression PASS: {}", name);
+    } else {
+        LOG_ERROR(logging::LogCategory::Task, "task regression FAIL: {}", name);
+    }
+}
+
+void ScenarioSaturatedProducers(unsigned workerCount)
+{
+    ScenarioDeadline deadline("saturated producers");
+    auto& ts = TaskSystem::Get();
+    ts.Start(workerCount);
+    constexpr std::size_t kChildren = 768;
+    std::vector<std::atomic<unsigned>> hits(workerCount * kChildren);
+    for (auto& hit : hits) { hit.store(0); }
+    std::latch started(workerCount), go(1);
+    for (unsigned producer = 0; producer < workerCount; ++producer) {
+        ts.SubmitDetach([&, producer] {
+            started.count_down();
+            go.wait();
+            // Every worker is a producer, and none can consume until its Submit
+            // loop returns. Overflow must neither spin nor execute arbitrary work.
+            for (std::size_t i = 0; i < kChildren; ++i) {
+                ts.SubmitDetach([&, index = producer * kChildren + i] { ++hits[index]; });
+            }
+        });
+    }
+    started.wait();
+    go.count_down();
+    ts.WaitForAll(); // deliberately no helping from the main thread
+    ts.Stop();
+    const bool once = std::all_of(hits.begin(), hits.end(), [](const auto& h) { return h.load() == 1; });
+    RegressionCheck(once, workerCount == 1 ? "single-worker queue saturation" : "all-worker queue saturation");
+}
+
+void ScenarioLargeRange()
+{
+    ScenarioDeadline deadline("large range");
+    auto& ts = TaskSystem::Get();
+    ts.Start(1);
+    std::atomic<unsigned> ran{0};
+    auto range = ts.Dispatch(300, [&](std::size_t) { ++ran; }, 1);
+    ts.WaitForAll();
+    ts.Release(range);
+    ts.Stop();
+    RegressionCheck(ran.load() == 300, "range larger than ready queue");
+}
+
+void ScenarioRangeExceptions()
+{
+    ScenarioDeadline deadline("range exceptions");
+    auto& ts = TaskSystem::Get();
+    ts.Start(2);
+    LOG_INFO(logging::LogCategory::Task, "task regression: expecting two intentional callback exceptions");
+    std::atomic<unsigned> ran{0};
+    ts.DispatchWait(16, [&](std::size_t i) {
+        if (i == 7) { throw std::runtime_error("task regression: intentional child exception"); }
+        ++ran;
+    }, 1);
+    RegressionCheck(ran.load() == 15, "throwing child still completes and joins");
+
+    std::latch first(1), releaseChild(1);
+    std::atomic<bool> childDone{false};
+    std::thread release([&] {
+        first.wait();
+        // Hold the child beyond the throw so an early completion is observable.
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        releaseChild.count_down();
+    });
+    ts.DispatchWait(2, [&](std::size_t i) {
+        if (i == 0) {
+            first.count_down();
+            throw std::runtime_error("task regression: intentional first-chunk exception");
+        }
+        releaseChild.wait();
+        childDone.store(true);
+    }, 1);
+    RegressionCheck(childDone.load(), "first-chunk exception joins outstanding children");
+    release.join();
+    ts.Stop();
+}
+
+void ScenarioNestedTracking()
+{
+    ScenarioDeadline deadline("nested tracking");
+    auto& ts = TaskSystem::Get();
+    ts.Start(1);
+    std::latch started(1), go(1);
+    std::atomic<unsigned> ran{0};
+    auto parent = ts.Submit([&] {
+        started.count_down();
+        go.wait();
+        ts.DispatchTrack(8, [&](std::size_t) {
+            ts.DispatchTrack(4, [&](std::size_t) { ++ran; }, 1);
+        }, 1);
+    });
+    started.wait();
+    ts.TrackFrameTask(parent);
+    std::thread release([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        go.count_down();
+    });
+    ts.WaitForTrackedAsyncTasks();
+    RegressionCheck(ran.load() == 32, "tracked wait drains recursively registered work");
+    release.join();
+    ts.Stop();
+}
+
+void ScenarioTargetedWait()
+{
+    ScenarioDeadline deadline("targeted wait");
+    auto& ts = TaskSystem::Get();
+    ts.Start(1);
+    std::latch started(1), go(1);
+    std::atomic<unsigned> ran{0};
+    auto a = ts.CreateTask([&] {
+        started.count_down();
+        go.wait();
+        ts.DispatchWait(1, [&](std::size_t) { ++ran; }, 1);
+    });
+    auto b = ts.CreateTask([&] { ++ran; });
+    ts.SetDependencies(b, &a, 1);
+    auto c = ts.CreateTask([&] { ts.Wait(b); ++ran; });
+    ts.Submit(a);
+    started.wait();
+    ts.Submit(c); // FIFO places unrelated C before A's newly-created child
+    go.count_down();
+    ts.WaitForAll();
+    RegressionCheck(ran.load() == 3, "nested wait never executes a dependent of its ancestor");
+    ts.Release(a); ts.Release(b); ts.Release(c);
+    ts.Stop();
+}
+
+void ScenarioPrerequisiteLifetime()
+{
+    ScenarioDeadline deadline("prerequisite lifetime");
+    auto& ts = TaskSystem::Get();
+    ts.Start(1);
+    std::latch started(1), go(1);
+    ts.SubmitDetach([&] { started.count_down(); go.wait(); });
+    started.wait(); // all progress below must come from targeted main-thread help
+    std::atomic<unsigned> ran{0};
+    auto root = ts.CreateTask([&] { ++ran; });
+    auto middle = ts.CreateTask([&] { ++ran; });
+    auto leaf = ts.CreateTask([&] { ++ran; });
+    ts.SetDependencies(middle, &root, 1);
+    ts.SetDependencies(leaf, &middle, 1);
+    ts.Submit(root);
+    ts.Release(root); ts.Release(middle);
+    ts.Wait(leaf);
+    RegressionCheck(ran.load() == 3, "targeted help retains and traverses prerequisites");
+    ts.Release(leaf);
+    go.count_down();
+    ts.Stop(); // must release the already-completed entries still in the ring
+}
+
+void ScenarioPoolOwnership()
+{
+    ScenarioDeadline deadline("pool ownership");
+    auto& ts = TaskSystem::Get();
+    std::unordered_set<TaskSystem::TaskHandle> live;
+    std::mutex liveMutex;
+    std::atomic<bool> duplicate{false};
+    std::vector<std::thread> threads;
+    for (unsigned t = 0; t < 4; ++t) {
+        threads.emplace_back([&] {
+            for (unsigned i = 0; i < 70000; ++i) {
+                TaskSystem::TaskHandle handles[] = {
+                    ts.CreateTask([] {}), ts.CreateTask([] {}),
+                    ts.CreateRangeTask(1, [](std::size_t) {}), ts.CreateRangeTask(1, [](std::size_t) {})
+                };
+                {
+                    std::lock_guard lock(liveMutex);
+                    for (auto handle : handles) {
+                        if (!live.insert(handle).second) { duplicate.store(true); }
+                    }
+                }
+                std::this_thread::yield();
+                {
+                    std::lock_guard lock(liveMutex);
+                    for (auto handle : handles) { live.erase(handle); }
+                }
+                for (auto& handle : handles) { ts.Release(handle); }
+            }
+        });
+    }
+    for (auto& thread : threads) { thread.join(); }
+    RegressionCheck(!duplicate.load(), "concurrent pool ownership beyond 65536 reuse cycles");
 }
 
 // Death test: a fifth dependent must abort the process (fail-fast instead of
@@ -243,9 +467,19 @@ int RunTaskSystemStress(bool overflowDeathTest)
     const auto t0 = std::chrono::steady_clock::now();
     Log("task system stress, hardware threads: %u\n", hw);
 
+    ScenarioSaturatedProducers(1);
+    ScenarioSaturatedProducers(4);
+    ScenarioLargeRange();
+    ScenarioRangeExceptions();
+    ScenarioNestedTracking();
+    ScenarioTargetedWait();
+    ScenarioPrerequisiteLifetime();
+    ScenarioPoolOwnership();
+
     // One round is a few seconds; races need wall-clock, so run many.
     constexpr int kRounds = 50;
     for (int round = 0; round < kRounds; ++round) {
+        ScenarioDeadline deadline("stress round");
         Log("--- round %d/%d ---\n", round + 1, kRounds);
 
         ScenarioConcurrentChurn(hw, 8, 4000);
@@ -272,6 +506,8 @@ int RunTaskSystemStress(bool overflowDeathTest)
     Log("scenario totals: churn %.2fs, nested %.2fs, fanout %.2fs, startstop %.2fs\n",
         gChurnSeconds, gNestedSeconds, gFanOutSeconds, gStartStopSeconds);
     Log("done in %.1fs, failures: %d\n", seconds, gFailures);
+    LOG_INFO(logging::LogCategory::Task, "task system stress: {} ({} failures)",
+        gFailures == 0 ? "PASS" : "FAIL", gFailures);
     gLog.Close();
     return gFailures;
 }

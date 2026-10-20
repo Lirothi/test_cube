@@ -42,15 +42,20 @@ public:
 
         TaskSystem& owner_;
         TaskKind kind_;
-        TaskWithDeps* nextFree_{nullptr};
+        // Only the overflow publisher / detached-batch consumer touches this link.
+        // The ready queue owns a reference until that consumer releases the entry.
+        TaskWithDeps* nextReady_{nullptr};
         std::atomic<std::size_t> pendingDeps_{0};
-        //std::vector<TaskHandle> dependents_;
         tc::inl_vector<TaskHandle, 4> dependents_;
+        // Immutable after dependency setup; owns references for targeted helping.
+        std::vector<TaskHandle> prerequisites_;
         // Completion flag, waited on via C++20 atomic wait. Waiters must hold a
         // reference to the handle so the task cannot be recycled under them.
         std::atomic<std::uint32_t> completed_{0};
         std::atomic<bool> submitted_{false};
         std::atomic<bool> scheduled_{false};
+        std::atomic<bool> ready_{false};
+        std::atomic<bool> executionClaimed_{false};
         std::atomic<int> refCount_{1};
 
     protected:
@@ -61,6 +66,8 @@ public:
 
     static TaskSystem& Get();
 
+    // Lifecycle calls are externally serialized; external producers must stop
+    // submitting before Stop. Work spawned by already-running tasks is drained.
     void Start(unsigned threadCount = 0);
     void Stop();
 
@@ -87,9 +94,13 @@ public:
                         std::function<void(std::size_t)> fn,
                         std::size_t batchSize = 1);
 
+    // May execute this task or its explicit prerequisites, never unrelated work.
+    // Callers must own the handle until Wait returns; dependency graphs are acyclic.
     void Wait(TaskHandle handle);
     void Release(TaskHandle& handle);
 
+    // Transfers the caller's reference. Waiting also drains tasks registered by
+    // those tasks, without holding the registration mutex across user callbacks.
     void TrackFrameTask(TaskHandle handle);
     void WaitForTrackedAsyncTasks();
 
@@ -126,13 +137,9 @@ private:
         std::function<void(std::size_t)> fn_;
         std::size_t jobCount_;
         std::size_t batchSize_;
-        std::mutex chunkMutex_;
-        std::condition_variable chunkCv_;
-        // Outstanding chunk count guarded by the task ref count so captured lambdas
-        // keep the range task (and its synchronization primitives) alive.
-        std::atomic<std::size_t> pendingChunks_{0};
     };
 
+    TaskSystem();
     ~TaskSystem();
 
     LambdaTaskSet* AcquireLambdaTask(Task& fn, std::size_t depCapacity);
@@ -152,10 +159,10 @@ private:
     void OnDependencyComplete(TaskWithDeps* dependent);
 
     void RunTask(TaskWithDeps* task);
+    bool TryRunTask(TaskWithDeps* task);
+    bool HelpTask(TaskWithDeps* task);
     void FinishTask(TaskWithDeps* task);
     void WorkerLoop(std::size_t index);
-    void WaitForWork();
-    bool RunInlineTask();
     std::size_t NextPowerOfTwo(std::size_t value) const;
 
     class LockFreeQueue;
@@ -166,22 +173,25 @@ private:
     std::atomic<bool> shutdown_{false};
     // A task is outstanding from Submit until FinishTask; its execution window is
     // strictly inside that, so this single counter covers the WaitForAll predicate.
-    // Hot atomics below are cache-line separated: each is hammered by a different
-    // mix of threads (submit/finish vs push/pop-notify vs pool acquire/recycle).
+    // Submission/completion, wakeups and overflow publication use separate lines.
     alignas(64) std::atomic<std::size_t> outstandingTasks_{0};
     mutable std::mutex waitMutex_;
     std::condition_variable waitCv_;
     std::mutex trackedFrameMutex_;
     std::vector<TaskHandle> trackedFrameTasks_;
-    std::atomic<std::size_t> workerCount_{0};
-    alignas(64) std::atomic<std::size_t> availableTasks_{0};
-    // Treiber-stack freelists. Heads are tagged pointers: low 48 bits = node,
-    // high 16 bits = pop counter, guarding against ABA (pop A / pop B / push A
-    // between another thread's load and CAS).
-    alignas(64) std::atomic<std::uintptr_t> lambdaPool_{0};
-    alignas(64) std::atomic<std::uintptr_t> rangePool_{0};
+    // An epoch (not an item count) also changes at shutdown, so atomic::wait
+    // cannot miss a wake when all queued entries have already been claimed.
+    alignas(64) std::atomic<std::uint64_t> workEpoch_{0};
+    // Full-ring fallback: MPSC push + atomic whole-list detach. No speculative
+    // reads of a node's link, no finite pointer tag, and no producer waits for space.
+    alignas(64) std::atomic<TaskWithDeps*> overflow_{nullptr};
+    // Bounded MPMC pointer caches; excess recycled nodes are deleted. A consumer
+    // claims the queue cell before reading its pointer, never a speculative node.
+    std::unique_ptr<LockFreeQueue> lambdaPool_;
+    std::unique_ptr<LockFreeQueue> rangePool_;
 
     static thread_local std::size_t workerIndex_;
+    static thread_local TaskWithDeps* currentTask_;
 };
 
 #endif // TASKSYSTEM_USE_LOCKFREE

@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <immintrin.h>
 #include <limits>
 #include <thread>
@@ -18,31 +19,11 @@
 namespace {
 constexpr std::size_t kInvalidThreadIndex = std::numeric_limits<std::size_t>::max();
 
-// Tagged freelist heads: user-mode x64 pointers fit in 48 bits, leaving 16 bits
-// for a counter that is bumped on every pop. A node popped and pushed back
-// between another thread's head load and its CAS then carries a different tag,
-// so the stale CAS fails instead of corrupting the list (classic ABA).
-constexpr std::uintptr_t kTagShift = 48;
-constexpr std::uintptr_t kPtrMask = (std::uintptr_t(1) << kTagShift) - 1;
-
-template <typename T>
-T* TaggedPtr(std::uintptr_t value)
-{
-    return reinterpret_cast<T*>(value & kPtrMask);
-}
-
-std::uintptr_t MakeTagged(const void* ptr, std::uintptr_t tag)
-{
-    return (reinterpret_cast<std::uintptr_t>(ptr) & kPtrMask) | (tag << kTagShift);
-}
-
-std::uintptr_t TagOf(std::uintptr_t value)
-{
-    return value >> kTagShift;
-}
+constexpr std::size_t kPoolCapacity = 4096;
 }
 
 thread_local std::size_t TaskSystem::workerIndex_ = kInvalidThreadIndex;
+thread_local TaskSystem::TaskWithDeps* TaskSystem::currentTask_ = nullptr;
 
 class TaskSystem::LockFreeQueue {
 public:
@@ -122,6 +103,12 @@ TaskSystem& TaskSystem::Get()
     return instance;
 }
 
+TaskSystem::TaskSystem()
+    : lambdaPool_(std::make_unique<LockFreeQueue>(kPoolCapacity))
+    , rangePool_(std::make_unique<LockFreeQueue>(kPoolCapacity))
+{
+}
+
 TaskSystem::~TaskSystem()
 {
     Stop();
@@ -133,21 +120,21 @@ TaskSystem::TaskWithDeps::TaskWithDeps(TaskSystem& owner, TaskKind kind, std::si
     : owner_(owner)
     , kind_(kind)
 {
-    (void)depCapacity;
+    prerequisites_.reserve(depCapacity);
 }
 
 void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
 {
     pendingDeps_.store(0, std::memory_order_relaxed);
-    if (dependents_.capacity() < depCapacity) {
-        assert(false && "dependents_.capacity() < depCapacity");
-    }
+    prerequisites_.reserve(depCapacity);
     dependents_.clear();
     completed_.store(0, std::memory_order_relaxed);
     submitted_.store(false, std::memory_order_relaxed);
     scheduled_.store(false, std::memory_order_relaxed);
     refCount_.store(1, std::memory_order_relaxed);
-    nextFree_ = nullptr;
+    ready_.store(false, std::memory_order_relaxed);
+    executionClaimed_.store(false, std::memory_order_relaxed);
+    nextReady_ = nullptr;
 }
 
 bool TaskSystem::TaskWithDeps::AddDependent(TaskHandle dependent)
@@ -226,7 +213,6 @@ void TaskSystem::RangeTaskSet::Reset(std::size_t jobCount,
     fn_ = std::move(fn);
     jobCount_ = jobCount;
     batchSize_ = batchSize == 0 ? 1 : batchSize;
-    pendingChunks_.store(0, std::memory_order_relaxed);
 }
 
 void TaskSystem::RangeTaskSet::Execute()
@@ -235,69 +221,54 @@ void TaskSystem::RangeTaskSet::Execute()
         return;
     }
 
-    std::size_t chunkCount = (jobCount_ + batchSize_ - 1) / batchSize_;
-    if (chunkCount == 0) {
-        return;
-    }
-
-    pendingChunks_.store(chunkCount, std::memory_order_relaxed);
-
-    auto processChunk = [this](std::size_t begin, std::size_t end) {
-        for (std::size_t i = begin; i < end; ++i) {
+    // Avoid overflow in jobCount + batchSize - 1. Each child is a normal task:
+    // RunTask catches its exception and completes it even when its body throws.
+    const std::size_t chunkCount = 1 + (jobCount_ - 1) / batchSize_;
+    std::vector<TaskHandle> chunks;
+    chunks.reserve(chunkCount - 1);
+    std::exception_ptr failure;
+    try {
+        for (std::size_t chunk = 1; chunk < chunkCount; ++chunk) {
+            const std::size_t begin = chunk * batchSize_;
+            const std::size_t end = begin + std::min(batchSize_, jobCount_ - begin);
+            auto child = owner_.CreateTask([this, begin, end]() {
+                for (std::size_t i = begin; i < end; ++i) {
+                    fn_(i);
+                }
+            });
+            chunks.push_back(child); // reserved above; ownership cannot be lost here
+            owner_.Submit(child);
+        }
+        for (std::size_t i = 0; i < std::min(batchSize_, jobCount_); ++i) {
             fn_(i);
         }
-    };
-
-    auto signalCompletion = [this]() {
-        if (pendingChunks_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-            std::lock_guard<std::mutex> lock(chunkMutex_);
-            chunkCv_.notify_one();
-        }
-    };
-
-    for (std::size_t chunk = 1; chunk < chunkCount; ++chunk) {
-        std::size_t begin = chunk * batchSize_;
-        std::size_t end = std::min(begin + batchSize_, jobCount_);
-        owner_.Retain(this); // ensure the range task outlives detached chunk work
-        owner_.SubmitDetach([this, begin, end, signalCompletion]() {
-            for (std::size_t i = begin; i < end; ++i) {
-                fn_(i);
-            }
-            signalCompletion();
-            owner_.ReleaseRef(this);
-        });
+    } catch (...) {
+        failure = std::current_exception();
     }
 
-    std::size_t firstEnd = std::min(batchSize_, jobCount_);
-    processChunk(0, firstEnd);
-    signalCompletion();
-    while (pendingChunks_.load(std::memory_order_acquire) != 0) {
-        if (!owner_.RunInlineTask()) {
-            std::unique_lock<std::mutex> lock(chunkMutex_);
-            chunkCv_.wait(lock, [&]() {
-                return pendingChunks_.load(std::memory_order_acquire) == 0;
-            });
-        }
+    // Join even if the first chunk or child allocation threw. This Execute's
+    // reference keeps this and fn_ alive; completion never precedes child work.
+    for (auto& child : chunks) {
+        owner_.Wait(child);
+        owner_.Release(child);
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
     }
 }
 
 TaskSystem::LambdaTaskSet* TaskSystem::AcquireLambdaTask(Task& fn, std::size_t depCapacity)
 {
-    std::uintptr_t head = lambdaPool_.load(std::memory_order_acquire);
-    while (true) {
-        auto* node = TaggedPtr<LambdaTaskSet>(head);
-        if (!node) {
-            break;
-        }
-        auto* next = static_cast<LambdaTaskSet*>(node->nextFree_);
-        const std::uintptr_t desired = MakeTagged(next, TagOf(head) + 1);
-        if (lambdaPool_.compare_exchange_weak(head,
-                                             desired,
-                                             std::memory_order_acq_rel,
-                                             std::memory_order_acquire)) {
+    TaskWithDeps* cached = nullptr;
+    if (lambdaPool_->pop(cached)) {
+        auto* node = static_cast<LambdaTaskSet*>(cached);
+        try {
             node->Reset(std::move(fn), depCapacity);
-            return node;
+        } catch (...) {
+            delete node;
+            throw;
         }
+        return node;
     }
     return new LambdaTaskSet(*this, std::move(fn), depCapacity);
 }
@@ -307,21 +278,16 @@ TaskSystem::RangeTaskSet* TaskSystem::AcquireRangeTask(std::size_t jobCount,
                                                        std::size_t batchSize,
                                                        std::size_t depCapacity)
 {
-    std::uintptr_t head = rangePool_.load(std::memory_order_acquire);
-    while (true) {
-        auto* node = TaggedPtr<RangeTaskSet>(head);
-        if (!node) {
-            break;
-        }
-        auto* next = static_cast<RangeTaskSet*>(node->nextFree_);
-        const std::uintptr_t desired = MakeTagged(next, TagOf(head) + 1);
-        if (rangePool_.compare_exchange_weak(head,
-                                             desired,
-                                             std::memory_order_acq_rel,
-                                             std::memory_order_acquire)) {
+    TaskWithDeps* cached = nullptr;
+    if (rangePool_->pop(cached)) {
+        auto* node = static_cast<RangeTaskSet*>(cached);
+        try {
             node->Reset(jobCount, std::move(fn), batchSize, depCapacity);
-            return node;
+        } catch (...) {
+            delete node;
+            throw;
         }
+        return node;
     }
     return new RangeTaskSet(*this, jobCount, std::move(fn), batchSize, depCapacity);
 }
@@ -333,11 +299,15 @@ void TaskSystem::RecycleTask(TaskWithDeps* task)
     }
 
     task->dependents_.clear();
+    for (auto* prerequisite : task->prerequisites_) {
+        ReleaseRef(prerequisite);
+    }
+    task->prerequisites_.clear();
     task->pendingDeps_.store(0, std::memory_order_relaxed);
     task->submitted_.store(false, std::memory_order_relaxed);
     task->scheduled_.store(false, std::memory_order_relaxed);
     task->refCount_.store(0, std::memory_order_relaxed);
-    task->nextFree_ = nullptr;
+    task->nextReady_ = nullptr;
 
     switch (task->kind_) {
     case TaskKind::Lambda:
@@ -351,59 +321,33 @@ void TaskSystem::RecycleTask(TaskWithDeps* task)
 
 void TaskSystem::RecycleLambdaTask(LambdaTaskSet* task)
 {
-    if (!task) {
-        return;
-    }
-
     task->fn_ = Task();
-    std::uintptr_t head = lambdaPool_.load(std::memory_order_relaxed);
-    std::uintptr_t desired;
-    do {
-        task->nextFree_ = TaggedPtr<LambdaTaskSet>(head);
-        desired = MakeTagged(task, TagOf(head));
-    } while (!lambdaPool_.compare_exchange_weak(head,
-                                                desired,
-                                                std::memory_order_release,
-                                                std::memory_order_relaxed));
+    if (!lambdaPool_->push(task)) {
+        delete task;
+    }
 }
 
 void TaskSystem::RecycleRangeTask(RangeTaskSet* task)
 {
-    if (!task) {
-        return;
-    }
-
     task->fn_ = nullptr;
-    task->jobCount_ = 0;
-    task->batchSize_ = 1;
-    std::uintptr_t head = rangePool_.load(std::memory_order_relaxed);
-    std::uintptr_t desired;
-    do {
-        task->nextFree_ = TaggedPtr<RangeTaskSet>(head);
-        desired = MakeTagged(task, TagOf(head));
-    } while (!rangePool_.compare_exchange_weak(head,
-                                               desired,
-                                               std::memory_order_release,
-                                               std::memory_order_relaxed));
+    if (!rangePool_->push(task)) {
+        delete task;
+    }
 }
 
 void TaskSystem::ClearLambdaPool()
 {
-    auto* node = TaggedPtr<LambdaTaskSet>(lambdaPool_.exchange(0, std::memory_order_acquire));
-    while (node) {
-        auto* next = static_cast<LambdaTaskSet*>(node->nextFree_);
-        delete node;
-        node = next;
+    TaskWithDeps* task = nullptr;
+    while (lambdaPool_->pop(task)) {
+        delete task;
     }
 }
 
 void TaskSystem::ClearRangePool()
 {
-    auto* node = TaggedPtr<RangeTaskSet>(rangePool_.exchange(0, std::memory_order_acquire));
-    while (node) {
-        auto* next = static_cast<RangeTaskSet*>(node->nextFree_);
-        delete node;
-        node = next;
+    TaskWithDeps* task = nullptr;
+    while (rangePool_->pop(task)) {
+        delete task;
     }
 }
 
@@ -430,18 +374,57 @@ void TaskSystem::RunTask(TaskWithDeps* task)
         return;
     }
 
+    auto* previousTask = currentTask_;
+    currentTask_ = task;
     try {
         task->Execute();
+    } catch (const std::exception& error) {
+        // Wait remains non-throwing, as before; failures are session events.
+        LOG_ERROR_ONCE_PER_MESSAGE(logging::LogCategory::Task, "Task callback threw: {}", error.what());
     } catch (...) {
-        // Swallowed by design: the previous promise-based path stored the
-        // exception but no caller ever rethrew it (Wait never called get()).
+        LOG_ERROR_ONCE(logging::LogCategory::Task, "Task callback threw a non-standard exception");
     }
+    currentTask_ = previousTask;
 
     task->completed_.store(1, std::memory_order_release);
     task->completed_.notify_all();
 
     task->NotifyDependents();
     FinishTask(task);
+}
+
+bool TaskSystem::TryRunTask(TaskWithDeps* task)
+{
+    if (!task->ready_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    bool expected = false;
+    if (!task->executionClaimed_.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+        return false;
+    }
+    // Execution and the queue entry own separate references: a targeted waiter
+    // may finish this task long before a worker removes its queued pointer.
+    Retain(task);
+    RunTask(task);
+    return true;
+}
+
+bool TaskSystem::HelpTask(TaskWithDeps* task)
+{
+    if (task->completed_.load(std::memory_order_acquire) != 0) {
+        return false;
+    }
+    if (TryRunTask(task)) {
+        return true;
+    }
+    if (task->pendingDeps_.load(std::memory_order_acquire) != 0) {
+        for (auto* prerequisite : task->prerequisites_) {
+            if (HelpTask(prerequisite)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 void TaskSystem::FinishTask(TaskWithDeps* task)
@@ -467,21 +450,25 @@ void TaskSystem::Schedule(TaskWithDeps* task)
         return;
     }
 
-    Retain(task);
+    Retain(task); // ready-queue reference, independent of execution
+    task->ready_.store(true, std::memory_order_release);
     if (!running_.load(std::memory_order_acquire) || !queue_) {
-        RunTask(task);
+        TryRunTask(task);
+        ReleaseRef(task);
         return;
     }
 
-    // Count before publishing: a consumer can pop the task the instant push
-    // completes, and decrementing before our increment would wrap the unsigned
-    // counter. Counting first keeps it >= the real item count at all times; the
-    // worst case is a brief spurious worker wake during the increment->push gap.
-    availableTasks_.fetch_add(1, std::memory_order_release);
-    while (!queue_->push(task)) {
-        std::this_thread::yield();
+    if (!queue_->push(task)) {
+        // Never execute arbitrary work on the producer's stack and never wait
+        // for a consumer: either can deadlock when producers are themselves tasks.
+        auto* head = overflow_.load(std::memory_order_relaxed);
+        do {
+            task->nextReady_ = head;
+        } while (!overflow_.compare_exchange_weak(head, task,
+            std::memory_order_release, std::memory_order_relaxed));
     }
-    availableTasks_.notify_one();
+    workEpoch_.fetch_add(1, std::memory_order_release);
+    workEpoch_.notify_one();
 }
 
 void TaskSystem::OnDependencyComplete(TaskWithDeps* dependent)
@@ -495,59 +482,33 @@ void TaskSystem::OnDependencyComplete(TaskWithDeps* dependent)
 void TaskSystem::WorkerLoop(std::size_t index)
 {
     workerIndex_ = index;
-    {
-        // Name for the session log's [tid=.../Name] column and the debugger. Once per thread
-        // start; does not touch scheduling.
-        char name[32];
-        std::snprintf(name, sizeof(name), "Worker%zu", index);
-        logging::SetCurrentThreadName(name);
-    }
+    char name[32];
+    std::snprintf(name, sizeof(name), "Worker%zu", index);
+    logging::SetCurrentThreadName(name);
     while (true) {
+        // Snapshot BEFORE looking for work: a publication/shutdown between the
+        // last failed pop and wait changes the value and cannot be missed.
+        const auto epoch = workEpoch_.load(std::memory_order_acquire);
         TaskWithDeps* task = nullptr;
-        if (queue_ && queue_->pop(task)) {
-            availableTasks_.fetch_sub(1, std::memory_order_acq_rel);
-            if (!task) {
-                break;
+        if (queue_->pop(task)) {
+            TryRunTask(task);
+            ReleaseRef(task);
+        } else if (auto* batch = overflow_.exchange(nullptr, std::memory_order_acquire)) {
+            // The whole list is exclusively ours. Read each link while its
+            // queue reference is held; neither helpers nor recycling can change it.
+            while (batch) {
+                auto* next = batch->nextReady_;
+                TryRunTask(batch);
+                ReleaseRef(batch);
+                batch = next;
             }
-            RunTask(task);
         } else if (shutdown_.load(std::memory_order_acquire)) {
             break;
         } else {
-            WaitForWork();
+            workEpoch_.wait(epoch, std::memory_order_acquire);
         }
     }
     workerIndex_ = kInvalidThreadIndex;
-}
-
-void TaskSystem::WaitForWork()
-{
-    while (!shutdown_.load(std::memory_order_acquire)) {
-        std::size_t expected = availableTasks_.load(std::memory_order_acquire);
-        if (expected != 0) {
-            return;
-        }
-        availableTasks_.wait(expected, std::memory_order_acquire);
-    }
-}
-
-bool TaskSystem::RunInlineTask()
-{
-    if (!queue_) {
-        return false;
-    }
-
-    TaskWithDeps* task = nullptr;
-    if (!queue_->pop(task)) {
-        return false;
-    }
-
-    availableTasks_.fetch_sub(1, std::memory_order_acq_rel);
-    if (!task) {
-        return true;
-    }
-
-    RunTask(task);
-    return true;
 }
 
 std::size_t TaskSystem::NextPowerOfTwo(std::size_t value) const
@@ -581,8 +542,6 @@ void TaskSystem::Start(unsigned threadCount)
     queue_ = std::make_unique<LockFreeQueue>(capacity);
     shutdown_.store(false, std::memory_order_release);
     running_.store(true, std::memory_order_release);
-    workerCount_.store(threadCount, std::memory_order_release);
-    availableTasks_.store(0, std::memory_order_release);
 
     workers_.reserve(threadCount);
     for (std::size_t i = 0; i < threadCount; ++i) {
@@ -592,23 +551,19 @@ void TaskSystem::Start(unsigned threadCount)
 
 void TaskSystem::Stop()
 {
-    if (!running_.exchange(false, std::memory_order_acq_rel)) {
+    if (!running_.load(std::memory_order_acquire)) {
         return;
     }
 
+    // Keep scheduling normally while draining: tasks may still spawn children.
     WaitForAll();
+    running_.store(false, std::memory_order_release);
     shutdown_.store(true, std::memory_order_release);
-    availableTasks_.notify_all();
+    workEpoch_.fetch_add(1, std::memory_order_release);
+    workEpoch_.notify_all();
 
-    if (queue_) {
-        for (std::size_t i = 0; i < workers_.size(); ++i) {
-            availableTasks_.fetch_add(1, std::memory_order_release);
-            while (!queue_->push(nullptr)) {
-                std::this_thread::yield();
-            }
-            availableTasks_.notify_one();
-        }
-    }
+    // Workers drain even already-completed queue entries and the overflow list
+    // before exiting, releasing their queue references before queue_ is destroyed.
 
     for (auto& worker : workers_) {
         if (worker.joinable()) {
@@ -618,7 +573,6 @@ void TaskSystem::Stop()
     workers_.clear();
     queue_.reset();
     shutdown_.store(false, std::memory_order_release);
-    workerCount_.store(0, std::memory_order_release);
 }
 
 TaskSystem::TaskHandle TaskSystem::Submit(Task t)
@@ -669,6 +623,9 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
     assert(!handle->submitted_.load(std::memory_order_acquire) &&
            "SetDependencies must run before the target task is submitted");
 
+    // Reserve before registering any edges, so allocation failure cannot leave
+    // a partially registered graph. Stored prerequisites stay alive for Wait.
+    handle->prerequisites_.reserve(depCount);
     bool registered = false;
     for (std::size_t i = 0; i < depCount; ++i) {
         TaskHandle dep = deps[i];
@@ -680,6 +637,8 @@ void TaskSystem::SetDependencies(TaskHandle handle, const TaskHandle* deps, std:
         // once it can actually run.
         assert(!dep->scheduled_.load(std::memory_order_acquire) &&
                "Cannot add a dependent to a task that is already scheduled");
+        Retain(dep);
+        handle->prerequisites_.push_back(dep);
         handle->IncrementDependency();
         if (!dep->AddDependent(handle)) {
             // Fan-out overflow is fatal in every build config: the alternatives
@@ -755,40 +714,26 @@ void TaskSystem::DispatchDetach(std::size_t jobCount,
 
 void TaskSystem::Wait(TaskHandle handle)
 {
-    //CPU_SCOPE(ProfilerScopes::kService2);
     if (!handle) {
         return;
     }
-
-    if (workerIndex_ == kInvalidThreadIndex) {
-        // Non-worker (main thread): help drain the queue while the task is
-        // pending; once there is no inline work left, block on the completion
-        // flag (futex-backed, woken by RunTask's notify_all). Workers handle
-        // anything queued after we block.
-        while (handle->completed_.load(std::memory_order_acquire) == 0) {
-            if (!RunInlineTask()) {
-                handle->completed_.wait(0, std::memory_order_acquire);
-            }
-        }
-        return;
-    }
-
-    // Worker context (e.g. CSM/spot-shadow passes calling DispatchWait from a
-    // render-graph task): never fully block. A worker parked on completed_ stops
-    // watching availableTasks_, so work pushed after its last failed pop would be
-    // invisible to it — with every worker parked that way, the queue would never
-    // drain. Keep helping; between attempts spin briefly, then yield.
     while (handle->completed_.load(std::memory_order_acquire) == 0) {
-        if (RunInlineTask()) {
+        if (HelpTask(handle)) {
             continue;
         }
-        for (int i = 0; i < 64; ++i) {
-            if (handle->completed_.load(std::memory_order_acquire) != 0) {
-                return;
+        if (!currentTask_) {
+            // External waiters can park. A task executing on any thread (also
+            // the main thread) keeps checking its target for newly-ready work.
+            handle->completed_.wait(0, std::memory_order_acquire);
+        } else {
+            for (int i = 0; i < 64; ++i) {
+                if (handle->completed_.load(std::memory_order_acquire) != 0) {
+                    return;
+                }
+                _mm_pause();
             }
-            _mm_pause();
+            std::this_thread::yield();
         }
-        std::this_thread::yield();
     }
 }
 
@@ -813,12 +758,26 @@ void TaskSystem::TrackFrameTask(TaskHandle handle)
 
 void TaskSystem::WaitForTrackedAsyncTasks()
 {
-    std::lock_guard<std::mutex> lock(trackedFrameMutex_);
-    for (TaskHandle& handle : trackedFrameTasks_) {
-        Wait(handle);
-        Release(handle);
+    std::vector<TaskHandle> pending;
+    for (;;) {
+        {
+            std::lock_guard<std::mutex> lock(trackedFrameMutex_);
+            if (trackedFrameTasks_.empty()) {
+                // Keep the reusable frame list's capacity after the unlocked join.
+                if (pending.capacity() > trackedFrameTasks_.capacity()) {
+                    pending.swap(trackedFrameTasks_);
+                }
+                return;
+            }
+            pending.swap(trackedFrameTasks_);
+        }
+        for (auto& handle : pending) {
+            Wait(handle);
+            Release(handle);
+        }
+        pending.clear();
+        // Tasks we just joined may themselves have registered tracked work.
     }
-    trackedFrameTasks_.clear();
 }
 
 void TaskSystem::WaitForAll()
