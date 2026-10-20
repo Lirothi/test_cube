@@ -664,6 +664,8 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     CullDecisions dec{};
     cmdFrameReady_ = false; // A6: decided below for this frame; a frame the cull skips has no merged draws
     cmdMerge_ = { false, false };
+    localCompactFrame_ = false; // S6a: likewise -- a frame the cull skips has no compacted rows
+    localCompactViews_ = 0;
     if (!cullClearMat_ || !cullMat_) { return dec; }
     if (count_ == 0 || numMeshGroups_ == 0) { return dec; }
     // A6: this frame's GroupMask copy for the bindless masked PSO (heap indices change with
@@ -721,10 +723,29 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         }
     }
 
+    // Local-light plan S6a: the atlas local views' rows compacted for one ExecuteIndirect each. Atlas modes only (VSM
+    // renders the local views from these rows per page), with the mega buffer the compacted records point into. The
+    // draws ask localCompactFrame_, set HERE on the main thread like cmdMerge_ (they record on workers in parallel).
+    {
+        const std::uint32_t views = activeViews_ > render::kShadowViewCascades ? activeViews_ - render::kShadowViewCascades : 0u;
+        dec.localCompact = render::g_localShadowCompact && !render::VsmActive() && views > 0u &&
+                           localCompactMat_ && localCompactMat_->GetPipelineState() &&
+                           localArgs_.Valid() && localCounts_.Valid() &&
+                           MegaReady() && megaVB_.Get() && megaIB_.Get() && GroupLodMegaSrv().ptr != 0;
+        dec.localViews = dec.localCompact ? views : 0u;
+        localCompactFrame_ = dec.localCompact;
+        localCompactViews_ = dec.localViews;
+    }
+
     dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(indirectCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    if (dec.localCompact)
+    {
+        ctx.Use(localArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(localCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
     // S5b: the counters are zeroed by the cull-clear every frame (bound unconditionally, so the
     // table has no hole), the rest only on a testing frame -- the post pass returns those to
     // their canonical states, and on other frames nothing touches them.
@@ -881,6 +902,11 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    if (dec.localCompact)
+    {
+        ctx.Use(localArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        ctx.Use(localCounts_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    }
     if (dec.gbuffer)
     {
         ctx.Use(camArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
@@ -1333,6 +1359,22 @@ void ShadowGpuData::RecordGBufferCommandExpand(Renderer* renderer, ID3D12Graphic
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         count, 1,
         cmds.buffer.Get());
+}
+
+void ShadowGpuData::RecordLocalArgsCompact(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t views)
+{
+    if (!renderer || !cl || views == 0u || !localCompactMat_) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount) { return; }
+    struct CompactCB { std::uint32_t numGroups, firstView, numViews, pad; };
+    const CompactCB c{ numVirtualGroups_, render::kShadowViewCascades, views, 0u };
+    // One 64-thread group per view: the helper divides both extents by its 8x8 group.
+    RecordComputeDispatch(renderer, cl, localCompactMat_.get(), static_cast<UINT>(sizeof(CompactCB)),
+        [c](std::uint8_t* dst) { std::memcpy(dst, &c, sizeof(c)); },
+        { GroupLodMegaSrv() },
+        { cullUav_[f], cullUav_[14 * render::kFrameCount + f], cullUav_[15 * render::kFrameCount + f] },
+        D3D12_GPU_DESCRIPTOR_HANDLE{},
+        views * kComputeDispatchGroupSize, kComputeDispatchGroupSize);
 }
 
 bool ShadowGpuData::IsGiIndirectActive() const
@@ -1988,6 +2030,16 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     EnsureUavRing(renderer, indirectArgs_, numViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.IndirectArgs");
     EnsureUavRing(renderer, visibleList_, numViews * casters * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.VisibleList");
     EnsureUavRing(renderer, indirectCounts_, numViews * sizeof(std::uint32_t), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"ShadowGpuData.IndirectCounts");
+    // Local-light plan S6a: the atlas local views' compacted rows (non-empty records, mega offsets) and their counts,
+    // written by shadow_args_compact_cs after the cull, read by ExecuteIndirect -- they rest where the draws read them.
+    // Both are RAW views per region, and a RAW view's first element must sit on 16 bytes: 138 views x 4 B = 552 put
+    // region 1 of the counts at element 138, which the debug layer rejects (and Release crashed on), so round up.
+    {
+        const size_t localViews = render::kMaxShadowViews - render::kShadowViewCascades;
+        const auto align16 = [](size_t bytes) { return (bytes + 15u) & ~static_cast<size_t>(15u); };
+        EnsureUavRing(renderer, localArgs_, align16(localViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalArgs");
+        EnsureUavRing(renderer, localCounts_, align16(localViews * sizeof(std::uint32_t)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalCounts");
+    }
     // S5b: the cascade HZB cull's buffers -- cascade rows only, otherwise the layout of the pair
     // above. The counters rest in UAV (the cull-clear zeroes them every frame, tested or not).
     {
@@ -2350,6 +2402,19 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             gbufferCmdExpandMat_.reset();
         }
     }
+    // Local-light plan S6a: the atlas local views' args compaction. Optional -- without it a view keeps one
+    // ExecuteIndirect per mesh group.
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/shadow_args_compact_cs.hlsl";
+        cd.csEntry = "CSMain";
+        localCompactMat_ = mm->GetOrCreateCompute(renderer, cd);
+        if (!localCompactMat_ || !localCompactMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "shadow_args_compact_cs.hlsl did not build a PSO; local-light views keep one ExecuteIndirect per group");
+            localCompactMat_.reset();
+        }
+    }
     // Step 4 (GI→VSM): the GI-scatter compute that folds each GPU-instanced object's per-instance
     // transforms into the unified caster buffers. Optional — a failure just leaves GI on the CPU tail.
     {
@@ -2642,6 +2707,8 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
         };
         rawUav(camCmds_, 12);
         rawUav(camCmdsB_, 13);
+        rawUav(localArgs_, 14);   // S6a
+        rawUav(localCounts_, 15);
     }
 }
 
@@ -2997,6 +3064,13 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
             renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
         }
+    }
+
+    // Local-light plan S6a: the local views' non-empty records, once the cull's InterlockedAdds have landed (the UAV
+    // barrier above) and before the validation copy takes the args to COPY_SOURCE.
+    if (dec.localCompact)
+    {
+        RecordLocalArgsCompact(renderer, cl, dec.localViews);
     }
 
     // A6: pair the camera cull's counts with the PSO-sorted static part into the bindless commands
@@ -3512,6 +3586,31 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     visVBV.SizeInBytes = static_cast<UINT>(list.regionBytes);
     visVBV.StrideInBytes = sizeof(std::uint32_t);
     cl->IASetVertexBuffers(1, 1, &visVBV);
+
+    // Local-light plan S6a: an atlas local view whose rows were compacted this frame (PrepareCullPass decided it on
+    // the main thread) is ONE ExecuteIndirect over its non-empty records, the mega VB/IB bound once -- not a bind and
+    // a draw per mesh group that had a caster anywhere in the scene.
+    if (!passB && localCompactFrame_ && viewSlot >= render::kShadowViewCascades &&
+        viewSlot - render::kShadowViewCascades < localCompactViews_)
+    {
+        D3D12_VERTEX_BUFFER_VIEW vbv{};
+        vbv.BufferLocation = megaVB_.Get()->GetGPUVirtualAddress();
+        vbv.SizeInBytes = megaVBBytes_;
+        vbv.StrideInBytes = megaStride_;
+        cl->IASetVertexBuffers(0, 1, &vbv);
+        D3D12_INDEX_BUFFER_VIEW ibv{};
+        ibv.BufferLocation = megaIB_.Get()->GetGPUVirtualAddress();
+        ibv.SizeInBytes = megaIBBytes_;
+        ibv.Format = megaIndexFormat_;
+        cl->IASetIndexBuffer(&ibv);
+        const std::uint32_t local = viewSlot - render::kShadowViewCascades;
+        renderer->ExecuteIndirect(cl, sig, numVirtualGroups_, localArgs_.buffer.Get(),
+            static_cast<UINT64>(f) * localArgs_.regionBytes +
+                static_cast<UINT64>(local) * numVirtualGroups_ * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS),
+            localCounts_.buffer.Get(),
+            static_cast<UINT64>(f) * localCounts_.regionBytes + static_cast<UINT64>(local) * sizeof(std::uint32_t));
+        return true;
+    }
 
     const UINT64 argRegionBase = static_cast<UINT64>(f) * args.regionBytes;
     const Mesh* boundMesh = nullptr; // B3: a mesh's submesh groups are contiguous — bind once

@@ -150,6 +150,11 @@ inline bool g_localShadowFadeUe = true;
 inline bool g_localShadowBiasTexel = true;
 inline float g_localShadowNormalTexels = 3.0f;
 inline float g_localShadowPushTexels = 0.5f;
+// Local-light plan S6a: the atlas local views draw with ONE ExecuteIndirect each -- the cull's non-empty records,
+// compacted on the GPU (shadow_args_compact_cs) and pointed at the consolidated mega VB/IB -- instead of one per mesh
+// group. Needs the mega buffer (uniform vertex stride, R32 indices; dropped by a mid-game Rebuild until the next
+// load). false = one ExecuteIndirect per group: `--set shadow.localCompact:0|1`.
+inline bool g_localShadowCompact = true;
 // The atlas modes' point-light cube faces are rendered this many texels wider each side (Scene.cpp, the face fov) and
 // sampled in their inner 90 degrees -- MIRRORS kPointShadowGuardTexels in shaders/local_shadow_filter.hlsli.
 constexpr float kPointShadowGuardTexels = 2.0f;

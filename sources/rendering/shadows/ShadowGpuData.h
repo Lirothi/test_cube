@@ -99,6 +99,10 @@ public:
         // Occlusion plan S5: ...and tests them against last frame's camera pyramid, deferring
         // the hidden ones (the previous pyramid was valid; the three S5 passes run).
         bool camHzb = false;
+        // Local-light plan S6a: the atlas local views' rows are compacted after the cull (localArgs_ / localCounts_)
+        // for one ExecuteIndirect per view; `localViews` = how many views from render::kShadowViewCascades.
+        bool localCompact = false;
+        std::uint32_t localViews = 0;
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -594,6 +598,14 @@ private:
     UavRing indirectArgs_;   // per (view, mesh-group) D3D12_DRAW_INDEXED_ARGUMENTS
     UavRing visibleList_;    // per (view, mesh-group) visible caster ids (uint32)
     UavRing indirectCounts_; // per view draw count (uint32)
+    // Local-light plan S6a: per atlas local view (slot - kShadowViewCascades) its non-empty records, pointed at the
+    // mega VB/IB, and their count (both rest INDIRECT_ARGUMENT). Decided per frame by PrepareCullPass (main thread).
+    UavRing localArgs_;
+    UavRing localCounts_;
+    std::shared_ptr<Material> localCompactMat_;   // shadow_args_compact_cs.hlsl
+    bool localCompactFrame_ = false;
+    std::uint32_t localCompactViews_ = 0;
+    void RecordLocalArgsCompact(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t views);
 
     // Occlusion plan S5b (cascade light-space HZB cull). Per cascade: the casters the main cull
     // deferred (last frame's pyramid hid them), the 8 counters ([c] deferred, [4 + c] drawn by
@@ -705,7 +717,7 @@ private:
     // S4: [7k..8k)=camArgs (RAW), [8k..9k)=camVisibleList,
     // S5: [9k..10k)=camDeferred, [10k..11k)=camArgsB (RAW), [11k..12k)=camVisibleListB.
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
-    static constexpr std::size_t kCullUavSets = 14; // A6: 12 = camCmds_ RAW, 13 = camCmdsB_ RAW
+    static constexpr std::size_t kCullUavSets = 16; // A6: 12 = camCmds_ RAW, 13 = camCmdsB_ RAW; S6a: 14 localArgs_, 15 localCounts_
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCullUavSets * render::kFrameCount> cullUav_{};
 
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl

@@ -830,6 +830,7 @@
     <None Include="shaders\rt_resolve_cs.hlsl" />
     <None Include="shaders\gbuffer_indirect_expand_cs.hlsl" />
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
+    <None Include="shaders\shadow_args_compact_cs.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />
     <None Include="shaders\sdsm_analyze_cs.hlsl" />
     <None Include="shaders\sdsm_evsm_cs.hlsl" />

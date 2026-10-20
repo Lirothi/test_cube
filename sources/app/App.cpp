@@ -618,6 +618,7 @@ namespace
         if (setting == "shadow.localBiasTexel") { render::g_localShadowBiasTexel = value != 0.0f; return true; }
         if (setting == "shadow.localNormalTexels") { render::g_localShadowNormalTexels = std::clamp(value, 0.0f, 8.0f); return true; }
         if (setting == "shadow.localPushTexels") { render::g_localShadowPushTexels = std::clamp(value, 0.0f, 8.0f); return true; }
+        if (setting == "shadow.localCompact") { render::g_localShadowCompact = value != 0.0f; return true; } // S6a
         // Plan S4: UE r.Shadow.MaxResolution for the spot / point atlases (Scene::ReconcileShadowMode reallocates).
         if (setting == "shadow.localMaxRes")
         {
