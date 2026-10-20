@@ -28,6 +28,57 @@ float ReadHalf(const std::uint16_t h)
                      exponent ? static_cast<int>(exponent) - 15 : -14);
     return h & 32768u ? -magnitude : magnitude;
 }
+
+// TIME-OF-DAY PLAN P1: A RUNNING CLOCK MOVES THE SKY A LITTLE EVERY FRAME -- the sun, the moon, the stars'
+// sphere and, through the twilight, the lights' illuminance -- and the environment capture and the distant
+// light, keyed on the exact view, rebuilt every frame of it: measured on wind_test (the owner's three views,
+// a day in 30 minutes), +0.07..0.12 ms of the animated frame's +0.02..0.17, the capture alone 0.06-0.10 ms a
+// frame. Their keys stay exact for everything else; the bodies within kKeyTurnDeg and their light within
+// kKeyLightShare of the two lights' sum count as unchanged, so a day in 30 minutes rebuilds them every ~2.5 s.
+// A quarter of a degree is ~1/40 of the sun's aureole and one percent of the light, neither visible in a
+// probe or the fog's sky term.
+constexpr float kKeyTurnCos = 0.99999048f; // cos(0.25 degrees)
+constexpr float kKeyLightShare = 0.01f;
+
+bool SameDirection(const float a[4], const float b[4])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] >= kKeyTurnCos;
+}
+
+bool NearlySameView(const SkyViewFrameData& now, const SkyViewFrameData& key)
+{
+    for (int c = 0; c < 3; ++c)
+    {
+        const float total = std::max(std::fabs(now.illuminance[c]) + std::fabs(now.light1Illuminance[c]),
+                                     std::fabs(key.illuminance[c]) + std::fabs(key.light1Illuminance[c]));
+        const float change = std::fabs(now.illuminance[c] - key.illuminance[c]) +
+                             std::fabs(now.light1Illuminance[c] - key.light1Illuminance[c]);
+        if (change > kKeyLightShare * total) return false;
+    }
+    if (!SameDirection(now.sunDirection, key.sunDirection) || !SameDirection(now.light1Direction, key.light1Direction))
+        return false;
+    // Everything else exactly: the moving fields copied over from the key, then the bytes compared.
+    SkyViewFrameData rest = now;
+    for (int c = 0; c < 3; ++c)
+    {
+        rest.sunDirection[c] = key.sunDirection[c]; rest.light1Direction[c] = key.light1Direction[c];
+        rest.illuminance[c] = key.illuminance[c]; rest.light1Illuminance[c] = key.light1Illuminance[c];
+    }
+    return std::memcmp(&rest, &key, sizeof(rest)) == 0;
+}
+
+// The night sky's picture the same way: its celestial sphere turns with the clock (the rows), within
+// kKeyTurnDeg of the last capture's it is the same sky.
+bool NearlySameNight(const NightSkyFrameData& now, const NightSkyFrameData& key)
+{
+    // Not drawn (all zero by day, row0.w = 0): exactly, or a zero row would read as a turn every frame.
+    if (now.row0[3] == 0.0f || key.row0[3] == 0.0f) return std::memcmp(&now, &key, sizeof(now)) == 0;
+    if (!SameDirection(now.row0, key.row0) || !SameDirection(now.row1, key.row1) || !SameDirection(now.row2, key.row2))
+        return false;
+    NightSkyFrameData rest = now;
+    for (int c = 0; c < 3; ++c) { rest.row0[c] = key.row0[c]; rest.row1[c] = key.row1[c]; rest.row2[c] = key.row2[c]; }
+    return std::memcmp(&rest, &key, sizeof(rest)) == 0;
+}
 }
 
 SkyAtmosphere::SkyAtmosphere()
@@ -578,9 +629,10 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     NightSkyFrameData night = nightIn;
     night.layers[2] = night.layers[3] = 0.0f;
     if (!nightReady_ || !night_.Get()) night.layers[1] = 0.0f;
+    // P1: the moving bodies and their light within a tolerance of the last capture's (NearlySameView).
     const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
-        || std::memcmp(&view, &environmentKey_, sizeof(view)) != 0
-        || std::memcmp(&night, &environmentNightKey_, sizeof(night)) != 0
+        || !NearlySameView(view, environmentKey_)
+        || !NearlySameNight(night, environmentNightKey_)
         || (overlayActive && overlay->dirty) || overlayActive != environmentOverlayActive_;
     // Select descriptors before any serial pass builder/worker consumes the frame's environment.
     sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()});
@@ -957,8 +1009,9 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
     std::fill(std::begin(view.moonDisc), std::end(view.moonDisc), 0.0f);
     std::fill(std::begin(view.moonDisc2), std::end(view.moonDisc2), 0.0f);
     const auto params = settings.parameters;
+    // P1: the moving bodies and their light within a tolerance of the last build's (NearlySameView).
     if (distantReady_ && std::memcmp(&params, &distantParameters_, sizeof(params)) == 0
-        && std::memcmp(&view, &distantKey_, sizeof(view)) == 0) return after;
+        && NearlySameView(view, distantKey_)) return after;
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (after != static_cast<size_t>(-1)) deps.push_back(after);
     const bool validate = settings.lutValidate;

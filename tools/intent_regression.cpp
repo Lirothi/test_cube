@@ -988,6 +988,14 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         void ResetExposure() override { ++resets; }
         int historyAsked = -1;
         std::string Readouts(int historyRows) override { historyAsked = historyRows; return "{\"fake\":true}"; }
+        std::string profileFilter = "-";
+        bool profileReset = false;
+        std::string Profile(const std::string& filter, bool resetMax) override
+        {
+            profileFilter = filter;
+            profileReset = resetMax;
+            return "{\"gpu\":[]}";
+        }
     } runtime;
     editormcp::SetRuntimeHost(&runtime);
     const std::optional<json> set = call(11, "tools/call", { { "name", "set_settings" },
@@ -1004,6 +1012,12 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     Check(runtime.historyAsked == 0, "and adds no per-frame rows unless asked");
     call(1201, "tools/call", { { "name", "get_readouts" }, { "arguments", { { "history", 2000 } } } });
     Check(runtime.historyAsked == 512, "`history` reaches the app, clamped to the ring's 512 rows");
+    const std::optional<json> profile = call(1202, "tools/call", { { "name", "get_profile" },
+        { "arguments", { { "filter", "VSM" }, { "reset", true } } } });
+    Check(text(profile) == "{\"gpu\":[]}" && runtime.profileFilter == "VSM" && runtime.profileReset,
+        "get_profile hands the app its filter and the reset, and answers with its rows: " + text(profile));
+    call(1203, "tools/call", { { "name", "get_profile" } });
+    Check(runtime.profileFilter.empty() && !runtime.profileReset, "and by default reads every row without a reset");
     const std::optional<json> reset = call(13, "tools/call", { { "name", "reset_settings" } });
     Check(!(*reset)["result"]["isError"].get<bool>() && runtime.resets == 2,
         "reset_settings re-applies the document and re-meters: " + text(reset));

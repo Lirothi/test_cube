@@ -324,7 +324,10 @@ offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has 
 optional; `lookAt: "moon"` the moon; positive offsetPitchDeg tilts DOWN, so a view 4 degrees over the horizon
 toward a sun at elevation e is `offsetPitchDeg: e - 4`). An exposure curve is shaped live with
 `exposure.curvePoints` / `exposure.curveEv<i>` / `exposure.curveComp<i>` (`exposure.curve:0|1|2` = none/Eye/UDS).
-The Level Editor closed (F2) still serves every call. Kill the editor afterwards (`Stop-Process`), as for any live MCP check.
+The Level Editor closed (F2) still serves every call -- MEASURE COSTS WITH IT CLOSED (its panels are a load of
+their own) and on a real view, not wherever the camera happened to be: `get_profile {filter, reset}` returns the
+profiler's rows (GPU/CPU per pass: EMA, max since `reset`, runs last frame), and `shadow.mode:0|1|2`
+(Legacy/VSM/SDSM) switches the sun's shadows live. Kill the editor afterwards (`Stop-Process`), as for any live MCP check.
 
 MEASURE, DON'T READ A SCREENSHOT: the tone curve clips a glint to white, so "how bright is it" is
 unanswerable from a PNG. `set_settings {set: "debug.probeU:0.537;debug.probeV:0.469;debug.probeRadius:40"}`

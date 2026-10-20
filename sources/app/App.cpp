@@ -9,6 +9,7 @@
 #include "core/logging/Log.h"
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <chrono>
 #include <climits>
 #include <cmath>
@@ -597,6 +598,13 @@ namespace
         // The Ctrl-key toggle, headless. Two draw paths write the SAME atlas (GPU-driven indirect
         // vs the CPU object walk) and S6 has to bias both identically -- that is only checkable
         // if a capture can select the path.
+        // The sun's shadow machinery, 0 Legacy CSM / 1 VSM / 2 SDSM -- the developer window's combo (Ctrl+V)
+        // writes the same global; Scene::ReconcileShadowMode applies it at its GPU-idle point.
+        if (setting == "shadow.mode")
+        {
+            render::g_shadowMode = static_cast<render::ShadowMode>(std::clamp(static_cast<int>(value), 0, 2));
+            return true;
+        }
         if (setting == "shadow.indirect") { render::g_indirectShadowsEnabled = value != 0.0f; return true; }
         // The Ctrl-G toggle, headless: GI casters folded into the indirect cull. OFF is what lets the
         // one-shot GPU-vs-CPU cull validator run (its CPU reference covers static casters only), so
@@ -1699,6 +1707,28 @@ namespace
             return known;
         }
         void ResetExposure() override { renderer_.Exposure().RequestReset(); }
+        std::string Profile(const std::string& filter, bool resetMax) override
+        {
+            const auto lower = [](std::string s) {
+                for (char& c : s) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+                return s;
+            };
+            const std::string want = lower(filter);
+            nlohmann::json gpu = nlohmann::json::array(), cpu = nlohmann::json::array();
+            for (const Profiler::OverlaySample& r : Profiler::Get().OverlaySnapshot())
+            {
+                if (!want.empty() && lower(r.name).find(want) == std::string::npos) { continue; }
+                (r.gpu ? gpu : cpu).push_back(nlohmann::json::array({ r.name, std::round(r.avgMs * 1000.0) / 1000.0,
+                                                                       std::round(r.maxMs * 1000.0) / 1000.0, r.usages }));
+            }
+            if (resetMax) { Profiler::Get().ResetMaxNow(); }
+            const nlohmann::json out = {
+                { "frame", renderer_.GetTotalFrameNumber() },
+                { "columns", nlohmann::json::array({ "name", "avgMs", "maxMs", "usages" }) },
+                { "gpu", std::move(gpu) }, { "cpu", std::move(cpu) },
+            };
+            return out.dump();
+        }
         std::string Readouts(int historyRows) override
         {
             const ExposureMetering::Readback rb = renderer_.Exposure().LatestReadback();

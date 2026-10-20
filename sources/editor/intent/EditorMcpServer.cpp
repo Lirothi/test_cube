@@ -482,6 +482,18 @@ namespace editormcp
                         { "description", "per-frame rows to add, newest last, 0-512 (default 0)" } } } }) },
             },
             {
+                { "name", "get_profile" },
+                { "description",
+                  "The profiler's rows, the same the HUD overlay shows: per GPU pass and CPU scope its "
+                  "running average (EMA, ms) and its max since the last reset, and how many times it ran "
+                  "last frame. `filter` keeps the names containing it (case-insensitive). `reset: true` "
+                  "restarts the maxima after reading, so the next call's max is the worst frame between "
+                  "the two -- how a stall or a per-frame rebuild is caught while something animates." },
+                { "inputSchema", ObjectSchema({
+                    { "filter", { { "type", "string" }, { "description", "substring of the scope names to keep" } } },
+                    { "reset", { { "type", "boolean" }, { "description", "restart the maxima after reading" } } } }) },
+            },
+            {
                 { "name", "undo" },
                 { "description",
                   "Undo the newest entry on the editor's undo stack -- WHOEVER made it, you or "
@@ -856,11 +868,20 @@ namespace editormcp
             return result;
         }
 
-        if (name == "set_settings" || name == "get_readouts")
+        if (name == "set_settings" || name == "get_readouts" || name == "get_profile")
         {
             if (!g_runtimeHost)
             {
                 return Error("There is no running app here to set or read (this host has none).");
+            }
+            if (name == "get_profile")
+            {
+                ToolResult result;
+                const std::string filter = arguments.contains("filter") && arguments["filter"].is_string()
+                    ? arguments["filter"].get<std::string>() : std::string();
+                const bool reset = arguments.contains("reset") && arguments["reset"].is_boolean() && arguments["reset"].get<bool>();
+                result.text = g_runtimeHost->Profile(filter, reset);
+                return result;
             }
             if (name == "get_readouts")
             {

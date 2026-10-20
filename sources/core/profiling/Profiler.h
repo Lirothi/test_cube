@@ -220,6 +220,16 @@ public:
     // Temporary perf harness: write the current CPU+GPU overlay rows (the same data the HUD shows)
     // to a UTF-8 text file. Returns false on file-open failure. Reads the lock-free double buffer.
     bool DumpOverlay(const std::string& path);
+    // The same rows as data -- the editor's MCP `get_profile` reads them from a running frame.
+    struct OverlaySample
+    {
+        std::string name;
+        double avgMs = 0.0; // EMA
+        double maxMs = 0.0; // since the last ResetMaxNow / cooldown
+        uint32_t usages = 0;
+        bool gpu = false;
+    };
+    std::vector<OverlaySample> OverlaySnapshot() const;
 
     // Controls
 #if PROF_ENABLED

@@ -1474,37 +1474,51 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
 #endif
 }
 
-bool Profiler::DumpOverlay(const std::string& path) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    if (!f) { return false; }
-    auto writeRows = [&](const char* header, const std::vector<OverlayRow>& rows) {
-        f << header << " frame=" << frameNo_ << "\n";
+std::vector<Profiler::OverlaySample> Profiler::OverlaySnapshot() const {
+    std::vector<OverlaySample> out;
+    auto addRows = [&](const std::vector<OverlayRow>& rows, bool gpu) {
         for (const auto& r : rows) {
-            char line[256];
             // ASCII-ify: the formatted wstring is ASCII in practice, but avoid locale issues by
-            // writing the numeric fields directly and the name from the formatted row's prefix.
+            // taking the numeric fields directly and the name from the formatted row's prefix.
             // The formatted row is "%-35s  avg:...": the name is everything before the first run of
             // two spaces (single spaces inside a scope name like "Whole Cycle" are preserved).
-            std::string name;
+            OverlaySample s;
             int spaceRun = 0;
             for (wchar_t c : r.formatted) {
                 if (c == L' ') { if (++spaceRun >= 2) { break; } continue; }
-                if (spaceRun == 1) { name.push_back(' '); }
+                if (spaceRun == 1) { s.name.push_back(' '); }
                 spaceRun = 0;
-                name.push_back((char)(c & 0x7F));
-                if (name.size() > 40) { break; }
+                s.name.push_back((char)(c & 0x7F));
+                if (s.name.size() > 40) { break; }
             }
-            std::snprintf(line, sizeof(line), "%-36s avg:%8.3f max:%8.3f usages:%u\n",
-                name.c_str(), r.avgMs, r.maxMs, r.usages);
-            f << line;
+            s.avgMs = r.avgMs;
+            s.maxMs = r.maxMs;
+            s.usages = r.usages;
+            s.gpu = gpu;
+            out.push_back(std::move(s));
         }
     };
-    const int cpuIdx = overlayReadBuf_.load(std::memory_order_acquire);
-    writeRows("[CPU]", overlayRows_[cpuIdx]);
+    addRows(overlayRows_[overlayReadBuf_.load(std::memory_order_acquire)], false);
 #if PROF_GPU_ENABLED
-    const int gpuIdx = gpuOverlayReadBuf_.load(std::memory_order_acquire);
-    writeRows("[GPU]", gpuOverlayRows_[gpuIdx]);
+    addRows(gpuOverlayRows_[gpuOverlayReadBuf_.load(std::memory_order_acquire)], true);
 #endif
+    return out;
+}
+
+bool Profiler::DumpOverlay(const std::string& path) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (!f) { return false; }
+    const std::vector<OverlaySample> rows = OverlaySnapshot();
+    for (const bool gpu : { false, true }) {
+        f << (gpu ? "[GPU]" : "[CPU]") << " frame=" << frameNo_ << "\n";
+        for (const auto& r : rows) {
+            if (r.gpu != gpu) { continue; }
+            char line[256];
+            std::snprintf(line, sizeof(line), "%-36s avg:%8.3f max:%8.3f usages:%u\n",
+                r.name.c_str(), r.avgMs, r.maxMs, r.usages);
+            f << line;
+        }
+    }
     return f.good();
 }
 

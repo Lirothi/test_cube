@@ -27376,19 +27376,19 @@
       "mesh": "models/fern_02_node_fern_02_d.mesh.json",
       "name": "fern_02_node_fern_02_d 014",
       "position": [
-        -66.56120300292969,
-        2.1528000831604004,
-        39.21659851074219
+        -66.56119537353516,
+        2.352799892425537,
+        39.21659469604492
       ],
       "rotationDeg": [
-        0.0,
-        108.19999694824219,
-        0.0
+        180.0,
+        71.80001068115234,
+        180.0
       ],
       "scale": [
+        1.2669998407363892,
         1.2669999599456787,
-        1.2669999599456787,
-        1.2669999599456787
+        1.2669998407363892
       ],
       "type": "staticMesh"
     },
@@ -29147,19 +29147,19 @@
       "mesh": "models/lowpoly_sticks_node_stick_12.mesh.json",
       "name": "lowpoly_sticks_node_stick_12 003",
       "position": [
-        -35.0890007019043,
-        2.4059998989105225,
+        -35.08877944946289,
+        2.36738657951355,
         71.14330291748047
       ],
       "rotationDeg": [
-        0.0,
-        173.58999633789063,
-        0.0
+        180.0,
+        6.410009860992432,
+        180.0
       ],
       "scale": [
+        7.685799598693848,
         7.685800075531006,
-        7.685800075531006,
-        7.685800075531006
+        7.685799598693848
       ],
       "type": "staticMesh"
     },
@@ -32778,13 +32778,15 @@
       "convSpokeLength": 0.8999999761581421,
       "convSpokeStrength": 0.4000000059604645,
       "convSpokeWidth": 4.0,
+      "convSunGhostScale": 0.25,
+      "convSunKernelScale": 0.25,
       "enabled": true,
       "fireflyClamp": true,
-      "intensity": 0.30000001192092896,
+      "intensity": 1.0,
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,
-      "sunGlareIntensity": 0.005,
+      "sunGlareIntensity": 0.00800000037997961,
       "sunGlareRadiusDeg": 2.0,
       "sunGlareSmoothingSec": 0.10000000149011612,
       "sunGlareVeil": 0.25,
@@ -32880,9 +32882,9 @@
       "denoise": true,
       "enabled": true,
       "fadeStart": 100.0,
-      "intensity": 1.5,
+      "intensity": 1.0,
       "numAngles": 2,
-      "numSteps": 10,
+      "numSteps": 16,
       "skyIntensity": 0.0,
       "skyMipBias": 3,
       "skyRadius": 25.0,
@@ -32936,7 +32938,8 @@
       21
     ],
     "dawn": 6.0,
-    "dayLengthMin": 30.0,
+    "dayLengthMin": 2.0,
+    "daySkyBrightness": 2.0,
     "dusk": 18.0,
     "extendTwilight": 0.0,
     "heightOffset": 0.0,
@@ -32986,8 +32989,7 @@
       "phaseAuto": true
     },
     "nightBrightness": 11364.0,
-    "daySkyBrightness": 2.0,
-    "nightLengthMin": 15.0,
+    "nightLengthMin": 2.0,
     "nightSky": {
       "airglowColor": [
         0.093,
@@ -33018,7 +33020,7 @@
         0.03322261571884155,
         0.03322261571884155
       ],
-      "lightShaftBloomMaxBrightness": 0.44999998807907104,
+      "lightShaftBloomMaxBrightness": 0.5,
       "lightShaftBloomScale": 0.3499999940395355,
       "lightShaftBloomThreshold": 0.699999988079071,
       "lightShaftBloomTint": [
@@ -33033,20 +33035,36 @@
       "lightShaftSmoothing": 0.05000000074505806,
       "lightShaftsEnabled": true,
       "lightSourceAngle": 2.0,
-      "lightSourceSoftAngle": 0.0,
+      "lightSourceSoftAngle": 0.5,
       "skyFillIntensity": 2.0,
       "sunIlluminanceLux": 120000.0,
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 15.0,
+    "time": 15.5600004196167,
     "timeScale": 60.0,
     "twilight": {
+      "lightHandOverDeg": 3.0,
+      "ozoneBlendDeg": 1.9500000476837158,
+      "ozoneNightTint": [
+        6.1539998054504395,
+        1.805999994277954,
+        1.4279999732971191
+      ],
+      "ozoneSunriseTint": [
+        4.614999771118164,
+        1.5570000410079956,
+        4.031000137329102
+      ],
+      "rayleighDayFullDeg": 3.680000066757202,
+      "rayleighDayStartDeg": -2.069999933242798,
       "rayleighNightTint": [
         0.825,
         0.4906,
         0.3523
-      ]
+      ],
+      "sunSkyFullDeg": -6.489999771118164,
+      "sunSkyStartDeg": -9.029999732971191
     },
     "utcOffset": -10.0
   },
@@ -33058,7 +33076,7 @@
     "detailStrength": 0.3499999940395355,
     "detailTileKm": 1.0,
     "distanceToSampleCountMaxKm": 3.0,
-    "enabled": false,
+    "enabled": true,
     "extinctionScale": 10.0,
     "formation": true,
     "formationChangeSpeed": 20.0,

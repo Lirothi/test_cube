@@ -102,6 +102,10 @@ namespace editormcp
         // What the frame measured (exposure, the sun probe, frame rate), as a JSON object; with
         // `historyRows` > 0 also that many of the newest per-frame rows (ExposureMetering::History).
         virtual std::string Readouts(int historyRows) = 0;
+        // The profiler's rows (the HUD overlay's: EMA average and max per scope, GPU and CPU) whose name
+        // contains `filter` (case-insensitive; empty = all), as a JSON object; `resetMax` then restarts
+        // the maxima, so the next call's max covers the time between the two.
+        virtual std::string Profile(const std::string& filter, bool resetMax) = 0;
     };
     void SetRuntimeHost(RuntimeHost* host);
 
