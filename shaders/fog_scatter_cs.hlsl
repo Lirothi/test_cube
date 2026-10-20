@@ -16,7 +16,7 @@
 // b1 = FogCB (fog_common.hlsli)
 // t0 ShadowAtlas  t1 VsmPageTable  t2 VsmPool  t3 SkyIrradiance (cube)  t4 FogHistory (3D, prev slot)
 // t5 HzbFurthest (this frame)  t6 PrevHzbFurthest (last frame) -- conservative depth (plan A3)
-// t7 SpotLights  t8 PointLights  t9 SpotShadowAtlas  t10 PointShadowCube -- local lights (plan A4)
+// t7 SpotLights  t8 PointLights  t9 SpotShadowAtlas  t10 PointShadowAtlas -- local lights (plan A4)
 // u0 FogScatter (3D)
 // s0 point clamp  s1 comparison linear  s2 linear wrap  s3 linear clamp (the lighting pass's set)
 #pragma pack_matrix(row_major)
@@ -26,6 +26,7 @@
 #include "fog_common.hlsli"
 #include "rt_lights.hlsli" // SpotLightData / PointLightData (the light passes' layout)
 #include "local_shadow_bias.hlsli" // plan S1: the point light's receiver bias, the light pass's own
+#include "local_shadow_filter.hlsli" // plan S4: a light's square of its atlas slice, the point faces' addressing
 #include "cloud_shadow_common.hlsli" // plan C3: the cloud's shadow on the sun in the air
 
 #define FOG_SCATTER_RS \
@@ -46,7 +47,7 @@ Texture2D<float>        PrevHzbFurthest : register(t6); // last frame's (the his
 StructuredBuffer<SpotLightData>  SpotLights      : register(t7);  // plan A4: the light passes' buffers
 StructuredBuffer<PointLightData> PointLights     : register(t8);
 Texture2DArray                   SpotShadowAtlas : register(t9);  // Legacy local shadows
-TextureCubeArray                 PointShadowCube : register(t10);
+Texture2DArray                   PointShadowAtlas : register(t10); // 6 faces per light, a 2D array since plan S4
 Texture2D<float4>       DistantSkyLight : register(t11); // B5 raw isotropic luminance at 6 km
 Texture2D<float4>       CloudShadowMap  : register(t12); // C3 cloud shadow map (dummy without clouds)
 // t13: S15, this frame's SDSM partitions (placeholder SRV when the mode is not SDSM).
@@ -125,7 +126,9 @@ float FogSpotShadow(SpotLightData light, float3 P, float3 toL, float distToLight
     const float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     const float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
     if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z <= 0.0f || ndc.z >= 1.0f) { return 1.0f; }
-    return SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uv, light.shadowParams.y), ndc.z - light.shadowParams.w);
+    const float2 uvRect = LocalShadowRectUV(uv, light.shadowParams2.w, fogLocalParams.y, 0.5f); // plan S4: its square
+    return lerp(1.0f, SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uvRect, light.shadowParams.y), ndc.z - light.shadowParams.w),
+                light.shadowParams2.z); // plan S3: UE's shadow fade, as the spot pass's
 }
 
 float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLight)
@@ -147,7 +150,10 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
     const float farP = max(light.shadowParams.w, nearP + 1e-3f);
     const float mBiased = PointShadowCompareDistance(m, light.shadowParams, light.volumetric.y, 1.0f);
     const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
-    return PointShadowCube.SampleCmpLevelZero(gSmpLinear, float4(d, light.shadowParams.x), zc);
+    // Plan S4: the light's face and square (PointShadowCubeUV); 1 / the face slice = its square / its resolution.
+    const float3 tap = PointShadowCubeUV(d, light.shadowParams.x, light.shadowFade.y, light.shadowFade.y * light.shadowFade.z);
+    return lerp(1.0f, PointShadowAtlas.SampleCmpLevelZero(gSmpLinear, tap, zc),
+                light.shadowFade.x); // plan S3: UE's shadow fade, as the point pass's
 }
 
 // The tile's farthest depth (min reverse-Z) over the 3x3 tile neighbourhood: the integrated volume is

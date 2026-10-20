@@ -611,6 +611,15 @@ namespace
         if (setting == "shadow.localBiasUe") { render::g_localShadowBiasUe = value != 0.0f; return true; }
         // Plan S2: 1 = UE's spot / point filters, 0 = the old 3x3 boxes.
         if (setting == "shadow.localFilterUe") { render::g_localShadowFilterUe = value != 0.0f; return true; }
+        // Plan S3: 1 = UE's shadow fade by on-screen resolution, 0 = every shadowed light at full strength.
+        if (setting == "shadow.localFadeUe") { render::g_localShadowFadeUe = value != 0.0f; return true; }
+        // Plan S4: UE r.Shadow.MaxResolution for the spot / point atlases (Scene::ReconcileShadowMode reallocates).
+        if (setting == "shadow.localMaxRes")
+        {
+            render::g_localShadowMaxRes = static_cast<unsigned>(std::clamp(value,
+                static_cast<float>(render::kLocalShadowMaxResMin), static_cast<float>(render::kLocalShadowMaxResMax)));
+            return true;
+        }
         // The Ctrl-G toggle, headless: GI casters folded into the indirect cull. OFF is what lets the
         // one-shot GPU-vs-CPU cull validator run (its CPU reference covers static casters only), so
         // a headless gate can read its PASS/MISMATCH verdict from the session log.
@@ -1706,6 +1715,40 @@ void App::ReleaseLoadingScreen()
 #if WITH_EDITOR
 namespace
 {
+    // Local-light shadow plan S3, for get_readouts: every local light holding a shadow slot or being
+    // faded, as [lightIndex, slot (-1 = none), fade, resolution] -- what UE's CalculateShadowFadeAlpha and its
+    // whole-scene sizing (plan S4: a spot's square, a point's cube face) made of it.
+    std::string LocalShadowsJson(const LightManager& lm)
+    {
+        std::string out = ",\"localShadows\":{\"spots\":[";
+        char item[80];
+        const char* separator = "";
+        for (size_t i = 0; i < lm.SpotLights().size(); ++i)
+        {
+            const int slot = lm.GetSpotShadowSlot(i);
+            const float fade = lm.GetSpotShadowFade(i);
+            if (slot < 0 && fade >= 1.0f) { continue; }
+            std::snprintf(item, sizeof(item), "%s[%zu,%d,%.3f,%u]", separator, i, slot, fade,
+                          static_cast<unsigned>(lm.GetSpotShadowResolution(i)));
+            out += item;
+            separator = ",";
+        }
+        out += "],\"points\":[";
+        separator = "";
+        for (size_t i = 0; i < lm.PointLights().size(); ++i)
+        {
+            const int slot = lm.GetPointShadowSlot(i);
+            const float fade = lm.GetPointShadowFade(i);
+            if (slot < 0 && fade >= 1.0f) { continue; }
+            std::snprintf(item, sizeof(item), "%s[%zu,%d,%.3f,%u]", separator, i, slot, fade,
+                          static_cast<unsigned>(lm.GetPointShadowResolution(i)));
+            out += item;
+            separator = ",";
+        }
+        out += "]}";
+        return out;
+    }
+
     // Claude Code's runtime door (editor MCP set_settings / get_readouts): the `--set` name table and
     // the renderer's metering, used from the frame thread the MCP tools run on. One editor process
     // then serves any number of A/B variants instead of one boot per picture.
@@ -1770,19 +1813,19 @@ namespace
                     rb.pixelProbeMaxLocalExposed, rb.pixelProbeBox4,
                     rb.pixelProbeMean[0], rb.pixelProbeMean[1], rb.pixelProbeMean[2]);
             }
-            if (n > 0 && n < static_cast<int>(sizeof(text)) - 1)
+            if (n <= 0 || n >= static_cast<int>(sizeof(text)) - 1)
             {
-                text[n] = '}';
-                text[n + 1] = '\0';
+                return "{\"valid\":false}";
             }
-            if (historyRows <= 0 || n <= 0 || n >= static_cast<int>(sizeof(text)) - 1)
+            std::string out(text, static_cast<size_t>(n)); // without the closing brace
+            out += LocalShadowsJson(scene_.GetLightManager());
+            if (historyRows <= 0)
             {
-                return text;
+                return out + "}";
             }
             // Per-frame rows, oldest first: a flicker is read here, not across calls.
             std::vector<ExposureMetering::HistoryRow> rows(static_cast<size_t>(historyRows));
             rows.resize(renderer_.Exposure().History(rows.data(), rows.size()));
-            std::string out(text, static_cast<size_t>(n)); // without the closing brace
             out += ",\"history\":{\"columns\":[\"frame\",\"adaptedEv100\",\"targetEv100\",\"preExposure\","
                    "\"probeMeanR\",\"probeMeanG\",\"probeMeanB\",\"probeMaxLuma\",\"sunProbeLuma\"],\"rows\":[";
             char row[256];

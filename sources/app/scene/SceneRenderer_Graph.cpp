@@ -648,7 +648,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             // the same state, and only the first light's list actually transitions it.
             const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
             const bool indirect = IndirectShadowDrawsActive(); // S7c: one decision for both sides
-            ctx.Use(ctx.renderer->GetDeferredForFrame().spotShadow.Get(),
+            ctx.Use(ctx.renderer->GetDeferredForFrame().spotShadow,
                     D3D12_RESOURCE_STATE_DEPTH_WRITE);
             ctx.NextPoint();
             PrepareOpaqueDrawStates(ctx, frame_->spotShadowViews->data(), n, indirect);
@@ -670,7 +670,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             if (n == 0) { return {}; }
             const std::uint32_t atlasPoint = ctx.usePoint ? *ctx.usePoint : 0u;
             const bool indirect = IndirectShadowDrawsActive(); // S7c: one decision for both sides
-            ctx.Use(ctx.renderer->GetDeferredForFrame().pointShadow.Get(),
+            ctx.Use(ctx.renderer->GetDeferredForFrame().pointShadow,
                     D3D12_RESOURCE_STATE_DEPTH_WRITE);
             ctx.NextPoint();
             PrepareOpaqueDrawStates(ctx, frame_->pointShadowViews->data(), n, indirect);
@@ -1363,8 +1363,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             if (decisions_.fogLocalLights && !vsmShadows)
             {
                 // A4: the Legacy local atlases, the state Main_SpotLights / Main_PointLights declare.
-                if (DF.spotShadow.Get()) { ctx.Use(DF.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
-                if (DF.pointShadow.Get()) { ctx.Use(DF.pointShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+                if (DF.spotShadow) { ctx.Use(DF.spotShadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+                if (DF.pointShadow) { ctx.Use(DF.pointShadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
             }
             if (decisions_.fogConservativeDepth)
             {
@@ -1523,7 +1523,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
             { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
             { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
-            { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            { D.spotShadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } };
         if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1))
@@ -1541,7 +1541,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
-              { D.spotShadow.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+              { D.spotShadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
             spotBuilder);
     }
 
@@ -1584,7 +1584,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
-              { D.pointShadow.Get(), kSrvAll },
+              { D.pointShadow, kSrvAll },
               { frame_->vsm->PagePool(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { frame_->vsm->PageTable(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
             pointBuilder);
@@ -1595,7 +1595,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             { { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
               { D.gb0.Get(), kSrvAll }, { D.gb1.Get(), kSrvAll }, { D.gb2.Get(), kSrvAll },
               { D.gbVelocity.Get(), kSrvAll }, { D.gbAux.Get(), kSrvAll }, { D.depth.Get(), kSrvAll },
-              { D.pointShadow.Get(), kSrvAll } },
+              { D.pointShadow, kSrvAll } },
             pointBuilder);
     }
 

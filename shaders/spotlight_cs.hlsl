@@ -25,7 +25,8 @@ struct SpotLightData
     float4 directionCosOuter;  // xyz = direction, w = cos(outer)
     float4 colorIntensity;     // xyz = color, w = intensity
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
-    float4 shadowParams2;      // x = normal bias (world units)
+    float4 shadowParams2;      // x = normal bias (world units), y = volumetric scattering, z = UE's shadow fade (S3),
+                               // w = the light's square in its atlas slice (S4: res / slice)
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
 };
@@ -127,7 +128,7 @@ float SampleShadowPCF(float3 uvw, float depth, float2 texel)
     return shadow / 9.0f;
 }
 
-float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
+float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float NdotL)
 {
     // shadowParams.y < 0 => this spot has no shadow slot this frame (unshadowed).
     if (light.shadowParams.y < 0.0f)
@@ -182,6 +183,8 @@ float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndo
     {
         return 1.0f;
     }
+    // Plan S4: the light drew into the top-left square of its own resolution; 3 texels inside it for the 6x6 tent.
+    uv = LocalShadowRectUV(uv, light.shadowParams2.w, invShadowSize.x, 3.0f);
 
     // Plan S2: UE's Manual5x5PCF with its soft transition, the ramp narrowed toward the light by the receiver's NoL
     // (UE: TransitionScale x lerp(1 - SpotLightReceiverBias 0.5, 1, NoL), ShadowProjectionPixelShader.usf:248), then
@@ -198,6 +201,12 @@ float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndo
     }
     float3 uvw = float3(uv, light.shadowParams.y);
     return SampleShadowPCF(uvw, depth - depthBias, invShadowSize);
+}
+
+// Plan S3: UE's shadow fade by the resolution the light wants on screen (LightManager::SelectShadowedSpots; 1 under VSM).
+float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
+{
+    return lerp(1.0f, ComputeSpotShadowMap(light, P, N, NdotL), light.shadowParams2.z);
 }
 
 [numthreads(8, 8, 1)]

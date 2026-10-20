@@ -4,6 +4,49 @@
 // Local-light shadow plan S2 (docs/local_light_shadows_plan.md): UE's filters for the spot / point atlases, ONE copy
 // for every pass that samples them (spotlight_cs, pointlight_cs, glass). Include local_shadow_bias.hlsli first.
 
+// --- Plan S4: a light's square in its atlas slice ---------------------------------------------------------------
+// Every light draws into the top-left res x res of its slice, res = UE's resolution for it (LightManager); `rect` =
+// res / slice. Taps are clamped `margin` slice texels inside that square, so no filter reads what another frame's
+// larger square left beyond it.
+float2 LocalShadowRectUV(float2 uv, float rect, float sliceTexel, float margin)
+{
+    return clamp(uv * rect, margin * sliceTexel, rect - margin * sliceTexel);
+}
+
+// A cube direction -> (uv, slice) of the point atlas, which is a 2D array of 6 faces per light since S4 (a hardware
+// cube lookup always reads the whole face). D3D's cube convention -- the one the faces were rendered for: +X, -X, +Y,
+// -Y, +Z, -Z, face uv from (-z,-y) (+z,-y) (x,z) (x,-z) (x,-y) (-x,-y) over the major axis. Half a texel inside the
+// square, so each tap's 2x2 compare footprint stays on its own face (UE's hardware cube filters across the seam).
+// The face `v` lands on as a basis: st = (v.U, v.V) / v.W.
+void PointShadowFace(float3 v, out float face, out float3 U, out float3 V, out float3 W)
+{
+    const float3 a = abs(v);
+    if (a.x >= a.y && a.x >= a.z)
+    {
+        const float s = v.x >= 0.0f ? 1.0f : -1.0f;
+        face = v.x >= 0.0f ? 0.0f : 1.0f; W = float3(s, 0, 0); U = float3(0, 0, -s); V = float3(0, -1, 0);
+    }
+    else if (a.y >= a.z)
+    {
+        const float s = v.y >= 0.0f ? 1.0f : -1.0f;
+        face = v.y >= 0.0f ? 2.0f : 3.0f; W = float3(0, s, 0); U = float3(1, 0, 0); V = float3(0, 0, s);
+    }
+    else
+    {
+        const float s = v.z >= 0.0f ? 1.0f : -1.0f;
+        face = v.z >= 0.0f ? 4.0f : 5.0f; W = float3(0, 0, s); U = float3(s, 0, 0); V = float3(0, -1, 0);
+    }
+}
+
+float3 PointShadowCubeUV(float3 v, float slot, float rect, float sliceTexel)
+{
+    float face;
+    float3 U, V, W;
+    PointShadowFace(v, face, U, V, W);
+    const float2 uv = float2(dot(v, U), dot(v, V)) / max(dot(v, W), 1e-9f) * 0.5f + 0.5f;
+    return float3(LocalShadowRectUV(uv, rect, sliceTexel, 0.5f), slot * 6.0f + face);
+}
+
 // UE ShadowProjectionPixelShader.usf:394-409 / :513-518: sharpen FIRST (ShadowSharpen: (s - 0.5) * (7 * sharpen + 1)
 // + 0.5), then the PCF over-blur correction (ApplyPCFOverBlurCorrection = Square). `sharpen` arrives as 7 * s + 1.
 float LocalShadowFinish(float shadow, float sharpen)
@@ -68,9 +111,10 @@ static const float2 kDiscSamples29[29] = { // ShadowProjectionCommon.ush:89-120,
 };
 
 // `d` = receiver - light (unbiased: UE has no normal offset), `m` its major-axis distance. shadowParams / slopeScale as in
-// local_shadow_bias.hlsli (UE mode: shadowParams.y < 0).
-float PointShadowDisc29(TextureCubeArray cube, SamplerComparisonState cmp, float3 d, float m, float4 shadowParams,
-                        float slopeScale, float NoL, float invRes)
+// local_shadow_bias.hlsli (UE mode: shadowParams.y < 0). S4: `invRes` = 1 / the light's own face resolution, `rect` /
+// `sliceTexel` its square (PointShadowCubeUV).
+float PointShadowDisc29(Texture2DArray atlas, SamplerComparisonState cmp, float3 d, float m, float4 shadowParams,
+                        float slopeScale, float NoL, float invRes, float rect, float sliceTexel)
 {
     const float nearP = shadowParams.z;
     const float farP = max(shadowParams.w, nearP + 1e-3f);
@@ -80,13 +124,29 @@ float PointShadowDisc29(TextureCubeArray cube, SamplerComparisonState cmp, float
     const float3 dn = normalize(d);
     const float3 side = normalize(cross(seed, dn)) * invRes;
     const float3 up = cross(dn, side);
+    // S4: the hardware cube picked each tap's face for free; here the disc's centre face is found ONCE and every tap is
+    // linear in its disc offset on it -- (st, w) = c + sx * k.x + sy * k.y. A tap past that face's seam (the disc is
+    // ~1.25 texels) reads the face's edge texel instead of the neighbour face -- which keeps it in the metric zc is in
+    // (the centre face's depth axis; the hardware cube compared it against the neighbour's other axis). Measured on
+    // wind_test's lamps, Pass_PointLights: a per-tap face lookup 0.114 ms, a fallback branch for the seam taps 0.119,
+    // this 0.074 -- the hardware cube's was 0.078 (plan S2); 0.035-0.039 without the map.
+    float face;
+    float3 U, V, W;
+    PointShadowFace(dn, face, U, V, W);
+    const float3 c = float3(dot(dn, U), dot(dn, V), dot(dn, W));
+    const float3 sx = float3(dot(side, U), dot(side, V), dot(side, W));
+    const float3 sy = float3(dot(up, U), dot(up, V), dot(up, W));
+    const float faceSlice = shadowParams.x * 6.0f + face;
     float shadow = 0.0f;
     [unroll]
     for (int i = 0; i < 29; ++i)
     {
         const float mBiased = max(m / (1.0f + rel * length(kDiscSamples29[i])), nearP);
         const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
-        shadow += cube.SampleCmpLevelZero(cmp, float4(dn + side * kDiscSamples29[i].x + up * kDiscSamples29[i].y, shadowParams.x), zc);
+        const float3 t = c + sx * kDiscSamples29[i].x + sy * kDiscSamples29[i].y;
+        const float2 st = t.xy / t.z;
+        const float3 tap = float3(LocalShadowRectUV(st * 0.5f + 0.5f, rect, sliceTexel, 0.5f), faceSlice);
+        shadow += atlas.SampleCmpLevelZero(cmp, tap, zc);
     }
     return shadow * (1.0f / 29.0f);
 }

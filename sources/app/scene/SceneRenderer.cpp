@@ -180,7 +180,14 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 spotCPU[i].shadowParams = Math::float4(light.GetCosInner(),
                     static_cast<float>(lm.GetSpotShadowSlot(i)), light.GetInvAngleRange(),
                     (render::g_localShadowBiasUe && !render::VsmActive()) ? 0.0f : light.GetShadowDepthBias()); // VSM: as before
-                spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f), 0.0f, 0.0f);
+                // .z = UE's shadow fade (plan S3, LightManager::SelectShadowedSpots); the VSM path does not read it.
+                const float spotFade = (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetSpotShadowFade(i) : 1.0f;
+                // .w = plan S4: the light's square in its atlas slice (res / slice), the shaders' UV scale.
+                const float spotSlice = static_cast<float>(std::max(renderer->GetDeferredForFrame().spotShadowRes, 1u));
+                const std::uint32_t spotRes = lm.GetSpotShadowResolution(i);
+                const float spotRect = spotRes ? std::min(static_cast<float>(spotRes) / spotSlice, 1.0f) : 1.0f;
+                spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f),
+                                                        spotFade, spotRect);
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
                 // Plan S2: the filter's inputs (local_shadow_filter.hlsli). UE's soft transition for a spot is
                 // 1/SpotLightTransitionScale (60) x 2 x ShadowBias of its normalised depth (ShadowRendering.cpp:2059-2075),
@@ -220,7 +227,10 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 // its slope scale 3 x shadowSlopeBias (r.Shadow.PointLightSlopeScaleDepthBias 3) in volumetric.y;
                 // or the old +0.10 world metres (B4) with shadow.localBiasUe off.
                 const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
-                const float pointRes = static_cast<float>(std::max(renderer->GetDeferredForFrame().pointShadowRes, 1u));
+                // Plan S4: the light's own cube-face resolution (its square of the face slices); UE's bias is per that.
+                const float pointSlice = static_cast<float>(std::max(renderer->GetDeferredForFrame().pointShadowRes, 1u));
+                const std::uint32_t pointResOwn = lm.GetPointShadowResolution(i);
+                const float pointRes = pointResOwn ? std::min(static_cast<float>(pointResOwn), pointSlice) : pointSlice;
                 const float ueDepthBias = 0.02f * 512.0f / pointRes * 2.0f * std::max(desc.shadowBias, 0.0f);
                 pointCPU[i].volumetric = Math::float4(std::max(desc.volumetricIntensity, 0.0f), // plan A4d
                                                       3.0f * std::max(desc.shadowSlopeBias, 0.0f),
@@ -230,6 +240,11 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     static_cast<float>(lm.GetPointShadowSlot(i)),
                     (render::g_localShadowBiasUe && !render::VsmActive()) ? -std::max(ueDepthBias, 1.0e-9f) : 0.10f, // VSM: as before
                     pointShadowNear, desc.radius);
+                // Plan S3: UE's shadow fade (LightManager::SelectShadowedPoints); the VSM path does not read it.
+                // .y / .z = plan S4: the light's square in its face slices and 1 / its resolution (the filter's texel).
+                pointCPU[i].shadowFade = Math::float4(
+                    (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetPointShadowFade(i) : 1.0f,
+                    pointRes / pointSlice, 1.0f / pointRes, 0.0f);
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {

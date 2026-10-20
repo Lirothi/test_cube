@@ -6,6 +6,7 @@
 #include "core/math/Frustum.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/shadows/ShadowSettings.h" // plan S4: kLocalShadowMinRes
 
 LightManager::~LightManager()
 {
@@ -26,13 +27,80 @@ void LightManager::UpdateSpotLightCache()
     }
 }
 
-void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum)
+namespace
+{
+    // Local-light shadow plan S3: UE's CalculateShadowFadeAlpha (ShadowSetup.cpp:534-566) with its defaults --
+    // r.Shadow.FadeResolution 64, r.Shadow.MinResolution 32, r.Shadow.FadeExponent 0.25 (:203-207, :306-316).
+    float ShadowFadeAlpha(float unclampedResolution)
+    {
+        constexpr float kFadeResolution = 64.0f, kMinResolution = 32.0f, kExponent = 0.25f;
+        if (unclampedResolution > kFadeResolution) { return 1.0f; }
+        if (unclampedResolution <= kMinResolution) { return 0.0f; }
+        const float inverseRange = 1.0f / (kFadeResolution - kMinResolution);
+        const float firstFadeValue = std::pow(inverseRange, kExponent);
+        const float sizeRatio = (unclampedResolution - kMinResolution) * inverseRange;
+        // UE: rescaled so the step from "no fading" to the first faded value is small (less popping). Below
+        // 33 texels this goes NEGATIVE, as UE's does -- kMinShadowFade is what keeps such a light shadowless.
+        return (std::pow(sizeRatio, kExponent) - firstFadeValue) / (1.0f - firstFadeValue);
+    }
+    // UE creates a light's whole-scene shadow only while its fade is above 1/256 (ShadowSetup.cpp:4353).
+    constexpr float kMinShadowFade = 1.0f / 256.0f;
+
+    // UE r.Shadow.TexelsPerPixelSpotlight / ...Pointlight (ShadowSetup.cpp:282-292).
+    constexpr float kTexelsPerPixelSpot = 2.0f * 1.27324f;
+    constexpr float kTexelsPerPixelPoint = 1.27324f;
+    constexpr float kMinLightDistance = 0.01f; // UE's FMath::Max(Distance, 1.0f) in cm
+
+    // Plan S4: UE's whole-scene shadow size (ShadowSetup.cpp:4330-4347, :4448-4458) -- the wanted resolution clamped
+    // to the maximum (ClampShadowRolution, :3387) and raised to r.Shadow.MinResolution. A spot's is then rounded DOWN
+    // to a power of two, UE's `1 << (CeilLogTwo(x + 1) - 1)`: "resolution changes are always doubling or halving the
+    // resolution, which increases filtering stability". UE also takes a 4-texel border off it; ours needs none, the
+    // shader clamps its taps inside the light's square.
+    float DesiredShadowResolution(float unclampedResolution, std::uint32_t maxRes)
+    {
+        return std::max(std::min(unclampedResolution, static_cast<float>(maxRes)),
+                        static_cast<float>(render::kLocalShadowMinRes));
+    }
+    std::uint32_t SpotShadowResolution(float unclampedResolution, std::uint32_t maxRes)
+    {
+        const float desired = DesiredShadowResolution(unclampedResolution, maxRes);
+        if (desired >= static_cast<float>(maxRes)) { return maxRes; }
+        const std::uint32_t wanted = static_cast<std::uint32_t>(desired); // UE truncates to uint32 as well
+        std::uint32_t res = render::kLocalShadowMinRes;
+        while (res * 2u <= wanted) { res *= 2u; }
+        return res;
+    }
+    // A point's cube face: the first of UE's five cube sizes not above the wanted resolution -- half the maximum ("cubemaps
+    // use a lot of memory"), its half, quarter, eighth, and r.Shadow.MinResolution (GetCubeShadowDepthZIndex, :771-797).
+    std::uint32_t PointShadowFaceResolution(float unclampedResolution, std::uint32_t maxRes)
+    {
+        const float desired = DesiredShadowResolution(unclampedResolution, maxRes);
+        const std::uint32_t sizes[5] = { maxRes / 2u, maxRes / 4u, maxRes / 8u, maxRes / 16u, render::kLocalShadowMinRes };
+        for (const std::uint32_t size : sizes)
+        {
+            if (desired >= static_cast<float>(size)) { return std::max(size, render::kLocalShadowMinRes); }
+        }
+        return render::kLocalShadowMinRes;
+    }
+}
+
+void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
+                                       std::uint32_t maxRes)
 {
     CPU_SCOPE(ProfilerScopes::kSelectShadowedSpots);
+
+    // S3: who had a slot last frame (the hysteresis), before the reset.
+    std::vector<std::uint8_t> wasShadowed(spotLights_.size(), 0u);
+    for (const std::uint32_t index : shadowedSpotLightIndices_)
+    {
+        if (index < wasShadowed.size()) { wasShadowed[index] = 1u; }
+    }
 
     // Reset every spot to "unshadowed"; sized to the full spot list so
     // GetSpotShadowSlot is safe for any lit index.
     spotShadowSlot_.assign(spotLights_.size(), -1);
+    spotShadowFade_.assign(spotLights_.size(), 1.0f);
+    spotShadowRes_.assign(spotLights_.size(), maxRes);
     shadowedSpotLightIndices_.clear();
 
     const size_t candidateCount = cachedSpotLightCount_;
@@ -53,7 +121,6 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     struct Candidate { std::uint32_t index; float score; };
     std::vector<Candidate> candidates;
     candidates.reserve(candidateCount);
-    constexpr float kMinPriorityDistance = 0.25f;
     for (size_t i = 0; i < candidateCount; ++i)
     {
         const SpotLight& spot = spotLights_[i];
@@ -68,21 +135,27 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
             continue;
         }
 
-        const Math::float3 boundsCenter = influenceBounds.GetCenter();
-        const float boundsRadius = influenceBounds.GetRadius();
-        const Math::float3 toBounds = boundsCenter - cameraPos;
-        const float centerDistance = std::sqrt(toBounds.Dot(toBounds));
-        const float priorityDistance = std::max(centerDistance - boundsRadius, kMinPriorityDistance);
-        const float projectedSize = boundsRadius / priorityDistance;
-
-        const float luminance = std::max(0.0f,
-            desc.color.x * 0.2126f + desc.color.y * 0.7152f + desc.color.z * 0.0722f);
-        const float brightness = std::max(desc.luminousFluxLm, 0.0f) * luminance; // P16.5
-        const float score = projectedSize * projectedSize;// *brightness;
+        // S3: UE's effective screen radius of a spot -- the sphere inscribed at the cone's end, written as UE writes it
+        // (centre at R cos, radius R sin: SpotLightSceneProxy.cpp:117-135) -- and the shadow resolution that asks for.
+        const float range = std::max(desc.range, 0.0f);
+        const float cosOuter = spot.GetCosOuter();
+        const float sinOuter = std::sqrt(std::max(1.0f - cosOuter * cosOuter, 0.0f));
+        const Math::float3 sphereCentre = desc.position + spot.GetDirection() * (range * cosOuter);
+        const Math::float3 toSphere = sphereCentre - cameraPos;
+        const float sphereDistance = std::max(std::sqrt(toSphere.Dot(toSphere)), kMinLightDistance);
+        const float unclampedResolution = screenScale * (range * sinOuter) / sphereDistance * kTexelsPerPixelSpot;
+        const float fade = ShadowFadeAlpha(unclampedResolution);
+        spotShadowFade_[i] = std::max(fade, 0.0f);
+        spotShadowRes_[i] = SpotShadowResolution(unclampedResolution, maxRes); // S4
+        if (fade <= kMinShadowFade)
+        {
+            continue; // UE: too small on screen to have a shadow
+        }
+        const float score = unclampedResolution * (wasShadowed[i] ? kShadowSlotHysteresis : 1.0f);
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 
-    // Select WHICH spots are shadowed by projected size (most important first).
+    // Select WHICH spots are shadowed by the resolution they want (most first).
     const size_t shadowCount = std::min<size_t>(candidates.size(), kMaxShadowedSpotLights);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
         [](const Candidate& a, const Candidate& b)
@@ -113,7 +186,8 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     }
 }
 
-void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum)
+void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
+                                        std::uint32_t maxRes)
 {
     CPU_SCOPE(ProfilerScopes::kSelectShadowedPoints);
 
@@ -121,7 +195,14 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     // on frustum-cull-then-projected-size and the stable index-order slot assignment).
     // The only difference: a point light is omnidirectional, so its influence bound is
     // exactly a sphere (position, radius) rather than a cone AABB.
+    std::vector<std::uint8_t> wasShadowed(pointLights_.size(), 0u); // S3 hysteresis
+    for (const std::uint32_t index : shadowedPointLightIndices_)
+    {
+        if (index < wasShadowed.size()) { wasShadowed[index] = 1u; }
+    }
     pointShadowSlot_.assign(pointLights_.size(), -1);
+    pointShadowFade_.assign(pointLights_.size(), 1.0f);
+    pointShadowRes_.assign(pointLights_.size(), std::max(maxRes / 2u, render::kLocalShadowMinRes));
     shadowedPointLightIndices_.clear();
 
     const size_t candidateCount = pointLights_.size();
@@ -133,7 +214,6 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     struct Candidate { std::uint32_t index; float score; };
     std::vector<Candidate> candidates;
     candidates.reserve(candidateCount);
-    constexpr float kMinPriorityDistance = 0.25f;
     for (size_t i = 0; i < candidateCount; ++i)
     {
         const PointLightDesc& desc = pointLights_[i].GetDesc();
@@ -146,11 +226,18 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
             continue; // reach never touches the view -> no visible shadow
         }
 
+        // S3: UE's effective screen radius of a point light (LocalLightSceneProxy.cpp:101-108) and its resolution.
         const Math::float3 toCenter = desc.position - cameraPos;
-        const float centerDistance = std::sqrt(toCenter.Dot(toCenter));
-        const float priorityDistance = std::max(centerDistance - desc.radius, kMinPriorityDistance);
-        const float projectedSize = desc.radius / priorityDistance;
-        const float score = projectedSize * projectedSize;
+        const float centerDistance = std::max(std::sqrt(toCenter.Dot(toCenter)), kMinLightDistance);
+        const float unclampedResolution = screenScale * desc.radius / centerDistance * kTexelsPerPixelPoint;
+        const float fade = ShadowFadeAlpha(unclampedResolution);
+        pointShadowFade_[i] = std::max(fade, 0.0f);
+        pointShadowRes_[i] = PointShadowFaceResolution(unclampedResolution, maxRes); // S4
+        if (fade <= kMinShadowFade)
+        {
+            continue; // UE: too small on screen to have a shadow
+        }
+        const float score = unclampedResolution * (wasShadowed[i] ? kShadowSlotHysteresis : 1.0f);
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 

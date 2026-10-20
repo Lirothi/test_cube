@@ -3,6 +3,7 @@
 
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
+#include "rendering/core/GraphicsDevice.h" // GbvEnabled: GBV keeps its own PSO cache
 #include "rendering/core/RasterSettings.h" // A6: g_rasterBindless decides the GBUFFER_BINDLESS permutation
 
 #include <d3dcompiler.h>
@@ -503,7 +504,11 @@ bool PipelineCacheEnabled()
 
 std::filesystem::path PipelineCachePath(const std::wstring& name)
 {
-    return ShaderCacheDirectory() / L"pso" / (name + L".bin");
+    // A driver blob names the device it was compiled for, and a GBV device is not the plain one: a blob stored by
+    // either is refused by the other (id=886, "a cached PSO intended for a different driver version") and then
+    // overwritten, so GBV and ordinary runs kept spoiling each other's cache -- and a GBV run, which owes the owner
+    // zero warnings, logged one per such pipeline. GBV keeps its own.
+    return ShaderCacheDirectory() / (GraphicsDevice::GbvEnabled() ? L"pso_gbv" : L"pso") / (name + L".bin");
 }
 
 uint64_t ElapsedMicroseconds(std::chrono::steady_clock::time_point begin)

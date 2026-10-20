@@ -19,7 +19,8 @@ struct PointLightData
     float3 color;
     float intensity;
     float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
-    float4 volumetric;   // x = volumetric scattering intensity (plan A4d), yzw reserved -- mirrors LightManager::PointLightGpu
+    float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
+    float4 shadowFade;   // x = UE's shadow fade (S3), y = the light's square (S4), z = 1 / its res -- mirrors LightManager::PointLightGpu
 };
 
 struct SpotLightData
@@ -28,7 +29,8 @@ struct SpotLightData
     float4 directionCosOuter;  // xyz = direction, w = cos(outer)
     float4 colorIntensity;     // xyz = color, w = intensity
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
-    float4 shadowParams2;      // x = normal bias (world units)
+    float4 shadowParams2;      // x = normal bias (world units), y = volumetric scattering, z = UE's shadow fade (S3),
+                               // w = the light's square in its atlas slice (S4)
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
 };
@@ -55,7 +57,7 @@ StructuredBuffer<PointLightData> PointLights : register(t4);
 StructuredBuffer<SpotLightData> SpotLights : register(t5);
 Texture2D NormalMap : register(t6);
 Texture2D GlassReflection : register(t7); // S15b: premultiplied off-screen RT glass reflection
-TextureCubeArray PointShadowCube : register(t8); // B3: omnidirectional point shadow depth cube (D16 -> R16)
+Texture2DArray PointShadowAtlas : register(t8); // B3: point shadow faces, 6 per light (D16 -> R16); a 2D array since S4
 StructuredBuffer<uint> VsmPageTable : register(t9);  // Rung 2 / Step 21
 Texture2D VsmPool : register(t10);
 // P5: GGX-prefiltered sky. Inert unless skySpecMipCount says this level's sky has it, in which case
@@ -74,13 +76,13 @@ SamplerState EnvSampler : register(s2);
 // in pointlight_cs.hlsl: normal-offset receiver, WORLD-space depth bias subtracted from the
 // compare distance before projecting to the standard-projection depth (render is
 // PerspectiveFovLH(90,1,near,far), LESS_EQUAL, clear 1.0 = far), then SampleCmpLevelZero on
-// the cube-array slice (.w = cube index/slot). 1 = lit, 0 = shadowed. The bias is local_shadow_bias.hlsli's.
+// the light's face (PointShadowCubeUV, plan S4). 1 = lit, 0 = shadowed. The bias is local_shadow_bias.hlsli's.
 static const float kPointPcfRadius  = 0.015f; // PCF disk radius as a fraction of the light distance
 static const float3 kPointPcfOffsets[8] = {
     float3( 1,  1,  1), float3( 1, -1,  1), float3(-1, -1,  1), float3(-1,  1,  1),
     float3( 1,  1, -1), float3( 1, -1, -1), float3(-1, -1, -1), float3(-1,  1, -1)
 };
-float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
+float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; }
     float3 Poff = P + N * PointShadowNormalOffset(Ld.shadowParams);
@@ -99,20 +101,37 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
     float nearP = Ld.shadowParams.z;
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
-    float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, dot(N, normalize(Ld.position - P)));
+    const float NoL = dot(N, normalize(Ld.position - P));
+    // Plan S4: the light's own square of its face slices; 1 / the slice = rect / res.
+    const float rect = Ld.shadowFade.y;
+    const float sliceTexel = Ld.shadowFade.y * Ld.shadowFade.z;
+    // Plan S8 (unblocked by S4, which put the light's resolution in its own data): pointlight_cs's filter, UE's 29-tap
+    // disc, sharpened and squared -- glass no longer shades a point shadow its own way.
+    if (Ld.volumetric.w != 0.0f && Ld.shadowParams.y < 0.0f)
+    {
+        return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, ShadowSampler, d, m, Ld.shadowParams, Ld.volumetric.y,
+                                                   NoL, Ld.shadowFade.z, rect, sliceTexel), Ld.volumetric.z);
+    }
+    float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
-    // PCF: 8 cube taps, offset scaled by m for a ~constant world-space footprint (mirrors
-    // PointShadowFactor in pointlight_cs.hlsl).
+    // PCF: 8 cube taps, offset scaled by m for a ~constant world-space footprint (the old filter,
+    // shadow.localFilterUe:0).
     float radius = m * kPointPcfRadius;
     float shadow = 0.0f;
     [unroll]
     for (int i = 0; i < 8; ++i)
     {
         float3 sd = d + kPointPcfOffsets[i] * radius;
-        shadow += PointShadowCube.SampleCmpLevelZero(ShadowSampler,
-            float4(sd, Ld.shadowParams.x), zc);
+        shadow += PointShadowAtlas.SampleCmpLevelZero(ShadowSampler,
+            PointShadowCubeUV(sd, Ld.shadowParams.x, rect, sliceTexel), zc);
     }
     return shadow * 0.125f;
+}
+
+// Plan S3: UE's shadow fade, as pointlight_cs.hlsl's.
+float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
+{
+    return lerp(1.0f, PointShadowFactorMap(Ld, P, N), Ld.shadowFade.x);
 }
 
 struct VSIn
@@ -249,7 +268,7 @@ float ShadowPCF3x3Array(Texture2DArray atlas, float3 uvw, float depth, float2 te
     return s / 9.0f;
 }
 
-float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
+float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float NdotL)
 {
     // shadowParams.y < 0 => this spot has no shadow slot this frame (unshadowed).
     if (light.shadowParams.y < 0.0f)
@@ -278,8 +297,9 @@ float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndot
         return 1.0f;
     }
 
-    float3 uvw = float3(uv, light.shadowParams.y);
     float2 texel = spotShadowInfo.zw;
+    uv = LocalShadowRectUV(uv, light.shadowParams2.w, texel.x, 3.0f); // plan S4: the light's square of its slice
+    float3 uvw = float3(uv, light.shadowParams.y);
     if (light.shadowParams3.w != 0.0f) // plan S2: the spot pass's own filter (local_shadow_filter.hlsli)
     {
         const float n = light.shadowParams3.x;
@@ -289,6 +309,12 @@ float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float Ndot
                                                    n, f, 1.0f / texel, texel), light.shadowParams3.z);
     }
     return ShadowPCF3x3Array(SpotShadowAtlas, uvw, depth - depthBias, texel);
+}
+
+// Plan S3: UE's shadow fade, as spotlight_cs.hlsl's.
+float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
+{
+    return lerp(1.0f, SampleSpotShadowMap(light, P, N, NdotL), light.shadowParams2.z);
 }
 
 struct PSOut

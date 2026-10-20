@@ -2259,11 +2259,19 @@ void Scene::PrepareViews(Renderer* renderer)
     // selection must be temporally stable, so cull against the un-jittered frustum.
     const Frustum shadowSelectFrustum = Frustum::FromInvViewProj(
         mainView.invView, camera_.GetProjMatrixNoJitter(), camera_.GetZNear(), camera_.GetZFar());
-    lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum);
+    // Local-light shadow plan S3: UE's ScreenScale (LocalLightSceneProxy.cpp:104) at the RENDER resolution, as UE's
+    // View.ViewRect is after the screen percentage.
+    const mat4& shadowSelectProj = camera_.GetProjMatrixNoJitter();
+    const float shadowScreenScale = std::max(
+        0.5f * static_cast<float>(renderer->GetRenderWidth()) * shadowSelectProj.m._11,
+        0.5f * static_cast<float>(renderer->GetRenderHeight()) * shadowSelectProj.m._22);
+    // Plan S4: the spot atlas slice is the largest a local shadow may be (ReconcileShadowMode keeps it the knob's).
+    const std::uint32_t localShadowMaxRes = std::max(renderer->GetDeferredForFrame().spotShadowRes, 1u);
+    lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes);
     // B2a: choose which point lights cast (cube) shadows this frame, same non-jittered
     // frustum. Drives Pass_PointLights' shadowParams.x; the cube views + render pass are
     // B2b, sampling is B3, so this is inert (no visual change) until those land.
-    lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum);
+    lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes);
     const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
     for (size_t s = 0; s < shadowedSpotCount; ++s)
@@ -2292,12 +2300,14 @@ void Scene::PrepareViews(Renderer* renderer)
         view.zFar = farPlane;
         view.hfov = 0.0f;
         view.shadowBias = float2(desc.shadowBias, desc.shadowSlopeBias); // local-light shadows S1
+        view.shadowRes = lightManager_.GetSpotShadowResolution(lightIndex); // S4: its square of the slice
         view.requiresDepthCheck = false;
     }
 
     // B2b: point-light cube shadow views — 6 faces per shadowed point light. Face order
-    // is the D3D cube-map convention (+X,-X,+Y,-Y,+Z,-Z) so a runtime TextureCubeArray
-    // sample by direction (P - lightPos) selects the matching slice (rendered into
+    // is the D3D cube-map convention (+X,-X,+Y,-Y,+Z,-Z) so a sample by direction
+    // (P - lightPos) selects the matching slice (since plan S4 the shaders pick it themselves,
+    // local_shadow_filter.hlsli PointShadowFace, by the same convention) (rendered into
     // pointShadowViews_[slot*6 + face], matching BindPointShadowTarget's faceIndex). All
     // faces share one 90° FOV perspective; only orientation differs.
     static const Math::float3 kCubeDir[6] = {
@@ -2342,6 +2352,7 @@ void Scene::PrepareViews(Renderer* renderer)
             view.zNear = nearPlane;
             view.zFar = farPlane;
             view.hfov = 0.0f;
+            view.shadowRes = lightManager_.GetPointShadowResolution(lightIndex); // S4: its square of the face slice
             view.requiresDepthCheck = false;
         }
     }
@@ -2745,6 +2756,9 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     const unsigned wantAtlasRes =
         std::clamp(render::g_csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
     const bool atlasResOk = (wantAtlasRes == renderer->CsmAtlasResolution());
+    // Local-light shadow plan S4: the spot / point atlas slices follow render::g_localShadowMaxRes the same way.
+    const unsigned wantLocalRes = RenderTargetManager::LocalShadowSliceRes(render::g_localShadowMaxRes);
+    const bool localResOk = (wantLocalRes == renderer->LocalShadowMaxResolution());
     // S16: the EVSM moments atlas is the SAME kind of decision -- resident only while SDSM is the
     // mode AND EVSM is on, and sized to the atlas edge. It belongs here and NOWHERE ELSE, because
     // turning EVSM off FREES a texture: doing that from the per-frame update (where the toggle
@@ -2753,11 +2767,19 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     const bool wantMoments = wantSdsm && render::sdsm::g_evsm;
     const bool momentsOk = (wantMoments == sdsm_.MomentsReady()) &&
                            (!wantMoments || sdsm_.MomentsRes() == wantAtlasRes);
-    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk) { return; } // all in sync — the common per-frame path
+    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk) { return; } // all in sync — the common per-frame path
     // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
     renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
     if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
     if (!atlasOk) { renderer->SetLocalShadowResidency(wantAtlasFull); }
+    if (!localResOk)
+    {
+        renderer->SetLocalShadowMaxResolution(wantLocalRes);
+        LOG_INFO(logging::LogCategory::RenderShadow, "local shadow max resolution -> {} (spot slices {}, point faces {}: {:.1f} MB, R16)",
+                 wantLocalRes, wantLocalRes, wantLocalRes / 2u,
+                 (static_cast<double>(LightManager::kMaxShadowedSpotLights) * wantLocalRes * wantLocalRes +
+                  6.0 * LightManager::kMaxShadowedPointLights * (wantLocalRes / 2u) * (wantLocalRes / 2u)) * 2.0 / (1024.0 * 1024.0));
+    }
     if (!atlasResOk)
     {
         renderer->SetCsmAtlasResolution(wantAtlasRes);

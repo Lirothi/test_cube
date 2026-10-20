@@ -421,11 +421,10 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         // settings file or a --set cannot ask for a size the device will refuse.
         D.shadowRes = std::clamp(render::g_csmAtlasRes, render::kCsmAtlasResMin, render::kCsmAtlasResMax);
 
-        D.spotShadowRes = 512;
-        CreateSpotShadowResource(dev, decls, f, D.spotShadowRes);
-
-        D.pointShadowRes = 256;
-        CreatePointShadowResource(dev, decls, f, D.pointShadowRes);
+        // Local-light shadow plan S5: the atlases themselves are created once, after this loop. S4: their slices are
+        // the knob's largest shadow (a spot's), the point faces half of it (UE's largest cube).
+        D.spotShadowRes = LocalShadowSliceRes(render::g_localShadowMaxRes);
+        D.pointShadowRes = D.spotShadowRes / 2u;
 
         CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.light, DeferredRtvSlot::Light, DeferredSrvSlot::Light, DeferredSrvSlot::LightUAV, f, D.light, D.lightRTV, D.lightSRV);
         CreateRT(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.sceneColor, DeferredRtvSlot::Scene, DeferredSrvSlot::Scene, DeferredSrvSlot::SceneUAV, f, D.scene, D.sceneRTV, D.sceneSRV);
@@ -846,9 +845,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 #endif
         nameRes(D.depth.Get(), L"Depth", kNps);
         nameRes(D.depthCopy.Get(), L"DepthCopy", kPs);
-        // Legacy shadow atlases: written every frame, never sampled after the last light pass.
-        nameRes(D.spotShadow.Get(), L"SpotShadow", kNps);
-        nameRes(D.pointShadow.Get(), L"PointShadow", kNps | kPs);
+        // Legacy shadow atlases: ONE each since local-light shadow plan S5, named where they are created.
         nameRes(D.light.Get(), L"Light", kNps);
         nameRes(D.scene.Get(), L"Scene", kNps);
         nameRes(D.sceneOpaque.Get(), L"SceneOpaque", kPs);
@@ -895,6 +892,9 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     // S3.5: the cascade shadow atlas is ONE resource for every frame in flight, so it is
     // created here rather than inside the loop above; the per-frame DSV/SRV are built inside.
     CreateShadowResource(dev, decls, deferred_[0].shadowRes);
+    // Local-light shadow plan S5: the spot / point atlases likewise.
+    CreateSpotShadowResource(dev, decls, deferred_[0].spotShadowRes);
+    CreatePointShadowResource(dev, decls, deferred_[0].pointShadowRes);
 }
 
 // Step 24f-2: CSM cascade atlas (R16_TYPELESS 2D, DSV=D16, SRV=R16). Writes deferred_[f].shadow + its
@@ -959,12 +959,11 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclar
 }
 
 // Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
-// Writes deferred_[f].spotShadow + its views. `resolution` = full-res (Legacy) or 1 (VSM: tiny).
-void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution)
+// Writes spotShadowAtlas_ and every frame's alias + views. `resolution` = full-res (Legacy) or 1 (VSM: tiny).
+void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 512; }
-    auto& D = deferred_[f];
 
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -989,47 +988,53 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
+    // S5: ONE resource for every frame in flight; GetAddressOfForCreate resets + unregisters the outgoing one.
     ThrowIfFailed(render::CreateCommittedTexture(dev,
         heapProps, D3D12_HEAP_FLAG_NONE, desc,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &clear, D.spotShadow.GetAddressOfForCreate()));
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &clear, spotShadowAtlas_.GetAddressOfForCreate()));
+    spotShadowAtlas_->SetName(L"SpotShadow");
+    spotShadowAtlas_.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
 
-    D.spotShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::SpotShadow);
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Format = DXGI_FORMAT_R16_UNORM;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Texture2DArray.MipLevels = 1;
-    srvDesc.Texture2DArray.FirstArraySlice = 0;
-    srvDesc.Texture2DArray.ArraySize = LightManager::kMaxShadowedSpotLights;
-    srvDesc.Texture2DArray.MostDetailedMip = 0;
-    srvDesc.Texture2DArray.PlaneSlice = 0;
-    srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
-    dev->CreateShaderResourceView(D.spotShadow.Get(), &srvDesc, D.spotShadowSRV);
-
-    for (UINT i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
+    // The views stay per-frame (they live in the per-frame descriptor heaps), all against the one resource.
+    for (UINT f = 0; f < render::kFrameCount; ++f)
     {
-        D.spotShadowDSV[i] = DeferredSpotShadowDsvCPU(f, i);
-        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-        dsv.Format = DXGI_FORMAT_D16_UNORM;
-        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-        dsv.Flags = D3D12_DSV_FLAG_NONE;
-        dsv.Texture2DArray.ArraySize = 1;
-        dsv.Texture2DArray.FirstArraySlice = i;
-        dsv.Texture2DArray.MipSlice = 0;
-        dev->CreateDepthStencilView(D.spotShadow.Get(), &dsv, D.spotShadowDSV[i]);
-    }
+        auto& D = deferred_[f];
+        D.spotShadow = spotShadowAtlas_.Get();
 
-    D.spotShadow->SetName(L"SpotShadow");
-    D.spotShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+        D.spotShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::SpotShadow);
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R16_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2DArray.MipLevels = 1;
+        srvDesc.Texture2DArray.FirstArraySlice = 0;
+        srvDesc.Texture2DArray.ArraySize = LightManager::kMaxShadowedSpotLights;
+        srvDesc.Texture2DArray.MostDetailedMip = 0;
+        srvDesc.Texture2DArray.PlaneSlice = 0;
+        srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+        dev->CreateShaderResourceView(D.spotShadow, &srvDesc, D.spotShadowSRV);
+
+        for (UINT i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
+        {
+            D.spotShadowDSV[i] = DeferredSpotShadowDsvCPU(f, i);
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+            dsv.Format = DXGI_FORMAT_D16_UNORM;
+            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+            dsv.Flags = D3D12_DSV_FLAG_NONE;
+            dsv.Texture2DArray.ArraySize = 1;
+            dsv.Texture2DArray.FirstArraySlice = i;
+            dsv.Texture2DArray.MipSlice = 0;
+            dev->CreateDepthStencilView(D.spotShadow, &dsv, D.spotShadowDSV[i]);
+        }
+    }
 }
 
 // Step 24c: point shadow cube-array (6*N slices of R16_TYPELESS; DSV=D16 per face, SRV=R16 cube
 // array). Mirrors CreateSpotShadowResource, cube-ified. `resolution` = full-res (Legacy) or 1 (VSM).
-void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution)
+void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 512; }
-    auto& D = deferred_[f];
     constexpr UINT kFaces = 6 * LightManager::kMaxShadowedPointLights;
 
     D3D12_HEAP_PROPERTIES heapProps{};
@@ -1053,59 +1058,89 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
+    // S5: ONE resource for every frame in flight, as the spot atlas.
     ThrowIfFailed(render::CreateCommittedTexture(dev,
         heapProps, D3D12_HEAP_FLAG_NONE, desc,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, D.pointShadow.GetAddressOfForCreate()));
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, pointShadowAtlas_.GetAddressOfForCreate()));
+    pointShadowAtlas_->SetName(L"PointShadow");
+    pointShadowAtlas_.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
 
-    D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-    srvDesc.Format = DXGI_FORMAT_R16_UNORM;
-    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBEARRAY;
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.TextureCubeArray.MostDetailedMip = 0;
-    srvDesc.TextureCubeArray.MipLevels = 1;
-    srvDesc.TextureCubeArray.First2DArrayFace = 0;
-    srvDesc.TextureCubeArray.NumCubes = LightManager::kMaxShadowedPointLights;
-    srvDesc.TextureCubeArray.ResourceMinLODClamp = 0.0f;
-    dev->CreateShaderResourceView(D.pointShadow.Get(), &srvDesc, D.pointShadowSRV);
-
-    for (UINT face = 0; face < kFaces; ++face)
+    for (UINT f = 0; f < render::kFrameCount; ++f)
     {
-        D.pointShadowDSV[face] = DeferredPointShadowDsvCPU(f, face);
-        D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
-        dsv.Format = DXGI_FORMAT_D16_UNORM;
-        dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
-        dsv.Flags = D3D12_DSV_FLAG_NONE;
-        dsv.Texture2DArray.ArraySize = 1;
-        dsv.Texture2DArray.FirstArraySlice = face;
-        dsv.Texture2DArray.MipSlice = 0;
-        dev->CreateDepthStencilView(D.pointShadow.Get(), &dsv, D.pointShadowDSV[face]);
-    }
+        auto& D = deferred_[f];
+        D.pointShadow = pointShadowAtlas_.Get();
 
-    D.pointShadow->SetName(L"PointShadow");
-    D.pointShadow.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr);
+        // Plan S4: a 2D ARRAY of the 6 x N faces, not a cube array -- each light draws into the top-left square of its
+        // own resolution, which a hardware cube lookup (always the whole face) cannot address. The shaders pick the
+        // face and its texel themselves (local_shadow_filter.hlsli PointShadowCubeUV, D3D's cube face convention).
+        D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_R16_UNORM;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2DArray.MostDetailedMip = 0;
+        srvDesc.Texture2DArray.MipLevels = 1;
+        srvDesc.Texture2DArray.FirstArraySlice = 0;
+        srvDesc.Texture2DArray.ArraySize = kFaces;
+        srvDesc.Texture2DArray.PlaneSlice = 0;
+        srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+        dev->CreateShaderResourceView(D.pointShadow, &srvDesc, D.pointShadowSRV);
+
+        for (UINT face = 0; face < kFaces; ++face)
+        {
+            D.pointShadowDSV[face] = DeferredPointShadowDsvCPU(f, face);
+            D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
+            dsv.Format = DXGI_FORMAT_D16_UNORM;
+            dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+            dsv.Flags = D3D12_DSV_FLAG_NONE;
+            dsv.Texture2DArray.ArraySize = 1;
+            dsv.Texture2DArray.FirstArraySlice = face;
+            dsv.Texture2DArray.MipSlice = 0;
+            dev->CreateDepthStencilView(D.pointShadow, &dsv, D.pointShadowDSV[face]);
+        }
+    }
 }
 
 void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDeclarations decls, bool full)
 {
     if (full == localShadowFull_ || !dev) { return; }
-    for (UINT f = 0; f < render::kFrameCount; ++f)
-    {
-        auto& D = deferred_[f];
-        // Untrack the outgoing resources (ReleaseAndGetAddressOf inside the create calls frees them),
-        // so a re-used address can't inherit a stale tracked state.
-        if (D.spotShadow) { decls.Forget(D.spotShadow.Get()); }
-        if (D.pointShadow) { decls.Forget(D.pointShadow.Get()); }
-        // Keep the configured resolutions; only the created size changes (1 = tiny placeholder). VSM mode
-        // retires the CSM cascade atlas (~96 MB across frames) as well: the render graph omits the
-        // Main_CSM pass in VSM mode, so nothing renders into this 1x1 placeholder.
-        CreateSpotShadowResource(dev, decls, f, full ? D.spotShadowRes : 1u);
-        CreatePointShadowResource(dev, decls, f, full ? D.pointShadowRes : 1u);
-    }
+    // Keep the configured resolutions; only the created size changes (1 = tiny placeholder). Local-light
+    // shadow plan S5: the spot / point atlases are ONE resource each, rebuilt once (GetAddressOfForCreate
+    // inside resets and unregisters the outgoing one, so a re-used address can't inherit a stale state).
+    CreateSpotShadowResource(dev, decls, full ? deferred_[0].spotShadowRes : 1u);
+    CreatePointShadowResource(dev, decls, full ? deferred_[0].pointShadowRes : 1u);
+    // VSM mode retires the CSM cascade atlas as well: the render graph omits the Main_CSM pass in VSM
+    // mode, so nothing renders into this 1x1 placeholder.
     // S3.5: the cascade atlas is ONE resource, so it is forgotten and rebuilt once, not per frame.
     // (GetAddressOfForCreate inside does the Forget; the explicit one here would be redundant.)
     CreateShadowResource(dev, decls, full ? deferred_[0].shadowRes : 1u);
     localShadowFull_ = full;
+}
+
+UINT RenderTargetManager::LocalShadowSliceRes(UINT knob)
+{
+    // A power of two: every light's square is one (S4), and must fit the slice exactly.
+    UINT res = render::kLocalShadowMaxResMin;
+    const UINT wanted = std::clamp(knob, render::kLocalShadowMaxResMin, render::kLocalShadowMaxResMax);
+    while (res * 2u <= wanted) { res *= 2u; }
+    return res;
+}
+
+void RenderTargetManager::SetLocalShadowMaxResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT knob)
+{
+    const UINT res = LocalShadowSliceRes(knob);
+    if (!dev || res == deferred_[0].spotShadowRes) { return; }
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        deferred_[f].spotShadowRes = res;
+        deferred_[f].pointShadowRes = res / 2u;
+    }
+    // As the cascade atlas: resident only outside VSM; otherwise the size is remembered for SetLocalShadowResidency.
+    if (localShadowFull_)
+    {
+        CreateSpotShadowResource(dev, decls, res);
+        CreatePointShadowResource(dev, decls, res / 2u);
+    }
 }
 
 void RenderTargetManager::SetCsmAtlasResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
@@ -1156,8 +1191,8 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.oceanReflection);
         collect(D.oceanReflectionHistory);
         D.shadow = nullptr; // S3.5: non-owning alias; shadowAtlas_ below is the owner
-        collect(D.spotShadow);
-        collect(D.pointShadow);
+        D.spotShadow = nullptr;  // S5: non-owning aliases; the atlases below are the owners
+        D.pointShadow = nullptr;
         collect(D.dlssOutput);
         collect(D.glassReflNormal);
         collect(D.glassReflDepth);
@@ -1178,6 +1213,8 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
     }
 
     shadowAtlas_.Reset(); // S3.5: the single cascade atlas; Reset unregisters it
+    spotShadowAtlas_.Reset();  // local-light shadow plan S5, likewise
+    pointShadowAtlas_.Reset();
 
     decls.ForgetMany(released);
 

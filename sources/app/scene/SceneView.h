@@ -36,6 +36,9 @@ struct SceneView
     // Local-light shadow plan S1: a SPOT shadow view's UE biases (shadowBias, shadowSlopeBias) -- Pass_SpotShadows
     // turns them into its depth pass's world-metre bias at the atlas's resolution. Zero on every other view.
     float2 shadowBias = float2(0.0f, 0.0f);
+    // Plan S4: a spot / point-face shadow view's own resolution (LightManager: UE's size for its light) -- the square of
+    // its atlas slice it draws into, and the resolution its S1 bias is for. 0 = the whole slice; 0 on every other view.
+    std::uint32_t shadowRes = 0;
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

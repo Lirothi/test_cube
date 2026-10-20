@@ -474,6 +474,9 @@ namespace editormcp
                   "What the renderer measured on the latest read-back frame: the metered and the "
                   "adapted EV100, the pre-exposure, the sun probe's disc colour (pre-exposed) and "
                   "visible share, the frame rate. The numbers behind a look, without a picture. "
+                  "`localShadows` lists every spot / point light holding a shadow slot or being faded "
+                  "as [lightIndex, slot (-1 = none), fade 0..1, resolution] (UE's shadow fade and size by "
+                  "on-screen radius: a spot's square, a point's cube face). "
                   "`history` adds that many of the newest frames, one row EACH (frame, adapted and "
                   "metered EV100, pre-exposure, pixel-probe mean rgb and max luminance, sun-probe "
                   "luminance) -- how a flicker is read: two calls land ~10 frames apart." },

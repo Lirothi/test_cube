@@ -39,6 +39,9 @@ public:
         Math::float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
         Math::float4 volumetric;   // x = volumetric scattering intensity (plan A4d); local-light shadows: y = UE's slope
                                    // scale (S1), z = UE's sharpen 7s+1 (S2), w = 1: UE's 29-tap disc, 0: the old 3x3
+        Math::float4 shadowFade;   // local-light shadows S3: x = UE's shadow fade (lerp(1, shadow, x)); S4: y = the
+                                   // light's square in its face slices (res / slice res), z = 1 / res, w reserved.
+                                   // Mirrored by pointlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
     };
 
     struct alignas(16) SpotLightGpu
@@ -47,7 +50,9 @@ public:
         Math::float4 directionCosOuter;  // xyz = direction (normalized), w = cos(outer)
         Math::float4 colorIntensity;     // xyz = color, w = intensity
         Math::float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
-        Math::float4 shadowParams2;      // x = normal bias (WS), y = volumetric scattering intensity (plan A4d)
+        Math::float4 shadowParams2;      // x = normal bias (WS), y = volumetric scattering intensity (plan A4d),
+                                         // z = UE's shadow fade (S3: lerp(1, shadow, z)), w = the light's square in
+                                         // its slice (S4: res / slice res)
         Math::mat4   viewProj;
         // Local-light shadow plan S2: x = the projection's near plane, y = UE's soft-transition scale (1/m), z = UE's
         // sharpen (7 x ShadowSharpen + 1), w = 1: UE's 6x6 tent filter, 0: the old 3x3 box. Mirrored by
@@ -74,7 +79,39 @@ public:
     // the camera, out of reach) never consumes a scarce shadow slot. Must run
     // after UpdateSpotLightCache and before the spot shadow views are built /
     // the spot-light buffer is filled.
-    void SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum);
+    //
+    // Local-light shadow plan S3: ranked, as UE sizes a light's shadow, by the resolution it WANTS -- its effective
+    // screen radius (UE GetEffectiveScreenRadius: a spot's inscribed sphere at the cone's end, SpotLightSceneProxy.cpp
+    // :117-135; a point's radius) x r.Shadow.TexelsPerPixelSpotlight 2.546 / ...Pointlight 1.273 (ShadowSetup.cpp
+    // :276-292) -- and faded by it as UE fades (CalculateShadowFadeAlpha, :534-566: full above r.Shadow.FadeResolution
+    // 64 texels, none at MinResolution 32, FadeExponent 0.25); a light whose fade is 0 takes no slot. A light shadowed
+    // last frame ranks x kShadowSlotHysteresis, so two lights of about one size do not swap the slot back and forth.
+    // `screenScale` = max(W/2 * P11, H/2 * P22) of the camera's projection at the render resolution.
+    //
+    // Plan S4: the same wanted resolution sizes the light's shadow as UE sizes it -- a spot's rounded down to a power of
+    // two up to `maxRes` (the spot atlas slice), a point's cube face to the first of maxRes/2, /4, /8, /16, 32 -- and
+    // the light renders into the top-left square of that size of its slice (GetSpotShadowResolution).
+    void SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
+                             std::uint32_t maxRes);
+    // S3: the light's shadow fade this frame, 0..1 (1 for an index without one).
+    float GetSpotShadowFade(size_t lightIndex) const
+    {
+        return lightIndex < spotShadowFade_.size() ? spotShadowFade_[lightIndex] : 1.0f;
+    }
+    float GetPointShadowFade(size_t lightIndex) const
+    {
+        return lightIndex < pointShadowFade_.size() ? pointShadowFade_[lightIndex] : 1.0f;
+    }
+    // S4: the light's shadow resolution this frame (a spot's square, a point's cube face), 0 for an index without one.
+    std::uint32_t GetSpotShadowResolution(size_t lightIndex) const
+    {
+        return lightIndex < spotShadowRes_.size() ? spotShadowRes_[lightIndex] : 0u;
+    }
+    std::uint32_t GetPointShadowResolution(size_t lightIndex) const
+    {
+        return lightIndex < pointShadowRes_.size() ? pointShadowRes_[lightIndex] : 0u;
+    }
+    static constexpr float kShadowSlotHysteresis = 1.25f;
 
     size_t GetSpotLightCount() const { return cachedSpotLightCount_; }
 
@@ -98,7 +135,8 @@ public:
     // [0, GetShadowedPointCount()). Pass the SAME non-jittered frustum used for
     // spots. Must run before the point cube views are built / the point-light buffer
     // is filled.
-    void SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum);
+    void SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
+                              std::uint32_t maxRes); // S3 / S4 as spots
 
     // Number of point lights casting a shadow this frame (<= kMaxShadowedPointLights).
     size_t GetShadowedPointCount() const { return shadowedPointLightIndices_.size(); }
@@ -161,6 +199,10 @@ private:
     // Per-frame point cube-shadow-slot mapping (see SelectShadowedPoints).
     std::vector<int> pointShadowSlot_;                      // parallel to pointLights_; -1 = unshadowed
     std::vector<std::uint32_t> shadowedPointLightIndices_;  // slot -> point-light index
+    std::vector<float> spotShadowFade_;                     // S3: parallel to spotLights_
+    std::vector<float> pointShadowFade_;                    // S3: parallel to pointLights_
+    std::vector<std::uint32_t> spotShadowRes_;              // S4: parallel to spotLights_
+    std::vector<std::uint32_t> pointShadowRes_;             // S4: parallel to pointLights_ (cube face)
     // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_
     // / spotLightCapacity_ elements; region f is written+read only by in-flight frame
     // f, with its own SRV in the *SrvHandles_ array. Capacity is PER REGION.

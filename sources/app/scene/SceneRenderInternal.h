@@ -279,6 +279,13 @@ namespace scene_internal
         return UploadFrameCB(renderer, vc);
     }
 
+    // Local-light shadow plan S4: a spot / point-face shadow view's resolution (SceneView::shadowRes, its light's UE size),
+    // never above the atlas slice; the whole slice for a view without one.
+    inline UINT ShadowViewRes(const SceneView& view, UINT slice)
+    {
+        return (view.shadowRes == 0u) ? slice : std::min<UINT>(view.shadowRes, slice);
+    }
+
     // Local-light shadow plan S1: a SPOT view's depth-pass bias, UE's (ShadowRendering.cpp:2037-2056; CVars :120-130 and
     // :203-208 -- r.Shadow.SpotLightDepthBias 3, SpotLightSlopeDepthBias 3, ShadowMaxSlopeScaleDepthBias 1). UE's
     // constant is 3*512/((MaxZ-MinZ)*Res)*2*ShadowBias of a [0,1] linear depth over the subject range: 1536/Res of its

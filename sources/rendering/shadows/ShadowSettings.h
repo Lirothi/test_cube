@@ -131,6 +131,20 @@ inline bool g_localShadowBiasUe = true;
 // Plan S2: UE's filters on the atlases -- a spot's Manual5x5PCF (6x6 tent, soft occlusion ramp), a point's 29-tap
 // CubemapHardwarePCF, both sharpened and squared. false = the old 3x3 boxes: `--set shadow.localFilterUe:0`.
 inline bool g_localShadowFilterUe = true;
+// Plan S3: UE's shadow fade by the resolution a light wants on screen (CalculateShadowFadeAlpha: full above 64 texels,
+// none at 32) -- a distant lamp's shadow thins out instead of switching off when it loses its slot. false = every
+// shadowed light at full strength (the slots are still ranked by that resolution): `--set shadow.localFadeUe:0`.
+inline bool g_localShadowFadeUe = true;
+// Plan S4: UE r.Shadow.MaxResolution for the local lights (BaseScalability.ini: 1024 at High, 2048 at Epic). A spot's
+// shadow is its screen radius x 2.546 rounded DOWN to a power of two up to this; a point's cube face is the first of
+// max/2, /4, /8, /16 and 32 not above its radius x 1.273 (ShadowSetup.cpp:4301-4464, :771-797). The atlas slices are
+// this size (spot) and half of it (point faces), each light drawn into the top-left square of its own: resident
+// 8 x max^2 + 24 x (max/2)^2 R16, 112 MB at 2048, 28 MB at 1024. Reallocated by Scene::ReconcileShadowMode;
+// `--set shadow.localMaxRes:<n>`.
+inline unsigned g_localShadowMaxRes = 2048u;
+constexpr unsigned kLocalShadowMaxResMin = 256u;
+constexpr unsigned kLocalShadowMaxResMax = 4096u;
+constexpr unsigned kLocalShadowMinRes = 32u; // UE r.Shadow.MinResolution
 
 // S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
 // 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the

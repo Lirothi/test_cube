@@ -78,8 +78,11 @@ public:
         // inside the SAME frame, on the graphics queue, so a second copy buys nothing but VRAM.
         // The DSV/SRV below still live in the per-frame descriptor heaps and point here.
         ID3D12Resource* shadow = nullptr; // R16_TYPELESS atlas (DSV=D16, SRV=R16)
-        GpuResource spotShadow; // R16_TYPELESS array for spot lights
-        GpuResource pointShadow; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
+        // Local-light shadow plan S5: NON-OWNING aliases of RenderTargetManager::spotShadowAtlas_ / pointShadowAtlas_,
+        // for the reason `shadow` above is one: written by Main_SpotShadows / Main_PointShadows, read by the light
+        // passes, the fog scatter and glass of the SAME frame, every one of them on the graphics queue.
+        ID3D12Resource* spotShadow = nullptr; // R16_TYPELESS array for spot lights
+        ID3D12Resource* pointShadow = nullptr; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
         GpuResource dlssOutput; // scene color format, upscaled
         // S15 off-screen glass reflections: a reflection-res glass G-buffer (front-face
         // normal + depth) feeding a second rt_reflections_cs dispatch into glassReflection.
@@ -330,7 +333,12 @@ public:
     // A no-op while the atlas is the VSM-mode 1x1 placeholder -- the size is remembered and
     // applied when the mode comes back.
     void SetCsmAtlasResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution);
+    // Local-light shadow plan S4: the spot slice / point face size from render::g_localShadowMaxRes (rounded down to a
+    // power of two); reallocates the two atlases when resident. Called from Scene::ReconcileShadowMode, GPU idle.
+    void SetLocalShadowMaxResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT knob);
+    static UINT LocalShadowSliceRes(UINT knob);
     UINT CsmAtlasResolution() const { return deferred_[0].shadowRes; }
+    UINT LocalShadowMaxResolution() const { return deferred_[0].spotShadowRes; }
 
 private:
     enum class DeferredRtvSlot : UINT {
@@ -407,8 +415,10 @@ private:
     // toggle can rebuild them at 1x1 / full res.
     // S3.5: creates the ONE atlas and every frame's views onto it (hence no frame index).
     void CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution); // Step 24f-2: CSM atlas
-    void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution);
-    void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT f, UINT resolution);
+    // Local-light shadow plan S5: ONE resource each for every frame in flight (as CreateShadowResource), the
+    // per-frame SRV / DSVs built against it.
+    void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution);
+    void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution);
 
     // CPU heaps for offscreen resources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
@@ -421,5 +431,9 @@ private:
 
     // S3.5: the ONE cascade shadow atlas. deferred_[f].shadow aliases this; nothing else owns it.
     GpuResource shadowAtlas_;
+    // Local-light shadow plan S5: the ONE spot atlas and the ONE point cube array; deferred_[f].spotShadow /
+    // .pointShadow alias these.
+    GpuResource spotShadowAtlas_;
+    GpuResource pointShadowAtlas_;
     bool localShadowFull_ = true; // Step 24c: spot/point atlases at full res (Legacy) vs 1x1 (VSM)
 };

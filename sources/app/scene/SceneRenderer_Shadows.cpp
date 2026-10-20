@@ -710,10 +710,11 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             {
                 renderer->EmitPoint(t.cl, atlasPoint);
             }
-            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
-
             const SceneView& view = spotViews[lightIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, D.spotShadowRes); // S1
+            // Plan S4: the view's own square of the slice, and the S1 bias for that resolution.
+            const UINT res = ShadowViewRes(view, D.spotShadowRes);
+            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true, res);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, res); // S1
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -760,10 +761,10 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 
         for (size_t lightIndex = 0; lightIndex < viewCount; ++lightIndex)
         {
-            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true);
-
             const SceneView& view = spotViews[lightIndex];
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, frame_->wind, D.spotShadowRes); // S1
+            const UINT res = ShadowViewRes(view, D.spotShadowRes); // S4
+            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true, res);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, frame_->wind, res); // S1
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -831,10 +832,9 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
             {
                 renderer->EmitPoint(t.cl, atlasPoint);
             }
-            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
-                static_cast<UINT>(faceIndex % 6), /*clear=*/true);
-
             const SceneView& view = pointViews[faceIndex];
+            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
+                static_cast<UINT>(faceIndex % 6), /*clear=*/true, ShadowViewRes(view, D.pointShadowRes)); // S4
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
@@ -882,10 +882,9 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
 
         for (size_t faceIndex = 0; faceIndex < viewCount; ++faceIndex)
         {
-            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
-                static_cast<UINT>(faceIndex % 6), /*clear=*/true);
-
             const SceneView& view = pointViews[faceIndex];
+            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
+                static_cast<UINT>(faceIndex % 6), /*clear=*/true, ShadowViewRes(view, D.pointShadowRes)); // S4
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
