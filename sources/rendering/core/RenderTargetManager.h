@@ -192,10 +192,10 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionHistorySRV{}, oceanReflectionHistoryUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, LightManager::kMaxShadowedSpotLights> spotShadowDSV{};
+        // Plan S9: one DSV per atlas PAGE (each light draws into its own rectangle of its page); one SRV per pool.
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kLocalShadowMaxPagesLimit> spotShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE spotShadowSRV{};
-        // One DSV per cube face (6 * kMaxShadowedPointLights); one cube-array depth SRV.
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 6 * LightManager::kMaxShadowedPointLights> pointShadowDSV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kLocalShadowMaxPagesLimit> pointShadowDSV{};
         D3D12_CPU_DESCRIPTOR_HANDLE pointShadowSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE dlssOutputUAV{};
@@ -252,8 +252,10 @@ public:
         UINT bloomHistoryWidth = 1, bloomHistoryHeight = 1;
 
         UINT shadowRes = 4096; // atlas edge; tile = half, content = tile - 2 * gutter. See render::g_csmAtlasRes.
-        UINT spotShadowRes = 512;
-        UINT pointShadowRes = 256; // per cube face
+        UINT spotShadowRes = 512;  // plan S9: a spot PAGE's edge (= the largest spot shadow)
+        UINT pointShadowRes = 256; // the largest cube face; a point page is 3x by 2x it (one block)
+        UINT spotShadowPages = 1;  // plan S9: resident pages of each pool (array slices)
+        UINT pointShadowPages = 1;
     };
 
     struct Formats {
@@ -337,8 +339,13 @@ public:
     // power of two); reallocates the two atlases when resident. Called from Scene::ReconcileShadowMode, GPU idle.
     void SetLocalShadowMaxResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT knob);
     static UINT LocalShadowSliceRes(UINT knob);
+    // Plan S9: the resident page count of each pool (clamped to 1..kLocalShadowMaxPagesLimit); reallocates the pool
+    // that changes when resident. GPU idle, like the two above.
+    void SetLocalShadowPages(ID3D12Device* dev, ResourceDeclarations decls, UINT spotPages, UINT pointPages);
     UINT CsmAtlasResolution() const { return deferred_[0].shadowRes; }
     UINT LocalShadowMaxResolution() const { return deferred_[0].spotShadowRes; }
+    UINT LocalSpotShadowPages() const { return localSpotPages_; }   // the configured counts (VSM keeps 1x1 resident)
+    UINT LocalPointShadowPages() const { return localPointPages_; }
 
 private:
     enum class DeferredRtvSlot : UINT {
@@ -395,11 +402,10 @@ private:
 
     static constexpr UINT kDeferredRtvPerFrame = (UINT)DeferredRtvSlot::Count;
     static constexpr UINT kDeferredSrvPerFrame = (UINT)DeferredSrvSlot::Count;
-    // DSV heap per frame: named slots, then the spot-shadow DSV block, then the
-    // point-shadow cube DSV block (one DSV per cube face).
+    // DSV heap per frame: named slots, then the spot-page DSV block, then the point-page DSV block (plan S9: one DSV
+    // per atlas page, up to render::kLocalShadowMaxPagesLimit each).
     static constexpr UINT kDeferredDsvPerFrame = (UINT)DeferredDsvSlot::Count
-        + LightManager::kMaxShadowedSpotLights
-        + 6 * LightManager::kMaxShadowedPointLights;
+        + 2u * render::kLocalShadowMaxPagesLimit;
 
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvAt(UINT idx) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvAt(UINT idx) const;
@@ -407,8 +413,8 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredRtvCPU(UINT frame, DeferredRtvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredSrvCPU(UINT frame, DeferredSrvSlot slot) const;
     D3D12_CPU_DESCRIPTOR_HANDLE DeferredDsvCPU(UINT frame, DeferredDsvSlot slot) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const;
-    D3D12_CPU_DESCRIPTOR_HANDLE DeferredPointShadowDsvCPU(UINT frame, UINT faceIndex) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredSpotShadowDsvCPU(UINT frame, UINT page) const;
+    D3D12_CPU_DESCRIPTOR_HANDLE DeferredPointShadowDsvCPU(UINT frame, UINT page) const;
 
     // Step 24c: (re)create the spot / point shadow atlas resource + its SRV/DSV views at `resolution`
     // for frame `f` (operates on deferred_[f]). Extracted from Create()'s lambdas so the residency
@@ -417,8 +423,9 @@ private:
     void CreateShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution); // Step 24f-2: CSM atlas
     // Local-light shadow plan S5: ONE resource each for every frame in flight (as CreateShadowResource), the
     // per-frame SRV / DSVs built against it.
-    void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution);
-    void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution);
+    // Plan S9: `pages` array slices -- spot pages resolution^2, point pages 3 x 2 faces of `resolution`.
+    void CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution, UINT pages);
+    void CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution, UINT pages);
 
     // CPU heaps for offscreen resources
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> deferredRtvHeap_;   // RTV shared across frames
@@ -435,5 +442,7 @@ private:
     // .pointShadow alias these.
     GpuResource spotShadowAtlas_;
     GpuResource pointShadowAtlas_;
+    UINT localSpotPages_ = 1;  // plan S9: the page counts to build (kept across Create / the residency toggle)
+    UINT localPointPages_ = 1;
     bool localShadowFull_ = true; // Step 24c: spot/point atlases at full res (Legacy) vs 1x1 (VSM)
 };

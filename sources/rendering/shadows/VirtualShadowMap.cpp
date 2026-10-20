@@ -1609,7 +1609,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     }
 
     constexpr std::uint32_t kLods = render::kMaxShadowLods;                    // KMAX_SHADOW_LODS
-    constexpr std::uint32_t kViewLodVec4 = (render::kMaxShadowViews + 3u) / 4u; // 44 cull-views packed 4/uint4
+    // VSM's cull views only -- the prefix of the layout (plan S9); KVIEWLOD_VEC4 in vsm_page_setup_cs.hlsl mirrors it.
+    constexpr std::uint32_t kViewLodVec4 = (render::kVsmShadowViews + 3u) / 4u; // 46 cull-views packed 4/uint4 = 12
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
@@ -1672,7 +1673,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.compactArgs = compactArgs ? 1u : 0u;
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
-            cb.flatLod = shadowGpu->ViewLodAt(render::kMaxShadowViews - vsm::kNumClipmapLevels);
+            cb.flatLod = shadowGpu->ViewLodAt(render::ShadowViewClipmapSlot(0u));
             if (wind) // W5: null / swayAmp 0 leaves WindOffset returning exactly 0 (rigid casters)
             {
                 cb.wind0 = DirectX::XMFLOAT4(wind->time, wind->prevTime,
@@ -1684,7 +1685,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
             // Per-view shadow LOD (cull-view layout, packed 4/uint4) + per-(group,lod) mega geometry.
             const std::vector<std::uint32_t>& vl = shadowGpu->ViewLod();
-            for (std::uint32_t v = 0; v < render::kMaxShadowViews && v < vl.size(); ++v)
+            for (std::uint32_t v = 0; v < render::kVsmShadowViews && v < vl.size(); ++v)
             {
                 reinterpret_cast<std::uint32_t*>(cb.viewLod)[v] = vl[v];
             }

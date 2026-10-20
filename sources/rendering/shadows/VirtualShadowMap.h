@@ -127,8 +127,12 @@ namespace vsm
         std::array<ClipmapLevelSquare, kNumClipmapLevels> level{};
     };
     inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 42
-    static_assert(kNumCascades + kMaxVirtualViews == render::kMaxShadowViews,
-                  "cull view layout must be [cascades | local | clipmap]");
+    // Local-light shadow plan S9: VSM's views are the PREFIX of the cull layout (render::kVsmShadowViews); the atlas
+    // modes' extra local views follow it and VSM never addresses them.
+    static_assert(kNumCascades + kMaxVirtualViews == render::kVsmShadowViews,
+                  "cull view layout must start [cascades | local | clipmap]");
+    static_assert(kNumLocalVirtualViews == render::kShadowViewVsmSpots + 6u * render::kShadowViewVsmPoints,
+                  "VSM's local views are the cull layout's 8 spots + 24 point faces");
     inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*40 = 13640
 
     // Caster MESH-GROUPS the GPU-driven shadow path can address at once, across the whole level: one

@@ -25,7 +25,7 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 #define KMAX_SHADOW_LODS 4      // matches render::kMaxShadowLods
-#define KVIEWLOD_VEC4    11     // (render::kMaxShadowViews=44 cull-views + 3) / 4, packed 4/uint4
+#define KVIEWLOD_VEC4    12     // (render::kVsmShadowViews=46 cull-views + 3) / 4, packed 4/uint4 (was a stale 11 until plan S9)
 #define VSM_SETUP_LANES  8      // == numthreads y; threads per page that share the per-group loop
 
 cbuffer SetupCB : register(b0)

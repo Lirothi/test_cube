@@ -613,11 +613,23 @@ namespace
         if (setting == "shadow.localFilterUe") { render::g_localShadowFilterUe = value != 0.0f; return true; }
         // Plan S3: 1 = UE's shadow fade by on-screen resolution, 0 = every shadowed light at full strength.
         if (setting == "shadow.localFadeUe") { render::g_localShadowFadeUe = value != 0.0f; return true; }
+        // Peter-panning hunt: a multiplier on the atlas-mode local lights' UE shadowBias.
+        // The peter-panning fix: the TEXEL bias (VSM's local model on the atlases) and its two sizes in shadow texels.
+        if (setting == "shadow.localBiasTexel") { render::g_localShadowBiasTexel = value != 0.0f; return true; }
+        if (setting == "shadow.localNormalTexels") { render::g_localShadowNormalTexels = std::clamp(value, 0.0f, 8.0f); return true; }
+        if (setting == "shadow.localPushTexels") { render::g_localShadowPushTexels = std::clamp(value, 0.0f, 8.0f); return true; }
         // Plan S4: UE r.Shadow.MaxResolution for the spot / point atlases (Scene::ReconcileShadowMode reallocates).
         if (setting == "shadow.localMaxRes")
         {
             render::g_localShadowMaxRes = static_cast<unsigned>(std::clamp(value,
                 static_cast<float>(render::kLocalShadowMaxResMin), static_cast<float>(render::kLocalShadowMaxResMax)));
+            return true;
+        }
+        // Plan S9: the most atlas pages each local-shadow pool may grow to (ReconcileShadowMode).
+        if (setting == "shadow.localMaxPages")
+        {
+            render::g_localShadowMaxPages = static_cast<unsigned>(std::clamp(value, 1.0f,
+                static_cast<float>(render::kLocalShadowMaxPagesLimit)));
             return true;
         }
         // The Ctrl-G toggle, headless: GI casters folded into the indirect cull. OFF is what lets the
@@ -1716,7 +1728,8 @@ void App::ReleaseLoadingScreen()
 namespace
 {
     // Local-light shadow plan S3, for get_readouts: every local light holding a shadow slot or being
-    // faded, as [lightIndex, slot (-1 = none), fade, resolution] -- what UE's CalculateShadowFadeAlpha and its
+    // faded, as [lightIndex, slot (-1 = none), fade, resolution, page, x, y] (plan S9: its place in the atlas -- a
+    // spot's square, a point's 3f x 2f block; page -1 = none) -- what UE's CalculateShadowFadeAlpha and its
     // whole-scene sizing (plan S4: a spot's square, a point's cube face) made of it.
     std::string LocalShadowsJson(const LightManager& lm)
     {
@@ -1728,8 +1741,9 @@ namespace
             const int slot = lm.GetSpotShadowSlot(i);
             const float fade = lm.GetSpotShadowFade(i);
             if (slot < 0 && fade >= 1.0f) { continue; }
-            std::snprintf(item, sizeof(item), "%s[%zu,%d,%.3f,%u]", separator, i, slot, fade,
-                          static_cast<unsigned>(lm.GetSpotShadowResolution(i)));
+            const LightManager::ShadowAtlasPlacement place = lm.GetSpotShadowPlacement(i); // S9
+            std::snprintf(item, sizeof(item), "%s[%zu,%d,%.3f,%u,%d,%u,%u]", separator, i, slot, fade,
+                          static_cast<unsigned>(lm.GetSpotShadowResolution(i)), place.page, place.x, place.y);
             out += item;
             separator = ",";
         }
@@ -1740,8 +1754,9 @@ namespace
             const int slot = lm.GetPointShadowSlot(i);
             const float fade = lm.GetPointShadowFade(i);
             if (slot < 0 && fade >= 1.0f) { continue; }
-            std::snprintf(item, sizeof(item), "%s[%zu,%d,%.3f,%u]", separator, i, slot, fade,
-                          static_cast<unsigned>(lm.GetPointShadowResolution(i)));
+            const LightManager::ShadowAtlasPlacement place = lm.GetPointShadowPlacement(i); // S9: the block's corner
+            std::snprintf(item, sizeof(item), "%s[%zu,%d,%.3f,%u,%d,%u,%u]", separator, i, slot, fade,
+                          static_cast<unsigned>(lm.GetPointShadowResolution(i)), place.page, place.x, place.y);
             out += item;
             separator = ",";
         }

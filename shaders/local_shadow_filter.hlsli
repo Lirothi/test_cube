@@ -4,19 +4,28 @@
 // Local-light shadow plan S2 (docs/local_light_shadows_plan.md): UE's filters for the spot / point atlases, ONE copy
 // for every pass that samples them (spotlight_cs, pointlight_cs, glass). Include local_shadow_bias.hlsli first.
 
-// --- Plan S4: a light's square in its atlas slice ---------------------------------------------------------------
-// Every light draws into the top-left res x res of its slice, res = UE's resolution for it (LightManager); `rect` =
-// res / slice. Taps are clamped `margin` slice texels inside that square, so no filter reads what another frame's
-// larger square left beyond it.
-float2 LocalShadowRectUV(float2 uv, float rect, float sliceTexel, float margin)
+// --- Plans S4 / S9: a light's rectangle in its atlas page -------------------------------------------------------
+// Every light draws into its own rectangle of an atlas page (LightManager::PackShadowAtlases): a spot's res x res
+// square, a point's six faces as one 3f x 2f block (face k at (k % 3, k / 3) faces from the block's corner). `offset`
+// and `scale` are that rectangle in page UV, `texel` one page texel in UV. Taps are clamped `margin` texels inside it,
+// so no filter reads a neighbour's shadow.
+float2 LocalShadowAtlasUV(float2 uv, float2 offset, float2 scale, float2 texel, float margin)
 {
-    return clamp(uv * rect, margin * sliceTexel, rect - margin * sliceTexel);
+    return clamp(offset + uv * scale, offset + margin * texel, offset + scale - margin * texel);
 }
 
-// A cube direction -> (uv, slice) of the point atlas, which is a 2D array of 6 faces per light since S4 (a hardware
-// cube lookup always reads the whole face). D3D's cube convention -- the one the faces were rendered for: +X, -X, +Y,
-// -Y, +Z, -Z, face uv from (-z,-y) (+z,-y) (x,z) (x,-z) (x,-y) (-x,-y) over the major axis. Half a texel inside the
-// square, so each tap's 2x2 compare footprint stays on its own face (UE's hardware cube filters across the seam).
+// A cube face's corner in page UV: the light's block corner + (face % 3, face / 3) faces (atlas = the light's
+// shadowAtlas: xy = the block's corner, zw = one face).
+float2 PointShadowFaceOffset(float face, float4 atlas)
+{
+    const float row = floor(face / 3.0f);
+    return atlas.xy + float2(face - 3.0f * row, row) * atlas.zw;
+}
+
+// A cube direction -> (uv, page) of the point atlas, a 2D array since S4 (a hardware cube lookup always reads the
+// whole face). D3D's cube convention -- the one the faces were rendered for: +X, -X, +Y, -Y, +Z, -Z, face uv from
+// (-z,-y) (+z,-y) (x,z) (x,-z) (x,-y) (-x,-y) over the major axis. Half a texel inside the face's square, so each tap's
+// 2x2 compare footprint stays on its own face (UE's hardware cube filters across the seam).
 // The face `v` lands on as a basis: st = (v.U, v.V) / v.W.
 void PointShadowFace(float3 v, out float face, out float3 U, out float3 V, out float3 W)
 {
@@ -38,13 +47,23 @@ void PointShadowFace(float3 v, out float face, out float3 U, out float3 V, out f
     }
 }
 
-float3 PointShadowCubeUV(float3 v, float slot, float rect, float sliceTexel)
+// The faces' GUARD BAND (MIRRORS render::kPointShadowGuardTexels): each face is rendered kPointShadowGuardTexels texels
+// wider than 90 degrees on every side, so a tap that far past the seam still reads its own face, in its own depth axis.
+// A direction's face uv is then st * 0.5 * PointShadowGuardScale + 0.5. `invRes` = 1 / the light's face resolution.
+static const float kPointShadowGuardTexels = 2.0f;
+float PointShadowGuardScale(float invRes)
+{
+    return 1.0f / (1.0f + 2.0f * kPointShadowGuardTexels * invRes);
+}
+
+float3 PointShadowCubeUV(float3 v, float4 atlas, float page, float2 texel)
 {
     float face;
     float3 U, V, W;
     PointShadowFace(v, face, U, V, W);
-    const float2 uv = float2(dot(v, U), dot(v, V)) / max(dot(v, W), 1e-9f) * 0.5f + 0.5f;
-    return float3(LocalShadowRectUV(uv, rect, sliceTexel, 0.5f), slot * 6.0f + face);
+    const float guard = PointShadowGuardScale(texel.x / max(atlas.z, 1e-9f)); // texel = face size / res
+    const float2 uv = float2(dot(v, U), dot(v, V)) / max(dot(v, W), 1e-9f) * (0.5f * guard) + 0.5f;
+    return float3(LocalShadowAtlasUV(uv, PointShadowFaceOffset(face, atlas), atlas.zw, texel, 0.5f), page);
 }
 
 // UE ShadowProjectionPixelShader.usf:394-409 / :513-518: sharpen FIRST (ShadowSharpen: (s - 0.5) * (7 * sharpen + 1)
@@ -111,10 +130,10 @@ static const float2 kDiscSamples29[29] = { // ShadowProjectionCommon.ush:89-120,
 };
 
 // `d` = receiver - light (unbiased: UE has no normal offset), `m` its major-axis distance. shadowParams / slopeScale as in
-// local_shadow_bias.hlsli (UE mode: shadowParams.y < 0). S4: `invRes` = 1 / the light's own face resolution, `rect` /
-// `sliceTexel` its square (PointShadowCubeUV).
+// local_shadow_bias.hlsli (UE mode: shadowParams.y < 0). S4: `invRes` = 1 / the light's own face resolution. S9:
+// `block` / `page` / `texel` its 3f x 2f block in an atlas page (PointShadowCubeUV).
 float PointShadowDisc29(Texture2DArray atlas, SamplerComparisonState cmp, float3 d, float m, float4 shadowParams,
-                        float slopeScale, float NoL, float invRes, float rect, float sliceTexel)
+                        float slopeScale, float NoL, float invRes, float4 block, float page, float2 texel)
 {
     const float nearP = shadowParams.z;
     const float farP = max(shadowParams.w, nearP + 1e-3f);
@@ -126,17 +145,20 @@ float PointShadowDisc29(Texture2DArray atlas, SamplerComparisonState cmp, float3
     const float3 up = cross(dn, side);
     // S4: the hardware cube picked each tap's face for free; here the disc's centre face is found ONCE and every tap is
     // linear in its disc offset on it -- (st, w) = c + sx * k.x + sy * k.y. A tap past that face's seam (the disc is
-    // ~1.25 texels) reads the face's edge texel instead of the neighbour face -- which keeps it in the metric zc is in
-    // (the centre face's depth axis; the hardware cube compared it against the neighbour's other axis). Measured on
-    // wind_test's lamps, Pass_PointLights: a per-tap face lookup 0.114 ms, a fallback branch for the seam taps 0.119,
-    // this 0.074 -- the hardware cube's was 0.078 (plan S2); 0.035-0.039 without the map.
+    // ~1.25 texels) lands in the face's GUARD BAND (kPointShadowGuardTexels rendered past 90 degrees), so it reads real
+    // depth in the metric zc is in (the centre face's depth axis; the hardware cube compared it against the neighbour's
+    // other axis). Clamping it to the edge texel instead read the edge's nearer floor and self-shadowed the floor along
+    // the seams under a lamp once the texel bias stopped covering it. Measured on wind_test's lamps, Pass_PointLights:
+    // a per-tap face lookup 0.114 ms, a fallback branch for the seam taps 0.119, this 0.074 -- the hardware cube's was
+    // 0.078 (plan S2); 0.035-0.039 without the map.
     float face;
     float3 U, V, W;
     PointShadowFace(dn, face, U, V, W);
     const float3 c = float3(dot(dn, U), dot(dn, V), dot(dn, W));
     const float3 sx = float3(dot(side, U), dot(side, V), dot(side, W));
     const float3 sy = float3(dot(up, U), dot(up, V), dot(up, W));
-    const float faceSlice = shadowParams.x * 6.0f + face;
+    const float2 faceOffset = PointShadowFaceOffset(face, block); // S9: the centre face's square in the page
+    const float guard = 0.5f * PointShadowGuardScale(invRes);     // the face's guard band (PointShadowCubeUV)
     float shadow = 0.0f;
     [unroll]
     for (int i = 0; i < 29; ++i)
@@ -145,7 +167,7 @@ float PointShadowDisc29(Texture2DArray atlas, SamplerComparisonState cmp, float3
         const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
         const float3 t = c + sx * kDiscSamples29[i].x + sy * kDiscSamples29[i].y;
         const float2 st = t.xy / t.z;
-        const float3 tap = float3(LocalShadowRectUV(st * 0.5f + 0.5f, rect, sliceTexel, 0.5f), faceSlice);
+        const float3 tap = float3(LocalShadowAtlasUV(st * guard + 0.5f, faceOffset, block.zw, texel, 0.5f), page);
         shadow += atlas.SampleCmpLevelZero(cmp, tap, zc);
     }
     return shadow * (1.0f / 29.0f);

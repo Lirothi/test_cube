@@ -24,11 +24,48 @@ inline constexpr unsigned kFrameCount = 3;
 inline constexpr unsigned kConstantBufferAlignment = 256u;
 
 // Rung 0 GPU-driven shadows: the fixed number of shadow-view slots the per-view cull
-// inputs (frustum planes) + indirect buffers are sized for. Layout is
-// [4 CSM cascades | kMaxShadowedSpotLights | kMaxShadowedPointLights*6 point cube faces].
-// Kept here (below the light subsystem in the include graph) as a plain value; Scene.cpp
-// static_asserts it equals the sum of the actual LightManager caps so the two can't drift.
-inline constexpr unsigned kMaxShadowViews = 46; // 4 cascade + 8 spot + 4*6 point + 10 clipmap (Step 24e: directional clipmap cull views)
+// inputs (frustum planes) + indirect buffers are sized for. Kept here (below the light subsystem
+// in the include graph); LightManager's caps are DEFINED from it, so the two cannot drift.
+//
+// Local-light shadow plan S9 (docs/local_light_shadows_plan.md): the atlas modes (Legacy / SDSM)
+// shadow up to kMaxShadowViewSpots spots and kMaxShadowViewPoints points, VSM keeps its own fixed
+// 8 + 4 (its 32 local virtual views). So the layout is VSM's prefix, untouched -- VSM addresses a
+// cull view as `its view + 4` -- followed by the atlas modes' extra local views:
+//   [4 cascades | 8 spots | 24 point faces | 10 clipmap levels | 24 more spots | 72 more faces]
+// A spot slot / point face index maps to its cull slot ONLY through ShadowViewSpotSlot /
+// ShadowViewPointFaceSlot below.
+inline constexpr unsigned kShadowViewCascades = 4;
+inline constexpr unsigned kShadowViewVsmSpots = 8;       // VSM's local spot views (and the prefix's)
+inline constexpr unsigned kShadowViewVsmPoints = 4;      // VSM's local point lights: 24 cube faces
+inline constexpr unsigned kShadowViewClipmapLevels = 10; // VSM's directional clipmap (Step 24e)
+inline constexpr unsigned kShadowViewSpots = 32;         // the atlas modes' cap (plan S9)
+inline constexpr unsigned kShadowViewPoints = 16;
+inline constexpr unsigned kVsmShadowViews = kShadowViewCascades + kShadowViewVsmSpots + 6u * kShadowViewVsmPoints
+                                          + kShadowViewClipmapLevels; // 46: VSM's whole layout
+inline constexpr unsigned kMaxShadowViews = kVsmShadowViews + (kShadowViewSpots - kShadowViewVsmSpots)
+                                          + 6u * (kShadowViewPoints - kShadowViewVsmPoints); // 142
+constexpr unsigned ShadowViewSpotSlot(unsigned spot)
+{
+    return (spot < kShadowViewVsmSpots) ? kShadowViewCascades + spot
+                                        : kVsmShadowViews + (spot - kShadowViewVsmSpots);
+}
+constexpr unsigned ShadowViewPointFaceSlot(unsigned face) // face = point slot * 6 + cube face
+{
+    return (face < 6u * kShadowViewVsmPoints)
+        ? kShadowViewCascades + kShadowViewVsmSpots + face
+        : kVsmShadowViews + (kShadowViewSpots - kShadowViewVsmSpots) + (face - 6u * kShadowViewVsmPoints);
+}
+constexpr unsigned ShadowViewClipmapSlot(unsigned level)
+{
+    return kShadowViewCascades + kShadowViewVsmSpots + 6u * kShadowViewVsmPoints + level;
+}
+static_assert(ShadowViewSpotSlot(kShadowViewSpots - 1u) + 1u == ShadowViewPointFaceSlot(6u * kShadowViewVsmPoints),
+              "the extra spots come right after the VSM prefix, the extra faces right after them");
+static_assert(ShadowViewPointFaceSlot(6u * kShadowViewPoints - 1u) + 1u == kMaxShadowViews,
+              "the extra point faces end the layout");
+// Plan S9: the most atlas pages a local-shadow pool (spots, points) may grow to -- the DSV slots reserved for each
+// (RenderTargetManager); render::g_localShadowMaxPages is the live cap below it.
+inline constexpr unsigned kLocalShadowMaxPagesLimit = 8;
 
 // --- Swapchain / backbuffer formats ---
 inline constexpr DXGI_FORMAT kBackbufferResourceFormat = DXGI_FORMAT_R8G8B8A8_UNORM;

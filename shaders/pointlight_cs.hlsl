@@ -27,7 +27,8 @@ struct PointLightData
     float intensity;
     float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
-    float4 shadowFade;   // x = UE's shadow fade (S3), y = the light's square (S4), z = 1 / its res -- mirrors LightManager::PointLightGpu
+    float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
+    float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
 };
 
 Texture2D GB0 : register(t0);
@@ -36,7 +37,7 @@ Texture2D GB2 : register(t2);
 Texture2D GBVelocity : register(t3);
 Texture2D DepthT : register(t4);
 StructuredBuffer<PointLightData> PointLights : register(t5);
-Texture2DArray PointShadowAtlas : register(t6); // plan S4: each light in its own square (PointShadowCubeUV)
+Texture2DArray PointShadowAtlas : register(t6); // plans S4 / S9: pages, each light a 3f x 2f block (PointShadowCubeUV)
 StructuredBuffer<uint> VsmPageTable : register(t7); // Rung 2 / Step 21
 Texture2D VsmPool : register(t8);
 Texture2D GBAux : register(t9);
@@ -54,7 +55,7 @@ cbuffer PointLightFrame : register(b0)
     uint lightCount;
     float2 screenSize;
     float2 invScreenSize;
-    float invPointShadowSize; // 1 / pointShadowRes, the face SLICE's texel (plan S4: a light's own is shadowFade.z)
+    float invPointShadowSize; // 1 / pointShadowRes, the largest face (plan S9: the shaders take a light's page texel from its own data)
     uint   useVsm;      // Rung 2 / Step 21: sample the VSM page pool instead of the cube atlas
     float  vsmRefDist;  // VSM mip level-select reference distance
     // VSM local-light shadow bias in shadow-texel units (live-tunable, vsm::g_local*Texels) — same
@@ -121,14 +122,18 @@ void LocalShadowSources(bool hasSlot, out bool useMap, out bool useContact)
 // offsets the UV by `invShadowSize`; here the coord is a direction, so we step in the tangent
 // plane of d by one texel = 2*m*invRes world units — a 90-deg cube face spans 2*m at view
 // depth m across `res` texels, and UV[0,1] <-> tangent[-1,1] gives the 2x. Plan S4: res is the light's own
-// (shadowFade.z = 1/res), drawn into its square of the face slices (shadowFade.y; `sliceTexel` = 1 / the slice).
-float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float sliceTexel)
+// (shadowFade.z = 1/res). Plan S9: its six faces are one 3f x 2f block (shadowAtlas) of an atlas page (shadowFade.y);
+// a page texel in UV is one face's size over res.
+// `Ng` = the geometric normal (LocalShadowGeometricNormal) -- the texel bias's push; `N` (shading) everywhere else.
+float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
 {
     const float invRes = Ld.shadowFade.z;
-    const float rect = Ld.shadowFade.y;
+    const float4 block = Ld.shadowAtlas;
+    const float page = Ld.shadowFade.y;
+    const float2 pageTexel = block.zw * invRes;
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
 
-    float3 Poff = P + N * PointShadowNormalOffset(Ld.shadowParams); // normal-offset receiver (the old bias only)
+    float3 Poff = P + N * ((Ld.shadowFade.w > 0.0f) ? 0.0f : PointShadowNormalOffset(Ld.shadowParams)); // the old bias only
     // Rung 2 / Step 21: sample the VSM page pool. Reconstructs the cube face's view-proj + looks up
     // the page table. World-space bias = pull the receiver toward the light before projecting (like
     // the atlas path, avoiding the crushed-perspective-depth bias problem).
@@ -153,6 +158,14 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float sliceTex
                               VsmPageTable, VsmPool, gSmpShadowCmp);
     }
 
+    // The TEXEL bias (local_shadow_bias.hlsli): the receiver moves by texels of THIS light's face at its distance,
+    // the compare below then carries no bias at all (shadowParams.y = 0).
+    if (Ld.shadowFade.w > 0.0f)
+    {
+        const float3 d0 = P - Ld.position;
+        const float texelWorld = 2.0f * max(abs(d0.x), max(abs(d0.y), abs(d0.z))) * invRes;
+        Poff = LocalShadowTexelOffset(P, Ng, normalize(Ld.position - P), texelWorld, Ld.shadowFade.w, Ld.volumetric.y);
+    }
     float3 d = Poff - Ld.position; // HW picks the face from d
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));     // view-space Z on the selected face
     float nearP = Ld.shadowParams.z;
@@ -161,11 +174,11 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float sliceTex
     // NDC bias: perspective depth is crushed into [~0.95,1] at any real distance. UE's is a fraction
     // of the distance, slope-scaled by the receiver's NoL (local_shadow_bias.hlsli).
     const float NoL = dot(N, normalize(Ld.position - P));
-    // Plan S2: UE's 29-tap disc (its bias per tap, so only with UE's bias), sharpened and squared.
-    if (Ld.volumetric.w != 0.0f && Ld.shadowParams.y < 0.0f)
+    // Plan S2: UE's 29-tap disc (its bias per tap -- 0 under the texel bias), sharpened and squared.
+    if (Ld.volumetric.w != 0.0f && (Ld.shadowParams.y < 0.0f || Ld.shadowFade.w > 0.0f))
     {
         return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, gSmpShadowCmp, d, m, Ld.shadowParams, Ld.volumetric.y,
-                                                   NoL, invRes, rect, sliceTexel), Ld.volumetric.z);
+                                                   NoL, invRes, block, page, pageTexel), Ld.volumetric.z);
     }
     float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased); // standard LH NDC depth
@@ -188,16 +201,16 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float sliceTex
         {
             float3 sd = d + (t1 * x + t2 * y) * texel;
             shadow += PointShadowAtlas.SampleCmpLevelZero(gSmpShadowCmp,
-                PointShadowCubeUV(sd, Ld.shadowParams.x, rect, sliceTexel), zc); // the slot's face of sd (S4)
+                PointShadowCubeUV(sd, block, page, pageTexel), zc); // sd's face in the light's block (S4 / S9)
         }
     }
     return shadow / 9.0f;
 }
 
 // Plan S3: UE's shadow fade by the resolution the light wants on screen (LightManager::SelectShadowedPoints; 1 under VSM).
-float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float sliceTexel)
+float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float3 Ng)
 {
-    return lerp(1.0f, PointShadowFactorMap(Ld, P, N, sliceTexel), Ld.shadowFade.x);
+    return lerp(1.0f, PointShadowFactorMap(Ld, P, N, Ng), Ld.shadowFade.x);
 }
 
 [numthreads(8,8,1)]
@@ -228,6 +241,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 N = normalize(g1.rgb * 2.0 - 1.0);
     float3 P = ReconstructPosWS(uv, z, invProj, invView);
     float3 V = normalize(camPosWS - P);
+    // The texel bias pushes along the geometry's normal, not the normal map's (local_shadow_bias.hlsli); VSM keeps N.
+    const float3 Ng = (useVsm == 0u)
+        ? LocalShadowGeometricNormal(DepthT, gSmpPoint, uv, invScreenSize, z, P, camPosWS, invProj, invView, N) : N;
 
     // F5: foliage shading model (GBAux.b is an ID -> point sample) + subsurface payload (GB2).
     const float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
@@ -277,7 +293,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 bool useMap, useContact;
                 LocalShadowSources(Ld.shadowParams.x >= 0.0f, useMap, useContact);
-                float shadow = useMap ? PointShadowFactor(Ld, P, N, invPointShadowSize) : 1.0f;
+                float shadow = useMap ? PointShadowFactor(Ld, P, N, Ng) : 1.0f;
                 if (useContact)
                 {
                     shadow = ApplyContactShadow(shadow, P, N, L, fr.NdotL, dispatchThreadId.xy, camPosWS,
@@ -292,7 +308,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 bool useMapT, useContactT;
                 LocalShadowSources(Ld.shadowParams.x >= 0.0f, useMapT, useContactT);
-                float shadowT = useMapT ? PointShadowFactor(Ld, P, -N, invPointShadowSize) : 1.0f;
+                float shadowT = useMapT ? PointShadowFactor(Ld, P, -N, -Ng) : 1.0f;
                 if (useContactT)
                 {
                     shadowT = ApplyContactShadow(shadowT, P, -N, L, saturate(dot(-N, L)),
@@ -313,7 +329,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
             bool useMap, useContact;
             LocalShadowSources(Ld.shadowParams.x >= 0.0f, useMap, useContact);
-            float shadow = useMap ? PointShadowFactor(Ld, P, N, invPointShadowSize) : 1.0f;
+            float shadow = useMap ? PointShadowFactor(Ld, P, N, Ng) : 1.0f;
             if (useContact)
             {
                 shadow = ApplyContactShadow(shadow, P, N, L, br.NdotL, dispatchThreadId.xy, camPosWS,

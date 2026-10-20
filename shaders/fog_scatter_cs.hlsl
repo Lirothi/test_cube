@@ -122,12 +122,23 @@ float FogSpotShadow(SpotLightData light, float3 P, float3 toL, float distToLight
         return VsmSpotShadow((uint)light.shadowParams.y, light.viewProj, Pv, camPosWS, fogLocalParams.w, 0.0f,
                              VsmPageTable, VsmPool, gSmpLinear);
     }
-    const float4 clip = mul(float4(P, 1.0f), light.viewProj);
+    float4 clip = mul(float4(P, 1.0f), light.viewProj);
+    // The TEXEL bias (local_shadow_bias.hlsli): no surface here, so the cell moves toward the light only, by the normal
+    // and the push texels together -- the VSM branch above does the same with its own two texels.
+    if (light.shadowParams2.w > 0.0f)
+    {
+        const float cosOuter = max(light.directionCosOuter.w, 1e-3f);
+        const float tanOuter = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
+        const float res = max(light.shadowAtlas.z / max(fogLocalParams.y, 1e-9f), 1.0f);
+        const float texelWorld = 2.0f * max(clip.w, 0.0f) * tanOuter / res;
+        clip = mul(float4(P + toL * (texelWorld * (light.shadowParams2.w + light.shadowParams2.x)), 1.0f), light.viewProj);
+    }
     const float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     const float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
     if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z <= 0.0f || ndc.z >= 1.0f) { return 1.0f; }
-    const float2 uvRect = LocalShadowRectUV(uv, light.shadowParams2.w, fogLocalParams.y, 0.5f); // plan S4: its square
-    return lerp(1.0f, SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uvRect, light.shadowParams.y), ndc.z - light.shadowParams.w),
+    // Plan S9: its square of an atlas page; fogLocalParams.y is one page texel.
+    const float2 uvRect = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, fogLocalParams.yy, 0.5f);
+    return lerp(1.0f, SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uvRect, light.shadowAtlas.w), ndc.z - light.shadowParams.w),
                 light.shadowParams2.z); // plan S3: UE's shadow fade, as the spot pass's
 }
 
@@ -144,14 +155,19 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
                               VsmPageTable, VsmPool, gSmpLinear);
     }
     // pointlight_cs.hlsl's cube compare: the face's view-space depth with its bias (no surface: NoL = 1).
-    const float3 d = P - light.position;
+    float3 d = P - light.position;
+    if (light.shadowFade.w > 0.0f) // the TEXEL bias: toward the light by the normal + push texels (no surface here)
+    {
+        const float texelWorld = 2.0f * max(abs(d.x), max(abs(d.y), abs(d.z))) * light.shadowFade.z;
+        d += toL * (texelWorld * (light.shadowFade.w + light.volumetric.y));
+    }
     const float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
     const float nearP = light.shadowParams.z;
     const float farP = max(light.shadowParams.w, nearP + 1e-3f);
     const float mBiased = PointShadowCompareDistance(m, light.shadowParams, light.volumetric.y, 1.0f);
     const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
-    // Plan S4: the light's face and square (PointShadowCubeUV); 1 / the face slice = its square / its resolution.
-    const float3 tap = PointShadowCubeUV(d, light.shadowParams.x, light.shadowFade.y, light.shadowFade.y * light.shadowFade.z);
+    // Plan S9: the light's face in its 3f x 2f block of an atlas page (PointShadowCubeUV); a page texel = one face / res.
+    const float3 tap = PointShadowCubeUV(d, light.shadowAtlas, light.shadowFade.y, light.shadowAtlas.zw * light.shadowFade.z);
     return lerp(1.0f, PointShadowAtlas.SampleCmpLevelZero(gSmpLinear, tap, zc),
                 light.shadowFade.x); // plan S3: UE's shadow fade, as the point pass's
 }

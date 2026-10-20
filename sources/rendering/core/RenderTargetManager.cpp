@@ -36,15 +36,15 @@ D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredDsvCPU(UINT frame, Defe
     const UINT idx = frame * kDeferredDsvPerFrame + static_cast<UINT>(slot);
     return DeferredDsvAt(idx);
 }
-D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredSpotShadowDsvCPU(UINT frame, UINT lightIndex) const {
+D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredSpotShadowDsvCPU(UINT frame, UINT page) const {
     const UINT base = frame * kDeferredDsvPerFrame + static_cast<UINT>(DeferredDsvSlot::Count);
-    return DeferredDsvAt(base + lightIndex);
+    return DeferredDsvAt(base + page);
 }
-D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredPointShadowDsvCPU(UINT frame, UINT faceIndex) const {
-    // Point-shadow cube DSVs sit after the named DSV slots AND the spot-shadow DSV block.
+D3D12_CPU_DESCRIPTOR_HANDLE RenderTargetManager::DeferredPointShadowDsvCPU(UINT frame, UINT page) const {
+    // Point-page DSVs sit after the named DSV slots AND the spot-page DSV block (plan S9).
     const UINT base = frame * kDeferredDsvPerFrame
-        + static_cast<UINT>(DeferredDsvSlot::Count) + LightManager::kMaxShadowedSpotLights;
-    return DeferredDsvAt(base + faceIndex);
+        + static_cast<UINT>(DeferredDsvSlot::Count) + render::kLocalShadowMaxPagesLimit;
+    return DeferredDsvAt(base + page);
 }
 
 void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, const Sizes& sizes, ResourceDeclarations decls)
@@ -893,8 +893,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
     // created here rather than inside the loop above; the per-frame DSV/SRV are built inside.
     CreateShadowResource(dev, decls, deferred_[0].shadowRes);
     // Local-light shadow plan S5: the spot / point atlases likewise.
-    CreateSpotShadowResource(dev, decls, deferred_[0].spotShadowRes);
-    CreatePointShadowResource(dev, decls, deferred_[0].pointShadowRes);
+    CreateSpotShadowResource(dev, decls, deferred_[0].spotShadowRes, localSpotPages_);
+    CreatePointShadowResource(dev, decls, deferred_[0].pointShadowRes, localPointPages_);
 }
 
 // Step 24f-2: CSM cascade atlas (R16_TYPELESS 2D, DSV=D16, SRV=R16). Writes deferred_[f].shadow + its
@@ -960,10 +960,13 @@ void RenderTargetManager::CreateShadowResource(ID3D12Device* dev, ResourceDeclar
 
 // Step 24c: spot shadow atlas (R16_TYPELESS 2D-array, DSV=D16 per slice, SRV=R16 Texture2DArray).
 // Writes spotShadowAtlas_ and every frame's alias + views. `resolution` = full-res (Legacy) or 1 (VSM: tiny).
-void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
+// Local-light shadow plan S9: the slices are PAGES of resolution^2, each holding the squares LightManager packed.
+void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution, UINT pages)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 512; }
+    pages = std::clamp(pages, 1u, render::kLocalShadowMaxPagesLimit);
+    for (UINT f = 0; f < render::kFrameCount; ++f) { deferred_[f].spotShadowPages = pages; }
 
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -980,7 +983,7 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
     desc.Alignment = 0;
     desc.Width = resolution;
     desc.Height = resolution;
-    desc.DepthOrArraySize = static_cast<UINT16>(LightManager::kMaxShadowedSpotLights);
+    desc.DepthOrArraySize = static_cast<UINT16>(pages);
     desc.MipLevels = 1;
     desc.Format = DXGI_FORMAT_R16_TYPELESS;
     desc.SampleDesc.Count = 1;
@@ -1008,13 +1011,13 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srvDesc.Texture2DArray.MipLevels = 1;
         srvDesc.Texture2DArray.FirstArraySlice = 0;
-        srvDesc.Texture2DArray.ArraySize = LightManager::kMaxShadowedSpotLights;
+        srvDesc.Texture2DArray.ArraySize = pages;
         srvDesc.Texture2DArray.MostDetailedMip = 0;
         srvDesc.Texture2DArray.PlaneSlice = 0;
         srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
         dev->CreateShaderResourceView(D.spotShadow, &srvDesc, D.spotShadowSRV);
 
-        for (UINT i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
+        for (UINT i = 0; i < pages; ++i)
         {
             D.spotShadowDSV[i] = DeferredSpotShadowDsvCPU(f, i);
             D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
@@ -1029,13 +1032,16 @@ void RenderTargetManager::CreateSpotShadowResource(ID3D12Device* dev, ResourceDe
     }
 }
 
-// Step 24c: point shadow cube-array (6*N slices of R16_TYPELESS; DSV=D16 per face, SRV=R16 cube
-// array). Mirrors CreateSpotShadowResource, cube-ified. `resolution` = full-res (Legacy) or 1 (VSM).
-void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)
+// Step 24c: point shadow atlas (R16_TYPELESS slices; DSV=D16 per slice, SRV=R16 2D array). Mirrors
+// CreateSpotShadowResource. `resolution` = the largest cube face (Legacy) or 1 (VSM).
+// Local-light shadow plan S9: the slices are PAGES of 3 x 2 faces of `resolution` -- exactly one block of the largest
+// cube; each light's six faces are one 3f x 2f block LightManager packed into a page.
+void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution, UINT pages)
 {
     if (!dev) { return; }
     if (resolution == 0) { resolution = 512; }
-    constexpr UINT kFaces = 6 * LightManager::kMaxShadowedPointLights;
+    pages = std::clamp(pages, 1u, render::kLocalShadowMaxPagesLimit);
+    for (UINT f = 0; f < render::kFrameCount; ++f) { deferred_[f].pointShadowPages = pages; }
 
     D3D12_HEAP_PROPERTIES heapProps{};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -1049,9 +1055,9 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
 
     D3D12_RESOURCE_DESC desc{};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width = resolution;
-    desc.Height = resolution;
-    desc.DepthOrArraySize = static_cast<UINT16>(kFaces);
+    desc.Width = 3u * resolution;
+    desc.Height = 2u * resolution;
+    desc.DepthOrArraySize = static_cast<UINT16>(pages);
     desc.MipLevels = 1;
     desc.Format = DXGI_FORMAT_R16_TYPELESS;
     desc.SampleDesc.Count = 1;
@@ -1070,9 +1076,9 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
         auto& D = deferred_[f];
         D.pointShadow = pointShadowAtlas_.Get();
 
-        // Plan S4: a 2D ARRAY of the 6 x N faces, not a cube array -- each light draws into the top-left square of its
-        // own resolution, which a hardware cube lookup (always the whole face) cannot address. The shaders pick the
-        // face and its texel themselves (local_shadow_filter.hlsli PointShadowCubeUV, D3D's cube face convention).
+        // Plan S4: a 2D ARRAY, not a cube array -- each light's faces are rectangles of its own resolution, which a
+        // hardware cube lookup (always the whole face) cannot address. The shaders pick the face and its texel
+        // themselves (local_shadow_filter.hlsli PointShadowCubeUV, D3D's cube face convention).
         D.pointShadowSRV = DeferredSrvCPU(f, DeferredSrvSlot::PointShadow);
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
         srvDesc.Format = DXGI_FORMAT_R16_UNORM;
@@ -1081,22 +1087,22 @@ void RenderTargetManager::CreatePointShadowResource(ID3D12Device* dev, ResourceD
         srvDesc.Texture2DArray.MostDetailedMip = 0;
         srvDesc.Texture2DArray.MipLevels = 1;
         srvDesc.Texture2DArray.FirstArraySlice = 0;
-        srvDesc.Texture2DArray.ArraySize = kFaces;
+        srvDesc.Texture2DArray.ArraySize = pages;
         srvDesc.Texture2DArray.PlaneSlice = 0;
         srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
         dev->CreateShaderResourceView(D.pointShadow, &srvDesc, D.pointShadowSRV);
 
-        for (UINT face = 0; face < kFaces; ++face)
+        for (UINT page = 0; page < pages; ++page)
         {
-            D.pointShadowDSV[face] = DeferredPointShadowDsvCPU(f, face);
+            D.pointShadowDSV[page] = DeferredPointShadowDsvCPU(f, page);
             D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
             dsv.Format = DXGI_FORMAT_D16_UNORM;
             dsv.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
             dsv.Flags = D3D12_DSV_FLAG_NONE;
             dsv.Texture2DArray.ArraySize = 1;
-            dsv.Texture2DArray.FirstArraySlice = face;
+            dsv.Texture2DArray.FirstArraySlice = page;
             dsv.Texture2DArray.MipSlice = 0;
-            dev->CreateDepthStencilView(D.pointShadow, &dsv, D.pointShadowDSV[face]);
+            dev->CreateDepthStencilView(D.pointShadow, &dsv, D.pointShadowDSV[page]);
         }
     }
 }
@@ -1107,8 +1113,8 @@ void RenderTargetManager::SetLocalShadowResidency(ID3D12Device* dev, ResourceDec
     // Keep the configured resolutions; only the created size changes (1 = tiny placeholder). Local-light
     // shadow plan S5: the spot / point atlases are ONE resource each, rebuilt once (GetAddressOfForCreate
     // inside resets and unregisters the outgoing one, so a re-used address can't inherit a stale state).
-    CreateSpotShadowResource(dev, decls, full ? deferred_[0].spotShadowRes : 1u);
-    CreatePointShadowResource(dev, decls, full ? deferred_[0].pointShadowRes : 1u);
+    CreateSpotShadowResource(dev, decls, full ? deferred_[0].spotShadowRes : 1u, full ? localSpotPages_ : 1u);
+    CreatePointShadowResource(dev, decls, full ? deferred_[0].pointShadowRes : 1u, full ? localPointPages_ : 1u);
     // VSM mode retires the CSM cascade atlas as well: the render graph omits the Main_CSM pass in VSM
     // mode, so nothing renders into this 1x1 placeholder.
     // S3.5: the cascade atlas is ONE resource, so it is forgotten and rebuilt once, not per frame.
@@ -1138,9 +1144,22 @@ void RenderTargetManager::SetLocalShadowMaxResolution(ID3D12Device* dev, Resourc
     // As the cascade atlas: resident only outside VSM; otherwise the size is remembered for SetLocalShadowResidency.
     if (localShadowFull_)
     {
-        CreateSpotShadowResource(dev, decls, res);
-        CreatePointShadowResource(dev, decls, res / 2u);
+        CreateSpotShadowResource(dev, decls, res, localSpotPages_);
+        CreatePointShadowResource(dev, decls, res / 2u, localPointPages_);
     }
+}
+
+void RenderTargetManager::SetLocalShadowPages(ID3D12Device* dev, ResourceDeclarations decls, UINT spotPages, UINT pointPages)
+{
+    spotPages = std::clamp(spotPages, 1u, render::kLocalShadowMaxPagesLimit);
+    pointPages = std::clamp(pointPages, 1u, render::kLocalShadowMaxPagesLimit);
+    const bool spotChanged = (spotPages != localSpotPages_);
+    const bool pointChanged = (pointPages != localPointPages_);
+    localSpotPages_ = spotPages;   // remembered: a resize's Create and the residency toggle build these counts
+    localPointPages_ = pointPages;
+    if (!dev || !localShadowFull_) { return; } // VSM: the 1x1 placeholders stay
+    if (spotChanged) { CreateSpotShadowResource(dev, decls, deferred_[0].spotShadowRes, spotPages); }
+    if (pointChanged) { CreatePointShadowResource(dev, decls, deferred_[0].pointShadowRes, pointPages); }
 }
 
 void RenderTargetManager::SetCsmAtlasResolution(ID3D12Device* dev, ResourceDeclarations decls, UINT resolution)

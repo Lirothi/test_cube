@@ -107,10 +107,12 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     };
     // Slot layout must match vsm::kMaxVirtualViews / the page-table view indexing: spots first,
     // then point-light cube faces. Cascades are intentionally excluded (Step 19b local scope).
+    // Plan S9: the view arrays hold the atlas modes' 32 spots / 96 faces; VSM's local views are only the first 8 / 24
+    // (VSM selection caps there, LightManager::kVsmShadowed*).
     const size_t spotCount = frame_->lightManager->GetShadowedSpotCount();
-    { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
+    for (size_t i = 0; i < LightManager::kVsmShadowedSpotLights; ++i) { addView((*frame_->spotShadowViews)[i], i < spotCount); }
     const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
-    { size_t i = 0; for (const SceneView& v : *frame_->pointShadowViews) { addView(v, i < pointFaces); ++i; } }
+    for (size_t i = 0; i < 6u * LightManager::kVsmShadowedPointLights; ++i) { addView((*frame_->pointShadowViews)[i], i < pointFaces); }
     // Step 24d: directional clipmap levels fill slots [32, 40) — the request shader picks the finest
     // level containing each receiver. Add-dormant: pages get requested + allocated but not yet
     // rendered/sampled (the setup shader skips clipmap views; directional still uses CSM).
@@ -151,10 +153,10 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
         views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
         ++slot;
     };
-    const size_t spotCount = frame_->lightManager->GetShadowedSpotCount();
-    { size_t i = 0; for (const SceneView& v : *frame_->spotShadowViews) { addView(v, i < spotCount); ++i; } }
+    const size_t spotCount = frame_->lightManager->GetShadowedSpotCount(); // plan S9: VSM's first 8 / 24 only
+    for (size_t i = 0; i < LightManager::kVsmShadowedSpotLights; ++i) { addView((*frame_->spotShadowViews)[i], i < spotCount); }
     const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
-    { size_t i = 0; for (const SceneView& v : *frame_->pointShadowViews) { addView(v, i < pointFaces); ++i; } }
+    for (size_t i = 0; i < 6u * LightManager::kVsmShadowedPointLights; ++i) { addView((*frame_->pointShadowViews)[i], i < pointFaces); }
     // Step 24e: clipmap views fill slots [32, 40) so the setup builds their per-page projection from
     // gViewProj[view]; they render directional casters via the Rung-0 clipmap cull slots (rung0View
     // = view + kNumCascades). Matches the request pass + cull frustum layout.
@@ -713,7 +715,9 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             const SceneView& view = spotViews[lightIndex];
             // Plan S4: the view's own square of the slice, and the S1 bias for that resolution.
             const UINT res = ShadowViewRes(view, D.spotShadowRes);
-            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true, res);
+            // Plan S9: the view's square of its atlas page.
+            renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/false, view.shadowPage, view.shadowX, view.shadowY, res,
+                                            /*clearDepth=*/true);
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, res); // S1
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
@@ -721,8 +725,8 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 
             if (indirect)
             {
-                // Spot light i -> shadow-view slot kCascades + i.
-                const std::uint32_t viewSlot = static_cast<std::uint32_t>(kCascades + lightIndex);
+                // Spot slot i -> its cull-view slot (plan S9: VSM's prefix, then the atlas modes' extra spots).
+                const std::uint32_t viewSlot = render::ShadowViewSpotSlot(static_cast<unsigned>(lightIndex));
                 shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
                 // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
                 // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
@@ -763,7 +767,8 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
         {
             const SceneView& view = spotViews[lightIndex];
             const UINT res = ShadowViewRes(view, D.spotShadowRes); // S4
-            renderer->BindSpotShadowTarget(t.cl, static_cast<UINT>(lightIndex), /*clearDepth=*/true, res);
+            renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/false, view.shadowPage, view.shadowX, view.shadowY, res,
+                                            /*clearDepth=*/true); // S9
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, frame_->wind, res); // S1
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
@@ -833,8 +838,9 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 renderer->EmitPoint(t.cl, atlasPoint);
             }
             const SceneView& view = pointViews[faceIndex];
-            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
-                static_cast<UINT>(faceIndex % 6), /*clear=*/true, ShadowViewRes(view, D.pointShadowRes)); // S4
+            // Plan S9: the face's square inside its light's 3f x 2f block of an atlas page.
+            renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/true, view.shadowPage, view.shadowX, view.shadowY,
+                                            ShadowViewRes(view, D.pointShadowRes), /*clearDepth=*/true);
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
@@ -842,9 +848,8 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
 
             if (indirect)
             {
-                // Point cube face k -> shadow-view slot kCascades + kMaxShadowedSpotLights + k.
-                const std::uint32_t viewSlot = static_cast<std::uint32_t>(
-                    kCascades + LightManager::kMaxShadowedSpotLights + faceIndex);
+                // Point cube face k -> its cull-view slot (plan S9: VSM's prefix, then the extra faces).
+                const std::uint32_t viewSlot = render::ShadowViewPointFaceSlot(static_cast<unsigned>(faceIndex));
                 shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
                 // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
                 // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
@@ -883,8 +888,8 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
         for (size_t faceIndex = 0; faceIndex < viewCount; ++faceIndex)
         {
             const SceneView& view = pointViews[faceIndex];
-            renderer->BindPointShadowTarget(t.cl, static_cast<UINT>(faceIndex / 6),
-                static_cast<UINT>(faceIndex % 6), /*clear=*/true, ShadowViewRes(view, D.pointShadowRes)); // S4
+            renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/true, view.shadowPage, view.shadowX, view.shadowY,
+                                            ShadowViewRes(view, D.pointShadowRes), /*clearDepth=*/true); // S9
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];

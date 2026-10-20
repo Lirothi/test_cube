@@ -26,9 +26,10 @@ struct SpotLightData
     float4 colorIntensity;     // xyz = color, w = intensity
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
     float4 shadowParams2;      // x = normal bias (world units), y = volumetric scattering, z = UE's shadow fade (S3),
-                               // w = the light's square in its atlas slice (S4: res / slice)
+                               // w reserved
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
+    float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
 };
 
 Texture2D GB0 : register(t0);
@@ -128,7 +129,8 @@ float SampleShadowPCF(float3 uvw, float depth, float2 texel)
     return shadow / 9.0f;
 }
 
-float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float NdotL)
+// `Ng` = the geometric normal (LocalShadowGeometricNormal) -- the texel bias's push; `N` (shading) everywhere else.
+float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 Ng, float NdotL)
 {
     // shadowParams.y < 0 => this spot has no shadow slot this frame (unshadowed).
     if (light.shadowParams.y < 0.0f)
@@ -136,7 +138,10 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float 
         return 1.0f;
     }
 
-    float normalBias = light.shadowParams2.x;
+    // The TEXEL bias (local_shadow_bias.hlsli) when shadowParams2.w > 0: .w = normal texels, .x = push texels -- the
+    // world normal bias .x carries otherwise is then not one.
+    const bool texelBias = light.shadowParams2.w > 0.0f;
+    float normalBias = texelBias ? 0.0f : light.shadowParams2.x;
     float depthBias = light.shadowParams.w;
     float3 Poff = P + N * normalBias;
 
@@ -174,6 +179,18 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float 
                              VsmPageTable, VsmPool, gSmpShadow);
     }
 
+    // TEXEL bias: one shadow texel at the receiver is 2 w tan(outer) over the light's resolution (its square in the page).
+    float texelWorld = 0.0f;
+    if (texelBias)
+    {
+        const float cosOuter = max(light.directionCosOuter.w, 1e-3f);
+        const float tanOuter = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
+        const float res = max(light.shadowAtlas.z / max(invShadowSize.x, 1e-9f), 1.0f);
+        texelWorld = 2.0f * max(mul(float4(P, 1.0f), light.viewProj).w, 0.0f) * tanOuter / res;
+        Poff = LocalShadowTexelOffset(P, Ng, normalize(light.positionRange.xyz - P), texelWorld,
+                                      light.shadowParams2.w, light.shadowParams2.x);
+    }
+
     float4 clip = mul(float4(Poff, 1.0f), light.viewProj);
     float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
@@ -184,7 +201,9 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float 
         return 1.0f;
     }
     // Plan S4: the light drew into the top-left square of its own resolution; 3 texels inside it for the 6x6 tent.
-    uv = LocalShadowRectUV(uv, light.shadowParams2.w, invShadowSize.x, 3.0f);
+    // Plan S9: its square of an atlas page (shadowAtlas); `invShadowSize` is one page texel.
+    uv = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, invShadowSize, 3.0f);
+    const float page = light.shadowAtlas.w;
 
     // Plan S2: UE's Manual5x5PCF with its soft transition, the ramp narrowed toward the light by the receiver's NoL
     // (UE: TransitionScale x lerp(1 - SpotLightReceiverBias 0.5, 1, NoL), ShadowProjectionPixelShader.usf:248), then
@@ -194,19 +213,22 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float 
         const float n = light.shadowParams3.x;
         const float f = max(light.positionRange.w, n + 0.1f); // SpotLight::UpdateCachedData's far
         const float NoL = saturate(dot(N, normalize(light.positionRange.xyz - P)));
-        const float ts = light.shadowParams3.y * lerp(0.5f, 1.0f, NoL);
-        const float s = SpotShadowTent6x6(SpotShadowAtlas, gSmpPoint, uv, light.shadowParams.y, clip.w, ts, n, f,
+        // The ramp: UE's (f - n) / 60 metres at bias 0.5 (~23 cm on a 14 m spot -- a shadow fading in that far behind
+        // its caster reads as a gap at the foot), or kSpotRampTexels shadow texels under the TEXEL bias.
+        const float ts = (texelBias ? 1.0f / max(kSpotRampTexels * texelWorld, 1e-4f) : light.shadowParams3.y)
+                       * lerp(0.5f, 1.0f, NoL);
+        const float s = SpotShadowTent6x6(SpotShadowAtlas, gSmpPoint, uv, page, clip.w, ts, n, f,
                                           1.0f / invShadowSize, invShadowSize);
         return LocalShadowFinish(s, light.shadowParams3.z);
     }
-    float3 uvw = float3(uv, light.shadowParams.y);
+    float3 uvw = float3(uv, page);
     return SampleShadowPCF(uvw, depth - depthBias, invShadowSize);
 }
 
 // Plan S3: UE's shadow fade by the resolution the light wants on screen (LightManager::SelectShadowedSpots; 1 under VSM).
-float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
+float ComputeSpotShadow(const SpotLightData light, float3 P, float3 N, float3 Ng, float NdotL)
 {
-    return lerp(1.0f, ComputeSpotShadowMap(light, P, N, NdotL), light.shadowParams2.z);
+    return lerp(1.0f, ComputeSpotShadowMap(light, P, N, Ng, NdotL), light.shadowParams2.z);
 }
 
 [numthreads(8, 8, 1)]
@@ -237,6 +259,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 N = normalize(g1.rgb * 2.0 - 1.0);
     float3 P = ReconstructPosWS(uv, z, invProj, invView);
     float3 V = normalize(camPosWS - P);
+    // The texel bias pushes along the geometry's normal, not the normal map's (local_shadow_bias.hlsli); VSM keeps N.
+    const float3 Ng = (useVsm == 0u)
+        ? LocalShadowGeometricNormal(DepthT, gSmpPoint, uv, invScreenSize, z, P, camPosWS, invProj, invView, N) : N;
 
     // F5: foliage shading model (GBAux.b is an ID -> point sample) + subsurface payload (GB2).
     const float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
@@ -295,7 +320,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 bool useMap, useContact;
                 LocalShadowSources(light.shadowParams.y >= 0.0f, useMap, useContact);
-                float shadow = useMap ? ComputeSpotShadow(light, P, N, fr.NdotL) : 1.0f;
+                float shadow = useMap ? ComputeSpotShadow(light, P, N, Ng, fr.NdotL) : 1.0f;
                 if (useContact)
                 {
                     shadow = ApplyContactShadow(shadow, P, N, L, fr.NdotL, dispatchThreadId.xy, camPosWS,
@@ -310,7 +335,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             {
                 bool useMapT, useContactT;
                 LocalShadowSources(light.shadowParams.y >= 0.0f, useMapT, useContactT);
-                float shadowT = useMapT ? ComputeSpotShadow(light, P, -N, saturate(dot(-N, L))) : 1.0f;
+                float shadowT = useMapT ? ComputeSpotShadow(light, P, -N, -Ng, saturate(dot(-N, L))) : 1.0f;
                 if (useContactT)
                 {
                     shadowT = ApplyContactShadow(shadowT, P, -N, L, saturate(dot(-N, L)),
@@ -331,7 +356,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
             bool useMap, useContact;
             LocalShadowSources(light.shadowParams.y >= 0.0f, useMap, useContact);
-            float shadow = useMap ? ComputeSpotShadow(light, P, N, br.NdotL) : 1.0f;
+            float shadow = useMap ? ComputeSpotShadow(light, P, N, Ng, br.NdotL) : 1.0f;
             if (useContact)
             {
                 shadow = ApplyContactShadow(shadow, P, N, L, br.NdotL, dispatchThreadId.xy, camPosWS,

@@ -295,7 +295,8 @@ namespace scene_internal
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildSpotShadowViewCB(Renderer* renderer, const SceneView& view,
                                                            const vfx::WindState* wind, std::uint32_t atlasRes)
     {
-        if (!render::g_localShadowBiasUe) { return BuildShadowViewCB(renderer, view.view, view.proj, wind); }
+        // The old bias and the TEXEL bias (local_shadow_bias.hlsli) both bias the RECEIVER, not the depth pass.
+        if (!render::g_localShadowBiasUe || render::LocalShadowTexelBias()) { return BuildShadowViewCB(renderer, view.view, view.proj, wind); }
         const float n = view.zNear, f = view.zFar;
         const float k = f > n ? n * f / (f - n) : 0.0f;
         const float constMetres = std::min(15.36f / static_cast<float>(std::max(atlasRes, 1u)) * 2.0f *

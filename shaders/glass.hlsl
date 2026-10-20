@@ -20,7 +20,8 @@ struct PointLightData
     float intensity;
     float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
-    float4 shadowFade;   // x = UE's shadow fade (S3), y = the light's square (S4), z = 1 / its res -- mirrors LightManager::PointLightGpu
+    float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
+    float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
 };
 
 struct SpotLightData
@@ -30,9 +31,10 @@ struct SpotLightData
     float4 colorIntensity;     // xyz = color, w = intensity
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
     float4 shadowParams2;      // x = normal bias (world units), y = volumetric scattering, z = UE's shadow fade (S3),
-                               // w = the light's square in its atlas slice (S4)
+                               // w reserved
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
+    float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
 };
 
 // Per-object data (unique per glass instance).
@@ -82,10 +84,11 @@ static const float3 kPointPcfOffsets[8] = {
     float3( 1,  1,  1), float3( 1, -1,  1), float3(-1, -1,  1), float3(-1,  1,  1),
     float3( 1,  1, -1), float3( 1, -1, -1), float3(-1, -1, -1), float3(-1,  1, -1)
 };
-float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N)
+// `Ng` = the vertex normal (no normal map) -- the texel bias's push, as the light passes' geometric normal.
+float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
 {
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; }
-    float3 Poff = P + N * PointShadowNormalOffset(Ld.shadowParams);
+    float3 Poff = P + N * ((Ld.shadowFade.w > 0.0f) ? 0.0f : PointShadowNormalOffset(Ld.shadowParams)); // the old bias only
     // Rung 2 / Step 21: sample the VSM page pool (matches pointlight_cs.hlsl's VSM branch).
     if (vsmParams.x != 0.0f)
     {
@@ -97,20 +100,28 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N)
                               Ld.shadowParams.w, camPosSky.xyz, vsmParams.y, 0.0f,
                               VsmPageTable, VsmPool, ShadowSampler);
     }
+    // The TEXEL bias, as pointlight_cs.hlsl's (local_shadow_bias.hlsli): the receiver moves, the compare carries none.
+    if (Ld.shadowFade.w > 0.0f)
+    {
+        const float3 d0 = P - Ld.position;
+        const float texelWorld = 2.0f * max(abs(d0.x), max(abs(d0.y), abs(d0.z))) * Ld.shadowFade.z;
+        Poff = LocalShadowTexelOffset(P, Ng, normalize(Ld.position - P), texelWorld, Ld.shadowFade.w, Ld.volumetric.y);
+    }
     float3 d = Poff - Ld.position;
     float m = max(abs(d.x), max(abs(d.y), abs(d.z)));
     float nearP = Ld.shadowParams.z;
     float farP = max(Ld.shadowParams.w, nearP + 1e-3f);
     const float NoL = dot(N, normalize(Ld.position - P));
-    // Plan S4: the light's own square of its face slices; 1 / the slice = rect / res.
-    const float rect = Ld.shadowFade.y;
-    const float sliceTexel = Ld.shadowFade.y * Ld.shadowFade.z;
+    // Plan S9: the light's 3f x 2f block of an atlas page (as pointlight_cs.hlsl's); a page texel = one face / res.
+    const float4 block = Ld.shadowAtlas;
+    const float page = Ld.shadowFade.y;
+    const float2 texel = block.zw * Ld.shadowFade.z;
     // Plan S8 (unblocked by S4, which put the light's resolution in its own data): pointlight_cs's filter, UE's 29-tap
     // disc, sharpened and squared -- glass no longer shades a point shadow its own way.
-    if (Ld.volumetric.w != 0.0f && Ld.shadowParams.y < 0.0f)
+    if (Ld.volumetric.w != 0.0f && (Ld.shadowParams.y < 0.0f || Ld.shadowFade.w > 0.0f))
     {
         return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, ShadowSampler, d, m, Ld.shadowParams, Ld.volumetric.y,
-                                                   NoL, Ld.shadowFade.z, rect, sliceTexel), Ld.volumetric.z);
+                                                   NoL, Ld.shadowFade.z, block, page, texel), Ld.volumetric.z);
     }
     float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
     float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
@@ -123,15 +134,15 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N)
     {
         float3 sd = d + kPointPcfOffsets[i] * radius;
         shadow += PointShadowAtlas.SampleCmpLevelZero(ShadowSampler,
-            PointShadowCubeUV(sd, Ld.shadowParams.x, rect, sliceTexel), zc);
+            PointShadowCubeUV(sd, block, page, texel), zc);
     }
     return shadow * 0.125f;
 }
 
 // Plan S3: UE's shadow fade, as pointlight_cs.hlsl's.
-float PointShadowFactor(PointLightData Ld, float3 P, float3 N)
+float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float3 Ng)
 {
-    return lerp(1.0f, PointShadowFactorMap(Ld, P, N), Ld.shadowFade.x);
+    return lerp(1.0f, PointShadowFactorMap(Ld, P, N, Ng), Ld.shadowFade.x);
 }
 
 struct VSIn
@@ -268,7 +279,7 @@ float ShadowPCF3x3Array(Texture2DArray atlas, float3 uvw, float depth, float2 te
     return s / 9.0f;
 }
 
-float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float NdotL)
+float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 Ng, float NdotL)
 {
     // shadowParams.y < 0 => this spot has no shadow slot this frame (unshadowed).
     if (light.shadowParams.y < 0.0f)
@@ -276,7 +287,9 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float N
         return 1.0f;
     }
 
-    float normalBias = light.shadowParams2.x;
+    // The TEXEL bias as spotlight_cs.hlsl's (shadowParams2.w > 0: .w = normal texels, .x = push texels).
+    const bool texelBias = light.shadowParams2.w > 0.0f;
+    float normalBias = texelBias ? 0.0f : light.shadowParams2.x;
     float depthBias = light.shadowParams.w;
     float3 Poff = P + N * normalBias;
 
@@ -286,6 +299,17 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float N
         uint slot = (uint)light.shadowParams.y;
         return VsmSpotShadow(slot, light.viewProj, Poff, camPosSky.xyz, vsmParams.y, depthBias,
                              VsmPageTable, VsmPool, ShadowSampler);
+    }
+
+    float texelWorld = 0.0f;
+    if (texelBias)
+    {
+        const float cosOuter = max(light.directionCosOuter.w, 1e-3f);
+        const float tanOuter = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
+        const float res = max(light.shadowAtlas.z / max(spotShadowInfo.z, 1e-9f), 1.0f);
+        texelWorld = 2.0f * max(mul(float4(P, 1.0f), light.viewProj).w, 0.0f) * tanOuter / res;
+        Poff = LocalShadowTexelOffset(P, Ng, normalize(light.positionRange.xyz - P), texelWorld,
+                                      light.shadowParams2.w, light.shadowParams2.x);
     }
 
     float4 clip = mul(float4(Poff, 1.0f), light.viewProj);
@@ -298,23 +322,25 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float N
     }
 
     float2 texel = spotShadowInfo.zw;
-    uv = LocalShadowRectUV(uv, light.shadowParams2.w, texel.x, 3.0f); // plan S4: the light's square of its slice
-    float3 uvw = float3(uv, light.shadowParams.y);
+    uv = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, texel, 3.0f); // plan S9: its square of a page
+    const float page = light.shadowAtlas.w;
+    float3 uvw = float3(uv, page);
     if (light.shadowParams3.w != 0.0f) // plan S2: the spot pass's own filter (local_shadow_filter.hlsli)
     {
         const float n = light.shadowParams3.x;
         const float f = max(light.positionRange.w, n + 0.1f);
-        const float ts = light.shadowParams3.y * lerp(0.5f, 1.0f, saturate(dot(N, normalize(light.positionRange.xyz - P))));
-        return LocalShadowFinish(SpotShadowTent6x6(SpotShadowAtlas, LinearSampler, uv, light.shadowParams.y, clip.w, ts,
+        const float ts = (texelBias ? 1.0f / max(kSpotRampTexels * texelWorld, 1e-4f) : light.shadowParams3.y)
+                       * lerp(0.5f, 1.0f, saturate(dot(N, normalize(light.positionRange.xyz - P))));
+        return LocalShadowFinish(SpotShadowTent6x6(SpotShadowAtlas, LinearSampler, uv, page, clip.w, ts,
                                                    n, f, 1.0f / texel, texel), light.shadowParams3.z);
     }
     return ShadowPCF3x3Array(SpotShadowAtlas, uvw, depth - depthBias, texel);
 }
 
 // Plan S3: UE's shadow fade, as spotlight_cs.hlsl's.
-float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float NdotL)
+float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float3 Ng, float NdotL)
 {
-    return lerp(1.0f, SampleSpotShadowMap(light, P, N, NdotL), light.shadowParams2.z);
+    return lerp(1.0f, SampleSpotShadowMap(light, P, N, Ng, NdotL), light.shadowParams2.z);
 }
 
 struct PSOut
@@ -330,6 +356,7 @@ struct PSOut
 PSOut PSMain(VSOut i)
 {
     float3 N = normalize(i.normalWS);
+    const float3 geomN = N; // the local shadows' texel bias pushes along this, never the normal map's
     float3 camPos = camPosSky.xyz;
     float3 V = normalize(camPos - i.posWS);
     float ior = max(matExtra.x, 1.0f);
@@ -422,7 +449,7 @@ PSOut PSMain(VSOut i)
             continue;
         }
 
-        float shadow = PointShadowFactor(light, i.posWS, N);
+        float shadow = PointShadowFactor(light, i.posWS, N, geomN);
         if (shadow <= 0.0f)
         {
             continue;
@@ -470,7 +497,7 @@ PSOut PSMain(VSOut i)
             continue;
         }
 
-        float shadow = SampleSpotShadow(light, i.posWS, N, br.NdotL);
+        float shadow = SampleSpotShadow(light, i.posWS, N, geomN, br.NdotL);
         float3 radiance = light.colorIntensity.xyz * light.colorIntensity.w * distAtten * angleAtten;
         diffuseAccum += br.diffBRDF * br.NdotL * radiance * shadow;
         specAccum += br.specBRDF * br.NdotL * radiance * shadow;

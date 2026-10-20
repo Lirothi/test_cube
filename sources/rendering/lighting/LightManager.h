@@ -20,15 +20,17 @@ class LightManager {
 public:
     // The total spot-light count is unbounded (the structured buffer grows on
     // demand). Only shadow CASTERS are capped per frame - the highest-priority
-    // kMaxShadowedSpotLights for the camera - which sizes the shadow atlas /
-    // shadow-view array / DSV reservation. Distant spots still light the scene,
-    // just without a shadow.
-    static constexpr std::uint32_t kMaxShadowedSpotLights = 8;
-    // Max point lights that can cast (omnidirectional cube) shadows in one frame.
-    // Each shadowed point uses 6 cube faces, so this sizes the point shadow atlas
-    // at 6 * kMaxShadowedPointLights slices. Chosen per frame by projected size,
-    // like the spot casters. Distant/opted-out points still light, just no shadow.
-    static constexpr std::uint32_t kMaxShadowedPointLights = 4;
+    // kMaxShadowedSpotLights for the camera - which sizes the shadow-view arrays and the
+    // GPU cull's view slots. Distant spots still light the scene, just without a shadow.
+    //
+    // Local-light shadow plan S9: the atlas modes (Legacy / SDSM) take up to 32 spots and 16
+    // points -- UE has no count at all, but our views are fixed slots (render::kMaxShadowViews);
+    // the atlas itself is a page budget (PackShadowAtlases). VSM keeps its own 8 + 4: its 32 local
+    // virtual views are a fixed layout (kVsmShadowed*, plan S10).
+    static constexpr std::uint32_t kMaxShadowedSpotLights = render::kShadowViewSpots;
+    static constexpr std::uint32_t kMaxShadowedPointLights = render::kShadowViewPoints;
+    static constexpr std::uint32_t kVsmShadowedSpotLights = render::kShadowViewVsmSpots;
+    static constexpr std::uint32_t kVsmShadowedPointLights = render::kShadowViewVsmPoints;
 
     struct alignas(16) PointLightGpu
     {
@@ -39,9 +41,11 @@ public:
         Math::float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
         Math::float4 volumetric;   // x = volumetric scattering intensity (plan A4d); local-light shadows: y = UE's slope
                                    // scale (S1), z = UE's sharpen 7s+1 (S2), w = 1: UE's 29-tap disc, 0: the old 3x3
-        Math::float4 shadowFade;   // local-light shadows S3: x = UE's shadow fade (lerp(1, shadow, x)); S4: y = the
-                                   // light's square in its face slices (res / slice res), z = 1 / res, w reserved.
-                                   // Mirrored by pointlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
+        Math::float4 shadowFade;   // local-light shadows S3: x = UE's shadow fade (lerp(1, shadow, x)); S9: y = the atlas
+                                   // page; S4: z = 1 / the light's face resolution; w reserved.
+        // Plan S9: the light's 3f x 2f block in its atlas page, in page UV -- xy = the block's corner, zw = one face's
+        // size (face k at xy + (k % 3, k / 3) * zw). Mirrored by pointlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
+        Math::float4 shadowAtlas;
     };
 
     struct alignas(16) SpotLightGpu
@@ -51,13 +55,15 @@ public:
         Math::float4 colorIntensity;     // xyz = color, w = intensity
         Math::float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
         Math::float4 shadowParams2;      // x = normal bias (WS), y = volumetric scattering intensity (plan A4d),
-                                         // z = UE's shadow fade (S3: lerp(1, shadow, z)), w = the light's square in
-                                         // its slice (S4: res / slice res)
+                                         // z = UE's shadow fade (S3: lerp(1, shadow, z)), w reserved
         Math::mat4   viewProj;
         // Local-light shadow plan S2: x = the projection's near plane, y = UE's soft-transition scale (1/m), z = UE's
         // sharpen (7 x ShadowSharpen + 1), w = 1: UE's 6x6 tent filter, 0: the old 3x3 box. Mirrored by
         // spotlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
         Math::float4 shadowParams3;
+        // Plan S9: the light's square in its atlas page -- xy = its corner in page UV, z = its size in page UV, w = the
+        // page. Same mirrors.
+        Math::float4 shadowAtlas;
     };
 
     LightManager() = default;
@@ -89,10 +95,11 @@ public:
     // `screenScale` = max(W/2 * P11, H/2 * P22) of the camera's projection at the render resolution.
     //
     // Plan S4: the same wanted resolution sizes the light's shadow as UE sizes it -- a spot's rounded down to a power of
-    // two up to `maxRes` (the spot atlas slice), a point's cube face to the first of maxRes/2, /4, /8, /16, 32 -- and
-    // the light renders into the top-left square of that size of its slice (GetSpotShadowResolution).
+    // two up to `maxRes` (the spot atlas page), a point's cube face to the first of maxRes/2, /4, /8, /16, 32
+    // (GetSpotShadowResolution). Plan S9: up to `maxCount` lights (the mode's cap: kMaxShadowedSpotLights in the atlas
+    // modes, kVsmShadowedSpotLights in VSM); PackShadowAtlases then places them.
     void SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
-                             std::uint32_t maxRes);
+                             std::uint32_t maxRes, std::uint32_t maxCount);
     // S3: the light's shadow fade this frame, 0..1 (1 for an index without one).
     float GetSpotShadowFade(size_t lightIndex) const
     {
@@ -136,7 +143,36 @@ public:
     // spots. Must run before the point cube views are built / the point-light buffer
     // is filled.
     void SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
-                              std::uint32_t maxRes); // S3 / S4 as spots
+                              std::uint32_t maxRes, std::uint32_t maxCount); // S3 / S4 / S9 as spots
+
+    // Local-light shadow plan S9: place every shadowed light in the atlas pages, as UE packs its whole-scene shadows
+    // into atlases (ShadowSetup.cpp AllocateAtlasedShadowDepthTargets :5971-6090): a spot's res x res square in a
+    // spot page (spotPageSize square), a point's six faces as ONE 3f x 2f block in a point page (3 * pointFaceMax by
+    // 2 * pointFaceMax). UE adds an atlas when one is full; ours are resident pages, so a frame that does not fit
+    // halves every light one step at a time, as UE's VSM raises one global LOD bias on a short pool (and, past the
+    // floor, drops the lowest-ranked) -- and asks for more pages, up to `maxPages`, through WantedSpotShadowPages /
+    // WantedPointShadowPages (Scene::ReconcileShadowMode grows them).
+    // After both Select*; may lower GetSpot/PointShadowResolution and drop slots.
+    struct ShadowAtlasPages
+    {
+        std::uint32_t spotPages = 1, pointPages = 1, maxPages = 1;
+        std::uint32_t spotPageSize = 0, pointFaceMax = 0;
+    };
+    void PackShadowAtlases(const ShadowAtlasPages& pages);
+    struct ShadowAtlasPlacement { std::int32_t page = -1; std::uint32_t x = 0, y = 0; }; // texels in the page
+    ShadowAtlasPlacement GetSpotShadowPlacement(size_t lightIndex) const
+    {
+        return lightIndex < spotShadowPlace_.size() ? spotShadowPlace_[lightIndex] : ShadowAtlasPlacement{};
+    }
+    ShadowAtlasPlacement GetPointShadowPlacement(size_t lightIndex) const // the 3f x 2f block's corner
+    {
+        return lightIndex < pointShadowPlace_.size() ? pointShadowPlace_[lightIndex] : ShadowAtlasPlacement{};
+    }
+    std::uint32_t WantedSpotShadowPages() const { return wantedSpotPages_; }
+    std::uint32_t WantedPointShadowPages() const { return wantedPointPages_; }
+    // How many lights the last pack had to shrink / drop to fit the resident pages (0 = everything at its UE size).
+    std::uint32_t ShadowAtlasShrunk() const { return atlasShrunk_; }
+    std::uint32_t ShadowAtlasDropped() const { return atlasDropped_; }
 
     // Number of point lights casting a shadow this frame (<= kMaxShadowedPointLights).
     size_t GetShadowedPointCount() const { return shadowedPointLightIndices_.size(); }
@@ -203,6 +239,12 @@ private:
     std::vector<float> pointShadowFade_;                    // S3: parallel to pointLights_
     std::vector<std::uint32_t> spotShadowRes_;              // S4: parallel to spotLights_
     std::vector<std::uint32_t> pointShadowRes_;             // S4: parallel to pointLights_ (cube face)
+    std::vector<float> spotShadowScore_;                    // S9: the S3 rank (wanted resolution), for the pack
+    std::vector<float> pointShadowScore_;
+    std::vector<ShadowAtlasPlacement> spotShadowPlace_;     // S9: parallel to spotLights_
+    std::vector<ShadowAtlasPlacement> pointShadowPlace_;    // S9: parallel to pointLights_
+    std::uint32_t wantedSpotPages_ = 1, wantedPointPages_ = 1;
+    std::uint32_t atlasShrunk_ = 0, atlasDropped_ = 0;
     // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_
     // / spotLightCapacity_ elements; region f is written+read only by in-flight frame
     // f, with its own SRV in the *SrvHandles_ array. Capacity is PER REGION.

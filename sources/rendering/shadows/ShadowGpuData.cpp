@@ -863,7 +863,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         valFade_ = casterFadeCpu_;
         valCamGroups_ = numVirtualGroups_;
         valCasters_ = dec.giOn ? count_ : staticCount_;
-        valViews_ = render::kMaxShadowViews;
+        valViews_ = activeViews_; // S9: the views this frame's cull walked
         // The args are laid out per VIRTUAL group (S3.6: real group * kMaxShadowLods + receiver
         // LOD), so a view's row is numVirtualGroups_ entries wide. Reading it as numMeshGroups_
         // (the pre-S3.6 layout) folded view v's LOD buckets into reader rows 4v..4v+3 and reported
@@ -1684,21 +1684,22 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     }
 
     // --- Per-view shadow LOD (tunable tier stride + g_shadowLodBias) -----------------------------------
-    // Cull-view layout: [cascades | spots | point-faces | clipmap]. A view's tier picks a base LOD
+    // Cull-view layout: [cascades | spots | point-faces | clipmap | the atlas modes' extra spots and faces]
+    // (render::ShadowView*Slot, local-light shadow plan S9). A view's tier picks a base LOD
     // (near = fine, far = coarse); the global bias shifts it. Locals use the near tier. The final LOD
     // is clamped per mesh by the tables below (a mesh may have fewer LODs than the view asks for).
     const int lodCap = static_cast<int>(render::kMaxShadowLods) - 1;
     viewLod_.assign(render::kMaxShadowViews, 0u);
     {
         constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
-        constexpr std::uint32_t kLocalEnd = kCasc + LightManager::kMaxShadowedSpotLights
-                                          + LightManager::kMaxShadowedPointLights * 6u; // spots + point faces
+        constexpr std::uint32_t kClipmapBegin = render::ShadowViewClipmapSlot(0u);
         for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
         {
             std::uint32_t tier;
-            if (v < kCasc)              { tier = v; }                  // CSM cascade index (near->far)
-            else if (v < kLocalEnd)     { tier = 0u; }                 // local light -> near tier
-            else                        { tier = v - kLocalEnd; }      // VSM clipmap level (near->far)
+            if (v < kCasc)                       { tier = v; }                  // CSM cascade index (near->far)
+            else if (v < kClipmapBegin)          { tier = 0u; }                 // local light -> near tier
+            else if (v < render::kVsmShadowViews) { tier = v - kClipmapBegin; } // VSM clipmap level (near->far)
+            else                                 { tier = 0u; }                 // S9: the atlas modes' extra locals
             // The bias is a shift of the TIER curve, and a local light has no tier -- it is pinned
             // at 0 and then biased anyway, which is how a spot ended up rasterizing its casters two
             // levels coarser than the camera drew them. On thin shells that is self-shadow blobs:
@@ -2228,6 +2229,11 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         lastMoverCount_ = uploaded;
     }
     return uploaded;
+}
+
+void ShadowGpuData::SetActiveViewCount(std::uint32_t views)
+{
+    activeViews_ = std::clamp<std::uint32_t>(views, render::kVsmShadowViews, render::kMaxShadowViews);
 }
 
 void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count)
@@ -2765,7 +2771,9 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
 
     const UINT f = renderer->GetCurrentFrameIndex();
 
-    const std::uint32_t numViews = render::kMaxShadowViews;
+    // Plan S9: only the views in use (VSM's prefix + the occupied extra local slots); the rows past it stay stale and
+    // nothing draws from them. 142 rows cleared and tested every frame cost wind_test's cull +61 us for 3 lamps.
+    const std::uint32_t numViews = activeViews_;
     const std::uint32_t numGroups = numVirtualGroups_; // S3.6: args are per (view, VIRTUAL group)
     // Step 4 (GI→VSM): when the GI folding path is active this frame, the cull covers ALL count_
     // casters (the scatter below fills the GI region first); otherwise only the static Nstatic (GI

@@ -300,12 +300,10 @@ public:
     // and leave the others as they are -- the SDSM partition cache keeps those. All four bits = the
     // whole-atlas clear BindShadowTarget(cl, 0, true) does.
     void ClearShadowTiles(ID3D12GraphicsCommandList* cl, std::uint32_t tileMask);
-    // Local-light shadow plan S4: `res` = the light's own shadow resolution, its top-left square of the slice is the
-    // viewport (0 = the whole slice); the clear covers that square only.
-    void BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth, UINT res = 0);
-    // Bind one cube face (cubeSlot in [0,kMaxShadowedPointLights), face in [0,6)) of the
-    // point shadow atlas as the depth target. When clear=true, clears the face to "far" (1.0). `res` as for spots.
-    void BindPointShadowTarget(ID3D12GraphicsCommandList* cl, UINT cubeSlot, UINT face, bool clear, UINT res = 0);
+    // Local-light shadow plan S9: bind one atlas PAGE of the spot or point pool as the depth target, with the light's
+    // size x size rectangle at (x, y) of it as viewport and scissor; `clearDepth` clears that rectangle only.
+    void BindLocalShadowTarget(ID3D12GraphicsCommandList* cl, bool pointPool, UINT page, UINT x, UINT y, UINT size,
+                               bool clearDepth);
     // Prebuilt SRV tables (in the frame's shader-visible heap)
     D3D12_GPU_DESCRIPTOR_HANDLE StageGBufferSrvTable(); // t0..t3 : GB0,GB1,GB2,Depth
     D3D12_GPU_DESCRIPTOR_HANDLE StageComposeSrvTable(); // t0..t1 : Light,GB2
@@ -351,6 +349,10 @@ public:
     // Local-light shadow plan S4: the spot slice size (point faces are half), from render::g_localShadowMaxRes.
     void SetLocalShadowMaxResolution(UINT knob) { if (GetDevice()) { rtManager_.SetLocalShadowMaxResolution(GetDevice(), Declarations(), knob); } }
     UINT LocalShadowMaxResolution() const { return rtManager_.LocalShadowMaxResolution(); }
+    // Plan S9: the local-shadow atlas pages (GPU idle: Scene::ReconcileShadowMode).
+    void SetLocalShadowPages(UINT spotPages, UINT pointPages) { if (GetDevice()) { rtManager_.SetLocalShadowPages(GetDevice(), Declarations(), spotPages, pointPages); } }
+    UINT LocalSpotShadowPages() const { return rtManager_.LocalSpotShadowPages(); }
+    UINT LocalPointShadowPages() const { return rtManager_.LocalPointShadowPages(); }
 
     // Step 21: transient VSM page-table + pool SRVs for the transparent (glass) pass, which lacks
     // frame/VSM access. Set by SceneRenderer::Pass_Transparent each frame; read by the glass draws.

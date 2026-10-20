@@ -177,17 +177,29 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     Math::float4(desc.color, render::CandelaFromLumens(light.EffectiveFluxLm())); // P16.5; plan L's level
                 // .w = the OLD receiver bias (NDC): 0 under UE's, which lives in the depth pass (plan S1,
                 // BuildSpotShadowViewCB) -- the receivers (spot pass, glass, fog) subtract whatever is here.
+                // The TEXEL bias (render::LocalShadowTexelBias, local_shadow_bias.hlsli) is 0 here too: it moves the receiver.
+                const bool texelBias = render::LocalShadowTexelBias();
                 spotCPU[i].shadowParams = Math::float4(light.GetCosInner(),
                     static_cast<float>(lm.GetSpotShadowSlot(i)), light.GetInvAngleRange(),
-                    (render::g_localShadowBiasUe && !render::VsmActive()) ? 0.0f : light.GetShadowDepthBias()); // VSM: as before
+                    ((render::g_localShadowBiasUe || texelBias) && !render::VsmActive()) ? 0.0f : light.GetShadowDepthBias()); // VSM: as before
                 // .z = UE's shadow fade (plan S3, LightManager::SelectShadowedSpots); the VSM path does not read it.
                 const float spotFade = (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetSpotShadowFade(i) : 1.0f;
-                // .w = plan S4: the light's square in its atlas slice (res / slice), the shaders' UV scale.
-                const float spotSlice = static_cast<float>(std::max(renderer->GetDeferredForFrame().spotShadowRes, 1u));
-                const std::uint32_t spotRes = lm.GetSpotShadowResolution(i);
-                const float spotRect = spotRes ? std::min(static_cast<float>(spotRes) / spotSlice, 1.0f) : 1.0f;
-                spotCPU[i].shadowParams2 = Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f),
-                                                        spotFade, spotRect);
+                // TEXEL bias: .x = push texels, .w = normal texels (> 0 marks the mode); otherwise .x = the world normal bias.
+                spotCPU[i].shadowParams2 = texelBias
+                    ? Math::float4(std::max(render::g_localShadowPushTexels, 0.0f), std::max(desc.volumetricIntensity, 0.0f),
+                                   spotFade, std::max(render::g_localShadowNormalTexels, 1.0e-3f))
+                    : Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f), spotFade, 0.0f);
+                // Plan S9: its square in its atlas page, in page UV (LightManager::PackShadowAtlases) -- corner, size,
+                // page. A light without a place gets the whole first page (it has no slot then, nothing reads it).
+                {
+                    const float spotPage = static_cast<float>(std::max(renderer->GetDeferredForFrame().spotShadowRes, 1u));
+                    const std::uint32_t spotRes = lm.GetSpotShadowResolution(i);
+                    const LightManager::ShadowAtlasPlacement place = lm.GetSpotShadowPlacement(i);
+                    spotCPU[i].shadowAtlas = (place.page >= 0 && spotRes != 0u)
+                        ? Math::float4(static_cast<float>(place.x) / spotPage, static_cast<float>(place.y) / spotPage,
+                                       std::min(static_cast<float>(spotRes) / spotPage, 1.0f), static_cast<float>(place.page))
+                        : Math::float4(0.0f, 0.0f, 1.0f, 0.0f);
+                }
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
                 // Plan S2: the filter's inputs (local_shadow_filter.hlsli). UE's soft transition for a spot is
                 // 1/SpotLightTransitionScale (60) x 2 x ShadowBias of its normalised depth (ShadowRendering.cpp:2059-2075),
@@ -227,24 +239,38 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 // its slope scale 3 x shadowSlopeBias (r.Shadow.PointLightSlopeScaleDepthBias 3) in volumetric.y;
                 // or the old +0.10 world metres (B4) with shadow.localBiasUe off.
                 const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
-                // Plan S4: the light's own cube-face resolution (its square of the face slices); UE's bias is per that.
+                // Plan S4: the light's own cube-face resolution; UE's bias is per that.
                 const float pointSlice = static_cast<float>(std::max(renderer->GetDeferredForFrame().pointShadowRes, 1u));
                 const std::uint32_t pointResOwn = lm.GetPointShadowResolution(i);
                 const float pointRes = pointResOwn ? std::min(static_cast<float>(pointResOwn), pointSlice) : pointSlice;
+                // Plan S9: its 3f x 2f block in a point page (3 x 2 faces of pointSlice), in page UV.
+                const LightManager::ShadowAtlasPlacement pointPlace = lm.GetPointShadowPlacement(i);
+                const float pointPageW = 3.0f * pointSlice;
+                const float pointPageH = 2.0f * pointSlice;
+                pointCPU[i].shadowAtlas = (pointPlace.page >= 0)
+                    ? Math::float4(static_cast<float>(pointPlace.x) / pointPageW, static_cast<float>(pointPlace.y) / pointPageH,
+                                   pointRes / pointPageW, pointRes / pointPageH)
+                    : Math::float4(0.0f, 0.0f, 1.0f / 3.0f, 0.5f);
                 const float ueDepthBias = 0.02f * 512.0f / pointRes * 2.0f * std::max(desc.shadowBias, 0.0f);
+                // The TEXEL bias (local_shadow_bias.hlsli): volumetric.y = push texels, shadowFade.w = normal texels
+                // (> 0 marks the mode), shadowParams.y = 0 -- the receiver moves, the compare carries no bias.
+                const bool texelBias = render::LocalShadowTexelBias();
                 pointCPU[i].volumetric = Math::float4(std::max(desc.volumetricIntensity, 0.0f), // plan A4d
-                                                      3.0f * std::max(desc.shadowSlopeBias, 0.0f),
+                                                      texelBias ? std::max(render::g_localShadowPushTexels, 0.0f)
+                                                                : 3.0f * std::max(desc.shadowSlopeBias, 0.0f),
                                                       7.0f * std::max(desc.shadowSharpen, 0.0f) + 1.0f, // S2: UE's sharpen
                                                       render::g_localShadowFilterUe ? 1.0f : 0.0f);      // S2: UE's disc
                 pointCPU[i].shadowParams = Math::float4(
                     static_cast<float>(lm.GetPointShadowSlot(i)),
-                    (render::g_localShadowBiasUe && !render::VsmActive()) ? -std::max(ueDepthBias, 1.0e-9f) : 0.10f, // VSM: as before
+                    texelBias ? 0.0f
+                              : ((render::g_localShadowBiasUe && !render::VsmActive()) ? -std::max(ueDepthBias, 1.0e-9f) : 0.10f), // VSM: as before
                     pointShadowNear, desc.radius);
                 // Plan S3: UE's shadow fade (LightManager::SelectShadowedPoints); the VSM path does not read it.
-                // .y / .z = plan S4: the light's square in its face slices and 1 / its resolution (the filter's texel).
+                // .y = plan S9: the atlas page; .z = plan S4: 1 / the face resolution (the filter's texel).
                 pointCPU[i].shadowFade = Math::float4(
                     (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetPointShadowFade(i) : 1.0f,
-                    pointRes / pointSlice, 1.0f / pointRes, 0.0f);
+                    static_cast<float>(std::max(pointPlace.page, 0)), 1.0f / pointRes,
+                    texelBias ? std::max(render::g_localShadowNormalTexels, 1.0e-3f) : 0.0f);
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {

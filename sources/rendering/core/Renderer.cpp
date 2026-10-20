@@ -3242,55 +3242,31 @@ void Renderer::ClearShadowTiles(ID3D12GraphicsCommandList* cl, std::uint32_t til
     }
 }
 
-void Renderer::BindSpotShadowTarget(ID3D12GraphicsCommandList* cl, UINT lightIndex, bool clearDepth, UINT res)
+void Renderer::BindLocalShadowTarget(ID3D12GraphicsCommandList* cl, bool pointPool, UINT page, UINT x, UINT y, UINT size,
+                                     bool clearDepth)
 {
     auto& D = rtManager_.Deferred(currentFrameIndex_);
-    if (lightIndex >= LightManager::kMaxShadowedSpotLights)
-    {
-        lightIndex = LightManager::kMaxShadowedSpotLights - 1;
-    }
+    // Plan S9: the light's rectangle of its atlas PAGE -- one DSV per page, the rectangle is the viewport and scissor
+    // (the shaders map their UVs into it and clamp their taps inside it).
+    const UINT pages = pointPool ? D.pointShadowPages : D.spotShadowPages;
+    page = std::min(page, std::max(pages, 1u) - 1u);
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsv = pointPool ? D.pointShadowDSV[page] : D.spotShadowDSV[page];
+    cl->OMSetRenderTargets(0, nullptr, FALSE, &dsv);
 
-    cl->OMSetRenderTargets(0, nullptr, FALSE, &D.spotShadowDSV[lightIndex]);
-
-    // Plan S4: the light's own square, top-left of its slice (the shaders scale and clamp their UVs into it).
-    const UINT slice = std::max(D.spotShadowRes, 1u);
-    const UINT edge = (res == 0u) ? slice : std::min(res, slice);
-    D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(edge), static_cast<float>(edge), 0.0f, 1.0f };
-    D3D12_RECT sc{ 0, 0, static_cast<LONG>(edge), static_cast<LONG>(edge) };
+    const UINT pageWidth = pointPool ? 3u * std::max(D.pointShadowRes, 1u) : std::max(D.spotShadowRes, 1u);
+    const UINT pageHeight = pointPool ? 2u * std::max(D.pointShadowRes, 1u) : std::max(D.spotShadowRes, 1u);
+    x = std::min(x, pageWidth - 1u);
+    y = std::min(y, pageHeight - 1u);
+    const UINT w = std::min(std::max(size, 1u), pageWidth - x);
+    const UINT h = std::min(std::max(size, 1u), pageHeight - y);
+    D3D12_VIEWPORT vp{ static_cast<float>(x), static_cast<float>(y), static_cast<float>(w), static_cast<float>(h), 0.0f, 1.0f };
+    D3D12_RECT sc{ static_cast<LONG>(x), static_cast<LONG>(y), static_cast<LONG>(x + w), static_cast<LONG>(y + h) };
     cl->RSSetViewports(1, &vp);
     cl->RSSetScissorRects(1, &sc);
 
     if (clearDepth)
     {
-        cl->ClearDepthStencilView(D.spotShadowDSV[lightIndex], D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 1, &sc);
-    }
-}
-
-void Renderer::BindPointShadowTarget(ID3D12GraphicsCommandList* cl, UINT cubeSlot, UINT face, bool clear, UINT res)
-{
-    auto& D = rtManager_.Deferred(currentFrameIndex_);
-    if (cubeSlot >= LightManager::kMaxShadowedPointLights)
-    {
-        cubeSlot = LightManager::kMaxShadowedPointLights - 1;
-    }
-    if (face >= 6) { face = 5; }
-    const UINT faceIndex = cubeSlot * 6u + face;
-
-    // Depth-cube: this cube face IS a depth slice — bind it as the DSV (no color RT),
-    // exactly like BindSpotShadowTarget binds a spot atlas slice.
-    cl->OMSetRenderTargets(0, nullptr, FALSE, &D.pointShadowDSV[faceIndex]);
-
-    // Plan S4: the light's own square, as BindSpotShadowTarget.
-    const UINT slice = std::max(D.pointShadowRes, 1u);
-    const UINT edge = (res == 0u) ? slice : std::min(res, slice);
-    D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(edge), static_cast<float>(edge), 0.0f, 1.0f };
-    D3D12_RECT sc{ 0, 0, static_cast<LONG>(edge), static_cast<LONG>(edge) };
-    cl->RSSetViewports(1, &vp);
-    cl->RSSetScissorRects(1, &sc);
-
-    if (clear)
-    {
-        cl->ClearDepthStencilView(D.pointShadowDSV[faceIndex], D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 1, &sc);
+        cl->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 1, &sc);
     }
 }
 

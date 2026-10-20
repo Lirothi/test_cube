@@ -135,16 +135,41 @@ inline bool g_localShadowFilterUe = true;
 // none at 32) -- a distant lamp's shadow thins out instead of switching off when it loses its slot. false = every
 // shadowed light at full strength (the slots are still ranked by that resolution): `--set shadow.localFadeUe:0`.
 inline bool g_localShadowFadeUe = true;
+// The peter-panning fix (2026-10-20, owner: "I see it"): the TEXEL bias (shaders/local_shadow_bias.hlsli
+// LocalShadowTexelOffset) -- our VSM local-light model on the atlases: the receiver pushed `g_localShadowNormalTexels`
+// shadow texels along its normal and `g_localShadowPushTexels` x slope (1 / NoL, 1..6) toward the light, no depth-pass
+// bias, no fraction-of-distance compare; the spot tent's ramp 2 texels instead of UE's (f - n) / 60 m. UE's projection
+// bias needs a distance-sized constant for grazing receivers and detaches every shadow from its caster's foot.
+// The normal push must cover the FILTER's reach, not one texel: a tap r texels off the centre meets a plane tilted by
+// theta r x tan(theta) texels deeper, the push buys n / cos(theta) -- n >= r. The spot's 6x6 tent reaches 3 texels, the
+// point's disc 1.25 + each tap's bilinear compare + the face's perspective about the same: 3. Measured on
+// data/levels/local_shadow_test.json, exposure pinned below the clip (a clipped white floor hides the acne -- wind_test's
+// did): acne on 0.3-1.8 % of the lit floor with 3.0 (UE's own bias 0.4-1.8 %, VSM's shapes), 36-54 % with 1.5, the foot
+// of every pillar touching like the VSM's where UE's leaves a gap. false = UE's / the old bias (shadow.localBiasUe).
+// `--set shadow.localBiasTexel:0|1`, `shadow.localNormalTexels`, `shadow.localPushTexels`.
+inline bool g_localShadowBiasTexel = true;
+inline float g_localShadowNormalTexels = 3.0f;
+inline float g_localShadowPushTexels = 0.5f;
+// The atlas modes' point-light cube faces are rendered this many texels wider each side (Scene.cpp, the face fov) and
+// sampled in their inner 90 degrees -- MIRRORS kPointShadowGuardTexels in shaders/local_shadow_filter.hlsli.
+constexpr float kPointShadowGuardTexels = 2.0f;
+// The texel bias is the ATLAS modes' -- VSM keeps its own (vsm::g_local*Texels) and the old per-light values.
+inline bool LocalShadowTexelBias() { return g_localShadowBiasTexel && !VsmActive(); }
 // Plan S4: UE r.Shadow.MaxResolution for the local lights (BaseScalability.ini: 1024 at High, 2048 at Epic). A spot's
 // shadow is its screen radius x 2.546 rounded DOWN to a power of two up to this; a point's cube face is the first of
-// max/2, /4, /8, /16 and 32 not above its radius x 1.273 (ShadowSetup.cpp:4301-4464, :771-797). The atlas slices are
-// this size (spot) and half of it (point faces), each light drawn into the top-left square of its own: resident
-// 8 x max^2 + 24 x (max/2)^2 R16, 112 MB at 2048, 28 MB at 1024. Reallocated by Scene::ReconcileShadowMode;
-// `--set shadow.localMaxRes:<n>`.
+// max/2, /4, /8, /16 and 32 not above its radius x 1.273 (ShadowSetup.cpp:4301-4464, :771-797). Plan S9: the atlas
+// pages are sized from it (a spot page max^2, a point page 1.5 max x max -- see g_localShadowMaxPages). Reallocated by
+// Scene::ReconcileShadowMode; `--set shadow.localMaxRes:<n>`.
 inline unsigned g_localShadowMaxRes = 2048u;
 constexpr unsigned kLocalShadowMaxResMin = 256u;
 constexpr unsigned kLocalShadowMaxResMax = 4096u;
 constexpr unsigned kLocalShadowMinRes = 32u; // UE r.Shadow.MinResolution
+// Plan S9: the atlas modes' local shadows live in PAGES -- spot pages of max^2, point pages of 1.5 max x max (one block
+// of the largest cube) -- that grow, as UE opens another atlas, up to this many per pool. UE has no cap (its atlases
+// come from the render-target pool); ours is the VRAM guard: at max 2048 a spot page is 8 MB and a point page 12 MB
+// (R16), so 4 + 4 = 80 MB at most. A frame that needs more halves every light a step (UE's VSM global LOD bias).
+// `--set shadow.localMaxPages:<n>`; grown (never shrunk below the need) in Scene::ReconcileShadowMode.
+inline unsigned g_localShadowMaxPages = 4u; // 1 .. render::kLocalShadowMaxPagesLimit
 
 // S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
 // 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the

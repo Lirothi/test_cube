@@ -428,6 +428,7 @@
     <ClCompile Include="sources/rendering/shadows/CascadeHzb.cpp" />
     <ClCompile Include="sources/rendering/shadows/VirtualShadowMap.cpp" />
     <ClCompile Include="sources/rendering/shadows/SdsmShadows.cpp" />
+    <ClCompile Include="sources/rendering/shadows/ShadowAtlasPacker.cpp" />
     <ClCompile Include="sources/text/FontAtlas.cpp" />
     <ClCompile Include="sources/text/FontGenerator.cpp" />
     <ClCompile Include="sources/text/FontManager.cpp" />
@@ -692,6 +693,7 @@
     <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h" />
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h" />
     <ClInclude Include="sources/rendering/shadows/SdsmShadows.h" />
+    <ClInclude Include="sources/rendering/shadows/ShadowAtlasPacker.h" />
     <ClInclude Include="sources/rendering/shadows/SdsmPartitions.h" />
     <ClInclude Include="sources/rendering/RenderLayers.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />

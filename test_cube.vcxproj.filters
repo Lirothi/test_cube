@@ -717,6 +717,9 @@
     <ClCompile Include="sources/rendering/shadows/SdsmShadows.cpp">
       <Filter>sources\rendering\shadows</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/shadows/ShadowAtlasPacker.cpp">
+      <Filter>sources\rendering\shadows</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -1404,6 +1407,9 @@
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/shadows/SdsmShadows.h">
+      <Filter>sources\rendering\shadows</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/shadows/ShadowAtlasPacker.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/shadows/SdsmPartitions.h">

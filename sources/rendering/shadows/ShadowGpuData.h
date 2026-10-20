@@ -65,6 +65,12 @@ public:
     // `frustums[i]` may be null (inactive view slot → reject-all sentinel so the cull emits
     // zero for it). `count` is the fixed view-slot count (stable view->slot mapping for the cull).
     void UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count);
+    // Local-light shadow plan S9: how many cull views this frame actually uses -- VSM's whole prefix
+    // (render::kVsmShadowViews) and, past it, up to the last occupied extra spot / point-face slot. The
+    // clear and the cull walk only these (each view costs its row of args plus one frustum test per
+    // caster); a slot past it is never drawn from. Clamped to [kVsmShadowViews, kMaxShadowViews].
+    void SetActiveViewCount(std::uint32_t views);
+    std::uint32_t ActiveViewCount() const { return activeViews_; }
 
     // Rung 0 / Step 4: record the GPU cull for this frame — a clear dispatch (init the per-
     // (view, mesh-group) indirect args) + a cull dispatch (frustum-test every caster into the
@@ -743,6 +749,7 @@ private:
     std::vector<std::uint32_t> cpuCasterMeta_;
     bool          forceContentRefresh_ = false; // editor rebuild changed material/geometry content
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
+    std::uint32_t activeViews_ = render::kVsmShadowViews; // S9: the views the clear / cull walk this frame
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 
     std::vector<const Mesh*> groupMesh_; // mesh-group id -> Mesh* (VB/IB for the indirect draws)

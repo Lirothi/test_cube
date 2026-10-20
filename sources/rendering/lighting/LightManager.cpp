@@ -7,6 +7,9 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/shadows/ShadowSettings.h" // plan S4: kLocalShadowMinRes
+#include "rendering/shadows/ShadowAtlasPacker.h" // plan S9
+
+#include <algorithm>
 
 LightManager::~LightManager()
 {
@@ -85,7 +88,7 @@ namespace
 }
 
 void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
-                                       std::uint32_t maxRes)
+                                       std::uint32_t maxRes, std::uint32_t maxCount)
 {
     CPU_SCOPE(ProfilerScopes::kSelectShadowedSpots);
 
@@ -101,6 +104,8 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     spotShadowSlot_.assign(spotLights_.size(), -1);
     spotShadowFade_.assign(spotLights_.size(), 1.0f);
     spotShadowRes_.assign(spotLights_.size(), maxRes);
+    spotShadowScore_.assign(spotLights_.size(), 0.0f);
+    spotShadowPlace_.assign(spotLights_.size(), ShadowAtlasPlacement{});
     shadowedSpotLightIndices_.clear();
 
     const size_t candidateCount = cachedSpotLightCount_;
@@ -152,11 +157,12 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
             continue; // UE: too small on screen to have a shadow
         }
         const float score = unclampedResolution * (wasShadowed[i] ? kShadowSlotHysteresis : 1.0f);
+        spotShadowScore_[i] = score; // S9: the atlas pack shrinks the lowest-ranked first
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 
-    // Select WHICH spots are shadowed by the resolution they want (most first).
-    const size_t shadowCount = std::min<size_t>(candidates.size(), kMaxShadowedSpotLights);
+    // Select WHICH spots are shadowed by the resolution they want (most first), up to the mode's cap (S9).
+    const size_t shadowCount = std::min<size_t>(candidates.size(), std::min<std::uint32_t>(maxCount, kMaxShadowedSpotLights));
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
         [](const Candidate& a, const Candidate& b)
         {
@@ -187,7 +193,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
 }
 
 void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
-                                        std::uint32_t maxRes)
+                                        std::uint32_t maxRes, std::uint32_t maxCount)
 {
     CPU_SCOPE(ProfilerScopes::kSelectShadowedPoints);
 
@@ -203,6 +209,8 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     pointShadowSlot_.assign(pointLights_.size(), -1);
     pointShadowFade_.assign(pointLights_.size(), 1.0f);
     pointShadowRes_.assign(pointLights_.size(), std::max(maxRes / 2u, render::kLocalShadowMinRes));
+    pointShadowScore_.assign(pointLights_.size(), 0.0f);
+    pointShadowPlace_.assign(pointLights_.size(), ShadowAtlasPlacement{});
     shadowedPointLightIndices_.clear();
 
     const size_t candidateCount = pointLights_.size();
@@ -238,12 +246,13 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
             continue; // UE: too small on screen to have a shadow
         }
         const float score = unclampedResolution * (wasShadowed[i] ? kShadowSlotHysteresis : 1.0f);
+        pointShadowScore_[i] = score; // S9, as the spots'
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 
     // Select WHICH points are shadowed by projected size, then assign slots in stable
-    // ascending-index order (see SelectShadowedSpots for why slot order must be stable).
-    const size_t shadowCount = std::min<size_t>(candidates.size(), kMaxShadowedPointLights);
+    // ascending-index order (see SelectShadowedSpots for why slot order must be stable). S9: the mode's cap.
+    const size_t shadowCount = std::min<size_t>(candidates.size(), std::min<std::uint32_t>(maxCount, kMaxShadowedPointLights));
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
         [](const Candidate& a, const Candidate& b)
         {
@@ -263,6 +272,102 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
         shadowedPointLightIndices_.push_back(lightIndex);
         pointShadowSlot_[lightIndex] = static_cast<int>(s);
     }
+}
+
+namespace
+{
+    // Plan S9: one pool of atlas pages. Packs the pool's shadowed lights at their UE sizes, reports how many pages
+    // that wants (up to maxPages), then makes it fit the RESIDENT pages: EVERY light that can still shrink is halved
+    // -- one step for all, as UE's VSM raises one global LOD bias when its page pool is short
+    // (VirtualShadowMapCacheManager.cpp:155-187), so the lights keep the proportions their screen sizes gave them --
+    // and when none can, the lowest-ranked is dropped (no shadow this frame). UE's classic path would open another
+    // atlas instead; ours grow at the next residency point. `shadowed` stays in ascending light order, so the slots
+    // it re-numbers keep the stable order SelectShadowed* gave them.
+    std::uint32_t PackShadowPool(std::vector<std::uint32_t>& shadowed, std::vector<int>& slots,
+                                 std::vector<std::uint32_t>& res, const std::vector<float>& score,
+                                 std::vector<LightManager::ShadowAtlasPlacement>& place, bool pointBlocks,
+                                 std::uint32_t pageWidth, std::uint32_t pageHeight, std::uint32_t residentPages,
+                                 std::uint32_t maxPages, std::uint32_t& shrunk, std::uint32_t& dropped)
+    {
+        std::vector<render::ShadowAtlasItem> items;
+        std::vector<render::ShadowAtlasSlot> placed;
+        const auto build = [&]()
+        {
+            items.clear();
+            for (const std::uint32_t light : shadowed)
+            {
+                const std::uint32_t r = res[light];
+                items.push_back(pointBlocks ? render::ShadowAtlasItem{ 3u * r, 2u * r, light }
+                                            : render::ShadowAtlasItem{ r, r, light });
+            }
+        };
+        build();
+        const std::uint32_t wanted = std::max(render::PackShadowAtlas(items, pageWidth, pageHeight, maxPages, placed), 1u);
+
+        std::vector<std::uint8_t> wasShrunk(res.size(), 0u);
+        for (std::uint32_t guard = 0; guard < 4096u; ++guard)
+        {
+            build();
+            render::PackShadowAtlas(items, pageWidth, pageHeight, residentPages, placed);
+            if (std::all_of(placed.begin(), placed.end(), [](const render::ShadowAtlasSlot& s) { return s.page >= 0; }))
+            {
+                break;
+            }
+            // One step down for every light that still can.
+            bool halved = false;
+            for (const std::uint32_t light : shadowed)
+            {
+                if (res[light] / 2u < render::kLocalShadowMinRes) { continue; }
+                res[light] /= 2u;
+                halved = true;
+                if (!wasShrunk[light]) { wasShrunk[light] = 1u; ++shrunk; }
+            }
+            if (halved) { continue; }
+            // Nothing left to halve: drop the lowest-ranked light.
+            std::uint32_t lowest = 0;
+            for (std::uint32_t k = 1; k < shadowed.size(); ++k)
+            {
+                if (score[shadowed[k]] <= score[shadowed[lowest]]) { lowest = k; }
+            }
+            slots[shadowed[lowest]] = -1;
+            shadowed.erase(shadowed.begin() + lowest);
+            ++dropped;
+        }
+        // A light without a place (only if the guard ran out) loses its slot rather than render nowhere.
+        std::vector<std::uint32_t> kept;
+        kept.reserve(shadowed.size());
+        for (std::uint32_t s = 0; s < shadowed.size(); ++s)
+        {
+            const std::uint32_t light = shadowed[s];
+            if (s < placed.size() && placed[s].page >= 0)
+            {
+                place[light] = LightManager::ShadowAtlasPlacement{ placed[s].page, placed[s].x, placed[s].y };
+                kept.push_back(light);
+            }
+            else
+            {
+                slots[light] = -1;
+                ++dropped;
+            }
+        }
+        shadowed.swap(kept);
+        for (std::uint32_t s = 0; s < shadowed.size(); ++s) { slots[shadowed[s]] = static_cast<int>(s); }
+        return wanted;
+    }
+}
+
+void LightManager::PackShadowAtlases(const ShadowAtlasPages& pages)
+{
+    atlasShrunk_ = 0u;
+    atlasDropped_ = 0u;
+    // Spots: a res x res square in a spot page. Points: the six faces as one 3f x 2f block in a point page, which is
+    // exactly one block of the largest face (3 * pointFaceMax by 2 * pointFaceMax).
+    wantedSpotPages_ = PackShadowPool(shadowedSpotLightIndices_, spotShadowSlot_, spotShadowRes_, spotShadowScore_,
+                                      spotShadowPlace_, false, pages.spotPageSize, pages.spotPageSize,
+                                      pages.spotPages, pages.maxPages, atlasShrunk_, atlasDropped_);
+    wantedPointPages_ = PackShadowPool(shadowedPointLightIndices_, pointShadowSlot_, pointShadowRes_, pointShadowScore_,
+                                       pointShadowPlace_, true, 3u * pages.pointFaceMax, 2u * pages.pointFaceMax,
+                                       pages.pointPages, pages.maxPages, atlasShrunk_, atlasDropped_);
 }
 
 void LightManager::ReleasePointLightBuffer(Renderer* renderer)

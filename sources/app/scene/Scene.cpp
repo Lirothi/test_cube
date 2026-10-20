@@ -2266,12 +2266,38 @@ void Scene::PrepareViews(Renderer* renderer)
         0.5f * static_cast<float>(renderer->GetRenderWidth()) * shadowSelectProj.m._11,
         0.5f * static_cast<float>(renderer->GetRenderHeight()) * shadowSelectProj.m._22);
     // Plan S4: the spot atlas slice is the largest a local shadow may be (ReconcileShadowMode keeps it the knob's).
-    const std::uint32_t localShadowMaxRes = std::max(renderer->GetDeferredForFrame().spotShadowRes, 1u);
-    lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes);
+    const auto& shadowTargets = renderer->GetDeferredForFrame();
+    const std::uint32_t localShadowMaxRes = std::max(shadowTargets.spotShadowRes, 1u);
+    // Plan S9: the atlas modes shadow up to 32 spots / 16 points; VSM keeps its fixed 8 + 4 local views.
+    const bool vsmLocal = render::VsmActive();
+    lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
+        vsmLocal ? LightManager::kVsmShadowedSpotLights : LightManager::kMaxShadowedSpotLights);
     // B2a: choose which point lights cast (cube) shadows this frame, same non-jittered
     // frustum. Drives Pass_PointLights' shadowParams.x; the cube views + render pass are
     // B2b, sampling is B3, so this is inert (no visual change) until those land.
-    lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes);
+    lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
+        vsmLocal ? LightManager::kVsmShadowedPointLights : LightManager::kMaxShadowedPointLights);
+    // Plan S9: place them in the resident atlas pages (shrinking / dropping the lowest-ranked if they do not fit); the
+    // pages it wants are grown at the next ReconcileShadowMode. VSM has no atlas.
+    if (!vsmLocal)
+    {
+        LightManager::ShadowAtlasPages pages;
+        pages.spotPages = std::max(shadowTargets.spotShadowPages, 1u);
+        pages.pointPages = std::max(shadowTargets.pointShadowPages, 1u);
+        pages.maxPages = std::clamp(render::g_localShadowMaxPages, 1u, render::kLocalShadowMaxPagesLimit);
+        pages.spotPageSize = localShadowMaxRes;
+        pages.pointFaceMax = std::max(shadowTargets.pointShadowRes, 1u);
+        lightManager_.PackShadowAtlases(pages);
+        const std::uint32_t shrunk = lightManager_.ShadowAtlasShrunk();
+        const std::uint32_t dropped = lightManager_.ShadowAtlasDropped();
+        if (shrunk != 0u || dropped != 0u)
+        {
+            LOG_INFO_ONCE_PER_MESSAGE(logging::LogCategory::RenderShadow,
+                "local shadow atlas full ({} spot / {} point pages resident): {} light(s) at a lower resolution, {} without a "
+                "shadow this frame; wants {} / {} pages", pages.spotPages, pages.pointPages, shrunk, dropped,
+                lightManager_.WantedSpotShadowPages(), lightManager_.WantedPointShadowPages());
+        }
+    }
     const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
     for (size_t s = 0; s < shadowedSpotCount; ++s)
@@ -2300,7 +2326,13 @@ void Scene::PrepareViews(Renderer* renderer)
         view.zFar = farPlane;
         view.hfov = 0.0f;
         view.shadowBias = float2(desc.shadowBias, desc.shadowSlopeBias); // local-light shadows S1
-        view.shadowRes = lightManager_.GetSpotShadowResolution(lightIndex); // S4: its square of the slice
+        view.shadowRes = lightManager_.GetSpotShadowResolution(lightIndex); // S4: its square
+        {
+            const LightManager::ShadowAtlasPlacement place = lightManager_.GetSpotShadowPlacement(lightIndex); // S9
+            view.shadowPage = static_cast<std::uint32_t>(std::max(place.page, 0));
+            view.shadowX = place.x;
+            view.shadowY = place.y;
+        }
         view.requiresDepthCheck = false;
     }
 
@@ -2308,7 +2340,7 @@ void Scene::PrepareViews(Renderer* renderer)
     // is the D3D cube-map convention (+X,-X,+Y,-Y,+Z,-Z) so a sample by direction
     // (P - lightPos) selects the matching slice (since plan S4 the shaders pick it themselves,
     // local_shadow_filter.hlsli PointShadowFace, by the same convention) (rendered into
-    // pointShadowViews_[slot*6 + face], matching BindPointShadowTarget's faceIndex). All
+    // pointShadowViews_[slot*6 + face], the view index Pass_PointShadows walks). All
     // faces share one 90° FOV perspective; only orientation differs.
     static const Math::float3 kCubeDir[6] = {
         { 1.0f, 0.0f, 0.0f }, { -1.0f, 0.0f, 0.0f }, { 0.0f,  1.0f, 0.0f },
@@ -2329,7 +2361,15 @@ void Scene::PrepareViews(Renderer* renderer)
         // the compare depth with this exact near/far (see PointShadowFactor).
         const float nearPlane = std::max(0.2f, desc.radius * 0.02f);
         const float farPlane = std::max(desc.radius, nearPlane + 0.1f);
-        const mat4 proj = mat4::PerspectiveFovLH(kHalfPi, 1.0f, nearPlane, farPlane);
+        // The atlas modes' faces carry a GUARD BAND of render::kPointShadowGuardTexels texels each side: a face 90 degrees
+        // plus that much, so a filter tap up to that far past the seam reads its own face's depth, in its own depth axis,
+        // instead of a clamped edge texel (which self-shadowed the floor along the seams once the texel bias stopped
+        // hiding it). The shaders map a direction into the inner 90 degrees (local_shadow_filter.hlsli). VSM renders
+        // these same views into its pages at exactly 90, so it keeps them.
+        const float faceRes = static_cast<float>(std::max(lightManager_.GetPointShadowResolution(lightIndex), 1u));
+        const float faceFov = vsmLocal ? kHalfPi
+                                       : 2.0f * std::atan(1.0f + 2.0f * render::kPointShadowGuardTexels / faceRes);
+        const mat4 proj = mat4::PerspectiveFovLH(faceFov, 1.0f, nearPlane, farPlane);
         for (int face = 0; face < 6; ++face)
         {
             SceneView& view = pointShadowViews_[s * 6 + static_cast<size_t>(face)];
@@ -2352,7 +2392,15 @@ void Scene::PrepareViews(Renderer* renderer)
             view.zNear = nearPlane;
             view.zFar = farPlane;
             view.hfov = 0.0f;
-            view.shadowRes = lightManager_.GetPointShadowResolution(lightIndex); // S4: its square of the face slice
+            view.shadowRes = lightManager_.GetPointShadowResolution(lightIndex); // S4: the face's square
+            {
+                // S9: the face's square inside the light's 3f x 2f block -- face k at (k % 3, k / 3) faces from its
+                // corner, the layout local_shadow_filter.hlsli PointShadowCubeUV reads.
+                const LightManager::ShadowAtlasPlacement place = lightManager_.GetPointShadowPlacement(lightIndex);
+                view.shadowPage = static_cast<std::uint32_t>(std::max(place.page, 0));
+                view.shadowX = place.x + static_cast<std::uint32_t>(face % 3) * view.shadowRes;
+                view.shadowY = place.y + static_cast<std::uint32_t>(face / 3) * view.shadowRes;
+            }
             view.requiresDepthCheck = false;
         }
     }
@@ -2360,8 +2408,8 @@ void Scene::PrepareViews(Renderer* renderer)
     prepareViewsSetupScope.reset();
 
     // main + shore + cascades + up to kMaxShadowedSpotLights spot views + up to
-    // 6*kMaxShadowedPointLights point cube-face views.
-    tc::inl_vector<SceneView*, 48> viewsToCull;
+    // 6*kMaxShadowedPointLights point cube-face views (plan S9: 32 + 96 in the atlas modes).
+    tc::inl_vector<SceneView*, 160> viewsToCull;
     auto enqueueView = [this, camMask, &viewsToCull](SceneView& view)
     {
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
@@ -2759,6 +2807,14 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     // Local-light shadow plan S4: the spot / point atlas slices follow render::g_localShadowMaxRes the same way.
     const unsigned wantLocalRes = RenderTargetManager::LocalShadowSliceRes(render::g_localShadowMaxRes);
     const bool localResOk = (wantLocalRes == renderer->LocalShadowMaxResolution());
+    // Plan S9: the local-shadow atlas pages -- grown to what the last pack wanted (LightManager::PackShadowAtlases), up
+    // to the knob; lowered only when the knob drops below what is built. VSM has no atlas to grow.
+    const unsigned pageCap = std::clamp(render::g_localShadowMaxPages, 1u, render::kLocalShadowMaxPagesLimit);
+    const unsigned haveSpotPages = renderer->LocalSpotShadowPages();
+    const unsigned havePointPages = renderer->LocalPointShadowPages();
+    const unsigned wantSpotPages = std::min(std::max(haveSpotPages, lightManager_.WantedSpotShadowPages()), pageCap);
+    const unsigned wantPointPages = std::min(std::max(havePointPages, lightManager_.WantedPointShadowPages()), pageCap);
+    const bool pagesOk = wantVsm || (wantSpotPages == haveSpotPages && wantPointPages == havePointPages);
     // S16: the EVSM moments atlas is the SAME kind of decision -- resident only while SDSM is the
     // mode AND EVSM is on, and sized to the atlas edge. It belongs here and NOWHERE ELSE, because
     // turning EVSM off FREES a texture: doing that from the per-frame update (where the toggle
@@ -2767,18 +2823,30 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     const bool wantMoments = wantSdsm && render::sdsm::g_evsm;
     const bool momentsOk = (wantMoments == sdsm_.MomentsReady()) &&
                            (!wantMoments || sdsm_.MomentsRes() == wantAtlasRes);
-    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk) { return; } // all in sync — the common per-frame path
+    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk && pagesOk) { return; } // all in sync — the common per-frame path
     // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
     renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
     if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
     if (!atlasOk) { renderer->SetLocalShadowResidency(wantAtlasFull); }
+    // Plan S9: one atlas page of each pool in MB (R16): a spot page res^2, a point page 3 x 2 faces of res / 2.
+    const auto pageMb = [](unsigned res, unsigned spotPages, unsigned pointPages)
+    {
+        const double spot = static_cast<double>(res) * res;
+        const double point = 6.0 * (res / 2u) * (res / 2u);
+        return (spot * spotPages + point * pointPages) * 2.0 / (1024.0 * 1024.0);
+    };
     if (!localResOk)
     {
         renderer->SetLocalShadowMaxResolution(wantLocalRes);
-        LOG_INFO(logging::LogCategory::RenderShadow, "local shadow max resolution -> {} (spot slices {}, point faces {}: {:.1f} MB, R16)",
-                 wantLocalRes, wantLocalRes, wantLocalRes / 2u,
-                 (static_cast<double>(LightManager::kMaxShadowedSpotLights) * wantLocalRes * wantLocalRes +
-                  6.0 * LightManager::kMaxShadowedPointLights * (wantLocalRes / 2u) * (wantLocalRes / 2u)) * 2.0 / (1024.0 * 1024.0));
+        LOG_INFO(logging::LogCategory::RenderShadow, "local shadow max resolution -> {} (spot pages {}^2, point pages {}x{}: {:.1f} MB, R16)",
+                 wantLocalRes, wantLocalRes, 3u * (wantLocalRes / 2u), wantLocalRes,
+                 pageMb(wantLocalRes, renderer->LocalSpotShadowPages(), renderer->LocalPointShadowPages()));
+    }
+    if (!pagesOk)
+    {
+        renderer->SetLocalShadowPages(wantSpotPages, wantPointPages);
+        LOG_INFO(logging::LogCategory::RenderShadow, "local shadow atlas pages -> {} spot + {} point (cap {}): {:.1f} MB, R16",
+                 wantSpotPages, wantPointPages, pageCap, pageMb(wantLocalRes, wantSpotPages, wantPointPages));
     }
     if (!atlasResOk)
     {
@@ -2962,13 +3030,15 @@ void Scene::Render(Renderer* renderer) {
         // render::kMaxShadowViews; keep it equal to the real cap sum so they can't drift.
         static_assert(kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots == render::kMaxShadowViews,
                       "render::kMaxShadowViews must equal the shadow-view slot layout");
-        // Direct constant base offsets (not a running index) so the array writes are provably
-        // in-bounds — [cascades | spots | point faces | clipmap]. The VSM setup's rung0View =
-        // view + kNumCascades relies on this exact ordering.
+        static_assert(kCascadeSlots == render::kShadowViewCascades && kClipmapSlots == render::kShadowViewClipmapLevels,
+                      "the cull layout's cascades / clipmap are VSM's");
+        // Local-light shadow plan S9: VSM's prefix [cascades | 8 spots | 24 point faces | clipmap] -- the VSM setup's
+        // rung0View = view + kNumCascades relies on it -- then the atlas modes' extra spots and faces; every slot index
+        // comes from render::ShadowView*Slot, never from a running count.
         // Occlusion plan S4: one more slot past the shadow views -- the CAMERA frustum, for the
         // registry's camera row (the indirect G-buffer). Never a shadow view: the shadow cull
         // loops kMaxShadowViews and the camera branch addresses its slot by index.
-        std::array<const Frustum*, kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots + 1> frustums{};
+        std::array<const Frustum*, render::kMaxShadowViews + 1> frustums{};
         // S15: in SDSM the four directional slots are written by Main_SdsmAnalyze from this frame's
         // depth, and Main_SdsmCull re-clears and re-fills their args rows. Uploading the Legacy
         // cascade frusta here would make the MAIN cull append every caster into rows that are
@@ -2982,23 +3052,39 @@ void Scene::Render(Renderer* renderer) {
         const size_t spotCount = lightManager_.GetShadowedSpotCount();
         for (size_t i = 0; i < kSpotSlots; ++i)
         {
-            frustums[kCascadeSlots + i] = (i < spotCount) ? &spotShadowViews_[i].frustum : nullptr;
+            frustums[render::ShadowViewSpotSlot(static_cast<unsigned>(i))] =
+                (i < spotCount) ? &spotShadowViews_[i].frustum : nullptr;
         }
         const size_t pointFaceCount = lightManager_.GetShadowedPointCount() * 6;
         for (size_t i = 0; i < kPointFaceSlots; ++i)
         {
-            frustums[kCascadeSlots + kSpotSlots + i] = (i < pointFaceCount) ? &pointShadowViews_[i].frustum : nullptr;
+            frustums[render::ShadowViewPointFaceSlot(static_cast<unsigned>(i))] =
+                (i < pointFaceCount) ? &pointShadowViews_[i].frustum : nullptr;
         }
         // Step 24e: directional clipmap levels — culled ONLY in VSM mode (null = reject-all in Legacy,
         // so the cull emits zero for them and the Legacy atlas path is untouched).
         for (size_t i = 0; i < kClipmapSlots; ++i)
         {
-            frustums[kCascadeSlots + kSpotSlots + kPointFaceSlots + i] =
+            frustums[render::ShadowViewClipmapSlot(static_cast<unsigned>(i))] =
                 render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
         // S4: the camera, this frame's (PrepareViews above built it).
         frustums[render::kMaxShadowViews] = &camera_.GetView().frustum;
         shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size());
+        // Plan S9: the cull walks VSM's prefix and, past it, only up to the last occupied extra slot.
+        {
+            unsigned activeViews = render::kVsmShadowViews;
+            if (spotCount > LightManager::kVsmShadowedSpotLights)
+            {
+                activeViews = std::max(activeViews, render::ShadowViewSpotSlot(static_cast<unsigned>(spotCount) - 1u) + 1u);
+            }
+            if (pointFaceCount > 6u * LightManager::kVsmShadowedPointLights)
+            {
+                activeViews = std::max(activeViews,
+                                       render::ShadowViewPointFaceSlot(static_cast<unsigned>(pointFaceCount) - 1u) + 1u);
+            }
+            shadowGpu_.SetActiveViewCount(activeViews);
+        }
 
         // Occlusion plan S5b: this frame's cascade light matrices for the light-space HZB cull
         // (last frame's become `prev`), and whether the cull should test at all: the knob, the
