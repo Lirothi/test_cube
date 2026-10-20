@@ -140,6 +140,15 @@ struct VolumetricCloudSettings
     // Stands in for the light the bright cloud sides/undersides add under broken cloud (Mobley: the
     // diffuse part stays 30-60 % of the clear-sky total), which our environment cube does not carry.
     float oceanBodyShadow = 0.35f;
+    // Ours: the cloud shadow on SURFACES (the ground, the water -- the volumetric fog keeps all of it) fades out as
+    // the light it is cast from goes down to the horizon: full from this elevation (degrees), none below 1. A cloud
+    // 1.5 km up throws its shadow h / tan(e) away, and that moves h / sin^2(e) per radian of the light: at 2 degrees
+    // ~1 km for each 0.05-degree step of the light (the map is re-traced whole at every step), 120 m at 6, 43 m at
+    // 10. On wind_test (a day of 2 minutes) the moon's glitter path under it blinked shot to shot at dawn and at
+    // moonrise, the light 1.4-3.4 degrees up: the path's flicker energy (mean |second difference|) 0.93-1.53 %
+    // with no fade, 0.29-0.42 % at 6 degrees, 0.24-0.32 % with no cloud shadow at all (owner, 2026-10-20); more
+    // horizon samples did not help. UE has no such fade. 0 = off, the shadow at any height.
+    float shadowHorizonFadeDeg = 6.0f;
     float shadowSnapKm = 2.0f;         // UE ShadowMap.SnapLength
     float shadowDepthBiasKm = 0.0f;    // UE CloudShadowDepthBias
     std::uint32_t shadowMapSampleCount = 16u; // UE CloudShadowRaySampleBaseCount 16 (x horizon factor)

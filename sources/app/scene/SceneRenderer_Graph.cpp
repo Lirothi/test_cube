@@ -2054,7 +2054,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             {
                 p.Use(volumetricCloud_.ShadowResource(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
                 frame_->ocean->SetCloudShadow(volumetricCloud_.ShadowViewProj(),
-                    float4(1.0f, volumetricCloud_.ShadowFarDepthKm(),
+                    float4(volumetricCloud_.ShadowSurfaceStrength(), volumetricCloud_.ShadowFarDepthKm(),
                            std::clamp(frame_->settings.volumetricCloud.oceanBodyShadow, 0.0f, 1.0f), 0.0f),
                     volumetricCloud_.ShadowSrv());
             }

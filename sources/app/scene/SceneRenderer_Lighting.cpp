@@ -434,7 +434,8 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     if (volumetricCloud_.ShadowBuilt())
     {
         constants.cloudShadowViewProj = volumetricCloud_.ShadowViewProj();
-        constants.cloudShadowParams = float4(1.0f, volumetricCloud_.ShadowFarDepthKm(), 0.0f, 0.0f);
+        // z: how much of it the SURFACES take (ShadowSurfaceStrength, 0 toward the horizon); the fog keeps all of it.
+        constants.cloudShadowParams = float4(1.0f, volumetricCloud_.ShadowFarDepthKm(), volumetricCloud_.ShadowSurfaceStrength(), 0.0f);
     }
     constants.smrtScreenRayLength = vsm::g_smrtScreenRayLength;
     constants.smrtScreenRaySamples = vsm::g_smrtScreenRaySamples;

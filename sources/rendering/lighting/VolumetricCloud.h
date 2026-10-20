@@ -131,6 +131,10 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE ShadowSrv() const { return shadowFilteredSrv_; }
     const Math::mat4& ShadowViewProj() const { return shadowViewProj_; }
     float ShadowFarDepthKm() const { return shadowFarKm_; }
+    // How much of the cloud shadow surfaces take this frame (VolumetricCloudSettings::shadowHorizonFadeDeg): 1 with
+    // the shadow's light high, fading to 0 as it reaches the horizon. Lighting reads it as cloudShadowParams.z (the
+    // fog keeps the whole shadow), the ocean as its .x.
+    float ShadowSurfaceStrength() const { return shadowSurfaceStrength_; }
     unsigned NoiseRevision() const { return noiseBuilds_; }
 
 private:
@@ -209,6 +213,7 @@ private:
     bool shadowBuilt_ = false; // reset/committed by each frame's serial builder
     Math::mat4 shadowViewProj_{};
     float shadowFarKm_ = 1.0f;
+    float shadowSurfaceStrength_ = 1.0f;
     // Time slicing (render::g_cloudShadowUpdateFrames): the raw map persists across frames, and
     // this is the key it was traced under. Anything in it changing forces a full trace; so does a
     // frame that built no map (the content is then of unknown age). Committed in BuildShadow.

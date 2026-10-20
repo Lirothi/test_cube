@@ -625,7 +625,14 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                 // From the moon's disc on the horizon up to a few degrees, as the sun's from its own.
                 const float moonElevationDeg = std::asin(std::clamp(toSun.y, -1.0f, 1.0f)) * 57.2957795f;
                 const float moonT = std::clamp((moonElevationDeg + 0.27f) / 3.0f, 0.0f, 1.0f);
-                decisions_.lightShaftFade = moonT * moonT * (3.0f - 2.0f * moonT);
+                // ...AND IN FROM ZERO after the sun's are out, over the next 3 degrees of the SUN's descent (full
+                // at -9, where the twilight takes the sun out of the sky), out the same way before the sun's come
+                // back at dawn. One source at a time, cross-faded: the moon's shafts used to start at full the
+                // frame the sun's reached 0 -- a moon already 3 degrees up popped the frame +16..32 % on the
+                // ground of a moonward view (owner, 2026-10-20: "a flicker on the water near the bodies when
+                // dusk turns into night"; measured on wind_test, the pop gone with the moon's shafts off).
+                const float inT = std::clamp((-6.0f - elevationDeg) / 3.0f, 0.0f, 1.0f);
+                decisions_.lightShaftFade = moonT * moonT * (3.0f - 2.0f * moonT) * inT * inT * (3.0f - 2.0f * inT);
                 decisions_.lightShaftFromMoon = true;
             }
             const float4 clip = frame.camera->GetViewProjMatrixNoJitter().Transform(float4(toSun.x, toSun.y, toSun.z, 0.0f));

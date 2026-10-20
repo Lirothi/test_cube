@@ -75,6 +75,7 @@ inline void ApplyOverrides(const nlohmann::json& j, VolumetricCloudSettings& s)
     s.shadowExtentKm = std::clamp(j.value("shadowExtentKm", s.shadowExtentKm), 1.0f, 500.0f);
     s.shadowStrength = std::clamp(j.value("shadowStrength", s.shadowStrength), 0.0f, 1.0f);
     s.oceanBodyShadow = std::clamp(j.value("oceanBodyShadow", s.oceanBodyShadow), 0.0f, 1.0f);
+    s.shadowHorizonFadeDeg = std::clamp(j.value("shadowHorizonFadeDeg", s.shadowHorizonFadeDeg), 0.0f, 45.0f);
     s.shadowSnapKm = std::clamp(j.value("shadowSnapKm", s.shadowSnapKm), 0.01f, 100.0f);
     s.shadowDepthBiasKm = std::clamp(j.value("shadowDepthBiasKm", s.shadowDepthBiasKm), -5.0f, 5.0f);
     s.shadowMapSampleCount = std::clamp(j.value("shadowMapSampleCount", s.shadowMapSampleCount), 4u, 128u);
@@ -141,6 +142,7 @@ inline nlohmann::json ToJson(const VolumetricCloudSettings& s)
     j["shadowExtentKm"] = s.shadowExtentKm;
     j["shadowStrength"] = s.shadowStrength;
     j["oceanBodyShadow"] = s.oceanBodyShadow;
+    j["shadowHorizonFadeDeg"] = s.shadowHorizonFadeDeg;
     j["shadowSnapKm"] = s.shadowSnapKm;
     j["shadowDepthBiasKm"] = s.shadowDepthBiasKm;
     j["shadowMapSampleCount"] = s.shadowMapSampleCount;

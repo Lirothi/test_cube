@@ -134,7 +134,9 @@ cbuffer PerFrame : register(b0)
     // radiance back (compose, SSR, the RT resolves) divide it out in fp32.
     float lightPreExposure;
     // Plan C3: the cloud shadow map (cloud_shadow_common.hlsli), multiplied into the sun's
-    // visibility wherever it is sampled. cloudShadowParams.x 0 = no map this frame; y = far depth km.
+    // visibility wherever it is sampled. cloudShadowParams.x 0 = no map this frame; y = far depth km;
+    // z = the surfaces' share (lighting_cs; 0 as the light nears the horizon, where the map flickers --
+    // VolumetricCloudSettings::shadowHorizonFadeDeg). The fog takes the whole shadow.
     float4x4 cloudShadowViewProj;
     float4 cloudShadowParams;
     // S15: active SDSM partitions this frame, 0 = not SDSM mode. The one gate on reading the

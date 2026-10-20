@@ -15,6 +15,14 @@ class Renderer;
 template <size_t MaxPasses> class RenderGraph;
 struct RenderGraphPassContext;
 
+namespace render
+{
+// Time-of-day P1: the environment capture and the distant light keep their last build while the moving bodies
+// and their light stay within a tolerance of it (SkyAtmosphere.cpp, NearlySameView). false = the exact keys
+// of before -- every change rebuilds; the A/B arm (`--set=sky.keyTolerance`).
+inline bool g_skyKeyTolerance = true;
+}
+
 // Plan C4: something composited INTO the sky's radiance cube between its capture and its probe
 // filter -- the volumetric clouds, in UE's real-time sky light capture role. Its owner fills this
 // per frame; the environment rebuilds when the sky's own key OR this says so, runs the material

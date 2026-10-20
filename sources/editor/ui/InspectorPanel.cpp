@@ -2898,6 +2898,12 @@ namespace
                           "always lose the sun. 0 = the water's own light ignores the cloud, 1 = it darkens "
                           "with the sun like the land. Under broken cloud the bright cloud sides keep the "
                           "sea lit far more than the shadow map alone says.");
+            dragF("Shadow Horizon Fade (deg)", "shadowHorizonFadeDeg", 6.0f, 0.1f, 0.0f, 45.0f, "%.1f");
+            InspectorHelp("The cloud shadow on the ground and the water fades out as the sun (or the moon) goes "
+                          "down: full from this height, none below 1 degree (the volumetric fog keeps all of it). "
+                          "A light at the horizon throws a cloud's shadow tens of km, and every small turn of it "
+                          "moves the shadow by up to a kilometre: under it the glitter path flickered. "
+                          "0 = the shadow at any height (UE).");
             dragF("Shadow Snap (km)", "shadowSnapKm", 2.0f, 0.1f, 0.01f, 100.0f, "%.2f");
             InspectorHelp("UE ShadowMap.SnapLength: the map's centre moves in steps of this, so the "
                           "shadow does not shimmer as the camera walks.");

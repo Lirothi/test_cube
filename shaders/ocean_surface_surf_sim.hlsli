@@ -99,7 +99,7 @@ cbuffer OceanCB : register(b0)
     // Plan C3: the cloud shadow map's projection and (on, far depth km, 0, 0) -- the SAME numbers the
     // deferred lighting and the fog get (SceneRenderer sets them from the frame's VolumetricCloud).
     float4x4 cloudShadowViewProj;
-    float4 cloudShadowParams;          // x: on, y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
+    float4 cloudShadowParams;          // x: on, as the share by the light's height (0 = off), y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
     float4 sunShapeParams;             // x: the light's angular RADIUS (rad, UE's half apex) for the sphere-light glint (OceanSunSpecular), y: its soft radius (UE SoftSourceRadius), zw: reserved
 };
 

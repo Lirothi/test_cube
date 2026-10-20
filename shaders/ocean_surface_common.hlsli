@@ -24,8 +24,11 @@ Texture2D<float4> CloudShadowMap : register(t21); // plan C3: the cloud shadow m
 // sky irradiance ("дико тёмные").
 float CloudSunVisibility(float3 worldPos)
 {
+    // x is also the share by the light's height (VolumetricCloud::ShadowSurfaceStrength): at grazing light
+    // the map flickers, and the moon's or sun's glitter path under it blinked at dusk and dawn.
     if (cloudShadowParams.x == 0.0f) { return 1.0f; }
-    return CloudShadowTransmittance(worldPos, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, LinearClampSampler);
+    return lerp(1.0f, CloudShadowTransmittance(worldPos, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, LinearClampSampler),
+                saturate(cloudShadowParams.x));
 }
 
 // THE WATER'S G-BUFFER LAYER (docs/ocean_gbuffer_ssr_unification_plan.md S1/S4, UE SingleLayerWater):

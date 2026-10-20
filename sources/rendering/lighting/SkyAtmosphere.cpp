@@ -47,6 +47,7 @@ bool SameDirection(const float a[4], const float b[4])
 
 bool NearlySameView(const SkyViewFrameData& now, const SkyViewFrameData& key)
 {
+    if (!render::g_skyKeyTolerance) return std::memcmp(&now, &key, sizeof(now)) == 0;
     for (int c = 0; c < 3; ++c)
     {
         const float total = std::max(std::fabs(now.illuminance[c]) + std::fabs(now.light1Illuminance[c]),
@@ -72,7 +73,8 @@ bool NearlySameView(const SkyViewFrameData& now, const SkyViewFrameData& key)
 bool NearlySameNight(const NightSkyFrameData& now, const NightSkyFrameData& key)
 {
     // Not drawn (all zero by day, row0.w = 0): exactly, or a zero row would read as a turn every frame.
-    if (now.row0[3] == 0.0f || key.row0[3] == 0.0f) return std::memcmp(&now, &key, sizeof(now)) == 0;
+    if (!render::g_skyKeyTolerance || now.row0[3] == 0.0f || key.row0[3] == 0.0f)
+        return std::memcmp(&now, &key, sizeof(now)) == 0;
     if (!SameDirection(now.row0, key.row0) || !SameDirection(now.row1, key.row1) || !SameDirection(now.row2, key.row2))
         return false;
     NightSkyFrameData rest = now;

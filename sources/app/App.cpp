@@ -6,6 +6,7 @@
 #include "core/diagnostics/BootProfile.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "rendering/lighting/SkyAtmosphere.h" // render::g_skyKeyTolerance (--set sky.keyTolerance)
 #include "core/logging/Log.h"
 #include <algorithm>
 #include <cassert>
@@ -809,6 +810,7 @@ namespace
                 { "tracingMaxDistanceKm", &c.tracingMaxDistanceKm, 1.0f, 1000.0f },
                 { "historyWeight", &c.historyWeight, 0.0f, 0.99f }, { "shadowExtentKm", &c.shadowExtentKm, 1.0f, 500.0f },
                 { "shadowStrength", &c.shadowStrength, 0.0f, 1.0f }, { "oceanBodyShadow", &c.oceanBodyShadow, 0.0f, 1.0f }, { "shadowSnapKm", &c.shadowSnapKm, 0.01f, 100.0f },
+                { "shadowHorizonFadeDeg", &c.shadowHorizonFadeDeg, 0.0f, 45.0f },
                 { "shadowDepthBiasKm", &c.shadowDepthBiasKm, -5.0f, 5.0f },
             };
             for (const FloatKnob& k : knobs)
@@ -904,6 +906,8 @@ namespace
         if (setting == "sky.aerialPerspective") { scene.SkyAtmosphereRef().aerialPerspective = value != 0.0f; return true; }
         if (setting == "sky.aerialDebugView") { scene.SkyAtmosphereRef().aerialDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; }
         if (setting == "sky.luminanceScale") { scene.SkyAtmosphereRef().luminanceScale = std::clamp(value, 0.0f, 10.0f); return true; }
+        // P1's A/B arm: 0 = the capture and the distant light rebuild on every change of the sky (exact keys).
+        if (setting == "sky.keyTolerance") { render::g_skyKeyTolerance = value != 0.0f; return true; }
         // The sun's half-apex angle in radians (the disc and the specular floor), the level sun's property.
         if (setting == "sun.angularSize") { scene.SunLightRef().SetSunHalfApexRadians(std::clamp(value, 0.0f, 0.25f)); return true; }
         // UE's LightSourceSoftAngle of the sun, degrees (apex): softens the specular glint's edge.

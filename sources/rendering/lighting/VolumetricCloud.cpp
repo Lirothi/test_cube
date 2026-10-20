@@ -744,9 +744,23 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     if (!Ready() || !in.settings || !in.settings->shadowMap || !noiseReady_)
     {
         shadowHistoryValid_ = false;
+        shadowSurfaceStrength_ = 1.0f;
         return kNone;
     }
     VolumetricCloudConstants constants = MakeConstants(in);
+    // The surfaces' share of the shadow by its light's height (VolumetricCloudSettings::shadowHorizonFadeDeg):
+    // none below 1 degree, smoothstep to full at the fade height. shadowSun is the unit direction TO the light.
+    {
+        const float fadeDeg = in.settings->shadowHorizonFadeDeg;
+        const float elevationDeg = std::asin(std::clamp(constants.shadowSun[1], -1.0f, 1.0f)) * 57.2957795f;
+        float strength = 1.0f;
+        if (fadeDeg > 1.0f)
+        {
+            const float t = std::clamp((elevationDeg - 1.0f) / (fadeDeg - 1.0f), 0.0f, 1.0f);
+            strength = t * t * (3.0f - 2.0f * t);
+        }
+        shadowSurfaceStrength_ = strength;
+    }
 
     // TIME SLICING (render::g_cloudShadowUpdateFrames; the rationale is at the switch). The raw map
     // persists, so a partial trace is only valid while everything the whole map was traced under is

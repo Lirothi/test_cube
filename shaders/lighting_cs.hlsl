@@ -248,11 +248,13 @@ CausticsParams LoadCausticsParams()
 }
 
 // Plan C3: the cloud's shadow on the sun, from the cloud shadow map (cloud_shadow_common.hlsli).
-// 1 when the level has no clouds or the map was not built this frame.
+// 1 when the level has no clouds or the map was not built this frame; faded out by the light's
+// height (cloudShadowParams.z, the surfaces' share).
 float CloudSunVisibility(float3 P)
 {
-    if (cloudShadowParams.x == 0.0f) { return 1.0f; }
-    return CloudShadowTransmittance(P, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, gSmpLinearClamp);
+    if (cloudShadowParams.x == 0.0f || cloudShadowParams.z == 0.0f) { return 1.0f; }
+    return lerp(1.0f, CloudShadowTransmittance(P, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, gSmpLinearClamp),
+                saturate(cloudShadowParams.z));
 }
 
 #define LIGHTING_RS \
