@@ -19,6 +19,7 @@
 
 class Camera;
 class DirectionalLight;
+namespace render { class LocalShadowCache; }
 class OceanRenderable;
 class RenderableObjectBase;
 class Skybox;
@@ -774,6 +775,7 @@ struct SceneFrameData
     // the developer window edits, so a slider move reaches the shader the very next frame.
     const CascadeShadowConfig* cascadeConfig = nullptr;
     ShadowGpuData* shadowGpu = nullptr; // Rung 0: GPU-driven shadow cull inputs/outputs
+    render::LocalShadowCache* localShadowCache = nullptr; // local-light plan S7: the atlas lights' static-caster cache
     // Occlusion plan S4: this frame draws the registry's eligible objects through the indirect
     // G-buffer pass (Scene decided before the camera prepare; the CPU buckets hold the rest).
     bool gbufferIndirect = false;

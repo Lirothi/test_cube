@@ -115,6 +115,7 @@ const Profiler::ScopeNameKey kPassBloomConv = Profiler::RegisterTraceLiteral(L"P
 const Profiler::ScopeNameKey kPassLighting = Profiler::RegisterTraceLiteral(L"Pass_Lighting");
 const Profiler::ScopeNameKey kPassSpotShadow = Profiler::RegisterTraceLiteral(L"Pass_SpotShadows");
 const Profiler::ScopeNameKey kPassPointShadow = Profiler::RegisterTraceLiteral(L"Pass_PointShadows");
+const Profiler::ScopeNameKey kPassLocalShadowCache = Profiler::RegisterTraceLiteral(L"Pass_LocalShadowCache");
 const Profiler::ScopeNameKey kSpotShadowPerLight = Profiler::RegisterTraceLiteral(L"SpotShadow.PerLight");
 const Profiler::ScopeNameKey kPassSpotLights = Profiler::RegisterTraceLiteral(L"Pass_SpotLights");
 const Profiler::ScopeNameKey kPassPointLights = Profiler::RegisterTraceLiteral(L"Pass_PointLights");

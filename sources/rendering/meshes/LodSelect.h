@@ -111,6 +111,9 @@ inline unsigned int SelectChunkLodTier(float distMeters, unsigned int currentTie
 // receiver, coarser only where the view's tier curve already coarsens (which distance hides).
 // Keep in sync with the decode in vsm_page_scatter_cs.hlsl.
 inline constexpr unsigned int kCasterLodExactBit = 0x80u;
+// Local-light shadow plan S7: set on the UPLOADED CasterLod only (ShadowGpuData::UploadCasterLods) -- the caster is
+// movable for the local shadow cache. Every reader masks the LOD with kCasterLodMask; shadow_cull_cs.hlsl reads this.
+inline constexpr unsigned int kCasterLocalDynamicBit = 0x100u;
 inline constexpr unsigned int kCasterLodMask = 0x0Fu;
 
 // The LOD a draw of `selectedTier` will ACTUALLY use once the two global debug overrides are

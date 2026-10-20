@@ -2035,6 +2035,7 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.nightSky.timeSeconds = windState_.time;
     frameData_.cascadeConfig = &cascadeConfig_;
     frameData_.shadowGpu = &shadowGpu_;
+    frameData_.localShadowCache = &localShadowCache_;
     frameData_.vsm = &vsm_;
     frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
     frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
@@ -2402,6 +2403,56 @@ void Scene::PrepareViews(Renderer* renderer)
                 view.shadowY = place.y + static_cast<std::uint32_t>(face / 3) * view.shadowRes;
             }
             view.requiresDepthCheck = false;
+        }
+    }
+
+    // Local-light plan S7: every shadowed view asks the cache for its static casters -- a hit (copy them in, draw the
+    // movables), a miss (the cache pass renders them into the pool first) or uncached (no room: draw all, as before).
+    // Atlas modes with S6a's compaction only; an occluded light draws nothing this frame and is not asked (its empty
+    // static rows would be cached as its picture). The cull decides later whether this frame really splits the rows
+    // (not on its validation frame); the passes and the cache pass's commit read that decision.
+    {
+        // Without a pool yet every request is uncached and asks for one (grown at the next reconcile).
+        const bool cacheOn = !vsmLocal && render::g_localShadowCache && render::g_localShadowCompact &&
+                             shadowGpu_.MegaReady();
+        localShadowCache_.BeginFrame(renderer ? renderer->GetTotalFrameNumber() : 0ull, shadowGpu_.LocalStaticVersion());
+        const auto request = [this](SceneView& view, std::uint32_t id, bool occluded)
+        {
+            view.cacheMode = 0;
+            view.cachePage = -1;
+            if (occluded) { return; }
+            render::LocalShadowCache::Key key{};
+            key.id = id;
+            std::memcpy(key.viewProj.data(), &view.view.m, 16 * sizeof(float));
+            std::memcpy(key.viewProj.data() + 16, &view.proj.m, 16 * sizeof(float));
+            key.res = view.shadowRes;
+            render::LocalShadowCache::Rect rect{};
+            view.cacheMode = static_cast<std::uint8_t>(localShadowCache_.Request(key, rect));
+            view.cachePage = rect.page;
+            view.cacheX = rect.x;
+            view.cacheY = rect.y;
+        };
+        for (size_t s = 0; s < shadowedSpotCount; ++s)
+        {
+            SceneView& view = spotShadowViews_[s];
+            const size_t lightIndex = lightManager_.GetShadowedSpotLightIndex(s);
+            const bool occluded = lightIndex < spotLightOccluded_.size() && spotLightOccluded_[lightIndex];
+            if (cacheOn) { request(view, render::LocalShadowCache::SpotId(static_cast<std::uint32_t>(lightIndex)), occluded); }
+            else { view.cacheMode = 0; view.cachePage = -1; }
+        }
+        for (size_t s = 0; s < shadowedPointCount; ++s)
+        {
+            const size_t lightIndex = lightManager_.GetShadowedPointLightIndex(s);
+            const bool occluded = lightIndex < pointLightOccluded_.size() && pointLightOccluded_[lightIndex];
+            for (std::uint32_t face = 0; face < 6u; ++face)
+            {
+                SceneView& view = pointShadowViews_[s * 6 + face];
+                if (cacheOn)
+                {
+                    request(view, render::LocalShadowCache::PointId(static_cast<std::uint32_t>(lightIndex), face), occluded);
+                }
+                else { view.cacheMode = 0; view.cachePage = -1; }
+            }
         }
     }
 
@@ -2823,7 +2874,15 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     const bool wantMoments = wantSdsm && render::sdsm::g_evsm;
     const bool momentsOk = (wantMoments == sdsm_.MomentsReady()) &&
                            (!wantMoments || sdsm_.MomentsRes() == wantAtlasRes);
-    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk && pagesOk) { return; } // all in sync — the common per-frame path
+    // Plan S7: the local shadow cache's pool -- grown to what the cache asked for (LocalShadowCache::WantedPages), up to
+    // its knob, in pages of the spot page's size; freed with the cache off and in VSM (no atlas lights to cache).
+    const bool wantCache = !wantVsm && render::g_localShadowCache && render::g_localShadowCompact;
+    const unsigned cacheCap = std::clamp(render::g_localShadowCacheMaxPages, 1u, render::kLocalShadowCacheMaxPagesLimit);
+    const unsigned haveCachePages = localShadowCache_.ResidentPages();
+    const unsigned wantCachePages = wantCache ? std::min(std::max(haveCachePages, localShadowCache_.WantedPages()), cacheCap) : 0u;
+    const bool cacheOk = wantCachePages == haveCachePages &&
+                         (wantCachePages == 0u || localShadowCache_.PageSize() == wantLocalRes);
+    if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk && pagesOk && cacheOk) { return; } // all in sync — the common per-frame path
     // Reconciled independently so a resize (which rebuilds the atlases full-res) also self-corrects.
     renderer->WaitForPreviousFrame(); // GPU idle before freeing/allocating shadow resources
     if (!vsmOk) { if (wantVsm) { vsm_.EnsureResources(renderer); } else { vsm_.ReleaseResources(); } }
@@ -2841,6 +2900,10 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
         LOG_INFO(logging::LogCategory::RenderShadow, "local shadow max resolution -> {} (spot pages {}^2, point pages {}x{}: {:.1f} MB, R16)",
                  wantLocalRes, wantLocalRes, 3u * (wantLocalRes / 2u), wantLocalRes,
                  pageMb(wantLocalRes, renderer->LocalSpotShadowPages(), renderer->LocalPointShadowPages()));
+    }
+    if (!cacheOk) // S7 (the GPU is idle here, the rule for freeing anything a frame in flight may still read)
+    {
+        localShadowCache_.EnsurePool(renderer->GetDevice(), renderer->Declarations(), wantLocalRes, wantCachePages);
     }
     if (!pagesOk)
     {

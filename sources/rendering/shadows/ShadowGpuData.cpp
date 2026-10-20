@@ -626,6 +626,40 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
     if (std::uint8_t* dst = casterLodBuf_.Region(f))
     {
         std::memcpy(dst, casterLod_.data(), casterLod_.size() * sizeof(std::uint32_t));
+        // Local-light plan S7: bit kCasterLocalDynamicBit of the UPLOADED copy (never casterLod_: its compare against
+        // last frame is the LOD-change signal that re-renders VSM) = movable for the local shadow cache -- GI, an
+        // IsDynamicCaster object, one that moved within kFrameCount + 1 frames (pending_), one that sways in the wind
+        // (UE: Movable, or a WPO material with r.Shadow.CacheWPOPrimitives 0). Every caster that changes side changes
+        // the static set, so the cached pictures go stale: a move invalidates on its first frame (the old position is
+        // baked in) and again when it settles (it has to be baked in at the new one).
+        auto* lods = reinterpret_cast<std::uint32_t*>(dst);
+        const std::uint32_t n = static_cast<std::uint32_t>(casterLod_.size());
+        if (localDynamicPrev_.size() != n) { localDynamicPrev_.assign(n, 0u); ++localStaticVersion_; }
+        bool changed = false;
+        std::uint32_t movable = 0, gi = 0, flagged = 0, moved = 0, windy = 0;
+        for (std::uint32_t i = 0; i < n; ++i)
+        {
+            const bool isGi = i >= staticCount_;
+            const bool isFlagged = i < cpuCasterMeta_.size() && (cpuCasterMeta_[i] & 1u) != 0u;
+            const bool isMoved = i < pending_.size() && pending_[i] > 0;
+            const bool isWindy = !render::g_localShadowCacheWind && i < casterWindy_.size() && casterWindy_[i] != 0u;
+            const bool dyn = isGi || isFlagged || isMoved || isWindy;
+            if (dyn) { lods[i] |= render::kCasterLocalDynamicBit; }
+            const std::uint8_t d = dyn ? 1u : 0u;
+            if (localDynamicPrev_[i] != d) { localDynamicPrev_[i] = d; changed = true; }
+            movable += d;
+            gi += isGi ? 1u : 0u;
+            flagged += isFlagged ? 1u : 0u;
+            moved += isMoved ? 1u : 0u;
+            windy += isWindy ? 1u : 0u;
+        }
+        if (changed)
+        {
+            ++localStaticVersion_;
+            LOG_DEBUG_ONCE_PER_MESSAGE(logging::LogCategory::RenderShadow,
+                "local shadow cache: {} of {} casters movable (GI {}, IsDynamicCaster {}, moved {}, wind {})",
+                movable, n, gi, flagged, moved, windy);
+        }
     }
     // S4: the camera flags + crossfade tables, same ring discipline (rewritten every frame).
     if (!casterCamCpu_.empty() &&
@@ -666,6 +700,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     cmdMerge_ = { false, false };
     localCompactFrame_ = false; // S6a: likewise -- a frame the cull skips has no compacted rows
     localCompactViews_ = 0;
+    localSplitFrame_ = false;   // S7: and no static rows
     if (!cullClearMat_ || !cullMat_) { return dec; }
     if (count_ == 0 || numMeshGroups_ == 0) { return dec; }
     // A6: this frame's GroupMask copy for the bindless masked PSO (heap indices change with
@@ -735,6 +770,14 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         dec.localViews = dec.localCompact ? views : 0u;
         localCompactFrame_ = dec.localCompact;
         localCompactViews_ = dec.localViews;
+        // Local-light plan S7: the local views' static casters in their own rows, for the shadow cache. Never on the
+        // validation-readback frame (decided the same way below): the CPU reference counts every caster in one row.
+        const bool readbackWanted = valState_ == 0 && !IsGiIndirectActive() &&
+                                    ctx.renderer->GetTotalFrameNumber() > render::kFrameCount;
+        dec.localSplit = dec.localCompact && render::g_localShadowCache && !readbackWanted &&
+                         staticArgs_.Valid() && staticVisibleList_.Valid() && localStaticArgs_.Valid() &&
+                         localStaticCounts_.Valid();
+        localSplitFrame_ = dec.localSplit;
     }
 
     dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -745,6 +788,13 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     {
         ctx.Use(localArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(localCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    if (dec.localSplit) // S7: the static rows, seeded, filled by the cull and compacted here
+    {
+        ctx.Use(staticArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(staticVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(localStaticArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(localStaticCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
     // S5b: the counters are zeroed by the cull-clear every frame (bound unconditionally, so the
     // table has no hole), the rest only on a testing frame -- the post pass returns those to
@@ -906,6 +956,13 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     {
         ctx.Use(localArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
         ctx.Use(localCounts_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+    }
+    if (dec.localSplit)
+    {
+        ctx.Use(staticArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        ctx.Use(staticVisibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+        ctx.Use(localStaticArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        ctx.Use(localStaticCounts_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     }
     if (dec.gbuffer)
     {
@@ -1361,18 +1418,24 @@ void ShadowGpuData::RecordGBufferCommandExpand(Renderer* renderer, ID3D12Graphic
         cmds.buffer.Get());
 }
 
-void ShadowGpuData::RecordLocalArgsCompact(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t views)
+void ShadowGpuData::RecordLocalArgsCompact(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t views,
+                                           bool staticRows)
 {
     if (!renderer || !cl || views == 0u || !localCompactMat_) { return; }
     const UINT f = renderer->GetCurrentFrameIndex();
     if (f >= render::kFrameCount) { return; }
     struct CompactCB { std::uint32_t numGroups, firstView, numViews, pad; };
-    const CompactCB c{ numVirtualGroups_, render::kShadowViewCascades, views, 0u };
+    // The main rows are indexed by view slot; S7's static rows already by slot - kShadowViewCascades.
+    const CompactCB c{ numVirtualGroups_, staticRows ? 0u : render::kShadowViewCascades, views, 0u };
+    const std::size_t src = staticRows ? 16u : 0u;
+    const std::size_t outArgs = staticRows ? 18u : 14u;
+    const std::size_t outCounts = staticRows ? 19u : 15u;
     // One 64-thread group per view: the helper divides both extents by its 8x8 group.
     RecordComputeDispatch(renderer, cl, localCompactMat_.get(), static_cast<UINT>(sizeof(CompactCB)),
         [c](std::uint8_t* dst) { std::memcpy(dst, &c, sizeof(c)); },
         { GroupLodMegaSrv() },
-        { cullUav_[f], cullUav_[14 * render::kFrameCount + f], cullUav_[15 * render::kFrameCount + f] },
+        { cullUav_[src * render::kFrameCount + f], cullUav_[outArgs * render::kFrameCount + f],
+          cullUav_[outCounts * render::kFrameCount + f] },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         views * kComputeDispatchGroupSize, kComputeDispatchGroupSize);
 }
@@ -1453,6 +1516,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     std::vector<const Mesh*> casterMesh(casterCount, nullptr);
     std::vector<std::uint32_t> casterSub(casterCount, 0u);      // submesh ordinal within casterMesh
     std::vector<std::uint32_t> staticDynamic(casterCount, 0u); // per static caster: IsDynamicCaster (VSM page-cache invalidation)
+    // Local-light plan S7: per caster, the object sways in the wind (its BASE strength -- the distance fade would flip a
+    // caster at the fade radius between static and movable as the camera moves, and every flip empties the cache).
+    casterWindy_.assign(casterCount, 0u);
     // C2: per-group shadow-mask table, filled when a mesh is FIRST seen — the first object using
     // a (mesh, slot) defines the group's mask (an object overriding a shared mesh's slot keeps
     // the first object's shadow mask; same shared-mesh semantics as the mega buffer / RT BLAS).
@@ -1575,6 +1641,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             casterMesh[idx] = mesh;
             casterSub[idx] = static_cast<std::uint32_t>(s);
             staticDynamic[idx] = dyn;
+            casterWindy_[idx] = (gbFoliage && gbFoliage->GetWindStrength() > 0.0f) ? 1u : 0u; // S7
             casterEligible_[idx] = eligible ? 1u : 0u;
             ++idx;
         }
@@ -2039,6 +2106,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         const auto align16 = [](size_t bytes) { return (bytes + 15u) & ~static_cast<size_t>(15u); };
         EnsureUavRing(renderer, localArgs_, align16(localViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalArgs");
         EnsureUavRing(renderer, localCounts_, align16(localViews * sizeof(std::uint32_t)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalCounts");
+        // S7: the same pair again for the local views' STATIC casters (the cull's split rows) and its compacted twin.
+        EnsureUavRing(renderer, staticArgs_, align16(localViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.StaticArgs");
+        EnsureUavRing(renderer, staticVisibleList_, align16(localViews * casters * sizeof(std::uint32_t)), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, L"ShadowGpuData.StaticVisibleList");
+        EnsureUavRing(renderer, localStaticArgs_, align16(localViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalStaticArgs");
+        EnsureUavRing(renderer, localStaticCounts_, align16(localViews * sizeof(std::uint32_t)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalStaticCounts");
     }
     // S5b: the cascade HZB cull's buffers -- cascade rows only, otherwise the layout of the pair
     // above. The counters rest in UAV (the cull-clear zeroes them every frame, tested or not).
@@ -2074,6 +2146,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildCullDescriptors(renderer);
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
+    ++localStaticVersion_; // S7: a new caster set -- every cached local-light picture is stale
 
     char buf[352];
     std::snprintf(buf, sizeof(buf),
@@ -2709,6 +2782,10 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
         rawUav(camCmdsB_, 13);
         rawUav(localArgs_, 14);   // S6a
         rawUav(localCounts_, 15);
+        rawUav(staticArgs_, 16);  // S7
+        structuredUint(staticVisibleList_, 17);
+        rawUav(localStaticArgs_, 18);
+        rawUav(localStaticCounts_, 19);
     }
 }
 
@@ -2958,9 +3035,11 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
 
     // S4: the fourth word is the camera's slot in the frustum ring (the last one, past the
     // shadow views), or ~0 when the camera row is off this frame.
-    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView; };
+    // S7: the fifth word -- the cull splits the local views' static casters into their own rows (dec.localSplit).
+    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView, localSplit, pad0, pad1, pad2; };
     const std::uint32_t camView = dec.gbuffer ? render::kMaxShadowViews : 0xFFFFFFFFu;
-    auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, camView }; std::memcpy(dst, &c, sizeof(c)); };
+    const std::uint32_t localSplit = dec.localSplit ? 1u : 0u;
+    auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, camView, localSplit, 0u, 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); };
     const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
     cullCastersThisFrame_ = numCasters;
@@ -2984,6 +3063,20 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         noSampler,
         numViews * numGroups, 1,
         indirectArgs_.buffer.Get()); // UAV barrier: args init visible to the cull's InterlockedAdd
+
+    // S7: the static rows, seeded the same way (row = slot - kShadowViewCascades, StartInstance into their own list).
+    // The counts and counters the clear also writes are the same buffers as above, rewritten with harmless values.
+    if (dec.localSplit)
+    {
+        const std::uint32_t localRows = dec.localViews;
+        auto writeCBS = [&](std::uint8_t* dst) { CullCB c{ numCasters, localRows, numGroups, 0u, 0u, 0u, 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); };
+        RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCBS,
+            { perGroupVg_.Srv(f) },
+            { cullUav_[16 * render::kFrameCount + f], cullUav_[2 * render::kFrameCount + f], deferredCountUav() },
+            noSampler,
+            localRows * numGroups, 1,
+            staticArgs_.buffer.Get());
+    }
 
     // S5b: pass B's args, seeded the same way for the cascade rows only (the counts and the
     // counters it also writes are the SAME buffers as above, rewritten with the same values).
@@ -3057,7 +3150,9 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
             rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[f], cullUav_[render::kFrameCount + f],
                                                           deferredListUav(), deferredCountUav(),
                                                           cullUav_[7 * render::kFrameCount + f], cullUav_[8 * render::kFrameCount + f],
-                                                          camDeferredUav }).gpu;
+                                                          camDeferredUav,
+                                                          // S7: the static rows (bound always: a volatile table has no holes)
+                                                          cullUav_[16 * render::kFrameCount + f], cullUav_[17 * render::kFrameCount + f] }).gpu;
             rc.samplerTable[0] = noSampler;
             cullMat_->Bind(cl, rc);
             const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
@@ -3070,7 +3165,12 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // barrier above) and before the validation copy takes the args to COPY_SOURCE.
     if (dec.localCompact)
     {
-        RecordLocalArgsCompact(renderer, cl, dec.localViews);
+        RecordLocalArgsCompact(renderer, cl, dec.localViews, /*staticRows=*/false);
+    }
+    if (dec.localSplit) // S7: the static rows the same way, once the cull's adds on them have landed
+    {
+        renderer->UAVBarrier(cl, staticArgs_.buffer.Get());
+        RecordLocalArgsCompact(renderer, cl, dec.localViews, /*staticRows=*/true);
     }
 
     // A6: pair the camera cull's counts with the PSO-sorted static part into the bindless commands
@@ -3271,11 +3371,12 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
         return;
     }
 
-    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView; };
+    // shadow_cull_cs.hlsl's CullParams (S7: + localSplit, 0 here -- these are cascade rows only).
+    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView, localSplit, pad0, pad1, pad2; };
     const std::uint32_t kNoCamView = 0xFFFFFFFFu;
     auto writeCB = [&](std::uint8_t* dst)
     {
-        CullCB c{ numCasters, dec.views, numGroups, kNoCamView };
+        CullCB c{ numCasters, dec.views, numGroups, kNoCamView, 0u, 0u, 0u, 0u };
         std::memcpy(dst, &c, sizeof(c));
     };
     const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
@@ -3345,7 +3446,9 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
                                                       cullUav_[3 * render::kFrameCount + f], deferredCountUav,
                                                       cullUav_[7 * render::kFrameCount + f],
                                                       cullUav_[8 * render::kFrameCount + f],
-                                                      cullUav_[9 * render::kFrameCount + f] }).gpu;
+                                                      cullUav_[9 * render::kFrameCount + f],
+                                                      cullUav_[16 * render::kFrameCount + f], // S7: unread (split 0)
+                                                      cullUav_[17 * render::kFrameCount + f] }).gpu;
         rc.samplerTable[0] = noSampler;
         cullMat_->Bind(cl, rc);
         const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
@@ -3547,9 +3650,12 @@ bool ShadowGpuData::IndirectDrawReady() const
 
 bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                               std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
-                                              bool passB)
+                                              bool passB, bool staticRows)
 {
     if (!renderer || !cl || !IndirectDrawReady()) { return false; }
+    // S7: the static rows exist only on a split frame, only for the compacted local views.
+    if (staticRows && (passB || !localSplitFrame_ || !localCompactFrame_ || viewSlot < render::kShadowViewCascades ||
+                       viewSlot - render::kShadowViewCascades >= localCompactViews_)) { return false; }
     const UINT f = renderer->GetCurrentFrameIndex();
     if (f >= render::kFrameCount) { return false; }
     ID3D12CommandSignature* sig = renderer->GetDrawIndexedCommandSignature();
@@ -3580,10 +3686,11 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
 
     // Slot 1 = this frame's visible-list region as a per-instance stream; each draw's
     // StartInstanceLocation (baked by the cull) offsets into it.
+    const UavRing& visible = staticRows ? staticVisibleList_ : list; // S7: the static rows' own list
     D3D12_VERTEX_BUFFER_VIEW visVBV{};
-    visVBV.BufferLocation = list.buffer->GetGPUVirtualAddress() +
-                            static_cast<UINT64>(f) * list.regionBytes;
-    visVBV.SizeInBytes = static_cast<UINT>(list.regionBytes);
+    visVBV.BufferLocation = visible.buffer->GetGPUVirtualAddress() +
+                            static_cast<UINT64>(f) * visible.regionBytes;
+    visVBV.SizeInBytes = static_cast<UINT>(visible.regionBytes);
     visVBV.StrideInBytes = sizeof(std::uint32_t);
     cl->IASetVertexBuffers(1, 1, &visVBV);
 
@@ -3604,11 +3711,13 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
         ibv.Format = megaIndexFormat_;
         cl->IASetIndexBuffer(&ibv);
         const std::uint32_t local = viewSlot - render::kShadowViewCascades;
-        renderer->ExecuteIndirect(cl, sig, numVirtualGroups_, localArgs_.buffer.Get(),
-            static_cast<UINT64>(f) * localArgs_.regionBytes +
+        const UavRing& cargs = staticRows ? localStaticArgs_ : localArgs_;     // S7
+        const UavRing& ccounts = staticRows ? localStaticCounts_ : localCounts_;
+        renderer->ExecuteIndirect(cl, sig, numVirtualGroups_, cargs.buffer.Get(),
+            static_cast<UINT64>(f) * cargs.regionBytes +
                 static_cast<UINT64>(local) * numVirtualGroups_ * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS),
-            localCounts_.buffer.Get(),
-            static_cast<UINT64>(f) * localCounts_.regionBytes + static_cast<UINT64>(local) * sizeof(std::uint32_t));
+            ccounts.buffer.Get(),
+            static_cast<UINT64>(f) * ccounts.regionBytes + static_cast<UINT64>(local) * sizeof(std::uint32_t));
         return true;
     }
 

@@ -720,6 +720,9 @@
     <ClCompile Include="sources/rendering/shadows/ShadowAtlasPacker.cpp">
       <Filter>sources\rendering\shadows</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/shadows/LocalShadowCache.cpp">
+      <Filter>sources\rendering\shadows</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -1412,6 +1415,9 @@
     <ClInclude Include="sources/rendering/shadows/ShadowAtlasPacker.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/shadows/LocalShadowCache.h">
+      <Filter>sources\rendering\shadows</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/shadows/SdsmPartitions.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
@@ -1834,6 +1840,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\shadow_args_compact_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\shadow_cache_copy.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\shadow_cull_clear_cs.hlsl">

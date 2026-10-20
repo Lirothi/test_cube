@@ -8,6 +8,7 @@
 
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
+#include "rendering/shadows/LocalShadowCache.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/SdsmShadows.h"
 #include "app/camera/Camera.h"
@@ -88,6 +89,7 @@ public:
     render::ColorPipelineSettings& ColorPipelineRef() { return colorPipeline_; }
     LightManager& GetLightManager() { return lightManager_; }
     const LightManager& GetLightManager() const { return lightManager_; }
+    const render::LocalShadowCache& GetLocalShadowCache() const { return localShadowCache_; } // S7 readout
     Skybox* GetSkybox() const { return skyBox_.get(); }
 
     // Rung 2: the virtual-shadow-map page pool + page table (dev-window "VSM" tab reads its stats).
@@ -342,6 +344,8 @@ private:
     // Rung 0 / Steps 1-2: GPU-side shadow data (per-caster instance + bounds, per-view
     // frustum planes). Built at level load, maintained per frame; not yet consumed by any pass.
     ShadowGpuData shadowGpu_{};
+    // Local-light plan S7: the atlas spot / point lights' cache of their static casters (pool + entries).
+    render::LocalShadowCache localShadowCache_{};
     // Occlusion plan S3a: the camera's occlusion history (per primitive / per chunk), the query
     // heap that records this frame's plan and the CPU copy of the results frame N - latency read
     // at the top of PrepareViews (kept alive for the camera task's Consider calls).

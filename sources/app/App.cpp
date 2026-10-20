@@ -619,6 +619,19 @@ namespace
         if (setting == "shadow.localNormalTexels") { render::g_localShadowNormalTexels = std::clamp(value, 0.0f, 8.0f); return true; }
         if (setting == "shadow.localPushTexels") { render::g_localShadowPushTexels = std::clamp(value, 0.0f, 8.0f); return true; }
         if (setting == "shadow.localCompact") { render::g_localShadowCompact = value != 0.0f; return true; } // S6a
+        if (setting == "shadow.localCache") { render::g_localShadowCache = value != 0.0f; return true; } // S7
+        if (setting == "shadow.localCacheWind") { render::g_localShadowCacheWind = value != 0.0f; return true; } // S7
+        if (setting == "shadow.localViewsPerList") // S6b
+        {
+            render::g_localShadowViewsPerList = static_cast<unsigned>(std::clamp(value, 1.0f, 128.0f));
+            return true;
+        }
+        if (setting == "shadow.localCacheMaxPages")
+        {
+            render::g_localShadowCacheMaxPages = static_cast<unsigned>(std::clamp(value, 1.0f,
+                static_cast<float>(render::kLocalShadowCacheMaxPagesLimit)));
+            return true;
+        }
         // Plan S4: UE r.Shadow.MaxResolution for the spot / point atlases (Scene::ReconcileShadowMode reallocates).
         if (setting == "shadow.localMaxRes")
         {
@@ -1732,7 +1745,8 @@ namespace
     // faded, as [lightIndex, slot (-1 = none), fade, resolution, page, x, y] (plan S9: its place in the atlas -- a
     // spot's square, a point's 3f x 2f block; page -1 = none) -- what UE's CalculateShadowFadeAlpha and its
     // whole-scene sizing (plan S4: a spot's square, a point's cube face) made of it.
-    std::string LocalShadowsJson(const LightManager& lm)
+    // Plan S7: + "cache": this frame's {hits, misses, uncached, evicted, entries, pages} of the static-caster cache.
+    std::string LocalShadowsJson(const LightManager& lm, const render::LocalShadowCache& cache)
     {
         std::string out = ",\"localShadows\":{\"spots\":[";
         char item[80];
@@ -1761,7 +1775,12 @@ namespace
             out += item;
             separator = ",";
         }
-        out += "]}";
+        const render::LocalShadowCache::Stats& cs = cache.FrameStats();
+        char cacheItem[160];
+        std::snprintf(cacheItem, sizeof(cacheItem),
+                      "],\"cache\":{\"hits\":%u,\"misses\":%u,\"uncached\":%u,\"evicted\":%u,\"entries\":%u,\"pages\":%u}}",
+                      cs.hits, cs.misses, cs.uncached, cs.evicted, cs.entries, cache.ResidentPages());
+        out += cacheItem;
         return out;
     }
 
@@ -1834,7 +1853,7 @@ namespace
                 return "{\"valid\":false}";
             }
             std::string out(text, static_cast<size_t>(n)); // without the closing brace
-            out += LocalShadowsJson(scene_.GetLightManager());
+            out += LocalShadowsJson(scene_.GetLightManager(), scene_.GetLocalShadowCache());
             if (historyRows <= 0)
             {
                 return out + "}";

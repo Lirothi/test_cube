@@ -128,6 +128,7 @@ extern const Profiler::ScopeNameKey kPassBloomConv;
 extern const Profiler::ScopeNameKey kPassLighting;
 extern const Profiler::ScopeNameKey kPassSpotShadow;
 extern const Profiler::ScopeNameKey kPassPointShadow;
+extern const Profiler::ScopeNameKey kPassLocalShadowCache; // local-light plan S7
 extern const Profiler::ScopeNameKey kSpotShadowPerLight;
 extern const Profiler::ScopeNameKey kPassSpotLights;
 extern const Profiler::ScopeNameKey kPassPointLights;

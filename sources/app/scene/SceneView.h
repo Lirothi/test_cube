@@ -41,6 +41,12 @@ struct SceneView
     // atlas page (array slice) and its corner in texels.
     std::uint32_t shadowRes = 0;
     std::uint32_t shadowPage = 0, shadowX = 0, shadowY = 0;
+    // Plan S7 (render::LocalShadowCache): 0 = uncached, 1 = hit (copy the cached statics in, draw the movables), 2 = miss
+    // (the cache pass renders the statics into the pool first); the view's square in the pool. A frame the cull did not
+    // split (ShadowGpuData::LocalSplitFrame) treats every view as uncached.
+    std::uint8_t cacheMode = 0;
+    std::int32_t cachePage = -1;
+    std::uint32_t cacheX = 0, cacheY = 0;
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

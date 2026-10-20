@@ -155,6 +155,23 @@ inline float g_localShadowPushTexels = 0.5f;
 // group. Needs the mega buffer (uniform vertex stride, R32 indices; dropped by a mid-game Rebuild until the next
 // load). false = one ExecuteIndirect per group: `--set shadow.localCompact:0|1`.
 inline bool g_localShadowCompact = true;
+// Local-light plan S7: UE's whole-scene shadow cache for the atlas lights (render::LocalShadowCache) -- the static
+// casters' depth kept per light in a pool and copied in every frame, only the movable ones drawn on top. Needs S6a's
+// compaction (the static rows are drawn the same way). `--set shadow.localCache:0|1`; the pool grows to what the lights
+// want up to `shadow.localCacheMaxPages` pages of localMaxRes^2 D16 (UE r.Shadow.WholeSceneShadowCacheMb 150).
+inline bool g_localShadowCache = true;
+inline unsigned g_localShadowCacheMaxPages = 8u;
+// UE r.Shadow.CacheWPOPrimitives (0): a caster that sways in the wind is MOVABLE for the cache, drawn every frame. 1 caches
+// it with the statics -- right only while the wind stands still (wind.freeze), the case UE's switch exists for.
+// `--set shadow.localCacheWind:0|1`.
+inline bool g_localShadowCacheWind = false;
+constexpr unsigned kLocalShadowCacheMaxPagesLimit = 16u;
+// Local-light plan S6b: how many atlas views (a spot, a cube face) one command list of the spot / point shadow passes
+// records. A list of one small view costs the GPU ~8 us by itself (its boundary, descriptor heaps, profiler timestamps);
+// UE draws a whole atlas in one pass. 1 = one list per view, the old fan-out. `--set shadow.localViewsPerList:<n>`.
+// Measured on demo (9 spots + 30 faces, editor closed): GPU frame 3.94 ms at 1, 3.84 at 2, 3.76 at 4, 3.74 at 8, 3.71
+// at 16, 3.72 at 64; the shadow lists' CPU recording 1.05 -> 0.22 ms in total.
+inline unsigned g_localShadowViewsPerList = 16u;
 // The atlas modes' point-light cube faces are rendered this many texels wider each side (Scene.cpp, the face fov) and
 // sampled in their inner 90 degrees -- MIRRORS kPointShadowGuardTexels in shaders/local_shadow_filter.hlsli.
 constexpr float kPointShadowGuardTexels = 2.0f;

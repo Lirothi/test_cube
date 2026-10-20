@@ -47,6 +47,9 @@ enum class RenderPass : uint16_t {
     Main_CsmHzb,
     Main_ShadowCullPost,
     Main_CSMPost,
+    // Local-light shadow plan S7: the lights whose cached static depth is missing render their static casters into
+    // the cache pool (UE SDCM_StaticPrimitivesOnly); the spot / point passes then copy it in and draw the movables.
+    Main_LocalShadowCache,
     Main_SpotShadows,
     Main_PointShadows,
     Main_GBuffer,
@@ -168,6 +171,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_CsmHzb: return L"CsmHzb";
     case RenderPass::Main_ShadowCullPost: return L"ShadowCullPost";
     case RenderPass::Main_CSMPost: return L"CSMPost";
+    case RenderPass::Main_LocalShadowCache: return L"LocalShadowCache";
     case RenderPass::Main_SpotShadows: return L"SpotShadows";
     case RenderPass::Main_PointShadows: return L"PointShadows";
     case RenderPass::Main_GBuffer: return L"GBuffer";

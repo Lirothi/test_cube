@@ -28,10 +28,15 @@
 // matrices -- Nanite's CULLING_PASS_OCCLUSION_MAIN, exactly as the cascades do it (S5b): frustum
 // side test skipped, near crossing = visible. Hidden -> the camera DEFERRED list (u6) instead of
 // pass A; cam_cull_post_cs.hlsl retests it after pass A against this frame's pyramid.
+//
+// Local-light shadow plan S7 (the shadow cache): with gLocalSplit a local view's STATIC caster -- CasterLod without
+// kLocalDynamicBit -- goes to that view's static rows (u7/u8, row = view - kCascadeViews) instead of the main ones, which
+// then hold only the movable casters. The cache renders the static rows into its pool on a miss and copies them in
+// every frame; the movable rows draw on top.
 #define SHADOW_CULL_RS \
     "CBV(b0), CBV(b1), CBV(b2), " \
     "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(UAV(u0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullParams : register(b0)
 {
@@ -39,6 +44,8 @@ cbuffer CullParams : register(b0)
     uint gNumViews;
     uint gNumGroups;
     uint gCamView;      // S4: the camera's frustum slot, or 0xFFFFFFFF when the camera row is off
+    uint gLocalSplit;   // S7: 1 = the local views' static casters into StaticArgs / StaticVisibleList
+    uint3 gCullPad;
 };
 
 // Mirrors render::CascadeHzb::GpuParams. Both matrices are the cascade's light view-projection
@@ -112,8 +119,12 @@ RWStructuredBuffer<uint> DeferredCount : register(u3); // S5b: [v] deferred this
 RWByteAddressBuffer      CamArgs       : register(u4); // S4: the camera's args (one row of virtual groups)
 RWStructuredBuffer<uint> CamVisibleList : register(u5); // S4: the camera's visible caster ids
 RWStructuredBuffer<uint> CamDeferred   : register(u6); // S5: candidates last frame's pyramid hid
+RWByteAddressBuffer      StaticArgs    : register(u7); // S7: the local views' static rows [(view - 4) * groups + vg]
+RWStructuredBuffer<uint> StaticVisibleList : register(u8); // S7: their caster ids
 static const uint kCamDeferredCount = 8u;   // DeferredCount[] slots: [8] list length, [9] weighted (fade x2)
 static const uint kCamDeferredWeighted = 9u;
+static const uint kCascadeViews = 4u;          // render::kShadowViewCascades: the views below are cascades
+static const uint kLocalDynamicBit = 0x100u;   // render::kCasterLocalDynamicBit (the uploaded CasterLod only)
 
 static const uint kArgStride = 20u;
 
@@ -182,10 +193,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     float3 e = b.halfExtents.xyz;
     // Real mesh group -> VIRTUAL group (group * kMaxShadowLods + receiver LOD). The bucket is the
     // same for every shadow view, so it is chosen once here instead of per view in a scatter.
-    uint lod = CasterLod[caster] & kCasterLodMask;
+    const uint lodEnc = CasterLod[caster];
+    uint lod = lodEnc & kCasterLodMask;
     if (lod >= kMaxShadowLods) { lod = kMaxShadowLods - 1u; }
     uint g = CasterGroup[caster] * kMaxShadowLods + lod;
     uint base = PerGroup[g].x;
+    const bool splitStatic = gLocalSplit != 0u && (lodEnc & kLocalDynamicBit) == 0u; // S7
 
     for (uint v = 0; v < gNumViews; ++v)
     {
@@ -196,6 +209,14 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 uint d;
                 InterlockedAdd(DeferredCount[v], 1u, d);
                 DeferredList[v * gNumCasters + d] = caster;
+                continue;
+            }
+            if (splitStatic && v >= kCascadeViews)
+            {
+                const uint row = v - kCascadeViews;
+                uint sslot;
+                StaticArgs.InterlockedAdd((row * gNumGroups + g) * kArgStride + 4u, 1u, sslot);
+                StaticVisibleList[row * gNumCasters + base + sslot] = caster;
                 continue;
             }
             uint slot;

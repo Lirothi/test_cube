@@ -429,6 +429,7 @@
     <ClCompile Include="sources/rendering/shadows/VirtualShadowMap.cpp" />
     <ClCompile Include="sources/rendering/shadows/SdsmShadows.cpp" />
     <ClCompile Include="sources/rendering/shadows/ShadowAtlasPacker.cpp" />
+    <ClCompile Include="sources/rendering/shadows/LocalShadowCache.cpp" />
     <ClCompile Include="sources/text/FontAtlas.cpp" />
     <ClCompile Include="sources/text/FontGenerator.cpp" />
     <ClCompile Include="sources/text/FontManager.cpp" />
@@ -694,6 +695,7 @@
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h" />
     <ClInclude Include="sources/rendering/shadows/SdsmShadows.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowAtlasPacker.h" />
+    <ClInclude Include="sources/rendering/shadows/LocalShadowCache.h" />
     <ClInclude Include="sources/rendering/shadows/SdsmPartitions.h" />
     <ClInclude Include="sources/rendering/RenderLayers.h" />
     <ClInclude Include="sources/text/FontAtlas.h" />
@@ -831,6 +833,7 @@
     <None Include="shaders\gbuffer_indirect_expand_cs.hlsl" />
     <None Include="shaders\shadow_cull_clear_cs.hlsl" />
     <None Include="shaders\shadow_args_compact_cs.hlsl" />
+    <None Include="shaders\shadow_cache_copy.hlsl" />
     <None Include="shaders\shadow_cull_cs.hlsl" />
     <None Include="shaders\sdsm_analyze_cs.hlsl" />
     <None Include="shaders\sdsm_evsm_cs.hlsl" />

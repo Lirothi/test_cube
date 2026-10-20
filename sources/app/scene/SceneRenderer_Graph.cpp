@@ -39,6 +39,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
+#include "rendering/shadows/LocalShadowCache.h" // local-light plan S7
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "vfx/WindState.h"
@@ -637,8 +638,49 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
     // are fixed-size and their tail entries keep queues from earlier frames, whose object
     // pointers a level switch has already freed — reading past it crashed the stress harness
     // inside the very first SwitchLevel.
-    gb.pSpotShadow = rg.AddPass2(RenderPass::Main_SpotShadows, { gb.pShadow },
+    // Local-light plan S7: the views whose cached static depth is missing render it into the cache pool (UE
+    // SDCM_StaticPrimitivesOnly), in ONE list before the spot / point lists copy it in. Only on a frame the cull split
+    // the static rows (LocalSplitFrame) with indirect shadow draws; any other frame commits no fill, so its misses stay
+    // misses and the lists draw every caster themselves. The decision is this builder's, read by the two below.
+    const size_t pLocalShadowCache = rg.AddPass2(RenderPass::Main_LocalShadowCache, { gb.pShadow },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            render::LocalShadowCache* cache = frame_->localShadowCache;
+            if (!cache) { return {}; }
+            const size_t nSpot = frame_->spotShadowViews
+                ? std::min(frame_->spotShadowViews->size(), frame_->lightManager->GetShadowedSpotCount()) : 0u;
+            const size_t nFace = frame_->pointShadowViews
+                ? std::min(frame_->pointShadowViews->size(), frame_->lightManager->GetShadowedPointCount() * 6) : 0u;
+            const bool split = !render::VsmActive() && frame_->shadowGpu && frame_->shadowGpu->LocalSplitFrame() &&
+                               IndirectShadowDrawsActive() && cache->Pool() && cache->CopyMaterial(renderer);
+            size_t misses = 0;
+            for (size_t i = 0; i < nSpot; ++i) { misses += (*frame_->spotShadowViews)[i].cacheMode == 2 ? 1u : 0u; }
+            for (size_t i = 0; i < nFace; ++i) { misses += (*frame_->pointShadowViews)[i].cacheMode == 2 ? 1u : 0u; }
+            cache->CommitFills(split);
+            if (!split || misses == 0) { return {}; }
+            const std::uint32_t fillPoint = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(cache->Pool(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            ctx.NextPoint();
+            const std::uint32_t readPoint = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(cache->Pool(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            return [this, renderer, nSpot, nFace, fillPoint, readPoint](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassLocalShadowCache);
+                Pass_LocalShadowCache(renderer, c, nSpot, nFace, fillPoint, readPoint);
+            };
+        });
+
+    // S7: a pass copies cached statics in when the frame split the rows and the copy PSO is there; the pool rests in
+    // PIXEL_SHADER_RESOURCE (the cache pass hands it back there), declared at the atlas point as a no-op transition.
+    const auto localCacheUse = [this, renderer](RenderGraphPassContext& ctx, bool indirect) -> bool
+    {
+        render::LocalShadowCache* cache = frame_->localShadowCache;
+        const bool use = indirect && cache && cache->Pool() && frame_->shadowGpu && frame_->shadowGpu->LocalSplitFrame() &&
+                         cache->CopyMaterial(renderer);
+        if (use) { ctx.Use(cache->Pool(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); }
+        return use;
+    };
+
+    gb.pSpotShadow = rg.AddPass2(RenderPass::Main_SpotShadows, { pLocalShadowCache },
+        [this, renderer, localCacheUse](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (render::VsmActive()) { return {}; } // the spot atlas is a 1x1 placeholder there
             if (!frame_->spotShadowViews) { return {}; }
             const size_t n = std::min(frame_->spotShadowViews->size(),
@@ -650,11 +692,12 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             const bool indirect = IndirectShadowDrawsActive(); // S7c: one decision for both sides
             ctx.Use(ctx.renderer->GetDeferredForFrame().spotShadow,
                     D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            const bool cached = localCacheUse(ctx, indirect); // S7
             ctx.NextPoint();
             PrepareOpaqueDrawStates(ctx, frame_->spotShadowViews->data(), n, indirect);
-            return [this, renderer, n, atlasPoint, indirect](RenderGraphPassContext c) {
+            return [this, renderer, n, atlasPoint, indirect, cached](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSpotShadow);
-                Pass_SpotShadows(renderer, c, *frame_->spotShadowViews, n, atlasPoint, indirect);
+                Pass_SpotShadows(renderer, c, *frame_->spotShadowViews, n, atlasPoint, indirect, cached);
             };
         });
 
@@ -662,7 +705,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
     // shadows (parallel per-face lists, no declared states). Runs before Pass_PointLights
     // (which samples the cube atlas in B3).
     gb.pPointShadow = rg.AddPass2(RenderPass::Main_PointShadows, { gb.pSpotShadow },
-        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, localCacheUse](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (render::VsmActive()) { return {}; } // same skip as the spot pass
             if (!frame_->pointShadowViews) { return {}; }
             const size_t n = std::min(frame_->pointShadowViews->size(),
@@ -672,11 +715,12 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             const bool indirect = IndirectShadowDrawsActive(); // S7c: one decision for both sides
             ctx.Use(ctx.renderer->GetDeferredForFrame().pointShadow,
                     D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            const bool cached = localCacheUse(ctx, indirect); // S7
             ctx.NextPoint();
             PrepareOpaqueDrawStates(ctx, frame_->pointShadowViews->data(), n, indirect);
-            return [this, renderer, n, atlasPoint, indirect](RenderGraphPassContext c) {
+            return [this, renderer, n, atlasPoint, indirect, cached](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassPointShadow);
-                Pass_PointShadows(renderer, c, *frame_->pointShadowViews, n, atlasPoint, indirect);
+                Pass_PointShadows(renderer, c, *frame_->pointShadowViews, n, atlasPoint, indirect, cached);
             };
         });
 }

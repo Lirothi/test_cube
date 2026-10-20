@@ -35,6 +35,7 @@
 #include "rendering/renderables/GBufferRenderable.h" // per-slot RT materials (B3 follow-up)
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
+#include "rendering/shadows/LocalShadowCache.h" // local-light plan S7
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
@@ -666,9 +667,93 @@ void SceneRenderer::Pass_CSMPost(Renderer* renderer, RenderGraphPassContext ctx,
     ctx.EndCL(t);
 }
 
+namespace
+{
+// Local-light plan S7: a view copies its statics from the cache pool when the pass was told the cache is usable this
+// frame and the view hit, or missed and the cache pass filled it.
+bool LocalViewCached(const SceneView& view, const render::LocalShadowCache* cache, bool cached)
+{
+    return cached && cache && view.cachePage >= 0 &&
+           (view.cacheMode == 1 || (view.cacheMode == 2 && cache->FillsRan()));
+}
+
+// S7: the view's rectangle as the target, then its depth before the movable casters -- the cached statics copied in
+// (UE CopyCachedShadowMap) or a clear to far.
+void PrepareLocalShadowTarget(Renderer* renderer, ID3D12GraphicsCommandList* cl, render::LocalShadowCache* cache,
+                              const SceneView& view, bool pointPool, UINT res, bool copyStatics)
+{
+    renderer->BindLocalShadowTarget(cl, pointPool, view.shadowPage, view.shadowX, view.shadowY, res,
+                                    /*clearDepth=*/!copyStatics);
+    if (!copyStatics) { return; }
+    Material* mat = cache->CopyMaterial(nullptr); // built by the pass's builder (main thread); never created here
+    if (!mat) { return; }
+    struct CopyCB { std::int32_t dx, dy; std::uint32_t page, pad; };
+    const CopyCB c{ static_cast<std::int32_t>(view.cacheX) - static_cast<std::int32_t>(view.shadowX),
+                    static_cast<std::int32_t>(view.cacheY) - static_cast<std::int32_t>(view.shadowY),
+                    static_cast<std::uint32_t>(view.cachePage), 0u };
+    auto cb = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CopyCB)), render::kConstantBufferAlignment);
+    if (!cb.cpu) { return; }
+    std::memcpy(cb.cpu, &c, sizeof(c));
+    auto h = renderer->GetRenderContextPool()->Acquire();
+    RenderContext& rc = h.ref();
+    rc.cbv[0] = cb.gpu;
+    rc.srvTable[0] = renderer->StageSrvUavTable({ cache->PoolSrv() }).gpu;
+    mat->Bind(cl, rc, false);
+    cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cl->DrawInstanced(3u, 1u, 0u, 0u);
+}
+} // namespace
+
+void SceneRenderer::Pass_LocalShadowCache(Renderer* renderer, RenderGraphPassContext ctx, size_t spotCount,
+    size_t faceCount, std::uint32_t fillPoint, std::uint32_t readPoint)
+{
+    // Local-light plan S7: every miss's STATIC casters (the cull's split rows) into its square of the pool, cleared
+    // first -- UE SDCM_StaticPrimitivesOnly. One list: the pool is one resource, and the spot / point lists that copy
+    // from it record in parallel after this one is submitted.
+    render::LocalShadowCache* cache = frame_->localShadowCache;
+    ShadowGpuData* shadowGpu = frame_->shadowGpu;
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassLocalShadowCache);
+        renderer->EmitPoint(t.cl, fillPoint);
+        if (cache && shadowGpu)
+        {
+            const auto& D = renderer->GetDeferredForFrame();
+            const auto fill = [&](const SceneView& view, std::uint32_t slot, D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+            {
+                render::LocalShadowCache::Rect r{};
+                r.page = view.cachePage;
+                r.x = view.cacheX;
+                r.y = view.cacheY;
+                r.size = view.shadowRes;
+                cache->BindTarget(t.cl, r, /*clear=*/true);
+                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, slot, viewCB, /*passB=*/false, /*staticRows=*/true);
+            };
+            for (size_t i = 0; i < spotCount; ++i)
+            {
+                const SceneView& view = (*frame_->spotShadowViews)[i];
+                if (view.cacheMode != 2 || view.cachePage < 0) { continue; }
+                const UINT res = ShadowViewRes(view, D.spotShadowRes);
+                fill(view, render::ShadowViewSpotSlot(static_cast<unsigned>(i)),
+                     BuildSpotShadowViewCB(renderer, view, frame_->wind, res)); // the S1 bias the spot pass draws with
+            }
+            for (size_t i = 0; i < faceCount; ++i)
+            {
+                const SceneView& view = (*frame_->pointShadowViews)[i];
+                if (view.cacheMode != 2 || view.cachePage < 0) { continue; }
+                fill(view, render::ShadowViewPointFaceSlot(static_cast<unsigned>(i)),
+                     BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind));
+            }
+        }
+        renderer->EmitPoint(t.cl, readPoint);
+    }
+    ctx.EndCL(t);
+}
+
 void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
     const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& spotViews,
-    size_t viewCount, std::uint32_t atlasPoint, bool indirect)
+    size_t viewCount, std::uint32_t atlasPoint, bool indirect, bool cached)
 {
     // pass-flow S6: the VSM-mode skip (Step 24c: in VSM mode the spot atlas is a 1x1 placeholder
     // and local shadows come from the VSM pool) and the light-count clamp are the BUILDER's — it
@@ -688,11 +773,21 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
     // pass's barriers too, or the flip loses exactly the passes that record in parallel.
     Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
-    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint](std::size_t lightIndex)
+    render::LocalShadowCache* const cache = frame_->localShadowCache; // S7
+    const bool split = indirect && shadowGpu && shadowGpu->LocalSplitFrame();
+    // Local-light plan S6b: several views per command list (render::g_localShadowViewsPerList). A list of one tiny view
+    // cost the GPU ~8 us on its own -- its boundary, its heaps, its profiler timestamps -- which on demo (39 views) was
+    // most of what local shadows cost; UE renders a whole atlas in one pass.
+    const size_t perList = std::max<size_t>(render::g_localShadowViewsPerList, 1u);
+    const size_t lists = (viewCount + perList - 1) / perList;
+    auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint,
+                             cache, cached, split, perList, viewCount](std::size_t listIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
-        if (lightIndex >= spotViews.size())
+        const size_t first = listIndex * perList;
+        const size_t last = std::min(std::min(first + perList, viewCount), spotViews.size());
+        if (first >= last)
         {
             return;
         }
@@ -702,60 +797,65 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
         SetCommandListName(t.cl, RenderPass::Main_SpotShadows);
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
-            // Only the FIRST light's list moves the atlas. Recording order across the fan-out is
-            // nondeterministic; SUBMISSION order is localOrder = lightIndex. Letting every list
+            // Only the FIRST list moves the atlas. Recording order across the fan-out is
+            // nondeterministic; SUBMISSION order is localOrder = listIndex. Letting every list
             // transition meant the barrier the flip actually emitted landed in whichever list
             // recorded first, i.e. possibly AFTER another list's ClearDepthStencilView had already
             // run on the queue — D3D12 errors 527/538 on the atlas. The tracker hid this by
             // stitching acquire barriers at submit time, where the real order is known.
-            if (lightIndex == 0)
+            if (listIndex == 0)
             {
                 renderer->EmitPoint(t.cl, atlasPoint);
             }
-            const SceneView& view = spotViews[lightIndex];
-            // Plan S4: the view's own square of the slice, and the S1 bias for that resolution.
-            const UINT res = ShadowViewRes(view, D.spotShadowRes);
-            // Plan S9: the view's square of its atlas page.
-            renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/false, view.shadowPage, view.shadowX, view.shadowY, res,
-                                            /*clearDepth=*/true);
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, res); // S1
-            const auto& visibleBuckets = view.queue.VisibleBuckets();
-            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+            for (size_t lightIndex = first; lightIndex < last; ++lightIndex)
+            {
+                const SceneView& view = spotViews[lightIndex];
+                // Plan S4: the view's own square of the slice, and the S1 bias for that resolution.
+                const UINT res = ShadowViewRes(view, D.spotShadowRes);
+                // Plan S9: the view's square of its atlas page. S7: its cached statics copied in, or a clear.
+                const bool copyStatics = LocalViewCached(view, cache, cached);
+                PrepareLocalShadowTarget(renderer, t.cl, cache, view, /*pointPool=*/false, res, copyStatics);
+                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, res); // S1
+                const auto& visibleBuckets = view.queue.VisibleBuckets();
+                const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+                const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
 
-            if (indirect)
-            {
-                // Spot slot i -> its cull-view slot (plan S9: VSM's prefix, then the atlas modes' extra spots).
-                const std::uint32_t viewSlot = render::ShadowViewSpotSlot(static_cast<unsigned>(lightIndex));
-                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
-                // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
-                // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
-                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-            }
-            else
-            {
-                for (auto* obj : opaqueSimple)
+                if (indirect)
                 {
-                    if (obj)
-                    {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
-                    }
+                    // Spot slot i -> its cull-view slot (plan S9: VSM's prefix, then the atlas modes' extra spots).
+                    const std::uint32_t viewSlot = render::ShadowViewSpotSlot(static_cast<unsigned>(lightIndex));
+                    // S7: on a split frame the main rows hold the movables only; an uncached view draws its statics too.
+                    if (split && !copyStatics) { shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB, false, true); }
+                    shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
+                    // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
+                    // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
+                    for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                    for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
                 }
-                for (auto* obj : opaqueComplex)
+                else
                 {
-                    if (obj)
+                    for (auto* obj : opaqueSimple)
                     {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                        if (obj)
+                        {
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                        }
+                    }
+                    for (auto* obj : opaqueComplex)
+                    {
+                        if (obj)
+                        {
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                        }
                     }
                 }
             }
         }
-        // Per-light index is the deterministic submit order within the batch.
-        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(lightIndex));
+        // The list index is the deterministic submit order within the batch.
+        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(listIndex));
     };
 
-    TaskSystem::Get().DispatchWait(viewCount, renderSpotShadow, 1);
+    TaskSystem::Get().DispatchWait(lists, renderSpotShadow, 1);
 #else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
@@ -796,7 +896,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 
 void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext ctx,
     const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& pointViews,
-    size_t viewCount, std::uint32_t atlasPoint, bool indirect)
+    size_t viewCount, std::uint32_t atlasPoint, bool indirect, bool cached)
 {
     // pass-flow S6: same as Pass_SpotShadows — the VSM-mode skip (Step 24c: VSM renders point
     // shadows into the pool, the cube atlas is a 1x1 placeholder) and the 6-faces-per-light
@@ -817,11 +917,19 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
     // pass's barriers too, or the flip loses exactly the passes that record in parallel.
     Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
-    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint](std::size_t faceIndex)
+    render::LocalShadowCache* const cache = frame_->localShadowCache; // S7
+    const bool split = indirect && shadowGpu && shadowGpu->LocalSplitFrame();
+    // Plan S6b: several faces per command list, as the spot pass.
+    const size_t perList = std::max<size_t>(render::g_localShadowViewsPerList, 1u);
+    const size_t lists = (viewCount + perList - 1) / perList;
+    auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint,
+                              cache, cached, split, perList, viewCount](std::size_t listIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
-        if (faceIndex >= pointViews.size())
+        const size_t first = listIndex * perList;
+        const size_t last = std::min(std::min(first + perList, viewCount), pointViews.size());
+        if (first >= last)
         {
             return;
         }
@@ -832,52 +940,59 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
         {
             GPU_SCOPE(t.cl, ProfilerScopes::kPassPointShadow);
             // See Pass_SpotShadows: the atlas barrier must be recorded into the list submitted
-            // first (localOrder = faceIndex), not into whichever list records first.
-            if (faceIndex == 0)
+            // first (localOrder = listIndex), not into whichever list records first.
+            if (listIndex == 0)
             {
                 renderer->EmitPoint(t.cl, atlasPoint);
             }
-            const SceneView& view = pointViews[faceIndex];
-            // Plan S9: the face's square inside its light's 3f x 2f block of an atlas page.
-            renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/true, view.shadowPage, view.shadowX, view.shadowY,
-                                            ShadowViewRes(view, D.pointShadowRes), /*clearDepth=*/true);
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
-            const auto& visibleBuckets = view.queue.VisibleBuckets();
-            const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
-            const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
+            for (size_t faceIndex = first; faceIndex < last; ++faceIndex)
+            {
+                const SceneView& view = pointViews[faceIndex];
+                // Plan S9: the face's square inside its light's 3f x 2f block of an atlas page. S7: its cached statics
+                // copied in, or a clear.
+                const bool copyStatics = LocalViewCached(view, cache, cached);
+                PrepareLocalShadowTarget(renderer, t.cl, cache, view, /*pointPool=*/true, ShadowViewRes(view, D.pointShadowRes),
+                                         copyStatics);
+                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
+                const auto& visibleBuckets = view.queue.VisibleBuckets();
+                const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
+                const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
 
-            if (indirect)
-            {
-                // Point cube face k -> its cull-view slot (plan S9: VSM's prefix, then the extra faces).
-                const std::uint32_t viewSlot = render::ShadowViewPointFaceSlot(static_cast<unsigned>(faceIndex));
-                shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
-                // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
-                // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
-                for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-                for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-            }
-            else
-            {
-                for (auto* obj : opaqueSimple)
+                if (indirect)
                 {
-                    if (obj)
-                    {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
-                    }
+                    // Point cube face k -> its cull-view slot (plan S9: VSM's prefix, then the extra faces).
+                    const std::uint32_t viewSlot = render::ShadowViewPointFaceSlot(static_cast<unsigned>(faceIndex));
+                    // S7: on a split frame the main rows hold the movables only; an uncached face draws its statics too.
+                    if (split && !copyStatics) { shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB, false, true); }
+                    shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
+                    // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
+                    // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
+                    for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                    for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
                 }
-                for (auto* obj : opaqueComplex)
+                else
                 {
-                    if (obj)
+                    for (auto* obj : opaqueSimple)
                     {
-                        obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                        if (obj)
+                        {
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                        }
+                    }
+                    for (auto* obj : opaqueComplex)
+                    {
+                        if (obj)
+                        {
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                        }
                     }
                 }
             }
         }
-        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(faceIndex));
+        renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(listIndex));
     };
 
-    TaskSystem::Get().DispatchWait(viewCount, renderPointShadow, 1);
+    TaskSystem::Get().DispatchWait(lists, renderPointShadow, 1);
 #else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);

@@ -103,6 +103,8 @@ public:
         // for one ExecuteIndirect per view; `localViews` = how many views from render::kShadowViewCascades.
         bool localCompact = false;
         std::uint32_t localViews = 0;
+        // Local-light plan S7: the cull splits the local views' static casters into their own rows this frame.
+        bool localSplit = false;
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -301,9 +303,16 @@ public:
     // row carry the same index a cascade's do), and its projection arrives as `viewCB` like any
     // other -- from a GPU-written block rather than a CPU upload, which this function cannot tell
     // apart and does not need to.
+    // Local-light plan S7: `staticRows` draws a local view's STATIC casters (the cull's split rows, LocalSplitFrame());
+    // the default rows then hold only the movable ones. Off a split frame the default rows hold everything.
     bool RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                    std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
-                                   bool passB = false);
+                                   bool passB = false, bool staticRows = false);
+    // S7: this frame the cull put the local views' static casters into their own rows (decided by PrepareCullPass on
+    // the main thread: the cache on, S6a's compaction on, not the validation-readback frame).
+    bool LocalSplitFrame() const { return localSplitFrame_; }
+    // S7: bumped whenever the static caster set changes (a rebuild, a caster changing side) -- the cache's staleness key.
+    std::uint32_t LocalStaticVersion() const { return localStaticVersion_; }
 
     // Drop CPU-side state on level unload; RETAINS the GPU buffers + SRVs (the LightManager
     // lesson: a pass may reference an SRV while frames are in flight). Next Rebuild reuses them.
@@ -605,7 +614,17 @@ private:
     std::shared_ptr<Material> localCompactMat_;   // shadow_args_compact_cs.hlsl
     bool localCompactFrame_ = false;
     std::uint32_t localCompactViews_ = 0;
-    void RecordLocalArgsCompact(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t views);
+    void RecordLocalArgsCompact(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t views, bool staticRows);
+    // Local-light plan S7: on a split frame the cull writes a local view's STATIC casters here (row = slot -
+    // kShadowViewCascades, the same layout as the main pair), compacted like the main rows into localStatic*.
+    UavRing staticArgs_;
+    UavRing staticVisibleList_;
+    UavRing localStaticArgs_;
+    UavRing localStaticCounts_;
+    bool localSplitFrame_ = false;
+    std::vector<std::uint8_t> casterWindy_;      // per caster: its object sways in the wind (base strength)
+    std::vector<std::uint8_t> localDynamicPrev_; // per caster: last frame's movable bit (a change = a new static set)
+    std::uint32_t localStaticVersion_ = 0;
 
     // Occlusion plan S5b (cascade light-space HZB cull). Per cascade: the casters the main cull
     // deferred (last frame's pyramid hid them), the 8 counters ([c] deferred, [4 + c] drawn by
@@ -717,7 +736,9 @@ private:
     // S4: [7k..8k)=camArgs (RAW), [8k..9k)=camVisibleList,
     // S5: [9k..10k)=camDeferred, [10k..11k)=camArgsB (RAW), [11k..12k)=camVisibleListB.
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cullUavHeap_;
-    static constexpr std::size_t kCullUavSets = 16; // A6: 12 = camCmds_ RAW, 13 = camCmdsB_ RAW; S6a: 14 localArgs_, 15 localCounts_
+    // A6: 12 = camCmds_ RAW, 13 = camCmdsB_ RAW; S6a: 14 localArgs_, 15 localCounts_; S7: 16 staticArgs_ RAW,
+    // 17 staticVisibleList_, 18 localStaticArgs_, 19 localStaticCounts_.
+    static constexpr std::size_t kCullUavSets = 20;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kCullUavSets * render::kFrameCount> cullUav_{};
 
     std::shared_ptr<Material> cullClearMat_;     // shadow_cull_clear_cs.hlsl
