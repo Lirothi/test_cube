@@ -146,6 +146,12 @@ struct TimeOfDaySettings
     // wind_test at noon: sky 2380 cd/m2 at 75 degrees from the sun against a CIE clear sky's ~3300-4900, sunlit
     // sand 12540 (albedo 0.4 at ~100 klx, right).
     float daySkyBrightness = 1.0f;
+    // The owner's "night darker / lighter" (2026-10-20), in STOPS of exposure: added to the camera's compensation
+    // (CameraExposureSettings::compensationEv, the FRAME's copy) by the night's share -- 0 with the sun above -6
+    // degrees (the end of civil twilight), all of it from -12 (the end of nautical), smoothstep between. The camera
+    // only: the light, the meter, the curve's key (the scene's own EV) and the night vision (the eye) stay as they
+    // are, so it moves the night's picture and nothing else. Negative darkens; 0 = none.
+    float nightExposureEv = 0.0f;
 
     // --- Twilight, as Ultra Dynamic Sky draws it -----------------------------------------------------
     // THE SUN LEAVES THE ATMOSPHERE before the night falls: its light into the sky -- the sky's LUTs, the

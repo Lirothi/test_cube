@@ -72,6 +72,8 @@ public:
     const float* OzoneTint() const { return ozoneTint_; }
     // What the frame's sky luminance scale is multiplied by (TimeOfDaySettings::daySkyBrightness at the day blend).
     float SkyLuminanceScale() const { return skyLuminanceScale_; }
+    // Stops added to the frame camera's compensation (TimeOfDaySettings::nightExposureEv by the night's share).
+    float NightExposureEv() const { return nightExposureEv_; }
     // The scene light's share through the hand-over cross-fade (TimeOfDaySettings::lightHandOverDeg), 0..1.
     float HandOverFade() const { return handOverFade_; }
 
@@ -107,6 +109,7 @@ private:
     float rayleighTint_[3] = {1.0f, 1.0f, 1.0f};
     float ozoneTint_[3] = {1.0f, 1.0f, 1.0f};
     float skyLuminanceScale_ = 1.0f;
+    float nightExposureEv_ = 0.0f;
     float handOverFade_ = 1.0f;
 };
 

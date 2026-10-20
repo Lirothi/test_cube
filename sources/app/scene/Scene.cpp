@@ -2036,6 +2036,9 @@ void Scene::PrepareViews(Renderer* renderer)
         dirLight_.SetCloudVisibility(skyAtmosphere_.mode != 0u ? CloudSunGroundVisibility(volumetricCloud_) : 1.0f);
     }
     frameData_.cameraExposure = cameraExposure_;
+    // The owner's night exposure (TimeOfDaySettings::nightExposureEv), on the FRAME's camera: the level keeps
+    // its compensation as written. Into the static trim, so the curve stays keyed on the scene's own EV.
+    if (timeOfDay_.Present()) { frameData_.cameraExposure.compensationEv += timeOfDay_.NightExposureEv(); }
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
     frameData_.selectedEditorObjectIds =

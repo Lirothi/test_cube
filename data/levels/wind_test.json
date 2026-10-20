@@ -32818,11 +32818,11 @@
       "exposureCurve": [
         [
           4.550000190734863,
-          -2.430000066757202
+          -4.920000076293945
         ],
         [
           8.550000190734863,
-          -1.75
+          -2.5199999809265137
         ],
         [
           10.550000190734863,
@@ -32934,8 +32934,8 @@
     "animate": false,
     "date": [
       2026,
-      6,
-      21
+      9,
+      27
     ],
     "dawn": 6.0,
     "dayLengthMin": 2.0,
@@ -32943,9 +32943,9 @@
     "dusk": 18.0,
     "extendTwilight": 0.0,
     "heightOffset": 0.0,
-    "latitude": -16.5,
+    "latitude": 50.11090087890625,
     "lightUpdateThresholdDeg": 0.05000000074505806,
-    "longitude": -151.75,
+    "longitude": 8.682100296020508,
     "moon": {
       "discAdaptation": 1.0,
       "discColor": [
@@ -32965,8 +32965,8 @@
         0.8650000095367432
       ],
       "lightShaftBloomMaxBrightness": 0.15000000596046448,
-      "lightShaftBloomScale": 0.20000000298023224,
-      "lightShaftBloomThreshold": 0.699999988079071,
+      "lightShaftBloomScale": 0.25,
+      "lightShaftBloomThreshold": 0.15000000596046448,
       "lightShaftBloomTint": [
         1.0,
         1.0,
@@ -32989,6 +32989,7 @@
       "phaseAuto": true
     },
     "nightBrightness": 11364.0,
+    "nightExposureEv": -1.0,
     "nightLengthMin": 2.0,
     "nightSky": {
       "airglowColor": [
@@ -33006,7 +33007,7 @@
     "northYawDeg": 0.0,
     "pathTiltDeg": 30.0,
     "pathYawDeg": 322.8896076655306,
-    "realPositions": false,
+    "realPositions": true,
     "sun": {
       "ambient": 0.10000000149011612,
       "color": [
@@ -33041,7 +33042,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 21.079999923706055,
+    "time": 24.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,
@@ -33066,7 +33067,7 @@
       "sunSkyFullDeg": -6.489999771118164,
       "sunSkyStartDeg": -9.029999732971191
     },
-    "utcOffset": -10.0
+    "utcOffset": 2.0
   },
   "volumetricCloud": {
     "albedo": 1.0,

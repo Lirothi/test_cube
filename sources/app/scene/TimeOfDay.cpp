@@ -323,6 +323,11 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         // The day sky's brightness comes in with UDS's day sky, on the same (stepped) blend.
         skyLuminanceScale_ = 1.0f + (std::max(s.daySkyBrightness, 0.0f) - 1.0f) * day;
     }
+    // The owner's night exposure (TimeOfDaySettings::nightExposureEv): none above -6 degrees, all of it from -12.
+    {
+        const float x = std::clamp(static_cast<float>((-6.0 - sunElevation) / 6.0), 0.0f, 1.0f);
+        nightExposureEv_ = s.nightExposureEv * x * x * (3.0f - 2.0f * x);
+    }
     // UDS's twilight ozone: night -> sunrise (at 0) -> the authored ozone, across +-ozoneBlendDeg, in the same
     // 1/64 steps (of each half).
     {

@@ -746,6 +746,27 @@ namespace
                                           "dawn a moonlit blue until the sun is nearly up. With the physical moon "
                                           "(Night Brightness 1) it leaves the night far too dark -- that one wants Eye.");
                     }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("UDS Steady Night"))
+                    {
+                        render::CameraExposureSettings steady;
+                        render::SetUdsSteadyNightExposureCurve(steady);
+                        nlohmann::json curve = nlohmann::json::array();
+                        for (std::uint32_t i = 0; i < steady.exposureCurvePoints; ++i)
+                        {
+                            curve.push_back(nlohmann::json::array({ steady.exposureCurveEv[i], steady.exposureCurveComp[i] }));
+                        }
+                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("UDS's curve with a night that holds: the same from EV 10.55 up (the day, the "
+                                          "bright twilight), steeper below, so at night the camera follows only 40 %% "
+                                          "of the scene's darkening (UDS: 80 %%). Among dark palms the sky through the "
+                                          "leaves no longer lights up: the camera opened 1.3 stops there, now 0.6. "
+                                          "The open night comes out ~0.6 stops darker -- Time of Day > Night "
+                                          "Exposure to taste.");
+                    }
                     ImGui::PopID();
                 }
                 InspectorHelp("Extra compensation, in EV, by how much light the eye is adapted to -- the "
@@ -760,7 +781,9 @@ namespace
                               "points, flat past its ends. It follows the eye's SMOOTHED adaptation, so a "
                               "dark room darkens the picture as the eye adapts rather than on one frame. "
                               "Min/Max EV100 still bound the camera. Night vision reads the eye's "
-                              "adaptation, not the darkened camera. --set=exposure.curve:<0 none|1 eye|2 uds>");
+                              "adaptation, not the darkened camera. The SLOPE is the adaptation's strength: where the "
+                              "compensation rises s stops a stop, the camera follows (1 - s) of the scene's change. "
+                              "--set=exposure.curve:<0 none|1 eye|2 uds|3 uds steady night>");
                 ImGui::SeparatorText("Metering (which pixels set the exposure)");
                 dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
                 InspectorHelp("The histogram window the meter averages between. Widening it makes "
@@ -2487,6 +2510,11 @@ namespace
                           "reflections and the light it sheds, together (the sky's luminance scale). It comes in "
                           "with the day sky -- Twilight > Day Rayleigh From / Full At -- so the night and the "
                           "moonlit dawn keep their darkness. 1 = as the atmosphere gives it.");
+            dragF("Night Exposure (stops)", "nightExposureEv", 0.0f, 0.05f, -10.0f, 10.0f, "%+.2f");
+            InspectorHelp("The night darker or lighter: stops added to the camera's exposure at night -- none "
+                          "with the sun above -6 degrees, all of it from -12, smooth between. Only the picture: "
+                          "the light, the meter, the exposure curve and the night vision stay as they are. "
+                          "Negative darkens; 0 = none.");
             ImGui::SeparatorText("Cost");
             dragF("Light Update Threshold (deg)", "lightUpdateThresholdDeg", 0.05f, 0.005f, 0.0f, 5.0f, "%.3f");
             InspectorHelp("While the clock runs, the scene light (and with it every shadow) turns only once "

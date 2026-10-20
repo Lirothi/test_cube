@@ -873,6 +873,7 @@ namespace
                 { "moonLightShaftTintB", &t.moonLightShaftTint[2], 0.0f, 10.0f },
                 { "nightBrightness", &t.nightBrightness, 0.0f, 100000.0f },
                 { "daySkyBrightness", &t.daySkyBrightness, 0.0f, 10.0f },
+                { "nightExposureEv", &t.nightExposureEv, -10.0f, 10.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
                 // N2: the night sky's layers (timeOfDay.nightSky.*).
                 { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },
@@ -1366,10 +1367,12 @@ namespace
         { e.localDetailStrength = value; return true; }
         if (setting == "exposure.nightVision") { e.nightVision = std::clamp(value, 0.0f, 1.0f); return true; } // E2
         if (setting == "exposure.nightDesaturation") { e.nightDesaturation = std::clamp(value, 0.0f, 1.0f); return true; }
-        // Time-of-day E1: the compensation curve, 0 = none, 1 = the eye preset (the A/B of a night), 2 = UDS's.
+        // Time-of-day E1: the compensation curve, 0 = none, 1 = the eye preset (the A/B of a night), 2 = UDS's,
+        // 3 = UDS's with a steady night.
         if (setting == "exposure.curve")
         {
-            if (value >= 1.5f) { render::SetUdsExposureCurve(e); }
+            if (value >= 2.5f) { render::SetUdsSteadyNightExposureCurve(e); }
+            else if (value >= 1.5f) { render::SetUdsExposureCurve(e); }
             else if (value != 0.0f) { render::SetEyeExposureCurve(e); }
             else { e.exposureCurvePoints = 0u; }
             return true;

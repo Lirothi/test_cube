@@ -336,6 +336,23 @@ inline void SetUdsExposureCurve(CameraExposureSettings& s)
     for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
 }
 
+// UDS WITH A STEADY NIGHT (owner, 2026-10-20: "at night the auto exposure works far too hard -- among dark foliage
+// it lifts the sky"). A slope s of the curve leaves the camera following (1 - s) of the scene's change: UDS's
+// night segment rises 0.2 a stop, so a frame filled with dark palms (metered 1.6 stops under the open night)
+// opened the camera 1.3 stops and the sky through the leaves came out 1.3 stops brighter. Here the curve keeps
+// UDS's from 10.55 up -- the day and the bright twilight untouched -- and falls 0.6 a stop below it: the night's
+// camera follows 40 %. Measured on wind_test at 21:00 (Frankfurt, 27 Sep): under the palms 0.62-0.63 stops instead
+// of 1.26-1.29; the open night 0.57 stops darker than UDS's (Time of Day > Night Exposure +0.57 puts it back).
+inline void SetUdsSteadyNightExposureCurve(CameraExposureSettings& s)
+{
+    static constexpr float kEv[] = {4.55f, 8.55f, 10.55f, 12.55f, 14.55f, 15.55f};
+    static constexpr float kComp[] = {-4.92f, -2.52f, -1.32f, -0.85f, -0.32f, 0.06f};
+    static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
+    static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
+    s.exposureCurvePoints = kPoints;
+    for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
+}
+
 // Display transform (plan section 6.1 / step P3).
 enum class ToneCurve : std::uint32_t
 {

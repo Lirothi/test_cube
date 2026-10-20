@@ -323,7 +323,8 @@ the sun probe (disc colour, visible share) and the frame rate; `set_camera {look
 offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has it (`position`
 optional; `lookAt: "moon"` the moon; positive offsetPitchDeg tilts DOWN, so a view 4 degrees over the horizon
 toward a sun at elevation e is `offsetPitchDeg: e - 4`). An exposure curve is shaped live with
-`exposure.curvePoints` / `exposure.curveEv<i>` / `exposure.curveComp<i>` (`exposure.curve:0|1|2` = none/Eye/UDS).
+`exposure.curvePoints` / `exposure.curveEv<i>` / `exposure.curveComp<i>` (`exposure.curve:0|1|2|3` = none/Eye/UDS/UDS
+Steady Night; the curve's slope is the adaptation's strength -- the camera follows 1 - slope of the scene's change).
 The Level Editor closed (F2) still serves every call -- MEASURE COSTS WITH IT CLOSED (its panels are a load of
 their own) and on a real view, not wherever the camera happened to be: `get_profile {filter, reset}` returns the
 profiler's rows (GPU/CPU per pass: EMA, max since `reset`, runs last frame), and `shadow.mode:0|1|2`
