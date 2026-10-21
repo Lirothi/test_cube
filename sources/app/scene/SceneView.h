@@ -47,6 +47,11 @@ struct SceneView
     std::uint8_t cacheMode = 0;
     std::int32_t cachePage = -1;
     std::uint32_t cacheX = 0, cacheY = 0;
+    // Plan S9e: a spot / point-face view's light, for the GPU caster cull (UE AffectsBounds): its reach sphere (xyz
+    // origin, w radius; w < 0 = none) and a spot's cone (xyz axis, w cos of the outer angle; > 1 = none). Not part of
+    // `frustum` -- the CPU path culls with the planes alone.
+    float4 lightSphere = float4(0.0f, 0.0f, 0.0f, -1.0f);
+    float4 lightCone = float4(0.0f, 0.0f, 0.0f, 2.0f);
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

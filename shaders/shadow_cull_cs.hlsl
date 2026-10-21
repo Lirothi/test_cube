@@ -33,6 +33,14 @@
 // kLocalDynamicBit -- goes to that view's static rows (u7/u8, row = view - kCascadeViews) instead of the main ones, which
 // then hold only the movable casters. The cache renders the static rows into its pool on a miss and copies them in
 // every frame; the movable rows draw on top.
+//
+// Local-light shadow plan S9e (UE's caster culling for a spot / point face): such a view's 16 slots are its 6 frustum
+// planes, the light's reach sphere, a spot's cone and UE's light + camera-frustum hull (render::kLocalView*Slot). A
+// caster must touch the light (UE AffectsBounds: the box against the sphere, its bounding sphere against the cone);
+// one that is not cached -- every caster on a frame without the split -- must also lie in the hull
+// (BuildLightViewFrustumConvexHull) and be no smaller than r.Shadow.RadiusThreshold of its distance to the camera (GI
+// exempt). UE skips both for the static-primitives cache (SDCM_StaticPrimitivesOnly) and VSM, which cache pictures the
+// camera must not shape; the CPU leaves VSM's hull empty and its threshold 0.
 #define SHADOW_CULL_RS \
     "CBV(b0), CBV(b1), CBV(b2), " \
     "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
@@ -45,7 +53,10 @@ cbuffer CullParams : register(b0)
     uint gNumGroups;
     uint gCamView;      // S4: the camera's frustum slot, or 0xFFFFFFFF when the camera row is off
     uint gLocalSplit;   // S7: 1 = the local views' static casters into StaticArgs / StaticVisibleList
-    uint3 gCullPad;
+    uint gClipFirst;    // S9e: the clipmap slots [gClipFirst, gClipEnd) -- every other view past the cascades is local
+    uint gClipEnd;
+    uint gGiFirst;      // S9e: casters from here on are GI (exempt from the radius threshold)
+    float4 gLocalCam;   // S9e: xyz the camera, w (RadiusThreshold x LODDistanceFactor)^2, 0 = off
 };
 
 // Mirrors render::CascadeHzb::GpuParams. Both matrices are the cascade's light view-projection
@@ -165,17 +176,54 @@ bool HiddenLastFrame(uint v, float3 c, float3 e)
     return !HzbIsVisible(CsmHzb[v], gHzbSize, rect);
 }
 
-// Positive-vertex AABB-vs-frustum test (mirrors Frustum::Intersects). Inactive view slots carry
-// a reject-all sentinel plane (0,0,0,-1) so they cull everything -> zero visible casters.
-bool Intersects(uint view, float3 c, float3 e)
+// Positive-vertex AABB-vs-frustum test over planes [first, first + count) (mirrors Frustum::Intersects). Callers pass
+// LITERAL ranges, so the loop stays unrolled. Inactive view slots carry a reject-all sentinel plane (0,0,0,-1) in plane 0
+// so they cull everything -> zero visible casters.
+bool PlanesPass(uint view, uint first, uint count, float3 c, float3 e)
 {
     [unroll]
-    for (uint i = 0u; i < kViewPlanes; ++i)
+    for (uint i = 0u; i < count; ++i)
     {
-        float4 p = Frustums[view].planes[i];
+        float4 p = Frustums[view].planes[first + i];
         float signedDist = dot(p.xyz, c) + p.w;
         float projRadius = dot(abs(p.xyz), e);
         if (signedDist + projRadius < 0.0f) { return false; }
+    }
+    return true;
+}
+
+bool Intersects(uint view, float3 c, float3 e) { return PlanesPass(view, 0u, kViewPlanes, c, e); }
+
+// S9e: render::kLocalView*Slot.
+static const uint kLocalFrustumPlanes = 6u;
+static const uint kLocalSphereSlot = 6u;
+static const uint kLocalConeSlot = 7u;
+static const uint kLocalHullFirst = 8u;
+static const uint kLocalHullPlanes = 8u;
+
+// S9e: does the caster touch the light? The box against its reach sphere (the exact box distance: tighter than UE's
+// bounding-sphere test, never culling what that keeps), then for a spot its bounding sphere (radius r) against the cone
+// -- UE USpotLightComponent::AffectsBounds term for term: the apex pulled back by r / sin so the cone grows by r, and
+// near the apex the sphere's own distance. Mirrored by CpuLightBoundsPass (ShadowGpuData.cpp).
+bool LightBoundsPass(float4 sphere, float4 cone, float3 c, float3 e, float r)
+{
+    if (sphere.w >= 0.0f)
+    {
+        const float3 d = max(abs(c - sphere.xyz) - e, 0.0f);
+        if (dot(d, d) > sphere.w * sphere.w) { return false; }
+    }
+    if (cone.w <= 1.0f)
+    {
+        const float cosA = cone.w;
+        const float sinA = sqrt(saturate(1.0f - cosA * cosA));
+        float3 d = c - (sphere.xyz - (r / max(sinA, 1e-4f)) * cone.xyz);
+        float dsqr = dot(d, d);
+        float e2 = dot(cone.xyz, d);
+        if (!(e2 > 0.0f && e2 * e2 >= dsqr * (cosA * cosA))) { return false; }
+        d = c - sphere.xyz;
+        dsqr = dot(d, d);
+        e2 = -dot(cone.xyz, d);
+        if (e2 > 0.0f && e2 * e2 >= dsqr * (sinA * sinA)) { return dsqr <= r * r; }
     }
     return true;
 }
@@ -199,10 +247,28 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     uint g = CasterGroup[caster] * kMaxShadowLods + lod;
     uint base = PerGroup[g].x;
     const bool splitStatic = gLocalSplit != 0u && (lodEnc & kLocalDynamicBit) == 0u; // S7
+    // S9e: r.Shadow.RadiusThreshold -- too small for its distance to the camera (GI instances exempt).
+    const float3 toCam = c - gLocalCam.xyz;
+    const bool tiny = gLocalCam.w > 0.0f && caster < gGiFirst && b.center.w * b.center.w <= gLocalCam.w * dot(toCam, toCam);
 
     for (uint v = 0; v < gNumViews; ++v)
     {
-        if (Intersects(v, c, e))
+        bool hit;
+        bool toStatic = false;
+        if (v >= kCascadeViews && (v < gClipFirst || v >= gClipEnd))
+        {
+            // S9e: a spot / point face. Its frustum and the light's bounds for every caster; a caster the cache does not
+            // hold (movable, or any on a frame without the split) also the hull and the threshold.
+            hit = PlanesPass(v, 0u, kLocalFrustumPlanes, c, e) &&
+                  LightBoundsPass(Frustums[v].planes[kLocalSphereSlot], Frustums[v].planes[kLocalConeSlot], c, e, b.center.w);
+            toStatic = splitStatic;
+            if (hit && !toStatic) { hit = !tiny && PlanesPass(v, kLocalHullFirst, kLocalHullPlanes, c, e); }
+        }
+        else
+        {
+            hit = Intersects(v, c, e);
+        }
+        if (hit)
         {
             if (HiddenLastFrame(v, c, e))
             {
@@ -211,7 +277,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 DeferredList[v * gNumCasters + d] = caster;
                 continue;
             }
-            if (splitStatic && v >= kCascadeViews)
+            if (toStatic)
             {
                 const uint row = v - kCascadeViews;
                 uint sslot;

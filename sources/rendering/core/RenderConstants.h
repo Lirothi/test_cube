@@ -63,6 +63,13 @@ static_assert(ShadowViewSpotSlot(kShadowViewSpots - 1u) + 1u == ShadowViewPointF
               "the extra spots come right after the VSM prefix, the extra faces right after them");
 static_assert(ShadowViewPointFaceSlot(6u * kShadowViewPoints - 1u) + 1u == kMaxShadowViews,
               "the extra point faces end the layout");
+// Plan S9e: a spot / point-face slot -- the views whose uploaded planes carry the light's bounds and UE's hull
+// (render::kLocalView*Slot, InstanceTypes.h). shadow_cull_cs.hlsl gets the clipmap range in its CB, not as literals.
+constexpr bool IsLocalShadowView(unsigned slot)
+{
+    return slot >= kShadowViewCascades && slot < kMaxShadowViews &&
+           (slot < ShadowViewClipmapSlot(0u) || slot >= ShadowViewClipmapSlot(kShadowViewClipmapLevels));
+}
 // Plan S9: the most atlas pages a local-shadow pool (spots, points) may grow to -- the DSV slots reserved for each
 // (RenderTargetManager); render::g_localShadowMaxPages is the live cap below it.
 inline constexpr unsigned kLocalShadowMaxPagesLimit = 8;

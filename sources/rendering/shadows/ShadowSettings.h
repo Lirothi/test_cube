@@ -185,6 +185,22 @@ constexpr unsigned kLocalShadowCacheMaxPagesLimit = 16u;
 // Measured on demo (9 spots + 30 faces, editor closed): GPU frame 3.94 ms at 1, 3.84 at 2, 3.76 at 4, 3.74 at 8, 3.71
 // at 16, 3.72 at 64; the shadow lists' CPU recording 1.05 -> 0.22 ms in total.
 inline unsigned g_localShadowViewsPerList = 16u;
+// Local-light plan S9e: the GPU cull's tests for a spot / point-face view beyond its own frustum, UE's. Bounds: the
+// caster's box against the light's reach sphere and a spot's bounding sphere against its cone (UE AffectsBounds, the
+// light-primitive interaction; camera-independent, so the S7 cache and VSM take it too). Hull: UE
+// BuildLightViewFrustumConvexHull -- the hull of the light and the camera frustum's four side planes; a caster outside it
+// cannot shadow anything the camera sees (r.Shadow.LightViewConvexHullCull 1). Radius threshold: UE
+// r.Shadow.RadiusThreshold (Epic 0.01) -- a caster whose bounding radius is at most that share of its distance to the
+// camera (x the view's LODDistanceFactor, hfov / 90) casts no local shadow; GPU-instanced (GI) casters are exempt, UE
+// tests an instanced component's bounds, never an instance's. The hull and the threshold depend on the camera, so --
+// like UE (SDCM_StaticPrimitivesOnly, VSM) -- neither touches the S7 cache's static rows nor VSM.
+// `--set shadow.localBoundsCull:0|1`, `shadow.localHullCull:0|1`, `shadow.localRadiusThreshold:<share>` (0 = off).
+inline bool g_localShadowBoundsCull = true;
+inline bool g_localShadowHullCull = true;
+inline float g_localShadowRadiusThreshold = 0.01f;
+// `--set shadow.cullValidate:1` (MCP set_settings too): the shadow cull's one-shot CPU validation runs again on the next
+// frame at the current view; its verdict line also says how many local caster draws each S9e test removed there.
+inline bool g_shadowCullRevalidate = false;
 // The atlas modes' point-light cube faces are rendered this many texels wider each side (Scene.cpp, the face fov) and
 // sampled in their inner 90 degrees -- MIRRORS kPointShadowGuardTexels in shaders/local_shadow_filter.hlsli.
 constexpr float kPointShadowGuardTexels = 2.0f;

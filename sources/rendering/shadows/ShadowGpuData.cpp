@@ -215,6 +215,21 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
     return true;
 }
 
+// shadow_cull_cs.hlsl's CullParams (the cull-clear reads its first three words). S4: camView is the camera's slot in
+// the frustum ring (the last one, past the shadow views), or ~0 when the camera row is off. S7: localSplit -- the cull
+// splits the local views' static casters into their own rows. S9e: the clipmap slots (the views past the cascades that
+// are NOT local), the first GI caster (exempt from the radius threshold) and that threshold: the camera's position and
+// (r.Shadow.RadiusThreshold x LODDistanceFactor)^2, 0 = off.
+struct ShadowCullCB
+{
+    std::uint32_t numCasters = 0, numViews = 0, numGroups = 0, camView = 0xFFFFFFFFu;
+    std::uint32_t localSplit = 0, clipFirst = render::ShadowViewClipmapSlot(0u),
+                  clipEnd = render::ShadowViewClipmapSlot(render::kShadowViewClipmapLevels), giFirst = 0;
+    float camPos[3] = { 0.0f, 0.0f, 0.0f };
+    float radiusThresholdSq = 0.0f;
+};
+static_assert(sizeof(ShadowCullCB) == 48, "ShadowCullCB mirrors shadow_cull_cs.hlsl's CullParams");
+
 // ---- Caster filtering + fills ----------------------------------------------
 
 // B3: a caster object registers one caster SLOT per submesh of its mesh — the cull/args/draw
@@ -703,6 +718,12 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     localSplitFrame_ = false;   // S7: and no static rows
     if (!cullClearMat_ || !cullMat_) { return dec; }
     if (count_ == 0 || numMeshGroups_ == 0) { return dec; }
+    // S9e: `--set shadow.cullValidate:1` -- the one-shot validation once more, at whatever the view is now.
+    if (render::g_shadowCullRevalidate && valState_ == 2)
+    {
+        render::g_shadowCullRevalidate = false;
+        valState_ = 0;
+    }
     // A6: this frame's GroupMask copy for the bindless masked PSO (heap indices change with
     // streaming swaps and fades). Main-thread builder, before any shadow pass records.
     RefreshGroupMaskForFrame(ctx.renderer);
@@ -778,6 +799,9 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                          staticArgs_.Valid() && staticVisibleList_.Valid() && localStaticArgs_.Valid() &&
                          localStaticCounts_.Valid();
         localSplitFrame_ = dec.localSplit;
+        // Plan S9e: the radius threshold's inputs, this frame's (atlas modes only -- VSM caches pages, UE skips it there).
+        dec.localCamPos = localCamPos_;
+        dec.localRadiusSq = render::VsmActive() ? 0.0f : localRadiusThresholdSq_;
     }
 
     dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -925,6 +949,9 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     {
         valBounds_ = cpuBounds_;
         valFrustums_ = cpuViewFrustums_;
+        valLocalCamPos_ = dec.localCamPos; // S9e: the threshold the cull applies this frame
+        valLocalRadiusSq_ = dec.localRadiusSq;
+        valGiFirst_ = staticCount_;
         // S4: the camera row's inputs of THIS frame -- eligibility, the occlusion/chunk skip and
         // the crossfade (a fading caster counts twice), so the CPU reference reproduces the
         // camera branch of shadow_cull_cs.hlsl exactly.
@@ -2361,7 +2388,8 @@ void ShadowGpuData::SetActiveViewCount(std::uint32_t views)
     activeViews_ = std::clamp<std::uint32_t>(views, render::kVsmShadowViews, render::kMaxShadowViews);
 }
 
-void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count)
+void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count,
+                                       const render::LocalViewCull* const* local)
 {
     if (!renderer) { return; }
     if (count == 0 || !frustums)
@@ -2386,7 +2414,27 @@ void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const*
     {
         render::ShadowViewFrustum vf{};
         const Frustum* f = frustums[i];
-        if (f && f->IsValid())
+        if (f && f->IsValid() && render::IsLocalShadowView(static_cast<unsigned>(i)))
+        {
+            // Plan S9e: a spot / point face -- its 6 planes, the light's sphere and cone, UE's hull (the shader reads them
+            // by these slots). A perspective light view has exactly 6 planes; more would be dropped, which only culls less.
+            const DirectX::XMFLOAT4 acceptAll(0.0f, 0.0f, 0.0f, 1.0f);
+            const Math::float4* p = f->Planes();
+            const int n = std::min<int>(f->PlaneCount(), static_cast<int>(render::kLocalViewFrustumPlanes));
+            for (int j = 0; j < static_cast<int>(render::kLocalViewFrustumPlanes); ++j)
+            {
+                vf.planes[j] = j < n ? DirectX::XMFLOAT4(p[j].x, p[j].y, p[j].z, p[j].w) : acceptAll;
+            }
+            const render::LocalViewCull none{};
+            const render::LocalViewCull& lc = (local && local[i]) ? *local[i] : none;
+            vf.planes[render::kLocalViewSphereSlot] = lc.sphere;
+            vf.planes[render::kLocalViewConeSlot] = lc.cone;
+            for (std::uint32_t j = 0; j < render::kLocalViewHullPlanes; ++j)
+            {
+                vf.planes[render::kLocalViewHullFirst + j] = j < lc.hullCount ? lc.hull[j] : acceptAll;
+            }
+        }
+        else if (f && f->IsValid())
         {
             // S14: PlaneCount() real planes (6 for a box/perspective view, up to 12 for a cascade's
             // convex cull volume), the rest padded with the accept-all plane (0,0,0,+1): signedDist
@@ -3033,14 +3081,26 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         renderer->EmitPoint(cl, dec.unifiedRead);
     }
 
-    // S4: the fourth word is the camera's slot in the frustum ring (the last one, past the
-    // shadow views), or ~0 when the camera row is off this frame.
-    // S7: the fifth word -- the cull splits the local views' static casters into their own rows (dec.localSplit).
-    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView, localSplit, pad0, pad1, pad2; };
     const std::uint32_t camView = dec.gbuffer ? render::kMaxShadowViews : 0xFFFFFFFFu;
-    const std::uint32_t localSplit = dec.localSplit ? 1u : 0u;
-    auto writeCB = [&](std::uint8_t* dst) { CullCB c{ numCasters, numViews, numGroups, camView, localSplit, 0u, 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); };
-    const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
+    // The clears read only the first three words; `rows` is how many view rows they seed.
+    const auto clearCB = [&](std::uint32_t rows, std::uint32_t cam)
+    {
+        ShadowCullCB c{};
+        c.numCasters = numCasters;
+        c.numViews = rows;
+        c.numGroups = numGroups;
+        c.camView = cam;
+        return c;
+    };
+    ShadowCullCB cullCB = clearCB(numViews, camView);
+    cullCB.localSplit = dec.localSplit ? 1u : 0u;
+    cullCB.giFirst = staticCount_; // S9e: casters past it are GI (UploadCasterLods' isGi)
+    cullCB.camPos[0] = dec.localCamPos.x;
+    cullCB.camPos[1] = dec.localCamPos.y;
+    cullCB.camPos[2] = dec.localCamPos.z;
+    cullCB.radiusThresholdSq = dec.localRadiusSq;
+    auto writeCB = [&](std::uint8_t* dst) { std::memcpy(dst, &cullCB, sizeof(cullCB)); };
+    const UINT cbSize = static_cast<UINT>(sizeof(ShadowCullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
     cullCastersThisFrame_ = numCasters;
 
@@ -3069,7 +3129,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     if (dec.localSplit)
     {
         const std::uint32_t localRows = dec.localViews;
-        auto writeCBS = [&](std::uint8_t* dst) { CullCB c{ numCasters, localRows, numGroups, 0u, 0u, 0u, 0u, 0u }; std::memcpy(dst, &c, sizeof(c)); };
+        auto writeCBS = [&](std::uint8_t* dst) { const ShadowCullCB c = clearCB(localRows, 0u); std::memcpy(dst, &c, sizeof(c)); };
         RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCBS,
             { perGroupVg_.Srv(f) },
             { cullUav_[16 * render::kFrameCount + f], cullUav_[2 * render::kFrameCount + f], deferredCountUav() },
@@ -3083,7 +3143,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     if (dec.hzb)
     {
         const std::uint32_t hzbViews = render::CascadeHzb::kCascades;
-        auto writeCBB = [&](std::uint8_t* dst) { CullCB c{ numCasters, hzbViews, numGroups, 0u }; std::memcpy(dst, &c, sizeof(c)); };
+        auto writeCBB = [&](std::uint8_t* dst) { const ShadowCullCB c = clearCB(hzbViews, 0u); std::memcpy(dst, &c, sizeof(c)); };
         RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCBB,
             { perGroupVg_.Srv(f) },
             { cullUav_[5 * render::kFrameCount + f], cullUav_[2 * render::kFrameCount + f], deferredCountUav() },
@@ -3095,7 +3155,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     // S4: the camera's args, seeded from the camera's own bases (one view row).
     if (dec.gbuffer)
     {
-        auto writeCBCam = [&](std::uint8_t* dst) { CullCB c{ numCasters, 1u, numGroups, camView }; std::memcpy(dst, &c, sizeof(c)); };
+        auto writeCBCam = [&](std::uint8_t* dst) { const ShadowCullCB c = clearCB(1u, camView); std::memcpy(dst, &c, sizeof(c)); };
         RecordComputeDispatch(renderer, cl, cullClearMat_.get(), cbSize, writeCBCam,
             { perGroupVgCam_.Srv(f) },
             { cullUav_[7 * render::kFrameCount + f], cullUav_[2 * render::kFrameCount + f], deferredCountUav() },
@@ -3371,15 +3431,16 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
         return;
     }
 
-    // shadow_cull_cs.hlsl's CullParams (S7: + localSplit, 0 here -- these are cascade rows only).
-    struct CullCB { std::uint32_t numCasters, numViews, numGroups, camView, localSplit, pad0, pad1, pad2; };
-    const std::uint32_t kNoCamView = 0xFFFFFFFFu;
+    // shadow_cull_cs.hlsl's CullParams: cascade rows only, so no split, no camera row, nothing local (S7, S9e).
     auto writeCB = [&](std::uint8_t* dst)
     {
-        CullCB c{ numCasters, dec.views, numGroups, kNoCamView, 0u, 0u, 0u, 0u };
+        ShadowCullCB c{};
+        c.numCasters = numCasters;
+        c.numViews = dec.views;
+        c.numGroups = numGroups;
         std::memcpy(dst, &c, sizeof(c));
     };
-    const UINT cbSize = static_cast<UINT>(sizeof(CullCB));
+    const UINT cbSize = static_cast<UINT>(sizeof(ShadowCullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
     const D3D12_CPU_DESCRIPTOR_HANDLE deferredCountUav = cullUav_[4 * render::kFrameCount + f];
 
@@ -3833,6 +3894,55 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
     megaReady_ = true;
 }
 
+namespace
+{
+// The positive-vertex test over planes [first, first + count) -- shadow_cull_cs.hlsl's PlanesPass.
+bool CpuPlanesPass(const render::ShadowViewFrustum& vf, std::uint32_t first, std::uint32_t count, const render::CasterBounds& b)
+{
+    for (std::uint32_t i = first; i < first + count; ++i)
+    {
+        const DirectX::XMFLOAT4& p = vf.planes[i];
+        const float signedDist = p.x * b.center.x + p.y * b.center.y + p.z * b.center.z + p.w;
+        const float projRadius = std::abs(p.x) * b.halfExtents.x + std::abs(p.y) * b.halfExtents.y + std::abs(p.z) * b.halfExtents.z;
+        if (signedDist + projRadius < 0.0f) { return false; }
+    }
+    return true;
+}
+
+// Plan S9e: shadow_cull_cs.hlsl's LightBoundsPass -- the box against the light's sphere, its bounding sphere against a
+// spot's cone (UE USpotLightComponent::AffectsBounds).
+bool CpuLightBoundsPass(const DirectX::XMFLOAT4& sphere, const DirectX::XMFLOAT4& cone, const render::CasterBounds& b)
+{
+    if (sphere.w >= 0.0f)
+    {
+        const float dx = std::max(std::abs(b.center.x - sphere.x) - b.halfExtents.x, 0.0f);
+        const float dy = std::max(std::abs(b.center.y - sphere.y) - b.halfExtents.y, 0.0f);
+        const float dz = std::max(std::abs(b.center.z - sphere.z) - b.halfExtents.z, 0.0f);
+        if (dx * dx + dy * dy + dz * dz > sphere.w * sphere.w) { return false; }
+    }
+    if (cone.w <= 1.0f)
+    {
+        const float r = b.center.w;
+        const float cosA = cone.w;
+        const float sinA = std::sqrt(std::clamp(1.0f - cosA * cosA, 0.0f, 1.0f));
+        const float pull = r / std::max(sinA, 1e-4f);
+        float dx = b.center.x - (sphere.x - pull * cone.x);
+        float dy = b.center.y - (sphere.y - pull * cone.y);
+        float dz = b.center.z - (sphere.z - pull * cone.z);
+        float dsqr = dx * dx + dy * dy + dz * dz;
+        float e = cone.x * dx + cone.y * dy + cone.z * dz;
+        if (!(e > 0.0f && e * e >= dsqr * (cosA * cosA))) { return false; }
+        dx = b.center.x - sphere.x;
+        dy = b.center.y - sphere.y;
+        dz = b.center.z - sphere.z;
+        dsqr = dx * dx + dy * dy + dz * dz;
+        e = -(cone.x * dx + cone.y * dy + cone.z * dz);
+        if (e > 0.0f && e * e >= dsqr * (sinA * sinA)) { return dsqr <= r * r; }
+    }
+    return true;
+}
+} // namespace
+
 void ShadowGpuData::PollValidation(Renderer* renderer)
 {
     if (valState_ != 1 || !renderer || !valReadback_) { return; }
@@ -3882,21 +3992,37 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
 
     // CPU per-view totals from the snapshot (same positive-vertex test as shadow_cull_cs.hlsl).
     std::uint32_t mismatchViews = 0, firstView = 0, firstCpu = 0, firstGpu = 0;
+    std::uint64_t localStages[3] = {}, localDrawn = 0; // S9e: local caster draws after the frustum, bounds, hull; final
     std::string mismatchList;
     for (std::uint32_t v = 0; v < valViews_; ++v)
     {
         const render::ShadowViewFrustum& vf = valFrustums_[v];
+        const bool localView = render::IsLocalShadowView(v);
         std::uint32_t cpu = 0;
         for (std::uint32_t c = 0; c < valCasters_; ++c)
         {
             const render::CasterBounds& b = valBounds_[c];
-            bool visible = true;
-            for (int i = 0; i < static_cast<int>(render::kShadowViewPlanes); ++i)
+            bool visible;
+            if (localView)
             {
-                const DirectX::XMFLOAT4& p = vf.planes[i];
-                const float signedDist = p.x * b.center.x + p.y * b.center.y + p.z * b.center.z + p.w;
-                const float projRadius = std::abs(p.x) * b.halfExtents.x + std::abs(p.y) * b.halfExtents.y + std::abs(p.z) * b.halfExtents.z;
-                if (signedDist + projRadius < 0.0f) { visible = false; break; }
+                // S9e: the validation frame never splits, so every caster takes the hull and the threshold too. The
+                // stages are counted for the verdict line (what each test removed at this view).
+                const float dx = b.center.x - valLocalCamPos_.x, dy = b.center.y - valLocalCamPos_.y, dz = b.center.z - valLocalCamPos_.z;
+                const bool tiny = valLocalRadiusSq_ > 0.0f && c < valGiFirst_ &&
+                                  b.center.w * b.center.w <= valLocalRadiusSq_ * (dx * dx + dy * dy + dz * dz);
+                visible = CpuPlanesPass(vf, 0u, render::kLocalViewFrustumPlanes, b);
+                if (visible) { ++localStages[0]; }
+                visible = visible &&
+                          CpuLightBoundsPass(vf.planes[render::kLocalViewSphereSlot], vf.planes[render::kLocalViewConeSlot], b);
+                if (visible) { ++localStages[1]; }
+                visible = visible && CpuPlanesPass(vf, render::kLocalViewHullFirst, render::kLocalViewHullPlanes, b);
+                if (visible) { ++localStages[2]; }
+                visible = visible && !tiny;
+                if (visible) { ++localDrawn; }
+            }
+            else
+            {
+                visible = CpuPlanesPass(vf, 0u, render::kShadowViewPlanes, b);
             }
             if (visible) { ++cpu; }
         }
@@ -3971,6 +4097,14 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
     // trust it.
     logging::WriteRaw(mismatchViews == 0 ? logging::LogLevel::Info : logging::LogLevel::Warning,
                       logging::LogCategory::RenderShadow, buf);
+    // S9e: what UE's caster culling removed from the local views at this view (the CPU reference's own stages).
+    if (localStages[0] > 0)
+    {
+        LOG_INFO(logging::LogCategory::RenderShadow,
+                 "local shadow caster cull: {} draws inside the views' frusta, {} touch their light, {} in the light + "
+                 "camera hull, {} above the radius threshold",
+                 localStages[0], localStages[1], localStages[2], localDrawn);
+    }
     valState_ = 2;
 }
 

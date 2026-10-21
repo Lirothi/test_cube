@@ -64,7 +64,17 @@ public:
     // Per-frame upload of the active shadow views' frustum planes into this frame's region.
     // `frustums[i]` may be null (inactive view slot → reject-all sentinel so the cull emits
     // zero for it). `count` is the fixed view-slot count (stable view->slot mapping for the cull).
-    void UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count);
+    // Local-light plan S9e: `local[i]` (null = none) is a spot / point-face slot's light bounds and UE hull, packed
+    // beside its 6 planes (render::kLocalView*Slot); a local slot without one is uploaded without them.
+    void UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count,
+                            const render::LocalViewCull* const* local = nullptr);
+    // Plan S9e: UE r.Shadow.RadiusThreshold for the local views' MOVABLE rows -- this frame's camera position and
+    // (threshold x LODDistanceFactor)^2, 0 = off. Once per frame from Scene, before the cull records.
+    void SetLocalRadiusThreshold(const Math::float3& camPos, float thresholdSq)
+    {
+        localCamPos_ = camPos;
+        localRadiusThresholdSq_ = thresholdSq;
+    }
     // Local-light shadow plan S9: how many cull views this frame actually uses -- VSM's whole prefix
     // (render::kVsmShadowViews) and, past it, up to the last occupied extra spot / point-face slot. The
     // clear and the cull walk only these (each view costs its row of args plus one frustum test per
@@ -105,6 +115,9 @@ public:
         std::uint32_t localViews = 0;
         // Local-light plan S7: the cull splits the local views' static casters into their own rows this frame.
         bool localSplit = false;
+        // Plan S9e: SetLocalRadiusThreshold's values, taken by the builder (the record may run on a worker).
+        Math::float3 localCamPos = Math::float3(0.0f, 0.0f, 0.0f);
+        float localRadiusSq = 0.0f;
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -852,12 +865,17 @@ private:
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
+    Math::float3 localCamPos_ = Math::float3(0.0f, 0.0f, 0.0f); // S9e: SetLocalRadiusThreshold
+    float localRadiusThresholdSq_ = 0.0f;
 
     // Step 4 validation: deferred readback of the args region + a snapshot to compare against.
     Microsoft::WRL::ComPtr<ID3D12Resource> valReadback_; // READBACK heap
     std::vector<render::CasterBounds>      valBounds_;
     std::vector<render::ShadowViewFrustum> valFrustums_;
     std::uint32_t valCasters_ = 0, valViews_ = 0, valGroups_ = 0;
+    Math::float3 valLocalCamPos_ = Math::float3(0.0f, 0.0f, 0.0f); // S9e: the readback frame's threshold inputs
+    float valLocalRadiusSq_ = 0.0f;
+    std::uint32_t valGiFirst_ = 0;
     std::uint64_t valFrame_ = 0;
     int           valState_ = 0; // 0 = not started, 1 = readback pending, 2 = done
 

@@ -108,6 +108,24 @@ struct alignas(16) ShadowViewFrustum
 };
 static_assert(sizeof(ShadowViewFrustum) == 16 * kShadowViewPlanes, "ShadowViewFrustum must be 256 bytes");
 
+// Local-light plan S9e: a spot / point-face view (render::IsLocalShadowView) uses the same 16 slots differently --
+// shadow_cull_cs.hlsl reads them by these indices: its own frustum's 6 planes, the light's reach sphere (xyz origin,
+// w radius; w < 0 = none), a spot's cone (xyz axis, w cos of the outer angle; > 1 = none), then UE's light + camera
+// hull (BuildLightViewFrustumConvexHull, at most 6 planes, accept-all padded), which the S7 cache's static rows skip.
+inline constexpr uint32_t kLocalViewFrustumPlanes = 6;
+inline constexpr uint32_t kLocalViewSphereSlot = 6;
+inline constexpr uint32_t kLocalViewConeSlot = 7;
+inline constexpr uint32_t kLocalViewHullFirst = 8;
+inline constexpr uint32_t kLocalViewHullPlanes = kShadowViewPlanes - kLocalViewHullFirst;
+// What Scene hands ShadowGpuData::UpdateViewFrustums for one local slot, beside its Frustum.
+struct LocalViewCull
+{
+    DirectX::XMFLOAT4 sphere{ 0.0f, 0.0f, 0.0f, -1.0f };
+    DirectX::XMFLOAT4 cone{ 0.0f, 0.0f, 0.0f, 2.0f };
+    DirectX::XMFLOAT4 hull[kLocalViewHullPlanes] = {};
+    uint32_t hullCount = 0;
+};
+
 // Must equal GBUFFER_MAX_INSTANCES in shaders/gbuffer_common.hlsli. Runs larger than this
 // are split across multiple instanced draws.
 inline constexpr uint32_t kMaxInstancesPerDraw = 256;

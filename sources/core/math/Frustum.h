@@ -223,6 +223,48 @@ public:
         return true;
     }
 
+    // Local-light shadow plan S9e: UE BuildLightViewFrustumConvexHull (ShadowSetup.cpp) -- the convex hull of a light's
+    // origin and this PERSPECTIVE frustum's four side planes (no near, no far). A caster outside it cannot shadow
+    // anything this frustum sees: every point whose shadow ray enters the frustum lies between the light and it. Inward
+    // planes into `out`: the side planes the light is inside of, plus one through the light and each silhouette edge
+    // (an edge whose two planes disagree about the light). Returns the count, at most 6 (two sides visible, four
+    // edges); 0 = no test (an invalid or non-perspective frustum, or a light behind the apex outside all four, UE's
+    // empty hull). planes_[2..5] are DirectX's Right, Left, Top, Bottom (BoundingFrustum::GetPlanes).
+    static constexpr int kMaxLightHullPlanes = 8;
+    int LightViewConvexHull(const Math::float3& light, Math::float4 out[kMaxLightHullPlanes]) const
+    {
+        if (!valid_ || type_ != Type::Perspective || planeCount_ < 6) { return 0; }
+        enum { kRight = 2, kLeft = 3, kTop = 4, kBottom = 5 };
+        static constexpr int kEdges[4][2] = { { kLeft, kTop }, { kLeft, kBottom }, { kRight, kTop }, { kRight, kBottom } };
+        float dist[6] = {};
+        bool visible[6] = {};
+        int n = 0;
+        for (int i = kRight; i <= kBottom; ++i)
+        {
+            const Math::float4& p = planes_[i];
+            dist[i] = p.x * light.x + p.y * light.y + p.z * light.z + p.w;
+            visible[i] = dist[i] > 0.0f; // inward planes: UE's PlaneDot < 0
+            if (visible[i]) { out[n++] = p; }
+        }
+        for (const auto& edge : kEdges)
+        {
+            const int i1 = edge[0], i2 = edge[1];
+            if (visible[i1] == visible[i2]) { continue; }
+            // The plane through the edge (a combination of its two planes) and the light (it zeroes there), turned so the
+            // frustum's face on the hidden side stays inside: dist1 * plane2 - dist2 * plane1 when plane 1 is the visible one.
+            const float s = visible[i1] ? 1.0f : -1.0f;
+            const Math::float4& a = planes_[i1];
+            const Math::float4& b = planes_[i2];
+            Math::float4 p(s * (dist[i1] * b.x - dist[i2] * a.x), s * (dist[i1] * b.y - dist[i2] * a.y),
+                           s * (dist[i1] * b.z - dist[i2] * a.z), s * (dist[i1] * b.w - dist[i2] * a.w));
+            const float len = std::sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+            if (len <= 1e-8f) { continue; }
+            const float inv = 1.0f / len;
+            out[n++] = Math::float4(p.x * inv, p.y * inv, p.z * inv, p.w * inv);
+        }
+        return n;
+    }
+
 private:
     enum class Type
     {

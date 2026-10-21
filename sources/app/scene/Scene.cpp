@@ -2326,6 +2326,9 @@ void Scene::PrepareViews(Renderer* renderer)
         view.zNear = nearPlane;
         view.zFar = farPlane;
         view.hfov = 0.0f;
+        // Plan S9e: the light's reach and its cone (the clamped outer angle its projection is built from).
+        view.lightSphere = float4(desc.position, farPlane);
+        view.lightCone = float4(light.GetDirection(), light.GetCosOuter());
         view.shadowBias = float2(desc.shadowBias, desc.shadowSlopeBias); // local-light shadows S1
         view.shadowRes = lightManager_.GetSpotShadowResolution(lightIndex); // S4: its square
         {
@@ -2393,6 +2396,8 @@ void Scene::PrepareViews(Renderer* renderer)
             view.zNear = nearPlane;
             view.zFar = farPlane;
             view.hfov = 0.0f;
+            view.lightSphere = float4(P, farPlane); // plan S9e: a face's corners reach to sqrt(3) x the radius
+            view.lightCone = float4(0.0f, 0.0f, 0.0f, 2.0f);
             view.shadowRes = lightManager_.GetPointShadowResolution(lightIndex); // S4: the face's square
             {
                 // S9: the face's square inside the light's 3f x 2f block -- face k at (k % 3, k / 3) faces from its
@@ -3132,8 +3137,59 @@ void Scene::Render(Renderer* renderer) {
                 render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
         // S4: the camera, this frame's (PrepareViews above built it).
-        frustums[render::kMaxShadowViews] = &camera_.GetView().frustum;
-        shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size());
+        const SceneView& camView = camera_.GetView();
+        frustums[render::kMaxShadowViews] = &camView.frustum;
+        // Local-light plan S9e: each local view's light bounds, and -- atlas modes, the knob -- UE's hull of its light and
+        // the camera frustum (one per light: a point light's six faces share it). VSM caches pages: no hull (UE).
+        {
+            const bool boundsOn = render::g_localShadowBoundsCull;
+            const bool hullOn = render::g_localShadowHullCull && !render::VsmActive();
+            localViewCullPtr_.fill(nullptr);
+            const auto fill = [&](size_t slot, const SceneView& view, const render::LocalViewCull& hull)
+            {
+                render::LocalViewCull& lc = localViewCull_[slot];
+                lc = hull;
+                if (boundsOn)
+                {
+                    lc.sphere = view.lightSphere.xf();
+                    lc.cone = view.lightCone.xf();
+                }
+                localViewCullPtr_[slot] = &lc;
+            };
+            const auto buildHull = [&](const float3& light)
+            {
+                render::LocalViewCull hull{};
+                if (hullOn)
+                {
+                    Math::float4 planes[Frustum::kMaxLightHullPlanes] = {};
+                    const int n = std::min<int>(camView.frustum.LightViewConvexHull(light, planes),
+                                                static_cast<int>(render::kLocalViewHullPlanes));
+                    for (int j = 0; j < n; ++j) { hull.hull[j] = planes[j].xf(); }
+                    hull.hullCount = static_cast<std::uint32_t>(n);
+                }
+                return hull;
+            };
+            for (size_t i = 0; i < kSpotSlots && i < spotCount; ++i)
+            {
+                fill(render::ShadowViewSpotSlot(static_cast<unsigned>(i)), spotShadowViews_[i],
+                     buildHull(spotShadowViews_[i].position));
+            }
+            for (size_t i = 0; i < kPointFaceSlots && i < pointFaceCount; i += 6)
+            {
+                const render::LocalViewCull hull = buildHull(pointShadowViews_[i].position);
+                for (size_t face = 0; face < 6 && i + face < pointFaceCount; ++face)
+                {
+                    fill(render::ShadowViewPointFaceSlot(static_cast<unsigned>(i + face)), pointShadowViews_[i + face], hull);
+                }
+            }
+            // UE r.Shadow.RadiusThreshold x LODDistanceFactor (the player camera's FOV / 90, UE LocalPlayer.cpp) -- the
+            // horizontal FOV, which is UE's; 1 / proj[0][0] = tan(hfov / 2), unchanged by the jitter.
+            const float m00 = camView.proj.m.m[0][0];
+            const float hfovDeg = m00 > 1e-6f ? DirectX::XMConvertToDegrees(2.0f * std::atan(1.0f / m00)) : 90.0f;
+            const float share = std::max(render::g_localShadowRadiusThreshold, 0.0f) * (hfovDeg / 90.0f);
+            shadowGpu_.SetLocalRadiusThreshold(camView.position, share * share);
+        }
+        shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size(), localViewCullPtr_.data());
         // Plan S9: the cull walks VSM's prefix and, past it, only up to the last occupied extra slot.
         {
             unsigned activeViews = render::kVsmShadowViews;

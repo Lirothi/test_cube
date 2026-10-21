@@ -346,6 +346,9 @@ private:
     ShadowGpuData shadowGpu_{};
     // Local-light plan S7: the atlas spot / point lights' cache of their static casters (pool + entries).
     render::LocalShadowCache localShadowCache_{};
+    // Plan S9e: the local views' light bounds + UE hull handed to UpdateViewFrustums each frame (by slot; null = none).
+    std::array<render::LocalViewCull, render::kMaxShadowViews + 1> localViewCull_{};
+    std::array<const render::LocalViewCull*, render::kMaxShadowViews + 1> localViewCullPtr_{};
     // Occlusion plan S3a: the camera's occlusion history (per primitive / per chunk), the query
     // heap that records this frame's plan and the CPU copy of the results frame N - latency read
     // at the top of PrepareViews (kept alive for the camera task's Consider calls).
