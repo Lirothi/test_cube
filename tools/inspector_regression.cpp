@@ -1,10 +1,12 @@
 // CPU-only regression: build the engine Debug|x64, then this tool's vcxproj.
 // No window/device, level writes, asset writes, or editor preference changes.
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <memory>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
@@ -13,7 +15,9 @@
 #include "editor/ui/InspectorMultiEdit.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/InspectorPropertyDelta.h"
+#include "editor/ui/SceneOutlinerPanel.h"
 #include "editor/commands/TransformObjectCommand.h"
+#include "editor/intent/EditorActionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/StaticMesh.h"
@@ -263,6 +267,109 @@ void TestMouseGesture(EditorContext& ctx)
     std::puts("PASS: ImGui mouse drag -> existing InspectorPanel -> all selected objects -> one undo");
 }
 
+// The outliner's category box (owner, 2026-10-22): the real panel, a real mouse. Meshes 1 and 2 and point light 6 in
+// the group "Lamps", mesh 2 off -> one click on the group row's "On" box raises SetGroupEnabled for all three, ON (a
+// mix turns everything on); the controller's road (setEnabled over the targets) changes mesh 2 alone, one undo entry;
+// a second click turns all three off, again one entry. The selection is never touched.
+void TestOutlinerGroupToggle(EditorContext& ctx)
+{
+    auto& doc = ctx.document;
+    doc.Find({1})->properties["group"] = "Lamps";
+    doc.Find({2})->properties["group"] = "Lamps";
+    doc.Environment()[0].properties["group"] = "Lamps"; // point light 6
+    doc.Find({2})->enabled = false;
+    doc.SetDirty(true);
+    const std::vector<EditorObjectId> selectedBefore = ctx.selection.Ordered();
+    const auto selectionUntouched = [&]
+    {
+        const auto& now = ctx.selection.Ordered();
+        return now.size() == selectedBefore.size() &&
+            std::equal(now.begin(), now.end(), selectedBefore.begin(),
+                [](EditorObjectId a, EditorObjectId b) { return a.value == b.value; });
+    };
+
+    SceneOutlinerPanel panel;
+    EditorCommandStack history;
+    AssetRegistry registry;
+    EditorExtensionRegistry extensions;
+    const std::unordered_map<std::uint64_t, std::vector<std::string>> noErrors;
+    bool open = true;
+    OutlinerAction raised;
+    const auto frame = [&]
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        OutlinerAction action = panel.Draw(doc, ctx.selection, noErrors, &open);
+        if (action.type != OutlinerAction::Type::None && raised.type == OutlinerAction::Type::None)
+        {
+            raised = std::move(action);
+        }
+        ImGui::Render();
+    };
+    frame(); frame();
+
+    // The box's id, built the way ImGui builds it: the table's id in the window, the group's name, the box.
+    ImGuiWindow* window = ImGui::FindWindowByName("Scene Outliner");
+    Check(window != nullptr, "outliner window drawn");
+    const ImGuiID tableId = ImHashStr("##outliner", 0, window->ID);
+    ImGuiTable* table = ImGui::TableFindByID(tableId);
+    Check(table != nullptr && table->Columns.size() == 4, "outliner table found");
+    const ImGuiID boxId = ImHashStr("##groupEnabled", 0, ImHashStr("Lamps", 0, tableId));
+    const float x = (table->Columns[3].MinX + table->Columns[3].MaxX) * 0.5f;
+    auto& io = ImGui::GetIO();
+    // THIS frame's hovered id: ImGui::GetHoveredID() falls back to the previous frame's when nothing is hovered now,
+    // which "found" the box over the column header and clicked the header.
+    const auto findBox = [&]
+    {
+        for (float y = table->OuterRect.Min.y; y < table->OuterRect.Min.y + 160.0f; y += 2.0f)
+        {
+            io.AddMousePosEvent(x, y);
+            frame();
+            if (ImGui::GetCurrentContext()->HoveredId == boxId) { return y; }
+        }
+        return -1.0f;
+    };
+    const auto click = [&]
+    {
+        raised = OutlinerAction{};
+        io.AddMouseButtonEvent(0, true);
+        frame();
+        io.AddMouseButtonEvent(0, false);
+        frame();
+    };
+    const auto runRaised = [&]
+    {
+        nlohmann::json params;
+        params["enabled"] = raised.enabledValue;
+        std::string status;
+        return RunEditorAction(EditorActionContext{ ctx, registry, extensions }, history,
+            MakeActionIntent("setEnabled", params), raised.targets, status);
+    };
+    const auto lightOn = [&] { return doc.Environment()[0].properties.value("enabled", true); };
+
+    Check(findBox() >= 0.0f, "the Lamps row has an On box under the mouse");
+    click();
+    Check(raised.type == OutlinerAction::Type::SetGroupEnabled, "a click on the box raises SetGroupEnabled");
+    Check(raised.enabledValue, "a mixed category turns ON");
+    Check(raised.targets.size() == 3, "the action carries every row of the category");
+    Check(runRaised(), "setEnabled over the category runs");
+    Check(doc.Find({1})->enabled && doc.Find({2})->enabled && lightOn(), "all rows on");
+    Check(history.HistorySize() == 1, "one undo entry for the category");
+    Check(selectionUntouched(), "the category box leaves the selection alone");
+
+    frame(); frame(); // the panel re-reads the document (content version)
+    Check(findBox() >= 0.0f, "the box is still there");
+    click();
+    Check(raised.type == OutlinerAction::Type::SetGroupEnabled && !raised.enabledValue, "an all-on category turns OFF");
+    Check(runRaised(), "setEnabled off over the category runs");
+    Check(!doc.Find({1})->enabled && !doc.Find({2})->enabled && !lightOn(), "all rows off");
+    Check(history.HistorySize() == 2, "again one undo entry");
+    history.Undo(ctx);
+    Check(doc.Find({1})->enabled && doc.Find({2})->enabled && lightOn(), "undo restores the whole category");
+    Check(selectionUntouched(), "selection still untouched");
+    std::puts("PASS: ImGui click -> outliner category box -> every row of the group, one undo, selection untouched");
+}
+
 int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
@@ -297,6 +404,7 @@ int main()
         int width, height;
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
         TestMouseGesture(ctx);
+        TestOutlinerGroupToggle(ctx);
         selection.Replace(post->id);
 #if INSPECTOR_BASELINE
         std::printf("Post Process BEFORE: %.3f ms/draw (Debug, 5 expanded categories)\n",

@@ -22,7 +22,8 @@ struct PointLightData
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
     float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4), w = texel-bias normal texels
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
-    float4 shadowParams4; // S10e: x = the light's VSM mip bias (unread here); S4: y = 1 / (f - n) of a LINEAR face depth
+    float4 shadowParams4; // S10e: x = the light's VSM mip bias (unread here); S4: y = 1 / (f - n) of a LINEAR face depth;
+                          // S9e: z = the VSM view of its +X face
 };
 
 struct SpotLightData
@@ -36,7 +37,8 @@ struct SpotLightData
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
     float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
-    float4 shadowParams4;      // S10e: x = the light's VSM mip bias (unread here); S4: y = 1 / (f - n) of a LINEAR atlas depth
+    float4 shadowParams4;      // S10e: x = the light's VSM mip bias (unread here); S4: y = 1 / (f - n) of a LINEAR atlas depth;
+                               // S9e: z = its VSM view
 };
 
 // Per-object data (unique per glass instance).
@@ -98,7 +100,7 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         float3 toLight = Ld.position - Poff;
         const float dist = length(toLight);
         Poff += (toLight / max(dist, 1e-4f)) * (dist - PointShadowCompareDistance(dist, Ld.shadowParams, Ld.volumetric.y, 1.0f));
-        return VsmPointShadow((uint)Ld.shadowParams.x, Poff, Ld.position, Ld.shadowParams.z,
+        return VsmPointShadow((uint)Ld.shadowParams4.z, Poff, Ld.position, Ld.shadowParams.z, // S9e: its first VSM view
                               Ld.shadowParams.w, camPosSky.xyz, vsmParams.y, 0.0f,
                               VsmPageTable, VsmPool, ShadowSampler);
     }
@@ -298,8 +300,8 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 
     // Rung 2 / Step 21: sample the VSM page pool (matches spotlight_cs.hlsl's VSM branch).
     if (vsmParams.x != 0.0f)
     {
-        uint slot = (uint)light.shadowParams.y;
-        return VsmSpotShadow(slot, light.viewProj, Poff, camPosSky.xyz, vsmParams.y, depthBias,
+        const uint view = (uint)light.shadowParams4.z; // plan S9e: the light's VSM view
+        return VsmSpotShadow(view, light.viewProj, Poff, camPosSky.xyz, vsmParams.y, depthBias,
                              VsmPageTable, VsmPool, ShadowSampler);
     }
 

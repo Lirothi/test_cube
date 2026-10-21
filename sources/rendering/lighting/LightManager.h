@@ -18,18 +18,13 @@ class Frustum;
 
 class LightManager {
 public:
-    // The total spot-light count is unbounded (the structured buffer grows on
-    // demand). Only shadow CASTERS are capped per frame - the highest-priority
-    // kMaxShadowedSpotLights for the camera - which sizes the shadow-view arrays and the
-    // GPU cull's view slots. Distant spots still light the scene, just without a shadow.
-    //
-    // Local-light shadow plan S9: the atlas modes (Legacy / SDSM) take up to 32 spots and 16
-    // points -- UE has no count at all, but our views are fixed slots (render::kMaxShadowViews);
-    // the atlas itself is a page budget (PackShadowAtlases). Plan S10b: VSM takes the same 32 + 16
-    // (its views are the cull slots minus the cascades). kVsmShadowed* is only the size of the
+    // The total spot-light count is unbounded (the structured buffer grows on demand), and since local-light plan S9e so
+    // are the shadow CASTERS -- UE's: every lit light whose reach touches the view and whose fade is above 1/256 wants a
+    // shadow. The view slots they take are a CAPACITY (render::ShadowSpotCapacity / ShadowPointCapacity) the caller
+    // passes as `maxCount`; a frame that wants more takes the best-ranked that fit and reports the rest through
+    // WantedShadowedSpots / Points, and Scene::ReconcileShadowMode grows the capacity at its next GPU-idle point. The
+    // atlas itself is a page budget (PackShadowAtlases), VSM's a page pool. kVsmShadowed* is only the size of the
     // layout's PREFIX -- the spots and faces before the clipmap slots.
-    static constexpr std::uint32_t kMaxShadowedSpotLights = render::kShadowViewSpots;
-    static constexpr std::uint32_t kMaxShadowedPointLights = render::kShadowViewPoints;
     static constexpr std::uint32_t kVsmShadowedSpotLights = render::kShadowViewVsmSpots;
     static constexpr std::uint32_t kVsmShadowedPointLights = render::kShadowViewVsmPoints;
 
@@ -50,7 +45,8 @@ public:
         Math::float4 shadowAtlas;
         // Plan S10e: x = the light's VSM mip bias on top of the frame's (vsm::LocalMovingMipBias: UE's
         // ResolutionLodBiasLocalMoving by the light's mobility). Plan S4: y = 1 / (f - n) when its faces hold the
-        // LINEAR depth (render::PointShadowLinearDepth; n = shadowParams.z), 0 = perspective. zw reserved. Same mirrors.
+        // LINEAR depth (render::PointShadowLinearDepth; n = shadowParams.z), 0 = perspective. Plan S9e: z = the VSM view
+        // of its +X face (vsm::PointFaceView of slot * 6; the other five follow). w reserved. Same mirrors.
         Math::float4 shadowParams4;
     };
 
@@ -74,7 +70,7 @@ public:
         // Plan S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias, see PointLightGpu).
         // Plan S4: y = 1 / (f - n) when its atlas square holds the LINEAR depth (w - n) / (f - n)
         // (render::SpotShadowLinearDepth; n = shadowParams3.x, both the projection's own), 0 = the perspective NDC
-        // depth. zw reserved. Same mirrors.
+        // depth. Plan S9e: z = its VSM view (vsm::SpotView of its slot). w reserved. Same mirrors.
         Math::float4 shadowParams4;
     };
 
@@ -91,7 +87,7 @@ public:
 
     // Per-frame: among lit spots whose influence intersects the camera frustum,
     // choose the highest-priority projected/bright spots up to
-    // kMaxShadowedSpotLights to cast shadows, and assign each a shadow slot in
+    // `maxCount` (the view capacity, plan S9e) to cast shadows, and assign each a shadow slot in
     // [0, GetShadowedSpotCount()) in descending-priority order. Frustum-culling
     // first means a nearby spot that can't affect any visible pixel (e.g. behind
     // the camera, out of reach) never consumes a scarce shadow slot. Must run
@@ -108,8 +104,8 @@ public:
     //
     // Plan S4: the same wanted resolution sizes the light's shadow as UE sizes it -- a spot's rounded down to a power of
     // two up to `maxRes` (the spot atlas page), a point's cube face to the first of maxRes/2, /4, /8, /16, 32
-    // (GetSpotShadowResolution). Plan S9: up to `maxCount` lights (kMaxShadowedSpotLights -- the atlas modes and, since
-    // plan S10b, VSM); PackShadowAtlases then places them on the atlases.
+    // (GetSpotShadowResolution). Plan S9: up to `maxCount` lights (render::ShadowSpotCapacity -- the atlas modes and,
+    // since plan S10b, VSM; S9e: WantedShadowedSpots grows it); PackShadowAtlases then places them on the atlases.
     void SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
                              std::uint32_t maxRes, std::uint32_t maxCount);
     // S3: the light's shadow fade this frame, 0..1 (1 for an index without one).
@@ -134,8 +130,14 @@ public:
 
     size_t GetSpotLightCount() const { return cachedSpotLightCount_; }
 
-    // Number of spots casting a shadow this frame (<= kMaxShadowedSpotLights).
+    // Number of spots casting a shadow this frame (<= the caller's maxCount, the view capacity).
     size_t GetShadowedSpotCount() const { return shadowedSpotLightIndices_.size(); }
+    // Plan S9e: how many spots / points the last selection WANTED to shadow (every candidate, before the capacity cut) --
+    // what Scene::ReconcileShadowMode grows the view capacity to.
+    std::uint32_t WantedShadowedSpots() const { return wantedShadowedSpots_; }
+    std::uint32_t WantedShadowedPoints() const { return wantedShadowedPoints_; }
+    // A fresh level asks again from nothing (Scene::FinalizeLevelLoad resets the capacity with it).
+    void ForgetWantedShadowed() { wantedShadowedSpots_ = 0u; wantedShadowedPoints_ = 0u; }
     // Shadow-atlas slot for a spot-light index, or -1 if it is not shadowed.
     int GetSpotShadowSlot(size_t lightIndex) const
     {
@@ -150,7 +152,7 @@ public:
     // Per-frame point-light equivalent of SelectShadowedSpots. Among point lights
     // whose influence sphere (position, radius) intersects the camera frustum and
     // which have shadows enabled, choose the highest projected-size up to
-    // kMaxShadowedPointLights to cast (cube) shadows, assigning each a cube slot in
+    // `maxCount` (the view capacity) to cast (cube) shadows, assigning each a cube slot in
     // [0, GetShadowedPointCount()). Pass the SAME non-jittered frustum used for
     // spots. Must run before the point cube views are built / the point-light buffer
     // is filled.
@@ -186,7 +188,7 @@ public:
     std::uint32_t ShadowAtlasShrunk() const { return atlasShrunk_; }
     std::uint32_t ShadowAtlasDropped() const { return atlasDropped_; }
 
-    // Number of point lights casting a shadow this frame (<= kMaxShadowedPointLights).
+    // Number of point lights casting a shadow this frame (<= the caller's maxCount).
     size_t GetShadowedPointCount() const { return shadowedPointLightIndices_.size(); }
     // Cube-atlas slot for a point-light index, or -1 if it is not shadowed.
     int GetPointShadowSlot(size_t lightIndex) const
@@ -267,6 +269,8 @@ private:
     // Per-frame point cube-shadow-slot mapping (see SelectShadowedPoints).
     std::vector<int> pointShadowSlot_;                      // parallel to pointLights_; -1 = unshadowed
     std::vector<std::uint32_t> shadowedPointLightIndices_;  // slot -> point-light index
+    std::uint32_t wantedShadowedSpots_ = 0;                 // S9e: the last selection's candidates
+    std::uint32_t wantedShadowedPoints_ = 0;
     std::vector<float> spotShadowFade_;                     // S3: parallel to spotLights_
     std::vector<float> pointShadowFade_;                    // S3: parallel to pointLights_
     std::vector<std::uint32_t> spotShadowRes_;              // S4: parallel to spotLights_

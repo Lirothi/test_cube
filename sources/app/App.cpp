@@ -25,6 +25,7 @@
 
 // Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
 std::string g_bootLevelPath;
+std::string g_sceneStressExtraLevel;
 bool  g_camOverride = false;
 float g_camPos[3] = { 0.0f, 0.0f, 0.0f };
 float g_camFly[2] = { 0.0f, 0.0f }; // "--cam-fly=x,z": constant camera drift in m/s (world XZ)
@@ -626,6 +627,8 @@ namespace
         if (setting == "shadow.localCompact") { render::g_localShadowCompact = value != 0.0f; return true; } // S6a
         if (setting == "shadow.localCache") { render::g_localShadowCache = value != 0.0f; return true; } // S7
         if (setting == "shadow.localCacheWind") { render::g_localShadowCacheWind = value != 0.0f; return true; } // S7
+        // The lamps' shadows sway only within this many metres of the camera (< 0 = everywhere).
+        if (setting == "shadow.localWindRange") { render::g_localShadowWindRange = std::min(value, 100000.0f); return true; }
         // Plan S9e: UE's caster culling for the local views -- the light's bounds, the light + camera hull, the radius
         // threshold (a share of the distance to the camera, 0 = off).
         if (setting == "shadow.localBoundsCull") { render::g_localShadowBoundsCull = value != 0.0f; return true; }
@@ -975,6 +978,7 @@ namespace
                 { "lampTurnOnSec", &t.lampTurnOnSec, 0.0f, 600.0f },
                 { "lampTurnOnFlicker", &t.lampTurnOnFlicker, 0.0f, 1.0f },
                 { "lampTurnOnExponent", &t.lampTurnOnExponent, 0.01f, 10.0f },
+                { "lampDayBrightness", &t.lampDayBrightness, 0.0f, 100000.0f }, // always-on lamps by day (UDS's 5-lux sun)
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
                 // N2: the night sky's layers (timeOfDay.nightSky.*).
                 { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },

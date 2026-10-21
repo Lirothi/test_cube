@@ -547,13 +547,15 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             case OutlinerGroup::PostProcess: group = &postProcessRows; break;
             case OutlinerGroup::Other:       group = &other; break;
             }
-            // A NAMED GROUP OVERRIDES THE MESHES BUCKET, and only that one. The other
-            // buckets answer "what kind of thing is this", which a designer's grouping does
-            // not change: a light put in "North Shore" is still a light and still belongs
-            // with the lights, where someone looking for lights will find it. Placed
-            // geometry is the only bucket big enough to need dividing anyway -- 600 rows of
-            // "Meshes" is the problem groups exist to solve.
-            if (group == &meshes && !environment && object.properties.is_object())
+            // A NAMED GROUP OVERRIDES THE MESHES AND THE LIGHTS BUCKETS, and only those. The
+            // other buckets answer "what kind of thing is this", which a designer's grouping
+            // does not change. Placed geometry was the first bucket big enough to need
+            // dividing -- 600 rows of "Meshes" is the problem groups exist to solve -- and a
+            // lamp is two of them: its bulb (a mesh) and its light. The owner (2026-10-21)
+            // wants a level's lamps in their own category, bulb and light together, rather
+            // than a hundred lights among the rest; a light without a group stays in Lights.
+            const bool groupable = (group == &meshes && !environment) || group == &lights;
+            if (groupable && object.properties.is_object())
             {
                 const auto it = object.properties.find("group");
                 if (it != object.properties.end() && it->is_string() &&
@@ -1014,11 +1016,13 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::SetNextItemOpen(groupOpen, ImGuiCond_Always);
+            // AllowOverlap so the category's "On" box below stays clickable over this row-spanning node.
             const ImGuiTreeNodeFlags groupFlags =
                 ImGuiTreeNodeFlags_SpanAllColumns |
                 ImGuiTreeNodeFlags_LabelSpanAllColumns |
                 ImGuiTreeNodeFlags_FramePadding |
-                ImGuiTreeNodeFlags_NoTreePushOnOpen;
+                ImGuiTreeNodeFlags_NoTreePushOnOpen |
+                ImGuiTreeNodeFlags_AllowOverlap;
 
             // TRUNCATED TO THE NAME COLUMN, with the full text on hover. The label is
             // allowed to span the row, which is right for a heading, but a name long
@@ -1061,6 +1065,51 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
             if (ImGui::IsItemToggledOpen())
             {
                 groupOpen = openNow;
+            }
+
+            // THE CATEGORY'S OWN "On" (owner, 2026-10-22: "над категорией можно было делать enable/disable"):
+            // checked when every row is on, empty when every row is off, the mixed mark otherwise, and one click
+            // sets them all -- a mix turns everything on -- through the rows' own setEnabled, as one undo entry.
+            // It acts on the rows the category shows, so a search narrows it with the list. Only where EVERY row
+            // can be switched: a box over Environment that moved only the ocean would say the sky was off.
+            bool anyOn = false;
+            bool anyOff = false;
+            bool allSwitchable = true;
+            for (const OutlinerRowRef& row : rows)
+            {
+                if (!row.object) { continue; }
+                if (row.environment && !SupportsEnvironmentEnable(*row.object))
+                {
+                    allSwitchable = false;
+                    break;
+                }
+                if (RowEnabledValue(*row.object, row.environment)) { anyOn = true; } else { anyOff = true; }
+            }
+            if (allSwitchable && (anyOn || anyOff))
+            {
+                ImGui::TableSetColumnIndex(OutlinerColumn_Enabled - 1); // the ids count from Name = 1
+                ImGui::PushID(id);
+                bool allOn = anyOn && !anyOff;
+                ImGui::PushItemFlag(ImGuiItemFlags_MixedValue, anyOn && anyOff);
+                const bool clicked = ImGui::Checkbox("##groupEnabled", &allOn);
+                ImGui::PopItemFlag();
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("%s all %zu rows of %s (one undo step)", allOn ? "Disable" : "Enable",
+                        rows.size(), label);
+                }
+                if (clicked && action.type == OutlinerAction::Type::None)
+                {
+                    action.type = OutlinerAction::Type::SetGroupEnabled;
+                    action.enabledValue = allOn;
+                    action.targets.clear();
+                    action.targets.reserve(rows.size());
+                    for (const OutlinerRowRef& row : rows)
+                    {
+                        if (row.object) { action.targets.push_back(row.object->id); }
+                    }
+                }
+                ImGui::PopID();
             }
             if (!openNow)
             {

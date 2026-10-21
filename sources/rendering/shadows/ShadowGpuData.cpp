@@ -24,7 +24,7 @@
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumCascades / kNumClipmapLevels (view tiers)
-#include "rendering/lighting/LightManager.h"    // kMaxShadowedSpotLights / kMaxShadowedPointLights
+#include "rendering/lighting/LightManager.h"
 #include "rendering/renderables/GBufferRenderable.h" // C2: per-slot MaterialData accessor
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/IInstanceable.h"
@@ -221,6 +221,8 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
 // splits the local views' static casters into their own rows. S9e: the clipmap slots (the views past the cascades that
 // are NOT local), the first GI caster (exempt from the radius threshold) and that threshold: the camera's position and
 // (r.Shadow.RadiusThreshold x LODDistanceFactor)^2, 0 = off.
+// render::g_localShadowWindRange: windRigid -- one bit per view slot, set for a local view whose light is past the range
+// (its wind-only casters go to its static rows).
 struct ShadowCullCB
 {
     std::uint32_t numCasters = 0, numViews = 0, numGroups = 0, camView = 0xFFFFFFFFu;
@@ -228,8 +230,10 @@ struct ShadowCullCB
                   clipEnd = render::ShadowViewClipmapSlot(render::kShadowViewClipmapLevels), giFirst = 0;
     float camPos[3] = { 0.0f, 0.0f, 0.0f };
     float radiusThresholdSq = 0.0f;
+    ShadowGpuData::ViewMask windRigid{};
 };
-static_assert(sizeof(ShadowCullCB) == 48, "ShadowCullCB mirrors shadow_cull_cs.hlsl's CullParams");
+static_assert(sizeof(ShadowCullCB) == 48 + sizeof(ShadowGpuData::ViewMask),
+              "ShadowCullCB mirrors shadow_cull_cs.hlsl's CullParams");
 
 // ---- Caster filtering + fills ----------------------------------------------
 
@@ -661,8 +665,9 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
     {
         // Local-light plan S7: bit kCasterLocalDynamicBit of the UPLOADED copy (never casterLod_: its compare against
         // last frame is the LOD-change signal that re-renders VSM) = movable for the local shadow cache -- GI, an
-        // IsDynamicCaster object, one that moved within kFrameCount + 1 frames (pending_), one that sways in the wind
-        // (UE: Movable, or a WPO material with r.Shadow.CacheWPOPrimitives 0). Every caster that changes side changes
+        // IsDynamicCaster object, one that moved within kFrameCount + 1 frames (pending_); one that sways in the wind
+        // (UE: Movable, or a WPO material with r.Shadow.CacheWPOPrimitives 0) carries kCasterLocalWindBit instead, movable
+        // only for the lights inside render::g_localShadowWindRange. Every caster that changes side changes
         // the static set, so the cached pictures go stale: a move invalidates on its first frame (the old position is
         // baked in) and again when it settles (it has to be baked in at the new one).
         // Built in CPU memory and copied ONCE: the ring region is write-combined upload memory, and setting the bit
@@ -680,11 +685,15 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
             const bool isFlagged = i < cpuCasterMeta_.size() && (cpuCasterMeta_[i] & 1u) != 0u;
             const bool isMoved = i < pending_.size() && pending_[i] > 0;
             const bool isWindy = !render::g_localShadowCacheWind && i < casterWindy_.size() && casterWindy_[i] != 0u;
-            const bool dyn = isGi || isFlagged || isMoved || isWindy;
+            const bool dyn = isGi || isFlagged || isMoved;
+            // render::g_localShadowWindRange: a caster that is movable only for its sway is static for the lights past
+            // the range (shadow_cull_cs reads the view's verdict), so it keeps its own bit.
             if (dyn) { lods[i] |= render::kCasterLocalDynamicBit; }
-            const std::uint8_t d = dyn ? 1u : 0u;
+            else if (isWindy) { lods[i] |= render::kCasterLocalWindBit; }
+            // Either static set changes when a caster changes class: 0 static, 1 wind only, 2 movable.
+            const std::uint8_t d = dyn ? 2u : (isWindy ? 1u : 0u);
             if (localDynamicPrev_[i] != d) { localDynamicPrev_[i] = d; changed = true; }
-            movable += d;
+            movable += d != 0u ? 1u : 0u;
             gi += isGi ? 1u : 0u;
             flagged += isFlagged ? 1u : 0u;
             moved += isMoved ? 1u : 0u;
@@ -825,6 +834,8 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         // Plan S9e: the radius threshold's inputs, this frame's (atlas modes only -- VSM caches pages, UE skips it there).
         dec.localCamPos = localCamPos_;
         dec.localRadiusSq = render::VsmActive() ? 0.0f : localRadiusThresholdSq_;
+        // The wind range only splits rows, so only a split frame reads it (VSM never splits).
+        if (dec.localSplit) { dec.localWindRigid = localWindRigid_; } else { dec.localWindRigid.fill(0u); }
     }
 
     dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -1097,7 +1108,7 @@ void ShadowGpuData::RecordCamCullPost(Renderer* renderer, ID3D12GraphicsCommandL
         auto cb1 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CameraHzbParams)), render::kConstantBufferAlignment);
         if (cb0.cpu && cb1.cpu)
         {
-            const CullCB c{ numCasters, 1u, numGroups, render::kMaxShadowViews };
+            const CullCB c{ numCasters, 1u, numGroups, render::MaxShadowViews() }; // S9e: the camera slot follows the views
             std::memcpy(cb0.cpu, &c, sizeof(c));
             std::memcpy(cb1.cpu, &camHzbParams_, sizeof(camHzbParams_));
 
@@ -1849,11 +1860,12 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // (near = fine, far = coarse); the global bias shifts it. Locals use the near tier. The final LOD
     // is clamped per mesh by the tables below (a mesh may have fewer LODs than the view asks for).
     const int lodCap = static_cast<int>(render::kMaxShadowLods) - 1;
-    viewLod_.assign(render::kMaxShadowViews, 0u);
+    const std::uint32_t maxViews = render::MaxShadowViews(); // S9e: the view capacity this rebuild is sized for
+    viewLod_.assign(maxViews, 0u);
     {
         constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
         constexpr std::uint32_t kClipmapBegin = render::ShadowViewClipmapSlot(0u);
-        for (std::uint32_t v = 0; v < render::kMaxShadowViews; ++v)
+        for (std::uint32_t v = 0; v < maxViews; ++v)
         {
             std::uint32_t tier;
             if (v < kCasc)                       { tier = v; }                  // CSM cascade index (near->far)
@@ -2129,7 +2141,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // Step 3: allocate the GPU-driven indirect-execution buffers, sized per (view, mesh-group).
     // Worst case: every caster visible in every view (visible list) and one draw per
     // (view, mesh-group) (args), one draw count per view. Still unused (no descriptors).
-    const size_t numViews = render::kMaxShadowViews;
+    // Plan S9e: the view CAPACITY (render::MaxShadowViews), which Scene::ReconcileShadowCapacity grows -- by rebuilding
+    // this whole set, so the rows below always match the layout the frame uploads.
+    const size_t numViews = render::MaxShadowViews();
+    builtViews_ = static_cast<std::uint32_t>(numViews);
     // S3.6: the indirect args are indexed per (view, VIRTUAL group).
     const size_t groups = std::max<size_t>(numVirtualGroups_, 1);
     const size_t casters = std::max<size_t>(count_, 1); // TOTAL (static + GI): visible-list + unified width
@@ -2153,7 +2168,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // Both are RAW views per region, and a RAW view's first element must sit on 16 bytes: 138 views x 4 B = 552 put
     // region 1 of the counts at element 138, which the debug layer rejects (and Release crashed on), so round up.
     {
-        const size_t localViews = render::kMaxShadowViews - render::kShadowViewCascades;
+        const size_t localViews = numViews - render::kShadowViewCascades;
         const auto align16 = [](size_t bytes) { return (bytes + 15u) & ~static_cast<size_t>(15u); };
         EnsureUavRing(renderer, localArgs_, align16(localViews * groups * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalArgs");
         EnsureUavRing(renderer, localCounts_, align16(localViews * sizeof(std::uint32_t)), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT, L"ShadowGpuData.LocalCounts");
@@ -2413,7 +2428,8 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
 
 void ShadowGpuData::SetActiveViewCount(std::uint32_t views)
 {
-    activeViews_ = std::clamp<std::uint32_t>(views, render::kVsmShadowViews, render::kMaxShadowViews);
+    // S9e: never past the rows the last rebuild made (a capacity growth rebuilds them before the frame that uses it).
+    activeViews_ = std::clamp<std::uint32_t>(views, render::kVsmShadowViews, std::max(builtViews_, render::kVsmShadowViews));
 }
 
 void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const* frustums, size_t count,
@@ -3118,7 +3134,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
         renderer->EmitPoint(cl, dec.unifiedRead);
     }
 
-    const std::uint32_t camView = dec.gbuffer ? render::kMaxShadowViews : 0xFFFFFFFFu;
+    const std::uint32_t camView = dec.gbuffer ? render::MaxShadowViews() : 0xFFFFFFFFu; // S9e: past the capacity's views
     // The clears read only the first three words; `rows` is how many view rows they seed.
     const auto clearCB = [&](std::uint32_t rows, std::uint32_t cam)
     {
@@ -3136,6 +3152,7 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
     cullCB.camPos[1] = dec.localCamPos.y;
     cullCB.camPos[2] = dec.localCamPos.z;
     cullCB.radiusThresholdSq = dec.localRadiusSq;
+    cullCB.windRigid = dec.localWindRigid;
     auto writeCB = [&](std::uint8_t* dst) { std::memcpy(dst, &cullCB, sizeof(cullCB)); };
     const UINT cbSize = static_cast<UINT>(sizeof(ShadowCullCB));
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
@@ -3252,8 +3269,10 @@ void ShadowGpuData::RecordCull(Renderer* renderer, ID3D12GraphicsCommandList* cl
                                                           cullUav_[16 * render::kFrameCount + f], cullUav_[17 * render::kFrameCount + f] }).gpu;
             rc.samplerTable[0] = noSampler;
             cullMat_->Bind(cl, rc);
+            // Plan S9e: x the casters, y the views (shadow_cull_cs: one thread per pair; row 0 also the camera row).
             const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
-            if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
+            const UINT groupsY = (std::max(numViews, 1u) + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
+            if (groupsX > 0) { cl->Dispatch(groupsX, groupsY, 1); }
             renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
         }
     }
@@ -3549,8 +3568,10 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
                                                       cullUav_[17 * render::kFrameCount + f] }).gpu;
         rc.samplerTable[0] = noSampler;
         cullMat_->Bind(cl, rc);
+        // Plan S9e: one thread per (caster, view), as the main cull (four cascade rows -> one group row).
         const UINT groupsX = (numCasters + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
-        if (groupsX > 0) { cl->Dispatch(groupsX, 1, 1); }
+        const UINT groupsY = (std::max(dec.views, 1u) + kComputeDispatchGroupSize - 1u) / kComputeDispatchGroupSize;
+        if (groupsX > 0) { cl->Dispatch(groupsX, groupsY, 1); }
         renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
     }
 
@@ -4087,9 +4108,9 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
     // CPU twin of the camera branch in shadow_cull_cs.hlsl.
     std::uint32_t cpuCam = 0;
     bool camMismatch = false;
-    if (valCamOn_ && valFrustums_.size() > render::kMaxShadowViews)
+    if (valCamOn_ && valFrustums_.size() > render::MaxShadowViews())
     {
-        const render::ShadowViewFrustum& vf = valFrustums_[render::kMaxShadowViews];
+        const render::ShadowViewFrustum& vf = valFrustums_[render::MaxShadowViews()];
         for (std::uint32_t c = 0; c < valCasters_ && c < valCam_.size(); ++c)
         {
             if ((valCam_[c] & 3u) != 1u) { continue; }

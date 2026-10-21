@@ -8,7 +8,7 @@
 // Local-light plan S10a: the view counts come from C++ (Material.cpp EngineShaderDefines, from render::kShadowView*),
 // never as literals here -- a shader compiled without them fails loudly instead of addressing a stale layout.
 #if !defined(TC_VSM_PREFIX_SPOTS) || !defined(TC_VSM_CLIPMAP_FIRST) || !defined(TC_VSM_CLIPMAP_LEVELS) || \
-    !defined(TC_SHADOW_SPOTS) || !defined(TC_SHADOW_POINTS)
+    !defined(TC_SHADOW_VIEW_CEILING) || !defined(TC_SHADOW_CASCADE_VIEWS)
 #error "TC_VSM_* layout defines missing: compile through Material (EngineShaderDefines)"
 #endif
 // Plan S10b: VSM's views are the cull layout minus its cascades (vsm::SpotView / PointFaceView / ClipmapView):
@@ -17,21 +17,30 @@ static const uint VSM_PREFIX_SPOTS       = TC_VSM_PREFIX_SPOTS;               //
 static const uint VSM_CLIPMAP_FIRST      = TC_VSM_CLIPMAP_FIRST;              // vsm::kClipmapFirstView
 static const uint VSM_NUM_CLIPMAP_LEVELS = TC_VSM_CLIPMAP_LEVELS;             // vsm::kNumClipmapLevels
 static const uint VSM_CLIPMAP_END        = VSM_CLIPMAP_FIRST + VSM_NUM_CLIPMAP_LEVELS;
-static const uint VSM_MAX_SPOTS          = TC_SHADOW_SPOTS;                   // render::kShadowViewSpots
-static const uint VSM_MAX_LOCAL_VIEWS    = TC_SHADOW_SPOTS + 6u * TC_SHADOW_POINTS; // vsm::kMaxLocalVirtualViews
-static const uint VSM_MAX_VIEWS          = VSM_MAX_LOCAL_VIEWS + VSM_NUM_CLIPMAP_LEVELS; // vsm::kMaxVirtualViews
-uint VsmSpotView(uint slot)
-{
-    return (slot < VSM_PREFIX_SPOTS) ? slot : VSM_CLIPMAP_END + (slot - VSM_PREFIX_SPOTS);
-}
-uint VsmPointFaceView(uint face) // face = point slot * 6 + cube face
-{
-    const uint prefixFaces = VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS;
-    return (face < prefixFaces) ? VSM_PREFIX_SPOTS + face
-                                : VSM_CLIPMAP_END + (VSM_MAX_SPOTS - VSM_PREFIX_SPOTS) + (face - prefixFaces);
-}
+// Plan S9e: the view count grows at run time (vsm::MaxVirtualViews, the shadow capacity) -- a light's view comes with
+// the light (SpotLightGpu / PointLightGpu shadowParams4.z, vsm::SpotView / PointFaceView), never from a count here. This
+// is only the literal every loop over views is bounded by (vsm::kVirtualViewCeiling); the CB's count stops it.
+static const uint VSM_VIEW_CEILING       = TC_SHADOW_VIEW_CEILING - TC_SHADOW_CASCADE_VIEWS;
 bool VsmIsClipmapView(uint view) { return view >= VSM_CLIPMAP_FIRST && view < VSM_CLIPMAP_END; }
 uint VsmLocalView(uint i) { return (i < VSM_CLIPMAP_FIRST) ? i : i + VSM_NUM_CLIPMAP_LEVELS; } // the i-th local view
+
+// Plan S9e: one record per VSM view (vsm::ViewGpuData, 192 bytes), in a StructuredBuffer the CPU uploads twice a frame
+// -- the request pass's and the render pass's -- instead of CB arrays a view count could outgrow (a CB holds 64 KB).
+// Explicitly row_major: the files that include this differ in their pack_matrix.
+static const uint VSM_VIEW_DIRTY          = 1u; // bits.x: the view's matrix changed this frame (the page cache)
+static const uint VSM_VIEW_DISTANT        = 2u; // plan S10d: a distant light's view (rigid, round-robin redraw)
+static const uint VSM_VIEW_DISTANT_UPDATE = 4u; // ...the round robin redraws it this frame
+struct VsmViewData
+{
+    row_major float4x4 viewProj;     // this frame's
+    row_major float4x4 prevViewProj; // render slot: last frame's (the scatter's prev-pyramid test)
+    float4 params; // x = valid (0/1), y = a point face's cube face (0..5; -1 = a spot / clipmap), z = zFar,
+                   // w = the projection's x scale (S10e: the pixel footprint)
+    float4 cull;   // plan S10e: the light's position + reach (w < 0 = none)
+    float4 mip;    // plan S10e: x = the light's mip bias on top of the frame's (UE's ResolutionLodBiasLocalMoving)
+    uint4  bits;   // render slot: x = VSM_VIEW_* flags, y = the view's shadow LOD (its cull view's tier curve);
+                   // request slot: w = the page remap (S10c: keep / drop / the new view)
+};
 // ---- PAGE TABLE ENTRY FORMAT (the one definition; vsm_page_alloc_common.hlsli includes this) ----
 //
 //   bit 31      : MAPPED HERE. A physical page is allocated for this exact virtual page, and the

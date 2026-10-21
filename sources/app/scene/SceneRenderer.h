@@ -464,10 +464,10 @@ private:
     // Local-light plan S7: `cached` = this frame's views may copy their statics from the cache pool (their cacheMode);
     // false = every view clears and draws all its casters (the static rows too on a split frame).
     void Pass_SpotShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& views,
+        const std::vector<SceneView>& views,
         size_t viewCount, std::uint32_t atlasPoint, bool indirect, bool cached);
     void Pass_PointShadows(Renderer* r, RenderGraphPassContext ctx,
-        const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& views,
+        const std::vector<SceneView>& views,
         size_t viewCount, std::uint32_t atlasPoint, bool indirect, bool cached);
     // S7: the cache misses' static casters into the pool (spot views [0, spotCount), point faces [0, faceCount)).
     void Pass_LocalShadowCache(Renderer* r, RenderGraphPassContext ctx, size_t spotCount, size_t faceCount,

@@ -21,7 +21,7 @@ void LightManager::UpdateSpotLightCache()
 {
     // Step A3: the total spot-light count is uncapped — every spot lights the
     // scene. Shadow casting is separately capped per frame by SelectShadowedSpots
-    // (kMaxShadowedSpotLights, highest projected importance); spots outside that set
+    // (the view capacity, highest projected importance -- plan S9e grows it); spots outside that set
     // render shadowless via the shadowParams.y = -1 sentinel.
     cachedSpotLightCount_ = spotLights_.size();
 
@@ -144,6 +144,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     spotShadowScore_.assign(spotLights_.size(), 0.0f);
     spotShadowPlace_.assign(spotLights_.size(), ShadowAtlasPlacement{});
     shadowedSpotLightIndices_.clear();
+    wantedShadowedSpots_ = 0;
 
     const size_t candidateCount = cachedSpotLightCount_;
     if (candidateCount == 0)
@@ -155,7 +156,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     // whose reach never touches the view cannot cast a visible shadow, so it never
     // consumes a scarce shadow slot even if it is physically close to the camera
     // (e.g. behind it). Among the survivors, pick the most important
-    // min(count, kMaxShadowedSpotLights) by projected cone-bound size and brightness.
+    // min(count, maxCount) by projected cone-bound size and brightness.
     //
     // Influence bound: the cached world-space AABB of the finite outer cone. It
     // encloses the real cone, so this remains conservative, while rejecting many
@@ -198,8 +199,10 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
         candidates.push_back({ static_cast<std::uint32_t>(i), score });
     }
 
-    // Select WHICH spots are shadowed by the resolution they want (most first), up to the mode's cap (S9).
-    const size_t shadowCount = std::min<size_t>(candidates.size(), std::min<std::uint32_t>(maxCount, kMaxShadowedSpotLights));
+    // Select WHICH spots are shadowed by the resolution they want (most first), up to the view capacity (S9e: UE has no
+    // cap -- a frame that wants more takes the best that fit, and the capacity grows to wantedShadowedSpots_).
+    wantedShadowedSpots_ = static_cast<std::uint32_t>(candidates.size());
+    const size_t shadowCount = std::min<size_t>(candidates.size(), maxCount);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
         [](const Candidate& a, const Candidate& b)
         {
@@ -246,6 +249,7 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     pointShadowScore_.assign(pointLights_.size(), 0.0f);
     pointShadowPlace_.assign(pointLights_.size(), ShadowAtlasPlacement{});
     shadowedPointLightIndices_.clear();
+    wantedShadowedPoints_ = 0;
 
     const size_t candidateCount = pointLights_.size();
     if (candidateCount == 0)
@@ -285,8 +289,9 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     }
 
     // Select WHICH points are shadowed by projected size, then assign slots in stable
-    // ascending-index order (see SelectShadowedSpots for why slot order must be stable). S9: the mode's cap.
-    const size_t shadowCount = std::min<size_t>(candidates.size(), std::min<std::uint32_t>(maxCount, kMaxShadowedPointLights));
+    // ascending-index order (see SelectShadowedSpots for why slot order must be stable). S9e: up to the capacity.
+    wantedShadowedPoints_ = static_cast<std::uint32_t>(candidates.size());
+    const size_t shadowCount = std::min<size_t>(candidates.size(), maxCount);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
         [](const Candidate& a, const Candidate& b)
         {

@@ -178,6 +178,16 @@ inline unsigned g_localShadowCacheMaxPages = 8u;
 // it with the statics -- right only while the wind stands still (wind.freeze), the case UE's switch exists for.
 // `--set shadow.localCacheWind:0|1`.
 inline bool g_localShadowCacheWind = false;
+// The wind range of the atlas lights' shadows (owner, 2026-10-22: "радиус качания 30 м с ручкой"): a spot / point light
+// whose reach comes within this many metres of the camera (max(0, |light - camera| - radius) <= range) draws its swaying
+// casters every frame, as above; farther away its shadow is RIGID -- the wind casters drawn without sway and cached with
+// the statics, the light's whole picture copied in, nothing redrawn. UE's VSM does the same for its distant lights (no
+// WPO, cached; r.Shadow.Virtual.DistantLightMode). A light that crosses the range refills its own cache entry (the
+// key carries the mode), with 1 m of hysteresis. < 0 = every light sways (the old rule).
+// `--set shadow.localWindRange:<metres>`, Developer > CSM "Lamp shadow sway range". On wind_test (100 lamps, 22:00) the
+// swaying palms were ~0.63 ms of the point lights' 0.78.
+inline float g_localShadowWindRange = 30.0f;
+constexpr float kLocalShadowWindRangeHysteresis = 1.0f;
 constexpr unsigned kLocalShadowCacheMaxPagesLimit = 16u;
 // Local-light plan S6b: how many atlas views (a spot, a cube face) one command list of the spot / point shadow passes
 // records. A list of one small view costs the GPU ~8 us by itself (its boundary, descriptor heaps, profiler timestamps);

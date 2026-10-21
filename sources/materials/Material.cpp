@@ -83,8 +83,9 @@ static const Material::DefineList& EngineShaderDefines()
 {
     static const Material::DefineList defines = {
         { "TC_SHADOW_CASCADE_VIEWS", std::to_string(render::kShadowViewCascades) },
-        { "TC_SHADOW_SPOTS", std::to_string(render::kShadowViewSpots) },   // S10b: the shadowed spots / points
-        { "TC_SHADOW_POINTS", std::to_string(render::kShadowViewPoints) }, // (atlas modes and VSM alike)
+        // S9e: the shadow views have no fixed count (render::MaxShadowViews grows at run time) -- the shaders loop up to
+        // the ceiling and stop at their CB's count (a loop bound read from a CB alone is garbage when the write misses).
+        { "TC_SHADOW_VIEW_CEILING", std::to_string(render::kShadowViewCeiling) },
         { "TC_VSM_PREFIX_SPOTS", std::to_string(render::kShadowViewVsmSpots) }, // the spots before the prefix's faces
         { "TC_VSM_CLIPMAP_FIRST", std::to_string(render::kShadowViewVsmSpots + 6u * render::kShadowViewVsmPoints) },
         { "TC_VSM_CLIPMAP_LEVELS", std::to_string(render::kShadowViewClipmapLevels) },

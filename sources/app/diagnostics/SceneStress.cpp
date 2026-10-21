@@ -999,9 +999,9 @@ private:
         }
         case Op::SwitchLevel:
         {
-            // Live-switch among the three demo levels (the Step 19 path).
-            nextLevelIndex_ = (nextLevelIndex_ + 1) % 3;
-            levelManager_.RequestLevelPathChange(kLevels_[nextLevelIndex_]);
+            // Live-switch among the three demo levels (the Step 19 path) and the --stress-level one, if any.
+            nextLevelIndex_ = (nextLevelIndex_ + 1) % LevelCount_();
+            levelManager_.RequestLevelPathChange(CurrentLevelPath_());
             break;
         }
         case Op::ResizeWindow:
@@ -1123,9 +1123,11 @@ private:
     }
 #endif
 
+    int LevelCount_() const { return g_sceneStressExtraLevel.empty() ? 3 : 4; }
     std::string CurrentLevelPath_() const
     {
-        return kLevels_[nextLevelIndex_ % 3];
+        const int i = nextLevelIndex_ % LevelCount_();
+        return i < 3 ? std::string(kLevels_[i]) : g_sceneStressExtraLevel;
     }
 
     HWND hWnd_ = nullptr;
@@ -1143,7 +1145,7 @@ private:
     bool faultCaught_ = false;
     char faultDetail_[320] = {};
 
-    int nextLevelIndex_ = 0;
+    int nextLevelIndex_ = g_sceneStressExtraLevel.empty() ? 0 : 3; // --stress-level boots into the extra level
     int resizeIndex_ = 0;
     int dlssModeIndex_ = 0;
     int renderScaleIndex_ = 0;

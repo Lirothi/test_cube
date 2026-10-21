@@ -75,12 +75,20 @@ public:
         localCamPos_ = camPos;
         localRadiusThresholdSq_ = thresholdSq;
     }
+    // One bit per cull view slot (render::kShadowViewCeiling of them, whole uint4s: shadow_cull_cs reads it as
+    // uint4 gWindRigid[]).
+    using ViewMask = std::array<std::uint32_t, ((render::kShadowViewCeiling + 127u) / 128u) * 4u>;
+    // render::g_localShadowWindRange: the local views whose light is past the range this frame -- their wind-only
+    // casters are static for them (cached, drawn rigid). Once per frame from Scene, before the cull records.
+    void SetLocalWindRigid(const ViewMask& mask) { localWindRigid_ = mask; }
     // Local-light shadow plan S9: how many cull views this frame actually uses -- VSM's whole prefix
     // (render::kVsmShadowViews) and, past it, up to the last occupied extra spot / point-face slot. The
     // clear and the cull walk only these (each view costs its row of args plus one frustum test per
-    // caster); a slot past it is never drawn from. Clamped to [kVsmShadowViews, kMaxShadowViews].
+    // caster); a slot past it is never drawn from. Clamped to [kVsmShadowViews, the rows the last Rebuild made].
+    // Plan S9e: BuiltViewCount() -- render::MaxShadowViews() at that Rebuild; a capacity growth rebuilds.
     void SetActiveViewCount(std::uint32_t views);
     std::uint32_t ActiveViewCount() const { return activeViews_; }
+    std::uint32_t BuiltViewCount() const { return builtViews_; }
 
     // Rung 0 / Step 4: record the GPU cull for this frame — a clear dispatch (init the per-
     // (view, mesh-group) indirect args) + a cull dispatch (frustum-test every caster into the
@@ -118,6 +126,7 @@ public:
         // Plan S9e: SetLocalRadiusThreshold's values, taken by the builder (the record may run on a worker).
         Math::float3 localCamPos = Math::float3(0.0f, 0.0f, 0.0f);
         float localRadiusSq = 0.0f;
+        ViewMask localWindRigid{};      // SetLocalWindRigid's, likewise
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -799,6 +808,7 @@ private:
     bool          forceContentRefresh_ = false; // editor rebuild changed material/geometry content
     std::uint32_t viewFrustumCount_ = 0; // fixed shadow-view slot count
     std::uint32_t activeViews_ = render::kVsmShadowViews; // S9: the views the clear / cull walk this frame
+    std::uint32_t builtViews_ = 0; // S9e: render::MaxShadowViews() when the per-view rows were last made (Rebuild)
     std::uint32_t numMeshGroups_ = 0;    // distinct caster meshes (indirect-buffer sizing)
 
     std::vector<const Mesh*> groupMesh_; // mesh-group id -> Mesh* (VB/IB for the indirect draws)
@@ -868,6 +878,7 @@ private:
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
+    ViewMask localWindRigid_{}; // SetLocalWindRigid
     Math::float3 localCamPos_ = Math::float3(0.0f, 0.0f, 0.0f); // S9e: SetLocalRadiusThreshold
     float localRadiusThresholdSq_ = 0.0f;
 

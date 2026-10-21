@@ -71,6 +71,91 @@ static const uint kFogTemporalOn = 8u;
 // R3 low-discrepancy sequence (Roberts): the extra cell offsets of a history-miss supersample.
 static const float3 kFogR3 = float3(0.8191725134f, 0.6710436067f, 0.5497004779f);
 
+// Plan S9e: the group's local lights. The group's 4x4 cells x 4 slices share one world-space box -- the AABB of its
+// frustum chunk's eight corners, which holds every sample of every cell (the offsets lie in [0, 1]) -- and a light
+// whose range sphere misses the box would `continue` at the loops' range test in every cell of it. Walking only the
+// lights that touch it, in index order, sums the same terms in the same order; past kFogTileLights lights the loops
+// walk all of them, as before. The light passes cull per 8x8 pixel tile the same way (pointlight_cs.hlsl).
+static const uint kFogTileLights = 1024u;
+static const uint kFogTileWords = kFogTileLights / 32u;
+static const uint kFogLightWalkCeiling = 65536u; // literal loop bound (engine rule); the counts only shorten it
+groupshared uint gsFogSpotMask[kFogTileWords];
+groupshared uint gsFogPointMask[kFogTileWords];
+groupshared float3 gsFogTileMin;
+groupshared float3 gsFogTileMax;
+
+bool FogSphereTouchesTile(float3 centre, float radius)
+{
+    // A hair of slack over the radius: the corners and the samples are the same math on different offsets.
+    const float reach = radius * 1.001f + 1e-3f;
+    const float3 dd = centre - clamp(centre, gsFogTileMin, gsFogTileMax);
+    return radius > 1e-6f && dot(dd, dd) <= reach * reach;
+}
+
+// Every thread of the group calls it (barriers), before any of them returns.
+void BuildFogTileLights(uint groupIndex, uint3 groupId)
+{
+    if (groupIndex < kFogTileWords)
+    {
+        gsFogSpotMask[groupIndex] = 0u;
+        gsFogPointMask[groupIndex] = 0u;
+    }
+    if (groupIndex == 0u)
+    {
+        const uint3 base = groupId * 4u;
+        float3 lo = 1e30f.xxx;
+        float3 hi = -1e30f.xxx;
+        [unroll]
+        for (uint c = 0u; c < 8u; ++c)
+        {
+            const uint3 corner = base + uint3((c & 1u) ? 4u : 0u, (c & 2u) ? 4u : 0u, (c & 4u) ? 4u : 0u);
+            const float3 P = FogCellWorldPosition(corner, 0.0f.xxx, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
+            lo = min(lo, P);
+            hi = max(hi, P);
+        }
+        gsFogTileMin = lo;
+        gsFogTileMax = hi;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    [loop]
+    for (uint si = groupIndex; si < kFogTileLights; si += 64u)
+    {
+        if (si >= fogLocal.x) { break; }
+        if (FogSphereTouchesTile(SpotLights[si].positionRange.xyz, SpotLights[si].positionRange.w))
+        {
+            InterlockedOr(gsFogSpotMask[si >> 5u], 1u << (si & 31u));
+        }
+    }
+    [loop]
+    for (uint pi = groupIndex; pi < kFogTileLights; pi += 64u)
+    {
+        if (pi >= fogLocal.y) { break; }
+        if (FogSphereTouchesTile(PointLights[pi].position, PointLights[pi].radius))
+        {
+            InterlockedOr(gsFogPointMask[pi >> 5u], 1u << (pi & 31u));
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+}
+
+// The k-th light of a loop: k itself when the loop walks every light, else the next set bit of the group's mask
+// (`word` / `bits` carry the walk). False = no more lights.
+bool FogNextTileLight(bool spots, bool walkAll, uint count, uint k, inout uint word, inout uint bits, out uint index)
+{
+    index = k;
+    if (walkAll) { return k < count; }
+    [loop]
+    while (bits == 0u && word + 1u < kFogTileWords)
+    {
+        ++word;
+        bits = spots ? gsFogSpotMask[word] : gsFogPointMask[word];
+    }
+    if (bits == 0u) { return false; }
+    index = word * 32u + firstbitlow(bits);
+    bits &= bits - 1u;
+    return true;
+}
+
 // Sun visibility at a point IN THE AIR: the lighting pass's CSM / VSM path, minus everything that
 // belongs to a receiver surface (receiver-plane bias, contact shadows, SMRT). N = the direction
 // to the sun and ndl = 1 make the normal-offset terms a small lift towards the light -- harmless
@@ -119,7 +204,7 @@ float FogSpotShadow(SpotLightData light, float3 P, float3 toL, float distToLight
         const float tanOuter   = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
         const float texelWorld = (2.0f * distToLight * tanOuter / VSM_VIRTUAL_RES) * exp2((float)lvl);
         const float3 Pv = P + toL * (texelWorld * 2.0f);
-        return VsmSpotShadow((uint)light.shadowParams.y, light.viewProj, Pv, camPosWS, fogLocalParams.w, 0.0f,
+        return VsmSpotShadow((uint)light.shadowParams4.z, light.viewProj, Pv, camPosWS, fogLocalParams.w, 0.0f, // S9e: its view
                              VsmPageTable, VsmPool, gSmpLinear);
     }
     float4 clip = mul(float4(P, 1.0f), light.viewProj);
@@ -151,7 +236,7 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
         const uint  lvl        = VsmSelectLevel(length(P - camPosWS), fogLocalParams.w, VSM_MAX_LEVEL);
         const float texelWorld = (2.0f * distToLight / VSM_VIRTUAL_RES) * exp2((float)lvl);
         const float3 Pv = P + toL * (texelWorld * 2.0f);
-        return VsmPointShadow((uint)light.shadowParams.x, Pv, light.position, light.shadowParams.z,
+        return VsmPointShadow((uint)light.shadowParams4.z, Pv, light.position, light.shadowParams.z, // S9e: first view
                               light.shadowParams.w, camPosWS, fogLocalParams.w, 0.0f,
                               VsmPageTable, VsmPool, gSmpLinear);
     }
@@ -235,8 +320,8 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
         L += SkyIrradiance.SampleLevel(gSmpLinearClamp, -V, 0).rgb * skyIrradianceScale * fogMedium2.x;
     }
     // Local lights (plan A4, UE :944-1030): every spot / point whose range reaches the cell, with
-    // its shadow map. No light grid: the scene has tens of lights, not thousands, and the range
-    // test is the cull (a cell outside every range costs the two loops' distance tests). The +1 in
+    // its shadow map -- of the lights whose range touches the cell's group (plan S9e, the masks
+    // above), and the range test is the per-cell cull. The +1 in
     // LightDistanceAttenuation's denominator is the singularity bias next to the source (UE
     // InverseSquaredLightDistanceBiasScale); the cone's soft edge is the light passes' squared
     // ramp (UE additionally soften it by the cell radius, LightSoftFading -- not done). Literal
@@ -256,10 +341,14 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
         const float softFadeDistance = fogLocalParams2.x * length(Pc0 - Pn2);
         float distanceBiasSqr = max(cellRadius * fogLocalParams2.y, 1.0f);
         distanceBiasSqr *= distanceBiasSqr;
+        const bool spotAll = fogLocal.x > kFogTileLights;
+        uint spotWord = 0u;
+        uint spotBits = gsFogSpotMask[0];
         [loop]
-        for (uint si = 0u; si < 256u; ++si)
+        for (uint sk = 0u; sk < kFogLightWalkCeiling; ++sk)
         {
-            if (si >= fogLocal.x) { break; }
+            uint si;
+            if (!FogNextTileLight(true, spotAll, fogLocal.x, sk, spotWord, spotBits, si)) { break; }
             const SpotLightData light = SpotLights[si];
             const float3 Lvec = light.positionRange.xyz - P;
             const float d = length(Lvec);
@@ -288,10 +377,14 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
             L += light.colorIntensity.xyz * light.colorIntensity.w * atten * shadow * fogLocalParams.x * light.shadowParams2.y
                  * FogPhaseHG(g, dot(Ldir, V));
         }
+        const bool pointAll = fogLocal.y > kFogTileLights;
+        uint pointWord = 0u;
+        uint pointBits = gsFogPointMask[0];
         [loop]
-        for (uint pi = 0u; pi < 256u; ++pi)
+        for (uint pk = 0u; pk < kFogLightWalkCeiling; ++pk)
         {
-            if (pi >= fogLocal.y) { break; }
+            uint pi;
+            if (!FogNextTileLight(false, pointAll, fogLocal.y, pk, pointWord, pointBits, pi)) { break; }
             const PointLightData light = PointLights[pi];
             const float3 Lvec = light.position - P;
             const float d = length(Lvec);
@@ -307,8 +400,14 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
 
 [numthreads(4, 4, 4)]
 [RootSignature(FOG_SCATTER_RS)]
-void CSMain(uint3 coord : SV_DispatchThreadID)
+void CSMain(uint3 coord : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
+    // Plan S9e: the group's light masks, before any thread returns (the builder's barriers). fogLocalParams.x is the
+    // dispatch's constant, so the whole group takes the same side.
+    if (fogLocalParams.x > 0.0f)
+    {
+        BuildFogTileLights(groupIndex, groupId);
+    }
     if (any(coord >= fogGridSize)) { return; }
 
     // Conservative depth (UE :785-800): the furthest pyramid's texel over this cell's 16x16 pixels is

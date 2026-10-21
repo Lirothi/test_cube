@@ -1851,6 +1851,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "fit, still computed every frame but not what the picture came from \xE2\x80\x94 it is\n"
                         "the A/B baseline. The partitions actually used are in the SDSM section.");
 
+                // The local lights' atlases are Legacy's and SDSM's (VSM has its own distant lights), so their wind
+                // range lives on this tab.
+                ImGui::SeparatorText("Local lights (atlas)");
+                ImGui::BeginDisabled(render::VsmActive());
+                GRAPHICS_CONTROL(LocalShadowWindRange, "localShadowWindRange",
+                    ImGui::SliderFloat("Lamp shadow sway range (m)", &render::g_localShadowWindRange,
+                                       -1.0f, 200.0f, "%.0f"));
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                    ImGui::SetTooltip("A spot / point light whose reach comes within this many metres of the camera\n"
+                                      "redraws its swaying casters (palms, ferns) every frame. Farther away its shadow is\n"
+                                      "rigid: the swaying casters are drawn without sway and cached with the static ones,\n"
+                                      "nothing is redrawn (UE does the same for VSM's distant lights). -1 = every light\n"
+                                      "sways. wind_test, 100 lamps at night: the palms were 0.63 of the lamps' 0.78 ms.\n"
+                                      "Atlas modes (Legacy / SDSM) only.");
+                ImGui::EndDisabled();
+
                 CascadeShadowConfig& csmCfg = scene.CascadeConfig();
 
                 ImGui::SeparatorText("Coverage");
@@ -3081,8 +3097,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 {
                                     const std::uint32_t view = owner / vsm::kPagesPerView;
                                     const bool clip = vsm::IsClipmapView(view); // directional clipmap
-                                    const float hue = static_cast<float>(view % vsm::kMaxVirtualViews) /
-                                                      static_cast<float>(vsm::kMaxVirtualViews);
+                                    const std::uint32_t views = std::max(vsm::MaxVirtualViews(), 1u);
+                                    const float hue = static_cast<float>(view % views) / static_cast<float>(views);
                                     col = ImColor::HSV(hue, clip ? 0.85f : 0.55f, clip ? 1.0f : 0.85f);
                                 }
                                 const ImVec2 a(origin.x + px * pitch, origin.y + py * pitch);
@@ -3105,7 +3121,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 {
                                     const std::uint32_t view = owner / vsm::kPagesPerView;
                                     // Plan S10b: [prefix spots | prefix faces | clipmap | more spots | more faces].
-                                    const std::uint32_t moreSpotsEnd = vsm::SpotView(render::kShadowViewSpots - 1u) + 1u;
+                                    const std::uint32_t moreSpotsEnd = vsm::SpotView(render::ShadowSpotCapacity() - 1u) + 1u;
                                     const char* kind = vsm::IsClipmapView(view) ? "directional clipmap"
                                         : ((view < vsm::PointFaceView(0u) || (view >= vsm::SpotView(render::kShadowViewVsmSpots) &&
                                                                               view < moreSpotsEnd)) ? "spot" : "point face");

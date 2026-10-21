@@ -20,6 +20,9 @@
 // Optional boot-level override (set from the "--level=<path>" command line). Empty = the default
 // demo level. Used for headless verification of specific levels (see docs atoll plan A2+).
 extern std::string g_bootLevelPath;
+// "--stress-level=<path>": one more level in --scene-stress's switch rotation (after its three demo levels) -- a level
+// with what the gate must churn through, e.g. more shadowed lights than the initial view capacity (plan S9e). Empty = none.
+extern std::string g_sceneStressExtraLevel;
 // "--cam-pos=x,y,z" / "--cam-rot=x,y,z,w": override the boot camera AFTER the level's
 // freeCameraStart. Both values are exactly what the on-screen HUD prints, so a screenshot round-trips
 // into a headless repro of the same view (see AGENTS.md).

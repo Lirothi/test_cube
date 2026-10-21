@@ -18,13 +18,13 @@ namespace
 using render::sdsm::kMaxPartitions;
 
 constexpr UINT kPlanesPerView = render::kShadowViewPlanes;
-// ONE MORE SLOT THAN kMaxShadowViews. ShadowGpuData's own ring carries the CAMERA frustum past
-// the shadow views (occlusion plan S4 addresses it as slot kMaxShadowViews), so its
-// ViewFrustumCount() is 47, not 46 -- and CarryFrustums copies every slot that count names.
-// Sizing this to 46 made the copy write one view past the end, which GBV reports as an
+// ONE MORE SLOT THAN MaxShadowViews(). ShadowGpuData's own ring carries the CAMERA frustum past
+// the shadow views (occlusion plan S4 addresses it as slot MaxShadowViews()), so its
+// ViewFrustumCount() is one more than the views -- and CarryFrustums copies every slot that count names.
+// Sizing this to the views alone made the copy write one view past the end, which GBV reports as an
 // out-of-bounds UAV store and which a Release run would simply corrupt whatever follows.
-constexpr UINT kFrustumViews = render::kMaxShadowViews + 1u;
-constexpr UINT kFrustumFloat4s = kFrustumViews * kPlanesPerView;
+// Local-light plan S9e: sized from the view capacity when the buffers are made (frustumViews_); a capacity growth
+// re-creates them (Scene::ReconcileShadowCapacity).
 
 // Heap slots, in the order EnsureDescriptors writes them. Named because a descriptor TABLE is
 // positional (a skipped slot shifts everything after it) and these are staged as two tables.
@@ -94,7 +94,7 @@ bool SdsmShadows::EnsureResources(Renderer* renderer)
     ready_ = true;
     LOG_INFO(logging::LogCategory::RenderShadow,
              "SDSM resources ready ({} partitions, {} cull-view slots)",
-             kMaxPartitions, render::kMaxShadowViews);
+             kMaxPartitions, frustumViews_ - 1u);
     return true;
 }
 
@@ -110,13 +110,15 @@ bool SdsmShadows::EnsureBuffers(Renderer* renderer)
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     bool ok = true;
+    if (!frustums_) { frustumViews_ = render::MaxShadowViews() + 1u; } // S9e: the capacity's views + the camera slot
+    const UINT frustumFloat4s = frustumViews_ * kPlanesPerView;
     ok &= CreateBuffer(renderer, partitions_, sizeof(render::sdsm::Partition) * kMaxPartitions,
                        kSrvAll, L"SDSM.Partitions");
     ok &= CreateBuffer(renderer, zbounds_, sizeof(render::sdsm::ZBoundsScratch),
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"SDSM.ZBounds");
     ok &= CreateBuffer(renderer, bounds_, sizeof(render::sdsm::BoundsUint) * kMaxPartitions,
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"SDSM.Bounds");
-    ok &= CreateBuffer(renderer, frustums_, sizeof(float) * 4ull * kFrustumFloat4s,
+    ok &= CreateBuffer(renderer, frustums_, sizeof(float) * 4ull * frustumFloat4s,
                        kSrvAll, L"SDSM.Frustums");
     ok &= CreateBuffer(renderer, prevPartitions_, sizeof(render::sdsm::Partition) * kMaxPartitions,
                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"SDSM.PrevPartitions");
@@ -197,7 +199,7 @@ bool SdsmShadows::EnsureDescriptors(Renderer* renderer)
     structuredUav(zbounds_.Get(), sizeof(render::sdsm::ZBoundsScratch), 1u, kSlotZBoundsUav);
     structuredUav(bounds_.Get(), sizeof(render::sdsm::BoundsUint), kMaxPartitions, kSlotBoundsUav);
     structuredUav(partitions_.Get(), sizeof(render::sdsm::Partition), kMaxPartitions, kSlotPartitionUav);
-    structuredUav(frustums_.Get(), sizeof(float) * 4u, kFrustumFloat4s, kSlotFrustumUav);
+    structuredUav(frustums_.Get(), sizeof(float) * 4u, frustumViews_ * kPlanesPerView, kSlotFrustumUav);
     // Both constant blocks are WRITTEN as float4 arrays and READ as cbuffers; only the write side
     // needs a descriptor at all (the read side is a raw address).
     structuredUav(viewCBs_.Get(), sizeof(float) * 4u,
@@ -209,7 +211,7 @@ bool SdsmShadows::EnsureDescriptors(Renderer* renderer)
     // SRV has to describe it that way -- a float4 view here would make the shader read every
     // sixteenth plane. The UAV above is the float4 view, because the writer indexes planes.
     structuredSrv(frustums_.Get(), sizeof(float) * 4u * kPlanesPerView,
-                  kFrustumViews, kSlotFrustumSrv);
+                  frustumViews_, kSlotFrustumSrv);
 
     zboundsUav_ = slot(kSlotZBoundsUav);
     boundsUav_ = slot(kSlotBoundsUav);
@@ -308,6 +310,7 @@ void SdsmShadows::ReleaseResources(Renderer* renderer)
     zbounds_.Reset();
     bounds_.Reset();
     frustums_.Reset();
+    frustumViews_ = 0; // S9e: the next EnsureBuffers sizes it from the (possibly grown) capacity
     viewCBs_.Reset();
     cullCB_.Reset();
     readback_.Reset();
@@ -699,7 +702,7 @@ void SdsmShadows::RecordAnalyze(Renderer* renderer, ID3D12GraphicsCommandList* c
     // Clamped to what the buffer actually holds: the count comes from ShadowGpuData, and a future
     // slot added there must not silently run off the end of this one.
     {
-        const UINT views = std::min<UINT>(cb_.viewFrustumCount, kFrustumViews);
+        const UINT views = std::min<UINT>(cb_.viewFrustumCount, frustumViews_);
         if (srcFrustumSrv_.ptr != 0 && views > kMaxPartitions)
         {
             const UINT planes = (views - kMaxPartitions) * kPlanesPerView;

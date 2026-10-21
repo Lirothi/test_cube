@@ -30,7 +30,8 @@ struct PointLightData
     float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
     float4 shadowParams4; // S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias);
-                          // S4: y = 1 / (f - n) when the faces hold the LINEAR depth, 0 = perspective
+                          // S4: y = 1 / (f - n) when the faces hold the LINEAR depth, 0 = perspective;
+                          // S9e: z = the VSM view of its +X face (vsm::PointFaceView of slot * 6; the others follow)
 };
 
 Texture2D GB0 : register(t0);
@@ -159,7 +160,8 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
             ? VsmLocalMipFromPixel(dot(P - camPosWS, invView[2].xyz) * vsmLocalMip.z, 1.0f,
                                    VsmPointFaceDepth(P, Ld.position), vsmLocalMip.y + Ld.shadowParams4.x) // S10e: + its moving bias
             : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
-        const uint  lvl        = texelFix ? VsmPointSampledLevel((uint)Ld.shadowParams.x, reqLevel, P, Ld.position,
+        const uint  firstView  = (uint)Ld.shadowParams4.z; // plan S9e: the VSM view of its +X face
+        const uint  lvl        = texelFix ? VsmPointSampledLevel(firstView, reqLevel, P, Ld.position,
                                                                  Ld.shadowParams.z, Ld.shadowParams.w, VsmPageTable)
                                           : reqLevel;
         const float3 Nb        = texelFix ? Ng : N;
@@ -170,7 +172,7 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         const float  slope     = clamp(1.0f / max(ndl, 0.15f), 1.0f, 6.0f);
         float3 PoffV = P + Nb * (texelWorld * localLateralTexels)
                          + toL * (texelWorld * slope * localDepthPushTexels);
-        return VsmPointShadowFrom((uint)Ld.shadowParams.x, reqLevel, PoffV, Ld.position, Ld.shadowParams.z,
+        return VsmPointShadowFrom(firstView, reqLevel, PoffV, Ld.position, Ld.shadowParams.z,
                                   Ld.shadowParams.w, 0.0f, VsmPageTable, VsmPool, gSmpShadowCmp);
     }
 
@@ -229,26 +231,86 @@ float PointShadowFactor(PointLightData Ld, float3 P, float3 N, float3 Ng)
     return lerp(1.0f, PointShadowFactorMap(Ld, P, N, Ng), Ld.shadowFade.x);
 }
 
+// TILED LIGHT CULLING (2026-10-21, a hundred lamps on wind_test): the 8x8 group is a screen tile. Its receivers' depth
+// range bounds it in world space (the box of the slab's 8 corners -- the slab is convex and in front of the eye, so it
+// holds every receiver of the tile), the group tests each light's sphere against that box once, and a pixel walks only
+// the tile's lights -- in index order, as the full loop did: the same lights reach the same per-pixel test in the same
+// order, so the sum is the old one bit for bit. A tile of sky does no light work at all.
+static const uint kTileLights = 1024u;           // the mask's lights; a frame with more walks every light, as before
+static const uint kTileWords = kTileLights / 32u;
+static const uint kLightWalkCeiling = 65536u;    // the literal bound of the per-pixel walk (the CB's count stops it)
+groupshared uint gsTileMask[kTileWords];
+groupshared uint gsTileZNear; // device depth bits (reverse-Z, positive floats order as uints): the nearest is the largest
+groupshared uint gsTileZFar;
+groupshared float3 gsTileMin;
+groupshared float3 gsTileMax;
+
+// Every thread of the group calls it, before any of them returns.
+void BuildTileLights(uint groupIndex, uint2 groupId, float z, bool hasSurface, uint count)
+{
+    if (groupIndex == 0u) { gsTileZNear = 0u; gsTileZFar = 0x7F7FFFFFu; }
+    for (uint w = groupIndex; w < kTileWords; w += 64u) { gsTileMask[w] = 0u; }
+    GroupMemoryBarrierWithGroupSync();
+    if (hasSurface)
+    {
+        uint unused;
+        InterlockedMax(gsTileZNear, asuint(z), unused);
+        InterlockedMin(gsTileZFar, asuint(z), unused);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (groupIndex == 0u && gsTileZNear != 0u)
+    {
+        const float2 uv0 = float2(groupId * 8u) * invScreenSize;
+        const float2 uv1 = float2(groupId * 8u + 8u) * invScreenSize;
+        float3 mn = float3(1e30f, 1e30f, 1e30f);
+        float3 mx = -mn;
+        [unroll] for (uint c = 0u; c < 8u; ++c)
+        {
+            const float2 cornerUv = float2((c & 1u) ? uv1.x : uv0.x, (c & 2u) ? uv1.y : uv0.y);
+            const float3 p = ReconstructPosWS(cornerUv, asfloat((c & 4u) ? gsTileZNear : gsTileZFar), invProj, invView);
+            mn = min(mn, p);
+            mx = max(mx, p);
+        }
+        gsTileMin = mn;
+        gsTileMax = mx;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    if (gsTileZNear != 0u && count <= kTileLights)
+    {
+        for (uint i = groupIndex; i < kTileLights; i += 64u)
+        {
+            if (i >= count) { break; }
+            const PointLightData Ld = PointLights[i];
+            const float3 d = max(max(gsTileMin - Ld.position, Ld.position - gsTileMax), 0.0f);
+            const float reach = Ld.radius * 1.001f + 1e-3f; // the corners' rounding: never lose a light a pixel keeps
+            if (Ld.radius > kEpsilon && dot(d, d) <= reach * reach)
+            {
+                InterlockedOr(gsTileMask[i >> 5u], 1u << (i & 31u));
+            }
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+}
+
 [numthreads(8,8,1)]
 [RootSignature(POINTLIGHT_CS_RS)]
-void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
+void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
     uint width = (uint)screenSize.x;
     uint height = (uint)screenSize.y;
-    if (dispatchThreadId.x >= width || dispatchThreadId.y >= height)
+    const bool inside = dispatchThreadId.x < width && dispatchThreadId.y < height;
+
+    float2 uv = (float2(dispatchThreadId.xy) + 0.5f) * invScreenSize;
+    float z = inside ? DepthT.SampleLevel(gSmpPoint, uv, 0).r : 0.0f;
+    const uint count = (uint)lightCount;
+    BuildTileLights(groupIndex, groupId.xy, z, inside && z > kEpsilon, count);
+    if (!inside || z <= kEpsilon)
     {
         return;
     }
-
-    float2 uv = (float2(dispatchThreadId.xy) + 0.5f) * invScreenSize;
 
     float4 g0 = GB0.SampleLevel(gSmpLinear, uv, 0);
     float4 g1 = GB1.SampleLevel(gSmpLinear, uv, 0);
-    float z = DepthT.SampleLevel(gSmpPoint, uv, 0).r;
-    if (z <= kEpsilon)
-    {
-        return;
-    }
 
     float3 albedo = g0.rgb;
     float2 rm = UnpackRM(g0.a);
@@ -276,9 +338,25 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float4 base = LightTarget[dispatchThreadId.xy];
     float3 accum = 0.0f.xxx;   // this pass's lights, in radiance; pre-exposed into `base` at the end
 
-    uint count = (uint)lightCount;
-    for (uint i = 0; i < count; ++i)
+    // The tile's lights in index order (every light when there are more than the mask holds).
+    const bool walkAll = count > kTileLights;
+    uint word = 0u;
+    uint bits = gsTileMask[0];
+    [loop] for (uint k = 0u; k < kLightWalkCeiling; ++k)
     {
+        uint i;
+        if (walkAll)
+        {
+            if (k >= count) { break; }
+            i = k;
+        }
+        else
+        {
+            [loop] while (bits == 0u && word + 1u < kTileWords) { ++word; bits = gsTileMask[word]; }
+            if (bits == 0u) { break; }
+            i = word * 32u + firstbitlow(bits);
+            bits &= bits - 1u; // before the body: its `continue`s go to the next light
+        }
         PointLightData Ld = PointLights[i];
         float3 Lvec = Ld.position - P;
         float dist = length(Lvec);

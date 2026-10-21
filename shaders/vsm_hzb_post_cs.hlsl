@@ -15,7 +15,7 @@
 
 #define VSM_HZB_POST_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS // render::kMaxShadowLods (plan S10a: Material.cpp EngineShaderDefines)
@@ -29,8 +29,6 @@ cbuffer PostCB : register(b0)
     uint gPerInstanceLod; // mirrors the scatter's gPerInstanceLod
     uint gDeferredCap;    // capacity of DeferredPairs (the scatter counted past it = treated visible)
     uint2 _pad0;
-    float4x4 gViewProj[VSM_MAX_VIEWS];             // THIS frame's, same indexing as the scatter
-    uint4 gTargetLod[(VSM_MAX_VIEWS + 3) / 4];     // per scatter target, as the scatter
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };
@@ -45,6 +43,7 @@ StructuredBuffer<uint2>        DeferredPairs  : register(t6); // (leading caster
 StructuredBuffer<uint>         PageGroupCount : register(t7); // pass A's counts (final after the scatter)
 StructuredBuffer<uint>         PerPageDirty   : register(t8); // pages rendered this frame
 Texture2D<float>               VsmHzb         : register(t9); // the pool pyramid after pass A
+StructuredBuffer<VsmViewData>  Views          : register(t10); // plan S9e: the scatter's (THIS frame's matrix, bits.y = LOD)
 
 RWStructuredBuffer<uint> PageGroupCountB : register(u0); // per (page, virtual group) pass-B count / cursor
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // the shared per-page slices
@@ -102,7 +101,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     // Nanite's post rule (NaniteCullingCommon.ush:483-497): the frustum again with this frame's
     // matrices, the near crossing = visible, otherwise the depth test against the fresh pyramid.
-    const HzbFrustumCull cur = HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, PageWorldToClip(gViewProj[view], level, px, py), false, false);
+    const HzbFrustumCull cur = HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, PageWorldToClip(Views[view].viewProj, level, px, py), false, false);
     if (!cur.isVisible) { return; }
     if (!cur.crossesNearPlane)
     {
@@ -115,8 +114,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     // Visible after all: every slot of the object into pass B, the scatter's bucket arithmetic.
     const uint slots = CasterMeta[c] >> 1;
-    const uint target = view - VSM_CLIPMAP_FIRST;     // clipmap level == scatter target
-    const uint targetLod = gTargetLod[target >> 2u][target & 3u];
+    const uint targetLod = Views[view].bits.y;         // the scatter's, by the same view
     const uint numVg = gNumGroups * KMAX_SHADOW_LODS;
     const uint pageBase = p * gNumCasters * KMAX_SHADOW_LODS;
     for (uint s = 0u; s < slots; ++s)

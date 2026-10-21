@@ -746,8 +746,10 @@ struct SceneFrameData
     // pass and the glass pass rotate their sample sets IDENTICALLY -- two different phases would
     // make a window shade against a differently-sampled shadow than the ground beneath it.
     std::uint32_t smrtFrameIndex = 0;
-    std::array<SceneView, LightManager::kMaxShadowedSpotLights>* spotShadowViews = nullptr;
-    std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>* pointShadowViews = nullptr;
+    // Local-light plan S9e: one view per shadow slot of the current capacity (render::ShadowSpotCapacity, 6 per
+    // render::ShadowPointCapacity) -- the first GetShadowed*Count of them are this frame's.
+    std::vector<SceneView>* spotShadowViews = nullptr;
+    std::vector<SceneView>* pointShadowViews = nullptr;
     LightManager* lightManager = nullptr;
     Skybox* skybox = nullptr;
     const std::vector<std::unique_ptr<RenderableObjectBase>>* objects = nullptr;

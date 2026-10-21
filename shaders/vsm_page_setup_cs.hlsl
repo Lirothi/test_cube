@@ -20,16 +20,12 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 // page projections, the dirty bits and the brute-force lists are pass A's.
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=12, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
-// Plan S10a: from C++ (Material.cpp EngineShaderDefines) -- render::kMaxShadowLods, and VSM's cull views
-// (render::kVsmShadowViews = cascades + VSM views) packed 4 per uint4 (a literal here was a stale 11 until plan S9).
+// Plan S10a: from C++ (Material.cpp EngineShaderDefines) -- render::kMaxShadowLods.
 #define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS
-#define KVIEWLOD_VEC4    ((TC_SHADOW_CASCADE_VIEWS + TC_SHADOW_SPOTS + 6 * TC_SHADOW_POINTS + TC_VSM_CLIPMAP_LEVELS + 3) / 4)
-// Plan S10a: the "view matrix changed" bits, one per VSM view, 128 per uint4 (was a uint2: a hard cap of 64 views).
-#define KVIEWDIRTY_VEC4  ((TC_SHADOW_SPOTS + 6 * TC_SHADOW_POINTS + TC_VSM_CLIPMAP_LEVELS + 127) / 128)
 #define VSM_SETUP_LANES  8      // == numthreads y; threads per page that share the per-group loop
 
 cbuffer SetupCB : register(b0)
@@ -68,21 +64,6 @@ cbuffer SetupCB : register(b0)
     uint gWindDirtyMaxLevel;
     uint gPassB; // S5b.2: 1 = pass-B args from PageGroupCountB (see the header comment)
     uint2 gSetupPad;
-    // Per-VSM-view "matrix changed this frame" bits (view v = bit v & 31 of word v >> 5, four
-    // words per uint4; plan S10a -- was a uint2, a hard cap of 64 views). A cached
-    // page's id is (view, level, px, py) — an NDC rect of ITS VIEW, with no scroll offset —
-    // so ANY view translation/snap/rotation makes every cached page of that view hold depth
-    // for the WRONG world rect while its owner id never changes (isNew cannot see it; Unreal
-    // solves the clipmap case with a per-level PageOffset). Until pages scroll, the honest
-    // cache contract is: a view that moved re-renders wholesale. Static camera + static
-    // lights = everything caches; a dolly re-renders exactly what it invalidates.
-    uint4 gViewDirtyMask[KVIEWDIRTY_VEC4];
-    // Plan S10d (UE distant lights): the views of lights whose whole map is one page at the finest mip any of their
-    // receivers can ask for. Their pages ignore wind and moving casters (UE skips a single-page map's invalidations) and
-    // draw their casters rigid; they redraw when the round robin names them in gDistantUpdate (one light a frame), when
-    // new, when their matrix moved, or on gForceAll. Same bit layout as gViewDirtyMask.
-    uint4 gDistantMask[KVIEWDIRTY_VEC4];
-    uint4 gDistantUpdate[KVIEWDIRTY_VEC4];
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -92,12 +73,10 @@ cbuffer SetupCB : register(b0)
     // 224 of every page slot). Identical across levels, which is what keeps the clipmap blend
     // band consistent; the per-level rigid gate above it only decides CACHING. w = 0 disables.
     float4 gWindFade;
-    float4x4 gViewProj[VSM_MAX_VIEWS];    // per VSM local view (spots then point faces)
-    uint4    gViewLod[KVIEWLOD_VEC4];      // per cull-view shadow LOD (near->far tier + bias), packed 4/uint4
     // NOTE: the per-(group,lod) mega ranges and the per-group LOD override used to live HERE, as CB
     // arrays sized VSM_MAX_SETUP_GROUPS. That is what capped the whole shadow path at 64 mesh-groups
     // — a CB array cannot be sized by gNumGroups. Both are SRVs now (t9/t10), sized by the real group
-    // count. gViewLod stays: the view count is fixed at 44, so it has no such problem.
+    // count. Plan S9e did the same to the per-view matrices, LODs and bits (t12, Views): the view count grows.
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; }; // xyz world center/half-extents (matches render::CasterBounds)
@@ -118,6 +97,17 @@ StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: a dyn
 StructuredBuffer<uint4>        GroupLodMega     : register(t9);  // per (group,lod): {megaStart, lodRel, count, baseVertex}
 StructuredBuffer<int>          GroupLodOverride : register(t10); // per group: see ResolveGroupLod
 StructuredBuffer<uint>         PageGroupCountB  : register(t11); // S5b.2: pass B's per (page, group) counts (placeholder in pass A)
+// Plan S9e: per VSM view (the render slot): its matrix, its shadow LOD (bits.y, its cull view's = view + the cascades) and
+// its flags (bits.x). VSM_VIEW_DIRTY: the matrix changed this frame. A cached page's id is (view, level, px, py) — an NDC
+// rect of ITS VIEW, with no scroll offset — so ANY view translation/snap/rotation makes every cached page of that view
+// hold depth for the WRONG world rect while its owner id never changes (isNew cannot see it; Unreal solves the clipmap
+// case with a per-level PageOffset). Until pages scroll, the honest cache contract is: a view that moved re-renders
+// wholesale. Static camera + static lights = everything caches; a dolly re-renders exactly what it invalidates.
+// VSM_VIEW_DISTANT (plan S10d, UE distant lights): the views of lights whose whole map is one page at the finest mip any
+// of their receivers can ask for. Their pages ignore wind and moving casters (UE skips a single-page map's invalidations)
+// and draw their casters rigid; they redraw when the round robin names them (VSM_VIEW_DISTANT_UPDATE, one light a
+// frame), when new, when their matrix moved, or on gForceAll.
+StructuredBuffer<VsmViewData>  Views            : register(t12);
 
 // Per-INSTANCE LOD note: the SCATTERED path no longer resolves a LOD here at all. The scatter pass
 // buckets every caster instance into a VIRTUAL group (group * gNumLods + lod) chosen from that
@@ -234,9 +224,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // locals report 0 and always animate.
     const bool isLocalView = !VsmIsClipmapView(view); // plan S10b: locals sit on both sides of the clipmap
     const uint clipLevel = isLocalView ? 0u : (view - VSM_CLIPMAP_FIRST);
-    const uint viewWord = gDistantMask[view >> 7u][(view >> 5u) & 3u];
-    const bool distantView = ((viewWord >> (view & 31u)) & 1u) != 0u; // plan S10d: rigid, redrawn by the round robin
-    const bool distantDue = ((gDistantUpdate[view >> 7u][(view >> 5u) & 3u] >> (view & 31u)) & 1u) != 0u;
+    const uint4 viewBits = Views[view].bits;
+    const bool distantView = (viewBits.x & VSM_VIEW_DISTANT) != 0u; // plan S10d: rigid, redrawn by the round robin
+    const bool distantDue = (viewBits.x & VSM_VIEW_DISTANT_UPDATE) != 0u;
     const bool windHere = (gWindDirtyMaxLevel != 0u) && !distantView &&
                           (isLocalView || clipLevel < gWindDirtyMaxLevel);
     if (lane == 0u && gPassB == 0u)
@@ -248,7 +238,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                                     0, a, 0, 0,
                                     0, 0, 1, 0,
                                     -cx * a, -cy * a, 0, 1);
-        pm = mul(gViewProj[view], S);
+        pm = mul(Views[view].viewProj, S);
         uint po = p * 256u; // 256-byte stride (root-CBV alignment)
         PageProj.Store4(po +  0u, asuint(pm[0]));
         PageProj.Store4(po + 16u, asuint(pm[1]));
@@ -277,7 +267,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     planes[4] = pt[2];         // near (z >= 0)
     planes[5] = pt[3] - pt[2]; // far
 
-    const uint rung0View = view + TC_SHADOW_CASCADE_VIEWS; // the cull layout's cascades come first
     // Groups this lane owns in the per-group loops below: strided across lanes on the scattered
     // path, the whole range on the serial one (where only lane 0 got this far).
     const uint gStart = scattered ? lane : 0u;
@@ -352,7 +341,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // flag itself has one writer.
     // Wind no longer rides gForceAll: it dirties only the pages that actually ANIMATE it
     // (near clipmap levels + locals). Everything past the range renders rigid and caches.
-    const bool viewDirty = ((gViewDirtyMask[view >> 7u][(view >> 5u) & 3u] >> (view & 31u)) & 1u) != 0u;
+    const bool viewDirty = (viewBits.x & VSM_VIEW_DIRTY) != 0u;
     // S5b.2, pass B: the verdict pass A wrote, read back through the same UAV (never rewritten).
     // Plan S10d: a distant light's page takes no caster invalidation -- the round robin redraws it instead.
     const bool invalidated = distantView ? distantDue : dynamicOverlap;
@@ -391,7 +380,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     // Write per (page, VIRTUAL group) args BEFORE the brute scatter (so perGroupBase can double as
     // the scatter cursor below). InstanceCount + StartInstanceLocation are per-page.
-    uint viewLod = gMegaActive ? (gViewLod[rung0View >> 2u][rung0View & 3u]) : gFlatLod;
+    uint viewLod = gMegaActive ? viewBits.y : gFlatLod; // its cull view's (view + the cascades)
     if (viewLod >= gNumLods) { viewLod = gNumLods - 1u; }
 
     if (scattered)

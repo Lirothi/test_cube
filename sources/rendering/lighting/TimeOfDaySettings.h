@@ -167,6 +167,12 @@ struct TimeOfDaySettings
     float lampTurnOnSec = 1.5f;
     float lampTurnOnFlicker = 0.2f;
     float lampTurnOnExponent = 0.6f;
+    // An ALWAYS-ON lamp's multiplier by day (no "onAt"; 1 = physics), as nightBrightness is the night light's: its
+    // lumens stay a bulb's, the day around it is what is weighed. UE with Ultra Dynamic Sky lights its day with a sun
+    // of 5 lux (UDS Sun Light Intensity, read off the owner's level 2026-10-21) where ours is 120000, so a lamp there
+    // shows by day and here it vanishes; 120000 / 5 = 24000 weighs it as UDS does. By night it takes nightBrightness,
+    // as the night lamps do, through the night's share (TimeOfDay::NightShare) in between.
+    float lampDayBrightness = 1.0f;
 
     // --- Twilight, as Ultra Dynamic Sky draws it -----------------------------------------------------
     // THE SUN LEAVES THE ATMOSPHERE before the night falls: its light into the sky -- the sky's LUTs, the

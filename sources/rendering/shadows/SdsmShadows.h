@@ -116,8 +116,11 @@ public:
     // lighting, fog and glass all read this one.
     D3D12_CPU_DESCRIPTOR_HANDLE PartitionSrv() const { return partitionSrv_; }
     // SRV over the GPU-written cull planes, laid out exactly like ShadowGpuData's CPU ring
-    // (ShadowViewFrustum[kMaxShadowViews]) so shadow_cull_cs.hlsl binds it at t1 unchanged.
+    // (ShadowViewFrustum[MaxShadowViews() + 1]) so shadow_cull_cs.hlsl binds it at t1 unchanged.
     D3D12_CPU_DESCRIPTOR_HANDLE FrustumSrv() const { return frustumSrv_; }
+    // Local-light plan S9e: the frustum slots the buffers were made for -- the view capacity's MaxShadowViews() + the
+    // camera slot. A capacity growth re-creates the resources (Scene::ReconcileShadowCapacity); 0 before.
+    std::uint32_t FrustumViewCapacity() const { return frustumViews_; }
 
     // ---- readout (dev window + --sdsm-readout) ----
     // Copy of the partitions of frame N - kFrameCount, mapped once its fence has passed. Purely a
@@ -147,7 +150,8 @@ private:
     GpuResource prevPartitions_;
     GpuResource zbounds_;     // SdsmZBounds[1]
     GpuResource bounds_;      // SdsmBoundsUint[kMaxPartitions]
-    GpuResource frustums_;    // float4[(kMaxShadowViews + 1) * kShadowViewPlanes]
+    GpuResource frustums_;    // float4[frustumViews_ * kShadowViewPlanes]
+    std::uint32_t frustumViews_ = 0; // S9e: MaxShadowViews() + 1 when frustums_ was made
     GpuResource viewCBs_;     // kMaxPartitions x 256 B, each a scene_internal::PerViewCB
     GpuResource cullCB_;      // one render::CascadeHzb::GpuParams, 560 B
     GpuResource moments_;     // S16: RGBA32F EVSM moments, atlas-sized

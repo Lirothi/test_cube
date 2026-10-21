@@ -3353,6 +3353,16 @@ void EditorController::Draw(
                         outlinerAction.enabledValue,
                         levelStatus_);
                 }
+                else if (outlinerAction.type == OutlinerAction::Type::SetGroupEnabled)
+                {
+                    // The category's own box: its rows, not the selection -- switching a folder off is not a
+                    // request to select a hundred lamps. The rows' own action, so one undo entry and the same
+                    // rules (rows already in the asked-for state are left out of it).
+                    nlohmann::json params;
+                    params["enabled"] = outlinerAction.enabledValue;
+                    RunEditorAction(EditorActionContext{ panelCtx, assetRegistry_, extensions_ }, commandStack_,
+                        MakeActionIntent("setEnabled", params), outlinerAction.targets, levelStatus_);
+                }
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(

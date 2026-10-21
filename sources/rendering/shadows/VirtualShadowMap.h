@@ -92,25 +92,24 @@ namespace vsm
     static_assert(kPoolPageCount <= (1u << (32u - kPageIdShift)), "page id must fit above kPageIdShift");
 
     // Step 19b: LOCAL lights only — spots + point-light cube faces, NO CSM cascades (directional
-    // stays on Pass_CSM until Step 24). render::kMaxShadowViews (36) = 4 cascades + this set, so
-    // subtract the cascades. Layout: [spots (kMaxShadowedSpotLights) | point faces
-    // (kMaxShadowedPointLights*6)] = 8 + 24 = 32.
+    // stays on Pass_CSM until Step 24): the cull layout (render::MaxShadowViews) minus its 4 cascades.
     // Local-light plan S10a: ONE source -- the cull layout's counts (RenderConstants.h); the shaders get the same numbers
     // as defines at compile time (Material.cpp EngineShaderDefines: TC_SHADOW_CASCADE_VIEWS, TC_VSM_PREFIX_SPOTS,
-    // TC_VSM_CLIPMAP_FIRST, TC_VSM_CLIPMAP_LEVELS, TC_SHADOW_SPOTS, TC_SHADOW_POINTS), never as literals of their own.
+    // TC_VSM_CLIPMAP_FIRST, TC_VSM_CLIPMAP_LEVELS, TC_SHADOW_VIEW_CEILING), never as literals of their own.
     inline constexpr std::uint32_t kNumCascades = render::kShadowViewCascades;      // == SceneFrameData::kCascades
-    // Plan S10b: VSM's views ARE the cull layout minus its cascades -- [8 spots | 24 point faces | clipmap | 24 more
-    // spots | 72 more faces] -- so every VSM view's cull slot is view + kNumCascades (the setup's rung0View) and VSM
-    // shadows the atlas modes' 32 spots / 16 points. The view of a light is SpotView / PointFaceView, never a count.
+    // Plan S10b: VSM's views ARE the cull layout minus its cascades -- [8 spots | 24 point faces | clipmap | the other
+    // spots | the other faces] -- so every VSM view's cull slot is view + kNumCascades (the setup's rung0View) and VSM
+    // shadows every spot / point the atlas modes do. The view of a light is SpotView / PointFaceView, never a count.
     inline constexpr std::uint32_t kClipmapFirstView = render::kShadowViewVsmSpots + 6u * render::kShadowViewVsmPoints; // 32
-    inline constexpr std::uint32_t kMaxLocalVirtualViews = render::kShadowViewSpots + 6u * render::kShadowViewPoints;   // 128
+    // Plan S9e: as many local views as the shadow capacity holds (render::ShadowSpotCapacity / ShadowPointCapacity, which
+    // grow at Scene::ReconcileShadowMode's GPU-idle point and re-create VSM with them) -- 128 at the initial 32 / 16.
+    inline std::uint32_t MaxLocalVirtualViews() { return render::ShadowSpotCapacity() + 6u * render::ShadowPointCapacity(); }
 
     // Step 24d/24e: directional clipmap — N nested camera-centered ortho levels, appended as VSM
     // views AFTER the 32 local ones (each a full view of kPagesPerView pages). Step 24e adds them to
     // the Rung-0 cull too, so the cull layout is [4 cascade | 32 local | N clipmap] and the setup's
     // rung0View = view + kNumCascades maps a clipmap VSM view straight to its cull slot. Hence
-    // render::kMaxShadowViews == kNumCascades + kMaxVirtualViews. VSM_MAX_VIEWS / kMaxViews in the
-    // shaders must equal kMaxVirtualViews.
+    // render::MaxShadowViews() == kNumCascades + MaxVirtualViews().
     // 10 levels (was 8, 2026-08-28): the coarsest level's half-extent is g_clipmapBaseExtent*2^9
     // = ~6.1 km at the default 12 m base, so directional shadows reach 4x farther for +682 page
     // table entries and two more cull/scatter views; the physical pool is untouched (far levels
@@ -134,22 +133,23 @@ namespace vsm
         std::uint32_t count = 0;
         std::array<ClipmapLevelSquare, kNumClipmapLevels> level{};
     };
-    inline constexpr std::uint32_t kMaxVirtualViews = kMaxLocalVirtualViews + kNumClipmapLevels; // 138
+    // Plan S9e: every VSM view at the current capacity (138 at 32 / 16); VirtualShadowMap sizes its page table, request
+    // bits and per-view records by it at EnsureResources and keeps that count (ViewCount) until it is re-created.
+    inline std::uint32_t MaxVirtualViews() { return MaxLocalVirtualViews() + kNumClipmapLevels; }
+    // The literal every shader loop over views is bounded by (VSM_VIEW_CEILING, vsm_addressing.hlsli).
+    inline constexpr std::uint32_t kVirtualViewCeiling = render::kShadowViewCeiling - kNumCascades;
     // Plan S10b: the views of a spot slot, a point face (slot * 6 + face), a clipmap level; the i-th local view.
-    constexpr std::uint32_t SpotView(std::uint32_t slot) { return render::ShadowViewSpotSlot(slot) - kNumCascades; }
-    constexpr std::uint32_t PointFaceView(std::uint32_t face) { return render::ShadowViewPointFaceSlot(face) - kNumCascades; }
+    inline std::uint32_t SpotView(std::uint32_t slot) { return render::ShadowViewSpotSlot(slot) - kNumCascades; }
+    inline std::uint32_t PointFaceView(std::uint32_t face) { return render::ShadowViewPointFaceSlot(face) - kNumCascades; }
     constexpr std::uint32_t ClipmapView(std::uint32_t level) { return kClipmapFirstView + level; }
     constexpr bool IsClipmapView(std::uint32_t view) { return view >= kClipmapFirstView && view < kClipmapFirstView + kNumClipmapLevels; }
     constexpr std::uint32_t LocalView(std::uint32_t i) { return i < kClipmapFirstView ? i : i + kNumClipmapLevels; }
-    static_assert(kNumCascades + kMaxVirtualViews == render::kMaxShadowViews,
-                  "VSM's views are the whole cull layout past the cascades");
-    static_assert(ClipmapView(0u) + kNumCascades == render::ShadowViewClipmapSlot(0u) && SpotView(0u) == 0u &&
-                  PointFaceView(0u) == render::kShadowViewVsmSpots && LocalView(kClipmapFirstView) == ClipmapView(kNumClipmapLevels),
+    static_assert(ClipmapView(0u) + kNumCascades == render::ShadowViewClipmapSlot(0u) &&
+                  LocalView(kClipmapFirstView) == ClipmapView(kNumClipmapLevels),
                   "VSM view = cull slot - cascades: [prefix spots | prefix faces | clipmap | more spots | more faces]");
-    inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*138 = 47058 (188 KB)
-    // Plan S10a: the page setup's "view matrix changed" bits, one per view, 128 per uint4 (KVIEWDIRTY_VEC4 in
-    // vsm_page_setup_cs.hlsl, from the same counts).
-    inline constexpr std::uint32_t kViewDirtyVec4 = (kMaxVirtualViews + 127u) / 128u;
+    // The page table / request bits of `views` views (341 x 138 = 47058 entries, 188 KB, at the initial capacity).
+    constexpr std::uint32_t PageTableEntries(std::uint32_t views) { return kPagesPerView * views; }
+    constexpr std::uint32_t RequestWords(std::uint32_t views) { return (PageTableEntries(views) + 31u) / 32u; }
 
     // Caster MESH-GROUPS the GPU-driven shadow path can address at once, across the whole level: one
     // per (mesh, submesh), so submesh splits — material slots, and terrain chunking's spatial tiles —
@@ -177,8 +177,7 @@ namespace vsm
     inline constexpr std::uint32_t kPageResidentBit = 0x80000000u;
     inline constexpr std::uint32_t kPagePhysicalMask = 0x0000FFFFu;
 
-    // Step 19: the page-request set is a bitfield (1 bit per virtual page).
-    inline constexpr std::uint32_t kRequestWords = (kPageTableEntries + 31u) / 32u; // 1471 uints
+    // Step 19: the page-request set is a bitfield (1 bit per virtual page) -- RequestWords above (1471 uints at 138 views).
 
     // Step 19b perf: run the request pass at 1/kRequestDownscale per axis. Lower = denser screen
     // sampling = better page coverage (fewer "missed" pages that show as a resident/lit
@@ -578,8 +577,8 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
     // stats; flip this on only when you want them in the debug output too.
     inline bool g_logPageStats = false;
 
-    // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
-    // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = a point face's cube face (0..5; -1 = a spot or
+    // Per-shadow-view data (BuildVsmViews' list): what the request pass projects screen pixels through, and the view
+    // matrix the page render draws with. params.x = valid (0/1), .y = a point face's cube face (0..5; -1 = a spot or
     // a clipmap level), .z = zFar, .w = the projection's x scale (plan S10e: the pixel-footprint mip). cull = the light's
     // position + reach (w < 0 = none; plan S10e: the request skips receivers it does not reach).
     struct alignas(16) ViewProjEntry
@@ -589,6 +588,24 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
         DirectX::XMFLOAT4   cull{ 0.0f, 0.0f, 0.0f, -1.0f };
         DirectX::XMFLOAT4   mip{ 0.0f, 0.0f, 0.0f, 0.0f }; // plan S10e: x = the light's mip bias on top of the frame's
     };
+    // Plan S9e: the GPU's per-view record (VsmViewData in vsm_addressing.hlsli, 192 bytes), uploaded into a StructuredBuffer
+    // twice a frame -- the request pass's slot (the entry above + bits.w = the page remap) and the render pass's (the
+    // matrices + bits.x flags + bits.y the view's shadow LOD) -- where CB arrays could hold at most 64 KB of views.
+    inline constexpr std::uint32_t kViewDirty = 1u;          // VSM_VIEW_DIRTY: the matrix changed (the page cache)
+    inline constexpr std::uint32_t kViewDistant = 2u;        // VSM_VIEW_DISTANT (plan S10d)
+    inline constexpr std::uint32_t kViewDistantUpdate = 4u;  // VSM_VIEW_DISTANT_UPDATE
+    inline constexpr std::uint32_t kRemapKeep = 0xFFFFFFFFu; // vsm_page_alloc_remap_cs.hlsl kRemapKeep / kRemapDrop
+    inline constexpr std::uint32_t kRemapDrop = 0xFFFFFFFEu;
+    struct alignas(16) ViewGpuData
+    {
+        DirectX::XMFLOAT4X4 viewProj;
+        DirectX::XMFLOAT4X4 prevViewProj;
+        DirectX::XMFLOAT4   params;
+        DirectX::XMFLOAT4   cull;
+        DirectX::XMFLOAT4   mip;
+        DirectX::XMUINT4    bits;
+    };
+    static_assert(sizeof(ViewGpuData) == 192, "ViewGpuData mirrors VsmViewData (vsm_addressing.hlsli)");
     struct alignas(16) PageRequestConstants
     {
         DirectX::XMFLOAT4X4 invView;
@@ -598,8 +615,12 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
         DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale, w=clipmap blend width
         DirectX::XMFLOAT4   localMip;   // plan S10e: x = pixel-footprint mip on, y = lod bias, z = pixel radius / depth
         std::uint32_t       numViews;
-        std::uint32_t       _pad[3];
-        ViewProjEntry       views[kMaxVirtualViews];
+        // Plan S9e (cost without a limit): the request walks LIGHTS, not views -- the shadowed spots (their views
+        // SpotView(0..)) and points (six faces each from PointFaceView(slot * 6), the extra lights' faces from
+        // pointExtraView = PointFaceView(6 x the prefix's points)), a point's sphere once for its six faces.
+        std::uint32_t       spotLights = 0;
+        std::uint32_t       pointLights = 0;
+        std::uint32_t       pointExtraView = 0;
     };
 }
 
@@ -642,7 +663,7 @@ public:
         std::uint32_t alloc = 0;           // the six alloc buffers -> UAV
         // Plan S10e: the alloc counters into this frame's readback slot, every frame (dynamic resolution).
         bool remap = false;                // S10c: this frame moves pages between views (PlanViewRemap)
-        std::array<std::uint32_t, vsm::kMaxVirtualViews> viewRemap{}; // ...per OLD view: keep / drop / new view
+        std::vector<std::uint32_t> viewRemap; // ...per OLD view: keep / drop / new view (filled only when `remap`)
         bool counters = false;
         std::uint32_t countersCopy = 0;    // counters -> COPY_SOURCE
         std::uint32_t countersRestore = 0; // ...and back to UAV
@@ -670,9 +691,10 @@ public:
         std::uint32_t forceAll = 1u;
         // Clipmap levels below this wind-animate and wind-dirty; 0 = calm. See gWindDirtyMaxLevel.
         std::uint32_t windDirtyMaxLevel = 0u;
-        // Plan S10d: the views of distant lights, and of those the round robin redraws this frame (bit per view).
-        std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantMask{};
-        std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantUpdate{};
+        // Plan S10d: the views of distant lights, and of those the round robin redraws this frame (bit per view, 32 per
+        // word; empty when there are none).
+        std::vector<std::uint32_t> distantMask;
+        std::vector<std::uint32_t> distantUpdate;
         // pass-flow S3b: the ABSOLUTE declaration indices of the pass's barrier points, captured
         // by PrepareRenderPass as it declares them. RecordPageRender emits each with an EmitPoint
         // marker — the record body names no resource and no state. Scatter/cache indices are only
@@ -704,6 +726,9 @@ public:
     // Step 24b: free every VSM GPU allocation (Legacy mode / teardown). MUST be at GPU idle.
     void ReleaseResources();
     bool IsAllocated() const { return pagePool_ != nullptr && pageTable_ != nullptr; }
+    // Plan S9e: the views the page table, the request bits and the per-view records were made for (vsm::MaxVirtualViews
+    // at EnsureResources); 0 while unallocated. A capacity change re-creates VSM (Scene::ReconcileShadowCapacity).
+    std::uint32_t ViewCount() const { return views_; }
 
     // Resources + views for the future VSM passes; null/{0} until allocated.
     ID3D12Resource* PagePool() const { return pagePool_.Get(); }
@@ -727,11 +752,12 @@ public:
 
     // Step 19: run the screen-space page-request pass into `cl` (an open command list). Clears
     // the request bitfield, then for each visible pixel projects into every active shadow view
-    // and marks the virtual page it needs. `constants` carries the camera + per-view viewProj
-    // (filled by the caller from the frame's shadow views); `depthSrv` is the camera depth.
-    // Produces the request set; NOTHING consumes it yet (Step 20 allocates from it).
+    // and marks the virtual page it needs. `constants` carries the camera, `views` the frame's shadow views (plan S9e:
+    // uploaded with `pts`' page remap as this frame's request slot, which RecordPageAllocate's remap reads too);
+    // `depthSrv` is the camera depth.
     void RecordPageRequest(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                            const vsm::PageRequestConstants& constants,
+                           const vsm::ViewProjEntry* views, std::uint32_t viewCount, const PageRequestPoints& pts,
                            D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH);
 
     // Step 20: consume the request bitfield produced by RecordPageRequest (same command list,
@@ -786,14 +812,19 @@ public:
     // light has no cull view to draw from), so a frame that could change its pages unseen -- one that dirties pages
     // wholesale (forceAll, wind on the locals) or moves a caster -- frees them instead (parkedStale_).
     static constexpr std::uint32_t kNoViewOwner = 0xFFFFFFFFu;
-    using ViewOwners = std::array<std::uint32_t, vsm::kMaxVirtualViews>;
+    // Plan S9e: one per view (ViewCount; SetViewOwners takes any length and keeps the first ViewCount, the rest none).
+    using ViewOwners = std::vector<std::uint32_t>;
     static constexpr std::uint32_t SpotViewOwner(std::uint32_t lightIndex) { return lightIndex & 0x7FFFFFFFu; }
     static constexpr std::uint32_t PointFaceViewOwner(std::uint32_t lightIndex, std::uint32_t face)
     {
         return 0x80000000u | ((lightIndex & 0x0FFFFFFFu) << 3u) | (face & 7u);
     }
-    static ViewOwners NoViewOwners() { ViewOwners o{}; o.fill(kNoViewOwner); return o; }
-    void SetViewOwners(const ViewOwners& owners) { nextViewOwners_ = owners; }
+    static ViewOwners NoViewOwners(std::uint32_t views) { return ViewOwners(views, kNoViewOwner); }
+    void SetViewOwners(const ViewOwners& owners)
+    {
+        nextViewOwners_.assign(views_, kNoViewOwner);
+        std::copy_n(owners.begin(), std::min<size_t>(owners.size(), views_), nextViewOwners_.begin());
+    }
     bool ViewOwnersPending() const { return nextViewOwners_ != appliedViewOwners_; }
     // Builder (main thread), before PrepareRequestPass, only on a frame the pool updates. `frame` = the renderer's.
     void PlanViewRemap(std::uint64_t frame);
@@ -807,7 +838,7 @@ public:
     const RemapStats& Remaps() const { return remapStats_; }
     bool IsViewParked(std::uint32_t view) const
     {
-        return view < vsm::kMaxVirtualViews && parkedOwners_[view] != kNoViewOwner;
+        return view < parkedOwners_.size() && parkedOwners_[view] != kNoViewOwner;
     }
 
     // Plan S10d (vsm::g_distantLightMode): which views belong to distant lights this frame and which of those lights the
@@ -843,7 +874,26 @@ public:
 
 private:
     GpuResource pagePool_;   // R32_TYPELESS depth atlas (kPoolTexels²) — D32, see EnsureResources
-    GpuResource pageTable_;  // StructuredBuffer<uint>[kPageTableEntries]
+    GpuResource pageTable_;  // StructuredBuffer<uint>[PageTableEntries(views_)]
+    // Plan S9e: the view count everything below was sized for (see ViewCount), and its derived sizes.
+    std::uint32_t views_ = 0;
+    std::uint32_t PageTableEntries() const { return vsm::PageTableEntries(views_); }
+    std::uint32_t RequestWords() const { return vsm::RequestWords(views_); }
+    // Plan S9e: the per-view records (vsm::ViewGpuData), an UPLOAD ring of kFrameCount x 2 slots of views_ records -- slot
+    // f * 2 the request pass's, f * 2 + 1 the render pass's -- persistently mapped, one SRV per slot. The CPU writes a slot
+    // only in the frame that owns it (BeginFrame waited on its fence); viewDataHigh_ = how many records a slot's last write
+    // left non-default (the rest stay zero / kRemapKeep from creation, so a write touches no more than it must).
+    static constexpr std::uint32_t kViewDataSlots = render::kFrameCount * 2u;
+    Microsoft::WRL::ComPtr<ID3D12Resource> viewData_;
+    std::uint8_t* viewDataPtr_ = nullptr;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> viewDataHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE viewDataSrv_[kViewDataSlots]{};
+    std::uint32_t viewDataHigh_[kViewDataSlots]{};
+    void EnsureViewData(Renderer* renderer);
+    // Writes records [0, count) of slot `slot` from `fill(i, record)` and resets the ones the slot's last write left past
+    // that; returns the slot's SRV ({0} when the ring is missing).
+    template <typename Fill>
+    D3D12_CPU_DESCRIPTOR_HANDLE WriteViewData(std::uint32_t slot, std::uint32_t count, Fill&& fill);
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> dsvHeap_;    // pool DSV
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvUavHeap_; // pool SRV + page-table SRV/UAV
 
@@ -973,7 +1023,7 @@ private:
     // The pass-B chain after pass A's single draw (see the definition). `writeSetupCB` fills the
     // setup CB exactly as pass A did, with the pass-B flag.
     void RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandList* cl, ShadowGpuData* shadowGpu,
-                        const vsm::ViewProjEntry* views, std::uint32_t viewCount, const PageRenderDecisions& dec,
+                        D3D12_CPU_DESCRIPTOR_HANDLE viewsSrv, const PageRenderDecisions& dec,
                         ID3D12CommandSignature* sig, Material* pageMat, RenderContext& ctx, UINT setupCbSize,
                         const std::function<void(std::uint8_t*, std::uint32_t)>& writeSetupCB);
     std::uint32_t   renderGroups_ = 0;           // mesh-group count pageDrawArgs_ is sized for
@@ -981,7 +1031,7 @@ private:
     std::uint32_t   renderCasters_ = 0;          // caster count pageVisibleList_ is sized for
     // Last frame's per-view matrices (page cache: a moved view re-renders wholesale; see
     // gViewDirtyMask in vsm_page_setup_cs.hlsl).
-    DirectX::XMFLOAT4X4 prevViewVp_[vsm::kMaxVirtualViews]{};
+    std::vector<DirectX::XMFLOAT4X4> prevViewVp_; // views_ (plan S9e)
     bool prevViewVpValid_ = false;
     bool            cacheWarmup_ = true;         // force one full render until physOwnerPrev_ is valid (else garbage)
     // Single-draw page render: last logged reason the path was unavailable while g_pageDrawSingle
@@ -1011,22 +1061,23 @@ private:
     // Plan S10c: the lights the pages are for (applied) and this frame's (next); per OLD view the remap the GPU pass
     // applies (keep / drop / new view); whether the alloc pass runs it this frame, and whether the dirty test's
     // prevViewVp_ still has to follow it (the render pass's builder applies that).
-    ViewOwners appliedViewOwners_ = NoViewOwners();
-    ViewOwners nextViewOwners_ = NoViewOwners();
-    std::array<std::uint32_t, vsm::kMaxVirtualViews> viewRemap_{};
+    // Plan S9e: every per-view vector here is views_ long (EnsureResources sizes them, ReleaseResources empties them).
+    ViewOwners appliedViewOwners_;
+    ViewOwners nextViewOwners_;
+    std::vector<std::uint32_t> viewRemap_;
     bool remapPending_ = false;
     bool prevVpRemapPending_ = false;
     // Per view: the light whose pages it parks (kNoViewOwner = none) and since which frame; parkedStale_ = a render since
     // could have changed them unseen (PrepareRenderPass), so the next plan frees every parked view.
-    ViewOwners parkedOwners_ = NoViewOwners();
-    std::array<std::uint64_t, vsm::kMaxVirtualViews> parkedSince_{};
+    ViewOwners parkedOwners_;
+    std::vector<std::uint64_t> parkedSince_;
     std::uint32_t parkedCount_ = 0;
     bool parkedStale_ = false;
     RemapStats remapStats_{};
     // Plan S10d: this frame's distant views / scheduled views (PlanDistantLights -> PrepareRenderPass), and per distant
     // light (spot owner, or a point's owner without its face bits) the frame it last redrew.
-    std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantMask_{};
-    std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantUpdate_{};
+    std::vector<std::uint32_t> distantMask_;   // bit per view, (views_ + 31) / 32 words; empty = none this frame
+    std::vector<std::uint32_t> distantUpdate_;
     struct DistantLight { std::uint32_t key = 0; std::uint64_t lastUpdate = 0; bool scheduled = false; };
     std::vector<DistantLight> distantLights_;
     std::vector<DistantLight> distantScratch_;

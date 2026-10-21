@@ -54,6 +54,9 @@ struct SceneView
     float4 lightCone = float4(0.0f, 0.0f, 0.0f, 2.0f);
     // Plan S10e: a local light's VSM mip bias on top of the frame's (vsm::LocalMovingMipBias of its mobility).
     float vsmMipBias = 0.0f;
+    // render::g_localShadowWindRange: an atlas spot / point-face view whose light is past the range -- its casters draw
+    // without sway and its wind-only casters are cached with the statics. False in VSM and on every other view.
+    bool windRigid = false;
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

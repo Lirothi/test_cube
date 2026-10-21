@@ -32,7 +32,8 @@
 // Local-light shadow plan S7 (the shadow cache): with gLocalSplit a local view's STATIC caster -- CasterLod without
 // kLocalDynamicBit -- goes to that view's static rows (u7/u8, row = view - kCascadeViews) instead of the main ones, which
 // then hold only the movable casters. The cache renders the static rows into its pool on a miss and copies them in
-// every frame; the movable rows draw on top.
+// every frame; the movable rows draw on top. A caster movable only for its sway (kLocalWindBit) is static for a view
+// whose light is past render::g_localShadowWindRange (gWindRigid) -- that light's shadow draws it rigid.
 //
 // Local-light shadow plan S9e (UE's caster culling for a spot / point face): such a view's 16 slots are its 6 frustum
 // planes, the light's reach sphere, a spot's cone and UE's light + camera-frustum hull (render::kLocalView*Slot). A
@@ -57,6 +58,9 @@ cbuffer CullParams : register(b0)
     uint gClipEnd;
     uint gGiFirst;      // S9e: casters from here on are GI (exempt from the radius threshold)
     float4 gLocalCam;   // S9e: xyz the camera, w (RadiusThreshold x LODDistanceFactor)^2, 0 = off
+    // render::g_localShadowWindRange: one bit per view slot -- a local view whose light is past the range, whose wind-only
+    // casters are static (ShadowGpuData::ViewMask). Zero on a frame without the split.
+    uint4 gWindRigid[(TC_SHADOW_VIEW_CEILING + 127) / 128];
 };
 
 // Mirrors render::CascadeHzb::GpuParams. Both matrices are the cascade's light view-projection
@@ -136,6 +140,12 @@ static const uint kCamDeferredCount = 8u;   // DeferredCount[] slots: [8] list l
 static const uint kCamDeferredWeighted = 9u;
 static const uint kCascadeViews = TC_SHADOW_CASCADE_VIEWS; // render::kShadowViewCascades: the views below are cascades
 static const uint kLocalDynamicBit = 0x100u;   // render::kCasterLocalDynamicBit (the uploaded CasterLod only)
+static const uint kLocalWindBit = 0x200u;      // render::kCasterLocalWindBit: movable only for its sway
+
+bool ViewWindRigid(uint v)
+{
+    return ((gWindRigid[v >> 7u][(v >> 5u) & 3u] >> (v & 31u)) & 1u) != 0u;
+}
 
 static const uint kArgStride = 20u;
 
@@ -228,13 +238,60 @@ bool LightBoundsPass(float4 sphere, float4 cone, float3 c, float3 e, float r)
     return true;
 }
 
+// One (caster, view) pair: the view's tests and, on a hit, the caster's entry in the view's row (or its static row, or
+// the cascade's deferred list). `r` = the caster's bounding-sphere radius, `g` its virtual group, `base` that group's
+// base in a row.
+void CullView(uint v, uint caster, float3 c, float3 e, float r, uint g, uint base, bool splitStatic, bool tiny)
+{
+    bool hit;
+    bool toStatic = false;
+    if (v >= kCascadeViews && (v < gClipFirst || v >= gClipEnd))
+    {
+        // S9e: a spot / point face. Its frustum and the light's bounds for every caster; a caster the cache does not
+        // hold (movable, or any on a frame without the split) also the hull and the threshold.
+        hit = PlanesPass(v, 0u, kLocalFrustumPlanes, c, e) &&
+              LightBoundsPass(Frustums[v].planes[kLocalSphereSlot], Frustums[v].planes[kLocalConeSlot], c, e, r);
+        toStatic = splitStatic;
+        if (hit && !toStatic) { hit = !tiny && PlanesPass(v, kLocalHullFirst, kLocalHullPlanes, c, e); }
+    }
+    else
+    {
+        hit = Intersects(v, c, e);
+    }
+    if (!hit) { return; }
+    if (HiddenLastFrame(v, c, e))
+    {
+        uint d;
+        InterlockedAdd(DeferredCount[v], 1u, d);
+        DeferredList[v * gNumCasters + d] = caster;
+        return;
+    }
+    if (toStatic)
+    {
+        const uint row = v - kCascadeViews;
+        uint sslot;
+        StaticArgs.InterlockedAdd((row * gNumGroups + g) * kArgStride + 4u, 1u, sslot);
+        StaticVisibleList[row * gNumCasters + base + sslot] = caster;
+        return;
+    }
+    uint slot;
+    Args.InterlockedAdd((v * gNumGroups + g) * kArgStride + 4u, 1u, slot);
+    VisibleList[v * gNumCasters + base + slot] = caster;
+}
+
+// Plan S9e (cost without a limit): one thread per (caster, view) -- x the caster, y the view (ShadowGpuData dispatches
+// ceil(views / 8) group rows). It was one thread per caster walking every view, and only row 0 of each 8x8 group
+// worked: with a few dozen casters and hundreds of local views the cull was a long serial loop on a nearly idle GPU
+// (0.86 ms for 100 lights). The camera row stays one per caster (y == 0).
 [numthreads(8, 8, 1)]
 [RootSignature(SHADOW_CULL_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
-    if (dtid.y != 0u) { return; }
-    uint caster = dtid.x;
+    const uint caster = dtid.x;
+    const uint v = dtid.y;
     if (caster >= gNumCasters) { return; }
+    const bool camThread = v == 0u && gCamView != kNoCamView;
+    if (v >= gNumViews && !camThread) { return; }
 
     CasterBounds b = Bounds[caster];
     float3 c = b.center.xyz;
@@ -246,56 +303,24 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (lod >= kMaxShadowLods) { lod = kMaxShadowLods - 1u; }
     uint g = CasterGroup[caster] * kMaxShadowLods + lod;
     uint base = PerGroup[g].x;
-    const bool splitStatic = gLocalSplit != 0u && (lodEnc & kLocalDynamicBit) == 0u; // S7
+    // S7: static for this view -- not movable, or movable only for its sway and the view's light past the wind range.
+    const bool splitStatic = gLocalSplit != 0u && (lodEnc & kLocalDynamicBit) == 0u &&
+                             ((lodEnc & kLocalWindBit) == 0u || (v < (uint)TC_SHADOW_VIEW_CEILING && ViewWindRigid(v)));
     // S9e: r.Shadow.RadiusThreshold -- too small for its distance to the camera (GI instances exempt).
     const float3 toCam = c - gLocalCam.xyz;
     const bool tiny = gLocalCam.w > 0.0f && caster < gGiFirst && b.center.w * b.center.w <= gLocalCam.w * dot(toCam, toCam);
     // UE Cast Shadow off (ShadowGpuData::FillBounds: halfExtents.w = 1): in the table for the camera row below only.
     const bool castsShadow = b.halfExtents.w == 0.0f;
 
-    for (uint v = 0; v < gNumViews && castsShadow; ++v)
+    // The view count grows at run time (render::MaxShadowViews, plan S9e); this thread's view is one of them.
+    if (castsShadow && v < gNumViews && v < (uint)TC_SHADOW_VIEW_CEILING)
     {
-        bool hit;
-        bool toStatic = false;
-        if (v >= kCascadeViews && (v < gClipFirst || v >= gClipEnd))
-        {
-            // S9e: a spot / point face. Its frustum and the light's bounds for every caster; a caster the cache does not
-            // hold (movable, or any on a frame without the split) also the hull and the threshold.
-            hit = PlanesPass(v, 0u, kLocalFrustumPlanes, c, e) &&
-                  LightBoundsPass(Frustums[v].planes[kLocalSphereSlot], Frustums[v].planes[kLocalConeSlot], c, e, b.center.w);
-            toStatic = splitStatic;
-            if (hit && !toStatic) { hit = !tiny && PlanesPass(v, kLocalHullFirst, kLocalHullPlanes, c, e); }
-        }
-        else
-        {
-            hit = Intersects(v, c, e);
-        }
-        if (hit)
-        {
-            if (HiddenLastFrame(v, c, e))
-            {
-                uint d;
-                InterlockedAdd(DeferredCount[v], 1u, d);
-                DeferredList[v * gNumCasters + d] = caster;
-                continue;
-            }
-            if (toStatic)
-            {
-                const uint row = v - kCascadeViews;
-                uint sslot;
-                StaticArgs.InterlockedAdd((row * gNumGroups + g) * kArgStride + 4u, 1u, sslot);
-                StaticVisibleList[row * gNumCasters + base + sslot] = caster;
-                continue;
-            }
-            uint slot;
-            Args.InterlockedAdd((v * gNumGroups + g) * kArgStride + 4u, 1u, slot);
-            VisibleList[v * gNumCasters + base + slot] = caster;
-        }
+        CullView(v, caster, c, e, b.center.w, g, base, splitStatic, tiny);
     }
 
     // S4: the camera row. Eligible (bit 0), not skipped by the CPU verdicts (bit 1), inside the
     // camera frustum; a crossfading caster goes to its tier and the next one.
-    if (gCamView != kNoCamView)
+    if (camThread)
     {
         const uint cam = CasterCam[caster];
         if ((cam & 3u) == 1u && Intersects(gCamView, c, e))

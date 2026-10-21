@@ -167,6 +167,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.lampTurnOnSec = std::clamp(Number(l, "turnOnSec", s.lampTurnOnSec), 0.0f, 600.0f);
         s.lampTurnOnFlicker = std::clamp(Number(l, "turnOnFlicker", s.lampTurnOnFlicker), 0.0f, 1.0f);
         s.lampTurnOnExponent = std::clamp(Number(l, "turnOnExponent", s.lampTurnOnExponent), 0.01f, 10.0f);
+        s.lampDayBrightness = std::clamp(Number(l, "dayBrightness", s.lampDayBrightness), 0.0f, 100000.0f);
     }
     // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
     if (const auto it = j.find("twilight"); it != j.end() && it->is_object())
@@ -334,6 +335,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "turnOnSec", s.lampTurnOnSec },
         { "turnOnFlicker", s.lampTurnOnFlicker },
         { "turnOnExponent", s.lampTurnOnExponent },
+        { "dayBrightness", s.lampDayBrightness },
     };
     return j;
 }

@@ -222,7 +222,9 @@ namespace
               "the height of the surface under world points, by casting a ray down through "
               "the scene, and whether each one is above the waterline. Ask for MANY points "
               "at once -- tracing a shoreline is this question along a line",
-              false, "point: [x, z] or [x, y, z]; or points: a list of those, up to 64",
+              false, "point: [x, z] or [x, y, z]; or points: a list of those, up to 64; "
+              "on: a name/group the ray may hit (e.g. the terrain) -- everything else, canopies "
+              "included, is passed through",
               EditorQueryDesc::ChatArg::Point },
             { "zoneInfo",
               "the shape of one named zone: its kind, size, control points, whether it is "
@@ -504,6 +506,25 @@ namespace
             {
                 out["waterLevel"] = Round1(level);
             }
+            // `on`: only these objects are ground. Without it the ray stops at the first thing
+            // below -- under a palm, its canopy, ten metres above the sand a lamp has to stand on.
+            std::vector<std::uint64_t> only;
+            const auto onIt = ask.params.is_object() ? ask.params.find("on") : ask.params.end();
+            const std::string on = (ask.params.is_object() && onIt != ask.params.end() && onIt->is_string())
+                ? onIt->get<std::string>() : std::string{};
+            if (!on.empty())
+            {
+                for (const EditorObject& object : ctx.document.Objects())
+                {
+                    if (editormatch::MatchesSearch(object, on)) { only.push_back(object.id.value); }
+                }
+                if (only.empty())
+                {
+                    out["error"] = "groundHeight: nothing matches params.on '" + on + "'";
+                    return out;
+                }
+                out["on"] = only.size();
+            }
             const std::vector<std::uint64_t> noIgnores;
             nlohmann::json results = nlohmann::json::array();
             for (const Math::float3& point : points)
@@ -513,7 +534,7 @@ namespace
                                                       Round1(point.z) });
                 float height = 0.0f;
                 if (!editorquery::ProbeGroundHeight(ctx.scene, point.x, point.z,
-                        editorquery::kGroundProbeUp, noIgnores, height))
+                        editorquery::kGroundProbeUp, noIgnores, height, only.empty() ? nullptr : &only))
                 {
                     entry["ground"] = nullptr;   // nothing below: open water or off the map
                 }

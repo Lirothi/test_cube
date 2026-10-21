@@ -2575,6 +2575,23 @@ void TestQuestionsAnswerWithoutChangingAnything(const EditorActionContext& actio
     Check(paged["objects"][0].contains("id") &&
         paged["note"].get<std::string>().find("offset=2") != std::string::npos,
         "each entry carries its id, and the note names the next page: " + paged.dump());
+
+    // groundHeight `on` (2026-10-21, lamps on wind_test): only the named objects are ground, so a probe under a canopy
+    // reaches the sand. A name nothing has is refused by name rather than answered with every object's surface.
+    EditorIntent groundOn;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"query","ask":[{"query":"groundHeight","params":{"points":[[0,0],[1,1]],"on":"no_such_ground"}}]})",
+        groundOn, whyNot), "a groundHeight with `on` parses: " + whyNot);
+    const Json groundNone = Json::parse(editorquery::Answer(actionCtx, groundOn))["groundHeight"];
+    Check(groundNone.contains("error") &&
+        groundNone["error"].get<std::string>().find("no_such_ground") != std::string::npos,
+        "`on` that names nothing is an error naming it: " + groundNone.dump());
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"query","ask":[{"query":"groundHeight","params":{"points":[[0,0]],"on":"coconut_palm"}}]})",
+        groundOn, whyNot), "a groundHeight on the palms parses: " + whyNot);
+    const Json groundPalms = Json::parse(editorquery::Answer(actionCtx, groundOn))["groundHeight"];
+    Check(!groundPalms.contains("error") && groundPalms.value("on", 0) == 2 && groundPalms["samples"].size() == 1,
+        "`on` reports how many objects count as ground (the two coconut palms): " + groundPalms.dump());
 }
 
 // --------------------------------------------------------------- environment

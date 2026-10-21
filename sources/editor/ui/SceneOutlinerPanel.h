@@ -29,12 +29,16 @@ struct OutlinerAction
         // The outliner DISPLAYS groups as folders and the command bar can assign them by
         // phrase; without this the only way to make one by hand was to type a sentence,
         // which is a strange thing to require of somebody already looking at the list.
-        GroupSelection
+        GroupSelection,
+        // A category's own "On" box: every row of it shown or hidden at once (`targets`, the rows the
+        // category holds under the current filters), one undo entry. The selection is not touched.
+        SetGroupEnabled
     };
     Type type = Type::None;
     EditorObjectId target;
-    bool enabledValue = false; // for SetEnabled / SetEnvEnabled
+    bool enabledValue = false; // for SetEnabled / SetEnvEnabled / SetGroupEnabled
     std::string nameValue; // for RenameObject and GroupSelection
+    std::vector<EditorObjectId> targets; // for SetGroupEnabled
 };
 
 // Lists document and environment entities in a searchable/filterable table.

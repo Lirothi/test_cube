@@ -32553,6 +32553,7 @@
       ],
       "emissiveStrength": 3000.0,
       "enabled": true,
+      "group": "Lamps",
       "id": 2134,
       "mesh": "models/sphere.mesh.json",
       "name": "lamp bulb 1",
@@ -32583,6 +32584,7 @@
       ],
       "emissiveStrength": 3000.0,
       "enabled": true,
+      "group": "Lamps",
       "id": 2135,
       "mesh": "models/sphere.mesh.json",
       "name": "lamp bulb 2",
@@ -32613,6 +32615,7 @@
       ],
       "emissiveStrength": 3000.0,
       "enabled": true,
+      "group": "Lamps",
       "id": 2136,
       "mesh": "models/sphere.mesh.json",
       "name": "lamp bulb 3",
@@ -32643,6 +32646,7 @@
       ],
       "emissiveStrength": 3000.0,
       "enabled": true,
+      "group": "Lamps",
       "id": 2137,
       "mesh": "models/sphere.mesh.json",
       "name": "lamp bulb 4",
@@ -32651,6 +32655,3006 @@
         -64.0,
         3.4,
         52.0
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2138,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 001 bulb",
+      "position": [
+        28.5,
+        3.0,
+        -52.7
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2139,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 002 bulb",
+      "position": [
+        -88.16,
+        3.0,
+        -21.18
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2140,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 003 bulb",
+      "position": [
+        76.55,
+        3.1,
+        53.79
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2141,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 004 bulb",
+      "position": [
+        -43.58,
+        3.8,
+        -78.16
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2142,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 005 bulb",
+      "position": [
+        89.12,
+        2.9,
+        -15.98
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2143,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 006 bulb",
+      "position": [
+        -78.46,
+        3.2,
+        39.59
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2144,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 007 bulb",
+      "position": [
+        5.46,
+        2.9,
+        -89.49
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2145,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 008 bulb",
+      "position": [
+        36.63,
+        3.1,
+        53.79
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2146,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 009 bulb",
+      "position": [
+        58.99,
+        2.9,
+        16.55
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2147,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 010 bulb",
+      "position": [
+        65.97,
+        3.9,
+        -48.1
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2148,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 011 bulb",
+      "position": [
+        -41.33,
+        2.9,
+        44.09
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2149,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 012 bulb",
+      "position": [
+        -14.03,
+        3.4,
+        -62.08
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2150,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 013 bulb",
+      "position": [
+        90.31,
+        3.0,
+        25.78
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2151,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 014 bulb",
+      "position": [
+        59.69,
+        3.4,
+        -20.64
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2152,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 015 bulb",
+      "position": [
+        -87.24,
+        3.3,
+        12.74
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2153,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 016 bulb",
+      "position": [
+        52.26,
+        3.3,
+        75.58
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2154,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 017 bulb",
+      "position": [
+        20.97,
+        5.1,
+        75.68
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2155,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 018 bulb",
+      "position": [
+        -65.67,
+        4.1,
+        -19.32
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2156,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 019 bulb",
+      "position": [
+        59.37,
+        4.1,
+        38.84
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2157,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 020 bulb",
+      "position": [
+        -35.55,
+        5.5,
+        67.64
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2158,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 021 bulb",
+      "position": [
+        -19.53,
+        3.0,
+        -88.55
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2159,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 022 bulb",
+      "position": [
+        -17.61,
+        3.9,
+        81.13
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2160,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 023 bulb",
+      "position": [
+        22.65,
+        4.6,
+        -78.05
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2161,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 024 bulb",
+      "position": [
+        -55.33,
+        5.0,
+        -59.23
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2162,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 025 bulb",
+      "position": [
+        -33.11,
+        3.2,
+        -54.54
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2163,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 026 bulb",
+      "position": [
+        46.09,
+        3.4,
+        -40.2
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2164,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 027 bulb",
+      "position": [
+        78.22,
+        4.9,
+        4.21
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2165,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 028 bulb",
+      "position": [
+        -64.31,
+        4.7,
+        22.73
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2166,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 029 bulb",
+      "position": [
+        7.77,
+        2.9,
+        -62.31
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2167,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 030 bulb",
+      "position": [
+        -77.03,
+        4.9,
+        -35.74
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2168,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 031 bulb",
+      "position": [
+        50.76,
+        4.8,
+        -60.67
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2169,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 032 bulb",
+      "position": [
+        56.82,
+        5.1,
+        60.54
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2170,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 033 bulb",
+      "position": [
+        -80.63,
+        4.9,
+        -6.74
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2171,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 034 bulb",
+      "position": [
+        78.06,
+        4.6,
+        35.34
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2172,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 035 bulb",
+      "position": [
+        -59.99,
+        4.9,
+        51.15
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2173,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 036 bulb",
+      "position": [
+        -6.36,
+        5.1,
+        -80.2
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2174,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 037 bulb",
+      "position": [
+        36.79,
+        5.1,
+        72.24
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2175,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 038 bulb",
+      "position": [
+        65.36,
+        3.9,
+        -5.77
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2176,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 039 bulb",
+      "position": [
+        -24.97,
+        5.5,
+        -70.36
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2177,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 040 bulb",
+      "position": [
+        37.69,
+        5.4,
+        -65.95
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2178,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 041 bulb",
+      "position": [
+        -26.89,
+        2.9,
+        55.11
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2179,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 042 bulb",
+      "position": [
+        73.95,
+        5.7,
+        -20.58
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2180,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 043 bulb",
+      "position": [
+        9.18,
+        5.1,
+        -75.22
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2181,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 044 bulb",
+      "position": [
+        -65.16,
+        5.1,
+        -46.71
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2182,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 045 bulb",
+      "position": [
+        -77.45,
+        4.8,
+        25.05
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2183,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 046 bulb",
+      "position": [
+        76.38,
+        5.3,
+        20.98
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2184,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 047 bulb",
+      "position": [
+        -55.22,
+        2.9,
+        -77.14
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2185,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 048 bulb",
+      "position": [
+        69.82,
+        5.4,
+        -33.68
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2186,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 049 bulb",
+      "position": [
+        91.52,
+        2.9,
+        3.68
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2187,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 050 bulb",
+      "position": [
+        -18.92,
+        5.0,
+        69.01
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2188,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 051 bulb",
+      "position": [
+        -46.91,
+        5.7,
+        56.64
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2189,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 052 bulb",
+      "position": [
+        -59.46,
+        4.7,
+        37.49
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2190,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 053 bulb",
+      "position": [
+        -69.26,
+        5.3,
+        7.52
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2191,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 054 bulb",
+      "position": [
+        -43.32,
+        5.1,
+        -63.22
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2192,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 055 bulb",
+      "position": [
+        46.45,
+        3.7,
+        48.53
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2193,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 056 bulb",
+      "position": [
+        -60.19,
+        3.8,
+        -31.83
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2194,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 057 bulb",
+      "position": [
+        64.48,
+        4.2,
+        29.83
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2195,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 058 bulb",
+      "position": [
+        28.23,
+        4.2,
+        83.05
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2196,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 059 bulb",
+      "position": [
+        -31.1,
+        3.4,
+        79.48
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2197,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 060 bulb",
+      "position": [
+        -47.87,
+        4.1,
+        -49.72
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2198,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 061 bulb",
+      "position": [
+        -86.66,
+        2.9,
+        -37.33
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2199,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 062 bulb",
+      "position": [
+        38.39,
+        3.4,
+        -46.5
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2200,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 063 bulb",
+      "position": [
+        76.58,
+        5.3,
+        -9.21
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2201,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 064 bulb",
+      "position": [
+        -68.53,
+        3.3,
+        -63.62
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2202,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 065 bulb",
+      "position": [
+        43.97,
+        5.1,
+        63.57
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2203,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 066 bulb",
+      "position": [
+        21.72,
+        4.3,
+        -64.83
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2204,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 067 bulb",
+      "position": [
+        -32.11,
+        3.4,
+        -84.31
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2205,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 068 bulb",
+      "position": [
+        66.06,
+        4.0,
+        47.74
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2206,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 069 bulb",
+      "position": [
+        -76.32,
+        4.9,
+        -20.83
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2207,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 070 bulb",
+      "position": [
+        63.49,
+        3.3,
+        67.52
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2208,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 071 bulb",
+      "position": [
+        35.18,
+        6.4,
+        -82.21
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2209,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 072 bulb",
+      "position": [
+        -66.81,
+        7.8,
+        -4.56
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2210,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 073 bulb",
+      "position": [
+        -1.98,
+        7.7,
+        -68.67
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2211,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 074 bulb",
+      "position": [
+        56.37,
+        8.3,
+        -49.6
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2212,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 075 bulb",
+      "position": [
+        -8.46,
+        6.8,
+        -88.39
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2213,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 076 bulb",
+      "position": [
+        59.2,
+        6.9,
+        -59.35
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2214,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 077 bulb",
+      "position": [
+        -89.02,
+        6.5,
+        -3.91
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2215,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 078 bulb",
+      "position": [
+        55.84,
+        6.3,
+        28.1
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2216,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 079 bulb",
+      "position": [
+        -67.49,
+        8.5,
+        35.57
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2217,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 080 bulb",
+      "position": [
+        13.74,
+        6.4,
+        61.86
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2218,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 081 bulb",
+      "position": [
+        -54.22,
+        6.4,
+        28.56
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2219,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 082 bulb",
+      "position": [
+        83.63,
+        7.1,
+        -23.7
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2220,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 083 bulb",
+      "position": [
+        57.75,
+        7.8,
+        -32.66
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2221,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 084 bulb",
+      "position": [
+        69.61,
+        8.0,
+        11.48
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2222,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 085 bulb",
+      "position": [
+        -50.25,
+        6.9,
+        69.08
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2223,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 086 bulb",
+      "position": [
+        91.4,
+        6.3,
+        13.91
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2224,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 087 bulb",
+      "position": [
+        16.14,
+        7.3,
+        -83.28
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2225,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 088 bulb",
+      "position": [
+        -35.09,
+        6.6,
+        50.71
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2226,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 089 bulb",
+      "position": [
+        -32.87,
+        8.9,
+        -71.12
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2227,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 090 bulb",
+      "position": [
+        75.91,
+        6.3,
+        -41.81
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2228,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 091 bulb",
+      "position": [
+        -59.68,
+        6.8,
+        16.64
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2229,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 092 bulb",
+      "position": [
+        49.31,
+        6.4,
+        39.5
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2230,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 093 bulb",
+      "position": [
+        -74.46,
+        7.9,
+        -48.72
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2231,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 094 bulb",
+      "position": [
+        -81.19,
+        7.7,
+        -28.26
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2232,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 095 bulb",
+      "position": [
+        38.07,
+        8.2,
+        -56.59
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2233,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 096 bulb",
+      "position": [
+        27.44,
+        7.8,
+        66.41
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2234,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 097 bulb",
+      "position": [
+        58.11,
+        8.6,
+        50.94
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2235,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 098 bulb",
+      "position": [
+        -79.68,
+        8.7,
+        3.38
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2236,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 099 bulb",
+      "position": [
+        -14.54,
+        8.8,
+        -77.07
+      ],
+      "rotationDeg": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "scale": [
+        0.24,
+        0.24,
+        0.24
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "castShadow": false,
+      "emissiveColor": [
+        1.0,
+        0.75,
+        0.45
+      ],
+      "emissiveStrength": 100000.0,
+      "enabled": true,
+      "group": "Lamps",
+      "id": 2237,
+      "mesh": "models/sphere.mesh.json",
+      "name": "Lamp 100 bulb",
+      "position": [
+        -25.63,
+        6.8,
+        -58.88
       ],
       "rotationDeg": [
         0.0,
@@ -32867,6 +35871,7 @@
         0.5
       ],
       "enabled": true,
+      "group": "Lamps",
       "luminousFluxLm": 400.0,
       "name": "Beach Lamp 1",
       "onAt": "night",
@@ -32886,6 +35891,7 @@
         0.5
       ],
       "enabled": true,
+      "group": "Lamps",
       "luminousFluxLm": 400.0,
       "name": "Beach Lamp 2",
       "onAt": "night",
@@ -32905,6 +35911,7 @@
         0.5
       ],
       "enabled": true,
+      "group": "Lamps",
       "luminousFluxLm": 400.0,
       "name": "Beach Lamp 3",
       "onAt": "night",
@@ -32924,6 +35931,7 @@
         0.5
       ],
       "enabled": true,
+      "group": "Lamps",
       "luminousFluxLm": 400.0,
       "name": "Palm Lamp",
       "onAt": "night",
@@ -32933,6 +35941,1336 @@
         52.0
       ],
       "radius": 9.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 001",
+      "position": [
+        28.5,
+        3.0,
+        -52.7
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 002",
+      "position": [
+        -88.16,
+        3.0,
+        -21.18
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 003",
+      "position": [
+        76.55,
+        3.1,
+        53.79
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 004",
+      "position": [
+        -43.58,
+        3.8,
+        -78.16
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 005",
+      "position": [
+        89.12,
+        2.9,
+        -15.98
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 006",
+      "position": [
+        -78.46,
+        3.2,
+        39.59
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 007",
+      "position": [
+        5.46,
+        2.9,
+        -89.49
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 008",
+      "position": [
+        36.63,
+        3.1,
+        53.79
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 009",
+      "position": [
+        58.99,
+        2.9,
+        16.55
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 010",
+      "position": [
+        65.97,
+        3.9,
+        -48.1
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 011",
+      "position": [
+        -41.33,
+        2.9,
+        44.09
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 012",
+      "position": [
+        -14.03,
+        3.4,
+        -62.08
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 013",
+      "position": [
+        90.31,
+        3.0,
+        25.78
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 014",
+      "position": [
+        59.69,
+        3.4,
+        -20.64
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 015",
+      "position": [
+        -87.24,
+        3.3,
+        12.74
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 016",
+      "position": [
+        52.26,
+        3.3,
+        75.58
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 017",
+      "position": [
+        20.97,
+        5.1,
+        75.68
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 018",
+      "position": [
+        -65.67,
+        4.1,
+        -19.32
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 019",
+      "position": [
+        59.37,
+        4.1,
+        38.84
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 020",
+      "position": [
+        -35.55,
+        5.5,
+        67.64
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 021",
+      "position": [
+        -19.53,
+        3.0,
+        -88.55
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 022",
+      "position": [
+        -17.61,
+        3.9,
+        81.13
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 023",
+      "position": [
+        22.65,
+        4.6,
+        -78.05
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 024",
+      "position": [
+        -55.33,
+        5.0,
+        -59.23
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 025",
+      "position": [
+        -33.11,
+        3.2,
+        -54.54
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 026",
+      "position": [
+        46.09,
+        3.4,
+        -40.2
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 027",
+      "position": [
+        78.22,
+        4.9,
+        4.21
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 028",
+      "position": [
+        -64.31,
+        4.7,
+        22.73
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 029",
+      "position": [
+        7.77,
+        2.9,
+        -62.31
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 030",
+      "position": [
+        -77.03,
+        4.9,
+        -35.74
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 031",
+      "position": [
+        50.76,
+        4.8,
+        -60.67
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 032",
+      "position": [
+        56.82,
+        5.1,
+        60.54
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 033",
+      "position": [
+        -80.63,
+        4.9,
+        -6.74
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 034",
+      "position": [
+        78.06,
+        4.6,
+        35.34
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 035",
+      "position": [
+        -59.99,
+        4.9,
+        51.15
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 036",
+      "position": [
+        -6.36,
+        5.1,
+        -80.2
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 037",
+      "position": [
+        36.79,
+        5.1,
+        72.24
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 038",
+      "position": [
+        65.36,
+        3.9,
+        -5.77
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 039",
+      "position": [
+        -24.97,
+        5.5,
+        -70.36
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 040",
+      "position": [
+        37.69,
+        5.4,
+        -65.95
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 041",
+      "position": [
+        -26.89,
+        2.9,
+        55.11
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 042",
+      "position": [
+        73.95,
+        5.7,
+        -20.58
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 043",
+      "position": [
+        9.18,
+        5.1,
+        -75.22
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 044",
+      "position": [
+        -65.16,
+        5.1,
+        -46.71
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 045",
+      "position": [
+        -77.45,
+        4.8,
+        25.05
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 046",
+      "position": [
+        76.38,
+        5.3,
+        20.98
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 047",
+      "position": [
+        -55.22,
+        2.9,
+        -77.14
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 048",
+      "position": [
+        69.82,
+        5.4,
+        -33.68
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 049",
+      "position": [
+        91.52,
+        2.9,
+        3.68
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 050",
+      "position": [
+        -18.92,
+        5.0,
+        69.01
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 051",
+      "position": [
+        -46.91,
+        5.7,
+        56.64
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 052",
+      "position": [
+        -59.46,
+        4.7,
+        37.49
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 053",
+      "position": [
+        -69.26,
+        5.3,
+        7.52
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 054",
+      "position": [
+        -43.32,
+        5.1,
+        -63.22
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 055",
+      "position": [
+        46.45,
+        3.7,
+        48.53
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 056",
+      "position": [
+        -60.19,
+        3.8,
+        -31.83
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 057",
+      "position": [
+        64.48,
+        4.2,
+        29.83
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 058",
+      "position": [
+        28.23,
+        4.2,
+        83.05
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 059",
+      "position": [
+        -31.1,
+        3.4,
+        79.48
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 060",
+      "position": [
+        -47.87,
+        4.1,
+        -49.72
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 061",
+      "position": [
+        -86.66,
+        2.9,
+        -37.33
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 062",
+      "position": [
+        38.39,
+        3.4,
+        -46.5
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 063",
+      "position": [
+        76.58,
+        5.3,
+        -9.21
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 064",
+      "position": [
+        -68.53,
+        3.3,
+        -63.62
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 065",
+      "position": [
+        43.97,
+        5.1,
+        63.57
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 066",
+      "position": [
+        21.72,
+        4.3,
+        -64.83
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 067",
+      "position": [
+        -32.11,
+        3.4,
+        -84.31
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 068",
+      "position": [
+        66.06,
+        4.0,
+        47.74
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 069",
+      "position": [
+        -76.32,
+        4.9,
+        -20.83
+      ],
+      "radius": 10.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "luminousFluxLm": 400.0,
+      "name": "Lamp 070",
+      "position": [
+        63.49,
+        3.3,
+        67.52
+      ],
+      "radius": 10.0,
       "shadowsEnabled": true,
       "volumetricIntensity": 1.0
     }
@@ -33139,6 +37477,7 @@
         0.148
       ],
       "enabled": true,
+      "group": "Lamps",
       "innerAngleDeg": 20.0,
       "luminousFluxLm": 1500.0,
       "name": "Street Light 1",
@@ -33167,6 +37506,7 @@
         -0.099
       ],
       "enabled": true,
+      "group": "Lamps",
       "innerAngleDeg": 20.0,
       "luminousFluxLm": 1500.0,
       "name": "Street Light 2",
@@ -33180,6 +37520,786 @@
       "range": 14.0,
       "shadowDepthBias": 0.0001,
       "shadowNormalBias": 0.05,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0093,
+        -0.9929,
+        0.1188
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 071",
+      "outerAngleDeg": 40.0,
+      "position": [
+        35.18,
+        6.4,
+        -82.21
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0871,
+        -0.9929,
+        -0.0813
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 072",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -66.81,
+        7.8,
+        -4.56
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.1191,
+        -0.9929,
+        0.0012
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 073",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -1.98,
+        7.7,
+        -68.67
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0886,
+        -0.9929,
+        0.0796
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 074",
+      "outerAngleDeg": 40.0,
+      "position": [
+        56.37,
+        8.3,
+        -49.6
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0116,
+        -0.9929,
+        -0.1186
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 075",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -8.46,
+        6.8,
+        -88.39
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0716,
+        -0.9929,
+        0.0953
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 076",
+      "outerAngleDeg": 40.0,
+      "position": [
+        59.2,
+        6.9,
+        -59.35
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.1171,
+        -0.9929,
+        -0.0219
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 077",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -89.02,
+        6.5,
+        -3.91
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.1011,
+        -0.9929,
+        -0.063
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 078",
+      "outerAngleDeg": 40.0,
+      "position": [
+        55.84,
+        6.3,
+        28.1
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.032,
+        -0.9929,
+        0.1148
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 079",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -67.49,
+        8.5,
+        35.57
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0539,
+        -0.9929,
+        -0.1063
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 080",
+      "outerAngleDeg": 40.0,
+      "position": [
+        13.74,
+        6.4,
+        61.86
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.1115,
+        -0.9929,
+        0.042
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 081",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -54.22,
+        6.4,
+        28.56
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.1106,
+        -0.9929,
+        0.0444
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 082",
+      "outerAngleDeg": 40.0,
+      "position": [
+        83.63,
+        7.1,
+        -23.7
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0515,
+        -0.9929,
+        -0.1074
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 083",
+      "outerAngleDeg": 40.0,
+      "position": [
+        57.75,
+        7.8,
+        -32.66
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0345,
+        -0.9929,
+        0.114
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 084",
+      "outerAngleDeg": 40.0,
+      "position": [
+        69.61,
+        8.0,
+        11.48
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.1025,
+        -0.9929,
+        -0.0607
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 085",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -50.25,
+        6.9,
+        69.08
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.1166,
+        -0.9929,
+        -0.0244
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 086",
+      "outerAngleDeg": 40.0,
+      "position": [
+        91.4,
+        6.3,
+        13.91
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0695,
+        -0.9929,
+        0.0968
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 087",
+      "outerAngleDeg": 40.0,
+      "position": [
+        16.14,
+        7.3,
+        -83.28
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0142,
+        -0.9929,
+        -0.1183
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 088",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -35.09,
+        6.6,
+        50.71
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0904,
+        -0.9929,
+        0.0777
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 089",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -32.87,
+        8.9,
+        -71.12
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.1191,
+        -0.9929,
+        0.0038
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 090",
+      "outerAngleDeg": 40.0,
+      "position": [
+        75.91,
+        6.3,
+        -41.81
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0853,
+        -0.9929,
+        -0.0832
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 091",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -59.68,
+        6.8,
+        16.64
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0067,
+        -0.9929,
+        0.119
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 092",
+      "outerAngleDeg": 40.0,
+      "position": [
+        49.31,
+        6.4,
+        39.5
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0754,
+        -0.9929,
+        -0.0922
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 093",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -74.46,
+        7.9,
+        -48.72
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.1179,
+        -0.9929,
+        0.017
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 094",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -81.19,
+        7.7,
+        -28.26
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0985,
+        -0.9929,
+        0.0671
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 095",
+      "outerAngleDeg": 40.0,
+      "position": [
+        38.07,
+        8.2,
+        -56.59
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0273,
+        -0.9929,
+        -0.116
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 096",
+      "outerAngleDeg": 40.0,
+      "position": [
+        27.44,
+        7.8,
+        66.41
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.0582,
+        -0.9929,
+        0.1039
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 097",
+      "outerAngleDeg": 40.0,
+      "position": [
+        58.11,
+        8.6,
+        50.94
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.1132,
+        -0.9929,
+        -0.0373
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 098",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -79.68,
+        8.7,
+        3.38
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        0.1086,
+        -0.9929,
+        -0.0489
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 099",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -14.54,
+        8.8,
+        -77.07
+      ],
+      "range": 18.0,
+      "shadowsEnabled": true,
+      "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.82,
+        0.6
+      ],
+      "direction": [
+        -0.0471,
+        -0.9929,
+        0.1095
+      ],
+      "enabled": true,
+      "group": "Lamps",
+      "innerAngleDeg": 25.0,
+      "luminousFluxLm": 1600.0,
+      "name": "Lamp 100",
+      "outerAngleDeg": 40.0,
+      "position": [
+        -25.63,
+        6.8,
+        -58.88
+      ],
+      "range": 18.0,
       "shadowsEnabled": true,
       "volumetricIntensity": 1.0
     }
@@ -33197,6 +38317,9 @@
     "dusk": 18.0,
     "extendTwilight": 0.0,
     "heightOffset": 0.0,
+    "lamps": {
+      "dayBrightness": 48000.0
+    },
     "latitude": 50.11090087890625,
     "lightUpdateThresholdDeg": 0.05000000074505806,
     "longitude": 8.682100296020508,

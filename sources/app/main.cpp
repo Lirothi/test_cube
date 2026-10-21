@@ -700,6 +700,13 @@ int WINAPI WinMain(
             const bool roughnessEdits = std::strstr(lpCmdLine, "--scene-stress-roughness") != nullptr;
             const bool skyEdits = std::strstr(lpCmdLine, "--scene-stress-sky") != nullptr;
             if (roughnessEdits || skyEdits) { g_bootLevelPath = "data/levels/wind_test.json"; }
+            // "--stress-level=<path>": a fourth level in the switch rotation (plan S9e: one with many shadowed lights),
+            // and the one the run boots into -- so the churn starts on it (a reload, then every switch, leaves it).
+            if (const char* extra = std::strstr(lpCmdLine, "--stress-level=")) {
+                const char* p = extra + std::strlen("--stress-level=");
+                while (*p && !std::isspace(static_cast<unsigned char>(*p))) { g_sceneStressExtraLevel.push_back(*p); ++p; }
+                if (!roughnessEdits && !skyEdits) { g_bootLevelPath = g_sceneStressExtraLevel; }
+            }
             // The stress harness is a diagnostic run by definition, so the per-frame buckets are
             // wanted here without a separate flag.
             boot::SetFrameProfiling(true);

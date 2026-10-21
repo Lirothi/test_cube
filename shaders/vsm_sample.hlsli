@@ -131,12 +131,12 @@ float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDis
                             PageTable, Pool, cmp);
 }
 
-// Spot: `slot` = the spot's shadow slot (0..kMaxShadowedSpotLights-1); its VSM view is VsmSpotView(slot) (plan
-// S10b). Pbiased = P + N*normalBias. Plan S10e: from mip `startLevel` (the request's; VsmSpotShadow picks it by distance).
-float VsmSpotShadowFrom(uint slot, uint startLevel, float4x4 viewProj, float3 Pbiased, float depthBias,
+// Spot: `view` = the spot's VSM view (plan S9e: SpotLightGpu::shadowParams4.z, vsm::SpotView of its slot -- the light
+// carries it, the receiver knows no layout). Pbiased = P + N*normalBias. Plan S10e: from mip `startLevel` (the
+// request's; VsmSpotShadow picks it by distance).
+float VsmSpotShadowFrom(uint view, uint startLevel, float4x4 viewProj, float3 Pbiased, float depthBias,
                         StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
-    const uint view = VsmSpotView(slot);
     float4 clip = mul(float4(Pbiased, 1.0f), viewProj);
     if (clip.w <= 0.0f) { return 1.0f; }
     float3 ndc = clip.xyz / clip.w;
@@ -146,21 +146,22 @@ float VsmSpotShadowFrom(uint slot, uint startLevel, float4x4 viewProj, float3 Pb
     // only); a zero gradient makes the receiver-plane term vanish, so this is an exact no-op.
     return VsmSampleNDCFrom(view, startLevel, ndc, uv, depthBias, float2(0.0f, 0.0f), PageTable, Pool, cmp);
 }
-float VsmSpotShadow(uint slot, float4x4 viewProj, float3 Pbiased, float3 camPos, float refDist,
+float VsmSpotShadow(uint view, float4x4 viewProj, float3 Pbiased, float3 camPos, float refDist,
                     float depthBias, StructuredBuffer<uint> PageTable, Texture2D Pool,
                     SamplerComparisonState cmp)
 {
-    return VsmSpotShadowFrom(slot, VsmSelectLevel(length(Pbiased - camPos), refDist, VSM_MAX_LEVEL), viewProj, Pbiased,
+    return VsmSpotShadowFrom(view, VsmSelectLevel(length(Pbiased - camPos), refDist, VSM_MAX_LEVEL), viewProj, Pbiased,
                              depthBias, PageTable, Pool, cmp);
 }
 
-// Point: `slot` = the light's cube slot. The 6 cube faces (VSM local views 8 + slot*6 + face) are
-// rendered with LookAtLH(lightPos, lightPos+kCubeDir[face], kCubeUp[face]) * PerspectiveFovLH(90,
+// Point: `firstView` = the VSM view of the light's +X face (plan S9e: PointLightGpu::shadowParams4.z, vsm::PointFaceView
+// of slot * 6); its six faces are the views firstView + face (a light never straddles the layout's prefix: it holds
+// whole lights). They are rendered with LookAtLH(lightPos, lightPos+kCubeDir[face], kCubeUp[face]) * PerspectiveFovLH(90,
 // 1, near, far) — the exact D3D face order (+X,-X,+Y,-Y,+Z,-Z). The receiver's direction major axis
 // picks the one face whose 90° cone contains it (the faces tile the sphere exactly, no overlap), so
 // we reconstruct just that face's view-proj here (no per-face buffer needed) and sample it.
 // Plan S10b: P in its cube face's VSM view -- the face's view, NDC and UV; false outside it.
-bool VsmPointFaceProject(uint slot, float3 Pbiased, float3 lightPos, float nearP, float farP,
+bool VsmPointFaceProject(uint firstView, float3 Pbiased, float3 lightPos, float nearP, float farP,
                          out uint vsmView, out float3 ndc, out float2 uv)
 {
     vsmView = 0u; ndc = float3(0.0f, 0.0f, 0.0f); uv = float2(0.0f, 0.0f);
@@ -201,26 +202,26 @@ bool VsmPointFaceProject(uint slot, float3 Pbiased, float3 lightPos, float nearP
     ndc = clip.xyz / clip.w;
     if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { return false; }
     uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-    vsmView = VsmPointFaceView(slot * 6u + face);
+    vsmView = firstView + face;
     return true;
 }
 
 // Plan S10e: from mip `startLevel` (the request's); VsmPointShadow picks it by distance.
-float VsmPointShadowFrom(uint slot, uint startLevel, float3 Pbiased, float3 lightPos, float nearP, float farP,
+float VsmPointShadowFrom(uint firstView, uint startLevel, float3 Pbiased, float3 lightPos, float nearP, float farP,
                          float depthBias, StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     uint view;
     float3 ndc;
     float2 uv;
-    if (!VsmPointFaceProject(slot, Pbiased, lightPos, nearP, farP, view, ndc, uv)) { return 1.0f; }
+    if (!VsmPointFaceProject(firstView, Pbiased, lightPos, nearP, farP, view, ndc, uv)) { return 1.0f; }
     return VsmSampleNDCFrom(view, startLevel, ndc, uv, depthBias, float2(0.0f, 0.0f), PageTable, Pool, cmp);
 }
-float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, float farP,
+float VsmPointShadow(uint firstView, float3 Pbiased, float3 lightPos, float nearP, float farP,
                      float3 camPos, float refDist, float depthBias,
                      StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
-    return VsmPointShadowFrom(slot, VsmSelectLevel(length(Pbiased - camPos), refDist, VSM_MAX_LEVEL), Pbiased, lightPos,
-                              nearP, farP, depthBias, PageTable, Pool, cmp);
+    return VsmPointShadowFrom(firstView, VsmSelectLevel(length(Pbiased - camPos), refDist, VSM_MAX_LEVEL), Pbiased,
+                              lightPos, nearP, farP, depthBias, PageTable, Pool, cmp);
 }
 
 // Plan S10e: a point receiver's depth in its cube face's view -- the major axis of P - light (the face's view z).
@@ -246,21 +247,21 @@ uint VsmResidentLevel(uint view, float2 uv, uint startLevel, StructuredBuffer<ui
     }
     return level;
 }
-uint VsmSpotSampledLevel(uint slot, uint startLevel, float4x4 viewProj, float3 P, StructuredBuffer<uint> PageTable)
+uint VsmSpotSampledLevel(uint view, uint startLevel, float4x4 viewProj, float3 P, StructuredBuffer<uint> PageTable)
 {
     const float4 clip = mul(float4(P, 1.0f), viewProj);
     if (clip.w <= 0.0f) { return startLevel; }
     const float2 ndc = clip.xy / clip.w;
     const float2 uv = saturate(float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y));
-    return VsmResidentLevel(VsmSpotView(slot), uv, startLevel, PageTable);
+    return VsmResidentLevel(view, uv, startLevel, PageTable);
 }
-uint VsmPointSampledLevel(uint slot, uint startLevel, float3 P, float3 lightPos, float nearP, float farP,
+uint VsmPointSampledLevel(uint firstView, uint startLevel, float3 P, float3 lightPos, float nearP, float farP,
                           StructuredBuffer<uint> PageTable)
 {
     uint view;
     float3 ndc;
     float2 uv;
-    if (!VsmPointFaceProject(slot, P, lightPos, nearP, farP, view, ndc, uv)) { return startLevel; }
+    if (!VsmPointFaceProject(firstView, P, lightPos, nearP, farP, view, ndc, uv)) { return startLevel; }
     return VsmResidentLevel(view, uv, startLevel, PageTable);
 }
 

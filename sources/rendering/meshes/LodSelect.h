@@ -114,6 +114,9 @@ inline constexpr unsigned int kCasterLodExactBit = 0x80u;
 // Local-light shadow plan S7: set on the UPLOADED CasterLod only (ShadowGpuData::UploadCasterLods) -- the caster is
 // movable for the local shadow cache. Every reader masks the LOD with kCasterLodMask; shadow_cull_cs.hlsl reads this.
 inline constexpr unsigned int kCasterLocalDynamicBit = 0x100u;
+// ...and this one when it is movable ONLY because it sways in the wind: static for a local view whose light is past
+// render::g_localShadowWindRange (that view draws it rigid), movable for the others. Never set with the bit above.
+inline constexpr unsigned int kCasterLocalWindBit = 0x200u;
 inline constexpr unsigned int kCasterLodMask = 0x0Fu;
 
 // The LOD a draw of `selectedTier` will ACTUALLY use once the two global debug overrides are

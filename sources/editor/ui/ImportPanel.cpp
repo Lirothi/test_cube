@@ -2626,9 +2626,9 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
             // The other cost is linear and dominated by GPU BUFFERS: per-(page, group) draw args +
             // per-(page, group) counter + per-(view, group) Rung-0 args. Page-setup GPU time is
             // ~19 ns/frame per group (measured at 1042 groups), i.e. negligible next to the memory.
-            constexpr double kBytesPerGroup =
+            const double kBytesPerGroup =
                 static_cast<double>(vsm::kPoolPageCount) * (sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) + sizeof(std::uint32_t)) +
-                static_cast<double>(render::kMaxShadowViews) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * render::kFrameCount;
+                static_cast<double>(render::MaxShadowViews()) * sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) * render::kFrameCount;
             const double mb = tiles * kBytesPerGroup / (1024.0 * 1024.0);
             const bool heavy = mb > 64.0;
             if (heavy)

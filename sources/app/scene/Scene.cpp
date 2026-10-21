@@ -164,6 +164,15 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
 {
     sceneRenderer_.FinalizeLevelLoad(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
     SyncObjectsForRender(SceneObjectSyncReason::LevelLoad);
+    // Local-light plan S9e: a fresh level starts from the initial shadow capacity -- the last level's lights do not keep
+    // their view buffers resident; its own selection grows it again at the first ReconcileShadowMode. GPU idle here, and
+    // the caster Rebuild below makes the cull's rows for it.
+    lightManager_.ForgetWantedShadowed();
+    if (render::g_shadowSpotCapacity != render::kShadowSpotsInitial ||
+        render::g_shadowPointCapacity != render::kShadowPointsInitial)
+    {
+        ApplyShadowCapacity(renderer, render::kShadowSpotsInitial, render::kShadowPointsInitial);
+    }
     // Rung 0 / Steps 1-2: build the persistent per-caster shadow buffers (instance + bounds)
     // once the object transforms are finalized (SyncSceneState above resets motion history so
     // prevWorld == world). Level load is GPU-idle, safe for the alloc.
@@ -1704,9 +1713,15 @@ void Scene::TickNightLamps(float deltaTime)
     // the sky as street lights are, the full multiplier once the night is the moon's.
     const float nightLight = timeOfDay_.Present()
         ? std::pow(std::max(t.nightBrightness, 1.0e-6f), timeOfDay_.NightShare()) : 1.0f;
+    // An ALWAYS-ON lamp (2026-10-21, the hundred lamps of wind_test) is the night's light by night -- Night Brightness,
+    // as above -- and by day weighed against the day as Ultra Dynamic Sky weighs it (lampDayBrightness: its sun is 5
+    // lux, ours 120000), from one to the other in stops by the night's share. Both 1 = physics.
+    const float alwaysLight = timeOfDay_.Present()
+        ? nightLight * std::pow(std::max(t.lampDayBrightness, 1.0e-6f), 1.0f - timeOfDay_.NightShare()) : 1.0f;
     const auto scaleOf = [&](LampSwitch lampSwitch, const Math::float3& position) {
         const float level = nightLamps_.Level(lampSwitch, position); // Always = 1, a no-op once there
-        return lampSwitch == LampSwitch::Night ? level * nightLight : level;
+        return lampSwitch == LampSwitch::Night ? level * nightLight
+             : lampSwitch == LampSwitch::Always ? level * alwaysLight : level;
     };
     std::size_t lights = 0;
     for (PointLight& light : lightManager_.PointLights())
@@ -2269,16 +2284,16 @@ void Scene::PrepareViews(Renderer* renderer)
     // Plan S4: the spot atlas slice is the largest a local shadow may be (ReconcileShadowMode keeps it the knob's).
     const auto& shadowTargets = renderer->GetDeferredForFrame();
     const std::uint32_t localShadowMaxRes = std::max(shadowTargets.spotShadowRes, 1u);
-    // Plan S9: the atlas modes shadow up to 32 spots / 16 points; plan S10b: VSM too -- its views are the whole cull
-    // layout past the cascades (vsm::SpotView / PointFaceView), no longer a fixed 8 + 4.
+    // Plan S9e: every mode shadows as many spots / points as the view capacity holds (VSM's views are the whole cull
+    // layout past the cascades, vsm::SpotView / PointFaceView); wanting more grows it at the next ReconcileShadowMode.
     const bool vsmLocal = render::VsmActive();
     lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
-        LightManager::kMaxShadowedSpotLights);
+        render::ShadowSpotCapacity());
     // B2a: choose which point lights cast (cube) shadows this frame, same non-jittered
     // frustum. Drives Pass_PointLights' shadowParams.x; the cube views + render pass are
     // B2b, sampling is B3, so this is inert (no visual change) until those land.
     lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
-        LightManager::kMaxShadowedPointLights);
+        render::ShadowPointCapacity());
     // Plan S9: place them in the resident atlas pages (shrinking / dropping the lowest-ranked if they do not fit); the
     // pages it wants are grown at the next ReconcileShadowMode. VSM has no atlas.
     if (!vsmLocal)
@@ -2300,6 +2315,23 @@ void Scene::PrepareViews(Renderer* renderer)
                 lightManager_.WantedSpotShadowPages(), lightManager_.WantedPointShadowPages());
         }
     }
+    // render::g_localShadowWindRange: a light whose reach stays farther than the range from the camera has a rigid,
+    // wholly cached shadow (atlas modes; VSM has its own distant lights). 1 m of hysteresis, so a light on the edge does
+    // not refill its cache entry every frame the camera wobbles across it.
+    const Math::float3 windCamera = camera_.GetPosition();
+    const auto windRigid = [&](std::vector<std::uint8_t>& memo, size_t lightIndex, const float3& position, float reach)
+    {
+        if (memo.size() <= lightIndex) { memo.resize(lightIndex + 1u, 0u); }
+        bool rigid = false;
+        if (!vsmLocal && render::g_localShadowWindRange >= 0.0f)
+        {
+            const float gap = std::max((position - windCamera).Length() - reach, 0.0f);
+            rigid = gap > render::g_localShadowWindRange +
+                          (memo[lightIndex] != 0u ? 0.0f : render::kLocalShadowWindRangeHysteresis);
+        }
+        memo[lightIndex] = rigid ? 1u : 0u;
+        return rigid;
+    };
     const size_t shadowedSpotCount = lightManager_.GetShadowedSpotCount();
     const auto& spotLights = lightManager_.SpotLights();
     for (size_t s = 0; s < shadowedSpotCount; ++s)
@@ -2331,6 +2363,7 @@ void Scene::PrepareViews(Renderer* renderer)
         view.lightSphere = float4(desc.position, farPlane);
         view.lightCone = float4(light.GetDirection(), light.GetCosOuter());
         view.vsmMipBias = vsm::LocalMovingMipBias(lightManager_.GetSpotMobility(lightIndex)); // S10e
+        view.windRigid = windRigid(spotWindRigid_, lightIndex, desc.position, farPlane);
         view.shadowBias = float2(desc.shadowBias, desc.shadowSlopeBias); // local-light shadows S1
         view.shadowRes = lightManager_.GetSpotShadowResolution(lightIndex); // S4: its square
         {
@@ -2376,6 +2409,7 @@ void Scene::PrepareViews(Renderer* renderer)
         const float faceFov = vsmLocal ? kHalfPi
                                        : 2.0f * std::atan(1.0f + 2.0f * render::kPointShadowGuardTexels / faceRes);
         const mat4 proj = mat4::PerspectiveFovLH(faceFov, 1.0f, nearPlane, farPlane);
+        const bool pointRigid = windRigid(pointWindRigid_, lightIndex, P, farPlane); // one verdict for the six faces
         for (int face = 0; face < 6; ++face)
         {
             SceneView& view = pointShadowViews_[s * 6 + static_cast<size_t>(face)];
@@ -2401,6 +2435,7 @@ void Scene::PrepareViews(Renderer* renderer)
             view.lightSphere = float4(P, farPlane); // plan S9e: a face's corners reach to sqrt(3) x the radius
             view.lightCone = float4(0.0f, 0.0f, 0.0f, 2.0f);
             view.vsmMipBias = vsm::LocalMovingMipBias(lightManager_.GetPointMobility(lightIndex)); // S10e
+            view.windRigid = pointRigid;
             view.shadowRes = lightManager_.GetPointShadowResolution(lightIndex); // S4: the face's square
             {
                 // S9: the face's square inside the light's 3f x 2f block -- face k at (k % 3, k / 3) faces from its
@@ -2434,7 +2469,9 @@ void Scene::PrepareViews(Renderer* renderer)
             std::memcpy(key.viewProj.data(), &view.view.m, 16 * sizeof(float));
             std::memcpy(key.viewProj.data() + 16, &view.proj.m, 16 * sizeof(float));
             key.res = view.shadowRes;
-            key.encoding = linearDepth ? 1u : 0u; // plan S4
+            // Plan S4: the depth encoding; and the wind range -- a rigid light caches its swaying casters too, so a light
+            // that crosses the range must not take the other mode's picture.
+            key.encoding = (linearDepth ? 1u : 0u) | (view.windRigid ? 2u : 0u);
             render::LocalShadowCache::Rect rect{};
             view.cacheMode = static_cast<std::uint8_t>(localShadowCache_.Request(key, rect));
             view.cachePage = rect.page;
@@ -2473,19 +2510,20 @@ void Scene::PrepareViews(Renderer* renderer)
     // Local-light plan S10c: which light each VSM view holds this frame -- the pool moves a light's pages with it when its
     // slot changes (VirtualShadowMap::PlanViewRemap) instead of re-rendering them.
     {
-        VirtualShadowMap::ViewOwners owners = VirtualShadowMap::NoViewOwners();
+        // Plan S9e: as many views as the pool was made for (a light past them waits for the re-create).
+        VirtualShadowMap::ViewOwners owners = VirtualShadowMap::NoViewOwners(vsm_.ViewCount());
+        const auto own = [&owners](std::uint32_t view, std::uint32_t owner) { if (view < owners.size()) { owners[view] = owner; } };
         for (size_t s = 0; s < shadowedSpotCount; ++s)
         {
-            owners[vsm::SpotView(static_cast<std::uint32_t>(s))] =
-                VirtualShadowMap::SpotViewOwner(static_cast<std::uint32_t>(lightManager_.GetShadowedSpotLightIndex(s)));
+            own(vsm::SpotView(static_cast<std::uint32_t>(s)),
+                VirtualShadowMap::SpotViewOwner(static_cast<std::uint32_t>(lightManager_.GetShadowedSpotLightIndex(s))));
         }
         for (size_t s = 0; s < shadowedPointCount; ++s)
         {
             const auto light = static_cast<std::uint32_t>(lightManager_.GetShadowedPointLightIndex(s));
             for (std::uint32_t face = 0; face < 6u; ++face)
             {
-                owners[vsm::PointFaceView(static_cast<std::uint32_t>(s) * 6u + face)] =
-                    VirtualShadowMap::PointFaceViewOwner(light, face);
+                own(vsm::PointFaceView(static_cast<std::uint32_t>(s) * 6u + face), VirtualShadowMap::PointFaceViewOwner(light, face));
             }
         }
         vsm_.SetViewOwners(owners);
@@ -2493,13 +2531,12 @@ void Scene::PrepareViews(Renderer* renderer)
 
     prepareViewsSetupScope.reset();
 
-    // main + shore + shore SDF + cascades + up to kMaxShadowedSpotLights spot views + up to
-    // 6*kMaxShadowedPointLights point cube-face views (plan S9: 32 + 96, the atlas modes and since S10b VSM too).
-    // tc::inl_vector does not grow: past its capacity Release writes over the stack (an assert only in Debug).
-    constexpr size_t kMaxViewsToCull = 3u + static_cast<size_t>(kCascades) + LightManager::kMaxShadowedSpotLights +
-                                       6u * LightManager::kMaxShadowedPointLights;
-    static_assert(kMaxViewsToCull <= 160u, "viewsToCull / viewTasks capacity");
-    tc::inl_vector<SceneView*, 160> viewsToCull;
+    // main + shore + shore SDF + cascades + the shadowed spots' views + 6 cube faces per shadowed point -- plan S9e: as
+    // many as the view capacity holds, so a growing vector (tc::inl_vector does not grow: past its capacity Release
+    // wrote over the stack once, S10b).
+    std::vector<SceneView*> viewsToCull;
+    viewsToCull.reserve(3u + static_cast<size_t>(kCascades) + lightManager_.GetShadowedSpotCount() +
+                        6u * lightManager_.GetShadowedPointCount());
     auto enqueueView = [this, camMask, &viewsToCull](SceneView& view)
     {
         if (view.type == SceneView::Type::Shadow && !view.frustum.IsValid())
@@ -2507,15 +2544,7 @@ void Scene::PrepareViews(Renderer* renderer)
             PrepareViewQueue(view, camMask);
             return;
         }
-
-        if (viewsToCull.size() < viewsToCull.capacity())
-        {
-            viewsToCull.push_back(&view);
-        }
-        else
-        {
-            PrepareViewQueue(view, camMask);
-        }
+        viewsToCull.push_back(&view);
     };
 
     {
@@ -2546,9 +2575,9 @@ void Scene::PrepareViews(Renderer* renderer)
 
     // Camera preparation was published before cascade/light-view setup. Publish the remaining
     // independent views now; while waiting for the camera task, main may help drain these tasks.
-    // One task per view to cull -- the same capacity (it was 48: plan S9 let the atlases reach 32 spots + 96 faces, and a
-    // Release editor with 10 spots + 6 points in VSM overran it, S10b).
-    tc::inl_vector<TaskSystem::TaskHandle, 160> viewTasks;
+    // One task per view to cull (plan S9e: as many as there are views).
+    std::vector<TaskSystem::TaskHandle> viewTasks;
+    viewTasks.reserve(viewsToCull.size());
     {
         CPU_SCOPE(ProfilerScopes::kPrepareViewsDispatch);
         for (SceneView* view : viewsToCull)
@@ -2665,10 +2694,9 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     cb.contentRes = static_cast<float>(contentRes);
     cb.tileRes = tileRes;
     cb.borderRes = borderRes;
-    // Clamped to what the SDSM frustum buffer holds (kMaxShadowViews + 1, the camera slot
+    // Clamped to what the SDSM frustum buffer holds (MaxShadowViews() + 1, the camera slot
     // included). ShadowGpuData owns this count; a slot added there must not run off this buffer.
-    cb.viewFrustumCount = std::min<std::uint32_t>(shadowGpu_.ViewFrustumCount(),
-                                                  render::kMaxShadowViews + 1u);
+    cb.viewFrustumCount = std::min<std::uint32_t>(shadowGpu_.ViewFrustumCount(), sdsm_.FrustumViewCapacity());
     // S15.4: the accurate cull volume, on the SAME knob Legacy uses -- it is the same construction
     // (UE's ComputeShadowCullingVolume), just evaluated in the analyze instead of on the CPU,
     // because the partition intervals it needs are a GPU result.
@@ -2851,6 +2879,72 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     }
 }
 
+bool Scene::ReconcileShadowCapacity(Renderer* renderer)
+{
+    // Local-light plan S9e: UE shadows every visible movable light that passes its fade (ShadowSetup.cpp:6411-6482) --
+    // no count. Ours are a CAPACITY of view slots: when the last selection (LightManager::SelectShadowedSpots / Points)
+    // wanted more than it holds, the capacity doubles (up to the ceiling, a memory guard) HERE, at the GPU-idle point,
+    // and everything sized by views is made again for it: the scene's views, the cull's rows (RebuildShadowCasters),
+    // VSM's page table and records, SDSM's frustum buffer. The frame that asked shadowed what fitted; the next one all.
+    const auto grow = [](unsigned have, unsigned want, unsigned ceiling)
+    {
+        unsigned cap = std::max(have, 1u);
+        while (cap < want && cap < ceiling) { cap *= 2u; }
+        return std::min(std::max(cap, have), ceiling);
+    };
+    const unsigned spots = grow(render::g_shadowSpotCapacity, lightManager_.WantedShadowedSpots(), render::kShadowSpotsCeiling);
+    const unsigned points = grow(render::g_shadowPointCapacity, lightManager_.WantedShadowedPoints(), render::kShadowPointsCeiling);
+    if (lightManager_.WantedShadowedSpots() > spots || lightManager_.WantedShadowedPoints() > points)
+    {
+        LOG_WARNING_ONCE(logging::LogCategory::RenderShadow,
+                         "local shadows: {} spot / {} point lights want a shadow, past the capacity ceiling {} / {} -- "
+                         "the rest stay unshadowed", lightManager_.WantedShadowedSpots(), lightManager_.WantedShadowedPoints(),
+                         render::kShadowSpotsCeiling, render::kShadowPointsCeiling);
+    }
+    if (spots == render::g_shadowSpotCapacity && points == render::g_shadowPointCapacity) { return false; }
+
+    renderer->WaitForPreviousFrame(); // nothing in flight reads a buffer re-made below
+    ApplyShadowCapacity(renderer, spots, points);
+    RebuildShadowCasters(*renderer);
+    return true;
+}
+
+void Scene::ApplyShadowCapacity(Renderer* renderer, unsigned spots, unsigned points)
+{
+    // Plan S9e: the GPU is idle (the caller's wait, or a level load). Everything sized by the view count follows the
+    // capacity here, except the cull's rows: the caller rebuilds the casters (RebuildShadowCasters / the level's Rebuild).
+    const unsigned oldSpots = render::g_shadowSpotCapacity;
+    const unsigned oldPoints = render::g_shadowPointCapacity;
+    const unsigned oldViews = render::MaxShadowViews();
+    render::g_shadowSpotCapacity = spots;
+    render::g_shadowPointCapacity = points;
+    // Made anew (a SceneView does not relocate: its render queue's batches are move-only, its move not noexcept); every
+    // view is rebuilt each frame by PrepareViews anyway.
+    spotShadowViews_ = std::vector<SceneView>(spots);
+    pointShadowViews_ = std::vector<SceneView>(6u * static_cast<size_t>(points));
+    localViewCull_.resize(render::MaxShadowViews() + 1u);
+    localViewCullPtr_.resize(render::MaxShadowViews() + 1u, nullptr);
+    if (vsm_.IsAllocated())
+    {
+        vsm_.ReleaseResources();
+        vsm_.EnsureResources(renderer);
+    }
+    if (sdsm_.Ready()) // its moments go with it; ReconcileShadowMode's moments step makes them again
+    {
+        sdsm_.ReleaseResources(renderer);
+        if (!sdsm_.EnsureResources(renderer))
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "SDSM resources unavailable after the shadow capacity changed; "
+                      "falling back to Legacy CSM");
+            render::g_shadowMode = render::ShadowMode::Legacy;
+        }
+    }
+    LOG_INFO(logging::LogCategory::RenderShadow,
+             "local shadow capacity -> {} spots / {} points (was {} / {}; wanted {} / {}): {} shadow views (was {})",
+             spots, points, oldSpots, oldPoints, lightManager_.WantedShadowedSpots(), lightManager_.WantedShadowedPoints(),
+             render::MaxShadowViews(), oldViews);
+}
+
 void Scene::ReconcileShadowMode(Renderer* renderer)
 {
     // Step 24b: make the VSM resource state match the active shadow mode. The common path is a cheap
@@ -2881,6 +2975,8 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
                      render::ShadowModeLabel(render::g_shadowMode));
         }
     }
+    // Plan S9e: the shadow view capacity first -- what it re-creates, the residency below then settles as usual.
+    ReconcileShadowCapacity(renderer);
     const bool wantVsm = render::VsmActive();
     const bool wantAtlasFull = !wantVsm; // legacy spot/point atlases full-res only in Legacy mode
     // S15: the SDSM buffers follow the same residency rule -- resident only in the mode that uses
@@ -3135,22 +3231,20 @@ void Scene::Render(Renderer* renderer) {
     {
         CPU_SCOPE(ProfilerScopes::kSceneShadowViewUpload);
         constexpr size_t kCascadeSlots = static_cast<size_t>(kCascades);
-        constexpr size_t kSpotSlots = LightManager::kMaxShadowedSpotLights;
-        constexpr size_t kPointFaceSlots = LightManager::kMaxShadowedPointLights * 6;
+        const size_t kSpotSlots = render::ShadowSpotCapacity();          // plan S9e: the capacity, not a cap
+        const size_t kPointFaceSlots = 6u * render::ShadowPointCapacity();
         constexpr size_t kClipmapSlots = vsm::kNumClipmapLevels; // Step 24e: directional clipmap cull views
-        // Single source of truth: the indirect buffers (ShadowGpuData) size per view against
-        // render::kMaxShadowViews; keep it equal to the real cap sum so they can't drift.
-        static_assert(kCascadeSlots + kSpotSlots + kPointFaceSlots + kClipmapSlots == render::kMaxShadowViews,
-                      "render::kMaxShadowViews must equal the shadow-view slot layout");
+        const size_t maxViews = render::MaxShadowViews(); // the indirect buffers (ShadowGpuData) size per view by it
         static_assert(kCascadeSlots == render::kShadowViewCascades && kClipmapSlots == render::kShadowViewClipmapLevels,
                       "the cull layout's cascades / clipmap are VSM's");
-        // Local-light shadow plan S9: [cascades | 8 spots | 24 point faces | clipmap | 24 more spots | 72 more faces];
-        // every slot index comes from render::ShadowView*Slot, never from a running count. Plan S10b: VSM's views are
-        // these slots minus the cascades (vsm::SpotView / PointFaceView / ClipmapView: rung0View = view + kNumCascades).
+        // Local-light shadow plan S9: [cascades | 8 spots | 24 point faces | clipmap | S - 8 more spots | 6 (P - 4) more
+        // faces]; every slot index comes from render::ShadowView*Slot, never from a running count. Plan S10b: VSM's views
+        // are these slots minus the cascades (vsm::SpotView / PointFaceView / ClipmapView: rung0View = view + 4).
         // Occlusion plan S4: one more slot past the shadow views -- the CAMERA frustum, for the
         // registry's camera row (the indirect G-buffer). Never a shadow view: the shadow cull
-        // loops kMaxShadowViews and the camera branch addresses its slot by index.
-        std::array<const Frustum*, render::kMaxShadowViews + 1> frustums{};
+        // loops MaxShadowViews() and the camera branch addresses its slot by index.
+        std::vector<const Frustum*>& frustums = shadowViewFrustums_;
+        frustums.assign(maxViews + 1u, nullptr);
         // S15: in SDSM the four directional slots are written by Main_SdsmAnalyze from this frame's
         // depth, and Main_SdsmCull re-clears and re-fills their args rows. Uploading the Legacy
         // cascade frusta here would make the MAIN cull append every caster into rows that are
@@ -3182,13 +3276,13 @@ void Scene::Render(Renderer* renderer) {
         }
         // S4: the camera, this frame's (PrepareViews above built it).
         const SceneView& camView = camera_.GetView();
-        frustums[render::kMaxShadowViews] = &camView.frustum;
+        frustums[maxViews] = &camView.frustum;
         // Local-light plan S9e: each local view's light bounds, and -- atlas modes, the knob -- UE's hull of its light and
         // the camera frustum (one per light: a point light's six faces share it). VSM caches pages: no hull (UE).
         {
             const bool boundsOn = render::g_localShadowBoundsCull;
             const bool hullOn = render::g_localShadowHullCull && !render::VsmActive();
-            localViewCullPtr_.fill(nullptr);
+            std::fill(localViewCullPtr_.begin(), localViewCullPtr_.end(), nullptr);
             const auto fill = [&](size_t slot, const SceneView& view, const render::LocalViewCull& hull)
             {
                 render::LocalViewCull& lc = localViewCull_[slot];
@@ -3232,6 +3326,23 @@ void Scene::Render(Renderer* renderer) {
             const float hfovDeg = m00 > 1e-6f ? DirectX::XMConvertToDegrees(2.0f * std::atan(1.0f / m00)) : 90.0f;
             const float share = std::max(render::g_localShadowRadiusThreshold, 0.0f) * (hfovDeg / 90.0f);
             shadowGpu_.SetLocalRadiusThreshold(camView.position, share * share);
+        }
+        // render::g_localShadowWindRange: the slots of the lights past it (Scene::PrepareViews' verdicts).
+        {
+            ShadowGpuData::ViewMask rigid{};
+            const auto mark = [&rigid](unsigned slot)
+            {
+                if (slot / 32u < rigid.size()) { rigid[slot / 32u] |= 1u << (slot % 32u); }
+            };
+            for (size_t i = 0; i < kSpotSlots && i < spotCount; ++i)
+            {
+                if (spotShadowViews_[i].windRigid) { mark(render::ShadowViewSpotSlot(static_cast<unsigned>(i))); }
+            }
+            for (size_t i = 0; i < kPointFaceSlots && i < pointFaceCount; ++i)
+            {
+                if (pointShadowViews_[i].windRigid) { mark(render::ShadowViewPointFaceSlot(static_cast<unsigned>(i))); }
+            }
+            shadowGpu_.SetLocalWindRigid(rigid);
         }
         shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size(), localViewCullPtr_.data());
         // Plan S9: the cull walks VSM's prefix and, past it, only up to the last occupied extra slot.

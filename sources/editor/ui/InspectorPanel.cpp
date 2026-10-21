@@ -2584,6 +2584,12 @@ namespace
                               "up to Flicker while it warms (UDS's Light Day/Night Toggle: 1.5 s, 0.6, 0.2). It goes "
                               "out at once. A clock set by hand -- the time slider, setTime -- switches every lamp at "
                               "once.");
+                dragF("Day Brightness", "dayBrightness", defaults.lampDayBrightness, 1.0f, 0.0f, 100000.0f, "%.0f",
+                      ImGuiSliderFlags_Logarithmic);
+                InspectorHelp("A manual multiplier on the ALWAYS-ON lamps (no On At) by day, as Night Brightness is the "
+                              "night's -- by night they take Night Brightness like the night lamps. 1 = physics: a lamp "
+                              "is lost in daylight. Ultra Dynamic Sky's sun is 5 lux against our 120000, which is why a "
+                              "lamp shows by day in UE; 24000 weighs it as UDS does.");
                 ImGui::TextDisabled("Now: %s", ctx.scene.GetNightLamps().Night() ? "night (lamps on)" : "day (lamps off)");
             }
             ImGui::PopID();

@@ -82,7 +82,7 @@ public:
         // for the reason `shadow` above is one: written by Main_SpotShadows / Main_PointShadows, read by the light
         // passes, the fog scatter and glass of the SAME frame, every one of them on the graphics queue.
         ID3D12Resource* spotShadow = nullptr; // R16_TYPELESS array for spot lights
-        ID3D12Resource* pointShadow = nullptr; // R16_TYPELESS cube array (6*kMaxShadowedPointLights slices), DSV=D16/SRV=R16: depth-cube point shadows
+        ID3D12Resource* pointShadow = nullptr; // R16_TYPELESS array of point pages (plan S9: 3 x 2 faces each), DSV=D16/SRV=R16
         GpuResource dlssOutput; // scene color format, upscaled
         // S15 off-screen glass reflections: a reflection-res glass G-buffer (front-face
         // normal + depth) feeding a second rt_reflections_cs dispatch into glassReflection.

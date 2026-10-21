@@ -37,7 +37,7 @@
 
 #define VSM_SCATTER_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS // render::kMaxShadowLods (plan S10a); the per-group LOD bucket count
@@ -53,19 +53,9 @@ cbuffer ScatterCB : register(b0)
     uint gNumLocalViews; // local (spot/point) views scattered after the clipmap levels; 0 = none
     uint gPerInstanceLod; // 1 = bucket FLOOR casters by their receiver LOD; 0 = old per-view (A/B)
     uint2 _pad0;
-    // Every VSM view, same indexing as the setup CB (vsm::SpotView / PointFaceView / ClipmapView). Was only the 8
-    // clipmap matrices before S5. An inactive slot is a ZERO matrix, which the perspective path
-    // rejects on its own (maxW <= 0) — and its pages are not resident either.
-    float4x4 gViewProj[VSM_MAX_VIEWS];
-    // Per SCATTER TARGET (same y indexing as the dispatch: clipmap levels, then local views): the
-    // view's own shadow LOD from the tier curve. It is only the lower bound for FLOOR casters —
-    // the per-caster LOD below can only push COARSER past it, never finer.
-    uint4 gTargetLod[(VSM_MAX_VIEWS + 3) / 4];
     // S5b.2: x = the HZB test is on, y = last frame's pyramid + PrevPageTable are valid (a render
     // with a build happened last frame, same level), z = DeferredPairs capacity, w unused.
     uint4 gHzbParams;
-    // LAST frame's matrices of every view (the pyramid's pages were drawn with these).
-    float4x4 gPrevViewProj[VSM_MAX_VIEWS];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };
@@ -88,6 +78,11 @@ StructuredBuffer<uint>         CasterLod   : register(t5);
 // allocation) and the pool pyramid built then. Placeholders when the test is off (never read).
 StructuredBuffer<uint>         PrevPageTable : register(t6);
 Texture2D<float>               VsmHzbPrev    : register(t7);
+// Plan S9e: every VSM view (the render slot, same indexing as the setup's): viewProj (an inactive view's is ZERO, which
+// the perspective path rejects on its own -- maxW <= 0 -- and its pages are not resident either), prevViewProj = LAST
+// frame's (the pyramid's pages were drawn with it), bits.y = the view's own shadow LOD from the tier curve -- only the
+// lower bound for FLOOR casters: the per-caster LOD below can only push COARSER past it, never finer.
+StructuredBuffer<VsmViewData>  Views         : register(t8);
 
 RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) count, doubles as the cursor
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // per (page, slot) caster id
@@ -225,13 +220,14 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // receiver pixel marks whichever level matches its density, so every level can be resident.
     const uint mipCount = isLocal ? (VSM_MAX_LEVEL + 1u) : 1u;
 
+    const float4x4 viewProj = Views[view].viewProj;
     float2 lo, hi;
     bool straddles;
-    if (!ProjectAabbNdc(gViewProj[view], ctr, ext, isLocal, lo, hi, straddles)) { return; }
+    if (!ProjectAabbNdc(viewProj, ctr, ext, isLocal, lo, hi, straddles)) { return; }
     if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) { return; } // outside this view
 
     const bool isDynamic = (meta & 1u) != 0u;
-    const uint targetLod = gTargetLod[target >> 2u][target & 3u]; // this view's own tier-curve LOD
+    const uint targetLod = Views[view].bits.y; // this view's own tier-curve LOD
 
     // S5b.2: last frame's clip rect of this caster in the level, once; the page loop remaps it.
     // Not for local views (perspective pages; the post pass would need their view/proj split).
@@ -239,7 +235,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     HzbFrustumCull prevCull = (HzbFrustumCull)0;
     if (!isLocal && gHzbParams.x != 0u && gHzbParams.y != 0u)
     {
-        prevCull = HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, mul(gPrevViewProj[view], kFlipZ), false, true);
+        prevCull = HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, mul(Views[view].prevViewProj, kFlipZ), false, true);
         prevTest = prevCull.isVisible && !prevCull.crossesNearPlane;
     }
 
@@ -265,7 +261,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 const uint entry = PageTable[pageId];
                 if ((entry & 0x80000000u) == 0u) { continue; }   // not resident -> nothing to draw into
                 // Residency first: the exact test is only worth building for a page that exists.
-                if (isLocal && !BoxInPagePlanes(gViewProj[view], L, pxi, py, ctr, ext)) { continue; }
+                if (isLocal && !BoxInPagePlanes(viewProj, L, pxi, py, ctr, ext)) { continue; }
                 const uint p = entry & 0x0000FFFFu;              // physical page index
 
                 // S5b.2: clipmap pairs last frame's pyramid hid go to the deferred list instead

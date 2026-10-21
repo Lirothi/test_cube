@@ -12,26 +12,16 @@
 
 #define VSM_PAGE_REQUEST_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 // Must match the vsm:: constants in VirtualShadowMap.h; the view counts ARE them (plan S10a, Material.cpp
 // EngineShaderDefines). Plan S10b: local views are [0, VSM_CLIPMAP_FIRST) and [VSM_CLIPMAP_END, numViews).
-static const uint kMaxViews     = VSM_MAX_VIEWS;  // kMaxVirtualViews
 static const uint kL0Axis       = 16u;   // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint kMaxLevel     = 4u;    // kMaxMipLevel
 static const uint kPagesPerView = 341u;  // kPagesPerView (16²+8²+4²+2²+1)
 // Prefix sum of per-level page counts within a view (kLevelOffset[L] = vsm::LevelPageOffset(L)).
 static const uint kLevelOffset[6] = { 0u, 256u, 320u, 336u, 340u, 341u };
-
-struct ViewProjEntry
-{
-    float4x4 viewProj;
-    float4   params; // x = valid (0/1), y = a point face's cube face (0..5; -1 = a spot / clipmap), z = zFar,
-                     // w = the projection's x scale (S10e: the pixel footprint)
-    float4   cull;   // plan S10e: the light's position + reach (w < 0 = none): a receiver it does not reach marks nothing
-    float4   mip;    // plan S10e: x = the light's mip bias on top of localMip.y (UE's ResolutionLodBiasLocalMoving)
-};
 
 cbuffer PageRequestCB : register(b0)
 {
@@ -45,12 +35,54 @@ cbuffer PageRequestCB : register(b0)
     // receiver against each view's light sphere first (vsm.requestLightCull).
     float4   localMip;
     uint     numViews;
-    uint3    _pad;
-    ViewProjEntry views[kMaxViews];
+    // Plan S9e (cost without a limit): the request walks the shadowed LIGHTS, not their views -- spots one view each
+    // (vsm::SpotView), points six faces each from PointFaceView(slot * 6) (the extra lights' from gPointExtraView).
+    uint     gSpotLights;
+    uint     gPointLights;
+    uint     gPointExtraView;
 };
 
-Texture2D                DepthT  : register(t0);
-RWStructuredBuffer<uint> Request : register(u0);
+Texture2D                       DepthT  : register(t0);
+StructuredBuffer<VsmViewData>   Views   : register(t1); // plan S9e: numViews records (the request slot)
+RWStructuredBuffer<uint>        Request : register(u0);
+
+// One local view's pages for receiver P: its projection, the mip (the pixel's footprint in ITS texels, plan S10e, or the
+// camera-distance level), and that mip with every coarser one marked.
+void MarkLocalView(uint v, float3 P, bool pixelMip, float pixelRadiusWorld, uint levelByDistance, uint maxLevel)
+{
+    const VsmViewData view = Views[v];
+    if (view.params.x < 0.5f) { return; } // inactive view slot
+    float4 clip = mul(float4(P, 1.0f), view.viewProj);
+    if (clip.w <= 0.0f) { return; }
+    float3 ndc = clip.xyz / clip.w;
+    if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f) { return; }
+    if (ndc.z < 0.0f || ndc.z > 1.0f) { return; }
+    const uint level = pixelMip ? VsmLocalMipFromPixel(pixelRadiusWorld, view.params.w, clip.w, localMip.y + view.mip.x)
+                                : levelByDistance;
+
+    // Shadow UV (D3D clip -> UV, y flipped). Mark the selected level AND all coarser levels (a
+    // mip chain): the sampler may pick a slightly different level per pixel, so keeping the
+    // coarser pages resident gives it something to fall back to (no distance pop-in). Coarser
+    // levels have very few pages (level 4 = 1/view), so the extra requests are cheap.
+    float2 suv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
+    for (uint L = level; L <= maxLevel; ++L)
+    {
+        uint axisL = kL0Axis >> L;
+        uint pageX = min((uint)(suv.x * axisL), axisL - 1u);
+        uint pageY = min((uint)(suv.y * axisL), axisL - 1u);
+        uint page = v * kPagesPerView + kLevelOffset[L] + pageY * axisL + pageX;
+        uint prev;
+        InterlockedOr(Request[page >> 5u], 1u << (page & 31u), prev);
+    }
+}
+
+// Plan S10e (UE marks a pixel's pages only for the lights its light-grid cell holds): beyond the light's reach nothing
+// samples its views. `cull` = the light's sphere (w < 0 = none).
+bool OutsideLight(float4 cull, float3 P)
+{
+    const float3 toP = P - cull.xyz;
+    return cull.w >= 0.0f && dot(toP, toP) > cull.w * cull.w;
+}
 
 [numthreads(8, 8, 1)]
 [RootSignature(VSM_PAGE_REQUEST_RS)]
@@ -78,54 +110,38 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
     const uint  levelByDistance = (uint)clamp(rawLevel, 0, (int)maxLevel);
 
-    const uint count = min(numViews, kMaxViews);
+    const uint count = min(numViews, VSM_VIEW_CEILING);
 
-    // --- Local views (spots + point faces): per-view projection + a distance-selected mip chain. Plan S10b: the i-th
-    // local view is VsmLocalView(i) -- the prefix before the clipmap, then the rest after it, up to numViews. ---
-    const uint localCount = (count <= VSM_CLIPMAP_FIRST) ? count
-                          : ((count > VSM_CLIPMAP_END) ? count - VSM_NUM_CLIPMAP_LEVELS : VSM_CLIPMAP_FIRST);
+    // --- Local lights: per view, a projection + a mip chain. Plan S9e: walked per LIGHT (a point's six faces share its
+    // sphere: one distance test, then only the face P's direction falls in -- VsmCubeFace, the sampler's rule), bounded
+    // by the literal ceiling and stopped by the CB's counts. localMip.w = 0 (vsm.requestLightCull) tests nothing and
+    // projects into every face. ---
     // Plan S10e: the camera pixel's radius at this receiver (UE VirtualShadowMapCalcPixelFootprintLocal).
     const bool pixelMip = localMip.x != 0.0f;
     const float pixelRadiusWorld = dot(P - camPosWS.xyz, invView[2].xyz) * localMip.z;
-    for (uint li = 0; li < localCount; ++li)
+    const bool lightCull = localMip.w != 0.0f;
+    [loop] for (uint s = 0; s < VSM_VIEW_CEILING; ++s)
     {
-        const uint v = VsmLocalView(li);
-        if (views[v].params.x < 0.5f) { continue; } // inactive view slot
-        // Plan S10e (UE marks a pixel's pages only for the lights its light-grid cell holds): beyond the light's reach
-        // nothing samples this view, and of a point light's six faces only the one P's direction falls in can hold it --
-        // one distance test and a face pick instead of six projections.
-        const float4 cull = views[v].cull; // always the light's sphere (plan S10d reads it too); localMip.w = test it
-        if (localMip.w != 0.0f && cull.w >= 0.0f)
+        if (s >= gSpotLights) { break; }
+        const uint v = (s < VSM_PREFIX_SPOTS) ? s : VSM_CLIPMAP_END + (s - VSM_PREFIX_SPOTS); // vsm::SpotView
+        if (lightCull && OutsideLight(Views[v].cull, P)) { continue; }
+        MarkLocalView(v, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+    }
+    const uint prefixPoints = (VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS) / 6u;
+    [loop] for (uint q = 0; q < VSM_VIEW_CEILING / 6u; ++q)
+    {
+        if (q >= gPointLights) { break; }
+        const uint first = (q < prefixPoints) ? VSM_PREFIX_SPOTS + 6u * q : gPointExtraView + 6u * (q - prefixPoints);
+        const float4 cull = Views[first].cull; // the light's sphere, the same on all six faces
+        if (lightCull && cull.w >= 0.0f)
         {
-            const float3 toP = P - cull.xyz;
-            if (dot(toP, toP) > cull.w * cull.w) { continue; }
-            if (views[v].params.y >= 0.0f && VsmCubeFace(toP) != (uint)views[v].params.y) { continue; }
+            if (OutsideLight(cull, P)) { continue; }
+            MarkLocalView(first + VsmCubeFace(P - cull.xyz), P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+            continue;
         }
-
-        float4 clip = mul(float4(P, 1.0f), views[v].viewProj);
-        if (clip.w <= 0.0f) { continue; }
-        float3 ndc = clip.xyz / clip.w;
-        if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f) { continue; }
-        if (ndc.z < 0.0f || ndc.z > 1.0f) { continue; }
-        // S10e: this view's mip -- the pixel's footprint in ITS texels (the light's distance and cone width), or the old
-        // camera-distance level shared by every view.
-        const uint level = pixelMip ? VsmLocalMipFromPixel(pixelRadiusWorld, views[v].params.w, clip.w,
-                                                           localMip.y + views[v].mip.x)
-                                    : levelByDistance;
-
-        // Shadow UV (D3D clip -> UV, y flipped). Mark the selected level AND all coarser levels (a
-        // mip chain): the sampler may pick a slightly different level per pixel, so keeping the
-        // coarser pages resident gives it something to fall back to (no distance pop-in). Coarser
-        // levels have very few pages (level 4 = 1/view), so the extra requests are cheap.
-        float2 suv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-        for (uint L = level; L <= maxLevel; ++L)
+        [loop] for (uint face = 0u; face < 6u; ++face)
         {
-            uint axisL = kL0Axis >> L;
-            uint pageX = min((uint)(suv.x * axisL), axisL - 1u);
-            uint pageY = min((uint)(suv.y * axisL), axisL - 1u);
-            uint page = v * kPagesPerView + kLevelOffset[L] + pageY * axisL + pageX;
-            uint prev;
-            InterlockedOr(Request[page >> 5u], 1u << (page & 31u), prev);
+            MarkLocalView(first + face, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
         }
     }
 
@@ -137,8 +153,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint clipEnd = min(count, VSM_CLIPMAP_END);
     for (uint cv = VSM_CLIPMAP_FIRST; cv < clipEnd; ++cv)
     {
-        if (views[cv].params.x < 0.5f) { continue; }
-        float4 cclip = mul(float4(P, 1.0f), views[cv].viewProj);
+        if (Views[cv].params.x < 0.5f) { continue; }
+        float4 cclip = mul(float4(P, 1.0f), Views[cv].viewProj);
         if (cclip.w <= 0.0f) { continue; }
         float3 cndc = cclip.xyz / cclip.w;
         if (cndc.x < -1.0f || cndc.x > 1.0f || cndc.y < -1.0f || cndc.y > 1.0f) { continue; } // outside this level
@@ -154,12 +170,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // The sampler blends by the fine level's square-edge coordinate. Request the parent page
         // only in that same band, so width 0 has zero residency/raster cost and a narrow band adds
         // only the coarse pages that can actually receive a second PCF sample.
-        if (clipBlendWidth > 0.0f && cv + 1u < clipEnd && views[cv + 1u].params.x >= 0.5f)
+        if (clipBlendWidth > 0.0f && cv + 1u < clipEnd && Views[cv + 1u].params.x >= 0.5f)
         {
             const float edge = max(abs(cndc.x), abs(cndc.y));
             if (edge > 1.0f - clipBlendWidth)
             {
-                float4 pclip = mul(float4(P, 1.0f), views[cv + 1u].viewProj);
+                float4 pclip = mul(float4(P, 1.0f), Views[cv + 1u].viewProj);
                 if (pclip.w > 0.0f)
                 {
                     float3 pndc = pclip.xyz / pclip.w;

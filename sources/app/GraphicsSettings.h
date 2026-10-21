@@ -67,6 +67,7 @@ enum class GraphicsControl
     ChunkLodDistance,
     ChunkLodFactor,
     ShadowMode,
+    LocalShadowWindRange,         // the atlas lamps' sway range (render::g_localShadowWindRange)
     CsmMaxDistance,
     CsmAutoSplits,
     CsmDistributionExponent,

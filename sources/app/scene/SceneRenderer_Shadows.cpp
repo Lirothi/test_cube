@@ -62,15 +62,18 @@ namespace
 // Local-light plan S10b: VSM's view list, by the layout's slot for each light (vsm::SpotView / PointFaceView /
 // ClipmapView = the cull slot minus the cascades) -- the request and the render pass must agree, so both build it here.
 // Every slot of the prefix (spots, faces, clipmap) is written, valid or not; past it, up to the last shadowed light's
-// view. Returns the count: the request shader, the scatter and the setup walk exactly these.
-std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* views)
+// view. Returns the count: the request shader, the scatter and the setup walk exactly these. Plan S9e: `views` holds
+// the VSM's ViewCount (the capacity it was made for); a light past it -- the capacity grew this frame, VSM is re-created
+// at the next ReconcileShadowMode -- has no view yet.
+std::uint32_t BuildVsmViews(const SceneFrameData& frame, std::vector<vsm::ViewProjEntry>& views)
 {
     std::uint32_t count = vsm::kClipmapFirstView + vsm::kNumClipmapLevels;
-    for (std::uint32_t v = 0; v < vsm::kMaxVirtualViews; ++v) { views[v] = vsm::ViewProjEntry{}; }
+    views.assign(frame.vsm ? frame.vsm->ViewCount() : 0u, vsm::ViewProjEntry{});
+    const std::uint32_t viewSlots = static_cast<std::uint32_t>(views.size());
     // `face` = a point face's cube face (0..5), -1 for a spot or a clipmap level.
     const auto put = [&](std::uint32_t slot, const SceneView& v, bool active, float face)
     {
-        if (slot >= vsm::kMaxVirtualViews) { return; }
+        if (slot >= viewSlots) { return; }
         views[slot].viewProj = (v.view * v.proj).m;
         const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
         // .w = the projection's x scale (plan S10e: the request's pixel-footprint mip; a spot's 1 / tan(outer), a face's 1).
@@ -81,22 +84,18 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* vie
         views[slot].mip = DirectX::XMFLOAT4(v.vsmMipBias, 0.0f, 0.0f, 0.0f); // S10e: UE's moving bias, this light's
         if (active) { count = std::max(count, slot + 1u); }
     };
-    const size_t spotCount = frame.lightManager->GetShadowedSpotCount();
-    for (size_t i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
+    const size_t spotCount = std::min(frame.lightManager->GetShadowedSpotCount(), frame.spotShadowViews->size());
+    for (size_t i = 0; i < std::max<size_t>(spotCount, LightManager::kVsmShadowedSpotLights) &&
+                       i < frame.spotShadowViews->size(); ++i)
     {
-        if (i < spotCount || i < LightManager::kVsmShadowedSpotLights)
-        {
-            put(vsm::SpotView(static_cast<std::uint32_t>(i)), (*frame.spotShadowViews)[i], i < spotCount, -1.0f);
-        }
+        put(vsm::SpotView(static_cast<std::uint32_t>(i)), (*frame.spotShadowViews)[i], i < spotCount, -1.0f);
     }
-    const size_t pointFaces = frame.lightManager->GetShadowedPointCount() * 6;
-    for (size_t i = 0; i < 6u * LightManager::kMaxShadowedPointLights; ++i)
+    const size_t pointFaces = std::min(frame.lightManager->GetShadowedPointCount() * 6, frame.pointShadowViews->size());
+    for (size_t i = 0; i < std::max<size_t>(pointFaces, 6u * LightManager::kVsmShadowedPointLights) &&
+                       i < frame.pointShadowViews->size(); ++i)
     {
-        if (i < pointFaces || i < 6u * LightManager::kVsmShadowedPointLights)
-        {
-            put(vsm::PointFaceView(static_cast<std::uint32_t>(i)), (*frame.pointShadowViews)[i], i < pointFaces,
-                static_cast<float>(i % 6u));
-        }
+        put(vsm::PointFaceView(static_cast<std::uint32_t>(i)), (*frame.pointShadowViews)[i], i < pointFaces,
+            static_cast<float>(i % 6u));
     }
     // Step 24d/24e: the directional clipmap levels -- the request shader picks the finest level containing each
     // receiver; the setup renders their pages through the cull's clipmap slots (rung0View = view + kNumCascades).
@@ -157,7 +156,14 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
 
     // The page-table view indexing (plan S10b: vsm::SpotView / PointFaceView / ClipmapView, the cull layout minus its
     // cascades). Cascades are intentionally excluded (Step 19b local scope).
-    cb.numViews = BuildVsmViews(*frame_, cb.views);
+    std::vector<vsm::ViewProjEntry> views;
+    cb.numViews = BuildVsmViews(*frame_, views);
+    // Plan S9e: the request walks the shadowed lights (BuildVsmViews made their views valid), as many as have a view.
+    cb.spotLights = static_cast<std::uint32_t>(std::min(frame_->lightManager->GetShadowedSpotCount(),
+                                                        frame_->spotShadowViews->size()));
+    cb.pointLights = static_cast<std::uint32_t>(std::min(frame_->lightManager->GetShadowedPointCount(),
+                                                         frame_->pointShadowViews->size() / 6u));
+    cb.pointExtraView = vsm::PointFaceView(6u * render::kShadowViewVsmPoints);
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
@@ -166,7 +172,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         // The base point moves camera depth to SRV (the G-buffer leaves it in DEPTH_WRITE) and
         // the request buffer to UAV, in one marker.
         renderer->EmitPoint(t.cl, pts.base);
-        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, D.depthSRV, rw, rh);
+        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, views.data(), cb.numViews, pts, D.depthSRV, rw, rh);
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.
         frame_->vsm->RecordPageAllocate(renderer, t.cl, pts, frame_->clipmapSquares);
@@ -179,8 +185,8 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
 void SceneRenderer::PlanVsmDistantLights(Renderer* renderer)
 {
     if (!frame_ || !frame_->vsm || !frame_->mainView || !renderer) { return; }
-    std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
-    const std::uint32_t count = BuildVsmViews(*frame_, views.data());
+    std::vector<vsm::ViewProjEntry> views;
+    const std::uint32_t count = BuildVsmViews(*frame_, views);
     const SceneView& mv = *frame_->mainView;
     const DirectX::XMFLOAT3 camPos(mv.position.x, mv.position.y, mv.position.z);
     const DirectX::XMFLOAT3 camForward(mv.invView.m._31, mv.invView.m._32, mv.invView.m._33); // the request's depth axis
@@ -202,8 +208,8 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     // Step 24e: clipmap views sit at vsm::ClipmapView(level) so the setup builds their per-page projection from
     // gViewProj[view]; every view renders its casters via its Rung-0 cull slot (rung0View = view + kNumCascades).
     // Plan S10b: the same list the request pass built (BuildVsmViews).
-    std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
-    const std::uint32_t slot = BuildVsmViews(*frame_, views.data());
+    std::vector<vsm::ViewProjEntry> views;
+    const std::uint32_t slot = BuildVsmViews(*frame_, views);
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
@@ -775,20 +781,22 @@ void SceneRenderer::Pass_LocalShadowCache(Renderer* renderer, RenderGraphPassCon
             };
             const bool spotLinear = render::SpotShadowLinearDepth();   // plan S4: the spot pass's own encoding
             const bool pointLinear = render::PointShadowLinearDepth(); // ...and the point pass's
+            // render::g_localShadowWindRange: a light past it caches its swaying casters too -- rigid (no wind state).
+            const auto viewWind = [this](const SceneView& view) { return view.windRigid ? nullptr : frame_->wind; };
             for (size_t i = 0; i < spotCount; ++i)
             {
                 const SceneView& view = (*frame_->spotShadowViews)[i];
                 if (view.cacheMode != 2 || view.cachePage < 0) { continue; }
                 const UINT res = ShadowViewRes(view, D.spotShadowRes);
                 fill(view, render::ShadowViewSpotSlot(static_cast<unsigned>(i)),
-                     BuildSpotShadowViewCB(renderer, view, frame_->wind, res, spotLinear), spotLinear); // the spot pass's bias
+                     BuildSpotShadowViewCB(renderer, view, viewWind(view), res, spotLinear), spotLinear); // the spot pass's bias
             }
             for (size_t i = 0; i < faceCount; ++i)
             {
                 const SceneView& view = (*frame_->pointShadowViews)[i];
                 if (view.cacheMode != 2 || view.cachePage < 0) { continue; }
                 fill(view, render::ShadowViewPointFaceSlot(static_cast<unsigned>(i)),
-                     BuildPointShadowViewCB(renderer, view, frame_->wind, pointLinear), pointLinear);
+                     BuildPointShadowViewCB(renderer, view, viewWind(view), pointLinear), pointLinear);
             }
         }
         renderer->EmitPoint(t.cl, readPoint);
@@ -797,7 +805,7 @@ void SceneRenderer::Pass_LocalShadowCache(Renderer* renderer, RenderGraphPassCon
 }
 
 void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext ctx,
-    const std::array<SceneView, LightManager::kMaxShadowedSpotLights>& spotViews,
+    const std::vector<SceneView>& spotViews,
     size_t viewCount, std::uint32_t atlasPoint, bool indirect, bool cached)
 {
     // pass-flow S6: the VSM-mode skip (Step 24c: in VSM mode the spot atlas is a 1x1 placeholder
@@ -865,7 +873,9 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
                 // Plan S9: the view's square of its atlas page. S7: its cached statics copied in, or a clear.
                 const bool copyStatics = LocalViewCached(view, cache, cached);
                 PrepareLocalShadowTarget(renderer, t.cl, cache, view, /*pointPool=*/false, res, copyStatics);
-                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, wind, res, linear); // S1, S4
+                // S1, S4; render::g_localShadowWindRange: a light past it draws its casters rigid.
+                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, view.windRigid ? nullptr : wind,
+                                                                               res, linear);
                 const auto& visibleBuckets = view.queue.VisibleBuckets();
                 const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
                 const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -922,7 +932,8 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             const UINT res = ShadowViewRes(view, D.spotShadowRes); // S4
             renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/false, view.shadowPage, view.shadowX, view.shadowY, res,
                                             /*clearDepth=*/true); // S9
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view, frame_->wind, res, linear); // S1
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildSpotShadowViewCB(renderer, view,
+                view.windRigid ? nullptr : frame_->wind, res, linear); // S1; the wind range
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -950,7 +961,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
 }
 
 void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext ctx,
-    const std::array<SceneView, LightManager::kMaxShadowedPointLights * 6>& pointViews,
+    const std::vector<SceneView>& pointViews,
     size_t viewCount, std::uint32_t atlasPoint, bool indirect, bool cached)
 {
     // pass-flow S6: same as Pass_SpotShadows — the VSM-mode skip (Step 24c: VSM renders point
@@ -1012,7 +1023,9 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 const bool copyStatics = LocalViewCached(view, cache, cached);
                 PrepareLocalShadowTarget(renderer, t.cl, cache, view, /*pointPool=*/true, ShadowViewRes(view, D.pointShadowRes),
                                          copyStatics);
-                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view, wind, linear); // S4
+                // S4; render::g_localShadowWindRange: a light past it draws its casters rigid.
+                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view, view.windRigid ? nullptr : wind,
+                                                                                linear);
                 const auto& visibleBuckets = view.queue.VisibleBuckets();
                 const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
                 const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -1067,7 +1080,8 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
             const SceneView& view = pointViews[faceIndex];
             renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/true, view.shadowPage, view.shadowX, view.shadowY,
                                             ShadowViewRes(view, D.pointShadowRes), /*clearDepth=*/true); // S9
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view, frame_->wind, linear); // S4
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view,
+                view.windRigid ? nullptr : frame_->wind, linear); // S4; the wind range
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];

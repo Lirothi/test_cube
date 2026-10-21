@@ -89,6 +89,7 @@ namespace
 
         render::ShadowMode shadowMode = render::ShadowMode::VSM;
         bool giIndirectShadows = true;
+        float localShadowWindRange = 30.0f; // render::g_localShadowWindRange (metres, < 0 = every light sways)
         CascadeShadowConfig csm{};
         // The CSM atlas edge (render::g_csmAtlasRes) -- a RESOURCE size, shared by Legacy and
         // SDSM, reallocated at GPU idle by Scene::ReconcileShadowMode.
@@ -358,6 +359,7 @@ namespace
         s.contactMinDistance = std::clamp(finite(s.contactMinDistance, 0.0f), 0.0f, 2000.0f);
         s.contactMaxDistance = std::clamp(finite(s.contactMaxDistance, 0.0f), 0.0f, 2000.0f);
         s.contactFadeBand = std::clamp(finite(s.contactFadeBand, 10.0f), 0.1f, 200.0f);
+        s.localShadowWindRange = std::clamp(finite(s.localShadowWindRange, 30.0f), -1.0f, 2000.0f);
 
         s.shadowLodBias = std::clamp(s.shadowLodBias, -2, 3);
         s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
@@ -468,6 +470,7 @@ namespace
 
         s.shadowMode = render::g_shadowModeFromCli ? render::g_shadowModePersisted : render::g_shadowMode;
         s.giIndirectShadows = render::g_giIndirectShadowsEnabled;
+        s.localShadowWindRange = render::g_localShadowWindRange;
         s.csm = scene.CascadeConfig();
         s.csmAtlasRes = render::g_csmAtlasRes;
 
@@ -666,6 +669,7 @@ namespace
         render::g_shadowModePersisted = s.shadowMode;
         if (!render::g_shadowModeFromCli) { render::g_shadowMode = s.shadowMode; }
         render::g_giIndirectShadowsEnabled = s.giIndirectShadows;
+        render::g_localShadowWindRange = s.localShadowWindRange;
         render::g_shadowLodBias = s.shadowLodBias;
         render::g_shadowLodBiasNearTier = s.shadowLodBiasNearTier;
         render::g_shadowLodTierStride = s.shadowLodTierStride;
@@ -802,6 +806,7 @@ namespace
             { "shadows", {
                 { "mode", ShadowModeName(s.shadowMode) },
                 { "gpuInstancedCasters", s.giIndirectShadows },
+                { "localLightWindRange", s.localShadowWindRange },
                 { "contact", {
                     { "enabled", s.contactEnabled },
                     { "localLightMode", s.contactLocalMode },
@@ -999,6 +1004,7 @@ namespace
             s.shadowMode = ParseShadowMode(*it, s.shadowMode);
         }
         Read(shadows, "gpuInstancedCasters", s.giIndirectShadows);
+        Read(shadows, "localLightWindRange", s.localShadowWindRange);
         Read(contact, "enabled", s.contactEnabled);
         Read(contact, "localLightMode", s.contactLocalMode);
         Read(contact, "temporalDither", s.contactTemporalDither);
@@ -1369,6 +1375,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::ContactMaxDistance:             current.contactMaxDistance = defaults.contactMaxDistance; break;
     case GraphicsControl::ContactFadeBand:                current.contactFadeBand = defaults.contactFadeBand; break;
     case GraphicsControl::GiIndirectShadows:              current.giIndirectShadows = defaults.giIndirectShadows; break;
+    case GraphicsControl::LocalShadowWindRange:           current.localShadowWindRange = defaults.localShadowWindRange; break;
     case GraphicsControl::IndirectGBuffer:                 current.indirectGBuffer = defaults.indirectGBuffer; break;
     case GraphicsControl::GbufferHzb:                     current.gbufferHzbCull = defaults.gbufferHzbCull; break;
     case GraphicsControl::RasterBindless:                 current.rasterBindless = defaults.rasterBindless; break;

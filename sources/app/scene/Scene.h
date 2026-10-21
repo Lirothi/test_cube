@@ -328,8 +328,10 @@ private:
     // separate from SceneView because it is expressed in the SHARED light frame, which no single
     // level's view matrix carries (each level's own view is centred on itself).
     vsm::ClipmapSquares clipmapSquares_{};
-    std::array<SceneView, LightManager::kMaxShadowedSpotLights> spotShadowViews_{};
-    std::array<SceneView, LightManager::kMaxShadowedPointLights * 6> pointShadowViews_{}; // 6 cube faces per shadowed point light
+    // Local-light plan S9e: sized to the view capacity (render::ShadowSpotCapacity / 6 x ShadowPointCapacity), resized only
+    // by ReconcileShadowMode's capacity growth at GPU idle.
+    std::vector<SceneView> spotShadowViews_ = std::vector<SceneView>(render::kShadowSpotsInitial);
+    std::vector<SceneView> pointShadowViews_ = std::vector<SceneView>(6u * render::kShadowPointsInitial); // 6 cube faces per light
     // Step 6e: the directional cascades + spot shadow views all bucketize the same
     // shadow-caster set (identical objects/mask/filter), so it's bucketized ONCE here and
     // shared — each shadow view only runs its own per-frustum Cull against it.
@@ -346,9 +348,17 @@ private:
     ShadowGpuData shadowGpu_{};
     // Local-light plan S7: the atlas spot / point lights' cache of their static casters (pool + entries).
     render::LocalShadowCache localShadowCache_{};
-    // Plan S9e: the local views' light bounds + UE hull handed to UpdateViewFrustums each frame (by slot; null = none).
-    std::array<render::LocalViewCull, render::kMaxShadowViews + 1> localViewCull_{};
-    std::array<const render::LocalViewCull*, render::kMaxShadowViews + 1> localViewCullPtr_{};
+    // Plan S9e: the local views' light bounds + UE hull handed to UpdateViewFrustums each frame (by slot; null = none),
+    // MaxShadowViews() + 1 of each (resized with the capacity).
+    std::vector<render::LocalViewCull> localViewCull_ = std::vector<render::LocalViewCull>(render::MaxShadowViews() + 1u);
+    std::vector<const render::LocalViewCull*> localViewCullPtr_ = std::vector<const render::LocalViewCull*>(render::MaxShadowViews() + 1u);
+    std::vector<const Frustum*> shadowViewFrustums_; // S9e: the per-frame frustum upload's slots (MaxShadowViews() + camera)
+    // S9e: grows the view capacity to what the last selection wanted (doubling, up to the ceiling) -- ReconcileShadowMode,
+    // at its GPU-idle point. Returns whether it grew (everything sized by views has then been re-created).
+    bool ReconcileShadowCapacity(Renderer* renderer);
+    // S9e: sets the capacity and re-makes what is sized by it (scene views, VSM, SDSM) -- GPU idle; the caller rebuilds
+    // the casters. ReconcileShadowCapacity grows through it, FinalizeLevelLoad resets to the initial capacity.
+    void ApplyShadowCapacity(Renderer* renderer, unsigned spots, unsigned points);
     // Occlusion plan S3a: the camera's occlusion history (per primitive / per chunk), the query
     // heap that records this frame's plan and the CPU copy of the results frame N - latency read
     // at the top of PrepareViews (kept alive for the camera task's Consider calls).
@@ -361,6 +371,9 @@ private:
     std::vector<std::uint32_t> hzbResults_;
     std::vector<std::uint8_t> spotLightOccluded_;  // S3a.6, per LightManager spot index
     std::vector<std::uint8_t> pointLightOccluded_; // per point index
+    // render::g_localShadowWindRange: each light's last verdict (1 = rigid), for the hysteresis. Per LightManager index.
+    std::vector<std::uint8_t> spotWindRigid_;
+    std::vector<std::uint8_t> pointWindRigid_;
     // Rung 2 (Step 18): persistent virtual-shadow-map page pool + page table. Allocated once at
     // level load; not yet consumed by any pass.
     VirtualShadowMap vsm_{};
