@@ -2728,10 +2728,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 int lru = static_cast<int>(vsm::g_lruThreshold);
                 if (GRAPHICS_CONTROL(VsmLru, "vsmLru",
-                                     ImGui::SliderInt("LRU eviction frames", &lru, 1, 120)))
+                                     ImGui::SliderInt("LRU eviction frames", &lru, 1, static_cast<int>(vsm::kMaxLruFrames))))
                     vsm::g_lruThreshold = static_cast<std::uint32_t>(lru < 1 ? 1 : lru);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed.");
+                    ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed (UE 1000).\n"
+                                      "Before that it is taken back only when the pool has no empty page left,\n"
+                                      "least recently requested first.");
 
                 GRAPHICS_CONTROL(VsmClipmapBaseExtent, "vsmClipmapBaseExtent",
                     ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent,

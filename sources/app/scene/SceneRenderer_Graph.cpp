@@ -882,6 +882,9 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             ctx.Use(ctx.renderer->GetDeferredForFrame().depth.Get(),
                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             // VSM owns the buffers its Record* functions barrier, so it declares them itself.
+            // Plan S10c: first, which lights changed view since the pool's pages were made (their pages move along), and
+            // which left or came back (their pages park, return, or go).
+            frame_->vsm->PlanViewRemap(ctx.renderer->GetTotalFrameNumber());
             const VirtualShadowMap::PageRequestPoints pts =
                 frame_->vsm->PrepareRequestPass(ctx);
             return [this, renderer, pts](RenderGraphPassContext c) {

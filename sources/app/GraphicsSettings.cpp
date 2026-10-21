@@ -363,7 +363,7 @@ namespace
         s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
         s.vsmLodRefDistance = std::clamp(finite(s.vsmLodRefDistance, vsm::kLodRefDist), 1.0f, 40.0f);
         s.vsmRequestDownscale = std::clamp(s.vsmRequestDownscale, 1u, 8u);
-        s.vsmLruFrames = std::clamp(s.vsmLruFrames, 1u, 120u);
+        s.vsmLruFrames = std::clamp(s.vsmLruFrames, 1u, vsm::kMaxLruFrames);
         s.vsmClipmapBaseExtent = std::clamp(finite(s.vsmClipmapBaseExtent, 8.0f), 4.0f, 200.0f);
         s.vsmClipmapBlendWidth = std::clamp(finite(s.vsmClipmapBlendWidth, 0.12f), 0.0f, 0.30f);
         s.smrtRayCount = std::min(s.smrtRayCount, vsm::kSmrtMaxRays);

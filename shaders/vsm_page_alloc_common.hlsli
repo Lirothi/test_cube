@@ -27,6 +27,10 @@ cbuffer VsmAllocCB : register(b0)
     uint gNumPages;      // kPoolPageCount (physical pages)
     uint gCurFrame;      // renderer total frame number (low 32 bits) — LRU clock
     uint gLruThreshold;  // free a resident page unrequested for >= this many frames
+    // ...or for >= this many frames when the last render found it dirty (0 = off): the setup redraws every dirty resident
+    // page, so a page nobody asks for would be redrawn every frame under wind for all of gLruThreshold.
+    uint gRedrawUnrequestedFrames;
+    uint3 _padAlloc;
 };
 
 // Is virtual page `page` set in the request bitfield?

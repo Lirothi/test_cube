@@ -2462,6 +2462,27 @@ void Scene::PrepareViews(Renderer* renderer)
         }
     }
 
+    // Local-light plan S10c: which light each VSM view holds this frame -- the pool moves a light's pages with it when its
+    // slot changes (VirtualShadowMap::PlanViewRemap) instead of re-rendering them.
+    {
+        VirtualShadowMap::ViewOwners owners = VirtualShadowMap::NoViewOwners();
+        for (size_t s = 0; s < shadowedSpotCount; ++s)
+        {
+            owners[vsm::SpotView(static_cast<std::uint32_t>(s))] =
+                VirtualShadowMap::SpotViewOwner(static_cast<std::uint32_t>(lightManager_.GetShadowedSpotLightIndex(s)));
+        }
+        for (size_t s = 0; s < shadowedPointCount; ++s)
+        {
+            const auto light = static_cast<std::uint32_t>(lightManager_.GetShadowedPointLightIndex(s));
+            for (std::uint32_t face = 0; face < 6u; ++face)
+            {
+                owners[vsm::PointFaceView(static_cast<std::uint32_t>(s) * 6u + face)] =
+                    VirtualShadowMap::PointFaceViewOwner(light, face);
+            }
+        }
+        vsm_.SetViewOwners(owners);
+    }
+
     prepareViewsSetupScope.reset();
 
     // main + shore + shore SDF + cascades + up to kMaxShadowedSpotLights spot views + up to

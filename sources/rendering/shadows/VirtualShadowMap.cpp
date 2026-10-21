@@ -308,6 +308,15 @@ void VirtualShadowMap::ReleaseResources()
     requestUav_ = {};
     physOwnerUav_ = physLastFrameUav_ = freeListUav_ = needsRenderUav_ = allocCountersUav_ = {};
     physOwnerSrv_ = rung0ArgsSrv_ = pageDrawArgsUav_ = pageProjUav_ = {};
+    physOwnerPrevUav_ = {}; // S10c
+    // S10c: the pool is gone, so is every view's light (a fresh pool starts with nothing to remap).
+    appliedViewOwners_.fill(kNoViewOwner);
+    nextViewOwners_.fill(kNoViewOwner);
+    parkedOwners_.fill(kNoViewOwner);
+    parkedCount_ = 0;
+    parkedStale_ = false;
+    remapPending_ = false;
+    prevVpRemapPending_ = false;
 }
 
 void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
@@ -414,6 +423,7 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     allocFreeMat_  = makeCompute(L"shaders/vsm_page_alloc_freelist_cs.hlsl");
     allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
     allocPropagateMat_ = makeCompute(L"shaders/vsm_page_propagate_cs.hlsl");
+    allocRemapMat_ = makeCompute(L"shaders/vsm_page_alloc_remap_cs.hlsl"); // S10c (optional: without it moved lights re-render)
     pageSetupMat_  = makeCompute(L"shaders/vsm_page_setup_cs.hlsl");
     // Spatial scatter cull (directional clipmap). Optional: if either fails to compile the setup
     // shader still culls those pages the brute-force way, so shadows stay correct (just slower).
@@ -502,6 +512,15 @@ VirtualShadowMap::PageRequestPoints VirtualShadowMap::PrepareRequestPass(
     ctx.Use(freeList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(needsRender_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // The free list reads the last render's per-page verdict (a page redrawn for nobody goes).
+    if (perPageDirty_) { ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    // Plan S10c: the page remap moves last frame's owners too (the render pass declares it back to a read).
+    pts.remap = remapPending_;
+    if (pts.remap)
+    {
+        pts.viewRemap = viewRemap_;
+        ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
     // Plan S10e: the counters into this frame's readback slot after the allocation, every frame, and back.
     pts.counters = ctx.renderer && ctx.renderer->GetCurrentFrameIndex() < render::kFrameCount &&
                    countersReadback_[ctx.renderer->GetCurrentFrameIndex()] != nullptr;
@@ -621,6 +640,13 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     // S5b.2 cross-frame state, committed in the (serial) builder: this frame renders; if it also
     // builds the pyramid, next frame may test against it.
     hzbThisFrame_ = d.hzb;
+    // Plan S10c: nothing re-renders a parked view (its light has no cull view to draw from), so this render clears
+    // whatever of it it calls dirty -- every page on forceAll, every local one under wind -- and a caster that moves
+    // can leave its pages stale with no test noticing. Such a frame frees them all at the next plan.
+    if (parkedCount_ > 0u && (d.forceAll != 0u || d.windDirtyMaxLevel != 0u || shadowGpu->MoverCount() > 0u))
+    {
+        parkedStale_ = true;
+    }
     // Logged on change only: a headless run reads from the session log whether the stage ran,
     // and if not, which gate said no.
     {
@@ -836,10 +862,43 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
     // from the compiled alloc point, emitted wholesale.
     renderer->EmitPoint(cl, pts.alloc);
 
-    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold; };
+    // Plan S10c: lights that changed view take their pages along (PlanViewRemap), before the touch pass reads the table:
+    // pass 0 clears the moving entries and frees what an arrival would collide with, pass 1 re-owns and re-enters.
+    if (pts.remap && allocRemapMat_)
+    {
+        struct RemapCB
+        {
+            std::uint32_t numPages, pass, pad0, pad1;
+            DirectX::XMUINT4 remap[(vsm::kMaxVirtualViews + 3u) / 4u];
+        };
+        for (std::uint32_t pass = 0; pass < 2u; ++pass)
+        {
+            RecordComputeDispatch(renderer, cl, allocRemapMat_.get(), static_cast<UINT>(sizeof(RemapCB)),
+                [&](std::uint8_t* dst)
+                {
+                    RemapCB c{};
+                    c.numPages = vsm::kPoolPageCount;
+                    c.pass = pass;
+                    std::memset(c.remap, 0xFF, sizeof(c.remap));
+                    std::memcpy(c.remap, pts.viewRemap.data(), sizeof(std::uint32_t) * pts.viewRemap.size());
+                    std::memcpy(dst, &c, sizeof(c));
+                },
+                {},
+                { physOwnerUav_, pageTableUav_, physOwnerPrevUav_ },
+                D3D12_GPU_DESCRIPTOR_HANDLE{},
+                vsm::kPoolPageCount, 1,
+                pageTable_.Get());
+            renderer->UAVBarrier(cl, physOwner_.Get());
+            renderer->UAVBarrier(cl, physOwnerPrev_.Get());
+        }
+    }
+
+    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold, redrawUnrequestedFrames, pad[3]; };
+    // The last render's per-page verdict (the free list frees what was redrawn for nobody); without it, that rule is off.
+    const bool dirtyKnown = perPageDirty_ && perPageDirtyUav_.ptr != 0;
     auto writeCB = [&](std::uint8_t* dst)
     {
-        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold };
+        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold, dirtyKnown ? vsm::g_redrawUnrequestedFrames : 0u, {} };
         std::memcpy(dst, &c, sizeof(c));
     };
     const UINT cbSize = static_cast<UINT>(sizeof(AllocCB));
@@ -869,12 +928,16 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         physLastFrame_.Get());
     renderer->UAVBarrier(cl, allocCounters_.Get());
 
-    // Pass 2 (build free list): evict LRU-stale pages, append free physical pages to the list.
+    // Pass 2 (build free list): UE's available list -- free the pages older than the LRU age, then list the empty
+    // pages and the cached ones nobody asked for this frame in the order pass 3 takes them (empty first, then least
+    // recently requested). ONE group of 1024 threads sorts the whole pool in groupshared.
+    static_assert(vsm::kPoolPageCount <= 1024u, "vsm_page_alloc_freelist_cs.hlsl sorts the pool in one 1024-thread group");
     RecordComputeDispatch(renderer, cl, allocFreeMat_.get(), cbSize, writeCB,
         {},
-        { physOwnerUav_, physLastFrameUav_, pageTableUav_, freeListUav_, allocCountersUav_ },
+        { physOwnerUav_, physLastFrameUav_, pageTableUav_, freeListUav_, allocCountersUav_,
+          dirtyKnown ? perPageDirtyUav_ : freeListUav_ }, // unread when !dirtyKnown (the CB turns the rule off)
         noSampler,
-        numPages, 1,
+        1, 1,
         freeList_.Get());
     renderer->UAVBarrier(cl, allocCounters_.Get());
     renderer->UAVBarrier(cl, pageTable_.Get());
@@ -948,6 +1011,175 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
 
     // Step 20 debug: sample the request bitfield + alloc counters a few frames later.
     RecordDebugReadback(renderer, cl, pts);
+}
+
+void VirtualShadowMap::PlanViewRemap(std::uint64_t frame)
+{
+    constexpr std::uint32_t kKeep = 0xFFFFFFFFu; // vsm_page_alloc_remap_cs.hlsl kRemapKeep / kRemapDrop
+    constexpr std::uint32_t kDrop = 0xFFFFFFFEu;
+    constexpr std::uint32_t kViews = vsm::kMaxVirtualViews;
+    remapPending_ = false;
+    prevVpRemapPending_ = false;
+    // A parked view is due when a render could have changed its pages unseen, or its light stayed away longer than UE's
+    // MaxLightAgeSinceLastRequest (kept while frame - lastReferenced <= age: parked on frame F = last referenced F - 1).
+    const auto parkedDue = [&](std::uint32_t v)
+    {
+        return parkedStale_ || frame - parkedSince_[v] >= vsm::g_maxLightAgeFrames;
+    };
+    bool anyDue = false;
+    for (std::uint32_t v = 0; v < kViews && parkedCount_ > 0u && !anyDue; ++v)
+    {
+        anyDue = parkedOwners_[v] != kNoViewOwner && parkedDue(v);
+    }
+    if (nextViewOwners_ == appliedViewOwners_ && !anyDue) { return; }
+    // Without the pass (or its last-owner view) the pages stay put and the lights that moved re-render, as before S10c;
+    // parked pages are left to the LRU.
+    const bool canRemap = vsm::g_lightPageRemap && IsAllocated() && allocRemapMat_ && allocRemapMat_->GetPipelineState() &&
+                          physOwnerPrev_ && physOwnerPrevUav_.ptr != 0;
+    if (!canRemap)
+    {
+        parkedOwners_.fill(kNoViewOwner);
+        parkedCount_ = 0;
+        parkedStale_ = false;
+        appliedViewOwners_ = nextViewOwners_;
+        return;
+    }
+
+    viewRemap_.fill(kKeep);
+    std::array<std::uint8_t, kViews> arrival{};
+    std::uint32_t moved = 0, parked = 0, returned = 0, expired = 0, stale = 0;
+    const auto unpark = [&](std::uint32_t v) { parkedOwners_[v] = kNoViewOwner; --parkedCount_; };
+    const auto park = [&](std::uint32_t v, std::uint32_t owner, std::uint64_t since)
+    {
+        parkedOwners_[v] = owner;
+        parkedSince_[v] = since;
+        ++parkedCount_;
+    };
+    // A view to park on: no light this frame, nothing arriving, nothing parked -- from the top, past the lights in use
+    // and out of every pass's range when there is room. Its own leftovers (an older light's) go (the arrival rule).
+    const auto freeView = [&]() -> std::uint32_t
+    {
+        for (std::uint32_t s = kViews; s-- > 0u;)
+        {
+            if (!vsm::IsClipmapView(s) && nextViewOwners_[s] == kNoViewOwner && !arrival[s] &&
+                parkedOwners_[s] == kNoViewOwner) { return s; }
+        }
+        return kViews;
+    };
+    const auto inNext = [&](std::uint32_t owner)
+    {
+        return std::find(nextViewOwners_.begin(), nextViewOwners_.end(), owner) != nextViewOwners_.end();
+    };
+
+    // 1. Parked pages nothing vouches for any more go (UE drops the cache entry, and its pages with it).
+    for (std::uint32_t v = 0; v < kViews; ++v)
+    {
+        if (parkedOwners_[v] == kNoViewOwner || !parkedDue(v)) { continue; }
+        viewRemap_[v] = kDrop;
+        ++(parkedStale_ ? stale : expired);
+        unpark(v);
+    }
+    parkedStale_ = false;
+
+    // 2. A light at a new view takes its pages along: from its old view (its slot changed), or from where they are
+    //    parked (it is back in time). Back on the very view they are parked on, nothing moves.
+    for (std::uint32_t w = 0; w < kViews; ++w)
+    {
+        const std::uint32_t owner = nextViewOwners_[w];
+        if (owner == kNoViewOwner || appliedViewOwners_[w] == owner) { continue; }
+        std::uint32_t from = kViews;
+        for (std::uint32_t u = 0; u < kViews; ++u) // a frame the shadowed set changed: 138^2 at most
+        {
+            if (u != w && appliedViewOwners_[u] == owner) { from = u; break; }
+        }
+        if (from == kViews)
+        {
+            for (std::uint32_t p = 0; p < kViews && parkedCount_ > 0u; ++p)
+            {
+                if (parkedOwners_[p] != owner) { continue; }
+                unpark(p);
+                ++returned;
+                if (p != w) { from = p; }
+                break;
+            }
+        }
+        if (from < kViews)
+        {
+            viewRemap_[from] = w;
+            arrival[w] = 1u;
+            ++moved;
+        }
+    }
+
+    // 3. A light that left parks its pages where they are while nobody takes the view...
+    const bool parking = vsm::g_maxLightAgeFrames > 0u;
+    std::array<std::uint8_t, kViews> departed{};
+    for (std::uint32_t u = 0; u < kViews; ++u)
+    {
+        const std::uint32_t owner = appliedViewOwners_[u];
+        if (owner == kNoViewOwner || nextViewOwners_[u] == owner || inNext(owner)) { continue; }
+        departed[u] = 1u;
+        if (parking && nextViewOwners_[u] == kNoViewOwner && !arrival[u])
+        {
+            park(u, owner, frame);
+            ++parked;
+            departed[u] = 0u;
+        }
+    }
+    // 4. ...parked pages a light now lands on move to a free view (or go: they would share its virtual pages)...
+    for (std::uint32_t p = 0; p < kViews && parkedCount_ > 0u; ++p)
+    {
+        if (parkedOwners_[p] == kNoViewOwner || nextViewOwners_[p] == kNoViewOwner) { continue; }
+        const std::uint32_t owner = parkedOwners_[p];
+        const std::uint64_t since = parkedSince_[p];
+        unpark(p);
+        const std::uint32_t s = freeView();
+        if (s == kViews) { continue; }
+        viewRemap_[p] = s;
+        arrival[s] = 1u;
+        park(s, owner, since);
+        ++moved;
+    }
+    // 5. ...and so do the pages of a light that left a view someone else takes.
+    for (std::uint32_t u = 0; u < kViews && parking; ++u)
+    {
+        if (!departed[u]) { continue; }
+        const std::uint32_t s = freeView();
+        if (s == kViews) { break; } // every view is in use: they go, as before S10c
+        viewRemap_[u] = s;
+        arrival[s] = 1u;
+        park(s, appliedViewOwners_[u], frame);
+        ++parked;
+        ++moved;
+    }
+
+    // A view something lands on, whose own pages do not move out: free them (that light left for good, or an older
+    // light's leftovers are ageing out) -- the arrivals would share its virtual pages.
+    std::uint32_t dropped = 0;
+    for (std::uint32_t u = 0; u < kViews; ++u)
+    {
+        if (arrival[u] && viewRemap_[u] == kKeep) { viewRemap_[u] = kDrop; }
+        if (viewRemap_[u] == kDrop) { ++dropped; }
+    }
+    if (moved > 0u || dropped > 0u)
+    {
+        remapPending_ = true;
+        prevVpRemapPending_ = moved > 0u;
+        remapStats_.moved += moved;
+        remapStats_.dropped += dropped;
+        ++remapStats_.frames;
+    }
+    remapStats_.parked += parked;
+    remapStats_.returned += returned;
+    remapStats_.expired += expired;
+    remapStats_.stale += stale;
+    if (moved > 0u || dropped > 0u || parked > 0u || returned > 0u)
+    {
+        LOG_DEBUG(logging::LogCategory::RenderShadow,
+                  "VSM: {} view(s) moved, {} freed; {} parked, {} back, {} expired, {} stale ({} parked now)",
+                  moved, dropped, parked, returned, expired, stale, parkedCount_);
+    }
+    appliedViewOwners_ = nextViewOwners_;
 }
 
 void VirtualShadowMap::UpdateDynamicResolution(Renderer* renderer)
@@ -1108,6 +1340,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     {
         physOwnerPrev_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PhysOwnerPrev"), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         physOwnerPrevSrv_ = {};
+        physOwnerPrevUav_ = {};
     }
     if (!perPageDirty_)
     {
@@ -1164,13 +1397,14 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
                           perPageDirtyUav_.ptr == 0 || perPageDirtySrv_.ptr == 0 ||
                           pageGroupCountUav_.ptr == 0 || pageGroupCountSrv_.ptr == 0 ||
                           pageScatterDynUav_.ptr == 0 || pageScatterDynSrv_.ptr == 0 ||
-                          pageProjSrv_.ptr == 0 || pageArgCountUav_.ptr == 0;
+                          pageProjSrv_.ptr == 0 || pageArgCountUav_.ptr == 0 || physOwnerPrevUav_.ptr == 0;
     if (!needHeap) { return; }
 
     if (!renderHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 14; // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV + pageProj SRV + argCount UAV
+        // + pageGroupCount UAV/SRV + pageScatterDyn UAV/SRV + pageProj SRV + argCount UAV + physOwnerPrev UAV (S10c)
+        hd.NumDescriptors = 15;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
@@ -1195,6 +1429,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     pageScatterDynSrv_  = { base.ptr + static_cast<SIZE_T>(11) * incr };
     pageProjSrv_        = { base.ptr + static_cast<SIZE_T>(12) * incr };
     pageArgCountUav_    = { base.ptr + static_cast<SIZE_T>(13) * incr };
+    physOwnerPrevUav_   = { base.ptr + static_cast<SIZE_T>(14) * incr }; // S10c: the page remap moves last frame's owner
 
     D3D12_SHADER_RESOURCE_VIEW_DESC oSd{};
     oSd.Format = DXGI_FORMAT_UNKNOWN;
@@ -1267,6 +1502,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         ud.Buffer.NumElements = vsm::kPoolPageCount;
         ud.Buffer.StructureByteStride = sizeof(std::uint32_t);
         dev->CreateUnorderedAccessView(perPageDirty_.Get(), nullptr, &ud, perPageDirtyUav_);
+        dev->CreateUnorderedAccessView(physOwnerPrev_.Get(), nullptr, &ud, physOwnerPrevUav_); // S10c
         // Scatter cull: per-page dynamic-overlap flag (same shape as perPageDirty).
         dev->CreateShaderResourceView(pageScatterDyn_.Get(), &sd, pageScatterDynSrv_);
         dev->CreateUnorderedAccessView(pageScatterDyn_.Get(), nullptr, &ud, pageScatterDynUav_);
@@ -1531,12 +1767,26 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> viewDirtyMask{};
     // S5b.2: last frame's matrices, kept for the scatter's prev-pyramid test before the compare
     // below replaces them with this frame's.
+    // Plan S10c: views whose light moved this frame carry that light's last matrix (its pages came along).
+    if (prevVpRemapPending_)
+    {
+        DirectX::XMFLOAT4X4 before[vsm::kMaxVirtualViews];
+        std::memcpy(before, prevViewVp_, sizeof(before));
+        for (std::uint32_t u = 0; u < vsm::kMaxVirtualViews; ++u)
+        {
+            if (viewRemap_[u] < vsm::kMaxVirtualViews) { prevViewVp_[viewRemap_[u]] = before[u]; }
+        }
+        prevVpRemapPending_ = false;
+    }
     DirectX::XMFLOAT4X4 prevVp[vsm::kMaxVirtualViews];
     std::memcpy(prevVp, prevViewVp_, sizeof(prevVp));
     {
         const std::uint32_t nv = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
         for (std::uint32_t v = 0; v < nv; ++v)
         {
+            // Plan S10c: a parked view keeps its light's matrix -- the compare against the empty slot's zero would dirty
+            // (clear) its pages, and the matrix is what its light is checked against when it comes back.
+            if (IsViewParked(v)) { continue; }
             const bool changed = !prevViewVpValid_ ||
                 std::memcmp(&prevViewVp_[v], &views[v].viewProj, sizeof(DirectX::XMFLOAT4X4)) != 0;
             if (changed) { viewDirtyMask[v >> 5u] |= (1u << (v & 31u)); }

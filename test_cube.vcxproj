@@ -847,6 +847,7 @@
     <None Include="shaders\vsm_page_alloc_freelist_cs.hlsl" />
     <None Include="shaders\vsm_page_alloc_init_cs.hlsl" />
     <None Include="shaders\vsm_page_alloc_map_cs.hlsl" />
+    <None Include="shaders\vsm_page_alloc_remap_cs.hlsl" />
     <None Include="shaders\vsm_page_propagate_cs.hlsl" />
     <None Include="shaders\vsm_page_alloc_touch_cs.hlsl" />
     <None Include="shaders\vsm_page_clear.hlsl" />

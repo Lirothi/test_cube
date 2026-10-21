@@ -3,6 +3,10 @@
 // FreeCount) and map it: write the page-table entry, claim the physical page's owner + last-frame,
 // and append the physical page to the needs-render list (Step 22 will rasterize casters into it).
 // If the pool is full (free list empty) the page stays not-resident and FailCount is bumped.
+// The list ends with the empty pages and then the cached ones nobody asked for this frame, least recently requested
+// last (vsm_page_alloc_freelist_cs.hlsl): a popped page that still holds a mapping is evicted first, as UE's
+// AllocateNewPageMappings clears the previous owner's entry. That owner was not requested this frame (touch would have
+// kept it out of the list), so no other thread of this pass maps it.
 #include "vsm_page_alloc_common.hlsli"
 
 #define VSM_PAGE_ALLOC_MAP_RS \
@@ -41,6 +45,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     const uint phys = FreeList[prevFree - 1u];
+    const uint previousOwner = PhysOwner[phys];
+    if (previousOwner != VSM_INVALID && previousOwner < gNumEntries)
+    {
+        PageTable[previousOwner] = 0u;
+        uint resident;
+        InterlockedAdd(AllocCounters[VSM_CNT_RESIDENT], 0xFFFFFFFFu, resident); // it is no longer carried over
+    }
     // ANY_LOD is set on a mapped page too: "mapped here" implies "resolvable here", so a sampler
     // tests one bit instead of two. The LOD offset field stays 0, which is what marks it as this
     // level's own page rather than a pointer to a coarser one.

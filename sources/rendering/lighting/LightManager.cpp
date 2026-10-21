@@ -85,6 +85,40 @@ namespace
         }
         return render::kLocalShadowMinRes;
     }
+
+    // Local-light plan S10c: the selected set's slots, STICKY. A light that stays selected keeps its slot -- VSM's views
+    // are slots, so a light that changes slot re-renders every page (its new view starts empty) and hands its old view,
+    // pages and all, to whichever light lands there; ascending-index slots shifted EVERY light after a newcomer or a
+    // leaver. The hole a leaver leaves takes the LAST light (one light moves, never the rest), newcomers append in
+    // ascending light index (the old order for a set that starts fresh). `previous` = last frame's slot order.
+    std::vector<std::uint32_t> StickyShadowSlots(const std::vector<std::uint32_t>& previous, std::vector<std::uint32_t> selected)
+    {
+        std::sort(selected.begin(), selected.end());
+        const auto chosen = [&selected](std::uint32_t light) { return std::binary_search(selected.begin(), selected.end(), light); };
+        std::vector<std::uint32_t> slots;
+        slots.reserve(selected.size());
+        std::vector<std::uint8_t> hole;
+        for (const std::uint32_t light : previous)
+        {
+            slots.push_back(light);
+            hole.push_back(chosen(light) ? 0u : 1u);
+        }
+        for (size_t i = 0; i < slots.size(); ++i)
+        {
+            if (!hole[i]) { continue; }
+            while (!slots.empty() && hole.back()) { slots.pop_back(); hole.pop_back(); }
+            if (i >= slots.size()) { break; }
+            slots[i] = slots.back();
+            hole[i] = 0u;
+            slots.pop_back();
+            hole.pop_back();
+        }
+        for (const std::uint32_t light : selected)
+        {
+            if (std::find(previous.begin(), previous.end(), light) == previous.end()) { slots.push_back(light); }
+        }
+        return slots;
+    }
 }
 
 void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
@@ -98,6 +132,8 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     {
         if (index < wasShadowed.size()) { wasShadowed[index] = 1u; }
     }
+
+    const std::vector<std::uint32_t> previousSlots = shadowedSpotLightIndices_; // S10c: last frame's slot order
 
     // Reset every spot to "unshadowed"; sized to the full spot list so
     // GetSpotShadowSlot is safe for any lit index.
@@ -173,22 +209,18 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
             return a.score > b.score;
         });
 
-    // Assign atlas SLOTS to the selected set in a STABLE order (ascending light
-    // index), NOT in score order, so an unchanged shadowed set keeps the same
-    // per-light slice every frame instead of reshuffling as scores drift. This is
-    // a stability/coherence nicety (steady atlas contents, friendlier to any
-    // temporal reuse); cross-frame correctness of `shadowParams.y` is guaranteed
-    // by the per-frame ring buffering of the spot-light buffer (see
+    // Assign SLOTS to the selected set in a STABLE order, NOT in score order, so an unchanged shadowed set keeps the
+    // same per-light slot every frame instead of reshuffling as scores drift. Plan S10c: and a CHANGED set too -- the
+    // lights that stay keep their slots (StickyShadowSlots; VSM's page cache lives in the slot's view). Cross-frame
+    // correctness of `shadowParams.y` is guaranteed by the per-frame ring buffering of the spot-light buffer (see
     // EnsureSpotLightBuffer), not by this ordering.
-    std::sort(candidates.begin(), candidates.begin() + shadowCount,
-        [](const Candidate& a, const Candidate& b) { return a.index < b.index; });
-
-    shadowedSpotLightIndices_.reserve(shadowCount);
-    for (size_t s = 0; s < shadowCount; ++s)
+    std::vector<std::uint32_t> selected;
+    selected.reserve(shadowCount);
+    for (size_t s = 0; s < shadowCount; ++s) { selected.push_back(candidates[s].index); }
+    shadowedSpotLightIndices_ = StickyShadowSlots(previousSlots, std::move(selected));
+    for (size_t s = 0; s < shadowedSpotLightIndices_.size(); ++s)
     {
-        const std::uint32_t lightIndex = candidates[s].index;
-        shadowedSpotLightIndices_.push_back(lightIndex);
-        spotShadowSlot_[lightIndex] = static_cast<int>(s);
+        spotShadowSlot_[shadowedSpotLightIndices_[s]] = static_cast<int>(s);
     }
 }
 
@@ -206,6 +238,7 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     {
         if (index < wasShadowed.size()) { wasShadowed[index] = 1u; }
     }
+    const std::vector<std::uint32_t> previousSlots = shadowedPointLightIndices_; // S10c: last frame's slot order
     pointShadowSlot_.assign(pointLights_.size(), -1);
     pointShadowFade_.assign(pointLights_.size(), 1.0f);
     pointShadowRes_.assign(pointLights_.size(), std::max(maxRes / 2u, render::kLocalShadowMinRes));
@@ -262,15 +295,14 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
             }
             return a.score > b.score;
         });
-    std::sort(candidates.begin(), candidates.begin() + shadowCount,
-        [](const Candidate& a, const Candidate& b) { return a.index < b.index; });
-
-    shadowedPointLightIndices_.reserve(shadowCount);
-    for (size_t s = 0; s < shadowCount; ++s)
+    // Plan S10c: sticky slots, as the spots'.
+    std::vector<std::uint32_t> selected;
+    selected.reserve(shadowCount);
+    for (size_t s = 0; s < shadowCount; ++s) { selected.push_back(candidates[s].index); }
+    shadowedPointLightIndices_ = StickyShadowSlots(previousSlots, std::move(selected));
+    for (size_t s = 0; s < shadowedPointLightIndices_.size(); ++s)
     {
-        const std::uint32_t lightIndex = candidates[s].index;
-        shadowedPointLightIndices_.push_back(lightIndex);
-        pointShadowSlot_[lightIndex] = static_cast<int>(s);
+        pointShadowSlot_[shadowedPointLightIndices_[s]] = static_cast<int>(s);
     }
 }
 
@@ -281,8 +313,8 @@ namespace
     // -- one step for all, as UE's VSM raises one global LOD bias when its page pool is short
     // (VirtualShadowMapCacheManager.cpp:155-187), so the lights keep the proportions their screen sizes gave them --
     // and when none can, the lowest-ranked is dropped (no shadow this frame). UE's classic path would open another
-    // atlas instead; ours grow at the next residency point. `shadowed` stays in ascending light order, so the slots
-    // it re-numbers keep the stable order SelectShadowed* gave them.
+    // atlas instead; ours grow at the next residency point. `shadowed` keeps its order, so the slots it re-numbers keep
+    // the stable order SelectShadowed* gave them (sticky since plan S10c).
     std::uint32_t PackShadowPool(std::vector<std::uint32_t>& shadowed, std::vector<int>& slots,
                                  std::vector<std::uint32_t>& res, const std::vector<float>& score,
                                  std::vector<LightManager::ShadowAtlasPlacement>& place, bool pointBlocks,

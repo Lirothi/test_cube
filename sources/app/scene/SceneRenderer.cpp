@@ -471,7 +471,9 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                                    frame.shadowGpu && frame.shadowGpu->HasWindCasters();
         // Local-light plan S10e: nor while the page pool is settling (refused requests, a moving dynamic-resolution
         // bias) -- frozen there, the pool keeps the pages the old bias asked for and the shadows stay missing.
-        const bool poolSettling = frame.vsm && frame.vsm->DynamicResSettling();
+        // Plan S10c: nor when the shadowed set changed (a light came, left or moved slot): its pages are requested,
+        // allocated and moved only by an update.
+        const bool poolSettling = frame.vsm && (frame.vsm->DynamicResSettling() || frame.vsm->ViewOwnersPending());
         const bool contentStill = (!frame.shadowGpu || frame.shadowGpu->MoverCount() == 0) &&
                                   !windAnimating && !poolSettling;
         if (viewStill && contentStill)

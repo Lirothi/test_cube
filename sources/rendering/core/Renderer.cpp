@@ -198,6 +198,7 @@ void Renderer::Shutdown()
     // permanent entries in a leak report is how a real leak goes unnoticed, which is the same
     // reason the barrier log now collapses its repeats. Both are recreated on demand, so nothing
     // downstream depends on them surviving this far.
+    vsmDummyReady_.store(false, std::memory_order_release);
     vsmDummyHeap_.Reset();
     drawIndexedCmdSig_.Reset();
     // ...and the bindless G-buffer command signatures (A6), for the same reason: each holds its root signature, so a
@@ -2345,6 +2346,8 @@ void Renderer::UAVBarrier(ID3D12GraphicsCommandList* cl, ID3D12Resource* res) {
 }
 
 void Renderer::EnsureVsmDummySrvs() {
+    if (vsmDummyReady_.load(std::memory_order_acquire)) { return; }
+    std::lock_guard<std::mutex> lock(vsmDummyMtx_); // worker lists ask in parallel (Renderer.h)
     if (vsmDummyHeap_) { return; }
     ID3D12Device* dev = GetDevice();
     if (!dev) { return; }
@@ -2358,6 +2361,7 @@ void Renderer::EnsureVsmDummySrvs() {
         return;
     }
     vsmDummyHeap_->SetName(L"VSM.DummySrvs");
+    LOG_DEBUG(logging::LogCategory::Render, "VSM dummy SRVs created (frame {})", GetTotalFrameNumber());
 
     const UINT inc = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE base = vsmDummyHeap_->GetCPUDescriptorHandleForHeapStart();
@@ -2387,6 +2391,7 @@ void Renderer::EnsureVsmDummySrvs() {
         d.Texture2D.MipLevels = 1;
         dev->CreateShaderResourceView(nullptr, &d, vsmDummyTexSrv_);
     }
+    vsmDummyReady_.store(true, std::memory_order_release); // the handles above are published with it
 }
 
 ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {

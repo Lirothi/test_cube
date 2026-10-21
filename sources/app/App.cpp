@@ -641,6 +641,22 @@ namespace
         // Plan S10e: UE's local-light mip by the pixel footprint (0 = by camera distance) and its bias.
         if (setting == "vsm.localMipFromPixel") { vsm::g_localMipFromPixel = value != 0.0f; return true; }
         if (setting == "vsm.requestLightCull") { vsm::g_requestLightCull = value != 0.0f; return true; }
+        if (setting == "vsm.lightPageRemap") { vsm::g_lightPageRemap = value != 0.0f; return true; } // S10c
+        if (setting == "vsm.maxLightAge") // S10c: UE r.Shadow.Virtual.Cache.MaxLightAgeSinceLastRequest
+        {
+            vsm::g_maxLightAgeFrames = static_cast<std::uint32_t>(std::clamp(value, 0.0f, 1000.0f));
+            return true;
+        }
+        if (setting == "vsm.lruFrames") // the pool's page age (graphics settings vsm.lruFrames, same range)
+        {
+            vsm::g_lruThreshold = static_cast<std::uint32_t>(std::clamp(value, 1.0f, static_cast<float>(vsm::kMaxLruFrames)));
+            return true;
+        }
+        if (setting == "vsm.redrawUnrequestedFrames") // a page redrawn for nobody this long goes (0 = off)
+        {
+            vsm::g_redrawUnrequestedFrames = static_cast<std::uint32_t>(std::clamp(value, 0.0f, static_cast<float>(vsm::kMaxLruFrames)));
+            return true;
+        }
         if (setting == "vsm.resolutionLodBiasLocal") { vsm::g_resolutionLodBiasLocal = std::clamp(value, -4.0f, 4.0f); return true; }
         if (setting == "shadow.localViewsPerList") // S6b
         {
@@ -1878,9 +1894,15 @@ namespace
             // Plan S10e: the VSM page pool's load and the dynamic-resolution bias it drives (a kFrameCount-old frame).
             {
                 const VirtualShadowMap::DynamicResStats& dr = scene_.Vsm().DynamicRes();
-                char vsmItem[160];
-                std::snprintf(vsmItem, sizeof(vsmItem), ",\"vsmPool\":{\"valid\":%s,\"load\":%.3f,\"refused\":%d,\"lodBias\":%.3f}",
-                              dr.valid ? "true" : "false", dr.poolLoad, dr.refused, dr.lodBias);
+                const VirtualShadowMap::RemapStats& rs = scene_.Vsm().Remaps(); // S10c: views moved with their light
+                char vsmItem[384];
+                std::snprintf(vsmItem, sizeof(vsmItem),
+                              ",\"vsmPool\":{\"valid\":%s,\"load\":%.3f,\"refused\":%d,\"lodBias\":%.3f,"
+                              "\"remapFrames\":%llu,\"remapMoved\":%u,\"remapDropped\":%u,"
+                              "\"parked\":%u,\"parkedBack\":%u,\"parkedExpired\":%u,\"parkedStale\":%u}",
+                              dr.valid ? "true" : "false", dr.poolLoad, dr.refused, dr.lodBias,
+                              static_cast<unsigned long long>(rs.frames), rs.moved, rs.dropped,
+                              rs.parked, rs.returned, rs.expired, rs.stale);
                 out += vsmItem;
             }
             if (historyRows <= 0)

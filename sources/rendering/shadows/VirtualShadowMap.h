@@ -193,9 +193,12 @@ namespace vsm
     inline constexpr float kLodRefDist = 5.0f;
 
     // Step 20 allocation: free a resident physical page that has not been requested for this many
-    // frames (LRU). Small enough that pages the camera moved off release promptly; large enough
-    // not to thrash pages that flicker in/out of the sub-sampled request set.
-    inline constexpr std::uint32_t kLruFrameThreshold = 16;
+    // frames (UE r.Shadow.Virtual.Cache.MaxPageAgeSinceLastRequest, 1000). Until then a page nobody
+    // asked for keeps its content and is taken back only when the pool runs out of empty pages,
+    // least recently requested first (vsm_page_alloc_freelist_cs.hlsl) -- it was 16 frames and no
+    // eviction under pressure, so the pages of a light looking away left long before UE's would.
+    inline constexpr std::uint32_t kLruFrameThreshold = 1000;
+    inline constexpr std::uint32_t kMaxLruFrames = 1000; // the settings' / --set's / the slider's range
 
     // --- Runtime-tunable mirrors (dev-window "VSM" tab). The passes read THESE each frame, so a
     // change applies live. They only feed per-frame CB values / the request dispatch size — NOT
@@ -224,6 +227,13 @@ namespace vsm
     // receiver into the one cube face its direction falls in (UE marks a pixel only for its light-grid cell's lights).
     // `--set vsm.requestLightCull:0|1`.
     inline bool  g_requestLightCull = true;
+    // Plan S10c: a light whose shadow slot changes takes its pages to the new view (UE's per-light cache) instead of
+    // re-rendering them. `--set vsm.lightPageRemap:0|1`.
+    inline bool  g_lightPageRemap = true;
+    // ...and a light that LEFT the shadowed set keeps its pages this many frames on a view nobody holds; back inside it
+    // in time, they move to its new view (UE r.Shadow.Virtual.Cache.MaxLightAgeSinceLastRequest, 10: the unreferenced
+    // light keeps its cache entry and gets an unreferenced VSM id). 0 = drop at once. `--set vsm.maxLightAge:<frames>`.
+    inline std::uint32_t g_maxLightAgeFrames = 10;
     inline float g_resolutionLodBiasLocal = 0.0f;
     inline float LocalMipBias() { return g_resolutionLodBiasLocal + g_dynamicLodBias; }
     // The camera pixel's radius per unit of view depth (UE RadiusXY = 1 / (ViewSize * ViewToClip._m00_m11), the smaller
@@ -435,6 +445,12 @@ namespace vsm
     // `vsm.localLateralTexels`, `vsm.localDepthPushTexels`.
     inline bool          g_localTexelBias = true;
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
+    // A page nobody requested for this many frames that the last render still found dirty goes at the next allocation
+    // instead of being redrawn again (vsm_page_alloc_freelist_cs.hlsl). The setup redraws every dirty RESIDENT page --
+    // the sub-sampled request misses pages pixels still read -- so with a 1000-frame page age a view the camera left
+    // kept being redrawn under wind: VsmPageRender 1.8 -> 3.0 ms on wind_test. 16 = the old page age, the window the
+    // sub-sampling needs. 0 = off. `--set vsm.redrawUnrequestedFrames`.
+    inline std::uint32_t g_redrawUnrequestedFrames = 16;
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free
     // pool pages → far fewer CPU draw calls). DEFAULT ON: the CPU saving is worth the artifact here.
@@ -594,6 +610,8 @@ public:
         std::uint32_t snapshotCopy = 0;    // pageTable -> COPY_SOURCE, prevPageTable -> COPY_DEST
         std::uint32_t alloc = 0;           // the six alloc buffers -> UAV
         // Plan S10e: the alloc counters into this frame's readback slot, every frame (dynamic resolution).
+        bool remap = false;                // S10c: this frame moves pages between views (PlanViewRemap)
+        std::array<std::uint32_t, vsm::kMaxVirtualViews> viewRemap{}; // ...per OLD view: keep / drop / new view
         bool counters = false;
         std::uint32_t countersCopy = 0;    // counters -> COPY_SOURCE
         std::uint32_t countersRestore = 0; // ...and back to UAV
@@ -722,8 +740,41 @@ public:
     const DynamicResStats& DynamicRes() const { return dynamicRes_; }
     // S10e: the pool has not settled -- requests were refused, or the bias is still moving. The skip-when-still update
     // must not freeze it then: the controller learns only from frames that allocate, and the pages the old bias asked
-    // for leave the pool only through the LRU (vsm::kLruFrameThreshold frames of updates).
+    // for give way only to pages a frame requests (the allocate pass's LRU eviction).
     bool DynamicResSettling() const { return dynamicRes_.valid && dynamicRes_.settling; }
+
+    // Local-light plan S10c (UE's per-light VSM cache): which LIGHT each VSM view holds. Scene hands this frame's
+    // (SetViewOwners, from the shadow slots); the request pass's builder compares it with what the pool's pages were
+    // made for (PlanViewRemap) and, where a light changed view, moves its pages along instead of re-rendering them
+    // (vsm_page_alloc_remap_cs.hlsl) -- and the prev-matrix table the page cache's dirty test reads. A light that left
+    // the set PARKS its pages for vsm::g_maxLightAgeFrames (UE's unreferenced cache entry): on its own view while nobody
+    // takes it, else moved to a free one; back in time, they move to its new view. Nothing renders a parked view (its
+    // light has no cull view to draw from), so a frame that could change its pages unseen -- one that dirties pages
+    // wholesale (forceAll, wind on the locals) or moves a caster -- frees them instead (parkedStale_).
+    static constexpr std::uint32_t kNoViewOwner = 0xFFFFFFFFu;
+    using ViewOwners = std::array<std::uint32_t, vsm::kMaxVirtualViews>;
+    static constexpr std::uint32_t SpotViewOwner(std::uint32_t lightIndex) { return lightIndex & 0x7FFFFFFFu; }
+    static constexpr std::uint32_t PointFaceViewOwner(std::uint32_t lightIndex, std::uint32_t face)
+    {
+        return 0x80000000u | ((lightIndex & 0x0FFFFFFFu) << 3u) | (face & 7u);
+    }
+    static ViewOwners NoViewOwners() { ViewOwners o{}; o.fill(kNoViewOwner); return o; }
+    void SetViewOwners(const ViewOwners& owners) { nextViewOwners_ = owners; }
+    bool ViewOwnersPending() const { return nextViewOwners_ != appliedViewOwners_; }
+    // Builder (main thread), before PrepareRequestPass, only on a frame the pool updates. `frame` = the renderer's.
+    void PlanViewRemap(std::uint64_t frame);
+    // moved = views moved (to a light's new view, a return or a parking spot); dropped = views freed for an arrival or
+    // because their parked light did not come back in time (expired) or could not vouch for them (stale).
+    struct RemapStats
+    {
+        std::uint32_t moved = 0, dropped = 0, parked = 0, returned = 0, expired = 0, stale = 0;
+        std::uint64_t frames = 0;
+    };
+    const RemapStats& Remaps() const { return remapStats_; }
+    bool IsViewParked(std::uint32_t view) const
+    {
+        return view < vsm::kMaxVirtualViews && parkedOwners_[view] != kNoViewOwner;
+    }
 
     // --- Live debug stats for the dev-window "VSM" tab. Filled by PollPageRequestDebug from the
     // deferred readback (a kFrameCount-old snapshot, refreshed a few times/sec). They reflect the
@@ -819,6 +870,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE pageProjUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageVisibleListUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerPrevSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE physOwnerPrevUav_{}; // S10c: the page remap (vsm_page_alloc_remap_cs.hlsl)
     D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtyUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE perPageDirtySrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageGroupCountUav_{};
@@ -912,6 +964,22 @@ private:
     std::uint64_t lastFrameOverBudget_ = 0;
     bool poolOverflowLogged_ = false;
     DynamicResStats dynamicRes_{};
+    // Plan S10c: the lights the pages are for (applied) and this frame's (next); per OLD view the remap the GPU pass
+    // applies (keep / drop / new view); whether the alloc pass runs it this frame, and whether the dirty test's
+    // prevViewVp_ still has to follow it (the render pass's builder applies that).
+    ViewOwners appliedViewOwners_ = NoViewOwners();
+    ViewOwners nextViewOwners_ = NoViewOwners();
+    std::array<std::uint32_t, vsm::kMaxVirtualViews> viewRemap_{};
+    bool remapPending_ = false;
+    bool prevVpRemapPending_ = false;
+    // Per view: the light whose pages it parks (kNoViewOwner = none) and since which frame; parkedStale_ = a render since
+    // could have changed them unseen (PrepareRenderPass), so the next plan frees every parked view.
+    ViewOwners parkedOwners_ = NoViewOwners();
+    std::array<std::uint64_t, vsm::kMaxVirtualViews> parkedSince_{};
+    std::uint32_t parkedCount_ = 0;
+    bool parkedStale_ = false;
+    RemapStats remapStats_{};
+    std::shared_ptr<Material> allocRemapMat_;        // vsm_page_alloc_remap_cs.hlsl (S10c)
 
     // Step 19/20 validation: deferred readback of the request bitfield + alloc counters, re-armed
     // periodically so a live/stress run samples several times. The single readback buffer holds

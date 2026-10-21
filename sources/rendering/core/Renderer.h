@@ -954,6 +954,12 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyBufferSrv_{};                     // null StructuredBuffer<uint> (t7/t9)
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyTexSrv_{};                        // null Texture2D (t8/t10)
     void EnsureVsmDummySrvs();                                                  // lazily create the two null SRVs
+    // The passes that ask for these record on WORKER lists in parallel: two of them used to find the heap missing at the
+    // same frame and both create it, the second CreateDescriptorHeap writing over the first through GetAddressOf()
+    // without a Release -- the one "Live ID3D12DescriptorHeap ... VSM.DummySrvs" at exit, only now and then (it took
+    // two passes racing on frame 1). Ready flag + lock, double-checked.
+    std::atomic<bool>                 vsmDummyReady_{ false };
+    std::mutex                        vsmDummyMtx_;
     static constexpr UINT             kFrameShaderVisibleHeapCount_ = 2;
     std::array<ID3D12DescriptorHeap*, kFrameShaderVisibleHeapCount_> currentFrameDescriptorHeaps_{};
     UINT                              currentFrameDescriptorHeapCount_ = 0;
