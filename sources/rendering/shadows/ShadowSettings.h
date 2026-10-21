@@ -150,6 +150,19 @@ inline bool g_localShadowFadeUe = true;
 inline bool g_localShadowBiasTexel = true;
 inline float g_localShadowNormalTexels = 3.0f;
 inline float g_localShadowPushTexels = 0.5f;
+// Plan S8: a light's OWN Shadow Bias / Shadow Slope Bias (UE's per-light knobs, 0.5 each) scale the texel bias, so the
+// Inspector fields keep meaning something with it on: 0.5 = the global texels above, 1.0 = twice, 0 = none. (They drove
+// only UE's bias before, which the texel bias replaced -- two knobs that moved nothing.) The normal push stays above 0:
+// it is what marks the texel mode to the shaders.
+inline float LocalShadowNormalTexels(float shadowBias)
+{
+    const float t = g_localShadowNormalTexels * (shadowBias > 0.0f ? shadowBias : 0.0f) * 2.0f;
+    return t > 1.0e-3f ? t : 1.0e-3f;
+}
+inline float LocalShadowPushTexels(float shadowSlopeBias)
+{
+    return g_localShadowPushTexels * (shadowSlopeBias > 0.0f ? shadowSlopeBias : 0.0f) * 2.0f;
+}
 // Local-light plan S6a: the atlas local views draw with ONE ExecuteIndirect each -- the cull's non-empty records,
 // compacted on the GPU (shadow_args_compact_cs) and pointed at the consolidated mega VB/IB -- instead of one per mesh
 // group. Needs the mega buffer (uniform vertex stride, R32 indices; dropped by a mid-game Rebuild until the next
@@ -296,8 +309,10 @@ namespace contact
     //       lever: a shadowed spot costs 9 atlas taps per pixel, a contact trace 8 depth taps
     //       and no atlas render.
     //   2 = auto: contacts only where the light has no shadow slot; slotted lights keep their map.
-    // Never both. Stacking them on a small-range light darkens the same contact twice; the user
-    // asked for an either/or and that is what this is. Sun is unaffected -- there the contact
+    //   3 = both -- UE's own arrangement (a light with ContactShadowLength > 0 multiplies the trace into its
+    //       shadow map), added for the A/B by local-light plan S8.
+    // 0-2 never stack them: on a small-range light that darkens the same contact twice, and the user
+    // asked for an either/or -- which is what they are. Sun is unaffected -- there the contact
     // term sits on top of CSM/VSM by design, recovering what a far cascade cannot resolve.
     inline std::uint32_t g_localMode = 1u;
     // What the local-light passes actually receive. The mode is meaningless with the master

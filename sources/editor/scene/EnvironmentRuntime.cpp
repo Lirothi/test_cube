@@ -212,6 +212,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
         d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
         d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
+        d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
         spots[i].SetDesc(d);
     }
     else if (env.type == "timeOfDay")
@@ -543,6 +544,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
             d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
             d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
+            d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
         }

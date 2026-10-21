@@ -110,6 +110,7 @@ void LocalShadowSources(bool hasSlot, out bool useMap, out bool useContact)
     useMap = true; useContact = false;
     if (contactShadowLocalMode == 1u)      { useMap = false;   useContact = true; }
     else if (contactShadowLocalMode == 2u) { useMap = hasSlot; useContact = !hasSlot; }
+    else if (contactShadowLocalMode == 3u) { useMap = true;    useContact = true; } // plan S8: UE's, the trace on top
 }
 
 

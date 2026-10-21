@@ -115,7 +115,8 @@ namespace
             ValidateOptionalNumber(objectJson, "innerAngleDeg", outReason) &&
             ValidateOptionalNumber(objectJson, "outerAngleDeg", outReason) &&
             ValidateOptionalNumber(objectJson, "shadowNormalBias", outReason) &&
-            ValidateOptionalNumber(objectJson, "shadowDepthBias", outReason);
+            ValidateOptionalNumber(objectJson, "shadowDepthBias", outReason) &&
+            ValidateOptionalNumber(objectJson, "shadowNear", outReason); // S8
     }
 
     void OffsetEnvironmentPosition(EditorObject& object)

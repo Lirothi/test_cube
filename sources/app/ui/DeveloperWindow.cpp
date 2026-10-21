@@ -2514,22 +2514,24 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     // term sits on top of CSM/VSM by design.
                     static const char* kLocalModes[] = { "Shadow map (contacts off for locals)",
                                                          "Contacts INSTEAD of the shadow map",
-                                                         "Auto: contacts only where no shadow slot" };
-                    int mode = (int)std::min<std::uint32_t>(render::contact::g_localMode, 2u);
+                                                         "Auto: contacts only where no shadow slot",
+                                                         "Both (UE: contacts on top of the map)" };
+                    int mode = (int)std::min<std::uint32_t>(render::contact::g_localMode, 3u);
                     if (GRAPHICS_CONTROL(ContactLocalMode, "contactLocalMode",
-                        ImGui::Combo("Local lights (spot/point)", &mode, kLocalModes, 3)))
+                        ImGui::Combo("Local lights (spot/point)", &mode, kLocalModes, 4)))
                         render::contact::g_localMode = (std::uint32_t)mode;
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("A local light uses ONE shadow source, never both. Stacking a contact trace\n"
-                                          "on a small-range light's shadow map darkens the same contact twice and\n"
-                                          "buys nothing.\n\n"
+                        ImGui::SetTooltip("The first three give a local light ONE shadow source. Stacking a contact\n"
+                                          "trace on a small-range light's shadow map darkens the same contact twice.\n\n"
                                           "Shadow map: what you had; this tab does nothing for locals.\n"
                                           "Contacts instead: the map is not even sampled (9 atlas taps saved per\n"
                                           "pixel), the 8-step depth trace is the light's only shadow. Cheap, but a\n"
                                           "contact only reaches as far as the trace length -- nothing casts across\n"
                                           "the room.\n"
                                           "Auto: slotted lights keep their map, unslotted ones get contacts, so a\n"
-                                          "light that lost the atlas budget is not left with no shadow at all.");
+                                          "light that lost the atlas budget is not left with no shadow at all.\n"
+                                          "Both: UE's own arrangement (a light with Contact Shadow Length > 0) --\n"
+                                          "the trace multiplied into the map, for the A/B.");
                 }
 
                 ImGui::Separator();

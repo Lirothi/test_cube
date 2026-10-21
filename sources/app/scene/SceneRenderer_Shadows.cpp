@@ -760,6 +760,9 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     // declares nothing on the frames this pass has no work, instead of the two sides agreeing by
     // discipline.
     const auto& D = renderer->GetDeferredForFrame();
+    // Plan S8: the CPU path's casters at their RECEIVER's LOD, chunks at their camera tier and culled by the view --
+    // Pass_CSM's rule (ReceiverCasterLod); they drew LOD 0 here. By value: the workers have no `this`.
+    const Math::float3 localCamPos = frame_->camera ? frame_->camera->GetPosition() : Math::float3(0.0f, 0.0f, 0.0f);
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
@@ -781,7 +784,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
     const size_t perList = std::max<size_t>(render::g_localShadowViewsPerList, 1u);
     const size_t lists = (viewCount + perList - 1) / perList;
     auto renderSpotShadow = [renderer, &D, &spotViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint,
-                             cache, cached, split, perList, viewCount](std::size_t listIndex)
+                             cache, cached, split, perList, viewCount, localCamPos](std::size_t listIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -838,14 +841,16 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
                     {
                         if (obj)
                         {
-                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                         }
                     }
                     for (auto* obj : opaqueComplex)
                     {
                         if (obj)
                         {
-                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                         }
                     }
                 }
@@ -878,14 +883,16 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                 }
             }
             for (auto* obj : opaqueComplex)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                 }
             }
         }
@@ -904,6 +911,8 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     // is its own depth-array slice (its own DSV), so faces render independently, with the
     // flattened face index as the "slice" (cubeSlot = idx/6, face = idx%6).
     const auto& D = renderer->GetDeferredForFrame();
+    // Plan S8: the CPU path's casters at their receiver's LOD, as Pass_SpotShadows.
+    const Math::float3 localCamPos = frame_->camera ? frame_->camera->GetPosition() : Math::float3(0.0f, 0.0f, 0.0f);
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     ShadowGpuData* shadowGpu = frame_->shadowGpu;
@@ -923,7 +932,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     const size_t perList = std::max<size_t>(render::g_localShadowViewsPerList, 1u);
     const size_t lists = (viewCount + perList - 1) / perList;
     auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint,
-                              cache, cached, split, perList, viewCount](std::size_t listIndex)
+                              cache, cached, split, perList, viewCount, localCamPos](std::size_t listIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -976,14 +985,16 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                     {
                         if (obj)
                         {
-                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                         }
                     }
                     for (auto* obj : opaqueComplex)
                     {
                         if (obj)
                         {
-                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                            obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                         }
                     }
                 }
@@ -1014,14 +1025,16 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                 }
             }
             for (auto* obj : opaqueComplex)
             {
                 if (obj)
                 {
-                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB);
+                    obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
+                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
                 }
             }
         }

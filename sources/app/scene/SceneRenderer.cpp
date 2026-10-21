@@ -186,8 +186,8 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 const float spotFade = (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetSpotShadowFade(i) : 1.0f;
                 // TEXEL bias: .x = push texels, .w = normal texels (> 0 marks the mode); otherwise .x = the world normal bias.
                 spotCPU[i].shadowParams2 = texelBias
-                    ? Math::float4(std::max(render::g_localShadowPushTexels, 0.0f), std::max(desc.volumetricIntensity, 0.0f),
-                                   spotFade, std::max(render::g_localShadowNormalTexels, 1.0e-3f))
+                    ? Math::float4(render::LocalShadowPushTexels(desc.shadowSlopeBias), std::max(desc.volumetricIntensity, 0.0f),
+                                   spotFade, render::LocalShadowNormalTexels(desc.shadowBias)) // S8: the light's own knobs
                     : Math::float4(light.GetShadowNormalBias(), std::max(desc.volumetricIntensity, 0.0f), spotFade, 0.0f);
                 // Plan S9: its square in its atlas page, in page UV (LightManager::PackShadowAtlases) -- corner, size,
                 // page. A light without a place gets the whole first page (it has no slot then, nothing reads it).
@@ -256,7 +256,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 // (> 0 marks the mode), shadowParams.y = 0 -- the receiver moves, the compare carries no bias.
                 const bool texelBias = render::LocalShadowTexelBias();
                 pointCPU[i].volumetric = Math::float4(std::max(desc.volumetricIntensity, 0.0f), // plan A4d
-                                                      texelBias ? std::max(render::g_localShadowPushTexels, 0.0f)
+                                                      texelBias ? render::LocalShadowPushTexels(desc.shadowSlopeBias) // S8
                                                                 : 3.0f * std::max(desc.shadowSlopeBias, 0.0f),
                                                       7.0f * std::max(desc.shadowSharpen, 0.0f) + 1.0f, // S2: UE's sharpen
                                                       render::g_localShadowFilterUe ? 1.0f : 0.0f);      // S2: UE's disc
@@ -270,7 +270,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 pointCPU[i].shadowFade = Math::float4(
                     (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetPointShadowFade(i) : 1.0f,
                     static_cast<float>(std::max(pointPlace.page, 0)), 1.0f / pointRes,
-                    texelBias ? std::max(render::g_localShadowNormalTexels, 1.0e-3f) : 0.0f);
+                    texelBias ? render::LocalShadowNormalTexels(desc.shadowBias) : 0.0f); // S8: the light's own knob
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {

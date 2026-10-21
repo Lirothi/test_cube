@@ -327,6 +327,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.shadowBias = sl.value("shadowBias", desc.shadowBias);           // local-light shadows S1 (UE's)
             desc.shadowSlopeBias = sl.value("shadowSlopeBias", desc.shadowSlopeBias);
             desc.shadowSharpen = sl.value("shadowSharpen", desc.shadowSharpen); // S2
+            desc.nearPlane = sl.value("shadowNear", desc.nearPlane);           // S8: the shadow projection's near
             lightManager.SpotLights().push_back({});
             lightManager.SpotLights().back().SetDesc(desc);
         }

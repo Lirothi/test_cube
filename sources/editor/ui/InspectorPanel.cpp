@@ -45,6 +45,7 @@
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
+#include "rendering/shadows/ShadowSettings.h" // local-light plan S8: which bias the shadow fields drive
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -2039,10 +2040,13 @@ namespace
             checkB("Cast Shadows", "shadowsEnabled", false);
             dragF("Shadow Bias", "shadowBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
             dragF("Shadow Slope Bias", "shadowSlopeBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
-            InspectorHelp("UE's Shadow Bias / Shadow Slope Bias (0.5 each). A point light's shadow is looked up "
-                          "nearer the light by a FRACTION of the distance: 0.02 x 512/Res x 2 x Shadow Bias (4 % "
-                          "at the atlas's 256 per face), times 1 + 3 x Slope Bias x (1 - N.L) on surfaces turned "
-                          "away from it. Larger = no acne, but the shadow starts further from its caster.");
+            InspectorHelp("UE's Shadow Bias / Shadow Slope Bias (0.5 each). With the texel bias (the default) a "
+                          "surface looks its shadow up moved off itself by this light's own texels: 3 along its "
+                          "geometric normal x Shadow Bias / 0.5, and 0.5 toward the light x Slope Bias / 0.5 x the "
+                          "slope (1 / N.L, up to 6). Larger = no acne on rough or grazing ground, but the shadow "
+                          "lifts off its caster's foot. With shadow.localBiasTexel:0 they are UE's own: the lookup "
+                          "moves toward the light by 0.02 x 512/Res x 2 x Shadow Bias of the distance, times "
+                          "1 + 3 x Slope Bias x (1 - N.L).");
             dragF("Shadow Sharpen", "shadowSharpen", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("UE's Shadow Sharpen: narrows the filtered penumbra -- the 29-tap disc's result is "
                           "stretched about its middle by 7 x this + 1. 0 = UE's soft edge.");
@@ -2121,16 +2125,28 @@ namespace
             onAtCombo();
             dragF("Shadow Bias", "shadowBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
             dragF("Shadow Slope Bias", "shadowSlopeBias", 0.5f, 0.01f, 0.0f, 10.0f, "%.2f");
-            InspectorHelp("UE's Shadow Bias / Shadow Slope Bias (0.5 each). The shadow map is written pushed away "
-                          "from the light by 15.36/Res metres x 2 x Shadow Bias -- 3 cm at the atlas's 512 -- plus "
-                          "that x 3 x Slope Bias on surfaces steep to the light, so a surface does not shadow itself "
-                          "(acne). Larger = cleaner but the shadow starts further from its caster.");
+            InspectorHelp("UE's Shadow Bias / Shadow Slope Bias (0.5 each). With the texel bias (the default) a "
+                          "surface looks its shadow up moved off itself by this light's own texels: 3 along its "
+                          "geometric normal x Shadow Bias / 0.5, and 0.5 toward the light x Slope Bias / 0.5 x the "
+                          "slope (1 / N.L, up to 6). Larger = no acne, but the shadow lifts off its caster's foot. "
+                          "With shadow.localBiasTexel:0 they are UE's own: the map is written pushed away from the "
+                          "light by 15.36/Res metres x 2 x Shadow Bias, plus that x 3 x Slope Bias on steep "
+                          "surfaces.");
             dragF("Shadow Sharpen", "shadowSharpen", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("UE's Shadow Sharpen: narrows the filtered penumbra -- the 6x6 tent's result is stretched "
                           "about its middle by 7 x this + 1. 0 = UE's soft edge.");
+            // Plan S8: read only by UE's / the old bias -- the texel bias moves the receiver by texels, so with it on the
+            // field is shown but moves nothing, and says so.
+            ImGui::BeginDisabled(render::LocalShadowTexelBias());
             dragF("Shadow Normal Bias", "shadowNormalBias", 0.05f, 0.001f, 0.0f, 10.0f, "%.5f");
-            InspectorHelp("Ours, on top of UE's: the receiver is looked up this many metres off its surface, along "
-                          "the normal.");
+            ImGui::EndDisabled();
+            InspectorHelp("Ours, on top of UE's bias: the receiver is looked up this many metres off its surface, "
+                          "along the normal. Only with shadow.localBiasTexel:0 -- the texel bias (the default) "
+                          "pushes by this light's texels instead (Shadow Bias above).");
+            dragF("Shadow Near (m)", "shadowNear", 0.1f, 0.005f, 0.01f, 5.0f, "%.3f");
+            InspectorHelp("The shadow's near plane: a caster nearer the light than this is not in its map (a lamp's "
+                          "own bulb or frame inside it does not shadow the light). Lower lets a close caster shadow; "
+                          "the map's 16-bit depth then has less precision far away.");
         }
         else if (env.type == "timeOfDay")
         {

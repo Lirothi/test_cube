@@ -18,11 +18,15 @@ struct SpotLightDesc {
     float        shadowNormalBias = 0.01f;
     float        volumetricIntensity = 1.0f; // plan A4d: UE VolumetricScatteringIntensity -- this light's weight in the fog volume
     float        shadowDepthBias = 0.001f;
+    // The shadow projection's near plane, metres (level key "shadowNear", plan S8): a caster nearer the light is not in
+    // the map. D16 perspective depth, so lowering it costs precision at the far end.
     float        nearPlane = 0.1f;
     bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow
     LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
     // Local-light shadow plan S1: UE's ShadowBias / ShadowSlopeBias (LightComponent.cpp:466-467, both 0.5). The depth
     // pass's constant is 15.36/Res m x 2 x shadowBias, its slope part that x 3 x shadowSlopeBias x tan (<= 1).
+    // Under the texel bias (the atlas default) they scale its normal / slope push instead, 0.5 = the global texels
+    // (render::LocalShadowNormalTexels / LocalShadowPushTexels, plan S8).
     // `shadowDepthBias` above is the OLD receiver bias (NDC), read only with shadow.localBiasUe off.
     float        shadowBias = 0.5f;
     float        shadowSlopeBias = 0.5f;

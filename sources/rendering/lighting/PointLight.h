@@ -28,7 +28,8 @@ struct PointLightDesc {
     LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
     // Local-light shadow plan S1: UE's ShadowBias / ShadowSlopeBias (both 0.5). UE biases a point light at projection:
     // the compare distance moves toward the light by 0.02 x 512/Res x 2 x shadowBias of itself, times
-    // (1 + 3 x shadowSlopeBias x (1 - NoL)) -- local_shadow_bias.hlsli.
+    // (1 + 3 x shadowSlopeBias x (1 - NoL)) -- local_shadow_bias.hlsli. Under the texel bias (the atlas default) they
+    // scale its normal / slope push instead, 0.5 = the global texels (render::LocalShadowNormalTexels, plan S8).
     float        shadowBias = 0.5f;
     float        shadowSlopeBias = 0.5f;
     // Plan S2: UE's ShadowSharpen (0): narrows the filtered penumbra, x (7 x this + 1).
