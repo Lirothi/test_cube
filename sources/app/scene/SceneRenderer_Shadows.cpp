@@ -75,8 +75,9 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* vie
         const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
         // .w = the projection's x scale (plan S10e: the request's pixel-footprint mip; a spot's 1 / tan(outer), a face's 1).
         views[slot].params = DirectX::XMFLOAT4(valid, face, v.zFar, v.proj.m._11);
-        // Plan S10e: the light's reach (SceneView::lightSphere, S9e) -- the request marks nothing for receivers past it.
-        views[slot].cull = vsm::g_requestLightCull ? v.lightSphere.xf() : DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, -1.0f);
+        // Plan S10e: the light's reach (SceneView::lightSphere, S9e) -- the request marks nothing for receivers past it
+        // (when localMip.w says so: vsm.requestLightCull); plan S10d classifies distant lights by it.
+        views[slot].cull = v.lightSphere.xf();
         if (active) { count = std::max(count, slot + 1u); }
     };
     const size_t spotCount = frame.lightManager->GetShadowedSpotCount();
@@ -151,6 +152,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
                                      static_cast<float>(vsm::g_requestDownscale),
                                      vsm::ClipmapBlendWidth());
     cb.localMip = vsm::LocalMipParams(mv.invProj.m, static_cast<float>(rw), static_cast<float>(rh)); // S10e: UE's mip
+    cb.localMip.w = vsm::g_requestLightCull ? 1.0f : 0.0f; // S10e: test the receiver against the light's sphere
 
     // The page-table view indexing (plan S10b: vsm::SpotView / PointFaceView / ClipmapView, the cull layout minus its
     // cascades). Cascades are intentionally excluded (Step 19b local scope).
@@ -169,6 +171,22 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         frame_->vsm->RecordPageAllocate(renderer, t.cl, pts, frame_->clipmapSquares);
     }
     ctx.EndCL(t);
+}
+
+// Plan S10d: which lights are distant this frame and which of them the round robin redraws -- from the view list both
+// VSM passes walk, once a frame, in the page-render pass's builder before PrepareRenderPass.
+void SceneRenderer::PlanVsmDistantLights(Renderer* renderer)
+{
+    if (!frame_ || !frame_->vsm || !frame_->mainView || !renderer) { return; }
+    std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
+    const std::uint32_t count = BuildVsmViews(*frame_, views.data());
+    const SceneView& mv = *frame_->mainView;
+    const DirectX::XMFLOAT3 camPos(mv.position.x, mv.position.y, mv.position.z);
+    const DirectX::XMFLOAT3 camForward(mv.invView.m._31, mv.invView.m._32, mv.invView.m._33); // the request's depth axis
+    const float pixelRadiusPerDepth = vsm::PixelRadiusPerDepth(mv.invProj.m, static_cast<float>(renderer->GetRenderWidth()),
+                                                                static_cast<float>(renderer->GetRenderHeight()));
+    frame_->vsm->PlanDistantLights(views.data(), count, camPos, camForward, pixelRadiusPerDepth,
+                                   renderer->GetTotalFrameNumber());
 }
 
 void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContext ctx,

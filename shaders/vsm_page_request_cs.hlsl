@@ -40,7 +40,8 @@ cbuffer PageRequestCB : register(b0)
     float4   screen;    // x=w, y=h, z=1/w, w=1/h
     float4   lodParams; // x=refDist, y=maxLevel, z=downscale, w=directional clipmap blend width
     // Plan S10e: x = 1 picks a local view's mip by the camera pixel's footprint (VsmLocalMipFromPixel, UE's), y = the lod
-    // bias, z = the pixel radius per unit of view depth (min(1 / (W P00), 1 / (H P11)), render resolution).
+    // bias, z = the pixel radius per unit of view depth (min(1 / (W P00), 1 / (H P11)), render resolution), w = 1 tests a
+    // receiver against each view's light sphere first (vsm.requestLightCull).
     float4   localMip;
     uint     numViews;
     uint3    _pad;
@@ -92,8 +93,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // Plan S10e (UE marks a pixel's pages only for the lights its light-grid cell holds): beyond the light's reach
         // nothing samples this view, and of a point light's six faces only the one P's direction falls in can hold it --
         // one distance test and a face pick instead of six projections.
-        const float4 cull = views[v].cull;
-        if (cull.w >= 0.0f)
+        const float4 cull = views[v].cull; // always the light's sphere (plan S10d reads it too); localMip.w = test it
+        if (localMip.w != 0.0f && cull.w >= 0.0f)
         {
             const float3 toP = P - cull.xyz;
             if (dot(toP, toP) > cull.w * cull.w) { continue; }

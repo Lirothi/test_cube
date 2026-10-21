@@ -911,6 +911,7 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             [this, renderer](RenderGraphPassContext& ctx)
                 -> std::function<void(RenderGraphPassContext)> {
                 if (decisions_.vsmSkipUpdate || !frame_->shadowGpu) { return {}; }
+                PlanVsmDistantLights(ctx.renderer); // plan S10d: before the decisions that carry its masks
                 const VirtualShadowMap::PageRenderDecisions dec =
                     frame_->vsm->PrepareRenderPass(ctx, frame_->shadowGpu, frame_->wind);
                 return [this, renderer, dec](RenderGraphPassContext c) {

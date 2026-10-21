@@ -311,6 +311,8 @@ private:
     // point indices the declarations were made under, captured by value into the record lambda.
     void Pass_VsmPageRequest(Renderer* r, RenderGraphPassContext ctx,
         const VirtualShadowMap::PageRequestPoints& pts);
+    // Plan S10d: the distant lights and their round robin, in the page-render builder before PrepareRenderPass.
+    void PlanVsmDistantLights(Renderer* renderer);
     // pass-flow S3: `dec` arrives from the AddPass2 builder's PrepareRenderPass call — the same
     // values the declarations were made from, captured by value into the record lambda.
     void Pass_VsmPageRender(Renderer* r, RenderGraphPassContext ctx,

@@ -234,8 +234,25 @@ namespace vsm
     // in time, they move to its new view (UE r.Shadow.Virtual.Cache.MaxLightAgeSinceLastRequest, 10: the unreferenced
     // light keeps its cache entry and gets an unreferenced VSM id). 0 = drop at once. `--set vsm.maxLightAge:<frames>`.
     inline std::uint32_t g_maxLightAgeFrames = 10;
+    // Plan S10d (UE distant lights: r.Shadow.Virtual.DistantLightMode 1, r.Shadow.Virtual.MaxDistantUpdatePerFrame 1,
+    // ShadowSceneRenderer.cpp:33-46, 210-260, 329-430). A local light whose FINEST possible mip -- the camera pixel at the
+    // near side of its sphere, over its whole radius in light depth (GetConservativeMipLevelLocal) -- is the last one has
+    // its map in one page a view. Its pages then ignore wind and moving casters (UE skips the invalidations of a single-page
+    // map) and draw their casters rigid, and they redraw in a round robin: this many lights a frame, the one waiting
+    // longest first (< 0 = all). Turning distant redraws it at once (UE: the flag is part of the light's cache key).
+    // `--set vsm.distantLightMode:0|1`, `vsm.maxDistantUpdatePerFrame:<n>`.
+    inline int   g_distantLightMode = 1;
+    inline int   g_maxDistantUpdatesPerFrame = 1;
     inline float g_resolutionLodBiasLocal = 0.0f;
     inline float LocalMipBias() { return g_resolutionLodBiasLocal + g_dynamicLodBias; }
+    // vsm_addressing.hlsli VsmLocalMipFromPixel, term for term (plan S10d classifies lights with it on the CPU).
+    inline std::uint32_t LocalMipFromPixel(float pixelRadiusWorld, float lightXScale, float lightDepth, float lodBias)
+    {
+        const float footprint = std::abs(pixelRadiusWorld * lightXScale / std::max(lightDepth, 1e-4f)) *
+                                (2.0f * static_cast<float>(kVirtualRes));
+        const float mip = std::log2(std::max(footprint, 1e-8f)) + lodBias;
+        return static_cast<std::uint32_t>(std::min(std::max(std::floor(mip), 0.0f), static_cast<float>(kMaxMipLevel)));
+    }
     // The camera pixel's radius per unit of view depth (UE RadiusXY = 1 / (ViewSize * ViewToClip._m00_m11), the smaller
     // axis) from the INVERSE projection at the render resolution: 1 / P00 = invProj._11. And the CB's float4 for it.
     inline float PixelRadiusPerDepth(const DirectX::XMFLOAT4X4& invProj, float renderWidth, float renderHeight)
@@ -639,6 +656,9 @@ public:
         std::uint32_t forceAll = 1u;
         // Clipmap levels below this wind-animate and wind-dirty; 0 = calm. See gWindDirtyMaxLevel.
         std::uint32_t windDirtyMaxLevel = 0u;
+        // Plan S10d: the views of distant lights, and of those the round robin redraws this frame (bit per view).
+        std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantMask{};
+        std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantUpdate{};
         // pass-flow S3b: the ABSOLUTE declaration indices of the pass's barrier points, captured
         // by PrepareRenderPass as it declares them. RecordPageRender emits each with an EmitPoint
         // marker — the record body names no resource and no state. Scatter/cache indices are only
@@ -775,6 +795,16 @@ public:
     {
         return view < vsm::kMaxVirtualViews && parkedOwners_[view] != kNoViewOwner;
     }
+
+    // Plan S10d (vsm::g_distantLightMode): which views belong to distant lights this frame and which of those lights the
+    // round robin redraws. Builder of the page-render pass, once a frame, after PlanViewRemap (the view owners name the
+    // lights) and before PrepareRenderPass (which hands the result to the setup). `views` = BuildVsmViews' list (cull =
+    // the light's sphere), the camera = the main view, `pixelRadiusPerDepth` = vsm::PixelRadiusPerDepth at render res.
+    void PlanDistantLights(const vsm::ViewProjEntry* views, std::uint32_t viewCount, const DirectX::XMFLOAT3& camPos,
+                           const DirectX::XMFLOAT3& camForward, float pixelRadiusPerDepth, std::uint64_t frame);
+    // lights = distant this frame; updates = redraws the round robin scheduled; turned = lights that turned distant.
+    struct DistantStats { std::uint32_t lights = 0; std::uint64_t updates = 0, turned = 0; };
+    const DistantStats& Distant() const { return distantStats_; }
 
     // --- Live debug stats for the dev-window "VSM" tab. Filled by PollPageRequestDebug from the
     // deferred readback (a kFrameCount-old snapshot, refreshed a few times/sec). They reflect the
@@ -979,6 +1009,14 @@ private:
     std::uint32_t parkedCount_ = 0;
     bool parkedStale_ = false;
     RemapStats remapStats_{};
+    // Plan S10d: this frame's distant views / scheduled views (PlanDistantLights -> PrepareRenderPass), and per distant
+    // light (spot owner, or a point's owner without its face bits) the frame it last redrew.
+    std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantMask_{};
+    std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> distantUpdate_{};
+    struct DistantLight { std::uint32_t key = 0; std::uint64_t lastUpdate = 0; bool scheduled = false; };
+    std::vector<DistantLight> distantLights_;
+    std::vector<DistantLight> distantScratch_;
+    DistantStats distantStats_{};
     std::shared_ptr<Material> allocRemapMat_;        // vsm_page_alloc_remap_cs.hlsl (S10c)
 
     // Step 19/20 validation: deferred readback of the request bitfield + alloc counters, re-armed

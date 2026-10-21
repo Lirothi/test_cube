@@ -652,6 +652,13 @@ namespace
             vsm::g_lruThreshold = static_cast<std::uint32_t>(std::clamp(value, 1.0f, static_cast<float>(vsm::kMaxLruFrames)));
             return true;
         }
+        // Plan S10d: UE r.Shadow.Virtual.DistantLightMode (0 = off, 1 = on) and MaxDistantUpdatePerFrame (< 0 = all).
+        if (setting == "vsm.distantLightMode") { vsm::g_distantLightMode = value != 0.0f ? 1 : 0; return true; }
+        if (setting == "vsm.maxDistantUpdatePerFrame")
+        {
+            vsm::g_maxDistantUpdatesPerFrame = static_cast<int>(std::clamp(value, -1.0f, 1000.0f));
+            return true;
+        }
         if (setting == "vsm.redrawUnrequestedFrames") // a page redrawn for nobody this long goes (0 = off)
         {
             vsm::g_redrawUnrequestedFrames = static_cast<std::uint32_t>(std::clamp(value, 0.0f, static_cast<float>(vsm::kMaxLruFrames)));
@@ -1895,14 +1902,18 @@ namespace
             {
                 const VirtualShadowMap::DynamicResStats& dr = scene_.Vsm().DynamicRes();
                 const VirtualShadowMap::RemapStats& rs = scene_.Vsm().Remaps(); // S10c: views moved with their light
-                char vsmItem[384];
+                const VirtualShadowMap::DistantStats& ds = scene_.Vsm().Distant(); // S10d: distant lights, round robin
+                char vsmItem[512];
                 std::snprintf(vsmItem, sizeof(vsmItem),
                               ",\"vsmPool\":{\"valid\":%s,\"load\":%.3f,\"refused\":%d,\"lodBias\":%.3f,"
                               "\"remapFrames\":%llu,\"remapMoved\":%u,\"remapDropped\":%u,"
-                              "\"parked\":%u,\"parkedBack\":%u,\"parkedExpired\":%u,\"parkedStale\":%u}",
+                              "\"parked\":%u,\"parkedBack\":%u,\"parkedExpired\":%u,\"parkedStale\":%u,"
+                              "\"distantLights\":%u,\"distantUpdates\":%llu,\"distantTurned\":%llu}",
                               dr.valid ? "true" : "false", dr.poolLoad, dr.refused, dr.lodBias,
                               static_cast<unsigned long long>(rs.frames), rs.moved, rs.dropped,
-                              rs.parked, rs.returned, rs.expired, rs.stale);
+                              rs.parked, rs.returned, rs.expired, rs.stale,
+                              ds.lights, static_cast<unsigned long long>(ds.updates),
+                              static_cast<unsigned long long>(ds.turned));
                 out += vsmItem;
             }
             if (historyRows <= 0)

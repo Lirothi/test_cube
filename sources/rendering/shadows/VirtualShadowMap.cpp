@@ -317,6 +317,9 @@ void VirtualShadowMap::ReleaseResources()
     parkedStale_ = false;
     remapPending_ = false;
     prevVpRemapPending_ = false;
+    distantMask_.fill(0u); // S10d
+    distantUpdate_.fill(0u);
+    distantLights_.clear();
 }
 
 void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
@@ -637,6 +640,8 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     // record lambda, so the record reads the same values by construction.
     if (!IsAllocated() || !shadowGpu) { return PageRenderDecisions{}; }
     PageRenderDecisions d = ComputePageRenderDecisions(shadowGpu, wind);
+    d.distantMask = distantMask_;     // plan S10d (PlanDistantLights, this frame)
+    d.distantUpdate = distantUpdate_;
     // S5b.2 cross-frame state, committed in the (serial) builder: this frame renders; if it also
     // builds the pyramid, next frame may test against it.
     hzbThisFrame_ = d.hzb;
@@ -1180,6 +1185,90 @@ void VirtualShadowMap::PlanViewRemap(std::uint64_t frame)
                   moved, dropped, parked, returned, expired, stale, parkedCount_);
     }
     appliedViewOwners_ = nextViewOwners_;
+}
+
+void VirtualShadowMap::PlanDistantLights(const vsm::ViewProjEntry* views, std::uint32_t viewCount,
+    const DirectX::XMFLOAT3& camPos, const DirectX::XMFLOAT3& camForward, float pixelRadiusPerDepth, std::uint64_t frame)
+{
+    distantMask_.fill(0u);
+    distantUpdate_.fill(0u);
+    distantScratch_.clear();
+    const auto bit = [](std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4>& m, std::uint32_t v) { m[v >> 5u] |= 1u << (v & 31u); };
+    const auto lightKey = [](std::uint32_t owner) { return (owner & 0x80000000u) != 0u ? (owner & ~7u) : owner; };
+    const std::uint32_t n = (views && vsm::g_distantLightMode != 0) ? std::min(viewCount, vsm::kMaxVirtualViews) : 0u;
+    const float bias = vsm::LocalMipBias();
+
+    // GetConservativeMipLevelLocal: the camera pixel at the sphere's near side (view depth - radius, not below 0) over
+    // the light's radius as the receiver's light-space depth -- the finest mip any receiver of this light can ask for.
+    // With the distance select (vsm.localMipFromPixel 0) the same bound in its own terms: the sphere's nearest point.
+    for (std::uint32_t v = 0; v < n; ++v)
+    {
+        if (vsm::IsClipmapView(v) || views[v].params.x < 0.5f) { continue; }
+        const std::uint32_t owner = appliedViewOwners_[v];
+        const DirectX::XMFLOAT4& s = views[v].cull;
+        if (owner == kNoViewOwner || s.w <= 0.0f) { continue; }
+        const float dx = s.x - camPos.x, dy = s.y - camPos.y, dz = s.z - camPos.z;
+        std::uint32_t mip = 0;
+        if (vsm::g_localMipFromPixel)
+        {
+            const float nearDepth = std::max(0.0f, dx * camForward.x + dy * camForward.y + dz * camForward.z - s.w);
+            mip = vsm::LocalMipFromPixel(nearDepth * pixelRadiusPerDepth, views[v].params.w, s.w, bias);
+        }
+        else
+        {
+            const float nearDist = std::max(std::sqrt(dx * dx + dy * dy + dz * dz) - s.w, 1e-3f);
+            const float level = std::floor(std::log2(nearDist / std::max(vsm::LocalRefDist(), 1e-3f)));
+            mip = static_cast<std::uint32_t>(std::clamp(level, 0.0f, static_cast<float>(vsm::kMaxMipLevel)));
+        }
+        if (mip < vsm::kMaxMipLevel) { continue; }
+        bit(distantMask_, v);
+        const std::uint32_t key = lightKey(owner);
+        if (std::none_of(distantScratch_.begin(), distantScratch_.end(), [&](const DistantLight& d) { return d.key == key; }))
+        {
+            distantScratch_.push_back(DistantLight{ key, 0u, false });
+        }
+    }
+
+    // Who redraws: a light that just turned distant (UE: its cache key changed -- not counted in the budget), then the
+    // longest-waiting of the rest, up to the budget (UE's priority queue by frames since last scheduled).
+    std::uint32_t turned = 0;
+    for (DistantLight& d : distantScratch_)
+    {
+        const auto was = std::find_if(distantLights_.begin(), distantLights_.end(), [&](const DistantLight& o) { return o.key == d.key; });
+        if (was == distantLights_.end()) { d.lastUpdate = frame; d.scheduled = true; ++turned; }
+        else { d.lastUpdate = was->lastUpdate; }
+    }
+    std::uint32_t budget = vsm::g_maxDistantUpdatesPerFrame < 0 ? 0xFFFFFFFFu
+                                                                 : static_cast<std::uint32_t>(vsm::g_maxDistantUpdatesPerFrame);
+    while (budget > 0u)
+    {
+        DistantLight* oldest = nullptr;
+        for (DistantLight& d : distantScratch_)
+        {
+            if (!d.scheduled && (!oldest || d.lastUpdate < oldest->lastUpdate)) { oldest = &d; }
+        }
+        if (!oldest) { break; }
+        oldest->scheduled = true;
+        oldest->lastUpdate = frame;
+        --budget;
+    }
+    std::uint32_t scheduled = 0;
+    for (std::uint32_t v = 0; v < n; ++v)
+    {
+        if ((distantMask_[v >> 5u] & (1u << (v & 31u))) == 0u) { continue; }
+        const std::uint32_t key = lightKey(appliedViewOwners_[v]);
+        const auto d = std::find_if(distantScratch_.begin(), distantScratch_.end(), [&](const DistantLight& o) { return o.key == key; });
+        if (d != distantScratch_.end() && d->scheduled) { bit(distantUpdate_, v); }
+    }
+    for (DistantLight& d : distantScratch_)
+    {
+        if (d.scheduled) { ++scheduled; }
+        d.scheduled = false;
+    }
+    distantLights_.swap(distantScratch_);
+    distantStats_.lights = static_cast<std::uint32_t>(distantLights_.size());
+    distantStats_.updates += scheduled;
+    distantStats_.turned += turned;
 }
 
 void VirtualShadowMap::UpdateDynamicResolution(Renderer* renderer)
@@ -2005,6 +2094,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         std::uint32_t passB{};               // S5b.2: mirrors gPassB
         std::uint32_t setupPad[2]{};         // keeps the mask on its own row (HLSL packing)
         DirectX::XMUINT4 viewDirtyMask[vsm::kViewDirtyVec4]{}; // mirrors gViewDirtyMask (view matrix changed bits, S10a)
+        DirectX::XMUINT4 distantMask[vsm::kViewDirtyVec4]{};   // mirrors gDistantMask (plan S10d)
+        DirectX::XMUINT4 distantUpdate[vsm::kViewDirtyVec4]{}; // mirrors gDistantUpdate
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -2038,6 +2129,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
             cb.windDirtyMaxLevel = dec.windDirtyMaxLevel;
             std::memcpy(cb.viewDirtyMask, viewDirtyMask.data(), sizeof(cb.viewDirtyMask));
+            static_assert(sizeof(cb.distantMask) == sizeof(dec.distantMask), "S10d masks: one bit per VSM view");
+            std::memcpy(cb.distantMask, dec.distantMask.data(), sizeof(cb.distantMask));
+            std::memcpy(cb.distantUpdate, dec.distantUpdate.data(), sizeof(cb.distantUpdate));
             // World-distance sway falloff (see gWindFade in the setup shader): reaches zero at
             // the outer extent of the last SWAYING level, so the rigid levels beyond pick up
             // exactly where the falloff ends and the clipmap blend band sees one geometry.

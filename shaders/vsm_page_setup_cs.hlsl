@@ -77,6 +77,12 @@ cbuffer SetupCB : register(b0)
     // cache contract is: a view that moved re-renders wholesale. Static camera + static
     // lights = everything caches; a dolly re-renders exactly what it invalidates.
     uint4 gViewDirtyMask[KVIEWDIRTY_VEC4];
+    // Plan S10d (UE distant lights): the views of lights whose whole map is one page at the finest mip any of their
+    // receivers can ask for. Their pages ignore wind and moving casters (UE skips a single-page map's invalidations) and
+    // draw their casters rigid; they redraw when the round robin names them in gDistantUpdate (one light a frame), when
+    // new, when their matrix moved, or on gForceAll. Same bit layout as gViewDirtyMask.
+    uint4 gDistantMask[KVIEWDIRTY_VEC4];
+    uint4 gDistantUpdate[KVIEWDIRTY_VEC4];
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -228,7 +234,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // locals report 0 and always animate.
     const bool isLocalView = !VsmIsClipmapView(view); // plan S10b: locals sit on both sides of the clipmap
     const uint clipLevel = isLocalView ? 0u : (view - VSM_CLIPMAP_FIRST);
-    const bool windHere = (gWindDirtyMaxLevel != 0u) &&
+    const uint viewWord = gDistantMask[view >> 7u][(view >> 5u) & 3u];
+    const bool distantView = ((viewWord >> (view & 31u)) & 1u) != 0u; // plan S10d: rigid, redrawn by the round robin
+    const bool distantDue = ((gDistantUpdate[view >> 7u][(view >> 5u) & 3u] >> (view & 31u)) & 1u) != 0u;
+    const bool windHere = (gWindDirtyMaxLevel != 0u) && !distantView &&
                           (isLocalView || clipLevel < gWindDirtyMaxLevel);
     if (lane == 0u && gPassB == 0u)
     {
@@ -344,8 +353,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // (near clipmap levels + locals). Everything past the range renders rigid and caches.
     const bool viewDirty = ((gViewDirtyMask[view >> 7u][(view >> 5u) & 3u] >> (view & 31u)) & 1u) != 0u;
     // S5b.2, pass B: the verdict pass A wrote, read back through the same UAV (never rewritten).
+    // Plan S10d: a distant light's page takes no caster invalidation -- the round robin redraws it instead.
+    const bool invalidated = distantView ? distantDue : dynamicOverlap;
     const bool dirty = (gPassB != 0u) ? (PerPageDirty[p] != 0u)
-                                      : (isNew || dynamicOverlap || (gForceAll != 0u) || windHere || viewDirty);
+                                      : (isNew || invalidated || (gForceAll != 0u) || windHere || viewDirty);
     if (lane == 0u && gPassB == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
     if (!dirty)
     {
