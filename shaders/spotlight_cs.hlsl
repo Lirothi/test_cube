@@ -1,4 +1,4 @@
-#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define SPOTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : Texture2DArray Spot Shadow Atlas
@@ -45,6 +45,9 @@ StructuredBuffer<SpotLightData> SpotLights : register(t6);
 StructuredBuffer<uint> VsmPageTable : register(t7); // Rung 2 / Step 21
 Texture2D VsmPool : register(t8);
 Texture2D GBAux : register(t9);
+// Plan S7, the direct read: the local shadow cache's pool -- a light whose shadowAtlas.w is negative is its picture there
+// (page -w - 1, the same square layout and page size as the atlas). The atlas stands in while there is no pool.
+Texture2DArray LocalShadowPool : register(t10);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);
@@ -122,7 +125,7 @@ void LocalShadowSources(bool hasSlot, out bool useMap, out bool useContact)
 }
 
 
-float SampleShadowPCF(float3 uvw, float depth, float2 texel)
+float SampleShadowPCF(Texture2DArray atlas, float3 uvw, float depth, float2 texel)
 {
     float shadow = 0.0f;
     [unroll]
@@ -132,7 +135,7 @@ float SampleShadowPCF(float3 uvw, float depth, float2 texel)
         for (int x = -1; x <= 1; ++x)
         {
             float2 offset = float2(x, y) * texel;
-            shadow += SpotShadowAtlas.SampleCmpLevelZero(gSmpShadow, float3(uvw.xy + offset, uvw.z), depth);
+            shadow += atlas.SampleCmpLevelZero(gSmpShadow, float3(uvw.xy + offset, uvw.z), depth);
         }
     }
     return shadow / 9.0f;
@@ -233,7 +236,9 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
     // Plan S4: the light drew into the top-left square of its own resolution; 3 texels inside it for the 6x6 tent.
     // Plan S9: its square of an atlas page (shadowAtlas); `invShadowSize` is one page texel.
     uv = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, invShadowSize, 3.0f);
-    const float page = light.shadowAtlas.w;
+    // Plan S7: a negative page = the light's picture in the cache pool (LocalShadowPool).
+    const bool fromPool = light.shadowAtlas.w < 0.0f;
+    const float page = fromPool ? -light.shadowAtlas.w - 1.0f : light.shadowAtlas.w;
 
     // Plan S2: UE's Manual5x5PCF with its soft transition, the ramp narrowed toward the light by the receiver's NoL
     // (UE: TransitionScale x lerp(1 - SpotLightReceiverBias 0.5, 1, NoL), ShadowProjectionPixelShader.usf:248), then
@@ -247,12 +252,24 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         // its caster reads as a gap at the foot), or kSpotRampTexels shadow texels under the TEXEL bias.
         const float ts = (texelBias ? 1.0f / max(kSpotRampTexels * texelWorld, 1e-4f) : light.shadowParams3.y)
                        * lerp(0.5f, 1.0f, NoL);
-        const float s = SpotShadowTent6x6(SpotShadowAtlas, gSmpPoint, uv, page, clip.w, ts, n, f,
-                                          1.0f / invShadowSize, invShadowSize, linearInvRange);
+        float s;
+        [branch]
+        if (fromPool)
+        {
+            s = SpotShadowTent6x6(LocalShadowPool, gSmpPoint, uv, page, clip.w, ts, n, f, 1.0f / invShadowSize, invShadowSize,
+                                  linearInvRange);
+        }
+        else
+        {
+            s = SpotShadowTent6x6(SpotShadowAtlas, gSmpPoint, uv, page, clip.w, ts, n, f, 1.0f / invShadowSize, invShadowSize,
+                                  linearInvRange);
+        }
         return LocalShadowFinish(s, light.shadowParams3.z);
     }
     float3 uvw = float3(uv, page);
-    return SampleShadowPCF(uvw, depth - depthBias, invShadowSize);
+    [branch]
+    if (fromPool) { return SampleShadowPCF(LocalShadowPool, uvw, depth - depthBias, invShadowSize); }
+    return SampleShadowPCF(SpotShadowAtlas, uvw, depth - depthBias, invShadowSize);
 }
 
 // Plan S3: UE's shadow fade by the resolution the light wants on screen (LightManager::SelectShadowedSpots; 1 under VSM).

@@ -394,6 +394,22 @@ namespace
     }
 }
 
+void LightManager::ClearShadowDirect()
+{
+    spotShadowDirect_.assign(spotLights_.size(), ShadowAtlasPlacement{});
+    pointShadowDirect_.assign(pointLights_.size(), ShadowAtlasPlacement{});
+}
+
+void LightManager::SetSpotShadowDirect(size_t lightIndex, ShadowAtlasPlacement place)
+{
+    if (lightIndex < spotShadowDirect_.size()) { spotShadowDirect_[lightIndex] = place; }
+}
+
+void LightManager::SetPointShadowDirect(size_t lightIndex, ShadowAtlasPlacement place)
+{
+    if (lightIndex < pointShadowDirect_.size()) { pointShadowDirect_[lightIndex] = place; }
+}
+
 void LightManager::PackShadowAtlases(const ShadowAtlasPages& pages)
 {
     atlasShrunk_ = 0u;

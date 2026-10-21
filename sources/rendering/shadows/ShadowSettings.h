@@ -187,6 +187,11 @@ inline bool g_localShadowCacheWind = false;
 // `--set shadow.localWindRange:<metres>`, Developer > CSM "Lamp shadow sway range". On wind_test (100 lamps, 22:00) the
 // swaying palms were ~0.63 ms of the point lights' 0.78.
 inline float g_localShadowWindRange = 30.0f;
+// Local-light plan S7, the direct read (UE ShadowSetup.cpp:6002-6009 / 6643-6653: a cached whole-scene shadow with no
+// movable subject primitives is projected straight from its cached map): a light whose views all hit the cache, that is
+// past the wind range and has nothing movable in reach is read by its receivers from the pool -- no copy, no draw.
+// `--set shadow.localDirectRead:0|1`.
+inline bool g_localShadowDirectRead = true;
 constexpr float kLocalShadowWindRangeHysteresis = 1.0f;
 constexpr unsigned kLocalShadowCacheMaxPagesLimit = 16u;
 // Local-light plan S6b: how many atlas views (a spot, a cube face) one command list of the spot / point shadow passes

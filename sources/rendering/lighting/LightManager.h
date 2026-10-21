@@ -182,6 +182,20 @@ public:
     {
         return lightIndex < pointShadowPlace_.size() ? pointShadowPlace_[lightIndex] : ShadowAtlasPlacement{};
     }
+    // Local-light plan S7, the direct read: this frame the light's whole shadow is its picture in the cache pool
+    // (render::LocalShadowCache) -- the pool page and the corner of its square / 3f x 2f block; page -1 = read its atlas
+    // place as usual. Scene decides each frame (after the cache requests), the light buffers read it.
+    void ClearShadowDirect();
+    void SetSpotShadowDirect(size_t lightIndex, ShadowAtlasPlacement place);
+    void SetPointShadowDirect(size_t lightIndex, ShadowAtlasPlacement place);
+    ShadowAtlasPlacement GetSpotShadowDirect(size_t lightIndex) const
+    {
+        return lightIndex < spotShadowDirect_.size() ? spotShadowDirect_[lightIndex] : ShadowAtlasPlacement{};
+    }
+    ShadowAtlasPlacement GetPointShadowDirect(size_t lightIndex) const
+    {
+        return lightIndex < pointShadowDirect_.size() ? pointShadowDirect_[lightIndex] : ShadowAtlasPlacement{};
+    }
     std::uint32_t WantedSpotShadowPages() const { return wantedSpotPages_; }
     std::uint32_t WantedPointShadowPages() const { return wantedPointPages_; }
     // How many lights the last pack had to shrink / drop to fit the resident pages (0 = everything at its UE size).
@@ -279,6 +293,8 @@ private:
     std::vector<float> pointShadowScore_;
     std::vector<ShadowAtlasPlacement> spotShadowPlace_;     // S9: parallel to spotLights_
     std::vector<ShadowAtlasPlacement> pointShadowPlace_;    // S9: parallel to pointLights_
+    std::vector<ShadowAtlasPlacement> spotShadowDirect_;    // S7 direct read: parallel to spotLights_ (page -1 = none)
+    std::vector<ShadowAtlasPlacement> pointShadowDirect_;   // ...and to pointLights_
     std::uint32_t wantedSpotPages_ = 1, wantedPointPages_ = 1;
     std::uint32_t atlasShrunk_ = 0, atlasDropped_ = 0;
     // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_

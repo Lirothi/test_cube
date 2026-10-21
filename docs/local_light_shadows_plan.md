@@ -388,6 +388,34 @@
   аллокатора, а приёмник адресует блок 3f × 2f — без новой раскладки пула прямое чтение граней невозможно. Потолок
   выигрыша — копия ~18 мкс на прожектор 512² (demo) и ~5 на грань, на local_shadow_test (всё статично) Pass_SpotShadows
   0.008 мс на оба прожектора. Вернуться вместе с S9e (без лимита ламп станет много).
+  — **Сделано (2026-10-22, после радиуса качания: у дальних ламп подвижных не осталось).**
+  - **Решение — на лампу, в `Scene::PrepareViews`** после запросов кэша: все её виды — попадание, она за радиусом
+    качания (`windRigid`), и ни один подвижный кастер (IsDynamicCaster, сдвинутый за kFrameCount + 1 кадров, GI —
+    `ShadowGpuData::CollectLocalMovables` / `LocalMovableTouches`, коробка против сферы, как UE AffectsBounds) не
+    достаёт до её сферы. Тогда виды лампы помечены `directRead`: проходы прожекторов / граней их пропускают целиком (ни
+    копии, ни подвижных), а `LightManager::Set*ShadowDirect` даёт приёмникам место в пуле.
+  - **Приёмникам структура не меняется.** `SceneRenderer` подставляет в `shadowAtlas` координаты пула, а страницу
+    (`shadowAtlas.w` у прожектора, `shadowFade.y` у точечной) пишет отрицательной: `−1 − page`. Спот, точечная, туман и
+    стекло читают `page < 0` как «из пула» и сэмплят новую SRV `LocalShadowPool` в конце своей таблицы (t10 / t10 / t14 /
+    t14); без пула туда стоит атлас того же вида. Прожектор — только пока страница пула равна странице атласа (тексель
+    приёмника — страничный).
+  - **Точечная в пуле — блоком 3f × 2f**, как в атласе (`LocalShadowCache::Request(..., pointBlock)`, id `PointBlockId`):
+    один бадди-квадрат 4f, грани в его левой верхней четверти и левом столбце правой верхней; две нижние четверти и
+    правый столбец сразу возвращаются в списки свободных, `FreeEntry` отдаёт три занятых куска, и бадди склеивает их
+    обратно. Пока 4f не влезает в страницу (грань 1024 при странице 2048), грани — отдельными квадратами, как раньше, и
+    прямого чтения нет. Ключ блока — вид грани +X (матрицы и разрешение у шести граней общие).
+  - Пул отдыхает в `PIXEL | NON_PIXEL_SHADER_RESOURCE` (`LocalShadowCache::kRestState`: приёмники ламп и тумана —
+    compute, копия и стекло — пиксельные), объявлен в проходах-приёмниках без перехода. Ручка `shadow.localDirectRead:0|1`;
+    MCP `get_readouts` → `localShadows.cache.directLights`.
+  - **Замер** (wind_test 22:00, SDSM, радиус качания 30 м): на неподвижной камере прямо из пула читают 37 ламп из 53
+    (при радиусе 0 — 44; промахов и «некэшированных» 0). Поворот камеры, по два прогона: GPU-кадр 3.50 → 3.46 мс
+    (PointShadows 0.50 → 0.46, SpotShadows 0.028 → 0.023), CPU-запись списков теней 1.06 → 0.61 мс суммарно по потокам.
+    Кадр против `localDirectRead:0` — только блики дальнего моря (поза волн между прогонами), сверх шума — ничего.
+  - Гейты: три конфигурации; GBV `--gbv-passes=SpotLights,PointLights,VolumetricFog,LocalShadowCache,PointShadows,
+    SpotShadows` на wind_test 22:00 SDSM и `SpotLights,PointLights,PointShadows --sweep=shadow.localDirectRead:1,0,1`;
+    стекло — demo.json `--gbv-passes=Translucent,Transparent` (8 проходов группы); везде ноль `render.validation`,
+    `live objects at exit: none`; `--scene-stress=12 --scene-stress-gbv --shadow-mode=sdsm --stress-level=wind_test` —
+    CLEAN, 7599 enhanced / 0 legacy; intent / inspector regression PASS; `check_logging` 0.
 - Гейты: три конфигурации, intent/inspector regression, `check_logging`; Debug `--gbv --gbv-passes=ShadowCull,
   LocalShadowCache,SpotShadows,PointShadows,SpotLights,PointLights --sweep=shadow.localCache:1,0,1,1;
   shadow.localViewsPerList:16,1,16,4;shadow.mode:2,2,1,2` на local_shadow_test (заполнения, освобождение и рост пула,

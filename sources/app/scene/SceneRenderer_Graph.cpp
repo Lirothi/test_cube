@@ -649,7 +649,7 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             ctx.Use(cache->Pool(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
             ctx.NextPoint();
             const std::uint32_t readPoint = ctx.usePoint ? *ctx.usePoint : 0u;
-            ctx.Use(cache->Pool(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            ctx.Use(cache->Pool(), render::LocalShadowCache::kRestState);
             return [this, renderer, nSpot, nFace, fillPoint, readPoint](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassLocalShadowCache);
                 Pass_LocalShadowCache(renderer, c, nSpot, nFace, fillPoint, readPoint);
@@ -657,13 +657,13 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
         });
 
     // S7: a pass copies cached statics in when the frame split the rows and the copy PSO is there; the pool rests in
-    // PIXEL_SHADER_RESOURCE (the cache pass hands it back there), declared at the atlas point as a no-op transition.
+    // LocalShadowCache::kRestState (the cache pass hands it back there), declared at the atlas point as a no-op transition.
     const auto localCacheUse = [this, renderer](RenderGraphPassContext& ctx, bool indirect) -> bool
     {
         render::LocalShadowCache* cache = frame_->localShadowCache;
         const bool use = indirect && cache && cache->Pool() && frame_->shadowGpu && frame_->shadowGpu->LocalSplitFrame() &&
                          cache->CopyMaterial(renderer);
-        if (use) { ctx.Use(cache->Pool(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); }
+        if (use) { ctx.Use(cache->Pool(), render::LocalShadowCache::kRestState); }
         return use;
     };
 
@@ -1401,6 +1401,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                 // A4: the Legacy local atlases, the state Main_SpotLights / Main_PointLights declare.
                 if (DF.spotShadow) { ctx.Use(DF.spotShadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
                 if (DF.pointShadow) { ctx.Use(DF.pointShadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
+                // Plan S7, the direct read: the shadow cache pool (t14), at its rest.
+                if (ID3D12Resource* pool = LocalShadowPoolResource()) { ctx.Use(pool, render::LocalShadowCache::kRestState); }
             }
             if (decisions_.fogConservativeDepth)
             {
@@ -1543,6 +1545,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                               frame_->vsm->PagePoolSrv().ptr != 0;
         if (render::VsmActive() && !vsmReady) { return {}; }
         ctx.UseDeclared();
+        // Plan S7, the direct read: the shadow cache pool, read at its rest (t10).
+        if (ID3D12Resource* pool = LocalShadowPoolResource()) { ctx.Use(pool, render::LocalShadowCache::kRestState); }
         const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
         return [this, renderer, point](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassSpotLights);
@@ -1607,6 +1611,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                               frame_->vsm->PagePoolSrv().ptr != 0;
         if (render::VsmActive() && !vsmReady) { return {}; }
         ctx.UseDeclared();
+        // Plan S7, the direct read: the shadow cache pool, read at its rest (t10).
+        if (ID3D12Resource* pool = LocalShadowPoolResource()) { ctx.Use(pool, render::LocalShadowCache::kRestState); }
         const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
         return [this, renderer, point](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassPointLights);
@@ -2092,6 +2098,8 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         p.NextPoint();
         pts.pixel = p.usePoint ? *p.usePoint : 0u;
         if (frame_->skybox) frame_->skybox->DeclareEnvironment(p, kSrvAll);
+        // Plan S7, the direct read: glass binds the shadow cache pool (t14), at its rest.
+        if (ID3D12Resource* pool = LocalShadowPoolResource()) { p.Use(pool, render::LocalShadowCache::kRestState); }
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         // Volumetric fog (plan A5): the ocean, glass and particles bind the integrated volume EVERY
@@ -2308,6 +2316,8 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         // inside this pass, so it is one point; the fan-out chunks re-apply the same states per chunk.
         const std::uint32_t rebind = p.usePoint ? *p.usePoint : 0u;
         if (frame_->skybox) { frame_->skybox->DeclareEnvironment(p, kSrvAll); }
+        // Plan S7, the direct read: glass binds the shadow cache pool (t14), at its rest.
+        if (ID3D12Resource* pool = LocalShadowPoolResource()) { p.Use(pool, render::LocalShadowCache::kRestState); }
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         if (DT.fogIntegrated.Get())

@@ -2459,11 +2459,10 @@ void Scene::PrepareViews(Renderer* renderer)
         const bool cacheOn = !vsmLocal && render::g_localShadowCache && render::g_localShadowCompact &&
                              shadowGpu_.MegaReady();
         localShadowCache_.BeginFrame(renderer ? renderer->GetTotalFrameNumber() : 0ull, shadowGpu_.LocalStaticVersion());
-        const auto request = [this](SceneView& view, std::uint32_t id, bool occluded, bool linearDepth)
+        // `view` names the key: its matrices and resolution (a point block's: its +X face's, the other five follow it).
+        const auto request = [this](const SceneView& view, std::uint32_t id, bool linearDepth, bool pointBlock,
+                                    render::LocalShadowCache::Rect& rect)
         {
-            view.cacheMode = 0;
-            view.cachePage = -1;
-            if (occluded) { return; }
             render::LocalShadowCache::Key key{};
             key.id = id;
             std::memcpy(key.viewProj.data(), &view.view.m, 16 * sizeof(float));
@@ -2472,37 +2471,85 @@ void Scene::PrepareViews(Renderer* renderer)
             // Plan S4: the depth encoding; and the wind range -- a rigid light caches its swaying casters too, so a light
             // that crosses the range must not take the other mode's picture.
             key.encoding = (linearDepth ? 1u : 0u) | (view.windRigid ? 2u : 0u);
-            render::LocalShadowCache::Rect rect{};
-            view.cacheMode = static_cast<std::uint8_t>(localShadowCache_.Request(key, rect));
+            return static_cast<std::uint8_t>(localShadowCache_.Request(key, rect, pointBlock));
+        };
+        const auto place = [](SceneView& view, std::uint8_t mode, const render::LocalShadowCache::Rect& rect,
+                              std::uint32_t dx, std::uint32_t dy)
+        {
+            view.cacheMode = mode;
             view.cachePage = rect.page;
-            view.cacheX = rect.x;
-            view.cacheY = rect.y;
+            view.cacheX = rect.x + dx;
+            view.cacheY = rect.y + dy;
+        };
+        // Plan S7, the direct read (UE ShadowSetup.cpp:6002-6009, :6643-6653 -- SDCM_MovablePrimitivesOnly without subject
+        // primitives projects straight from the cached map): a light whose views all hit and that has nothing movable in
+        // reach is read from the pool by its receivers -- no copy, no draw. Only past the wind range (a light inside it has
+        // its swaying casters to draw); a spot only while a pool page is a spot atlas page (the receivers' texel is the
+        // page's), a point only as one 3f x 2f block (the receivers' face addressing).
+        lightManager_.ClearShadowDirect();
+        if (cacheOn) { shadowGpu_.CollectLocalMovables(); }
+        const auto readsDirect = [&](const SceneView& view)
+        {
+            return render::g_localShadowDirectRead &&
+                   view.cacheMode == static_cast<std::uint8_t>(render::LocalShadowCache::Mode::Hit) && view.windRigid &&
+                   !shadowGpu_.LocalMovableTouches(view.lightSphere.xyz(), view.lightSphere.w);
         };
         for (size_t s = 0; s < shadowedSpotCount; ++s)
         {
             SceneView& view = spotShadowViews_[s];
             const size_t lightIndex = lightManager_.GetShadowedSpotLightIndex(s);
             const bool occluded = lightIndex < spotLightOccluded_.size() && spotLightOccluded_[lightIndex];
-            if (cacheOn)
+            view.cacheMode = 0;
+            view.cachePage = -1;
+            view.directRead = false;
+            if (!cacheOn || occluded) { continue; }
+            render::LocalShadowCache::Rect rect{};
+            place(view, request(view, render::LocalShadowCache::SpotId(static_cast<std::uint32_t>(lightIndex)),
+                                render::SpotShadowLinearDepth(), false, rect), rect, 0u, 0u);
+            if (localShadowCache_.PageSize() == localShadowMaxRes && readsDirect(view))
             {
-                request(view, render::LocalShadowCache::SpotId(static_cast<std::uint32_t>(lightIndex)), occluded,
-                        render::SpotShadowLinearDepth());
+                view.directRead = true;
+                lightManager_.SetSpotShadowDirect(lightIndex, { view.cachePage, view.cacheX, view.cacheY });
+                localShadowCache_.CountDirect();
             }
-            else { view.cacheMode = 0; view.cachePage = -1; }
         }
         for (size_t s = 0; s < shadowedPointCount; ++s)
         {
             const size_t lightIndex = lightManager_.GetShadowedPointLightIndex(s);
             const bool occluded = lightIndex < pointLightOccluded_.size() && pointLightOccluded_[lightIndex];
+            SceneView* faces = &pointShadowViews_[s * 6];
             for (std::uint32_t face = 0; face < 6u; ++face)
             {
-                SceneView& view = pointShadowViews_[s * 6 + face];
-                if (cacheOn)
+                faces[face].cacheMode = 0;
+                faces[face].cachePage = -1;
+                faces[face].directRead = false;
+            }
+            if (!cacheOn || occluded) { continue; }
+            const std::uint32_t faceRes = faces[0].shadowRes;
+            if (localShadowCache_.PointBlockFits(faceRes))
+            {
+                // One entry for the six faces, laid out as in the atlas: face k at (k % 3, k / 3) faces from the corner.
+                render::LocalShadowCache::Rect block{};
+                const std::uint8_t mode = request(faces[0], render::LocalShadowCache::PointBlockId(
+                    static_cast<std::uint32_t>(lightIndex)), render::PointShadowLinearDepth(), true, block);
+                for (std::uint32_t face = 0; face < 6u; ++face)
                 {
-                    request(view, render::LocalShadowCache::PointId(static_cast<std::uint32_t>(lightIndex), face), occluded,
-                            render::PointShadowLinearDepth());
+                    place(faces[face], mode, block, (face % 3u) * faceRes, (face / 3u) * faceRes);
                 }
-                else { view.cacheMode = 0; view.cachePage = -1; }
+                if (readsDirect(faces[0]))
+                {
+                    for (std::uint32_t face = 0; face < 6u; ++face) { faces[face].directRead = true; }
+                    lightManager_.SetPointShadowDirect(lightIndex, { block.page, block.x, block.y });
+                    localShadowCache_.CountDirect();
+                }
+                continue;
+            }
+            // A face too big for a block in a page (4f > a page): six squares of their own, copied in as before.
+            for (std::uint32_t face = 0; face < 6u; ++face)
+            {
+                render::LocalShadowCache::Rect rect{};
+                place(faces[face], request(faces[face], render::LocalShadowCache::PointId(static_cast<std::uint32_t>(lightIndex), face),
+                                           render::PointShadowLinearDepth(), false, rect), rect, 0u, 0u);
             }
         }
     }

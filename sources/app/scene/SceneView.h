@@ -57,6 +57,9 @@ struct SceneView
     // render::g_localShadowWindRange: an atlas spot / point-face view whose light is past the range -- its casters draw
     // without sway and its wind-only casters are cached with the statics. False in VSM and on every other view.
     bool windRigid = false;
+    // Plan S7, the direct read: the light reads its whole shadow from the cache pool this frame (a hit, nothing movable in
+    // reach) -- the spot / point pass draws nothing for this view, not even the copy. Atlas modes only.
+    bool directRead = false;
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

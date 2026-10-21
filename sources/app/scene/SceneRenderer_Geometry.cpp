@@ -382,6 +382,8 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
     {
         renderer->SetVsmShadowSrvs({}, {});
     }
+    // Plan S7, the direct read (t14): the shadow cache pool, at its rest here (null = none, the draw binds its spot atlas).
+    renderer->SetLocalShadowPoolSrv(LocalShadowPoolSrv({}));
     // S15: the same transport for the SDSM partitions (t13). Null outside SDSM mode, which
     // substitutes the inert dummy buffer -- glass gates on csmSdsmParams.x.
     renderer->SetSdsmPartitionSrv(frame_->sdsm ? frame_->sdsm->PartitionSrv()
@@ -477,6 +479,7 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
     // S15: the same transport for the SDSM partitions (t13) -- see Pass_Transparent.
     renderer->SetSdsmPartitionSrv(frame_->sdsm ? frame_->sdsm->PartitionSrv()
                                                : D3D12_CPU_DESCRIPTOR_HANDLE{});
+    renderer->SetLocalShadowPoolSrv(LocalShadowPoolSrv({})); // plan S7 (t14) -- see Pass_Transparent
     renderer->SetSdsmMomentsSrv((decisions_.sdsmEvsm && frame_->sdsm)
                                     ? frame_->sdsm->MomentsSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
 

@@ -1,7 +1,7 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
@@ -73,6 +73,9 @@ Texture3D<float4> FogVolume : register(t12); // plan A5: the integrated froxel v
 // t13: S15, this frame's SDSM partitions. glass is a PIXEL shader, which is why the partition
 // buffer's canonical state carries the PIXEL bit as well as the non-pixel one.
 StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
+// Plan S7, the direct read: the local shadow cache's pool -- a light whose atlas page is negative is read there (page
+// -page - 1, the atlas layout). The spot atlas stands in while there is no pool.
+Texture2DArray LocalShadowPool : register(t14);
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
@@ -118,14 +121,26 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
     const float NoL = dot(N, normalize(Ld.position - P));
     // Plan S9: the light's 3f x 2f block of an atlas page (as pointlight_cs.hlsl's); a page texel = one face / res.
     const float4 block = Ld.shadowAtlas;
-    const float page = Ld.shadowFade.y;
+    const bool fromPool = Ld.shadowFade.y < 0.0f; // plan S7: its block in the cache pool (LocalShadowPool)
+    const float page = fromPool ? -Ld.shadowFade.y - 1.0f : Ld.shadowFade.y;
     const float2 texel = block.zw * Ld.shadowFade.z;
     // Plan S8 (unblocked by S4, which put the light's resolution in its own data): pointlight_cs's filter, UE's 29-tap
     // disc, sharpened and squared -- glass no longer shades a point shadow its own way.
     if (Ld.volumetric.w != 0.0f && (Ld.shadowParams.y < 0.0f || Ld.shadowFade.w > 0.0f))
     {
-        return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, ShadowSampler, d, m, Ld.shadowParams, Ld.volumetric.y,
-                                                   NoL, Ld.shadowFade.z, block, page, texel, Ld.shadowParams4.y), Ld.volumetric.z);
+        float s;
+        [branch]
+        if (fromPool)
+        {
+            s = PointShadowDisc29(LocalShadowPool, ShadowSampler, d, m, Ld.shadowParams, Ld.volumetric.y, NoL, Ld.shadowFade.z,
+                                  block, page, texel, Ld.shadowParams4.y);
+        }
+        else
+        {
+            s = PointShadowDisc29(PointShadowAtlas, ShadowSampler, d, m, Ld.shadowParams, Ld.volumetric.y, NoL, Ld.shadowFade.z,
+                                  block, page, texel, Ld.shadowParams4.y);
+        }
+        return LocalShadowFinish(s, Ld.volumetric.z);
     }
     float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
     float zc = PointShadowCompareDepth(mBiased, nearP, farP, Ld.shadowParams4.y); // plan S4
@@ -137,8 +152,9 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
     for (int i = 0; i < 8; ++i)
     {
         float3 sd = d + kPointPcfOffsets[i] * radius;
-        shadow += PointShadowAtlas.SampleCmpLevelZero(ShadowSampler,
-            PointShadowCubeUV(sd, block, page, texel), zc);
+        const float3 tap = PointShadowCubeUV(sd, block, page, texel);
+        shadow += fromPool ? LocalShadowPool.SampleCmpLevelZero(ShadowSampler, tap, zc)
+                           : PointShadowAtlas.SampleCmpLevelZero(ShadowSampler, tap, zc);
     }
     return shadow * 0.125f;
 }
@@ -328,7 +344,8 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 
 
     float2 texel = spotShadowInfo.zw;
     uv = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, texel, 3.0f); // plan S9: its square of a page
-    const float page = light.shadowAtlas.w;
+    const bool fromPool = light.shadowAtlas.w < 0.0f; // plan S7: its picture in the cache pool (LocalShadowPool)
+    const float page = fromPool ? -light.shadowAtlas.w - 1.0f : light.shadowAtlas.w;
     float3 uvw = float3(uv, page);
     if (light.shadowParams3.w != 0.0f) // plan S2: the spot pass's own filter (local_shadow_filter.hlsli)
     {
@@ -336,9 +353,20 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 
         const float f = max(light.positionRange.w, n + 0.1f);
         const float ts = (texelBias ? 1.0f / max(kSpotRampTexels * texelWorld, 1e-4f) : light.shadowParams3.y)
                        * lerp(0.5f, 1.0f, saturate(dot(N, normalize(light.positionRange.xyz - P))));
-        return LocalShadowFinish(SpotShadowTent6x6(SpotShadowAtlas, LinearSampler, uv, page, clip.w, ts,
-                                                   n, f, 1.0f / texel, texel, linearInvRange), light.shadowParams3.z);
+        float s;
+        [branch]
+        if (fromPool)
+        {
+            s = SpotShadowTent6x6(LocalShadowPool, LinearSampler, uv, page, clip.w, ts, n, f, 1.0f / texel, texel, linearInvRange);
+        }
+        else
+        {
+            s = SpotShadowTent6x6(SpotShadowAtlas, LinearSampler, uv, page, clip.w, ts, n, f, 1.0f / texel, texel, linearInvRange);
+        }
+        return LocalShadowFinish(s, light.shadowParams3.z);
     }
+    [branch]
+    if (fromPool) { return ShadowPCF3x3Array(LocalShadowPool, uvw, depth - depthBias, texel); }
     return ShadowPCF3x3Array(SpotShadowAtlas, uvw, depth - depthBias, texel);
 }
 

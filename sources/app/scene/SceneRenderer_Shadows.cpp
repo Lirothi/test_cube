@@ -228,6 +228,18 @@ bool SceneRenderer::IndirectShadowDrawsActive() const
            frame_->shadowGpu->IndirectDrawReady();
 }
 
+ID3D12Resource* SceneRenderer::LocalShadowPoolResource() const
+{
+    return (frame_ && frame_->localShadowCache) ? frame_->localShadowCache->Pool() : nullptr;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE SceneRenderer::LocalShadowPoolSrv(D3D12_CPU_DESCRIPTOR_HANDLE fallback) const
+{
+    if (!LocalShadowPoolResource()) { return fallback; }
+    const D3D12_CPU_DESCRIPTOR_HANDLE srv = frame_->localShadowCache->PoolSrv();
+    return srv.ptr != 0 ? srv : fallback;
+}
+
 // ---- Pass_ShoreDepth ----
 void SceneRenderer::Pass_ShoreDepth(Renderer* renderer, RenderGraphPassContext ctx,
     const SceneView* view, const ShoreDepthPoints& pts)
@@ -868,6 +880,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
             for (size_t lightIndex = first; lightIndex < last; ++lightIndex)
             {
                 const SceneView& view = spotViews[lightIndex];
+                if (view.directRead) { continue; } // S7: its receivers read the cache pool; nothing to draw here
                 // Plan S4: the view's own square of the slice, and the S1 bias for that resolution.
                 const UINT res = ShadowViewRes(view, D.spotShadowRes);
                 // Plan S9: the view's square of its atlas page. S7: its cached statics copied in, or a clear.
@@ -929,6 +942,7 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
         for (size_t lightIndex = 0; lightIndex < viewCount; ++lightIndex)
         {
             const SceneView& view = spotViews[lightIndex];
+            if (view.directRead) { continue; } // S7: read from the cache pool
             const UINT res = ShadowViewRes(view, D.spotShadowRes); // S4
             renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/false, view.shadowPage, view.shadowX, view.shadowY, res,
                                             /*clearDepth=*/true); // S9
@@ -1018,6 +1032,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
             for (size_t faceIndex = first; faceIndex < last; ++faceIndex)
             {
                 const SceneView& view = pointViews[faceIndex];
+                if (view.directRead) { continue; } // S7: its receivers read the cache pool; nothing to draw here
                 // Plan S9: the face's square inside its light's 3f x 2f block of an atlas page. S7: its cached statics
                 // copied in, or a clear.
                 const bool copyStatics = LocalViewCached(view, cache, cached);
@@ -1078,6 +1093,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
         for (size_t faceIndex = 0; faceIndex < viewCount; ++faceIndex)
         {
             const SceneView& view = pointViews[faceIndex];
+            if (view.directRead) { continue; } // S7: read from the cache pool
             renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/true, view.shadowPage, view.shadowX, view.shadowY,
                                             ShadowViewRes(view, D.pointShadowRes), /*clearDepth=*/true); // S9
             const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view,

@@ -42,8 +42,9 @@ void LocalShadowCache::EnsurePool(ID3D12Device* dev, ResourceDeclarations decls,
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-    // Rests where the copies read it; the cache pass takes it to DEPTH_WRITE for a fill and back.
-    if (FAILED(CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+    // Rests where the copies and the direct reads take it (kRestState); the cache pass takes it to DEPTH_WRITE for a fill
+    // and back.
+    if (FAILED(CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc, kRestState,
                                       &clear, pool_.GetAddressOfForCreate())))
     {
         LOG_ERROR(logging::LogCategory::RenderShadow, "local shadow cache: pool of {} x {}^2 failed to allocate; no cache",
@@ -51,7 +52,7 @@ void LocalShadowCache::EnsurePool(ID3D12Device* dev, ResourceDeclarations decls,
         pool_.Reset();
         return;
     }
-    pool_.DeclareCreated(decls, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, L"LocalShadowCache");
+    pool_.DeclareCreated(decls, kRestState, L"LocalShadowCache");
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -186,6 +187,45 @@ bool LocalShadowCache::Allocate(std::uint32_t size, Rect& out)
     return true;
 }
 
+// A point light's 3f x 2f block: one buddy square of 4f, its faces in the top-left 2f quarter and the left column of the
+// top-right one; the bottom two quarters and that column's right half go straight back to the free lists (no area lost
+// to the 4f rounding), and FreeEntry returns the three used pieces, which the buddy merge then joins with the rest.
+bool LocalShadowCache::AllocatePointBlock(std::uint32_t faceRes, Rect& out)
+{
+    if (!PointBlockFits(faceRes)) { return false; }
+    Rect whole{};
+    if (!Allocate(4u * faceRes, whole)) { return false; }
+    const std::uint32_t f = faceRes;
+    const auto giveBack = [&](std::uint32_t x, std::uint32_t y, std::uint32_t size)
+    {
+        freeLists_[LevelOf(size)].push_back(Block{ static_cast<std::uint16_t>(whole.page),
+            static_cast<std::uint16_t>(x / kMinBlock), static_cast<std::uint16_t>(y / kMinBlock) });
+    };
+    giveBack(whole.x, whole.y + 2u * f, 2u * f);          // bottom-left quarter
+    giveBack(whole.x + 2u * f, whole.y + 2u * f, 2u * f); // bottom-right quarter
+    giveBack(whole.x + 3u * f, whole.y, f);               // the top-right quarter's right column
+    giveBack(whole.x + 3u * f, whole.y + f, f);
+    out.page = whole.page;
+    out.x = whole.x;
+    out.y = whole.y;
+    out.size = f;
+    return true;
+}
+
+void LocalShadowCache::FreeEntry(const Entry& e)
+{
+    if (!e.block)
+    {
+        Free(e.rect);
+        return;
+    }
+    if (e.rect.page < 0) { return; }
+    const std::uint32_t f = e.rect.size;
+    Free(Rect{ e.rect.page, e.rect.x, e.rect.y, 2u * f });
+    Free(Rect{ e.rect.page, e.rect.x + 2u * f, e.rect.y, f });
+    Free(Rect{ e.rect.page, e.rect.x + 2u * f, e.rect.y + f, f });
+}
+
 void LocalShadowCache::Free(const Rect& r)
 {
     if (r.page < 0 || freeLists_.empty()) { return; }
@@ -231,10 +271,11 @@ void LocalShadowCache::BeginFrame(std::uint64_t frame, std::uint32_t staticVersi
     }
 }
 
-LocalShadowCache::Mode LocalShadowCache::Request(const Key& key, Rect& out)
+LocalShadowCache::Mode LocalShadowCache::Request(const Key& key, Rect& out, bool pointBlock)
 {
     out = Rect{};
-    if (pages_ == 0u || freeLists_.empty() || key.res < kMinBlock || key.res > pageSize_)
+    if (pages_ == 0u || freeLists_.empty() || key.res < kMinBlock || key.res > pageSize_ ||
+        (pointBlock && !PointBlockFits(key.res)))
     {
         if (pages_ == 0u) { wantedPages_ = std::max(wantedPages_, 1u); }
         ++stats_.uncached;
@@ -253,7 +294,7 @@ LocalShadowCache::Mode LocalShadowCache::Request(const Key& key, Rect& out)
         }
         if (e.rect.size != key.res) // a new resolution needs a new square (UE recaches on a size change too)
         {
-            Free(e.rect);
+            FreeEntry(e);
             e.rect = Rect{};
         }
         e.valid = false;
@@ -262,7 +303,9 @@ LocalShadowCache::Mode LocalShadowCache::Request(const Key& key, Rect& out)
     e.lastUsed = frame_;
     if (e.rect.page < 0)
     {
-        bool placed = Allocate(key.res, e.rect);
+        e.block = pointBlock;
+        const auto place = [&]() { return pointBlock ? AllocatePointBlock(key.res, e.rect) : Allocate(key.res, e.rect); };
+        bool placed = place();
         while (!placed)
         {
             // Evict the least recently used entry this frame has not asked for.
@@ -273,10 +316,10 @@ LocalShadowCache::Mode LocalShadowCache::Request(const Key& key, Rect& out)
                 if (victim == entries_.end() || v->second.lastUsed < victim->second.lastUsed) { victim = v; }
             }
             if (victim == entries_.end()) { break; }
-            Free(victim->second.rect);
+            FreeEntry(victim->second);
             entries_.erase(victim);
             ++stats_.evicted;
-            placed = Allocate(key.res, e.rect);
+            placed = place();
         }
         if (!placed)
         {

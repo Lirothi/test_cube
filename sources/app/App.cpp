@@ -629,6 +629,7 @@ namespace
         if (setting == "shadow.localCacheWind") { render::g_localShadowCacheWind = value != 0.0f; return true; } // S7
         // The lamps' shadows sway only within this many metres of the camera (< 0 = everywhere).
         if (setting == "shadow.localWindRange") { render::g_localShadowWindRange = std::min(value, 100000.0f); return true; }
+        if (setting == "shadow.localDirectRead") { render::g_localShadowDirectRead = value != 0.0f; return true; } // S7
         // Plan S9e: UE's caster culling for the local views -- the light's bounds, the light + camera hull, the radius
         // threshold (a share of the distance to the camera, 0 = off).
         if (setting == "shadow.localBoundsCull") { render::g_localShadowBoundsCull = value != 0.0f; return true; }
@@ -1836,10 +1837,11 @@ namespace
             separator = ",";
         }
         const render::LocalShadowCache::Stats& cs = cache.FrameStats();
-        char cacheItem[160];
+        char cacheItem[192];
         std::snprintf(cacheItem, sizeof(cacheItem),
-                      "],\"cache\":{\"hits\":%u,\"misses\":%u,\"uncached\":%u,\"evicted\":%u,\"entries\":%u,\"pages\":%u}}",
-                      cs.hits, cs.misses, cs.uncached, cs.evicted, cs.entries, cache.ResidentPages());
+                      "],\"cache\":{\"hits\":%u,\"misses\":%u,\"uncached\":%u,\"evicted\":%u,\"entries\":%u,\"pages\":%u,"
+                      "\"directLights\":%u}}",
+                      cs.hits, cs.misses, cs.uncached, cs.evicted, cs.entries, cache.ResidentPages(), cs.direct);
         out += cacheItem;
         return out;
     }

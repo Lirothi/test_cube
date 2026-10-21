@@ -28,6 +28,7 @@
 #include "rendering/renderables/GBufferRenderable.h" // per-slot RT materials (B3 follow-up)
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
+#include "rendering/shadows/LocalShadowCache.h" // local-light plan S7: the direct read's pool page size
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "ocean/OceanSimulation.h"
 #include "rendering/core/PhotographicSettings.h" // P16.1 pre-exposure
@@ -200,6 +201,15 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                         ? Math::float4(static_cast<float>(place.x) / spotPage, static_cast<float>(place.y) / spotPage,
                                        std::min(static_cast<float>(spotRes) / spotPage, 1.0f), static_cast<float>(place.page))
                         : Math::float4(0.0f, 0.0f, 1.0f, 0.0f);
+                    // Plan S7, the direct read: its square in the cache pool (a page of the same size, Scene checked) --
+                    // the page negative, which is how the receivers know to read the pool (page -w - 1).
+                    const LightManager::ShadowAtlasPlacement direct = lm.GetSpotShadowDirect(i);
+                    if (direct.page >= 0 && spotRes != 0u && LocalShadowPoolResource())
+                    {
+                        spotCPU[i].shadowAtlas = Math::float4(static_cast<float>(direct.x) / spotPage,
+                            static_cast<float>(direct.y) / spotPage, std::min(static_cast<float>(spotRes) / spotPage, 1.0f),
+                            -1.0f - static_cast<float>(direct.page));
+                    }
                 }
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
                 // .z = plan S9e: its VSM view (the receivers read it; they know no layout).
@@ -279,6 +289,17 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetPointShadowFade(i) : 1.0f,
                     static_cast<float>(std::max(pointPlace.page, 0)), 1.0f / pointRes,
                     texelBias ? render::LocalShadowNormalTexels(desc.shadowBias) : 0.0f); // S8: the light's own knob
+                // Plan S7, the direct read: its 3f x 2f block in the cache pool (a square page, in its UV), the page
+                // negative -- the receivers then read the pool (page -y - 1).
+                const LightManager::ShadowAtlasPlacement direct = lm.GetPointShadowDirect(i);
+                const float poolPage = LocalShadowPoolResource()
+                    ? static_cast<float>(frame_->localShadowCache->PageSize()) : 0.0f;
+                if (direct.page >= 0 && poolPage > 0.0f)
+                {
+                    pointCPU[i].shadowAtlas = Math::float4(static_cast<float>(direct.x) / poolPage,
+                        static_cast<float>(direct.y) / poolPage, pointRes / poolPage, pointRes / poolPage);
+                    pointCPU[i].shadowFade.y = -1.0f - static_cast<float>(direct.page);
+                }
                 // .z = plan S9e: the VSM view of its +X face (the five others follow it).
                 const int pointSlot = lm.GetPointShadowSlot(i);
                 pointCPU[i].shadowParams4 = Math::float4(vsm::LocalMovingMipBias(lm.GetPointMobility(i)), // S10e

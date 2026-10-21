@@ -264,6 +264,11 @@ private:
     // The one place that decision is made. `shadowDraw` is false for the G-buffer, whose draws
     // never go through the indirect path.
     bool IndirectShadowDrawsActive() const;
+    // Local-light plan S7, the direct read: the shadow cache pool's SRV for the receivers' pool slot (spot / point / fog /
+    // glass), or `fallback` -- an atlas, an array of the same kind, never sampled then -- while there is no pool.
+    D3D12_CPU_DESCRIPTOR_HANDLE LocalShadowPoolSrv(D3D12_CPU_DESCRIPTOR_HANDLE fallback) const;
+    // ...and the pool itself, for the receivers' declarations (null = none).
+    ID3D12Resource* LocalShadowPoolResource() const;
 
     // `point` is the D7 release the builder declared for Main_ObjectCompute's move to the compute
     // queue — the ocean maps handed over in a compute-legal state. Empty on an ocean-less level.

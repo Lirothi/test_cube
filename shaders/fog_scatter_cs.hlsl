@@ -31,7 +31,7 @@
 
 #define FOG_SCATTER_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -52,6 +52,9 @@ Texture2D<float4>       DistantSkyLight : register(t11); // B5 raw isotropic lum
 Texture2D<float4>       CloudShadowMap  : register(t12); // C3 cloud shadow map (dummy without clouds)
 // t13: S15, this frame's SDSM partitions (placeholder SRV when the mode is not SDSM).
 StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
+// Plan S7, the direct read: the local shadow cache's pool -- a light whose atlas page is negative is read there (page
+// -page - 1, the atlas layout). A Legacy atlas stands in while there is no pool.
+Texture2DArray LocalShadowPool : register(t14);
 RWTexture3D<float4>     FogScatter    : register(u0);
 
 // S15: AFTER the resource declarations, not before. MakeCsmParams reads SdsmPartitions, so the
@@ -222,10 +225,13 @@ float FogSpotShadow(SpotLightData light, float3 P, float3 toL, float distToLight
     const float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
     const float depth = SpotReceiverDepth(clip, light.shadowParams3.x, light.shadowParams4.y); // plan S4: the atlas's encoding
     if (any(uv < 0.0f) || any(uv > 1.0f) || depth <= 0.0f || depth >= 1.0f) { return 1.0f; }
-    // Plan S9: its square of an atlas page; fogLocalParams.y is one page texel.
+    // Plan S9: its square of an atlas page; fogLocalParams.y is one page texel. Plan S7: a negative page is the pool's.
     const float2 uvRect = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, fogLocalParams.yy, 0.5f);
-    return lerp(1.0f, SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uvRect, light.shadowAtlas.w), depth - light.shadowParams.w),
-                light.shadowParams2.z); // plan S3: UE's shadow fade, as the spot pass's
+    const bool fromPool = light.shadowAtlas.w < 0.0f;
+    const float3 tap = float3(uvRect, fromPool ? -light.shadowAtlas.w - 1.0f : light.shadowAtlas.w);
+    const float lit = fromPool ? LocalShadowPool.SampleCmpLevelZero(gSmpLinear, tap, depth - light.shadowParams.w)
+                               : SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, tap, depth - light.shadowParams.w);
+    return lerp(1.0f, lit, light.shadowParams2.z); // plan S3: UE's shadow fade, as the spot pass's
 }
 
 float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLight)
@@ -253,9 +259,13 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
     const float mBiased = PointShadowCompareDistance(m, light.shadowParams, light.volumetric.y, 1.0f);
     const float zc = PointShadowCompareDepth(mBiased, nearP, farP, light.shadowParams4.y); // plan S4
     // Plan S9: the light's face in its 3f x 2f block of an atlas page (PointShadowCubeUV); a page texel = one face / res.
-    const float3 tap = PointShadowCubeUV(d, light.shadowAtlas, light.shadowFade.y, light.shadowAtlas.zw * light.shadowFade.z);
-    return lerp(1.0f, PointShadowAtlas.SampleCmpLevelZero(gSmpLinear, tap, zc),
-                light.shadowFade.x); // plan S3: UE's shadow fade, as the point pass's
+    // Plan S7: a negative page is the block's in the cache pool.
+    const bool fromPool = light.shadowFade.y < 0.0f;
+    const float page = fromPool ? -light.shadowFade.y - 1.0f : light.shadowFade.y;
+    const float3 tap = PointShadowCubeUV(d, light.shadowAtlas, page, light.shadowAtlas.zw * light.shadowFade.z);
+    const float lit = fromPool ? LocalShadowPool.SampleCmpLevelZero(gSmpLinear, tap, zc)
+                               : PointShadowAtlas.SampleCmpLevelZero(gSmpLinear, tap, zc);
+    return lerp(1.0f, lit, light.shadowFade.x); // plan S3: UE's shadow fade, as the point pass's
 }
 
 // The tile's farthest depth (min reverse-Z) over the 3x3 tile neighbourhood: the integrated volume is

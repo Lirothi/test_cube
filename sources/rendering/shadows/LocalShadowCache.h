@@ -9,7 +9,9 @@
 // UE's IsMeshShapeOftenMoving with r.Shadow.CacheWPOPrimitives 0 (a swaying palm is WPO there).
 //
 // The pool is pages of PageSize^2 (D16), carved by a buddy allocator into power-of-two squares: a spot's square of its
-// resolution, a point light's six face squares. Its own descriptor heaps, so the per-frame deferred heaps do not grow.
+// resolution, a point light's six faces as one 3f x 2f block (or, while 4f exceeds a page, six face squares). Its own
+// descriptor heaps, so the per-frame deferred heaps do not grow. A light with nothing movable in reach is read straight
+// from it (Scene::PrepareViews, UE's SDCM_MovablePrimitivesOnly without subject primitives): no copy, no draw.
 // The CPU side runs on the main thread: Scene requests every shadowed view after the atlas pack, the cache pass's
 // builder commits the fills it recorded.
 
@@ -52,6 +54,13 @@ public:
     };
     static constexpr std::uint32_t SpotId(std::uint32_t lightIndex) { return (lightIndex << 4) | 0xFu; }
     static constexpr std::uint32_t PointId(std::uint32_t lightIndex, std::uint32_t face) { return (lightIndex << 4) | face; }
+    // A point light's six faces as ONE entry: a 3f x 2f block, face k at (k % 3, k / 3) faces from its corner -- the
+    // atlas page's layout, so a receiver can read the light straight from the pool (Request with pointBlock).
+    static constexpr std::uint32_t PointBlockId(std::uint32_t lightIndex) { return (lightIndex << 4) | 0xEu; }
+    // The pool's resting state: the copies (pixel shaders) and the direct reads (the spot / point light passes and the
+    // fog are compute, glass is a pixel shader) all read it there.
+    static constexpr D3D12_RESOURCE_STATES kRestState =
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
     // ---- GPU side: the pool (recreated only where the GPU is idle -- Scene::ReconcileShadowMode) -------------------
     // Recreation empties the cache. `pages` 0 frees it.
@@ -69,7 +78,11 @@ public:
     // ---- CPU side, per frame, main thread -----------------------------------------------------------------------
     // A changed `staticVersion` (ShadowGpuData::LocalStaticVersion) invalidates every entry.
     void BeginFrame(std::uint64_t frame, std::uint32_t staticVersion);
-    Mode Request(const Key& key, Rect& out);
+    // `pointBlock`: key.res is a FACE's size and the entry a point light's 3f x 2f block (PointBlockId; its corner and
+    // the face size come back in `out`), placed in one buddy square of 4f with the unused quarter-squares handed back --
+    // only while 4f fits a page (PointBlockFits).
+    Mode Request(const Key& key, Rect& out, bool pointBlock = false);
+    bool PointBlockFits(std::uint32_t faceRes) const { return faceRes >= kMinBlock && 4u * faceRes <= pageSize_; }
     // The misses requested this frame got their fill recorded (`ran`), or did not and stay invalid.
     void CommitFills(bool ran);
     // This frame's misses hold their statics (CommitFills(true)): the passes may copy a miss, not only a hit.
@@ -81,8 +94,10 @@ public:
     {
         std::uint32_t hits = 0, misses = 0, uncached = 0, evicted = 0;
         std::uint32_t entries = 0;
+        std::uint32_t direct = 0; // lights read straight from the pool this frame (Scene's CountDirect)
     };
     const Stats& FrameStats() const { return stats_; }
+    void CountDirect() { ++stats_.direct; }
 
 private:
     struct Block
@@ -96,12 +111,15 @@ private:
         Rect rect{};
         bool valid = false;
         bool pending = false;
+        bool block = false; // a point light's 3f x 2f block (rect = its corner, size = one face)
         std::uint64_t lastUsed = 0;
     };
 
     void ResetAllocator();
     bool Allocate(std::uint32_t size, Rect& out);
+    bool AllocatePointBlock(std::uint32_t faceRes, Rect& out);
     void Free(const Rect& r);
+    void FreeEntry(const Entry& e);
     std::uint32_t LevelOf(std::uint32_t size) const;
 
     // GPU

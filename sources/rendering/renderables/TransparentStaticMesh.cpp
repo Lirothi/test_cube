@@ -240,7 +240,7 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
             ? sky->SpecularSrv()
             : skyDisplaySrv;
 
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 14> srvs{
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15> srvs{
         sceneColorSrv,
         // t1: the SUN atlas -- DEPTH normally, EVSM4 MOMENTS when S16 is on. glass.hlsl reads
         // whichever through csm_sample, which decides from the partition's exponents.
@@ -261,7 +261,10 @@ bool TransparentStaticMesh::RecordGraphics(Renderer* renderer, ID3D12GraphicsCom
         // t13: S15, this frame's SDSM partitions (the dummy buffer in Legacy and VSM -- the shader
         // gates on csmSdsmParams.x, which is 0 there).
         renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv()
-                                                 : renderer->VsmDummyBufferSrv()
+                                                 : renderer->VsmDummyBufferSrv(),
+        // t14: plan S7, the local shadow cache pool (a light with a negative atlas page reads there); the spot atlas,
+        // an array of the same kind, stands in while there is no pool.
+        renderer->GetLocalShadowPoolSrv().ptr != 0 ? renderer->GetLocalShadowPoolSrv() : deferred.spotShadowSRV
     };
     ctx.srvTable[0] = renderer->StageSrvUavTable(srvs).gpu;
 

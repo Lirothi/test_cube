@@ -640,6 +640,35 @@ void ShadowGpuData::RefreshVirtualGroups(Renderer* renderer)
 // The override table's home is a PER-FRAME ring region: it is rewritten every frame, so writing it
 // into region f is the same WAR discipline the instance/bounds rings use. Sized by numMeshGroups_,
 // which is what took the group cap off this table.
+void ShadowGpuData::CollectLocalMovables()
+{
+    localMovables_.clear();
+    localMovableGi_ = count_ > staticCount_;
+    const std::uint32_t n = std::min<std::uint32_t>(staticCount_, static_cast<std::uint32_t>(cpuBounds_.size()));
+    for (std::uint32_t i = 0; i < n; ++i)
+    {
+        // UploadCasterLods' "movable" without the wind: IsDynamicCaster, or moved within kFrameCount + 1 frames. A caster
+        // with its shadow off (halfExtents.w = 1) casts into no light.
+        const bool flagged = i < cpuCasterMeta_.size() && (cpuCasterMeta_[i] & 1u) != 0u;
+        const bool moved = i < pending_.size() && pending_[i] > 0;
+        if ((flagged || moved) && cpuBounds_[i].halfExtents.w == 0.0f) { localMovables_.push_back(i); }
+    }
+}
+
+bool ShadowGpuData::LocalMovableTouches(const Math::float3& centre, float radius) const
+{
+    if (localMovableGi_) { return true; }
+    for (const std::uint32_t i : localMovables_)
+    {
+        const render::CasterBounds& b = cpuBounds_[i];
+        const float dx = std::max(std::abs(centre.x - b.center.x) - b.halfExtents.x, 0.0f);
+        const float dy = std::max(std::abs(centre.y - b.center.y) - b.halfExtents.y, 0.0f);
+        const float dz = std::max(std::abs(centre.z - b.center.z) - b.halfExtents.z, 0.0f);
+        if (dx * dx + dy * dy + dz * dz <= radius * radius) { return true; }
+    }
+    return false;
+}
+
 void ShadowGpuData::UploadCasterLods(Renderer* renderer)
 {
     if (!renderer || groupLodOverride_.empty()) { return; }

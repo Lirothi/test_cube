@@ -631,7 +631,10 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 // t13: S15 SDSM partitions -- the fog samples the sun through the same helper.
                 (frame_->sdsm && frame_->sdsm->PartitionSrv().ptr != 0)
                     ? frame_->sdsm->PartitionSrv()
-                    : renderer->VsmDummyBufferSrv() }).gpu;
+                    : renderer->VsmDummyBufferSrv(),
+                // t14: plan S7, the local shadow cache pool (a light with a negative atlas page reads there).
+                (!localVsm && (fc.local[0] || fc.local[1])) ? LocalShadowPoolSrv(renderer->VsmDummyTexSrv())
+                                                            : renderer->VsmDummyTexSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
             const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                                   *SamplerManager::ComparisonLinearClamp(),
@@ -921,7 +924,8 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, D.spotShadowSRV, spotLightSrvHandle,
               vsmReady ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t7 (inert in Legacy)
               vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t8 (inert in Legacy)
-              D.gbAuxSRV },                                                             // t9
+              D.gbAuxSRV,                                                               // t9
+              LocalShadowPoolSrv(D.spotShadowSRV) },                                    // t10: plan S7, the direct read
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -996,7 +1000,8 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
             { D.gbSRV[0], D.gbSRV[1], D.gbSRV[2], D.gbSRV[3], D.depthSRV, pointLightSrvHandle, D.pointShadowSRV,
               vsmReady ? frame_->vsm->PageTableSrv() : renderer->VsmDummyBufferSrv(),  // t7 (inert in Legacy)
               vsmReady ? frame_->vsm->PagePoolSrv()  : renderer->VsmDummyTexSrv(),     // t8 (inert in Legacy)
-              D.gbAuxSRV },                                                             // t9
+              D.gbAuxSRV,                                                               // t9
+              LocalShadowPoolSrv(D.pointShadowSRV) },                                   // t10: plan S7, the direct read
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

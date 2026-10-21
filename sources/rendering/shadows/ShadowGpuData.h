@@ -337,6 +337,13 @@ public:
     bool LocalSplitFrame() const { return localSplitFrame_; }
     // S7: bumped whenever the static caster set changes (a rebuild, a caster changing side) -- the cache's staleness key.
     std::uint32_t LocalStaticVersion() const { return localStaticVersion_; }
+    // Local-light plan S7, the direct read: the casters movable for EVERY local light this frame -- IsDynamicCaster, moved
+    // within kFrameCount + 1 frames, GI (the wind-only ones are static for the lights past render::g_localShadowWindRange,
+    // the only lights read directly). Once per frame from Scene, after UpdateForFrame. LocalMovableTouches: one of them
+    // reaches into the sphere (its box against it, UE AffectsBounds) -- the light needs its movable pass. GI instances
+    // have no CPU bounds, so any GI caster answers yes.
+    void CollectLocalMovables();
+    bool LocalMovableTouches(const Math::float3& centre, float radius) const;
 
     // Drop CPU-side state on level unload; RETAINS the GPU buffers + SRVs (the LightManager
     // lesson: a pass may reference an SRV while frames are in flight). Next Rebuild reuses them.
@@ -879,6 +886,8 @@ private:
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
     ViewMask localWindRigid_{}; // SetLocalWindRigid
+    std::vector<std::uint32_t> localMovables_; // CollectLocalMovables: static-region casters movable this frame
+    bool localMovableGi_ = false;              // ...and whether GI casters exist (no CPU bounds: always "touches")
     Math::float3 localCamPos_ = Math::float3(0.0f, 0.0f, 0.0f); // S9e: SetLocalRadiusThreshold
     float localRadiusThresholdSq_ = 0.0f;
 

@@ -367,6 +367,11 @@ public:
     }
     D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPageTableSrv() const { return vsmPageTableSrv_; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetVsmPoolSrv() const { return vsmPoolSrv_; }
+    // Local-light plan S7, the direct read: the shadow cache pool for glass.hlsl's t14, the same transport (set by
+    // SceneRenderer::Pass_Transparent / Pass_Translucent each frame; null = no pool, the glass draw binds its spot atlas
+    // there instead).
+    void SetLocalShadowPoolSrv(D3D12_CPU_DESCRIPTOR_HANDLE pool) { localShadowPoolSrv_ = pool; }
+    D3D12_CPU_DESCRIPTOR_HANDLE GetLocalShadowPoolSrv() const { return localShadowPoolSrv_; }
     // S15: the same transport for the SDSM partition buffer (t13 of glass.hlsl). The glass draws
     // have no frame access either, and a null handle here substitutes the inert dummy buffer -- the
     // shader reads it only when csmSdsmParams.x != 0.
@@ -949,6 +954,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE       sdsmPartitionSrv_{};                      // S15: glass SDSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       sdsmMomentsSrv_{};                        // S16: glass EVSM atlas slot
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
+    D3D12_CPU_DESCRIPTOR_HANDLE       localShadowPoolSrv_{};                    // S7 direct read: glass's t14
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyBufferSrv_{};                     // null StructuredBuffer<uint> (t7/t9)

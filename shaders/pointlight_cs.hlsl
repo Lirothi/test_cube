@@ -1,4 +1,4 @@
-#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#define POINTLIGHT_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 // t0..t3 : GBuffer (GB0, GB1, GB2, GBVelocity)
 // t4     : Depth
 // t5     : StructuredBuffer<PointLightData>
@@ -44,6 +44,9 @@ Texture2DArray PointShadowAtlas : register(t6); // plans S4 / S9: pages, each li
 StructuredBuffer<uint> VsmPageTable : register(t7); // Rung 2 / Step 21
 Texture2D VsmPool : register(t8);
 Texture2D GBAux : register(t9);
+// Plan S7, the direct read: the local shadow cache's pool -- a light whose shadowFade.y is negative is its 3f x 2f block
+// there (page -y - 1; shadowAtlas in the pool page's UV). The atlas stands in while there is no pool.
+Texture2DArray LocalShadowPool : register(t10);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpLinear : register(s0);
@@ -136,7 +139,8 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
 {
     const float invRes = Ld.shadowFade.z;
     const float4 block = Ld.shadowAtlas;
-    const float page = Ld.shadowFade.y;
+    const bool fromPool = Ld.shadowFade.y < 0.0f; // plan S7: its block in the cache pool (LocalShadowPool)
+    const float page = fromPool ? -Ld.shadowFade.y - 1.0f : Ld.shadowFade.y;
     const float2 pageTexel = block.zw * invRes;
     if (Ld.shadowParams.x < 0.0f) { return 1.0f; } // this light has no shadow slot this frame
 
@@ -195,8 +199,19 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
     // Plan S2: UE's 29-tap disc (its bias per tap -- 0 under the texel bias), sharpened and squared.
     if (Ld.volumetric.w != 0.0f && (Ld.shadowParams.y < 0.0f || Ld.shadowFade.w > 0.0f))
     {
-        return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, gSmpShadowCmp, d, m, Ld.shadowParams, Ld.volumetric.y,
-                                                   NoL, invRes, block, page, pageTexel, Ld.shadowParams4.y), Ld.volumetric.z);
+        float s;
+        [branch]
+        if (fromPool)
+        {
+            s = PointShadowDisc29(LocalShadowPool, gSmpShadowCmp, d, m, Ld.shadowParams, Ld.volumetric.y, NoL, invRes, block, page,
+                                  pageTexel, Ld.shadowParams4.y);
+        }
+        else
+        {
+            s = PointShadowDisc29(PointShadowAtlas, gSmpShadowCmp, d, m, Ld.shadowParams, Ld.volumetric.y, NoL, invRes, block, page,
+                                  pageTexel, Ld.shadowParams4.y);
+        }
+        return LocalShadowFinish(s, Ld.volumetric.z);
     }
     float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
     float zc = PointShadowCompareDepth(mBiased, nearP, farP, Ld.shadowParams4.y); // plan S4: linear, or LH NDC
@@ -218,8 +233,9 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         for (int x = -1; x <= 1; ++x)
         {
             float3 sd = d + (t1 * x + t2 * y) * texel;
-            shadow += PointShadowAtlas.SampleCmpLevelZero(gSmpShadowCmp,
-                PointShadowCubeUV(sd, block, page, pageTexel), zc); // sd's face in the light's block (S4 / S9)
+            const float3 tap = PointShadowCubeUV(sd, block, page, pageTexel); // sd's face in the light's block (S4 / S9)
+            shadow += fromPool ? LocalShadowPool.SampleCmpLevelZero(gSmpShadowCmp, tap, zc)
+                               : PointShadowAtlas.SampleCmpLevelZero(gSmpShadowCmp, tap, zc);
         }
     }
     return shadow / 9.0f;
