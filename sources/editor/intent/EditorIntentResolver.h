@@ -57,10 +57,12 @@ struct EditorIntentPreview
 // Public because the preview is no longer the only caller: a query answers questions
 // about the same sets ("how big is what I would be deleting"), and a second copy of this
 // would be a second opinion about which objects a phrase reaches.
+// `includeLights`: a filter also reaches point / spot lights by name (EditorActionDesc::reachesLights).
 void ResolveTargetObjects(const EditorActionContext& actionCtx,
     EditorIntentTarget& target,
     std::vector<EditorObjectId>& outTargets,
-    std::vector<EditorIntentPreview::Group>& outGroups);
+    std::vector<EditorIntentPreview::Group>& outGroups,
+    bool includeLights = false);
 
 // Resolve the intent's target -- existing objects through the outliner's own search
 // predicate (E5), or an asset through the AssetRegistry -- validate its parameters

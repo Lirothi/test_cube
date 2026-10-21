@@ -36,6 +36,11 @@ namespace editormatch
         // search box, and typing it must find the same set the command bar finds. Naming a
         // group in a filter is how "удали северную рощу" works at all.
         "group",
+        // A LIGHT's own name in the level. An object's "name" is lifted out of its properties (kCommonKeys), so this
+        // never reaches one; a point/spot light is an environment entity labelled "Spot Light 3" by its index, and the
+        // name the level gave it ("ring spot 3") stays in its properties. Without this, `move` -- which reaches lights
+        // by name (EditorActionDesc::reachesLights) -- and the search box both missed every light by what it is called.
+        "name",
     };
 
     // What to CALL a group of these objects, in priority order. A subset of the list above,

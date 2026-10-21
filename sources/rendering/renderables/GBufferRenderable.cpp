@@ -592,6 +592,7 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
         Material::GraphicsDesc sd = BuildShadowDesc(renderer, gd); // -> gbuffer_instcb_csm.hlsl
         shadow = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sd);
         if (!shadow || !shadow->GetPipelineState()) { return; }
+        renderer->GetMaterialManager()->LinkSpotLinearDepthVariant(renderer, *shadow); // plan S4: spot views
     }
 
     // B2b: multi-slot objects instance through the per-slot-CB variant (the batch loops

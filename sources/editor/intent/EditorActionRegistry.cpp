@@ -2160,7 +2160,50 @@ namespace
     std::unique_ptr<EditorCommand> BuildMove(const EditorActionContext& actionCtx,
         const std::vector<EditorObjectId>& targets, const EditorIntent& intent, std::string& outStatus)
     {
-        return BuildTransform(actionCtx, targets, intent, &ApplyMove, "Moved", "Move", outStatus);
+        // EditorActionDesc::reachesLights: the lights among the targets move by their "position" property, through the
+        // command the Inspector and the light gizmo use (its runtime apply rebuilds the light from the properties).
+        const EditorSceneDocument& document = actionCtx.editor.document;
+        const Math::float3 value = Vec3Or(intent.params, "value", Math::float3(0.0f, 0.0f, 0.0f));
+        const bool relative = BoolOr(intent.params, "relative", true);
+        std::vector<EditorObjectId> objects;
+        std::vector<std::unique_ptr<EditorCommand>> lights;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* light = FindEnvironmentObject(document, id);
+            if (!light || (light->type != "pointLight" && light->type != "spotLight"))
+            {
+                objects.push_back(id);
+                continue;
+            }
+            const nlohmann::json& before = light->properties;
+            Math::float3 position(0.0f, 0.0f, 0.0f);
+            if (const auto it = before.find("position"); it != before.end() && it->is_array() && it->size() == 3)
+            {
+                position = Math::float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+            }
+            position = relative ? Math::float3(position.x + value.x, position.y + value.y, position.z + value.z) : value;
+            nlohmann::json after = before;
+            after["position"] = nlohmann::json::array({ position.x, position.y, position.z });
+            lights.push_back(std::make_unique<EditEnvironmentCommand>(id, before, std::move(after), "Move Light"));
+        }
+        if (lights.empty())
+        {
+            return BuildTransform(actionCtx, objects, intent, &ApplyMove, "Moved", "Move", outStatus);
+        }
+        std::vector<std::unique_ptr<EditorCommand>> commands = std::move(lights);
+        const std::size_t lightCount = commands.size();
+        std::string objectStatus;
+        if (!objects.empty())
+        {
+            if (auto rest = BuildTransform(actionCtx, objects, intent, &ApplyMove, "Moved", "Move", objectStatus))
+            {
+                commands.push_back(std::move(rest));
+            }
+        }
+        const bool movedObjects = commands.size() > lightCount;
+        outStatus = "Moved " + std::to_string(lightCount) + (lightCount == 1 ? " light" : " lights") +
+                    (movedObjects ? " and " + objectStatus.substr(objectStatus.find(' ') + 1) : std::string());
+        return FoldIntoOneEntry(std::move(commands), "Move " + std::to_string(lightCount + objects.size()) + " Objects");
     }
 
     std::unique_ptr<EditorCommand> BuildRotate(const EditorActionContext& actionCtx,
@@ -3493,13 +3536,19 @@ EditorActionRegistry::EditorActionRegistry()
         "setOnAt",
         "Make the matching lamps come on at night (or only by day, or always): point and spot lights, and meshes "
         "that glow (a bulb, a lit window -- their emissive). They switch when the sun goes down and comes up, "
-        "warming up over a second or two, each a little after the next. Lights are reached through the selection "
-        "(target scope \"selected\"); meshes by name too.",
+        "warming up over a second or two, each a little after the next. Lights and meshes are reached by name, or "
+        "through the selection (target scope \"selected\").",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
         { { "onAt", EditorParamKind::Enum, true, "night = on after sunset, day = on after sunrise, always = never switched",
             { "night", "day", "always" } } },
         &BuildSetOnAt,
+        false,   // filterFromSelection
+        nullptr, // refinePreview
+        false,   // takesDestinationAsset
+        false,   // wholeLevelIsFine
+        nullptr, // wholeLevelNeedsParam
+        true,    // reachesLights
     });
 
     actions_.push_back({
@@ -3696,8 +3745,9 @@ EditorActionRegistry::EditorActionRegistry()
 
     actions_.push_back({
         "move",
-        "Move the matching objects. With relative=true (the default) the value is metres to add to "
-        "the current position; with relative=false it is the absolute world position to put them at.",
+        "Move the matching objects -- or point and spot lights, named in the filter. With relative=true (the "
+        "default) the value is metres to add to the current position; with relative=false it is the absolute "
+        "world position to put them at.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
         {
@@ -3705,6 +3755,12 @@ EditorActionRegistry::EditorActionRegistry()
             { "relative", EditorParamKind::Bool, false, "add to the current position (default true)" },
         },
         &BuildMove,
+        false,   // filterFromSelection
+        nullptr, // refinePreview
+        false,   // takesDestinationAsset
+        false,   // wholeLevelIsFine
+        nullptr, // wholeLevelNeedsParam
+        true,    // reachesLights -- a lamp is moved by its name
     });
 
     actions_.push_back({

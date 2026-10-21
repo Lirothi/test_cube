@@ -613,6 +613,8 @@ namespace
         if (setting == "shadow.localFilterUe") { render::g_localShadowFilterUe = value != 0.0f; return true; }
         // Plan S3: 1 = UE's shadow fade by on-screen resolution, 0 = every shadowed light at full strength.
         if (setting == "shadow.localFadeUe") { render::g_localShadowFadeUe = value != 0.0f; return true; }
+        // Plan S4: 1 = UE's LINEAR spot depth (SV_Depth) and its 1 mm near, 0 = the perspective depth and 0.1 m.
+        if (setting == "shadow.spotLinearDepth") { render::g_spotShadowLinearDepth = value != 0.0f; return true; }
         // Peter-panning hunt: a multiplier on the atlas-mode local lights' UE shadowBias.
         // The peter-panning fix: the TEXEL bias (VSM's local model on the atlases) and its two sizes in shadow texels.
         if (setting == "shadow.localBiasTexel") { render::g_localShadowBiasTexel = value != 0.0f; return true; }
@@ -665,6 +667,13 @@ namespace
             return true;
         }
         if (setting == "vsm.resolutionLodBiasLocal") { vsm::g_resolutionLodBiasLocal = std::clamp(value, -4.0f, 4.0f); return true; }
+        // Plan S10e: UE r.Shadow.Virtual.ResolutionLodBiasLocalMoving / r.Shadow.Scene.LightActiveFrameCount.
+        if (setting == "vsm.resolutionLodBiasLocalMoving") { vsm::g_resolutionLodBiasLocalMoving = std::clamp(value, -4.0f, 4.0f); return true; }
+        if (setting == "vsm.lightActiveFrameCount")
+        {
+            vsm::g_lightActiveFrameCount = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 1000.0f));
+            return true;
+        }
         if (setting == "shadow.localViewsPerList") // S6b
         {
             render::g_localShadowViewsPerList = static_cast<unsigned>(std::clamp(value, 1.0f, 128.0f));
@@ -1908,12 +1917,12 @@ namespace
                               ",\"vsmPool\":{\"valid\":%s,\"load\":%.3f,\"refused\":%d,\"lodBias\":%.3f,"
                               "\"remapFrames\":%llu,\"remapMoved\":%u,\"remapDropped\":%u,"
                               "\"parked\":%u,\"parkedBack\":%u,\"parkedExpired\":%u,\"parkedStale\":%u,"
-                              "\"distantLights\":%u,\"distantUpdates\":%llu,\"distantTurned\":%llu}",
+                              "\"distantLights\":%u,\"distantUpdates\":%llu,\"distantTurned\":%llu,\"mobileLights\":%u}",
                               dr.valid ? "true" : "false", dr.poolLoad, dr.refused, dr.lodBias,
                               static_cast<unsigned long long>(rs.frames), rs.moved, rs.dropped,
                               rs.parked, rs.returned, rs.expired, rs.stale,
                               ds.lights, static_cast<unsigned long long>(ds.updates),
-                              static_cast<unsigned long long>(ds.turned));
+                              static_cast<unsigned long long>(ds.turned), scene_.GetLightManager().GetMobileLightCount());
                 out += vsmItem;
             }
             if (historyRows <= 0)

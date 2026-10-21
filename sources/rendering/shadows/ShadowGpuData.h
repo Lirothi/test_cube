@@ -318,9 +318,11 @@ public:
     // apart and does not need to.
     // Local-light plan S7: `staticRows` draws a local view's STATIC casters (the cull's split rows, LocalSplitFrame());
     // the default rows then hold only the movable ones. Off a split frame the default rows hold everything.
+    // Plan S4: `spotLinearDepth` binds the atlas PSO's linear-depth twin (Material::SpotLinearDepthVariant) -- a spot
+    // view whose viewCB BuildSpotShadowViewCB built for it.
     bool RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                    std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
-                                   bool passB = false, bool staticRows = false);
+                                   bool passB = false, bool staticRows = false, bool spotLinearDepth = false);
     // S7: this frame the cull put the local views' static casters into their own rows (decided by PrepareCullPass on
     // the main thread: the cache on, S6a's compaction on, not the validation-readback frame).
     bool LocalSplitFrame() const { return localSplitFrame_; }

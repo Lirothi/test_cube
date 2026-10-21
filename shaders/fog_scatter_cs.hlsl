@@ -135,10 +135,11 @@ float FogSpotShadow(SpotLightData light, float3 P, float3 toL, float distToLight
     }
     const float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     const float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-    if (any(uv < 0.0f) || any(uv > 1.0f) || ndc.z <= 0.0f || ndc.z >= 1.0f) { return 1.0f; }
+    const float depth = SpotReceiverDepth(clip, light.shadowParams3.x, light.shadowParams4.y); // plan S4: the atlas's encoding
+    if (any(uv < 0.0f) || any(uv > 1.0f) || depth <= 0.0f || depth >= 1.0f) { return 1.0f; }
     // Plan S9: its square of an atlas page; fogLocalParams.y is one page texel.
     const float2 uvRect = LocalShadowAtlasUV(uv, light.shadowAtlas.xy, light.shadowAtlas.zz, fogLocalParams.yy, 0.5f);
-    return lerp(1.0f, SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uvRect, light.shadowAtlas.w), ndc.z - light.shadowParams.w),
+    return lerp(1.0f, SpotShadowAtlas.SampleCmpLevelZero(gSmpLinear, float3(uvRect, light.shadowAtlas.w), depth - light.shadowParams.w),
                 light.shadowParams2.z); // plan S3: UE's shadow fade, as the spot pass's
 }
 

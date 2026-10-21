@@ -156,7 +156,52 @@
         (46 видов + камера);
       - `--scene-stress=12 --scene-stress-gbv` — CLEAN, 7127 / 0, `live objects at exit: none`.
   - Остаётся от S4: near 1 мм и линейная глубина спота. Ждут контента с плафонами: флаг теперь позволяет выключить
-    тень у лампочки внутри её же лампы.
+    тень у лампочки внутри её же лампы. — **Сделано для спота (2026-10-21)**, см. ниже; near точечной — нет.
+  - **Линейная глубина спота и near 1 мм (2026-10-21).** UE: прожектор пишет глубину сам — VS отдаёт пиксельному
+    шейдеру глубину в пространстве лампы и смещение (`ShadowDepthVertexShader.usf:146-158` `TransformShadowSpot`,
+    смещение `ComputeDepthBiasDirectionalSpot` :97-113), PS — `SV_Depth = saturate(1 − z·InvMaxSubjectDepth + bias)`
+    (`ShadowDepthPixelShader.usf:80-86`); near — `MinLightW` 0.1 см (`SpotLightSceneProxy.cpp:101`). У нас прямой Z,
+    поэтому `(w + bias − n) / (f − n)`. Шаг D16 — (f − n)/65535 на любой дальности: 0.2 мм на 14 м против 3 см у
+    перспективной глубины с near 0.1 м.
+    - Шейдеры: `ShadowLinearDepth` (`shadow_depth_common.hlsli`) и перестановка `SHADOW_LINEAR_DEPTH` в
+      `gbuffer_csm`, `gbuffer_inst_csm`, `gbuffer_instcb_csm`, `shadow_indirect_csm` (обычный и masked). Интерполянт
+      `w` аффинен в мире, перспективно-корректная интерполяция даёт его точно в каждом пикселе; z растеризации остаётся
+      перспективным и нужен только отсечению. Кодировка — в четырёх полях смещения PerViewCB (`BuildSpotShadowViewCB`):
+      (const м, slope м, −1/(f − n), n); отрицательный maxSlope — признак режима (у UE maxSlope спота и так 1). Раскладка
+      PerViewCB не меняется (SDSM пишет её на GPU).
+    - PSO: у каждого теневого материала — близнец с define (`Material::SpotLinearDepthVariant`,
+      `MaterialManager::LinkSpotLinearDepthVariant`, из кэшированного desc), связывается при создании в
+      `RenderableObject::Init`, `GBufferRenderable::BuildInstancedMaterials` (instcb), `ShadowGpuData` (два атласных PSO
+      непрямого пути); у прозрачных — нет (проход спота рисует только непрозрачные корзины). Проходы спота и заполнение
+      S7-кэша читают режим один раз и передают его в `RenderShadow` / `RecordShadow` / `RecordIndirectShadowDraws`.
+    - Приёмники (`spotlight_cs`, `glass`, `fog_scatter_cs`): `SpotLightGpu.shadowParams4.y` = 1/(f − n) у линейного
+      атласа, 0 — перспективный (поле S10e `vsm` переименовано в `shadowParams4`); `SpotReceiverDepth` и мягкий переход
+      тента (`SpotOcclusion4`) читают обе кодировки. Ключ S7-кэша получил `encoding`: переключение режима при заданном в
+      уровне near не оставит в пуле глубину другой кодировки.
+    - Near: `SpotLightDesc::nearPlane` 0 = автоматически (`render::SpotShadowNear`): 1 мм на линейной глубине, 0.1 м на
+      перспективной — и в VSM (пул D32 с прямым Z при 1 мм дал бы сантиметровые шаги в конце луча). Заданный в уровне
+      `shadowNear` побеждает в любом режиме (не меньше 1 мм). Near берётся из одного места (`SpotLight::GetShadowNear /
+      GetShadowFar`) — три копии `max(near, 0.01)` в Scene / SceneRenderer / SpotLight убраны; смена режима
+      перестраивает проекцию лампы (`UpdateCachedData` сверяет near). Inspector показывает автоматический near.
+    - Ручка: `--set shadow.spotLinearDepth:0|1` (MCP `set_settings`); 0 = прежняя перспективная глубина и near 0.1 м.
+    - Замер (MCP, редактор закрыт, SDSM, EV −0.5 на local_shadow_test).
+      - Акне (`s9_bias.py`, % освещённых по эталону; линейная / перспективная / линейная): A (точечная, контроль)
+        0.35 / 0.29 / 0.25; B 2.72 / 2.70 / 2.71; C 0.65 / 0.70 / 0.74 — одинаково в пределах шума; расхождение с VSM в
+        его тенях то же.
+      - Близкий кастер (`s4_near.py`): кубик 2 см в 5 см от прожектора B по оси затеняет 1.70 % кадра на линейной глубине
+        и 0.07 % на перспективной (отрезан near 0.1).
+      - wind_test у фонарей (EV 2, луна выкл.): кадр линейная против перспективной 0.47 % пикселей > 8/255 при шуме 0.45 %.
+      - Цена: wind_test `Pass_SpotShadows` 0.014 = 0.014 мс (и без S7-кэша 0.015 = 0.015), GPU-кадр 2.777 = 2.777; demo
+        (9 прожекторов, кэш выкл.) 0.258 против 0.243 мс, GPU-кадр 2.944 против 2.927 — PS с SV_Depth без раннего теста
+        глубины, +15 мкс.
+    - **Near точечной — не тронут.** UE: 1 см (`ShadowSetup.cpp:1169`, перспективный куб D16 — его шаг на краю радиуса
+      компенсирует смещение долей расстояния). У нас `max(0.2, 0.02·r)`. На wind_test у каждой точечной в самом свете
+      стоит сфера-лампочка r 0.12 м с тенью (`lamp bulb 1..4`): near 1 см зачернил бы все четыре лампы. Сначала —
+      `castShadow: false` у лампочек (правка уровня, нужно согласие владельца), потом near.
+    - Гейты: три конфигурации, регрессии, `check_logging`; GBV `SpotShadows, LocalShadowCache, SpotLights,
+      VolumetricFog, Transparent` на wind_test 21:00 SDSM со свипом режима и кэша (1/0/1, кэш 1/1/0) — ноль сообщений,
+      `live objects at exit: none`; `--scene-stress=12 --scene-stress-gbv --shadow-mode=sdsm` — CLEAN, 7395 enhanced /
+      0 legacy, ноль предупреждений, `live objects at exit: none`.
 
 #### Что сделано по S4 (2026-10-20, первая часть — разрешение), коммит 1afa4962
 
@@ -634,7 +679,41 @@ id — `VirtualShadowMapPageAccessCommon.ush:127-147, 192-215`), растёт с
   - Гейты: три конфигурации, регрессии, `check_logging`; GBV `VsmPageRequest, VsmPageRender, SpotLights, PointLights`
     на wind_test в VSM со свипом обеих ручек — ноль сообщений, `live objects at exit: none`.
   - Не сделано: настоящая сетка ламп (клетки экрана со списками ламп) — нашего отсева сферой хватает, пока ламп
-    десятки; `ResolutionLodBiasLocalMoving` (UE: подвижная лампа на мип грубее).
+    десятки. `ResolutionLodBiasLocalMoving` — сделано в части 3.
+  — **S10e, часть 3 (2026-10-21): `ResolutionLodBiasLocalMoving` UE — подвижная лампа на мип грубее.**
+  - UE: `r.Shadow.Virtual.ResolutionLodBiasLocalMoving` 1 (`ShadowSceneRenderer.cpp:68-72, 277-280`); сдвиг =
+    `InterpolateResolutionBias(неподвижный, движущийся, MobilityFactor)` = lerp(n, max(n, m), f)
+    (`VirtualShadowMapArray.cpp:5712`); f = 1 в кадр сдвига лампы и линейно падает до 0 за
+    `r.Shadow.Scene.LightActiveFrameCount` 10 кадров (`ShadowScene.cpp:187-222`, `UpdateForRenderedFrame`).
+  - У нас: `LightManager::UpdateLightMobility` раз в кадр (после `UpdateSpotLightCache`) сравнивает позу тени каждой
+    лампы с прошлой — прожектор: позиция, направление, дальность, косинус конуса, near; точечная: позиция, радиус — и
+    помнит кадр последнего сдвига; лампа, увиденная впервые, считается стоящей (иначе загрузка уровня — кадр сдвига
+    всех ламп). `vsm::LocalMovingMipBias(f)` = f · (max(n, m) − n) — только добавка к общему сдвигу
+    `resolutionLodBiasLocal`, который уже стоит в мипе.
+  - Добавка — на лампу, одна и та же в запросе и в выборке (иначе выборка читала бы мип, которого никто не просил):
+    вид VSM несёт её в новом `ViewProjEntry.mip.x` (`SceneView::vsmMipBias`, `BuildVsmViews`), прожектор и точечная
+    в шейдере освещения — в новом `float4 vsm` в конце `SpotLightGpu` / `PointLightGpu` (стекло и RT-лампы получили
+    то же поле, не читают его). Решение «дальняя лампа» (S10d) тоже считает с ней.
+  - Пока хоть одна лампа подвижна, VSM не засыпает на неподвижной камере (`lightsSettling` в `DecideFrame`): иначе
+    кадр, на котором добавка сошла в 0, остался бы на грубом мипе.
+  - Ручки: `--set vsm.resolutionLodBiasLocalMoving` (UE 1), `vsm.lightActiveFrameCount` (UE 10). Readout `vsmPool`:
+    `mobileLights`.
+  - MCP: `move` теперь достаёт лампы по имени (`EditorActionDesc::reachesLights`, ещё у `setOnAt`) — через ту же
+    `EditEnvironmentCommand`, что Inspector и гизмо, одной записью истории вместе с объектами; имя лампы из уровня
+    (`"name": "ring spot 3"`, у сущности — «Spot Light 3») теперь находится и поиском аутлайнера
+    (`editormatch::kSearchPropertyKeys`). Раньше до лампы через MCP было не дотянуться: выделение MCP не делает.
+    Гейт — `TestMoveReachesLights` (по имени, по имени из уровня, лампы + пальмы одной записью, undo, `delete`
+    ламп не видит).
+  - Замер (MCP, редактор закрыт, уровень 10 + 6, 10 прожекторов ходят по ±2 см ~90 раз в секунду, 3 с на значение,
+    1 → 0 → 1 → 0):
+    | сдвиг | загрузка пула | VsmPageRender | VsmPageRequest |
+    |---|---|---|---|
+    | 1 (UE) | 0.68–0.71 | 0.18–0.19 мс | 0.47–0.48 мс |
+    | 0 | 0.85 | 0.20 мс | 0.52–0.53 мс |
+    Через секунду после остановки `mobileLights` 0, кадр против стоячего — 0.011–0.014 % (> 8/255), шум.
+  - Гейты: три конфигурации, регрессии, `check_logging`; GBV `VsmPageRequest, VsmPageRender, SpotLights, PointLights`
+    — ноль сообщений, `live objects at exit: none`; `--scene-stress=12 --scene-stress-gbv` — CLEAN, 7663 enhanced /
+    0 legacy, `live objects at exit: none` (структуры ламп выросли на 16 байт).
 - **S10c. Кэш по лампе**, не по слоту (ключ: лампа + матрица); лампа без запросов держит страницы N кадров (UE 10).
   — **Сделано (2026-10-21).**
   - Липкие слоты (`LightManager.cpp StickyShadowSlots`): лампа держит свой слот, пока она в наборе; дыру ушедшей
@@ -746,11 +825,14 @@ id — `VirtualShadowMapPageAccessCommon.ush:127-147, 192-215`), растёт с
     `--scene-stress=12 --scene-stress-gbv` — CLEAN, 7127 / 0, `live objects at exit: none`.
 - **S10e. Разметка страниц по сетке ламп** (тайловые списки) вместо перебора всех видов на пиксель; мип по размеру
   пикселя + `ResolutionLodBiasLocal`; переполнение пула — грубее мип и динамический сдвиг LOD при загрузке 0.85.
+  — Сделано всё, кроме сетки ламп (части 1–3 выше): динамическое разрешение, мип по пикселю, отсев сферой и гранью,
+  `ResolutionLodBiasLocalMoving`.
 - Порядок: S9 раньше (общие векторы видов и строки отсечения S9e переиспользуются); S10a — независим.
 
 ### Что осталось и чего оно стоит — замеры после S5 (2026-10-20, wind_test 21:00, редактор закрыт)
 
-- **Линейная глубина спота / near ~1 см (остаток S4).** Акне нет: камера у фонаря (прожектор 1024, смещение UE
+- **Линейная глубина спота / near ~1 см (остаток S4).** — Спот сделан 2026-10-21 (S4, «Линейная глубина спота и near
+  1 мм»); near точечной ждёт `castShadow: false` у лампочек wind_test. Разбор на тот момент: Акне нет: камера у фонаря (прожектор 1024, смещение UE
   1.5 см против шага D16 ~1–1.2 см на краю пятна) — на открытом песке кадр с картой / без карты 0.98–1.00, 1024 и
   512 одинаковы; мягкий переход S2 (`60/((f−n)·2·bias)`, ~23 см) прячет шаг. Линейная глубина понадобится, когда
   опустим near: кастер ближе 10 см (spot) / 20 см (point) к лампе сейчас отрезан — плафон, рама фонаря. Такого

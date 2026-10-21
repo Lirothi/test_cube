@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cmath>
+#include <cstring>
 
 #include "core/math/Frustum.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -640,5 +641,60 @@ void LightManager::Reset()
     shadowedSpotLightIndices_.clear();
     pointShadowSlot_.clear();
     shadowedPointLightIndices_.clear();
+    spotPose_.clear(); // S10e: a new level's lights are first seen standing
+    pointPose_.clear();
+    spotMovedFrame_.clear();
+    pointMovedFrame_.clear();
+    mobileLights_ = 0;
+}
+
+void LightManager::UpdateLightMobility(std::uint64_t frame, std::uint32_t activeFrames)
+{
+    mobilityFrame_ = frame;
+    mobilityActiveFrames_ = std::max(activeFrames, 1u);
+    const auto track = [frame](std::vector<ShadowPose>& poses, std::vector<std::uint64_t>& moved, size_t count,
+                               const auto& poseOf)
+    {
+        if (poses.size() != count) // lights added or removed: those first seen stand, the rest keep their history
+        {
+            const size_t old = poses.size();
+            poses.resize(count);
+            moved.resize(count, kNeverMoved);
+            for (size_t i = old; i < count; ++i) { poses[i] = poseOf(i); }
+        }
+        for (size_t i = 0; i < count; ++i)
+        {
+            const ShadowPose now = poseOf(i);
+            if (std::memcmp(&now, &poses[i], sizeof(now)) != 0)
+            {
+                poses[i] = now;
+                moved[i] = frame;
+            }
+        }
+    };
+    track(spotPose_, spotMovedFrame_, spotLights_.size(), [this](size_t i)
+    {
+        const SpotLight& light = spotLights_[i];
+        const auto& d = light.GetDesc();
+        const Math::float3 dir = light.GetDirection();
+        return ShadowPose{ { d.position.x, d.position.y, d.position.z, dir.x, dir.y, dir.z, d.range, light.GetCosOuter(),
+                             d.nearPlane } };
+    });
+    track(pointPose_, pointMovedFrame_, pointLights_.size(), [this](size_t i)
+    {
+        const auto& d = pointLights_[i].GetDesc();
+        return ShadowPose{ { d.position.x, d.position.y, d.position.z, d.radius } };
+    });
+    mobileLights_ = 0;
+    for (size_t i = 0; i < spotMovedFrame_.size(); ++i) { mobileLights_ += GetSpotMobility(i) > 0.0f ? 1u : 0u; }
+    for (size_t i = 0; i < pointMovedFrame_.size(); ++i) { mobileLights_ += GetPointMobility(i) > 0.0f ? 1u : 0u; }
+}
+
+float LightManager::Mobility(const std::vector<std::uint64_t>& moved, size_t index) const
+{
+    // UE: 1 on the frame it moved, 1 - k / N k frames later, 0 from N on.
+    if (index >= moved.size() || moved[index] == kNeverMoved || mobilityFrame_ < moved[index]) { return 0.0f; }
+    const float age = static_cast<float>(mobilityFrame_ - moved[index]);
+    return 1.0f - std::clamp(age / static_cast<float>(mobilityActiveFrames_), 0.0f, 1.0f);
 }
 

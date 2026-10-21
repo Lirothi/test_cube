@@ -2073,6 +2073,21 @@ std::shared_ptr<Material> MaterialManager::GetOrCreateGraphics(Renderer* r, cons
     return m;
 }
 
+void MaterialManager::LinkSpotLinearDepthVariant(Renderer* r, Material& base)
+{
+    if (base.SpotLinearDepthVariant()) { return; } // a shared shadow material: linked by its first owner
+    Material::GraphicsDesc gd = base.GetCachedGraphicsDesc();
+    gd.defines.emplace_back("SHADOW_LINEAR_DEPTH", "1");
+    std::shared_ptr<Material> variant = GetOrCreateGraphics(r, gd);
+    if (!variant || !variant->GetPipelineState())
+    {
+        LOG_ERROR(logging::LogCategory::Render, "spot linear-depth shadow PSO failed: {} -- its casters keep the "
+                  "perspective depth in a linear spot atlas", gd.shaderFile);
+        return;
+    }
+    base.SetSpotLinearDepthVariant(std::move(variant));
+}
+
 std::shared_ptr<Material> MaterialManager::GetOrCreateCompute(Renderer* r, const Material::ComputeDesc& cd)
 {
     std::wstring key = BuildKey(cd);

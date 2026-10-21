@@ -30,6 +30,8 @@ struct SpotLightData
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
     float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
+    float4 shadowParams4;      // S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias);
+                               // S4: y = 1 / (f - n) when the atlas holds the LINEAR depth, 0 = perspective
 };
 
 Texture2D GB0 : register(t0);
@@ -185,7 +187,8 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         {
             const float viewDepth = dot(P - camPosWS, invView[2].xyz);
             const float lightDepth = mul(float4(P, 1.0f), light.viewProj).w;
-            reqLevel = VsmLocalMipFromPixel(viewDepth * vsmLocalMip.z, 1.0f / max(tanOuter, 1e-4f), lightDepth, vsmLocalMip.y);
+            reqLevel = VsmLocalMipFromPixel(viewDepth * vsmLocalMip.z, 1.0f / max(tanOuter, 1e-4f), lightDepth,
+                                            vsmLocalMip.y + light.shadowParams4.x); // S10e: + the light's moving bias
         }
         else
         {
@@ -218,7 +221,9 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
     float4 clip = mul(float4(Poff, 1.0f), light.viewProj);
     float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-    float depth = ndc.z;
+    // Plan S4: the atlas's encoding -- the linear (w - n) / (f - n) or the perspective NDC z.
+    const float linearInvRange = light.shadowParams4.y;
+    float depth = SpotReceiverDepth(clip, light.shadowParams3.x, linearInvRange);
 
     if (any(uv < 0.0f) || any(uv > 1.0f) || depth <= 0.0f || depth >= 1.0f)
     {
@@ -242,7 +247,7 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         const float ts = (texelBias ? 1.0f / max(kSpotRampTexels * texelWorld, 1e-4f) : light.shadowParams3.y)
                        * lerp(0.5f, 1.0f, NoL);
         const float s = SpotShadowTent6x6(SpotShadowAtlas, gSmpPoint, uv, page, clip.w, ts, n, f,
-                                          1.0f / invShadowSize, invShadowSize);
+                                          1.0f / invShadowSize, invShadowSize, linearInvRange);
         return LocalShadowFinish(s, light.shadowParams3.z);
     }
     float3 uvw = float3(uv, page);

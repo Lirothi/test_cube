@@ -285,14 +285,14 @@ void GpuInstancedModels::DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod)
     mesh_->DrawInstanced(cl, instanceCount_, lod);
 }
 
-void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx)
+void GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool spotLinearDepth)
 {
     const D3D12_RESOURCE_STATES kSRV =
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     renderer->Transition(cl, instanceBuffer_.GetResource(), kSRV);
     ctx.srvTable[0] = instanceBuffer_.GetSRVForFrame(renderer);
 
-    RenderableObject::RecordShadow(renderer, cl, lightView, lightProj, ctx);
+    RenderableObject::RecordShadow(renderer, cl, lightView, lightProj, ctx, spotLinearDepth);
 }
 
 void GpuInstancedModels::Tick(float deltaTime)

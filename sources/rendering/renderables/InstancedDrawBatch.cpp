@@ -160,12 +160,14 @@ void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer)
     }
 }
 
-void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool /*chunkCameraLods*/, const Frustum* /*chunkCullFrustum*/)
+void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool /*chunkCameraLods*/, const Frustum* /*chunkCullFrustum*/, bool spotLinearDepth)
 {
     if (!renderer || !cl || !shadowMat_ || !mesh_ || members_.empty()) { return; }
+    // Plan S4: a linear-depth spot view draws the shadow material's twin (logged at its creation if it has none).
+    Material* const mat = (spotLinearDepth && shadowMat_->SpotLinearDepthVariant()) ? shadowMat_->SpotLinearDepthVariant() : shadowMat_;
     // Shadows use the per-cascade LOD floor for the whole run (all casters in a cascade are at
     // ~the same depth slice), so no per-instance bucketing is needed here.
-    RecordInstanced(renderer, cl, shadowMat_, viewCB, /*gbuffer=*/false, lod, members_);
+    RecordInstanced(renderer, cl, mat, viewCB, /*gbuffer=*/false, lod, members_);
 }
 
 void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,

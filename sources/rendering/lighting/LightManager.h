@@ -43,10 +43,14 @@ public:
         Math::float4 volumetric;   // x = volumetric scattering intensity (plan A4d); local-light shadows: y = UE's slope
                                    // scale (S1), z = UE's sharpen 7s+1 (S2), w = 1: UE's 29-tap disc, 0: the old 3x3
         Math::float4 shadowFade;   // local-light shadows S3: x = UE's shadow fade (lerp(1, shadow, x)); S9: y = the atlas
-                                   // page; S4: z = 1 / the light's face resolution; w reserved.
+                                   // page; S4: z = 1 / the light's face resolution; w = the TEXEL bias's normal texels
+                                   // (> 0 marks that mode, render::LocalShadowNormalTexels).
         // Plan S9: the light's 3f x 2f block in its atlas page, in page UV -- xy = the block's corner, zw = one face's
         // size (face k at xy + (k % 3, k / 3) * zw). Mirrored by pointlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
         Math::float4 shadowAtlas;
+        // Plan S10e: x = the light's VSM mip bias on top of the frame's (vsm::LocalMovingMipBias: UE's
+        // ResolutionLodBiasLocalMoving by the light's mobility); yzw reserved. Same mirrors.
+        Math::float4 vsm;
     };
 
     struct alignas(16) SpotLightGpu
@@ -56,7 +60,8 @@ public:
         Math::float4 colorIntensity;     // xyz = color, w = intensity
         Math::float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
         Math::float4 shadowParams2;      // x = normal bias (WS), y = volumetric scattering intensity (plan A4d),
-                                         // z = UE's shadow fade (S3: lerp(1, shadow, z)), w reserved
+                                         // z = UE's shadow fade (S3: lerp(1, shadow, z)), w = the TEXEL bias's normal
+                                         // texels (> 0 marks that mode; x is then its push texels)
         Math::mat4   viewProj;
         // Local-light shadow plan S2: x = the projection's near plane, y = UE's soft-transition scale (1/m), z = UE's
         // sharpen (7 x ShadowSharpen + 1), w = 1: UE's 6x6 tent filter, 0: the old 3x3 box. Mirrored by
@@ -65,6 +70,11 @@ public:
         // Plan S9: the light's square in its atlas page -- xy = its corner in page UV, z = its size in page UV, w = the
         // page. Same mirrors.
         Math::float4 shadowAtlas;
+        // Plan S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias, see PointLightGpu::vsm).
+        // Plan S4: y = 1 / (f - n) when its atlas square holds the LINEAR depth (w - n) / (f - n)
+        // (render::SpotShadowLinearDepth; n = shadowParams3.x, both the projection's own), 0 = the perspective NDC
+        // depth. zw reserved. Same mirrors.
+        Math::float4 shadowParams4;
     };
 
     LightManager() = default;
@@ -218,10 +228,30 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetPointLightSrv(UINT frame) const { return pointLightSrvHandles_[frame]; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetSpotLightSrv(UINT frame) const { return spotLightSrvHandles_[frame]; }
 
+    // Plan S10e: UE's light mobility (ShadowScene.cpp:190-220, r.Shadow.Scene.LightActiveFrameCount): 1 on a frame
+    // the light's SHADOW moved -- position, direction, reach, cone, near plane -- falling linearly to 0 over
+    // `activeFrames` frames after the last move. A light first seen stands (a level load is not a move). Once a frame,
+    // before the shadow views are built.
+    void UpdateLightMobility(std::uint64_t frame, std::uint32_t activeFrames);
+    float GetSpotMobility(size_t index) const { return Mobility(spotMovedFrame_, index); }
+    float GetPointMobility(size_t index) const { return Mobility(pointMovedFrame_, index); }
+    // Lights still moving or settling (mobility > 0): the VSM must keep updating while their bias decays.
+    std::uint32_t GetMobileLightCount() const { return mobileLights_; }
+
     void Reset();
 
 private:
     using ComPtr = Microsoft::WRL::ComPtr<ID3D12Resource>;
+
+    // Plan S10e: what moves a light's shadow, as raw floats (compared bitwise); the frame it last changed.
+    struct ShadowPose { float v[9] = {}; };
+    static constexpr std::uint64_t kNeverMoved = ~0ull;
+    float Mobility(const std::vector<std::uint64_t>& moved, size_t index) const;
+    std::vector<ShadowPose> spotPose_, pointPose_;
+    std::vector<std::uint64_t> spotMovedFrame_, pointMovedFrame_;
+    std::uint64_t mobilityFrame_ = 0;
+    std::uint32_t mobilityActiveFrames_ = 10;
+    std::uint32_t mobileLights_ = 0;
 
     void ReleasePointLightBuffer(Renderer* renderer = nullptr);
     void ReleaseSpotLightBuffer(Renderer* renderer = nullptr);

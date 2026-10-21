@@ -1,4 +1,5 @@
 #include "rendering/lighting/SpotLight.h"
+#include "rendering/shadows/ShadowSettings.h" // plan S4: render::SpotShadowNear
 
 #include <algorithm>
 #include <cmath>
@@ -117,7 +118,9 @@ SpotLight::DebugConeParams SpotLight::GetDebugConeParams() const
 
 void SpotLight::UpdateCachedData()
 {
-    if (!dirty_)
+    // Plan S4: the automatic near follows the depth mode (render::SpotShadowNear), which a shadow-mode switch or
+    // shadow.spotLinearDepth changes under an unchanged desc.
+    if (!dirty_ && render::SpotShadowNear(desc_.nearPlane) == shadowNear_)
     {
         return;
     }
@@ -152,9 +155,11 @@ void SpotLight::UpdateCachedData()
 
     const float fov = outer * 2.0f;
     const float aspect = 1.0f;
-    const float nearPlane = std::max(desc_.nearPlane, 0.01f);
+    const float nearPlane = render::SpotShadowNear(desc_.nearPlane);
     const float farPlane = std::max(desc_.range, nearPlane + 0.1f);
     proj_ = Math::mat4::PerspectiveFovLH(fov, aspect, nearPlane, farPlane);
+    shadowNear_ = nearPlane;
+    shadowFar_ = farPlane;
 
     coneBounds_ = AABB::Empty();
     coneObb_.Reset();

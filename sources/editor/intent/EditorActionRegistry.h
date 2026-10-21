@@ -175,6 +175,13 @@ struct EditorActionDesc
     // when it means one name for six hundred objects -- the same action, and the difference
     // is in the parameters, so the permission has to be able to look at them.
     const char* wholeLevelNeedsParam = nullptr;
+
+    // A filter also reaches the level's point and spot lights, by name. They are environment entities -- no asset, no
+    // EditorTransform -- so an ordinary filter never finds them, which is right for most verbs (a "lamp" filter must
+    // not delete the lights too) and wrong for the few that mean lights: `move` (their position, through the same
+    // command the Inspector and the light gizmo use) and `setOnAt`. Before this, a light was reachable only through
+    // the selection, which nothing over MCP can make.
+    bool reachesLights = false;
 };
 
 class EditorActionRegistry

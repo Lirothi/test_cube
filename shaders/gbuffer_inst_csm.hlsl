@@ -14,7 +14,18 @@ struct InstanceData
 
 StructuredBuffer<InstanceData> gInstances : register(t0);
 
-struct VSOutD { float4 H : SV_POSITION; };
+// Local-light plan S4: SHADOW_LINEAR_DEPTH = the spot views' twin (gbuffer_csm.hlsl).
+#ifndef SHADOW_LINEAR_DEPTH
+#define SHADOW_LINEAR_DEPTH 0
+#endif
+
+struct VSOutD
+{
+    float4 H : SV_POSITION;
+#if SHADOW_LINEAR_DEPTH
+    float linearDepth : TEXCOORD0;
+#endif
+};
 
 [RootSignature(GBUFFER_INST_CSM_RS)]
 VSOutD VSMain(VSInInst i)
@@ -27,10 +38,19 @@ VSOutD VSMain(VSInInst i)
     wp.xyz += ApplyWindWS(i.P, wp.xyz, w, windStrength, i.WIND, windFoliage,
                           windTrunkStiff, windLeafScale, windGustMul, windTime);
     const float3 nWS = mul(i.N, (float3x3)w); // S6
-    o.H = ApplyShadowDepthBias(mul(wp, viewProj), nWS, viewProj, float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear));
+    const float4 bias = float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear);
+    o.H = ApplyShadowDepthBias(mul(wp, viewProj), nWS, viewProj, bias);
+#if SHADOW_LINEAR_DEPTH
+    o.linearDepth = ShadowLinearDepth(o.H, nWS, viewProj, bias);
+#endif
     return o;
 }
 
+#if SHADOW_LINEAR_DEPTH
+[RootSignature(GBUFFER_INST_CSM_RS)]
+float PSMain(VSOutD i) : SV_Depth { return saturate(i.linearDepth); }
+#else
 // Depth-only — pixel shader can remain empty
 [RootSignature(GBUFFER_INST_CSM_RS)]
 void PSMain(VSOutD i) { }
+#endif

@@ -272,7 +272,8 @@ void NormaliseSelectedZone(const EditorActionContext& actionCtx, EditorIntentTar
 void ResolveTargetObjects(const EditorActionContext& actionCtx,
     EditorIntentTarget& target,
     std::vector<EditorObjectId>& outTargets,
-    std::vector<EditorIntentPreview::Group>& outGroups)
+    std::vector<EditorIntentPreview::Group>& outGroups,
+    bool includeLights)
 {
     const EditorContext& ctx = actionCtx.editor;
 
@@ -333,6 +334,18 @@ void ResolveTargetObjects(const EditorActionContext& actionCtx,
         for (const EditorObject& object : ctx.document.Objects())
         {
             consider(object);
+        }
+        // EditorActionDesc::reachesLights: the lights a filter names, by name (they have no asset, and their place is a
+        // property, not a transform -- so no spatial narrowing for them).
+        if (includeLights && !target.filter.empty() && !target.where.Any())
+        {
+            for (const EditorObject& light : ctx.document.Environment())
+            {
+                if (light.type != "pointLight" && light.type != "spotLight") { continue; }
+                if (!MatchesAnyNeedle(light, target.filter) || MatchesAnyNeedle(light, target.exclude)) { continue; }
+                outTargets.push_back(light.id);
+                AppendGroup(outGroups, light.type == "pointLight" ? "point light" : "spot light");
+            }
         }
     }
 }
@@ -582,7 +595,7 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
     }
 
     EditorIntentTarget& target = preview.resolved.target;
-    ResolveTargetObjects(actionCtx, target, preview.targets, preview.groups);
+    ResolveTargetObjects(actionCtx, target, preview.targets, preview.groups, action->reachesLights);
 
     // A ZONE THAT DOES NOT RESOLVE IS A DIFFERENT ANSWER FROM AN EMPTY ONE, and until now
     // they were the same sentence. PassesSpatialFilter turns a failed lookup into "this

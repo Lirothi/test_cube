@@ -22,6 +22,7 @@ struct PointLightData
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
     float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
+    float4 vsm;          // S10e: x = the light's VSM mip bias (unread here: glass picks its mip by distance)
 };
 
 struct SpotLightData
@@ -35,6 +36,7 @@ struct SpotLightData
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
     float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
+    float4 shadowParams4;      // S10e: x = the light's VSM mip bias (unread here); S4: y = 1 / (f - n) of a LINEAR atlas depth
 };
 
 // Per-object data (unique per glass instance).
@@ -315,7 +317,8 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 
     float4 clip = mul(float4(Poff, 1.0f), light.viewProj);
     float3 ndc = clip.xyz / max(clip.w, 1e-6f);
     float2 uv = ndc.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
-    float depth = ndc.z;
+    const float linearInvRange = light.shadowParams4.y; // plan S4: the atlas's encoding, as spotlight_cs.hlsl's
+    float depth = SpotReceiverDepth(clip, light.shadowParams3.x, linearInvRange);
     if (any(uv < 0.0f) || any(uv > 1.0f) || depth <= 0.0f || depth >= 1.0f)
     {
         return 1.0f;
@@ -332,7 +335,7 @@ float SampleSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3 
         const float ts = (texelBias ? 1.0f / max(kSpotRampTexels * texelWorld, 1e-4f) : light.shadowParams3.y)
                        * lerp(0.5f, 1.0f, saturate(dot(N, normalize(light.positionRange.xyz - P))));
         return LocalShadowFinish(SpotShadowTent6x6(SpotShadowAtlas, LinearSampler, uv, page, clip.w, ts,
-                                                   n, f, 1.0f / texel, texel), light.shadowParams3.z);
+                                                   n, f, 1.0f / texel, texel, linearInvRange), light.shadowParams3.z);
     }
     return ShadowPCF3x3Array(SpotShadowAtlas, uvw, depth - depthBias, texel);
 }

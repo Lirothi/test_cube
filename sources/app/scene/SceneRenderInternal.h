@@ -292,17 +292,31 @@ namespace scene_internal
     // units (cm), 15.36/Res metres -- 3 cm at our 512, whatever the distance -- clamped to 0.1 of the range (:2053).
     // The slope part is that x 3 x ShadowSlopeBias x tan(angle to the light's axis), the tan clamped to 1. Our depth is
     // perspective, so it goes in as world metres with -n*f/(f-n) in the clampNear slot (ApplyShadowDepthBias).
+    //
+    // Plan S4, the LINEAR depth (render::SpotShadowLinearDepth, drawn with the SHADOW_LINEAR_DEPTH PSOs): the same metres
+    // go in as (const, slope, -1 / (f - n), n) -- a negative maxSlope marks the mode (shadow_depth_common.hlsli
+    // ShadowLinearDepth; UE's maxSlope for a spot is 1 anyway), and the pass writes (w + bias - n) / (f - n). The texel
+    // bias then still biases the receiver alone: the biases are zero, the range is not. `linearDepth` is the PASS's
+    // reading of the switch, the same one that picked its PSOs.
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildSpotShadowViewCB(Renderer* renderer, const SceneView& view,
-                                                           const vfx::WindState* wind, std::uint32_t atlasRes)
+                                                           const vfx::WindState* wind, std::uint32_t atlasRes,
+                                                           bool linearDepth)
     {
-        // The old bias and the TEXEL bias (local_shadow_bias.hlsli) both bias the RECEIVER, not the depth pass.
-        if (!render::g_localShadowBiasUe || render::LocalShadowTexelBias()) { return BuildShadowViewCB(renderer, view.view, view.proj, wind); }
         const float n = view.zNear, f = view.zFar;
-        const float k = f > n ? n * f / (f - n) : 0.0f;
-        const float constMetres = std::min(15.36f / static_cast<float>(std::max(atlasRes, 1u)) * 2.0f *
-                                               std::max(view.shadowBias.x, 0.0f),
-                                           0.1f * std::max(f - n, 0.0f));
+        // The old bias and the TEXEL bias (local_shadow_bias.hlsli) both bias the RECEIVER, not the depth pass.
+        const bool depthPassBias = render::g_localShadowBiasUe && !render::LocalShadowTexelBias();
+        const float constMetres = depthPassBias ? std::min(15.36f / static_cast<float>(std::max(atlasRes, 1u)) * 2.0f *
+                                                               std::max(view.shadowBias.x, 0.0f),
+                                                           0.1f * std::max(f - n, 0.0f))
+                                                : 0.0f;
         const float slopeMetres = constMetres * 3.0f * std::max(view.shadowBias.y, 0.0f);
+        if (linearDepth)
+        {
+            return BuildShadowViewCB(renderer, view.view, view.proj, wind, constMetres, slopeMetres,
+                                     -1.0f / std::max(f - n, 1.0e-4f), n);
+        }
+        if (!depthPassBias) { return BuildShadowViewCB(renderer, view.view, view.proj, wind); }
+        const float k = f > n ? n * f / (f - n) : 0.0f;
         return BuildShadowViewCB(renderer, view.view, view.proj, wind, constMetres, slopeMetres, 1.0f, -k);
     }
 

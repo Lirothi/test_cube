@@ -100,6 +100,17 @@
 #define SHADOW_VS_NORMAL(i) float3(0.0f, 0.0f, 1.0f)
 #endif
 
+// Local-light plan S4: SHADOW_LINEAR_DEPTH (with SHADOW_DEPTH_BIAS, never with VSM_PAGE) = the spot views' twin of the
+// two atlas PSOs -- the pixel shader writes shadow_depth_common.hlsli's ShadowLinearDepth as SV_Depth.
+#ifndef SHADOW_LINEAR_DEPTH
+#define SHADOW_LINEAR_DEPTH 0
+#endif
+#if SHADOW_LINEAR_DEPTH
+#define SHADOW_LINEAR_OUT float linearDepth : TEXCOORD3;
+#else
+#define SHADOW_LINEAR_OUT
+#endif
+
 // Matches render::InstancePerObject (224 bytes) / the InstanceArray element in gbuffer_common.
 // W3 grew it 208 -> 224 to add windStrength; the tail (emissive + pad) is unused by the shadow
 // pass, so it is aliased as padding. W5 reads `windStrength` here to sway the shadow.
@@ -239,9 +250,10 @@ cbuffer PerView : register(b1)
 // a draw-uniform value, two more PSOs, a reshuffled descriptor table in the masked variant, and 16
 // bytes on every PerView in the engine -- for a value D3D12 is perfectly happy to take as a CBV,
 // because SDSM issues one ExecuteIndirect per partition and a root CBV is legal per draw.
+// `linearDepth`: plan S4's spot depth (ShadowLinearDepth); read only by the SHADOW_LINEAR_DEPTH pixel shaders.
 inline float4 WindTransformH(float3 objPos, float3 objNormal, float4x4 world, float4 windWeights,
                              float windStrengthValue, float foliageValue, float trunkStiffValue,
-                             float leafScaleValue)
+                             float leafScaleValue, out float linearDepth)
 {
     const float4x4 vp = viewProj;
     const float4 bias = float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear);
@@ -250,10 +262,15 @@ inline float4 WindTransformH(float3 objPos, float3 objNormal, float4x4 world, fl
                                        float4(windTime, windPrevTime, windDirXZ),
                                        float4(windSwayAmp, windSwayFreq, windGustMul, windPrevGustMul),
                                        float4(0.0f, 0.0f, 0.0f, 0.0f)); // no falloff on the legacy path
+    linearDepth = 0.0f;
 #if SHADOW_DEPTH_BIAS
     // S6. Wind has already moved the vertex; the normal is NOT re-oriented by the sway, exactly as
     // the gbuffer leaves it -- a swayed leaf's lighting normal and its shadow bias then agree.
-    return ApplyShadowDepthBias(H, mul(objNormal, (float3x3)world), vp, bias);
+    const float3 nWS = mul(objNormal, (float3x3)world);
+#if SHADOW_LINEAR_DEPTH
+    linearDepth = ShadowLinearDepth(H, nWS, vp, bias);
+#endif
+    return ApplyShadowDepthBias(H, nWS, vp, bias);
 #else
     return H;
 #endif
@@ -288,6 +305,7 @@ struct VSOutMasked
     float2 UV : TEXCOORD0;
     nointerpolation uint  texSlot : TEXCOORD1; // ~0 = opaque group (PS early-out)
     nointerpolation float cutoff  : TEXCOORD2;
+    SHADOW_LINEAR_OUT                          // plan S4
 #if VSM_PAGE
     float4 CD : SV_ClipDistance0; // the page's four borders (replaces the per-page scissor)
 #endif
@@ -300,6 +318,7 @@ struct PSInMasked
     float2 UV : TEXCOORD0;
     nointerpolation uint  texSlot : TEXCOORD1;
     nointerpolation float cutoff  : TEXCOORD2;
+    SHADOW_LINEAR_OUT
 };
 
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]
@@ -318,8 +337,12 @@ VSOutMasked VSMain(VSInMasked i)
 #else
     const uint cid = i.casterId;
     const InstancePerObject ip = Instances[cid];
+    float linearDepth;
     o.H = WindTransformH(i.P, SHADOW_VS_NORMAL(i), ip.world, i.WIND, ip.windStrength, ip.windFoliage,
-                         ip.windTrunkStiff, ip.windLeafScale);
+                         ip.windTrunkStiff, ip.windLeafScale, linearDepth);
+#if SHADOW_LINEAR_DEPTH
+    o.linearDepth = linearDepth;
+#endif
 #endif
     o.UV = i.UV;
     const uint2 gm = GroupMask[CasterGroup[cid]];
@@ -328,8 +351,7 @@ VSOutMasked VSMain(VSInMasked i)
     return o;
 }
 
-[RootSignature(SHADOW_INDIRECT_CSM_RS)]
-void PSMain(PSInMasked i)
+void MaskedClip(PSInMasked i)
 {
     if (i.texSlot == 0xFFFFFFFFu) { return; } // opaque group — draw-uniform branch, no sample
 #if GBUFFER_BINDLESS
@@ -340,6 +362,21 @@ void PSMain(PSInMasked i)
 #endif
     clip(a - i.cutoff);
 }
+
+#if SHADOW_LINEAR_DEPTH
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+float PSMain(PSInMasked i) : SV_Depth
+{
+    MaskedClip(i);
+    return saturate(i.linearDepth);
+}
+#else
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+void PSMain(PSInMasked i)
+{
+    MaskedClip(i);
+}
+#endif
 
 #else // opaque (null-work PS) variant
 
@@ -353,11 +390,12 @@ struct VSInIndirect
 struct VSOutD
 {
     float4 H : SV_POSITION;
+    SHADOW_LINEAR_OUT // plan S4
 #if VSM_PAGE
     float4 CD : SV_ClipDistance0; // the page's four borders (replaces the per-page scissor)
 #endif
 };
-struct PSInD { float4 H : SV_POSITION; }; // the PS never reads CD (see the masked variant)
+struct PSInD { float4 H : SV_POSITION; SHADOW_LINEAR_OUT }; // the PS never reads CD (see the masked variant)
 
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]
 VSOutD VSMain(VSInIndirect i)
@@ -374,14 +412,23 @@ VSOutD VSMain(VSInIndirect i)
     PagePlace(page, hLocal, o.H, o.CD);
 #else
     const InstancePerObject ip = Instances[i.casterId];
+    float linearDepth;
     o.H = WindTransformH(i.P, SHADOW_VS_NORMAL(i), ip.world, i.WIND, ip.windStrength, ip.windFoliage,
-                         ip.windTrunkStiff, ip.windLeafScale);
+                         ip.windTrunkStiff, ip.windLeafScale, linearDepth);
+#if SHADOW_LINEAR_DEPTH
+    o.linearDepth = linearDepth;
+#endif
 #endif
     return o;
 }
 
+#if SHADOW_LINEAR_DEPTH
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+float PSMain(PSInD i) : SV_Depth { return saturate(i.linearDepth); }
+#else
 // Depth-only — empty pixel shader.
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]
 void PSMain(PSInD i) { }
+#endif
 
 #endif // SHADOW_MASKED

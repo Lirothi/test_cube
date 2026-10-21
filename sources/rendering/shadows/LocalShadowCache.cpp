@@ -245,7 +245,7 @@ LocalShadowCache::Mode LocalShadowCache::Request(const Key& key, Rect& out)
     {
         Entry& e = it->second;
         e.lastUsed = frame_;
-        if (e.rect.size == key.res && e.valid && e.key.viewProj == key.viewProj)
+        if (e.rect.size == key.res && e.valid && e.key.viewProj == key.viewProj && e.key.encoding == key.encoding)
         {
             ++stats_.hits;
             out = e.rect;

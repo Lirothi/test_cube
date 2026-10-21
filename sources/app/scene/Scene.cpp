@@ -2313,8 +2313,8 @@ void Scene::PrepareViews(Renderer* renderer)
         view.invView = mat4::Inverse(view.view);
         view.invProj = mat4::Inverse(view.proj);
         const auto& desc = light.GetDesc();
-        const float nearPlane = std::max(desc.nearPlane, 0.01f);
-        const float farPlane = std::max(desc.range, nearPlane + 0.1f);
+        const float nearPlane = light.GetShadowNear(); // plan S4: what its projection was built with
+        const float farPlane = light.GetShadowFar();
         view.frustum = Frustum::FromInvViewProj(view.invView, view.proj, nearPlane, farPlane);
         // S3a.6: an occluded influence volume draws no shadow this frame (Legacy atlas only --
         // VSM never takes occlusion verdicts, UE rule).
@@ -2330,6 +2330,7 @@ void Scene::PrepareViews(Renderer* renderer)
         // Plan S9e: the light's reach and its cone (the clamped outer angle its projection is built from).
         view.lightSphere = float4(desc.position, farPlane);
         view.lightCone = float4(light.GetDirection(), light.GetCosOuter());
+        view.vsmMipBias = vsm::LocalMovingMipBias(lightManager_.GetSpotMobility(lightIndex)); // S10e
         view.shadowBias = float2(desc.shadowBias, desc.shadowSlopeBias); // local-light shadows S1
         view.shadowRes = lightManager_.GetSpotShadowResolution(lightIndex); // S4: its square
         {
@@ -2399,6 +2400,7 @@ void Scene::PrepareViews(Renderer* renderer)
             view.hfov = 0.0f;
             view.lightSphere = float4(P, farPlane); // plan S9e: a face's corners reach to sqrt(3) x the radius
             view.lightCone = float4(0.0f, 0.0f, 0.0f, 2.0f);
+            view.vsmMipBias = vsm::LocalMovingMipBias(lightManager_.GetPointMobility(lightIndex)); // S10e
             view.shadowRes = lightManager_.GetPointShadowResolution(lightIndex); // S4: the face's square
             {
                 // S9: the face's square inside the light's 3f x 2f block -- face k at (k % 3, k / 3) faces from its
@@ -2422,7 +2424,7 @@ void Scene::PrepareViews(Renderer* renderer)
         const bool cacheOn = !vsmLocal && render::g_localShadowCache && render::g_localShadowCompact &&
                              shadowGpu_.MegaReady();
         localShadowCache_.BeginFrame(renderer ? renderer->GetTotalFrameNumber() : 0ull, shadowGpu_.LocalStaticVersion());
-        const auto request = [this](SceneView& view, std::uint32_t id, bool occluded)
+        const auto request = [this](SceneView& view, std::uint32_t id, bool occluded, bool linearDepth)
         {
             view.cacheMode = 0;
             view.cachePage = -1;
@@ -2432,6 +2434,7 @@ void Scene::PrepareViews(Renderer* renderer)
             std::memcpy(key.viewProj.data(), &view.view.m, 16 * sizeof(float));
             std::memcpy(key.viewProj.data() + 16, &view.proj.m, 16 * sizeof(float));
             key.res = view.shadowRes;
+            key.encoding = linearDepth ? 1u : 0u; // plan S4
             render::LocalShadowCache::Rect rect{};
             view.cacheMode = static_cast<std::uint8_t>(localShadowCache_.Request(key, rect));
             view.cachePage = rect.page;
@@ -2443,7 +2446,11 @@ void Scene::PrepareViews(Renderer* renderer)
             SceneView& view = spotShadowViews_[s];
             const size_t lightIndex = lightManager_.GetShadowedSpotLightIndex(s);
             const bool occluded = lightIndex < spotLightOccluded_.size() && spotLightOccluded_[lightIndex];
-            if (cacheOn) { request(view, render::LocalShadowCache::SpotId(static_cast<std::uint32_t>(lightIndex)), occluded); }
+            if (cacheOn)
+            {
+                request(view, render::LocalShadowCache::SpotId(static_cast<std::uint32_t>(lightIndex)), occluded,
+                        render::SpotShadowLinearDepth());
+            }
             else { view.cacheMode = 0; view.cachePage = -1; }
         }
         for (size_t s = 0; s < shadowedPointCount; ++s)
@@ -2455,7 +2462,8 @@ void Scene::PrepareViews(Renderer* renderer)
                 SceneView& view = pointShadowViews_[s * 6 + face];
                 if (cacheOn)
                 {
-                    request(view, render::LocalShadowCache::PointId(static_cast<std::uint32_t>(lightIndex), face), occluded);
+                    request(view, render::LocalShadowCache::PointId(static_cast<std::uint32_t>(lightIndex), face), occluded,
+                            false);
                 }
                 else { view.cacheMode = 0; view.cachePage = -1; }
             }
@@ -3056,6 +3064,8 @@ void Scene::Render(Renderer* renderer) {
     }
 
     lightManager_.UpdateSpotLightCache();
+    // Plan S10e: which lights' shadows moved (UE's light mobility) -- before PrepareViews builds their views.
+    lightManager_.UpdateLightMobility(renderer->GetTotalFrameNumber(), vsm::g_lightActiveFrameCount);
 
     // Rung 0 / Steps 1-2: refresh the persistent per-caster shadow buffers (instance + bounds),
     // re-uploading only the movers' entries into this frame's ring region. Pure CPU write into

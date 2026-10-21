@@ -168,6 +168,13 @@ public:
 
     const GraphicsDesc& GetCachedGraphicsDesc() const { return cachedGfxDesc_; }
 
+    // Local-light shadow plan S4: this SHADOW PSO's twin for a spot view's LINEAR depth -- the same desc plus
+    // SHADOW_LINEAR_DEPTH, whose pixel shader writes SV_Depth (render::SpotShadowLinearDepth). Linked once, when the
+    // shadow material is created (MaterialManager::LinkSpotLinearDepthVariant); null where none was built. A spot pass
+    // binds `SpotLinearDepthVariant()` wherever it would bind this material.
+    Material* SpotLinearDepthVariant() const { return spotLinearDepth_.get(); }
+    void SetSpotLinearDepthVariant(std::shared_ptr<Material> variant) { spotLinearDepth_ = std::move(variant); }
+
     CBFieldHandle ComputeCBFieldHandle(UINT bRegister, const std::string& name) const;
     CBFieldHandle ComputeCB0FieldHandle(const std::string& name) const { return ComputeCBFieldHandle(0, name); }
 
@@ -215,6 +222,7 @@ private:
     // Cache for rebuilding
     GraphicsDesc cachedGfxDesc_{};
     ComputeDesc  cachedCmpDesc_{};
+    std::shared_ptr<Material> spotLinearDepth_; // plan S4 (SpotLinearDepthVariant)
 
     // Watch list
     std::vector<std::wstring>                     watchedFiles_;
@@ -268,6 +276,10 @@ class MaterialManager {
 public:
     std::shared_ptr<Material> GetOrCreateGraphics(Renderer* r, const Material::GraphicsDesc& gd);
     std::shared_ptr<Material> GetOrCreateCompute(Renderer* r, const Material::ComputeDesc& cd);
+    // Local-light shadow plan S4: builds (or finds) the SHADOW_LINEAR_DEPTH twin of the shadow material `base` and links
+    // it (Material::SpotLinearDepthVariant). A twin that fails to build is logged and left unlinked: the spot pass then
+    // draws that caster with `base`, its depth in the wrong encoding -- the log says which shader.
+    void LinkSpotLinearDepthVariant(Renderer* r, Material& base);
 
     // Legacy-compatible wrapper
     std::shared_ptr<Material> GetOrCreateCompute(Renderer* r, const std::wstring& shaderFile) {

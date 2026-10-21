@@ -63,7 +63,7 @@ public:
     void RenderSelectionStencil(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* material, const Camera& camera) override;
 #endif
     void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum) override;
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum, bool spotLinearDepth) override;
     virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Transform
@@ -288,7 +288,8 @@ protected:
     // PSO inside the multi-slot submesh loop. CB field handles still come from
     // GetGraphicsMaterial() (slot 0) — all slot permutations share the PerObject layout.
     virtual Material* CurrentGraphicsMaterial() const { return graphicsMaterial_.get(); }
-    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx);
+    // `spotLinearDepth`: bind the shadow material's spot linear-depth twin (RenderShadow's flag, plan S4).
+    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool spotLinearDepth);
     // Forwards Material::Bind's verdict; see RecordGraphics.
     bool UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
     virtual void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod = 0);

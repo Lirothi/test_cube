@@ -245,6 +245,19 @@ namespace vsm
     inline int   g_maxDistantUpdatesPerFrame = 1;
     inline float g_resolutionLodBiasLocal = 0.0f;
     inline float LocalMipBias() { return g_resolutionLodBiasLocal + g_dynamicLodBias; }
+    // Plan S10e: UE r.Shadow.Virtual.ResolutionLodBiasLocalMoving (1: a moving light's pages one mip coarser) and
+    // r.Shadow.Scene.LightActiveFrameCount (10: frames the bias takes to fade back once it stops). A light's bias is
+    // lerp(ResolutionLodBiasLocal, max(it, Moving), mobility) (FVirtualShadowMapArray::InterpolateResolutionBias,
+    // ShadowSceneRenderer.cpp:275-281); this is what it adds to LocalMipBias(), per light (the request's view entry,
+    // the light's GPU data). A moving light re-renders every page it has each frame, so this is a cost cap.
+    // `--set vsm.resolutionLodBiasLocalMoving`, `vsm.lightActiveFrameCount`.
+    inline float g_resolutionLodBiasLocalMoving = 1.0f;
+    inline std::uint32_t g_lightActiveFrameCount = 10;
+    inline float LocalMovingMipBias(float mobility)
+    {
+        const float still = g_resolutionLodBiasLocal;
+        return std::clamp(mobility, 0.0f, 1.0f) * (std::max(still, g_resolutionLodBiasLocalMoving) - still);
+    }
     // vsm_addressing.hlsli VsmLocalMipFromPixel, term for term (plan S10d classifies lights with it on the CPU).
     inline std::uint32_t LocalMipFromPixel(float pixelRadiusWorld, float lightXScale, float lightDepth, float lodBias)
     {
@@ -574,6 +587,7 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
         DirectX::XMFLOAT4X4 viewProj;
         DirectX::XMFLOAT4   params;
         DirectX::XMFLOAT4   cull{ 0.0f, 0.0f, 0.0f, -1.0f };
+        DirectX::XMFLOAT4   mip{ 0.0f, 0.0f, 0.0f, 0.0f }; // plan S10e: x = the light's mip bias on top of the frame's
     };
     struct alignas(16) PageRequestConstants
     {

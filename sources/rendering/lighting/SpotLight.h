@@ -19,8 +19,9 @@ struct SpotLightDesc {
     float        volumetricIntensity = 1.0f; // plan A4d: UE VolumetricScatteringIntensity -- this light's weight in the fog volume
     float        shadowDepthBias = 0.001f;
     // The shadow projection's near plane, metres (level key "shadowNear", plan S8): a caster nearer the light is not in
-    // the map. D16 perspective depth, so lowering it costs precision at the far end.
-    float        nearPlane = 0.1f;
+    // the map. 0 = automatic (plan S4, render::SpotShadowNear): UE's 1 mm on the atlases' linear depth, 0.1 m on a
+    // perspective one. Read the near the light actually uses from SpotLight::GetShadowNear.
+    float        nearPlane = 0.0f;
     bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow
     LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
     // Local-light shadow plan S1: UE's ShadowBias / ShadowSlopeBias (LightComponent.cpp:466-467, both 0.5). The depth
@@ -76,6 +77,10 @@ public:
 
     const Math::mat4& GetViewMatrix() const { return view_; }
     const Math::mat4& GetProjMatrix() const { return proj_; }
+    // The near / far planes GetProjMatrix was built with (plan S4: the near resolved by render::SpotShadowNear). The
+    // shadow views, the depth pass's linear depth and every receiver read THESE -- one copy of the arithmetic.
+    float GetShadowNear() const { return shadowNear_; }
+    float GetShadowFar() const { return shadowFar_; }
     Math::mat4 GetViewProjMatrix() const { return view_ * proj_; }
 
     struct DebugConeParams
@@ -105,6 +110,8 @@ private:
     float        invAngleRange_ = 0.0f;
     Math::mat4   view_ = Math::mat4::Identity();
     Math::mat4   proj_ = Math::mat4::Identity();
+    float        shadowNear_ = 0.1f;
+    float        shadowFar_ = 10.0f;
     AABB  coneBounds_{};
     OBB   coneObb_{};
     bool         dirty_ = true;

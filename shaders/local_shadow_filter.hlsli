@@ -76,12 +76,21 @@ float LocalShadowFinish(float shadow, float sharpen)
 
 // --- Spot: UE Manual5x5PCF (ShadowFilteringCommon.ush:264-365), a 6x6 tent from nine Gathers --------------------
 // with the soft occlusion ramp of CalculateOcclusion (:151-170): occlusion falls off over 1/transitionScale behind the
-// stored depth instead of a hard compare. UE ramps on a LINEAR depth; our atlas holds a perspective NDC depth, so every
-// gathered texel is linearised (w = n f / (f - z (f - n))) and the ramp is in metres.
-float4 SpotOcclusion4(float4 storedNdc, float receiverW, float transitionScale, float n, float f)
+// stored depth instead of a hard compare. UE ramps on a LINEAR depth, and so does this, in metres: plan S4's atlas stores
+// (w - n) / (f - n) (`linearInvRange` = 1 / (f - n) > 0, SpotLightGpu::shadowParams4.y), the old one a perspective NDC
+// depth, linearised per texel (w = n f / (f - z (f - n))).
+float4 SpotOcclusion4(float4 stored, float receiverW, float transitionScale, float n, float f, float linearInvRange)
 {
-    const float4 w = (n * f) / max(f - storedNdc * (f - n), 1e-6f);
+    const float4 w = linearInvRange > 0.0f ? n + stored / linearInvRange
+                                           : (n * f) / max(f - stored * (f - n), 1e-6f);
     return saturate((w - receiverW) * transitionScale + 1.0f);
+}
+
+// Plan S4: the receiver's depth in the light's atlas encoding -- (w - n) / (f - n) on a linear atlas, the NDC z of its
+// clip position otherwise. Outside (0, 1) the receiver is in front of the near plane or past the far one.
+float SpotReceiverDepth(float4 clip, float n, float linearInvRange)
+{
+    return linearInvRange > 0.0f ? (clip.w - n) * linearInvRange : clip.z / max(clip.w, 1e-6f);
 }
 
 // UE HorizontalPCF5x2: three horizontally adjacent quads folded into the two rows they cover (outer columns 1-frac /
@@ -99,12 +108,12 @@ float2 LocalHorizontal5x2(float2 frac2, float4 v0, float4 v2, float4 v4)
 }
 
 float SpotShadowTent6x6(Texture2DArray atlas, SamplerState pointClamp, float2 uv, float slice, float receiverW,
-                        float transitionScale, float n, float f, float2 atlasSize, float2 texel)
+                        float transitionScale, float n, float f, float2 atlasSize, float2 texel, float linearInvRange)
 {
     const float2 texelPos = uv * atlasSize - 0.5f;
     const float2 frac2 = frac(texelPos);
     const float2 quadUV = (floor(texelPos) + 1.0f) * texel;
-    #define SPOT_G6(ox, oy) SpotOcclusion4(atlas.Gather(pointClamp, float3(quadUV + float2((ox) * texel.x, (oy) * texel.y), slice)), receiverW, transitionScale, n, f)
+    #define SPOT_G6(ox, oy) SpotOcclusion4(atlas.Gather(pointClamp, float3(quadUV + float2((ox) * texel.x, (oy) * texel.y), slice)), receiverW, transitionScale, n, f, linearInvRange)
     const float2 row0 = LocalHorizontal5x2(frac2, SPOT_G6(-2, -2), SPOT_G6(0, -2), SPOT_G6(2, -2));
     float results = row0.x * (1.0f - frac2.y) + row0.y;
     const float2 row1 = LocalHorizontal5x2(frac2, SPOT_G6(-2, 0), SPOT_G6(0, 0), SPOT_G6(2, 0));

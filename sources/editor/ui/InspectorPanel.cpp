@@ -2143,10 +2143,13 @@ namespace
             InspectorHelp("Ours, on top of UE's bias: the receiver is looked up this many metres off its surface, "
                           "along the normal. Only with shadow.localBiasTexel:0 -- the texel bias (the default) "
                           "pushes by this light's texels instead (Shadow Bias above).");
-            dragF("Shadow Near (m)", "shadowNear", 0.1f, 0.005f, 0.01f, 5.0f, "%.3f");
+            // Plan S4: absent = automatic, shown as the near the light then uses (render::SpotShadowNear).
+            dragF("Shadow Near (m)", "shadowNear", render::SpotShadowNear(0.0f), 0.001f, render::kSpotShadowMinNear,
+                  5.0f, "%.3f");
             InspectorHelp("The shadow's near plane: a caster nearer the light than this is not in its map (a lamp's "
-                          "own bulb or frame inside it does not shadow the light). Lower lets a close caster shadow; "
-                          "the map's 16-bit depth then has less precision far away.");
+                          "own bulb or frame inside it does not shadow the light -- or switch that mesh's Cast Shadow "
+                          "off). Unset, it is UE's 1 mm on the atlases' linear depth and 0.1 m under VSM / "
+                          "shadow.spotLinearDepth:0, whose perspective depth loses precision far away when it is lower.");
         }
         else if (env.type == "timeOfDay")
         {

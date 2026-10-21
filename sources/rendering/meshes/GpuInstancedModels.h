@@ -74,7 +74,7 @@ public:
 
 protected:
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx) override;
+    void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool spotLinearDepth) override;
     void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod) override;
 
 private:

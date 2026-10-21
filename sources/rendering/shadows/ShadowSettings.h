@@ -206,6 +206,25 @@ inline bool g_shadowCullRevalidate = false;
 constexpr float kPointShadowGuardTexels = 2.0f;
 // The texel bias is the ATLAS modes' -- VSM keeps its own (vsm::g_local*Texels) and the old per-light values.
 inline bool LocalShadowTexelBias() { return g_localShadowBiasTexel && !VsmActive(); }
+// Local-light plan S4: a spot's atlas holds a LINEAR depth, UE's (TShadowDepthPS<PerspectiveCorrect>,
+// ShadowDepthPixelShader.usf:80-86): the pixel shader writes SV_Depth = (w - n) / (f - n) + bias, so a D16 step is
+// (f - n) / 65535 at any distance (0.2 mm on a 14 m spot) where the perspective depth's grew with w^2 (3 cm at 14 m from
+// a 0.1 m near). That is what lets the near plane be UE's: a caster 1 mm from the light shadows. The cost is a pixel
+// shader on every caster of a spot view (no early depth there) -- a SHADOW_LINEAR_DEPTH twin of each shadow PSO
+// (Material::SpotLinearDepthVariant). The atlas modes only: VSM's pool keeps its own perspective depth.
+// false = the old perspective depth and a 0.1 m near: `--set shadow.spotLinearDepth:0|1`.
+inline bool g_spotShadowLinearDepth = true;
+inline bool SpotShadowLinearDepth() { return g_spotShadowLinearDepth && !VsmActive(); }
+// UE MinLightW 0.1 (cm: SpotLightSceneProxy.cpp:101) -- the floor of any spot's near, authored or not.
+constexpr float kSpotShadowMinNear = 0.001f;
+// A spot's shadow near plane, metres. `authored` > 0 is the level's "shadowNear" (SpotLightDesc::nearPlane) and wins;
+// otherwise UE's 1 mm on the linear depth, the old 0.1 m on a perspective one (1 mm there would leave steps of
+// centimetres at the far end -- of the D16 atlas, and of the VSM pool's direct-Z D32 as well).
+inline float SpotShadowNear(float authored)
+{
+    if (authored > 0.0f) { return authored > kSpotShadowMinNear ? authored : kSpotShadowMinNear; }
+    return SpotShadowLinearDepth() ? kSpotShadowMinNear : 0.1f;
+}
 // Plan S4: UE r.Shadow.MaxResolution for the local lights (BaseScalability.ini: 1024 at High, 2048 at Epic). A spot's
 // shadow is its screen radius x 2.546 rounded DOWN to a power of two up to this; a point's cube face is the first of
 // max/2, /4, /8, /16 and 32 not above its radius x 1.273 (ShadowSetup.cpp:4301-4464, :771-797). Plan S9: the atlas

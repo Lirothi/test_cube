@@ -4,7 +4,19 @@
 #include "gbuffer_common.hlsli"
 #include "shadow_depth_common.hlsli"
 
-struct VSOutD { float4 H : SV_POSITION; };
+// Local-light plan S4: SHADOW_LINEAR_DEPTH = the spot views' twin -- the pixel shader writes the linear depth
+// (shadow_depth_common.hlsli ShadowLinearDepth) as SV_Depth. Every other view keeps the empty pixel shader.
+#ifndef SHADOW_LINEAR_DEPTH
+#define SHADOW_LINEAR_DEPTH 0
+#endif
+
+struct VSOutD
+{
+    float4 H : SV_POSITION;
+#if SHADOW_LINEAR_DEPTH
+    float linearDepth : TEXCOORD0;
+#endif
+};
 
 [RootSignature(GBUFFER_CSM_RS)]
 VSOutD VSMain(VSIn i)
@@ -18,10 +30,19 @@ VSOutD VSMain(VSIn i)
     // S6: the normal is already in this layout (VSIn is the full PNTUV gbuffer input), so the
     // fallback path costs no extra fetch. World scale only skews the bias -- acceptable.
     const float3 nWS = mul(i.N, (float3x3)world);
-    o.H = ApplyShadowDepthBias(mul(wp, viewProj), nWS, viewProj, float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear));
+    const float4 bias = float4(shadowConstBias, shadowSlopeBias, shadowMaxSlope, shadowClampNear);
+    o.H = ApplyShadowDepthBias(mul(wp, viewProj), nWS, viewProj, bias);
+#if SHADOW_LINEAR_DEPTH
+    o.linearDepth = ShadowLinearDepth(o.H, nWS, viewProj, bias);
+#endif
     return o;
 }
 
+#if SHADOW_LINEAR_DEPTH
+[RootSignature(GBUFFER_CSM_RS)]
+float PSMain(VSOutD i) : SV_Depth { return saturate(i.linearDepth); }
+#else
 // Depth-only — pixel shader can remain empty
 [RootSignature(GBUFFER_CSM_RS)]
 void PSMain(VSOutD i) { }
+#endif

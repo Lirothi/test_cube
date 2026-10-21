@@ -12,10 +12,11 @@ struct SpotLightData
     float4   directionCosOuter; // xyz = direction, w = cos(outer)
     float4   colorIntensity;    // xyz = color, w = intensity
     float4   shadowParams;      // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
-    float4   shadowParams2;     // x = normal bias, y = volumetric scattering, z = UE's shadow fade (S3), w reserved
+    float4   shadowParams2;     // x = normal bias, y = volumetric scattering, z = UE's shadow fade (S3), w = texel-bias normal texels
     float4x4 viewProj;
     float4   shadowParams3;     // local-light shadows S2: x = near, y = soft-transition scale, z = sharpen, w = filter
     float4   shadowAtlas;       // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
+    float4   shadowParams4;     // S10e: x = the light's VSM mip bias; S4: y = 1 / (f - n) of a LINEAR atlas depth (0 = perspective)
 };
 
 struct PointLightData
@@ -26,8 +27,9 @@ struct PointLightData
     float  intensity;
     float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
-    float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
+    float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4), w = texel-bias normal texels
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
+    float4 vsm;          // S10e: x = the light's VSM mip bias (unread here)
 };
 
 // Returns the spot light's radiance (color*intensity*distAtten*coneAtten) and the

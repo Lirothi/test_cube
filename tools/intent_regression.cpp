@@ -1596,6 +1596,64 @@ void TestLampsComeOnAtNight(const EditorActionContext& actionCtx)
           "palms that do not glow are refused, and the refusal says why: " + status);
 }
 
+// EditorActionDesc::reachesLights: `move` reaches a light by its NAME (nothing over MCP can select one), writes its
+// "position" property through the Inspector's command, a light and a palm in one phrase are ONE history entry, and undo
+// puts the light back. Every other verb still does not see lights: a "Porch" delete finds nothing.
+void TestMoveReachesLights(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    ctx.selection.Clear();
+    const auto position = [&](std::uint64_t id)
+    {
+        for (const EditorObject& light : ctx.document.Environment())
+        {
+            if (light.id.value == id) { return light.properties.at("position"); }
+        }
+        return Json();
+    };
+    const auto preview = [&](const char* answer)
+    {
+        std::string error;
+        EditorIntent intent;
+        Check(intentschema::ParseAnswer(answer, intent, error), std::string("parses: ") + error);
+        return BuildIntentPreview(actionCtx, intent);
+    };
+
+    const EditorIntentPreview porch = preview(
+        R"({"kind":"command","action":"move","target":{"filter":["Porch"]},"params":{"value":[0.5,0,-1]}})");
+    Check(porch.executable && porch.targets.size() == 1 && porch.targets[0].value == 920,
+          "move reaches the porch light by its name: " + porch.problem);
+    EditorCommandStack stack;
+    std::string status;
+    Check(ExecuteIntent(actionCtx, stack, porch, status), status);
+    Check(stack.HistorySize() == 1 && status.find("1 light") != std::string::npos, "one entry, and it says so: " + status);
+    Check(position(920) == Json::array({ 1.5, 2.0, 2.0 }), "the porch light moved by the value: " + position(920).dump());
+    Check(position(921) == Json::array({ 1.0, 2.0, 3.0 }), "the street light stayed");
+    stack.Undo(ctx);
+    Check(position(920) == Json::array({ 1.0, 2.0, 3.0 }), "undo puts the porch light back: " + position(920).dump());
+
+    const EditorIntentPreview both = preview(
+        R"({"kind":"command","action":"move","target":{"filter":["Light","palm"]},"params":{"value":[0,1,0]}})");
+    Check(both.executable && both.targets.size() == 5, "two lights and three palms: " + both.problem);
+    EditorCommandStack bothStack;
+    status.clear();
+    Check(ExecuteIntent(actionCtx, bothStack, both, status), status);
+    Check(bothStack.HistorySize() == 1 && status.find("2 lights and 3 objects") != std::string::npos,
+          "lights and palms are ONE history entry: " + status);
+    Check(position(921) == Json::array({ 1.0, 3.0, 3.0 }), "the street light rose a metre");
+    bothStack.Undo(ctx);
+    Check(position(921) == Json::array({ 1.0, 2.0, 3.0 }), "and undo brings it down");
+
+    // A light's level name lives in its properties (the entity is "Spot Light 3"); the filter finds it by that too.
+    const EditorIntentPreview ring = preview(
+        R"({"kind":"command","action":"move","target":{"filter":["ring spot"]},"params":{"value":[0,0,1]}})");
+    Check(ring.executable && ring.targets.size() == 1 && ring.targets[0].value == 921,
+          "move reaches a light by the name the level gave it: " + ring.problem);
+
+    const EditorIntentPreview remove = preview(R"({"kind":"command","action":"delete","target":{"filter":["Porch"]}})");
+    Check(!remove.executable, "delete does not reach lights by name");
+}
+
 // setSurface and setColor go through the Inspector's live path (InspectorMultiEdit::ApplySnapshot),
 // not a document-only property edit: the document carries the value, ONE undo entry covers the
 // group, and undo takes the keys away again. (The runtime half is checked live over MCP -- this
@@ -3568,11 +3626,13 @@ int main(int argc, char** argv)
             spot.type = "spotLight";
             spot.name = "Street Light";
             spot.properties["range"] = 14.0;
+            spot.properties["name"] = "ring spot 3"; // the level's own name; the entity is labelled by type and index
             lampDocument.Environment().push_back(spot);
             EditorSelection lampSelection;
             EditorContext lampCtx{ *renderer, *scene, levels, lampDocument, lampSelection };
             const EditorActionContext lampActionCtx{ lampCtx, assets, extensions };
             TestLampsComeOnAtNight(lampActionCtx);
+            TestMoveReachesLights(lampActionCtx);
         }
         TestSurfaceAndColourUndo(actionCtx);
         TestRestPose();

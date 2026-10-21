@@ -30,6 +30,7 @@ struct ViewProjEntry
     float4   params; // x = valid (0/1), y = a point face's cube face (0..5; -1 = a spot / clipmap), z = zFar,
                      // w = the projection's x scale (S10e: the pixel footprint)
     float4   cull;   // plan S10e: the light's position + reach (w < 0 = none): a receiver it does not reach marks nothing
+    float4   mip;    // plan S10e: x = the light's mip bias on top of localMip.y (UE's ResolutionLodBiasLocalMoving)
 };
 
 cbuffer PageRequestCB : register(b0)
@@ -108,7 +109,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         if (ndc.z < 0.0f || ndc.z > 1.0f) { continue; }
         // S10e: this view's mip -- the pixel's footprint in ITS texels (the light's distance and cone width), or the old
         // camera-distance level shared by every view.
-        const uint level = pixelMip ? VsmLocalMipFromPixel(pixelRadiusWorld, views[v].params.w, clip.w, localMip.y)
+        const uint level = pixelMip ? VsmLocalMipFromPixel(pixelRadiusWorld, views[v].params.w, clip.w,
+                                                           localMip.y + views[v].mip.x)
                                     : levelByDistance;
 
         // Shadow UV (D3D clip -> UV, y flipped). Mark the selected level AND all coarser levels (a

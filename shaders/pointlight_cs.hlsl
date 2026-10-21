@@ -29,6 +29,7 @@ struct PointLightData
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
     float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
+    float4 vsm;          // S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias)
 };
 
 Texture2D GB0 : register(t0);
@@ -155,7 +156,7 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         // degrees), or the old camera distance.
         const uint  reqLevel   = (vsmLocalMip.x != 0.0f)
             ? VsmLocalMipFromPixel(dot(P - camPosWS, invView[2].xyz) * vsmLocalMip.z, 1.0f,
-                                   VsmPointFaceDepth(P, Ld.position), vsmLocalMip.y)
+                                   VsmPointFaceDepth(P, Ld.position), vsmLocalMip.y + Ld.vsm.x) // S10e: + its moving bias
             : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
         const uint  lvl        = texelFix ? VsmPointSampledLevel((uint)Ld.shadowParams.x, reqLevel, P, Ld.position,
                                                                  Ld.shadowParams.z, Ld.shadowParams.w, VsmPageTable)

@@ -52,6 +52,8 @@ struct SceneView
     // `frustum` -- the CPU path culls with the planes alone.
     float4 lightSphere = float4(0.0f, 0.0f, 0.0f, -1.0f);
     float4 lightCone = float4(0.0f, 0.0f, 0.0f, 2.0f);
+    // Plan S10e: a local light's VSM mip bias on top of the frame's (vsm::LocalMovingMipBias of its mobility).
+    float vsmMipBias = 0.0f;
     bool requiresDepthCheck = false;
     Type type = Type::Camera;
 };

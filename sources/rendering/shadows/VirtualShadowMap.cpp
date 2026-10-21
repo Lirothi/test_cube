@@ -1212,7 +1212,7 @@ void VirtualShadowMap::PlanDistantLights(const vsm::ViewProjEntry* views, std::u
         if (vsm::g_localMipFromPixel)
         {
             const float nearDepth = std::max(0.0f, dx * camForward.x + dy * camForward.y + dz * camForward.z - s.w);
-            mip = vsm::LocalMipFromPixel(nearDepth * pixelRadiusPerDepth, views[v].params.w, s.w, bias);
+            mip = vsm::LocalMipFromPixel(nearDepth * pixelRadiusPerDepth, views[v].params.w, s.w, bias + views[v].mip.x);
         }
         else
         {

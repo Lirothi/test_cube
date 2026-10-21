@@ -2595,6 +2595,11 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         gd.raster.CullMode = D3D12_CULL_MODE_BACK;
         gd.blend.RenderTarget[0].BlendEnable = FALSE;
         indirectShadowMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        // Plan S4: both atlas PSOs get the spot views' linear-depth twin (IndirectShadowMaterial picks it per view).
+        if (indirectShadowMat_ && indirectShadowMat_->GetPipelineState())
+        {
+            mm->LinkSpotLinearDepthVariant(renderer, *indirectShadowMat_);
+        }
 
         // C2: the SHADOW_MASKED variant — selected by IndirectShadowMaterial() whenever the
         // caster set contains alpha-masked groups (opaque groups early-out in its PS, so ONE
@@ -2609,6 +2614,10 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
         {
             LOG_ERROR(logging::LogCategory::RenderShadow, "masked indirect shadow PSO FAILED (masked casters cast solid shadows)");
             indirectShadowMaskedMat_.reset();
+        }
+        else
+        {
+            mm->LinkSpotLinearDepthVariant(renderer, *indirectShadowMaskedMat_); // plan S4
         }
 
         // Pool-format twins of the two PSOs above, for the VSM per-page LOOP fallback: same shader,
@@ -3739,7 +3748,7 @@ bool ShadowGpuData::IndirectDrawReady() const
 
 bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                               std::uint32_t viewSlot, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
-                                              bool passB, bool staticRows)
+                                              bool passB, bool staticRows, bool spotLinearDepth)
 {
     if (!renderer || !cl || !IndirectDrawReady()) { return false; }
     // S7: the static rows exist only on a split frame, only for the compacted local views.
@@ -3770,7 +3779,9 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     {
         ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
     }
-    IndirectShadowMaterial()->Bind(cl, ctx, false);
+    Material* const mat = IndirectShadowMaterial();
+    Material* const linear = spotLinearDepth ? mat->SpotLinearDepthVariant() : nullptr; // plan S4
+    (linear ? linear : mat)->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     // Slot 1 = this frame's visible-list region as a per-instance stream; each draw's

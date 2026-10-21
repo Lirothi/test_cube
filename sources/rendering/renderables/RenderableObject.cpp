@@ -115,6 +115,12 @@ void RenderableObject::Init(Renderer* renderer,
     {
         Material::GraphicsDesc shadowDesc = BuildShadowDesc(renderer, graphicsDesc);
         shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc);
+        // Plan S4: the spot views' linear-depth twin. Not for a transparent object -- the spot pass draws the opaque
+        // buckets only, so its twin would be a PSO nobody binds.
+        if (shadowMaterial_ && shadowMaterial_->GetPipelineState() && !IsTransparent())
+        {
+            renderer->GetMaterialManager()->LinkSpotLinearDepthVariant(renderer, *shadowMaterial_);
+        }
     }
     else
     {
@@ -357,13 +363,15 @@ std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
 }
 
 void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const mat4& lightView, const mat4& lightProj, RenderContext& ctx)
+    const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool spotLinearDepth)
 {
     (void)lightView;
     (void)lightProj;
 
     if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
-    shadowMaterial_->Bind(cl, ctx, false);
+    // Plan S4: a linear-depth spot view binds the twin (logged at its creation if it has none).
+    Material* const linear = spotLinearDepth ? shadowMaterial_->SpotLinearDepthVariant() : nullptr;
+    (linear ? linear : shadowMaterial_.get())->Bind(cl, ctx, false);
 }
 
 void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
@@ -376,7 +384,7 @@ void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod,
-    bool chunkCameraLods, const Frustum* chunkCullFrustum)
+    bool chunkCameraLods, const Frustum* chunkCullFrustum, bool spotLinearDepth)
 {
     if (!renderer || !cl || !shadowMaterial_)
     {
@@ -404,7 +412,7 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
         uniformBinder_->UpdateShadowCB(*this, renderer, lightView, lightProj, cbData);
     }
 
-    RecordShadow(renderer, cl, lightView, lightProj, ctx);
+    RecordShadow(renderer, cl, lightView, lightProj, ctx, spotLinearDepth);
     // B3: multi-submesh meshes draw per range — byte-identical coverage today (depth-only, the
     // ranges tile the buffer), but this loop is where Part C binds per-slot masked materials
     // between ranges. Single-submesh meshes keep the whole-buffer DrawGeometry, which stays

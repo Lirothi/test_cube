@@ -202,12 +202,16 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                         : Math::float4(0.0f, 0.0f, 1.0f, 0.0f);
                 }
                 spotCPU[i].viewProj = light.GetViewProjMatrix();
+                spotCPU[i].shadowParams4 = Math::float4(vsm::LocalMovingMipBias(lm.GetSpotMobility(i)), // S10e
+                    render::SpotShadowLinearDepth() ? 1.0f / std::max(light.GetShadowFar() - light.GetShadowNear(), 1.0e-4f)
+                                                    : 0.0f, // S4: the linear depth's scale, BuildSpotShadowViewCB's
+                    0.0f, 0.0f);
                 // Plan S2: the filter's inputs (local_shadow_filter.hlsli). UE's soft transition for a spot is
                 // 1/SpotLightTransitionScale (60) x 2 x ShadowBias of its normalised depth (ShadowRendering.cpp:2059-2075),
                 // which spans the light's range: the ramp is that many METRES here, (f - n) / 60 at the default bias.
                 {
-                    const float nearP = std::max(desc.nearPlane, 0.01f);
-                    const float farP = std::max(desc.range, nearP + 0.1f);
+                    const float nearP = light.GetShadowNear(); // plan S4: the projection's own (render::SpotShadowNear)
+                    const float farP = light.GetShadowFar();
                     const float transitionScale = 60.0f / std::max((farP - nearP) * 2.0f * std::max(desc.shadowBias, 0.0f), 1.0e-4f);
                     spotCPU[i].shadowParams3 = Math::float4(nearP, transitionScale, 7.0f * std::max(desc.shadowSharpen, 0.0f) + 1.0f,
                                                             render::g_localShadowFilterUe ? 1.0f : 0.0f);
@@ -272,6 +276,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetPointShadowFade(i) : 1.0f,
                     static_cast<float>(std::max(pointPlace.page, 0)), 1.0f / pointRes,
                     texelBias ? render::LocalShadowNormalTexels(desc.shadowBias) : 0.0f); // S8: the light's own knob
+                pointCPU[i].vsm = Math::float4(vsm::LocalMovingMipBias(lm.GetPointMobility(i)), 0.0f, 0.0f, 0.0f); // S10e
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {
@@ -474,7 +479,11 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         // bias) -- frozen there, the pool keeps the pages the old bias asked for and the shadows stay missing.
         // Plan S10c: nor when the shadowed set changed (a light came, left or moved slot): its pages are requested,
         // allocated and moved only by an update.
-        const bool poolSettling = frame.vsm && (frame.vsm->DynamicResSettling() || frame.vsm->ViewOwnersPending());
+        // Plan S10e: nor while a light's moving bias fades back (UE's mobility): the pages it asked coarser while it moved
+        // must be asked again as it settles, or the stopped light keeps its coarse shadow.
+        const bool lightsSettling = frame.lightManager && frame.lightManager->GetMobileLightCount() > 0;
+        const bool poolSettling = frame.vsm && (frame.vsm->DynamicResSettling() || frame.vsm->ViewOwnersPending() ||
+                                                lightsSettling);
         const bool contentStill = (!frame.shadowGpu || frame.shadowGpu->MoverCount() == 0) &&
                                   !windAnimating && !poolSettling;
         if (viewStill && contentStill)
