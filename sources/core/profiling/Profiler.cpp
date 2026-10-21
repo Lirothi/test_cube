@@ -13,9 +13,7 @@
 #include <limits>
 #include "third_party/robin_hood.h"
 #include "core/logging/Log.h"
-#include "text/TextManager.h"
-#include "input/InputManager.h"
-#include "app/Systems.h"
+#include <Windows.h>
 
 namespace {
 
@@ -49,7 +47,6 @@ std::string EscapeJson(const std::string& input) {
 }
 
 const Profiler::ScopeNameKey kTraceHandlingKey = Profiler::RegisterTraceLiteral(L"TraceHandling");
-const Profiler::ScopeNameKey kProfilerEmitOverlayKey = Profiler::RegisterTraceLiteral(L"Profiler::EmitOverlay");
 const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU.Frame");
 // Async-compute plan step 3: TWO GPU tracks. In a single-track trace an overlap is
 // indistinguishable from a reordering, so this has to exist before any pass moves — otherwise
@@ -63,7 +60,6 @@ constexpr uint32_t kGpuTraceThreadIndexCompute = 1u;    // async compute queue
 constexpr uint32_t kCpuTraceThreadIndexBase = 2u;       // CPU threads start after both GPU rows
 constexpr const char* kGpuTraceThreadName = "GPU Queue";
 constexpr const char* kGpuTraceThreadNameCompute = "GPU Queue (async compute)";
-constexpr UINT kGpuReadbackFrameSlots = 8u;
 // Built-in whole-CPU-frame counter, emitted automatically each EndFrame so no
 // manual CPU_SCOPE is needed; spans the profiler's BeginFrame..EndFrame bracket,
 // which includes Renderer::BeginFrame's fence wait.
@@ -224,15 +220,6 @@ std::string WideToUtf8(const std::wstring& input) {
     return out;
 }
 
-void FormatOverlayRow(Profiler::OverlayRow& row, const std::wstring* name) {
-    const double perUse = (row.usages ? (row.avgMs / static_cast<double>(row.usages)) : 0.0);
-    wchar_t buf[192];
-    std::swprintf(buf, sizeof(buf) / sizeof(wchar_t),
-        L"%-50s  avg:%6.2f  max:%6.2f  p/u:%6.3f  usages:%u",
-        name->c_str(), row.avgMs, row.maxMs, perUse, row.usages);
-    row.formatted.assign(buf);
-}
-
 uint64_t TraceOutputThreadIndex(const Profiler::TraceEvent& ev) {
     if (ev.category == Profiler::TraceEvent::Category::Gpu) {
         // Step 3: a GPU event carries its QUEUE index in threadIndex (0 direct / 1 compute), which
@@ -248,52 +235,16 @@ uint64_t TraceOutputThreadIndex(const Profiler::TraceEvent& ev) {
 
 #if PROF_ENABLED
 
-Profiler::SampleNode* const Profiler::kSampleListClosed = reinterpret_cast<Profiler::SampleNode*>(1);
-Profiler::TraceSampleNode* const Profiler::kTraceListClosed = reinterpret_cast<Profiler::TraceSampleNode*>(1);
-
 Profiler::Profiler() {
-    frameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
-#if PROF_GPU_ENABLED
-    gpuFrameSampleHead_.store(kSampleListClosed, std::memory_order_relaxed);
-#endif
-    traceSampleHead_.store(kTraceListClosed, std::memory_order_relaxed);
+    // Make the task system outlive this singleton even in a standalone harness.
+    (void)TaskSystem::Get();
 }
 
 Profiler::~Profiler() {
-    auto destroyList = [](SampleNode* head) {
-        while (head) {
-            SampleNode* next = head->next;
-            delete head;
-            head = next;
-        }
-    };
-
-    SampleNode* head = frameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
-    if (head == kSampleListClosed) { head = nullptr; }
-    destroyList(head);
-#if PROF_GPU_ENABLED
-    SampleNode* gpuHead = gpuFrameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
-    if (gpuHead == kSampleListClosed) { gpuHead = nullptr; }
-    destroyList(gpuHead);
-#endif
-
-    SampleNode* pool = sampleNodePool_.exchange(nullptr, std::memory_order_acq_rel);
-    destroyList(pool);
-
-    auto destroyTraceList = [](TraceSampleNode* head) {
-        while (head) {
-            TraceSampleNode* next = head->next;
-            delete head;
-            head = next;
-        }
-    };
-
-    TraceSampleNode* traceHead = traceSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
-    if (traceHead == kTraceListClosed) { traceHead = nullptr; }
-    destroyTraceList(traceHead);
-
-    TraceSampleNode* tracePool = traceSamplePool_.exchange(nullptr, std::memory_order_acq_rel);
-    destroyTraceList(tracePool);
+    sampleEpoch_.store(0, std::memory_order_release);
+    TaskSystem::Get().Wait(overlayTask_);
+    TaskSystem::Get().Release(overlayTask_);
+    StopTraceWriter();
 }
 
 Profiler::ScopeNameKey Profiler::RegisterTraceLiteral(const wchar_t* name) {
@@ -304,133 +255,47 @@ Profiler::ScopeNameKey Profiler::RegisterTraceDynamic(std::wstring name, uint32_
     return GetTraceStringTable().RegisterDynamic(std::move(name), outIndex);
 }
 
-void Profiler::ReleaseTraceNameKeys(const std::vector<Profiler::ScopeNameKey>& keys) {
+void Profiler::ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys) {
     GetTraceStringTable().ReleaseDynamicKeys(keys);
 }
 
-Profiler::SampleNode* Profiler::AcquireSampleNode() {
-    SampleNode* node = sampleNodePool_.load(std::memory_order_acquire);
-    while (node && !sampleNodePool_.compare_exchange_weak(node, node->next,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
-    }
-    if (!node) {
-        node = new SampleNode();
-    }
-    node->next = nullptr;
-    return node;
-}
-
-void Profiler::ReleaseSampleNode(SampleNode* node) {
-    if (!node) { return; }
-    SampleNode* head = sampleNodePool_.load(std::memory_order_relaxed);
-    do {
-        node->next = head;
-    } while (!sampleNodePool_.compare_exchange_weak(head, node,
-                std::memory_order_release, std::memory_order_relaxed));
-}
-
-void Profiler::ReleaseSampleList(SampleNode* head) {
-    if (!head || head == kSampleListClosed) { return; }
-    while (head) {
-        SampleNode* next = head->next;
-        ReleaseSampleNode(head);
-        head = next;
-    }
-}
-
-Profiler::TraceSampleNode* Profiler::AcquireTraceSampleNode() {
-    TraceSampleNode* node = traceSamplePool_.load(std::memory_order_acquire);
-    while (node && !traceSamplePool_.compare_exchange_weak(node, node->next,
-            std::memory_order_acq_rel, std::memory_order_acquire)) {
-    }
-    if (!node) {
-        node = new TraceSampleNode();
-    }
-    node->next = nullptr;
-    return node;
-}
-
-void Profiler::ReleaseTraceSampleNode(TraceSampleNode* node) {
-    if (!node) { return; }
-    TraceSampleNode* head = traceSamplePool_.load(std::memory_order_relaxed);
-    do {
-        node->next = head;
-    } while (!traceSamplePool_.compare_exchange_weak(head, node,
-                std::memory_order_release, std::memory_order_relaxed));
-}
-
-void Profiler::ReleaseTraceSampleList(TraceSampleNode* head) {
-    if (!head || head == kTraceListClosed) { return; }
-    while (head) {
-        TraceSampleNode* next = head->next;
-        ReleaseTraceSampleNode(head);
-        head = next;
-    }
-}
-
-bool Profiler::PushTraceSampleNode(TraceSampleNode* node) {
-    TraceSampleNode* head = traceSampleHead_.load(std::memory_order_acquire);
-    while (head != kTraceListClosed) {
-        node->next = head;
-        if (traceSampleHead_.compare_exchange_weak(head, node,
-                std::memory_order_release, std::memory_order_acquire)) {
-            return true;
+Profiler::ThreadSamples& Profiler::GetThreadSamples() {
+    // The singleton owns buffers until producers have shut down. Thread exit does
+    // not leave dangling registrations or reclaim a buffer under the collector.
+    static thread_local ThreadSamples* local = nullptr;
+    if (!local) {
+        auto buffer = std::make_unique<ThreadSamples>();
+        buffer->samples.reserve(256);
+        buffer->drainedSamples.reserve(256);
+        {
+            std::lock_guard<std::mutex> lock(mtx_);
+            buffer->threadIndex = GetThreadIndex_Locked(std::this_thread::get_id());
         }
+        std::lock_guard<std::mutex> lock(buffersMutex_);
+        local = buffer.get();
+        threadSamples_.push_back(std::move(buffer));
     }
-    return false;
+    return *local;
 }
 
-void Profiler::DrainTraceSampleNodes(uint64_t traceStartUs) {
-    TraceSampleNode* head = traceSampleHead_.exchange(kTraceListClosed, std::memory_order_acq_rel);
-    if (head == kTraceListClosed) { return; }
-    while (head) {
-        TraceSampleNode* next = head->next;
-        TraceEvent ev = head->sample;
-        if (ev.tsUs >= traceStartUs) {
-            ev.tsUs -= traceStartUs;
+void Profiler::DrainThreadSamples(bool capture, uint64_t startUs) {
+    std::lock_guard<std::mutex> registryLock(buffersMutex_);
+    for (auto& buffer : threadSamples_) {
+        {
+            std::lock_guard<std::mutex> lock(buffer->mutex);
+            buffer->samples.swap(buffer->drainedSamples);
+            buffer->traces.swap(buffer->drainedTraces);
         }
-        else {
-            ev.tsUs = 0;
+        asyncCpuSamples_.insert(asyncCpuSamples_.end(), buffer->drainedSamples.begin(), buffer->drainedSamples.end());
+        buffer->drainedSamples.clear();
+        if (capture) {
+            for (auto ev : buffer->drainedTraces) {
+                ev.tsUs = ev.tsUs >= startUs ? ev.tsUs - startUs : 0;
+                traceEvents_.push_back(ev);
+            }
         }
-        traceEvents_.push_back(std::move(ev));
-        ReleaseTraceSampleNode(head);
-        head = next;
+        buffer->drainedTraces.clear();
     }
-}
-
-bool Profiler::PushSampleNode(std::atomic<SampleNode*>& headAtomic, SampleNode* node) {
-    SampleNode* head = headAtomic.load(std::memory_order_acquire);
-    while (head != kSampleListClosed) {
-        node->next = head;
-        if (headAtomic.compare_exchange_weak(head, node,
-                std::memory_order_release, std::memory_order_acquire)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-void Profiler::DrainSampleNodes(std::atomic<SampleNode*>& headAtomic, std::vector<ScopeSample>& out) {
-    SampleNode* head = headAtomic.exchange(kSampleListClosed, std::memory_order_acq_rel);
-    if (head == kSampleListClosed) { return; }
-    while (head) {
-        out.push_back(head->sample);
-        SampleNode* next = head->next;
-        ReleaseSampleNode(head);
-        head = next;
-    }
-}
-
-uint32_t Profiler::GetThreadIndexForCurrentThread() {
-    static thread_local uint32_t cached = std::numeric_limits<uint32_t>::max();
-    uint32_t idx = cached;
-    if (idx != std::numeric_limits<uint32_t>::max()) {
-        return idx;
-    }
-    std::lock_guard<std::mutex> lk(mtx_);
-    idx = GetThreadIndex_Locked(std::this_thread::get_id());
-    cached = idx;
-    return idx;
 }
 
 Profiler& Profiler::Get() {
@@ -439,540 +304,205 @@ Profiler& Profiler::Get() {
 }
 
 #if PROF_GPU_ENABLED
-Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key)
-#if PROF_ENABLED
-    : cl_(cl)
-#endif
-{
-#if PROF_ENABLED
+Profiler::ScopedGpu::ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key) : cl_(cl) {
     idx_ = Profiler::Get().BeginGpuSample(cl, key);
-#else
-    (void)cl;
-    (void)key;
-#endif
 }
-
 Profiler::ScopedGpu::~ScopedGpu() {
-#if PROF_ENABLED
     Profiler::Get().EndGpuSample(cl_, idx_);
-#endif
 }
 #endif
 
 void Profiler::BeginFrame(uint64_t frameNo) {
     if (!GetEnabled()) { return; }
-    std::lock_guard<std::mutex> lk(mtx_);
-    frameSamples_.clear();
-    SampleNode* stale = frameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
-    if (stale && stale != kSampleListClosed) {
-        ReleaseSampleList(stale);
-    }
-#if PROF_GPU_ENABLED
-    SampleNode* gpuStale = gpuFrameSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
-    if (gpuStale && gpuStale != kSampleListClosed) {
-        ReleaseSampleList(gpuStale);
-    }
-#endif
-    TraceSampleNode* traceStale = traceSampleHead_.exchange(nullptr, std::memory_order_acq_rel);
-    if (traceStale && traceStale != kTraceListClosed) {
-        ReleaseTraceSampleList(traceStale);
-    }
-#if PROF_GPU_ENABLED
-    gpuFrameSamples_.clear();
-    gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
-#endif
+    std::lock_guard<std::mutex> lock(mtx_);
     frameNo_ = frameNo;
     frameOpen_ = true;
-    frameSampleHead_.store(nullptr, std::memory_order_release);
-#if PROF_GPU_ENABLED
-    gpuFrameSampleHead_.store(nullptr, std::memory_order_release);
-#endif
-    traceSampleHead_.store(nullptr, std::memory_order_release);
-    frameOpenFlag_.store(true, std::memory_order_release);
     frameCpuStart_ = CpuClock::now();
-
-    if (traceCaptureRequested_ && !traceCapturing_ && traceRequestFrameCount_ > 0) {
-        std::lock_guard<std::mutex> traceLock(traceMtx_);
+    if (traceCaptureRequested_ && !traceCapturing_ && !traceDraining_) {
         traceCaptureRequested_ = false;
         traceCapturing_ = true;
         traceFramesRemaining_ = traceRequestFrameCount_;
         traceFramesRecorded_ = 0;
         traceEvents_.clear();
-        traceStartUs_ = 0;
-        traceStartSet_ = false;
+        traceStartUs_ = ToMicroseconds(frameCpuStart_);
+        traceFirstFrame_ = frameNo;
+        traceLastFrame_ = UINT64_MAX;
         traceStopRequested_ = false;
-        auto leftoverKeys = GetTraceStringTable().TakeCaptureKeys();
-        if (!leftoverKeys.empty()) {
-            GetTraceStringTable().ReleaseDynamicKeys(leftoverKeys);
-        }
-    }
-
-    if (traceCapturing_ && !traceStartSet_) {
-        std::lock_guard<std::mutex> traceLock(traceMtx_);
-        if (!traceStartSet_) {
-            traceStartUs_ = ToMicroseconds(frameCpuStart_);
-            traceStartSet_ = true;
-        }
     }
     traceCapturingAtomic_.store(traceCapturing_, std::memory_order_release);
-
-    if (lastMaxReset_.time_since_epoch().count() == 0) {
-        lastMaxReset_ = CoolClock::now();
-    }
-    if (lastOverlaySort_.time_since_epoch().count() == 0) {
-        lastOverlaySort_ = CoolClock::now();
-    }
+    sampleEpoch_.store(++nextSampleEpoch_, std::memory_order_release);
+#if PROF_GPU_ENABLED
+    nextGpuQuery_.store(0, std::memory_order_relaxed);
+    gpuFrameSampleIdx_ = SIZE_MAX;
+    gpuRecordingReady_ = gpuInitialized_ && gpuResolvedBatches_[gpuRecordingReadbackSlot_].queryCount == 0;
+#endif
 }
 
 void Profiler::EndFrame() {
-    if (!GetEnabled()) { return; }
-
-    // 0) Wait for the previous async build (minimal work on the main thread)
-    TaskSystem& tasks = TaskSystem::Get();
+    if (!frameOpen_) { return; }
+    auto& tasks = TaskSystem::Get();
     tasks.Wait(overlayTask_);
     tasks.Release(overlayTask_);
-
-    // 1) Pull samples from the current frame and close it out quickly
-    auto& samples = asyncCpuSamples_;
-    samples.clear();
-#if PROF_GPU_ENABLED
-    auto& gpuSamples = asyncGpuSamples_;
-    gpuSamples.clear();
-#endif
-    auto& traceDump = traceDumpData_;
-    traceDump.events.clear();
-    traceDump.dynamicKeys.clear();
-    bool haveTraceDump = false;
-    bool finishTraceNow = false;
-    uint64_t finishedTraceStartUs = 0;
+    asyncCpuSamples_.clear();
+    asyncGpuSamples_.clear();
+    asyncGpuSamples_.swap(gpuFrameSamples_);
     const auto frameEnd = CpuClock::now();
-    frameSamples_.clear();
-#if PROF_GPU_ENABLED
-    gpuFrameSamples_.clear();
-#endif
-    frameOpenFlag_.store(false, std::memory_order_release);
-    DrainSampleNodes(frameSampleHead_, frameSamples_);
-#if PROF_GPU_ENABLED
-    DrainSampleNodes(gpuFrameSampleHead_, gpuFrameSamples_);
-#endif
-    samples.swap(frameSamples_);
-#if PROF_GPU_ENABLED
-    gpuSamples.swap(gpuFrameSamples_);
-#endif
+    sampleEpoch_.store(0, std::memory_order_release);
     {
-        std::lock_guard<std::mutex> lk(mtx_);
-        if (!frameOpen_) {
-            frameSamples_.swap(samples);
-#if PROF_GPU_ENABLED
-            gpuFrameSamples_.swap(gpuSamples);
-#endif
-            return;
-        }
+        std::lock_guard<std::mutex> lock(mtx_);
+        DrainThreadSamples(traceCapturing_, traceStartUs_);
         if (traceCapturing_) {
-            std::lock_guard<std::mutex> traceLock(traceMtx_);
             const uint64_t startUs = ToMicroseconds(frameCpuStart_);
             const uint64_t endUs = ToMicroseconds(frameEnd);
-            const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
-            const uint32_t threadIdx = GetThreadIndex_Locked(std::this_thread::get_id());
-            TraceEvent fev;
-            std::wstring frameLabel = L"Frame ";
-            frameLabel += std::to_wstring(frameNo_);
-            Profiler::ScopeNameKey frameKey = RegisterTraceDynamic(std::move(frameLabel));
-            fev.key = frameKey;
-            fev.tsUs = (startUs >= traceStartUs_) ? (startUs - traceStartUs_) : 0;
-            fev.durUs = durUs;
-            fev.threadIndex = threadIdx;
-            traceEvents_.push_back(std::move(fev));
-
-            DrainTraceSampleNodes(traceStartUs_);
-
-            TraceEvent hev;
-            hev.key = kTraceHandlingKey;
-            hev.tsUs = endUs - traceStartUs_;
-            hev.durUs = ToMicroseconds(CoolClock::now()) - endUs;
-            hev.threadIndex = threadIdx;
-            traceEvents_.push_back(std::move(hev));
-
-            const bool stopNow = traceStopRequested_;
-            traceStopRequested_ = false;
-
-            bool finishTrace = false;
-            if (stopNow) {
-                traceFramesRemaining_ = 0;
-                finishTrace = true;
-            }
-            else if (traceOpenEnded_) {
-                // Runs until StopTraceCapture; the frame budget does not apply.
-                ++traceFramesRecorded_;
-            }
-            else if (traceFramesRemaining_ > 0) {
-                ++traceFramesRecorded_;
-                traceFramesRemaining_--;
-                if (traceFramesRemaining_ == 0) {
-                    finishTrace = true;
-                }
-            }
-
-            if (finishTrace) {
-                finishTraceNow = true;
-                finishedTraceStartUs = traceStartUs_;
+            TraceEvent frame;
+            frame.key = RegisterTraceDynamic(L"Frame " + std::to_wstring(frameNo_));
+            frame.tsUs = startUs - traceStartUs_;
+            frame.durUs = endUs - startUs;
+            frame.threadIndex = GetThreadIndex_Locked(std::this_thread::get_id());
+            frame.frameNumber = frameNo_;
+            frame.hasFrameNumber = true;
+            traceEvents_.push_back(frame);
+            TraceEvent handling;
+            handling.key = kTraceHandlingKey;
+            handling.tsUs = endUs - traceStartUs_;
+            handling.durUs = ToMicroseconds(CpuClock::now()) - endUs;
+            handling.threadIndex = frame.threadIndex;
+            traceEvents_.push_back(handling);
+            ++traceFramesRecorded_;
+            if (!traceOpenEnded_ && traceFramesRemaining_) { --traceFramesRemaining_; }
+            if (traceStopRequested_ || (!traceOpenEnded_ && traceFramesRemaining_ == 0)) {
                 traceCapturing_ = false;
-                traceStartUs_ = 0;
-                traceStartSet_ = false;
-                traceRequestFrameCount_ = 0;
+                traceDraining_ = true;
+                traceLastFrame_ = frameNo_;
+                traceStopRequested_ = false;
             }
         }
         frameOpen_ = false;
+        traceCapturingAtomic_.store(false, std::memory_order_release);
     }
-    traceCapturingAtomic_.store(traceCapturing_, std::memory_order_release);
-
-    // Whole-CPU-frame counter: the full BeginFrame..EndFrame span (includes
-    // Renderer::BeginFrame's fence wait). Pushed into this frame's CPU samples
-    // so it accumulates into stats_ / the overlay like any scope — past the
-    // early-out above, so the frame was open. Excludes only the profiler's own
-    // post-frameEnd work.
-    {
-        const double wholeFrameMs =
-            std::chrono::duration<double, std::milli>(frameEnd - frameCpuStart_).count();
-        asyncCpuSamples_.push_back(ScopeSample{ kCpuFrameKey, wholeFrameMs });
-    }
-
+    asyncCpuSamples_.push_back({ kCpuFrameKey,
+        std::chrono::duration<double, std::milli>(frameEnd - frameCpuStart_).count(), frameNo_ });
 #if PROF_GPU_ENABLED
-    // 2) prepare gpu samples for next frame
-    {
-        std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (!gpuPending_.empty() && nextGpuQuery_ > 0 && gpuQueue_[0] && gpuDrainFence_[0]) {
-            // Step 3: ONE value on BOTH drain fences. The batch becomes readable only when both
-            // have passed it (see CollectGpuResolvedSamples), which is what stops a compute-queue
-            // resolve from being read before the compute queue ran it.
-            const UINT64 fenceValue = gpuDrainFenceValue_++;
-            bool signalled = SUCCEEDED(gpuQueue_[0]->Signal(gpuDrainFence_[0].Get(), fenceValue));
-            for (UINT q = 1; q < kGpuQueueCount && signalled; ++q) {
-                if (!gpuDrainFence_[q]) { continue; }
-                signalled = gpuQueue_[q]
-                    ? SUCCEEDED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), fenceValue))
-                    : SUCCEEDED(gpuDrainFence_[q]->Signal(fenceValue)); // no queue: advance on CPU
-            }
-            if (signalled) {
-                GpuResolvedBatch batch;
-                batch.ranges = std::move(gpuPending_);
-                batch.queryCount = nextGpuQuery_;
-                batch.readbackSlot = gpuRecordingReadbackSlot_;
-                batch.fenceValue = fenceValue;
-                gpuResolvedBatches_.push_back(std::move(batch));
+    const UINT queryCount = (std::min)(nextGpuQuery_.load(std::memory_order_relaxed), maxGpuQueries_);
+    if (gpuRecordingReady_ && queryCount) {
+        auto& batch = gpuResolvedBatches_[gpuRecordingReadbackSlot_];
+        batch.ranges.assign(gpuPending_.begin(), gpuPending_.begin() + queryCount / 2);
+        batch.queryCount = queryCount;
+        batch.frameNo = frameNo_;
+        batch.fenceValue = gpuDrainFenceValue_++;
+        for (UINT q = 0; q < kGpuQueueCount; ++q) {
+            if (gpuQueue_[q] && FAILED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), batch.fenceValue))) {
+                LOG_ERROR(logging::LogCategory::Profiling, "GPU profiler fence signal failed on queue {}", q);
+                batch.fenceValue = UINT64_MAX; // never reuse a slot whose completion is unknown
+                break;
             }
         }
-        gpuPending_.clear();
-        nextGpuQuery_ = 0;
-        gpuRecordingReadbackSlot_ = (gpuRecordingReadbackSlot_ + 1u) % kGpuReadbackFrameSlots;
+        gpuRecordingReadbackSlot_ = (gpuRecordingReadbackSlot_ + 1) % kGpuReadbackFrameSlots;
     }
-
-    if (finishTraceNow && WaitForGpuProfilerIdle()) {
-        std::vector<TraceEvent> finalGpuTraceEvents;
-        CollectGpuResolvedSamples(&gpuSamples, &finalGpuTraceEvents, finishedTraceStartUs);
-        if (!finalGpuTraceEvents.empty()) {
-            std::lock_guard<std::mutex> traceLock(traceMtx_);
-            for (auto& ev : finalGpuTraceEvents) {
-                traceEvents_.push_back(std::move(ev));
-            }
-        }
-    }
+    gpuRecordingReady_ = false;
 #endif
+    FinishTraceIfReady();
 
-    if (finishTraceNow) {
-        std::lock_guard<std::mutex> traceLock(traceMtx_);
-        traceDump.events = std::move(traceEvents_);
-        traceDump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
-        haveTraceDump = true;
-    }
-
-    auto overlayJob = [this, haveTraceDump]() mutable {
+    auto overlayJob = [this]() {
         const auto t0 = CoolClock::now();
-
-        // A) Reduce samples into stats_ (lock-free) + EMA/lastCount
-        auto accumulateSamples = [&](const std::vector<ScopeSample>& src,
-                                     auto& statsMap,
-                                     uint32_t& nextOverlayId,
-                                     bool commitEmptyFrame) {
-            for (const auto& s : src) {
-                auto [it, inserted] = statsMap.try_emplace(s.key);
-                auto& entry = it->second;
+        const double cooldown = maxResetIntervalSec_.load(std::memory_order_relaxed);
+        if (resetMaxRequested_.exchange(false, std::memory_order_acq_rel) ||
+            std::chrono::duration<double>(t0 - lastMaxReset_).count() >= cooldown) {
+            ResetMax_Unsafe();
+            lastMaxReset_ = t0;
+        }
+        auto accumulate = [this](const auto& samples, auto& stats, auto& order, uint32_t& nextId, bool gpu) {
+            auto commit = [&]() { for (auto& kv : stats) { kv.second.stats.CommitFrame(emaAlpha_); } };
+            uint64_t frame = samples.empty() ? 0 : samples.front().frameNumber;
+            for (const auto& sample : samples) {
+                if (gpu && sample.frameNumber != frame) {
+                    commit();
+                    frame = sample.frameNumber;
+                }
+                auto [it, inserted] = stats.try_emplace(sample.key);
                 if (inserted) {
-                    entry.wideName = BuildWideName(it->first);
-                    entry.overlayId = nextOverlayId++;
-                    if (entry.overlayId == 0) { entry.overlayId = nextOverlayId++; }
+                    it->second.wideName = BuildWideName(sample.key);
+                    it->second.overlayId = nextId++;
+                    order.push_back(sample.key);
                 }
-                entry.stats.Accumulate(s.ms);
+                it->second.stats.Accumulate(sample.ms);
             }
-            // GPU timestamps are resolved asynchronously. An empty CPU frame
-            // therefore means "no completed readback yet", not "the GPU did
-            // no work". Do not clear lastCount in that case or the whole GPU
-            // overlay disappears until a later batch arrives. Once a resolved
-            // batch is present, still commit every entry so inactive passes
-            // (including VSM) receive a zero usage count and sort below active work.
-            if (commitEmptyFrame || !src.empty()) {
-                for (auto& kv : statsMap) {
-                    kv.second.stats.CommitFrame(emaAlpha_);
+            if (!gpu || !samples.empty()) { commit(); }
+        };
+        accumulate(asyncCpuSamples_, stats_, overlayOrder_, nextOverlayId_, false);
+#if PROF_GPU_ENABLED
+        accumulate(asyncGpuSamples_, gpuStats_, gpuOverlayOrder_, nextGpuOverlayId_, true);
+#endif
+        const bool resort = std::chrono::duration<double>(t0 - lastOverlaySort_).count() >=
+            overlayResortIntervalSec_.load(std::memory_order_relaxed);
+        auto sort = [&](auto& order, const auto& stats) {
+            if (!resort) { return; }
+            std::sort(order.begin(), order.end(), [&](ScopeNameKey a, ScopeNameKey b) {
+                const auto& x = stats.at(a);
+                const auto& y = stats.at(b);
+                if ((x.stats.lastCount == 0) != (y.stats.lastCount == 0)) { return x.stats.lastCount != 0; }
+                if (x.stats.avgMs != y.stats.avgMs) { return x.stats.avgMs > y.stats.avgMs; }
+                return x.overlayId < y.overlayId;
+            });
+        };
+        sort(overlayOrder_, stats_);
+#if PROF_GPU_ENABLED
+        sort(gpuOverlayOrder_, gpuStats_);
+#endif
+        if (resort) { lastOverlaySort_ = t0; }
+        auto publish = [](auto& rows, const auto& order, const auto& stats, size_t offset) {
+            rows.resize(order.size() + offset);
+            for (size_t i = 0; i < order.size(); ++i) {
+                const auto& entry = stats.at(order[i]);
+                auto& row = rows[i + offset];
+                if (row.entryId != entry.overlayId) {
+                    row.entryId = entry.overlayId;
+                    row.name = entry.wideName;
                 }
+                row.avgMs = entry.stats.avgMs;
+                row.maxMs = entry.stats.maxMs;
+                row.usages = entry.stats.lastCount;
             }
         };
-
-        accumulateSamples(asyncCpuSamples_, stats_, nextOverlayId_, /*commitEmptyFrame=*/true);
-        asyncCpuSamples_.clear();
-
+        std::lock_guard<std::mutex> lock(snapshotMutex_);
+        publish(overlayRows_, overlayOrder_, stats_, 1);
 #if PROF_GPU_ENABLED
-        accumulateSamples(asyncGpuSamples_, gpuStats_, nextGpuOverlayId_, /*commitEmptyFrame=*/false);
-        asyncGpuSamples_.clear();
+        publish(gpuOverlayRows_, gpuOverlayOrder_, gpuStats_, 0);
 #endif
-
-        // B) Build the current set of rows, reusing allocated buffers
-        auto buildOverlayScratch = [&](auto& statsMap,
-                                       std::vector<OverlayRow>& scratchRows,
-                                       robin_hood::unordered_flat_map<uint32_t, size_t>& lookup,
-                                       std::vector<uint8_t>& usedFlags,
-                                       std::vector<const StatsEntry*>& entryPtrs,
-                                       std::vector<size_t>& orderBuffer) {
-            entryPtrs.clear();
-            entryPtrs.reserve(statsMap.size());
-            for (auto& kv : statsMap) {
-                if (kv.second.overlayId == 0) { continue; }
-                // Keep inactive entries so a conditional pass (notably VSM) retains its row and
-                // stable placement when it resumes. The sort puts zero-usage rows below active
-                // work, where the overlay's line cap naturally hides them.
-                entryPtrs.push_back(&kv.second);
-            }
-            const size_t count = entryPtrs.size();
-            scratchRows.resize(count);
-            lookup.clear();
-            lookup.reserve(count);
-            usedFlags.assign(count, 0u);
-            orderBuffer.resize(count);
-            if (count == 0) {
-                return;
-            }
-            auto fillRow = [&](size_t idx) {
-                const StatsEntry* entry = entryPtrs[idx];
-                OverlayRow row;
-                row.entryId = entry->overlayId;
-                row.avgMs = entry->stats.avgMs;
-                row.maxMs = entry->stats.maxMs;
-                row.usages = entry->stats.lastCount;
-                FormatOverlayRow(row, &entry->wideName);
-                scratchRows[idx] = std::move(row);
-            };
-            constexpr size_t kParallelThreshold = 512;
-            const size_t jobCount = count;
-            if (jobCount >= kParallelThreshold) {
-                TaskSystem::ParallelFor(jobCount, [&](size_t idx) { fillRow(idx); }, 64);
-            }
-            else {
-                for (size_t idx = 0; idx < jobCount; ++idx) {
-                    fillRow(idx);
-                }
-            }
-            for (size_t idx = 0; idx < jobCount; ++idx) {
-                lookup.emplace(scratchRows[idx].entryId, idx);
-                orderBuffer[idx] = idx;
-            }
-        };
-
-        buildOverlayScratch(stats_, overlayScratchRows_, overlayScratchLookup_, overlayScratchUsed_, overlayEntryPtrs_, overlayScratchOrder_);
-#if PROF_GPU_ENABLED
-        buildOverlayScratch(gpuStats_, gpuOverlayScratchRows_, gpuOverlayScratchLookup_, gpuOverlayScratchUsed_, gpuOverlayEntryPtrs_, gpuOverlayScratchOrder_);
-#endif
-
-        // C) Rare sort or stable order update
-        const auto now = CoolClock::now();
-        const double secSinceSort = std::chrono::duration<double>(now - lastOverlaySort_).count();
-        const bool needResort = (secSinceSort >= overlayResortIntervalSec_);
-
-        const int readIdx = overlayReadBuf_.load(std::memory_order_acquire);
-        const int writeIdx = readIdx ^ 1;
-        auto& readRows = overlayRows_[readIdx];
-        auto& writeRows = overlayRows_[writeIdx];
-        writeRows.clear();
-        writeRows.reserve(overlayScratchRows_.size() + 1u);
-
-#if PROF_GPU_ENABLED
-        const int gpuReadIdx = gpuOverlayReadBuf_.load(std::memory_order_acquire);
-        const int gpuWriteIdx = gpuReadIdx ^ 1;
-        auto& gpuReadRows = gpuOverlayRows_[gpuReadIdx];
-        auto& gpuWriteRows = gpuOverlayRows_[gpuWriteIdx];
-        gpuWriteRows.clear();
-        gpuWriteRows.reserve(gpuOverlayScratchRows_.size());
-#endif
-
-        if (needResort) {
-            auto& order = overlayScratchOrder_;
-            auto cmpIdx = [&](size_t a, size_t b) {
-                const auto& ra = overlayScratchRows_[a];
-                const auto& rb = overlayScratchRows_[b];
-                if ((ra.usages == 0) != (rb.usages == 0)) {
-                    return ra.usages != 0;
-                }
-                if (ra.avgMs == rb.avgMs) {
-                    return ra.entryId < rb.entryId;
-                }
-                return ra.avgMs > rb.avgMs;
-            };
-            std::sort(order.begin(), order.end(), cmpIdx);
-            for (size_t idx : order) {
-                writeRows.push_back(std::move(overlayScratchRows_[idx]));
-            }
-
-#if PROF_GPU_ENABLED
-            auto& gorder = gpuOverlayScratchOrder_;
-            auto gcmpIdx = [&](size_t a, size_t b) {
-                const auto& ra = gpuOverlayScratchRows_[a];
-                const auto& rb = gpuOverlayScratchRows_[b];
-                if ((ra.usages == 0) != (rb.usages == 0)) {
-                    return ra.usages != 0;
-                }
-                if (ra.avgMs == rb.avgMs) {
-                    return ra.entryId < rb.entryId;
-                }
-                return ra.avgMs > rb.avgMs;
-            };
-            std::sort(gorder.begin(), gorder.end(), gcmpIdx);
-            for (size_t idx : gorder) {
-                gpuWriteRows.push_back(std::move(gpuOverlayScratchRows_[idx]));
-            }
-#endif
-            lastOverlaySort_ = now;
-        }
-        else {
-            for (const OverlayRow& prev : readRows) {
-                const uint32_t key = prev.entryId;
-                if (key == 0) { continue; }
-                auto it = overlayScratchLookup_.find(key);
-                if (it != overlayScratchLookup_.end()) {
-                    const size_t idx = it->second;
-                    writeRows.push_back(std::move(overlayScratchRows_[idx]));
-                    overlayScratchUsed_[idx] = 1;
-                }
-            }
-            for (size_t idx = 0; idx < overlayScratchRows_.size(); ++idx) {
-                if (!overlayScratchUsed_[idx]) {
-                    writeRows.push_back(std::move(overlayScratchRows_[idx]));
-                }
-            }
-
-#if PROF_GPU_ENABLED
-            for (const OverlayRow& prev : gpuReadRows) {
-                const uint32_t key = prev.entryId;
-                if (key == 0) { continue; }
-                auto it = gpuOverlayScratchLookup_.find(key);
-                if (it != gpuOverlayScratchLookup_.end()) {
-                    const size_t idx = it->second;
-                    gpuWriteRows.push_back(std::move(gpuOverlayScratchRows_[idx]));
-                    gpuOverlayScratchUsed_[idx] = 1;
-                }
-            }
-            for (size_t idx = 0; idx < gpuOverlayScratchRows_.size(); ++idx) {
-                if (!gpuOverlayScratchUsed_[idx]) {
-                    gpuWriteRows.push_back(std::move(gpuOverlayScratchRows_[idx]));
-                }
-            }
-#endif
-        }
-
-        // D) Cooldown for resetting maxima (under the stats_ lock)
-        {
-            const double secSinceMax = std::chrono::duration<double>(now - lastMaxReset_).count();
-            if (secSinceMax >= maxResetIntervalSec_) {
-                std::lock_guard<std::mutex> lk(mtx_);
-                ResetMax_Unsafe();
-                lastMaxReset_ = now;
-                endFrameAsyncMaxMs_ = 0.0;
-            }
-        }
-
-        // E) Measure the async phase itself and insert it as the first entry
-        {
-            const double dtMs = std::chrono::duration<double, std::milli>(CoolClock::now() - t0).count();
-            endFrameAsyncLastMs_ = dtMs;
-            if (endFrameAsyncAvgMs_ <= 0.0) { endFrameAsyncAvgMs_ = dtMs; }
-            else { endFrameAsyncAvgMs_ = endFrameAsyncAvgMs_ * emaAlpha_ + dtMs * (1.0 - emaAlpha_); }
-            if (dtMs > endFrameAsyncMaxMs_) { endFrameAsyncMaxMs_ = dtMs; }
-
-            static const std::wstring kAsyncName = L"Profiler::EndFrame.Async";
-            OverlayRow self;
-            self.entryId = 0;
-            self.avgMs = endFrameAsyncAvgMs_;
-            self.maxMs = endFrameAsyncMaxMs_;
-            self.usages = 1u;
-            FormatOverlayRow(self, &kAsyncName);
-            writeRows.insert(writeRows.begin(), std::move(self));
-        }
-
-#if PROF_GPU_ENABLED
-        // F) Flip the read buffers
-        overlayReadBuf_.store(writeIdx, std::memory_order_release);
-        gpuOverlayReadBuf_.store(gpuWriteIdx, std::memory_order_release);
-#else
-        overlayReadBuf_.store(writeIdx, std::memory_order_release);
-#endif
-
-        if (haveTraceDump) {
-            auto& traceDump = traceDumpData_;
-            if (!traceDump.events.empty()) {
-                WriteTraceJson(traceDump.events);
-            }
-            ReleaseTraceNameKeys(traceDump.dynamicKeys);
-            traceDump.events.clear();
-            traceDump.dynamicKeys.clear();
-        }
+        const double dt = std::chrono::duration<double, std::milli>(CoolClock::now() - t0).count();
+        endFrameAsyncAvgMs_ = endFrameAsyncAvgMs_ <= 0 ? dt : endFrameAsyncAvgMs_ * emaAlpha_ + dt * (1 - emaAlpha_);
+        endFrameAsyncMaxMs_ = (std::max)(endFrameAsyncMaxMs_, dt);
+        auto& self = overlayRows_.front();
+        if (self.name.empty()) { self.name = L"Profiler::EndFrame.Async"; }
+        self.avgMs = endFrameAsyncAvgMs_;
+        self.maxMs = endFrameAsyncMaxMs_;
+        self.usages = 1;
     };
-
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
-    overlayTask_ = TaskSystem::Get().Submit(std::move(overlayJob));
+    overlayTask_ = tasks.Submit(std::move(overlayJob));
 #else
-    overlayTask_ = nullptr;
     overlayJob();
 #endif
 }
 
-void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end) {
-    if (!GetEnabled()) { return; }
-    if (!frameOpenFlag_.load(std::memory_order_acquire)) { return; }
-    const double ms = std::chrono::duration<double, std::milli>(end - start).count();
-    SampleNode* node = AcquireSampleNode();
-    node->sample.key = key;
-    node->sample.ms = ms;
-    if (!PushSampleNode(frameSampleHead_, node)) {
-        ReleaseSampleNode(node);
-        return;
-    }
-
-    if (!traceCapturingAtomic_.load(std::memory_order_acquire)) {
-        return;
-    }
-
-    const uint64_t startUs = ToMicroseconds(start);
-    const uint64_t endUs = ToMicroseconds(end);
-    const uint64_t durUs = (endUs > startUs) ? (endUs - startUs) : 0;
-    const uint32_t threadIdx = GetThreadIndexForCurrentThread();
-    TraceSampleNode* traceNode = AcquireTraceSampleNode();
-    traceNode->sample.key = key;
-    traceNode->sample.tsUs = startUs;
-    traceNode->sample.durUs = durUs;
-    traceNode->sample.threadIndex = threadIdx;
-    if (!PushTraceSampleNode(traceNode)) {
-        ReleaseTraceSampleNode(traceNode);
+void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end, uint64_t epoch) {
+    if (!GetEnabled() || sampleEpoch_.load(std::memory_order_acquire) != epoch) { return; }
+    auto& buffer = GetThreadSamples();
+    std::lock_guard<std::mutex> lock(buffer.mutex);
+    // The frame may have closed while the producer was finding/locking its buffer.
+    if (sampleEpoch_.load(std::memory_order_acquire) != epoch) { return; }
+    buffer.samples.push_back({ key, std::chrono::duration<double, std::milli>(end - start).count() });
+    if (traceCapturingAtomic_.load(std::memory_order_acquire)) {
+        TraceEvent ev;
+        ev.key = key;
+        ev.tsUs = ToMicroseconds(start);
+        ev.durUs = ToMicroseconds(end) - ev.tsUs;
+        ev.threadIndex = buffer.threadIndex;
+        buffer.traces.push_back(ev);
     }
 }
+
 #if PROF_GPU_ENABLED
-void Profiler::PushGpuSample(const ScopeNameKey& key, double ms) {
-    if (!GetEnabled()) { return; }
-    if (!frameOpenFlag_.load(std::memory_order_acquire)) { return; }
-    SampleNode* node = AcquireSampleNode();
-    node->sample.key = key;
-    node->sample.ms = ms;
-    if (!PushSampleNode(gpuFrameSampleHead_, node)) {
-        ReleaseSampleNode(node);
-    }
-}
-
 bool Profiler::CaptureGpuTraceCalibration(UINT queueIndex, GpuTraceCalibration& calibration) const {
     if (queueIndex >= kGpuQueueCount) { return false; }
     if (!gpuInitialized_ || !gpuQueue_[queueIndex] || gpuFreq_[queueIndex] == 0 || gpuTraceQpcFreq_ == 0) {
@@ -1007,501 +537,235 @@ uint64_t Profiler::GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibr
     return static_cast<uint64_t>(std::llround(cpuUs));
 }
 
-void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
-    std::vector<TraceEvent>* traceOut,
-    uint64_t traceStartUs) {
+void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>& sampleOut,
+    std::vector<TraceEvent>* traceOut, uint64_t traceStartUs) {
     if (!gpuInitialized_) { return; }
-
-    std::vector<GpuResolvedBatch> readyBatches;
-    {
-        std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (gpuResolvedBatches_.empty() || !gpuDrainFence_[0]) { return; }
-
-        // Step 3: a batch is readable only when BOTH drain fences have passed its value. The old
-        // single-fence test declared compute-queue resolves readable before the compute queue had
-        // executed them, and the readback would then be mapped over memory nobody had written.
-        UINT64 completedFence = gpuDrainFence_[0]->GetCompletedValue();
-        for (UINT q = 1; q < kGpuQueueCount; ++q) {
-            if (gpuDrainFence_[q]) {
-                completedFence = (std::min)(completedFence, gpuDrainFence_[q]->GetCompletedValue());
-            }
-        }
-        auto writeIt = gpuResolvedBatches_.begin();
-        for (auto readIt = gpuResolvedBatches_.begin(); readIt != gpuResolvedBatches_.end(); ++readIt) {
-            if (readIt->fenceValue != 0 && completedFence >= readIt->fenceValue) {
-                readyBatches.push_back(std::move(*readIt));
-            }
-            else {
-                if (writeIt != readIt) {
-                    *writeIt = std::move(*readIt);
-                }
-                ++writeIt;
-            }
-        }
-        gpuResolvedBatches_.erase(writeIt, gpuResolvedBatches_.end());
+    UINT64 completed = UINT64_MAX;
+    for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        if (gpuDrainFence_[q]) { completed = (std::min)(completed, gpuDrainFence_[q]->GetCompletedValue()); }
     }
-
-    if (readyBatches.empty()) {
-        return;
+    std::array<UINT, kGpuReadbackFrameSlots> ready{};
+    size_t count = 0;
+    for (UINT i = 0; i < kGpuReadbackFrameSlots; ++i) {
+        const auto& batch = gpuResolvedBatches_[i];
+        if (batch.queryCount && batch.fenceValue != UINT64_MAX && completed >= batch.fenceValue) { ready[count++] = i; }
     }
-
-    // Step 3: one calibration PER QUEUE, captured together so both describe the same instant.
-    // Track 0 must exist for a trace to mean anything; track 1 is optional (no compute queue, or a
-    // frame with nothing on it), and a range from a queue with no calibration is simply not
-    // emitted rather than mapped through the wrong clock.
+    if (!count) { return; }
+    std::sort(ready.begin(), ready.begin() + count, [this](UINT a, UINT b) {
+        return gpuResolvedBatches_[a].fenceValue < gpuResolvedBatches_[b].fenceValue;
+    });
     GpuTraceCalibration calibration[kGpuQueueCount]{};
     bool calibrated[kGpuQueueCount] = {};
-    for (UINT q = 0; q < kGpuQueueCount; ++q) {
-        calibrated[q] = CaptureGpuTraceCalibration(q, calibration[q]);
+    // Durations need frequency only; calibration is solely for captured events.
+    if (traceOut && traceStartUs) {
+        for (UINT q = 0; q < kGpuQueueCount; ++q) { calibrated[q] = CaptureGpuTraceCalibration(q, calibration[q]); }
     }
-    const bool collectTrace = (traceOut != nullptr && traceStartUs != 0 && calibrated[0]);
-
-    for (const GpuResolvedBatch& batch : readyBatches) {
-        if (batch.queryCount == 0 || batch.readbackSlot >= kGpuReadbackFrameSlots) {
-            continue;
-        }
-
-        const SIZE_T slotBase = static_cast<SIZE_T>(batch.readbackSlot) *
-            static_cast<SIZE_T>(maxGpuQueries_) * sizeof(UINT64);
-        // Step 3: map EVERY queue's readback for this batch — a batch can hold ranges resolved on
-        // either queue, and each queue writes its own buffer (see the header on id=1047).
-        UINT64* slotData[kGpuQueueCount] = {};
-        bool mapped[kGpuQueueCount] = {};
-        D3D12_RANGE range{ slotBase, slotBase + static_cast<SIZE_T>(batch.queryCount) * sizeof(UINT64) };
-        for (UINT q = 0; q < kGpuQueueCount; ++q) {
-            UINT64* data = nullptr;
-            if (gpuReadback_[q] && SUCCEEDED(gpuReadback_[q]->Map(0, &range, reinterpret_cast<void**>(&data)))) {
-                slotData[q] = reinterpret_cast<UINT64*>(reinterpret_cast<uint8_t*>(data) + slotBase);
-                mapped[q] = true;
+    for (size_t i = 0; i < count; ++i) {
+        const UINT slot = ready[i];
+        auto& batch = gpuResolvedBatches_[slot];
+        const size_t base = static_cast<size_t>(slot) * maxGpuQueries_;
+        for (const auto& range : batch.ranges) {
+            const UINT q = range.queueIndex;
+            if (!range.completed || q >= kGpuQueueCount || !gpuMappedReadback_[q] || !gpuFreq_[q]) { continue; }
+            const UINT64 a = gpuMappedReadback_[q][base + range.start];
+            const UINT64 b = gpuMappedReadback_[q][base + range.end];
+            if (b < a) { continue; }
+            sampleOut.push_back({ range.key, static_cast<double>(b - a) * 1000.0 / gpuFreq_[q], range.frameNo });
+            if (!traceOut || !calibrated[q] || range.frameNo < traceFirstFrame_ || range.frameNo > traceLastFrame_) { continue; }
+            const uint64_t start = GpuTimestampToCpuUs(a, calibration[q], q);
+            const uint64_t end = GpuTimestampToCpuUs(b, calibration[q], q);
+            if (end <= traceStartUs || end < start) { continue; }
+            TraceEvent ev;
+            ev.key = range.key;
+            if (range.key.name == kGpuFrameKey.name) {
+                ev.key = RegisterTraceDynamic(L"GPU.Frame " + std::to_wstring(range.frameNo));
             }
+            ev.frameNumber = range.frameNo;
+            ev.hasFrameNumber = true;
+            ev.tsUs = (std::max)(start, traceStartUs) - traceStartUs;
+            ev.durUs = end - (std::max)(start, traceStartUs);
+            ev.threadIndex = q == 0 ? kGpuTraceThreadIndex : kGpuTraceThreadIndexCompute;
+            ev.category = TraceEvent::Category::Gpu;
+            traceOut->push_back(ev);
         }
-        if (mapped[0]) {
-            for (const auto& s : batch.ranges) {
-                if (!s.completed || s.start >= batch.queryCount || s.end >= batch.queryCount) {
-                    continue;
-                }
-                const UINT rq = (s.queueIndex < kGpuQueueCount) ? s.queueIndex : 0u;
-                if (!mapped[rq]) { continue; }
-
-                const UINT64 a = slotData[rq][s.start];
-                const UINT64 b = slotData[rq][s.end];
-                if (b <= a) {
-                    continue;
-                }
-
-                // Step 3: the DURATION uses this range's own queue frequency. Ticks from the
-                // compute queue divided by the direct queue's frequency is a wrong number that
-                // looks entirely reasonable, which is the worst kind.
-                const UINT q = rq;
-                if (gpuFreq_[q] == 0) { continue; }
-                const double ms = static_cast<double>(b - a) * 1000.0 / static_cast<double>(gpuFreq_[q]);
-                if (sampleOut) {
-                    sampleOut->push_back(ScopeSample{ s.key, ms });
-                }
-                else {
-                    PushGpuSample(s.key, ms);
-                }
-
-                if (collectTrace && calibrated[q]) {
-                    const uint64_t startCpuUs = GpuTimestampToCpuUs(a, calibration[q], q);
-                    const uint64_t endCpuUs = GpuTimestampToCpuUs(b, calibration[q], q);
-                    if (endCpuUs <= traceStartUs || endCpuUs <= startCpuUs) {
-                        continue;
-                    }
-
-                    const uint64_t clippedStartUs = std::max(startCpuUs, traceStartUs);
-                    TraceEvent ev;
-                    ev.key = s.key;
-                    if (s.key.name == kGpuFrameKey.name) {
-                        std::wstring frameName = L"GPU.Frame ";
-                        frameName += std::to_wstring(s.frameNo);
-                        ev.key = RegisterTraceDynamic(std::move(frameName));
-                        ev.frameNumber = s.frameNo;
-                        ev.hasFrameNumber = true;
-                    }
-                    ev.tsUs = clippedStartUs - traceStartUs;
-                    ev.durUs = endCpuUs - clippedStartUs;
-                    // Step 3: the row IS the queue (see TraceOutputThreadIndex).
-                    ev.threadIndex = (q == 0) ? kGpuTraceThreadIndex : kGpuTraceThreadIndexCompute;
-                    ev.category = TraceEvent::Category::Gpu;
-                    traceOut->push_back(std::move(ev));
-                }
-            }
-        }
-        D3D12_RANGE writtenRange{ 0, 0 };
-        for (UINT q = 0; q < kGpuQueueCount; ++q) {
-            if (mapped[q]) { gpuReadback_[q]->Unmap(0, &writtenRange); }
-        }
+        batch.ranges.clear(); // retain per-slot capacity
+        batch.queryCount = 0;
+        batch.fenceValue = 0;
     }
-}
-
-bool Profiler::WaitForGpuProfilerIdle() {
-    if (!gpuInitialized_ || !gpuQueue_[0] || !gpuDrainFence_[0] || !gpuDrainFenceEvent_[0]) {
-        return false;
-    }
-
-    // Step 3: drain BOTH queues. This runs when a trace capture finishes, and a capture that
-    // stopped waiting for the compute queue would drop its last frames' compute scopes — the
-    // trace would look like the async work simply was not there.
-    const UINT64 value = gpuDrainFenceValue_++;
-    for (UINT q = 0; q < kGpuQueueCount; ++q) {
-        if (!gpuDrainFence_[q]) { continue; }
-        if (gpuQueue_[q]) {
-            if (FAILED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), value))) {
-                return false;
-            }
-        }
-        else if (FAILED(gpuDrainFence_[q]->Signal(value))) {
-            // No such queue: advance from the CPU so the "both passed" test stays satisfiable.
-            return false;
-        }
-    }
-    for (UINT q = 0; q < kGpuQueueCount; ++q) {
-        if (!gpuDrainFence_[q] || !gpuDrainFenceEvent_[q]) { continue; }
-        if (gpuDrainFence_[q]->GetCompletedValue() < value) {
-            if (FAILED(gpuDrainFence_[q]->SetEventOnCompletion(value, gpuDrainFenceEvent_[q]))) {
-                return false;
-            }
-            WaitForSingleObject(gpuDrainFenceEvent_[q], INFINITE);
-        }
-    }
-    return true;
 }
 
 void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue,
-                       ID3D12CommandQueue* computeQueue, UINT maxQueries) {
-#if PROF_ENABLED
-    if (!device || !queue) { return; }
+    ID3D12CommandQueue* computeQueue, UINT maxQueries) {
+    if (!device || !queue || maxQueries < 2) { return; }
+    maxGpuQueries_ = maxQueries & ~1u;
     gpuQueue_[0] = queue;
-    gpuQueue_[1] = computeQueue; // step 3: may be null — every per-queue path tolerates that
-    maxGpuQueries_ = maxQueries;
-
-    // Step 3: one query heap and one readback buffer PER QUEUE. Two queues writing one readback
-    // resource is a cross-queue write hazard the debug layer rejects (id=1047) — see the header.
-    D3D12_QUERY_HEAP_DESC qh{};
-    qh.Count = maxQueries;
-    qh.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
-    qh.NodeMask = 0;
-
-    const UINT64 bufSize = (UINT64)maxQueries * sizeof(UINT64) * kGpuReadbackFrameSlots;
-    D3D12_HEAP_PROPERTIES hp{};
-    hp.Type = D3D12_HEAP_TYPE_READBACK;
-    D3D12_RESOURCE_DESC rd{};
-    rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    rd.Width = bufSize;
-    rd.Height = 1;
-    rd.DepthOrArraySize = 1;
-    rd.MipLevels = 1;
-    rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    rd.SampleDesc.Count = 1;
+    gpuQueue_[1] = computeQueue;
+    D3D12_QUERY_HEAP_DESC queryDesc{};
+    queryDesc.Count = maxGpuQueries_;
+    queryDesc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_READBACK;
+    D3D12_RESOURCE_DESC resource{};
+    resource.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+    resource.Width = static_cast<UINT64>(maxGpuQueries_) * sizeof(UINT64) * kGpuReadbackFrameSlots;
+    resource.Height = resource.DepthOrArraySize = resource.MipLevels = resource.SampleDesc.Count = 1;
+    resource.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     for (UINT q = 0; q < kGpuQueueCount; ++q) {
-        device->CreateQueryHeap(&qh, IID_PPV_ARGS(&gpuQueryHeap_[q]));
-        device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&gpuReadback_[q]));
-    }
-
-    // Step 3: frequency, fence and event PER QUEUE. `GetTimestampFrequency` is a queue method —
-    // two queues are not obliged to report the same value, and dividing compute ticks by the
-    // direct queue's frequency yields a wrong duration that looks perfectly sane.
-    for (UINT q = 0; q < kGpuQueueCount; ++q) {
-        if (gpuQueue_[q]) {
-            gpuQueue_[q]->GetTimestampFrequency(&gpuFreq_[q]);
+        if (!gpuQueue_[q]) { continue; }
+        const D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(resource.Width) };
+        if (FAILED(device->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&gpuQueryHeap_[q]))) ||
+            FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &resource,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&gpuReadback_[q]))) ||
+            FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpuDrainFence_[q]))) ||
+            FAILED(gpuQueue_[q]->GetTimestampFrequency(&gpuFreq_[q])) ||
+            FAILED(gpuReadback_[q]->Map(0, &readRange, reinterpret_cast<void**>(&gpuMappedReadback_[q])))) {
+            LOG_ERROR(logging::LogCategory::Profiling, "GPU profiler initialization failed on queue {}", q);
+            ShutdownGpu();
+            return;
         }
-        device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpuDrainFence_[q]));
-        gpuDrainFenceEvent_[q] = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     }
-    LARGE_INTEGER qpcFreq{};
-    LARGE_INTEGER qpcNow{};
-    if (QueryPerformanceFrequency(&qpcFreq) && QueryPerformanceCounter(&qpcNow)) {
-        gpuTraceQpcFreq_ = static_cast<UINT64>(qpcFreq.QuadPart);
-        gpuTraceQpcOrigin_ = static_cast<UINT64>(qpcNow.QuadPart);
+    gpuPending_.resize(maxGpuQueries_ / 2);
+    for (auto& batch : gpuResolvedBatches_) { batch.ranges.reserve(maxGpuQueries_ / 2); }
+    LARGE_INTEGER frequency{}, now{};
+    if (QueryPerformanceFrequency(&frequency) && QueryPerformanceCounter(&now)) {
+        gpuTraceQpcFreq_ = frequency.QuadPart;
+        gpuTraceQpcOrigin_ = now.QuadPart;
         gpuTraceCpuOriginUs_ = ToMicroseconds(CpuClock::now());
     }
     gpuInitialized_ = true;
-#else
-    (void)device; (void)queue; (void)maxQueries;
-#endif
 }
 
 void Profiler::CollectGpuResults() {
-#if PROF_ENABLED
-    if (!gpuInitialized_) { return; }
-
-    bool collectTrace = false;
-    uint64_t traceStartUs = 0;
+    bool capture = false;
+    uint64_t startUs = 0;
     {
-        std::lock_guard<std::mutex> lk(mtx_);
-        collectTrace = traceCapturing_ && traceStartSet_;
-        traceStartUs = traceStartUs_;
+        std::lock_guard<std::mutex> lock(mtx_);
+        capture = traceCapturing_ || traceDraining_;
+        startUs = traceStartUs_;
     }
-
-    std::vector<TraceEvent> gpuTraceEvents;
-    CollectGpuResolvedSamples(nullptr, collectTrace ? &gpuTraceEvents : nullptr, traceStartUs);
-    if (!gpuTraceEvents.empty()) {
-        std::lock_guard<std::mutex> traceLock(traceMtx_);
-        for (auto& ev : gpuTraceEvents) {
-            traceEvents_.push_back(std::move(ev));
-        }
+    std::vector<TraceEvent> events;
+    CollectGpuResolvedSamples(gpuFrameSamples_, capture ? &events : nullptr, startUs);
+    if (!events.empty()) {
+        std::lock_guard<std::mutex> lock(mtx_);
+        traceEvents_.insert(traceEvents_.end(), events.begin(), events.end());
     }
-#endif
+    // BeginFrame precedes the renderer's fence wait: recheck after readback.
+    // Never overwrite an unread ring slot when a queue is more than 8 frames late.
+    gpuRecordingReady_ = gpuInitialized_ && frameOpen_ && gpuResolvedBatches_[gpuRecordingReadbackSlot_].queryCount == 0;
+    FinishTraceIfReady();
 }
 
 void Profiler::BeginGpuFrame(ID3D12GraphicsCommandList* cl) {
-#if PROF_ENABLED
-    if (!GetEnabled()) {
-        gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
-        return;
-    }
-    const size_t idx = BeginGpuSample(cl, kGpuFrameKey);
-    gpuFrameSampleIdx_.store(idx, std::memory_order_relaxed);
-#else
-    (void)cl;
-#endif
+    gpuFrameSampleIdx_ = BeginGpuSample(cl, kGpuFrameKey);
 }
 
 void Profiler::EndGpuFrame(ID3D12GraphicsCommandList* cl) {
-#if PROF_ENABLED
-    const size_t idx = gpuFrameSampleIdx_.load(std::memory_order_relaxed);
-    if (idx != SIZE_MAX) {
-        EndGpuSample(cl, idx);
-    }
-    gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
-#else
-    (void)cl;
-#endif
+    EndGpuSample(cl, gpuFrameSampleIdx_);
+    gpuFrameSampleIdx_ = SIZE_MAX;
 }
 
 size_t Profiler::BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKey& key) {
-#if PROF_ENABLED
-    if (!gpuInitialized_ || !cl) { return SIZE_MAX; }
-    UINT start = 0;
-    UINT end = 0;
-    size_t idx = SIZE_MAX;
-    UINT heapIndex = 0;
-    {
-        std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (nextGpuQuery_ + 1 >= maxGpuQueries_) { return SIZE_MAX; }
-        start = nextGpuQuery_;
-        end = start + 1;
-        nextGpuQuery_ += 2;
-        idx = gpuPending_.size();
-        // Step 3: the queue is read off the RECORDING COMMAND LIST itself, so a scope cannot be
-        // mislabelled and no GPU_SCOPE call site had to change.
-        const UINT queueIndex =
-            (cl->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE) ? 1u : 0u;
-        gpuPending_.push_back({ key, start, end, false, frameNo_, queueIndex });
-        heapIndex = queueIndex;
+    if (!gpuInitialized_ || !gpuRecordingReady_ || !cl || !GetEnabled() || !sampleEpoch_.load(std::memory_order_acquire)) { return SIZE_MAX; }
+    const UINT q = cl->GetType() == D3D12_COMMAND_LIST_TYPE_COMPUTE ? 1u : 0u;
+    if (!gpuQueryHeap_[q]) { return SIZE_MAX; }
+    const UINT start = nextGpuQuery_.fetch_add(2, std::memory_order_relaxed);
+    if (start >= maxGpuQueries_) { return SIZE_MAX; }
+    auto& groups = GetThreadSamples().gpuGroups;
+    GpuResolveGroup* group = nullptr;
+    for (auto& candidate : groups) {
+        if (candidate->depth && candidate->cl == cl) { group = candidate.get(); break; }
     }
-    cl->EndQuery(gpuQueryHeap_[heapIndex].Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
+    if (!group) {
+        for (auto& candidate : groups) {
+            if (!candidate->depth) { group = candidate.get(); break; }
+        }
+        if (!group) {
+            groups.push_back(std::make_unique<GpuResolveGroup>());
+            group = groups.back().get();
+            group->starts.reserve(16);
+        }
+        group->cl = cl;
+        group->starts.clear();
+    }
+    ++group->depth;
+    group->starts.push_back(start);
+    const size_t idx = start / 2;
+    gpuPending_[idx] = { key, start, start + 1, false, frameNo_, q, group };
+    cl->EndQuery(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP, start);
     return idx;
-#else
-    (void)cl; (void)key; return SIZE_MAX;
-#endif
 }
 
 void Profiler::EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx) {
-#if PROF_ENABLED
-    if (!gpuInitialized_ || !cl || idx == SIZE_MAX) { return; }
-    UINT start = 0;
-    UINT end = 0;
-    UINT q = 0;
-    {
-        std::lock_guard<std::mutex> lk(gpuMtx_);
-        if (idx >= gpuPending_.size()) { return; }
-        auto& range = gpuPending_[idx];
-        if (range.completed) { return; }
-        start = range.start;
-        end = range.end;
-        q = (range.queueIndex < kGpuQueueCount) ? range.queueIndex : 0u;
-        range.completed = true;
+    if (!gpuInitialized_ || !cl || idx == SIZE_MAX || idx >= gpuPending_.size()) { return; }
+    auto& range = gpuPending_[idx];
+    if (range.completed) { return; }
+    const UINT q = range.queueIndex;
+    cl->EndQuery(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP, range.end);
+    range.completed = true;
+    auto& group = *range.group;
+    if (--group.depth) { return; }
+    // Coalesce only consecutive pairs of completed nested scopes on this list.
+    // Other recording threads can leave gaps; those queries must not be resolved.
+    for (size_t i = 0; i < group.starts.size();) {
+        const UINT first = group.starts[i++];
+        UINT count = 2;
+        while (i < group.starts.size() && group.starts[i] == first + count) { count += 2; ++i; }
+        const UINT64 offset = (static_cast<UINT64>(gpuRecordingReadbackSlot_) * maxGpuQueries_ + first) * sizeof(UINT64);
+        cl->ResolveQueryData(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP, first, count, gpuReadback_[q].Get(), offset);
     }
-    // Step 3: resolve into THIS QUEUE's own heap and readback buffer. Resolving into a shared
-    // buffer is the cross-queue write hazard the debug layer caught (id=1047).
-    if (!gpuQueryHeap_[q] || !gpuReadback_[q]) { return; }
-    cl->EndQuery(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP, end);
-    const UINT64 readbackOffset =
-        (static_cast<UINT64>(gpuRecordingReadbackSlot_) * static_cast<UINT64>(maxGpuQueries_) +
-            static_cast<UINT64>(start)) * sizeof(UINT64);
-    cl->ResolveQueryData(gpuQueryHeap_[q].Get(), D3D12_QUERY_TYPE_TIMESTAMP,
-        start, 2, gpuReadback_[q].Get(), readbackOffset);
-#else
-    (void)cl; (void)idx;
-#endif
 }
 
 void Profiler::ShutdownGpu() {
-#if PROF_ENABLED
-    if (!gpuInitialized_) {
-        return;
-    }
-
+    // The renderer joins both queues before releasing GPU resources. Only
+    // shutdown joins file I/O; interactive Stop merely retires completed batches.
+    CollectGpuResults();
     {
-        std::lock_guard<std::mutex> lk(gpuMtx_);
-        gpuPending_.clear();
-        gpuResolvedBatches_.clear();
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (traceCapturing_) {
+            traceCapturing_ = false;
+            traceDraining_ = true;
+            traceLastFrame_ = frameNo_;
+            traceCapturingAtomic_.store(false, std::memory_order_release);
+        }
     }
-
-    gpuFrameSampleIdx_.store(SIZE_MAX, std::memory_order_relaxed);
+    FinishTraceIfReady();
+    StopTraceWriter();
+    TaskSystem::Get().Wait(overlayTask_);
+    TaskSystem::Get().Release(overlayTask_);
+    gpuFrameSampleIdx_ = SIZE_MAX;
     for (UINT q = 0; q < kGpuQueueCount; ++q) {
+        if (gpuMappedReadback_[q] && gpuReadback_[q]) {
+            const D3D12_RANGE written{ 0, 0 };
+            gpuReadback_[q]->Unmap(0, &written);
+        }
+        gpuMappedReadback_[q] = nullptr;
         gpuQueryHeap_[q].Reset();
         gpuReadback_[q].Reset();
-    }
-    for (UINT q = 0; q < kGpuQueueCount; ++q) {
         gpuDrainFence_[q].Reset();
-        if (gpuDrainFenceEvent_[q]) {
-            CloseHandle(gpuDrainFenceEvent_[q]);
-            gpuDrainFenceEvent_[q] = nullptr;
-        }
         gpuQueue_[q] = nullptr;
         gpuFreq_[q] = 0;
     }
-    gpuTraceQpcFreq_ = 0;
-    gpuTraceQpcOrigin_ = 0;
-    gpuTraceCpuOriginUs_ = 0;
+    for (auto& batch : gpuResolvedBatches_) { batch.ranges.clear(); batch.queryCount = 0; batch.fenceValue = 0; }
+    gpuPending_.clear();
+    gpuTraceQpcFreq_ = gpuTraceQpcOrigin_ = gpuTraceCpuOriginUs_ = 0;
     gpuDrainFenceValue_ = 1;
-    maxGpuQueries_ = 0;
-    nextGpuQuery_ = 0;
-    gpuRecordingReadbackSlot_ = 0;
-    gpuInitialized_ = false;
-#endif
+    maxGpuQueries_ = gpuRecordingReadbackSlot_ = 0;
+    nextGpuQuery_.store(0, std::memory_order_relaxed);
+    gpuInitialized_ = gpuRecordingReady_ = false;
 }
 #endif // PROF_GPU_ENABLED
 
-void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
-    if (!tm || !GetEnabled()) { return; }
-    CPU_SCOPE(kProfilerEmitOverlayKey);
-
-    // Read the active read buffers WITHOUT locks
-    const int readIdx = overlayReadBuf_.load(std::memory_order_acquire);
-    const auto& rows = overlayRows_[readIdx];
-#if PROF_GPU_ENABLED
-    const int gpuReadIdx = gpuOverlayReadBuf_.load(std::memory_order_acquire);
-    const auto& gpuRows = gpuOverlayRows_[gpuReadIdx];
-#endif
-
-    bool captureActive = false;
-    bool capturePending = false;
-    uint32_t captureRemaining = 0;
-    uint32_t captureTotal = 0;
-    {
-        std::lock_guard<std::mutex> lk(mtx_);
-        captureActive = traceCapturing_;
-        capturePending = traceCaptureRequested_;
-        captureRemaining = traceFramesRemaining_;
-        captureTotal = traceRequestFrameCount_;
-    }
-
-    // Estimate the region width directly, without measuring individual lines
-    // Row format: "%-35s  avg:%6.2f  max:%6.2f  p/u:%6.2f  usages:%u"
-    const int namePad = 35;
-    const int otherCols = 1 + 28;
-    const int lineCols = namePad + otherCols + 16;
-    const double charW = 0.60 * 21.0;
-    const double needW = charW * (double)lineCols;
-    overlayWidthPx_ = overlayWidthPx_ * 0.9 + needW * 0.1;
-    const double boxW = std::max(overlayWidthPx_, 480.0);
-#if PROF_GPU_ENABLED
-    const bool hasGpuRows = !gpuRows.empty();
-    double gpuBoxW = 0.0;
-    if (hasGpuRows) {
-        gpuOverlayWidthPx_ = gpuOverlayWidthPx_ * 0.9 + needW * 0.1;
-        gpuBoxW = std::max(gpuOverlayWidthPx_, 480.0);
-    }
-#endif
-
-    // CPU region
-    auto reg = tm->CreateRegion(x, y, TextManager::Align::Left);
-    tm->RegionSetPadding(reg, 8, 6);
-    tm->RegionSetBackground(reg, float4(0.00f, 0.00f, 0.05f, 0.75f));
-    tm->RegionSetFixedWidth(reg, (float)boxW);
-    tm->RegionSetAutoMeasure(reg, false);
-    tm->RegionSetKerning(reg, false);
-
-    // Header
-    tm->AddTextfShadow(reg, 18.0f, float4(1, 1, 0.6f, 0.95f), true,
-        L"[CPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
-        (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
-
-    if (captureActive || capturePending) {
-        if (captureActive) {
-            const uint32_t recorded = (captureTotal > captureRemaining) ? (captureTotal - captureRemaining) : 0u;
-            tm->AddTextfShadow(reg, 16.0f, float4(1.0f, 0.85f, 0.25f, 0.95f), true,
-                L"[Trace capture active] recorded:%u remaining:%u  (press F10 to stop)",
-                recorded, captureRemaining);
-        }
-        else {
-            tm->AddTextfShadow(reg, 16.0f, float4(0.7f, 0.85f, 1.0f, 0.95f), true,
-                L"[Trace capture pending] frames:%u  (press F10 again to cancel)",
-                captureTotal);
-        }
-    }
-
-    tm->AddText(reg, 20.0f, float4(1, 1, 0.6f, 0.95f), L" ");
-
-    // Rows
-    int shown = 0;
-    const float4 colOdd = { 1, 1, 1, 0.92f };
-    const float4 colEven = { 0.5f, 0.5f, 0.5f, 0.92f };
-    for (const auto& r : rows) {
-        if (shown >= maxLines) { break; }
-        tm->AddText(reg, 18.0f, (shown & 1) ? colOdd : colEven, r.formatted, true);
-        shown++;
-    }
-
-#if PROF_GPU_ENABLED
-    if (hasGpuRows) {
-        // GPU region to the right of CPU
-        const int gpuX = x + (int)boxW + 16;
-        auto regGpu = tm->CreateRegion(gpuX, y, TextManager::Align::Left);
-        tm->RegionSetPadding(regGpu, 8, 6);
-        tm->RegionSetBackground(regGpu, float4(0.00f, 0.05f, 0.00f, 0.75f));
-        tm->RegionSetFixedWidth(regGpu, (float)gpuBoxW);
-        tm->RegionSetAutoMeasure(regGpu, false);
-        tm->RegionSetKerning(regGpu, false);
-
-        tm->AddTextfShadow(regGpu, 18.0f, float4(0.6f, 1, 0.6f, 0.95f), true,
-            L"[GPU profiler] frame=%llu  (max reset: %.1fs, sort every: %.2fs)",
-            (unsigned long long)frameNo_, GetMaxCooldownSeconds(), GetOverlayResortIntervalSeconds());
-        tm->AddText(regGpu, 20.0f, float4(0.6f, 1, 0.6f, 0.95f), L" ");
-
-        int gshown = 0;
-        for (const auto& r : gpuRows) {
-            if (gshown >= maxLines) { break; }
-            tm->AddText(regGpu, 18.0f, (gshown & 1) ? colOdd : colEven, r.formatted, true);
-            gshown++;
-        }
-    }
-#endif
-}
-
 std::vector<Profiler::OverlaySample> Profiler::OverlaySnapshot() const {
     std::vector<OverlaySample> out;
-    auto addRows = [&](const std::vector<OverlayRow>& rows, bool gpu) {
-        for (const auto& r : rows) {
-            // ASCII-ify: the formatted wstring is ASCII in practice, but avoid locale issues by
-            // taking the numeric fields directly and the name from the formatted row's prefix.
-            // The formatted row is "%-35s  avg:...": the name is everything before the first run of
-            // two spaces (single spaces inside a scope name like "Whole Cycle" are preserved).
-            OverlaySample s;
-            int spaceRun = 0;
-            for (wchar_t c : r.formatted) {
-                if (c == L' ') { if (++spaceRun >= 2) { break; } continue; }
-                if (spaceRun == 1) { s.name.push_back(' '); }
-                spaceRun = 0;
-                s.name.push_back((char)(c & 0x7F));
-                if (s.name.size() > 40) { break; }
-            }
-            s.avgMs = r.avgMs;
-            s.maxMs = r.maxMs;
-            s.usages = r.usages;
-            s.gpu = gpu;
-            out.push_back(std::move(s));
+    std::lock_guard<std::mutex> lock(snapshotMutex_);
+    out.reserve(overlayRows_.size() + gpuOverlayRows_.size());
+    auto addRows = [&](const auto& rows, bool gpu) {
+        for (const auto& row : rows) {
+            out.push_back({ WideToUtf8(row.name), row.avgMs, row.maxMs, row.usages, gpu });
         }
     };
-    addRows(overlayRows_[overlayReadBuf_.load(std::memory_order_acquire)], false);
-#if PROF_GPU_ENABLED
-    addRows(gpuOverlayRows_[gpuOverlayReadBuf_.load(std::memory_order_acquire)], true);
-#endif
+    addRows(overlayRows_, false);
+    addRows(gpuOverlayRows_, true);
     return out;
 }
 
@@ -1523,35 +787,86 @@ bool Profiler::DumpOverlay(const std::string& path) {
 }
 
 void Profiler::SetMaxCooldownSeconds(double sec) {
-    if (sec < 0.1) { sec = 0.1; }
-    std::lock_guard<std::mutex> lk(mtx_);
-    maxResetIntervalSec_ = sec;
+    maxResetIntervalSec_.store((std::max)(0.1, sec), std::memory_order_relaxed);
 }
 
 double Profiler::GetMaxCooldownSeconds() const {
-    return maxResetIntervalSec_;
+    return maxResetIntervalSec_.load(std::memory_order_relaxed);
 }
 
 void Profiler::ResetMaxNow() {
-    std::lock_guard<std::mutex> lk(mtx_);
-    ResetMax_Unsafe();
-    lastMaxReset_ = CoolClock::now();
+    resetMaxRequested_.store(true, std::memory_order_release);
 }
 
 void Profiler::ResetMax_Unsafe() {
-    for (auto& kv : stats_) {
-        kv.second.stats.maxMs = kv.second.stats.avgMs;
+    for (auto& kv : stats_) { kv.second.stats.maxMs = 0.0; }
+#if PROF_GPU_ENABLED
+    for (auto& kv : gpuStats_) { kv.second.stats.maxMs = 0.0; }
+#endif
+    endFrameAsyncMaxMs_ = 0.0;
+}
+
+void Profiler::FinishTraceIfReady() {
+    TraceDumpData dump;
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        if (!traceDraining_) { return; }
+#if PROF_GPU_ENABLED
+        for (const auto& batch : gpuResolvedBatches_) {
+            if (batch.queryCount && batch.frameNo >= traceFirstFrame_ && batch.frameNo <= traceLastFrame_) { return; }
+        }
+#endif
+        dump.events.swap(traceEvents_);
+        dump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
+        dump.threadNames = threadIndexToName_;
+        traceDraining_ = false;
+        traceStartUs_ = 0;
+        traceRequestFrameCount_ = traceFramesRemaining_ = 0;
+        traceOpenEnded_ = false;
     }
-    #if PROF_GPU_ENABLED
-    for (auto& kv : gpuStats_) {
-        kv.second.stats.maxMs = kv.second.stats.avgMs;
+    QueueTraceWrite(std::move(dump));
+}
+
+void Profiler::QueueTraceWrite(TraceDumpData dump) {
+    std::lock_guard<std::mutex> lock(traceWriterMutex_);
+    traceWriteQueue_.push_back(std::move(dump));
+    if (!traceWriter_.joinable()) {
+        traceWriterStop_ = false;
+        traceWriter_ = std::thread([this]() {
+            logging::SetCurrentThreadName("ProfilerTraceWriter");
+            for (;;) {
+                TraceDumpData next;
+                {
+                    std::unique_lock<std::mutex> lock(traceWriterMutex_);
+                    traceWriterCv_.wait(lock, [this]() { return traceWriterStop_ || !traceWriteQueue_.empty(); });
+                    if (traceWriteQueue_.empty()) { return; }
+                    next = std::move(traceWriteQueue_.front());
+                    traceWriteQueue_.pop_front();
+                }
+                try { WriteTraceJson(next); }
+                catch (const std::exception& e) {
+                    LOG_ERROR(logging::LogCategory::Profiling, "trace capture export failed: {}", e.what());
+                }
+                ReleaseTraceNameKeys(next.dynamicKeys);
+            }
+        });
     }
-    #endif
+    traceWriterCv_.notify_one();
+}
+
+void Profiler::StopTraceWriter() {
+    {
+        std::lock_guard<std::mutex> lock(traceWriterMutex_);
+        traceWriterStop_ = true;
+    }
+    traceWriterCv_.notify_all();
+    if (traceWriter_.joinable()) { traceWriter_.join(); }
 }
 
 void Profiler::RequestTraceCapture(uint32_t frameCount) {
     if (frameCount == 0) { return; }
     std::lock_guard<std::mutex> lk(mtx_);
+    if (traceDraining_) { return; }
     if (traceCapturing_) {
         traceStopRequested_ = true;
         LOG_INFO(logging::LogCategory::Profiling, "trace capture stop requested");
@@ -1572,7 +887,7 @@ void Profiler::RequestTraceCapture(uint32_t frameCount) {
 
 void Profiler::BeginTraceCapture() {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (traceCapturing_ || traceCaptureRequested_) { return; }
+    if (traceCapturing_ || traceCaptureRequested_ || traceDraining_) { return; }
     traceCaptureRequested_ = true;
     traceRequestFrameCount_ = 1; // the start path requires a non-zero budget; openEnded ignores it
     traceOpenEnded_ = true;
@@ -1595,24 +910,13 @@ Profiler::TraceCaptureStatus Profiler::GetTraceCaptureStatus() const {
     TraceCaptureStatus s;
     std::lock_guard<std::mutex> lk(mtx_);
     s.active = traceCapturing_;
-    s.pending = traceCaptureRequested_;
+    s.pending = traceCaptureRequested_ || traceDraining_;
     s.openEnded = traceOpenEnded_;
     s.framesRemaining = traceFramesRemaining_;
     s.framesRecorded = traceFramesRecorded_;
     s.events = traceEvents_.size();
     s.lastPath = traceLastPath_;
     return s;
-}
-
-void Profiler::Tick()
-{
-#if PROF_ENABLED
-    auto& input = Systems::GetInput();
-    if (input.WasActionPressed("CaptureTrace")) {
-        constexpr uint32_t kTraceFrames = 120;
-        RequestTraceCapture(kTraceFrames);
-    }
-#endif
 }
 
 void Profiler::SetThreadName(const std::string& name) {
@@ -1647,109 +951,69 @@ uint32_t Profiler::GetThreadIndex_Locked(std::thread::id id) {
     return idx;
 }
 
-void Profiler::WriteTraceJson(const std::vector<TraceEvent>& events) {
-    if (events.empty()) { return; }
+void Profiler::WriteTraceJson(const TraceDumpData& dump) {
+    if (dump.events.empty()) { return; }
     const uint32_t fileIdx = traceFileCounter_.fetch_add(1u, std::memory_order_relaxed);
-    auto now = std::chrono::system_clock::now();
-    std::time_t tt = std::chrono::system_clock::to_time_t(now);
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t tt = std::chrono::system_clock::to_time_t(now);
     std::tm tm{};
-#if defined(_WIN32)
     localtime_s(&tm, &tt);
-#else
-    localtime_r(&tt, &tm);
-#endif
     std::ostringstream fname;
 #if defined(NDEBUG)
-    constexpr const char* kTraceBuildSuffix = "_release";
+    constexpr const char* suffix = "_release";
 #else
-    constexpr const char* kTraceBuildSuffix = "_debug";
+    constexpr const char* suffix = "_debug";
 #endif
-    fname << "traces/trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << kTraceBuildSuffix
-          << "_" << std::setw(3) << std::setfill('0') << fileIdx << ".json";
+    fname << "traces/trace_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << suffix
+          << "_" << GetCurrentProcessId() << "_" << std::setw(3) << std::setfill('0') << fileIdx << ".json";
     const std::string fileName = fname.str();
-    {
-        // Remembered so the trace window can say where the file went instead of the user hunting
-        // for it by timestamp.
-        std::lock_guard<std::mutex> lk(mtx_);
-        traceLastPath_ = fileName;
-        traceOpenEnded_ = false;
-    }
     std::filesystem::create_directory("traces");
     std::ofstream out(fileName, std::ios::binary);
     if (!out) {
         LOG_ERROR(logging::LogCategory::Profiling, "trace capture FAILED: cannot write {}", fileName);
         return;
     }
-
     out << "{\n\"traceEvents\":[\n";
     bool first = true;
-    auto writeEntry = [&](const std::string& line) {
-        if (!first) { out << ",\n"; }
-        first = false;
-        out << line;
+    auto separator = [&]() { if (!first) { out << ",\n"; } first = false; };
+    auto threadName = [&](size_t tid, const std::string& name) {
+        separator();
+        out << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << tid
+            << ",\"args\":{\"name\":\"" << EscapeJson(name) << "\"}}";
     };
-
-    static const std::wstring kUnknownWide = L"unknown";
-    static const std::string  kUnknownNarrow = "unknown";
-    robin_hood::unordered_flat_map<const std::wstring*, std::string> nameLookup;
-    nameLookup.reserve(events.size());
-
 #if PROF_GPU_ENABLED
-    {
-        std::ostringstream line;
-        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << kGpuTraceThreadIndex
-             << ",\"args\":{\"name\":\"" << EscapeJson(kGpuTraceThreadName) << "\"}}";
-        writeEntry(line.str());
-    }
-    // Step 3: the second GPU row. Named UNCONDITIONALLY, even on a capture with no compute work —
-    // an absent row and an empty row look the same in the viewer, and only one of them means "the
-    // async queue did nothing". A named, empty track says that out loud.
-    {
-        std::ostringstream line;
-        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << kGpuTraceThreadIndexCompute
-             << ",\"args\":{\"name\":\"" << EscapeJson(kGpuTraceThreadNameCompute) << "\"}}";
-        writeEntry(line.str());
-    }
+    threadName(kGpuTraceThreadIndex, kGpuTraceThreadName);
+    threadName(kGpuTraceThreadIndexCompute, kGpuTraceThreadNameCompute);
 #endif
-
-    for (size_t tid = 0; tid < threadIndexToName_.size(); ++tid) {
-        if (threadIndexToName_[tid].empty()) { continue; }
-        std::ostringstream line;
-        line << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << (tid + kCpuTraceThreadIndexBase)
-             << ",\"args\":{\"name\":\"" << EscapeJson(threadIndexToName_[tid]) << "\"}}";
-        writeEntry(line.str());
+    for (size_t tid = 0; tid < dump.threadNames.size(); ++tid) {
+        if (!dump.threadNames[tid].empty()) { threadName(tid + kCpuTraceThreadIndexBase, dump.threadNames[tid]); }
     }
-
-    for (const auto& ev : events) {
-        const std::wstring* nameWidePtr = ev.key.name;
-        if (!nameWidePtr || nameWidePtr->empty()) {
-            nameWidePtr = &kUnknownWide;
-        }
-        auto lookupIt = nameLookup.find(nameWidePtr);
-        if (lookupIt == nameLookup.end()) {
-            std::string narrow = WideToUtf8(*nameWidePtr);
-            if (narrow.empty()) {
-                narrow = kUnknownNarrow;
-            }
-            lookupIt = nameLookup.emplace(nameWidePtr, std::move(narrow)).first;
-        }
-        const std::string& name = lookupIt->second;
-        const char* category = (ev.category == TraceEvent::Category::Gpu) ? "GPU" : "CPU";
-        const uint64_t outputTid = TraceOutputThreadIndex(ev);
-        std::ostringstream line;
-        line << "  {\"name\":\"" << EscapeJson(name) << "\",\"cat\":\"" << category << "\",\"ph\":\"X\",\"ts\":"
-             << ev.tsUs << ",\"dur\":" << ev.durUs << ",\"pid\":0,\"tid\":" << outputTid;
-        if (ev.hasFrameNumber) {
-            line << ",\"args\":{\"frame\":" << ev.frameNumber << "}";
-        }
-        line << "}";
-        writeEntry(line.str());
+    // Cache escaped names once per distinct name, not once per event; do not
+    // reserve an events-sized hash table for a capture with millions of events.
+    robin_hood::unordered_flat_map<const std::wstring*, std::string> names;
+    names.reserve(256);
+    for (const auto& ev : dump.events) {
+        auto [it, inserted] = names.try_emplace(ev.key.name);
+        if (inserted) { it->second = EscapeJson(ev.key.name ? WideToUtf8(*ev.key.name) : "unknown"); }
+        separator();
+        out << "  {\"name\":\"" << it->second << "\",\"cat\":\""
+            << (ev.category == TraceEvent::Category::Gpu ? "GPU" : "CPU")
+            << "\",\"ph\":\"X\",\"ts\":" << ev.tsUs << ",\"dur\":" << ev.durUs
+            << ",\"pid\":0,\"tid\":" << TraceOutputThreadIndex(ev);
+        if (ev.hasFrameNumber) { out << ",\"args\":{\"frame\":" << ev.frameNumber << "}"; }
+        out << "}";
     }
-
     out << "\n],\n\"displayTimeUnit\":\"us\"\n}\n";
     out.close();
-    // The artifact-producing event: path plus verdict, the trace itself stays a Chrome JSON file.
-    LOG_INFO(logging::LogCategory::Profiling, "trace saved: {} ({} events)", fileName, events.size());
+    if (!out) {
+        LOG_ERROR(logging::LogCategory::Profiling, "trace capture FAILED: incomplete write {}", fileName);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mtx_);
+        traceLastPath_ = fileName;
+    }
+    LOG_INFO(logging::LogCategory::Profiling, "trace saved: {} ({} events)", fileName, dump.events.size());
 }
 
 #endif // PROF_ENABLED

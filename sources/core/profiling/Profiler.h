@@ -11,6 +11,10 @@
 #include <optional>
 #include <string_view>
 #include <cstring>
+#include <array>
+#include <condition_variable>
+#include <deque>
+#include <memory>
 
 #include "core/task/TaskSystem.h"
 
@@ -29,7 +33,7 @@
 
 class TextManager; // forward
 // CPU profiler: scopes, EMA averaging, cooldown for resetting maxima,
-// overlay preparation in EndFrame (double-buffered) and infrequent sorting by average.
+// Numeric snapshots are independent of the demand-driven HUD cache.
 class Profiler {
 public:
     using CpuClock = std::chrono::steady_clock;
@@ -45,6 +49,7 @@ public:
     struct ScopeSample {
         ScopeNameKey key{};
         double       ms = 0.0;
+        uint64_t     frameNumber = 0; // original GPU frame, not its CPU readback frame
     };
 
     struct ScopeStats {
@@ -60,11 +65,11 @@ public:
         void Accumulate(double ms) {
             frameMsSum += ms;
             frameCount += 1u;
-            if (ms > maxMs) { maxMs = ms; }
         }
         void CommitFrame(double emaAlpha) {
             if (frameCount == 0) { lastCount = 0; return; }
             const double cur = frameMsSum;
+            maxMs = (std::max)(maxMs, cur);
             if (avgMs <= 0.0) { avgMs = cur; }
             else { avgMs = avgMs * emaAlpha + cur * (1.0 - emaAlpha); }
             lastCount = frameCount;
@@ -117,6 +122,7 @@ public:
     struct TraceDumpData {
         std::vector<TraceEvent> events;
         std::vector<ScopeNameKey> dynamicKeys;
+        std::vector<std::string> threadNames;
     };
 
     // --- overlay data (snapshot) ---
@@ -125,7 +131,8 @@ public:
         double   avgMs = 0.0;
         double   maxMs = 0.0;
         uint32_t usages = 0;
-        std::wstring formatted; // preformatted string
+        std::wstring name;
+        std::wstring formatted; // HUD cache only; numeric snapshots never format text
     };
 
 public:
@@ -160,19 +167,21 @@ public:
         ScopedCpu(ScopeNameKey key) {
 #if PROF_ENABLED
             key_ = key;
-            start_ = Clock::now();
+            auto& profiler = Profiler::Get();
+            epoch_ = profiler.GetEnabled() ? profiler.sampleEpoch_.load(std::memory_order_acquire) : 0;
+            if (epoch_) { start_ = Clock::now(); }
 #endif
         }
         ~ScopedCpu() {
 #if PROF_ENABLED
-            const auto end = Clock::now();
-            Profiler::Get().PushSample(key_, start_, end);
+            if (epoch_) { Profiler::Get().PushSample(key_, start_, Clock::now(), epoch_); }
 #endif
         }
     private:
 #if PROF_ENABLED
         using Clock = CpuClock;
         Clock::time_point start_{};
+        uint64_t epoch_ = 0;
 #endif
         ScopeNameKey key_{};
     };
@@ -191,6 +200,8 @@ public:
     public:
         ScopedGpu(ID3D12GraphicsCommandList* cl, ScopeNameKey key);
         ~ScopedGpu();
+        ScopedGpu(const ScopedGpu&) = delete;
+        ScopedGpu& operator=(const ScopedGpu&) = delete;
     private:
 #if PROF_ENABLED
         ID3D12GraphicsCommandList* cl_ = nullptr;
@@ -214,11 +225,11 @@ public:
 #define GPU_SCOPE_N(cmdList, keyExpr, id) do { } while (0)
 #endif
 
-    // Overlay table (reads the double buffer without locks)
+    // Overlay table (formats only visible rows, at most 10 Hz)
     void EmitOverlay(TextManager* tm, int x = 8, int y = 48, int maxLines = 16);
 
     // Temporary perf harness: write the current CPU+GPU overlay rows (the same data the HUD shows)
-    // to a UTF-8 text file. Returns false on file-open failure. Reads the lock-free double buffer.
+    // to a UTF-8 text file. Returns false on file-open failure. Reads the numeric snapshot.
     bool DumpOverlay(const std::string& path);
     // The same rows as data -- the editor's MCP `get_profile` reads them from a running frame.
     struct OverlaySample
@@ -269,15 +280,14 @@ public:
     void   SetOverlayResortIntervalSeconds(double sec) {
 #if PROF_ENABLED
         if (sec < 0.05) { sec = 0.05; }
-        std::lock_guard<std::mutex> lk(mtx_);
-        overlayResortIntervalSec_ = sec;
+        overlayResortIntervalSec_.store(sec, std::memory_order_relaxed);
 #else
         (void)sec;
 #endif
     }
     double GetOverlayResortIntervalSeconds() const {
 #if PROF_ENABLED
-        return overlayResortIntervalSec_;
+        return overlayResortIntervalSec_.load(std::memory_order_relaxed);
 #else
         return 0.0;
 #endif
@@ -286,9 +296,8 @@ public:
 private:
     Profiler();
     ~Profiler();
-    void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end);
+    void PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end, uint64_t epoch);
 #if PROF_GPU_ENABLED
-    void PushGpuSample(const ScopeNameKey& key, double ms);
     // Step 3: ONE calibration per queue. Two queues' timestamp counters are not the same clock and
     // are not required to tick at the same rate, so mapping a compute timestamp through the direct
     // queue's calibration produces a plausible-looking number in the wrong place — which is exactly
@@ -300,208 +309,137 @@ private:
     bool CaptureGpuTraceCalibration(UINT queueIndex, GpuTraceCalibration& calibration) const;
     uint64_t GpuTimestampToCpuUs(UINT64 gpuTimestamp, const GpuTraceCalibration& calibration,
                                  UINT queueIndex) const;
-    void CollectGpuResolvedSamples(std::vector<ScopeSample>* sampleOut,
+    void CollectGpuResolvedSamples(std::vector<ScopeSample>& sampleOut,
         std::vector<TraceEvent>* traceOut,
         uint64_t traceStartUs);
-    bool WaitForGpuProfilerIdle();
     size_t BeginGpuSample(ID3D12GraphicsCommandList* cl, const ScopeNameKey& key);
     void EndGpuSample(ID3D12GraphicsCommandList* cl, size_t idx);
 #endif
 
 #if PROF_ENABLED
-    void ResetMax_Unsafe(); // call while holding mtx_
+    void ResetMax_Unsafe(); // aggregation task only
     uint32_t GetThreadIndex_Locked(std::thread::id id);
-    void WriteTraceJson(const std::vector<TraceEvent>& events);
+    void WriteTraceJson(const TraceDumpData& dump);
+    void FinishTraceIfReady();
+    void QueueTraceWrite(TraceDumpData dump);
+    void StopTraceWriter();
     void ReleaseTraceNameKeys(const std::vector<ScopeNameKey>& keys);
 #endif
 
 private:
+    friend struct ProfilerTestAccess;
 #if PROF_ENABLED
-    // statistics collection
-    mutable std::mutex mtx_; // mutable: GetTraceCaptureStatus is a const query
-    std::mutex traceMtx_;
-    robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> stats_;
+    // Capture controls / thread names. Statistics have one writer: overlayTask_.
+    mutable std::mutex mtx_;
+    using StatsMap = robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual>;
+    StatsMap stats_;
 #if PROF_GPU_ENABLED
-    robin_hood::unordered_flat_map<ScopeNameKey, StatsEntry, ScopeNameKeyHash, ScopeNameKeyEqual> gpuStats_;
+    StatsMap gpuStats_;
+    struct GpuResolveGroup {
+        ID3D12GraphicsCommandList* cl = nullptr;
+        std::vector<UINT> starts;
+        uint32_t depth = 0;
+    };
 #endif
     robin_hood::unordered_flat_map<std::thread::id, std::string> threadNames_;
     robin_hood::unordered_flat_map<std::thread::id, uint32_t> threadIndices_;
     std::vector<std::string> threadIndexToName_;
 
-    struct SampleNode {
-        ScopeSample sample;
-        SampleNode* next = nullptr;
-    };
-
-    static SampleNode* const kSampleListClosed;
-
-    SampleNode* AcquireSampleNode();
-    void        ReleaseSampleNode(SampleNode* node);
-    void        ReleaseSampleList(SampleNode* head);
-    bool        PushSampleNode(std::atomic<SampleNode*>& head, SampleNode* node);
-    void        DrainSampleNodes(std::atomic<SampleNode*>& head, std::vector<ScopeSample>& out);
-    uint32_t    GetThreadIndexForCurrentThread();
-
-    struct TraceSampleNode {
-        TraceEvent sample;
-        TraceSampleNode* next = nullptr;
-    };
-
-    static TraceSampleNode* const kTraceListClosed;
-
-    TraceSampleNode* AcquireTraceSampleNode();
-    void             ReleaseTraceSampleNode(TraceSampleNode* node);
-    void             ReleaseTraceSampleList(TraceSampleNode* head);
-    bool             PushTraceSampleNode(TraceSampleNode* node);
-    void             DrainTraceSampleNodes(uint64_t traceStartUs);
-
-    std::atomic<SampleNode*> frameSampleHead_{ nullptr };
+    // One producer per buffer. The consumer swaps under this buffer's own lock;
+    // no shared free list, speculative node reads, or per-sample heap allocation.
+    struct alignas(64) ThreadSamples {
+        std::mutex mutex;
+        std::vector<ScopeSample> samples, drainedSamples;
+        std::vector<TraceEvent> traces, drainedTraces;
+        uint32_t threadIndex = 0;
 #if PROF_GPU_ENABLED
-    std::atomic<SampleNode*> gpuFrameSampleHead_{ nullptr };
+        std::vector<std::unique_ptr<GpuResolveGroup>> gpuGroups;
 #endif
-    std::atomic<SampleNode*> sampleNodePool_{ nullptr };
-    std::atomic<bool>        frameOpenFlag_{ false };
-
-    std::atomic<TraceSampleNode*> traceSampleHead_{ nullptr };
-    std::atomic<TraceSampleNode*> traceSamplePool_{ nullptr };
-
-    std::vector<ScopeSample> frameSamples_;
-#if PROF_GPU_ENABLED
-    std::vector<ScopeSample> gpuFrameSamples_;
-#endif
-    uint64_t  frameNo_ = 0;
-    bool      frameOpen_ = false;
+    };
+    ThreadSamples& GetThreadSamples();
+    void DrainThreadSamples(bool capture, uint64_t startUs);
+    std::mutex buffersMutex_;
+    std::vector<std::unique_ptr<ThreadSamples>> threadSamples_;
+    std::atomic<uint64_t> sampleEpoch_{ 0 }; // 0 = closed; prevents late producers crossing frames
+    uint64_t nextSampleEpoch_ = 0;
+    uint64_t frameNo_ = 0;
+    bool frameOpen_ = false;
     CpuClock::time_point frameCpuStart_{};
-
-    // EMA for avgMs
     double emaAlpha_ = 0.997;
-
     std::atomic<bool> enabled_{ true };
 
-    // Cooldown for resetting maxima
     using CoolClock = std::chrono::steady_clock;
-    CoolClock::time_point lastMaxReset_{};
-    double maxResetIntervalSec_ = 5.0;
+    CoolClock::time_point lastMaxReset_{}, lastOverlaySort_{};
+    std::atomic<double> maxResetIntervalSec_{ 5.0 };
+    std::atomic<double> overlayResortIntervalSec_{ 4.0 };
+    std::atomic<bool> resetMaxRequested_{ false };
+    double endFrameAsyncAvgMs_ = 0.0, endFrameAsyncMaxMs_ = 0.0;
+    uint32_t nextOverlayId_ = 1, nextGpuOverlayId_ = 1;
+    std::vector<ScopeNameKey> overlayOrder_, gpuOverlayOrder_;
 
-    double endFrameAsyncLastMs_ = 0.0;
-    double endFrameAsyncAvgMs_ = 0.0;
-    double endFrameAsyncMaxMs_ = 0.0;
-
-    // Overlay: double-buffered strings (EndFrame writes, EmitOverlay reads)
-    std::vector<OverlayRow> overlayRows_[2];
-    std::atomic<int>        overlayReadBuf_{ 0 }; // 0 or 1
-#if PROF_GPU_ENABLED
-    std::vector<OverlayRow> gpuOverlayRows_[2];
-    std::atomic<int>        gpuOverlayReadBuf_{ 0 };
-#endif
-
-    // Scratch buffers for building the overlay (reallocated rarely, reused between frames)
-    std::vector<OverlayRow> overlayScratchRows_;
-    robin_hood::unordered_flat_map<uint32_t, size_t> overlayScratchLookup_;
-    std::vector<uint8_t> overlayScratchUsed_;
-    std::vector<const StatsEntry*> overlayEntryPtrs_;
-    std::vector<size_t> overlayScratchOrder_;
-#if PROF_GPU_ENABLED
-    std::vector<OverlayRow> gpuOverlayScratchRows_;
-    robin_hood::unordered_flat_map<uint32_t, size_t> gpuOverlayScratchLookup_;
-    std::vector<uint8_t> gpuOverlayScratchUsed_;
-    std::vector<const StatsEntry*> gpuOverlayEntryPtrs_;
-    std::vector<size_t> gpuOverlayScratchOrder_;
-#endif
-
-    // Resort by avgMs every N seconds
-    CoolClock::time_point lastOverlaySort_{};
-    double overlayResortIntervalSec_ = 4.0; // defaults to once per second
-
-    // Overlay region width (fixed)—a smoothed estimate to avoid measuring strings
-    double overlayWidthPx_ = 640.0;
-#if PROF_GPU_ENABLED
-    double gpuOverlayWidthPx_ = 640.0;
-#endif
-
-    uint32_t nextOverlayId_ = 1;
-#if PROF_GPU_ENABLED
-    uint32_t nextGpuOverlayId_ = 1;
-#endif
-
+    // Readers copy numeric data under a short lock. Text is only generated by
+    // EmitOverlay (at most 10 Hz) into persistent consumer-owned string buffers.
+    mutable std::mutex snapshotMutex_;
+    std::vector<OverlayRow> overlayRows_, gpuOverlayRows_;
+    std::vector<OverlayRow> hudRows_, gpuHudRows_;
+    CoolClock::time_point lastHudUpdate_{};
+    double overlayWidthPx_ = 640.0, gpuOverlayWidthPx_ = 640.0;
     TaskSystem::TaskHandle overlayTask_ = nullptr;
+    std::vector<ScopeSample> asyncCpuSamples_, asyncGpuSamples_, gpuFrameSamples_;
 
-    bool traceCaptureRequested_ = false;
-    uint32_t traceRequestFrameCount_ = 0;
-    bool traceCapturing_ = false;
+    bool traceCaptureRequested_ = false, traceCapturing_ = false, traceDraining_ = false;
     std::atomic<bool> traceCapturingAtomic_{ false };
-    bool traceStopRequested_ = false;
-    bool traceOpenEnded_ = false;
-    uint32_t traceFramesRemaining_ = 0;
-    uint32_t traceFramesRecorded_ = 0;
+    bool traceStopRequested_ = false, traceOpenEnded_ = false;
+    uint32_t traceRequestFrameCount_ = 0, traceFramesRemaining_ = 0, traceFramesRecorded_ = 0;
     std::string traceLastPath_;
-    uint64_t traceStartUs_ = 0;
-    bool traceStartSet_ = false;
+    uint64_t traceStartUs_ = 0, traceFirstFrame_ = 0, traceLastFrame_ = 0;
     std::vector<TraceEvent> traceEvents_;
     std::atomic<uint32_t> traceFileCounter_{ 0 };
-    std::vector<ScopeSample> asyncCpuSamples_;
-#if PROF_GPU_ENABLED
-    std::vector<ScopeSample> asyncGpuSamples_;
-#endif
-    TraceDumpData traceDumpData_;
+    // Export owns immutable events, names and thread metadata. It is never a
+    // dependency of EndFrame / the render workers; shutdown alone joins it.
+    std::mutex traceWriterMutex_;
+    std::condition_variable traceWriterCv_;
+    std::deque<TraceDumpData> traceWriteQueue_;
+    std::thread traceWriter_;
+    bool traceWriterStop_ = false;
 
 #if PROF_GPU_ENABLED
-    // GPU timestamp queries
-    static constexpr UINT kGpuQueueCount = 2; // 0 = direct, 1 = async compute (step 3)
-    std::mutex gpuMtx_;
-    // Step 3, CORRECTED BY THE DEBUG LAYER: the query heap and the readback buffer are PER QUEUE.
-    //
-    // The first cut shared them, reasoning that a TIMESTAMP heap is valid on both queue types and
-    // that the counter only has to hand out unique slots. Both true, and both beside the point: a
-    // GPU scope on a compute list ends in `ResolveQueryData`, which WRITES the readback buffer — so
-    // two queues were writing one resource with no synchronisation between them. D3D12 says so
-    // plainly (id=1047, "still referenced by write GPU operations in-flight on another Command
-    // Queue"), and it says it at ExecuteCommandLists, not at the write.
-    //
-    // Disjoint resources are the fix rather than cross-queue fences around the profiler's own
-    // writes: the profiler must not add synchronisation between the queues it is measuring.
-    // Costs one extra 8 KB heap and one extra readback buffer.
+    static constexpr UINT kGpuQueueCount = 2;
+    static constexpr UINT kGpuReadbackFrameSlots = 8;
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_[kGpuQueueCount];
     Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_[kGpuQueueCount];
-    // Step 3 — everything below that is [kGpuQueueCount] is per-queue BECAUSE IT HAS TO BE:
-    //   * gpuDrainFence_ decides when a resolved batch may be READ. It used to be signalled only on
-    //     the direct queue, so a ResolveQueryData recorded on the compute queue would be declared
-    //     readable before it had run, and the collector would map a readback range nobody had
-    //     written yet — fictitious numbers, silently, from the tool this whole plan is judged by.
-    //   * gpuQueue_ is what GetClockCalibration is asked of, and each queue has its own clock.
-    //   * gpuFreq_ is per queue by API contract (GetTimestampFrequency is a queue method).
-    // The query HEAP and nextGpuQuery_ deliberately stay SHARED: a TIMESTAMP heap is valid on both
-    // queue types and the counter only has to hand out unique slots. "Shared heap, split fence" is
-    // an asymmetry a later reader will assume is a bug, so it is stated here.
     Microsoft::WRL::ComPtr<ID3D12Fence> gpuDrainFence_[kGpuQueueCount];
     ID3D12CommandQueue* gpuQueue_[kGpuQueueCount] = {};
-    HANDLE gpuDrainFenceEvent_[kGpuQueueCount] = {};
+    UINT64* gpuMappedReadback_[kGpuQueueCount] = {};
     UINT64 gpuFreq_[kGpuQueueCount] = {};
-    UINT64 gpuTraceQpcFreq_ = 0;
-    UINT64 gpuTraceQpcOrigin_ = 0;
+    UINT64 gpuTraceQpcFreq_ = 0, gpuTraceQpcOrigin_ = 0;
     uint64_t gpuTraceCpuOriginUs_ = 0;
     UINT64 gpuDrainFenceValue_ = 1;
     UINT maxGpuQueries_ = 0;
-    UINT nextGpuQuery_ = 0;
+    std::atomic<UINT> nextGpuQuery_{ 0 };
     UINT gpuRecordingReadbackSlot_ = 0;
-    // Step 3: `queueIndex` is taken from the recording command list's OWN type
-    // (ID3D12GraphicsCommandList::GetType()) rather than plumbed through the ~100 GPU_SCOPE call
-    // sites. That is both zero-churn and impossible to get wrong — a scope cannot be mislabelled,
-    // because the label is read off the thing doing the recording.
-    struct GpuSampleRange { ScopeNameKey key; UINT start; UINT end; bool completed; uint64_t frameNo; UINT queueIndex; };
+    bool gpuRecordingReady_ = false;
+    // Unique preallocated slots: one atomic reservation replaces two global
+    // mutex acquisitions per scope. Frame boundaries join recording workers.
+    struct GpuSampleRange {
+        ScopeNameKey key;
+        UINT start = 0, end = 0;
+        bool completed = false;
+        uint64_t frameNo = 0;
+        UINT queueIndex = 0;
+        GpuResolveGroup* group = nullptr;
+    };
     std::vector<GpuSampleRange> gpuPending_;
     struct GpuResolvedBatch {
         std::vector<GpuSampleRange> ranges;
         UINT queryCount = 0;
-        UINT readbackSlot = 0;
-        // Step 3: ONE value signalled on BOTH drain fences (same trick as the frame fences). The
-        // batch may hold ranges resolved on either queue, so it is readable only once BOTH have
-        // passed — one value, two fences, no per-range bookkeeping.
         UINT64 fenceValue = 0;
+        uint64_t frameNo = 0;
     };
-    std::vector<GpuResolvedBatch> gpuResolvedBatches_;
+    std::array<GpuResolvedBatch, kGpuReadbackFrameSlots> gpuResolvedBatches_;
     bool gpuInitialized_ = false;
-    std::atomic<size_t> gpuFrameSampleIdx_{ SIZE_MAX };
+    size_t gpuFrameSampleIdx_ = SIZE_MAX;
+
 #endif
 #endif
 };
@@ -517,6 +455,11 @@ inline void Profiler::SetMaxCooldownSeconds(double) {}
 inline double Profiler::GetMaxCooldownSeconds() const { return 0.0; }
 inline void Profiler::ResetMaxNow() {}
 inline void Profiler::RequestTraceCapture(uint32_t) {}
+inline void Profiler::BeginTraceCapture() {}
+inline void Profiler::StopTraceCapture() {}
+inline Profiler::TraceCaptureStatus Profiler::GetTraceCaptureStatus() const { return {}; }
+inline std::vector<Profiler::OverlaySample> Profiler::OverlaySnapshot() const { return {}; }
+inline bool Profiler::DumpOverlay(const std::string&) { return false; }
 inline void Profiler::Tick() {}
 inline void Profiler::SetThreadName(const std::string&) {}
 inline Profiler::ScopeNameKey Profiler::RegisterTraceLiteral(const wchar_t*) { return {}; }
