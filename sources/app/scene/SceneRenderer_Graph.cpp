@@ -497,19 +497,7 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             };
         });
 
-    // Buoyancy: the first 1-2 FFT cascades and the shore depth map into a readback ring, read by
-    // the CPU the first frame the GPU is known done with it -- never waited on. After the sim (the
-    // cascades) and after the shore map this frame may have re-rendered; nothing consumes it on the
-    // GPU, so it hangs off the graph as a leaf. Built only on a frame something floats.
-    //
-    // GRAPHICS queue, measured: the same copies inside the async Main_ObjectCompute cost the frame
-    // ~108 us against ~6 us here (A/B floating vs not, same binary): the ocean draw waits for that
-    // pass, so there is no slack to hide 1 MB of PCIe in.
-    rg.AddPass2(RenderPass::Main_OceanReadback, { gb.pObjectCompute, gb.pShoreDepth },
-        [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
-            if (!frame_->ocean) { return {}; }
-            return frame_->ocean->BuildReadbackPass(ctx);
-        });
+    // Main_OceanReadback (buoyancy) is registered in BuildForwardAndEditor, right before Main_Transparent: see there.
 }
 
 // GPU cull, CSM (legacy only), spot and point shadow atlases.
@@ -2057,6 +2045,28 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
     const std::initializer_list<size_t> transpDeps = decisions_.glassRefl
         ? std::initializer_list<size_t>{ gb.pCompose, gb.pGlassReflect, gb.pObjectCompute }
         : std::initializer_list<size_t>{ gb.pCompose, gb.pObjectCompute };
+
+    // Buoyancy: the first 1-2 FFT cascades and the shore depth map into a readback ring, read by
+    // the CPU the first frame the GPU is known done with it -- never waited on. After the sim (the
+    // cascades) and after the shore map this frame may have re-rendered; nothing consumes it on the
+    // GPU, so it hangs off the graph as a leaf. Built only on a frame something floats.
+    //
+    // GRAPHICS queue, measured: the same copies inside the async Main_ObjectCompute cost the frame
+    // ~108 us against ~6 us here (A/B floating vs not, same binary): the ocean draw waits for that
+    // pass, so there is no slack to hide 1 MB of PCIe in.
+    //
+    // HERE, next to the ocean draw, and not after the shore map where it used to sit: its prereq on the ASYNC
+    // Main_ObjectCompute is a cross-queue wait, and in the prologue it parked the whole graphics queue at the top of
+    // every frame until the sim had run -- the start-of-frame hole of the owner's trace (2026-10-21, wind_test,
+    // SDSM): Pass_PrologueClear, then nothing for a median 0.69 ms until Pass_OceanReadback / Pass_ShadowCull, the sim
+    // itself only 114 us of it; the rest is two queue hand-overs. Main_Transparent waits for the sim anyway (the ocean
+    // samples its maps), so the copy rides that wait, and the CPU reads it no later (the same frame fence).
+    rg.AddPass2(RenderPass::Main_OceanReadback, { gb.pObjectCompute, gb.pShoreDepth, gb.pCompose },
+        [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            if (!frame_->ocean) { return {}; }
+            return frame_->ocean->BuildReadbackPass(ctx);
+        });
+
     auto pTransp = rg.AddPass2(RenderPass::Main_Transparent, transpDeps,
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
         RenderGraphPassContext& p = ctx;

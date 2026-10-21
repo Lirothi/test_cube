@@ -1510,6 +1510,37 @@ Gates: `--scene-stress-gbv=20 --barrier-cmp --canonical-check` CLEAN; the same i
 `enhanced=8050 legacy=0` (7912 before — the prologue release and the foam acquire), and legacy=0
 confirms the new narrowing forces no fallbacks.
 
+### REGRESSED, then FIXED (2026-10-21): the buoyancy readback parked the graphics queue on it
+
+The owner's trace (wind_test, Release_Editor, SDSM) showed a hole at the top of every GPU frame:
+`Pass_PrologueClear`, then nothing on the graphics queue for a median **0.69 ms** (max 1.36) until
+`Pass_ShadowCull` / `Pass_OceanReadback`, while the compute queue ran only `Pass_ObjectCompute` (114 us),
+and that late (~300 us in).
+
+**Cause.** `Main_OceanReadback` (buoyancy, added after this move) copies the sim's FFT cascades, so it
+takes `Main_ObjectCompute` as a prereq -- a cross-queue wait -- and it was registered in the prologue,
+right after the shore map. Its graphics segment `[OceanReadback, ShadowCull, ...]` therefore waited for
+the sim, i.e. the whole frame waited: graphics signals after the prologue -> compute starts the sim ->
+compute signals -> graphics resumes. Two queue hand-overs on the critical path, ~0.3 ms each against
+0.11 ms of work, and no graphics work to overlap. Not the CPU: the frame is GPU-bound (the CPU waits in
+`Renderer::WaitForFrame`), every list is already queued, and the hole's end lines up with no main-thread
+event (spread of hundreds of us against every candidate).
+
+**Proof, one binary, `--async-pass`:** ObjectCompute on graphics (the rest async) -> hole median 13 us,
+GPU.Frame **3017 -> 2625 us**; everything on graphics -> 2810 us.
+
+**Fix.** The readback is registered right before `Main_Transparent`, which waits for the sim anyway (the
+ocean samples its maps): the copy rides that wait, the CPU reads it no later (same frame fence), and the
+sim overlaps the shadow and G-buffer work again. Measured: hole median **41 us**, GPU.Frame
+**3017 -> 2574 us (-15 %)** -- better than putting the sim back on graphics. Copies still land at the
+capped 30 per second (9 in 120 frames). Gates: GBV `OceanReadback, Transparent, ObjectCompute,
+ShadowCull` on wind_test -- none; `--scene-stress=12 --scene-stress-gbv` CLEAN, `live objects at exit:
+none`.
+
+**Rule.** A pass with a prereq on an ASYNC pass blocks its whole graphics segment at its position in
+the schedule. Register it where the graphics queue already waits for that producer, or where it has
+work to overlap -- never ahead of the frame's first heavy pass.
+
 ## FIXED: async BuildAS hung the device (in-place wind BLAS refit)
 
 Open since step 10 and only caught once the diagnostics below existed. `Main_BuildAS` on the compute

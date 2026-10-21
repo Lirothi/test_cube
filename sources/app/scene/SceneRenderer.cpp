@@ -40,6 +40,7 @@
 #include "text/TextManager.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include <optional>
 #include "core/containers/inl_vector.h"
 
 // R1 (docs/scene_renderer_refactor_plan.md): the helpers every pass body uses moved to an
@@ -830,12 +831,24 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     }
 
     frame_ = &frame;
-    EnsureFrameResources(renderer);
-    DecideFrame(renderer, frame);
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneRendererEnsureResources);
+        EnsureFrameResources(renderer);
+    }
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneRendererDecideFrame);
+        DecideFrame(renderer, frame);
+    }
     // Texture streaming A3: the manager's frame stage (snapshot / apply) before the graph is built,
     // so this frame's Main_TextureStreaming records what it asked for.
-    if (streaming::TextureStreaming* ts = renderer->GetTextureStreaming()) { ts->TickManager(renderer, frame); }
+    if (streaming::TextureStreaming* ts = renderer->GetTextureStreaming())
+    {
+        CPU_SCOPE(ProfilerScopes::kTextureStreamingTick);
+        ts->TickManager(renderer, frame);
+    }
 
+    // Until the graph's first AddPass: the submit timeline, the overlay task, the queue-mode sync, the graph reset.
+    std::optional<Profiler::ScopedCpu> graphSetupScope(std::in_place, ProfilerScopes::kSceneRendererGraphSetup);
     renderer->BeginSubmitTimeline();
 
     const bool showProfilerOverlay = frame.settings.showProfiler;
@@ -876,6 +889,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     renderer->SyncAsyncQueueMode();
     mainRenderGraph_->Reset();
     MainRenderGraph& rg = *mainRenderGraph_;
+    graphSetupScope.reset();
 
     // R5: the frame's SHAPE, in schedule order. Registration only — every builder these phases
     // attach runs later, inside ExecuteParallel. The bodies live in SceneRenderer_Graph.cpp.

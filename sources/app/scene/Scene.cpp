@@ -3082,8 +3082,11 @@ void Scene::Render(Renderer* renderer) {
     // PrepareViews above) as the shadow caster overrides — after PrepareViews on purpose, so the
     // caster can never lag the receiver by a frame at a LOD transition. S4: the same walk fills
     // the camera flags + crossfade tables from the verdicts PrepareViews just produced.
-    shadowGpu_.RefreshCasterLods(renderer, objects_, camera_.GetPosition(), occlusionHistory_.Enabled(),
-                                 renderer->GetTotalFrameNumber());
+    {
+        CPU_SCOPE(ProfilerScopes::kRefreshCasterLods);
+        shadowGpu_.RefreshCasterLods(renderer, objects_, camera_.GetPosition(), occlusionHistory_.Enabled(),
+                                     renderer->GetTotalFrameNumber());
+    }
 
     // LOD selection debug view (dev window "LOD" tab, or --set=lod.debug). Emitted HERE because
     // this is the one point where both halves of what it shows are valid: this frame's tiers are
@@ -3096,6 +3099,7 @@ void Scene::Render(Renderer* renderer) {
     // lockstep mapping. Kept out of SceneFrameData: this is a same-frame main-thread read, and the
     // frame data is for what the render threads consume.
     {
+        CPU_SCOPE(ProfilerScopes::kSceneEditorSelection);
         // One pass over the objects testing each against the sorted selection, instead of a scan
         // of every object per selected id -- the old shape was O(selection x objects) and a few
         // hundred selected meshes made it the most expensive thing in the editor frame.
@@ -3119,6 +3123,7 @@ void Scene::Render(Renderer* renderer) {
     // into this frame's ring region. Fixed slot layout [cascades | spots | point-faces] so a
     // view's slot index is stable for the future cull; inactive slots pass null → zeroed.
     {
+        CPU_SCOPE(ProfilerScopes::kSceneShadowViewUpload);
         constexpr size_t kCascadeSlots = static_cast<size_t>(kCascades);
         constexpr size_t kSpotSlots = LightManager::kMaxShadowedSpotLights;
         constexpr size_t kPointFaceSlots = LightManager::kMaxShadowedPointLights * 6;
@@ -3255,7 +3260,10 @@ void Scene::Render(Renderer* renderer) {
         // S15: everything the GPU analysis needs that only the CPU knows. AFTER UpdateViewFrustums,
         // because the analyze pass copies the non-directional slots out of THIS frame's ring region
         // and the handle moves with the region.
-        UpdateSdsmFrameParams(renderer);
+        {
+            CPU_SCOPE(ProfilerScopes::kSceneSdsmFrameParams); // its own block: CPU_SCOPE names one variable per block
+            UpdateSdsmFrameParams(renderer);
+        }
     }
 
     sceneRenderer_.Render(renderer, frameData_);

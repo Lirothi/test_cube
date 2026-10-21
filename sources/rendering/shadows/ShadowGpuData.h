@@ -637,6 +637,7 @@ private:
     bool localSplitFrame_ = false;
     std::vector<std::uint8_t> casterWindy_;      // per caster: its object sways in the wind (base strength)
     std::vector<std::uint8_t> localDynamicPrev_; // per caster: last frame's movable bit (a change = a new static set)
+    std::vector<std::uint32_t> casterLodUpload_; // the uploaded CasterLod (+ S7 movable bit), built in CPU memory
     std::uint32_t localStaticVersion_ = 0;
 
     // Occlusion plan S5b (cascade light-space HZB cull). Per cascade: the casters the main cull

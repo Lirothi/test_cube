@@ -7,6 +7,7 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -447,6 +448,7 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
     // Walk objects EXACTLY like Rebuild does — the caster slot cursor is the mapping. UpdateForFrame
     // rebuilds on any caster-count change before this runs, so the orders agree; the bounds guard
     // below is for the one frame a mismatch could slip through, not a supported state.
+    std::optional<Profiler::ScopedCpu> walkScope(std::in_place, ProfilerScopes::kRefreshCasterLodsWalk);
     std::uint32_t idx = 0;
     for (const auto& objPtr : objects)
     {
@@ -481,9 +483,11 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
         }
         idx += slots;
     }
+    walkScope.reset();
     // S4: this frame's camera flags + crossfade per caster -- zero on a frame the indirect
     // G-buffer does not run, so the cull emits nothing for the camera. Same object walk, same
     // cursor as the LOD table above.
+    std::optional<Profiler::ScopedCpu> cameraScope(std::in_place, ProfilerScopes::kRefreshCasterLodsCamera);
     casterCamCpu_.assign(casterLod_.size(), 0u);
     casterFadeCpu_.assign(casterLod_.size(), 0.0f);
     if (gbufferIndirectFrame_)
@@ -526,12 +530,16 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
     // Change detection for the page cache: any LOD move invalidates cached pages (they hold
     // the old geometry). Rebuild resizes the table, which reads as a change — correct, a new
     // caster set must flush too.
+    cameraScope.reset();
+    std::optional<Profiler::ScopedCpu> uploadScope(std::in_place, ProfilerScopes::kRefreshCasterLodsUpload);
     if (casterLodPrev_ != casterLod_)
     {
         casterLodsChanged_ = true;
         casterLodPrev_ = casterLod_;
     }
     UploadCasterLods(renderer);
+    uploadScope.reset();
+    CPU_SCOPE(ProfilerScopes::kRefreshCasterLodsGroups);
     RefreshVirtualGroups(renderer);
 }
 
@@ -614,9 +622,12 @@ void ShadowGpuData::RefreshVirtualGroups(Renderer* renderer)
     std::uint32_t camBase = 0;
     for (std::uint32_t vg = 0; vg < numVirtualGroups_; ++vg)
     {
+        // The ranges from groupLodMega_ again, never read back from `dst`: it is write-combined upload memory, and
+        // reading it back cost ~0.13 ms a frame on wind_test.
+        const size_t o = static_cast<size_t>(vg) * 4u;
         cam[vg * 4 + 0] = camBase;
-        cam[vg * 4 + 1] = dst[vg * 4 + 1];
-        cam[vg * 4 + 2] = dst[vg * 4 + 2];
+        cam[vg * 4 + 1] = (o + 2 < groupLodMega_.size()) ? groupLodMega_[o + 2] : 0u;
+        cam[vg * 4 + 2] = (o + 1 < groupLodMega_.size()) ? groupLodMega_[o + 1] : 0u;
         cam[vg * 4 + 3] = vgCamCount_[vg];
         camBase += vgCamCount_[vg];
     }
@@ -648,14 +659,17 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
     }
     if (std::uint8_t* dst = casterLodBuf_.Region(f))
     {
-        std::memcpy(dst, casterLod_.data(), casterLod_.size() * sizeof(std::uint32_t));
         // Local-light plan S7: bit kCasterLocalDynamicBit of the UPLOADED copy (never casterLod_: its compare against
         // last frame is the LOD-change signal that re-renders VSM) = movable for the local shadow cache -- GI, an
         // IsDynamicCaster object, one that moved within kFrameCount + 1 frames (pending_), one that sways in the wind
         // (UE: Movable, or a WPO material with r.Shadow.CacheWPOPrimitives 0). Every caster that changes side changes
         // the static set, so the cached pictures go stale: a move invalidates on its first frame (the old position is
         // baked in) and again when it settles (it has to be baked in at the new one).
-        auto* lods = reinterpret_cast<std::uint32_t*>(dst);
+        // Built in CPU memory and copied ONCE: the ring region is write-combined upload memory, and setting the bit
+        // there (`|=` reads it back, uncached) cost 0.33 ms a frame on wind_test -- the main thread's unscoped hole
+        // between Scene::PrepareViews and the graph (owner's trace, 2026-10-21).
+        casterLodUpload_.assign(casterLod_.begin(), casterLod_.end());
+        std::uint32_t* lods = casterLodUpload_.data();
         const std::uint32_t n = static_cast<std::uint32_t>(casterLod_.size());
         if (localDynamicPrev_.size() != n) { localDynamicPrev_.assign(n, 0u); ++localStaticVersion_; }
         bool changed = false;
@@ -676,6 +690,7 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
             moved += isMoved ? 1u : 0u;
             windy += isWindy ? 1u : 0u;
         }
+        std::memcpy(dst, lods, static_cast<size_t>(n) * sizeof(std::uint32_t));
         if (changed)
         {
             ++localStaticVersion_;

@@ -205,6 +205,20 @@ extern const Profiler::ScopeNameKey kPrepareMainView;
 extern const Profiler::ScopeNameKey kPrepareViewsDispatch;
 extern const Profiler::ScopeNameKey kPrepareViewsJoin;
 extern const Profiler::ScopeNameKey kUpdateCascades;
+// Scene::Render between PrepareViews and the graph's first AddPass -- 0.54 ms a frame with no scope in it (owner's
+// trace 2026-10-21, wind_test Release: a third of the main thread's cycle).
+extern const Profiler::ScopeNameKey kRefreshCasterLods;
+extern const Profiler::ScopeNameKey kRefreshCasterLodsWalk;    // the receiver LOD per caster slot
+extern const Profiler::ScopeNameKey kRefreshCasterLodsCamera;  // the camera flags + crossfade (indirect G-buffer)
+extern const Profiler::ScopeNameKey kRefreshCasterLodsUpload;  // the LOD tables into the ring (+ S7 movable bit)
+extern const Profiler::ScopeNameKey kRefreshCasterLodsGroups;  // the virtual-group bases
+extern const Profiler::ScopeNameKey kSceneEditorSelection;
+extern const Profiler::ScopeNameKey kSceneShadowViewUpload;
+extern const Profiler::ScopeNameKey kSceneSdsmFrameParams;
+extern const Profiler::ScopeNameKey kSceneRendererEnsureResources;
+extern const Profiler::ScopeNameKey kSceneRendererDecideFrame;
+extern const Profiler::ScopeNameKey kTextureStreamingTick;
+extern const Profiler::ScopeNameKey kSceneRendererGraphSetup;
 extern const Profiler::ScopeNameKey kSelectShadowedSpots;
 extern const Profiler::ScopeNameKey kSelectShadowedPoints;
 extern const Profiler::ScopeNameKey kSceneRenderQueueBucketize;
