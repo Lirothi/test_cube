@@ -1439,6 +1439,41 @@ void TestBuoyancyIsAFlagThatUndoes(const EditorActionContext& actionCtx)
     }
 }
 
+// Cast Shadow (UE) is a per-object flag the other way round: ABSENT while the mesh casts (the default -- a level that
+// never switched a shadow off saves byte-identical), "castShadow": false while it does not; one undo entry for the
+// group, and undo takes the key away again.
+void TestCastShadowIsAFlagThatUndoes(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    Check(EditorActionRegistry::Builtin().Find("setCastShadow") != nullptr, "setCastShadow is a registered action");
+    std::string error;
+    EditorIntent intent;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"setCastShadow","target":{"filter":["palm"]},"params":{"enabled":false}})",
+        intent, error), "a setCastShadow answer parses: " + error);
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable && preview.targets.size() == 3, "setCastShadow previews the three palms: " + preview.problem);
+
+    EditorCommandStack stack;
+    std::string status;
+    Check(ExecuteIntent(actionCtx, stack, preview, status), status);
+    Check(stack.HistorySize() == 1, "switching three palms' shadows off is ONE history entry");
+    Check(status.find("No shadows from 3") != std::string::npos, "and says what it switched: " + status);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        const auto flag = object.properties.find("castShadow");
+        const bool off = flag != object.properties.end() && flag->is_boolean() && !flag->get<bool>();
+        Check(off == (object.id.value <= 3), "the palms cast no shadow and the rock still does");
+    }
+
+    stack.Undo(ctx);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        Check(object.properties.find("castShadow") == object.properties.end(),
+            "undo takes the key away -- the level saves exactly as before");
+    }
+}
+
 // Plan L: the night lamps' switch on its own -- no editor. Settled at the first frame, a delay and a warm-up after
 // the sun crosses, out at once, instant when the clock is set by hand, and the delay continuous in position (a lamp
 // and its bulb together).
@@ -3516,6 +3551,7 @@ int main(int argc, char** argv)
         TestSpawnPlacement(actionCtx);
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
+        TestCastShadowIsAFlagThatUndoes(actionCtx);
         TestNightLampsSwitch();
         {
             // Plan L: the palm document with two lamps beside it (the palm one has no environment).

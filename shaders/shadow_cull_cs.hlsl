@@ -250,8 +250,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // S9e: r.Shadow.RadiusThreshold -- too small for its distance to the camera (GI instances exempt).
     const float3 toCam = c - gLocalCam.xyz;
     const bool tiny = gLocalCam.w > 0.0f && caster < gGiFirst && b.center.w * b.center.w <= gLocalCam.w * dot(toCam, toCam);
+    // UE Cast Shadow off (ShadowGpuData::FillBounds: halfExtents.w = 1): in the table for the camera row below only.
+    const bool castsShadow = b.halfExtents.w == 0.0f;
 
-    for (uint v = 0; v < gNumViews; ++v)
+    for (uint v = 0; v < gNumViews && castsShadow; ++v)
     {
         bool hit;
         bool toStatic = false;

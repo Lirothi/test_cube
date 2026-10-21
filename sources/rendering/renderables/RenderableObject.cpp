@@ -109,7 +109,9 @@ void RenderableObject::Init(Renderer* renderer,
     Material::GraphicsDesc graphicsDesc = BuildGraphicsDesc(renderer);
     graphicsMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, graphicsDesc);
 
-    if (CastsShadow())
+    // Built for an object the level's "castShadow": false switched off too (!castsShadow_): the Inspector can switch it
+    // back on, and a caster without its PSO draws nothing on the CPU path -- nor does an instanced run it leads.
+    if (CastsShadow() || ShadowSwitchedOff())
     {
         Material::GraphicsDesc shadowDesc = BuildShadowDesc(renderer, graphicsDesc);
         shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc);

@@ -331,7 +331,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             uint n = meta >> 1;
             if (n == 0u) { n = 1u; } // safety: a continuation slot can't lead the loop by construction
             CasterBounds b = Bounds[c];
-            if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
+            // halfExtents.w = 1: Cast Shadow off (ShadowGpuData::FillBounds) -- in the table for the camera only.
+            if (b.halfExtents.w == 0.0f && PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))
             {
                 for (uint s = 0u; s < n; ++s)
                 {

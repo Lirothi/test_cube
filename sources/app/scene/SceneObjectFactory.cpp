@@ -376,6 +376,13 @@ namespace SceneObjectFactory
             mesh.SetRenderLayer(RenderLayerFromString(o["renderLayer"].get<std::string>()));
         }
 
+        // UE's Cast Shadow (UPrimitiveComponent::CastShadow): "castShadow": false keeps the object out of every shadow --
+        // the sun's and the local lights' maps, VSM, the RT shadow rays. Absent = casts (the Inspector writes the key
+        // only while off). Contact shadows trace the depth buffer and still see it (UE: a separate bCastContactShadow).
+        if (o.contains("castShadow") && o["castShadow"].is_boolean())
+        {
+            mesh.SetCastsShadow(o["castShadow"].get<bool>());
+        }
         // Buoyancy: "buoyant" is the per-OBJECT switch (the Inspector's checkbox, absent = off);
         // "buoyancy" says where and how it floats and normally comes from the asset's mesh.json,
         // folded in by ResolveMeshAsset like every other asset key. See ocean/BuoyancyLayout.h.

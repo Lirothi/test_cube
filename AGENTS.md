@@ -416,6 +416,26 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   with nothing floating costs 0 us CPU and no copy. The copy was tried on the async
   queue inside Main_ObjectCompute and cost the frame ~108 us: the ocean draw waits on that pass.
 
+## Cast Shadow — Per Object
+
+A level mesh `"castShadow": false` (Inspector: Lighting > "Cast Shadow", MCP: `setCastShadow`; staticMesh and
+instancedModels) is UE's `CastShadow`: no shadow from it in any map -- the sun's (CSM/SDSM/VSM clipmap), the lamps'
+(atlases, VSM), the RT shadow rays (its TLAS instance lacks `rt::kInstanceMaskShadow`) -- while it stays visible and lit.
+Absent = casts; the key is written only while off. Contact shadows still see it (they trace the depth buffer; UE keeps
+those on a separate `bCastContactShadow`).
+
+- The mesh STAYS in the GPU-driven caster table (`ShadowGpuData::IsCaster`): that table is also the camera's indirect
+  G-buffer, and a mesh left out of it drops to the CPU G-buffer draw. The verdict rides its bounds instead
+  (`CasterBounds.halfExtents.w = 1`), and every shadow consumer tests it: `shadow_cull_cs` (shadow views; the camera row
+  ignores it), `vsm_page_scatter_cs`, the setup's brute-force fallback, the cull validator. A type that never casts
+  (the ocean, particles) stays out of the table -- `RenderableObject::ShadowSwitchedOff()` is the switch, not the type;
+  letting the ocean in made the merged caster VB/IB heterogeneous and turned VSM's single draw off (45 ms CPU).
+- A switched-off mesh still builds its shadow PSOs at Init, so switching it back on works on the CPU path too.
+- A switch rebuilds the caster set (`NotifyEditorShadowCasterVisibilityChanged`, like a visibility change), and every
+  `ShadowGpuData::Rebuild` flushes the VSM page cache once (`casterLodsChanged_`) -- the switch no longer resizes the table,
+  which is what used to flush it.
+- Only casters count for `HasWindCasters()`: grass with its shadow off does not keep VSM redrawing for the wind.
+
 ## Rest Pose — How a New Copy Lies
 
 mesh.json `"restRotationDeg": [pitch, yaw, roll]` (the level's rotationDeg order) is how a NEW copy of

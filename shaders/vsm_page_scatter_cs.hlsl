@@ -213,6 +213,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (slots == 0u) { return; }        // continuation slot: its object was handled by its first slot
 
     const CasterBounds b = Bounds[c];
+    if (b.halfExtents.w != 0.0f) { return; } // UE Cast Shadow off (ShadowGpuData::FillBounds): no page takes it
     const float3 ctr = b.center.xyz;
     const float3 ext = b.halfExtents.xyz;
 

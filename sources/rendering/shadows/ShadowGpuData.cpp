@@ -246,13 +246,20 @@ static size_t CasterSlots(const RenderableObjectBase* obj)
 
 bool ShadowGpuData::IsCaster(const RenderableObjectBase* obj)
 {
-    // Match SceneRenderQueue's visibility and CastsShadow predicates. A visibility change
-    // changes the count seen by UpdateForFrame, which rebuilds this cache before VSM or
-    // indirect draws consume it. In no-editor builds ordinary level objects remain visible.
-    // GPU-instanced casters are handled separately by IsGiFoldable below.
-    if (!obj || !obj->IsVisible() || !obj->CastsShadow() || obj->IsGpuInstancedCaster()) { return false; }
+    // Match SceneRenderQueue's visibility predicate. A visibility change changes the count seen by
+    // UpdateForFrame, which rebuilds this cache before VSM or indirect draws consume it. In no-editor
+    // builds ordinary level objects remain visible. GPU-instanced casters are handled separately by
+    // IsGiFoldable below.
+    // A mesh with Cast Shadow OFF is in the table too: the table is also the camera's indirect G-buffer, and a mesh
+    // left out of it falls back to the CPU G-buffer draw (grass with its shadow switched off would cost CPU recording).
+    // Its bounds carry the verdict instead (halfExtents.w = 1, FillBounds), which every shadow consumer tests --
+    // shadow_cull_cs's shadow views, vsm_page_scatter_cs, the setup's brute-force fallback, the cull validator.
+    // Only the switch: a type that never casts (the ocean) stays out -- its mesh would make the merged caster VB/IB
+    // heterogeneous and turn VSM's single-draw page render off (measured: the per-page loop, 45 ms CPU on wind_test).
+    if (!obj || !obj->IsVisible() || obj->IsGpuInstancedCaster()) { return false; }
     const RenderableObject* ro = obj->AsRenderableObject();
-    return ro && ro->GetMesh() != nullptr;
+    if (!ro || ro->GetMesh() == nullptr) { return false; }
+    return obj->CastsShadow() || ro->ShadowSwitchedOff();
 }
 
 bool ShadowGpuData::IsGiFoldable(const RenderableObjectBase* obj)
@@ -332,7 +339,8 @@ void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBo
     // If popping IS ever seen, reintroduce the pad DIRECTIONALLY (downwind XZ + small Y), not as the
     // old all-axis worst case — and bake it at level load too, or the pad hysteresis bug returns.
     out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, b.GetRadius());
-    out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
+    // w = 1: Cast Shadow off -- in the table for the camera only (IsCaster); no shadow view takes it.
+    out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, obj->CastsShadow() ? 0.0f : 1.0f);
 }
 
 // Terrain chunking: bounds for ONE slot of a chunked mesh (Mesh::IsChunkedSubmeshes). Its submeshes
@@ -358,7 +366,7 @@ static void FillChunkBounds(const RenderableObject* ro, size_t slot,
     const Math::float3 c = w.GetCenter();
     const Math::float3 e = w.GetHalfExtents();
     out.center = DirectX::XMFLOAT4(c.x, c.y, c.z, w.GetRadius());
-    out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, 0.0f);
+    out.halfExtents = DirectX::XMFLOAT4(e.x, e.y, e.z, objectBounds.halfExtents.w); // the object's Cast Shadow verdict
 }
 
 // ---- Public API ------------------------------------------------------------
@@ -1620,7 +1628,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         FillBounds(obj, bnd);
         // W5: a wind caster animates in the VERTEX shader — its transform never changes, so the
         // mover-based "nothing changed" tests would freeze its shadow. Remember that we have one.
-        if (inst.windStrength > 0.0f) { hasWindCasters_ = true; }
+        // Only a mesh that CASTS: grass with its shadow switched off must not keep VSM redrawing for the wind.
+        if (inst.windStrength > 0.0f && obj->CastsShadow()) { hasWindCasters_ = true; }
         const std::uint32_t dyn = obj->IsDynamicCaster() ? 1u : 0u;
         const bool chunked = mesh && mesh->IsChunkedSubmeshes();
         // S4: the object draws through the indirect G-buffer when EVERY submesh's slot has the
@@ -2174,6 +2183,10 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
     ++localStaticVersion_; // S7: a new caster set -- every cached local-light picture is stale
+    // ...and every cached VSM page (ComputePageRenderDecisions: forceAll once). It used to follow from the caster-LOD
+    // table changing size, but a Cast Shadow switch keeps the mesh in the table (IsCaster) and only flips its bounds'
+    // verdict: the pages it should now darken -- or stop darkening -- would stay as cached.
+    casterLodsChanged_ = true;
 
     char buf[352];
     std::snprintf(buf, sizeof(buf),
@@ -4002,6 +4015,7 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
         for (std::uint32_t c = 0; c < valCasters_; ++c)
         {
             const render::CasterBounds& b = valBounds_[c];
+            if (b.halfExtents.w != 0.0f) { continue; } // Cast Shadow off: the camera's only (FillBounds)
             bool visible;
             if (localView)
             {

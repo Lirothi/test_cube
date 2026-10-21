@@ -14,6 +14,12 @@ class Mesh;
 
 namespace rt {
 
+// TLAS instance mask bits (UE RayTracingInstanceMask: RAY_TRACING_MASK_SHADOW and friends). A ray traces with the bits
+// it cares about; an instance answers when its mask shares one. Every instance carries everything except, for an
+// object with Cast Shadow off, kInstanceMaskShadow -- the shadow rays (rt_reflect_common.hlsli RT_MASK_SHADOW) skip it.
+inline constexpr uint32_t kInstanceMaskAll = 0xFFu;
+inline constexpr uint32_t kInstanceMaskShadow = 0x02u;
+
 // A bottom-level acceleration structure (the built result buffer). Geometry in
 // this engine is static, so a BLAS is built once and cached per mesh.
 struct Blas {
@@ -43,6 +49,7 @@ struct InstanceEntry {
     // BLAS (build-once cache), so this must be derived from the mesh's own slot materials,
     // not from anything per-instance.
     uint64_t nonOpaqueSlots = 0;
+    uint32_t mask = kInstanceMaskAll; // D3D12 InstanceMask (8 bits); see kInstanceMaskShadow
 };
 
 // Builds and caches BLASes for meshes and assembles a per-frame TLAS from a list

@@ -254,6 +254,10 @@ public:
     // 0.38 ms baseline while a mesh was being dragged. A transient ghost like the editor's spawn
     // preview has no business paying that, or making the rest of the scene pay it.
     void SetCastsShadow(bool v) { castsShadow_ = v; }
+    // The per-object switch is what says no (the level's "castShadow": false, the Inspector) -- not a type that never
+    // casts (the ocean, particles: their CastsShadow() override is false with the switch left on). Such an object
+    // keeps its shadow PSOs and its place in the GPU-driven table (ShadowGpuData::IsCaster) so the switch can go back.
+    bool ShadowSwitchedOff() const { return !castsShadow_; }
 
     // Draw identity (no MaterialData at this tier; GBufferRenderable adds textures).
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), graphicsMaterial_.get(), nullptr }; }
@@ -269,6 +273,7 @@ public:
         }
         out.mesh = mesh_.get();
         out.world = modelMatrix_;
+        out.castsShadow = CastsShadow();
         return true;
     }
 

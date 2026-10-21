@@ -585,7 +585,7 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
     gd.shaderFile = L"shaders/gbuffer_instcb.hlsl";
 
     std::shared_ptr<Material> shadow;
-    if (CastsShadow())
+    if (CastsShadow() || ShadowSwitchedOff()) // switched off by the level's flag: still buildable back on (RenderableObject::Init)
     {
         // Shadow desc built BEFORE the slot-params define: depth-only ignores materials, so
         // multi- and single-slot objects share one instanced CSM PSO per define set.

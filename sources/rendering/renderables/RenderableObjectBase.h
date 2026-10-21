@@ -42,6 +42,9 @@ struct RtInstanceDesc
     // and RT candidate hits are kept only when baseColor.a * albedo.a >= alphaCutoff (the raster
     // clip rule). < 0 = opaque geometry, zero traversal cost added.
     float alphaCutoff = -1.0f;
+    // UE Cast Shadow: false keeps the instance out of shadow rays (its TLAS mask lacks rt::kInstanceMaskShadow) while
+    // reflections still see it.
+    bool castsShadow = true;
 };
 class Camera;
 class Material;

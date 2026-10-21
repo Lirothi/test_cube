@@ -283,6 +283,7 @@
     <ClCompile Include="sources/editor/commands/RenameObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/SetCastShadowCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetMaterialCommand.cpp" />
@@ -520,6 +521,7 @@
     <ClInclude Include="sources/editor/commands/RenameObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h" />
+    <ClInclude Include="sources/editor/commands/SetCastShadowCommand.h" />
     <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />
     <ClInclude Include="sources/editor/commands/SetMaterialCommand.h" />

@@ -157,6 +157,10 @@ SceneObjectRegistry::ObjectList CreateInstancedModels(SceneObjectRegistry::Creat
     }
 
     instances->SetModelMatrix(mat4::Scaling(scale) * mat4::RotationFromEulerXYZRad(rotationRad) * mat4::Translation(position));
+    if (o.contains("castShadow") && o["castShadow"].is_boolean()) // UE Cast Shadow, as a static mesh's
+    {
+        instances->SetCastsShadow(o["castShadow"].get<bool>());
+    }
     objects.push_back(std::move(instances));
     return objects;
 }

@@ -435,7 +435,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         d.Transform[2][0] = w.m[0][2]; d.Transform[2][1] = w.m[1][2];
         d.Transform[2][2] = w.m[2][2]; d.Transform[2][3] = w.m[3][2];
         d.InstanceID = e.instanceId & 0xFFFFFFu;
-        d.InstanceMask = 0xFF;
+        d.InstanceMask = e.mask & 0xFFu;
         d.InstanceContributionToHitGroupIndex = e.instanceId & 0xFFFFFFu;
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
         if (e.blasOverride != 0) {

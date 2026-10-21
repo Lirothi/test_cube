@@ -35,7 +35,7 @@ public:
     void SelectLod(const Camera& camera, const Frustum& cameraFrustum) override;
     UINT GetCameraInstanceCount() const override { return visibleInstanceCount_; }
     bool IsSimpleRender() const { return false; }
-    bool CastsShadow() const override { return true; }
+    // CastsShadow: the object's flag (the level's "castShadow", RenderableObject) -- it used to be a hard true.
     // One object drives many GPU-side instances, so it can't be a single per-caster indirect
     // entry — the GPU-driven shadow path (Step 6) skips it and it draws via its own instanced
     // RenderShadow instead.

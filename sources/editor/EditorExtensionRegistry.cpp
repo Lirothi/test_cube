@@ -20,6 +20,7 @@
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetBuoyantCommand.h"
+#include "editor/commands/SetCastShadowCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
@@ -585,11 +586,42 @@ namespace
                 ctx.document.SetDirty(true);
             }
 
+            DrawCastShadow(ctx, commandStack, obj);
             DrawBuoyancy(ctx, commandStack, obj, runtime);
             DrawGlowOnAt(ctx, commandStack, obj, gb);
         }
 
     private:
+        // UE's Lighting > Cast Shadow. Every selected mesh, one undo entry.
+        static void DrawCastShadow(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
+        {
+            ImGui::SeparatorText("Lighting");
+            bool castShadow = SetCastShadowCommand::DocumentCastsShadow(obj);
+            if (ImGui::Checkbox("Cast Shadow", &castShadow))
+            {
+                auto composite = std::make_unique<CompositeCommand>(
+                    castShadow ? "Enable Cast Shadow" : "Disable Cast Shadow");
+                for (const EditorObjectId id : ctx.selection.Ordered())
+                {
+                    const EditorObject* selected = ctx.document.Find(id);
+                    if (selected && SetCastShadowCommand::AppliesTo(*selected))
+                    {
+                        composite->Add(std::make_unique<SetCastShadowCommand>(id, castShadow));
+                    }
+                }
+                if (composite->Empty()) { composite->Add(std::make_unique<SetCastShadowCommand>(obj.id, castShadow)); }
+                commandStack.Execute(ctx, std::move(composite));
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "Off: the mesh stays visible and lit but casts no shadow -- not the sun's, not a lamp's\n"
+                    "(atlas or VSM), not a ray-traced one. For grass and small clutter (cheaper shadow\n"
+                    "passes) or a bulb inside its own lamp. Contact shadows still see it: they trace\n"
+                    "the depth buffer (UE keeps those on a separate switch).");
+            }
+        }
+
         // Plan L: offered only on a mesh that glows -- on any other the switch would move nothing.
         static void DrawGlowOnAt(EditorContext& ctx, EditorCommandStack& commandStack,
             const EditorObject& obj, const GBufferRenderable* gb)

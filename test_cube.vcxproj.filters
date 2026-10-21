@@ -288,6 +288,9 @@
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetCastShadowCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -927,6 +930,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetCastShadowCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h">

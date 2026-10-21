@@ -285,6 +285,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 rt::InstanceEntry entry;
                 entry.mesh = desc.mesh;
                 entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
+                entry.mask = desc.castsShadow ? rt::kInstanceMaskAll : (rt::kInstanceMaskAll & ~rt::kInstanceMaskShadow);
                 // TLAS InstanceID = the mesh's bindless geometry index (S9), so a hit
                 // can index the geometry/material table directly. Same owner+mesh ->
                 // same index (all instances of a cloud share one record run). Falls back to

@@ -36,6 +36,7 @@
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/commands/SetBuoyantCommand.h"
+#include "editor/commands/SetCastShadowCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -450,6 +451,38 @@ namespace
         }
         return FoldIntoOneEntry(std::move(commands),
             std::string(buoyant ? "Float " : "Stop Floating ") + std::to_string(count) + " Objects");
+    }
+
+    // ------------------------------------------------------------------ setCastShadow
+
+    std::unique_ptr<EditorCommand> BuildSetCastShadow(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const bool castShadow = BoolOr(intent.params, "enabled", true);
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t skipped = 0;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            if (!obj || !SetCastShadowCommand::AppliesTo(*obj))
+            {
+                ++skipped; // lights, zones, water, particles: nothing that casts a map shadow
+                continue;
+            }
+            commands.push_back(std::make_unique<SetCastShadowCommand>(id, castShadow));
+        }
+        if (commands.empty())
+        {
+            outStatus = "Nothing that casts a shadow: Cast Shadow is for meshes";
+            return nullptr;
+        }
+        const std::size_t count = commands.size();
+        outStatus = (castShadow ? "Casting shadows: " : "No shadows from ") + CountedObjects(count);
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not meshes)"; }
+        return FoldIntoOneEntry(std::move(commands),
+            std::string(castShadow ? "Cast Shadow On for " : "Cast Shadow Off for ") + std::to_string(count) + " Objects");
     }
 
     // ------------------------------------------------------------------ setOnAt
@@ -3443,6 +3476,17 @@ EditorActionRegistry::EditorActionRegistry()
         EditorTargetKind::Objects,
         { { "enabled", EditorParamKind::Bool, true, "true floats the meshes, false puts them back where the level placed them" } },
         &BuildSetBuoyant,
+    });
+
+    actions_.push_back({
+        "setCastShadow",
+        "Make the matching meshes cast shadows, or not (UE's Cast Shadow): off keeps them out of every light's "
+        "shadow -- the sun's, the lamps' and ray-traced ones -- while they stay visible and lit. Use it for grass, "
+        "small clutter or a bulb inside its own lamp.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "enabled", EditorParamKind::Bool, true, "true lets the meshes cast shadows, false stops them" } },
+        &BuildSetCastShadow,
     });
 
     actions_.push_back({

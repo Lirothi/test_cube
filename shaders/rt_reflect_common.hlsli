@@ -78,6 +78,9 @@ static const float kRtPayloadMiss = 0.0f;     // no surface / ray missed / alpha
 static const float kRtPayloadComplete = 1.0f; // radiancePart is the final radiance (off-screen re-shade)
 static const float kRtPayloadReuse = 2.0f;    // finish with + lightT.Sample(reuseUv)
 
+// TLAS instance mask bit of the shadow casters (rt::kInstanceMaskShadow): an object with Cast Shadow off lacks it.
+static const uint RT_MASK_SHADOW = 0x02u;
+
 // Shadow ray toward a local light: 0 if an opaque TLAS triangle occludes the path
 // to the light, else 1. Used for off-screen hit shading (sun + spot lights).
 float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 L, float maxDist,
@@ -91,7 +94,7 @@ float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 
     // or every leaf quad occludes as a solid card. Opaque geometry still never surfaces as a
     // candidate, and committing any passing candidate ends the search (ACCEPT_FIRST_HIT).
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sq;
-    sq.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, sray);
+    sq.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, RT_MASK_SHADOW, sray);
     StructuredBuffer<GeometryInfo> sgeom = ResourceDescriptorHeap[geomInfoIndex];
     while (sq.Proceed())
     {
