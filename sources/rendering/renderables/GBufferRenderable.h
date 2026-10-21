@@ -143,7 +143,13 @@ public:
     // read by the uniform binder when filling b0.
     const MaterialParams& CurrentDrawParams() const
     {
-        return matParamses_[currentDrawSlot_ < matParamses_.size() ? currentDrawSlot_ : 0];
+        return DrawParamsForSlot(currentDrawSlot_);
+    }
+    // Local-light plan S8: a slot's params by number -- the SHADOW passes record views in parallel, so their per-submesh
+    // loop passes the slot instead of setting currentDrawSlot_ (which belongs to the camera's one G-buffer draw).
+    const MaterialParams& DrawParamsForSlot(size_t slot) const
+    {
+        return matParamses_[slot < matParamses_.size() ? slot : 0];
     }
     // Pre-Init only: per-slot preset names from level JSON ("materials": [...]); "auto" = glTF.
     void SetSlotPresets(std::vector<std::string> presets)
@@ -225,6 +231,15 @@ public:
         }
         return InstancedGraphicsMaterial();
     }
+    // Plan S8: per-slot instanced shadow PSO (built in BuildInstancedMaterials for multi-slot objects).
+    Material* InstancedShadowMaterialForSlot(size_t slot) const override
+    {
+        if (slot < slotInstancedShadowMaterials_.size() && slotInstancedShadowMaterials_[slot])
+        {
+            return slotInstancedShadowMaterials_[slot].get();
+        }
+        return InstancedShadowMaterial();
+    }
     void FillInstanceData(render::InstancePerObject& out) const override;
     // Occlusion plan S4: the same record with SLOT `slot`'s material params (baseColor, metalRough,
     // alphaCutoff, mrMultiply, texOffsScale, texFlags, emissive, windFoliage). The GPU registry
@@ -267,9 +282,18 @@ public:
     // material") can read which glTF a still-"auto" slot resolves from.
     virtual std::string GetGltfMaterialSourcePath() const { return {}; }
 
+    // Local-light plan S8: a multi-slot object casts per submesh with its slot's shadow PSO and params (a masked slot
+    // clips by its albedo, UE's masked shadow depth); single-slot objects take RenderableObject's path.
+    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj,
+                      D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum,
+                      bool linearDepth) override;
+
 protected:
     bool RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData) override;
     void ConfigureGraphicsPipeline(Renderer* renderer, Material::GraphicsDesc& desc) const override;
+    // Plan S8: a masked shadow PSO reads the current slot's albedo -- its G-buffer table (never the bindless flavour: the
+    // CPU shadow shaders are not in the bindless set).
+    void StageShadowBindings(Renderer* renderer, RenderContext& ctx, const Material& shadowMaterial, size_t slot) const override;
 
     // C1b: bind the current slot's PSO inside the multi-slot submesh loop (slot 0 == the base
     // graphics material, so single-slot objects take the untouched default path).
@@ -326,6 +350,10 @@ private:
     // across objects, so all palms share the same opaque + masked pipelines.
     std::vector<std::shared_ptr<Material>> slotGraphicsMaterials_;
     std::vector<std::shared_ptr<Material>> slotInstancedGraphicsMaterials_;
+    // Plan S8: per-slot SHADOW PSOs for multi-slot objects (CPU path; [0] aliases shadowMaterial_), and the instanced
+    // ones (every slot built with INSTCB_SLOT_PARAMS). Empty = slot 0's for every submesh, as before.
+    std::vector<std::shared_ptr<Material>> slotShadowMaterials_;
+    std::vector<std::shared_ptr<Material>> slotInstancedShadowMaterials_;
     // S4: per-slot indirect G-buffer PSOs (one entry for single-slot objects); empty = CPU path.
     std::vector<std::shared_ptr<Material>> slotIndirectGraphicsMaterials_;
 };

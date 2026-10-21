@@ -615,6 +615,9 @@ namespace
         if (setting == "shadow.localFadeUe") { render::g_localShadowFadeUe = value != 0.0f; return true; }
         // Plan S4: 1 = UE's LINEAR spot depth (SV_Depth) and its 1 mm near, 0 = the perspective depth and 0.1 m.
         if (setting == "shadow.spotLinearDepth") { render::g_spotShadowLinearDepth = value != 0.0f; return true; }
+        // ...the point cube faces' linear depth, and UE's 1 cm near for them (0 = the old max(0.2, 2 % of the radius)).
+        if (setting == "shadow.pointLinearDepth") { render::g_pointShadowLinearDepth = value != 0.0f; return true; }
+        if (setting == "shadow.pointNearUe") { render::g_pointShadowNearUe = value != 0.0f; return true; }
         // Peter-panning hunt: a multiplier on the atlas-mode local lights' UE shadowBias.
         // The peter-panning fix: the TEXEL bias (VSM's local model on the atlases) and its two sizes in shadow texels.
         if (setting == "shadow.localBiasTexel") { render::g_localShadowBiasTexel = value != 0.0f; return true; }

@@ -2362,10 +2362,10 @@ void Scene::PrepareViews(Renderer* renderer)
         const size_t lightIndex = lightManager_.GetShadowedPointLightIndex(s);
         const auto& desc = pointLights[lightIndex].GetDesc();
         const float3 P = desc.position;
-        // near = 2% of radius (min 0.2) so far/near stays ~20 (not ~200) for usable D16
-        // precision. MUST equal Pass_PointLights' shadowParams.z — the sampler reconstructs
-        // the compare depth with this exact near/far (see PointShadowFactor).
-        const float nearPlane = std::max(0.2f, desc.radius * 0.02f);
+        // Plan S4: UE's 1 cm on the atlases' linear depth, else 2% of radius (min 0.2) so far/near stays ~20 for a usable
+        // D16 perspective depth (render::PointShadowNear). MUST equal Pass_PointLights' shadowParams.z — the sampler
+        // reconstructs the compare depth with this exact near/far (see PointShadowFactor).
+        const float nearPlane = render::PointShadowNear(desc.radius);
         const float farPlane = std::max(desc.radius, nearPlane + 0.1f);
         // The atlas modes' faces carry a GUARD BAND of render::kPointShadowGuardTexels texels each side: a face 90 degrees
         // plus that much, so a filter tap up to that far past the seam reads its own face's depth, in its own depth axis,
@@ -2463,7 +2463,7 @@ void Scene::PrepareViews(Renderer* renderer)
                 if (cacheOn)
                 {
                     request(view, render::LocalShadowCache::PointId(static_cast<std::uint32_t>(lightIndex), face), occluded,
-                            false);
+                            render::PointShadowLinearDepth());
                 }
                 else { view.cacheMode = 0; view.cachePage = -1; }
             }

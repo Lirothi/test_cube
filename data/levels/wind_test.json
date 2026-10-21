@@ -32545,6 +32545,7 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "emissiveColor": [
         1.0,
         0.75,
@@ -32574,6 +32575,7 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "emissiveColor": [
         1.0,
         0.75,
@@ -32603,6 +32605,7 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "emissiveColor": [
         1.0,
         0.75,
@@ -32632,6 +32635,7 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "emissiveColor": [
         1.0,
         0.75,

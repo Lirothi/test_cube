@@ -1,6 +1,7 @@
 #include "rendering/renderables/RenderableObject.h"
 
 #include "rendering/core/GBufferBindingGuard.h"
+#include "core/logging/Log.h"
 
 #include <stdexcept>
 #include <cstring>
@@ -115,11 +116,11 @@ void RenderableObject::Init(Renderer* renderer,
     {
         Material::GraphicsDesc shadowDesc = BuildShadowDesc(renderer, graphicsDesc);
         shadowMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, shadowDesc);
-        // Plan S4: the spot views' linear-depth twin. Not for a transparent object -- the spot pass draws the opaque
+        // Plan S4: the local views' linear-depth twin. Not for a transparent object -- the local passes draw the opaque
         // buckets only, so its twin would be a PSO nobody binds.
         if (shadowMaterial_ && shadowMaterial_->GetPipelineState() && !IsTransparent())
         {
-            renderer->GetMaterialManager()->LinkSpotLinearDepthVariant(renderer, *shadowMaterial_);
+            renderer->GetMaterialManager()->LinkLinearDepthVariant(renderer, *shadowMaterial_);
         }
     }
     else
@@ -362,16 +363,30 @@ std::wstring RenderableObject::AppendSuffixBeforeExt(const std::wstring& file,
     return file.substr(0, pos) + suffix + file.substr(pos);
 }
 
-void RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-    const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool spotLinearDepth)
+bool render::ShadowMaterialIsMasked(const Material* m)
+{
+    if (!m) { return false; }
+    const Material::GraphicsDesc& d = m->GetCachedGraphicsDesc();
+    if (d.shaderFile != L"shaders/gbuffer_csm.hlsl" && d.shaderFile != L"shaders/gbuffer_instcb_csm.hlsl") { return false; }
+    for (const auto& define : d.defines)
+    {
+        if (define.first == "ALPHA_TEST" && define.second != "0") { return true; }
+    }
+    return false;
+}
+
+bool RenderableObject::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+    const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool linearDepth)
 {
     (void)lightView;
     (void)lightProj;
 
-    if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return; }
-    // Plan S4: a linear-depth spot view binds the twin (logged at its creation if it has none).
-    Material* const linear = spotLinearDepth ? shadowMaterial_->SpotLinearDepthVariant() : nullptr;
-    (linear ? linear : shadowMaterial_.get())->Bind(cl, ctx, false);
+    if (!renderer || !cl || !GetMesh() || !shadowMaterial_) { return false; }
+    // Plan S4: a linear-depth local view binds the twin (logged at its creation if it has none).
+    Material* const linear = linearDepth ? shadowMaterial_->LinearDepthVariant() : nullptr;
+    Material* const bound = linear ? linear : shadowMaterial_.get();
+    StageShadowBindings(renderer, ctx, *bound, 0); // plan S8: a masked PSO's albedo (slot 0: one shadow PSO here)
+    return bound->Bind(cl, ctx, false);
 }
 
 void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
@@ -384,7 +399,7 @@ void RenderableObject::OnMaterialHotReload(Renderer* /*renderer*/)
 
 void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod,
-    bool chunkCameraLods, const Frustum* chunkCullFrustum, bool spotLinearDepth)
+    bool chunkCameraLods, const Frustum* chunkCullFrustum, bool linearDepth)
 {
     if (!renderer || !cl || !shadowMaterial_)
     {
@@ -409,10 +424,17 @@ void RenderableObject::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLis
 
     if (uniformBinder_)
     {
-        uniformBinder_->UpdateShadowCB(*this, renderer, lightView, lightProj, cbData);
+        uniformBinder_->UpdateShadowCB(*this, renderer, lightView, lightProj, cbData, 0);
     }
 
-    RecordShadow(renderer, cl, lightView, lightProj, ctx, spotLinearDepth);
+    if (!RecordShadow(renderer, cl, lightView, lightProj, ctx, linearDepth))
+    {
+        // Plan S8: never draw with an unbound root parameter (GBufferBindingGuard.h) -- a masked PSO whose albedo did
+        // not stage casts nothing rather than garbage.
+        LOG_WARNING_ONCE(logging::LogCategory::RenderShadow, "a CPU-path shadow caster's PSO could not bind (masked "
+                         "shadow without its albedo?) -- that caster is skipped");
+        return;
+    }
     // B3: multi-submesh meshes draw per range — byte-identical coverage today (depth-only, the
     // ranges tile the buffer), but this loop is where Part C binds per-slot masked materials
     // between ranges. Single-submesh meshes keep the whole-buffer DrawGeometry, which stays
@@ -652,7 +674,13 @@ void RenderableObject::ConfigureShadowPipeline(Renderer* renderer, Material::Gra
     desc.depth.DepthEnable = TRUE;
     desc.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
     desc.depth.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    // Local-light plan S8: masked foliage is authored double-sided, and culling a depth-only pass would drop half of
+    // every frond -- the indirect path's masked PSO (ShadowGpuData, C2) draws CULL_NONE for the same reason.
     desc.raster.CullMode = D3D12_CULL_MODE_BACK;
+    for (const auto& define : desc.defines)
+    {
+        if (define.first == "ALPHA_TEST" && define.second != "0") { desc.raster.CullMode = D3D12_CULL_MODE_NONE; }
+    }
     desc.blend.RenderTarget[0].BlendEnable = FALSE;
 }
 

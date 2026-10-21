@@ -58,6 +58,11 @@ public:
             shadowHandles_.windFoliage = shadowMaterial->ComputeCBFieldHandle(0, "windFoliage");
             shadowHandles_.windTrunkStiff = shadowMaterial->ComputeCBFieldHandle(0, "windTrunkStiff");
             shadowHandles_.windLeafScale = shadowMaterial->ComputeCBFieldHandle(0, "windLeafScale");
+            // Plan S8: what a masked shadow PSO clips by (every slot's permutation shares this PerObject layout; the
+            // reflection lists unread fields too, so slot 0's opaque PSO yields them).
+            shadowHandles_.alphaCutoff = shadowMaterial->ComputeCBFieldHandle(0, "alphaCutoff");
+            shadowHandles_.texOffsScale = shadowMaterial->ComputeCBFieldHandle(0, "texOffsScale");
+            shadowHandles_.baseColor = shadowMaterial->ComputeCBFieldHandle(0, "baseColor");
         }
     }
 
@@ -93,7 +98,7 @@ public:
         UpdateUniform(owner, cbHandles_.lodFade, material, owner.GetDrawLodFade(), cbData);
     }
 
-    void UpdateShadowCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* cbData) override
+    void UpdateShadowCB(RenderableObject& owner, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* cbData, size_t slot) override
     {
         Material* material = owner.GetShadowMaterial();
         if (!material) { return; }
@@ -105,7 +110,7 @@ public:
         // recycled frame-ring memory (observed as a stray, wildly displaced shadow). Write it.
         const GBufferRenderable* gb = owner.AsGBufferRenderable();
         const MaterialParams shadowDefaults{};
-        const auto& sp = gb ? gb->CurrentDrawParams() : shadowDefaults;
+        const auto& sp = gb ? gb->DrawParamsForSlot(slot) : shadowDefaults; // plan S8: the caller's slot, never shared state
         UpdateUniform(owner, shadowHandles_.windStrength, material,
                       gb ? gb->EffectiveWindStrength(sp.windStrength) : sp.windStrength, cbData);
         UpdateUniform(owner, shadowHandles_.windFoliage, material, sp.windFoliage, cbData);
@@ -113,6 +118,10 @@ public:
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
         UpdateUniform(owner, shadowHandles_.windLeafScale, material,
                       gb ? gb->GetWindLeafScaleWorld() : 0.0f, cbData);
+        // Plan S8: the slot's mask (-1 = never clips), read only by the masked shadow PSO.
+        UpdateUniform(owner, shadowHandles_.alphaCutoff, material, sp.alphaCutoff, cbData);
+        UpdateUniform(owner, shadowHandles_.texOffsScale, material, sp.texOffsScale, cbData);
+        UpdateUniform(owner, shadowHandles_.baseColor, material, sp.baseColor, cbData);
     }
 
 private:
@@ -142,6 +151,9 @@ private:
         Material::CBFieldHandle windFoliage;
         Material::CBFieldHandle windTrunkStiff;
         Material::CBFieldHandle windLeafScale;
+        Material::CBFieldHandle alphaCutoff;  // plan S8
+        Material::CBFieldHandle texOffsScale;
+        Material::CBFieldHandle baseColor;
     } shadowHandles_{};
 };
 } // namespace
@@ -342,6 +354,97 @@ void GBufferRenderable::BuildSlotMaterials(Renderer* renderer)
                         "gbuffer slot {} material unusable (PSO/CB layout); falling back to slot 0", i);
         }
         slotGraphicsMaterials_[i] = usable ? m : graphicsMaterial_;
+    }
+
+    // Local-light plan S8: the slots' SHADOW PSOs, from each slot's own desc -- ALPHA_TEST (the masked twin, which clips
+    // by the slot's albedo) and its cull mode -- where the shadow shader is the default one: gbuffer_csm.hlsl is the
+    // one with a masked twin, and a shader override's _csm shares slot 0's PSO as before. [0] aliases shadowMaterial_.
+    slotShadowMaterials_.clear();
+    if (shadowMaterial_ && shadowMaterial_->GetPipelineState() &&
+        shadowMaterial_->GetCachedGraphicsDesc().shaderFile == L"shaders/gbuffer_csm.hlsl")
+    {
+        const UINT shadowCbSize = shadowMaterial_->GetCBSizeBytesAligned(0, kAlign);
+        slotShadowMaterials_.resize(matDatas_.size());
+        slotShadowMaterials_[0] = shadowMaterial_;
+        for (size_t i = 1; i < matDatas_.size(); ++i)
+        {
+            Material::GraphicsDesc gd = BuildGraphicsDesc(renderer);
+            ApplySlotPipelineOverrides(gd, i);
+            gd.shaderFile = (matDatas_[i] && !matDatas_[i]->shaderOverride.empty())
+                ? matDatas_[i]->shaderOverride
+                : GetGraphicsShaderPath();
+            const Material::GraphicsDesc sd = BuildShadowDesc(renderer, gd);
+            std::shared_ptr<Material> m;
+            if (sd.shaderFile == L"shaders/gbuffer_csm.hlsl")
+            {
+                m = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sd);
+            }
+            const bool usable = m && m->GetPipelineState() && m->GetCBSizeBytesAligned(0, kAlign) == shadowCbSize;
+            if (usable)
+            {
+                renderer->GetMaterialManager()->LinkLinearDepthVariant(renderer, *m); // plan S4: local views
+            }
+            slotShadowMaterials_[i] = usable ? m : shadowMaterial_;
+        }
+    }
+}
+
+void GBufferRenderable::StageShadowBindings(Renderer* renderer, RenderContext& ctx, const Material& shadowMaterial,
+    size_t slot) const
+{
+    if (!render::ShadowMaterialIsMasked(&shadowMaterial)) { return; }
+    if (MaterialData* md = GetMaterialDataForSlot(slot))
+    {
+        md->StageGBufferBindings(renderer, ctx, 0, 0, /*bindless=*/false);
+    }
+}
+
+void GBufferRenderable::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView,
+    const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods,
+    const Frustum* chunkCullFrustum, bool linearDepth)
+{
+    Mesh* mesh = GetMesh();
+    if (!MultiSlotDraw() || slotShadowMaterials_.empty() || !mesh)
+    {
+        RenderableObject::RenderShadow(renderer, cl, lightView, lightProj, viewCB, lod, chunkCameraLods, chunkCullFrustum,
+                                       linearDepth);
+        return;
+    }
+    if (!renderer || !cl || !shadowMaterial_ || !CastsShadow()) { return; }
+
+    // Plan S8: per submesh, as Render: the slot's b0 slice (its foliage weight and mask), its shadow PSO (or that PSO's
+    // linear-depth twin), its albedo when masked, one ranged draw. The slot travels as an argument: shadow views record
+    // on several workers at once, and one object can be in many of them.
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
+    const UINT cbSize = shadowMaterial_->GetCBSizeBytesAligned(0, kAlign);
+    const auto& subs = mesh->SubmeshesForLod(lod);
+    for (size_t s = 0; s < subs.size(); ++s)
+    {
+        const size_t slot = subs[s].materialSlot < matDatas_.size() ? subs[s].materialSlot : matDatas_.size() - 1;
+        Material* const slotMaterial = (slot < slotShadowMaterials_.size() && slotShadowMaterials_[slot])
+            ? slotShadowMaterials_[slot].get()
+            : shadowMaterial_.get();
+        Material* const linear = linearDepth ? slotMaterial->LinearDepthVariant() : nullptr;
+        Material* const bound = linear ? linear : slotMaterial;
+
+        auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, kAlign);
+        uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
+        if (cbData) { std::memset(cbData, 0, cbSize); } // the ring-poison guard (RenderableObject::RenderShadow)
+        auto h = renderer->GetRenderContextPool()->Acquire();
+        auto& ctx = h.ref();
+        ctx.cbv[0] = alloc.gpu;
+        ctx.cbv[1] = viewCB;
+        if (UniformBinder* binder = GetUniformBinder())
+        {
+            binder->UpdateShadowCB(*this, renderer, lightView, lightProj, cbData, slot);
+        }
+        StageShadowBindings(renderer, ctx, *bound, slot);
+        if (!bound->Bind(cl, ctx, false))
+        {
+            render::ReportMissingGBufferBindings(this, static_cast<uint32_t>(slot), "GBufferRenderable::RenderShadow");
+            continue;
+        }
+        mesh->DrawSubmesh(cl, static_cast<UINT>(s), lod);
     }
 }
 
@@ -592,7 +695,7 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
         Material::GraphicsDesc sd = BuildShadowDesc(renderer, gd); // -> gbuffer_instcb_csm.hlsl
         shadow = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sd);
         if (!shadow || !shadow->GetPipelineState()) { return; }
-        renderer->GetMaterialManager()->LinkSpotLinearDepthVariant(renderer, *shadow); // plan S4: spot views
+        renderer->GetMaterialManager()->LinkLinearDepthVariant(renderer, *shadow); // plan S4: spot views
     }
 
     // B2b: multi-slot objects instance through the per-slot-CB variant (the batch loops
@@ -621,6 +724,28 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
             auto sm = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sgd);
             slotInstancedGraphicsMaterials_[i] =
                 (sm && sm->GetPipelineState()) ? sm : instancedGraphicsMaterial_;
+        }
+    }
+
+    // Local-light plan S8: the multi-slot batch's per-slot instanced SHADOW PSOs -- every slot (0 too) built with
+    // INSTCB_SLOT_PARAMS, so the slot CB (b2) carries its foliage weight for the sway and, on a masked slot (the masked
+    // twin, CULL_NONE), its cutoff and UV transform. A failed slot falls back to the single instanced shadow PSO.
+    slotInstancedShadowMaterials_.clear();
+    if (MultiSlotDraw() && instancedShadowMaterial_)
+    {
+        slotInstancedShadowMaterials_.resize(matDatas_.size());
+        for (size_t i = 0; i < matDatas_.size(); ++i)
+        {
+            Material::GraphicsDesc sgd = gd; // instcb + INSTCB_SLOT_PARAMS, slot-0 configured
+            ApplySlotPipelineOverrides(sgd, i);
+            const Material::GraphicsDesc sd = BuildShadowDesc(renderer, sgd); // -> gbuffer_instcb_csm.hlsl
+            auto sm = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, sd);
+            const bool usable = sm && sm->GetPipelineState();
+            if (usable)
+            {
+                renderer->GetMaterialManager()->LinkLinearDepthVariant(renderer, *sm); // plan S4: local views
+            }
+            slotInstancedShadowMaterials_[i] = usable ? sm : instancedShadowMaterial_;
         }
     }
 }

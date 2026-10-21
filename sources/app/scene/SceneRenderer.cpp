@@ -243,7 +243,8 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 // 0.02 x 512/Res x 2 x shadowBias (ShadowRendering.cpp:1977-1979, r.Shadow.PointLightDepthBias 0.02),
                 // its slope scale 3 x shadowSlopeBias (r.Shadow.PointLightSlopeScaleDepthBias 3) in volumetric.y;
                 // or the old +0.10 world metres (B4) with shadow.localBiasUe off.
-                const float pointShadowNear = std::max(0.2f, desc.radius * 0.02f);
+                const float pointShadowNear = render::PointShadowNear(desc.radius); // plan S4: Scene.cpp's faces
+                const float pointShadowFar = std::max(desc.radius, pointShadowNear + 0.1f);  // ...and their far
                 // Plan S4: the light's own cube-face resolution; UE's bias is per that.
                 const float pointSlice = static_cast<float>(std::max(renderer->GetDeferredForFrame().pointShadowRes, 1u));
                 const std::uint32_t pointResOwn = lm.GetPointShadowResolution(i);
@@ -276,7 +277,10 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     (render::g_localShadowFadeUe && !render::VsmActive()) ? lm.GetPointShadowFade(i) : 1.0f,
                     static_cast<float>(std::max(pointPlace.page, 0)), 1.0f / pointRes,
                     texelBias ? render::LocalShadowNormalTexels(desc.shadowBias) : 0.0f); // S8: the light's own knob
-                pointCPU[i].vsm = Math::float4(vsm::LocalMovingMipBias(lm.GetPointMobility(i)), 0.0f, 0.0f, 0.0f); // S10e
+                pointCPU[i].shadowParams4 = Math::float4(vsm::LocalMovingMipBias(lm.GetPointMobility(i)), // S10e
+                    render::PointShadowLinearDepth() ? 1.0f / std::max(pointShadowFar - pointShadowNear, 1.0e-4f)
+                                                     : 0.0f, // S4: the faces' linear depth scale, BuildPointShadowViewCB's
+                    0.0f, 0.0f);
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {

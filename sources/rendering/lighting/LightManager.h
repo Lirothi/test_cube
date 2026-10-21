@@ -49,8 +49,9 @@ public:
         // size (face k at xy + (k % 3, k / 3) * zw). Mirrored by pointlight_cs.hlsl, glass.hlsl and rt_lights.hlsli.
         Math::float4 shadowAtlas;
         // Plan S10e: x = the light's VSM mip bias on top of the frame's (vsm::LocalMovingMipBias: UE's
-        // ResolutionLodBiasLocalMoving by the light's mobility); yzw reserved. Same mirrors.
-        Math::float4 vsm;
+        // ResolutionLodBiasLocalMoving by the light's mobility). Plan S4: y = 1 / (f - n) when its faces hold the
+        // LINEAR depth (render::PointShadowLinearDepth; n = shadowParams.z), 0 = perspective. zw reserved. Same mirrors.
+        Math::float4 shadowParams4;
     };
 
     struct alignas(16) SpotLightGpu
@@ -70,7 +71,7 @@ public:
         // Plan S9: the light's square in its atlas page -- xy = its corner in page UV, z = its size in page UV, w = the
         // page. Same mirrors.
         Math::float4 shadowAtlas;
-        // Plan S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias, see PointLightGpu::vsm).
+        // Plan S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias, see PointLightGpu).
         // Plan S4: y = 1 / (f - n) when its atlas square holds the LINEAR depth (w - n) / (f - n)
         // (render::SpotShadowLinearDepth; n = shadowParams3.x, both the projection's own), 0 = the perspective NDC
         // depth. zw reserved. Same mirrors.

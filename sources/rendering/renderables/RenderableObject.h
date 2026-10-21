@@ -18,6 +18,14 @@
 class Renderer;
 class Camera;
 
+namespace render
+{
+    // Local-light plan S8: true when `m` is a MASKED CPU shadow PSO -- gbuffer_csm.hlsl / gbuffer_instcb_csm.hlsl built with
+    // ALPHA_TEST (its linear-depth twin included). Its root signature declares the G-buffer's t0..t2 table and s0, which
+    // the caller must stage (MaterialData::StageGBufferBindings) or the draw is skipped.
+    bool ShadowMaterialIsMasked(const Material* m);
+}
+
 class RenderableObject: public RenderableObjectBase {
 public:
     class UniformBinder
@@ -27,7 +35,8 @@ public:
 
         virtual void RebuildHandles(RenderableObject& /*owner*/) {}
         virtual void UpdateMainCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const Camera& /*camera*/, uint8_t* /*cbData*/) {}
-        virtual void UpdateShadowCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* /*cbData*/) {}
+        // `slot`: the material slot of the submesh being cast (local-light plan S8; 0 outside a multi-slot loop).
+        virtual void UpdateShadowCB(RenderableObject& /*owner*/, Renderer* /*renderer*/, const mat4& /*lightView*/, const mat4& /*lightProj*/, uint8_t* /*cbData*/, size_t /*slot*/) {}
 
     protected:
         template<typename T>
@@ -63,7 +72,7 @@ public:
     void RenderSelectionStencil(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* material, const Camera& camera) override;
 #endif
     void ExecuteCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum, bool spotLinearDepth) override;
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum, bool linearDepth) override;
     virtual void OnMaterialHotReload(Renderer* renderer);
 
     // Transform
@@ -288,8 +297,16 @@ protected:
     // PSO inside the multi-slot submesh loop. CB field handles still come from
     // GetGraphicsMaterial() (slot 0) — all slot permutations share the PerObject layout.
     virtual Material* CurrentGraphicsMaterial() const { return graphicsMaterial_.get(); }
-    // `spotLinearDepth`: bind the shadow material's spot linear-depth twin (RenderShadow's flag, plan S4).
-    virtual void RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool spotLinearDepth);
+    // `linearDepth`: bind the shadow material's linear-depth twin (RenderShadow's flag, plan S4). Returns Material::Bind's
+    // verdict, as RecordGraphics does: false = skip the draw (local-light plan S8: a masked shadow PSO declares the
+    // albedo table, which StageShadowBindings fills).
+    virtual bool RecordShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, RenderContext& ctx, bool linearDepth);
+    // Plan S8: put what the shadow material about to be bound declares beyond b0 / b1 into `ctx` -- a MASKED shadow PSO
+    // (render::ShadowMaterialIsMasked) reads its slot's albedo. Default: nothing.
+    virtual void StageShadowBindings(Renderer* renderer, RenderContext& ctx, const Material& shadowMaterial, size_t slot) const
+    {
+        (void)renderer; (void)ctx; (void)shadowMaterial; (void)slot;
+    }
     // Forwards Material::Bind's verdict; see RecordGraphics.
     bool UpdateAndBindGraphics(Renderer* renderer, ID3D12GraphicsCommandList* cl, RenderContext& ctx, const Camera& camera, uint8_t* cbData);
     virtual void DrawGeometry(ID3D12GraphicsCommandList* cl, UINT lod = 0);

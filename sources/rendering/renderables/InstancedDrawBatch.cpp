@@ -15,6 +15,7 @@
 #include "materials/Material.h"
 #include "materials/MaterialData.h"
 #include "rendering/core/GBufferBindingGuard.h"
+#include "rendering/renderables/RenderableObject.h" // plan S8: render::ShadowMaterialIsMasked
 #include "rendering/descriptors/BindlessHeap.h" // A6: the null texture index
 
 void InstancedDrawBatch::Configure(std::vector<RenderableObjectBase*>::const_iterator first,
@@ -97,7 +98,7 @@ void InstancedDrawBatch::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     }
 }
 
-void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer)
+void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer, bool shadow)
 {
     const size_t slotCount = leadInst_ ? leadInst_->InstanceSlotCount() : 0;
     slotBindingsScratch_.resize(slotCount);
@@ -149,39 +150,44 @@ void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer)
         }
 
         binding.paramsCbv = cb.gpu;
-        binding.material = leadInst_->InstancedGraphicsMaterialForSlot(slot);
+        binding.material = shadow ? leadInst_->InstancedShadowMaterialForSlot(slot) // plan S8
+                                  : leadInst_->InstancedGraphicsMaterialForSlot(slot);
         RenderContext ctx{};
-        if (MaterialData* md = leadInst_->InstanceSlotData(slot))
+        // Plan S8: the shadow pass needs a slot's textures only for a masked PSO, and always as a table.
+        const bool wantTextures = !shadow || render::ShadowMaterialIsMasked(binding.material);
+        if (MaterialData* md = wantTextures ? leadInst_->InstanceSlotData(slot) : nullptr)
         {
-            md->StageGBufferBindings(renderer, ctx, 0, 0, binding.material && binding.material->IsBindless());
+            md->StageGBufferBindings(renderer, ctx, 0, 0, !shadow && binding.material && binding.material->IsBindless());
         }
         binding.srvTable = ctx.srvTable[0];
         binding.samplerTable = ctx.samplerTable[0];
     }
 }
 
-void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool /*chunkCameraLods*/, const Frustum* /*chunkCullFrustum*/, bool spotLinearDepth)
+void InstancedDrawBatch::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& /*lightView*/, const mat4& /*lightProj*/, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool /*chunkCameraLods*/, const Frustum* /*chunkCullFrustum*/, bool linearDepth)
 {
     if (!renderer || !cl || !shadowMat_ || !mesh_ || members_.empty()) { return; }
-    // Plan S4: a linear-depth spot view draws the shadow material's twin (logged at its creation if it has none).
-    Material* const mat = (spotLinearDepth && shadowMat_->SpotLinearDepthVariant()) ? shadowMat_->SpotLinearDepthVariant() : shadowMat_;
+    // Plan S4: a linear-depth local view draws the shadow material's twin (logged at its creation if it has none).
+    Material* const mat = (linearDepth && shadowMat_->LinearDepthVariant()) ? shadowMat_->LinearDepthVariant() : shadowMat_;
+    // Plan S8: a multi-slot run casts per submesh with each slot's shadow PSO, params and (masked) albedo.
+    if (leadInst_) { PrepareSlotBindings(renderer, /*shadow=*/true); }
     // Shadows use the per-cascade LOD floor for the whole run (all casters in a cascade are at
     // ~the same depth slice), so no per-instance bucketing is needed here.
-    RecordInstanced(renderer, cl, mat, viewCB, /*gbuffer=*/false, lod, members_);
+    RecordInstanced(renderer, cl, mat, viewCB, /*gbuffer=*/false, lod, members_, nullptr, linearDepth);
 }
 
 void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                          Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod,
                                          const std::vector<RenderableObjectBase*>& members,
-                                         const float* fades)
+                                         const float* fades, bool linearDepth)
 {
     const size_t total = members.size();
     const bool wireframe = gbuffer && renderer->GetWireframeMode();
 
     // B2b: multi-slot gbuffer draws loop the LOD's submeshes; Render prepared each slot's
     // params/bindings once for all occupied LODs into a b2 slice read by INSTCB_SLOT_PARAMS.
-    // B3: the shadow path loops the same ranges (no per-slot bindings — depth-only and the
-    // ranges tile the buffer, so coverage is identical; Part C hooks masked slots here).
+    // B3: the shadow path loops the same ranges; local-light plan S8 binds each slot's instanced shadow PSO and b2
+    // there (RenderShadow's PrepareSlotBindings), so a masked slot clips and a slot's foliage weight sways its shadow.
     const bool multiSlot = leadInst_ != nullptr;
     const std::vector<Mesh::Submesh>* subs = nullptr;
     if (multiSlot)
@@ -247,8 +253,17 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
                     MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
                 }
             }
+            else if (matData_ && render::ShadowMaterialIsMasked(material))
+            {
+                // Plan S8: the masked shadow PSO clips by the albedo (the cutoff rides the instance array).
+                matData_->StageGBufferBindings(renderer, ctx, 0, 0, /*bindless=*/false);
+            }
 
-            material->Bind(cl, ctx, wireframe);
+            if (!material->Bind(cl, ctx, wireframe))
+            {
+                render::ReportMissingGBufferBindings(material, 0, "InstancedDrawBatch::Record");
+                continue; // never draw with an unbound root parameter (GBufferBindingGuard.h)
+            }
             mesh_->DrawInstanced(cl, count, lod);
             continue;
         }
@@ -257,7 +272,7 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
         // loop, only the combined material/surface b2 + the SRV/sampler tables change
         // (redundant rebinds elided by the bind
         // cache). Null slot materials draw flat: texFlags gate all sampling in the PS. The
-        // shadow path (gbuffer=false) draws the same ranges with no per-slot bindings (B3).
+        // shadow path (gbuffer=false) draws the same ranges with each slot's shadow PSO and b2 (plan S8).
         const size_t slotCount = leadInst_->InstanceSlotCount();
         RenderContext ctx{};
         ctx.cbv[0] = alloc.gpu; // b0: per-instance array (shared by every submesh)
@@ -296,6 +311,20 @@ void InstancedDrawBatch::RecordInstanced(Renderer* renderer, ID3D12GraphicsComma
                 //
                 // So: skip the DRAW, not just the bind. An invisible submesh is a bug worth seeing;
                 // an unbound root argument is undefined behaviour.
+            }
+            else if (slot < slotBindingsScratch_.size())
+            {
+                // Plan S8: the shadow pass -- the slot's instanced shadow PSO (INSTCB_SLOT_PARAMS: its b2 carries the
+                // foliage weight and the mask) or that PSO's linear-depth twin, and a masked slot's albedo table.
+                const SlotBindingScratch& binding = slotBindingsScratch_[slot];
+                ctx.cbv[2] = binding.paramsCbv;
+                ctx.srvTable[0] = binding.srvTable;
+                ctx.samplerTable[0] = binding.samplerTable;
+                if (binding.material)
+                {
+                    Material* const linear = linearDepth ? binding.material->LinearDepthVariant() : nullptr;
+                    slotMaterial = linear ? linear : binding.material;
+                }
             }
 
             if (!slotMaterial->Bind(cl, ctx, wireframe))

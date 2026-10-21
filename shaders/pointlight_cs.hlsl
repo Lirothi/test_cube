@@ -29,7 +29,8 @@ struct PointLightData
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
     float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
-    float4 vsm;          // S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias)
+    float4 shadowParams4; // S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias);
+                          // S4: y = 1 / (f - n) when the faces hold the LINEAR depth, 0 = perspective
 };
 
 Texture2D GB0 : register(t0);
@@ -156,7 +157,7 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         // degrees), or the old camera distance.
         const uint  reqLevel   = (vsmLocalMip.x != 0.0f)
             ? VsmLocalMipFromPixel(dot(P - camPosWS, invView[2].xyz) * vsmLocalMip.z, 1.0f,
-                                   VsmPointFaceDepth(P, Ld.position), vsmLocalMip.y + Ld.vsm.x) // S10e: + its moving bias
+                                   VsmPointFaceDepth(P, Ld.position), vsmLocalMip.y + Ld.shadowParams4.x) // S10e: + its moving bias
             : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
         const uint  lvl        = texelFix ? VsmPointSampledLevel((uint)Ld.shadowParams.x, reqLevel, P, Ld.position,
                                                                  Ld.shadowParams.z, Ld.shadowParams.w, VsmPageTable)
@@ -193,10 +194,10 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
     if (Ld.volumetric.w != 0.0f && (Ld.shadowParams.y < 0.0f || Ld.shadowFade.w > 0.0f))
     {
         return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, gSmpShadowCmp, d, m, Ld.shadowParams, Ld.volumetric.y,
-                                                   NoL, invRes, block, page, pageTexel), Ld.volumetric.z);
+                                                   NoL, invRes, block, page, pageTexel, Ld.shadowParams4.y), Ld.volumetric.z);
     }
     float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
-    float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased); // standard LH NDC depth
+    float zc = PointShadowCompareDepth(mBiased, nearP, farP, Ld.shadowParams4.y); // plan S4: linear, or LH NDC
 
     // Tangent basis perpendicular to d (seed with the smallest-magnitude axis to avoid a
     // degenerate cross product), then a 3x3 grid stepped by one texel in world units.

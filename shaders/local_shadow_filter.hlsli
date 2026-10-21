@@ -138,11 +138,19 @@ static const float2 kDiscSamples29[29] = { // ShadowProjectionCommon.ush:89-120,
     float2(-0.082476, 0.654088)
 };
 
+// Plan S4: a cube face's compare depth for the distance `m` along its axis -- (m - n) / (f - n) when the faces hold the
+// LINEAR depth (`linearInvRange` = 1 / (f - n) > 0, PointLightGpu::shadowParams4.y), the LH NDC depth otherwise.
+float PointShadowCompareDepth(float m, float nearP, float farP, float linearInvRange)
+{
+    return linearInvRange > 0.0f ? (m - nearP) * linearInvRange : (farP / (farP - nearP)) * (1.0f - nearP / m);
+}
+
 // `d` = receiver - light (unbiased: UE has no normal offset), `m` its major-axis distance. shadowParams / slopeScale as in
 // local_shadow_bias.hlsli (UE mode: shadowParams.y < 0). S4: `invRes` = 1 / the light's own face resolution. S9:
-// `block` / `page` / `texel` its 3f x 2f block in an atlas page (PointShadowCubeUV).
+// `block` / `page` / `texel` its 3f x 2f block in an atlas page (PointShadowCubeUV). S4: `linearInvRange` as above.
 float PointShadowDisc29(Texture2DArray atlas, SamplerComparisonState cmp, float3 d, float m, float4 shadowParams,
-                        float slopeScale, float NoL, float invRes, float4 block, float page, float2 texel)
+                        float slopeScale, float NoL, float invRes, float4 block, float page, float2 texel,
+                        float linearInvRange)
 {
     const float nearP = shadowParams.z;
     const float farP = max(shadowParams.w, nearP + 1e-3f);
@@ -173,7 +181,7 @@ float PointShadowDisc29(Texture2DArray atlas, SamplerComparisonState cmp, float3
     for (int i = 0; i < 29; ++i)
     {
         const float mBiased = max(m / (1.0f + rel * length(kDiscSamples29[i])), nearP);
-        const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
+        const float zc = PointShadowCompareDepth(mBiased, nearP, farP, linearInvRange);
         const float3 t = c + sx * kDiscSamples29[i].x + sy * kDiscSamples29[i].y;
         const float2 st = t.xy / t.z;
         const float3 tap = float3(LocalShadowAtlasUV(st * guard + 0.5f, faceOffset, block.zw, texel, 0.5f), page);

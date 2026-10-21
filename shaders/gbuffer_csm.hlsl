@@ -1,4 +1,14 @@
+// Local-light plan S8: ALPHA_TEST (the material slot's own define -- the shadow desc is built from the slot's G-buffer
+// desc) = the MASKED twin, UE's masked shadow depth: the albedo's alpha clips the caster exactly as the G-buffer clips it
+// (AlphaTestClip). Its root signature adds the G-buffer's t0..t2 table and s0 (only t0 is read), filled by
+// MaterialData::StageGBufferBindings. The indirect path has had this since C2 (shadow_indirect_csm SHADOW_MASKED).
+#if defined(ALPHA_TEST) && ALPHA_TEST
+#define GBUFFER_CSM_MASKED 1
+#define GBUFFER_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#else
+#define GBUFFER_CSM_MASKED 0
 #define GBUFFER_CSM_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1)"
+#endif
 // Use the shared b0 (per-object) + b1 (per-view: viewProj) from gbuffer_common
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsli"
@@ -10,11 +20,19 @@
 #define SHADOW_LINEAR_DEPTH 0
 #endif
 
+#if GBUFFER_CSM_MASKED
+Texture2D gAlbedo : register(t0);
+SamplerState gSmp : register(s0);
+#endif
+
 struct VSOutD
 {
     float4 H : SV_POSITION;
 #if SHADOW_LINEAR_DEPTH
     float linearDepth : TEXCOORD0;
+#endif
+#if GBUFFER_CSM_MASKED
+    float2 UV : TEXCOORD1;
 #endif
 };
 
@@ -35,12 +53,32 @@ VSOutD VSMain(VSIn i)
 #if SHADOW_LINEAR_DEPTH
     o.linearDepth = ShadowLinearDepth(o.H, nWS, viewProj, bias);
 #endif
+#if GBUFFER_CSM_MASKED
+    o.UV = i.UV;
+#endif
     return o;
+}
+
+// Plan S8: the slot's cutoff (-1 = an opaque slot sharing the masked PSO: never clips). No terrain is masked, so the
+// tiling arguments are zero.
+void ShadowMaskClip(VSOutD i)
+{
+#if GBUFFER_CSM_MASKED
+    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f),
+                  baseColor.a, alphaCutoff);
+#endif
 }
 
 #if SHADOW_LINEAR_DEPTH
 [RootSignature(GBUFFER_CSM_RS)]
-float PSMain(VSOutD i) : SV_Depth { return saturate(i.linearDepth); }
+float PSMain(VSOutD i) : SV_Depth
+{
+    ShadowMaskClip(i);
+    return saturate(i.linearDepth);
+}
+#elif GBUFFER_CSM_MASKED
+[RootSignature(GBUFFER_CSM_RS)]
+void PSMain(VSOutD i) { ShadowMaskClip(i); }
 #else
 // Depth-only — pixel shader can remain empty
 [RootSignature(GBUFFER_CSM_RS)]

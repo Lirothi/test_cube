@@ -148,10 +148,10 @@ public:
     // chunks whose world box misses it, tested ON THE SPOT (never the camera's mask: a chunk behind
     // the camera still casts into the cascade). Null = draw every chunk; only the Legacy CSM
     // cascade loops pass one (their `view.frustum`, the S14 accurate volume).
-    // `spotLinearDepth` (local-light plan S4): a spot view with a LINEAR depth -- draw with the shadow material's
-    // SpotLinearDepthVariant, whose pixel shader writes it. Only Pass_SpotShadows / the spot cache fill pass true, with
-    // the viewCB BuildSpotShadowViewCB built for it.
-    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0, bool chunkCameraLods = false, const Frustum* chunkCullFrustum = nullptr, bool spotLinearDepth = false) = 0;
+    // `linearDepth` (local-light plan S4): a spot / point-face view with a LINEAR depth -- draw with the shadow
+    // material's LinearDepthVariant, whose pixel shader writes it. Only Pass_SpotShadows / Pass_PointShadows / the cache
+    // fill pass true, with the viewCB BuildSpotShadowViewCB / BuildPointShadowViewCB built for it.
+    virtual void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod = 0, bool chunkCameraLods = false, const Frustum* chunkCullFrustum = nullptr, bool linearDepth = false) = 0;
     virtual bool IsTransparent() const = 0;
     // B6.1. UE split their forward surfaces by exactly this: SingleLayerWater writes depth, is in the
     // depth buffer when the screen-space fog pass runs, and is fogged BY that pass -- there is no fog

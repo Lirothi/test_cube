@@ -211,7 +211,7 @@ inline bool LocalShadowTexelBias() { return g_localShadowBiasTexel && !VsmActive
 // (f - n) / 65535 at any distance (0.2 mm on a 14 m spot) where the perspective depth's grew with w^2 (3 cm at 14 m from
 // a 0.1 m near). That is what lets the near plane be UE's: a caster 1 mm from the light shadows. The cost is a pixel
 // shader on every caster of a spot view (no early depth there) -- a SHADOW_LINEAR_DEPTH twin of each shadow PSO
-// (Material::SpotLinearDepthVariant). The atlas modes only: VSM's pool keeps its own perspective depth.
+// (Material::LinearDepthVariant). The atlas modes only: VSM's pool keeps its own perspective depth.
 // false = the old perspective depth and a 0.1 m near: `--set shadow.spotLinearDepth:0|1`.
 inline bool g_spotShadowLinearDepth = true;
 inline bool SpotShadowLinearDepth() { return g_spotShadowLinearDepth && !VsmActive(); }
@@ -224,6 +224,23 @@ inline float SpotShadowNear(float authored)
 {
     if (authored > 0.0f) { return authored > kSpotShadowMinNear ? authored : kSpotShadowMinNear; }
     return SpotShadowLinearDepth() ? kSpotShadowMinNear : 0.1f;
+}
+// The same for a POINT light's cube faces. UE's near is 1 cm (ShadowSetup.cpp:1169, FReversedZPerspectiveMatrix(PI / 4,
+// 1, 1, MinZ 1, Radius)) on a PERSPECTIVE depth, and UE's projection bias is a share of the distance (2 % x 512 / Res),
+// which grows with the perspective step. Ours is the texel bias (a few texels, the peter-panning fix), which does not:
+// at 1 cm a D16 step is ~w^2 / n x 1.5e-5 -- 12 cm at 9 m, 38 cm at the end of a 16 m light -- far past it. So the
+// faces take the spot's LINEAR depth with UE's near (a deviation from UE's point, for the same reason UE's spot has it).
+// Atlas modes only; VSM keeps the old near max(0.2, 2 % of the radius). `--set shadow.pointLinearDepth:0|1` (0 = the
+// perspective depth), `shadow.pointNearUe:0|1` (0 = the old near; perspective + 1 cm is the A/B that shows the steps).
+inline bool g_pointShadowLinearDepth = true;
+inline bool g_pointShadowNearUe = true;
+constexpr float kPointShadowUeNear = 0.01f;
+inline bool PointShadowLinearDepth() { return g_pointShadowLinearDepth && !VsmActive(); }
+inline float PointShadowNear(float radius)
+{
+    if (g_pointShadowNearUe && !VsmActive()) { return kPointShadowUeNear; }
+    const float old = radius * 0.02f;
+    return old > 0.2f ? old : 0.2f;
 }
 // Plan S4: UE r.Shadow.MaxResolution for the local lights (BaseScalability.ini: 1024 at High, 2048 at Epic). A spot's
 // shadow is its screen radius x 2.546 rounded DOWN to a power of two up to this; a point's cube face is the first of

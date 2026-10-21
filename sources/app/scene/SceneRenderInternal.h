@@ -320,6 +320,17 @@ namespace scene_internal
         return BuildShadowViewCB(renderer, view.view, view.proj, wind, constMetres, slopeMetres, 1.0f, -k);
     }
 
+    // Plan S4: a POINT cube face's view CB. Its bias is at the receiver (UE's share of the distance, or the texel bias),
+    // so the depth pass carries none; on the LINEAR depth (render::PointShadowLinearDepth, the face's
+    // SHADOW_LINEAR_DEPTH PSOs) the range goes in as the spot's does: (0, 0, -1 / (f - n), n).
+    inline D3D12_GPU_VIRTUAL_ADDRESS BuildPointShadowViewCB(Renderer* renderer, const SceneView& view,
+                                                            const vfx::WindState* wind, bool linearDepth)
+    {
+        if (!linearDepth) { return BuildShadowViewCB(renderer, view.view, view.proj, wind); }
+        return BuildShadowViewCB(renderer, view.view, view.proj, wind, 0.0f, 0.0f,
+                                 -1.0f / std::max(view.zFar - view.zNear, 1.0e-4f), view.zNear);
+    }
+
 
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame,
                                                      const float4& fogVolumeParams, const float4& fogVolumeZParams,

@@ -45,8 +45,8 @@ public:
         std::uint32_t id = 0;
         std::array<float, 32> viewProj{}; // the view matrix, then the projection (compared exactly, as UE compares)
         std::uint32_t res = 0;
-        // What the cached depth MEANS: plan S4, 1 = a spot's linear depth (render::SpotShadowLinearDepth), 0 = the
-        // perspective one. shadow.spotLinearDepth flips it under an unchanged projection (an authored near).
+        // What the cached depth MEANS: plan S4, 1 = the linear depth (render::SpotShadowLinearDepth /
+        // PointShadowLinearDepth), 0 = the perspective one. The switches flip it under an unchanged projection.
         std::uint32_t encoding = 0;
     };
     static constexpr std::uint32_t SpotId(std::uint32_t lightIndex) { return (lightIndex << 4) | 0xFu; }

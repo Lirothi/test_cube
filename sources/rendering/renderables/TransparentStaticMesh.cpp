@@ -82,7 +82,7 @@ public:
         UpdateUniform(obj, cb_.objectId, material, ToObjectId32(obj.GetEditorObjectId()), cbData);
     }
 
-    void UpdateShadowCB(RenderableObject& obj, Renderer* /*renderer*/, const mat4& lightView, const mat4& lightProj, uint8_t* cbData) override
+    void UpdateShadowCB(RenderableObject& obj, Renderer* /*renderer*/, const mat4& lightView, const mat4& lightProj, uint8_t* cbData, size_t /*slot*/) override
     {
         Material* shadowMaterial = obj.GetShadowMaterial();
         if (!shadowMaterial)

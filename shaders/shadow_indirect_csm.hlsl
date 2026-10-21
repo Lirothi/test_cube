@@ -305,6 +305,7 @@ struct VSOutMasked
     float2 UV : TEXCOORD0;
     nointerpolation uint  texSlot : TEXCOORD1; // ~0 = opaque group (PS early-out)
     nointerpolation float cutoff  : TEXCOORD2;
+    nointerpolation float baseAlpha : TEXCOORD4; // local-light plan S8: the slot's baseColor.a, as the G-buffer's clip
     SHADOW_LINEAR_OUT                          // plan S4
 #if VSM_PAGE
     float4 CD : SV_ClipDistance0; // the page's four borders (replaces the per-page scissor)
@@ -318,6 +319,7 @@ struct PSInMasked
     float2 UV : TEXCOORD0;
     nointerpolation uint  texSlot : TEXCOORD1;
     nointerpolation float cutoff  : TEXCOORD2;
+    nointerpolation float baseAlpha : TEXCOORD4;
     SHADOW_LINEAR_OUT
 };
 
@@ -344,7 +346,12 @@ VSOutMasked VSMain(VSInMasked i)
     o.linearDepth = linearDepth;
 #endif
 #endif
-    o.UV = i.UV;
+    // Local-light plan S8: the G-buffer's own clip (gbuffer_common.hlsli AlphaTestClip) -- the slot's UV transform and
+    // baseColor.a, which the caster record carries per submesh (FillInstanceDataForSlot). The raw UV and alpha cast
+    // every frond thicker than the leaf the camera sees; the CPU path, made masked in S8, showed it (1.5 % of the frame
+    // under local_shadow_test's spot B).
+    o.UV = i.UV * ip.texOffsScale.zw + ip.texOffsScale.xy;
+    o.baseAlpha = ip.baseColor.a;
     const uint2 gm = GroupMask[CasterGroup[cid]];
     o.texSlot = gm.x;
     o.cutoff = asfloat(gm.y);
@@ -360,7 +367,7 @@ void MaskedClip(PSInMasked i)
 #else
     const float a = gMaskAlbedo[NonUniformResourceIndex(i.texSlot)].Sample(gMaskSmp, i.UV).a;
 #endif
-    clip(a - i.cutoff);
+    clip(a * i.baseAlpha - i.cutoff);
 }
 
 #if SHADOW_LINEAR_DEPTH

@@ -29,7 +29,7 @@ public:
     void BuildLodBuckets();
 
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
-    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum, bool spotLinearDepth) override;
+    void RenderShadow(Renderer* renderer, ID3D12GraphicsCommandList* cl, const mat4& lightView, const mat4& lightProj, D3D12_GPU_VIRTUAL_ADDRESS viewCB, UINT lod, bool chunkCameraLods, const Frustum* chunkCullFrustum, bool linearDepth) override;
 
     void Init(Renderer*, ID3D12GraphicsCommandList*, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>*) override {}
     void Tick(float) override {}
@@ -52,8 +52,9 @@ private:
     };
 
     // Multi-slot material state is LOD-invariant. Build it once per batch Render instead of
-    // restaging the same 4-5 slots for every occupied LOD tier.
-    void PrepareSlotBindings(Renderer* renderer);
+    // restaging the same 4-5 slots for every occupied LOD tier. Local-light plan S8: `shadow` = for RenderShadow -- the
+    // slots' instanced SHADOW PSOs and their textures as a table (the CPU shadow shaders are never bindless).
+    void PrepareSlotBindings(Renderer* renderer, bool shadow = false);
 
     // Records instanced draws for a SUBSET of the run at one LOD (chunked to the shader's
     // instance-array capacity). Step 6d: the camera pass buckets members per-instance and
@@ -61,10 +62,11 @@ private:
     // `fades` (parallel to `members`, camera pass only; null = all solid) feeds the b3
     // LodFadeArray for the dithered crossfade — an instance in the fade band appears in TWO
     // tiers' buckets with -f / +f (see BuildLodBuckets).
+    // Plan S4: `linearDepth` (shadow pass) binds each slot PSO's linear-depth twin in the multi-slot loop.
     void RecordInstanced(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                          Material* material, D3D12_GPU_VIRTUAL_ADDRESS viewCB, bool gbuffer, UINT lod,
                          const std::vector<RenderableObjectBase*>& members,
-                         const float* fades = nullptr);
+                         const float* fades = nullptr, bool linearDepth = false);
 
     static constexpr unsigned int kMaxLodTiers = 4; // base + 3 (matches SelectLodTier range)
 
@@ -77,7 +79,8 @@ private:
     AABB bounds_ = AABB::Empty();
     // B2b: non-null when the run is multi-slot (multi-submesh mesh + >1 material slot) — the
     // gbuffer path then loops submeshes, binding each slot's textures + a b2 params slice from
-    // this lead (run members are slot-identical by SameInstanceSlots). Shadows stay whole-mesh.
+    // this lead (run members are slot-identical by SameInstanceSlots). Plan S8: the shadow pass loops them too, with
+    // each slot's instanced shadow PSO and params (its foliage weight, and a masked slot's cutoff).
     const IInstanceable* leadInst_ = nullptr;
     // Per-instance LOD buckets, reused each Render (pooled batch -> retains capacity).
     // lodBucketFades_ runs parallel to lodBuckets_: 0 = solid, -f = fading out of this tier,

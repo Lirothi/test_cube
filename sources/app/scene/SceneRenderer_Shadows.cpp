@@ -773,7 +773,8 @@ void SceneRenderer::Pass_LocalShadowCache(Renderer* renderer, RenderGraphPassCon
                 shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, slot, viewCB, /*passB=*/false, /*staticRows=*/true,
                                                      linear);
             };
-            const bool spotLinear = render::SpotShadowLinearDepth(); // plan S4: the spot pass's own encoding
+            const bool spotLinear = render::SpotShadowLinearDepth();   // plan S4: the spot pass's own encoding
+            const bool pointLinear = render::PointShadowLinearDepth(); // ...and the point pass's
             for (size_t i = 0; i < spotCount; ++i)
             {
                 const SceneView& view = (*frame_->spotShadowViews)[i];
@@ -787,7 +788,7 @@ void SceneRenderer::Pass_LocalShadowCache(Renderer* renderer, RenderGraphPassCon
                 const SceneView& view = (*frame_->pointShadowViews)[i];
                 if (view.cacheMode != 2 || view.cachePage < 0) { continue; }
                 fill(view, render::ShadowViewPointFaceSlot(static_cast<unsigned>(i)),
-                     BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind), false);
+                     BuildPointShadowViewCB(renderer, view, frame_->wind, pointLinear), pointLinear);
             }
         }
         renderer->EmitPoint(t.cl, readPoint);
@@ -978,8 +979,10 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     // Plan S6b: several faces per command list, as the spot pass.
     const size_t perList = std::max<size_t>(render::g_localShadowViewsPerList, 1u);
     const size_t lists = (viewCount + perList - 1) / perList;
+    // Plan S4: read ONCE, as the spot pass -- the face CBs, the PSOs and the light buffer's flag agree.
+    const bool linear = render::PointShadowLinearDepth();
     auto renderPointShadow = [renderer, &D, &pointViews, batchIndex = ctx.batchIndex, shadowGpu, indirect, wind, cmpLog, cmpBarriers, atlasPoint,
-                              cache, cached, split, perList, viewCount, localCamPos](std::size_t listIndex)
+                              cache, cached, split, perList, viewCount, localCamPos, linear](std::size_t listIndex)
     {
         Renderer::TransitionLogScope cmpScope(cmpLog);
         Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
@@ -1009,7 +1012,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 const bool copyStatics = LocalViewCached(view, cache, cached);
                 PrepareLocalShadowTarget(renderer, t.cl, cache, view, /*pointPool=*/true, ShadowViewRes(view, D.pointShadowRes),
                                          copyStatics);
-                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, wind);
+                const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view, wind, linear); // S4
                 const auto& visibleBuckets = view.queue.VisibleBuckets();
                 const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
                 const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -1019,12 +1022,12 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                     // Point cube face k -> its cull-view slot (plan S9: VSM's prefix, then the extra faces).
                     const std::uint32_t viewSlot = render::ShadowViewPointFaceSlot(static_cast<unsigned>(faceIndex));
                     // S7: on a split frame the main rows hold the movables only; an uncached face draws its statics too.
-                    if (split && !copyStatics) { shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB, false, true); }
-                    shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB);
+                    if (split && !copyStatics) { shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB, false, true, linear); }
+                    shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, viewSlot, viewCB, false, false, linear);
                     // GPU-instanced casters: skip when the GI folding path is active (Ctrl+G) — the
                     // indirect cull draws them; otherwise (flag off / over-cap / PSO failure) draw here.
-                    for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
-                    for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB); }
+                    for (auto* obj : opaqueSimple)  { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, 0, false, nullptr, linear); }
+                    for (auto* obj : opaqueComplex) { if (obj && obj->IsGpuInstancedCaster() && !shadowGpu->IsGiFoldedActive(obj)) obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB, 0, false, nullptr, linear); }
                 }
                 else
                 {
@@ -1033,7 +1036,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                         if (obj)
                         {
                             obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
+                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum, linear); // S8
                         }
                     }
                     for (auto* obj : opaqueComplex)
@@ -1041,7 +1044,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                         if (obj)
                         {
                             obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
+                                ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum, linear); // S8
                         }
                     }
                 }
@@ -1057,13 +1060,14 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
     {
         GPU_SCOPE(t.cl, ProfilerScopes::kPassSpotShadow);
         renderer->EmitPoint(t.cl, atlasPoint);
+        const bool linear = render::PointShadowLinearDepth(); // plan S4
 
         for (size_t faceIndex = 0; faceIndex < viewCount; ++faceIndex)
         {
             const SceneView& view = pointViews[faceIndex];
             renderer->BindLocalShadowTarget(t.cl, /*pointPool=*/true, view.shadowPage, view.shadowX, view.shadowY,
                                             ShadowViewRes(view, D.pointShadowRes), /*clearDepth=*/true); // S9
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildShadowViewCB(renderer, view.view, view.proj, frame_->wind);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildPointShadowViewCB(renderer, view, frame_->wind, linear); // S4
             const auto& visibleBuckets = view.queue.VisibleBuckets();
             const auto& opaqueSimple = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)];
             const auto& opaqueComplex = visibleBuckets[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)];
@@ -1073,7 +1077,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 if (obj)
                 {
                     obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
+                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum, linear); // S8
                 }
             }
             for (auto* obj : opaqueComplex)
@@ -1081,7 +1085,7 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
                 if (obj)
                 {
                     obj->RenderShadow(renderer, t.cl, view.view, view.proj, viewCB,
-                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum); // S8
+                        ReceiverCasterLod(obj, localCamPos), /*chunkCameraLods=*/true, &view.frustum, linear); // S8
                 }
             }
         }

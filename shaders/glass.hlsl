@@ -20,9 +20,9 @@ struct PointLightData
     float intensity;
     float4 shadowParams; // x = shadow slot (-1 = none), y = bias, z = nearPlane, w = farPlane (radius)
     float4 volumetric;   // x = volumetric scattering intensity (plan A4d), y = UE slope scale (S1), z = sharpen, w = filter (S2)
-    float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4)
+    float4 shadowFade;   // x = UE's shadow fade (S3), y = the atlas page (S9), z = 1 / its face res (S4), w = texel-bias normal texels
     float4 shadowAtlas;  // S9: its 3f x 2f block in the page, page UV: xy = corner, zw = one face -- mirrors LightManager::PointLightGpu
-    float4 vsm;          // S10e: x = the light's VSM mip bias (unread here: glass picks its mip by distance)
+    float4 shadowParams4; // S10e: x = the light's VSM mip bias (unread here); S4: y = 1 / (f - n) of a LINEAR face depth
 };
 
 struct SpotLightData
@@ -32,7 +32,7 @@ struct SpotLightData
     float4 colorIntensity;     // xyz = color, w = intensity
     float4 shadowParams;       // x = cos(inner), y = shadow index, z = invAngleRange, w = depth bias
     float4 shadowParams2;      // x = normal bias (world units), y = volumetric scattering, z = UE's shadow fade (S3),
-                               // w reserved
+                               // w = the texel bias's normal texels (> 0 marks it; x is then its push texels)
     float4x4 viewProj;
     float4 shadowParams3;      // S2: x = near, y = soft-transition scale (1/m), z = sharpen, w = 1 UE's tent / 0 old box
     float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
@@ -123,10 +123,10 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
     if (Ld.volumetric.w != 0.0f && (Ld.shadowParams.y < 0.0f || Ld.shadowFade.w > 0.0f))
     {
         return LocalShadowFinish(PointShadowDisc29(PointShadowAtlas, ShadowSampler, d, m, Ld.shadowParams, Ld.volumetric.y,
-                                                   NoL, Ld.shadowFade.z, block, page, texel), Ld.volumetric.z);
+                                                   NoL, Ld.shadowFade.z, block, page, texel, Ld.shadowParams4.y), Ld.volumetric.z);
     }
     float mBiased = PointShadowCompareDistance(m, Ld.shadowParams, Ld.volumetric.y, NoL);
-    float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
+    float zc = PointShadowCompareDepth(mBiased, nearP, farP, Ld.shadowParams4.y); // plan S4
     // PCF: 8 cube taps, offset scaled by m for a ~constant world-space footprint (the old filter,
     // shadow.localFilterUe:0).
     float radius = m * kPointPcfRadius;

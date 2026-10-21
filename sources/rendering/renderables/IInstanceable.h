@@ -26,6 +26,12 @@ public:
     {
         return InstancedGraphicsMaterial();
     }
+    // Local-light plan S8: the same for the SHADOW pass of a multi-slot batch -- the slot's instanced shadow PSO, built
+    // with INSTCB_SLOT_PARAMS (the slot CB carries its foliage weight and, masked, its cutoff). Default = the single one.
+    virtual Material* InstancedShadowMaterialForSlot(size_t /*slot*/) const
+    {
+        return InstancedShadowMaterial();
+    }
 
     // Write this object's per-instance payload (world/prevWorld + material params).
     virtual void FillInstanceData(render::InstancePerObject& out) const = 0;

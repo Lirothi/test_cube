@@ -166,7 +166,7 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
     const float nearP = light.shadowParams.z;
     const float farP = max(light.shadowParams.w, nearP + 1e-3f);
     const float mBiased = PointShadowCompareDistance(m, light.shadowParams, light.volumetric.y, 1.0f);
-    const float zc = (farP / (farP - nearP)) * (1.0f - nearP / mBiased);
+    const float zc = PointShadowCompareDepth(mBiased, nearP, farP, light.shadowParams4.y); // plan S4
     // Plan S9: the light's face in its 3f x 2f block of an atlas page (PointShadowCubeUV); a page texel = one face / res.
     const float3 tap = PointShadowCubeUV(d, light.shadowAtlas, light.shadowFade.y, light.shadowAtlas.zw * light.shadowFade.z);
     return lerp(1.0f, PointShadowAtlas.SampleCmpLevelZero(gSmpLinear, tap, zc),
