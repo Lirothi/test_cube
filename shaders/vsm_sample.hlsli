@@ -65,11 +65,10 @@ static const float VSM_MAX_DEPTH_SLOPE_UV = 4.17f;
 // level. That is not a separate step here: the offset is converted to UV using the dimensions of
 // the level ACTUALLY sampled, inside the fallback loop, so a coarser level's larger texel widens
 // the offset by exactly the same factor. Same result, one fewer thing to keep in step.
-float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDist, float depthBias,
-                   float2 depthSlopeUV,
-                   StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+// Plan S10e: from a given mip on (the local lights' pixel-footprint mip); VsmSampleNDC below picks it by distance.
+float VsmSampleNDCFrom(uint view, uint startLevel, float3 ndc, float2 uv, float depthBias, float2 depthSlopeUV,
+                       StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
-    const uint startLevel = VsmSelectLevel(distCam, refDist, VSM_MAX_LEVEL);
     const float invPoolAxis = 1.0f / (float)VSM_POOL_PAGES_AXIS;
     const float texel = 1.0f / (float)(VSM_POOL_PAGES_AXIS * VSM_PAGE_SIZE); // 1/4096
 
@@ -124,11 +123,18 @@ float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDis
     return 1.0f; // no resident level -> lit fallback
 }
 
+float VsmSampleNDC(uint view, float3 ndc, float2 uv, float distCam, float refDist, float depthBias,
+                   float2 depthSlopeUV,
+                   StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+{
+    return VsmSampleNDCFrom(view, VsmSelectLevel(distCam, refDist, VSM_MAX_LEVEL), ndc, uv, depthBias, depthSlopeUV,
+                            PageTable, Pool, cmp);
+}
+
 // Spot: `slot` = the spot's shadow slot (0..kMaxShadowedSpotLights-1); its VSM view is VsmSpotView(slot) (plan
-// S10b). Pbiased = P + N*normalBias.
-float VsmSpotShadow(uint slot, float4x4 viewProj, float3 Pbiased, float3 camPos, float refDist,
-                    float depthBias, StructuredBuffer<uint> PageTable, Texture2D Pool,
-                    SamplerComparisonState cmp)
+// S10b). Pbiased = P + N*normalBias. Plan S10e: from mip `startLevel` (the request's; VsmSpotShadow picks it by distance).
+float VsmSpotShadowFrom(uint slot, uint startLevel, float4x4 viewProj, float3 Pbiased, float depthBias,
+                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     const uint view = VsmSpotView(slot);
     float4 clip = mul(float4(Pbiased, 1.0f), viewProj);
@@ -136,11 +142,16 @@ float VsmSpotShadow(uint slot, float4x4 viewProj, float3 Pbiased, float3 camPos,
     float3 ndc = clip.xyz / clip.w;
     if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { return 1.0f; }
     float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-    float distCam = length(Pbiased - camPos);
     // Spot/point keep their own tuned constant bias (P16.16 changed the DIRECTIONAL clipmap
     // only); a zero gradient makes the receiver-plane term vanish, so this is an exact no-op.
-    return VsmSampleNDC(view, ndc, uv, distCam, refDist, depthBias, float2(0.0f, 0.0f),
-                        PageTable, Pool, cmp);
+    return VsmSampleNDCFrom(view, startLevel, ndc, uv, depthBias, float2(0.0f, 0.0f), PageTable, Pool, cmp);
+}
+float VsmSpotShadow(uint slot, float4x4 viewProj, float3 Pbiased, float3 camPos, float refDist,
+                    float depthBias, StructuredBuffer<uint> PageTable, Texture2D Pool,
+                    SamplerComparisonState cmp)
+{
+    return VsmSpotShadowFrom(slot, VsmSelectLevel(length(Pbiased - camPos), refDist, VSM_MAX_LEVEL), viewProj, Pbiased,
+                             depthBias, PageTable, Pool, cmp);
 }
 
 // Point: `slot` = the light's cube slot. The 6 cube faces (VSM local views 8 + slot*6 + face) are
@@ -194,24 +205,38 @@ bool VsmPointFaceProject(uint slot, float3 Pbiased, float3 lightPos, float nearP
     return true;
 }
 
-float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, float farP,
-                     float3 camPos, float refDist, float depthBias,
-                     StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+// Plan S10e: from mip `startLevel` (the request's); VsmPointShadow picks it by distance.
+float VsmPointShadowFrom(uint slot, uint startLevel, float3 Pbiased, float3 lightPos, float nearP, float farP,
+                         float depthBias, StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     uint view;
     float3 ndc;
     float2 uv;
     if (!VsmPointFaceProject(slot, Pbiased, lightPos, nearP, farP, view, ndc, uv)) { return 1.0f; }
-    float distCam = length(Pbiased - camPos);
-    return VsmSampleNDC(view, ndc, uv, distCam, refDist, depthBias, float2(0.0f, 0.0f), PageTable, Pool, cmp);
+    return VsmSampleNDCFrom(view, startLevel, ndc, uv, depthBias, float2(0.0f, 0.0f), PageTable, Pool, cmp);
+}
+float VsmPointShadow(uint slot, float3 Pbiased, float3 lightPos, float nearP, float farP,
+                     float3 camPos, float refDist, float depthBias,
+                     StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+{
+    return VsmPointShadowFrom(slot, VsmSelectLevel(length(Pbiased - camPos), refDist, VSM_MAX_LEVEL), Pbiased, lightPos,
+                              nearP, farP, depthBias, PageTable, Pool, cmp);
 }
 
-// Plan S10b: the mip VsmSampleNDC will actually read for `uv` -- the first resident level from the camera-selected one.
-// A receiver whose page fell back to a coarser level sits in BIGGER texels than the requested level's; a push sized for
-// the requested level leaves the whole fallen-back page in acne (the owner saw it as hatched quads with bright seams).
-uint VsmResidentLevel(uint view, float2 uv, float distCam, float refDist, StructuredBuffer<uint> PageTable)
+// Plan S10e: a point receiver's depth in its cube face's view -- the major axis of P - light (the face's view z).
+float VsmPointFaceDepth(float3 P, float3 lightPos)
 {
-    uint level = VsmSelectLevel(distCam, refDist, VSM_MAX_LEVEL);
+    const float3 a = abs(P - lightPos);
+    return max(a.x, max(a.y, a.z));
+}
+
+// Plan S10b: the mip VsmSampleNDC will actually read for `uv` -- the first resident level from `startLevel` (the one
+// the request asked for). A receiver whose page fell back to a coarser level sits in BIGGER texels than the requested
+// level's; a push sized for the requested level leaves the whole fallen-back page in acne (the owner saw it as hatched
+// quads with bright seams).
+uint VsmResidentLevel(uint view, float2 uv, uint startLevel, StructuredBuffer<uint> PageTable)
+{
+    uint level = startLevel;
     for (; level < VSM_MAX_LEVEL; ++level)
     {
         const uint axis = VSM_L0_AXIS >> level;
@@ -221,26 +246,22 @@ uint VsmResidentLevel(uint view, float2 uv, float distCam, float refDist, Struct
     }
     return level;
 }
-uint VsmSpotSampledLevel(uint slot, float4x4 viewProj, float3 P, float3 camPos, float refDist,
-                         StructuredBuffer<uint> PageTable)
+uint VsmSpotSampledLevel(uint slot, uint startLevel, float4x4 viewProj, float3 P, StructuredBuffer<uint> PageTable)
 {
     const float4 clip = mul(float4(P, 1.0f), viewProj);
-    if (clip.w <= 0.0f) { return VsmSelectLevel(length(P - camPos), refDist, VSM_MAX_LEVEL); }
+    if (clip.w <= 0.0f) { return startLevel; }
     const float2 ndc = clip.xy / clip.w;
     const float2 uv = saturate(float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y));
-    return VsmResidentLevel(VsmSpotView(slot), uv, length(P - camPos), refDist, PageTable);
+    return VsmResidentLevel(VsmSpotView(slot), uv, startLevel, PageTable);
 }
-uint VsmPointSampledLevel(uint slot, float3 P, float3 lightPos, float nearP, float farP, float3 camPos, float refDist,
+uint VsmPointSampledLevel(uint slot, uint startLevel, float3 P, float3 lightPos, float nearP, float farP,
                           StructuredBuffer<uint> PageTable)
 {
     uint view;
     float3 ndc;
     float2 uv;
-    if (!VsmPointFaceProject(slot, P, lightPos, nearP, farP, view, ndc, uv))
-    {
-        return VsmSelectLevel(length(P - camPos), refDist, VSM_MAX_LEVEL);
-    }
-    return VsmResidentLevel(view, uv, length(P - camPos), refDist, PageTable);
+    if (!VsmPointFaceProject(slot, P, lightPos, nearP, farP, view, ndc, uv)) { return startLevel; }
+    return VsmResidentLevel(view, uv, startLevel, PageTable);
 }
 
 // Directional clipmap (Step 24f): the receiver picks the FINEST level whose ortho extent contains it

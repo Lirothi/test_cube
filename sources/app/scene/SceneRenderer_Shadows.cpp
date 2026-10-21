@@ -67,12 +67,16 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* vie
 {
     std::uint32_t count = vsm::kClipmapFirstView + vsm::kNumClipmapLevels;
     for (std::uint32_t v = 0; v < vsm::kMaxVirtualViews; ++v) { views[v] = vsm::ViewProjEntry{}; }
-    const auto put = [&](std::uint32_t slot, const SceneView& v, bool active)
+    // `face` = a point face's cube face (0..5), -1 for a spot or a clipmap level.
+    const auto put = [&](std::uint32_t slot, const SceneView& v, bool active, float face)
     {
         if (slot >= vsm::kMaxVirtualViews) { return; }
         views[slot].viewProj = (v.view * v.proj).m;
         const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
-        views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
+        // .w = the projection's x scale (plan S10e: the request's pixel-footprint mip; a spot's 1 / tan(outer), a face's 1).
+        views[slot].params = DirectX::XMFLOAT4(valid, face, v.zFar, v.proj.m._11);
+        // Plan S10e: the light's reach (SceneView::lightSphere, S9e) -- the request marks nothing for receivers past it.
+        views[slot].cull = vsm::g_requestLightCull ? v.lightSphere.xf() : DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, -1.0f);
         if (active) { count = std::max(count, slot + 1u); }
     };
     const size_t spotCount = frame.lightManager->GetShadowedSpotCount();
@@ -80,7 +84,7 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* vie
     {
         if (i < spotCount || i < LightManager::kVsmShadowedSpotLights)
         {
-            put(vsm::SpotView(static_cast<std::uint32_t>(i)), (*frame.spotShadowViews)[i], i < spotCount);
+            put(vsm::SpotView(static_cast<std::uint32_t>(i)), (*frame.spotShadowViews)[i], i < spotCount, -1.0f);
         }
     }
     const size_t pointFaces = frame.lightManager->GetShadowedPointCount() * 6;
@@ -88,7 +92,8 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* vie
     {
         if (i < pointFaces || i < 6u * LightManager::kVsmShadowedPointLights)
         {
-            put(vsm::PointFaceView(static_cast<std::uint32_t>(i)), (*frame.pointShadowViews)[i], i < pointFaces);
+            put(vsm::PointFaceView(static_cast<std::uint32_t>(i)), (*frame.pointShadowViews)[i], i < pointFaces,
+                static_cast<float>(i % 6u));
         }
     }
     // Step 24d/24e: the directional clipmap levels -- the request shader picks the finest level containing each
@@ -98,7 +103,7 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* vie
         std::uint32_t level = 0;
         for (const SceneView& v : *frame.clipmapViews)
         {
-            if (level < vsm::kNumClipmapLevels) { put(vsm::ClipmapView(level), v, true); }
+            if (level < vsm::kNumClipmapLevels) { put(vsm::ClipmapView(level), v, true, -1.0f); }
             ++level;
         }
     }
@@ -145,6 +150,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.lodParams = DirectX::XMFLOAT4(vsm::LocalRefDist(), static_cast<float>(vsm::kMaxMipLevel), // S10e: dynamic res
                                      static_cast<float>(vsm::g_requestDownscale),
                                      vsm::ClipmapBlendWidth());
+    cb.localMip = vsm::LocalMipParams(mv.invProj.m, static_cast<float>(rw), static_cast<float>(rh)); // S10e: UE's mip
 
     // The page-table view indexing (plan S10b: vsm::SpotView / PointFaceView / ClipmapView, the cull layout minus its
     // cascades). Cascades are intentionally excluded (Step 19b local scope).

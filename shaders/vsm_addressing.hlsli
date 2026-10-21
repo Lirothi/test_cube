@@ -67,6 +67,28 @@ uint VsmSelectLevel(float distCam, float refDist, uint maxLevel)
     return (uint)clamp(raw, 0, (int)maxLevel);
 }
 
+// Local-light plan S10e: UE's local-light mip (VirtualShadowMapProjectionCommon.ush:96-118, VirtualShadowMapDefinitions.h
+// GetMipLevelLocal). `pixelRadiusWorld` = the camera pixel's radius at the receiver (view depth x
+// min(1 / (W P00), 1 / (H P11)), the RENDER resolution); projected into the light's view by its projection's x scale
+// over the receiver's depth there, in texels x 2 (UE's 2 x virtual resolution over NDC); mip = floor(log2 + bias),
+// clamped to the chain. `lodBias` = r.Shadow.Virtual.ResolutionLodBiasLocal + the dynamic-resolution bias.
+uint VsmLocalMipFromPixel(float pixelRadiusWorld, float lightXScale, float lightDepth, float lodBias)
+{
+    const float footprint = abs(pixelRadiusWorld * lightXScale / max(lightDepth, 1e-4f)) * (2.0f * VSM_VIRTUAL_RES);
+    const float mipLevel = log2(max(footprint, 1e-8f)) + lodBias;
+    return (uint)min(max(floor(mipLevel), 0.0f), (float)VSM_MAX_LEVEL);
+}
+
+// The D3D cube face (+X,-X,+Y,-Y,+Z,-Z) a direction from a point light falls in -- its major axis, ties to x then y
+// (VsmPointFaceProject samples by the same rule, plan S10e's request marks by it).
+uint VsmCubeFace(float3 d)
+{
+    const float3 ad = abs(d);
+    if (ad.x >= ad.y && ad.x >= ad.z) { return (d.x >= 0.0f) ? 0u : 1u; }
+    if (ad.y >= ad.z) { return (d.y >= 0.0f) ? 2u : 3u; }
+    return (d.z >= 0.0f) ? 4u : 5u;
+}
+
 // (view, level, px, py) -> virtual page id.
 uint VsmPageId(uint view, uint level, uint px, uint py)
 {

@@ -86,6 +86,9 @@ cbuffer PointLightFrame : register(b0)
     // The light target is PRE-EXPOSED (lighting_cb.hlsli lightPreExposure): what this pass adds is
     // scaled by it, the base it reads already is.
     float lightPreExposure;
+    // Plan S10e: the VSM local mip -- the spot pass's vsmLocalMip (x = pixel-footprint mip on, y = lod bias, z = the
+    // pixel radius per unit of view depth).
+    float4 vsmLocalMip;
 }
 ContactShadowParams MakeContactParams()
 {
@@ -148,9 +151,15 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         // by 1/N.L, plus a ~1-texel normal offset.
         // Plan S10b (vsmTexelBias): the texel of the level actually sampled, along the geometric normal (the spot path).
         const bool  texelFix   = vsmTexelBias != 0u;
-        const uint  lvl        = texelFix ? VsmPointSampledLevel((uint)Ld.shadowParams.x, P, Ld.position, Ld.shadowParams.z,
-                                                                 Ld.shadowParams.w, camPosWS, vsmRefDist, VsmPageTable)
-                                          : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        // Plan S10e: the mip the request pass asked for -- UE's pixel footprint (a face's projection has x scale 1: 90
+        // degrees), or the old camera distance.
+        const uint  reqLevel   = (vsmLocalMip.x != 0.0f)
+            ? VsmLocalMipFromPixel(dot(P - camPosWS, invView[2].xyz) * vsmLocalMip.z, 1.0f,
+                                   VsmPointFaceDepth(P, Ld.position), vsmLocalMip.y)
+            : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        const uint  lvl        = texelFix ? VsmPointSampledLevel((uint)Ld.shadowParams.x, reqLevel, P, Ld.position,
+                                                                 Ld.shadowParams.z, Ld.shadowParams.w, VsmPageTable)
+                                          : reqLevel;
         const float3 Nb        = texelFix ? Ng : N;
         const float distLight  = length(Ld.position - P);
         const float texelWorld = (2.0f * distLight / VSM_VIRTUAL_RES) * exp2((float)lvl);
@@ -159,9 +168,8 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         const float  slope     = clamp(1.0f / max(ndl, 0.15f), 1.0f, 6.0f);
         float3 PoffV = P + Nb * (texelWorld * localLateralTexels)
                          + toL * (texelWorld * slope * localDepthPushTexels);
-        return VsmPointShadow((uint)Ld.shadowParams.x, PoffV, Ld.position, Ld.shadowParams.z,
-                              Ld.shadowParams.w, camPosWS, vsmRefDist, 0.0f,
-                              VsmPageTable, VsmPool, gSmpShadowCmp);
+        return VsmPointShadowFrom((uint)Ld.shadowParams.x, reqLevel, PoffV, Ld.position, Ld.shadowParams.z,
+                                  Ld.shadowParams.w, 0.0f, VsmPageTable, VsmPool, gSmpShadowCmp);
     }
 
     // The TEXEL bias (local_shadow_bias.hlsli): the receiver moves by texels of THIS light's face at its distance,

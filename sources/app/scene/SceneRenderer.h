@@ -701,6 +701,10 @@ private:
     // these three and publishes the answer as FrameDecisions::vsmSkipUpdate.
     mat4 vsmLastView_{};
     std::uint32_t vsmLastLightVersion_ = 0; // the sun's transformVersion at vsmLastView_ (time-of-day plan T0)
+    // Local-light plan S10e: what the page request depends on besides the view -- the mip select (mode, biases, refDist,
+    // the render resolution the pixel footprint is taken at). A change is not "still": the pages would stay the old
+    // select's while the samplers read with the new one.
+    std::array<float, 7> vsmLastRequestKey_{};
     bool vsmHasRendered_ = false;
     std::uint32_t vsmStillFrames_ = 0;
     // FrameDecisions::sunShadowsOff last frame (the change is logged once), and whether the VSM update

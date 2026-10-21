@@ -2714,7 +2714,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                        1.0f, 40.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Smaller = coarser pages: fewer/faster + more stable, softer near.\n"
-                                      "Larger = sharper near but more resident pages + higher render cost.");
+                                      "Larger = sharper near but more resident pages + higher render cost.\n"
+                                      "Local lights' surfaces use it only with the pixel-footprint mip off\n"
+                                      "(--set vsm.localMipFromPixel:0); glass and the fog always.");
 
                 int ds = static_cast<int>(vsm::g_requestDownscale);
                 if (GRAPHICS_CONTROL(VsmRequestDownscale, "vsmRequestDownscale",

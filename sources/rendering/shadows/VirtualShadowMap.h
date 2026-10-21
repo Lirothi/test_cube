@@ -214,6 +214,31 @@ namespace vsm
     inline float         g_dynamicResMaxPoolLoad = 0.85f;
     inline float         g_dynamicLodBias = 0.0f;  // this frame's (VirtualShadowMap::UpdateDynamicResolution)
     inline float LocalRefDist() { return g_refDist * std::exp2(-g_dynamicLodBias); }
+    // Plan S10e: the local lights' mip by the camera pixel's footprint in the light's texels (UE's: the light's distance
+    // and cone width count, and the render resolution -- a cheaper DLSS mode asks for coarser pages), instead of the
+    // camera distance over g_refDist. `--set vsm.localMipFromPixel:0|1`; UE r.Shadow.Virtual.ResolutionLodBiasLocal
+    // (0; -1 doubles the resolution) = `vsm.resolutionLodBiasLocal`. The dynamic-resolution bias adds to it. Glass and
+    // the fog keep the distance select (their mip falls back coarser when the request's is not resident).
+    inline bool  g_localMipFromPixel = true;
+    // Plan S10e: the page request tests a receiver against each local light's reach first, and projects a point light's
+    // receiver into the one cube face its direction falls in (UE marks a pixel only for its light-grid cell's lights).
+    // `--set vsm.requestLightCull:0|1`.
+    inline bool  g_requestLightCull = true;
+    inline float g_resolutionLodBiasLocal = 0.0f;
+    inline float LocalMipBias() { return g_resolutionLodBiasLocal + g_dynamicLodBias; }
+    // The camera pixel's radius per unit of view depth (UE RadiusXY = 1 / (ViewSize * ViewToClip._m00_m11), the smaller
+    // axis) from the INVERSE projection at the render resolution: 1 / P00 = invProj._11. And the CB's float4 for it.
+    inline float PixelRadiusPerDepth(const DirectX::XMFLOAT4X4& invProj, float renderWidth, float renderHeight)
+    {
+        const float rx = std::abs(invProj._11) / std::max(renderWidth, 1.0f);
+        const float ry = std::abs(invProj._22) / std::max(renderHeight, 1.0f);
+        return std::min(rx, ry);
+    }
+    inline DirectX::XMFLOAT4 LocalMipParams(const DirectX::XMFLOAT4X4& invProj, float renderWidth, float renderHeight)
+    {
+        return DirectX::XMFLOAT4(g_localMipFromPixel ? 1.0f : 0.0f, LocalMipBias(),
+                                 PixelRadiusPerDepth(invProj, renderWidth, renderHeight), 0.0f);
+    }
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
@@ -508,11 +533,14 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
     inline bool g_logPageStats = false;
 
     // Per-shadow-view data the request pass projects screen pixels through (mirrors the HLSL
-    // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = zNear, .z = zFar.
+    // cbuffer in vsm_page_request_cs.hlsl). params.x = valid (0/1), .y = a point face's cube face (0..5; -1 = a spot or
+    // a clipmap level), .z = zFar, .w = the projection's x scale (plan S10e: the pixel-footprint mip). cull = the light's
+    // position + reach (w < 0 = none; plan S10e: the request skips receivers it does not reach).
     struct alignas(16) ViewProjEntry
     {
         DirectX::XMFLOAT4X4 viewProj;
         DirectX::XMFLOAT4   params;
+        DirectX::XMFLOAT4   cull{ 0.0f, 0.0f, 0.0f, -1.0f };
     };
     struct alignas(16) PageRequestConstants
     {
@@ -521,6 +549,7 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
         DirectX::XMFLOAT4   camPosWS;   // xyz
         DirectX::XMFLOAT4   screen;     // x=w, y=h, z=1/w, w=1/h
         DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale, w=clipmap blend width
+        DirectX::XMFLOAT4   localMip;   // plan S10e: x = pixel-footprint mip on, y = lod bias, z = pixel radius / depth
         std::uint32_t       numViews;
         std::uint32_t       _pad[3];
         ViewProjEntry       views[kMaxVirtualViews];

@@ -87,6 +87,10 @@ cbuffer SpotLightFrame : register(b0)
     // The light target is PRE-EXPOSED (lighting_cb.hlsli lightPreExposure): what this pass adds is
     // scaled by it, the base it reads already is.
     float lightPreExposure;
+    // Plan S10e: the VSM local mip (vsm_addressing.hlsli VsmLocalMipFromPixel, UE's): x = 1 by the camera pixel's
+    // footprint (0 = by camera distance), y = the lod bias (ResolutionLodBiasLocal + dynamic resolution), z = the
+    // pixel radius per unit of view depth (min(1 / (W P00), 1 / (H P11)) at the render resolution).
+    float4 vsmLocalMip;
 };
 ContactShadowParams MakeContactParams()
 {
@@ -172,11 +176,23 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         // leaves a ripple of acne at any push; plan S9 found it on the atlases).
         uint slot = (uint)light.shadowParams.y;
         const bool  texelFix   = vsmTexelBias != 0u;
-        const uint  lvl        = texelFix ? VsmSpotSampledLevel(slot, light.viewProj, P, camPosWS, vsmRefDist, VsmPageTable)
-                                          : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
-        const float3 Nb        = texelFix ? Ng : N;
         const float cosOuter   = max(light.directionCosOuter.w, 1e-3f);
         const float tanOuter   = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
+        // Plan S10e: the mip the request pass asked for -- UE's pixel footprint (the projection's x scale is
+        // 1 / tan(outer): fov 2 x outer, aspect 1), or the old camera distance.
+        uint reqLevel;
+        if (vsmLocalMip.x != 0.0f)
+        {
+            const float viewDepth = dot(P - camPosWS, invView[2].xyz);
+            const float lightDepth = mul(float4(P, 1.0f), light.viewProj).w;
+            reqLevel = VsmLocalMipFromPixel(viewDepth * vsmLocalMip.z, 1.0f / max(tanOuter, 1e-4f), lightDepth, vsmLocalMip.y);
+        }
+        else
+        {
+            reqLevel = VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        }
+        const uint  lvl        = texelFix ? VsmSpotSampledLevel(slot, reqLevel, light.viewProj, P, VsmPageTable) : reqLevel;
+        const float3 Nb        = texelFix ? Ng : N;
         const float distLight  = length(light.positionRange.xyz - P);
         const float texelWorld = (2.0f * distLight * tanOuter / VSM_VIRTUAL_RES) * exp2((float)lvl);
         const float3 toL       = normalize(light.positionRange.xyz - P);
@@ -184,8 +200,7 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         const float  slope     = clamp(1.0f / max(ndl, 0.15f), 1.0f, 6.0f);
         float3 PoffV = P + Nb * (texelWorld * localLateralTexels)
                          + toL * (texelWorld * slope * localDepthPushTexels);
-        return VsmSpotShadow(slot, light.viewProj, PoffV, camPosWS, vsmRefDist, 0.0f,
-                             VsmPageTable, VsmPool, gSmpShadow);
+        return VsmSpotShadowFrom(slot, reqLevel, light.viewProj, PoffV, 0.0f, VsmPageTable, VsmPool, gSmpShadow);
     }
 
     // TEXEL bias: one shadow texel at the receiver is 2 w tan(outer) over the light's resolution (its square in the page).

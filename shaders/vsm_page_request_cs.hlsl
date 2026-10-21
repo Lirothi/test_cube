@@ -27,7 +27,9 @@ static const uint kLevelOffset[6] = { 0u, 256u, 320u, 336u, 340u, 341u };
 struct ViewProjEntry
 {
     float4x4 viewProj;
-    float4   params; // x = valid (0/1), y = zNear, z = zFar
+    float4   params; // x = valid (0/1), y = a point face's cube face (0..5; -1 = a spot / clipmap), z = zFar,
+                     // w = the projection's x scale (S10e: the pixel footprint)
+    float4   cull;   // plan S10e: the light's position + reach (w < 0 = none): a receiver it does not reach marks nothing
 };
 
 cbuffer PageRequestCB : register(b0)
@@ -37,6 +39,9 @@ cbuffer PageRequestCB : register(b0)
     float4   camPosWS;
     float4   screen;    // x=w, y=h, z=1/w, w=1/h
     float4   lodParams; // x=refDist, y=maxLevel, z=downscale, w=directional clipmap blend width
+    // Plan S10e: x = 1 picks a local view's mip by the camera pixel's footprint (VsmLocalMipFromPixel, UE's), y = the lod
+    // bias, z = the pixel radius per unit of view depth (min(1 / (W P00), 1 / (H P11)), render resolution).
+    float4   localMip;
     uint     numViews;
     uint3    _pad;
     ViewProjEntry views[kMaxViews];
@@ -69,7 +74,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint  maxLevel = min((uint)lodParams.y, kMaxLevel);
     const float distCam  = length(P - camPosWS.xyz);
     const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
-    const uint  level    = (uint)clamp(rawLevel, 0, (int)maxLevel);
+    const uint  levelByDistance = (uint)clamp(rawLevel, 0, (int)maxLevel);
 
     const uint count = min(numViews, kMaxViews);
 
@@ -77,16 +82,33 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // local view is VsmLocalView(i) -- the prefix before the clipmap, then the rest after it, up to numViews. ---
     const uint localCount = (count <= VSM_CLIPMAP_FIRST) ? count
                           : ((count > VSM_CLIPMAP_END) ? count - VSM_NUM_CLIPMAP_LEVELS : VSM_CLIPMAP_FIRST);
+    // Plan S10e: the camera pixel's radius at this receiver (UE VirtualShadowMapCalcPixelFootprintLocal).
+    const bool pixelMip = localMip.x != 0.0f;
+    const float pixelRadiusWorld = dot(P - camPosWS.xyz, invView[2].xyz) * localMip.z;
     for (uint li = 0; li < localCount; ++li)
     {
         const uint v = VsmLocalView(li);
         if (views[v].params.x < 0.5f) { continue; } // inactive view slot
+        // Plan S10e (UE marks a pixel's pages only for the lights its light-grid cell holds): beyond the light's reach
+        // nothing samples this view, and of a point light's six faces only the one P's direction falls in can hold it --
+        // one distance test and a face pick instead of six projections.
+        const float4 cull = views[v].cull;
+        if (cull.w >= 0.0f)
+        {
+            const float3 toP = P - cull.xyz;
+            if (dot(toP, toP) > cull.w * cull.w) { continue; }
+            if (views[v].params.y >= 0.0f && VsmCubeFace(toP) != (uint)views[v].params.y) { continue; }
+        }
 
         float4 clip = mul(float4(P, 1.0f), views[v].viewProj);
         if (clip.w <= 0.0f) { continue; }
         float3 ndc = clip.xyz / clip.w;
         if (ndc.x < -1.0f || ndc.x > 1.0f || ndc.y < -1.0f || ndc.y > 1.0f) { continue; }
         if (ndc.z < 0.0f || ndc.z > 1.0f) { continue; }
+        // S10e: this view's mip -- the pixel's footprint in ITS texels (the light's distance and cone width), or the old
+        // camera-distance level shared by every view.
+        const uint level = pixelMip ? VsmLocalMipFromPixel(pixelRadiusWorld, views[v].params.w, clip.w, localMip.y)
+                                    : levelByDistance;
 
         // Shadow UV (D3D clip -> UV, y flipped). Mark the selected level AND all coarser levels (a
         // mip chain): the sampler may pick a slightly different level per pixel, so keeping the

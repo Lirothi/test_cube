@@ -638,6 +638,10 @@ namespace
         // Plan S10e: UE's dynamic VSM resolution (0 = off).
         if (setting == "vsm.dynamicResMaxLodBias") { vsm::g_dynamicResMaxLodBias = std::clamp(value, 0.0f, 4.0f); return true; }
         if (setting == "vsm.dynamicResMaxPoolLoad") { vsm::g_dynamicResMaxPoolLoad = std::clamp(value, 0.0f, 1.0f); return true; }
+        // Plan S10e: UE's local-light mip by the pixel footprint (0 = by camera distance) and its bias.
+        if (setting == "vsm.localMipFromPixel") { vsm::g_localMipFromPixel = value != 0.0f; return true; }
+        if (setting == "vsm.requestLightCull") { vsm::g_requestLightCull = value != 0.0f; return true; }
+        if (setting == "vsm.resolutionLodBiasLocal") { vsm::g_resolutionLodBiasLocal = std::clamp(value, -4.0f, 4.0f); return true; }
         if (setting == "shadow.localViewsPerList") // S6b
         {
             render::g_localShadowViewsPerList = static_cast<unsigned>(std::clamp(value, 1.0f, 128.0f));

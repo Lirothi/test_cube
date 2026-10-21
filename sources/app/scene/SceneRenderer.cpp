@@ -457,8 +457,13 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         // the update was skipped after kFrameCount + 1 frames and the shadows froze while the sun went
         // on (any sun animation: the dev window, --scene-stress-sky, time of day).
         const std::uint32_t lightVersion = frame.dirLight ? frame.dirLight->GetTransformVersion() : 0u;
+        const std::array<float, 7> requestKey = {
+            vsm::g_localMipFromPixel ? 1.0f : 0.0f, vsm::LocalMipBias(), vsm::LocalRefDist(),
+            static_cast<float>(vsm::g_requestDownscale), static_cast<float>(renderer->GetRenderWidth()),
+            static_cast<float>(renderer->GetRenderHeight()), vsm::g_requestLightCull ? 1.0f : 0.0f };
         const bool viewStill = vsmHasRendered_ && lightVersion == vsmLastLightVersion_ &&
-            std::memcmp(&frame.mainView->view, &vsmLastView_, sizeof(mat4)) == 0;
+            std::memcmp(&frame.mainView->view, &vsmLastView_, sizeof(mat4)) == 0 &&
+            requestKey == vsmLastRequestKey_;
         // W5: a wind-swayed caster animates in the VERTEX shader, so its transform never changes and
         // MoverCount() stays 0 — without this the pool freezes after a few still frames and the palm
         // shadow stops swaying while the tree keeps going (the shadow visibly detaches).
@@ -482,6 +487,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             vsmStillFrames_ = 0;
             vsmLastView_ = frame.mainView->view;
             vsmLastLightVersion_ = lightVersion;
+            vsmLastRequestKey_ = requestKey;
             vsmHasRendered_ = true;
         }
     }
