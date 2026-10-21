@@ -142,7 +142,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.camPosWS = DirectX::XMFLOAT4(mv.position.x, mv.position.y, mv.position.z, 0.0f);
     cb.screen = DirectX::XMFLOAT4(static_cast<float>(rw), static_cast<float>(rh),
                                   rw ? 1.0f / rw : 0.0f, rh ? 1.0f / rh : 0.0f);
-    cb.lodParams = DirectX::XMFLOAT4(vsm::g_refDist, static_cast<float>(vsm::kMaxMipLevel),
+    cb.lodParams = DirectX::XMFLOAT4(vsm::LocalRefDist(), static_cast<float>(vsm::kMaxMipLevel), // S10e: dynamic res
                                      static_cast<float>(vsm::g_requestDownscale),
                                      vsm::ClipmapBlendWidth());
 

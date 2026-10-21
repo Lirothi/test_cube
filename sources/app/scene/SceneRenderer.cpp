@@ -464,8 +464,11 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         // shadow stops swaying while the tree keeps going (the shadow visibly detaches).
         const bool windAnimating = frame.wind && frame.wind->swayAmplitude > 0.0f &&
                                    frame.shadowGpu && frame.shadowGpu->HasWindCasters();
+        // Local-light plan S10e: nor while the page pool is settling (refused requests, a moving dynamic-resolution
+        // bias) -- frozen there, the pool keeps the pages the old bias asked for and the shadows stay missing.
+        const bool poolSettling = frame.vsm && frame.vsm->DynamicResSettling();
         const bool contentStill = (!frame.shadowGpu || frame.shadowGpu->MoverCount() == 0) &&
-                                  !windAnimating;
+                                  !windAnimating && !poolSettling;
         if (viewStill && contentStill)
         {
             // Keep rendering for a few frames after everything goes still so the resident set + the

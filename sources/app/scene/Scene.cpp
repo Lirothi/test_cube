@@ -3043,6 +3043,7 @@ void Scene::Render(Renderer* renderer) {
     shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
     shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
     vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
+    vsm_.UpdateDynamicResolution(renderer); // S10e: the page pool's load of frame N - kFrameCount -> the local mip bias
     vsm_.PollHzbStats(renderer);          // S5b.2: the light-space two-pass counters of frame N - 3
 
     // Occlusion plan S4: does the indirect G-buffer run this frame? Decided here, BEFORE the

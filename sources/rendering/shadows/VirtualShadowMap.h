@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -201,6 +202,18 @@ namespace vsm
     // buffer sizing (kVirtualRes / kNumMipLevels / kPoolPageCount stay compile-time), so changing
     // them needs no reallocation. Defaults = the constexpr values above. ---
     inline float         g_refDist = kLodRefDist;
+    // Local-light plan S10e: UE's dynamic VSM resolution (VirtualShadowMapCacheManager.cpp:155-187, 683-722). When the
+    // page pool's load (1 - free / pool, above 1 when requests were refused) passes MaxPagePoolLoadFactor, the local
+    // lights' mips are biased coarser -- target = last bias + log2(load / factor), approached by 0.5 a frame while over,
+    // by 0.1 once 10 frames have passed under it, clamped to [0, MaxResolutionLodBias]. A refused page reads as LIT
+    // (no resident mip), so without it a pool too small for its lights loses their shadows. The bias enters the mip
+    // select as a scaled reference distance (LocalRefDist: floor(log2(d / (ref * 2^-b))) = level + b), the request pass
+    // and every sampler alike. `--set vsm.dynamicResMaxLodBias:<b>` (UE r.Shadow.Virtual.DynamicRes.MaxResolutionLodBias
+    // 2.0, 0 = off), `vsm.dynamicResMaxPoolLoad:<f>` (UE ...MaxPagePoolLoadFactor 0.85, 0 = off).
+    inline float         g_dynamicResMaxLodBias = 2.0f;
+    inline float         g_dynamicResMaxPoolLoad = 0.85f;
+    inline float         g_dynamicLodBias = 0.0f;  // this frame's (VirtualShadowMap::UpdateDynamicResolution)
+    inline float LocalRefDist() { return g_refDist * std::exp2(-g_dynamicLodBias); }
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
@@ -551,6 +564,10 @@ public:
         bool hzbSnapshot = false;
         std::uint32_t snapshotCopy = 0;    // pageTable -> COPY_SOURCE, prevPageTable -> COPY_DEST
         std::uint32_t alloc = 0;           // the six alloc buffers -> UAV
+        // Plan S10e: the alloc counters into this frame's readback slot, every frame (dynamic resolution).
+        bool counters = false;
+        std::uint32_t countersCopy = 0;    // counters -> COPY_SOURCE
+        std::uint32_t countersRestore = 0; // ...and back to UAV
         bool readback = false;             // this frame runs the one-shot debug readback
         std::uint32_t readbackCopy = 0;    // request/counters/physOwner -> COPY_SOURCE
         std::uint32_t readbackRestore = 0; // ...and back to canonical after the copies
@@ -666,6 +683,18 @@ public:
     // so caching is verifiable (resident stabilizes, newly-allocated ~0 when the scene is stable).
     // Re-armed periodically. Call once per frame (main thread).
     void PollPageRequestDebug(Renderer* renderer);
+
+    // Local-light plan S10e: UE's dynamic resolution -- reads this frame slot's alloc counters (the frame that last
+    // used the slot, kFrameCount ago) and moves vsm::g_dynamicLodBias. Once per frame on the main thread, after
+    // BeginFrame waited on the slot and before any pass records (they read vsm::LocalRefDist()).
+    void UpdateDynamicResolution(Renderer* renderer);
+    struct DynamicResStats { float poolLoad = 0.0f; float lodBias = 0.0f; std::int32_t refused = 0; bool valid = false;
+                             bool settling = false; };
+    const DynamicResStats& DynamicRes() const { return dynamicRes_; }
+    // S10e: the pool has not settled -- requests were refused, or the bias is still moving. The skip-when-still update
+    // must not freeze it then: the controller learns only from frames that allocate, and the pages the old bias asked
+    // for leave the pool only through the LRU (vsm::kLruFrameThreshold frames of updates).
+    bool DynamicResSettling() const { return dynamicRes_.valid && dynamicRes_.settling; }
 
     // --- Live debug stats for the dev-window "VSM" tab. Filled by PollPageRequestDebug from the
     // deferred readback (a kFrameCount-old snapshot, refreshed a few times/sec). They reflect the
@@ -845,6 +874,15 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> residentReadback_[render::kFrameCount];
     const std::uint32_t* residentReadbackPtr_[render::kFrameCount] = {};
     bool residentReadbackValid_[render::kFrameCount] = {};
+    // Plan S10e: the alloc counters of each frame slot (16 bytes, persistently mapped), the LOD bias that frame used
+    // (UE's LastGlobalResolutionLodBias comes back with its counters the same way), and the controller's state.
+    Microsoft::WRL::ComPtr<ID3D12Resource> countersReadback_[render::kFrameCount];
+    const std::uint32_t* countersReadbackPtr_[render::kFrameCount] = {};
+    bool countersReadbackValid_[render::kFrameCount] = {};
+    float countersLodBias_[render::kFrameCount] = {};
+    std::uint64_t lastFrameOverBudget_ = 0;
+    bool poolOverflowLogged_ = false;
+    DynamicResStats dynamicRes_{};
 
     // Step 19/20 validation: deferred readback of the request bitfield + alloc counters, re-armed
     // periodically so a live/stress run samples several times. The single readback buffer holds

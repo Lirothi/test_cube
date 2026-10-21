@@ -284,7 +284,16 @@ void VirtualShadowMap::ReleaseResources()
         residentReadback_[i].Reset(); // releasing implicitly unmaps the persistent map
         residentReadbackPtr_[i] = nullptr;
         residentReadbackValid_[i] = false;
+        countersReadback_[i].Reset(); // S10e
+        countersReadbackPtr_[i] = nullptr;
+        countersReadbackValid_[i] = false;
+        countersLodBias_[i] = 0.0f;
     }
+    // S10e: a fresh pool starts at full resolution (the bias was the old pool's answer).
+    vsm::g_dynamicLodBias = 0.0f;
+    lastFrameOverBudget_ = 0;
+    poolOverflowLogged_ = false;
+    dynamicRes_ = {};
 
     debugReadback_.Reset();
     debugReadbackState_ = 0;
@@ -318,6 +327,27 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
         physOwner_.Reset(); physLastFrame_.Reset(); freeList_.Reset();
         needsRender_.Reset(); allocCounters_.Reset();
         return;
+    }
+    // Plan S10e: one readback slot of the counters per frame in flight, persistently mapped (dynamic resolution).
+    {
+        D3D12_HEAP_PROPERTIES rb{}; rb.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = 4u * sizeof(std::uint32_t);
+        rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        for (UINT i = 0; i < render::kFrameCount; ++i)
+        {
+            countersReadbackValid_[i] = false;
+            if (SUCCEEDED(dev->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST,
+                    nullptr, IID_PPV_ARGS(countersReadback_[i].ReleaseAndGetAddressOf()))))
+            {
+                countersReadback_[i]->SetName(L"VSM.AllocCountersReadback");
+                void* p = nullptr;
+                if (SUCCEEDED(countersReadback_[i]->Map(0, nullptr, &p))) { countersReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
+            }
+        }
     }
 
     // One non-shader-visible heap for the 5 alloc-state UAVs (staged into the frame heap per
@@ -472,6 +502,18 @@ VirtualShadowMap::PageRequestPoints VirtualShadowMap::PrepareRequestPass(
     ctx.Use(freeList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(needsRender_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    // Plan S10e: the counters into this frame's readback slot after the allocation, every frame, and back.
+    pts.counters = ctx.renderer && ctx.renderer->GetCurrentFrameIndex() < render::kFrameCount &&
+                   countersReadback_[ctx.renderer->GetCurrentFrameIndex()] != nullptr;
+    if (pts.counters)
+    {
+        ctx.NextPoint();
+        pts.countersCopy = ctx.usePoint ? *ctx.usePoint : 0u;
+        ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+        ctx.NextPoint();
+        pts.countersRestore = ctx.usePoint ? *ctx.usePoint : 0u;
+        ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
     // The debug readback runs on exactly one frame; the decision is taken HERE and travels in
     // `pts.readback`, so declaration and record cannot evaluate it twice.
     pts.readback = WillRecordDebugReadback(ctx.renderer);
@@ -889,8 +931,94 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
             pageTable_.Get());
     }
 
+    // Plan S10e: this frame's counters into its readback slot (UpdateDynamicResolution reads it kFrameCount frames on).
+    // The points are emitted whatever happens between them -- a declared point left unrecorded desynchronises the graph.
+    if (pts.counters)
+    {
+        renderer->EmitPoint(cl, pts.countersCopy);
+        const UINT f = renderer->GetCurrentFrameIndex();
+        if (f < render::kFrameCount && countersReadback_[f])
+        {
+            cl->CopyBufferRegion(countersReadback_[f].Get(), 0, allocCounters_.Get(), 0, 4ull * sizeof(std::uint32_t));
+            countersReadbackValid_[f] = true;
+            countersLodBias_[f] = vsm::g_dynamicLodBias;
+        }
+        renderer->EmitPoint(cl, pts.countersRestore);
+    }
+
     // Step 20 debug: sample the request bitfield + alloc counters a few frames later.
     RecordDebugReadback(renderer, cl, pts);
+}
+
+void VirtualShadowMap::UpdateDynamicResolution(Renderer* renderer)
+{
+    if (!renderer) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    if (f >= render::kFrameCount || !countersReadbackValid_[f] || !countersReadbackPtr_[f]) { return; }
+    // The slot's frame retired (BeginFrame waited on it): read what its allocation saw, then let this frame's copy
+    // overwrite it. UE's message carries the free count (negative when requests were refused) and the bias it used.
+    countersReadbackValid_[f] = false;
+    const std::int32_t freePages = static_cast<std::int32_t>(countersReadbackPtr_[f][0]);
+    const float usedBias = countersLodBias_[f];
+    const float pool = static_cast<float>(vsm::kPoolPageCount);
+    const float load = 1.0f - static_cast<float>(freePages) / pool;
+    dynamicRes_.poolLoad = load;
+    dynamicRes_.refused = freePages < 0 ? -freePages : 0;
+    dynamicRes_.valid = true;
+
+    const float maxLoad = vsm::g_dynamicResMaxPoolLoad;
+    const float maxBias = std::max(vsm::g_dynamicResMaxLodBias, 0.0f);
+    float bias = vsm::g_dynamicLodBias;
+    float wanted = bias; // where the controller is heading (the settling test below)
+    if (maxLoad > 0.0f && maxBias > 0.0f)
+    {
+        // VirtualShadowMapCacheManager.cpp:689-721, term for term: react fast going down, slowly coming back up.
+        constexpr float kDownLerp = 0.5f;
+        constexpr float kUpLerp = 0.1f;
+        constexpr std::uint64_t kFramesBeforeUp = 10;
+        const std::uint64_t frame = renderer->GetTotalFrameNumber();
+        const float ratio = load / maxLoad;
+        const float target = std::max(0.0f, usedBias + (ratio > 0.0f ? std::log2(ratio) : -maxBias));
+        wanted = std::clamp(target, 0.0f, maxBias);
+        if (load <= maxLoad && frame - lastFrameOverBudget_ > kFramesBeforeUp)
+        {
+            bias += (target - bias) * kUpLerp;
+        }
+        else if (load > maxLoad)
+        {
+            lastFrameOverBudget_ = frame;
+            bias += (target - bias) * kDownLerp;
+        }
+        bias = std::clamp(bias, 0.0f, maxBias);
+    }
+    else
+    {
+        bias = 0.0f;
+    }
+    // Settling while pages are refused, or while the bias is still a step away from where the load wants it (the up
+    // path waits kFramesBeforeUp frames first: a frozen update would freeze it at its peak).
+    constexpr float kSettledBias = 0.05f;
+    dynamicRes_.settling = dynamicRes_.refused > 0 || std::abs(wanted - bias) > kSettledBias ||
+                           std::abs(bias - usedBias) > kSettledBias;
+    vsm::g_dynamicLodBias = bias;
+    dynamicRes_.lodBias = bias;
+
+    // UE warns once per overflow episode (the same wording's facts): requests the pool could not serve read as lit.
+    if (dynamicRes_.refused > 0)
+    {
+        if (!poolOverflowLogged_)
+        {
+            LOG_WARNING(logging::LogCategory::RenderShadow,
+                        "VSM page pool overflow: {} page allocations were not served this frame (pool {} pages) -- the "
+                        "pages read as lit until the dynamic resolution bias ({:.2f}, max {:.2f}) catches up",
+                        dynamicRes_.refused, vsm::kPoolPageCount, bias, maxBias);
+            poolOverflowLogged_ = true;
+        }
+    }
+    else
+    {
+        poolOverflowLogged_ = false;
+    }
 }
 
 void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCommandList* cl,

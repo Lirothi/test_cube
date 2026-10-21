@@ -635,6 +635,9 @@ namespace
         if (setting == "vsm.localTexelBias") { vsm::g_localTexelBias = value != 0.0f; return true; }
         if (setting == "vsm.localLateralTexels") { vsm::g_localLateralTexels = std::clamp(value, 0.0f, 8.0f); return true; }
         if (setting == "vsm.localDepthPushTexels") { vsm::g_localDepthPushTexels = std::clamp(value, 0.0f, 8.0f); return true; }
+        // Plan S10e: UE's dynamic VSM resolution (0 = off).
+        if (setting == "vsm.dynamicResMaxLodBias") { vsm::g_dynamicResMaxLodBias = std::clamp(value, 0.0f, 4.0f); return true; }
+        if (setting == "vsm.dynamicResMaxPoolLoad") { vsm::g_dynamicResMaxPoolLoad = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "shadow.localViewsPerList") // S6b
         {
             render::g_localShadowViewsPerList = static_cast<unsigned>(std::clamp(value, 1.0f, 128.0f));
@@ -1868,6 +1871,14 @@ namespace
             }
             std::string out(text, static_cast<size_t>(n)); // without the closing brace
             out += LocalShadowsJson(scene_.GetLightManager(), scene_.GetLocalShadowCache());
+            // Plan S10e: the VSM page pool's load and the dynamic-resolution bias it drives (a kFrameCount-old frame).
+            {
+                const VirtualShadowMap::DynamicResStats& dr = scene_.Vsm().DynamicRes();
+                char vsmItem[160];
+                std::snprintf(vsmItem, sizeof(vsmItem), ",\"vsmPool\":{\"valid\":%s,\"load\":%.3f,\"refused\":%d,\"lodBias\":%.3f}",
+                              dr.valid ? "true" : "false", dr.poolLoad, dr.refused, dr.lodBias);
+                out += vsmItem;
+            }
             if (historyRows <= 0)
             {
                 return out + "}";

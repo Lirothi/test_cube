@@ -561,7 +561,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         }
         fc.localParams = float4(std::max(a.localLightScatter, 0.0f),
                                 1.0f / static_cast<float>(std::max(D.spotShadowRes, 1u)),
-                                1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)), vsm::g_refDist);
+                                1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)), vsm::LocalRefDist());
         fc.localParams2 = float4(std::max(a.localSoftFading, 0.0f), std::max(a.localDistanceBias, 0.0f), 0.0f, 0.0f);
         // Row-vector convention (mul(v, M)): clip.z = z * _33 + _43, clip.w = z * _34 + _44.
         const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
@@ -905,7 +905,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         constants.invShadowSize = float2(invRes, invRes);
         constants.lightCount = static_cast<uint32_t>(spotLightCount);
         constants.useVsm = vsmSample ? 1u : 0u;
-        constants.vsmRefDist = vsm::g_refDist;
+        constants.vsmRefDist = vsm::LocalRefDist(); // plan S10e: the dynamic-resolution bias, as the request pass
         constants.localLateralTexels = vsm::g_localLateralTexels;
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
         constants.vsmTexelBias = vsm::g_localTexelBias ? 1u : 0u; // plan S10b
@@ -976,7 +976,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.lightCount = static_cast<uint32_t>(pointLights.size());
         constants.invPointShadowSize = 1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)); // cube-face texel for PCF
         constants.useVsm = vsmSample ? 1u : 0u;
-        constants.vsmRefDist = vsm::g_refDist;
+        constants.vsmRefDist = vsm::LocalRefDist(); // plan S10e: the dynamic-resolution bias, as the request pass
         constants.localLateralTexels = vsm::g_localLateralTexels;
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
         constants.vsmTexelBias = vsm::g_localTexelBias ? 1u : 0u; // plan S10b
