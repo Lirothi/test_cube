@@ -179,7 +179,7 @@ struct VsmSmrtResult
 // history rather than just the slope.
 struct VsmSmrtRayState
 {
-    uint   level;             // clipmap LEVEL index; the view slot is VSM_NUM_LOCAL_VIEWS + level
+    uint   level;             // clipmap LEVEL index; the view slot is VSM_CLIPMAP_FIRST + level
     float3 originWS;          // the ray's start, in world space -- kept so it can be re-projected
     float3 vecWS;             // full ray vector (direction * length), likewise
     float  rayLength;
@@ -271,7 +271,7 @@ VsmSmrtSample VsmSmrtFindSample(inout VsmSmrtRayState st, float sampleTime,
 
     float d = 1.0f;
     uint hintOffset = 0u;
-    if (VsmSmrtLoadDepth(VSM_NUM_LOCAL_VIEWS + st.level, sampleUVZ.xy, PageTable, Pool, d,
+    if (VsmSmrtLoadDepth(VSM_CLIPMAP_FIRST + st.level, sampleUVZ.xy, PageTable, Pool, d,
                          hintOffset))
     {
         s.valid = true;
@@ -304,7 +304,7 @@ VsmSmrtSample VsmSmrtFindSample(inout VsmSmrtRayState st, float sampleTime,
 
         float dl = 1.0f;
         uint dummyOffset = 0u;
-        if (!VsmSmrtLoadDepth(VSM_NUM_LOCAL_VIEWS + L, uv, PageTable, Pool, dl, dummyOffset))
+        if (!VsmSmrtLoadDepth(VSM_CLIPMAP_FIRST + L, uv, PageTable, Pool, dl, dummyOffset))
         {
             continue;
         }

@@ -5,7 +5,33 @@
 #ifndef VSM_ADDRESSING_HLSLI
 #define VSM_ADDRESSING_HLSLI
 
-static const uint VSM_MAX_VIEWS      = 42u;  // kMaxVirtualViews (32 local spots+point faces + 10 clipmap levels)
+// Local-light plan S10a: the view counts come from C++ (Material.cpp EngineShaderDefines, from render::kShadowView*),
+// never as literals here -- a shader compiled without them fails loudly instead of addressing a stale layout.
+#if !defined(TC_VSM_PREFIX_SPOTS) || !defined(TC_VSM_CLIPMAP_FIRST) || !defined(TC_VSM_CLIPMAP_LEVELS) || \
+    !defined(TC_SHADOW_SPOTS) || !defined(TC_SHADOW_POINTS)
+#error "TC_VSM_* layout defines missing: compile through Material (EngineShaderDefines)"
+#endif
+// Plan S10b: VSM's views are the cull layout minus its cascades (vsm::SpotView / PointFaceView / ClipmapView):
+// [prefix spots | prefix point faces | clipmap levels | the other spots | the other point faces].
+static const uint VSM_PREFIX_SPOTS       = TC_VSM_PREFIX_SPOTS;               // render::kShadowViewVsmSpots
+static const uint VSM_CLIPMAP_FIRST      = TC_VSM_CLIPMAP_FIRST;              // vsm::kClipmapFirstView
+static const uint VSM_NUM_CLIPMAP_LEVELS = TC_VSM_CLIPMAP_LEVELS;             // vsm::kNumClipmapLevels
+static const uint VSM_CLIPMAP_END        = VSM_CLIPMAP_FIRST + VSM_NUM_CLIPMAP_LEVELS;
+static const uint VSM_MAX_SPOTS          = TC_SHADOW_SPOTS;                   // render::kShadowViewSpots
+static const uint VSM_MAX_LOCAL_VIEWS    = TC_SHADOW_SPOTS + 6u * TC_SHADOW_POINTS; // vsm::kMaxLocalVirtualViews
+static const uint VSM_MAX_VIEWS          = VSM_MAX_LOCAL_VIEWS + VSM_NUM_CLIPMAP_LEVELS; // vsm::kMaxVirtualViews
+uint VsmSpotView(uint slot)
+{
+    return (slot < VSM_PREFIX_SPOTS) ? slot : VSM_CLIPMAP_END + (slot - VSM_PREFIX_SPOTS);
+}
+uint VsmPointFaceView(uint face) // face = point slot * 6 + cube face
+{
+    const uint prefixFaces = VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS;
+    return (face < prefixFaces) ? VSM_PREFIX_SPOTS + face
+                                : VSM_CLIPMAP_END + (VSM_MAX_SPOTS - VSM_PREFIX_SPOTS) + (face - prefixFaces);
+}
+bool VsmIsClipmapView(uint view) { return view >= VSM_CLIPMAP_FIRST && view < VSM_CLIPMAP_END; }
+uint VsmLocalView(uint i) { return (i < VSM_CLIPMAP_FIRST) ? i : i + VSM_NUM_CLIPMAP_LEVELS; } // the i-th local view
 // ---- PAGE TABLE ENTRY FORMAT (the one definition; vsm_page_alloc_common.hlsli includes this) ----
 //
 //   bit 31      : MAPPED HERE. A physical page is allocated for this exact virtual page, and the
@@ -26,8 +52,6 @@ static const uint VSM_LOD_SHIFT      = 16u;
 static const uint VSM_LOD_MASK       = 0x000F0000u; // 4 bits: offsets 0..15 (10 clipmap levels)
 static const uint VSM_PHYS_MASK_C    = 0x0000FFFFu;
 
-static const uint VSM_NUM_LOCAL_VIEWS = 32u; // kNumLocalVirtualViews — views [0,32) local; [32,40) directional clipmap
-static const uint VSM_NUM_CLIPMAP_LEVELS = 10u; // kNumClipmapLevels (VSM_MAX_VIEWS - VSM_NUM_LOCAL_VIEWS)
 static const float VSM_VIRTUAL_RES = 2048.0f;  // kVirtualRes — texels per clipmap level edge (for texel-scaled bias)
 static const uint VSM_L0_AXIS        = 16u;  // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint VSM_MAX_LEVEL      = 4u;   // kMaxMipLevel

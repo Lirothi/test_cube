@@ -2916,7 +2916,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SliderFloat("Local lateral bias (texels)",
                         &vsm::g_localLateralTexels, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Spot + point VSM: surface-normal offset in shadow texels. ~1 texel.\n"
+                    ImGui::SetTooltip("Spot + point VSM: offset along the geometric normal, in texels of the mip actually\n"
+                                      "sampled. 1.5 = the 3x3 PCF's reach (less leaves acne at grazing light).\n"
                                       "Higher = less acne but the shadow Peter-pans (lifts off the base).");
                 GRAPHICS_CONTROL(VsmLocalDepthPush, "vsmLocalDepthPush",
                     ImGui::SliderFloat("Local depth push (texels)",
@@ -3075,7 +3076,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 else
                                 {
                                     const std::uint32_t view = owner / vsm::kPagesPerView;
-                                    const bool clip = view >= vsm::kNumLocalVirtualViews; // directional clipmap
+                                    const bool clip = vsm::IsClipmapView(view); // directional clipmap
                                     const float hue = static_cast<float>(view % vsm::kMaxVirtualViews) /
                                                       static_cast<float>(vsm::kMaxVirtualViews);
                                     col = ImColor::HSV(hue, clip ? 0.85f : 0.55f, clip ? 1.0f : 0.85f);
@@ -3099,8 +3100,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 else
                                 {
                                     const std::uint32_t view = owner / vsm::kPagesPerView;
-                                    const char* kind = view < 8 ? "spot"
-                                        : (view < vsm::kNumLocalVirtualViews ? "point face" : "directional clipmap");
+                                    // Plan S10b: [prefix spots | prefix faces | clipmap | more spots | more faces].
+                                    const std::uint32_t moreSpotsEnd = vsm::SpotView(render::kShadowViewSpots - 1u) + 1u;
+                                    const char* kind = vsm::IsClipmapView(view) ? "directional clipmap"
+                                        : ((view < vsm::PointFaceView(0u) || (view >= vsm::SpotView(render::kShadowViewVsmSpots) &&
+                                                                              view < moreSpotsEnd)) ? "spot" : "point face");
                                     ImGui::SetTooltip("phys #%d (%d,%d)\nview %u (%s)",
                                         cy * axis + cx, cx, cy, view, kind);
                                 }

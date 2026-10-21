@@ -2269,15 +2269,16 @@ void Scene::PrepareViews(Renderer* renderer)
     // Plan S4: the spot atlas slice is the largest a local shadow may be (ReconcileShadowMode keeps it the knob's).
     const auto& shadowTargets = renderer->GetDeferredForFrame();
     const std::uint32_t localShadowMaxRes = std::max(shadowTargets.spotShadowRes, 1u);
-    // Plan S9: the atlas modes shadow up to 32 spots / 16 points; VSM keeps its fixed 8 + 4 local views.
+    // Plan S9: the atlas modes shadow up to 32 spots / 16 points; plan S10b: VSM too -- its views are the whole cull
+    // layout past the cascades (vsm::SpotView / PointFaceView), no longer a fixed 8 + 4.
     const bool vsmLocal = render::VsmActive();
     lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
-        vsmLocal ? LightManager::kVsmShadowedSpotLights : LightManager::kMaxShadowedSpotLights);
+        LightManager::kMaxShadowedSpotLights);
     // B2a: choose which point lights cast (cube) shadows this frame, same non-jittered
     // frustum. Drives Pass_PointLights' shadowParams.x; the cube views + render pass are
     // B2b, sampling is B3, so this is inert (no visual change) until those land.
     lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
-        vsmLocal ? LightManager::kVsmShadowedPointLights : LightManager::kMaxShadowedPointLights);
+        LightManager::kMaxShadowedPointLights);
     // Plan S9: place them in the resident atlas pages (shrinking / dropping the lowest-ranked if they do not fit); the
     // pages it wants are grown at the next ReconcileShadowMode. VSM has no atlas.
     if (!vsmLocal)
@@ -2463,8 +2464,12 @@ void Scene::PrepareViews(Renderer* renderer)
 
     prepareViewsSetupScope.reset();
 
-    // main + shore + cascades + up to kMaxShadowedSpotLights spot views + up to
-    // 6*kMaxShadowedPointLights point cube-face views (plan S9: 32 + 96 in the atlas modes).
+    // main + shore + shore SDF + cascades + up to kMaxShadowedSpotLights spot views + up to
+    // 6*kMaxShadowedPointLights point cube-face views (plan S9: 32 + 96, the atlas modes and since S10b VSM too).
+    // tc::inl_vector does not grow: past its capacity Release writes over the stack (an assert only in Debug).
+    constexpr size_t kMaxViewsToCull = 3u + static_cast<size_t>(kCascades) + LightManager::kMaxShadowedSpotLights +
+                                       6u * LightManager::kMaxShadowedPointLights;
+    static_assert(kMaxViewsToCull <= 160u, "viewsToCull / viewTasks capacity");
     tc::inl_vector<SceneView*, 160> viewsToCull;
     auto enqueueView = [this, camMask, &viewsToCull](SceneView& view)
     {
@@ -2512,7 +2517,9 @@ void Scene::PrepareViews(Renderer* renderer)
 
     // Camera preparation was published before cascade/light-view setup. Publish the remaining
     // independent views now; while waiting for the camera task, main may help drain these tasks.
-    tc::inl_vector<TaskSystem::TaskHandle, 48> viewTasks;
+    // One task per view to cull -- the same capacity (it was 48: plan S9 let the atlases reach 32 spots + 96 faces, and a
+    // Release editor with 10 spots + 6 points in VSM overran it, S10b).
+    tc::inl_vector<TaskSystem::TaskHandle, 160> viewTasks;
     {
         CPU_SCOPE(ProfilerScopes::kPrepareViewsDispatch);
         for (SceneView* view : viewsToCull)
@@ -3100,9 +3107,9 @@ void Scene::Render(Renderer* renderer) {
                       "render::kMaxShadowViews must equal the shadow-view slot layout");
         static_assert(kCascadeSlots == render::kShadowViewCascades && kClipmapSlots == render::kShadowViewClipmapLevels,
                       "the cull layout's cascades / clipmap are VSM's");
-        // Local-light shadow plan S9: VSM's prefix [cascades | 8 spots | 24 point faces | clipmap] -- the VSM setup's
-        // rung0View = view + kNumCascades relies on it -- then the atlas modes' extra spots and faces; every slot index
-        // comes from render::ShadowView*Slot, never from a running count.
+        // Local-light shadow plan S9: [cascades | 8 spots | 24 point faces | clipmap | 24 more spots | 72 more faces];
+        // every slot index comes from render::ShadowView*Slot, never from a running count. Plan S10b: VSM's views are
+        // these slots minus the cascades (vsm::SpotView / PointFaceView / ClipmapView: rung0View = view + kNumCascades).
         // Occlusion plan S4: one more slot past the shadow views -- the CAMERA frustum, for the
         // registry's camera row (the indirect G-buffer). Never a shadow view: the shadow cull
         // loops kMaxShadowViews and the camera branch addresses its slot by index.

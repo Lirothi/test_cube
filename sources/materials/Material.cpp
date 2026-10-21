@@ -5,6 +5,8 @@
 #include "rendering/core/GBufferBindingGuard.h"
 #include "rendering/core/GraphicsDevice.h" // GbvEnabled: GBV keeps its own PSO cache
 #include "rendering/core/RasterSettings.h" // A6: g_rasterBindless decides the GBUFFER_BINDLESS permutation
+#include "rendering/core/RenderConstants.h" // S10a: the shadow-view layout counts every shader is compiled with
+#include "rendering/meshes/LodSelect.h"     // S10a: render::kMaxShadowLods, likewise
 
 #include <d3dcompiler.h>
 #include <fstream>
@@ -71,6 +73,31 @@ static bool ChoosesBindless(Renderer* r, const Material::GraphicsDesc& gd)
 {
     return render::g_rasterBindless && r && r->GetBindlessHeap() && r->GetBindlessHeap()->DynamicResourcesSupported() &&
            Material::IsBindlessTextureShader(gd.shaderFile);
+}
+
+// Local-light plan S10a: the layout counts the shaders size their arrays and loops by, from the C++ that sizes the
+// buffers (render::kShadowView* in RenderConstants.h, which vsm:: and the cull are built from) instead of literals of
+// their own -- vsm_addressing.hlsli says so with an #error when they are missing. Every compile takes them first, DXC
+// and the D3DCompile fallback alike, so they are part of the shader cache key as well.
+static const Material::DefineList& EngineShaderDefines()
+{
+    static const Material::DefineList defines = {
+        { "TC_SHADOW_CASCADE_VIEWS", std::to_string(render::kShadowViewCascades) },
+        { "TC_SHADOW_SPOTS", std::to_string(render::kShadowViewSpots) },   // S10b: the shadowed spots / points
+        { "TC_SHADOW_POINTS", std::to_string(render::kShadowViewPoints) }, // (atlas modes and VSM alike)
+        { "TC_VSM_PREFIX_SPOTS", std::to_string(render::kShadowViewVsmSpots) }, // the spots before the prefix's faces
+        { "TC_VSM_CLIPMAP_FIRST", std::to_string(render::kShadowViewVsmSpots + 6u * render::kShadowViewVsmPoints) },
+        { "TC_VSM_CLIPMAP_LEVELS", std::to_string(render::kShadowViewClipmapLevels) },
+        { "TC_MAX_SHADOW_LODS", std::to_string(render::kMaxShadowLods) },
+    };
+    return defines;
+}
+
+static Material::DefineList WithEngineDefines(const Material::DefineList& defines)
+{
+    Material::DefineList all = EngineShaderDefines();
+    all.insert(all.end(), defines.begin(), defines.end());
+    return all;
 }
 
 int Material::FindRootParameterIndex(RootParameterInfo::Type type, UINT bindingRegister) const
@@ -986,12 +1013,13 @@ static HRESULT CompileDXC(const std::wstring& file,
     const char* entry,
     const char* stage4cc,   // "vs","ps","cs"
     ID3D12Device* device,
-    const Material::DefineList& defines,
+    const Material::DefineList& materialDefines,
     ComPtr<ID3DBlob>& outBlob,
     std::vector<std::wstring>& outIncludes)
 {
     outBlob.Reset();
     outIncludes.clear();
+    const Material::DefineList defines = WithEngineDefines(materialDefines); // S10a: and the key below takes them
 
     const std::filesystem::path path = NormalizeShaderPath(file);
     const D3D_SHADER_MODEL sm = QueryMaxShaderModel(device);
@@ -1199,7 +1227,7 @@ HRESULT Material::CompileWithIncludes(const std::wstring& file,
 
     std::vector<D3D_SHADER_MACRO> macros;
     std::vector<std::string>      macroStorage;
-    BuildMacros(defines, macros, macroStorage);
+    BuildMacros(WithEngineDefines(defines), macros, macroStorage); // S10a: the engine's layout counts first
 
     HRESULT hr = D3DCompileFromFile(p.c_str(), macros.empty() ? nullptr : macros.data(),
         &inc, entry, target, flags, 0, &outBlob, &errs);

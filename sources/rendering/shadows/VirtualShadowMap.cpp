@@ -182,9 +182,9 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
 
     char buf[192];
     std::snprintf(buf, sizeof(buf),
-        "[VSM] allocated: pool %ux%u D16 (%u pages), page table %u entries (%.2f MB pool).\n",
+        "[VSM] allocated: pool %ux%u D32 (%u pages), page table %u entries (%.2f MB pool).\n",
         vsm::kPoolTexels, vsm::kPoolTexels, vsm::kPoolPageCount, vsm::kPageTableEntries,
-        (static_cast<double>(vsm::kPoolTexels) * vsm::kPoolTexels * 2.0) / (1024.0 * 1024.0));
+        (static_cast<double>(vsm::kPoolTexels) * vsm::kPoolTexels * 4.0) / (1024.0 * 1024.0));
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderShadow, buf);
 }
 
@@ -1399,7 +1399,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // content stand for the wrong world rect with the owner id unchanged — the only honest
     // answer until pages scroll is to re-render that whole view. Bit-exact compare on purpose:
     // a static camera rebuilds bit-identical matrices, so a parked frame caches fully.
-    std::uint32_t viewDirtyMask[2] = { 0u, 0u };
+    // Plan S10a: one bit per VSM view, as many words as there are views (a uint2 capped the layout at 64).
+    std::array<std::uint32_t, 4u * vsm::kViewDirtyVec4> viewDirtyMask{};
     // S5b.2: last frame's matrices, kept for the scatter's prev-pyramid test before the compare
     // below replaces them with this frame's.
     DirectX::XMFLOAT4X4 prevVp[vsm::kMaxVirtualViews];
@@ -1501,6 +1502,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const D3D12_CPU_DESCRIPTOR_HANDLE perGroupSrv = shadowGpu->PerGroupSrv();
     const bool scatterActive = dec.scatterActive;
     const bool scatterLocals = dec.scatterLocals;
+    // Plan S10b: the local views this frame's view list reaches -- the prefix before the clipmap and, past it, up to the
+    // last active one (the scatter's local targets are LocalView(0..this)).
+    const std::uint32_t clipEndView = vsm::kClipmapFirstView + vsm::kNumClipmapLevels;
+    const std::uint32_t scatterLocalViews = (viewCount <= vsm::kClipmapFirstView) ? viewCount
+        : ((viewCount > clipEndView) ? std::min(viewCount, vsm::kMaxVirtualViews) - vsm::kNumClipmapLevels : vsm::kClipmapFirstView);
     if (scatterActive)
     {
         GPU_SCOPE(cl, ProfilerScopes::kVsmPageScatter);
@@ -1565,24 +1571,21 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 // visible-list entry so ONE draw can serve all pages. MUST match the setup CB below —
                 // both write the same list and the VS decodes it with one rule.
                 c.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u;
-                c.numLocalViews = scatterLocals ? vsm::kNumLocalVirtualViews : 0u;
+                c.numLocalViews = scatterLocals ? scatterLocalViews : 0u;
                 c.perInstanceLod = vsm::g_perInstanceCasterLod ? 1u : 0u;
                 // Every view, straight through. An inactive local slot stays the ZERO matrix this
                 // value-initialised struct starts with, which the shader's perspective path rejects
                 // on its own (maxW <= 0) — and such a view owns no resident pages either.
                 const std::uint32_t nv = (viewCount < vsm::kMaxVirtualViews) ? viewCount : vsm::kMaxVirtualViews;
                 for (std::uint32_t v = 0; v < nv; ++v) { c.viewProj[v] = views[v].viewProj; }
-                // Target t maps to cull-view: clipmap level L -> 4 locals-offset... precisely:
-                // VSM view = isLocal ? t - numLevels : 32 + t, cull view = VSM view + 4 (the
-                // same +4 the setup shader applies as rung0View).
-                const std::uint32_t targets = vsm::kNumClipmapLevels +
-                    (scatterLocals ? vsm::kNumLocalVirtualViews : 0u);
+                // Target t maps to cull-view: VSM view = isLocal ? LocalView(t - numLevels) : ClipmapView(t),
+                // cull view = VSM view + kNumCascades (the same offset the setup shader applies as rung0View).
+                const std::uint32_t targets = vsm::kNumClipmapLevels + (scatterLocals ? scatterLocalViews : 0u);
                 for (std::uint32_t t = 0; t < targets && t < vsm::kMaxVirtualViews; ++t)
                 {
                     const bool isLocal = (t >= vsm::kNumClipmapLevels);
-                    const std::uint32_t vsmView = isLocal ? (t - vsm::kNumClipmapLevels)
-                                                          : (vsm::kNumLocalVirtualViews + t);
-                    const std::uint32_t lod = shadowGpu->ViewLodAt(vsmView + 4u);
+                    const std::uint32_t vsmView = isLocal ? vsm::LocalView(t - vsm::kNumClipmapLevels) : vsm::ClipmapView(t);
+                    const std::uint32_t lod = shadowGpu->ViewLodAt(vsmView + vsm::kNumCascades);
                     reinterpret_cast<std::uint32_t*>(&c.targetLod[0])[t] = lod;
                 }
                 // S5b.2: the pyramid's pages were drawn with LAST frame's matrices -- the ones
@@ -1598,9 +1601,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
               dec.hzb ? deferredPairsUav_ : pageScatterDynUav_, dec.hzb ? hzbCountersUav_ : pageScatterDynUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
             // y now spans clipmap levels AND local views: RecordComputeDispatch rounds up to its
-            // 8-thread groups, so 8 + 32 = 40 becomes 5 groups.
+            // 8-thread groups, so 10 + 32 = 42 becomes 6 groups. Plan S10b: only the local views up to the last
+            // active one (scatterLocalViews), not all 128 the layout holds.
             activeCasters,
-            vsm::kNumClipmapLevels + (scatterLocals ? vsm::kNumLocalVirtualViews : 0u),
+            vsm::kNumClipmapLevels + (scatterLocals ? scatterLocalViews : 0u),
             pageGroupCount_.Get());
         renderer->UAVBarrier(cl, pageVisibleList_.Get());
         renderer->UAVBarrier(cl, pageScatterDyn_.Get());
@@ -1610,7 +1614,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
 
     constexpr std::uint32_t kLods = render::kMaxShadowLods;                    // KMAX_SHADOW_LODS
     // VSM's cull views only -- the prefix of the layout (plan S9); KVIEWLOD_VEC4 in vsm_page_setup_cs.hlsl mirrors it.
-    constexpr std::uint32_t kViewLodVec4 = (render::kVsmShadowViews + 3u) / 4u; // 46 cull-views packed 4/uint4 = 12
+    // Plan S10b: every cull view VSM can address (its views + the cascades) packed 4/uint4 = 36; KVIEWLOD_VEC4 in
+    // vsm_page_setup_cs.hlsl is built from the same counts.
+    constexpr std::uint32_t kViewLodVec4 = (render::kMaxShadowViews + 3u) / 4u;
     struct SetupCB
     {
         std::uint32_t numGroups, argBaseElems, numPages, numCasters;
@@ -1618,8 +1624,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         std::uint32_t scatterActive, pageIdShift, compactArgs; // 1 = the scatter pass produced clipmap lists
         std::uint32_t scatterLocals; // S5: 1 = LOCAL views were scattered too (was _pad5)
         std::uint32_t windDirtyMaxLevel = 0; // mirrors gWindDirtyMaxLevel (wind page-cache range)
-        std::uint32_t viewDirtyMask[2]{};    // mirrors gViewDirtyMask (view matrix changed bits)
-        std::uint32_t passB{};               // S5b.2: mirrors gPassB (took the pad that kept wind0 on its row)
+        std::uint32_t passB{};               // S5b.2: mirrors gPassB
+        std::uint32_t setupPad[2]{};         // keeps the mask on its own row (HLSL packing)
+        DirectX::XMUINT4 viewDirtyMask[vsm::kViewDirtyVec4]{}; // mirrors gViewDirtyMask (view matrix changed bits, S10a)
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -1652,8 +1659,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
             cb.windDirtyMaxLevel = dec.windDirtyMaxLevel;
-            cb.viewDirtyMask[0] = viewDirtyMask[0];
-            cb.viewDirtyMask[1] = viewDirtyMask[1];
+            std::memcpy(cb.viewDirtyMask, viewDirtyMask.data(), sizeof(cb.viewDirtyMask));
             // World-distance sway falloff (see gWindFade in the setup shader): reaches zero at
             // the outer extent of the last SWAYING level, so the rigid levels beyond pick up
             // exactly where the falloff ends and the clipmap blend band sees one geometry.
@@ -1685,7 +1691,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             for (std::uint32_t i = 0; i < n; ++i) { cb.vp[i] = views[i].viewProj; }
             // Per-view shadow LOD (cull-view layout, packed 4/uint4) + per-(group,lod) mega geometry.
             const std::vector<std::uint32_t>& vl = shadowGpu->ViewLod();
-            for (std::uint32_t v = 0; v < render::kVsmShadowViews && v < vl.size(); ++v)
+            for (std::uint32_t v = 0; v < render::kMaxShadowViews && v < vl.size(); ++v)
             {
                 reinterpret_cast<std::uint32_t*>(cb.viewLod)[v] = vl[v];
             }
@@ -2027,7 +2033,8 @@ void VirtualShadowMap::RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandL
                 // Clipmap targets only (the scatter defers no local pair): target t = level t.
                 for (std::uint32_t t = 0; t < vsm::kNumClipmapLevels; ++t)
                 {
-                    reinterpret_cast<std::uint32_t*>(&c.targetLod[0])[t] = shadowGpu->ViewLodAt(vsm::kNumLocalVirtualViews + t + 4u);
+                    reinterpret_cast<std::uint32_t*>(&c.targetLod[0])[t] =
+                        shadowGpu->ViewLodAt(vsm::ClipmapView(t) + vsm::kNumCascades);
                 }
                 std::memcpy(dst, &c, sizeof(c));
             },
@@ -2174,11 +2181,8 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
             if (o == 0xFFFFFFFFu) { continue; } // VSM_INVALID = free
             ++ownersTotal;
             const std::uint32_t v = o / vsm::kPagesPerView;
-            if (v < vsm::kNumLocalVirtualViews) { ++ownersLocal; }
-            else if (v - vsm::kNumLocalVirtualViews < vsm::kNumClipmapLevels)
-            {
-                ++ownersClip[v - vsm::kNumLocalVirtualViews];
-            }
+            if (vsm::IsClipmapView(v)) { ++ownersClip[v - vsm::kClipmapFirstView]; }
+            else if (v < vsm::kMaxVirtualViews) { ++ownersLocal; }
         }
         diag::WriteArtifactf("vsm_pages.log", diag::ArtifactMode::PerRunTruncate,
             "frame=%llu bias=%d req=%u (L0=%u L1=%u L2=%u L3=%u L4=%u) resident=%u new=%u fail=%u"

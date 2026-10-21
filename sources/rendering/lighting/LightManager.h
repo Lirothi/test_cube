@@ -25,8 +25,9 @@ public:
     //
     // Local-light shadow plan S9: the atlas modes (Legacy / SDSM) take up to 32 spots and 16
     // points -- UE has no count at all, but our views are fixed slots (render::kMaxShadowViews);
-    // the atlas itself is a page budget (PackShadowAtlases). VSM keeps its own 8 + 4: its 32 local
-    // virtual views are a fixed layout (kVsmShadowed*, plan S10).
+    // the atlas itself is a page budget (PackShadowAtlases). Plan S10b: VSM takes the same 32 + 16
+    // (its views are the cull slots minus the cascades). kVsmShadowed* is only the size of the
+    // layout's PREFIX -- the spots and faces before the clipmap slots.
     static constexpr std::uint32_t kMaxShadowedSpotLights = render::kShadowViewSpots;
     static constexpr std::uint32_t kMaxShadowedPointLights = render::kShadowViewPoints;
     static constexpr std::uint32_t kVsmShadowedSpotLights = render::kShadowViewVsmSpots;
@@ -96,8 +97,8 @@ public:
     //
     // Plan S4: the same wanted resolution sizes the light's shadow as UE sizes it -- a spot's rounded down to a power of
     // two up to `maxRes` (the spot atlas page), a point's cube face to the first of maxRes/2, /4, /8, /16, 32
-    // (GetSpotShadowResolution). Plan S9: up to `maxCount` lights (the mode's cap: kMaxShadowedSpotLights in the atlas
-    // modes, kVsmShadowedSpotLights in VSM); PackShadowAtlases then places them.
+    // (GetSpotShadowResolution). Plan S9: up to `maxCount` lights (kMaxShadowedSpotLights -- the atlas modes and, since
+    // plan S10b, VSM); PackShadowAtlases then places them on the atlases.
     void SelectShadowedSpots(const Math::float3& cameraPos, const Frustum& cameraFrustum, float screenScale,
                              std::uint32_t maxRes, std::uint32_t maxCount);
     // S3: the light's shadow fade this frame, 0..1 (1 for an index without one).

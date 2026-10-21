@@ -631,6 +631,10 @@ namespace
             return true;
         }
         if (setting == "shadow.cullValidate") { render::g_shadowCullRevalidate = value != 0.0f; return true; }
+        // Plan S10b: the VSM local lights' receiver push (the Developer window's VSM section has the same three).
+        if (setting == "vsm.localTexelBias") { vsm::g_localTexelBias = value != 0.0f; return true; }
+        if (setting == "vsm.localLateralTexels") { vsm::g_localLateralTexels = std::clamp(value, 0.0f, 8.0f); return true; }
+        if (setting == "vsm.localDepthPushTexels") { vsm::g_localDepthPushTexels = std::clamp(value, 0.0f, 8.0f); return true; }
         if (setting == "shadow.localViewsPerList") // S6b
         {
             render::g_localShadowViewsPerList = static_cast<unsigned>(std::clamp(value, 1.0f, 128.0f));

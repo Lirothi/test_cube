@@ -65,6 +65,7 @@ cbuffer SpotLightFrame : register(b0)
     // shadowNormalBias/shadowDepthBias now only drive the Legacy (atlas) path.
     float  localLateralTexels;
     float  localDepthPushTexels;
+    uint   vsmTexelBias;  // plan S10b: 1 = the push in texels of the level actually sampled, along the geometric normal
     // Contact shadows (docs/csm_improvement_plan.md S12). Same names in every light pass.
     float4x4 viewProj;           // camera world -> clip
     float4x4 projMatrix;         // camera view -> clip; the contact ray's compare tolerance
@@ -165,17 +166,24 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         // the light ray (depth-only, no lateral texel shift) and slope-scaled by 1/N.L so grazing
         // surfaces (where acne lives) get the depth while flat lit ground (where Peter-panning shows)
         // stays put. A small ~1-texel normal offset handles the rest.
-        const uint  lvl        = VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        // Plan S10b (vsmTexelBias): the texel of the level the sampler will ACTUALLY read -- a page that fell back to a
+        // coarser level has bigger texels, and a push sized for the requested level left the whole page in acne (hatched
+        // quads with bright seams) -- along the GEOMETRIC normal (a normal map's ripple tilts N off a grazing light and
+        // leaves a ripple of acne at any push; plan S9 found it on the atlases).
+        uint slot = (uint)light.shadowParams.y;
+        const bool  texelFix   = vsmTexelBias != 0u;
+        const uint  lvl        = texelFix ? VsmSpotSampledLevel(slot, light.viewProj, P, camPosWS, vsmRefDist, VsmPageTable)
+                                          : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        const float3 Nb        = texelFix ? Ng : N;
         const float cosOuter   = max(light.directionCosOuter.w, 1e-3f);
         const float tanOuter   = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
         const float distLight  = length(light.positionRange.xyz - P);
         const float texelWorld = (2.0f * distLight * tanOuter / VSM_VIRTUAL_RES) * exp2((float)lvl);
         const float3 toL       = normalize(light.positionRange.xyz - P);
-        const float  ndl       = saturate(dot(N, toL));
+        const float  ndl       = saturate(dot(Nb, toL));
         const float  slope     = clamp(1.0f / max(ndl, 0.15f), 1.0f, 6.0f);
-        float3 PoffV = P + N * (texelWorld * localLateralTexels)
+        float3 PoffV = P + Nb * (texelWorld * localLateralTexels)
                          + toL * (texelWorld * slope * localDepthPushTexels);
-        uint slot = (uint)light.shadowParams.y;
         return VsmSpotShadow(slot, light.viewProj, PoffV, camPosWS, vsmRefDist, 0.0f,
                              VsmPageTable, VsmPool, gSmpShadow);
     }
@@ -260,8 +268,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 N = normalize(g1.rgb * 2.0 - 1.0);
     float3 P = ReconstructPosWS(uv, z, invProj, invView);
     float3 V = normalize(camPosWS - P);
-    // The texel bias pushes along the geometry's normal, not the normal map's (local_shadow_bias.hlsli); VSM keeps N.
-    const float3 Ng = (useVsm == 0u)
+    // The texel bias pushes along the geometry's normal, not the normal map's (local_shadow_bias.hlsli); VSM too since
+    // plan S10b (vsmTexelBias), the old VSM bias keeps N.
+    const float3 Ng = (useVsm == 0u || vsmTexelBias != 0u)
         ? LocalShadowGeometricNormal(DepthT, gSmpPoint, uv, invScreenSize, z, P, camPosWS, invProj, invView, N) : N;
 
     // F5: foliage shading model (GBAux.b is an ID -> point sample) + subsurface payload (GB2).

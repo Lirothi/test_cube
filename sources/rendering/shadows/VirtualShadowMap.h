@@ -94,8 +94,15 @@ namespace vsm
     // stays on Pass_CSM until Step 24). render::kMaxShadowViews (36) = 4 cascades + this set, so
     // subtract the cascades. Layout: [spots (kMaxShadowedSpotLights) | point faces
     // (kMaxShadowedPointLights*6)] = 8 + 24 = 32.
-    inline constexpr std::uint32_t kNumCascades = 4;                                 // == SceneFrameData::kCascades
-    inline constexpr std::uint32_t kNumLocalVirtualViews = 32;                        // spots (8) + point faces (24)
+    // Local-light plan S10a: ONE source -- the cull layout's counts (RenderConstants.h); the shaders get the same numbers
+    // as defines at compile time (Material.cpp EngineShaderDefines: TC_SHADOW_CASCADE_VIEWS, TC_VSM_PREFIX_SPOTS,
+    // TC_VSM_CLIPMAP_FIRST, TC_VSM_CLIPMAP_LEVELS, TC_SHADOW_SPOTS, TC_SHADOW_POINTS), never as literals of their own.
+    inline constexpr std::uint32_t kNumCascades = render::kShadowViewCascades;      // == SceneFrameData::kCascades
+    // Plan S10b: VSM's views ARE the cull layout minus its cascades -- [8 spots | 24 point faces | clipmap | 24 more
+    // spots | 72 more faces] -- so every VSM view's cull slot is view + kNumCascades (the setup's rung0View) and VSM
+    // shadows the atlas modes' 32 spots / 16 points. The view of a light is SpotView / PointFaceView, never a count.
+    inline constexpr std::uint32_t kClipmapFirstView = render::kShadowViewVsmSpots + 6u * render::kShadowViewVsmPoints; // 32
+    inline constexpr std::uint32_t kMaxLocalVirtualViews = render::kShadowViewSpots + 6u * render::kShadowViewPoints;   // 128
 
     // Step 24d/24e: directional clipmap — N nested camera-centered ortho levels, appended as VSM
     // views AFTER the 32 local ones (each a full view of kPagesPerView pages). Step 24e adds them to
@@ -107,7 +114,7 @@ namespace vsm
     // = ~6.1 km at the default 12 m base, so directional shadows reach 4x farther for +682 page
     // table entries and two more cull/scatter views; the physical pool is untouched (far levels
     // are coarse and resident pages stay demand-driven).
-    inline constexpr std::uint32_t kNumClipmapLevels = 10;
+    inline constexpr std::uint32_t kNumClipmapLevels = render::kShadowViewClipmapLevels; // 10
 
     // The square each clipmap level covers in the FIXED light frame Scene::UpdateClipmap snaps
     // every level in (its `right` / `trueUp` axes are shared by all levels, which is the whole
@@ -126,14 +133,22 @@ namespace vsm
         std::uint32_t count = 0;
         std::array<ClipmapLevelSquare, kNumClipmapLevels> level{};
     };
-    inline constexpr std::uint32_t kMaxVirtualViews = kNumLocalVirtualViews + kNumClipmapLevels; // 42
-    // Local-light shadow plan S9: VSM's views are the PREFIX of the cull layout (render::kVsmShadowViews); the atlas
-    // modes' extra local views follow it and VSM never addresses them.
-    static_assert(kNumCascades + kMaxVirtualViews == render::kVsmShadowViews,
-                  "cull view layout must start [cascades | local | clipmap]");
-    static_assert(kNumLocalVirtualViews == render::kShadowViewVsmSpots + 6u * render::kShadowViewVsmPoints,
-                  "VSM's local views are the cull layout's 8 spots + 24 point faces");
-    inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*40 = 13640
+    inline constexpr std::uint32_t kMaxVirtualViews = kMaxLocalVirtualViews + kNumClipmapLevels; // 138
+    // Plan S10b: the views of a spot slot, a point face (slot * 6 + face), a clipmap level; the i-th local view.
+    constexpr std::uint32_t SpotView(std::uint32_t slot) { return render::ShadowViewSpotSlot(slot) - kNumCascades; }
+    constexpr std::uint32_t PointFaceView(std::uint32_t face) { return render::ShadowViewPointFaceSlot(face) - kNumCascades; }
+    constexpr std::uint32_t ClipmapView(std::uint32_t level) { return kClipmapFirstView + level; }
+    constexpr bool IsClipmapView(std::uint32_t view) { return view >= kClipmapFirstView && view < kClipmapFirstView + kNumClipmapLevels; }
+    constexpr std::uint32_t LocalView(std::uint32_t i) { return i < kClipmapFirstView ? i : i + kNumClipmapLevels; }
+    static_assert(kNumCascades + kMaxVirtualViews == render::kMaxShadowViews,
+                  "VSM's views are the whole cull layout past the cascades");
+    static_assert(ClipmapView(0u) + kNumCascades == render::ShadowViewClipmapSlot(0u) && SpotView(0u) == 0u &&
+                  PointFaceView(0u) == render::kShadowViewVsmSpots && LocalView(kClipmapFirstView) == ClipmapView(kNumClipmapLevels),
+                  "VSM view = cull slot - cascades: [prefix spots | prefix faces | clipmap | more spots | more faces]");
+    inline constexpr std::uint32_t kPageTableEntries = kPagesPerView * kMaxVirtualViews; // 341*138 = 47058 (188 KB)
+    // Plan S10a: the page setup's "view matrix changed" bits, one per view, 128 per uint4 (KVIEWDIRTY_VEC4 in
+    // vsm_page_setup_cs.hlsl, from the same counts).
+    inline constexpr std::uint32_t kViewDirtyVec4 = (kMaxVirtualViews + 127u) / 128u;
 
     // Caster MESH-GROUPS the GPU-driven shadow path can address at once, across the whole level: one
     // per (mesh, submesh), so submesh splits — material slots, and terrain chunking's spatial tiles —
@@ -162,7 +177,7 @@ namespace vsm
     inline constexpr std::uint32_t kPagePhysicalMask = 0x0000FFFFu;
 
     // Step 19: the page-request set is a bitfield (1 bit per virtual page).
-    inline constexpr std::uint32_t kRequestWords = (kPageTableEntries + 31u) / 32u; // 341 uints
+    inline constexpr std::uint32_t kRequestWords = (kPageTableEntries + 31u) / 32u; // 1471 uints
 
     // Step 19b perf: run the request pass at 1/kRequestDownscale per axis. Lower = denser screen
     // sampling = better page coverage (fewer "missed" pages that show as a resident/lit
@@ -369,8 +384,18 @@ namespace vsm
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =
     // along-the-light-ray, slope-scaled, so grazing acne clears without moving flat lit ground.
     // Live-tunable in the Developer window's VSM section (fed to the spot/point CBs each frame).
-    inline float         g_localLateralTexels   = 1.0f;
+    // Plan S10b: lateral 1.5 = the 3x3 PCF's reach (one texel per tap plus the bilinear compare's half) -- plan S9's rule
+    // that the push must cover the filter. Measured with the texel bias on (10 ring spots at night, against the atlas):
+    // pixels darker than the atlas by >= 3 % -- 12.6 % with the old bias, 0.51 % at 1.0, 0.07 % at 1.5, 0.04 at 2.0;
+    // the shadows' feet do not move (pixels lighter than the atlas stay 1.72 -> 1.75 %).
+    inline float         g_localLateralTexels   = 1.5f;
     inline float         g_localDepthPushTexels = 0.5f;
+    // Local-light plan S10b: the texel is that of the mip the sampler actually READS (a page that fell back to a coarser
+    // level has bigger texels -- sized for the requested one, the whole page went to acne: hatched quads with bright
+    // seams), and the push is along the GEOMETRIC normal rebuilt from depth (a normal map's ripple left a ripple of acne
+    // at any push -- plan S9). 0 = the old bias (requested level, shading normal). `--set vsm.localTexelBias:0|1`,
+    // `vsm.localLateralTexels`, `vsm.localDepthPushTexels`.
+    inline bool          g_localTexelBias = true;
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free

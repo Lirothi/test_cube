@@ -57,6 +57,55 @@
 using namespace scene_internal;
 
 // ---- Pass_ShadowCull + the two VSM passes ----
+namespace
+{
+// Local-light plan S10b: VSM's view list, by the layout's slot for each light (vsm::SpotView / PointFaceView /
+// ClipmapView = the cull slot minus the cascades) -- the request and the render pass must agree, so both build it here.
+// Every slot of the prefix (spots, faces, clipmap) is written, valid or not; past it, up to the last shadowed light's
+// view. Returns the count: the request shader, the scatter and the setup walk exactly these.
+std::uint32_t BuildVsmViews(const SceneFrameData& frame, vsm::ViewProjEntry* views)
+{
+    std::uint32_t count = vsm::kClipmapFirstView + vsm::kNumClipmapLevels;
+    for (std::uint32_t v = 0; v < vsm::kMaxVirtualViews; ++v) { views[v] = vsm::ViewProjEntry{}; }
+    const auto put = [&](std::uint32_t slot, const SceneView& v, bool active)
+    {
+        if (slot >= vsm::kMaxVirtualViews) { return; }
+        views[slot].viewProj = (v.view * v.proj).m;
+        const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
+        views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
+        if (active) { count = std::max(count, slot + 1u); }
+    };
+    const size_t spotCount = frame.lightManager->GetShadowedSpotCount();
+    for (size_t i = 0; i < LightManager::kMaxShadowedSpotLights; ++i)
+    {
+        if (i < spotCount || i < LightManager::kVsmShadowedSpotLights)
+        {
+            put(vsm::SpotView(static_cast<std::uint32_t>(i)), (*frame.spotShadowViews)[i], i < spotCount);
+        }
+    }
+    const size_t pointFaces = frame.lightManager->GetShadowedPointCount() * 6;
+    for (size_t i = 0; i < 6u * LightManager::kMaxShadowedPointLights; ++i)
+    {
+        if (i < pointFaces || i < 6u * LightManager::kVsmShadowedPointLights)
+        {
+            put(vsm::PointFaceView(static_cast<std::uint32_t>(i)), (*frame.pointShadowViews)[i], i < pointFaces);
+        }
+    }
+    // Step 24d/24e: the directional clipmap levels -- the request shader picks the finest level containing each
+    // receiver; the setup renders their pages through the cull's clipmap slots (rung0View = view + kNumCascades).
+    if (frame.clipmapViews)
+    {
+        std::uint32_t level = 0;
+        for (const SceneView& v : *frame.clipmapViews)
+        {
+            if (level < vsm::kNumClipmapLevels) { put(vsm::ClipmapView(level), v, true); }
+            ++level;
+        }
+    }
+    return count;
+}
+} // namespace
+
 void SceneRenderer::Pass_ShadowCull(Renderer* renderer, RenderGraphPassContext ctx,
     const ShadowGpuData::CullDecisions& dec)
 {
@@ -97,28 +146,9 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
                                      static_cast<float>(vsm::g_requestDownscale),
                                      vsm::ClipmapBlendWidth());
 
-    std::uint32_t slot = 0;
-    auto addView = [&](const SceneView& v, bool active)
-    {
-        if (slot >= vsm::kMaxVirtualViews) { return; }
-        cb.views[slot].viewProj = (v.view * v.proj).m;
-        const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
-        cb.views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
-        ++slot;
-    };
-    // Slot layout must match vsm::kMaxVirtualViews / the page-table view indexing: spots first,
-    // then point-light cube faces. Cascades are intentionally excluded (Step 19b local scope).
-    // Plan S9: the view arrays hold the atlas modes' 32 spots / 96 faces; VSM's local views are only the first 8 / 24
-    // (VSM selection caps there, LightManager::kVsmShadowed*).
-    const size_t spotCount = frame_->lightManager->GetShadowedSpotCount();
-    for (size_t i = 0; i < LightManager::kVsmShadowedSpotLights; ++i) { addView((*frame_->spotShadowViews)[i], i < spotCount); }
-    const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
-    for (size_t i = 0; i < 6u * LightManager::kVsmShadowedPointLights; ++i) { addView((*frame_->pointShadowViews)[i], i < pointFaces); }
-    // Step 24d: directional clipmap levels fill slots [32, 40) — the request shader picks the finest
-    // level containing each receiver. Add-dormant: pages get requested + allocated but not yet
-    // rendered/sampled (the setup shader skips clipmap views; directional still uses CSM).
-    if (frame_->clipmapViews) { for (const SceneView& v : *frame_->clipmapViews) { addView(v, true); } }
-    cb.numViews = slot;
+    // The page-table view indexing (plan S10b: vsm::SpotView / PointFaceView / ClipmapView, the cull layout minus its
+    // cascades). Cascades are intentionally excluded (Step 19b local scope).
+    cb.numViews = BuildVsmViews(*frame_, cb.views);
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
@@ -144,24 +174,11 @@ void SceneRenderer::Pass_VsmPageRender(Renderer* renderer, RenderGraphPassContex
     // pass-flow S3: no gates here — the AddPass2 builder decided this pass runs, made the
     // declarations, and captured `dec`; a second decision here could only disagree.
 
+    // Step 24e: clipmap views sit at vsm::ClipmapView(level) so the setup builds their per-page projection from
+    // gViewProj[view]; every view renders its casters via its Rung-0 cull slot (rung0View = view + kNumCascades).
+    // Plan S10b: the same list the request pass built (BuildVsmViews).
     std::array<vsm::ViewProjEntry, vsm::kMaxVirtualViews> views{};
-    std::uint32_t slot = 0;
-    auto addView = [&](const SceneView& v, bool active)
-    {
-        if (slot >= vsm::kMaxVirtualViews) { return; }
-        views[slot].viewProj = (v.view * v.proj).m;
-        const float valid = (active && v.frustum.IsValid()) ? 1.0f : 0.0f;
-        views[slot].params = DirectX::XMFLOAT4(valid, v.zNear, v.zFar, 0.0f);
-        ++slot;
-    };
-    const size_t spotCount = frame_->lightManager->GetShadowedSpotCount(); // plan S9: VSM's first 8 / 24 only
-    for (size_t i = 0; i < LightManager::kVsmShadowedSpotLights; ++i) { addView((*frame_->spotShadowViews)[i], i < spotCount); }
-    const size_t pointFaces = frame_->lightManager->GetShadowedPointCount() * 6;
-    for (size_t i = 0; i < 6u * LightManager::kVsmShadowedPointLights; ++i) { addView((*frame_->pointShadowViews)[i], i < pointFaces); }
-    // Step 24e: clipmap views fill slots [32, 40) so the setup builds their per-page projection from
-    // gViewProj[view]; they render directional casters via the Rung-0 clipmap cull slots (rung0View
-    // = view + kNumCascades). Matches the request pass + cull frustum layout.
-    if (frame_->clipmapViews) { for (const SceneView& v : *frame_->clipmapViews) { addView(v, true); } }
+    const std::uint32_t slot = BuildVsmViews(*frame_, views.data());
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);

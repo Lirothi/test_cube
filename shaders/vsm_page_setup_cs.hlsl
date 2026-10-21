@@ -24,8 +24,12 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
-#define KMAX_SHADOW_LODS 4      // matches render::kMaxShadowLods
-#define KVIEWLOD_VEC4    12     // (render::kVsmShadowViews=46 cull-views + 3) / 4, packed 4/uint4 (was a stale 11 until plan S9)
+// Plan S10a: from C++ (Material.cpp EngineShaderDefines) -- render::kMaxShadowLods, and VSM's cull views
+// (render::kVsmShadowViews = cascades + VSM views) packed 4 per uint4 (a literal here was a stale 11 until plan S9).
+#define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS
+#define KVIEWLOD_VEC4    ((TC_SHADOW_CASCADE_VIEWS + TC_SHADOW_SPOTS + 6 * TC_SHADOW_POINTS + TC_VSM_CLIPMAP_LEVELS + 3) / 4)
+// Plan S10a: the "view matrix changed" bits, one per VSM view, 128 per uint4 (was a uint2: a hard cap of 64 views).
+#define KVIEWDIRTY_VEC4  ((TC_SHADOW_SPOTS + 6 * TC_SHADOW_POINTS + TC_VSM_CLIPMAP_LEVELS + 127) / 128)
 #define VSM_SETUP_LANES  8      // == numthreads y; threads per page that share the per-group loop
 
 cbuffer SetupCB : register(b0)
@@ -62,15 +66,17 @@ cbuffer SetupCB : register(b0)
     // Local views always animate (their whole frustum is near-field). 0 = wind is not blowing
     // this frame (nothing wind-dirties); >= clipmap level count = the old animate-everywhere.
     uint gWindDirtyMaxLevel;
-    // Per-VSM-view "matrix changed this frame" bits (x = views 0..31, y = 32..39). A cached
+    uint gPassB; // S5b.2: 1 = pass-B args from PageGroupCountB (see the header comment)
+    uint2 gSetupPad;
+    // Per-VSM-view "matrix changed this frame" bits (view v = bit v & 31 of word v >> 5, four
+    // words per uint4; plan S10a -- was a uint2, a hard cap of 64 views). A cached
     // page's id is (view, level, px, py) — an NDC rect of ITS VIEW, with no scroll offset —
     // so ANY view translation/snap/rotation makes every cached page of that view hold depth
     // for the WRONG world rect while its owner id never changes (isNew cannot see it; Unreal
     // solves the clipmap case with a per-level PageOffset). Until pages scroll, the honest
     // cache contract is: a view that moved re-renders wholesale. Static camera + static
     // lights = everything caches; a dolly re-renders exactly what it invalidates.
-    uint2 gViewDirtyMask;
-    uint gPassB; // S5b.2: 1 = pass-B args from PageGroupCountB (see the header comment)
+    uint4 gViewDirtyMask[KVIEWDIRTY_VEC4];
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -195,7 +201,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // brute-force path is inherently serial (count -> prefix sum -> scatter cursor, all in one
     // thread's registers), so only lane 0 walks it.
     const bool scattered = (gScatterActive != 0u) &&
-                           (view >= VSM_NUM_LOCAL_VIEWS || gScatterLocals != 0u);
+                           (VsmIsClipmapView(view) || gScatterLocals != 0u);
     // S5b.2, pass B: only scattered pages can carry pass-B entries; a brute-force page's B args
     // are zero (or absent, compacted), and nothing below is pass B's to write.
     if (gPassB != 0u && !scattered)
@@ -220,8 +226,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     float4x4 pm = (float4x4)0;
     // Clipmap level of this page's VIEW (each clipmap level is its own view at mip 0);
     // locals report 0 and always animate.
-    const bool isLocalView = (view < VSM_NUM_LOCAL_VIEWS);
-    const uint clipLevel = isLocalView ? 0u : (view - VSM_NUM_LOCAL_VIEWS);
+    const bool isLocalView = !VsmIsClipmapView(view); // plan S10b: locals sit on both sides of the clipmap
+    const uint clipLevel = isLocalView ? 0u : (view - VSM_CLIPMAP_FIRST);
     const bool windHere = (gWindDirtyMaxLevel != 0u) &&
                           (isLocalView || clipLevel < gWindDirtyMaxLevel);
     if (lane == 0u && gPassB == 0u)
@@ -262,7 +268,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     planes[4] = pt[2];         // near (z >= 0)
     planes[5] = pt[3] - pt[2]; // far
 
-    const uint rung0View = view + 4u;
+    const uint rung0View = view + TC_SHADOW_CASCADE_VIEWS; // the cull layout's cascades come first
     // Groups this lane owns in the per-group loops below: strided across lanes on the scattered
     // path, the whole range on the serial one (where only lane 0 got this far).
     const uint gStart = scattered ? lane : 0u;
@@ -336,8 +342,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // flag itself has one writer.
     // Wind no longer rides gForceAll: it dirties only the pages that actually ANIMATE it
     // (near clipmap levels + locals). Everything past the range renders rigid and caches.
-    const bool viewDirty = (view < 32u) ? (((gViewDirtyMask.x >> view) & 1u) != 0u)
-                                        : (((gViewDirtyMask.y >> (view - 32u)) & 1u) != 0u);
+    const bool viewDirty = ((gViewDirtyMask[view >> 7u][(view >> 5u) & 3u] >> (view & 31u)) & 1u) != 0u;
     // S5b.2, pass B: the verdict pass A wrote, read back through the same UAV (never rewritten).
     const bool dirty = (gPassB != 0u) ? (PerPageDirty[p] != 0u)
                                       : (isNew || dynamicOverlap || (gForceAll != 0u) || windHere || viewDirty);

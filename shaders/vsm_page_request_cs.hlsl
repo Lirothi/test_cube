@@ -8,15 +8,16 @@
 // consumes it yet (Step 20 allocates physical pages from it).
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
+#include "vsm_addressing.hlsli" // plan S10b: the view layout (VsmLocalView, VSM_CLIPMAP_FIRST / END)
 
 #define VSM_PAGE_REQUEST_RS \
     "CBV(b0), " \
     "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
-// Must match the vsm:: constants in VirtualShadowMap.h.
-static const uint kMaxViews     = 42u;   // kMaxVirtualViews (32 local + 10 clipmap levels)
-static const uint kNumLocalViews = 32u;  // views [0,32) = local (mip chain); [32,40) = directional clipmap
+// Must match the vsm:: constants in VirtualShadowMap.h; the view counts ARE them (plan S10a, Material.cpp
+// EngineShaderDefines). Plan S10b: local views are [0, VSM_CLIPMAP_FIRST) and [VSM_CLIPMAP_END, numViews).
+static const uint kMaxViews     = VSM_MAX_VIEWS;  // kMaxVirtualViews
 static const uint kL0Axis       = 16u;   // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint kMaxLevel     = 4u;    // kMaxMipLevel
 static const uint kPagesPerView = 341u;  // kPagesPerView (16²+8²+4²+2²+1)
@@ -72,10 +73,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     const uint count = min(numViews, kMaxViews);
 
-    // --- Local views (spots + point faces): per-view projection + a distance-selected mip chain. ---
-    const uint localCount = min(count, kNumLocalViews);
-    for (uint v = 0; v < localCount; ++v)
+    // --- Local views (spots + point faces): per-view projection + a distance-selected mip chain. Plan S10b: the i-th
+    // local view is VsmLocalView(i) -- the prefix before the clipmap, then the rest after it, up to numViews. ---
+    const uint localCount = (count <= VSM_CLIPMAP_FIRST) ? count
+                          : ((count > VSM_CLIPMAP_END) ? count - VSM_NUM_CLIPMAP_LEVELS : VSM_CLIPMAP_FIRST);
+    for (uint li = 0; li < localCount; ++li)
     {
+        const uint v = VsmLocalView(li);
         if (views[v].params.x < 0.5f) { continue; } // inactive view slot
 
         float4 clip = mul(float4(P, 1.0f), views[v].viewProj);
@@ -100,12 +104,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         }
     }
 
-    // --- Directional clipmap (Step 24d): views [kNumLocalViews, count) are camera-centered ortho
+    // --- Directional clipmap (Step 24d): views [VSM_CLIPMAP_FIRST, VSM_CLIPMAP_END) are camera-centered ortho
     // levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain). Mark
     // the finest containing level and, inside its transition band, the next coarser level too. A
     // zero blend width preserves the old exact-one-page request path. ---
     const float clipBlendWidth = clamp(lodParams.w, 0.0f, 0.5f);
-    for (uint cv = kNumLocalViews; cv < count; ++cv)
+    const uint clipEnd = min(count, VSM_CLIPMAP_END);
+    for (uint cv = VSM_CLIPMAP_FIRST; cv < clipEnd; ++cv)
     {
         if (views[cv].params.x < 0.5f) { continue; }
         float4 cclip = mul(float4(P, 1.0f), views[cv].viewProj);
@@ -124,7 +129,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // The sampler blends by the fine level's square-edge coordinate. Request the parent page
         // only in that same band, so width 0 has zero residency/raster cost and a narrow band adds
         // only the coarse pages that can actually receive a second PCF sample.
-        if (clipBlendWidth > 0.0f && cv + 1u < count && views[cv + 1u].params.x >= 0.5f)
+        if (clipBlendWidth > 0.0f && cv + 1u < clipEnd && views[cv + 1u].params.x >= 0.5f)
         {
             const float edge = max(abs(cndc.x), abs(cndc.y));
             if (edge > 1.0f - clipBlendWidth)

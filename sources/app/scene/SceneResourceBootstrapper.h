@@ -110,6 +110,7 @@ struct ScenePointLightCBHandles
     Material::CBFieldHandle vsmRefDist;
     Material::CBFieldHandle localLateralTexels;
     Material::CBFieldHandle localDepthPushTexels;
+    Material::CBFieldHandle vsmTexelBias;                  // plan S10b
     Material::CBFieldHandle viewProj, projMatrix;          // contact shadows (S12)
     Material::CBFieldHandle contactShadowLength, contactShadowIntensity, contactShadowSteps,
                             contactShadowLengthInWS, contactShadowNormalOffset,
@@ -134,6 +135,7 @@ struct SceneSpotLightCBHandles
     Material::CBFieldHandle vsmRefDist;
     Material::CBFieldHandle localLateralTexels;
     Material::CBFieldHandle localDepthPushTexels;
+    Material::CBFieldHandle vsmTexelBias;                  // plan S10b
     Material::CBFieldHandle viewProj, projMatrix;          // contact shadows (S12)
     Material::CBFieldHandle contactShadowLength, contactShadowIntensity, contactShadowSteps,
                             contactShadowLengthInWS, contactShadowNormalOffset,
@@ -757,6 +759,7 @@ struct PointLightPassConstants
     float vsmRefDist = 10.0f;
     float localLateralTexels = 1.0f;   // VSM local-light bias (texels) — mirrors HLSL PointLightFrame
     float localDepthPushTexels = 0.5f;
+    uint32_t vsmTexelBias = 1;          // plan S10b: vsm::g_localTexelBias
     // Contact shadows (S12). Same member names as LightingPassConstants -- one shader function
     // and one CPU writer (render::contact::FillConstants) serve every light pass.
     mat4 viewProj{};
@@ -792,6 +795,7 @@ struct SpotLightPassConstants
     float vsmRefDist = 10.0f;
     float localLateralTexels = 1.0f;   // VSM local-light bias (texels) — mirrors HLSL SpotLightFrame
     float localDepthPushTexels = 0.5f;
+    uint32_t vsmTexelBias = 1;          // plan S10b: vsm::g_localTexelBias
     // Contact shadows (S12). Same member names as LightingPassConstants -- one shader function
     // and one CPU writer (render::contact::FillConstants) serve every light pass.
     mat4 viewProj{};

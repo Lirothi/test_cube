@@ -16,8 +16,8 @@ inline bool g_lodEnabled = true;
 inline int g_forcedLod = -1;
 
 // Maximum distinct shadow LODs the GPU-driven caster path plumbs per mesh (mega slices +
-// per-(group,lod) table depth). Meshes with fewer LODs clamp to their coarsest. Keep in sync with
-// KMAX_SHADOW_LODS in vsm_page_setup_cs.hlsl.
+// per-(group,lod) table depth). Meshes with fewer LODs clamp to their coarsest. The shaders get it as
+// TC_MAX_SHADOW_LODS (Material.cpp EngineShaderDefines, plan S10a).
 inline constexpr unsigned int kMaxShadowLods = 4u;
 
 // Shadow LOD bias: an ADDITIVE offset on top of the PER-VIEW base LOD the GPU-driven shadow casters

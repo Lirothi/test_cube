@@ -62,7 +62,7 @@ cbuffer PointLightFrame : register(b0)
     // model as the spot path. Lateral normal offset + slope-scaled along-ray depth push.
     float  localLateralTexels;
     float  localDepthPushTexels;
-    float  _vsmPad0;
+    uint   vsmTexelBias;  // plan S10b: 1 = the push in texels of the level actually sampled, along the geometric normal
     float  _vsmPad1;
     float  _vsmPad2;
     // Contact shadows (docs/csm_improvement_plan.md S12). Same names in every light pass.
@@ -146,13 +146,18 @@ float PointShadowFactorMap(PointLightData Ld, float3 P, float3 N, float3 Ng)
         // frustum, so tan(halfFov)=1 and texelWorld = 2*distToLight/VSM_VIRTUAL_RES at the
         // camera-selected level. Push ALONG the light ray (depth-only, crush-immune) slope-scaled
         // by 1/N.L, plus a ~1-texel normal offset.
-        const uint  lvl        = VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        // Plan S10b (vsmTexelBias): the texel of the level actually sampled, along the geometric normal (the spot path).
+        const bool  texelFix   = vsmTexelBias != 0u;
+        const uint  lvl        = texelFix ? VsmPointSampledLevel((uint)Ld.shadowParams.x, P, Ld.position, Ld.shadowParams.z,
+                                                                 Ld.shadowParams.w, camPosWS, vsmRefDist, VsmPageTable)
+                                          : VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+        const float3 Nb        = texelFix ? Ng : N;
         const float distLight  = length(Ld.position - P);
         const float texelWorld = (2.0f * distLight / VSM_VIRTUAL_RES) * exp2((float)lvl);
         const float3 toL       = normalize(Ld.position - P);
-        const float  ndl       = saturate(dot(N, toL));
+        const float  ndl       = saturate(dot(Nb, toL));
         const float  slope     = clamp(1.0f / max(ndl, 0.15f), 1.0f, 6.0f);
-        float3 PoffV = P + N * (texelWorld * localLateralTexels)
+        float3 PoffV = P + Nb * (texelWorld * localLateralTexels)
                          + toL * (texelWorld * slope * localDepthPushTexels);
         return VsmPointShadow((uint)Ld.shadowParams.x, PoffV, Ld.position, Ld.shadowParams.z,
                               Ld.shadowParams.w, camPosWS, vsmRefDist, 0.0f,
@@ -242,8 +247,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     float3 N = normalize(g1.rgb * 2.0 - 1.0);
     float3 P = ReconstructPosWS(uv, z, invProj, invView);
     float3 V = normalize(camPosWS - P);
-    // The texel bias pushes along the geometry's normal, not the normal map's (local_shadow_bias.hlsli); VSM keeps N.
-    const float3 Ng = (useVsm == 0u)
+    // The texel bias pushes along the geometry's normal, not the normal map's (local_shadow_bias.hlsli); VSM too since
+    // plan S10b (vsmTexelBias), the old VSM bias keeps N.
+    const float3 Ng = (useVsm == 0u || vsmTexelBias != 0u)
         ? LocalShadowGeometricNormal(DepthT, gSmpPoint, uv, invScreenSize, z, P, camPosWS, invProj, invView, N) : N;
 
     // F5: foliage shading model (GBAux.b is an ID -> point sample) + subsurface payload (GB2).

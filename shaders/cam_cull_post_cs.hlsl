@@ -53,7 +53,7 @@ StructuredBuffer<uint>         CasterLod   : register(t3);
 StructuredBuffer<float>        CasterFade  : register(t4);
 Texture2D<float>               CamHzb      : register(t5);
 
-static const uint kMaxShadowLods = 4u;
+static const uint kMaxShadowLods = TC_MAX_SHADOW_LODS; // render::kMaxShadowLods (plan S10a)
 static const uint kCasterLodMask = 0x0Fu;
 static const uint kArgStride = 20u;
 static const uint kCamDeferredCount = 8u;   // DeferredCount[] slot: the list's length

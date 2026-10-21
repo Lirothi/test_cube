@@ -908,6 +908,7 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         constants.vsmRefDist = vsm::g_refDist;
         constants.localLateralTexels = vsm::g_localLateralTexels;
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
+        constants.vsmTexelBias = vsm::g_localTexelBias ? 1u : 0u; // plan S10b
         render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
                                        camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
         constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();
@@ -978,6 +979,7 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.vsmRefDist = vsm::g_refDist;
         constants.localLateralTexels = vsm::g_localLateralTexels;
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
+        constants.vsmTexelBias = vsm::g_localTexelBias ? 1u : 0u; // plan S10b
         render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
                                        camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
         constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();

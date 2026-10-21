@@ -119,7 +119,7 @@ StructuredBuffer<uint>         CasterCam   : register(t10);
 StructuredBuffer<float>        CasterFade  : register(t11);
 Texture2D<float>               CamHzbPrev  : register(t12); // S5: last frame's camera pyramid (placeholder when off)
 
-static const uint kMaxShadowLods = 4u;   // must match render::kMaxShadowLods
+static const uint kMaxShadowLods = TC_MAX_SHADOW_LODS; // render::kMaxShadowLods (plan S10a: Material.cpp EngineShaderDefines)
 static const uint kCasterLodMask = 0x0Fu;
 static const uint kNoCamView = 0xFFFFFFFFu;
 
@@ -134,7 +134,7 @@ RWByteAddressBuffer      StaticArgs    : register(u7); // S7: the local views' s
 RWStructuredBuffer<uint> StaticVisibleList : register(u8); // S7: their caster ids
 static const uint kCamDeferredCount = 8u;   // DeferredCount[] slots: [8] list length, [9] weighted (fade x2)
 static const uint kCamDeferredWeighted = 9u;
-static const uint kCascadeViews = 4u;          // render::kShadowViewCascades: the views below are cascades
+static const uint kCascadeViews = TC_SHADOW_CASCADE_VIEWS; // render::kShadowViewCascades: the views below are cascades
 static const uint kLocalDynamicBit = 0x100u;   // render::kCasterLocalDynamicBit (the uploaded CasterLod only)
 
 static const uint kArgStride = 20u;

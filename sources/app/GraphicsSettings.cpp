@@ -150,7 +150,7 @@ namespace
         float vsmClipmapDepthBiasDecay = 1.0f;
         float vsmClipmapDepthBiasFloorTexels = 0.0f;
         float vsmClipmapNormalBias = 1.0f;
-        float vsmLocalLateralTexels = 1.0f;
+        float vsmLocalLateralTexels = 1.5f; // plan S10b: the 3x3 PCF's reach (vsm::g_localLateralTexels)
         float vsmLocalDepthPushTexels = 0.5f;
         bool vsmResidentOnly = true;
         bool vsmSingleDraw = true;
@@ -377,7 +377,7 @@ namespace
         s.vsmClipmapDepthBiasDecay = std::clamp(finite(s.vsmClipmapDepthBiasDecay, 1.0f), 0.25f, 1.0f);
         s.vsmClipmapDepthBiasFloorTexels = std::clamp(finite(s.vsmClipmapDepthBiasFloorTexels, 0.0f), 0.0f, 1.5f);
         s.vsmClipmapNormalBias = std::clamp(finite(s.vsmClipmapNormalBias, 1.0f), 0.0f, 4.0f);
-        s.vsmLocalLateralTexels = std::clamp(finite(s.vsmLocalLateralTexels, 1.0f), 0.0f, 4.0f);
+        s.vsmLocalLateralTexels = std::clamp(finite(s.vsmLocalLateralTexels, 1.5f), 0.0f, 4.0f);
         s.vsmLocalDepthPushTexels = std::clamp(finite(s.vsmLocalDepthPushTexels, 0.5f), 0.0f, 4.0f);
         s.vsmWindAnimateMaxLevel = std::min(s.vsmWindAnimateMaxLevel, vsm::kNumClipmapLevels);
 

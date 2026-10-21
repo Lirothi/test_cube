@@ -18,7 +18,7 @@
     "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
-#define KMAX_SHADOW_LODS 4 // matches render::kMaxShadowLods
+#define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS // render::kMaxShadowLods (plan S10a: Material.cpp EngineShaderDefines)
 
 cbuffer PostCB : register(b0)
 {
@@ -94,7 +94,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     uint view, level, px, py;
     VsmDecodePage(pageId, view, level, px, py);
-    if (view < VSM_NUM_LOCAL_VIEWS) { return; }    // clipmap pages only (the scatter defers no local pair)
+    if (!VsmIsClipmapView(view)) { return; }       // clipmap pages only (the scatter defers no local pair)
 
     const CasterBounds b = Bounds[c];
     const float3 ctr = b.center.xyz;
@@ -115,7 +115,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     // Visible after all: every slot of the object into pass B, the scatter's bucket arithmetic.
     const uint slots = CasterMeta[c] >> 1;
-    const uint target = view - VSM_NUM_LOCAL_VIEWS;   // clipmap level == scatter target
+    const uint target = view - VSM_CLIPMAP_FIRST;     // clipmap level == scatter target
     const uint targetLod = gTargetLod[target >> 2u][target & 3u];
     const uint numVg = gNumGroups * KMAX_SHADOW_LODS;
     const uint pageBase = p * gNumCasters * KMAX_SHADOW_LODS;

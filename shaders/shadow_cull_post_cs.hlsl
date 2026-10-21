@@ -52,7 +52,7 @@ StructuredBuffer<uint4>        PerGroup    : register(t2);
 StructuredBuffer<uint>         CasterLod   : register(t3);
 Texture2D<float>               CsmHzb[4]   : register(t4);
 
-static const uint kMaxShadowLods = 4u;
+static const uint kMaxShadowLods = TC_MAX_SHADOW_LODS; // render::kMaxShadowLods (plan S10a)
 static const uint kCasterLodMask = 0x0Fu;
 static const uint kArgStride = 20u;
 

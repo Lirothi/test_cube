@@ -88,7 +88,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint inLevel = i - level * pagesPerLevel;
     const uint2 page = uint2(inLevel % gPagesPerAxis, inLevel / gPagesPerAxis);
 
-    const uint view = VSM_NUM_LOCAL_VIEWS + level;
+    const uint view = VSM_CLIPMAP_FIRST + level;
     const uint slot = VsmPageId(view, 0u, page.x, page.y);
 
     // Mapped at this level: leave it completely alone. This is also the set every other thread
@@ -108,7 +108,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint2 coarsePage;
         if (!VsmPageFromLS(coarse, ls, coarsePage)) { continue; }
 
-        const uint coarseSlot = VsmPageId(VSM_NUM_LOCAL_VIEWS + coarse, 0u, coarsePage.x, coarsePage.y);
+        const uint coarseSlot = VsmPageId(VSM_CLIPMAP_FIRST + coarse, 0u, coarsePage.x, coarsePage.y);
         const uint coarseEntry = PageTable[coarseSlot];
         // Only a page MAPPED at that level will do. Chaining through another fallback entry would
         // read a pointer that may be being rewritten this very dispatch, and would also lose the

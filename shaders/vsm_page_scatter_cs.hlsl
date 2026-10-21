@@ -40,7 +40,7 @@
     "DescriptorTable(SRV(t0, numDescriptors=8, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
-#define KMAX_SHADOW_LODS 4 // matches render::kMaxShadowLods; the per-group LOD bucket count
+#define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS // render::kMaxShadowLods (plan S10a); the per-group LOD bucket count
 
 cbuffer ScatterCB : register(b0)
 {
@@ -53,7 +53,7 @@ cbuffer ScatterCB : register(b0)
     uint gNumLocalViews; // local (spot/point) views scattered after the clipmap levels; 0 = none
     uint gPerInstanceLod; // 1 = bucket FLOOR casters by their receiver LOD; 0 = old per-view (A/B)
     uint2 _pad0;
-    // Every VSM view, same indexing as the setup CB (0..31 local, 32..39 clipmap). Was only the 8
+    // Every VSM view, same indexing as the setup CB (vsm::SpotView / PointFaceView / ClipmapView). Was only the 8
     // clipmap matrices before S5. An inactive slot is a ZERO matrix, which the perspective path
     // rejects on its own (maxW <= 0) — and its pages are not resident either.
     float4x4 gViewProj[VSM_MAX_VIEWS];
@@ -217,8 +217,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const float3 ext = b.halfExtents.xyz;
 
     const bool isLocal = (target >= gNumLevels);
-    // Clipmap views sit after the local ones in the VSM view list; a clipmap LEVEL is its own view.
-    const uint view = isLocal ? (target - gNumLevels) : (VSM_NUM_LOCAL_VIEWS + target);
+    // A clipmap LEVEL is its own view; local target i is the i-th local view (plan S10b: locals sit on both sides of
+    // the clipmap in the VSM view list).
+    const uint view = isLocal ? VsmLocalView(target - gNumLevels) : (VSM_CLIPMAP_FIRST + target);
     // A clipmap view is one page grid (the level IS the LOD). A local view is a mip pyramid, and a
     // receiver pixel marks whichever level matches its density, so every level can be resident.
     const uint mipCount = isLocal ? (VSM_MAX_LEVEL + 1u) : 1u;
