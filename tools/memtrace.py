@@ -1,26 +1,84 @@
 #!/usr/bin/env python3
-"""Memory profiling plan M4: reads a memory trace (traces/memtrace_*.mtrace, written by --memtrace).
+"""Memory profiling plan M4 + M5: reads a memory trace (traces/memtrace_*.mtrace, written by --memtrace).
 
-    python tools/memtrace.py summary [file]   what is in it: run, events, frames, live by tag at the end,
-                                              the biggest live allocations with their stacks
-    python tools/memtrace.py verify [file]    replay to the end == what the process itself counted alive
-                                              when the trace stopped (the End record); exit 1 if not
+    python tools/memtrace.py summary [file]             the run, events, frames, live by tag at the end,
+                                                        the biggest live allocations with their stacks
+    python tools/memtrace.py verify [file]              replay to the end == what the process counted alive
+                                                        when the trace stopped (the End record); exit 1 if not
+    python tools/memtrace.py query RULE A [B [C [D]]]   UE Memory Insights' allocation query (see RULES)
+    python tools/memtrace.py leaks A B C                = query AaBCf A B C --by stack
+    python tools/memtrace.py growth A B                 = query AaBf A B --by stack
+    python tools/memtrace.py churn A B                  = query AafB A B --by stack --sort count
+    python tools/memtrace.py decline A B                = query aAfB A B --by stack
+    python tools/memtrace.py live A                     = query aAf A --by tag
+    python tools/memtrace.py tags A B                   per tag: size at A, at B, B - A, min/max/avg over the frames
+    python tools/memtrace.py timeline [--out x.json]    per-tag MB per frame as Chrome-trace counters (Perfetto)
+    python tools/memtrace.py selftest                   the rules and the replay on a synthetic trace
 
-Without a file: the newest traces/memtrace_*.mtrace. The format is in sources/core/memory/MemTrace.cpp.
-M5 adds UE's query rules (aAf, AaBf, AaBCf, ...) on top of the same replay.
+Time markers A..D: a frame (`600`, `f600` -- the end of that frame), seconds since the trace started
+(`12.5s`), `start` or `end`. The rules are UE's (TraceServices AllocationsProvider.h:25-52,
+AllocationsQuery.cpp:196-397), every bound inclusive, `f` = infinity for what is never freed:
+    aAf live at A          AaBf growth            aAfB decline         AafB short-lived (churn)
+    aABf long-living       AaBCf leaks            AaBfC limited life   aABfC decline of long-living
+    AaBCfD specific life   AaB alloc events       AfB free events      afA freed before  Aaf allocated after
+    aAfaBf decline + growth
+Options: --by tag|stack|tree|inverted|name|size|heap  --sort bytes|count  --top N  --heap cpu|gpu|all
+         --depth N (tree/inverted)  --file PATH (or the file as the last argument)
+Groupings follow Insights (SMemAllocTableTreeView.cpp:201-222): by size (power-of-two buckets, as
+MemAllocGroupingBySize), by tag, by callstack top-down (`tree`) and inverted, by function, by heap; `name`
+is the GPU resource. Without a file: the newest traces/memtrace_*.mtrace. The format is in
+sources/core/memory/MemTrace.cpp.
 """
 
 import glob
+import json
 import os
 import struct
 import sys
 import time
+from array import array
+from operator import itemgetter
 
 EV_RESET, EV_ALLOC, EV_FREE, EV_MARKER, EV_STACK = 1, 2, 3, 4, 5
 HEAP_CPU = 0
+HEAP_NAMES = {0: "cpu", 1: "gpu.local", 2: "gpu.nonlocal"}
 KIND_NAMES = {0: "cpu", 1: "buffer", 2: "texture", 3: "descheap", 4: "queryheap"}
 SYNTHETIC = 0x80
+INF = (1 << 64) - 1
 
+RULES = {
+    # name: (markers, condition over a/f and A..D, meaning) -- AllocationsQuery.cpp:196-397
+    "aAf": (1, "a <= A <= f", "live at A"),
+    "afA": (1, "f <= A", "freed by A"),
+    "Aaf": (1, "a >= A", "allocated from A on"),
+    "aAfB": (2, "a <= A and A <= f <= B", "decline: alive at A, freed by B"),
+    "AaBf": (2, "A <= a <= B and f >= B", "growth: allocated in [A, B], alive at B"),
+    "aAfaBf": (2, "(a <= A and A <= f <= B) or (A <= a <= B and f >= B)", "decline + growth"),
+    "AfB": (2, "A <= f <= B", "free events in [A, B]"),
+    "AaB": (2, "A <= a <= B", "alloc events in [A, B]"),
+    "AafB": (2, "a >= A and f <= B", "short-living: allocated and freed inside [A, B] (churn)"),
+    "aABf": (2, "a <= A and f >= B", "long-living: alive through [A, B]"),
+    "AaBCf": (3, "A <= a <= B and f >= C", "leaks: allocated in [A, B], still alive at C"),
+    "AaBfC": (3, "A <= a <= B and B <= f <= C", "limited lifetime: allocated in [A, B], freed in [B, C]"),
+    "aABfC": (3, "a <= A and B <= f <= C", "decline of long-living: alive at A, freed in [B, C]"),
+    "AaBCfD": (4, "A <= a <= B and C <= f <= D", "specific lifetime: allocated in [A, B], freed in [C, D]"),
+}
+ALIASES = {
+    "leaks": ("AaBCf", "stack", "bytes"),
+    "growth": ("AaBf", "stack", "bytes"),
+    "churn": ("AafB", "stack", "count"),
+    "decline": ("aAfB", "stack", "bytes"),
+    "live": ("aAf", "tag", "bytes"),
+}
+# Leaf frames that only say "it allocated": the standard library (its containers growing), the
+# allocator and the census wrappers. A stack is shown and grouped from the first frame past them -- the
+# code that made the container grow. (Release names of such frames are unreliable anyway: identical
+# COMDAT folding gives one body many types -- a vector of pointers shows up as nlohmann's.)
+NOISE_PREFIXES = ("std::", "operator new", "gpu::`anonymous namespace'::", "gpu::Create", "gpu::TrackExternalResource",
+                  "mi_", "_malloc", "malloc")
+
+
+# ---------------------------------------------------------------------------------------------- file
 
 class Trace:
     def __init__(self):
@@ -55,7 +113,6 @@ def decode_chunk(tr, data, pos, end, state):
         ev = data[pos]
         pos += 1
         if ev == EV_ALLOC or ev == EV_FREE or ev == EV_MARKER:
-            # serial delta
             v = 0; s = 0
             while True:
                 b = data[pos]; pos += 1
@@ -80,7 +137,6 @@ def decode_chunk(tr, data, pos, end, state):
                     s += 7
                 markers.append((serial, qpc, v - 1 if v else None))
                 continue
-            # key delta (zigzag)
             v = 0; s = 0
             while True:
                 b = data[pos]; pos += 1
@@ -234,45 +290,125 @@ def load(path):
     return tr
 
 
-def replay(tr):
-    """Every alloc and free in serial order. Returns (live, anomalies): live = {(ns, key): alloc tuple}."""
-    events = [(a[0], 1, a) for a in tr.allocs]
-    events += [(f[0], 0, f) for f in tr.frees]
-    events.sort(key=lambda e: e[0])
-    live = {}
-    double_alloc = unknown_free = 0
-    for _serial, is_alloc, e in events:
-        if is_alloc:
-            k = (0 if e[4] == HEAP_CPU else 1, e[1])
-            if k in live:
-                double_alloc += 1
-            live[k] = e
-        else:
-            k = (0 if e[2] == HEAP_CPU else 1, e[1])
-            if live.pop(k, None) is None:
-                unknown_free += 1
-    return live, dict(double_alloc=double_alloc, unknown_free=unknown_free)
+# -------------------------------------------------------------------------------------------- replay
+
+class Model:
+    """Every allocation as one row (UE FAllocationItem): alloc serial a, free serial f (INF = never), size,
+    tag, heap, kind, stack; plus the per-tag live bytes at the end of every frame."""
+
+    def __init__(self, tr):
+        self.tr = tr
+        allocs = sorted(tr.allocs, key=itemgetter(0))
+        frees = sorted(tr.frees, key=itemgetter(0))
+        frames = sorted((m[0], m[2], m[1]) for m in tr.markers if m[2] is not None)  # (serial, frame, qpc)
+        n, nf, nk = len(allocs), len(frees), len(frames)
+        self.a = array("Q", map(itemgetter(0), allocs))
+        self.size = array("Q", map(itemgetter(2), allocs))
+        self.tag = array("B", map(itemgetter(3), allocs))
+        self.heap = array("B", map(itemgetter(4), allocs))
+        self.kind = array("B", map(itemgetter(5), allocs))
+        self.stack = array("I", map(itemgetter(6), allocs))
+        self.names = {i: x[7] for i, x in enumerate(allocs) if x[7] is not None}
+        self.f = array("Q", [INF]) * n
+        ntags = max(len(tr.tags), 1)
+        self.ntags = ntags
+        cpu = [0] * ntags
+        gpu = [0] * ntags
+        self.frames = []  # (frame, serial, qpc, cpu bytes per tag, gpu bytes per tag) at the end of each frame
+        live = {}
+        double_alloc = unknown_free = 0
+        f = self.f
+        i = j = k = 0
+        while True:
+            sa = allocs[i][0] if i < n else INF
+            sf = frees[j][0] if j < nf else INF
+            s = sa if sa < sf else sf
+            while k < nk and frames[k][0] < s:
+                fs, fr, fq = frames[k]
+                self.frames.append((fr, fs, fq, cpu[:], gpu[:]))
+                k += 1
+            if s == INF:
+                break
+            if sa < sf:
+                x = allocs[i]
+                key = (x[4] != HEAP_CPU, x[1])
+                if key in live:
+                    double_alloc += 1
+                live[key] = i
+                if x[4] == HEAP_CPU:
+                    cpu[x[3]] += x[2]
+                else:
+                    gpu[x[3]] += x[2]
+                i += 1
+            else:
+                x = frees[j]
+                idx = live.pop((x[2] != HEAP_CPU, x[1]), None)
+                if idx is None:
+                    unknown_free += 1
+                else:
+                    f[idx] = x[0]
+                    if allocs[idx][4] == HEAP_CPU:
+                        cpu[allocs[idx][3]] -= allocs[idx][2]
+                    else:
+                        gpu[allocs[idx][3]] -= allocs[idx][2]
+                j += 1
+        self.live = live
+        self.anomalies = dict(double_alloc=double_alloc, unknown_free=unknown_free)
+        self.last_serial = max(allocs[-1][0] if n else 0, frees[-1][0] if nf else 0, frames[-1][0] if nk else 0)
+        hdr = tr.header
+        self.freq = hdr.get("qpc_freq", 1) or 1
+        self.start_qpc = hdr.get("start_qpc", 0)
+
+    def __len__(self):
+        return len(self.a)
+
+    # ---- time markers ----
+    def resolve(self, spec):
+        """'600' / 'f600' (end of that frame), '12.5s' (since the trace started), 'start', 'end' -> (serial, label)."""
+        s = spec.strip().lower()
+        if s in ("start", "begin"):
+            return 0, "start"
+        if s == "end":
+            return self.last_serial + 1, "end"
+        if s.endswith("s"):
+            secs = float(s[:-1])
+            target = self.start_qpc + secs * self.freq
+            for fr, fs, fq, _c, _g in self.frames:
+                if fq >= target:
+                    return fs, f"{secs:g}s (frame {fr})"
+            return self.last_serial + 1, f"{secs:g}s (past the end)"
+        frame = int(s.lstrip("f"))
+        for fr, fs, _fq, _c, _g in self.frames:
+            if fr >= frame:
+                return fs, f"frame {fr}"
+        return self.last_serial + 1, f"frame {frame} (past the end)"
+
+    def seconds(self, serial):
+        for fr, fs, fq, _c, _g in self.frames:
+            if fs >= serial:
+                return (fq - self.start_qpc) / self.freq
+        return (self.frames[-1][2] - self.start_qpc) / self.freq if self.frames else 0.0
+
+    # ---- queries ----
+    def select(self, rule, marks, heap="all"):
+        """Indices of the allocations the rule picks (UE QueryLiveAllocs). `marks` = serials A..D."""
+        need, cond, _meaning = RULES[rule]
+        A, B, C, D = (list(marks) + [0, 0, 0, 0])[:4]
+        code = compile(f"[i for i, (a, f) in enumerate(zip(ma, mf)) if {cond}]", f"<{rule}>", "eval")
+        picked = eval(code, {}, dict(ma=self.a, mf=self.f, A=A, B=B, C=C, D=D))
+        if heap == "cpu":
+            hp = self.heap
+            picked = [i for i in picked if hp[i] == HEAP_CPU]
+        elif heap == "gpu":
+            hp = self.heap
+            picked = [i for i in picked if hp[i] != HEAP_CPU]
+        return picked
+
+    def live_at_end(self):
+        return list(self.live.values())
 
 
-def tally(tr, live):
-    """Per tag: [cpuBytes, cpuCount, gpuLocal, gpuNonLocal, gpuDescriptor, gpuResources, gpuHeaps]."""
-    rows = [[0] * 7 for _ in range(max(len(tr.tags), 1))]
-    for (ns, _key), a in live.items():
-        _s, _k, size, tag, heap, kind, _st, _n = a
-        r = rows[tag]
-        if ns == 0:
-            r[0] += size
-            r[1] += 1
-            continue
-        k = kind & 0x7F
-        if k in (3, 4):
-            r[4] += size
-            r[6] += 1
-        else:
-            r[2 if heap == 1 else 3] += size
-            r[5] += 1
-    return rows
-
+# ------------------------------------------------------------------------------------------- display
 
 def newest():
     files = glob.glob(os.path.join("traces", "memtrace_*.mtrace"))
@@ -289,6 +425,19 @@ def mb(x):
     return x / (1024.0 * 1024.0)
 
 
+def human(x):
+    if x >= 1 << 20:
+        return f"{mb(x):.2f} MB"
+    if x >= 1 << 10:
+        return f"{x / 1024.0:.1f} KB"
+    return f"{x} B"
+
+
+def func_name(tr, addr):
+    sym = tr.symbols.get(addr)
+    return sym[0] if sym and sym[0] else f"0x{addr:x}"
+
+
 def frame_text(tr, addr):
     sym = tr.symbols.get(addr)
     if not sym or not sym[0]:
@@ -297,27 +446,165 @@ def frame_text(tr, addr):
     return f"{func} ({os.path.basename(file_)}:{line})" if file_ else func
 
 
-def cmd_verify(path):
+def caller_frames(tr, stack_id):
+    """The stack leaf first, past the allocator/census frames."""
+    frames = tr.stacks.get(stack_id, [])
+    start = 0
+    while start < len(frames) and func_name(tr, frames[start]).startswith(NOISE_PREFIXES):
+        start += 1
+    return frames[start:] if start < len(frames) else frames
+
+
+def group(model, picked, by):
+    """{key: [bytes, count, example index]} and a label function."""
+    tr = model.tr
+    out = {}
+    size, tag, heap, kind, stack = model.size, model.tag, model.heap, model.kind, model.stack
+    if by == "tag":
+        keyf = lambda i: tag[i]
+        label = lambda k: tag_name(tr, k)
+    elif by == "heap":
+        keyf = lambda i: heap[i]
+        label = lambda k: HEAP_NAMES.get(k, f"heap{k}")
+    elif by == "size":
+        keyf = lambda i: size[i].bit_length()
+        label = lambda k: f"[{human(1 << (k - 1)) if k else '0 B'}, {human(1 << k)})"
+    elif by == "name":
+        names = model.names
+        keyf = lambda i: names.get(i) or f"(cpu, {tag_name(tr, tag[i])})"
+        label = lambda k: k
+    elif by == "stack":
+        keyf = lambda i: stack[i]
+        label = lambda k: "(no stack)" if k == 0 else f"stack {k}"
+    else:
+        raise ValueError(by)
+    for i in picked:
+        k = keyf(i)
+        row = out.get(k)
+        if row is None:
+            out[k] = [size[i], 1, i]
+        else:
+            row[0] += size[i]
+            row[1] += 1
+    return out, label
+
+
+def print_rows(model, rows, label, sort, top, total_b, total_n, show_stack=False):
+    tr = model.tr
+    order = sorted(rows.items(), key=lambda kv: -(kv[1][1] if sort == "count" else kv[1][0]))
+    print(f"  {'bytes':>12} {'%':>6} {'count':>9}  group")
+    for k, (b, c, ex) in order[:top]:
+        pct = 100.0 * (c / total_n if sort == "count" else b / total_b) if (total_n if sort == "count" else total_b) else 0.0
+        extra = ""
+        if show_stack and k == 0:
+            extra = f"  e.g. {tag_name(tr, model.tag[ex])}"
+        print(f"  {human(b):>12} {pct:5.1f}% {c:9d}  {label(k)}{extra}")
+        if show_stack and k != 0:
+            print(f"      {tag_name(tr, model.tag[ex])}, {HEAP_NAMES.get(model.heap[ex])}"
+                  + (f", {model.names[ex]}" if ex in model.names else ""))
+            for addr in caller_frames(tr, k)[:8]:
+                print(f"        {frame_text(tr, addr)}")
+    if len(order) > top:
+        rest_b = sum(v[0] for _k, v in order[top:])
+        rest_c = sum(v[1] for _k, v in order[top:])
+        print(f"  {human(rest_b):>12}        {rest_c:9d}  ... {len(order) - top} more groups")
+
+
+def print_tree(model, picked, inverted, depth, top, sort):
+    """Callstack grouping by function: top-down from the root (`tree`) or from the allocation site
+    (`inverted`), each node with the bytes/count of the allocations under it."""
+    tr = model.tr
+    size, stack = model.size, model.stack
+    root = {}
+    for i in picked:
+        frames = caller_frames(tr, stack[i]) if stack[i] else []
+        names = [func_name(tr, a) for a in frames] or ["(no stack)"]
+        if not inverted:
+            names = names[::-1]
+        node = root
+        for nm in names[:depth]:
+            child = node.get(nm)
+            if child is None:
+                child = node[nm] = [0, 0, {}]
+            child[0] += size[i]
+            child[1] += 1
+            node = child[2]
+    total = sum(v[0] for v in root.values()) or 1
+
+    def walk(node, indent):
+        items = sorted(node.items(), key=lambda kv: -(kv[1][1] if sort == "count" else kv[1][0]))
+        for nm, (b, c, kids) in items[:top]:
+            if b * 200 < total and indent > 0:  # below 0.5 % of the query: not worth a line
+                continue
+            print(f"  {human(b):>12} {100.0 * b / total:5.1f}% {c:9d}  {'  ' * indent}{nm}")
+            walk(kids, indent + 1)
+
+    print(f"  {'bytes':>12} {'%':>6} {'count':>9}  {'allocation site -> callers' if inverted else 'root -> allocation site'}")
+    walk(root, 0)
+
+
+# ------------------------------------------------------------------------------------------ commands
+
+def parse_args(argv):
+    opts = dict(by=None, sort=None, top=15, heap="all", depth=8, file=None, out=None)
+    pos = []
+    it = iter(argv)
+    for x in it:
+        if x in ("--by", "--sort", "--top", "--heap", "--depth", "--file", "--out"):
+            v = next(it)
+            opts[x[2:]] = int(v) if x in ("--top", "--depth") else v
+        elif x.startswith("--"):
+            raise SystemExit(f"unknown option {x}")
+        else:
+            pos.append(x)
+    if opts["file"] is None and pos and (pos[-1].endswith(".mtrace") or os.sep in pos[-1] or "/" in pos[-1]):
+        opts["file"] = pos.pop()
+    return pos, opts
+
+
+def open_model(path):
     t0 = time.perf_counter()
     tr = load(path)
-    live, anomalies = replay(tr)
-    print(f"memtrace verify: {path} ({len(tr.allocs)} allocs, {len(tr.frees)} frees, read in {time.perf_counter() - t0:.1f} s)")
+    t1 = time.perf_counter()
+    model = Model(tr)
+    t2 = time.perf_counter()
+    events = len(tr.allocs) + len(tr.frees)
+    print(f"{path}: {len(tr.allocs)} allocs, {len(tr.frees)} frees ({events / 1e6:.2f} M events): "
+          f"read {t1 - t0:.1f} s, replay {t2 - t1:.1f} s")
+    return model
+
+
+def cmd_verify(path):
+    model = open_model(path)
+    tr = model.tr
     if tr.end is None:
         print("memtrace verify: FAIL -- no End record (the process did not stop the trace)")
         return 1
-    got = tally(tr, live)
+    rows = [[0] * 7 for _ in range(model.ntags)]
+    for i in model.live_at_end():
+        r = rows[model.tag[i]]
+        if model.heap[i] == HEAP_CPU:
+            r[0] += model.size[i]
+            r[1] += 1
+        elif model.kind[i] & 0x7F in (3, 4):
+            r[4] += model.size[i]
+            r[6] += 1
+        else:
+            r[2 if model.heap[i] == 1 else 3] += model.size[i]
+            r[5] += 1
     end = tr.end
     failures = []
     if end["drops"]:
         failures.append(f"{end['drops']} events dropped")
     if tr.truncated:
         failures.append("file truncated")
-    if anomalies["double_alloc"] or anomalies["unknown_free"]:
-        failures.append(f"{anomalies['double_alloc']} allocs of a live key, {anomalies['unknown_free']} frees of an unknown key")
+    an = model.anomalies
+    if an["double_alloc"] or an["unknown_free"]:
+        failures.append(f"{an['double_alloc']} allocs of a live key, {an['unknown_free']} frees of an unknown key")
     cols = ["cpu bytes", "cpu count", "gpu local", "gpu nonlocal", "gpu descriptor", "gpu resources", "gpu heaps"]
     use = ([0, 1] if end["cpu_on"] else []) + ([2, 3, 4, 5, 6] if end["gpu_on"] else [])
     for t, want in enumerate(end["rows"]):
-        have = got[t] if t < len(got) else [0] * 7
+        have = rows[t] if t < len(rows) else [0] * 7
         for c in use:
             if have[c] != want[c]:
                 failures.append(f"{tag_name(tr, t)} {cols[c]}: replay {have[c]} != process {want[c]}")
@@ -335,53 +622,232 @@ def cmd_verify(path):
 
 
 def cmd_summary(path):
-    t0 = time.perf_counter()
-    tr = load(path)
-    live, anomalies = replay(tr)
+    model = open_model(path)
+    tr = model.tr
     h = tr.header
-    freq = h.get("qpc_freq", 1) or 1
-    frames = [m for m in tr.markers if m[2] is not None]
-    span = (max(m[1] for m in tr.markers) - h.get("start_qpc", 0)) / freq if tr.markers else 0.0
-    synth = sum(1 for a in tr.allocs if a[5] & SYNTHETIC)
-    print(f"{path}: {mb(os.path.getsize(path)):.1f} MB, read in {time.perf_counter() - t0:.1f} s{'  TRUNCATED' if tr.truncated else ''}")
-    print(f"  run: pid {h.get('pid')}, {os.path.basename(h.get('exe', ''))}, cpu {'on' if h.get('cpu') else 'off'}, "
-          f"gpu {'on' if h.get('gpu') else 'off'}, stacks {h.get('stacks')}, started at frame {h.get('start_frame')}")
-    if frames:
-        print(f"  frames {frames[0][2]}..{frames[-1][2]} ({len(frames)} markers), {span:.1f} s")
-    cpu_a = sum(1 for a in tr.allocs if a[4] == HEAP_CPU)
-    print(f"  events: {len(tr.allocs)} allocs ({synth} alive at the start, {cpu_a} cpu), {len(tr.frees)} frees, "
-          f"{len(tr.markers)} markers, {len(tr.stacks)} stacks, {len(tr.symbols)} symbols, {len(tr.threads)} threads, {tr.chunks} chunks")
+    synth = sum(1 for k in model.kind if k & SYNTHETIC)
+    span = (model.frames[-1][2] - model.start_qpc) / model.freq if model.frames else 0.0
+    print(f"  file {mb(os.path.getsize(path)):.1f} MB{'  TRUNCATED' if tr.truncated else ''}; run: pid {h.get('pid')}, "
+          f"{os.path.basename(h.get('exe', ''))}, cpu {'on' if h.get('cpu') else 'off'}, gpu {'on' if h.get('gpu') else 'off'}, "
+          f"stacks {h.get('stacks')}, started at frame {h.get('start_frame')}")
+    if model.frames:
+        print(f"  frames {model.frames[0][0]}..{model.frames[-1][0]} ({len(model.frames)} markers), {span:.1f} s")
+    print(f"  {synth} alive at the start, {len(tr.markers)} markers, {len(tr.stacks)} stacks, {len(tr.symbols)} symbols, "
+          f"{len(tr.threads)} threads, {tr.chunks} chunks")
     if tr.end:
-        print(f"  end: drops {tr.end['drops']}, buffers {tr.end['buffers']}, anomalies {anomalies}")
+        print(f"  end: drops {tr.end['drops']}, buffers {tr.end['buffers']}, anomalies {model.anomalies}")
     else:
         print("  end: none (the process did not stop the trace)")
-    rows = tally(tr, live)
+    live = model.live_at_end()
+    rows = [[0, 0, 0, 0, 0] for _ in range(model.ntags)]  # cpu, cpu count, gpu local, gpu nonlocal, gpu resources
+    for i in live:
+        r = rows[model.tag[i]]
+        if model.heap[i] == HEAP_CPU:
+            r[0] += model.size[i]
+            r[1] += 1
+        else:
+            r[2 if model.heap[i] == 1 else 3] += model.size[i]
+            r[4] += 1
     order = sorted(range(len(rows)), key=lambda t: -(rows[t][0] + rows[t][2] + rows[t][3]))
     print("  alive at the end, by tag:      cpu MB    count   gpu local MB  nonlocal MB  resources")
     for t in order[:20]:
         r = rows[t]
-        if r[0] + r[2] + r[3] + r[4] == 0:
+        if r[0] + r[2] + r[3] == 0:
             continue
-        print(f"    {tag_name(tr, t):<24} {mb(r[0]):9.2f} {r[1]:8d} {mb(r[2]):14.2f} {mb(r[3]):12.2f} {r[5]:10d}")
-    for title, pick in (("gpu", lambda a: a[4] != HEAP_CPU), ("cpu", lambda a: a[4] == HEAP_CPU and a[6] != 0)):
-        biggest = sorted((a for a in live.values() if pick(a)), key=lambda a: -a[2])[:5]
+        print(f"    {tag_name(tr, t):<24} {mb(r[0]):9.2f} {r[1]:8d} {mb(r[2]):14.2f} {mb(r[3]):12.2f} {r[4]:10d}")
+    for title, pick in (("gpu", lambda i: model.heap[i] != HEAP_CPU), ("cpu", lambda i: model.heap[i] == HEAP_CPU and model.stack[i])):
+        biggest = sorted((i for i in live if pick(i)), key=lambda i: -model.size[i])[:5]
         if not biggest:
             continue
         print(f"  biggest live {title} allocations{' with a stack' if title == 'cpu' else ''}:")
-        for a in biggest:
-            label = a[7] or KIND_NAMES.get(a[5] & 0x7F, "?")
-            print(f"    {mb(a[2]):8.2f} MB  {tag_name(tr, a[3])}  {label}{'  (alive at start)' if a[5] & SYNTHETIC else ''}")
-            for addr in tr.stacks.get(a[6], [])[:6]:
+        for i in biggest:
+            label = model.names.get(i) or KIND_NAMES.get(model.kind[i] & 0x7F, "?")
+            print(f"    {mb(model.size[i]):8.2f} MB  {tag_name(tr, model.tag[i])}  {label}"
+                  f"{'  (alive at start)' if model.kind[i] & SYNTHETIC else ''}")
+            for addr in caller_frames(tr, model.stack[i])[:6]:
                 print(f"        {frame_text(tr, addr)}")
     return 0
 
 
+def run_query(model, rule, specs, by, sort, top, heap, depth):
+    need = RULES[rule][0]
+    if len(specs) < need:
+        raise SystemExit(f"{rule} needs {need} time marker(s): {' '.join('ABCD'[:need])}")
+    marks = []
+    labels = []
+    for s in specs[:need]:
+        serial, lab = model.resolve(s)
+        marks.append(serial)
+        labels.append(lab)
+    t0 = time.perf_counter()
+    picked = model.select(rule, marks, heap)
+    total_b = sum(model.size[i] for i in picked)
+    print(f"{rule} -- {RULES[rule][2]}; " + ", ".join(f"{'ABCD'[n]} = {labels[n]}" for n in range(need))
+          + f"; heap {heap}: {len(picked)} allocations, {human(total_b)} ({time.perf_counter() - t0:.1f} s)")
+    if not picked:
+        return 0
+    if by in ("tree", "inverted"):
+        print_tree(model, picked, by == "inverted", depth, top, sort)
+        return 0
+    rows, label = group(model, picked, by)
+    print_rows(model, rows, label, sort, top, total_b, len(picked), show_stack=(by == "stack"))
+    return 0
+
+
+def cmd_query(model, rule, specs, opts):
+    if rule not in RULES:
+        raise SystemExit(f"unknown rule {rule}; rules: {' '.join(RULES)}")
+    return run_query(model, rule, specs, opts["by"] or "tag", opts["sort"] or "bytes", opts["top"], opts["heap"], opts["depth"])
+
+
+def cmd_tags(model, specs, opts):
+    """UE's LLM tag table (MemTagTable.cpp:289-497): size at A, at B, B - A, and min/max/avg over the frames
+    between them."""
+    if len(specs) < 2:
+        raise SystemExit("tags needs A B")
+    (sa, la), (sb, lb) = model.resolve(specs[0]), model.resolve(specs[1])
+    heap = opts["heap"]
+    tr = model.tr
+    nt = model.ntags
+
+    def at(serial):
+        v = [0] * nt
+        for i in model.select("aAf", [serial], heap):
+            v[model.tag[i]] += model.size[i]
+        return v
+
+    va, vb = at(sa), at(sb)
+    window = [fr for fr in model.frames if sa <= fr[1] <= sb]
+    print(f"tags, heap {heap}: A = {la}, B = {lb}, {len(window)} frames between")
+    print(f"  {'tag':<24} {'size A':>12} {'size B':>12} {'B - A':>12} {'min':>12} {'max':>12} {'avg':>12}")
+    order = sorted(range(nt), key=lambda t: -max(va[t], vb[t]))
+    for t in order:
+        series = [(fr[3][t] if heap != "gpu" else 0) + (fr[4][t] if heap != "cpu" else 0) for fr in window]
+        if va[t] == 0 and vb[t] == 0 and not any(series):
+            continue
+        lo, hi = (min(series), max(series)) if series else (0, 0)
+        avg = sum(series) / len(series) if series else 0
+        d = vb[t] - va[t]
+        sign = "+" if d > 0 else ("-" if d < 0 else "")
+        print(f"  {tag_name(tr, t):<24} {human(va[t]):>12} {human(vb[t]):>12} {sign + human(abs(d)):>12} "
+              f"{human(lo):>12} {human(hi):>12} {human(int(avg)):>12}")
+    return 0
+
+
+def cmd_timeline(model, path, opts):
+    """Per-tag live MB at the end of every frame as Chrome-trace counter events -- two stacked tracks,
+    cpu and gpu (chrome://tracing, ui.perfetto.dev)."""
+    tr = model.tr
+    out = opts["out"] or os.path.splitext(path)[0] + ".json"
+    nt = model.ntags
+    used_cpu = [t for t in range(nt) if any(fr[3][t] for fr in model.frames)]
+    used_gpu = [t for t in range(nt) if any(fr[4][t] for fr in model.frames)]
+    events = [{"name": "process_name", "ph": "M", "pid": 1, "args": {"name": f"memtrace {os.path.basename(path)}"}}]
+    for fr, _fs, fq, cpu, gpu in model.frames:
+        ts = (fq - model.start_qpc) * 1e6 / model.freq
+        events.append({"name": "cpu MB by tag", "ph": "C", "ts": ts, "pid": 1, "tid": 1,
+                       "args": {tag_name(tr, t): round(mb(cpu[t]), 3) for t in used_cpu}})
+        events.append({"name": "gpu MB by tag", "ph": "C", "ts": ts, "pid": 1, "tid": 1,
+                       "args": {tag_name(tr, t): round(mb(gpu[t]), 3) for t in used_gpu}})
+    with open(out, "w", encoding="utf-8") as f:
+        json.dump({"traceEvents": events, "displayTimeUnit": "ms"}, f)
+    print(f"timeline: {len(model.frames)} frames, {len(used_cpu)} cpu tags, {len(used_gpu)} gpu tags -> {out}")
+    return 0
+
+
+# ----------------------------------------------------------------------------------------- self-test
+
+def cmd_selftest():
+    """Synthetic trace with known lifetimes: every rule and the per-frame series must give the answer
+    worked out by hand from UE's conditions."""
+    tr = Trace()
+    tr.tags = [("t0", 255), ("t1", 255)]
+    tr.header = dict(qpc_freq=1000, start_qpc=0)
+    # frame markers: end of frame 1..4 at serials 10, 20, 30, 40 (qpc = serial ms)
+    tr.markers = [(10, 10, 1), (20, 20, 2), (30, 30, 3), (40, 40, 4), (4096, 50, None)]
+    #             name: (alloc serial, free serial or None, size, tag)
+    items = {"X": (5, None, 100, 0), "W": (3, 18, 200, 0), "Y": (12, 25, 400, 1),
+             "Z": (15, None, 800, 1), "V": (22, 35, 1600, 0), "G": (7, 33, 3200, 1)}
+    by_serial = {}
+    for n, (a, f, size, tag) in items.items():
+        key = 0x1000 + 16 * len(by_serial)
+        by_serial[a] = n
+        heap = 1 if n == "G" else HEAP_CPU  # one GPU allocation: the namespaces must not collide
+        tr.allocs.append((a, key, size, tag, heap, 1 if heap else 0, 0, "gpu-res" if heap else None))
+        if f is not None:
+            tr.frees.append((f, key, heap))
+    # a CPU key equal to the GPU one (G's), alive the whole time: the GPU free must not take it
+    tr.allocs.append((1, 0x1000 + 16 * 5, 1, 0, HEAP_CPU, 0, 0, None))
+    by_serial[1] = "K"
+    model = Model(tr)
+
+    def names(rule, *specs):
+        marks = [model.resolve(s)[0] for s in specs]
+        return {by_serial[model.a[i]] for i in model.select(rule, marks)}
+
+    expect = [
+        (("aAf", "f1"), {"X", "W", "G", "K"}),
+        (("afA", "f2"), {"W"}),
+        (("Aaf", "f2"), {"V"}),
+        (("aAfB", "f1", "f2"), {"W"}),
+        (("AaBf", "f1", "f2"), {"Y", "Z"}),
+        (("aAfaBf", "f1", "f2"), {"W", "Y", "Z"}),
+        (("AfB", "f1", "f2"), {"W"}),
+        (("AaB", "f1", "f2"), {"Y", "Z"}),
+        (("AafB", "f1", "f3"), {"Y"}),
+        (("aABf", "f1", "f2"), {"X", "G", "K"}),
+        (("AaBCf", "f1", "f2", "f3"), {"Z"}),
+        (("AaBfC", "f1", "f2", "f3"), {"Y"}),
+        (("aABfC", "f1", "f2", "f4"), {"G"}),
+        (("AaBCfD", "f2", "f3", "f3", "f4"), {"V"}),
+        (("aAf", "end"), {"X", "Z", "K"}),
+        (("aAf", "0.02s"), {"X", "Y", "Z", "G", "K"}),  # 0.02 s = the end of frame 2 (serial 20): W freed at 18
+    ]
+    failures = 0
+    for (rule, *specs), want in expect:
+        got = names(rule, *specs)
+        ok = got == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {rule:<7} {' '.join(specs):<16} {sorted(got)}{'' if ok else f' != {sorted(want)}'}")
+    # the series at the end of frame 2 (serial 20): X 100 + Z 800 + Y 400 + K 1 on the cpu (W freed at 18), G 3200 on the gpu
+    fr2 = next(fr for fr in model.frames if fr[0] == 2)
+    series_ok = fr2[3] == [100 + 1, 400 + 800] and fr2[4] == [0, 3200]
+    failures += not series_ok
+    print(f"  {'ok  ' if series_ok else 'FAIL'} series at frame 2: cpu {fr2[3]} gpu {fr2[4]}")
+    an_ok = model.anomalies == dict(double_alloc=0, unknown_free=0)
+    failures += not an_ok
+    print(f"  {'ok  ' if an_ok else 'FAIL'} anomalies {model.anomalies}")
+    print(f"memtrace selftest: {'PASS' if failures == 0 else f'FAIL ({failures})'}")
+    return 1 if failures else 0
+
+
 def main(argv):
-    if len(argv) < 2 or argv[1] not in ("summary", "verify"):
+    if len(argv) < 2 or argv[1] in ("-h", "--help", "help"):
         print(__doc__)
         return 2
-    path = argv[2] if len(argv) > 2 else newest()
-    return cmd_verify(path) if argv[1] == "verify" else cmd_summary(path)
+    cmd = argv[1]
+    if cmd == "selftest":
+        return cmd_selftest()
+    pos, opts = parse_args(argv[2:])
+    path = opts["file"] or newest()
+    if cmd == "verify":
+        return cmd_verify(path)
+    if cmd == "summary":
+        return cmd_summary(path)
+    model = open_model(path)
+    if cmd == "query":
+        if not pos:
+            raise SystemExit("query RULE A [B [C [D]]]")
+        return cmd_query(model, pos[0], pos[1:], opts)
+    if cmd in ALIASES:
+        rule, by, sort = ALIASES[cmd]
+        return run_query(model, rule, pos, opts["by"] or by, opts["sort"] or sort, opts["top"], opts["heap"], opts["depth"])
+    if cmd == "tags":
+        return cmd_tags(model, pos, opts)
+    if cmd == "timeline":
+        return cmd_timeline(model, path, opts)
+    print(__doc__)
+    return 2
 
 
 if __name__ == "__main__":
