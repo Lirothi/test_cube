@@ -2592,6 +2592,16 @@ void Scene::PrepareViews(Renderer* renderer)
             PrepareViewQueue(view, camMask);
             return;
         }
+        // Plan S7's direct read: the receivers read the cache pool and every shadow pass skips the view
+        // (SceneRenderer_Shadows: `if (view.directRead) continue`), so its queue -- cull, LODs, instanced buckets --
+        // was built for nothing, per face, per frame: ~200 views on wind_test, 82 ms of worker time a Debug frame. An
+        // empty queue instead, as for an invalid frustum; PrepareOpaqueDrawStates then registers none of its objects,
+        // which no pass would have drawn.
+        if (view.type == SceneView::Type::Shadow && view.directRead)
+        {
+            view.queue.Clear();
+            return;
+        }
         viewsToCull.push_back(&view);
     };
 

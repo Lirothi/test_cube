@@ -963,10 +963,10 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
         LOG_DEBUG(logging::LogCategory::Core, "{}", threads);
     }
 
-    // The address-space breakdown: the second line (boot settled) and then once a minute.
+    // The address-space breakdown: once, on the second line (boot settled). Not periodically: the walk is 25-55 ms
+    // on the main thread, and a Debug session logs Debug -- a hitch a minute there. --memreport walks on demand.
     const std::uint64_t lineIndex = s.lines++;
-    if ((lineIndex == 1 || (lineIndex > 1 && lineIndex % 12 == 1)) &&
-        logging::ShouldLog(logging::LogLevel::Debug, logging::LogCategory::Core))
+    if (lineIndex == 1 && logging::ShouldLog(logging::LogLevel::Debug, logging::LogCategory::Core))
     {
         const RegionTotals r = WalkPrivateRegions();
         const std::uint64_t rest = r.committed - r.mimalloc - r.writeCombine - r.exec;

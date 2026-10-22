@@ -416,6 +416,12 @@
     стекло — demo.json `--gbv-passes=Translucent,Transparent` (8 проходов группы); везде ноль `render.validation`,
     `live objects at exit: none`; `--scene-stress=12 --scene-stress-gbv --shadow-mode=sdsm --stress-level=wind_test` —
     CLEAN, 7599 enhanced / 0 legacy; intent / inspector regression PASS; `check_logging` 0.
+  - **Дыра на CPU, закрыта 2026-10-22:** проходы пропускали виды `directRead`, но `Scene::PrepareViews` всё равно
+    строил им CPU-очередь (отсечение, LOD, инстанс-бакеты) — на каждую грань, каждый кадр. Теперь такой вид получает
+    пустую очередь, как вид с невалидным фрустумом (`enqueueView`, Scene.cpp). Debug, wind_test, камера уровня:
+    `prepareQueue` 196 → 49 видов/кадр, время воркеров 82.4 → 19.4 мс, CPU-кадр 17.5 → 13.1 мс; Release (камера
+    владельца, `--wind-freeze`): `Whole Cycle` 1.744 → 1.550 мс, GPU-кадр не изменился. GBV `--gbv-passes=SpotShadows,
+    PointShadows` на wind_test — ноль `render.validation`, `live objects at exit: none`.
 - Гейты: три конфигурации, intent/inspector regression, `check_logging`; Debug `--gbv --gbv-passes=ShadowCull,
   LocalShadowCache,SpotShadows,PointShadows,SpotLights,PointLights --sweep=shadow.localCache:1,0,1,1;
   shadow.localViewsPerList:16,1,16,4;shadow.mode:2,2,1,2` на local_shadow_test (заполнения, освобождение и рост пула,
