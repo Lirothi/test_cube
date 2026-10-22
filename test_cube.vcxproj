@@ -579,6 +579,7 @@
     <ClInclude Include="sources/core/logging/diagnostics/LogStress.h" />
     <ClInclude Include="sources/core/memory/MemCounters.h" />
     <ClInclude Include="sources/core/memory/MemTags.h" />
+    <ClInclude Include="sources/core/memory/MemScope.h" />
     <ClInclude Include="sources/core/memory/diagnostics/MemBench.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />

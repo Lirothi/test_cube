@@ -15,6 +15,8 @@
 
 #include <cstdint>
 
+#include "core/memory/MemTags.h"
+
 namespace mem
 {
 struct ThreadAllocCounters
@@ -39,4 +41,27 @@ void ForEachThreadCounters(ThreadCountersVisitor visit, void* user);
 
 // The calling thread's block index (taking one if it has none yet).
 std::uint32_t CurrentThreadCounterIndex();
+
+// ---- CPU tags, memory profiling plan M3 ----
+//
+// With `--memtrack` (read from the raw command line at the process's FIRST allocation -- static
+// constructors allocate long before WinMain, and a pointer allocated untracked could not be
+// freed tracked) every operator new records its pointer and the calling thread's MemScope tag in
+// a striped map (16 SRW-locked open-addressing tables on VirtualAlloc pages, never on the heap it
+// measures), and adds mi_usable_size to that tag in the thread's block; operator delete takes the
+// pointer out and subtracts from the tag it was allocated under. Without the switch nothing of
+// this runs (one relaxed load per call). UE: LLM's pointer map and per-thread deltas
+// (LLM.cpp:5185-5328, MemoryUtils.h:661-853).
+bool MemTrackEnabled();
+
+struct CpuTagTotals
+{
+    std::int64_t bytes[kMemTagCount] = {}; // live bytes (mi_usable_size) by the tag they were allocated under
+    std::int64_t count[kMemTagCount] = {}; // live allocations
+    std::uint64_t unknownFrees = 0;        // frees of pointers the map did not know (should stay 0)
+    std::uint64_t mapBytes = 0;            // the map's own pages (VirtualAlloc, outside mimalloc)
+    std::uint64_t mapEntries = 0;
+};
+// Sums every thread's block. Zeros when tracking is off.
+void ReadCpuTagTotals(CpuTagTotals& out);
 } // namespace mem

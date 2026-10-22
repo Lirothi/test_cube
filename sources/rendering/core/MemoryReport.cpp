@@ -409,6 +409,7 @@ void SaveMemorySnapshot(ID3D12Device* device, const std::string& label)
     MemorySnapshot snap;
     snap.platform = ReadMemoryPlatform(device);
     gpu::ReadCensus(snap.census);
+    mem::ReadCpuTagTotals(snap.cpu);
     snap.timeSec = MemoryNowSec();
     St().snapshots[label] = snap;
 }
@@ -481,25 +482,49 @@ std::string MemoryJson(ID3D12Device* device, const std::string& filter, int top,
     }
     out["gpu"] = std::move(gpuJson);
 
+    // The CPU tags (--memtrack, M3): null columns without it, so a reader can tell "off" from "zero".
+    const bool tracking = mem::MemTrackEnabled();
+    mem::CpuTagTotals cpu;
+    mem::ReadCpuTagTotals(cpu);
+    if (tracking)
+    {
+        std::int64_t live = 0;
+        for (std::uint32_t t = 0; t < kMemTagCount; ++t) { live += cpu.bytes[t]; }
+        out["cpu"] = {
+            { "liveMB", mb(static_cast<double>(live)) },
+            { "untaggedMB", mb(static_cast<double>(cpu.bytes[static_cast<std::uint32_t>(MemTag::Untagged)])) },
+            { "slackMB", mb(static_cast<double>(plat.mimallocCommitBytes) - static_cast<double>(live)) },
+            { "mapMB", mb(static_cast<double>(cpu.mapBytes)) },
+            { "mapEntries", cpu.mapEntries },
+            { "unknownFrees", cpu.unknownFrees },
+        };
+    }
+    else
+    {
+        out["cpu"] = nullptr;
+    }
+
     // Tags with anything in them (each its own row; a parent row holds only what was tagged with
     // the parent itself), biggest first.
-    struct TagRow { std::uint32_t tag; std::uint64_t bytes; };
+    struct TagRow { std::uint32_t tag; std::int64_t bytes; };
     std::vector<TagRow> tagRows;
     for (std::uint32_t t = 0; t < kMemTagCount; ++t)
     {
         const gpu::TagTotals& tt = census.tags[t];
-        if (tt.resources == 0 && tt.heaps == 0) { continue; }
+        if (tt.resources == 0 && tt.heaps == 0 && cpu.count[t] == 0 && cpu.bytes[t] == 0) { continue; }
         if (!want.empty() && lower(kMemTagNames[t]).find(want) == std::string::npos) { continue; }
-        tagRows.push_back(TagRow{ t, tt.bytes[kLocal] + tt.bytes[kNonLocal] });
+        tagRows.push_back(TagRow{ t, static_cast<std::int64_t>(tt.bytes[kLocal] + tt.bytes[kNonLocal]) + cpu.bytes[t] });
     }
     std::sort(tagRows.begin(), tagRows.end(), [](const TagRow& a, const TagRow& b) { return a.bytes > b.bytes; });
-    out["tagColumns"] = json::array({ "tag", "localMB", "nonLocalMB", "resources", "heaps" });
+    out["tagColumns"] = json::array({ "tag", "localMB", "nonLocalMB", "resources", "heaps", "cpuMB", "cpuAllocations" });
     json tags = json::array();
     for (const TagRow& r : tagRows)
     {
         const gpu::TagTotals& tt = census.tags[r.tag];
         tags.push_back(json::array({ kMemTagNames[r.tag], mb(static_cast<double>(tt.bytes[kLocal])),
-                                     mb(static_cast<double>(tt.bytes[kNonLocal])), tt.resources, tt.heaps }));
+                                     mb(static_cast<double>(tt.bytes[kNonLocal])), tt.resources, tt.heaps,
+                                     tracking ? json(mb(static_cast<double>(cpu.bytes[r.tag]))) : json(nullptr),
+                                     tracking ? json(cpu.count[r.tag]) : json(nullptr) }));
     }
     out["tags"] = std::move(tags);
 
@@ -544,14 +569,17 @@ std::string MemoryJson(ID3D12Device* device, const std::string& filter, int top,
             {
                 const gpu::TagTotals& a = then.census.tags[t];
                 const gpu::TagTotals& b = census.tags[t];
+                const std::int64_t dCpu = cpu.bytes[t] - then.cpu.bytes[t];
+                const std::int64_t dCpuCount = cpu.count[t] - then.cpu.count[t];
                 if (a.bytes[kLocal] == b.bytes[kLocal] && a.bytes[kNonLocal] == b.bytes[kNonLocal] &&
-                    a.resources == b.resources && a.heaps == b.heaps)
+                    a.resources == b.resources && a.heaps == b.heaps && dCpu == 0 && dCpuCount == 0)
                 {
                     continue;
                 }
                 tagDiff.push_back(json::array({ kMemTagNames[t], dmb(b.bytes[kLocal], a.bytes[kLocal]),
                                                 dmb(b.bytes[kNonLocal], a.bytes[kNonLocal]),
-                                                static_cast<long long>(b.resources) - static_cast<long long>(a.resources) }));
+                                                static_cast<long long>(b.resources) - static_cast<long long>(a.resources),
+                                                mb(static_cast<double>(dCpu)), dCpuCount }));
             }
             json d = {
                 { "against", diff },
@@ -564,7 +592,7 @@ std::string MemoryJson(ID3D12Device* device, const std::string& filter, int top,
                 { "gpuNonLocalMB", dmb(all.bytes[kNonLocal], then.census.all.bytes[kNonLocal]) },
                 { "resources", static_cast<long long>(all.resources) - static_cast<long long>(then.census.all.resources) },
                 { "liveAllocations", static_cast<long long>(plat.liveAllocations) - static_cast<long long>(then.platform.liveAllocations) },
-                { "tagColumns", json::array({ "tag", "dLocalMB", "dNonLocalMB", "dResources" }) },
+                { "tagColumns", json::array({ "tag", "dLocalMB", "dNonLocalMB", "dResources", "dCpuMB", "dCpuAllocations" }) },
                 { "tags", std::move(tagDiff) },
             };
             if (plat.haveVram && then.platform.haveVram)
@@ -637,6 +665,28 @@ namespace
             ++n;
         }
         profiler.RecordTraceCounters("gpu tags MB", names, values, n);
+
+        // The CPU tags the same way (--memtrack, M3).
+        if (mem::MemTrackEnabled())
+        {
+            mem::CpuTagTotals cpu;
+            mem::ReadCpuTagTotals(cpu);
+            n = 0;
+            for (std::uint32_t t = 0; t < kMemTagCount && n < Profiler::kMaxTraceCounterSeries; ++t)
+            {
+                if (kMemTagParents[t] != MemTag::Root) { continue; }
+                std::int64_t bytes = cpu.bytes[t];
+                for (std::uint32_t c = 0; c < kMemTagCount; ++c)
+                {
+                    if (static_cast<std::uint32_t>(kMemTagParents[c]) == t) { bytes += cpu.bytes[c]; }
+                }
+                if (bytes == 0) { continue; }
+                names[n] = kMemTagNames[t];
+                values[n] = static_cast<double>(bytes) / (1024.0 * 1024.0);
+                ++n;
+            }
+            profiler.RecordTraceCounters("cpu tags MB", names, values, n);
+        }
     }
 
     void AppendF(std::string& out, const char* fmt, ...)
@@ -689,13 +739,47 @@ namespace
         }
         text += "\n";
 
+        // The CPU tags (--memtrack, M3) beside the GPU census, one tree.
+        const bool tracking = mem::MemTrackEnabled();
+        mem::CpuTagTotals cpu;
+        mem::ReadCpuTagTotals(cpu);
+        if (tracking)
+        {
+            std::int64_t live = 0;
+            std::int64_t allocations = 0;
+            for (std::uint32_t t = 0; t < kMemTagCount; ++t) { live += cpu.bytes[t]; allocations += cpu.count[t]; }
+            AppendF(text, "memreport: cpu (--memtrack) live %.1f MB in %lld allocations, untagged %.1f MB, mimalloc slack %.1f MB, "
+                    "map %.1f MB (%llu entries), unknown frees %llu\n",
+                    static_cast<double>(live) / (1024.0 * 1024.0), static_cast<long long>(allocations),
+                    static_cast<double>(cpu.bytes[static_cast<std::uint32_t>(MemTag::Untagged)]) / (1024.0 * 1024.0),
+                    miCommit - static_cast<double>(live) / (1024.0 * 1024.0), Mb(cpu.mapBytes),
+                    static_cast<unsigned long long>(cpu.mapEntries), static_cast<unsigned long long>(cpu.unknownFrees));
+        }
+
         // The tag tree: each top-level row is its own bytes plus its children's.
-        AppendF(text, "memreport: tags (local / non-local MB, resources, heaps):\n");
+        AppendF(text, tracking ? "memreport: tags (gpu local / non-local MB, resources, heaps | cpu MB, allocations):\n"
+                               : "memreport: tags (local / non-local MB, resources, heaps):\n");
+        const auto has = [&](std::uint32_t t) {
+            return census.tags[t].resources > 0 || census.tags[t].heaps > 0 || cpu.count[t] != 0 || cpu.bytes[t] != 0;
+        };
+        const auto row = [&](const char* indent, int width, std::uint32_t tag, const gpu::TagTotals& g, std::int64_t cpuBytes,
+                             std::int64_t cpuCount) {
+            AppendF(text, "memreport: %s%-*s %9.1f %9.1f %5u %4u", indent, width, kMemTagNames[tag], Mb(g.bytes[0]), Mb(g.bytes[1]),
+                    g.resources, g.heaps);
+            if (tracking)
+            {
+                AppendF(text, " | %9.1f %7lld", static_cast<double>(cpuBytes) / (1024.0 * 1024.0), static_cast<long long>(cpuCount));
+            }
+            text += "\n";
+        };
         for (std::uint32_t top = 0; top < kMemTagCount; ++top)
         {
             if (kMemTagParents[top] != MemTag::Root) { continue; }
             gpu::TagTotals sum = census.tags[top];
+            std::int64_t cpuSum = cpu.bytes[top];
+            std::int64_t cpuSumCount = cpu.count[top];
             bool hasChildren = false;
+            bool any = has(top);
             for (std::uint32_t c = 0; c < kMemTagCount; ++c)
             {
                 if (static_cast<std::uint32_t>(kMemTagParents[c]) != top) { continue; }
@@ -704,19 +788,18 @@ namespace
                 sum.bytes[1] += ct.bytes[1];
                 sum.resources += ct.resources;
                 sum.heaps += ct.heaps;
-                hasChildren = hasChildren || ct.resources > 0 || ct.heaps > 0;
+                cpuSum += cpu.bytes[c];
+                cpuSumCount += cpu.count[c];
+                hasChildren = hasChildren || has(c);
+                any = any || has(c);
             }
-            if (sum.resources == 0 && sum.heaps == 0) { continue; }
-            AppendF(text, "memreport:   %-16s %9.1f %9.1f %5u %4u\n", kMemTagNames[top], Mb(sum.bytes[0]), Mb(sum.bytes[1]),
-                    sum.resources, sum.heaps);
+            if (!any) { continue; }
+            row("  ", 16, top, sum, cpuSum, cpuSumCount);
             if (!hasChildren) { continue; }
             for (std::uint32_t c = 0; c < kMemTagCount; ++c)
             {
-                if (static_cast<std::uint32_t>(kMemTagParents[c]) != top) { continue; }
-                const gpu::TagTotals& ct = census.tags[c];
-                if (ct.resources == 0 && ct.heaps == 0) { continue; }
-                AppendF(text, "memreport:     %-14s %9.1f %9.1f %5u %4u\n", kMemTagNames[c], Mb(ct.bytes[0]), Mb(ct.bytes[1]),
-                        ct.resources, ct.heaps);
+                if (static_cast<std::uint32_t>(kMemTagParents[c]) != top || !has(c)) { continue; }
+                row("    ", 14, c, census.tags[c], cpu.bytes[c], cpu.count[c]);
             }
         }
 
@@ -809,6 +892,27 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     }
     n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | heaps %.0f MB (%u) | other %.0f MB",
                        Mb(heaps.committed), heaps.count, otherMb);
+    // CPU tags (--memtrack, M3): what operator new holds live, how much of it no scope claimed, the
+    // allocator's own slack (mi commit - live) and the tag map's pages.
+    mem::CpuTagTotals cpuTags;
+    if (mem::MemTrackEnabled())
+    {
+        mem::ReadCpuTagTotals(cpuTags);
+        std::int64_t live = 0;
+        for (std::uint32_t t = 0; t < kMemTagCount; ++t) { live += cpuTags.bytes[t]; }
+        const std::int64_t untagged = cpuTags.bytes[static_cast<std::uint32_t>(MemTag::Untagged)];
+        n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n),
+                           " | cpu %.0f MB untagged %.1f MB (%.0f%%) slack %.0f MB map %.1f MB",
+                           static_cast<double>(live) / (1024.0 * 1024.0), static_cast<double>(untagged) / (1024.0 * 1024.0),
+                           live > 0 ? 100.0 * static_cast<double>(untagged) / static_cast<double>(live) : 0.0,
+                           (static_cast<double>(miCommit) - static_cast<double>(live)) / (1024.0 * 1024.0),
+                           Mb(cpuTags.mapBytes));
+        if (cpuTags.unknownFrees > 0)
+        {
+            n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " unknown frees %llu",
+                               static_cast<unsigned long long>(cpuTags.unknownFrees));
+        }
+    }
     // The first line covers static initialisation and boot, not frames: it states the totals.
     if (first || periodFrames == 0)
     {
@@ -913,6 +1017,38 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
                                tt.resources);
         }
         LOG_DEBUG(logging::LogCategory::Core, "{}", tags);
+
+        // The CPU tags, biggest first (--memtrack): MB and live allocations.
+        if (mem::MemTrackEnabled())
+        {
+            struct CpuRow
+            {
+                std::uint32_t tag = 0;
+                std::int64_t bytes = 0;
+            };
+            CpuRow cpuRows[kMemTagCount];
+            int cpuCount = 0;
+            for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+            {
+                const std::int64_t b = cpuTags.bytes[t];
+                if (b == 0 && cpuTags.count[t] == 0) { continue; }
+                int at = cpuCount++;
+                while (at > 0 && cpuRows[at - 1].bytes < b) { cpuRows[at] = cpuRows[at - 1]; --at; }
+                cpuRows[at] = CpuRow{ t, b };
+            }
+            char cpu[1024];
+            int c = std::snprintf(cpu, sizeof(cpu), "mem cpu: map %llu entries %.1f MB, unknown frees %llu |",
+                                  static_cast<unsigned long long>(cpuTags.mapEntries), Mb(cpuTags.mapBytes),
+                                  static_cast<unsigned long long>(cpuTags.unknownFrees));
+            for (int i = 0; i < cpuCount && c < static_cast<int>(sizeof(cpu)) - 64; ++i)
+            {
+                c += std::snprintf(cpu + c, sizeof(cpu) - static_cast<size_t>(c), " %s %.1f (%lld)",
+                                   MemTagName(static_cast<MemTag>(cpuRows[i].tag)),
+                                   static_cast<double>(cpuRows[i].bytes) / (1024.0 * 1024.0),
+                                   static_cast<long long>(cpuTags.count[cpuRows[i].tag]));
+            }
+            LOG_DEBUG(logging::LogCategory::Core, "{}", cpu);
+        }
     }
 }
 std::uint64_t DedicatedVideoMemoryBytes(ID3D12Device* device)

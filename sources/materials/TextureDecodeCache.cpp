@@ -1,4 +1,5 @@
 #include "materials/TextureDecodeCache.h"
+#include "core/memory/MemScope.h"
 
 #include <mutex>
 #include <unordered_map>
@@ -73,6 +74,7 @@ bool FinishInFlight(const Key& key)
 
 Status Request(const Texture2D::CreateDesc& desc)
 {
+    MEM_SCOPE(MemTag::TexDecode); // the decode task created below inherits it (memory profiling M3)
     const Key key = MakeKey(desc);
     // A DDS needs no decode at all — the caller's normal path is a read plus an upload.
     if (key.path.size() >= 4 &&
@@ -118,6 +120,7 @@ Status Request(const Texture2D::CreateDesc& desc)
 
 void Prewarm(const Texture2D::CreateDesc& desc)
 {
+    MEM_SCOPE(MemTag::TexDecode); // the decode task created below inherits it (memory profiling M3)
     const Key key = MakeKey(desc);
 
     {

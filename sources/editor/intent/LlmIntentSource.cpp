@@ -1,4 +1,5 @@
 #include "editor/intent/LlmIntentSource.h"
+#include "core/memory/MemScope.h"
 #if WITH_EDITOR
 
 #include <chrono>
@@ -261,6 +262,7 @@ bool LlmIntentSource::EnsureServer(std::string& outStatus)
         healthProbe_ = std::make_shared<HealthProbe>();
         std::thread([probe = healthProbe_, endpoint = settings_.endpoint]()
         {
+            MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
             const llmclient::Response health = llmclient::Get(endpoint, "/health", 2);
             probe->ok.store(health.ok, std::memory_order_relaxed);
             probe->done.store(true, std::memory_order_release);
@@ -483,6 +485,7 @@ void LlmIntentSource::SendPending()
     // at the top of the next frame, which would give the stall straight back.
     std::thread([request, endpoint, timeout, payload]()
     {
+        MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         const llmclient::Response response =
             llmclient::PostJson(endpoint, "/completion", payload, timeout);
         if (request->abandoned.load())
@@ -697,6 +700,7 @@ bool LlmIntentSource::BeginWarmup(const EditorIntentWorld& world)
     // "context 1%" on a window that was a third full.
     std::thread([request, endpoint, timeout, payload, started, tokens = &lastPromptTokens_]()
     {
+        MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         const llmclient::Response response =
             llmclient::PostJson(endpoint, "/completion", payload, timeout);
         if (response.ok)
@@ -937,6 +941,7 @@ void LlmIntentSource::BeginFreeform(const std::string& prompt, float temperature
 
     std::thread([request, endpoint, timeout, payload]()
     {
+        MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         // llama-server speaks server-sent events: "data: {json}\n\n" per token. Reads do
         // not respect event boundaries, so a partial line is carried to the next chunk.
         std::string pending;
@@ -1185,6 +1190,7 @@ void LlmIntentSource::RequestDeveloperNote(const std::string& phrase, const Edit
 
     std::thread([request, endpoint, timeout, payload, path, levelPath, refusalCopy, phraseCopy]()
     {
+        MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         const llmclient::Response response =
             llmclient::PostJson(endpoint, "/completion", payload, timeout);
         if (request->abandoned.load())

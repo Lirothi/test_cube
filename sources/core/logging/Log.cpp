@@ -1,4 +1,5 @@
 #include "Log.h"
+#include "core/memory/MemScope.h"
 
 #include "LogQueue.h"
 #include "LogSinks.h"
@@ -300,6 +301,7 @@ namespace logging
 
         unsigned __stdcall WriterMain(void* argument)
         {
+            MEM_SCOPE(MemTag::Log); // memory profiling M3
             LoggerState& state = *static_cast<LoggerState*>(argument);
             SetCurrentThreadName("LogWriter");
 

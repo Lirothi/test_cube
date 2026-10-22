@@ -1,4 +1,5 @@
 #include "app/ui/LogWindow.h"
+#include "core/memory/MemScope.h"
 
 #include <algorithm>
 #include <cctype>
@@ -53,6 +54,7 @@ namespace
 
 void LogWindow::Draw()
 {
+    MEM_SCOPE(MemTag::Log); // the viewer's copies of the records (memory profiling M3)
     if (!open_)
     {
         return; // the cost rule: a closed viewer does no work at all

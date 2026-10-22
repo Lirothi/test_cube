@@ -1,4 +1,5 @@
 #include "app/AppController.h"
+#include "core/memory/MemScope.h"
 
 #include "app/App.h" // g_hudHidden (--no-hud)
 #include "app/levels/LevelManager.h"
@@ -197,8 +198,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     scene.SetRenderSettings(settings_);
 
 #if WITH_EDITOR
-    editorController_.Draw(
-        renderer, scene, levelManager, developerWindow_.IsLogWindowOpen());
+    {
+        MEM_SCOPE(MemTag::Editor); // memory profiling M3: the editor's panels, document and tasks
+        editorController_.Draw(
+            renderer, scene, levelManager, developerWindow_.IsLogWindowOpen());
+    }
     if (editorController_.ConsumeOpenOceanPresetEditorRequest())
     {
         developerWindow_.OpenOceanControls();

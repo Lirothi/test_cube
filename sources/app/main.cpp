@@ -1,4 +1,5 @@
 #include <crtdbg.h>
+#include "core/memory/MemScope.h"
 #include <windows.h>
 #include "core/diagnostics/DiagPaths.h"
 #include <mimalloc.h>
@@ -290,6 +291,7 @@ int WINAPI WinMain(
     // are read here so they reach the harnesses too.
     struct LogSession {
         explicit LogSession(const char* commandLine) {
+            MEM_SCOPE(MemTag::Log); // the logger's rings and tables (memory profiling M3)
             logging::LogConfig config;
             logging::ApplyCommandLine(commandLine, config);
             logging::Initialize(config);

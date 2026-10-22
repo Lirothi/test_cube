@@ -1,4 +1,5 @@
 #include "core/logging/Log.h"
+#include "core/memory/MemScope.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
@@ -135,6 +136,7 @@ void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
     ready_.store(false, std::memory_order_relaxed);
     executionClaimed_.store(false, std::memory_order_relaxed);
     nextReady_ = nullptr;
+    memTag_ = static_cast<std::uint8_t>(mem::CurrentTag());
 }
 
 bool TaskSystem::TaskWithDeps::AddDependent(TaskHandle dependent)
@@ -377,6 +379,7 @@ void TaskSystem::RunTask(TaskWithDeps* task)
     auto* previousTask = currentTask_;
     currentTask_ = task;
     try {
+        MEM_SCOPE(static_cast<MemTag>(task->memTag_));
         task->Execute();
     } catch (const std::exception& error) {
         // Wait remains non-throwing, as before; failures are session events.

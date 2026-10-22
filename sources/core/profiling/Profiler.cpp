@@ -1,4 +1,5 @@
 #include "core/profiling/Profiler.h"
+#include "core/memory/MemScope.h"
 #include <cwchar>
 #include <fstream>
 #include <iomanip>
@@ -342,6 +343,7 @@ void Profiler::BeginFrame(uint64_t frameNo) {
 }
 
 void Profiler::EndFrame() {
+    MEM_SCOPE(MemTag::Profiler); // memory profiling M3
     if (!frameOpen_) { return; }
     auto& tasks = TaskSystem::Get();
     tasks.Wait(overlayTask_);
@@ -843,6 +845,7 @@ void Profiler::QueueTraceWrite(TraceDumpData dump) {
     if (!traceWriter_.joinable()) {
         traceWriterStop_ = false;
         traceWriter_ = std::thread([this]() {
+            MEM_SCOPE(MemTag::Profiler); // memory profiling M3
             logging::SetCurrentThreadName("ProfilerTraceWriter");
             for (;;) {
                 TraceDumpData next;

@@ -1,4 +1,5 @@
 #include "rendering/streaming/TextureStreamingManager.h"
+#include "core/memory/MemScope.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -63,6 +64,7 @@ float TextureStreamingManager::Now_() const
 
 void TextureStreamingManager::Tick(TextureStreaming& ts, Renderer* renderer, const SceneFrameData& frame, std::uint64_t /*frameNo*/)
 {
+    MEM_SCOPE(MemTag::TexStream); // the manager's snapshot and its async work inherit it (memory profiling M3)
     if (g_selftest && !selfTestDone_) { selfTestDone_ = true; SelfTest(); }
     if (!renderer || !ts.Ready() || !g_enabled || g_forceMips > 0 || !frame.camera)
     {

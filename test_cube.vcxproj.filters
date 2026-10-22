@@ -1115,6 +1115,9 @@
     <ClInclude Include="sources/core/memory/MemTags.h">
       <Filter>sources\core\memory</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/memory/MemScope.h">
+      <Filter>sources\core\memory</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/memory/diagnostics/MemBench.h">
       <Filter>sources\core\memory\diagnostics</Filter>
     </ClInclude>

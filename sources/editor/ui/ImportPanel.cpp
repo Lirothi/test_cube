@@ -1,4 +1,5 @@
 #include "editor/ui/ImportPanel.h"
+#include "core/memory/MemScope.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -1782,6 +1783,7 @@ void ImportPanel::BeginImport(const Item& item,
     const std::string sourcePath = item.path;
     worker_ = std::thread([this, opt, sourcePath, manifestIncludeRel]()
     {
+        MEM_SCOPE(MemTag::EditorImport); // memory profiling M3
         const int failures = assets::RunImport(opt); // CPU-heavy BC7 — off the UI thread
         if (failures == 0)
         {

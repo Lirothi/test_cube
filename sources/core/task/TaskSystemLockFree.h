@@ -57,6 +57,9 @@ public:
         std::atomic<bool> ready_{false};
         std::atomic<bool> executionClaimed_{false};
         std::atomic<int> refCount_{1};
+        // The MemScope tag current where the task was created (memory profiling plan M3): the worker
+        // runs the body under it, so a scope around a fan-out owns what the workers allocate.
+        std::uint8_t memTag_ = 0;
 
     protected:
         void Prepare(std::size_t depCapacity);

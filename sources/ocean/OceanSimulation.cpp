@@ -1,4 +1,5 @@
 #include "ocean/OceanSimulation.h"
+#include "core/memory/MemScope.h"
 #include "rendering/core/TextureCreate.h"
 
 #include <cassert>
@@ -64,6 +65,7 @@ OceanSimulation::OceanSimulation(const std::wstring& configPath)
 
 void OceanSimulation::InitializeFromConfig(const std::wstring& configPath)
 {
+    MEM_SCOPE(MemTag::Ocean); // memory profiling M3
     OceanSimulationConfig config;
     configPath_ = configPath.empty() ? L"data/ocean/default.json" : configPath;
     const bool loaded = LoadOceanSimulationConfigFromFile(configPath_, config);
@@ -422,6 +424,7 @@ void OceanSimulation::Initialize(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
+    MEM_SCOPE(MemTag::Ocean); // h0 and the wave data on the CPU (memory profiling M3)
     if (initialized_ || !renderer)
     {
         return;

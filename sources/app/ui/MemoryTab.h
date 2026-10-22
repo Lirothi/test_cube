@@ -27,6 +27,8 @@ private:
     double lastRefreshSec_ = -1.0;
     render::MemoryPlatform platform_;
     gpu::CensusTotals census_;
+    mem::CpuTagTotals cpu_; // --memtrack only (M3)
+    bool tracking_ = false;
     std::vector<gpu::RecordInfo> records_;
     std::vector<int> order_; // indices into records_ after the filter and the sort
     bool orderDirty_ = true;

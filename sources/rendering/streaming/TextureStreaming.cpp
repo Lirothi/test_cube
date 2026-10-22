@@ -1,4 +1,5 @@
 #include "rendering/streaming/TextureStreaming.h"
+#include "core/memory/MemScope.h"
 
 #include <algorithm>
 #include <string>
@@ -146,6 +147,7 @@ void TextureStreaming::DropSwap_(Swap* s, std::uint64_t frameNo)
 
 void TextureStreaming::TickManager(Renderer* renderer, const SceneFrameData& frame)
 {
+    MEM_SCOPE(MemTag::TexStream); // memory profiling M3
     if (!device_) { return; }
     manager_.Tick(*this, renderer, frame, frameNo_);
 }

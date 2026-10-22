@@ -4,6 +4,7 @@
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
 #include "core/diagnostics/BootProfile.h"
+#include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/SkyAtmosphere.h" // render::g_skyKeyTolerance (--set sky.keyTolerance)
@@ -1666,6 +1667,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     auto& input = systems_->input;
     {
         BOOT_SCOPE("Renderer::InitD3D12");
+        MEM_SCOPE(MemTag::Renderer);
         renderer.InitD3D12(hWnd_, defWidth, defHeight);
     }
     input.Initialize(hWnd_);
@@ -1674,6 +1676,7 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     // drain fence per queue, and put compute-recorded scopes on their own trace row. The compute
     // queue may be null (device refused it); every per-queue path in the profiler tolerates that.
     BOOT_SCOPE("Profiler::InitGpu");
+    MEM_SCOPE(MemTag::Profiler);
     Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue(),
                             renderer.GetComputeQueue());
 #endif
@@ -1699,6 +1702,7 @@ void App::InitScene()
     MaterialDataManager* materials = renderer.GetMaterialDataManager();
     {
         BOOT_SCOPE("MaterialPresets");
+        MEM_SCOPE(MemTag::Renderer);
         (void)materials->LoadPresetsFromJsonFile(L"data/materials.json"); // legacy, absent post-migration
         (void)materials->LoadPresetsFromDirectory(L"data/materials");
     }
@@ -1711,11 +1715,13 @@ void App::InitScene()
 
     {
         BOOT_SCOPE("InitTextSystem");
+        MEM_SCOPE(MemTag::Text);
         renderer.InitTextSystem(uploadBatch.CommandList(), uploadBatch.KeepAlive(), L"fonts");
     }
     if (auto* debugDraw = renderer.GetDebugDrawSystem())
     {
         BOOT_SCOPE("DebugDraw::Initialize");
+        MEM_SCOPE(MemTag::Renderer);
         debugDraw->Initialize(&renderer, uploadBatch.CommandList(), uploadBatch.KeepAlive());
     }
 
@@ -1740,6 +1746,7 @@ void App::InitScene()
     bool levelLoaded = false;
     {
         BOOT_SCOPE("LevelManager::LoadLevel");
+        MEM_SCOPE(MemTag::Scene); // the loaders' own scopes (meshes, textures, ocean) narrow it
         levelLoaded = levelManager.LoadLevel(JsonLevel::kName, loadCtx);
     }
     assert(levelLoaded && "Failed to load initial level");
@@ -2067,8 +2074,13 @@ void App::PaintLoadingScreen(HDC dc) const
 }
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
-    systems_ = std::make_unique<Systems::AppSystems>();
-    Systems::Init(systems_.get());
+    {
+        // The systems (renderer, scene, input, levels) are built here, before any of their own
+        // scopes exist: most of what they allocate at construction is the renderer's.
+        MEM_SCOPE(MemTag::Renderer);
+        systems_ = std::make_unique<Systems::AppSystems>();
+        Systems::Init(systems_.get());
+    }
 
     {
         auto& renderer = systems_->renderer;
@@ -2078,10 +2090,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         {
             BOOT_SCOPE("App::InitWindow");
+            MEM_SCOPE(MemTag::Renderer);
             InitWindow(hInstance, nCmdShow);
         }
         {
             BOOT_SCOPE("TaskSystem::Start");
+            MEM_SCOPE(MemTag::Tasks);
             TaskSystem::Get().Start(static_cast<unsigned int>(std::thread::hardware_concurrency() * 0.75f));
         }
         //TaskSystem::Get().Start(8);
@@ -2091,7 +2105,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         // Project-wide quality settings are applied after the renderer and level exist, so the
         // exact same live setters used by the developer window can rebuild dependent targets.
-        appController_.InitializeGraphicsSettings(renderer, scene);
+        {
+            MEM_SCOPE(MemTag::Renderer);
+            appController_.InitializeGraphicsSettings(renderer, scene);
+        }
 #if WITH_EDITOR
         // The editor MCP's set_settings / get_readouts reach the app through this; it outlives every
         // frame that could call it and is withdrawn before the systems go away.
@@ -2162,11 +2179,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // calls, one of which (the ImGui frame start) is not obviously cheap.
                 {
                     CPU_SCOPE(ProfilerScopes::kBeginImGuiFrame);
+                    MEM_SCOPE(MemTag::Ui);
                     renderer.BeginImGuiFrame();
                 }
 
                 {
                     CPU_SCOPE(ProfilerScopes::kProfilerTick);
+                    MEM_SCOPE(MemTag::Profiler);
                     Profiler::Get().Tick();
                 }
 
@@ -2212,17 +2231,26 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         cam.SetYawPitch(std::atan2(-std::sin(ang), std::cos(ang)), cam.GetPitch());
                     }
                 }
-                renderer.Tick(deltaTime);
+                {
+                    MEM_SCOPE(MemTag::Renderer);
+                    renderer.Tick(deltaTime);
+                }
                 // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
                 // frame's work is joined so the providers read settled state.
                 render::TickMemoryReport(renderer.GetDevice(), now); // providers tex.ret / rt.as.bin / rt.as.retired; the rest is the GPU census
-                appController_.Tick(input, renderer, scene, levelManager, deltaTime);
-                scene.Tick(deltaTime);
-
-                levelManager.Tick(deltaTime);
+                {
+                    MEM_SCOPE(MemTag::Ui); // the HUD, the developer window, the editor (its own scope narrows it)
+                    appController_.Tick(input, renderer, scene, levelManager, deltaTime);
+                }
+                {
+                    MEM_SCOPE(MemTag::Scene);
+                    scene.Tick(deltaTime);
+                    levelManager.Tick(deltaTime);
+                }
 
                 if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
                 {
+                    MEM_SCOPE(MemTag::Scene); // the loaders' own scopes (meshes, textures, ocean) narrow it
                     renderer.WaitForPreviousFrame();
 
                     bool levelLoaded = false;
@@ -2250,7 +2278,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
 
                 appController_.WaitForHudBuild();
-                scene.Render(&renderer);
+                {
+                    MEM_SCOPE(MemTag::Renderer); // the render graph's tasks inherit it
+                    scene.Render(&renderer);
+                }
             }
 
             // "--set=<name>:<value>;...": pin settings for the run. Applied once, here, because the

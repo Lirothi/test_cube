@@ -1,4 +1,5 @@
 #include "rendering/meshes/MeshManager.h"
+#include "core/memory/MemScope.h"
 
 #include "core/diagnostics/BootProfile.h"
 
@@ -1505,6 +1506,7 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
+    MEM_SCOPE(MemTag::Mesh); // memory profiling M3: the mesh's CPU data and its loader's work
     if (!renderer || !uploadCmdList) { return nullptr; }
     std::vector<VertexPNTUV> verts;
     std::vector<MeshLodCpu> lods;
@@ -1541,6 +1543,7 @@ std::shared_ptr<Mesh> MeshManager::Load(const std::string& path,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     const MeshLoadOptions& opt)
 {
+    MEM_SCOPE(MemTag::Mesh); // memory profiling M3: the mesh's CPU data and its loader's work
     // New pipeline: geometry referenced directly as our committed .mesh.bin (glTF stays in
     // import_staging/, never loaded at runtime). No hash cache + no glTF fallback — the .bin IS the
     // shipped geometry.
@@ -1654,6 +1657,7 @@ std::shared_ptr<Mesh> MeshManager::CreateFromCpuData(const std::string& key,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
+    MEM_SCOPE(MemTag::Mesh); // memory profiling M3: the mesh's CPU data and its loader's work
     const auto cached = cache_.find(key);
     if (cached != cache_.end()) { return cached->second; }
     if (!renderer || !uploadCmdList || data.vertices.empty() || data.indices.empty())
@@ -1765,6 +1769,7 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
     std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive,
     bool generateTangentSpace)
 {
+    MEM_SCOPE(MemTag::Mesh); // memory profiling M3: the mesh's CPU data and its loader's work
     robin_hood::unordered_map<std::string, std::shared_ptr<Mesh>>::iterator it = cache_.find(key);
     if (it != cache_.end()) {
         return it->second;

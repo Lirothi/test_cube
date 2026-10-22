@@ -1,4 +1,5 @@
 #include "rendering/streaming/TextureStreamingIo.h"
+#include "core/memory/MemScope.h"
 
 #include <windows.h>
 
@@ -82,6 +83,7 @@ void TextureStreamingIo::CloseAll_()
 
 void TextureStreamingIo::Run_()
 {
+    MEM_SCOPE(MemTag::TexStream); // the IO thread's buffers (memory profiling M3)
     std::vector<std::uint8_t> tight;
     for (;;)
     {

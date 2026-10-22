@@ -1,6 +1,7 @@
 #include "core/memory/diagnostics/MemBench.h"
 
 #include "core/logging/Log.h"
+#include "core/memory/MemCounters.h"
 
 #include <mimalloc.h>
 
@@ -87,9 +88,10 @@ int RunMemBench(const char* commandLine)
     const int threads = static_cast<int>(std::clamp(hw / 2u, 2u, 8u));
     constexpr int kRounds = 3;
 
+    // With --memtrack the counted path also tags every pointer (M3): this bench then prices the map.
     LOG_INFO(logging::LogCategory::Core,
-             "mem bench: {} rounds A/B alternating, {} pairs per round, sizes 16..2048 B, then {} threads",
-             kRounds, kBatches * kBatch, threads);
+             "mem bench: {} rounds A/B alternating, {} pairs per round, sizes 16..2048 B, then {} threads; memtrack {}",
+             kRounds, kBatches * kBatch, threads, mem::MemTrackEnabled() ? "ON" : "off");
 
     // Warm both paths once: page faults and mimalloc's first segments are not what is measured.
     (void)RunOne<Counted>();

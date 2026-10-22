@@ -65,6 +65,8 @@ void MemoryTab::Refresh(ID3D12Device* device)
 {
     platform_ = render::ReadMemoryPlatform(device);
     gpu::ReadCensus(census_);
+    tracking_ = mem::MemTrackEnabled();
+    mem::ReadCpuTagTotals(cpu_);
     gpu::SnapshotRecords(records_);
     orderDirty_ = true;
 }
@@ -127,6 +129,22 @@ void MemoryTab::Draw(ID3D12Device* device)
                 platform_.newPerFrame, platform_.mainNewPerFrame, Mb(static_cast<std::uint64_t>(platform_.newBytesPerFrame)),
                 static_cast<unsigned long long>(platform_.liveAllocations));
     ImGui::TextDisabled("Private also counts the VRAM through its write-combined mappings (M1): CPU memory = mimalloc + NT heaps.");
+    if (tracking_)
+    {
+        std::int64_t live = 0;
+        for (std::uint32_t t = 0; t < kMemTagCount; ++t) { live += cpu_.bytes[t]; }
+        const std::int64_t untagged = cpu_.bytes[static_cast<std::uint32_t>(MemTag::Untagged)];
+        ImGui::Text("CPU tags (--memtrack): live %.1f MB, untagged %.1f MB (%.0f%%), mimalloc slack %.1f MB, map %.1f MB (%llu entries)%s",
+                    static_cast<double>(live) / (1024.0 * 1024.0), static_cast<double>(untagged) / (1024.0 * 1024.0),
+                    live > 0 ? 100.0 * static_cast<double>(untagged) / static_cast<double>(live) : 0.0,
+                    (static_cast<double>(platform_.mimallocCommitBytes) - static_cast<double>(live)) / (1024.0 * 1024.0),
+                    Mb(cpu_.mapBytes), static_cast<unsigned long long>(cpu_.mapEntries),
+                    cpu_.unknownFrees > 0 ? " -- unknown frees!" : "");
+    }
+    else
+    {
+        ImGui::TextDisabled("CPU tags: run with --memtrack (decided at the first allocation; costs the map per new/delete).");
+    }
 
     if (platform_.haveVram)
     {
@@ -174,7 +192,29 @@ void MemoryTab::Draw(ID3D12Device* device)
 
     const ImGuiTableFlags tableFlags = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
                                        ImGuiTableFlags_SizingStretchProp;
-    const int tagColumns = haveSnapshot_ ? 8 : 5;
+    // One row's numbers: the GPU census and the CPU tags, now and at the snapshot.
+    struct TagRow
+    {
+        gpu::TagTotals gpu;
+        std::int64_t cpuBytes = 0;
+        std::int64_t cpuCount = 0;
+        bool Any() const { return gpu.resources > 0 || gpu.heaps > 0 || cpuBytes != 0 || cpuCount != 0; }
+    };
+    const auto subtree = [&](const gpu::CensusTotals& census, const mem::CpuTagTotals& cpu, std::uint32_t tag) {
+        TagRow r{ Subtree(census, tag), cpu.bytes[tag], cpu.count[tag] };
+        for (std::uint32_t c = 0; c < kMemTagCount; ++c)
+        {
+            if (static_cast<std::uint32_t>(kMemTagParents[c]) != tag) { continue; }
+            r.cpuBytes += cpu.bytes[c];
+            r.cpuCount += cpu.count[c];
+        }
+        return r;
+    };
+    const auto leaf = [&](const gpu::CensusTotals& census, const mem::CpuTagTotals& cpu, std::uint32_t tag) {
+        return TagRow{ census.tags[tag], cpu.bytes[tag], cpu.count[tag] };
+    };
+
+    const int tagColumns = 5 + (tracking_ ? 2 : 0) + (haveSnapshot_ ? 3 + (tracking_ ? 1 : 0) : 0);
     if (ImGui::BeginTable("memoryTags", tagColumns, tableFlags, ImVec2(0.0f, ImGui::GetTextLineHeightWithSpacing() * 16.0f)))
     {
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -183,53 +223,68 @@ void MemoryTab::Draw(ID3D12Device* device)
         ImGui::TableSetupColumn("Non-local MB");
         ImGui::TableSetupColumn("Resources");
         ImGui::TableSetupColumn("Heaps");
+        if (tracking_)
+        {
+            ImGui::TableSetupColumn("CPU MB");
+            ImGui::TableSetupColumn("CPU allocs");
+        }
         if (haveSnapshot_)
         {
             ImGui::TableSetupColumn("d Local");
             ImGui::TableSetupColumn("d Non-local");
             ImGui::TableSetupColumn("d Res");
+            if (tracking_) { ImGui::TableSetupColumn("d CPU"); }
         }
         ImGui::TableHeadersRow();
-        const auto row = [&](std::uint32_t tag, const gpu::TagTotals& t, const gpu::TagTotals& then, bool hasChildren) -> bool {
+        const auto row = [&](std::uint32_t tag, const TagRow& t, const TagRow& then, bool hasChildren) -> bool {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanFullWidth | ImGuiTreeNodeFlags_DefaultOpen;
             if (!hasChildren) { flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen; }
             const bool open = ImGui::TreeNodeEx(kMemTagNames[tag], flags);
-            ImGui::TableNextColumn(); ImGui::Text("%.1f", Mb(t.bytes[0]));
-            ImGui::TableNextColumn(); ImGui::Text("%.1f", Mb(t.bytes[1]));
-            ImGui::TableNextColumn(); ImGui::Text("%u", t.resources);
-            ImGui::TableNextColumn(); ImGui::Text("%u", t.heaps);
+            ImGui::TableNextColumn(); ImGui::Text("%.1f", Mb(t.gpu.bytes[0]));
+            ImGui::TableNextColumn(); ImGui::Text("%.1f", Mb(t.gpu.bytes[1]));
+            ImGui::TableNextColumn(); ImGui::Text("%u", t.gpu.resources);
+            ImGui::TableNextColumn(); ImGui::Text("%u", t.gpu.heaps);
+            if (tracking_)
+            {
+                ImGui::TableNextColumn(); ImGui::Text("%.2f", static_cast<double>(t.cpuBytes) / (1024.0 * 1024.0));
+                ImGui::TableNextColumn(); ImGui::Text("%lld", static_cast<long long>(t.cpuCount));
+            }
             if (haveSnapshot_)
             {
-                ImGui::TableNextColumn(); DeltaCell(DeltaMb(t.bytes[0], then.bytes[0]));
-                ImGui::TableNextColumn(); DeltaCell(DeltaMb(t.bytes[1], then.bytes[1]));
+                ImGui::TableNextColumn(); DeltaCell(DeltaMb(t.gpu.bytes[0], then.gpu.bytes[0]));
+                ImGui::TableNextColumn(); DeltaCell(DeltaMb(t.gpu.bytes[1], then.gpu.bytes[1]));
                 ImGui::TableNextColumn();
-                const long long dr = static_cast<long long>(t.resources) - static_cast<long long>(then.resources);
+                const long long dr = static_cast<long long>(t.gpu.resources) - static_cast<long long>(then.gpu.resources);
                 if (dr != 0) { ImGui::Text("%+lld", dr); } else { ImGui::TextDisabled("0"); }
+                if (tracking_)
+                {
+                    ImGui::TableNextColumn();
+                    DeltaCell(static_cast<double>(t.cpuBytes - then.cpuBytes) / (1024.0 * 1024.0));
+                }
             }
             return open && hasChildren;
         };
         for (std::uint32_t top = 0; top < kMemTagCount; ++top)
         {
             if (kMemTagParents[top] != MemTag::Root) { continue; }
-            const gpu::TagTotals sum = Subtree(census_, top);
-            const gpu::TagTotals sumThen = haveSnapshot_ ? Subtree(snapshot_.census, top) : gpu::TagTotals{};
-            if (sum.resources == 0 && sum.heaps == 0 && sumThen.resources == 0 && sumThen.heaps == 0) { continue; }
+            const TagRow sum = subtree(census_, cpu_, top);
+            const TagRow sumThen = haveSnapshot_ ? subtree(snapshot_.census, snapshot_.cpu, top) : TagRow{};
+            if (!sum.Any() && !sumThen.Any()) { continue; }
             bool hasChildren = false;
             for (std::uint32_t c = 0; c < kMemTagCount; ++c)
             {
-                if (static_cast<std::uint32_t>(kMemTagParents[c]) == top &&
-                    (census_.tags[c].resources > 0 || census_.tags[c].heaps > 0)) { hasChildren = true; }
+                if (static_cast<std::uint32_t>(kMemTagParents[c]) == top && leaf(census_, cpu_, c).Any()) { hasChildren = true; }
             }
             if (row(top, sum, sumThen, hasChildren))
             {
                 for (std::uint32_t c = 0; c < kMemTagCount; ++c)
                 {
                     if (static_cast<std::uint32_t>(kMemTagParents[c]) != top) { continue; }
-                    const gpu::TagTotals& ct = census_.tags[c];
-                    const gpu::TagTotals cThen = haveSnapshot_ ? snapshot_.census.tags[c] : gpu::TagTotals{};
-                    if (ct.resources == 0 && ct.heaps == 0 && cThen.resources == 0 && cThen.heaps == 0) { continue; }
+                    const TagRow ct = leaf(census_, cpu_, c);
+                    const TagRow cThen = haveSnapshot_ ? leaf(snapshot_.census, snapshot_.cpu, c) : TagRow{};
+                    if (!ct.Any() && !cThen.Any()) { continue; }
                     row(c, ct, cThen, false);
                 }
                 ImGui::TreePop();

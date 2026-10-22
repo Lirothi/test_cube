@@ -37,6 +37,7 @@
 #include <cstdint>
 #include <string>
 
+#include "core/memory/MemCounters.h"
 #include "rendering/core/GpuAlloc.h"
 
 struct ID3D12Device;
@@ -90,7 +91,8 @@ struct MemorySnapshot
 {
     MemoryPlatform platform;
     gpu::CensusTotals census;
-    double timeSec = 0.0; // QueryPerformanceCounter seconds when taken
+    mem::CpuTagTotals cpu; // zeros without --memtrack
+    double timeSec = 0.0;  // QueryPerformanceCounter seconds when taken
 };
 void SaveMemorySnapshot(ID3D12Device* device, const std::string& label);
 bool FindMemorySnapshot(const std::string& label, MemorySnapshot& out);

@@ -1,4 +1,5 @@
 #include "editor/intent/EditorMcpServer.h"
+#include "core/memory/MemScope.h"
 #if WITH_EDITOR
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -1232,6 +1233,7 @@ namespace editormcp
 
     void Server::AcceptLoop()
     {
+        MEM_SCOPE(MemTag::EditorIntent); // memory profiling M3
         logging::SetCurrentThreadName("EditorMcp");
         const SOCKET listener = static_cast<SOCKET>(listenSocket_);
         while (!stopping_)
