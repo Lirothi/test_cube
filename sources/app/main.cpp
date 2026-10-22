@@ -2,10 +2,8 @@
 #include <windows.h>
 #include "core/diagnostics/DiagPaths.h"
 #include <mimalloc.h>
-#pragma warning(push)
-#pragma warning(disable: 28251)
-#include "mimalloc-new-delete.h"
-#pragma warning(pop)
+// operator new/delete are replaced in core/memory/MemNew.cpp (mimalloc + per-thread counters,
+// memory profiling plan M0); this file no longer includes mimalloc-new-delete.h.
 #include "app/App.h"
 
 #include "assets/AssetImporter.h"
@@ -15,6 +13,7 @@
 #include "app/scene/SceneRenderQueue.h"
 #include "core/logging/Log.h"
 #include "core/logging/diagnostics/LogStress.h"
+#include "core/memory/diagnostics/MemBench.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
@@ -335,6 +334,12 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "tasksystem-stress") != nullptr) {
         const bool overflow = std::strstr(lpCmdLine, "stress-overflow") != nullptr;
         return RunTaskSystemStress(overflow);
+    }
+
+    // "--mem-bench" times the counted operator new/delete against raw mimalloc (memory profiling
+    // plan M0); verdict lines in the session log.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--mem-bench") != nullptr) {
+        return RunMemBench(lpCmdLine);
     }
 
     // "--renderer-submission-stress" runs the CPU-only submission-timeline

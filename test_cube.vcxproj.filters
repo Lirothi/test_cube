@@ -64,6 +64,12 @@
     <Filter Include="sources\core\logging\diagnostics">
       <UniqueIdentifier>{7a2d9c31-5b8e-4f60-9d1c-2e4b8a7f3c15}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\memory">
+      <UniqueIdentifier>{3c8e5a21-7d4f-4b6e-9a12-5f0d8c3b7e41}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="sources\core\memory\diagnostics">
+      <UniqueIdentifier>{9e1f4b72-2a6c-4d83-b5e0-7c3a1d9f6b28}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\core\task">
       <UniqueIdentifier>{614b2f1c-8fb2-4acf-8009-3349f15bfe0b}</UniqueIdentifier>
     </Filter>
@@ -467,6 +473,12 @@
     </ClCompile>
     <ClCompile Include="sources/core/logging/diagnostics/LogStress.cpp">
       <Filter>sources\core\logging\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/memory/MemNew.cpp">
+      <Filter>sources\core\memory</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/memory/diagnostics/MemBench.cpp">
+      <Filter>sources\core\memory\diagnostics</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/profiling/Profiler.cpp">
       <Filter>sources\core\profiling</Filter>
@@ -1087,6 +1099,12 @@
     </ClInclude>
     <ClInclude Include="sources/core/logging/diagnostics/LogStress.h">
       <Filter>sources\core\logging\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/memory/MemCounters.h">
+      <Filter>sources\core\memory</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/memory/diagnostics/MemBench.h">
+      <Filter>sources\core\memory\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystem.h">
       <Filter>sources\core\task</Filter>

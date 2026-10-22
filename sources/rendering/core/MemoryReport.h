@@ -14,9 +14,15 @@
 //
 // Process numbers come from GetProcessMemoryInfo, VRAM from the device adapter's
 // QueryVideoMemoryInfo (local = dedicated video memory, non-local = system memory the GPU maps),
-// `mi commit` from mimalloc. Everything after the bar is a PROVIDER: a subsystem that owns
-// memory the process counters cannot attribute registers a name and a byte-count callback.
-// Deltas are against the previous line.
+// `mi commit` from mimalloc's own statistics (mi_stats_get; NOT mi_process_info, whose "commit"
+// is the process's private bytes again), `heaps` from HeapSummary over every NT heap of the process (CRT
+// malloc, the D3D12 runtime, the driver), `other` = private - mi commit - heaps (images, stacks,
+// the driver's own mappings). `new/frame` is operator new calls per frame since the previous line,
+// all threads and the main thread's share, from the per-thread counters of
+// core/memory/MemCounters.h; `live` = news minus deletes since process start. A Debug line
+// `mem threads:` names the busiest allocating threads (memory profiling plan M0). Everything after
+// that is a PROVIDER: a subsystem that owns memory the process counters cannot attribute
+// registers a name and a byte-count callback. Deltas are against the previous line.
 //
 // Not a tracer: it says HOW MUCH and roughly WHO, never which allocation. A per-allocation
 // trace with call stacks (Unreal Insights' memory channel is the model) is a later step, noted

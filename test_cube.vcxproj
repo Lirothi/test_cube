@@ -342,6 +342,8 @@
     <ClCompile Include="sources/core/logging/LogQueue.cpp" />
     <ClCompile Include="sources/core/logging/LogSinks.cpp" />
     <ClCompile Include="sources/core/logging/diagnostics/LogStress.cpp" />
+    <ClCompile Include="sources/core/memory/MemNew.cpp" />
+    <ClCompile Include="sources/core/memory/diagnostics/MemBench.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
     <ClCompile Include="sources\core\task\TaskSystemEnki.cpp" />
@@ -572,6 +574,8 @@
     <ClInclude Include="sources/core/logging/LogQueue.h" />
     <ClInclude Include="sources/core/logging/LogSinks.h" />
     <ClInclude Include="sources/core/logging/diagnostics/LogStress.h" />
+    <ClInclude Include="sources/core/memory/MemCounters.h" />
+    <ClInclude Include="sources/core/memory/diagnostics/MemBench.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
     <ClInclude Include="sources/core/task/diagnostics/TaskSystemStress.h" />
