@@ -111,8 +111,9 @@ constinit std::atomic<int> g_trackState{ 0 };
 __declspec(noinline) bool ReadTrackSwitch() noexcept
 {
     const wchar_t* cmd = GetCommandLineW();
-    // A CPU memory trace (M4) needs the map as much as --memtrack does.
-    const bool on = cmd != nullptr && (std::wcsstr(cmd, L"--memtrack") != nullptr || memtrace::WantsCpuRaw(cmd));
+    // A CPU memory trace (M4) and the leak readout's per-tag verdict (M6) need the map as much as --memtrack does.
+    const bool on = cmd != nullptr && (std::wcsstr(cmd, L"--memtrack") != nullptr || std::wcsstr(cmd, L"--mem-readout") != nullptr ||
+                                       memtrace::WantsCpuRaw(cmd));
     g_trackState.store(on ? 2 : 1, std::memory_order_relaxed);
     return on;
 }

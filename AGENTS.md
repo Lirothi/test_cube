@@ -189,6 +189,50 @@ frame (a worktree without `import_staging/sandy_gravel_1k/textures/*.dds` skips 
 Run it in a normal visible window: a minimized one has a degenerate backbuffer, so neither its time
 nor its shot is the frame you think. Numbers and the trade-offs: `docs/gbv_startup_profile.md`.
 
+## Memory Profiling — How to Run It
+
+Plan and numbers: `docs/memory_profiling_plan.md` (UE's LLM + Memory Insights + `rhi.DumpResourceMemory`).
+Pick the tool by the question:
+
+- **"Who holds the memory?"** -- always on: the `mem:` line every 5 s (private, vram, the GPU census by
+  pool, allocations per frame) and `--memreport[=<s>]` (one dump: the census as a tag tree, every GPU
+  object by size). CPU owners need `--memtrack` (the pointer map: `mem:` gains `cpu X MB untagged Y`,
+  ~+0.07 ms a frame). Live: MCP `get_memory` (snapshot / diff), Developer Controls > Memory
+  (`--mem-window`). A new GPU owner gets a tag in `core/memory/MemTags.h` and creates through
+  `gpu::Create*` (`python tools/check_gpu_alloc.py` = 0); a CPU owner wraps its work in `MEM_SCOPE`.
+- **"Which allocation, from where?"** -- the trace:
+
+  ```bash
+  test_cube.exe --level=data/levels/wind_test.json --memtrace --profdump=p.txt --shot-delay=20
+  ```
+
+  `--memtrace[=all|cpu|gpu][,stacks=big|all|off|1/N][,start=<frame>]` writes
+  `traces/memtrace_*.mtrace` (last 10 kept). Then `python tools/memtrace.py verify` (the replay must
+  equal what the process counted alive -- PASS byte for byte, or the trace is not to be trusted),
+  `summary`, `leaks A B C`, `growth A B`, `churn A B`, `tags A B`, `timeline` (Perfetto JSON);
+  markers are frames (`600`) or seconds (`12.5s`). `stacks=big` costs nothing measurable,
+  `stacks=all` ~0.5 ms a frame -- cap the frame rate (`--set=frame.maxFps:60`) for a long one.
+- **"Is there a leak?"** -- the gates:
+
+  ```bash
+  test_cube.exe --level=data/levels/occlusion_test.json --cam-pos=0,8,0 --cam-orbit=35,14 --mem-readout=30
+  ```
+
+  15 s warm-up, 30 s at 4 Hz, a least-squares slope per series (private, vram.local, every tag);
+  `mem readout: PASS|FAIL <series> <MB/s>` in the session log, exit code = failing series. FAIL =
+  above 1 MB/s AND climbing in every third of the window (a capacity step is not a leak).
+  `--scene-stress=150` adds `mem tags: STABLE|DRIFT|NOT JUDGED` to `logs/scene_stress.log` (a tag
+  that climbs from visit to visit of the same level; first visits are cold and resolution-sized
+  tags are left out); fewer than 150 iterations is `NOT JUDGED`, never a pass.
+- **Prove a gate catches before trusting its silence**: `--mem-selftest=leak@<tag>[,kb=<n>][,cpu|gpu|both]`
+  loses 64 KB a frame under that tag. The line `mem self-test: injected ...` must be in the log;
+  measured: the readout FAILs it at ~28 MB/s, the stress reports DRIFT on every level.
+
+Reading numbers: `private` counts the VRAM twice on this machine (write-combined pages mirror it,
+M1), so a GPU leak FAILs `private` and `vram.local` together. Release stack names of std templates
+are folded by ICF (a vector of pointers shows up as nlohmann's) -- `memtrace.py` groups from the first
+non-`std::` frame; for exact names use Debug.
+
 ## Reproducing a Camera View From a Screenshot
 
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:

@@ -29,7 +29,9 @@
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
 #include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/ArtifactWriter.h"
+#include "core/memory/MemTags.h"
 #include "core/memory/MemTrace.h"
+#include "rendering/core/MemGates.h"
 #include "core/logging/Log.h"
 
 #include <chrono>
@@ -44,6 +46,7 @@
 #include <cstring>
 #include <exception>
 #include <iterator>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -325,7 +328,10 @@ public:
                 static_cast<double>(census.all.bytes[1]) / (1024.0 * 1024.0),
                 census.all.resources, census.all.heaps,
                 static_cast<unsigned long long>(census.created - census.released));
+            TrackVisit_(iter, !skyEdits_ && !roughnessEdits_ && (op == Op::ReloadLevel || op == Op::SwitchLevel));
         }
+        RecordVisitEnd_(iterations_);
+        LogVisitVerdict_();
 
         if (skyEdits_ && !RenderFrames_(30, "sky-trace-drain"))
             return FinishFault_(iterations_, "sky-trace-drain", "render-frame threw");
@@ -956,6 +962,7 @@ private:
 
             Profiler::Get().EndFrame();
             memtrace::OnFrameEnd(renderer_.GetTotalFrameNumber());
+            memgate::OnFrameEnd(renderer_.GetDevice(), boot::ElapsedMs() / 1000.0); // --mem-selftest's leak
             boot::AddBucket("frame: WHOLE",
                             std::chrono::duration<double, std::milli>(
                                 std::chrono::steady_clock::now() - frameBegin).count(),
@@ -1134,6 +1141,141 @@ private:
     }
 #endif
 
+    // Memory profiling plan M6: a level's tags at the end of each visit against its earlier visits. A
+    // visit ends where the next level op begins; the snapshot is the one taken after the iteration
+    // before it, when the previous level's retired resources have long left. A visit of one
+    // iteration is skipped -- 2-4 frames after a load the retire bins still hold the last level.
+    //
+    // A drift is memory a level leaves behind EVERY time it is loaded, so the verdict looks for a tag
+    // that climbs from visit to visit, not one that differs from some baseline. Measured on two
+    // 150-iteration runs: a level's first visit is cold (tex.stream 2 / 46 / 95 MB lower -- the 50 MB
+    // upload ring is created by the first stream-in; mesh and tex.material shifted by shared caches)
+    // and is not compared; after it a tag may still settle in one step (tex.stream +2.00 MB on new1
+    // from its third visit to its twelfth, -0.75 MB on demo1) -- a step, which a "differs from the
+    // second visit" rule called a drift. Tags sized by the render or display resolution are left
+    // out: the churn's resize, DLSS and scale ops move them by hundreds of MB between visits.
+    static bool ResolutionSized_(std::uint32_t t)
+    {
+        const MemTag tag = static_cast<MemTag>(t);
+        const MemTag parent = MemTagParent(tag);
+        return tag == MemTag::Frame || parent == MemTag::Frame || tag == MemTag::Reflect || tag == MemTag::Ao ||
+               tag == MemTag::Bloom || tag == MemTag::Fog || tag == MemTag::Shafts || tag == MemTag::Cloud ||
+               tag == MemTag::Exposure || tag == MemTag::Dlss || tag == MemTag::Vis;
+    }
+
+    void TrackVisit_(int iter, bool levelOp)
+    {
+        std::vector<std::int64_t> tags;
+        memgate::ReadTagBytes(tags);
+        if (levelOp)
+        {
+            RecordVisitEnd_(iter);
+            visitLevel_.clear();
+        }
+        if (visitLevel_.empty())
+        {
+            visitLevel_ = std::string(levelManager_.GetActiveLevelSourcePath());
+            visitIters_ = 0;
+        }
+        ++visitIters_;
+        visitTags_ = std::move(tags);
+    }
+
+    void RecordVisitEnd_(int iter)
+    {
+        if (visitLevel_.empty() || visitTags_.empty()) { return; }
+        if (visitIters_ < 2)
+        {
+            ++shortVisits_;
+            return;
+        }
+        LevelVisits& lv = levelVisits_[visitLevel_];
+        ++lv.seen;
+        if (lv.seen == 1)
+        {
+            Log("[iter %d] mem tags: %s first visit (cold, not compared; %d iterations)\n", iter, visitLevel_.c_str(), visitIters_);
+            return;
+        }
+        lv.visits.push_back(visitTags_);
+        if (lv.visits.size() == 1) { return; }
+        const std::vector<std::int64_t>& prev = lv.visits[lv.visits.size() - 2];
+        std::string diffs;
+        for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+        {
+            if (ResolutionSized_(t)) { continue; }
+            const std::int64_t d = visitTags_[t] - prev[t];
+            if (d >= kVisitNoteBytes || d <= -kVisitNoteBytes)
+            {
+                char buf[96];
+                std::snprintf(buf, sizeof(buf), " %s %+.2f MB", kMemTagNames[t], static_cast<double>(d) / (1024.0 * 1024.0));
+                diffs += buf;
+            }
+        }
+        Log("[iter %d] mem tags vs the previous visit of %s (visit %zu, %d iterations):%s\n", iter, visitLevel_.c_str(),
+            lv.visits.size() + 1, visitIters_, diffs.empty() ? " same" : diffs.c_str());
+    }
+
+    // The verdict, per level and tag (resolution-sized tags excepted): DRIFT when the level has at
+    // least 3 steps between compared visits, the tag grew by kVisitStepBytes or more in two thirds
+    // of them, and ended kVisitDriftBytes or more above where it started. A Warning, not a fault:
+    // the run's exit code stays the churn's (crash) verdict.
+    void LogVisitVerdict_()
+    {
+        std::string drift;
+        int judged = 0, steps = 0;
+        double largest = 0.0;
+        std::string largestText = "none";
+        for (const auto& [level, lv] : levelVisits_)
+        {
+            const std::size_t n = lv.visits.size();
+            if (n < 4) { continue; }
+            ++judged;
+            steps += static_cast<int>(n - 1);
+            for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+            {
+                if (ResolutionSized_(t)) { continue; }
+                std::size_t grew = 0;
+                for (std::size_t i = 1; i < n; ++i)
+                {
+                    if (lv.visits[i][t] - lv.visits[i - 1][t] >= kVisitStepBytes) { ++grew; }
+                }
+                const std::int64_t total = lv.visits[n - 1][t] - lv.visits[0][t];
+                const double totalMb = static_cast<double>(total) / (1024.0 * 1024.0);
+                char buf[192];
+                std::snprintf(buf, sizeof(buf), "%s %+.2f MB on %s (grew in %zu of %zu steps)", kMemTagNames[t], totalMb, level.c_str(), grew, n - 1);
+                if (totalMb > largest)
+                {
+                    largest = totalMb;
+                    largestText = buf;
+                }
+                if (total >= kVisitDriftBytes && grew * 3 >= (n - 1) * 2)
+                {
+                    drift += " ";
+                    drift += buf;
+                }
+            }
+        }
+        if (judged == 0)
+        {
+            // Silence here would be a false STABLE: nothing was compared (60 iterations leave every
+            // level short of 4 compared visits; 150 give each 6-10).
+            Log("mem tags: NOT JUDGED -- no level reached 4 compared visits (%d short visits skipped); run 150 iterations or more\n", shortVisits_);
+            LOG_WARNING(logging::LogCategory::App, "scene-stress mem tags: NOT JUDGED -- no level reached 4 compared visits; run 150 iterations or more");
+        }
+        else if (drift.empty())
+        {
+            Log("mem tags: STABLE -- %d levels judged over %d steps (%d short visits skipped); largest climb %s; resolution-sized tags not compared\n",
+                judged, steps, shortVisits_, largestText.c_str());
+            LOG_INFO(logging::LogCategory::App, "scene-stress mem tags: STABLE -- {} levels judged over {} steps, largest climb {}",
+                     judged, steps, largestText);
+        }
+        else
+        {
+            Log("mem tags: DRIFT --%s\n", drift.c_str());
+            LOG_WARNING(logging::LogCategory::App, "scene-stress mem tags: DRIFT --{}; details in logs/scene_stress.log", drift);
+        }
+    }
+
     int LevelCount_() const { return g_sceneStressExtraLevel.empty() ? 3 : 4; }
     std::string CurrentLevelPath_() const
     {
@@ -1164,6 +1306,20 @@ private:
 #if WITH_EDITOR
     Scene::SceneObjectId nextEditorStressId_ = 1;
 #endif
+
+    static constexpr std::int64_t kVisitNoteBytes = 256 * 1024;      // logged per comparison
+    static constexpr std::int64_t kVisitStepBytes = 64 * 1024;       // a step that counts as growth
+    static constexpr std::int64_t kVisitDriftBytes = 1024 * 1024;    // the climb the verdict needs
+    struct LevelVisits
+    {
+        int seen = 0;                                  // visits recorded; the first (cold) is not kept
+        std::vector<std::vector<std::int64_t>> visits; // tags at the end of each compared visit
+    };
+    std::string visitLevel_;
+    int visitIters_ = 0;
+    std::vector<std::int64_t> visitTags_;
+    std::map<std::string, LevelVisits> levelVisits_;
+    int shortVisits_ = 0;
 
     static constexpr const char* kLevels_[3] = {
         "data/levels/demo.json", "data/levels/demo1.json", "data/levels/new1.json" };
@@ -1260,6 +1416,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
                 BOOT_SCOPE("WaitForPreviousFrame");
                 renderer.WaitForPreviousFrame();
             }
+            memgate::ReleaseSelfTest();
             {
                 BOOT_SCOPE("Scene::Clear");
                 scene.Clear();

@@ -393,6 +393,7 @@
     <ClCompile Include="sources/rendering/visibility/HzbOcclusionTester.cpp" />
     <ClCompile Include="sources/rendering/core/MemoryReport.cpp" />
     <ClCompile Include="sources/rendering/core/GpuAlloc.cpp" />
+    <ClCompile Include="sources/rendering/core/MemGates.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp" />
     <ClCompile Include="sources/rendering/core/SwapchainManager.cpp" />
@@ -627,6 +628,7 @@
     <ClInclude Include="sources/rendering/core/VisibilityStats.h" />
     <ClInclude Include="sources/rendering/core/MemoryReport.h" />
     <ClInclude Include="sources/rendering/core/GpuAlloc.h" />
+    <ClInclude Include="sources/rendering/core/MemGates.h" />
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/GbvPassFilter.h" />

@@ -6,6 +6,7 @@
 #include "core/diagnostics/BootProfile.h"
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
+#include "rendering/core/MemGates.h"        // memory profiling M6: --mem-selftest, --mem-readout
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/SkyAtmosphere.h" // render::g_skyKeyTolerance (--set sky.keyTolerance)
@@ -2495,6 +2496,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
             Profiler::Get().EndFrame();
             memtrace::OnFrameEnd(renderer.GetTotalFrameNumber()); // the frame marker; a delayed --memtrace start
+            if (memgate::OnFrameEnd(renderer.GetDevice(), GetTimeSeconds())) // --mem-selftest's leak, --mem-readout's samples
+            {
+                isRunning_ = false; // the readout's verdict is in; main returns its exit code
+            }
 
             // Frame budget = the tighter of two caps: the user's (render::g_maxFps, UE t.MaxFPS)
             // and the model throttle below. One wait serves both (WaitOutFrameBudget).
@@ -2554,6 +2559,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         TaskSystem::Get().Stop();
 
         renderer.WaitForPreviousFrame();
+        memgate::ReleaseSelfTest();
         scene.Clear();
         Systems::DestroyOceanSimulation();
         renderer.Shutdown();

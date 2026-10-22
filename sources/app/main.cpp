@@ -16,6 +16,7 @@
 #include "core/logging/diagnostics/LogStress.h"
 #include "core/memory/diagnostics/MemBench.h"
 #include "core/memory/MemTrace.h"
+#include "rendering/core/MemGates.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
@@ -464,6 +465,10 @@ int WINAPI WinMain(
             memtrace::Configure(memtraceOptions);
         }
     }
+    // "--mem-selftest=leak@<tag>[,kb=<n>][,cpu|gpu|both]" / "--mem-readout=<s>[,warmup=<s>][,limit=<MB/s>]":
+    // the memory gates (plan M6, rendering/core/MemGates.h). Above the scene-stress branch: its
+    // revisit check is proven with the self-test's leak.
+    memgate::ParseAndConfigure(lpCmdLine);
 
     // "--cloud-profile=<image>" / "--cloud-formation=<dds>" / "--cloud-cells=<dds>": FILE OVERRIDES
     // for the volumetric clouds' generated profile LUT, formation and erosion volumes
@@ -1376,5 +1381,5 @@ int WINAPI WinMain(
     App app;
     app.Run(hInstance, nShowCmd);
     memtrace::Stop(); // App::Run stops it after the main loop; this catches a run that ended another way
-    return 0;
+    return memgate::ExitCode(); // a --mem-readout's failing series; 0 otherwise
 }
