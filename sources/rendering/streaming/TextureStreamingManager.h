@@ -22,8 +22,9 @@ class TextureStreaming;
 
 // Plan A3: UE FRenderAssetStreamingManager + FRenderAssetStreamingMipCalcTask. Every
 // framesForFullUpdate frames: snapshot (camera, bounds, textures) -> detached task (sizes, wanted
-// mips, budget, load/cancel lists) -> apply (requests to TextureStreaming). Main thread except
-// DoWork_, which only touches its own AsyncData.
+// mips, budget, load/cancel lists) -> apply (requests to TextureStreaming); the stages between
+// build the next snapshot's bounds a slice at a time. Main thread except DoWork_, which only
+// touches its own AsyncData.
 class TextureStreamingManager
 {
 public:
@@ -65,7 +66,7 @@ private:
     struct AsyncData
     {
         std::vector<StreamingTexture> textures;
-        std::vector<BoundsEntry> bounds;
+        BoundsSet bounds;
         float screenSize = 0.0f;
         Math::float3 viewOrigin{};
         float now = 0.0f;
@@ -98,7 +99,7 @@ private:
     int stage_ = 0;
     bool selfTestDone_ = false;
     std::chrono::steady_clock::time_point start_{};
-    std::unordered_map<const void*, float> lastSeen_;
+    BoundsBuilder bounds_; // the next snapshot's boxes, built over the idle stages
     std::vector<Persist> persist_;
     std::uint64_t memoryBudget_ = 0;
     std::uint64_t perfectResetThreshold_ = 0;

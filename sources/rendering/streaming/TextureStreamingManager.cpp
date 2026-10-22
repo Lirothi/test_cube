@@ -10,6 +10,8 @@
 #include "app/scene/SceneFrameData.h"
 #include "core/logging/Log.h"
 #include "core/math/Frustum.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
 #include "materials/Texture2D.h"
 #include "rendering/core/MemoryReport.h"
@@ -42,7 +44,7 @@ void TextureStreamingManager::Init()
     taskLaunched_ = false;
     memoryBudget_ = 0;
     perfectResetThreshold_ = 0;
-    lastSeen_.clear();
+    bounds_ = BoundsBuilder{};
     persist_.clear();
     rows_.clear();
     stats_ = {};
@@ -69,14 +71,18 @@ void TextureStreamingManager::Tick(TextureStreaming& ts, Renderer* renderer, con
     if (!renderer || !ts.Ready() || !g_enabled || g_forceMips > 0 || !frame.camera)
     {
         stage_ = 0;
+        bounds_.Reset();
         return;
     }
     const int frames = std::max(g_framesForFullUpdate, 1);
     if (stage_ == 0)
     {
         if (!taskDone_.load(std::memory_order_acquire)) { return; } // previous task still running
-        if (taskLaunched_) { Apply_(ts); taskLaunched_ = false; }
-        Snapshot_(ts, renderer, frame);
+        if (taskLaunched_) { CPU_SCOPE(ProfilerScopes::kTextureStreamingApply); Apply_(ts); taskLaunched_ = false; }
+        {
+            CPU_SCOPE(ProfilerScopes::kTextureStreamingSnapshot);
+            Snapshot_(ts, renderer, frame);
+        }
         if (async_->textures.empty()) { return; }
         taskDone_.store(false, std::memory_order_release);
         taskLaunched_ = true;
@@ -90,11 +96,24 @@ void TextureStreamingManager::Tick(TextureStreaming& ts, Renderer* renderer, con
         stage_ = 1;
         return;
     }
-    // Stages 1..frames-1: UE refreshes bounds incrementally here; a few hundred boxes are rebuilt
-    // whole at the next snapshot instead. The final stage applies as soon as the task is done.
-    if (stage_ < frames) { ++stage_; return; }
+    // Stages 1..frames-1 build the next snapshot's bounds, a slice of the object list each (UE
+    // refreshes its instance views incrementally here too); stage 0 adds whatever is left. The
+    // final stage applies as soon as the task is done.
+    if (stage_ < frames)
+    {
+        CPU_SCOPE(ProfilerScopes::kTextureStreamingBounds);
+        const std::size_t stages = static_cast<std::size_t>(frames - 1);
+        const std::size_t slice = std::max<std::size_t>((BoundsBuilder::ObjectCount(frame) + stages - 1) / stages, 1u);
+        const Frustum frustum = Frustum::FromViewProj(frame.camera->GetViewMatrix(), frame.camera->GetProjMatrixNoJitter());
+        bounds_.Step(frame, frustum, Now_(), ts, slice);
+        ++stage_;
+        return;
+    }
     if (!taskDone_.load(std::memory_order_acquire)) { return; }
-    Apply_(ts);
+    {
+        CPU_SCOPE(ProfilerScopes::kTextureStreamingApply);
+        Apply_(ts);
+    }
     taskLaunched_ = false;
     stage_ = 0;
 }
@@ -104,7 +123,6 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
     if (!async_) { async_ = std::make_unique<AsyncData>(); }
     AsyncData& d = *async_;
     d.textures.clear();
-    d.bounds.clear();
     d.loadRequests.clear();
     d.cancels.clear();
     d.now = Now_();
@@ -128,6 +146,7 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
     const std::size_t count = ts.EntryCount();
     if (persist_.size() < count) { persist_.resize(count); }
     std::vector<int> textureSlot(count, -1);
+    d.textures.reserve(count);
     for (std::uint32_t e = 0; e < count; ++e)
     {
         Texture2D* tex = ts.EntryTexture(e);
@@ -145,7 +164,8 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
         const unsigned inFlight = ts.InFlightTarget(e);
         t.requestedMips = inFlight ? inFlight : t.residentMips;
         t.numNonStreamingMips = std::min(kNonStreamingMips, t.mipCount);
-        for (unsigned m = 0; m <= t.mipCount; ++m) { t.bytesUpTo[m] = table.TailBytes(t.mipCount - m); }
+        t.bytesUpTo[0] = 0; // = TailBytes(mipCount - m), accumulated from the smallest mip up
+        for (unsigned m = 1; m <= t.mipCount; ++m) { t.bytesUpTo[m] = t.bytesUpTo[m - 1] + table.mips[t.mipCount - m].sliceBytes; }
         // StreamingTexture.cpp:193-236: the biases cap the max, never the min.
         t.budgetMipBias = d.perTextureBias ? p.budgetMipBias : 0;
         const int lodBias = t.budgetMipBias + (d.perTextureBias ? 0 : d.globalMipBias);
@@ -157,25 +177,24 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
     }
 
     const Frustum frustum = Frustum::FromViewProj(frame.camera->GetViewMatrix(), frame.camera->GetProjMatrixNoJitter());
-    BuildBounds(frame, frustum, d.now, lastSeen_, textureSlot, d.bounds);
-    for (const BoundsEntry& b : d.bounds)
     {
-        for (const BoundsEntry::Ref& r : b.refs)
+        CPU_SCOPE(ProfilerScopes::kTextureStreamingBounds);
+        bounds_.Step(frame, frustum, d.now, ts, 0); // what the idle stages left (all of it when frames = 1)
+        bounds_.TakeResolved(d.bounds, textureSlot, ts);
+    }
+    for (const BoundsEntry& b : d.bounds.entries)
+    {
+        for (std::uint32_t i = b.firstRef; i < b.firstRef + b.refCount; ++i)
         {
+            const BoundsRef& r = d.bounds.refs[i];
+            if (r.texture == BoundsRef::kNone) { continue; }
             StreamingTexture& t = d.textures[r.texture];
             t.hasBounds = true;
             t.isTerrain = t.isTerrain || b.terrain;
             t.texelFactorMax = std::max(t.texelFactorMax, r.texelFactor);
         }
     }
-    // Forget objects not seen for a while (level switches leave dead keys behind).
-    if (lastSeen_.size() > 4096)
-    {
-        for (auto it = lastSeen_.begin(); it != lastSeen_.end();)
-        {
-            if (d.now - it->second > 120.0f) { it = lastSeen_.erase(it); } else { ++it; }
-        }
-    }
+    bounds_.PruneLastSeen(d.now);
 }
 
 // AsyncTextureStreaming.cpp DoWork: UpdateBoundSizes -> UpdatePerfectWantedMips -> UpdateBudgetedMips
@@ -191,13 +210,15 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
         t.lastRenderTime = t.hasBounds ? FLT_MAX : 0.0f; // no bounds = an unknown ref, treated as just seen
     }
     // TextureInstanceView.cpp:286-449 UpdateBoundSizes + ProcessElement (TexelFactor >= 0 branch).
-    for (const BoundsEntry& b : d.bounds)
+    for (const BoundsEntry& b : d.bounds.entries)
     {
         const float distSq = std::max(DistSqToBox(d.viewOrigin, b.center, b.halfExtents), 1.0e-4f); // UE clamps at 1 cm^2
         const float normSize = d.screenSize / std::sqrt(distSq);
         const bool visible = b.lastSeenAge < kVisibleWindowSec;
-        for (const BoundsEntry::Ref& r : b.refs)
+        for (std::uint32_t i = b.firstRef; i < b.firstRef + b.refCount; ++i)
         {
+            const BoundsRef& r = d.bounds.refs[i];
+            if (r.texture == BoundsRef::kNone) { continue; }
             StreamingTexture& t = textures[r.texture];
             t.maxSize = std::max(t.maxSize, r.texelFactor * normSize);
             if (visible) { t.maxSizeVisibleOnly = std::max(t.maxSizeVisibleOnly, r.texelFactor * normSize); }
@@ -428,7 +449,7 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
     s.usedBytes = d.memUsed;
     s.budgetedBytes = d.memBudgeted;
     s.wantedBytes = d.memWanted;
-    s.bounds = static_cast<unsigned>(d.bounds.size());
+    s.bounds = static_cast<unsigned>(d.bounds.entries.size());
     s.screenSize = d.screenSize;
     s.calcMs = d.calcMs;
     s.cycles = stats_.cycles + 1;

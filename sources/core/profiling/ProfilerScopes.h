@@ -218,6 +218,9 @@ extern const Profiler::ScopeNameKey kSceneSdsmFrameParams;
 extern const Profiler::ScopeNameKey kSceneRendererEnsureResources;
 extern const Profiler::ScopeNameKey kSceneRendererDecideFrame;
 extern const Profiler::ScopeNameKey kTextureStreamingTick;
+extern const Profiler::ScopeNameKey kTextureStreamingApply;     // the manager's stage 0 / final stage
+extern const Profiler::ScopeNameKey kTextureStreamingSnapshot;
+extern const Profiler::ScopeNameKey kTextureStreamingBounds;
 extern const Profiler::ScopeNameKey kSceneRendererGraphSetup;
 extern const Profiler::ScopeNameKey kSelectShadowedSpots;
 extern const Profiler::ScopeNameKey kSelectShadowedPoints;

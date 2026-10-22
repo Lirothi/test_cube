@@ -424,6 +424,14 @@ placed-ресурсы из пула стриминга (UE: пул `r.Streaming.
    задача готова: `StreamRenderAssets`: заявки в `TextureStreamingIo` (A2) по `loadOrderPriority`,
    split-request (`visible` первым при `budgeted ≥ streaming.minMipForSplit` и не террейн);
    иначе ждать следующего кадра (не блокировать). `streaming.framesForFullUpdate` (5).
+   *Инкрементальные границы — с 2026-10-22* (`BoundsBuilder`, `StreamingBounds.h`): сначала
+   стадии 1..4 простаивали, а стадия 0 строила все боксы разом; на `wind_test` (1499 объектов)
+   это пик 11.9 мс кадра из пяти в Debug (`TextureStreaming::BuildBounds` 10.9 из них). Теперь
+   стадии 1..4 добавляют по четверти списка объектов, стадия 0 — остаток (весь список при
+   `framesForFullUpdate = 1`); новый список (другое хранилище или длина) начинает набор заново.
+   Ссылки на текстуры — один плоский массив на набор (чанки меша делят диапазон объекта), запись
+   хранит вход реестра + `gen` до снимка. Debug: `TickManager` max 11.9 → 1.08 мс; Release max
+   0.17 мс; решения те же (done 72, read 28 MB, used = wanted).
 6. **Инвариант для теста** (память `transcription-half-a-pair`): текстура 2048² (12 мипов),
    `texelFactor 10 м`, дистанция 20 м, ширина дисплея 2560, boost 1 → `size = 10 × 1280 / 20 × 0.71
    = 454` → `wanted = ceil(1 + log2 454) = 10` → резидентно 512². Зашить как `LOG_INFO` self-test при

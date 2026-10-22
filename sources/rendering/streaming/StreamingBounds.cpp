@@ -11,20 +11,30 @@
 #include "rendering/RenderLayers.h"
 #include "rendering/renderables/GBufferRenderable.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/streaming/TextureStreaming.h"
 
 namespace streaming {
 
-void BuildBounds(const SceneFrameData& frame, const Frustum& frustum, float now,
-                 std::unordered_map<const void*, float>& lastSeen,
-                 const std::vector<int>& textureSlot,
-                 std::vector<BoundsEntry>& out)
+std::size_t BoundsBuilder::ObjectCount(const SceneFrameData& frame)
 {
-    out.clear();
-    if (!frame.objects) { return; }
-    out.reserve(frame.objects->size());
-    for (const auto& objPtr : *frame.objects)
+    return frame.objects ? frame.objects->size() : 0u;
+}
+
+bool BoundsBuilder::Step(const SceneFrameData& frame, const Frustum& frustum, float now, const TextureStreaming& ts, std::size_t maxObjects)
+{
+    const std::size_t count = ObjectCount(frame);
+    const void* list = frame.objects ? static_cast<const void*>(frame.objects->data()) : nullptr;
+    if (list != list_ || count != listSize_)
     {
-        const RenderableObjectBase* base = objPtr.get();
+        set_.Clear();
+        cursor_ = 0;
+        list_ = list;
+        listSize_ = count;
+    }
+    const std::size_t end = maxObjects == 0 ? count : std::min(count, cursor_ + maxObjects);
+    for (; cursor_ < end; ++cursor_)
+    {
+        const RenderableObjectBase* base = (*frame.objects)[cursor_].get();
         if (!base) { continue; }
         const GBufferRenderable* gb = base->AsGBufferRenderable();
         const RenderableObject* ro = base->AsRenderableObject();
@@ -34,6 +44,7 @@ void BuildBounds(const SceneFrameData& frame, const Frustum& frustum, float now,
 
         BoundsEntry e;
         e.terrain = (base->GetRenderLayerMask() & RenderLayerMask(RenderLayer::Terrain)) != 0u;
+        e.firstRef = static_cast<std::uint32_t>(set_.refs.size());
 
         const Math::float3 scale = ro->GetScale();
         const float objScale = std::max({ std::fabs(scale.x), std::fabs(scale.y), std::fabs(scale.z), 1.0e-4f });
@@ -57,18 +68,20 @@ void BuildBounds(const SceneFrameData& frame, const Frustum& frustum, float now,
             {
                 if (!t) { continue; }
                 const int owner = t->StreamingOwnerIndex();
-                if (owner < 0 || static_cast<size_t>(owner) >= textureSlot.size()) { continue; }
-                const int idx = textureSlot[static_cast<size_t>(owner)];
-                if (idx < 0) { continue; }
-                e.refs.push_back(BoundsEntry::Ref{ static_cast<std::uint32_t>(idx), texelFactor });
+                if (owner < 0) { continue; }
+                const std::uint32_t entry = static_cast<std::uint32_t>(owner);
+                set_.refs.push_back(BoundsRef{ entry, ts.EntryGen(entry), texelFactor });
             }
         }
-        if (e.refs.empty()) { continue; }
+        e.refCount = static_cast<std::uint32_t>(set_.refs.size()) - e.firstRef;
+        if (e.refCount == 0) { continue; }
 
         // Visibility: a CPU frustum test stands in for UE's per-primitive LastRenderTime.
-        const auto seenAge = [&lastSeen, now, &frustum](const void* key, const AABB& b)
+        // The age is taken at the slice's own time, so a hitch before the snapshot cannot age a box
+        // that was in view when its slice ran.
+        const auto seenAge = [this, now, &frustum](const void* key, const AABB& b)
         {
-            float& seen = lastSeen[key];
+            float& seen = lastSeen_[key];
             if (frustum.Intersects(b)) { seen = now; }
             else if (seen == 0.0f) { seen = -1.0e6f; } // never seen
             return now - seen;
@@ -89,14 +102,38 @@ void BuildBounds(const SceneFrameData& frame, const Frustum& frustum, float now,
                 ce.halfExtents = w.GetHalfExtents();
                 const void* key = reinterpret_cast<const void*>(reinterpret_cast<std::uintptr_t>(base) + c + 1u);
                 ce.lastSeenAge = seenAge(key, w);
-                out.push_back(std::move(ce));
+                set_.entries.push_back(ce);
             }
             continue;
         }
         e.center = box.GetCenter();
         e.halfExtents = box.GetHalfExtents();
         e.lastSeenAge = seenAge(base, box);
-        out.push_back(std::move(e));
+        set_.entries.push_back(e);
+    }
+    return cursor_ >= count;
+}
+
+void BoundsBuilder::TakeResolved(BoundsSet& out, const std::vector<int>& textureSlot, const TextureStreaming& ts)
+{
+    for (BoundsRef& r : set_.refs)
+    {
+        const int idx = r.texture < textureSlot.size() ? textureSlot[r.texture] : -1;
+        r.texture = (idx >= 0 && ts.EntryGen(r.texture) == r.gen) ? static_cast<std::uint32_t>(idx) : BoundsRef::kNone;
+    }
+    std::swap(out, set_);
+    set_.Clear();
+    cursor_ = 0;
+    list_ = nullptr;
+    listSize_ = 0;
+}
+
+void BoundsBuilder::PruneLastSeen(float now)
+{
+    if (lastSeen_.size() <= 4096) { return; }
+    for (auto it = lastSeen_.begin(); it != lastSeen_.end();)
+    {
+        if (now - it->second > 120.0f) { it = lastSeen_.erase(it); } else { ++it; }
     }
 }
 
