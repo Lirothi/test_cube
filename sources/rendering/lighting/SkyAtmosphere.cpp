@@ -10,6 +10,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/MemoryReport.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/TextureCreate.h"
@@ -83,17 +84,11 @@ bool NearlySameNight(const NightSkyFrameData& now, const NightSkyFrameData& key)
 }
 }
 
-SkyAtmosphere::SkyAtmosphere()
-{
-    render::RegisterMemoryProvider("sky.luts", [](const void* self) -> std::uint64_t {
-        return static_cast<const SkyAtmosphere*>(self)->ownedBytes_;
-    }, this);
-}
+// The bytes these LUTs hold are the `sky` tag of the GPU census (rendering/core/GpuAlloc.h); the
+// "sky.luts" column of the memory line it replaced matched it by name (memory profiling plan M1c).
+SkyAtmosphere::SkyAtmosphere() = default;
 
-SkyAtmosphere::~SkyAtmosphere()
-{
-    render::UnregisterMemoryProvider(this);
-}
+SkyAtmosphere::~SkyAtmosphere() = default;
 
 void SkyAtmosphere::Reset()
 {
@@ -118,7 +113,7 @@ void SkyAtmosphere::Reset()
     debugMaterial_.reset();
     srv_ = {}; uav_ = {}; pending_ = {};
     initialized_ = failed_ = false;
-    builds_ = 0; ownedBytes_ = 0;
+    builds_ = 0;
 }
 
 void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& settings)
@@ -139,7 +134,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = 8;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Sky, L"SkyAtmosphere.LutHeap", IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const auto base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     const wchar_t* names[] = {L"SkyAtmosphere.Transmittance", L"SkyAtmosphere.MultiScatter"};
@@ -156,9 +151,8 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+        if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, MemTag::Sky, names[i], &resource)))
         { fail("texture"); return; }
-        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
         lut_[i].Attach(renderer->Declarations(), resource, kRest, names[i]);
         srv_[i] = {base.ptr + (i * 2u) * step};
         uav_[i] = {base.ptr + (i * 2u + 1u) * step};
@@ -184,9 +178,8 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
         vd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, vd, kRest, nullptr, &resource)))
+        if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, vd, kRest, nullptr, MemTag::Sky, L"SkyAtmosphere.SkyView", &resource)))
         { fail("SkyView texture"); return; }
-        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &vd).SizeInBytes;
         skyView_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.SkyView");
         viewSrv_ = {base.ptr + 4u * step}; viewUav_ = {base.ptr + 5u * step};
         D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
@@ -208,9 +201,8 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
         vd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, vd, kRest, nullptr, &resource)))
+        if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, vd, kRest, nullptr, MemTag::Sky, L"SkyAtmosphere.AerialPerspective", &resource)))
         { fail("AerialPerspective texture"); return; }
-        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &vd).SizeInBytes;
         aerial_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.AerialPerspective");
         aerialSrv_ = {base.ptr + 6u * step}; aerialUav_ = {base.ptr + 7u * step};
         D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
@@ -236,9 +228,8 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
     desc.SampleDesc.Count = 1; desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_READBACK;
     for (auto& resource : readback_)
-        if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&resource)))) { fail("readback ring"); return; }
-    ownedBytes_ += render::kFrameCount * device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+        if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Sky, L"SkyAtmosphere.LutReadback", IID_PPV_ARGS(&resource)))) { fail("readback ring"); return; }
 }
 
 size_t SkyAtmosphere::Build(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph, const SkyAtmosphereSettings& settings)
@@ -554,7 +545,7 @@ void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
     // 1+1 view, 1+8 radiance (the sky picture, mipped for the fog's distance fade),
     // 1+8 specular, 1+1 irradiance.
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 22;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&environmentHeap_)))) { fail("heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Sky, L"SkyEnvironment.Heap", IID_PPV_ARGS(&environmentHeap_)))) { fail("heap"); return; }
     const auto base = environmentHeap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     UINT descriptor = 0, output = 0;
@@ -570,10 +561,9 @@ void SkyAtmosphere::PrepareEnvironment(Renderer* renderer)
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
         D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
-        { fail("texture"); return; }
-        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
         const wchar_t* names[] = {L"SkyEnvironment.View", L"SkyEnvironment.Radiance", L"SkyEnvironment.Specular", L"SkyEnvironment.Irradiance"};
+        if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, MemTag::Sky, names[i], &resource)))
+        { fail("texture"); return; }
         (view ? environmentView_ : environment_[i-1]).Attach(renderer->Declarations(), resource, kRest, names[i]);
         D3D12_CPU_DESCRIPTOR_HANDLE srv{base.ptr + descriptor++ * step};
         D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
@@ -795,7 +785,7 @@ void SkyAtmosphere::PrepareMoon(Renderer* renderer)
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1 + kMoonMips;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&moonHeap_)))) { fail("heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Sky, L"SkyAtmosphere.MoonHeap", IID_PPV_ARGS(&moonHeap_)))) { fail("heap"); return; }
     const auto base = moonHeap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     D3D12_RESOURCE_DESC desc{};
@@ -805,10 +795,9 @@ void SkyAtmosphere::PrepareMoon(Renderer* renderer)
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+    if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, MemTag::Sky, L"SkyAtmosphere.Moon", &resource)))
     { fail("texture"); return; }
     moon_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.Moon");
-    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
     moonSrv_ = base;
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = desc.Format; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -874,7 +863,7 @@ void SkyAtmosphere::PrepareNight(Renderer* renderer)
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 2 + kNightMips;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&nightHeap_)))) { fail("heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Sky, L"SkyAtmosphere.NightSkyHeap", IID_PPV_ARGS(&nightHeap_)))) { fail("heap"); return; }
     const auto base = nightHeap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     // R11G11B10: radiance only, 4 bytes a texel -- 8 MB at 2048 x 1024 where RGBA16F would be 16. Its
@@ -886,10 +875,9 @@ void SkyAtmosphere::PrepareNight(Renderer* renderer)
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+    if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, MemTag::Sky, L"SkyAtmosphere.NightSky", &resource)))
     { fail("texture"); return; }
     night_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.NightSky");
-    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
     nightSrv_ = base;
     nightNullSrv_ = {base.ptr + step};
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
@@ -960,7 +948,7 @@ void SkyAtmosphere::PrepareDistant(Renderer* renderer)
     };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 2;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&distantHeap_)))) { fail("heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Sky, L"SkyAtmosphere.DistantSkyLightHeap", IID_PPV_ARGS(&distantHeap_)))) { fail("heap"); return; }
     distantSrv_ = distantHeap_->GetCPUDescriptorHandleForHeapStart();
     distantUav_ = {distantSrv_.ptr + device->GetDescriptorHandleIncrementSize(hd.Type)};
     D3D12_RESOURCE_DESC desc{};
@@ -969,10 +957,9 @@ void SkyAtmosphere::PrepareDistant(Renderer* renderer)
     desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource)))
+    if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, MemTag::Sky, L"SkyAtmosphere.DistantSkyLight", &resource)))
     { fail("texture"); return; }
     distant_.Attach(renderer->Declarations(), resource, kRest, L"SkyAtmosphere.DistantSkyLight");
-    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = desc.Format; sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING; sd.Texture2D.MipLevels = 1;
@@ -989,9 +976,8 @@ void SkyAtmosphere::PrepareDistant(Renderer* renderer)
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; hp.Type = D3D12_HEAP_TYPE_READBACK;
     for (auto& rb : distantReadback_)
     {
-        if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&rb)))) { fail("readback ring"); return; }
-        ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+        if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Sky, L"SkyAtmosphere.DistantSkyLightReadback", IID_PPV_ARGS(&rb)))) { fail("readback ring"); return; }
     }
 }
 

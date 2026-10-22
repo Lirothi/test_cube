@@ -226,5 +226,4 @@ private:
     std::uint32_t shadowKeyCheap_ = ~0u; // cheap-density bits the map was traced with (never a valid value at start)
     Math::float2 shadowKeyWind_{}; // LAST frame's drift offset (m): a jump beyond a quarter texel re-traces
     std::uint32_t shadowSlicePhase_ = 0;
-    UINT64 ownedBytes_ = 0;
 };

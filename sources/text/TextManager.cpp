@@ -14,6 +14,7 @@
 #include <DirectXPackedVector.h>
 #include "text/TextManager.h"
 #include "rendering/core/UploadManager.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/descriptors/SamplerManager.h"
 #include "rendering/descriptors/InputLayoutManager.h"
 #include "rendering/core/Renderer.h"
@@ -733,9 +734,9 @@ void TextManager::EnsureTextIndexCapacity(Renderer* r, size_t quadCount) {
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    ThrowIfFailed(r->GetDevice()->CreateCommittedResource(
+    ThrowIfFailed(gpu::CreateCommittedResource(r->GetDevice(),
         &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr, IID_PPV_ARGS(buffer.GetAddressOf())));
+        nullptr, MemTag::Text, L"Text.IndexBuffer", IID_PPV_ARGS(buffer.GetAddressOf())));
 
     D3D12_RANGE readRange{ 0, 0 };
     uint32_t* mapped = nullptr;

@@ -1,4 +1,5 @@
 #include "rendering/debug/DebugDraw.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderStats.h"
 
 #include <algorithm>
@@ -78,8 +79,9 @@ static bool EnsureInstanceBuffer(ID3D12Device* device, DebugDrawSystem::Instance
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(resource.GetAddressOf()))))
+    if (FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &desc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::Renderer, L"DebugDraw.Instances",
+        IID_PPV_ARGS(resource.GetAddressOf()))))
     {
         return false;
     }
@@ -98,7 +100,8 @@ static bool EnsureInstanceBuffer(ID3D12Device* device, DebugDrawSystem::Instance
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> cpuHeap;
-    if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(cpuHeap.GetAddressOf()))))
+    if (FAILED(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Renderer, L"DebugDraw.InstanceSrvHeap",
+        IID_PPV_ARGS(cpuHeap.GetAddressOf()))))
     {
         resource->Unmap(0, nullptr);
         resource.Reset();

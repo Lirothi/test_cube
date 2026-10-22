@@ -3,6 +3,7 @@
 #include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
+#include "rendering/core/GpuAlloc.h"
 #if WITH_EDITOR
 
 #include <algorithm>
@@ -325,19 +326,22 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         heapDesc.NumDescriptors = 1;
-        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&frame.rtvHeap))))
+        if (FAILED(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Editor, L"EditorPreview.RtvHeap",
+                IID_PPV_ARGS(&frame.rtvHeap))))
         {
             return false;
         }
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&frame.dsvHeap))))
+        if (FAILED(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Editor, L"EditorPreview.DsvHeap",
+                IID_PPV_ARGS(&frame.dsvHeap))))
         {
             return false;
         }
         heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         heapDesc.NumDescriptors = kPreviewSrvDescriptors;
-        if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&frame.srvHeap))))
+        if (FAILED(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Editor, L"EditorPreview.SrvHeap",
+                IID_PPV_ARGS(&frame.srvHeap))))
         {
             return false;
         }
@@ -362,8 +366,9 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
         cbDesc.Format = DXGI_FORMAT_UNKNOWN;
         cbDesc.SampleDesc.Count = 1;
         cbDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        if (FAILED(device->CreateCommittedResource(&uploadHeap, D3D12_HEAP_FLAG_NONE,
+        if (FAILED(gpu::CreateCommittedResource(device, &uploadHeap, D3D12_HEAP_FLAG_NONE,
                 &cbDesc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                MemTag::Editor, L"EditorPreview.ConstantBuffer",
                 IID_PPV_ARGS(&frame.constantBuffer))))
         {
             return false;
@@ -417,8 +422,8 @@ bool EditorPreviewRenderer::CreateSharedDepth(ID3D12Device* device,
     clear.Format = kDepthFormat;
     clear.DepthStencil.Depth = 1.0f;
 
-    if (FAILED(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
-            D3D12_RESOURCE_STATE_COMMON, &clear, &slot.depthTarget)))
+    if (FAILED(gpu::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
+            D3D12_RESOURCE_STATE_COMMON, &clear, MemTag::Editor, L"EditorPreview.Depth", &slot.depthTarget)))
     {
         return false;
     }
@@ -457,8 +462,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::CreateColorTarget(
     clear.Color[3] = 1.0f;
 
     ComPtr<ID3D12Resource> target;
-    if (FAILED(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
-            D3D12_RESOURCE_STATE_COMMON, &clear, &target)))
+    if (FAILED(gpu::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
+            D3D12_RESOURCE_STATE_COMMON, &clear, MemTag::Editor, L"EditorPreview.Color", &target)))
     {
         return nullptr;
     }

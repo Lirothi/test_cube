@@ -176,7 +176,6 @@ private:
     std::array<SkyAtmosphereParameters, render::kFrameCount> pendingParameters_{};
     std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> footprint_{};
     UINT64 readbackBytes_ = 0;
-    UINT64 ownedBytes_ = 0;
     SkyAtmosphereParameters cached_{};
     bool initialized_ = false, failed_ = false;
     unsigned builds_ = 0;

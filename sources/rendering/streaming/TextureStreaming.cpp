@@ -7,6 +7,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Texture2D.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/MemoryReport.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderGraph.h"
@@ -29,11 +30,6 @@ std::uint64_t RetiredBytesProvider(const void* self)
     return static_cast<const TextureStreaming*>(self)->RetiredBytes();
 }
 
-std::uint64_t ResidentBytesProvider(const void* self)
-{
-    return static_cast<const TextureStreaming*>(self)->ResidentBytes();
-}
-
 struct CopyOp
 {
     ID3D12Resource* dst = nullptr;
@@ -53,8 +49,8 @@ void TextureStreaming::Init(ID3D12Device* device)
     if (!device_) { return; }
     io_.Start();
     manager_.Init();
-    // One `self` per provider: the report keys unregistration by it.
-    render::RegisterMemoryProvider("tex", &ResidentBytesProvider, this);
+    // Cumulative retired bytes only: what the streamed textures hold is the `tex.stream` tag of the
+    // GPU census, which replaced the "tex" column (memory profiling plan M1c).
     render::RegisterMemoryProvider("tex.ret", &RetiredBytesProvider, &retire_);
     lastReadout_ = std::chrono::steady_clock::now();
     start_ = lastReadout_;
@@ -82,7 +78,6 @@ void TextureStreaming::Shutdown()
     entries_.clear();
     freeEntries_.clear();
     registered_ = 0;
-    render::UnregisterMemoryProvider(this);
     render::UnregisterMemoryProvider(&retire_);
     device_ = nullptr;
 }
@@ -441,15 +436,15 @@ std::function<void(RenderGraphPassContext)> TextureStreaming::BuildPass(Renderer
         // Created in its RESTING state: the barrier compile assumes every declared resource rests
         // canonical at frame start (the creation state has no consumer, ResourceDeclarations.h),
         // so point A below is the one that takes it to COPY_DEST -- GBV 1334 otherwise.
-        if (FAILED(render::CreateCommittedTexture(device_, hp, D3D12_HEAP_FLAG_NONE, s->newDesc,
-                kShaderReadStates, nullptr, s->newRes.GetAddressOfForCreate())))
+        const std::wstring name = L"Tex2D:" + tex->GetSourcePath() + L":s" + std::to_wstring(tex->GetSrvGeneration() + 1u);
+        if (FAILED(gpu::CreateCommittedTexture(device_, hp, D3D12_HEAP_FLAG_NONE, s->newDesc,
+                kShaderReadStates, nullptr, MemTag::TexStream, name.c_str(), s->newRes.GetAddressOfForCreate())))
         {
             LOG_ERROR(logging::LogCategory::Render, "[texstream] CreateCommittedTexture failed for {} ({} mips)", tex->GetSourcePath(), s->newResident);
             ++swapsFailed_;
             DropSwap_(s, frameNo);
             continue;
         }
-        const std::wstring name = L"Tex2D:" + tex->GetSourcePath() + L":s" + std::to_wstring(tex->GetSrvGeneration() + 1u);
         s->newRes.DeclareCreated(renderer->Declarations(), kShaderReadStates, kShaderReadStates, name.c_str());
         recorded.push_back(s);
     }

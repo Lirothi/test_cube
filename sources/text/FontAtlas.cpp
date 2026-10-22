@@ -210,6 +210,7 @@ bool FontAtlas::Load(Renderer* r, ID3D12GraphicsCommandList* uploadCl, std::vect
     }
     // Named after the atlas it came from: several atlases sharing one debug name is what made the
     // canonical registry's per-name leak check report "Tex2D:<rgba8> grew to 3".
+    tex_.SetMemTag(MemTag::Text);
     tex_.CreateFromRGBA8(r, uploadCl, rgba.data(), (UINT)w, (UINT)h, uploadKeepAlive, tgaPath.c_str());
 
     // Sort and deduplicate glyphs (the last entry in JSON wins)

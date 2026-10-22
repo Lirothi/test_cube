@@ -2,6 +2,7 @@
 #include "rendering/core/RenderStats.h"
 #include "core/logging/Log.h"
 #include "rendering/core/TextureCreate.h"
+#include "rendering/core/GpuAlloc.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -63,8 +64,8 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         cv.Format = DXGI_FORMAT_D32_FLOAT;
         cv.DepthStencil.Depth = 1.0f;
 
-        if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, pagePool_.GetAddressOfForCreate())) || !pagePool_)
+        if (FAILED(gpu::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, &cv, MemTag::ShadowVsm, L"VSM.PagePool", pagePool_.GetAddressOfForCreate())) || !pagePool_)
         {
             pagePool_.Reset();
             return;
@@ -88,8 +89,8 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
 
         // P12.2: COMMON at creation. Buffers are ALWAYS created in COMMON by D3D12 (GBV id=1328);
         // the resting state is declared below, and first use promotes into it.
-        if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(pageTable_.GetAddressOfForCreate()))) || !pageTable_)
+        if (FAILED(gpu::CreateCommittedResource(dev, &heap, D3D12_HEAP_FLAG_NONE, &bd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, MemTag::ShadowVsm, L"VSM.PageTable", IID_PPV_ARGS(pageTable_.GetAddressOfForCreate()))) || !pageTable_)
         {
             pageTable_.Reset();
             pagePool_.Reset();
@@ -111,8 +112,8 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-        if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(requestBuffer_.GetAddressOfForCreate()))) || !requestBuffer_)
+        if (FAILED(gpu::CreateCommittedResource(dev, &heap, D3D12_HEAP_FLAG_NONE, &bd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, MemTag::ShadowVsm, L"VSM.PageRequest", IID_PPV_ARGS(requestBuffer_.GetAddressOfForCreate()))) || !requestBuffer_)
         {
             requestBuffer_.Reset(); pageTable_.Reset(); pagePool_.Reset();
             return;
@@ -126,7 +127,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         hd.NumDescriptors = 1;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(dsvHeap_.GetAddressOf()))) || !dsvHeap_)
+        if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.DsvHeap", IID_PPV_ARGS(dsvHeap_.GetAddressOf()))) || !dsvHeap_)
         {
             pagePool_.Reset(); pageTable_.Reset(); dsvHeap_.Reset();
             return;
@@ -145,7 +146,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         hd.NumDescriptors = 4; // poolSrv, pageTableSrv, pageTableUav, requestUav
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(srvUavHeap_.GetAddressOf()))) || !srvUavHeap_)
+        if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.SrvUavHeap", IID_PPV_ARGS(srvUavHeap_.GetAddressOf()))) || !srvUavHeap_)
         {
             pagePool_.Reset(); pageTable_.Reset(); requestBuffer_.Reset(); dsvHeap_.Reset(); srvUavHeap_.Reset();
             return;
@@ -219,13 +220,12 @@ void VirtualShadowMap::EnsureViewData(Renderer* renderer)
     bd.Format = DXGI_FORMAT_UNKNOWN;
     bd.SampleDesc.Count = 1;
     bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                            IID_PPV_ARGS(viewData_.GetAddressOf()))) || !viewData_)
+    if (FAILED(gpu::CreateCommittedResource(dev, &heap, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                            MemTag::ShadowVsm, L"VSM.ViewData", IID_PPV_ARGS(viewData_.GetAddressOf()))) || !viewData_)
     {
         viewData_.Reset();
         return;
     }
-    viewData_->SetName(L"VSM.ViewData");
     void* mapped = nullptr;
     const D3D12_RANGE noRead{ 0, 0 };
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
@@ -233,7 +233,7 @@ void VirtualShadowMap::EnsureViewData(Renderer* renderer)
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     if (FAILED(viewData_->Map(0, &noRead, &mapped)) || !mapped ||
-        FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(viewDataHeap_.GetAddressOf()))) || !viewDataHeap_)
+        FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.ViewDataHeap", IID_PPV_ARGS(viewDataHeap_.GetAddressOf()))) || !viewDataHeap_)
     {
         viewData_.Reset();
         viewDataHeap_.Reset();
@@ -316,12 +316,11 @@ namespace
         bd.SampleDesc.Count = 1;
         bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         bd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        if (FAILED(dev->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bd,
-                D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
+        if (FAILED(gpu::CreateCommittedResource(dev, &heap, D3D12_HEAP_FLAG_NONE, &bd,
+                D3D12_RESOURCE_STATE_COMMON, nullptr, MemTag::ShadowVsm, name, IID_PPV_ARGS(res.GetAddressOf()))) || !res)
         {
             return nullptr;
         }
-        res->SetName(name);
         return res;
     }
 }
@@ -463,10 +462,9 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
         for (UINT i = 0; i < render::kFrameCount; ++i)
         {
             countersReadbackValid_[i] = false;
-            if (SUCCEEDED(dev->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST,
-                    nullptr, IID_PPV_ARGS(countersReadback_[i].ReleaseAndGetAddressOf()))))
+            if (SUCCEEDED(gpu::CreateCommittedResource(dev, &rb, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST,
+                    nullptr, MemTag::ShadowVsm, L"VSM.AllocCountersReadback", IID_PPV_ARGS(countersReadback_[i].ReleaseAndGetAddressOf()))))
             {
-                countersReadback_[i]->SetName(L"VSM.AllocCountersReadback");
                 void* p = nullptr;
                 if (SUCCEEDED(countersReadback_[i]->Map(0, nullptr, &p))) { countersReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
             }
@@ -479,7 +477,7 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     hd.NumDescriptors = 5;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(allocUavHeap_.GetAddressOf()))) || !allocUavHeap_)
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.AllocUavHeap", IID_PPV_ARGS(allocUavHeap_.GetAddressOf()))) || !allocUavHeap_)
     {
         allocUavHeap_.Reset();
         return;
@@ -1497,8 +1495,8 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
         rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
-        renderer->GetDevice()->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(debugReadback_.GetAddressOf()));
+        gpu::CreateCommittedResource(renderer->GetDevice(), &rb, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::ShadowVsm, L"VSM.DebugReadback", IID_PPV_ARGS(debugReadback_.GetAddressOf()));
     }
     if (!debugReadback_) { return; }
 
@@ -1606,8 +1604,8 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
         for (UINT i = 0; i < render::kFrameCount; ++i)
         {
-            if (SUCCEEDED(dev->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
-                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(residentReadback_[i].GetAddressOf()))))
+            if (SUCCEEDED(gpu::CreateCommittedResource(dev, &rb, D3D12_HEAP_FLAG_NONE, &rd,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::ShadowVsm, L"VSM.ResidentReadback", IID_PPV_ARGS(residentReadback_[i].GetAddressOf()))))
             {
                 void* p = nullptr;
                 if (SUCCEEDED(residentReadback_[i]->Map(0, nullptr, &p))) { residentReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
@@ -1631,7 +1629,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         hd.NumDescriptors = 15;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
+        if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.RenderHeap", IID_PPV_ARGS(renderHeap_.GetAddressOf()))) || !renderHeap_)
         {
             renderHeap_.Reset();
             return;
@@ -1783,8 +1781,8 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, vsmHzb_.GetAddressOfForCreate())) || !vsmHzb_)
+        if (FAILED(gpu::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, rd,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, MemTag::ShadowVsm, L"VSM.Hzb", vsmHzb_.GetAddressOfForCreate())) || !vsmHzb_)
         {
             vsmHzb_.Reset();
             return;
@@ -1841,10 +1839,9 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
         for (UINT i = 0; i < render::kFrameCount; ++i)
         {
-            if (SUCCEEDED(dev->CreateCommittedResource(&rb, D3D12_HEAP_FLAG_NONE, &rd,
-                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(hzbReadback_[i].GetAddressOf()))))
+            if (SUCCEEDED(gpu::CreateCommittedResource(dev, &rb, D3D12_HEAP_FLAG_NONE, &rd,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::ShadowVsm, L"VSM.HzbReadback", IID_PPV_ARGS(hzbReadback_[i].GetAddressOf()))))
             {
-                hzbReadback_[i]->SetName(L"VSM.HzbReadback");
                 void* p = nullptr;
                 if (SUCCEEDED(hzbReadback_[i]->Map(0, nullptr, &p))) { hzbReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
             }
@@ -1859,7 +1856,7 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
         hd.NumDescriptors = 16; // hzb SRV + 7 mip UAVs + prevPageTable SRV + pairs UAV/SRV + counters UAV + countsB UAV/SRV + argsB UAV + argCountB UAV
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(hzbHeap_.GetAddressOf()))) || !hzbHeap_)
+        if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.HzbHeap", IID_PPV_ARGS(hzbHeap_.GetAddressOf()))) || !hzbHeap_)
         {
             hzbHeap_.Reset();
             return;

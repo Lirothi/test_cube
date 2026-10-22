@@ -624,6 +624,9 @@
     <ClCompile Include="sources/rendering/core/MemoryReport.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/GpuAlloc.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -1103,6 +1106,9 @@
     <ClInclude Include="sources/core/memory/MemCounters.h">
       <Filter>sources\core\memory</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/memory/MemTags.h">
+      <Filter>sources\core\memory</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/memory/diagnostics/MemBench.h">
       <Filter>sources\core\memory\diagnostics</Filter>
     </ClInclude>
@@ -1278,6 +1284,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/MemoryReport.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/GpuAlloc.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/FrameScheduler.h">

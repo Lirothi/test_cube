@@ -5,6 +5,7 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContext.h"
 #include "rendering/core/Renderer.h"
@@ -55,13 +56,12 @@ bool OcclusionQueryHeap::EnsureResources(Renderer* renderer)
     D3D12_QUERY_HEAP_DESC qh{};
     qh.Type = D3D12_QUERY_HEAP_TYPE_OCCLUSION;
     qh.Count = kHeapQueries;
-    if (FAILED(device->CreateQueryHeap(&qh, IID_PPV_ARGS(&heap_))))
+    if (FAILED(gpu::CreateQueryHeap(device, &qh, MemTag::Vis, L"Occlusion.QueryHeap", IID_PPV_ARGS(&heap_))))
     {
-        LOG_ERROR(logging::LogCategory::Render, "occlusion queries: CreateQueryHeap({}) failed; method off", kHeapQueries);
+        LOG_ERROR(logging::LogCategory::Render, "occlusion queries: query heap of {} failed; method off", kHeapQueries);
         failed_ = true;
         return false;
     }
-    heap_->SetName(L"Occlusion.QueryHeap");
 
     D3D12_HEAP_PROPERTIES hp{};
     D3D12_RESOURCE_DESC rd{};
@@ -75,25 +75,25 @@ bool OcclusionQueryHeap::EnsureResources(Renderer* renderer)
 
     hp.Type = D3D12_HEAP_TYPE_READBACK;
     rd.Width = static_cast<UINT64>(kHeapQueries) * sizeof(std::uint64_t);
-    if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_))))
+    if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            MemTag::Vis, L"Occlusion.Readback", IID_PPV_ARGS(&readback_))))
     {
         LOG_ERROR(logging::LogCategory::Render, "occlusion queries: readback buffer failed; method off");
         failed_ = true;
         return false;
     }
-    readback_->SetName(L"Occlusion.Readback");
 
     // The 16-box index buffer, written once. An UPLOAD-heap buffer is a valid index buffer
     // (GENERIC_READ covers INDEX_BUFFER) and spares an upload command list.
     hp.Type = D3D12_HEAP_TYPE_UPLOAD;
     rd.Width = kIndexBufferBytes;
-    if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&indexBuffer_))))
+    if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            MemTag::Vis, L"Occlusion.BoxIndices", IID_PPV_ARGS(&indexBuffer_))))
     {
         LOG_ERROR(logging::LogCategory::Render, "occlusion queries: index buffer failed; method off");
         failed_ = true;
         return false;
     }
-    indexBuffer_->SetName(L"Occlusion.BoxIndices");
     {
         void* mapped = nullptr;
         const D3D12_RANGE noRead{ 0, 0 };

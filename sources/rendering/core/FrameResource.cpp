@@ -1,5 +1,6 @@
 ﻿#include "rendering/core/FrameResource.h"
 #include "core/Helpers.h"
+#include "rendering/core/GpuAlloc.h"
 
 void FrameResource::InitUpload(ID3D12Device* dev, UINT bytes) {
     if (bytes == 0u) {
@@ -21,9 +22,10 @@ void FrameResource::InitUpload(ID3D12Device* dev, UINT bytes) {
     rd.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> tmp;
-    ThrowIfFailed(dev->CreateCommittedResource(
+    ThrowIfFailed(gpu::CreateCommittedResource(dev,
         &hp, D3D12_HEAP_FLAG_NONE, &rd,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        MemTag::FrameUpload, L"FrameUpload.Ring",
         IID_PPV_ARGS(tmp.ReleaseAndGetAddressOf())));
 
     upload_ = tmp;
@@ -132,9 +134,10 @@ FrameResource::DynamicAlloc FrameResource::AllocDynamic(UINT size, UINT align) {
         Microsoft::WRL::ComPtr<ID3D12Device> dev;
         ThrowIfFailed(upload_->GetDevice(IID_PPV_ARGS(dev.GetAddressOf())));
 
-        ThrowIfFailed(dev->CreateCommittedResource(
+        ThrowIfFailed(gpu::CreateCommittedResource(dev.Get(),
             &hp, D3D12_HEAP_FLAG_NONE, &rd,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            MemTag::FrameUpload, L"FrameUpload.Overflow",
             IID_PPV_ARGS(ch.res.ReleaseAndGetAddressOf())));
 
         // persistent map

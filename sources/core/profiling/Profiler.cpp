@@ -13,6 +13,7 @@
 #include <limits>
 #include "third_party/robin_hood.h"
 #include "core/logging/Log.h"
+#include "rendering/core/GpuAlloc.h"
 #include <Windows.h>
 
 namespace {
@@ -613,9 +614,13 @@ void Profiler::InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue,
     for (UINT q = 0; q < kGpuQueueCount; ++q) {
         if (!gpuQueue_[q]) { continue; }
         const D3D12_RANGE readRange{ 0, static_cast<SIZE_T>(resource.Width) };
-        if (FAILED(device->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&gpuQueryHeap_[q]))) ||
-            FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &resource,
-                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&gpuReadback_[q]))) ||
+        if (FAILED(gpu::CreateQueryHeap(device, &queryDesc, MemTag::Profiler,
+                q == 0 ? L"Profiler.QueryHeap.Graphics" : L"Profiler.QueryHeap.Compute",
+                IID_PPV_ARGS(&gpuQueryHeap_[q]))) ||
+            FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &resource,
+                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Profiler,
+                q == 0 ? L"Profiler.Readback.Graphics" : L"Profiler.Readback.Compute",
+                IID_PPV_ARGS(&gpuReadback_[q]))) ||
             FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gpuDrainFence_[q]))) ||
             FAILED(gpuQueue_[q]->GetTimestampFrequency(&gpuFreq_[q])) ||
             FAILED(gpuReadback_[q]->Map(0, &readRange, reinterpret_cast<void**>(&gpuMappedReadback_[q])))) {

@@ -22,6 +22,7 @@
 #include "rendering/core/GBufferBindingGuard.h"
 #include "rendering/core/GbvPassFilter.h"
 #include "rendering/core/GraphicsDevice.h"
+#include "rendering/core/MemoryReport.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
 #include "meshoptimizer.h"                // --reimport-drop-small= -> meshopt_SimplifyPrune
@@ -821,6 +822,13 @@ int WINAPI WinMain(
             std::string path;
             while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
             g_profDumpPath = path;
+        }
+        // "--memreport[=<sec>]": one memory report (platform, the GPU census by tag, every GPU
+        // object by size) into the session log <sec> s after the first frame, default 10 (memory
+        // profiling plan M1). Keep it inside --shot-delay: the shot ends the run.
+        if (const char* flag = std::strstr(lpCmdLine, "--memreport")) {
+            const char* p = flag + std::strlen("--memreport");
+            render::ScheduleMemoryReport(*p == '=' ? std::atof(p + 1) : 10.0);
         }
         // "--ocean-shore-sink": cut the ocean's run-up sheet by sinking it under the terrain in
         // the VS instead of discarding it in the PS, which lets the whole ocean draw keep early-Z.

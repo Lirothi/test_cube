@@ -1,6 +1,7 @@
 #include "rendering/rt/BindlessTable.h"
 #include "core/logging/Log.h"
 
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/meshes/Mesh.h"
 
 #include <algorithm>
@@ -61,7 +62,7 @@ void BindlessTable::Init(ID3D12Device* device, render::BindlessHeap* shared)
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     desc.NumDescriptors = kMaxDescriptors;
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (SUCCEEDED(device_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap_)))) {
+    if (SUCCEEDED(gpu::CreateDescriptorHeap(device_, &desc, MemTag::RtBindless, L"RtBindless.Heap", IID_PPV_ARGS(&heap_)))) {
         incr_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     } else {
         buildFailed_ = true;
@@ -294,9 +295,10 @@ bool BindlessTable::UploadGeometryInfo(UINT frameIndex)
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-        if (FAILED(device_->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-                                                    D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                    IID_PPV_ARGS(&buffer)))) {
+        if (FAILED(gpu::CreateCommittedResource(device_, &heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                MemTag::RtBindless, L"RtBindless.GeometryInfo",
+                                                IID_PPV_ARGS(&buffer)))) {
             buildFailed_ = true;
             return false;
         }

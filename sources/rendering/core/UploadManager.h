@@ -1,7 +1,9 @@
 #pragma once
 #include <wrl.h>
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GpuAlloc.h"
 #include <d3d12.h>
+#include <string>
 #include <vector>
 #include <cstdint>
 #include "core/Helpers.h"
@@ -14,9 +16,12 @@ public:
         : device_(device), cmdList_(cmdList) {
     }
 
+    // `tag` and `name` go to the GPU census (rendering/core/GpuAlloc.h) for the default-heap buffer;
+    // its upload staging copy carries the same owner, named "<name>.Upload".
     ComPtr<ID3D12Resource> CreateBufferWithData(const void* srcData, size_t byteSize,
         D3D12_RESOURCE_FLAGS flags,
-        D3D12_RESOURCE_STATES afterCopy)
+        D3D12_RESOURCE_STATES afterCopy,
+        MemTag tag, const wchar_t* name)
     {
         // --- Default (GPU) ---
         D3D12_HEAP_PROPERTIES heapDefault{};
@@ -35,10 +40,10 @@ public:
 
         ComPtr<ID3D12Resource> defaultBuf;
         // IMPORTANT: buffers must use InitialState = COMMON
-        ThrowIfFailed(device_->CreateCommittedResource(
+        ThrowIfFailed(gpu::CreateCommittedResource(device_,
             &heapDefault, D3D12_HEAP_FLAG_NONE, &desc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(&defaultBuf)));
+            tag, name, IID_PPV_ARGS(&defaultBuf)));
 
         // --- Upload ---
         D3D12_HEAP_PROPERTIES heapUpload{};
@@ -48,10 +53,11 @@ public:
         descUpload.Flags = D3D12_RESOURCE_FLAG_NONE;
 
         ComPtr<ID3D12Resource> uploadBuf;
-        ThrowIfFailed(device_->CreateCommittedResource(
+        const std::wstring uploadName = std::wstring(name != nullptr ? name : L"Buffer") + L".Upload";
+        ThrowIfFailed(gpu::CreateCommittedResource(device_,
             &heapUpload, D3D12_HEAP_FLAG_NONE, &descUpload,
             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-            IID_PPV_ARGS(&uploadBuf)));
+            tag, uploadName.c_str(), IID_PPV_ARGS(&uploadBuf)));
 
         // Map + memcpy
         void* dst = nullptr;

@@ -6,6 +6,7 @@
 #include "core/logging/Log.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/RenderGraph.h"
@@ -63,9 +64,9 @@ bool CreateBuffer(Renderer* renderer, GpuResource& out, UINT64 bytes,
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    if (FAILED(renderer->GetDevice()->CreateCommittedResource(
+    if (FAILED(gpu::CreateCommittedResource(renderer->GetDevice(),
             &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr,
-            IID_PPV_ARGS(buffer.GetAddressOf()))) || !buffer)
+            MemTag::ShadowSdsm, name, IID_PPV_ARGS(buffer.GetAddressOf()))) || !buffer)
     {
         return false;
     }
@@ -145,9 +146,9 @@ bool SdsmShadows::EnsureBuffers(Renderer* renderer)
         rd.Format = DXGI_FORMAT_UNKNOWN;
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        if (FAILED(renderer->GetDevice()->CreateCommittedResource(
+        if (FAILED(gpu::CreateCommittedResource(renderer->GetDevice(),
                 &rb, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                IID_PPV_ARGS(readback_.GetAddressOf()))))
+                MemTag::ShadowSdsm, L"SDSM.Readback", IID_PPV_ARGS(readback_.GetAddressOf()))))
         {
             readback_.Reset(); // non-fatal: the readout is a display path, the render does not need it
         }
@@ -165,7 +166,7 @@ bool SdsmShadows::EnsureDescriptors(Renderer* renderer)
     hd.NumDescriptors = kSlotCount;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(heap_.GetAddressOf()))) || !heap_)
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowSdsm, L"SDSM.Heap", IID_PPV_ARGS(heap_.GetAddressOf()))) || !heap_)
     {
         heap_.Reset();
         return false;
@@ -354,8 +355,8 @@ bool SdsmShadows::EnsureMoments(Renderer* renderer, UINT atlasRes)
     // the buffers above may keep COMMON; RenderTargetManager states the same rule for every
     // texture it makes -- created directly in its resting state, so creation == canonical.
     Microsoft::WRL::ComPtr<ID3D12Resource> tex;
-    if (FAILED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc,
-                                              kSrvAll, nullptr, tex.GetAddressOf())) || !tex)
+    if (FAILED(gpu::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc,
+                                           kSrvAll, nullptr, MemTag::ShadowSdsm, L"SDSM.Moments", tex.GetAddressOf())) || !tex)
     {
         LOG_ERROR(logging::LogCategory::RenderShadow,
                   "SDSM moments atlas {}x{} RGBA32F allocation FAILED; EVSM unavailable", atlasRes, atlasRes);
@@ -367,7 +368,7 @@ bool SdsmShadows::EnsureMoments(Renderer* renderer, UINT atlasRes)
     hd.NumDescriptors = 2;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(momentsHeap_.GetAddressOf()))) || !momentsHeap_)
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowSdsm, L"SDSM.MomentsHeap", IID_PPV_ARGS(momentsHeap_.GetAddressOf()))) || !momentsHeap_)
     {
         ReleaseMoments(renderer);
         return false;
@@ -396,9 +397,10 @@ bool SdsmShadows::EnsureMoments(Renderer* renderer, UINT atlasRes)
         bd.Width = tile;
         bd.Height = tile;
         Microsoft::WRL::ComPtr<ID3D12Resource> scratch;
-        if (SUCCEEDED(render::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, bd,
-                                                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-                                                     scratch.GetAddressOf())) && scratch)
+        if (SUCCEEDED(gpu::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, bd,
+                                                  D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                                  MemTag::ShadowSdsm, L"SDSM.MomentsBlurScratch",
+                                                  scratch.GetAddressOf())) && scratch)
         {
             blurScratch_.Attach(renderer->Declarations(), scratch, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"SDSM.MomentsBlurScratch");
@@ -407,7 +409,7 @@ bool SdsmShadows::EnsureMoments(Renderer* renderer, UINT atlasRes)
             sh.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
             sh.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
             Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sheap;
-            if (SUCCEEDED(dev->CreateDescriptorHeap(&sh, IID_PPV_ARGS(sheap.GetAddressOf()))) && sheap)
+            if (SUCCEEDED(gpu::CreateDescriptorHeap(dev, &sh, MemTag::ShadowSdsm, L"SDSM.MomentsBlurScratchHeap", IID_PPV_ARGS(sheap.GetAddressOf()))) && sheap)
             {
                 blurScratchHeap_ = sheap;
                 const D3D12_CPU_DESCRIPTOR_HANDLE sbase = sheap->GetCPUDescriptorHandleForHeapStart();

@@ -11,6 +11,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
 
@@ -112,15 +113,14 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
     rd.SampleDesc.Count = 1;
     rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     void* mapped = nullptr;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(buffer_.GetAddressOf()))) ||
+    if (FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Ocean, L"Ocean.Readback", IID_PPV_ARGS(buffer_.GetAddressOf()))) ||
         FAILED(buffer_->Map(0, nullptr, &mapped)) || !mapped)
     {
         buffer_.Reset();
         LOG_ERROR(logging::LogCategory::Ocean, "ocean readback: could not create/map the {} byte ring", rd.Width);
         return false;
     }
-    buffer_->SetName(L"Ocean.Readback");
     mapped_ = static_cast<const std::uint8_t*>(mapped);
     layoutResolution_ = resolution;
     layoutCascades_ = 2u;

@@ -8,12 +8,16 @@
 #include <mimalloc.h>
 #include <mimalloc-stats.h>
 
+#include <algorithm>
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "core/logging/Log.h"
 #include "core/memory/MemCounters.h"
+#include "rendering/core/GpuAlloc.h"
 
 #pragma comment(lib, "dxgi.lib")
 
@@ -52,6 +56,10 @@ namespace
         std::uint64_t frames = 0;
         std::uint64_t framesAtLine = 0;
         std::uint64_t lines = 0;
+        // The memory report: scheduled relative to the first tick, or requested for the next one.
+        double firstTickSec = -1.0;
+        double reportAfterSec = -1.0;
+        bool reportRequested = false;
         ThreadPrev threadPrev[mem::kMaxThreadCounterBlocks + 1];
     };
     State& St()
@@ -336,10 +344,131 @@ void UnregisterMemoryProvider(const void* self)
     }
 }
 
+namespace
+{
+    void AppendF(std::string& out, const char* fmt, ...)
+    {
+        char buf[512];
+        va_list args;
+        va_start(args, fmt);
+        const int n = std::vsnprintf(buf, sizeof(buf), fmt, args);
+        va_end(args);
+        if (n > 0) { out.append(buf, static_cast<size_t>(n < static_cast<int>(sizeof(buf)) ? n : sizeof(buf) - 1)); }
+    }
+
+    void DumpMemoryReport(ID3D12Device* device, std::uint64_t frame)
+    {
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb = sizeof(pmc);
+        GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+        DXGI_QUERY_VIDEO_MEMORY_INFO local{}, nonLocal{};
+        bool haveVram = false;
+        if (IDXGIAdapter3* adapter = AdapterFor(device))
+        {
+            haveVram = SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local)) &&
+                       SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal));
+        }
+        mi_stats_t miStats{};
+        mi_stats_get(sizeof(miStats), &miStats);
+        const double miCommit = miStats.committed.current > 0 ? Mb(static_cast<std::uint64_t>(miStats.committed.current)) : 0.0;
+        const HeapTotals heaps = ProcessHeapTotals();
+        const RegionTotals regions = WalkPrivateRegions();
+        gpu::CensusTotals census;
+        gpu::ReadCensus(census);
+        std::vector<gpu::RecordInfo> records;
+        gpu::SnapshotRecords(records);
+        std::sort(records.begin(), records.end(),
+                  [](const gpu::RecordInfo& a, const gpu::RecordInfo& b) { return a.bytes > b.bytes; });
+
+        const auto& all = census.all;
+        const double gpuLocal = Mb(all.bytes[static_cast<int>(gpu::MemPool::Local)]);
+        const double gpuNonLocal = Mb(all.bytes[static_cast<int>(gpu::MemPool::NonLocal)]);
+
+        std::string text;
+        text.reserve(64 * 1024);
+        AppendF(text, "memreport: begin (frame %llu)\n", static_cast<unsigned long long>(frame));
+        AppendF(text, "memreport: process private %.1f MB, working set %.1f MB\n", Mb(pmc.PrivateUsage), Mb(pmc.WorkingSetSize));
+        AppendF(text, "memreport:   mimalloc commit %.1f MB | NT heaps %.1f MB (%u) | write-combined %.1f MB | exec %.1f MB | other private %.1f MB (walk %.1f ms, %u reservations)\n",
+                miCommit, Mb(heaps.committed), heaps.count, Mb(regions.writeCombine), Mb(regions.exec),
+                Mb(regions.committed) - Mb(regions.mimalloc) - Mb(regions.writeCombine) - Mb(regions.exec) - Mb(heaps.committed),
+                regions.ms, regions.reservations);
+        if (haveVram)
+        {
+            AppendF(text, "memreport: vram local %.1f / budget %.1f MB, non-local %.1f MB (DXGI, this process)\n",
+                    Mb(local.CurrentUsage), Mb(local.Budget), Mb(nonLocal.CurrentUsage));
+        }
+        AppendF(text, "memreport: gpu census local %.1f MB, non-local %.1f MB, %u resources + %u heaps (descriptors ~%.1f MB), buffer slack %.1f MB",
+                gpuLocal, gpuNonLocal, all.resources, all.heaps, Mb(all.descriptorBytes), Mb(all.bufferSlack));
+        if (haveVram)
+        {
+            AppendF(text, " | untracked local %.1f MB, non-local %.1f MB",
+                    Mb(local.CurrentUsage) - gpuLocal, Mb(nonLocal.CurrentUsage) - gpuNonLocal);
+        }
+        text += "\n";
+
+        // The tag tree: each top-level row is its own bytes plus its children's.
+        AppendF(text, "memreport: tags (local / non-local MB, resources, heaps):\n");
+        for (std::uint32_t top = 0; top < kMemTagCount; ++top)
+        {
+            if (kMemTagParents[top] != MemTag::Root) { continue; }
+            gpu::TagTotals sum = census.tags[top];
+            bool hasChildren = false;
+            for (std::uint32_t c = 0; c < kMemTagCount; ++c)
+            {
+                if (static_cast<std::uint32_t>(kMemTagParents[c]) != top) { continue; }
+                const gpu::TagTotals& ct = census.tags[c];
+                sum.bytes[0] += ct.bytes[0];
+                sum.bytes[1] += ct.bytes[1];
+                sum.resources += ct.resources;
+                sum.heaps += ct.heaps;
+                hasChildren = hasChildren || ct.resources > 0 || ct.heaps > 0;
+            }
+            if (sum.resources == 0 && sum.heaps == 0) { continue; }
+            AppendF(text, "memreport:   %-16s %9.1f %9.1f %5u %4u\n", kMemTagNames[top], Mb(sum.bytes[0]), Mb(sum.bytes[1]),
+                    sum.resources, sum.heaps);
+            if (!hasChildren) { continue; }
+            for (std::uint32_t c = 0; c < kMemTagCount; ++c)
+            {
+                if (static_cast<std::uint32_t>(kMemTagParents[c]) != top) { continue; }
+                const gpu::TagTotals& ct = census.tags[c];
+                if (ct.resources == 0 && ct.heaps == 0) { continue; }
+                AppendF(text, "memreport:     %-14s %9.1f %9.1f %5u %4u\n", kMemTagNames[c], Mb(ct.bytes[0]), Mb(ct.bytes[1]),
+                        ct.resources, ct.heaps);
+            }
+        }
+
+        AppendF(text, "memreport: objects by size (MB, pool, kind, tag, name):\n");
+        for (const gpu::RecordInfo& r : records)
+        {
+            AppendF(text, "memreport:   %9.3f %-8s %-9s %-16s %s\n", Mb(r.bytes),
+                    r.pool == gpu::MemPool::Local ? "local" : "nonlocal", r.kind, MemTagName(r.tag), r.name.c_str());
+        }
+        AppendF(text, "memreport: end (%zu objects)\n", records.size());
+        logging::WriteRawLines(logging::LogLevel::Info, logging::LogCategory::Core, text);
+    }
+}
+
+void ScheduleMemoryReport(double afterSec)
+{
+    St().reportAfterSec = afterSec >= 0.0 ? afterSec : 10.0;
+}
+
+void RequestMemoryReport()
+{
+    St().reportRequested = true;
+}
+
 void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
 {
     State& s = St();
     ++s.frames;
+    if (s.firstTickSec < 0.0) { s.firstTickSec = nowSec; }
+    if (s.reportRequested || (s.reportAfterSec >= 0.0 && nowSec - s.firstTickSec >= s.reportAfterSec))
+    {
+        s.reportRequested = false;
+        s.reportAfterSec = -1.0;
+        DumpMemoryReport(device, s.frames);
+    }
     if (s.lastSec >= 0.0 && nowSec - s.lastSec < periodSec) { return; }
     const bool first = s.lastSec < 0.0;
     s.lastSec = nowSec;
@@ -387,6 +516,20 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
                            " | vram local %.0f/%.0f MB (%+lld) nonlocal %.0f",
                            Mb(local.CurrentUsage), Mb(local.Budget),
                            first ? 0ll : MbDelta(local.CurrentUsage, s.prevLocal), Mb(nonLocal.CurrentUsage));
+    }
+    // The GPU census (rendering/core/GpuAlloc.h): what the engine's own resources hold, by pool.
+    // `untracked` = the adapter's local usage minus ours -- the driver, DLSS/Streamline, the ImGui
+    // backend. Signed: a remainder.
+    gpu::CensusTotals census;
+    gpu::ReadCensus(census);
+    const std::uint64_t gpuLocal = census.all.bytes[static_cast<int>(gpu::MemPool::Local)];
+    const std::uint64_t gpuNonLocal = census.all.bytes[static_cast<int>(gpu::MemPool::NonLocal)];
+    n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | gpu local %.0f nonlocal %.0f MB (%u res)",
+                       Mb(gpuLocal), Mb(gpuNonLocal), census.all.resources);
+    if (haveVram)
+    {
+        n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " untracked %.0f",
+                           Mb(local.CurrentUsage) - Mb(gpuLocal));
     }
     if (miCommit > 0)
     {
@@ -466,6 +609,39 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
                                b.mimalloc ? " mi" : "", b.writeCombine ? " wc" : "");
         }
         LOG_DEBUG(logging::LogCategory::Core, "{}", regions);
+
+        // The census by tag, biggest first: local/non-local MB and the resource count. Leaf rows
+        // only (a parent is the sum of its children and adds nothing to a one-line view).
+        struct Row
+        {
+            std::uint32_t tag = 0;
+            std::uint64_t bytes = 0;
+        };
+        Row rows[kMemTagCount];
+        int rowCount = 0;
+        for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+        {
+            const gpu::TagTotals& tt = census.tags[t];
+            const std::uint64_t b = tt.bytes[0] + tt.bytes[1];
+            if (b == 0) { continue; }
+            int at = rowCount++;
+            while (at > 0 && rows[at - 1].bytes < b) { rows[at] = rows[at - 1]; --at; }
+            rows[at] = Row{ t, b };
+        }
+        char tags[1024];
+        int g = std::snprintf(tags, sizeof(tags),
+                              "mem gpu: %u res + %u heaps (descriptors ~%.1f MB), buffer slack %.1f MB, created %llu released %llu |",
+                              census.all.resources, census.all.heaps, Mb(census.all.descriptorBytes),
+                              Mb(census.all.bufferSlack), static_cast<unsigned long long>(census.created),
+                              static_cast<unsigned long long>(census.released));
+        for (int i = 0; i < rowCount && g < static_cast<int>(sizeof(tags)) - 64; ++i)
+        {
+            const gpu::TagTotals& tt = census.tags[rows[i].tag];
+            g += std::snprintf(tags + g, sizeof(tags) - static_cast<size_t>(g), " %s %.1f/%.1f (%u)",
+                               MemTagName(static_cast<MemTag>(rows[i].tag)), Mb(tt.bytes[0]), Mb(tt.bytes[1]),
+                               tt.resources);
+        }
+        LOG_DEBUG(logging::LogCategory::Core, "{}", tags);
     }
 }
 std::uint64_t DedicatedVideoMemoryBytes(ID3D12Device* device)

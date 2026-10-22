@@ -4,6 +4,7 @@
 
 #include "core/logging/Log.h"
 #include "materials/Material.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
@@ -79,11 +80,11 @@ bool HzbOcclusionTester::EnsureResources(Renderer* renderer)
     hp.Type = D3D12_HEAP_TYPE_UPLOAD;
     {
         const D3D12_RESOURCE_DESC rd = BufferDesc(static_cast<UINT64>(kBoxRegionBytes) * kOcclusionBufferedFrames, D3D12_RESOURCE_FLAG_NONE);
-        if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&boxes_))))
+        if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                MemTag::Vis, L"VisTest.Boxes", IID_PPV_ARGS(&boxes_))))
         {
             return fail("box ring");
         }
-        boxes_->SetName(L"VisTest.Boxes");
         void* mapped = nullptr;
         const D3D12_RANGE noRead{ 0, 0 };
         if (FAILED(boxes_->Map(0, &noRead, &mapped)) || !mapped) { return fail("box ring map"); }
@@ -97,7 +98,8 @@ bool HzbOcclusionTester::EnsureResources(Renderer* renderer)
     {
         const D3D12_RESOURCE_DESC rd = BufferDesc(kResultRegionBytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
         Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-        if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer))))
+        if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                MemTag::Vis, L"VisTest.Results", IID_PPV_ARGS(&buffer))))
         {
             return fail("results buffer");
         }
@@ -108,11 +110,11 @@ bool HzbOcclusionTester::EnsureResources(Renderer* renderer)
     hp.Type = D3D12_HEAP_TYPE_READBACK;
     {
         const D3D12_RESOURCE_DESC rd = BufferDesc(static_cast<UINT64>(kResultRegionBytes) * kOcclusionBufferedFrames, D3D12_RESOURCE_FLAG_NONE);
-        if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_))))
+        if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                MemTag::Vis, L"VisTest.Readback", IID_PPV_ARGS(&readback_))))
         {
             return fail("readback buffer");
         }
-        readback_->SetName(L"VisTest.Readback");
     }
 
     // Descriptors: a box SRV per region and the results UAV, staged into the shader-visible heap
@@ -122,7 +124,7 @@ bool HzbOcclusionTester::EnsureResources(Renderer* renderer)
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.NumDescriptors = kOcclusionBufferedFrames + 1;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&descHeap_)))) { return fail("descriptor heap"); }
+        if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Vis, L"VisTest.SrvHeap", IID_PPV_ARGS(&descHeap_)))) { return fail("descriptor heap"); }
         const UINT incr = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         const D3D12_CPU_DESCRIPTOR_HANDLE base = descHeap_->GetCPUDescriptorHandleForHeapStart();
         for (UINT f = 0; f < kOcclusionBufferedFrames; ++f)

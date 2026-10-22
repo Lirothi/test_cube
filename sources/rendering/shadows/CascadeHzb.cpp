@@ -6,6 +6,7 @@
 #include "core/logging/Log.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
@@ -98,7 +99,7 @@ bool CascadeHzb::EnsureResources(Renderer* renderer, UINT contentRes)
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = kCascades * (1 + kMaxMips);
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { return fail("descriptor heap"); }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::ShadowCsm, L"CascadeHzb.Heap", IID_PPV_ARGS(&heap_)))) { return fail("descriptor heap"); }
     const UINT incr = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     const D3D12_CPU_DESCRIPTOR_HANDLE base = heap_->GetCPUDescriptorHandleForHeapStart();
 
@@ -119,9 +120,9 @@ bool CascadeHzb::EnsureResources(Renderer* renderer, UINT contentRes)
     for (unsigned c = 0; c < kCascades; ++c)
     {
         // Created and resting in NON_PIXEL (the cull reads it); UNORDERED_ACCESS only for the build.
-        if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, rd,
-                                                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
-                                                  pyramid_[c].GetAddressOfForCreate())))
+        if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, rd,
+                                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                                               MemTag::ShadowCsm, kNames[c], pyramid_[c].GetAddressOfForCreate())))
         {
             return fail("pyramid texture");
         }

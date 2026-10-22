@@ -2,6 +2,7 @@
 #include "rendering/visibility/HzbCull.h"
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
+#include "rendering/core/GpuAlloc.h"
 
 #include <windows.h>
 #include <d3d12.h>
@@ -277,7 +278,7 @@ TestResult Mirror(const TestCase& c, const SelfTestConstants& k, const Pyramid& 
 // ---- D3D12 plumbing ------------------------------------------------------------------------------
 
 ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, D3D12_HEAP_TYPE heap, UINT64 bytes,
-                                    D3D12_RESOURCE_STATES state, D3D12_RESOURCE_FLAGS flags);
+                                    D3D12_RESOURCE_STATES state, D3D12_RESOURCE_FLAGS flags, const wchar_t* name);
 
 // A synthetic pyramid on the GPU: the R32 mip chain, its staging copy and the upload. Two of
 // them since S5b (perspective and ortho), so the plumbing lives here once.
@@ -289,7 +290,7 @@ struct GpuPyramid
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints;
     int levels = 0;
 
-    bool Create(ID3D12Device* device, const Pyramid& pyr)
+    bool Create(ID3D12Device* device, const Pyramid& pyr, const wchar_t* texName, const wchar_t* stagingName)
     {
         levels = pyr.levels;
         desc = {};
@@ -304,14 +305,15 @@ struct GpuPyramid
         {
             D3D12_HEAP_PROPERTIES hp{};
             hp.Type = D3D12_HEAP_TYPE_DEFAULT;
-            device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&tex));
+            gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                         MemTag::Vis, texName, IID_PPV_ARGS(&tex));
         }
         footprints.assign(static_cast<size_t>(pyr.levels), {});
         std::vector<UINT> rowCounts(static_cast<size_t>(pyr.levels));
         std::vector<UINT64> rowBytes(static_cast<size_t>(pyr.levels));
         UINT64 stagingBytes = 0;
         device->GetCopyableFootprints(&desc, 0, static_cast<UINT>(pyr.levels), 0, footprints.data(), rowCounts.data(), rowBytes.data(), &stagingBytes);
-        staging = CreateBuffer(device, D3D12_HEAP_TYPE_UPLOAD, stagingBytes, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
+        staging = CreateBuffer(device, D3D12_HEAP_TYPE_UPLOAD, stagingBytes, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, stagingName);
         if (!tex || !staging) { return false; }
         void* mapped = nullptr;
         const D3D12_RANGE noRead{ 0, 0 };
@@ -365,7 +367,7 @@ struct GpuPyramid
 };
 
 ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, D3D12_HEAP_TYPE heap, UINT64 bytes,
-                                    D3D12_RESOURCE_STATES state, D3D12_RESOURCE_FLAGS flags)
+                                    D3D12_RESOURCE_STATES state, D3D12_RESOURCE_FLAGS flags, const wchar_t* name)
 {
     D3D12_HEAP_PROPERTIES hp{};
     hp.Type = heap;
@@ -380,7 +382,7 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, D3D12_HEAP_TYPE heap, 
     rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     rd.Flags = flags;
     ComPtr<ID3D12Resource> r;
-    if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr, IID_PPV_ARGS(&r))))
+    if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd, state, nullptr, MemTag::Vis, name, IID_PPV_ARGS(&r))))
     {
         return nullptr;
     }
@@ -547,13 +549,14 @@ int RunHzbCullSelfTest()
     }
 
     // --- Resources ---
-    ComPtr<ID3D12Resource> cbBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD, sizeof(SelfTestConstants), D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
-    ComPtr<ID3D12Resource> boxBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD, sizeof(TestBox) * kCaseCount, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
-    ComPtr<ID3D12Resource> resultBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_DEFAULT, sizeof(TestResult) * kCaseCount, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    ComPtr<ID3D12Resource> readback = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_READBACK, sizeof(TestResult) * kCaseCount, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE);
+    ComPtr<ID3D12Resource> cbBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD, sizeof(SelfTestConstants), D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, L"HzbSelfTest.Constants");
+    ComPtr<ID3D12Resource> boxBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_UPLOAD, sizeof(TestBox) * kCaseCount, D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE, L"HzbSelfTest.Boxes");
+    ComPtr<ID3D12Resource> resultBuf = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_DEFAULT, sizeof(TestResult) * kCaseCount, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, L"HzbSelfTest.Results");
+    ComPtr<ID3D12Resource> readback = CreateBuffer(device.Get(), D3D12_HEAP_TYPE_READBACK, sizeof(TestResult) * kCaseCount, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_FLAG_NONE, L"HzbSelfTest.Readback");
 
     GpuPyramid gpuPyr, gpuPyrOrtho;
-    const bool pyramidsOk = gpuPyr.Create(device.Get(), pyr) && gpuPyrOrtho.Create(device.Get(), pyrOrtho);
+    const bool pyramidsOk = gpuPyr.Create(device.Get(), pyr, L"HzbSelfTest.Pyramid", L"HzbSelfTest.PyramidStaging")
+        && gpuPyrOrtho.Create(device.Get(), pyrOrtho, L"HzbSelfTest.PyramidOrtho", L"HzbSelfTest.PyramidOrthoStaging");
 
     ComPtr<ID3D12DescriptorHeap> heap;
     {
@@ -561,7 +564,7 @@ int RunHzbCullSelfTest()
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.NumDescriptors = 4; // t0 boxes, t1 pyramid, t2 ortho pyramid, u0 results
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap));
+        gpu::CreateDescriptorHeap(device.Get(), &hd, MemTag::Vis, L"HzbSelfTest.SrvHeap", IID_PPV_ARGS(&heap));
     }
     if (!cbBuf || !boxBuf || !resultBuf || !readback || !pyramidsOk || !heap)
     {

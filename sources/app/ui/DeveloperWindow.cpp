@@ -508,6 +508,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 Texture2D::CreateDesc desc;
                 desc.path = L"textures/editor/content_browser_icons.png";
                 desc.usage = Texture2D::Usage::AlbedoSRGB;
+                resetIconAtlas_.SetMemTag(MemTag::Ui);
                 resetIconAtlasReady_ = resetIconAtlas_.CreateFromFile(
                     &renderer, uploads.CommandList(), desc, uploads.KeepAlive());
                 uploads.SubmitAndWait(&renderer);

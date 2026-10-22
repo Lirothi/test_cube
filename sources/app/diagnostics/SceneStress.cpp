@@ -12,6 +12,7 @@
 #include "vfx/WindState.h"
 #include <cmath>
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 
@@ -314,7 +315,15 @@ public:
                 return FinishFault_(iter, opName, reason);
             }
 
-            Log("[iter %d] op=%s ok\n", iter, opName);
+            // The GPU census after every op (memory profiling plan M1): a record whose release
+            // never comes back shows as `live` climbing across the run.
+            gpu::CensusTotals census;
+            gpu::ReadCensus(census);
+            Log("[iter %d] op=%s ok | gpu %.0f/%.0f MB %u res %u heaps live %llu\n", iter, opName,
+                static_cast<double>(census.all.bytes[0]) / (1024.0 * 1024.0),
+                static_cast<double>(census.all.bytes[1]) / (1024.0 * 1024.0),
+                census.all.resources, census.all.heaps,
+                static_cast<unsigned long long>(census.created - census.released));
         }
 
         if (skyEdits_ && !RenderFrames_(30, "sky-trace-drain"))

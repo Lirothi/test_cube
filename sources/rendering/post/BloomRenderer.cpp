@@ -123,6 +123,7 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                 Texture2D::CreateDesc desc;
                 desc.path = std::wstring(want.begin(), want.end());
                 desc.usage = Texture2D::Usage::LinearData;
+                bloomKernelTex_.SetMemTag(MemTag::Bloom);
                 bloomKernelReady_ = bloomKernelTex_.CreateFromFile(
                     renderer, up.CommandList(), desc, up.KeepAlive());
                 // P8C-2o: the same file again, on the CPU, for the centre/scatter survey. A
@@ -151,6 +152,7 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                     Texture2D::CreateDesc desc;
                     desc.path = std::wstring(want.begin(), want.end());
                     desc.usage = Texture2D::Usage::AlbedoSRGB;
+                    coronaTex_.SetMemTag(MemTag::Bloom);
                     coronaReady_ = coronaTex_.CreateFromFile(renderer, up.CommandList(), desc, up.KeepAlive());
                     up.SubmitAndWait(renderer);
                 }
@@ -1859,6 +1861,7 @@ void BloomRenderer::BakeFlareBokeh(Renderer* renderer, uint32_t blades)
     {
         return;
     }
+    flareBokeh_[slot].SetMemTag(MemTag::Bloom);
     flareBokeh_[slot].CreateFromRGBA8(renderer, batch->CommandList(), pixels.data(), kSize, kSize,
                                       batch->KeepAlive(), L"FlareBokeh");
     if (!batch->Submit(renderer))

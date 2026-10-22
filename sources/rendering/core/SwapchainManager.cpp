@@ -1,6 +1,9 @@
 #include "rendering/core/SwapchainManager.h"
 
+#include <cstdio>
+
 #include "core/Helpers.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/TextureCreate.h"
 
 void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, HWND hwnd,
@@ -37,13 +40,17 @@ void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, H
     rtvDesc.NumDescriptors = render::kFrameCount;
     rtvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
     rtvDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&rtvHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &rtvDesc, MemTag::FrameSwapchain, L"Swapchain.RtvHeap", IID_PPV_ARGS(&rtvHeap_)));
     rtvDescriptorSize_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
     // RTVs
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtvHeap_->GetCPUDescriptorHandleForHeapStart();
     for (UINT i = 0; i < render::kFrameCount; ++i) {
         ThrowIfFailed(swapChain_->GetBuffer(i, IID_PPV_ARGS(&renderTargets_[i])));
+        // DXGI made the buffer; the census records it as the swapchain's (memory plan M1).
+        wchar_t bufferName[48];
+        swprintf_s(bufferName, L"Swapchain.BackBuffer[%u]", i);
+        gpu::TrackExternalResource(device, renderTargets_[i].Get(), MemTag::FrameSwapchain, bufferName);
 
         D3D12_RENDER_TARGET_VIEW_DESC rtvFmt{};
         rtvFmt.Format = viewFormat;
@@ -66,7 +73,7 @@ void SwapchainManager::CreateDepth(ID3D12Device* device, UINT width, UINT height
     dsvHeapDesc.NumDescriptors = 1;
     dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&dsvHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &dsvHeapDesc, MemTag::FrameSwapchain, L"Swapchain.DsvHeap", IID_PPV_ARGS(&dsvHeap_)));
     dsvDescriptorSize_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
 
     D3D12_RESOURCE_DESC depthDesc{};
@@ -88,8 +95,8 @@ void SwapchainManager::CreateDepth(ID3D12Device* device, UINT width, UINT height
     cv.DepthStencil.Depth = 0.0f;
     cv.DepthStencil.Stencil = 0;
 
-    ThrowIfFailed(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, &depthBuffer_));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, depthDesc,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, MemTag::FrameSwapchain, L"Swapchain.Depth", &depthBuffer_));
 
     D3D12_DEPTH_STENCIL_VIEW_DESC dsv{};
     dsv.Format = DXGI_FORMAT_D32_FLOAT;

@@ -1,6 +1,7 @@
 #include "rendering/core/ExposureMetering.h"
 
 #include "core/Helpers.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderConstants.h" // g_preExposure, noted per readback slot for the history
 #include "rendering/core/TextureCreate.h" // P3B base log-luminance texture
@@ -40,7 +41,7 @@ namespace
     constexpr UINT64 kReadbackSlotBytes =
         kExposureRecordBytes + kCompensationRecordBytes + kSunProbeOutBytes + kPixelProbeBytes;
 
-    ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes)
+    ComPtr<ID3D12Resource> CreateRawUavBuffer(ID3D12Device* device, UINT64 bytes, const wchar_t* name)
     {
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
@@ -60,9 +61,10 @@ namespace
         // P12.2: COMMON, not UNORDERED_ACCESS. D3D12 creates every BUFFER in COMMON and ignores the
         // requested initial state (GBV id=1328); asking for UAV told the canonical registry a state
         // the driver never applied. The first UAV write promotes it, so nothing else changes.
-        ThrowIfFailed(device->CreateCommittedResource(
+        ThrowIfFailed(gpu::CreateCommittedResource(device,
             &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
             D3D12_RESOURCE_STATE_COMMON, nullptr,
+            MemTag::Exposure, name,
             IID_PPV_ARGS(resource.GetAddressOf())));
         return resource;
     }
@@ -81,17 +83,17 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
     // so declaring anything else would just add a barrier at each end. It stays exactly as it was --
     // P12.2 changed only the CREATION argument inside CreateRawUavBuffer, which is a different fact.
     histogram_.Attach(renderer->Declarations(),
-        CreateRawUavBuffer(device, static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t)),
+        CreateRawUavBuffer(device, static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t), L"Exposure.Histogram"),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Histogram");
     exposure_.Attach(renderer->Declarations(),
-        CreateRawUavBuffer(device, kMeteringBufferBytes),
+        CreateRawUavBuffer(device, kMeteringBufferBytes, L"Exposure.Value"),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Value");
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
     heapDesc.NumDescriptors = 9; // histogram, exposure, base-lum, bilateral grid: SRV/UAV each; blur UAV
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Exposure, L"Exposure.SrvHeap", IID_PPV_ARGS(&descriptorHeap_)));
 
     const UINT increment =
         device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -151,8 +153,9 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         ComPtr<ID3D12Resource> resource;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &resource));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+            MemTag::Exposure, L"Exposure.BaseLogLum", &resource));
         baseLum_.Attach(renderer->Declarations(), std::move(resource),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"Exposure.BaseLogLum");
 
@@ -172,8 +175,9 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
 
         // The blur's intermediate: same shape, UAV only, resting in UNORDERED_ACCESS.
         ComPtr<ID3D12Resource> blur;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &blur));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            MemTag::Exposure, L"Exposure.BaseLogLumBlur", &blur));
         baseLumBlur_.Attach(renderer->Declarations(), std::move(blur),
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.BaseLogLumBlur");
         baseLumBlurUav_ = next();
@@ -199,8 +203,9 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
         ComPtr<ID3D12Resource> resource;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, &resource));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+            MemTag::Exposure, L"Exposure.BilateralGrid", &resource));
         bilateralGrid_.Attach(renderer->Declarations(), std::move(resource),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"Exposure.BilateralGrid");
 
@@ -238,18 +243,17 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
         rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-        ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_)));
-        readback_->SetName(L"Exposure.Readback");
+        ThrowIfFailed(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Exposure, L"Exposure.Readback", IID_PPV_ARGS(&readback_)));
 
         void* mapped = nullptr;
         ThrowIfFailed(readback_->Map(0, nullptr, &mapped));
         readbackPtr_ = static_cast<const float*>(mapped);
 
         rd.Width = static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t) * kReadbackSlots;
-        ThrowIfFailed(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&histogramReadback_)));
-        histogramReadback_->SetName(L"Exposure.HistogramReadback");
+        ThrowIfFailed(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Exposure, L"Exposure.HistogramReadback",
+            IID_PPV_ARGS(&histogramReadback_)));
         void* mappedHist = nullptr;
         ThrowIfFailed(histogramReadback_->Map(0, nullptr, &mappedHist));
         histogramReadbackPtr_ = static_cast<const std::uint32_t*>(mappedHist);

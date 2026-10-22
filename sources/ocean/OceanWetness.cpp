@@ -7,6 +7,7 @@
 #include "core/Helpers.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/TextureCreate.h"
@@ -69,14 +70,14 @@ void OceanWetness::EnsureResources(Renderer* renderer)
     for (int i = 0; i < 2; ++i)
     {
         ComPtr<ID3D12Resource> resource;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, kHistoryRest, nullptr, &resource));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, kHistoryRest, nullptr, MemTag::Ocean, i == 0 ? L"Ocean.WetnessA" : L"Ocean.WetnessB", &resource));
         history_[i].Attach(renderer->Declarations(), std::move(resource),
             kHistoryRest, i == 0 ? L"Ocean.WetnessA" : L"Ocean.WetnessB");
 
         ComPtr<ID3D12Resource> stampResource;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-            desc, kStampRest, nullptr, &stampResource));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+            desc, kStampRest, nullptr, MemTag::Ocean, i == 0 ? L"Ocean.WetnessStampA" : L"Ocean.WetnessStampB", &stampResource));
         stamp_[i].Attach(renderer->Declarations(), std::move(stampResource),
             kStampRest, i == 0 ? L"Ocean.WetnessStampA" : L"Ocean.WetnessStampB");
     }
@@ -85,7 +86,7 @@ void OceanWetness::EnsureResources(Renderer* renderer)
     heapDesc.NumDescriptors = 8;
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ocean, L"Ocean.WetnessHeap", IID_PPV_ARGS(&descriptorHeap_)));
 
     const UINT increment =
         device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);

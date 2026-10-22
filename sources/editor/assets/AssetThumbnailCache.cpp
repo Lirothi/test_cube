@@ -28,6 +28,7 @@
 #include "materials/MaterialDataManager.h"
 #include "materials/TextureDecodeCache.h"
 #include "materials/TextureCube.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/meshes/Mesh.h"
@@ -563,8 +564,9 @@ namespace
         buffer.MipLevels = 1;
         buffer.SampleDesc.Count = 1;
         buffer.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE,
+        if (FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE,
                 &buffer, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                MemTag::Editor, L"Thumbnail.Readback",
                 IID_PPV_ARGS(&out.resource))))
         {
             return false;
@@ -1538,6 +1540,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         desc.usage = job->load.kind == PendingLoad::Kind::DiskCache
             ? Texture2D::Usage::AlbedoSRGB
             : job->load.usage;
+        job->texture.SetMemTag(MemTag::Editor);
         job->ok = job->texture.CreateFromFile(&renderer,
             job->commands->CommandList(), desc, job->commands->KeepAlive());
         break;

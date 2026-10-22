@@ -6,6 +6,7 @@
 
 #include "core/math/Frustum.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/shadows/ShadowSettings.h" // plan S4: kLocalShadowMinRes
 #include "rendering/shadows/ShadowAtlasPacker.h" // plan S9
@@ -484,9 +485,10 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+    HRESULT hr = gpu::CreateCommittedResource(renderer->GetDevice(),
         &heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        MemTag::Lights, L"LightManager.PointLightBuffer",
         IID_PPV_ARGS(buffer.GetAddressOf()));
     if (FAILED(hr) || !buffer)
     {
@@ -506,7 +508,7 @@ bool LightManager::EnsurePointLightBuffer(Renderer* renderer, size_t requiredLig
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
-    hr = renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(srvHeap.GetAddressOf()));
+    hr = gpu::CreateDescriptorHeap(renderer->GetDevice(), &heapDesc, MemTag::Lights, L"LightManager.PointLightSrvHeap", IID_PPV_ARGS(srvHeap.GetAddressOf()));
     if (FAILED(hr) || !srvHeap)
     {
         buffer->Unmap(0, nullptr);
@@ -577,9 +579,10 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+    HRESULT hr = gpu::CreateCommittedResource(renderer->GetDevice(),
         &heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        MemTag::Lights, L"LightManager.SpotLightBuffer",
         IID_PPV_ARGS(buffer.GetAddressOf()));
     if (FAILED(hr) || !buffer)
     {
@@ -599,7 +602,7 @@ bool LightManager::EnsureSpotLightBuffer(Renderer* renderer, size_t requiredLigh
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
-    hr = renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(srvHeap.GetAddressOf()));
+    hr = gpu::CreateDescriptorHeap(renderer->GetDevice(), &heapDesc, MemTag::Lights, L"LightManager.SpotLightSrvHeap", IID_PPV_ARGS(srvHeap.GetAddressOf()));
     if (FAILED(hr) || !srvHeap)
     {
         buffer->Unmap(0, nullptr);

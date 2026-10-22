@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "core/logging/Log.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
 #include "rendering/shadows/ShadowSettings.h"
@@ -44,8 +45,8 @@ void LocalShadowCache::EnsurePool(ID3D12Device* dev, ResourceDeclarations decls,
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     // Rests where the copies and the direct reads take it (kRestState); the cache pass takes it to DEPTH_WRITE for a fill
     // and back.
-    if (FAILED(CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc, kRestState,
-                                      &clear, pool_.GetAddressOfForCreate())))
+    if (FAILED(gpu::CreateCommittedTexture(dev, heap, D3D12_HEAP_FLAG_NONE, desc, kRestState,
+                                           &clear, MemTag::ShadowLocal, L"LocalShadowCache", pool_.GetAddressOfForCreate())))
     {
         LOG_ERROR(logging::LogCategory::RenderShadow, "local shadow cache: pool of {} x {}^2 failed to allocate; no cache",
                   pages, pageSize);
@@ -57,14 +58,14 @@ void LocalShadowCache::EnsurePool(ID3D12Device* dev, ResourceDeclarations decls,
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
     hd.NumDescriptors = pages;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(dsvHeap_.GetAddressOf()))))
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowLocal, L"LocalShadowCache.DsvHeap", IID_PPV_ARGS(dsvHeap_.GetAddressOf()))))
     {
         pool_.Reset();
         return;
     }
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = 1;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(srvHeap_.GetAddressOf()))))
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowLocal, L"LocalShadowCache.SrvHeap", IID_PPV_ARGS(srvHeap_.GetAddressOf()))))
     {
         pool_.Reset();
         dsvHeap_.Reset();

@@ -20,6 +20,7 @@
 #include "rendering/core/CommandListBindState.h" // A6: the merged draws bypass the bind cache
 #include "rendering/core/RasterSettings.h"       // A6: raster.bindless gates the merged path
 #include "rendering/core/GraphicsDevice.h"       // GbvEnabled: GBV takes the per-group path (id=1044)
+#include "rendering/core/GpuAlloc.h"
 #include <chrono>                                // A6: the throttled readout
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::g_shadowLodBias + ShadowTierBaseLod (per-view LOD)
@@ -95,9 +96,10 @@ bool ShadowGpuData::EnsureRing(Renderer* renderer, Ring& ring, size_t elements, 
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+    HRESULT hr = gpu::CreateCommittedResource(renderer->GetDevice(),
         &heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        MemTag::ShadowGpuData, name,
         IID_PPV_ARGS(buffer.GetAddressOf()));
     if (FAILED(hr) || !buffer)
     {
@@ -117,7 +119,7 @@ bool ShadowGpuData::EnsureRing(Renderer* renderer, Ring& ring, size_t elements, 
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> srvHeap;
-    hr = renderer->GetDevice()->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(srvHeap.GetAddressOf()));
+    hr = gpu::CreateDescriptorHeap(renderer->GetDevice(), &heapDesc, MemTag::ShadowGpuData, L"ShadowGpuData.RingSrvHeap", IID_PPV_ARGS(srvHeap.GetAddressOf()));
     if (FAILED(hr) || !srvHeap)
     {
         buffer->Unmap(0, nullptr);
@@ -201,9 +203,10 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-    HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+    HRESULT hr = gpu::CreateCommittedResource(renderer->GetDevice(),
         &heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_COMMON, nullptr,
+        MemTag::ShadowGpuData, name,
         IID_PPV_ARGS(buffer.GetAddressOf()));
     if (FAILED(hr) || !buffer)
     {
@@ -2757,7 +2760,7 @@ void ShadowGpuData::RebuildCullDescriptors(Renderer* renderer)
     hd.NumDescriptors = static_cast<UINT>(kCullUavSets * render::kFrameCount);
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(cullUavHeap_.GetAddressOf()))) || !cullUavHeap_)
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowGpuData, L"ShadowGpuData.CullUavHeap", IID_PPV_ARGS(cullUavHeap_.GetAddressOf()))) || !cullUavHeap_)
     {
         cullUavHeap_.Reset();
         return;
@@ -2931,7 +2934,7 @@ void ShadowGpuData::RebuildUnifiedDescriptors(Renderer* renderer)
     hd.NumDescriptors = 4 * render::kFrameCount; // [0..k)=inst SRV, [k..2k)=bounds SRV, [2k..3k)=inst UAV, [3k..4k)=bounds UAV
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(unifiedSrvHeap_.GetAddressOf()))) || !unifiedSrvHeap_)
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowGpuData, L"ShadowGpuData.UnifiedSrvHeap", IID_PPV_ARGS(unifiedSrvHeap_.GetAddressOf()))) || !unifiedSrvHeap_)
     {
         unifiedSrvHeap_.Reset();
         return;
@@ -3022,9 +3025,10 @@ void ShadowGpuData::EnsureReadback(Renderer* renderer, size_t bytes)
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     desc.Flags = D3D12_RESOURCE_FLAG_NONE;
-    renderer->GetDevice()->CreateCommittedResource(
+    gpu::CreateCommittedResource(renderer->GetDevice(),
         &heap, D3D12_HEAP_FLAG_NONE, &desc,
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        MemTag::ShadowGpuData, L"ShadowGpuData.ValidationReadback",
         IID_PPV_ARGS(valReadback_.GetAddressOf()));
 }
 
@@ -3723,13 +3727,13 @@ void ShadowGpuData::EnsureHzbStatsReadback(Renderer* renderer)
     desc.Format = DXGI_FORMAT_UNKNOWN;
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (FAILED(renderer->GetDevice()->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
-                                                              nullptr, IID_PPV_ARGS(hzbStatsReadback_.GetAddressOf()))))
+    if (FAILED(gpu::CreateCommittedResource(renderer->GetDevice(), &heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST,
+                                            nullptr, MemTag::ShadowGpuData, L"ShadowGpuData.HzbStatsReadback",
+                                            IID_PPV_ARGS(hzbStatsReadback_.GetAddressOf()))))
     {
         hzbStatsReadback_.Reset();
         return;
     }
-    hzbStatsReadback_->SetName(L"ShadowGpuData.HzbStatsReadback");
     hzbStatsFrame_.fill(0);
 }
 
@@ -3942,9 +3946,9 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
         desc.Flags = D3D12_RESOURCE_FLAG_NONE;
         Microsoft::WRL::ComPtr<ID3D12Resource> buf;
-        HRESULT hr = renderer->GetDevice()->CreateCommittedResource(
+        HRESULT hr = gpu::CreateCommittedResource(renderer->GetDevice(),
             &heap, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(buf.GetAddressOf()));
+            D3D12_RESOURCE_STATE_COMMON, nullptr, MemTag::ShadowGpuData, name, IID_PPV_ARGS(buf.GetAddressOf()));
         if (FAILED(hr) || !buf) { return false; }
         // Geometry is never transitioned, so it rests where it is created.
         out.Attach(renderer->Declarations(), std::move(buf), D3D12_RESOURCE_STATE_COMMON, name);

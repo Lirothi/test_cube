@@ -1,6 +1,7 @@
 #include "rendering/meshes/Mesh.h"
 #include "core/Helpers.h"
 #include "rendering/core/UploadManager.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/CommandListBindState.h"
 #include "rendering/core/RenderStats.h"
 #include "rendering/meshes/LodSelect.h"
@@ -45,7 +46,7 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     // consumer can start from without a barrier (needed by the mega-buffer's copy-source promotion).
     const UINT vbSize = vertexStride_ * vertexCount;
     vertexBuffer_ = up.CreateBufferWithData(vertices, vbSize, D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_COMMON);
+        D3D12_RESOURCE_STATE_COMMON, MemTag::Mesh, L"Mesh.VB");
     vertexBufferView_.BufferLocation = vertexBuffer_->GetGPUVirtualAddress();
     vertexBufferView_.StrideInBytes = vertexStride_;
     vertexBufferView_.SizeInBytes = vbSize;
@@ -60,7 +61,7 @@ void Mesh::CreateGPUFlexible(ID3D12Device* device,
     }
 
     indexBuffer_ = up.CreateBufferWithData(indices, ibSize, D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_COMMON); // see VB note: COMMON + implicit promotion for every reader
+        D3D12_RESOURCE_STATE_COMMON, MemTag::Mesh, L"Mesh.IB"); // see VB note: COMMON + implicit promotion for every reader
     indexBufferView_.BufferLocation = indexBuffer_->GetGPUVirtualAddress();
     indexBufferView_.SizeInBytes = ibSize;
     indexBufferView_.Format = indexFormat_;
@@ -282,7 +283,7 @@ void Mesh::AddLod(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList
     // the shadow LOD mega-buffer copy promotes COMMON->COPY_SOURCE; a resource created in
     // INDEX_BUFFER would fail that copy's implicit promotion (GPU-validation resource-state error).
     lod.indexBuffer = up.CreateBufferWithData(indices, ibSize, D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_COMMON);
+        D3D12_RESOURCE_STATE_COMMON, MemTag::Mesh, L"Mesh.LodIB");
     lod.indexBufferView.BufferLocation = lod.indexBuffer->GetGPUVirtualAddress();
     lod.indexBufferView.SizeInBytes = ibSize;
     lod.indexBufferView.Format = DXGI_FORMAT_R32_UINT;

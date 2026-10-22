@@ -8,6 +8,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/RenderContextPool.h"
@@ -70,8 +71,8 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
         for (int i = 0; i < 2; ++i)
         {
             ComPtr<ID3D12Resource> res;
-            ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
-                texDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &res));
+            ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE,
+                texDesc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, MemTag::Ocean, i == 0 ? nameA : nameB, &res));
             pair[i].Attach(renderer->Declarations(), std::move(res),
                 D3D12_RESOURCE_STATE_UNORDERED_ACCESS, i == 0 ? nameA : nameB);
         }
@@ -97,8 +98,8 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
         ComPtr<ID3D12Resource> res;
         // P12.2: COMMON at creation -- D3D12 ignores a buffer's initial state and warns (id=1328);
         // the resting declaration below is the one that matters and is unchanged.
-        ThrowIfFailed(device->CreateCommittedResource(&heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
-            D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&res)));
+        ThrowIfFailed(gpu::CreateCommittedResource(device, &heapProps, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_COMMON, nullptr, MemTag::Ocean, L"Ocean.SurfSimSpawners", IID_PPV_ARGS(&res)));
         spawners_.Attach(renderer->Declarations(), std::move(res),
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Ocean.SurfSimSpawners");
     }
@@ -107,7 +108,7 @@ void OceanSurfSim::EnsureResources(Renderer* renderer)
     heapDesc.NumDescriptors = 9u; // 4 sim UAVs + 4 sim SRVs + the spawner buffer UAV
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ocean, L"Ocean.SurfSimHeap", IID_PPV_ARGS(&descriptorHeap_)));
 
     const UINT incr = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE handle = descriptorHeap_->GetCPUDescriptorHandleForHeapStart();

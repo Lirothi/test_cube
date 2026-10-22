@@ -98,16 +98,14 @@ void RtSceneAs::EnsureInit(Renderer* renderer)
     asManager_.Init(renderer->GetDevice5());
     bindless_.Init(renderer->GetDevice(), renderer->GetBindlessHeap()); // A6: a region of the shared heap
     asManagerInited_ = true;
-    // The memory line in the session log: what the acceleration structures hold, and how much
-    // of it is sitting in the retire bin waiting for a fence -- the number that would have
-    // named the 2026-09-03 leak in its first minute. Registered once; Reset() re-inits the
-    // manager without re-registering.
+    // The memory line in the session log: how much of what the acceleration structures hold is
+    // sitting in the retire bin waiting for a fence -- the number that would have named the
+    // 2026-09-03 leak in its first minute -- and how much went through it. What they hold in
+    // total is the `rt.as` tag of the GPU census, which replaced the "rt.as" column and cannot
+    // tell a binned buffer from a live one (memory profiling plan M1c). Registered once; Reset()
+    // re-inits the manager without re-registering.
     if (!memRegistered_)
     {
-        render::RegisterMemoryProvider("rt.as", [](const void* self)
-        {
-            return static_cast<const RtSceneAs*>(self)->asManager_.GetAsMemoryBytes();
-        }, this);
         render::RegisterMemoryProvider("rt.as.bin", [](const void* self)
         {
             return static_cast<const RtSceneAs*>(self)->asManager_.RetireBinBytes();

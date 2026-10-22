@@ -631,6 +631,7 @@ void OceanRenderable::Init(Renderer* renderer,
         Texture2D::CreateDesc desc{};
         desc.path = path;
         desc.usage = usage;
+        tex.SetMemTag(MemTag::Ocean);
         tex.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
     };
 
@@ -654,6 +655,7 @@ void OceanRenderable::Init(Renderer* renderer,
         Texture2D::CreateDesc desc{};
         desc.path = std::filesystem::path(std::u8string(causticsLoadedPath_.begin(), causticsLoadedPath_.end())).wstring();
         desc.usage = Texture2D::Usage::LinearData;
+        causticsTexture_->SetMemTag(MemTag::Ocean);
         causticsTextureReady_ = causticsTexture_->CreateFromFile(
             renderer, uploadCmdList, desc, uploadKeepAlive);
     }
@@ -1154,6 +1156,7 @@ void OceanRenderable::EnsureSimulationResources(Renderer* renderer)
                 Texture2D::CreateDesc desc{};
                 desc.path = std::filesystem::path(std::u8string(desiredPath.begin(), desiredPath.end())).wstring();
                 desc.usage = Texture2D::Usage::LinearData;
+                texture->SetMemTag(MemTag::Ocean);
                 causticsTextureReady_ = texture->CreateFromFile(
                     renderer, upload.CommandList(), desc, upload.KeepAlive());
                 upload.SubmitAndWait(renderer);

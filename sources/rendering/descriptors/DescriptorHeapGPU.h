@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <atomic>
 
+#include "rendering/core/GpuAlloc.h"
+
 using Microsoft::WRL::ComPtr;
 
 struct GpuDescHandle {
@@ -17,7 +19,8 @@ class DescriptorHeapGPU {
 public:
     DescriptorHeapGPU() = default;
 
-    void Init(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t capacity, bool shaderVisible) {
+    void Init(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE type, uint32_t capacity, bool shaderVisible,
+              MemTag tag = MemTag::Renderer, const wchar_t* name = L"DescriptorHeapGPU") {
         device_ = device;
         type_ = type;
         capacity_ = capacity;
@@ -26,7 +29,7 @@ public:
         desc.NumDescriptors = capacity_;
         desc.Type = type;
         desc.Flags = shaderVisible ? D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE : D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-        if (FAILED(device_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap_)))) {
+        if (FAILED(gpu::CreateDescriptorHeap(device_, &desc, tag, name, IID_PPV_ARGS(&heap_)))) {
             throw std::runtime_error("CreateDescriptorHeap failed");
         }
         incr_ = device_->GetDescriptorHandleIncrementSize(type_);

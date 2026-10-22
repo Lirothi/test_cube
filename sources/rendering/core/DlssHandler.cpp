@@ -1,6 +1,7 @@
 #include "rendering/core/DlssHandler.h"
 #include "core/logging/Log.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/TextureCreate.h"
 
 #include <array>
@@ -416,12 +417,11 @@ void DlssHandler::EnsureExposureResources(ID3D12GraphicsCommandList* cl)
         desc.Format = DXGI_FORMAT_R32_FLOAT;
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        if (FAILED(render::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &exposureTex_)))
+        if (FAILED(gpu::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, desc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Dlss, L"DlssExposure1x1", &exposureTex_)))
         {
             return;
         }
-        exposureTex_->SetName(L"DlssExposure1x1");
 
         D3D12_HEAP_PROPERTIES upHeap{};
         upHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
@@ -434,8 +434,9 @@ void DlssHandler::EnsureExposureResources(ID3D12GraphicsCommandList* cl)
         bufDesc.Format = DXGI_FORMAT_UNKNOWN;
         bufDesc.SampleDesc.Count = 1;
         bufDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        if (FAILED(device->CreateCommittedResource(&upHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&exposureUpload_))))
+        if (FAILED(gpu::CreateCommittedResource(device, &upHeap, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::Dlss, L"DlssExposure.Upload",
+            IID_PPV_ARGS(&exposureUpload_))))
         {
             exposureTex_.Reset();
             return;

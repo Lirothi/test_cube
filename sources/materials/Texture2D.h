@@ -8,6 +8,7 @@
 #include <vector>
 #include <string>
 
+#include "core/memory/MemTags.h"
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/streaming/DdsMipTable.h"
 
@@ -106,6 +107,12 @@ public:
                 const void* rgba8, UINT width, UINT height,
                 std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive,
                 const wchar_t* debugLabel = nullptr);
+
+        // Memory profiling M1: the GPU census owner of the objects the next CreateFromFile /
+        // CreateFromRGBA8 makes (the texture, its upload intermediate, its CPU SRV heap). Default
+        // TexMaterial; a non-material user (the bloom kernel) sets its own tag first. A cache hit
+        // makes nothing, so it keeps the tag of whoever loaded the file first.
+        void SetMemTag(MemTag tag) { memTag_ = tag; }
 
         // Obtain the SRV GPU handle in the current frame's shader-visible heap
         D3D12_GPU_DESCRIPTOR_HANDLE GetSRVForFrame(Renderer* renderer);
@@ -239,6 +246,7 @@ private:
         // "Tex2D_RESOURCE", which made them indistinguishable in DRED/the debug layer and made
         // the canonical registry's duplicate-name leak check report one giant false positive.
         std::wstring debugName_ = L"Tex2D";
+        MemTag memTag_ = MemTag::TexMaterial; // see SetMemTag
 
 
         // CPU-only heap for the SRV (single descriptor)

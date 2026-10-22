@@ -12,6 +12,7 @@
 #include "backends/imgui_impl_dx12.h"
 #include "backends/imgui_impl_win32.h"
 #include "core/logging/Log.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
 
@@ -113,7 +114,8 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     heapDesc.NodeMask = 0;
 
-    if (FAILED(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(srvHeap_.ReleaseAndGetAddressOf()))))
+    if (FAILED(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ui, L"ImGui.SrvHeap",
+            IID_PPV_ARGS(srvHeap_.ReleaseAndGetAddressOf()))))
     {
         throw std::runtime_error("ImGuiLayer::Init failed to create ImGui SRV descriptor heap");
     }

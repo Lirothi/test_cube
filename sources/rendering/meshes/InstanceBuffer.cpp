@@ -1,6 +1,7 @@
 #include "rendering/meshes/InstanceBuffer.h"
 
 #include "core/Helpers.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
 
@@ -25,7 +26,8 @@ void InstanceBuffer::Create(ID3D12Device* device, ResourceDeclarations decls, UI
     Microsoft::WRL::ComPtr<ID3D12Resource> buf = up.CreateBufferWithData(
         init.data(), byteSize,
         D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        MemTag::MeshInstances, L"GpuInstanced.Instances");
     // Written as a UAV by the rotation compute, but every draw that follows flips it back to
     // shader-readable, which is where the frame leaves it.
     buffer_.Attach(decls, std::move(buf), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -45,8 +47,8 @@ void InstanceBuffer::CreateCpuDescriptors_(ID3D12Device* device)
     hd.NumDescriptors = 2;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only
-    ThrowIfFailed(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpuHeap_)));
-    cpuHeap_->SetName(L"InstanceBuffer_DESCRIPTOR_HEAP");
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &hd, MemTag::MeshInstances, L"InstanceBuffer_DESCRIPTOR_HEAP",
+        IID_PPV_ARGS(&cpuHeap_)));
 
     const UINT inc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     srvCPU_ = cpuHeap_->GetCPUDescriptorHandleForHeapStart();

@@ -6,6 +6,7 @@
 #include <chrono>
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
+#include "rendering/core/GpuAlloc.h"
 #include "materials/TextureDecodeCache.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
@@ -430,8 +431,8 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
     // DDS first and falls back to WIC on the same object, so the fallback textures were declared
     // twice and forgotten once.
-    ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, memTag_, debugName_.c_str(), tex_.GetAddressOfForCreate()));
 
     // 5) Compute footprints for every RESIDENT mip
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(residentMips);
@@ -453,8 +454,8 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     upDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     ComPtr<ID3D12Resource> upload;
-    ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+    ThrowIfFailed(gpu::CreateCommittedResource(device, &hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, memTag_, (debugName_ + L".Upload").c_str(), IID_PPV_ARGS(&upload)));
 
     // 7) Copy each mip while respecting the BC layout. Source rows come from the mip table -- the
     //    same tight pitch the old running offset computed, now addressed by file offset -- so the
@@ -737,6 +738,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     // key would each load, which costs a duplicate rather than corrupting anything — the map insert
     // below is what settles who is cached.
     auto owner = std::make_shared<Texture2D>();
+    owner->memTag_ = memTag_; // the GPU objects are the owner's: it carries the caller's census tag
     if (!owner->LoadFromFileUncached_(renderer, uploadCmd, resolved, keepAlive)) {
         return false; // a failed load is never cached: the next caller must be free to retry
     }
@@ -1042,8 +1044,8 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     // Step 15: this site was MISSED at step 11 (the two DDS/WIC paths were converted, this
     // raw-pixel one was not) and the debug layer named it — a texture created legacy in COPY_DEST
     // and then given an enhanced barrier fails interop at ExecuteCommandLists, id=1350.
-    ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, memTag_, debugName_.c_str(), tex_.GetAddressOfForCreate()));
 
     // Footprint
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp{};
@@ -1064,8 +1066,8 @@ void Texture2D::UploadRGBA8_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd,
     upDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     ComPtr<ID3D12Resource> upload;
-    ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+    ThrowIfFailed(gpu::CreateCommittedResource(device, &hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, memTag_, (debugName_ + L".Upload").c_str(), IID_PPV_ARGS(&upload)));
 
     // Fill upload rows
     uint8_t* mapped = nullptr;
@@ -1138,8 +1140,8 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     // unregistered it — that is the texture leak. CreateFromFile hits this routinely: it tries
     // DDS first and falls back to WIC on the same object, so the fallback textures were declared
     // twice and forgotten once.
-    ThrowIfFailed(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, memTag_, debugName_.c_str(), tex_.GetAddressOfForCreate()));
 
     std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> fps(n);
     std::vector<UINT> numRows(n);
@@ -1162,8 +1164,8 @@ void Texture2D::UploadRGBA8Mips_(Renderer* r, ID3D12GraphicsCommandList* uploadC
     // A BUFFER — deliberately NOT routed through CreateCommittedTexture. Buffers have no layout,
     // so asking CreateCommittedResource3 for one is invalid and the debug layer raises inside the
     // call (which is how this was caught: the enhanced path faulted here, not at any texture).
-    ThrowIfFailed(device->CreateCommittedResource(&hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+    ThrowIfFailed(gpu::CreateCommittedResource(device, &hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, memTag_, (debugName_ + L".Upload").c_str(), IID_PPV_ARGS(&upload)));
 
     uint8_t* mapped = nullptr;
     D3D12_RANGE rge{ 0, 0 };
@@ -1216,9 +1218,8 @@ void Texture2D::CreateCpuSrv_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels)
     hd.NumDescriptors = 1;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only
-    ThrowIfFailed(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvHeapCPU_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &hd, memTag_, L"Tex2D_DESC_HEAP", IID_PPV_ARGS(&srvHeapCPU_)));
     srvCPU_ = srvHeapCPU_->GetCPUDescriptorHandleForHeapStart();
-    srvHeapCPU_->SetName(L"Tex2D_DESC_HEAP");
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = srvFmt; // UNORM or SRGB

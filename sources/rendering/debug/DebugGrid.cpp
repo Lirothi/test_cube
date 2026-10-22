@@ -5,6 +5,7 @@
 
 #include "app/camera/Camera.h"
 #include "rendering/renderables/RenderableObject.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
 
@@ -126,7 +127,8 @@ public:
             ComPtr<ID3D12Resource> vb = um.CreateBufferWithData(
                 verts.data(), static_cast<UINT>(verts.size() * sizeof(LineVertex)),
                 D3D12_RESOURCE_FLAG_NONE,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+                MemTag::Renderer, L"DebugGrid.GridVB");
             vb_ = vb;
         }
         vbv_.BufferLocation = vb_->GetGPUVirtualAddress();
@@ -241,7 +243,8 @@ public:
             ComPtr<ID3D12Resource> vb = um.CreateBufferWithData(
                 verts.data(), static_cast<UINT>(verts.size() * sizeof(AxisVertex)),
                 D3D12_RESOURCE_FLAG_NONE,
-                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+                D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER,
+                MemTag::Renderer, L"DebugGrid.AxesVB");
             vb_ = vb;
         }
         vbv_.BufferLocation = vb_->GetGPUVirtualAddress();

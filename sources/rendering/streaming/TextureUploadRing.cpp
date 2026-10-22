@@ -1,6 +1,7 @@
 #include "rendering/streaming/TextureUploadRing.h"
 
 #include "core/logging/Log.h"
+#include "rendering/core/GpuAlloc.h"
 
 namespace streaming {
 
@@ -19,14 +20,14 @@ bool TextureUploadRing::Init(ID3D12Device* device, UINT64 bytes)
     desc.Format = DXGI_FORMAT_UNKNOWN;
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer_))))
+    if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::TexStream, L"Streaming.UploadRing",
+            IID_PPV_ARGS(&buffer_))))
     {
-        LOG_ERROR(logging::LogCategory::Render, "texture upload ring: CreateCommittedResource({} bytes) failed", bytes);
+        LOG_ERROR(logging::LogCategory::Render, "texture upload ring: gpu::CreateCommittedResource({} bytes) failed", bytes);
         buffer_.Reset();
         return false;
     }
-    buffer_->SetName(L"Streaming.UploadRing");
     D3D12_RANGE noRead{ 0, 0 };
     void* mapped = nullptr;
     if (FAILED(buffer_->Map(0, &noRead, &mapped)))

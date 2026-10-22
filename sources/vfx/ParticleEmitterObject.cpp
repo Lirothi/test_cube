@@ -18,6 +18,7 @@
 #include "materials/Material.h"
 #include "vfx/WindState.h" // W8: g_windDriftXZ
 #include "rendering/core/CommandListBindState.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
@@ -128,6 +129,7 @@ void ParticleEmitterObject::Init(Renderer* renderer,
         Texture2D::CreateDesc td{};
         td.path = std::wstring(desc_.texture.begin(), desc_.texture.end());
         td.usage = Texture2D::Usage::AlbedoSRGB;
+        sprite_.SetMemTag(MemTag::Vfx);
         hasSprite_ = sprite_.CreateFromFile(renderer, uploadCmdList, td, uploadKeepAlive);
     }
 }
@@ -150,16 +152,27 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     for (uint32_t i = 0; i < n; ++i) { initDead[i] = i; }
     const uint32_t initCount[4] = { n, 0u, 0u, 0u };
 
+    // PER EMITTER, not per class. The canonical registry's leak check counts live entries by debug
+    // NAME, so N emitters all calling their buffer "vfx.particles" report as an N-way leak that is
+    // not there -- three emitters on e1_particles_test read as "grew to 3" for each of the three
+    // buffers. Same false positive the font atlases had, same fix: make the name identify the
+    // instance. It also makes DRED and the debug layer name WHICH emitter faulted.
+    static std::atomic<unsigned> emitterSerial{ 0 };
+    const std::wstring tag = std::to_wstring(emitterSerial.fetch_add(1u, std::memory_order_relaxed));
+
     UploadManager up(renderer->GetDevice(), uploadCmdList);
     Microsoft::WRL::ComPtr<ID3D12Resource> particlesRes = up.CreateBufferWithData(
         initParticles.data(), sizeof(vfx::GpuParticle) * n,
-        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        MemTag::Vfx, (L"vfx.particles#" + tag).c_str());
     Microsoft::WRL::ComPtr<ID3D12Resource> deadListRes = up.CreateBufferWithData(
         initDead.data(), sizeof(uint32_t) * n,
-        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        MemTag::Vfx, (L"vfx.deadList#" + tag).c_str());
     Microsoft::WRL::ComPtr<ID3D12Resource> deadCountRes = up.CreateBufferWithData(
         initCount, sizeof(initCount),
-        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        MemTag::Vfx, (L"vfx.deadCount#" + tag).c_str());
 
     Microsoft::WRL::ComPtr<ID3D12Resource> sortedRes;
     if (sortEnabled_)
@@ -167,7 +180,8 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
         std::vector<uint32_t> initSorted(n);
         for (uint32_t i = 0; i < n; ++i) { initSorted[i] = i; }
         sortedRes = up.CreateBufferWithData(initSorted.data(), sizeof(uint32_t) * n,
-            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            MemTag::Vfx, (L"vfx.sorted#" + tag).c_str());
     }
     up.StealKeepAlive(uploadKeepAlive);
 
@@ -176,13 +190,6 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     // frame leaves them, while the dead list and counter never leave the sim.
     constexpr D3D12_RESOURCE_STATES kParticleRest = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
     const ResourceDeclarations decls = renderer->Declarations();
-    // PER EMITTER, not per class. The canonical registry's leak check counts live entries by debug
-    // NAME, so N emitters all calling their buffer "vfx.particles" report as an N-way leak that is
-    // not there -- three emitters on e1_particles_test read as "grew to 3" for each of the three
-    // buffers. Same false positive the font atlases had, same fix: make the name identify the
-    // instance. It also makes DRED and the debug layer name WHICH emitter faulted.
-    static std::atomic<unsigned> emitterSerial{ 0 };
-    const std::wstring tag = std::to_wstring(emitterSerial.fetch_add(1u, std::memory_order_relaxed));
     particles_.Attach(decls, std::move(particlesRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         kParticleRest, (L"vfx.particles#" + tag).c_str());
     deadList_.Attach(decls, std::move(deadListRes), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -206,9 +213,8 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     rd.MipLevels = 1;
     rd.SampleDesc = { 1, 0 };
     rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    ThrowIfFailed(renderer->GetDevice()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_)));
-    readback_->SetName(L"vfx.aliveReadback");
+    ThrowIfFailed(gpu::CreateCommittedResource(renderer->GetDevice(), &hp, D3D12_HEAP_FLAG_NONE, &rd,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Vfx, L"vfx.aliveReadback", IID_PPV_ARGS(&readback_)));
     void* mapped = nullptr;
     ThrowIfFailed(readback_->Map(0, nullptr, &mapped));
     readbackPtr_ = static_cast<const uint32_t*>(mapped);
@@ -220,8 +226,7 @@ void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
     hd.NumDescriptors = 6;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only staging
-    ThrowIfFailed(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpuHeap_)));
-    cpuHeap_->SetName(L"vfx.emitterDescriptors");
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &hd, MemTag::Vfx, L"vfx.emitterDescriptors", IID_PPV_ARGS(&cpuHeap_)));
 
     const UINT inc = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE h = cpuHeap_->GetCPUDescriptorHandleForHeapStart();

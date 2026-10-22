@@ -1,6 +1,7 @@
 #include "rendering/core/RenderGraph.h"
 #include "rendering/lighting/Skybox.h"
 #include "core/logging/Log.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadManager.h"
@@ -232,6 +233,7 @@ void Skybox::Init(Renderer* renderer,
             Texture2D::CreateDesc lutDesc;
             lutDesc.path = lutPath;
             lutDesc.usage = Texture2D::Usage::LinearData;
+            brdfLut_.SetMemTag(MemTag::Sky);
             const bool lutOk = brdfLut_.CreateFromFile(renderer, uploadCmdList, lutDesc, uploadKeepAlive);
             hasIbl_ = specOk && diffOk && lutOk;
             if (hasIbl_) { measuredUpIlluminance_ = MeasureCubeUpIlluminance(diffPath); }
@@ -258,13 +260,14 @@ void Skybox::Init(Renderer* renderer,
     {
         Texture2D::CreateDesc desc;
         desc.path = L"textures/brdf_lut.dds"; desc.usage = Texture2D::Usage::LinearData;
+        brdfLut_.SetMemTag(MemTag::Sky);
         brdfLut_.CreateFromFile(renderer, uploadCmdList, desc, uploadKeepAlive);
     }
 
     // Type-correct null descriptors keep the HDRI/editor path valid without atmosphere resources.
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; hd.NumDescriptors = 1;
-    if (FAILED(renderer->GetDevice()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&nullSkyViewHeap_))))
+    if (FAILED(gpu::CreateDescriptorHeap(renderer->GetDevice(), &hd, MemTag::Sky, L"Skybox.NullSkyViewHeap", IID_PPV_ARGS(&nullSkyViewHeap_))))
     {
         LOG_ERROR(logging::LogCategory::Render, "skybox null atmosphere descriptor allocation failed");
         return;

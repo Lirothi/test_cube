@@ -9,24 +9,30 @@
 // resources side by side -- so a growing number stands out in the first minute, and its column
 // says which owner to open.
 //
-//   [INFO][core] mem: private 1234 MB (+12) ws 1500 | vram local 2345/8000 MB (+30) nonlocal 12 |
-//                mi commit 800 MB | rt.as 456 MB | rt.as.bin 12 MB
+//   [INFO][core] mem: private 2951 MB (+0) ws 2421 | vram local 1804/23370 MB (+0) nonlocal 245 |
+//                gpu local 1524 nonlocal 76 MB (823 res) untracked 279 | mi commit 182 MB |
+//                heaps 202 MB (9) | other 2566 MB | new/frame 1510 (main 1430) 0.20 MB live 30335 |
+//                tex.ret 0.0 MB | rt.as.bin 0.0 MB | rt.as.retired 8.1 MB
 //
 // Process numbers come from GetProcessMemoryInfo, VRAM from the device adapter's
-// QueryVideoMemoryInfo (local = dedicated video memory, non-local = system memory the GPU maps),
+// QueryVideoMemoryInfo (local = dedicated video memory, non-local = system memory the GPU maps).
+// `gpu` is the GPU census (rendering/core/GpuAlloc.h): what the engine's own objects hold, by pool;
+// `untracked` = vram local - gpu local (the driver, DLSS/Streamline, the ImGui backend).
 // `mi commit` from mimalloc's own statistics (mi_stats_get; NOT mi_process_info, whose "commit"
 // is the process's private bytes again), `heaps` from HeapSummary over every NT heap of the process (CRT
-// malloc, the D3D12 runtime, the driver), `other` = private - mi commit - heaps (images, stacks,
-// the driver's own mappings). `new/frame` is operator new calls per frame since the previous line,
+// malloc, the D3D12 runtime, the driver), `other` = private - mi commit - heaps. On this machine
+// `other` is mostly WRITE-COMBINED pages that track the process's video memory one for one (M1:
+// DLSS off moved vram +681 MB and write-combined +633), so private counts the VRAM a second time;
+// the Debug line `mem regions:` (once a minute) splits it. `new/frame` is operator new calls per frame since the previous line,
 // all threads and the main thread's share, from the per-thread counters of
 // core/memory/MemCounters.h; `live` = news minus deletes since process start. A Debug line
-// `mem threads:` names the busiest allocating threads (memory profiling plan M0). Everything after
-// that is a PROVIDER: a subsystem that owns memory the process counters cannot attribute
-// registers a name and a byte-count callback. Deltas are against the previous line.
+// `mem threads:` names the busiest allocating threads (memory profiling plan M0), `mem gpu:` the
+// census by tag. Everything after that is a PROVIDER: a counter the census cannot give (a retire
+// bin's occupancy, a cumulative total) registered as a name and a byte-count callback. Deltas are
+// against the previous line.
 //
-// Not a tracer: it says HOW MUCH and roughly WHO, never which allocation. A per-allocation
-// trace with call stacks (Unreal Insights' memory channel is the model) is a later step, noted
-// in docs/bug_rt_retire_bin_leak.md.
+// Not a tracer: it says HOW MUCH and WHO, never which allocation. The per-allocation trace with
+// call stacks (Unreal Insights' memory channel is the model) is docs/memory_profiling_plan.md M4.
 
 #include <cstdint>
 
@@ -44,6 +50,14 @@ void UnregisterMemoryProvider(const void* self);
 // Emit the line if `periodSec` has passed since the last one (the first call emits). Main thread,
 // after the previous frame's work has been joined -- providers read their owners' state.
 void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec = 5.0);
+
+// The memory REPORT (UE's MemReport / rhi.DumpResourceMemory, memory profiling plan M1-M2): one
+// multi-line Info dump into the session log -- the platform breakdown with the address-space walk,
+// the GPU census as a tag tree, and every live GPU object by size. "--memreport[=<sec>]" schedules
+// one `afterSec` after the first TickMemoryReport (default 10 s); RequestMemoryReport asks for one
+// on the next tick. Main thread.
+void ScheduleMemoryReport(double afterSec);
+void RequestMemoryReport();
 
 // THE WHOLE CARD, not this process's share of it.
 //

@@ -2865,6 +2865,7 @@ ContentBrowserAction ContentBrowserPanel::Draw(AssetRegistry& registry,
             Texture2D::CreateDesc desc;
             desc.path = L"textures/editor/content_browser_icons.png";
             desc.usage = Texture2D::Usage::AlbedoSRGB;
+            iconAtlas_.SetMemTag(MemTag::Editor);
             iconAtlasReady_ = iconAtlas_.CreateFromFile(
                 &renderer,
                 uploads.CommandList(),

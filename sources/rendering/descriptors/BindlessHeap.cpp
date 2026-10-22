@@ -1,6 +1,7 @@
 #include "rendering/descriptors/BindlessHeap.h"
 
 #include "core/logging/Log.h"
+#include "rendering/core/GpuAlloc.h"
 
 #include <algorithm>
 
@@ -17,14 +18,13 @@ bool BindlessHeap::Init(ID3D12Device* device)
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     desc.NumDescriptors = kCapacity;
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    if (FAILED(device_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&heap_))) || !heap_)
+    if (FAILED(gpu::CreateDescriptorHeap(device_, &desc, MemTag::Renderer, L"Bindless.Heap", IID_PPV_ARGS(&heap_))) || !heap_)
     {
         heap_.Reset();
         LOG_ERROR(logging::LogCategory::Render, "[bindless] shader-visible heap of {} descriptors failed; per-frame heaps stay separate",
                   kCapacity);
         return false;
     }
-    heap_->SetName(L"Bindless.Heap");
     incr_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
     // The null texture slot: a Texture2D SRV over no resource samples as zero. Materials with a

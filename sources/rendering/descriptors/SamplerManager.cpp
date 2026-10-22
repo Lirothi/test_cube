@@ -1,4 +1,5 @@
 #include "rendering/descriptors/SamplerManager.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/descriptors/DescriptorAllocator.h" // for DescriptorAllocatorSampler
 
@@ -14,10 +15,9 @@ void SamplerManager::Init(ID3D12Device* device, UINT capacity) {
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
     hd.NumDescriptors = cpuCapacity_;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only
-    if (FAILED(device_->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&cpuHeap_)))) {
+    if (FAILED(gpu::CreateDescriptorHeap(device_, &hd, MemTag::Renderer, L"SampManager_DESCRIPTOR_HEAP", IID_PPV_ARGS(&cpuHeap_)))) {
         throw std::runtime_error("SamplerManager: CreateDescriptorHeap CPU failed");
     }
-    cpuHeap_->SetName(L"SampManager_DESCRIPTOR_HEAP");
     cpuIncr_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER);
     cpuCursor_ = 0;
     cache_.clear();

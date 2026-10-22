@@ -11,6 +11,7 @@
 #include "core/Helpers.h"
 #include "core/diagnostics/DiagPaths.h"
 #include "materials/Material.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderGraph.h"
@@ -653,12 +654,12 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     const size_t h0Bytes = h0Data_.size() * sizeof(Math::float4);
     h0Buffer_ = uploader.CreateBufferWithData(h0Data_.data(), h0Bytes,
         D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, MemTag::Ocean, L"Ocean.H0");
 
     const size_t waveBytes = waveData_.size() * sizeof(Math::float4);
     waveDataBuffer_ = uploader.CreateBufferWithData(waveData_.data(), waveBytes,
         D3D12_RESOURCE_FLAG_NONE,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, MemTag::Ocean, L"Ocean.WaveData");
 
     if (uploadKeepAlive)
     {
@@ -706,8 +707,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     ComPtr<ID3D12Resource> dispRes;
-    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, texDesc,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &dispRes));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, texDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, MemTag::Ocean, L"Ocean.Displacement", &dispRes));
 
     // Created as the FFT's UAV, but the frame leaves it shader-readable for the surface draw
     // (see PrepareUpdate). Measured with --canonical-check.
@@ -726,8 +727,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
     // seed happened to match reality. Enhanced barriers have no implicit promotion, so the first
     // barrier declared LayoutBefore=SHADER_RESOURCE against a resource genuinely in LAYOUT_COMMON:
     // debug-layer id=1334, and the only enhanced-only error that was actually OUR bug.
-    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, prevDesc,
-            prevSrvState, nullptr, &prevRes));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, prevDesc,
+            prevSrvState, nullptr, MemTag::Ocean, L"Ocean.PrevDisplacement", &prevRes));
 
     prevDisplacement_.Attach(renderer->Declarations(), std::move(prevRes),
         prevSrvState, prevSrvState, L"Ocean.PrevDisplacement");
@@ -740,8 +741,8 @@ void OceanSimulation::CreateResources(Renderer* renderer,
         foamDesc.DepthOrArraySize = static_cast<UINT16>(cascadeCount_);
         foamDesc.MipLevels = static_cast<UINT16>(mipCount_);
         ComPtr<ID3D12Resource> foamRes;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, foamDesc,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, &foamRes));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, foamDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, MemTag::Ocean, L"Ocean.FoamTurbulence", &foamRes));
         foamTurbulence_.Attach(renderer->Declarations(), std::move(foamRes), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             L"Ocean.FoamTurbulence");
         foamNeedsInit_ = true;
@@ -792,8 +793,8 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     clear.DepthStencil.Stencil = 0;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> shoreDepthRes;
-    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, depthDesc,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, &shoreDepthRes));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, depthDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, MemTag::Ocean, L"Ocean.ShoreDepth", &shoreDepthRes));
     // Naming, declaring and unregistering are now one thing the wrapper owns; rasterized as
     // depth, then sampled, so the frame leaves it shader-readable.
     // Created in its RESTING state (rasterized as depth, then sampled) — step 7 prereq #1.
@@ -806,7 +807,7 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     D3D12_DESCRIPTOR_HEAP_DESC dsvDesc{};
     dsvDesc.NumDescriptors = 1;
     dsvDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-    ThrowIfFailed(device->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(&shoreDepthDsvHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &dsvDesc, MemTag::Ocean, L"Ocean.ShoreDepthDsvHeap", IID_PPV_ARGS(&shoreDepthDsvHeap_)));
 
     shoreDepthDsv_ = shoreDepthDsvHeap_->GetCPUDescriptorHandleForHeapStart();
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvView{};
@@ -822,13 +823,13 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
     sdfSourceDesc.Height = kShoreSdfSize;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> sdfSourceRes;
-    ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, sdfSourceDesc,
-            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, &sdfSourceRes));
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, sdfSourceDesc,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, &clear, MemTag::Ocean, L"Ocean.ShoreSdfSource", &sdfSourceRes));
     shoreSdfSource_.Attach(renderer->Declarations(), std::move(sdfSourceRes),
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         L"Ocean.ShoreSdfSource");
 
-    ThrowIfFailed(device->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(&shoreSdfDsvHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &dsvDesc, MemTag::Ocean, L"Ocean.ShoreSdfDsvHeap", IID_PPV_ARGS(&shoreSdfDsvHeap_)));
     shoreSdfSourceDsv_ = shoreSdfDsvHeap_->GetCPUDescriptorHandleForHeapStart();
     device->CreateDepthStencilView(shoreSdfSource_.Get(), &dsvView, shoreSdfSourceDsv_);
 
@@ -856,8 +857,8 @@ void OceanSimulation::CreateShoreDepth(Renderer* renderer)
         const D3D12_RESOURCE_STATES rest =
             (i == 0) ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS : kSdfResultRest;
         Microsoft::WRL::ComPtr<ID3D12Resource> jumpRes;
-        ThrowIfFailed(render::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, jumpDesc,
-                rest, nullptr, &jumpRes));
+        ThrowIfFailed(gpu::CreateCommittedTexture(device, heapProps, D3D12_HEAP_FLAG_NONE, jumpDesc,
+                rest, nullptr, MemTag::Ocean, i == 0 ? L"Ocean.ShoreSdfJumpA" : L"Ocean.ShoreSdfJumpB", &jumpRes));
         shoreSdfJump_[i].Attach(renderer->Declarations(), std::move(jumpRes),
             rest, i == 0 ? L"Ocean.ShoreSdfJumpA" : L"Ocean.ShoreSdfJumpB");
     }
@@ -892,7 +893,7 @@ void OceanSimulation::CreateDescriptors(ID3D12Device* device)
     heapDesc.NumDescriptors = descriptorCount;
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&descriptorHeap_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ocean, L"Ocean.SrvHeap", IID_PPV_ARGS(&descriptorHeap_)));
 
     descriptorIncr_ = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     D3D12_CPU_DESCRIPTOR_HANDLE base = descriptorHeap_->GetCPUDescriptorHandleForHeapStart();

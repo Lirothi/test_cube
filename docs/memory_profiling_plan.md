@@ -1,7 +1,8 @@
 # Профайлинг аллокаций памяти (CPU + GPU) — план
 
 Написан 2026-10-22 по просьбе владельца («запланируй создание профайлинга аллокаций памяти. как пример анрил
-в D:\zalupa»). **Статус: M0 сделан 2026-10-22 (не закоммичен), следующий — M1.** Заменяет черновик «На будущее:
+в D:\zalupa»). **Статус: M0 сделан и закоммичен 2026-10-22 (`9f5ba576`); M1 сделан (не закоммичен); следующий — M2
+(`--memreport` уже есть).** Заменяет черновик «На будущее:
 трасса памяти» из `docs/bug_rt_retire_bin_leak.md:83-103`. Референс — UE 5.8.2 в `D:\zalupa\Engine`; все ссылки на
 UE ниже даны от этого корня и сверены 2026-10-22 (выборочно — по файлам; что не сверено — помечено «(сверить)»).
 
@@ -410,9 +411,67 @@ ERROR/FATAL; `check_logging.py` 0. Запусков: 6 (бенч, wind_test ×2,
 - **Гейт**: три конфигурации; Debug с отладочным слоем — sentinel срабатывает и под ним (проверить, что слой не
   держит ресурсы дольше; `live objects at exit: none` по-прежнему); `--scene-stress`.
 
+**СТАТУС: СДЕЛАНО 2026-10-22, не закоммичено.** Что вошло:
+- `core/memory/MemTags.h` (таблица §4.1), `rendering/core/GpuAlloc.{h,cpp}` (обёртки, запись-sentinel на private
+  data, перепись, `SnapshotRecords`), `tools/check_gpu_alloc.py` — **0 находок**: все ~108 созданий ресурсов, 54
+  дескрипторные кучи, 3 query-кучи и 11 `UploadManager::CreateBufferWithData` (тег + имя, staging — `<name>.Upload`)
+  идут через перепись; буферы свопчейна — `TrackExternalResource`. Миграцию делали 4 агента по непересекающимся
+  наборам файлов; безымянные раньше объекты (буферы AS, кольцо кадра, upload-копии, readback'и) получили имена.
+- `Texture2D::SetMemTag` (по умолчанию `tex.material`; кэш текстур: тег того, кто загрузил файл первым):
+  ядра bloom → `bloom`, шрифт → `text`, текстуры океана → `ocean`, BRDF LUT → `sky`, спрайт частиц → `vfx`,
+  иконки → `editor`/`ui`, загрузки миниатюр → `editor` (если миниатюра грузит файл раньше уровня, текстура так и
+  останется записанной на редактор). `TextureCube` (IBL неба) — пока `tex.material`.
+- `mem:`: `gpu local X nonlocal Y MB (N res) untracked Z`; Debug-строка `mem gpu:` (по тегам, раз в минуту);
+  **`--memreport[=<с>]`** — разовый отчёт в session log: платформа + обход адресного пространства, дерево тегов,
+  все GPU-объекты по убыванию (часть M2 сделана здесь — без неё не сверить провайдеры по именам).
+- `--scene-stress`: строка итерации несёт `gpu L/N MB, res, heaps, live`.
+
+Итоги (Release, wind_test, камера владельца, DLSS вкл. / выкл.):
+
+| | DLSS вкл | DLSS выкл |
+|---|---|---|
+| Перепись local / non-local, МБ | 1524 / 76 (823 рес. + 201 куча) | 2316 / 76 |
+| DXGI local / non-local, МБ | 1804 / 245 | 2495 / 235 |
+| **untracked** local / non-local | **279** / 169 | **178** / 159 |
+| write-combined (обход адресов) | 2071 | 2704 |
+
+- `untracked` local: ~100 МБ — DLSS (уходит с `--dlss=off`), ~178 МБ — драйвер; non-local ~160–170 МБ — тоже не
+  наши объекты. Бэкенд ImGui (`third_party`) в перепись не входит — он там же.
+- **2 ГБ write-combined из M0 объяснены: это видеопамять процесса, отражённая в его private.** WC ≈ DXGI
+  local + non-local в пределах ±1.3 % в обоих прогонах, и DLSS-off сдвинул VRAM на +681 МБ, WC на +633. Наших
+  UPLOAD/READBACK — 76 МБ. Значит, private на этой машине считает VRAM второй раз; собственно CPU-память процесса ≈
+  private − WC ≈ 0.8 ГБ (mimalloc 183, NT-кучи 204, прочее ~316).
+- Крупнейшие теги (DLSS вкл): `bloom` **376 МБ** — из них **288 МБ = `Deferred[0..2].BloomFftA/B/Kernel` по 32 МБ на
+  каждый кадр в полёте** (ядро между кадрами не меняется — кандидат на отдельную задачу); `frame.color` 284
+  (`DlssOutput`/`Tonemap`/`Fxaa` ×3), `frame.gbuffer` 149, `shadow.local` 128 (`LocalShadowCache` 64, `PointShadow`
+  48, `SpotShadow` 16), `reflect` 115, `shadow.gpudata` 66+7, `rt.as` 64, свопчейн 60, `cloud` 51, `ocean` 46+4.5,
+  `shadow.csm` 32, `mesh` 31 (195 буферов), `tex.stream` 31 + **50 non-local** (`Streaming.UploadRing`),
+  `tex.material` 20.
+- Цена committed-выравнивания (`buffer slack`, гранула 64 КБ) — **19.4 МБ**: повода для плана пулов нет.
+
+Сверка с провайдерами (M1c) — по именам ресурсов в `--memreport`:
+
+| Провайдер | Значение | Перепись | Итог |
+|---|---|---|---|
+| `sky.luts` | 17.1 | `SkyAtmosphere.*` + `SkyEnvironment.*` = 16.31 + 0.75 readback = 17.06 | совпало; удалён |
+| `cloud.textures` | 39.1 | `VolumetricCloud.*` = 39.06 (цели `Deferred[f].Cloud*` — сверх) | совпало; удалён |
+| `rt.as` | 57.3 | `rt.as` 64.6: +7.3 МБ — гранула 64 КБ у 214 буферов (провайдер считал запрошенные байты) | перепись точнее; удалён |
+| `tex` | 31.9 | `tex.stream` local 31.4; 0.5 МБ — зарегистрированные в стриминге текстуры, ещё на ресурсе `Texture2D` (`tex.material`) | удалён |
+| `rt.as.bin` | 0.0 | — | **оставлен**: перепись не отличает буфер в корзине ретайра от живого, а это сигнал утечки 2026-09-03; Q3 исходил из того, что он дублирует |
+
+Вместе с провайдерами ушёл мёртвый учёт `ownedBytes_` в `SkyAtmosphere`/`VolumetricCloud`. Остались кумулятивные
+`tex.ret`, `rt.as.retired` и `rt.as.bin`.
+
+Гейты: три конфигурации; `check_gpu_alloc.py` 0, `check_logging.py` 0; `--scene-stress=150` (Debug) CLEAN, 67.6 с,
+число ресурсов на сменах уровня 696–804 без тренда (записи освобождаются); Debug-прогон без `render.validation`;
+`--gbv --gbv-passes=Compose`: `live objects at exit: none`. Запусков: 7 (wind_test ×3, DLSS-off, scene-stress, Debug,
+GBV).
+
 ### M2. Вывод — [1 день]
 
-- **`memreport`** (аналог MemReport): одноразовый многострочный дамп в session log (`WriteRawLines`, Info,
+- **`memreport`** — **GPU-часть и платформа сделаны в M1** (`--memreport[=<с>]`, `render::RequestMemoryReport`);
+  остаются кнопка, MCP, CPU-теги после M3 и пик/Δ к прошлому дампу. Исходная формулировка:
+  одноразовый многострочный дамп в session log (`WriteRawLines`, Info,
   `core`): дерево тегов CPU/GPU (байты, число, пик, Δ к прошлому дампу), таблица GPU-ресурсов по убыванию
   (имя, тег, тип, формат, размеры, куча, байты, кадр создания, флаги — как `rhi.DumpResourceMemory`),
   платформенная раскладка. Вызов: кнопка в DeveloperWindow, `--memreport` (после `--shot-delay`), MCP.

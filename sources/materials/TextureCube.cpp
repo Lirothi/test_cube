@@ -3,6 +3,7 @@
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/descriptors/DescriptorAllocator.h"
 #include "core/Helpers.h"
 
@@ -121,8 +122,9 @@ bool TextureCube::CreateFromDDS(Renderer* r,
 
     // Step 15: same miss as Texture2D's raw-pixel path — step 11 converted no TextureCube site at
     // all, so the skybox was created legacy in COPY_DEST and then took an enhanced barrier.
-    ThrowIfFailed(render::CreateCommittedTexture(r->GetDevice(), hp, D3D12_HEAP_FLAG_NONE, td,
-        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, tex_.GetAddressOfForCreate()));
+    ThrowIfFailed(gpu::CreateCommittedTexture(r->GetDevice(), hp, D3D12_HEAP_FLAG_NONE, td,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::TexMaterial, L"TextureCube_RESOURCE",
+        tex_.GetAddressOfForCreate()));
 
     // 4) Prepare the upload buffer and subresource layout
     const UINT subresources = mips * arr;
@@ -148,9 +150,10 @@ bool TextureCube::CreateFromDDS(Renderer* r,
     upDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
     ComPtr<ID3D12Resource> upload;
-    ThrowIfFailed(r->GetDevice()->CreateCommittedResource(
+    ThrowIfFailed(gpu::CreateCommittedResource(r->GetDevice(),
         &hpUp, D3D12_HEAP_FLAG_NONE, &upDesc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload)));
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::TexMaterial, L"TextureCube_RESOURCE.Upload",
+        IID_PPV_ARGS(&upload)));
 
     // 5) Copy the linear DDS data into the upload buffer (respecting Footprint.RowPitch)
     uint8_t* mapped = nullptr;
@@ -371,7 +374,8 @@ void TextureCube::CreateSrvCPU_(Renderer* r, DXGI_FORMAT srvFmt, UINT mipLevels,
     hd.NumDescriptors = 1;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
-    ThrowIfFailed(r->GetDevice()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&srvHeapCPU_)));
+    ThrowIfFailed(gpu::CreateDescriptorHeap(r->GetDevice(), &hd, MemTag::TexMaterial, L"TextureCube_DESC_HEAP",
+        IID_PPV_ARGS(&srvHeapCPU_)));
     srvCPU_ = srvHeapCPU_->GetCPUDescriptorHandleForHeapStart();
 
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};

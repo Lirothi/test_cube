@@ -1,5 +1,6 @@
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GpuAlloc.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -105,8 +106,9 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path, unsigned max
     buf.SampleDesc.Count = 1;
     buf.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     ComPtr<ID3D12Resource> readback;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buf,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))))
+    if (FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &buf,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Renderer, L"Screenshot.Readback",
+            IID_PPV_ARGS(&readback))))
     {
         return false;
     }

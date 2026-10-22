@@ -9,6 +9,7 @@
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/CommandListBindState.h"
+#include "rendering/core/GpuAlloc.h"
 #include "core/Helpers.h"
 #include <cassert>
 #include <cmath>
@@ -948,10 +949,10 @@ void Renderer::RecordObjectIdPickReadback(ID3D12GraphicsCommandList* cl)
         desc.SampleDesc.Count = 1;
         desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-        ThrowIfFailed(GetDevice()->CreateCommittedResource(
+        ThrowIfFailed(gpu::CreateCommittedResource(GetDevice(),
             &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&objectIdReadback_)));
-        objectIdReadback_->SetName(L"Editor.ObjectIdReadback");
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Editor, L"Editor.ObjectIdReadback",
+            IID_PPV_ARGS(&objectIdReadback_)));
     }
 
     // No transition here. This used to be an out-of-graph readback that moved objectID itself,
@@ -1254,9 +1255,11 @@ void Renderer::EnsureListStats()
     rd.MipLevels = 1;
     rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     rd.SampleDesc.Count = 1;
-    if (FAILED(GetDevice()->CreateQueryHeap(&qh, IID_PPV_ARGS(&listStatsHeap_))) ||
-        FAILED(GetDevice()->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&listStatsReadback_))))
+    if (FAILED(gpu::CreateQueryHeap(GetDevice(), &qh, MemTag::Profiler, L"Renderer.ListStats",
+            IID_PPV_ARGS(&listStatsHeap_))) ||
+        FAILED(gpu::CreateCommittedResource(GetDevice(), &hp, D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Profiler, L"Renderer.ListStatsReadback",
+            IID_PPV_ARGS(&listStatsReadback_))))
     {
         listStatsHeap_.Reset();
         listStatsReadback_.Reset();
@@ -1266,8 +1269,6 @@ void Renderer::EnsureListStats()
             "Frame tab's GPU triangle count stays blank");
         return;
     }
-    listStatsHeap_->SetName(L"Renderer.ListStats");
-    listStatsReadback_->SetName(L"Renderer.ListStatsReadback");
     listStatsNames_.assign(total, {});
 }
 
@@ -2356,11 +2357,11 @@ void Renderer::EnsureVsmDummySrvs() {
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = 2;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only: these are copy SOURCES for StageSrvUavTable
-    if (FAILED(dev->CreateDescriptorHeap(&hd, IID_PPV_ARGS(vsmDummyHeap_.GetAddressOf()))) || !vsmDummyHeap_) {
+    if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.DummySrvs",
+            IID_PPV_ARGS(vsmDummyHeap_.GetAddressOf()))) || !vsmDummyHeap_) {
         vsmDummyHeap_.Reset();
         return;
     }
-    vsmDummyHeap_->SetName(L"VSM.DummySrvs");
     LOG_DEBUG(logging::LogCategory::Render, "VSM dummy SRVs created (frame {})", GetTotalFrameNumber());
 
     const UINT inc = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);

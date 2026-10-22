@@ -10,6 +10,7 @@
 #include "materials/Texture2D.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/ComputeDispatch.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/MemoryReport.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/TextureCreate.h"
@@ -57,10 +58,10 @@ void Dispatch3D(Renderer* renderer, ID3D12GraphicsCommandList* cl, Material* mat
 }
 
 // A texture the noise passes write (2D or 3D, one mip, UAV-capable), created at rest in NON_PIXEL,
-// with its SRV and UAV written into the two given descriptors. Its bytes are added to `owned`.
+// with its SRV and UAV written into the two given descriptors.
 bool CreateStorageTexture(Renderer* renderer, GpuResource& target, D3D12_CPU_DESCRIPTOR_HANDLE srv,
                           D3D12_CPU_DESCRIPTOR_HANDLE uav, UINT width, UINT height, UINT depth, DXGI_FORMAT format,
-                          const wchar_t* name, UINT64& owned)
+                          const wchar_t* name)
 {
     auto* device = renderer->GetDevice();
     const bool volume = depth > 1;
@@ -72,8 +73,7 @@ bool CreateStorageTexture(Renderer* renderer, GpuResource& target, D3D12_CPU_DES
     desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, &resource))) { return false; }
-    owned += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+    if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, kRest, nullptr, MemTag::Cloud, name, &resource))) { return false; }
     target.Attach(renderer->Declarations(), resource, kRest, name);
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = format; sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -93,12 +93,12 @@ bool CreateStorageTexture(Renderer* renderer, GpuResource& target, D3D12_CPU_DES
 // where the async compute queue the shadow map runs on can read it (Texture2D's uploads end in
 // PIXEL|NON_PIXEL). Load-time only.
 bool UploadToRest(Renderer* renderer, const D3D12_RESOURCE_DESC& desc, const std::uint8_t* texels,
-                  Microsoft::WRL::ComPtr<ID3D12Resource>& out)
+                  const wchar_t* name, Microsoft::WRL::ComPtr<ID3D12Resource>& out)
 {
     auto* device = renderer->GetDevice();
     D3D12_HEAP_PROPERTIES hp{}; hp.Type = D3D12_HEAP_TYPE_DEFAULT;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (FAILED(render::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, &resource)))
+    if (FAILED(gpu::CreateCommittedTexture(device, hp, D3D12_HEAP_FLAG_NONE, desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Cloud, name, &resource)))
     {
         return false;
     }
@@ -110,7 +110,7 @@ bool UploadToRest(Renderer* renderer, const D3D12_RESOURCE_DESC& desc, const std
     bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1; bd.DepthOrArraySize = 1;
     bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     Microsoft::WRL::ComPtr<ID3D12Resource> upload;
-    if (FAILED(device->CreateCommittedResource(&up, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload))))
+    if (FAILED(gpu::CreateCommittedResource(device, &up, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::Cloud, L"VolumetricCloud.UploadStaging", IID_PPV_ARGS(&upload))))
     {
         return false;
     }
@@ -164,7 +164,7 @@ bool ReadbackToDds(Renderer* renderer, ID3D12Resource* texture, const std::wstri
     bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER; bd.Width = total; bd.Height = 1; bd.DepthOrArraySize = 1;
     bd.MipLevels = 1; bd.SampleDesc.Count = 1; bd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     Microsoft::WRL::ComPtr<ID3D12Resource> readback;
-    if (FAILED(device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))))
+    if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &bd, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Cloud, L"VolumetricCloud.DumpReadback", IID_PPV_ARGS(&readback))))
     {
         return false;
     }
@@ -220,17 +220,12 @@ bool ReadbackToDds(Renderer* renderer, ID3D12Resource* texture, const std::wstri
 }
 } // namespace
 
-VolumetricCloud::VolumetricCloud()
-{
-    render::RegisterMemoryProvider("cloud.textures", [](const void* self) -> std::uint64_t {
-        return static_cast<const VolumetricCloud*>(self)->ownedBytes_;
-    }, this);
-}
+// The bytes these textures hold are the `cloud` tag of the GPU census (rendering/core/GpuAlloc.h);
+// the "cloud.textures" column of the memory line it replaced matched it by name (memory profiling
+// plan M1c).
+VolumetricCloud::VolumetricCloud() = default;
 
-VolumetricCloud::~VolumetricCloud()
-{
-    render::UnregisterMemoryProvider(this);
-}
+VolumetricCloud::~VolumetricCloud() = default;
 
 void VolumetricCloud::Reset()
 {
@@ -253,7 +248,6 @@ void VolumetricCloud::Reset()
     std::memset(profileGenKey_, 0, sizeof(profileGenKey_)); formationGenSeed_ = 0; formationGenRoughness_ = 0.0f;
     shadowBuilt_ = false; shadowViewProj_ = {}; shadowFarKm_ = 1.0f;
     shadowHistoryValid_ = false; shadowSlicePhase_ = 0;
-    ownedBytes_ = 0;
 }
 
 // Fixed-size resources, allocated once the level asks for clouds and kept until Reset.
@@ -294,7 +288,7 @@ void VolumetricCloud::CreateResources(Renderer* renderer)
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     // Six written textures x (SRV, UAV) + the three file overrides' SRVs + the blue-noise mask's.
     hd.NumDescriptors = 16;
-    if (FAILED(device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Cloud, L"VolumetricCloud.Heap", IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const auto base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     UINT next = 0;
@@ -332,7 +326,7 @@ void VolumetricCloud::CreateResources(Renderer* renderer)
     for (const Tex& t : textures)
     {
         *t.srv = handle(); *t.uav = handle();
-        if (t.wanted && !CreateStorageTexture(renderer, *t.res, *t.srv, *t.uav, t.width, t.height, t.depth, t.format, t.name, ownedBytes_))
+        if (t.wanted && !CreateStorageTexture(renderer, *t.res, *t.srv, *t.uav, t.width, t.height, t.depth, t.format, t.name))
         { fail("texture"); return; }
     }
 
@@ -405,8 +399,7 @@ bool VolumetricCloud::CreateProfile(Renderer* renderer, D3D12_CPU_DESCRIPTOR_HAN
     desc.Width = width; desc.Height = height; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
     desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; desc.SampleDesc.Count = 1;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (!UploadToRest(renderer, desc, pixels.data(), resource)) { return false; }
-    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
+    if (!UploadToRest(renderer, desc, pixels.data(), L"VolumetricCloud.ProfileFile", resource)) { return false; }
     profile_.Attach(renderer->Declarations(), resource, kRest, L"VolumetricCloud.ProfileFile");
     profileSrv_ = srv;
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
@@ -460,9 +453,8 @@ bool VolumetricCloud::LoadVolumeDds(Renderer* renderer, const std::wstring& path
     desc.Width = width; desc.Height = height; desc.DepthOrArraySize = static_cast<UINT16>(depth); desc.MipLevels = 1;
     desc.Format = dxgi; desc.SampleDesc.Count = 1;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-    if (!UploadToRest(renderer, desc, bytes.data() + 148, resource)) { return refuse("upload failed"); }
+    if (!UploadToRest(renderer, desc, bytes.data() + 148, name, resource)) { return refuse("upload failed"); }
     auto* device = renderer->GetDevice();
-    ownedBytes_ += device->GetResourceAllocationInfo(0, 1, &desc).SizeInBytes;
     target.Attach(renderer->Declarations(), resource, kRest, name);
     D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
     sd.Format = dxgi; sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "rendering/core/BarrierTranslation.h"
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/meshes/Mesh.h"
 
 namespace rt {
@@ -19,7 +20,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferHelper(ID3D12Device* device,
                                                          UINT64 size,
                                                          D3D12_HEAP_TYPE heapType,
                                                          D3D12_RESOURCE_STATES initialState,
-                                                         D3D12_RESOURCE_FLAGS flags)
+                                                         D3D12_RESOURCE_FLAGS flags,
+                                                         const wchar_t* name)
 {
     if (g_forceAsAllocFailure.load(std::memory_order_relaxed)) {
         return nullptr; // simulate out-of-memory
@@ -40,8 +42,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferHelper(ID3D12Device* device,
     desc.Flags = flags;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> res;
-    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
-                                               initialState, nullptr, IID_PPV_ARGS(&res)))) {
+    if (FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                            initialState, nullptr, MemTag::RtAs, name, IID_PPV_ARGS(&res)))) {
         return nullptr;
     }
     return res;
@@ -51,10 +53,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> CreateBufferHelper(ID3D12Device* device,
 // result is created directly in the RAYTRACING_ACCELERATION_STRUCTURE state.
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateUavBuffer(ID3D12Device* device,
                                                        UINT64 size,
-                                                       D3D12_RESOURCE_STATES initialState)
+                                                       D3D12_RESOURCE_STATES initialState,
+                                                       const wchar_t* name)
 {
     return CreateBufferHelper(device, size, D3D12_HEAP_TYPE_DEFAULT, initialState,
-                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS, name);
 }
 
 } // namespace
@@ -126,12 +129,12 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t no
 
     Microsoft::WRL::ComPtr<ID3D12Resource> result =
         CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
-                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+                        D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"RtAs.Blas");
     // Scratch is created in COMMON: D3D12 ignores (and warns about) a non-COMMON
     // initial state on buffers, and the build's UAV write implicitly promotes it.
     Microsoft::WRL::ComPtr<ID3D12Resource> scratch =
         CreateUavBuffer(device5_, info.ScratchDataSizeInBytes,
-                        D3D12_RESOURCE_STATE_COMMON);
+                        D3D12_RESOURCE_STATE_COMMON, L"RtAs.BlasScratch");
     if (!result || !scratch) {
         buildFailed_ = true; // out of VRAM / device lost -> caller disables RT, falls back to SSR
         return slot;
@@ -160,7 +163,7 @@ void AccelerationStructureManager::EnsureWindDescHeap()
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     desc.NumDescriptors = kMaxWindBlasSlots * 2;
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only; staged into the frame heap per use
-    if (SUCCEEDED(device5_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&windDescHeap_)))) {
+    if (SUCCEEDED(gpu::CreateDescriptorHeap(device5_, &desc, MemTag::RtAs, L"RtAs.WindDescHeap", IID_PPV_ARGS(&windDescHeap_)))) {
         windDescIncrement_ =
             device5_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
@@ -199,7 +202,7 @@ bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
             pf = WindBlasSlot::PerFrame{};
         }
         s.deformedVb = CreateUavBuffer(device5_, static_cast<UINT64>(count) * 12ull,
-                                       D3D12_RESOURCE_STATE_COMMON);
+                                       D3D12_RESOURCE_STATE_COMMON, L"RtAs.WindStream");
         if (!s.deformedVb) { buildFailed_ = true; return false; }
         s.mesh = mesh;
         s.vertexCount = count;
@@ -315,13 +318,13 @@ D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
     if (!f.blas || f.blasSize < info.ResultDataMaxSizeInBytes)
     {
         f.blas = CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
-                                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+                                 D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"RtAs.WindBlas");
         f.blasSize = info.ResultDataMaxSizeInBytes;
         f.builtOnce = false; // fresh result buffer cannot be PERFORM_UPDATEd
     }
     if (!f.scratch || f.scratchSize < wantScratch)
     {
-        f.scratch = CreateUavBuffer(device5_, wantScratch, D3D12_RESOURCE_STATE_COMMON);
+        f.scratch = CreateUavBuffer(device5_, wantScratch, D3D12_RESOURCE_STATE_COMMON, L"RtAs.WindBlasScratch");
         f.scratchSize = wantScratch;
     }
     if (!f.blas || !f.scratch) { buildFailed_ = true; return 0; }
@@ -365,7 +368,7 @@ void AccelerationStructureManager::EnsureSrvHeap()
     desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     desc.NumDescriptors = render::kFrameCount;
     desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only; renderer stages it into a shader-visible heap
-    if (SUCCEEDED(device5_->CreateDescriptorHeap(&desc, IID_PPV_ARGS(&srvHeap_)))) {
+    if (SUCCEEDED(gpu::CreateDescriptorHeap(device5_, &desc, MemTag::RtAs, L"RtAs.TlasSrvHeap", IID_PPV_ARGS(&srvHeap_)))) {
         srvIncrement_ = device5_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 }
@@ -400,7 +403,8 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
     const UINT64 instBytes = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * count;
     if (f.instanceCapacity < count || !f.instanceUpload) {
         f.instanceUpload = CreateBufferHelper(device5_, instBytes, D3D12_HEAP_TYPE_UPLOAD,
-                                              D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE);
+                                              D3D12_RESOURCE_STATE_GENERIC_READ, D3D12_RESOURCE_FLAG_NONE,
+                                              L"RtAs.TlasInstances");
         f.instanceCapacity = f.instanceUpload ? count : 0;
     }
     if (!f.instanceUpload) {
@@ -477,7 +481,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
     bool freshResult = false;
     if (f.resultSize < info.ResultDataMaxSizeInBytes || !f.result) {
         f.result = CreateUavBuffer(device5_, info.ResultDataMaxSizeInBytes,
-                                   D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE);
+                                   D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE, L"RtAs.Tlas");
         f.resultSize = f.result ? info.ResultDataMaxSizeInBytes : 0;
         freshResult = true; // a new buffer holds no prior AS — must full-build, can't refit
     }
@@ -485,7 +489,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         // COMMON: avoids the buffer-initial-state-ignored warning; the build's
         // UAV write implicitly promotes it to UNORDERED_ACCESS.
         f.scratch = CreateUavBuffer(device5_, info.ScratchDataSizeInBytes,
-                                    D3D12_RESOURCE_STATE_COMMON);
+                                    D3D12_RESOURCE_STATE_COMMON, L"RtAs.TlasScratch");
         f.scratchSize = f.scratch ? info.ScratchDataSizeInBytes : 0;
     }
     if (!f.result || !f.scratch) {

@@ -390,6 +390,7 @@
     <ClCompile Include="sources/rendering/visibility/OcclusionQueries.cpp" />
     <ClCompile Include="sources/rendering/visibility/HzbOcclusionTester.cpp" />
     <ClCompile Include="sources/rendering/core/MemoryReport.cpp" />
+    <ClCompile Include="sources/rendering/core/GpuAlloc.cpp" />
     <ClCompile Include="sources/rendering/core/RenderTargetManager.cpp" />
     <ClCompile Include="sources/rendering/core/SubmitTimeline.cpp" />
     <ClCompile Include="sources/rendering/core/SwapchainManager.cpp" />
@@ -575,6 +576,7 @@
     <ClInclude Include="sources/core/logging/LogSinks.h" />
     <ClInclude Include="sources/core/logging/diagnostics/LogStress.h" />
     <ClInclude Include="sources/core/memory/MemCounters.h" />
+    <ClInclude Include="sources/core/memory/MemTags.h" />
     <ClInclude Include="sources/core/memory/diagnostics/MemBench.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
@@ -619,6 +621,7 @@
     <ClInclude Include="sources/rendering/core/RenderStats.h" />
     <ClInclude Include="sources/rendering/core/VisibilityStats.h" />
     <ClInclude Include="sources/rendering/core/MemoryReport.h" />
+    <ClInclude Include="sources/rendering/core/GpuAlloc.h" />
     <ClInclude Include="sources/rendering/core/FrameScheduler.h" />
     <ClInclude Include="sources/rendering/core/GraphicsDevice.h" />
     <ClInclude Include="sources/rendering/core/GbvPassFilter.h" />

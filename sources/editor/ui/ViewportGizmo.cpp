@@ -699,6 +699,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
             Texture2D::CreateDesc desc;
             desc.path = L"textures/editor/editor_icons.png";
             desc.usage = Texture2D::Usage::LinearData;
+            iconAtlas_.SetMemTag(MemTag::Editor);
             iconAtlasReady_ = iconAtlas_.CreateFromFile(&ctx.renderer, up.CommandList(), desc, up.KeepAlive());
             up.SubmitAndWait(&ctx.renderer);
         }
