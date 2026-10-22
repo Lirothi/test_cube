@@ -18,11 +18,13 @@
 #include <d3d12.h>
 
 #include "rendering/core/RenderGraph.h"
+#include "rendering/renderables/RenderableObjectBase.h" // RtInstanceDesc
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/BindlessTable.h"
 
 class Renderer;
 class RenderableObjectBase;
+class GBufferRenderable;
 class Material;
 class Mesh;
 struct SceneFrameData;
@@ -67,6 +69,23 @@ private:
     bool memRegistered_ = false; // memory report providers (rt.as, rt.as.bin) registered once
     bool asVramLogged_ = false;  // S13: one-time AS VRAM accounting log
     std::vector<rt::InstanceEntry> rtInstances_; // reused scratch (only Build touches it)
+
+    // The rest of Build()'s per-frame scratch, kept for the same reason: each is cleared at its
+    // point of use and keeps last frame's capacity. As locals they grew from zero every frame --
+    // the reuse-deny list alone is one entry per wind-capable caster (~1100 on wind_test), 19
+    // reallocations and 124 KB a frame; with the candidates and the plan, 150 thousand
+    // short-lived allocations in 50 s of orbit (memtrace churn, 80 % of the CPU churn bytes).
+    // RW: the deform/refit recording plan for this frame -- (slot, entryIndex, gb).
+    struct WindPlanEntry { UINT slot; size_t entryIndex; GBufferRenderable* gb; };
+    struct WindCandidate { size_t entryIndex; GBufferRenderable* gb; float distSq; bool tight; };
+    struct WindReuseEntry { uint32_t recordBase; uint32_t recordCount; size_t entryIndex; bool sway; };
+    std::vector<WindPlanEntry> windPlan_;
+    std::vector<WindCandidate> windCandidates_;
+    std::vector<WindReuseEntry> windReuseEntries_;
+    std::vector<uint8_t> windPlanOk_;
+    std::vector<D3D12_RESOURCE_BARRIER> windStreamBarriers_;
+    std::vector<RtInstanceDesc> instanceDescs_; // a GPU-instanced caster's instances
+    std::vector<rt::BindlessTable::SlotMaterial> slotMats_;
 
     // RW: stable owner -> dynamic-BLAS slot binding. Stability is what makes the per-frame work a
     // REFIT instead of a rebuild -- a slot only rebuilds when its owner changes (or on cadence).

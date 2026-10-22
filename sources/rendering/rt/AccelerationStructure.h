@@ -234,6 +234,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> windDescHeap_;
     UINT windDescIncrement_ = 0;
     robin_hood::unordered_map<Mesh*, Blas> blasCache_;
+    // The per-submesh geometry table of a BLAS build (GetOrBuildBlas, BuildOrRefitWindSlot). The
+    // prebuild query and the build record read it only during the call, so one table serves
+    // every build and keeps its capacity: as a local it was one allocation per wind slot per
+    // frame (24 a frame on wind_test, memtrace churn).
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geomScratch_;
     struct Retired {
         Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
         uint64_t retireFrame = kUnstamped; // free once the build's frame number reaches this

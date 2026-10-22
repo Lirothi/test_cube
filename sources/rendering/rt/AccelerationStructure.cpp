@@ -87,7 +87,8 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t no
     // shaders index the bindless geometry-info table with InstanceID + GeometryIndex.
     const std::vector<Mesh::Submesh>& subs = mesh->GetSubmeshes();
     const UINT idxBytes = (mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 4u : 2u;
-    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geoms(std::max<size_t>(subs.size(), 1));
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC>& geoms = geomScratch_;
+    geoms.resize(std::max<size_t>(subs.size(), 1)); // every entry is reset below
     for (size_t s = 0; s < geoms.size(); ++s) {
         D3D12_RAYTRACING_GEOMETRY_DESC& geom = geoms[s];
         geom = {};
@@ -266,7 +267,8 @@ D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
     ID3D12Resource* ib = mesh->GetIndexBufferResource();
     const std::vector<Mesh::Submesh>& subs = mesh->GetSubmeshes();
     const UINT idxBytes = (mesh->GetIndexFormat() == DXGI_FORMAT_R32_UINT) ? 4u : 2u;
-    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC> geoms(std::max<size_t>(subs.size(), 1));
+    std::vector<D3D12_RAYTRACING_GEOMETRY_DESC>& geoms = geomScratch_;
+    geoms.resize(std::max<size_t>(subs.size(), 1)); // every entry is reset below
     for (size_t g = 0; g < geoms.size(); ++g) {
         D3D12_RAYTRACING_GEOMETRY_DESC& geom = geoms[g];
         geom = {};

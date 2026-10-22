@@ -153,9 +153,10 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
     // (S14) and transparent/glass (S15) also return false from GetRtInstance today;
     // bringing each into RT is its own step.
     rtInstances_.clear();
-    // RW: the deform/refit recording plan for this frame -- (slot, entryIndex, gb).
-    struct WindPlanEntry { UINT slot; size_t entryIndex; GBufferRenderable* gb; };
-    std::vector<WindPlanEntry> windPlan;
+    // RW: the deform/refit recording plan for this frame -- (slot, entryIndex, gb). Like the
+    // other scratch below it is a member that keeps its capacity across frames (see the header).
+    std::vector<WindPlanEntry>& windPlan = windPlan_;
+    windPlan.clear();
     if (frame.objects)
     {
         const auto& objects = *frame.objects;
@@ -164,7 +165,6 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
             rtBindlessObjectCache_.resize(objects.size());
         }
         uint32_t instanceId = 0;
-        std::vector<RtInstanceDesc> descs; // reused across objects this frame
         // RW: near wind casters collected during the gather; the deform + refit recording below
         // patches their entries with a per-instance deformed BLAS.
         const bool windActive = frame.settings.rtWindBlas && frame.wind && frame.wind->active &&
@@ -178,19 +178,20 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
         const float tightR = std::clamp(frame.settings.rtWindBlasRadius, 0.0f, 200.0f);
         const float tightR2 = tightR * tightR;
         const float wideR2 = tightR2 * (1.2f * 1.2f);
-        struct WindCandidate { size_t entryIndex; GBufferRenderable* gb; float distSq; bool tight; };
-        std::vector<WindCandidate> windCandidates;
+        std::vector<WindCandidate>& windCandidates = windCandidates_;
+        windCandidates.clear();
         // RW reuse-deny bookkeeping: every single-instance wind-CAPABLE caster, regardless of
         // the RT sway toggle or radius. After slot binding, each one's bindless records are
         // stamped with (or cleared of) the "raster sways but RT geometry is rest-pose" flag,
         // which tells the reflection shader to re-shade instead of reusing the on-screen colour.
-        struct WindReuseEntry { uint32_t recordBase; uint32_t recordCount; size_t entryIndex; bool sway; };
-        std::vector<WindReuseEntry> windReuseEntries;
+        std::vector<WindReuseEntry>& windReuseEntries = windReuseEntries_;
+        windReuseEntries.clear();
         const bool rasterWindOn = frame.wind && frame.wind->active &&
                                   frame.wind->swayAmplitude > 0.0f;
         // wind_test has hundreds of identical multi-slot palms. Keep this scratch allocation
         // across objects instead of allocating/freeing a 4-5 element vector for every palm.
-        std::vector<rt::BindlessTable::SlotMaterial> slotMats;
+        std::vector<rt::BindlessTable::SlotMaterial>& slotMats = slotMats_;
+        std::vector<RtInstanceDesc>& descs = instanceDescs_;
         for (size_t objectIndex = 0; objectIndex < objects.size(); ++objectIndex)
         {
             if (bindless_.BuildFailed()) { break; }
@@ -470,7 +471,8 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 renderer->BindDescriptorHeaps(t.cl); // the staged SRV/UAV tables live there
                 t.cl->SetComputeRootSignature(windDeformMat->GetRootSignature());
                 t.cl->SetPipelineState(windDeformMat->GetPipelineState());
-                std::vector<uint8_t> planOk(windPlan.size(), 0);
+                std::vector<uint8_t>& planOk = windPlanOk_;
+                planOk.assign(windPlan.size(), 0);
                 for (size_t w = 0; w < windPlan.size(); ++w)
                 {
                     const WindPlanEntry& pe = windPlan[w];
@@ -518,7 +520,8 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 // ONE batched transition for every deformed stream, then all builds
                 // back-to-back, then the AS-read barriers together: interleaving build+barrier
                 // per slot serialized the GPU at ~34 us/palm; batched, the builds pipeline.
-                std::vector<D3D12_RESOURCE_BARRIER> streamBarriers;
+                std::vector<D3D12_RESOURCE_BARRIER>& streamBarriers = windStreamBarriers_;
+                streamBarriers.clear();
                 streamBarriers.reserve(windPlan.size());
                 for (size_t w = 0; w < windPlan.size(); ++w)
                 {
