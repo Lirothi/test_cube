@@ -21,17 +21,23 @@
       <FunctionLevelLinking>true</FunctionLevelLinking><AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Release'">NDEBUG;NOMINMAX;WIN32_LEAN_AND_MEAN;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(Repo);$(Repo)sources;$(Repo)third_party;$(Repo)third_party\imgui;$(Repo)third_party\imgui\backends;$(Repo)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(Repo);$(Repo)sources;$(Repo)third_party;$(Repo)third_party\imgui;$(Repo)third_party\imgui\backends;$(Repo)third_party\tbb\include;$(Repo)third_party\mimalloc\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem><OptimizeReferences>true</OptimizeReferences><EnableCOMDATFolding>true</EnableCOMDATFolding>
-      <AdditionalDependencies>d3d12.lib;dxgi.lib;dxguid.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(Repo)third_party\mimalloc\lib\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>mimalloc.lib;d3d12.lib;dxgi.lib;dxguid.lib;user32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="profiler_regression.cpp" />
     <ClCompile Include="..\sources\core\profiling\Profiler.cpp" />
     <ClCompile Include="..\sources\core\task\TaskSystemLockFree.cpp" />
+    <ClCompile Include="..\sources\core\memory\MemNew.cpp" />
+    <ClCompile Include="..\sources\core\diagnostics\ArtifactWriter.cpp" />
+    <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
+    <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />
+    <ClCompile Include="..\sources\rendering\core\BarrierTranslation.cpp" />
     <ClCompile Include="..\sources\core\logging\Log.cpp" />
     <ClCompile Include="..\sources\core\logging\LogQueue.cpp" />
     <ClCompile Include="..\sources\core\logging\LogSinks.cpp" />
