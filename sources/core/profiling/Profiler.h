@@ -119,10 +119,23 @@ public:
         bool         dynamicInUse = false;
     };
 
+    // A counter sample ("ph":"C"): one track, up to kMaxTraceCounterSeries named values at one time.
+    // Names are static strings (the memory tags' table, literals). Memory profiling plan M2: the GPU
+    // census and the process numbers as tracks beside the CPU/GPU scopes.
+    static constexpr int kMaxTraceCounterSeries = 32;
+    struct TraceCounter {
+        const char* track = nullptr;
+        uint64_t    tsUs = 0;
+        int         count = 0;
+        const char* names[kMaxTraceCounterSeries] = {};
+        double      values[kMaxTraceCounterSeries] = {};
+    };
+
     struct TraceDumpData {
         std::vector<TraceEvent> events;
         std::vector<ScopeNameKey> dynamicKeys;
         std::vector<std::string> threadNames;
+        std::vector<TraceCounter> counters;
     };
 
     // --- overlay data (snapshot) ---
@@ -268,6 +281,12 @@ public:
         std::string lastPath;         // where the previous capture was written
     };
     TraceCaptureStatus GetTraceCaptureStatus() const;
+    // True while a capture records (a relaxed read; no lock). A counter source checks it before
+    // gathering anything, so it costs nothing outside a capture.
+    bool IsTraceCapturing() const;
+    // One counter sample on `track` at the current time, kept only while a capture records; at most
+    // kMaxTraceCounterSeries values. `track` and `names` must outlive the capture (static strings).
+    void RecordTraceCounters(const char* track, const char* const* names, const double* values, int count);
     void Tick();
     void SetThreadName(const std::string& name);
 
@@ -394,6 +413,10 @@ private:
     std::string traceLastPath_;
     uint64_t traceStartUs_ = 0, traceFirstFrame_ = 0, traceLastFrame_ = 0;
     std::vector<TraceEvent> traceEvents_;
+    std::vector<TraceCounter> traceCounters_;
+    // Mirrors traceCapturing_ across the whole capture (traceCapturingAtomic_ only covers the open
+    // frame), for IsTraceCapturing's lock-free read from code running between frames.
+    std::atomic<bool> traceRecording_{ false };
     std::atomic<uint32_t> traceFileCounter_{ 0 };
     // Export owns immutable events, names and thread metadata. It is never a
     // dependency of EndFrame / the render workers; shutdown alone joins it.
@@ -458,6 +481,8 @@ inline void Profiler::RequestTraceCapture(uint32_t) {}
 inline void Profiler::BeginTraceCapture() {}
 inline void Profiler::StopTraceCapture() {}
 inline Profiler::TraceCaptureStatus Profiler::GetTraceCaptureStatus() const { return {}; }
+inline bool Profiler::IsTraceCapturing() const { return false; }
+inline void Profiler::RecordTraceCounters(const char*, const char* const*, const double*, int) {}
 inline std::vector<Profiler::OverlaySample> Profiler::OverlaySnapshot() const { return {}; }
 inline bool Profiler::DumpOverlay(const std::string&) { return false; }
 inline void Profiler::Tick() {}

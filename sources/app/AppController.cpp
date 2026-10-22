@@ -72,6 +72,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         g_bootLogWindow = false; // once: "--log-window" opens the viewer for a headless capture
         developerWindow_.ToggleLogWindow();
     }
+    if (g_bootMemoryWindow)
+    {
+        g_bootMemoryWindow = false; // once: "--mem-window" opens the Memory tab for a headless capture
+        developerWindow_.OpenMemoryTab();
+    }
 #if WITH_EDITOR
     if (g_bootEditor)
     {

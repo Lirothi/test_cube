@@ -58,6 +58,7 @@ int g_windowSize[2] = { 0, 0 };
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
 bool g_hudHidden = false;
 bool g_bootLogWindow = false;
+bool g_bootMemoryWindow = false;
 bool g_bootEditor = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
@@ -1885,6 +1886,11 @@ namespace
                 { "gpu", std::move(gpu) }, { "cpu", std::move(cpu) },
             };
             return out.dump();
+        }
+        std::string Memory(const std::string& filter, int top, const std::string& snapshot,
+            const std::string& diff, bool report) override
+        {
+            return render::MemoryJson(renderer_.GetDevice(), filter, top, snapshot, diff, report);
         }
         std::string Readouts(int historyRows) override
         {

@@ -375,6 +375,9 @@
     <ClCompile Include="sources/app/ui/LogWindow.cpp">
       <Filter>sources\app\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/ui/MemoryTab.cpp">
+      <Filter>sources\app\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
@@ -987,6 +990,9 @@
       <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/ui/LogWindow.h">
+      <Filter>sources\app\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/ui/MemoryTab.h">
       <Filter>sources\app\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanControlsWindow.h">

@@ -926,6 +926,10 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--log-window")) {
             g_bootLogWindow = true;
         }
+        // "--mem-window": open Developer Controls on the Memory tab at boot (see App.h).
+        if (std::strstr(lpCmdLine, "--mem-window")) {
+            g_bootMemoryWindow = true;
+        }
         // "--editor": open the Level Editor at boot, so a --shot can photograph its panels.
         if (std::strstr(lpCmdLine, "--editor")) {
             g_bootEditor = true;

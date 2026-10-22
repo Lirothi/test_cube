@@ -325,6 +325,8 @@ void Profiler::BeginFrame(uint64_t frameNo) {
         traceFramesRemaining_ = traceRequestFrameCount_;
         traceFramesRecorded_ = 0;
         traceEvents_.clear();
+        traceCounters_.clear();
+        traceRecording_.store(true, std::memory_order_release);
         traceStartUs_ = ToMicroseconds(frameCpuStart_);
         traceFirstFrame_ = frameNo;
         traceLastFrame_ = UINT64_MAX;
@@ -373,6 +375,7 @@ void Profiler::EndFrame() {
             if (!traceOpenEnded_ && traceFramesRemaining_) { --traceFramesRemaining_; }
             if (traceStopRequested_ || (!traceOpenEnded_ && traceFramesRemaining_ == 0)) {
                 traceCapturing_ = false;
+                traceRecording_.store(false, std::memory_order_release);
                 traceDraining_ = true;
                 traceLastFrame_ = frameNo_;
                 traceStopRequested_ = false;
@@ -728,6 +731,7 @@ void Profiler::ShutdownGpu() {
         std::lock_guard<std::mutex> lock(mtx_);
         if (traceCapturing_) {
             traceCapturing_ = false;
+            traceRecording_.store(false, std::memory_order_release);
             traceDraining_ = true;
             traceLastFrame_ = frameNo_;
             traceCapturingAtomic_.store(false, std::memory_order_release);
@@ -822,6 +826,7 @@ void Profiler::FinishTraceIfReady() {
         }
 #endif
         dump.events.swap(traceEvents_);
+        dump.counters.swap(traceCounters_);
         dump.dynamicKeys = GetTraceStringTable().TakeCaptureKeys();
         dump.threadNames = threadIndexToName_;
         traceDraining_ = false;
@@ -909,6 +914,26 @@ void Profiler::StopTraceCapture() {
     traceCaptureRequested_ = false;
     traceRequestFrameCount_ = 0;
     traceOpenEnded_ = false;
+}
+
+bool Profiler::IsTraceCapturing() const {
+    return traceRecording_.load(std::memory_order_acquire);
+}
+
+void Profiler::RecordTraceCounters(const char* track, const char* const* names, const double* values, int count) {
+    if (track == nullptr || names == nullptr || values == nullptr || count <= 0) { return; }
+    TraceCounter c;
+    c.track = track;
+    c.count = count < kMaxTraceCounterSeries ? count : kMaxTraceCounterSeries;
+    for (int i = 0; i < c.count; ++i) {
+        c.names[i] = names[i];
+        c.values[i] = values[i];
+    }
+    const uint64_t nowUs = ToMicroseconds(CpuClock::now());
+    std::lock_guard<std::mutex> lk(mtx_);
+    if (!traceCapturing_) { return; }
+    c.tsUs = nowUs > traceStartUs_ ? nowUs - traceStartUs_ : 0;
+    traceCounters_.push_back(c);
 }
 
 Profiler::TraceCaptureStatus Profiler::GetTraceCaptureStatus() const {
@@ -1007,6 +1032,17 @@ void Profiler::WriteTraceJson(const TraceDumpData& dump) {
             << ",\"pid\":0,\"tid\":" << TraceOutputThreadIndex(ev);
         if (ev.hasFrameNumber) { out << ",\"args\":{\"frame\":" << ev.frameNumber << "}"; }
         out << "}";
+    }
+    // Counter tracks: one event per sample, every series of the track in its args.
+    for (const TraceCounter& c : dump.counters) {
+        separator();
+        out << "  {\"name\":\"" << EscapeJson(c.track) << "\",\"ph\":\"C\",\"ts\":" << c.tsUs
+            << ",\"pid\":0,\"tid\":0,\"args\":{";
+        for (int i = 0; i < c.count; ++i) {
+            if (i) { out << ","; }
+            out << "\"" << EscapeJson(c.names[i] ? c.names[i] : "?") << "\":" << c.values[i];
+        }
+        out << "}}";
     }
     out << "\n],\n\"displayTimeUnit\":\"us\"\n}\n";
     out.close();

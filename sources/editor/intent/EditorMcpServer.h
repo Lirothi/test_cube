@@ -106,6 +106,12 @@ namespace editormcp
         // contains `filter` (case-insensitive; empty = all), as a JSON object; `resetMax` then restarts
         // the maxima, so the next call's max covers the time between the two.
         virtual std::string Profile(const std::string& filter, bool resetMax) = 0;
+        // The memory census (rendering/core/MemoryReport.h MemoryJson), as a JSON object: the process
+        // and the adapter, the GPU census by tag, the `top` largest GPU objects whose name or tag
+        // contains `filter`; `diff` against a snapshot saved earlier, then `snapshot` saves the
+        // current state under that label; `report` also writes the full report into the session log.
+        virtual std::string Memory(const std::string& filter, int top, const std::string& snapshot,
+            const std::string& diff, bool report) = 0;
     };
     void SetRuntimeHost(RuntimeHost* host);
 

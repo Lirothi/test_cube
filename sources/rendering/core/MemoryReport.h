@@ -35,6 +35,9 @@
 // call stacks (Unreal Insights' memory channel is the model) is docs/memory_profiling_plan.md M4.
 
 #include <cstdint>
+#include <string>
+
+#include "rendering/core/GpuAlloc.h"
 
 struct ID3D12Device;
 
@@ -58,6 +61,47 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec = 5.
 // on the next tick. Main thread.
 void ScheduleMemoryReport(double afterSec);
 void RequestMemoryReport();
+
+// The numbers of the memory line, read now (memory profiling plan M2): for the Memory tab and the
+// MCP `get_memory`. The allocation rates are the latest line's (they are per-period numbers).
+struct MemoryPlatform
+{
+    std::uint64_t privateBytes = 0;
+    std::uint64_t workingSetBytes = 0;
+    std::uint64_t mimallocCommitBytes = 0; // 0 = unknown (a mimalloc without OS statistics)
+    std::uint64_t ntHeapsBytes = 0;
+    std::uint32_t ntHeapCount = 0;
+    bool haveVram = false;
+    std::uint64_t vramLocalBytes = 0;
+    std::uint64_t vramBudgetBytes = 0;
+    std::uint64_t vramNonLocalBytes = 0;
+    double newPerFrame = 0.0;     // operator new calls per frame, all threads, latest line
+    double mainNewPerFrame = 0.0; // the main thread's share
+    double newBytesPerFrame = 0.0;
+    std::uint64_t liveAllocations = 0;
+    std::uint64_t frame = 0;      // TickMemoryReport calls so far
+};
+MemoryPlatform ReadMemoryPlatform(ID3D12Device* device);
+
+// A named snapshot of the platform and the GPU census by tag (Insights' "Size A / Size B / Diff",
+// MemTagTable.cpp:289-497): SaveMemorySnapshot stores the current state under `label`, replacing
+// one of the same name; FindMemorySnapshot copies it out, false when there is none. Main thread.
+struct MemorySnapshot
+{
+    MemoryPlatform platform;
+    gpu::CensusTotals census;
+    double timeSec = 0.0; // QueryPerformanceCounter seconds when taken
+};
+void SaveMemorySnapshot(ID3D12Device* device, const std::string& label);
+bool FindMemorySnapshot(const std::string& label, MemorySnapshot& out);
+double MemoryNowSec();
+
+// The MCP `get_memory` answer, as a JSON object: platform, GPU census, tags (those whose name
+// contains `filter`, or every tag when empty), the `top` largest GPU objects (name or tag contains
+// `filter`), `diff` against a saved snapshot, then `snapshot` stores the current state under that
+// label; `report` also writes the full memory report into the session log.
+std::string MemoryJson(ID3D12Device* device, const std::string& filter, int top, const std::string& snapshot,
+                       const std::string& diff, bool report);
 
 // THE WHOLE CARD, not this process's share of it.
 //

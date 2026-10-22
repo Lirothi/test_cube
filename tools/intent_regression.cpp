@@ -964,7 +964,7 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     // The runtime door (set_settings / reset_settings / get_readouts): listed; refused without an app
     // behind it; with one, --set's own syntax reaches it name by name, an unknown name is reported
     // rather than swallowed, and the exposure is re-metered after a change.
-    for (const char* tool : { "set_settings", "reset_settings", "get_readouts" })
+    for (const char* tool : { "set_settings", "reset_settings", "get_readouts", "get_profile", "get_memory" })
     {
         bool listed = false;
         for (const json& t : (*list)["result"]["tools"])
@@ -998,6 +998,19 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
             profileReset = resetMax;
             return "{\"gpu\":[]}";
         }
+        std::string memoryFilter = "-", memorySnapshot = "-", memoryDiff = "-";
+        int memoryTop = -1;
+        bool memoryReport = false;
+        std::string Memory(const std::string& filter, int top, const std::string& snapshot,
+            const std::string& diff, bool report) override
+        {
+            memoryFilter = filter;
+            memoryTop = top;
+            memorySnapshot = snapshot;
+            memoryDiff = diff;
+            memoryReport = report;
+            return "{\"gpu\":{}}";
+        }
     } runtime;
     editormcp::SetRuntimeHost(&runtime);
     const std::optional<json> set = call(11, "tools/call", { { "name", "set_settings" },
@@ -1020,6 +1033,15 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         "get_profile hands the app its filter and the reset, and answers with its rows: " + text(profile));
     call(1203, "tools/call", { { "name", "get_profile" } });
     Check(runtime.profileFilter.empty() && !runtime.profileReset, "and by default reads every row without a reset");
+    const std::optional<json> memory = call(1204, "tools/call", { { "name", "get_memory" },
+        { "arguments", { { "filter", "bloom" }, { "top", 900 }, { "snapshot", "A" }, { "diff", "B" }, { "report", true } } } });
+    Check(text(memory) == "{\"gpu\":{}}" && runtime.memoryFilter == "bloom" && runtime.memoryTop == 500 &&
+          runtime.memorySnapshot == "A" && runtime.memoryDiff == "B" && runtime.memoryReport,
+        "get_memory hands the app its filter, snapshot, diff and report, `top` clamped to 500: " + text(memory));
+    call(1205, "tools/call", { { "name", "get_memory" } });
+    Check(runtime.memoryFilter.empty() && runtime.memoryTop == 20 && runtime.memorySnapshot.empty() &&
+          runtime.memoryDiff.empty() && !runtime.memoryReport,
+        "and by default lists the 20 largest GPU objects -- no snapshot, no diff, no report");
     const std::optional<json> reset = call(13, "tools/call", { { "name", "reset_settings" } });
     Check(!(*reset)["result"]["isError"].get<bool>() && runtime.resets == 2,
         "reset_settings re-applies the document and re-meters: " + text(reset));

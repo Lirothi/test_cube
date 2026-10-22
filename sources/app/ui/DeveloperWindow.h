@@ -5,6 +5,7 @@
 
 #include "app/scene/SceneFrameData.h"
 #include "app/ui/LogWindow.h"
+#include "app/ui/MemoryTab.h"
 #include "materials/Texture2D.h"
 #include "ocean/OceanControlsWindow.h"
 #include "rendering/debug/TextureDebugViewer.h"
@@ -28,6 +29,8 @@ public:
     void ToggleTextureInspector();
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
     void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
+    // "--mem-window": the window open on the Memory tab, so a headless --shot can photograph it.
+    void OpenMemoryTab() { open_ = true; activeTab_ = Tab::Memory; }
     bool IsLogWindowOpen() const { return logWindow_.IsOpen(); }
     void ToggleLogWindow() { logWindow_.ToggleOpen(); }
 
@@ -43,7 +46,7 @@ private:
     enum class Tab
     {
         Frame, AntiAliasing, Visibility, Reflections, Fog, Sky,
-        Debug, Lod, Csm, Contact, Vsm, Streaming, Bindings
+        Debug, Lod, Csm, Contact, Vsm, Streaming, Memory, Bindings
     };
     Tab activeTab_ = Tab::Frame;
 
@@ -64,6 +67,7 @@ private:
     Texture2D resetIconAtlas_;
     OceanControlsWindow oceanControlsWindow_;
     LogWindow logWindow_;
+    MemoryTab memoryTab_;
     ui::ImGuiWindowMaximizeState windowMaximize_;
     std::vector<std::string> availableLevelPaths_;
     std::string levelChangeStatus_;

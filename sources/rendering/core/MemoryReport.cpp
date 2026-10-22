@@ -9,15 +9,20 @@
 #include <mimalloc-stats.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "core/logging/Log.h"
 #include "core/memory/MemCounters.h"
+#include "core/profiling/Profiler.h"
 #include "rendering/core/GpuAlloc.h"
+#include "third_party/json/json.hpp"
 
 #pragma comment(lib, "dxgi.lib")
 
@@ -60,6 +65,13 @@ namespace
         double firstTickSec = -1.0;
         double reportAfterSec = -1.0;
         bool reportRequested = false;
+        // The latest line's allocation rates, for ReadMemoryPlatform (they are per-period numbers).
+        double newPerFrame = 0.0;
+        double mainNewPerFrame = 0.0;
+        double newBytesPerFrame = 0.0;
+        std::uint64_t liveAllocations = 0;
+        // Named snapshots (get_memory snapshot/diff, the Memory tab).
+        std::unordered_map<std::string, MemorySnapshot> snapshots;
         ThreadPrev threadPrev[mem::kMaxThreadCounterBlocks + 1];
     };
     State& St()
@@ -344,8 +356,289 @@ void UnregisterMemoryProvider(const void* self)
     }
 }
 
+MemoryPlatform ReadMemoryPlatform(ID3D12Device* device)
+{
+    State& s = St();
+    MemoryPlatform p;
+    PROCESS_MEMORY_COUNTERS_EX pmc{};
+    pmc.cb = sizeof(pmc);
+    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+    p.privateBytes = pmc.PrivateUsage;
+    p.workingSetBytes = pmc.WorkingSetSize;
+
+    DXGI_QUERY_VIDEO_MEMORY_INFO local{}, nonLocal{};
+    if (IDXGIAdapter3* adapter = AdapterFor(device))
+    {
+        p.haveVram = SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local)) &&
+                     SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal));
+    }
+    p.vramLocalBytes = local.CurrentUsage;
+    p.vramBudgetBytes = local.Budget;
+    p.vramNonLocalBytes = nonLocal.CurrentUsage;
+
+    // mimalloc's OWN committed bytes. Not mi_process_info: its "commit" is the whole process's
+    // PagefileUsage on Windows -- the same number as `private` above, byte for byte (measured
+    // 2026-10-22, M0) -- so until then this column was private twice over, and "almost all the
+    // process lives in the mimalloc heap" (docs/bug_rt_retire_bin_leak.md) was read off it.
+    mi_stats_t miStats{};
+    mi_stats_get(sizeof(miStats), &miStats);
+    p.mimallocCommitBytes = miStats.committed.current > 0 ? static_cast<std::uint64_t>(miStats.committed.current) : 0;
+
+    const HeapTotals heaps = ProcessHeapTotals();
+    p.ntHeapsBytes = heaps.committed;
+    p.ntHeapCount = heaps.count;
+
+    p.newPerFrame = s.newPerFrame;
+    p.mainNewPerFrame = s.mainNewPerFrame;
+    p.newBytesPerFrame = s.newBytesPerFrame;
+    p.liveAllocations = s.liveAllocations;
+    p.frame = s.frames;
+    return p;
+}
+
+double MemoryNowSec()
+{
+    LARGE_INTEGER f{}, t{};
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&t);
+    return static_cast<double>(t.QuadPart) / static_cast<double>(f.QuadPart);
+}
+
+void SaveMemorySnapshot(ID3D12Device* device, const std::string& label)
+{
+    MemorySnapshot snap;
+    snap.platform = ReadMemoryPlatform(device);
+    gpu::ReadCensus(snap.census);
+    snap.timeSec = MemoryNowSec();
+    St().snapshots[label] = snap;
+}
+
+bool FindMemorySnapshot(const std::string& label, MemorySnapshot& out)
+{
+    const State& s = St();
+    const auto it = s.snapshots.find(label);
+    if (it == s.snapshots.end()) { return false; }
+    out = it->second;
+    return true;
+}
+
+std::string MemoryJson(ID3D12Device* device, const std::string& filter, int top, const std::string& snapshot,
+                       const std::string& diff, bool report)
+{
+    using nlohmann::json;
+    const auto lower = [](std::string text) {
+        for (char& c : text) { c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); }
+        return text;
+    };
+    // Two decimals: what a person reads, and stable enough to diff by eye.
+    const auto mb = [](double bytes) { return std::round(bytes / (1024.0 * 1024.0) * 100.0) / 100.0; };
+    const auto dmb = [&](std::uint64_t now, std::uint64_t then) {
+        return mb(static_cast<double>(now) - static_cast<double>(then));
+    };
+    const std::string want = lower(filter);
+    const MemoryPlatform plat = ReadMemoryPlatform(device);
+    gpu::CensusTotals census;
+    gpu::ReadCensus(census);
+    const gpu::TagTotals& all = census.all;
+    const int kLocal = static_cast<int>(gpu::MemPool::Local);
+    const int kNonLocal = static_cast<int>(gpu::MemPool::NonLocal);
+
+    json out;
+    out["frame"] = plat.frame;
+    json platform = {
+        { "privateMB", mb(static_cast<double>(plat.privateBytes)) },
+        { "workingSetMB", mb(static_cast<double>(plat.workingSetBytes)) },
+        { "mimallocCommitMB", plat.mimallocCommitBytes > 0 ? json(mb(static_cast<double>(plat.mimallocCommitBytes))) : json(nullptr) },
+        { "ntHeapsMB", mb(static_cast<double>(plat.ntHeapsBytes)) },
+        { "ntHeaps", plat.ntHeapCount },
+        { "newPerFrame", std::round(plat.newPerFrame) },
+        { "mainNewPerFrame", std::round(plat.mainNewPerFrame) },
+        { "newMBPerFrame", mb(plat.newBytesPerFrame) },
+        { "liveAllocations", plat.liveAllocations },
+    };
+    if (plat.haveVram)
+    {
+        platform["vramLocalMB"] = mb(static_cast<double>(plat.vramLocalBytes));
+        platform["vramBudgetMB"] = mb(static_cast<double>(plat.vramBudgetBytes));
+        platform["vramNonLocalMB"] = mb(static_cast<double>(plat.vramNonLocalBytes));
+    }
+    out["platform"] = std::move(platform);
+
+    json gpuJson = {
+        { "localMB", mb(static_cast<double>(all.bytes[kLocal])) },
+        { "nonLocalMB", mb(static_cast<double>(all.bytes[kNonLocal])) },
+        { "resources", all.resources },
+        { "heaps", all.heaps },
+        { "descriptorMB", mb(static_cast<double>(all.descriptorBytes)) },
+        { "bufferSlackMB", mb(static_cast<double>(all.bufferSlack)) },
+        { "created", census.created },
+        { "released", census.released },
+    };
+    if (plat.haveVram)
+    {
+        gpuJson["untrackedLocalMB"] = dmb(plat.vramLocalBytes, all.bytes[kLocal]);
+        gpuJson["untrackedNonLocalMB"] = dmb(plat.vramNonLocalBytes, all.bytes[kNonLocal]);
+    }
+    out["gpu"] = std::move(gpuJson);
+
+    // Tags with anything in them (each its own row; a parent row holds only what was tagged with
+    // the parent itself), biggest first.
+    struct TagRow { std::uint32_t tag; std::uint64_t bytes; };
+    std::vector<TagRow> tagRows;
+    for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+    {
+        const gpu::TagTotals& tt = census.tags[t];
+        if (tt.resources == 0 && tt.heaps == 0) { continue; }
+        if (!want.empty() && lower(kMemTagNames[t]).find(want) == std::string::npos) { continue; }
+        tagRows.push_back(TagRow{ t, tt.bytes[kLocal] + tt.bytes[kNonLocal] });
+    }
+    std::sort(tagRows.begin(), tagRows.end(), [](const TagRow& a, const TagRow& b) { return a.bytes > b.bytes; });
+    out["tagColumns"] = json::array({ "tag", "localMB", "nonLocalMB", "resources", "heaps" });
+    json tags = json::array();
+    for (const TagRow& r : tagRows)
+    {
+        const gpu::TagTotals& tt = census.tags[r.tag];
+        tags.push_back(json::array({ kMemTagNames[r.tag], mb(static_cast<double>(tt.bytes[kLocal])),
+                                     mb(static_cast<double>(tt.bytes[kNonLocal])), tt.resources, tt.heaps }));
+    }
+    out["tags"] = std::move(tags);
+
+    if (top > 0)
+    {
+        std::vector<gpu::RecordInfo> records;
+        gpu::SnapshotRecords(records);
+        if (!want.empty())
+        {
+            records.erase(std::remove_if(records.begin(), records.end(), [&](const gpu::RecordInfo& r) {
+                return lower(r.name).find(want) == std::string::npos &&
+                       lower(MemTagName(r.tag)).find(want) == std::string::npos;
+            }), records.end());
+        }
+        std::sort(records.begin(), records.end(),
+                  [](const gpu::RecordInfo& a, const gpu::RecordInfo& b) { return a.bytes > b.bytes; });
+        out["objectColumns"] = json::array({ "name", "tag", "pool", "kind", "MB" });
+        json objects = json::array();
+        const std::size_t n = std::min<std::size_t>(records.size(), static_cast<std::size_t>(top));
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            const gpu::RecordInfo& r = records[i];
+            objects.push_back(json::array({ r.name, MemTagName(r.tag), r.pool == gpu::MemPool::Local ? "local" : "nonlocal",
+                                            r.kind, mb(static_cast<double>(r.bytes)) }));
+        }
+        out["objects"] = std::move(objects);
+        out["objectsMatched"] = records.size();
+    }
+
+    // The diff comes before the snapshot, so {diff: "A", snapshot: "A"} reads "since the last call".
+    if (!diff.empty())
+    {
+        MemorySnapshot then;
+        if (!FindMemorySnapshot(diff, then))
+        {
+            out["diff"] = { { "against", diff }, { "error", "no snapshot with this label -- take one with snapshot first" } };
+        }
+        else
+        {
+            json tagDiff = json::array();
+            for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+            {
+                const gpu::TagTotals& a = then.census.tags[t];
+                const gpu::TagTotals& b = census.tags[t];
+                if (a.bytes[kLocal] == b.bytes[kLocal] && a.bytes[kNonLocal] == b.bytes[kNonLocal] &&
+                    a.resources == b.resources && a.heaps == b.heaps)
+                {
+                    continue;
+                }
+                tagDiff.push_back(json::array({ kMemTagNames[t], dmb(b.bytes[kLocal], a.bytes[kLocal]),
+                                                dmb(b.bytes[kNonLocal], a.bytes[kNonLocal]),
+                                                static_cast<long long>(b.resources) - static_cast<long long>(a.resources) }));
+            }
+            json d = {
+                { "against", diff },
+                { "seconds", std::round((MemoryNowSec() - then.timeSec) * 10.0) / 10.0 },
+                { "frames", static_cast<long long>(plat.frame) - static_cast<long long>(then.platform.frame) },
+                { "privateMB", dmb(plat.privateBytes, then.platform.privateBytes) },
+                { "mimallocCommitMB", dmb(plat.mimallocCommitBytes, then.platform.mimallocCommitBytes) },
+                { "ntHeapsMB", dmb(plat.ntHeapsBytes, then.platform.ntHeapsBytes) },
+                { "gpuLocalMB", dmb(all.bytes[kLocal], then.census.all.bytes[kLocal]) },
+                { "gpuNonLocalMB", dmb(all.bytes[kNonLocal], then.census.all.bytes[kNonLocal]) },
+                { "resources", static_cast<long long>(all.resources) - static_cast<long long>(then.census.all.resources) },
+                { "liveAllocations", static_cast<long long>(plat.liveAllocations) - static_cast<long long>(then.platform.liveAllocations) },
+                { "tagColumns", json::array({ "tag", "dLocalMB", "dNonLocalMB", "dResources" }) },
+                { "tags", std::move(tagDiff) },
+            };
+            if (plat.haveVram && then.platform.haveVram)
+            {
+                d["vramLocalMB"] = dmb(plat.vramLocalBytes, then.platform.vramLocalBytes);
+            }
+            out["diff"] = std::move(d);
+        }
+    }
+    if (!snapshot.empty())
+    {
+        SaveMemorySnapshot(device, snapshot);
+        out["snapshot"] = snapshot;
+    }
+    if (report)
+    {
+        RequestMemoryReport();
+        out["report"] = "the full memory report goes into the session log on the next frame (memreport: lines)";
+    }
+    return out.dump();
+}
+
 namespace
 {
+    // While a profiler trace records, the process, the adapter and the GPU census ride along as
+    // counter tracks ("ph":"C") beside the CPU/GPU scopes -- a stall next to the allocation that
+    // caused it. Two DXGI reads and one census copy per frame, and only during a capture.
+    void SampleTraceCounters(ID3D12Device* device)
+    {
+        Profiler& profiler = Profiler::Get();
+        if (!profiler.IsTraceCapturing()) { return; }
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb = sizeof(pmc);
+        GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
+        DXGI_QUERY_VIDEO_MEMORY_INFO local{}, nonLocal{};
+        if (IDXGIAdapter3* adapter = AdapterFor(device))
+        {
+            adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local);
+            adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal);
+        }
+        gpu::CensusTotals census;
+        gpu::ReadCensus(census);
+        const int kLocal = static_cast<int>(gpu::MemPool::Local);
+        const int kNonLocal = static_cast<int>(gpu::MemPool::NonLocal);
+
+        static const char* const kProcessNames[] = { "private", "vram local", "vram nonlocal", "gpu census local",
+                                                     "gpu census nonlocal" };
+        const double process[] = { Mb(pmc.PrivateUsage), Mb(local.CurrentUsage), Mb(nonLocal.CurrentUsage),
+                                   Mb(census.all.bytes[kLocal]), Mb(census.all.bytes[kNonLocal]) };
+        profiler.RecordTraceCounters("memory MB", kProcessNames, process, 5);
+
+        // The census by top-level tag (children summed into their parent): a stacked track.
+        const char* names[Profiler::kMaxTraceCounterSeries];
+        double values[Profiler::kMaxTraceCounterSeries];
+        int n = 0;
+        for (std::uint32_t t = 0; t < kMemTagCount && n < Profiler::kMaxTraceCounterSeries; ++t)
+        {
+            if (kMemTagParents[t] != MemTag::Root) { continue; }
+            std::uint64_t bytes = census.tags[t].bytes[kLocal] + census.tags[t].bytes[kNonLocal];
+            for (std::uint32_t c = 0; c < kMemTagCount; ++c)
+            {
+                if (static_cast<std::uint32_t>(kMemTagParents[c]) == t)
+                {
+                    bytes += census.tags[c].bytes[kLocal] + census.tags[c].bytes[kNonLocal];
+                }
+            }
+            if (bytes == 0) { continue; }
+            names[n] = kMemTagNames[t];
+            values[n] = Mb(bytes);
+            ++n;
+        }
+        profiler.RecordTraceCounters("gpu tags MB", names, values, n);
+    }
+
     void AppendF(std::string& out, const char* fmt, ...)
     {
         char buf[512];
@@ -358,20 +651,10 @@ namespace
 
     void DumpMemoryReport(ID3D12Device* device, std::uint64_t frame)
     {
-        PROCESS_MEMORY_COUNTERS_EX pmc{};
-        pmc.cb = sizeof(pmc);
-        GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
-        DXGI_QUERY_VIDEO_MEMORY_INFO local{}, nonLocal{};
-        bool haveVram = false;
-        if (IDXGIAdapter3* adapter = AdapterFor(device))
-        {
-            haveVram = SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local)) &&
-                       SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal));
-        }
-        mi_stats_t miStats{};
-        mi_stats_get(sizeof(miStats), &miStats);
-        const double miCommit = miStats.committed.current > 0 ? Mb(static_cast<std::uint64_t>(miStats.committed.current)) : 0.0;
-        const HeapTotals heaps = ProcessHeapTotals();
+        const MemoryPlatform plat = ReadMemoryPlatform(device);
+        const bool haveVram = plat.haveVram;
+        const double miCommit = Mb(plat.mimallocCommitBytes);
+        const HeapTotals heaps{ plat.ntHeapsBytes, plat.ntHeapCount };
         const RegionTotals regions = WalkPrivateRegions();
         gpu::CensusTotals census;
         gpu::ReadCensus(census);
@@ -387,7 +670,7 @@ namespace
         std::string text;
         text.reserve(64 * 1024);
         AppendF(text, "memreport: begin (frame %llu)\n", static_cast<unsigned long long>(frame));
-        AppendF(text, "memreport: process private %.1f MB, working set %.1f MB\n", Mb(pmc.PrivateUsage), Mb(pmc.WorkingSetSize));
+        AppendF(text, "memreport: process private %.1f MB, working set %.1f MB\n", Mb(plat.privateBytes), Mb(plat.workingSetBytes));
         AppendF(text, "memreport:   mimalloc commit %.1f MB | NT heaps %.1f MB (%u) | write-combined %.1f MB | exec %.1f MB | other private %.1f MB (walk %.1f ms, %u reservations)\n",
                 miCommit, Mb(heaps.committed), heaps.count, Mb(regions.writeCombine), Mb(regions.exec),
                 Mb(regions.committed) - Mb(regions.mimalloc) - Mb(regions.writeCombine) - Mb(regions.exec) - Mb(heaps.committed),
@@ -395,14 +678,14 @@ namespace
         if (haveVram)
         {
             AppendF(text, "memreport: vram local %.1f / budget %.1f MB, non-local %.1f MB (DXGI, this process)\n",
-                    Mb(local.CurrentUsage), Mb(local.Budget), Mb(nonLocal.CurrentUsage));
+                    Mb(plat.vramLocalBytes), Mb(plat.vramBudgetBytes), Mb(plat.vramNonLocalBytes));
         }
         AppendF(text, "memreport: gpu census local %.1f MB, non-local %.1f MB, %u resources + %u heaps (descriptors ~%.1f MB), buffer slack %.1f MB",
                 gpuLocal, gpuNonLocal, all.resources, all.heaps, Mb(all.descriptorBytes), Mb(all.bufferSlack));
         if (haveVram)
         {
             AppendF(text, " | untracked local %.1f MB, non-local %.1f MB",
-                    Mb(local.CurrentUsage) - gpuLocal, Mb(nonLocal.CurrentUsage) - gpuNonLocal);
+                    Mb(plat.vramLocalBytes) - gpuLocal, Mb(plat.vramNonLocalBytes) - gpuNonLocal);
         }
         text += "\n";
 
@@ -462,6 +745,7 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
 {
     State& s = St();
     ++s.frames;
+    SampleTraceCounters(device);
     if (s.firstTickSec < 0.0) { s.firstTickSec = nowSec; }
     if (s.reportRequested || (s.reportAfterSec >= 0.0 && nowSec - s.firstTickSec >= s.reportAfterSec))
     {
@@ -475,29 +759,12 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     const std::uint64_t periodFrames = s.frames - s.framesAtLine;
     s.framesAtLine = s.frames;
 
-    PROCESS_MEMORY_COUNTERS_EX pmc{};
-    pmc.cb = sizeof(pmc);
-    GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc), sizeof(pmc));
-    const std::uint64_t privateBytes = pmc.PrivateUsage;
-    const std::uint64_t workingSet = pmc.WorkingSetSize;
-
-    DXGI_QUERY_VIDEO_MEMORY_INFO local{}, nonLocal{};
-    bool haveVram = false;
-    if (IDXGIAdapter3* adapter = AdapterFor(device))
-    {
-        haveVram = SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local)) &&
-                   SUCCEEDED(adapter->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal));
-    }
-
-    // mimalloc's OWN committed bytes. Not mi_process_info: its "commit" is the whole process's
-    // PagefileUsage on Windows -- the same number as `private` above, byte for byte (measured
-    // 2026-10-22, M0) -- so until then this column was private twice over, and "almost all the
-    // process lives in the mimalloc heap" (docs/bug_rt_retire_bin_leak.md) was read off it.
-    mi_stats_t miStats{};
-    mi_stats_get(sizeof(miStats), &miStats);
-    const std::uint64_t miCommit = miStats.committed.current > 0 ? static_cast<std::uint64_t>(miStats.committed.current) : 0;
-
-    const HeapTotals heaps = ProcessHeapTotals();
+    const MemoryPlatform plat = ReadMemoryPlatform(device);
+    const std::uint64_t privateBytes = plat.privateBytes;
+    const std::uint64_t workingSet = plat.workingSetBytes;
+    const bool haveVram = plat.haveVram;
+    const std::uint64_t miCommit = plat.mimallocCommitBytes;
+    const HeapTotals heaps{ plat.ntHeapsBytes, plat.ntHeapCount };
     // What neither mimalloc nor an NT heap accounts for: module images' writable pages, thread
     // stacks, the driver's own VirtualAllocs and mappings. Signed -- it is a remainder.
     const double otherMb = Mb(privateBytes) - Mb(miCommit) - Mb(heaps.committed);
@@ -514,8 +781,8 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     {
         n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n),
                            " | vram local %.0f/%.0f MB (%+lld) nonlocal %.0f",
-                           Mb(local.CurrentUsage), Mb(local.Budget),
-                           first ? 0ll : MbDelta(local.CurrentUsage, s.prevLocal), Mb(nonLocal.CurrentUsage));
+                           Mb(plat.vramLocalBytes), Mb(plat.vramBudgetBytes),
+                           first ? 0ll : MbDelta(plat.vramLocalBytes, s.prevLocal), Mb(plat.vramNonLocalBytes));
     }
     // The GPU census (rendering/core/GpuAlloc.h): what the engine's own resources hold, by pool.
     // `untracked` = the adapter's local usage minus ours -- the driver, DLSS/Streamline, the ImGui
@@ -529,7 +796,7 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     if (haveVram)
     {
         n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " untracked %.0f",
-                           Mb(local.CurrentUsage) - Mb(gpuLocal));
+                           Mb(plat.vramLocalBytes) - Mb(gpuLocal));
     }
     if (miCommit > 0)
     {
@@ -556,14 +823,18 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
                            " | new/frame %.0f (main %.0f) %.2f MB live %llu",
                            static_cast<double>(alloc.periodAllocs) / f, static_cast<double>(alloc.mainAllocs) / f,
                            Mb(alloc.periodBytes) / f, static_cast<unsigned long long>(alloc.allocs - alloc.frees));
+        s.newPerFrame = static_cast<double>(alloc.periodAllocs) / f;
+        s.mainNewPerFrame = static_cast<double>(alloc.mainAllocs) / f;
+        s.newBytesPerFrame = static_cast<double>(alloc.periodBytes) / f;
     }
+    s.liveAllocations = alloc.allocs - alloc.frees;
     for (const Provider& p : Providers())
     {
         if (n >= static_cast<int>(sizeof(line)) - 40) { break; }
         n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | %s %.1f MB", p.name, Mb(p.fn(p.self)));
     }
     s.prevPrivate = privateBytes;
-    s.prevLocal = local.CurrentUsage;
+    s.prevLocal = plat.vramLocalBytes;
     LOG_INFO(logging::LogCategory::Core, "{}", line);
 
     // Which threads allocate: the busiest few since the previous line, per frame.

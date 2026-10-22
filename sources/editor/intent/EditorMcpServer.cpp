@@ -497,6 +497,28 @@ namespace editormcp
                     { "reset", { { "type", "boolean" }, { "description", "restart the maxima after reading" } } } }) },
             },
             {
+                { "name", "get_memory" },
+                { "description",
+                  "Who holds the memory, now: the process (private, working set, mimalloc's own commit, the "
+                  "NT heaps, operator new calls per frame, live allocations), the adapter (VRAM local / "
+                  "budget / non-local), and the GPU census -- every resource, descriptor heap and query heap "
+                  "the engine created, by owner tag (frame.gbuffer, bloom, shadow.vsm, rt.as, tex.stream, ...), "
+                  "local and non-local MB, plus `untracked` (VRAM the engine did not create: driver, DLSS). "
+                  "`top` lists the largest GPU objects by name (default 20, 0-500); `filter` keeps tags and "
+                  "objects whose name contains it. `snapshot: \"A\"` saves the current state as A; "
+                  "`diff: \"A\"` answers the change since A, per tag (Unreal Insights' Size A / Size B / Diff) "
+                  "-- the diff is taken before the snapshot, so {diff:\"A\", snapshot:\"A\"} reads \"since the "
+                  "last call\". `report: true` also writes the full memory report (every object) into the "
+                  "session log. On this machine private counts the VRAM a second time (write-combined "
+                  "mappings), so read CPU memory as mimalloc + NT heaps, not private." },
+                { "inputSchema", ObjectSchema({
+                    { "filter", { { "type", "string" }, { "description", "substring of tag or object names to keep" } } },
+                    { "top", { { "type", "integer" }, { "description", "largest GPU objects to list, 0-500 (default 20)" } } },
+                    { "snapshot", { { "type", "string" }, { "description", "save the current state under this label" } } },
+                    { "diff", { { "type", "string" }, { "description", "answer the change since the snapshot with this label" } } },
+                    { "report", { { "type", "boolean" }, { "description", "also write the full report into the session log" } } } }) },
+            },
+            {
                 { "name", "undo" },
                 { "description",
                   "Undo the newest entry on the editor's undo stack -- WHOEVER made it, you or "
@@ -871,11 +893,22 @@ namespace editormcp
             return result;
         }
 
-        if (name == "set_settings" || name == "get_readouts" || name == "get_profile")
+        if (name == "set_settings" || name == "get_readouts" || name == "get_profile" || name == "get_memory")
         {
             if (!g_runtimeHost)
             {
                 return Error("There is no running app here to set or read (this host has none).");
+            }
+            if (name == "get_memory")
+            {
+                const auto str = [&](const char* key) {
+                    return arguments.contains(key) && arguments[key].is_string() ? arguments[key].get<std::string>() : std::string();
+                };
+                ToolResult result;
+                const int top = std::clamp(arguments.value("top", 20), 0, 500);
+                const bool report = arguments.contains("report") && arguments["report"].is_boolean() && arguments["report"].get<bool>();
+                result.text = g_runtimeHost->Memory(str("filter"), top, str("snapshot"), str("diff"), report);
+                return result;
             }
             if (name == "get_profile")
             {

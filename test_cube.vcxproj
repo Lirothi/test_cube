@@ -311,6 +311,7 @@
     <ClCompile Include="sources/app/GraphicsSettings.cpp" />
     <ClCompile Include="sources/app/ui/DeveloperWindow.cpp" />
     <ClCompile Include="sources/app/ui/LogWindow.cpp" />
+    <ClCompile Include="sources/app/ui/MemoryTab.cpp" />
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
@@ -539,6 +540,7 @@
     <ClInclude Include="sources/app/GraphicsSettings.h" />
     <ClInclude Include="sources/app/ui/DeveloperWindow.h" />
     <ClInclude Include="sources/app/ui/LogWindow.h" />
+    <ClInclude Include="sources/app/ui/MemoryTab.h" />
     <ClInclude Include="sources/ocean/OceanControlsWindow.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />

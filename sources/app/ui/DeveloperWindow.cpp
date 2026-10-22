@@ -554,7 +554,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" },
             { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
             { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
-            { Tab::Vsm, "VSM" }, { Tab::Streaming, "Streaming" }, { Tab::Bindings, "Bindings" }
+            { Tab::Vsm, "VSM" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
+            { Tab::Bindings, "Bindings" }
         };
         const float navigationWidth = ImGui::GetFontSize() * 8.0f;
         if (ImGui::BeginChild("DeveloperControlsNavigation", ImVec2(navigationWidth, 0), true))
@@ -3222,6 +3223,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     graphicsSettings.ResetStreaming(renderer, scene, settings);
                 }
+            }
+
+            if (activeTab_ == Tab::Memory)
+            {
+                memoryTab_.Draw(renderer.GetDevice());
             }
 
             if (activeTab_ == Tab::Bindings)

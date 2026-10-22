@@ -108,6 +108,9 @@ extern std::vector<std::pair<std::string, float>> g_fixedSettings;
 // "--log-window": open the session-log viewer at boot, so a headless --shot can capture the
 // viewer itself — the only way its rendering is verifiable without driving the GUI by hand.
 extern bool g_bootLogWindow;
+// "--mem-window": open Developer Controls on the Memory tab at boot (memory profiling plan M2), for
+// the same reason -- a --shot can then photograph the tab.
+extern bool g_bootMemoryWindow;
 // "--editor": open the Level Editor at boot, for the same reason g_bootLogWindow exists --
 // so a headless --shot can capture a panel that otherwise needs a keypress to appear.
 // WITH_EDITOR only; ignored elsewhere.
