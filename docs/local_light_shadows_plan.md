@@ -775,6 +775,17 @@
   - Гейты: три конфигурации; GBV `--gbv-passes=ShadowCull,LocalShadowCache,PointShadows,SpotShadows
     --sweep=shadow.localWindRange:30,-1,0,30` — ноль `render.validation`, `live objects at exit: none`; валидатор
     отсечения PASS (256 видов); intent / inspector regression PASS; `check_logging` 0.
+- **Радиус качания в VSM (2026-10-22, владелец: «перенеси радиус качания в VSM»).** То же решение на лампу
+  (`SceneView.windRigid`, теперь в обоих режимах) едет в список видов VSM как `ViewProjEntry.mip.y`, оттуда флаг
+  `VSM_VIEW_WIND_RIGID` в `bits.x` вида; в `vsm_page_setup_cs` такой вид не считает себя под ветром (`windHere`): его
+  страницы рисуют кастеры без качания и не пачкаются ветром — кэшируются, как дальние уровни клипмапа; прочие инвалидации
+  (сдвинутые кастеры, матрица) остаются, в отличие от дальних ламп S10d. Лампа, пересёкшая радиус, перерисовывает свои
+  страницы один раз (`prevWindRigid_`, переезжает с ремапом S10c), чтобы ни одна страница не застряла в позе качания.
+  Замер (wind_test 22:00, VSM, поворот камеры, два прогона): VsmPageRender 4.71–4.84 → 4.40–4.46 мс, кадр 7.4–8.1 →
+  7.07–7.12. Остаток — ветер: радиус 0 → VsmPageRender 2.74 (ближние лампы под ветром ~1.7 мс), ветер в VSM выключен
+  (`vsm.windMaxLevel:0`) → 0.40 (ветер ближних уровней клипмапа солнца ~2.3 мс). Кадр 30 м против −1 в пределах шума
+  VSM между прогонами (контроль −1 против −1 даёт то же). GBV `VsmPageRender,VsmPageRequest
+  --sweep=shadow.localWindRange:30,-1,0,30` — чисто.
 - `--stress-level=<path>` (см. выше) прогоняет карусель с этим уровнем.
 - Гейты: GBV `--gbv-passes=PointLights,SpotLights,VolumetricFog` на wind_test 22:00 SDSM — ноль `render.validation`,
   `live objects at exit: none`. Самопроверку на эти проходы не нацелить: `--gbv-selftest` внедряет draw только в

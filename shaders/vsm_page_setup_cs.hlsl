@@ -227,7 +227,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint4 viewBits = Views[view].bits;
     const bool distantView = (viewBits.x & VSM_VIEW_DISTANT) != 0u; // plan S10d: rigid, redrawn by the round robin
     const bool distantDue = (viewBits.x & VSM_VIEW_DISTANT_UPDATE) != 0u;
-    const bool windHere = (gWindDirtyMaxLevel != 0u) && !distantView &&
+    // render::g_localShadowWindRange (the atlases' rule): a local light whose reach stays past it draws its casters rigid
+    // and its pages take no wind dirt -- they cache; every other invalidation stands (unlike a distant light's).
+    const bool windRigidView = (viewBits.x & VSM_VIEW_WIND_RIGID) != 0u;
+    const bool windHere = (gWindDirtyMaxLevel != 0u) && !distantView && !windRigidView &&
                           (isLocalView || clipLevel < gWindDirtyMaxLevel);
     if (lane == 0u && gPassB == 0u)
     {

@@ -2315,15 +2315,16 @@ void Scene::PrepareViews(Renderer* renderer)
                 lightManager_.WantedSpotShadowPages(), lightManager_.WantedPointShadowPages());
         }
     }
-    // render::g_localShadowWindRange: a light whose reach stays farther than the range from the camera has a rigid,
-    // wholly cached shadow (atlas modes; VSM has its own distant lights). 1 m of hysteresis, so a light on the edge does
-    // not refill its cache entry every frame the camera wobbles across it.
+    // render::g_localShadowWindRange: a light whose reach stays farther than the range from the camera has a rigid shadow
+    // -- in the atlas modes wholly cached, in VSM its pages drawn rigid and kept from wind dirt (VSM_VIEW_WIND_RIGID, via
+    // the view list's mip.y). 1 m of hysteresis, so a light on the edge does not refill its cache entry (redraw its pages)
+    // every frame the camera wobbles across it.
     const Math::float3 windCamera = camera_.GetPosition();
     const auto windRigid = [&](std::vector<std::uint8_t>& memo, size_t lightIndex, const float3& position, float reach)
     {
         if (memo.size() <= lightIndex) { memo.resize(lightIndex + 1u, 0u); }
         bool rigid = false;
-        if (!vsmLocal && render::g_localShadowWindRange >= 0.0f)
+        if (render::g_localShadowWindRange >= 0.0f)
         {
             const float gap = std::max((position - windCamera).Length() - reach, 0.0f);
             rigid = gap > render::g_localShadowWindRange +

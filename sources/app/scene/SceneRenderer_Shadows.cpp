@@ -81,7 +81,8 @@ std::uint32_t BuildVsmViews(const SceneFrameData& frame, std::vector<vsm::ViewPr
         // Plan S10e: the light's reach (SceneView::lightSphere, S9e) -- the request marks nothing for receivers past it
         // (when localMip.w says so: vsm.requestLightCull); plan S10d classifies distant lights by it.
         views[slot].cull = v.lightSphere.xf();
-        views[slot].mip = DirectX::XMFLOAT4(v.vsmMipBias, 0.0f, 0.0f, 0.0f); // S10e: UE's moving bias, this light's
+        // S10e: UE's moving bias, this light's; y = render::g_localShadowWindRange's verdict (Scene::PrepareViews, both modes).
+        views[slot].mip = DirectX::XMFLOAT4(v.vsmMipBias, v.windRigid ? 1.0f : 0.0f, 0.0f, 0.0f);
         if (active) { count = std::max(count, slot + 1u); }
     };
     const size_t spotCount = std::min(frame.lightManager->GetShadowedSpotCount(), frame.spotShadowViews->size());

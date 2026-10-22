@@ -183,7 +183,9 @@ inline bool g_localShadowCacheWind = false;
 // casters every frame, as above; farther away its shadow is RIGID -- the wind casters drawn without sway and cached with
 // the statics, the light's whole picture copied in, nothing redrawn. UE's VSM does the same for its distant lights (no
 // WPO, cached; r.Shadow.Virtual.DistantLightMode). A light that crosses the range refills its own cache entry (the
-// key carries the mode), with 1 m of hysteresis. < 0 = every light sways (the old rule).
+// key carries the mode), with 1 m of hysteresis. < 0 = every light sways (the old rule). VSM too (2026-10-22): such a
+// light's pages draw its casters rigid and take no wind dirt (VSM_VIEW_WIND_RIGID), so they cache like the far clipmap
+// levels; a crossing redraws the light's pages once.
 // `--set shadow.localWindRange:<metres>`, Developer > CSM "Lamp shadow sway range". On wind_test (100 lamps, 22:00) the
 // swaying palms were ~0.63 ms of the point lights' 0.78.
 inline float g_localShadowWindRange = 30.0f;

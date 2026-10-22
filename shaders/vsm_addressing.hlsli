@@ -30,6 +30,7 @@ uint VsmLocalView(uint i) { return (i < VSM_CLIPMAP_FIRST) ? i : i + VSM_NUM_CLI
 static const uint VSM_VIEW_DIRTY          = 1u; // bits.x: the view's matrix changed this frame (the page cache)
 static const uint VSM_VIEW_DISTANT        = 2u; // plan S10d: a distant light's view (rigid, round-robin redraw)
 static const uint VSM_VIEW_DISTANT_UPDATE = 4u; // ...the round robin redraws it this frame
+static const uint VSM_VIEW_WIND_RIGID     = 8u; // render::g_localShadowWindRange: a local light past it -- no sway, no wind dirt
 struct VsmViewData
 {
     row_major float4x4 viewProj;     // this frame's

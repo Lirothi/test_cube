@@ -586,7 +586,8 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
         DirectX::XMFLOAT4X4 viewProj;
         DirectX::XMFLOAT4   params;
         DirectX::XMFLOAT4   cull{ 0.0f, 0.0f, 0.0f, -1.0f };
-        DirectX::XMFLOAT4   mip{ 0.0f, 0.0f, 0.0f, 0.0f }; // plan S10e: x = the light's mip bias on top of the frame's
+        // plan S10e: x = the light's mip bias on top of the frame's; y = 1: past render::g_localShadowWindRange (rigid)
+        DirectX::XMFLOAT4   mip{ 0.0f, 0.0f, 0.0f, 0.0f };
     };
     // Plan S9e: the GPU's per-view record (VsmViewData in vsm_addressing.hlsli, 192 bytes), uploaded into a StructuredBuffer
     // twice a frame -- the request pass's slot (the entry above + bits.w = the page remap) and the render pass's (the
@@ -594,6 +595,9 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
     inline constexpr std::uint32_t kViewDirty = 1u;          // VSM_VIEW_DIRTY: the matrix changed (the page cache)
     inline constexpr std::uint32_t kViewDistant = 2u;        // VSM_VIEW_DISTANT (plan S10d)
     inline constexpr std::uint32_t kViewDistantUpdate = 4u;  // VSM_VIEW_DISTANT_UPDATE
+    // VSM_VIEW_WIND_RIGID: a local light past render::g_localShadowWindRange (ViewProjEntry.mip.y != 0) -- its pages draw
+    // the casters rigid and take no wind dirt.
+    inline constexpr std::uint32_t kViewWindRigid = 8u;
     inline constexpr std::uint32_t kRemapKeep = 0xFFFFFFFFu; // vsm_page_alloc_remap_cs.hlsl kRemapKeep / kRemapDrop
     inline constexpr std::uint32_t kRemapDrop = 0xFFFFFFFEu;
     struct alignas(16) ViewGpuData
@@ -1032,6 +1036,9 @@ private:
     // Last frame's per-view matrices (page cache: a moved view re-renders wholesale; see
     // gViewDirtyMask in vsm_page_setup_cs.hlsl).
     std::vector<DirectX::XMFLOAT4X4> prevViewVp_; // views_ (plan S9e)
+    // render::g_localShadowWindRange: each view's rigid flag last frame -- a change redraws the view once, so no page keeps a
+    // swayed pose under a rigid light (or the reverse). views_, follows the remap like prevViewVp_.
+    std::vector<std::uint8_t> prevWindRigid_;
     bool prevViewVpValid_ = false;
     bool            cacheWarmup_ = true;         // force one full render until physOwnerPrev_ is valid (else garbage)
     // Single-draw page render: last logged reason the path was unavailable while g_pageDrawSingle

@@ -34,6 +34,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
     viewRemap_.assign(views_, vsm::kRemapKeep);
     prevViewVp_.assign(views_, DirectX::XMFLOAT4X4{});
     prevViewVpValid_ = false;
+    prevWindRigid_.assign(views_, 0u);
     distantMask_.clear();
     distantUpdate_.clear();
 
@@ -417,6 +418,7 @@ void VirtualShadowMap::ReleaseResources()
     viewRemap_.clear();
     prevViewVp_.clear();
     prevViewVpValid_ = false;
+    prevWindRigid_.clear();
     parkedCount_ = 0;
     parkedStale_ = false;
     remapPending_ = false;
@@ -1994,9 +1996,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     if (prevVpRemapPending_)
     {
         const std::vector<DirectX::XMFLOAT4X4> before = prevViewVp_;
+        const std::vector<std::uint8_t> rigidBefore = prevWindRigid_;
         for (std::uint32_t u = 0; u < views_ && u < viewRemap_.size(); ++u)
         {
             if (viewRemap_[u] < views_) { prevViewVp_[viewRemap_[u]] = before[u]; }
+            if (viewRemap_[u] < views_ && u < rigidBefore.size() && viewRemap_[u] < prevWindRigid_.size())
+            {
+                prevWindRigid_[viewRemap_[u]] = rigidBefore[u];
+            }
         }
         prevVpRemapPending_ = false;
     }
@@ -2011,6 +2018,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 std::memcmp(&prevViewVp_[v], &views[v].viewProj, sizeof(DirectX::XMFLOAT4X4)) != 0;
             if (changed) { viewDirty[v] = 1u; }
             prevViewVp_[v] = views[v].viewProj;
+            // render::g_localShadowWindRange: a light that crossed the range redraws its pages once in the new mode.
+            const std::uint8_t rigid = views[v].mip.y != 0.0f ? 1u : 0u;
+            if (v < prevWindRigid_.size())
+            {
+                if (prevWindRigid_[v] != rigid) { viewDirty[v] = 1u; }
+                prevWindRigid_[v] = rigid;
+            }
         }
         prevViewVpValid_ = true;
     }
@@ -2030,7 +2044,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             r.prevViewProj = prevVp[v];
             r.bits.x = (viewDirty[v] ? vsm::kViewDirty : 0u) |
                        (maskBit(dec.distantMask) ? vsm::kViewDistant : 0u) |
-                       (maskBit(dec.distantUpdate) ? vsm::kViewDistantUpdate : 0u);
+                       (maskBit(dec.distantUpdate) ? vsm::kViewDistantUpdate : 0u) |
+                       (views[v].mip.y != 0.0f ? vsm::kViewWindRigid : 0u);
             r.bits.y = shadowGpu->ViewLodAt(v + vsm::kNumCascades);
         });
     if (viewsSrv.ptr == 0) { return; }
