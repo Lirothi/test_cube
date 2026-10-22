@@ -1,6 +1,7 @@
 # Profiler efficiency review
 
 Implementation: `fcbb93e0`. Regression build integration with memory tracking: `edc6dc5a`.
+The application/test builds below used that committed snapshot, before the concurrent memory-trace work.
 
 ## Findings and fixes
 
@@ -63,3 +64,12 @@ render targets (generation 14). No `render.validation` warnings/errors preceded
 that exception, but the capture did not finish. The descriptor-heap failure is an
 outstanding renderer finding; its cause has not been established by this review.
 Session: `logs/session_20261022_152439_12152_debug.log` (subject to normal log rotation).
+
+A second **full guarded GBV** run, with a fixed 1280x720 window and an eight-frame
+capture, passed: 40 rendered frames, exit code 0, a clean session footer, no
+`render.validation` warnings/errors, and `live objects at exit: none`. Its trace
+contains eight matching CPU/GPU frame markers, 471 direct-queue and 56 compute-queue
+events, all inside the capture range with nonnegative timestamps/durations.
+Session: `logs/session_20261022_153758_35164_debug.log`;
+trace: `traces/trace_20261022_154430_debug_35164_000.json`.
+This short pass does not close the long-run descriptor-heap finding above.
