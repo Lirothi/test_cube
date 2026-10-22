@@ -442,12 +442,26 @@ ERROR/FATAL; `check_logging.py` 0. Запусков: 6 (бенч, wind_test ×2,
   UPLOAD/READBACK — 76 МБ. Значит, private на этой машине считает VRAM второй раз; собственно CPU-память процесса ≈
   private − WC ≈ 0.8 ГБ (mimalloc 183, NT-кучи 204, прочее ~316).
 - Крупнейшие теги (DLSS вкл): `bloom` **376 МБ** — из них **288 МБ = `Deferred[0..2].BloomFftA/B/Kernel` по 32 МБ на
-  каждый кадр в полёте** (ядро между кадрами не меняется — кандидат на отдельную задачу); `frame.color` 284
+  каждый кадр в полёте** (ядро между кадрами не меняется — **сведено к одному набору 2026-10-22**, см. ниже); `frame.color` 284
   (`DlssOutput`/`Tonemap`/`Fxaa` ×3), `frame.gbuffer` 149, `shadow.local` 128 (`LocalShadowCache` 64, `PointShadow`
   48, `SpotShadow` 16), `reflect` 115, `shadow.gpudata` 66+7, `rt.as` 64, свопчейн 60, `cloud` 51, `ocean` 46+4.5,
   `shadow.csm` 32, `mesh` 31 (195 буферов), `tex.stream` 31 + **50 non-local** (`Streaming.UploadRing`),
   `tex.material` 20.
 - Цена committed-выравнивания (`buffer slack`, гранула 64 КБ) — **19.4 МБ**: повода для плана пулов нет.
+- **Сетки FFT bloom — один набор на все кадры в полёте (2026-10-22).** Их трогает только bloom внутри `Main_Tonemap`
+  (графическая очередь, `SceneRenderer_Graph.cpp` `AddPass2(RenderPass::Main_Tonemap, ...)` без очереди = Graphics),
+  от записи до чтения в пределах одного кадра; A/B — рабочие буферы прохода, ядро кэшируется по ключу. Теперь
+  `RenderTargetManager` владеет `bloomFftA_/B_/Kernel_`, а `Deferred[f].bloomFft*` — невладеющие алиасы, как у атласа
+  CSM; ключ ядра в `BloomRenderer` один вместо трёх по слотам. UE так же: одно закэшированное ядро на вид
+  (`PostProcessFFTBloom.cpp:338-358`, сохранение `:695-710`), рабочие буферы — транзиенты RDG
+  (`GPUFastFourierTransform.cpp:1359`, `:1369`). Замер (Release, wind_test, `--dlss=off`, камера `-59.50,4.25,52.73`):
+  `bloom` **391.1 → 199.1 МБ** (−192), перепись local 2316.4 → 2124.4, DXGI local 2495 → 2302; кадр с
+  `--wind-freeze --set=exposure.autoExposure:0` в шумовом полу (до/до 1.38 % пикселей, после/до 1.36–1.48 %; контроль
+  `bloom.enabled:0` — 28.6 %, ореол луны r8-16 52.69 → 50.91, после 52.686). Гейты (Debug): `--gbv --gbv-passes=Tonemap`
+  на wind_test чисто (`live objects at exit: none`; пересоздание целей посреди прогона → ровно одна пересборка ядра на
+  новом поколении); `--scene-stress-gbv=14` CLEAN, 0 `render.validation`, 23 пересоздания целей — но свёртка на его
+  уровнях не включалась ни разу (0 пересборок ядра), так что он покрыл создание/удаление общего набора, а не FFT;
+  `check_gpu_alloc.py` 0, `check_logging.py` 0; три конфигурации 0 ошибок / 0 предупреждений.
 
 Сверка с провайдерами (M1c) — по именам ресурсов в `--memreport`:
 

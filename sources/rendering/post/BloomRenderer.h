@@ -210,7 +210,7 @@ private:
         // frame-ring frequency: one frame in three with no kernel and no streak, which is what
         // "toggle DLSS a few times and the bloom flickers" looks like. A generation counter cannot
         // be recycled: `Renderer::CreateDeferredTargets` bumps it every time the targets are built,
-        // so every slot's key mismatches after every recreation.
+        // so the key mismatches after every recreation.
         uint64_t generation = 0u;
         bool operator==(const BloomKernelKey& o) const
         {
@@ -220,11 +220,12 @@ private:
                    clampLevel == o.clampLevel && centerU == o.centerU && centerV == o.centerV;
         }
     };
-    // ONE KEY PER FRAME SLOT, not one for the renderer. The kernel spectrum lives in
-    // DeferredTargets, which is per-frame -- a single key meant slot 0 built the kernel and slots 1
-    // and 2 convolved against an empty texture, i.e. two frames in three had no bloom at all. That
-    // is what the first convolution captures actually showed.
-    std::array<BloomKernelKey, render::kFrameCount> bloomKernelKeys_{};
+    // ONE key, because there is one kernel spectrum: RenderTargetManager keeps a single set of
+    // convolution grids for every frame in flight (each DeferredTargets slot aliases it). It used to
+    // be a key per frame slot when every slot had its own texture -- a single key then meant slot 0
+    // built the kernel and slots 1 and 2 convolved against an empty one. A per-frame grid set
+    // reappearing needs the per-slot keys back with it.
+    BloomKernelKey bloomKernelKey_{};
     // P8C-2: the photographed convolution kernel (UE's DefaultBloomKernel as an FP16 DDS with
     // mips). Loaded once, lazily, at the frame-gate site -- WITHOUT it the convolution method
     // refuses to enable (UE's own gate: IsFFTBloomEnabled is false with no kernel texture), rather

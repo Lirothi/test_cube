@@ -111,9 +111,9 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
         bloomKernelPixels_.clear();
         bloomKernelPixelDim_ = 0u;
         bloomSurveyRatio_ = -1.0f;
-        // Every frame slot's kernel spectrum was built from the OLD image; forget the keys or
-        // two frames in three would convolve against it until the size happened to change.
-        bloomKernelKeys_ = {};
+        // The cached kernel spectrum was built from the OLD image; forget its key or the frame
+        // would convolve against it until the size happened to change.
+        bloomKernelKey_ = {};
         if (!want.empty())
         {
             renderer->WaitForPreviousFrame();
@@ -228,8 +228,8 @@ void BloomRenderer::Decide(Renderer* renderer, const SceneFrameData& frame)
                         convMaterial != nullptr && convMaterial->GetPipelineState() != nullptr &&
                         resources_->GetBloomFftCBSizeBytes() > 0u &&
                         resources_->GetBloomConvCBSizeBytes() > 0u &&
-                        DB.bloomFftA.Get() != nullptr && DB.bloomFftB.Get() != nullptr &&
-                        DB.bloomFftKernel.Get() != nullptr &&
+                        DB.bloomFftA != nullptr && DB.bloomFftB != nullptr &&
+                        DB.bloomFftKernel != nullptr &&
                         DB.lensFlare.Get() != nullptr;
     bloomActive_ = frame.settings.bloom.enabled &&
                    frame.settings.bloom.intensity > 0.0f &&
@@ -302,9 +302,9 @@ void BloomRenderer::Declare(RenderGraphPassContext& ctx, Points& out) const
         // barrier program on an unanswered point and left the FFT grids in UNORDERED_ACCESS under
         // the tonemap's read.
         ctx.Use(D.bloomUp.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        ctx.Use(D.bloomFftA.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        ctx.Use(D.bloomFftB.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-        ctx.Use(D.bloomFftKernel.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(D.bloomFftA, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(D.bloomFftB, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(D.bloomFftKernel, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
     else
     {
@@ -334,9 +334,9 @@ void BloomRenderer::Declare(RenderGraphPassContext& ctx, Points& out) const
     ctx.Use(D.bloomUp.Get(), kNps); // the tonemap samples mip 0
     if (bloomConvolution_)
     {
-        ctx.Use(D.bloomFftA.Get(), kNps);
-        ctx.Use(D.bloomFftB.Get(), kNps);
-        ctx.Use(D.bloomFftKernel.Get(), kNps);
+        ctx.Use(D.bloomFftA, kNps);
+        ctx.Use(D.bloomFftB, kNps);
+        ctx.Use(D.bloomFftKernel, kNps);
     }
     else
     {
@@ -1723,19 +1723,17 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const BloomKernelKey key{ grid.x, grid.y, image.x, image.y, convSizeFrac,
                               conv.kernelClampLevel, conv.kernelCenterUV[0], conv.kernelCenterUV[1],
                               renderer->GetDeferredTargetsGeneration() };
-    const UINT slot = renderer->GetCurrentFrameIndex() % render::kFrameCount;
-    BloomKernelKey& slotKey = bloomKernelKeys_[slot];
-    if (!(key == slotKey))
+    if (!(key == bloomKernelKey_))
     {
         CPU_SCOPE(ProfilerScopes::kBloomRecKernel);
         // The audit trail for the recreation bug: every "deferred targets created" line in the
-        // session log must be followed by exactly one of these per frame slot. Logged only when
-        // the TARGETS moved, never for a control moving -- a slider drag rebuilds every frame.
-        if (slotKey.generation != key.generation)
+        // session log must be followed by exactly one of these. Logged only when the TARGETS
+        // moved, never for a control moving -- a slider drag rebuilds every frame.
+        if (bloomKernelKey_.generation != key.generation)
         {
             LOG_INFO(logging::LogCategory::Render,
-                     "bloom kernel spectrum rebuilt: slot {}, grid {}x{}, targets generation {}",
-                     slot, grid.x, grid.y, key.generation);
+                     "bloom kernel spectrum rebuilt: grid {}x{}, targets generation {}",
+                     grid.x, grid.y, key.generation);
         }
         BloomConvConstants k = conv;
         BloomFftConstants f{};
@@ -1743,17 +1741,17 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 
         // The photograph into grid A, centre folded to the DC corner...
         k.convStage = 3u;
-        convDispatch(k, D.bloomFftAUAV, grid.x, grid.y, D.bloomFftA.Get());
+        convDispatch(k, D.bloomFftAUAV, grid.x, grid.y, D.bloomFftA);
 
         // ...and its spectrum into the kernel texture. The DC texel now holds the per-channel
         // sums, which both the streak's amplitude and the multiply's normalisation read.
         f.isVertical = 0u;
-        fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
+        fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
         f.isVertical = 1u;
         fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftKernelUAV,
-                    D.bloomFftKernel.Get());
+                    D.bloomFftKernel);
 
-        slotKey = key;
+        bloomKernelKey_ = key;
     }
 
     // ---- frame: pack -> forward -> multiply -> inverse -> resolve ----
@@ -1762,25 +1760,25 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         BloomConvConstants s = conv;
         s.convStage = 0u;
         s.sourceSize = uint2{ renderer->GetWidth(), renderer->GetHeight() };
-        convDispatch(s, D.bloomFftAUAV, grid.x, grid.y, D.bloomFftA.Get());
+        convDispatch(s, D.bloomFftAUAV, grid.x, grid.y, D.bloomFftA);
     }
 
     BloomFftConstants f{};
     f.transformSize = grid;
     f.isVertical = 0u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
+    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
     f.isVertical = 1u;
-    fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA.Get());
+    fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
     // P8C-2: the Hermitian spectral multiply, on the COMPLETE forward spectrum.
     f.mode = 1u;
     f.isVertical = 0u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
+    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
     f.mode = 0u;
     f.isInverse = 1u;
     f.isVertical = 1u;
-    fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA.Get());
+    fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
     f.isVertical = 0u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB.Get());
+    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
 
     {
         BloomConvConstants r = conv;

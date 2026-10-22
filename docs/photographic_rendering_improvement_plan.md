@@ -2615,7 +2615,8 @@ the one that catches a missing pad, and it fails silently otherwise.
 **OUTCOME (2026-08-19).** Shipped as `bloom.method` = 1, with the pyramid still the default.
 New shaders: `bloom_fft_cs.hlsl` (one axis of the transform plus the spectral multiply) and
 `bloom_conv_cs.hlsl` (pack / kernel / resolve). Three grids per frame set (`bloomFftA`, `bloomFftB`,
-`bloomFftKernel`) at 1024x512 R32G32B32A32, holding a 640x360 image inside a zero pad.
+`bloomFftKernel`) at 1024x512 R32G32B32A32, holding a 640x360 image inside a zero pad. (Since
+2026-10-22 ONE set shared by every frame in flight, with one kernel key -- memory_profiling_plan.md, M1.)
 
 **The transform is a radix-2 Stockham, and it was verified against numpy BEFORE anything was built on
 it** (`scratchpad/fft_verify.py`, a line-by-line port of the shader's indexing): forward agrees to

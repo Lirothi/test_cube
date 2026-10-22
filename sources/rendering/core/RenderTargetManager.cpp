@@ -745,29 +745,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.bloomHeight = h;
         }
 
-        // P8C: the convolution grids. Three of them -- two ping-ponged through the transform, one
-        // holding the kernel's cached spectrum -- all at the padded power-of-two size. They rest
-        // shader-readable like everything else here, and the transform flips them to UAV for its
-        // own duration.
-        {
-            const UINT fw = std::max(1u, sizes.bloomFftWidth);
-            const UINT fh = std::max(1u, sizes.bloomFftHeight);
-            currentTargetWidth = fw;
-            currentTargetHeight = fh;
-            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloomFft,
-                DeferredSrvSlot::BloomFftA, DeferredSrvSlot::BloomFftAUAV, f,
-                D.bloomFftA, D.bloomFftASRV, D.bloomFftAUAV, fw, fh, MemTag::Bloom, L"BloomFftA");
-            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloomFft,
-                DeferredSrvSlot::BloomFftB, DeferredSrvSlot::BloomFftBUAV, f,
-                D.bloomFftB, D.bloomFftBSRV, D.bloomFftBUAV, fw, fh, MemTag::Bloom, L"BloomFftB");
-            CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.bloomFft,
-                DeferredSrvSlot::BloomFftKernel, DeferredSrvSlot::BloomFftKernelUAV, f,
-                D.bloomFftKernel, D.bloomFftKernelSRV, D.bloomFftKernelUAV, fw, fh, MemTag::Bloom, L"BloomFftKernel");
-            D.bloomFftWidth = fw;
-            D.bloomFftHeight = fh;
-            D.bloomFftImageWidth = std::max(1u, sizes.bloomFftImageWidth);
-            D.bloomFftImageHeight = std::max(1u, sizes.bloomFftImageHeight);
-        }
+        // P8C: the convolution grids are ONE set for every frame in flight, created after this loop.
 
         // P8C-2: the lens-flare accumulation target. A RENDER target on purpose -- the scatter is
         // an instanced additive raster pass (that is UE's mechanism and the whole point), while
@@ -886,9 +864,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoFiltered.Get(), L"GtaoFiltered", kNps);
         nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
-        nameRes(D.bloomFftA.Get(), L"BloomFftA", kNps);
-        nameRes(D.bloomFftB.Get(), L"BloomFftB", kNps);
-        nameRes(D.bloomFftKernel.Get(), L"BloomFftKernel", kNps);
+        // The bloom's convolution grids: ONE set since the 2026-10-22 census, named where they are created.
         nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
         nameRes(D.streakA.Get(), L"StreakPyramidA", kNps);
         nameRes(D.streakB.Get(), L"StreakPyramidB", kNps);
@@ -910,6 +886,62 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         // Tonemap/FXAA end as the compute outputs they are — the resolve flips them back.
         nameRes(D.tonemap.Get(), L"Tonemap", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         nameRes(D.fxaa.Get(), L"Fxaa", D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+
+    // P8C: the convolution grids. Three of them -- two ping-ponged through the transform, one
+    // holding the kernel's cached spectrum -- all at the padded power-of-two size, and ONE set of
+    // them for every frame in flight, like the shadow atlas below: only the bloom inside
+    // Main_Tonemap touches them, start to finish within its frame on the graphics queue, so a
+    // second frame's copy would hold nothing the first one does not (2 x 96 MB at 1440p). They
+    // rest shader-readable like everything else here, and the transform flips them to UAV for its
+    // own duration. The views stay per-frame, in the per-frame heaps, built against the one set.
+    {
+        const UINT fw = std::max(1u, sizes.bloomFftWidth);
+        const UINT fh = std::max(1u, sizes.bloomFftHeight);
+        currentTargetWidth = fw;
+        currentTargetHeight = fh;
+        const D3D12_RESOURCE_DESC rd = MakeTex2DDesc(formats.bloomFft, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        auto createGrid = [&](GpuResource& res, const wchar_t* name) {
+            ThrowIfFailed(gpu::CreateCommittedTexture(dev,
+                heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr, MemTag::Bloom, name,
+                res.GetAddressOfForCreate()));
+            res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr); // created in its resting state
+        };
+        createGrid(bloomFftA_, L"BloomFftA");
+        createGrid(bloomFftB_, L"BloomFftB");
+        createGrid(bloomFftKernel_, L"BloomFftKernel");
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = formats.bloomFft;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels = 1;
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = formats.bloomFft;
+        ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+        for (UINT f = 0; f < render::kFrameCount; ++f)
+        {
+            auto& D = deferred_[f];
+            auto views = [&](ID3D12Resource* res, DeferredSrvSlot srvSlot, DeferredSrvSlot uavSlot,
+                             D3D12_CPU_DESCRIPTOR_HANDLE& srv, D3D12_CPU_DESCRIPTOR_HANDLE& uav) {
+                srv = DeferredSrvCPU(f, srvSlot);
+                dev->CreateShaderResourceView(res, &sd, srv);
+                uav = DeferredSrvCPU(f, uavSlot);
+                dev->CreateUnorderedAccessView(res, nullptr, &ud, uav);
+            };
+            D.bloomFftA = bloomFftA_.Get();
+            D.bloomFftB = bloomFftB_.Get();
+            D.bloomFftKernel = bloomFftKernel_.Get();
+            views(D.bloomFftA, DeferredSrvSlot::BloomFftA, DeferredSrvSlot::BloomFftAUAV, D.bloomFftASRV, D.bloomFftAUAV);
+            views(D.bloomFftB, DeferredSrvSlot::BloomFftB, DeferredSrvSlot::BloomFftBUAV, D.bloomFftBSRV, D.bloomFftBUAV);
+            views(D.bloomFftKernel, DeferredSrvSlot::BloomFftKernel, DeferredSrvSlot::BloomFftKernelUAV,
+                  D.bloomFftKernelSRV, D.bloomFftKernelUAV);
+            D.bloomFftWidth = fw;
+            D.bloomFftHeight = fh;
+            D.bloomFftImageWidth = std::max(1u, sizes.bloomFftImageWidth);
+            D.bloomFftImageHeight = std::max(1u, sizes.bloomFftImageHeight);
+        }
     }
 
     // S3.5: the cascade shadow atlas is ONE resource for every frame in flight, so it is
@@ -1235,6 +1267,9 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         D.shadow = nullptr; // S3.5: non-owning alias; shadowAtlas_ below is the owner
         D.spotShadow = nullptr;  // S5: non-owning aliases; the atlases below are the owners
         D.pointShadow = nullptr;
+        D.bloomFftA = nullptr;   // non-owning aliases; bloomFftA_ / B_ / Kernel_ below are the owners
+        D.bloomFftB = nullptr;
+        D.bloomFftKernel = nullptr;
         collect(D.dlssOutput);
         collect(D.glassReflNormal);
         collect(D.glassReflDepth);
@@ -1257,6 +1292,9 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
     shadowAtlas_.Reset(); // S3.5: the single cascade atlas; Reset unregisters it
     spotShadowAtlas_.Reset();  // local-light shadow plan S5, likewise
     pointShadowAtlas_.Reset();
+    bloomFftA_.Reset(); // the single set of bloom convolution grids, likewise
+    bloomFftB_.Reset();
+    bloomFftKernel_.Reset();
 
     decls.ForgetMany(released);
 

@@ -144,10 +144,15 @@ public:
         // `bloomUp` is what the tonemap samples.
         GpuResource bloomDown;
         GpuResource bloomUp;
-        // P8C: two ping-pong grids for the transform, plus the kernel's cached spectrum.
-        GpuResource bloomFftA;
-        GpuResource bloomFftB;
-        GpuResource bloomFftKernel;
+        // P8C: two ping-pong grids for the transform, plus the kernel's cached spectrum. NON-OWNING
+        // aliases of RenderTargetManager::bloomFftA_ / bloomFftB_ / bloomFftKernel_, for the reason
+        // `shadow` above is one: the bloom inside Main_Tonemap writes and reads all three within one
+        // frame on the graphics queue, so frame N+1's transform cannot start before frame N's is done
+        // with them, and a cached spectrum per frame slot was the same kernel three times (UE caches
+        // ONE per view: PostProcessFFTBloom.cpp:338-358). The views below stay per-frame.
+        ID3D12Resource* bloomFftA = nullptr;
+        ID3D12Resource* bloomFftB = nullptr;
+        ID3D12Resource* bloomFftKernel = nullptr;
         // P8C-2 step 5a: the lens-flare accumulation target. The bokeh scatter rasterizes into it
         // additively; the ghost composite reads it back.
         GpuResource lensFlare;
@@ -442,6 +447,10 @@ private:
     // .pointShadow alias these.
     GpuResource spotShadowAtlas_;
     GpuResource pointShadowAtlas_;
+    // P8C: the ONE set of convolution grids; deferred_[f].bloomFftA / B / Kernel alias these.
+    GpuResource bloomFftA_;
+    GpuResource bloomFftB_;
+    GpuResource bloomFftKernel_;
     UINT localSpotPages_ = 1;  // plan S9: the page counts to build (kept across Create / the residency toggle)
     UINT localPointPages_ = 1;
     bool localShadowFull_ = true; // Step 24c: spot/point atlases at full res (Legacy) vs 1x1 (VSM)
