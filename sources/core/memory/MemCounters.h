@@ -47,7 +47,7 @@ std::uint32_t CurrentThreadCounterIndex();
 // With `--memtrack` (read from the raw command line at the process's FIRST allocation -- static
 // constructors allocate long before WinMain, and a pointer allocated untracked could not be
 // freed tracked) every operator new records its pointer and the calling thread's MemScope tag in
-// a striped map (16 SRW-locked open-addressing tables on VirtualAlloc pages, never on the heap it
+// a striped map (256 SRW-locked open-addressing tables on VirtualAlloc pages, never on the heap it
 // measures), and adds mi_usable_size to that tag in the thread's block; operator delete takes the
 // pointer out and subtracts from the tag it was allocated under. Without the switch nothing of
 // this runs (one relaxed load per call). UE: LLM's pointer map and per-thread deltas
@@ -64,4 +64,17 @@ struct CpuTagTotals
 };
 // Sums every thread's block. Zeros when tracking is off.
 void ReadCpuTagTotals(CpuTagTotals& out);
+
+// ---- The map's side of the memory trace, plan M4 (core/memory/MemTrace.h) ----
+// `--memtrace` with CPU events turns the map on at the first allocation, like --memtrack.
+// Begin: stripe by stripe, under its lock, events on and every live pointer out as a synthetic
+// alloc. End: stripe by stripe, events off and the live pointers summed by tag -- exactly what the
+// stream leaves alive (the per-thread blocks above trail the map by an instant on a busy thread).
+struct CpuTraceTotals
+{
+    std::int64_t bytes[kMemTagCount] = {};
+    std::int64_t count[kMemTagCount] = {};
+};
+void BeginCpuTrace();
+void EndCpuTrace(CpuTraceTotals& out);
 } // namespace mem

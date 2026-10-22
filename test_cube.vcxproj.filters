@@ -480,6 +480,9 @@
     <ClCompile Include="sources/core/memory/MemNew.cpp">
       <Filter>sources\core\memory</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/memory/MemTrace.cpp">
+      <Filter>sources\core\memory</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/memory/diagnostics/MemBench.cpp">
       <Filter>sources\core\memory\diagnostics</Filter>
     </ClCompile>
@@ -1116,6 +1119,9 @@
       <Filter>sources\core\memory</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/memory/MemScope.h">
+      <Filter>sources\core\memory</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/memory/MemTrace.h">
       <Filter>sources\core\memory</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/memory/diagnostics/MemBench.h">

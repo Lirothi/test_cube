@@ -29,6 +29,7 @@
 #include <d3d12sdklayers.h> // ID3D12InfoQueue
 #include "core/diagnostics/BootProfile.h"
 #include "core/diagnostics/ArtifactWriter.h"
+#include "core/memory/MemTrace.h"
 #include "core/logging/Log.h"
 
 #include <chrono>
@@ -954,6 +955,7 @@ private:
             }
 
             Profiler::Get().EndFrame();
+            memtrace::OnFrameEnd(renderer_.GetTotalFrameNumber());
             boot::AddBucket("frame: WHOLE",
                             std::chrono::duration<double, std::milli>(
                                 std::chrono::steady_clock::now() - frameBegin).count(),
@@ -1238,6 +1240,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
             exitCode = 2;
             faultCaught = true;
         }
+        memtrace::Stop(); // after the churn, before the teardown -- and before a fault's TerminateProcess
 
         {
             BOOT_SCOPE("TaskSystem::Stop");

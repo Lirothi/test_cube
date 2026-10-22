@@ -8,6 +8,7 @@
 #include <string>
 
 #include "core/logging/Log.h"
+#include "core/memory/MemTrace.h"
 #include "rendering/core/TextureCreate.h"
 
 namespace gpu
@@ -45,6 +46,7 @@ struct Census
     std::mutex mtx;
     CensusRecord* head = nullptr;
     CensusTotals totals;
+    bool traced = false; // memory trace (M4): Add/Remove emit events -- under mtx, like the start snapshot
 
     static Census& Get()
     {
@@ -71,9 +73,27 @@ struct Census
         }
     }
 
-    void Add(CensusRecord* rec);
+    void Add(CensusRecord* rec, std::uint32_t stack);
     void Remove(CensusRecord* rec);
 };
+
+// The trace's view of a record: the key is the record (the object's identity while it lives).
+std::uint8_t TraceHeap(const Record& r)
+{
+    return r.pool == MemPool::NonLocal ? memtrace::kHeapGpuNonLocal : memtrace::kHeapGpuLocal;
+}
+
+std::uint8_t TraceKind(const Record& r)
+{
+    switch (r.kind)
+    {
+    case Kind::Buffer: return memtrace::kKindBuffer;
+    case Kind::Texture: return memtrace::kKindTexture;
+    case Kind::DescriptorHeap: return memtrace::kKindDescriptorHeap;
+    case Kind::QueryHeap: return memtrace::kKindQueryHeap;
+    }
+    return memtrace::kKindBuffer;
+}
 
 // The object D3D holds as private data. Its last Release is the D3D object's destruction.
 class CensusRecord final : public IUnknown
@@ -113,7 +133,7 @@ private:
     std::atomic<ULONG> refs_{ 1 };
 };
 
-void Census::Add(CensusRecord* rec)
+void Census::Add(CensusRecord* rec, std::uint32_t stack)
 {
     std::lock_guard<std::mutex> lk(mtx);
     rec->next = head;
@@ -121,6 +141,12 @@ void Census::Add(CensusRecord* rec)
     head = rec;
     Apply(rec->record, +1);
     ++totals.created;
+    if (traced)
+    {
+        const Record& r = rec->record;
+        memtrace::EmitAlloc(reinterpret_cast<std::uintptr_t>(rec), r.bytes, static_cast<std::uint8_t>(r.tag), TraceHeap(r),
+                            TraceKind(r), stack, r.name.c_str());
+    }
 }
 
 void Census::Remove(CensusRecord* rec)
@@ -131,7 +157,40 @@ void Census::Remove(CensusRecord* rec)
     if (rec->next != nullptr) { rec->next->prev = rec->prev; }
     Apply(rec->record, -1);
     ++totals.released;
+    if (traced) { memtrace::EmitFree(reinterpret_cast<std::uintptr_t>(rec), TraceHeap(rec->record)); }
 }
+
+// memtrace's GPU side: start = events on + every live object as a synthetic alloc; stop = events
+// off + the totals the trace's End record carries. Both under the census lock.
+void TraceHook(bool start, memtrace::GpuEndTotals* out)
+{
+    Census& c = Census::Get();
+    std::lock_guard<std::mutex> lk(c.mtx);
+    c.traced = start;
+    if (start)
+    {
+        for (const CensusRecord* rec = c.head; rec != nullptr; rec = rec->next)
+        {
+            const Record& r = rec->record;
+            memtrace::EmitAlloc(reinterpret_cast<std::uintptr_t>(rec), r.bytes, static_cast<std::uint8_t>(r.tag), TraceHeap(r),
+                                static_cast<std::uint8_t>(TraceKind(r) | memtrace::kKindSynthetic), 0, r.name.c_str());
+        }
+        return;
+    }
+    if (out == nullptr) { return; }
+    for (std::uint32_t t = 0; t < kMemTagCount; ++t)
+    {
+        const TagTotals& tt = c.totals.tags[t];
+        out->local[t] = tt.bytes[static_cast<int>(MemPool::Local)];
+        out->nonLocal[t] = tt.bytes[static_cast<int>(MemPool::NonLocal)];
+        out->descriptor[t] = tt.descriptorBytes;
+        out->resources[t] = tt.resources;
+        out->heaps[t] = tt.heaps;
+    }
+}
+
+// Registered before main: a trace configured at boot finds the hook in place.
+const bool g_traceHookRegistered = (memtrace::SetGpuHook(&TraceHook), true);
 
 std::string Narrow(const wchar_t* name)
 {
@@ -160,8 +219,9 @@ void Track(ID3D12Object* object, Record record, const wchar_t* name)
 {
     if (object == nullptr) { return; }
     if (name != nullptr && name[0] != L'\0') { object->SetName(name); }
+    const std::uint32_t stack = memtrace::CaptureGpuStack(); // 0 unless a GPU trace is running; outside the lock
     auto* rec = new CensusRecord(std::move(record));
-    Census::Get().Add(rec);
+    Census::Get().Add(rec, stack);
     // D3D takes its own reference; ours goes right after, so D3D's is the last one. Replacing an
     // earlier record (the same object tracked twice) releases that one, which takes it out.
     if (FAILED(object->SetPrivateDataInterface(kCensusRecordGuid, rec)))

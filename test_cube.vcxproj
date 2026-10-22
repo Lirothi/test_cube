@@ -344,6 +344,7 @@
     <ClCompile Include="sources/core/logging/LogSinks.cpp" />
     <ClCompile Include="sources/core/logging/diagnostics/LogStress.cpp" />
     <ClCompile Include="sources/core/memory/MemNew.cpp" />
+    <ClCompile Include="sources/core/memory/MemTrace.cpp" />
     <ClCompile Include="sources/core/memory/diagnostics/MemBench.cpp" />
     <ClCompile Include="sources/core/profiling/Profiler.cpp" />
     <ClCompile Include="sources/core/profiling/ProfilerScopes.cpp" />
@@ -580,6 +581,7 @@
     <ClInclude Include="sources/core/memory/MemCounters.h" />
     <ClInclude Include="sources/core/memory/MemTags.h" />
     <ClInclude Include="sources/core/memory/MemScope.h" />
+    <ClInclude Include="sources/core/memory/MemTrace.h" />
     <ClInclude Include="sources/core/memory/diagnostics/MemBench.h" />
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />

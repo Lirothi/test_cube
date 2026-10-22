@@ -20,6 +20,7 @@
 
 #include "core/memory/MemCounters.h"
 #include "core/memory/MemScope.h"
+#include "core/memory/MemTrace.h"
 
 #include <atomic>
 #include <cstddef>
@@ -110,7 +111,8 @@ constinit std::atomic<int> g_trackState{ 0 };
 __declspec(noinline) bool ReadTrackSwitch() noexcept
 {
     const wchar_t* cmd = GetCommandLineW();
-    const bool on = cmd != nullptr && std::wcsstr(cmd, L"--memtrack") != nullptr;
+    // A CPU memory trace (M4) needs the map as much as --memtrack does.
+    const bool on = cmd != nullptr && (std::wcsstr(cmd, L"--memtrack") != nullptr || memtrace::WantsCpuRaw(cmd));
     g_trackState.store(on ? 2 : 1, std::memory_order_relaxed);
     return on;
 }
@@ -152,6 +154,7 @@ struct alignas(64) Stripe
     std::uint8_t* tags;
     std::uint32_t capacity;
     std::uint32_t count;
+    bool traced;           // M4: this stripe's inserts and removes go to the memory trace (under `lock`)
 };
 constinit Stripe g_stripes[kStripeCount] = {};
 constinit std::atomic<std::uint64_t> g_mapBytes{ 0 };
@@ -198,7 +201,9 @@ bool Grow(Stripe& s) noexcept
     return true;
 }
 
-bool MapInsert(std::uintptr_t p, std::uint8_t tag) noexcept
+// `size` and `stack` only feed the trace (M4): the event is emitted under the stripe lock, so it
+// is ordered with the free of the same address and with the trace's start snapshot.
+bool MapInsert(std::uintptr_t p, std::uint8_t tag, std::uint64_t size, std::uint32_t stack) noexcept
 {
     const std::uint64_t h = HashPtr(p);
     Stripe& s = g_stripes[h >> kStripeShift];
@@ -210,9 +215,15 @@ bool MapInsert(std::uintptr_t p, std::uint8_t tag) noexcept
         const std::uint32_t mask = s.capacity - 1;
         std::uint32_t i = HomeSlot(h, s.capacity);
         while (s.keys[i] != 0 && s.keys[i] != p) { i = (i + 1) & mask; }
-        if (s.keys[i] == 0) { ++s.count; }
+        const bool existed = s.keys[i] != 0;
+        if (!existed) { ++s.count; }
         s.keys[i] = p; // a key already there was freed behind our back (a foreign free); its tag is replaced
         s.tags[i] = tag;
+        if (s.traced)
+        {
+            if (existed) { memtrace::EmitFree(p, memtrace::kHeapCpu); }
+            memtrace::EmitAlloc(p, size, tag, memtrace::kHeapCpu, memtrace::kKindCpu, stack, nullptr);
+        }
     }
     ReleaseSRWLockExclusive(&s.lock);
     return ok;
@@ -252,6 +263,7 @@ bool MapRemove(std::uintptr_t p, std::uint8_t& outTag) noexcept
             }
             s.keys[i] = 0;
             --s.count;
+            if (s.traced) { memtrace::EmitFree(p, memtrace::kHeapCpu); }
         }
     }
     ReleaseSRWLockExclusive(&s.lock);
@@ -261,9 +273,11 @@ bool MapRemove(std::uintptr_t p, std::uint8_t& outTag) noexcept
 __declspec(noinline) void TrackAlloc(void* p, CounterBlock* b, bool shared) noexcept
 {
     const std::uint8_t tag = CurrentTagRaw();
-    if (MapInsert(reinterpret_cast<std::uintptr_t>(p), tag))
+    const std::uint64_t size = mi_usable_size(p);
+    const std::uint32_t stack = memtrace::CaptureCpuStack(size); // 0 unless a CPU trace wants this one
+    if (MapInsert(reinterpret_cast<std::uintptr_t>(p), tag, size, stack))
     {
-        AddSigned(b->tagBytes[tag], static_cast<std::int64_t>(mi_usable_size(p)), shared);
+        AddSigned(b->tagBytes[tag], static_cast<std::int64_t>(size), shared);
         AddSigned(b->tagCount[tag], 1, shared);
     }
 }
@@ -378,6 +392,43 @@ void ReadCpuTagTotals(CpuTagTotals& out)
     for (std::uint32_t s = 0; s < kStripeCount; ++s)
     {
         out.mapEntries += g_stripes[s].count; // racy read of a counter, fine for a report
+    }
+}
+
+void BeginCpuTrace()
+{
+    if (!TrackingOn()) { return; }
+    for (Stripe& s : g_stripes)
+    {
+        AcquireSRWLockExclusive(&s.lock);
+        s.traced = true;
+        for (std::uint32_t i = 0; i < s.capacity; ++i)
+        {
+            const std::uintptr_t p = s.keys[i];
+            if (p == 0) { continue; }
+            // Alive: its free waits on this lock before mi_free, so the usable size can be read.
+            memtrace::EmitAlloc(p, mi_usable_size(reinterpret_cast<void*>(p)), s.tags[i], memtrace::kHeapCpu,
+                                memtrace::kKindCpu | memtrace::kKindSynthetic, 0, nullptr);
+        }
+        ReleaseSRWLockExclusive(&s.lock);
+    }
+}
+
+void EndCpuTrace(CpuTraceTotals& out)
+{
+    out = CpuTraceTotals{};
+    for (Stripe& s : g_stripes)
+    {
+        AcquireSRWLockExclusive(&s.lock);
+        s.traced = false;
+        for (std::uint32_t i = 0; i < s.capacity; ++i)
+        {
+            const std::uintptr_t p = s.keys[i];
+            if (p == 0) { continue; }
+            out.bytes[s.tags[i]] += static_cast<std::int64_t>(mi_usable_size(reinterpret_cast<void*>(p)));
+            out.count[s.tags[i]] += 1;
+        }
+        ReleaseSRWLockExclusive(&s.lock);
     }
 }
 } // namespace mem

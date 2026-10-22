@@ -15,6 +15,7 @@
 #include "core/logging/Log.h"
 #include "core/logging/diagnostics/LogStress.h"
 #include "core/memory/diagnostics/MemBench.h"
+#include "core/memory/MemTrace.h"
 #include "core/task/diagnostics/TaskSystemStress.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
@@ -453,6 +454,16 @@ int WINAPI WinMain(
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
     ParseTimeOfDayArgs(lpCmdLine);
+    // "--memtrace[=all|cpu|gpu][,stacks=big|all|off|1/N][,start=<frame>]": every allocation and
+    // free into traces/memtrace_*.mtrace (memory profiling plan M4, core/memory/MemTrace.h);
+    // tools/memtrace.py reads it. Starts here unless start= delays it -- above the scene-stress
+    // branch, whose level churn is the trace's hardest case.
+    {
+        memtrace::Options memtraceOptions;
+        if (memtrace::ParseSwitch(lpCmdLine, memtraceOptions)) {
+            memtrace::Configure(memtraceOptions);
+        }
+    }
 
     // "--cloud-profile=<image>" / "--cloud-formation=<dds>" / "--cloud-cells=<dds>": FILE OVERRIDES
     // for the volumetric clouds' generated profile LUT, formation and erosion volumes
@@ -1364,5 +1375,6 @@ int WINAPI WinMain(
 
     App app;
     app.Run(hInstance, nShowCmd);
+    memtrace::Stop(); // App::Run stops it after the main loop; this catches a run that ended another way
     return 0;
 }

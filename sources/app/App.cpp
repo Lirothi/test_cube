@@ -5,6 +5,7 @@
 #include "core/math/Math.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
+#include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/SkyAtmosphere.h" // render::g_skyKeyTolerance (--set sky.keyTolerance)
@@ -2493,6 +2494,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
 
             Profiler::Get().EndFrame();
+            memtrace::OnFrameEnd(renderer.GetTotalFrameNumber()); // the frame marker; a delayed --memtrace start
 
             // Frame budget = the tighter of two caps: the user's (render::g_maxFps, UE t.MaxFPS)
             // and the model throttle below. One wait serves both (WaitOutFrameBudget).
@@ -2543,6 +2545,8 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         }
 
         timeEndPeriod(1);
+        // The memory trace ends with the main loop: its End record is the steady state, not the teardown.
+        memtrace::Stop();
 #if WITH_EDITOR
         editormcp::SetRuntimeHost(nullptr);
 #endif
