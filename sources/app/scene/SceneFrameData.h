@@ -596,6 +596,21 @@ struct SceneRenderSettings
     //     fallback, not what is truly behind); costs the same as OFF.
     // 2 = FULL: exact per-candidate alpha testing during traversal, the expensive one.
     uint32_t rtAlphaMode = 2u;
+    // Interior lighting plan S: the RT sky visibility (UE DFAO's bent normal, traced on the TLAS at
+    // half resolution, rt_sky_visibility_cs.hlsl) occluding the sky's diffuse and specular. Needs RT
+    // hardware; off = the open sky everywhere, exactly the frame before it. `skyVisRays` per
+    // half-resolution pixel per frame, accumulated with `skyVisHistory` (the weight of the
+    // reprojected past); `skyVisMaxDistance` metres of ray -- an occluder farther than this does not
+    // count (UE's SkyLight OcclusionMaxDistance, 10 m by default; ours reaches over a palm crown).
+    // `skyVisDiffuse` / `skyVisSpecular` scale the two effects (0 off .. 1 UE).
+    // Measured 2026-10-23 (wind_test grove, half of 2560x1440, GPU): 4 rays 0.28 / 0.31 / 0.34 ms at
+    // 10 / 15 / 30 m, 8 rays 0.63 ms, 2 rays 0.18 ms -- the cost is the ray count, not the reach.
+    bool skyVisEnabled = true;
+    uint32_t skyVisRays = 4u;
+    float skyVisMaxDistance = 15.0f;
+    float skyVisHistory = 0.9f;
+    float skyVisDiffuse = 1.0f;
+    float skyVisSpecular = 1.0f;
     // RW: wind-deformed per-instance BLASes for near casters, so foliage sway reaches RT
     // reflections (and later RT shadows). Off = every caster reflects its rest pose.
     bool rtWindBlas = true;

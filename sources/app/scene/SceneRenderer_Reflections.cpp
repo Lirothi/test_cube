@@ -333,6 +333,110 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
     ctx.EndCL(t);
 }
 
+// ---- Interior lighting plan S: the RT sky visibility ----
+namespace {
+// Mirrors `cbuffer SkyVisibility` in rt_sky_visibility_cs.hlsl (row-major; two matrices, then rows of 4).
+struct SkyVisConstants
+{
+    Math::mat4 invView;
+    Math::mat4 invProj;
+    uint32_t tlasIndex = 0;     uint32_t gb1Index = 0;      uint32_t depthIndex = 0;    uint32_t velocityIndex = 0;
+    uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t geomInfoIndex = 0; uint32_t alphaMode = 2;
+    uint32_t outWidth = 0;      uint32_t outHeight = 0;     uint32_t rayCount = 4;      uint32_t frameIndex = 0;
+    float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t pad = 0;
+};
+static_assert(sizeof(SkyVisConstants) == 2 * 64 + 4 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
+
+// Bindless scene slots of this pass (BindlessTable kScenePerFrame = 32): reflections own 0-12, the
+// debug view 13-16, the glass dispatch 17-25. Its own copies of the TLAS / GB1 / depth, because the
+// reflection trace (which writes 0/2/3) does not run when reflections are not RT.
+constexpr UINT kSkyVisSlotUav = 26;
+constexpr UINT kSkyVisSlotHistory = 27;
+constexpr UINT kSkyVisSlotVelocity = 28;
+constexpr UINT kSkyVisSlotTlas = 29;
+constexpr UINT kSkyVisSlotGb1 = 30;
+constexpr UINT kSkyVisSlotDepth = 31;
+} // namespace
+
+Math::float4 SceneRenderer::SkyVisShaderParams() const
+{
+    const SceneRenderSettings& s = frame_->settings;
+    return Math::float4(decisions_.skyVisTraced ? 1.0f : 0.0f, std::clamp(s.skyVisDiffuse, 0.0f, 1.0f),
+                        std::clamp(s.skyVisSpecular, 0.0f, 1.0f), 0.0f);
+}
+
+void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
+                                const SkyVisChain& chain)
+{
+    auto t = ctx.BeginCL();
+    SetCommandListName(t.cl, ctx.pass);
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyVis);
+        const auto& D = renderer->GetDeferredForFrame();
+        const auto& P = renderer->GetDeferredForPrevFrame();
+        renderer->EmitPoint(t.cl, chain.point); // inputs -> NPS, the target -> UAV
+
+        auto material = resources_.GetSkyVisMaterial();
+        const UINT frameIndex = renderer->GetCurrentFrameIndex();
+        const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = rtAs_.Manager().TlasSrvCpu(frameIndex);
+        const bool traceable = material && rtAs_.Bindless().FrameReady(frameIndex) && tlasSrv.ptr != 0 &&
+                               rtAs_.Manager().TlasInstanceCount(frameIndex) != 0;
+        if (traceable)
+        {
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotUav, D.skyVisUAV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotHistory, P.skyVisSRV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotVelocity, D.gbSRV[3]);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotTlas, tlasSrv);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotGb1, D.gbSRV[1]);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotDepth, D.depthSRV);
+
+            const SceneRenderSettings& s = frame_->settings;
+            SkyVisConstants c{};
+            c.invView = camera.GetInvViewMatrix();
+            c.invProj = camera.GetInvProjMatrix();
+            c.tlasIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotTlas);
+            c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotGb1);
+            c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotDepth);
+            c.velocityIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotVelocity);
+            c.outUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotUav);
+            c.historyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotHistory);
+            c.geomInfoIndex = rtAs_.Bindless().GeomInfoIndex(frameIndex);
+            c.alphaMode = std::min(s.rtAlphaMode, 2u); // the foliage cut-out exactly as the reflections see it
+            c.outWidth = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
+            c.outHeight = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
+            c.rayCount = std::clamp(s.skyVisRays, 1u, 16u);
+            c.frameIndex = chain.frameIndex;
+            c.maxDistance = std::max(s.skyVisMaxDistance, 0.5f);
+            c.historyWeight = std::clamp(s.skyVisHistory, 0.0f, 0.98f);
+            c.historyValid = chain.historyValid ? 1u : 0u;
+
+            auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisConstants), render::kConstantBufferAlignment);
+            std::memcpy(cb.cpu, &c, sizeof(c));
+
+            // Bespoke bindless dispatch, as Pass_RTTrace: the persistent heap, then the frame heap back.
+            ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
+            t.cl->SetDescriptorHeaps(1, heaps);
+            t.cl->SetComputeRootSignature(material->GetRootSignature());
+            t.cl->SetPipelineState(material->GetPipelineState());
+            t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+            t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            renderer->BindDescriptorHeaps(t.cl);
+        }
+        else
+        {
+            // Nothing to trace against yet (the first frames of a level, before the TLAS is built):
+            // the open sky. CLEARED, not left alone -- lighting and compose read this target on the
+            // strength of the frame's decision, and last level's bent normals are not this one's.
+            renderer->BindDescriptorHeaps(t.cl); // the frame heap the staged descriptor lives in
+            const D3D12_GPU_DESCRIPTOR_HANDLE gpu = renderer->StageSrvUavTable({ D.skyVisUAV }).gpu;
+            const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            t.cl->ClearUnorderedAccessViewFloat(gpu, D.skyVisUAV, D.skyVis.Get(), zero, 0, nullptr);
+        }
+        renderer->EmitPoint(t.cl, chain.pointRestore); // the target -> NON_PIXEL, its rest
+    }
+    ctx.EndCL(t);
+}
+
 // Gather-then-shade split, SHADE phase: payload + lit HDR -> the premultiplied reflection
 // target. The ONLY RT reflection dispatch that consumes the lighting output, which is what
 // leaves the expensive trace free to overlap the shadow/lighting passes on the compute queue.

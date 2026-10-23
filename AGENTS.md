@@ -572,3 +572,22 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
 - The importer decides per NODE (`materialgen::ClassifyGlass`: the share of the surface whose transmission is over
   `kGlassTransmissionMin`; a split needs `kGlassOpaqueShareMin` of it opaque): one glTF material is often an atlas
   for mugs and tumblers alike. `intent_regression` holds it on the staged bathroom.
+
+## RT Sky Visibility -- the Sky Stops Lighting What It Cannot See
+
+`Main_SkyVis` (`shaders/rt_sky_visibility_cs.hlsl`) is UE's Distance Field AO bent normal traced with inline
+RayQuery on the TLAS: half resolution, `skyVis.rays` (4) cosine rays per pixel against the SHADOW casters, alpha-
+tested like the RT reflections, out to `skyVis.maxDistance` (15 m), accumulated over frames in the same dispatch
+(`skyVis.history` 0.9, reprojected through the G-buffer velocity). Its length is how much sky a point sees, its
+direction where from. `shaders/sky_visibility.hlsli` applies it with UE's formulas, file and line cited there:
+the sky diffuse takes min() with the AO (UE's Minimum combine) and a bent lookup normal, the sky specular a cone-cone
+occlusion -- in lighting_cs AND compose_cs, the same line, because compose subtracts the sky specular lighting
+added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the open sky, the frame before it.
+
+- Bindless scene slots 26-31 are this pass's (its own TLAS/GB1/depth copies -- the reflection trace that writes
+  0/2/3 does not run unless reflections are RT).
+- The body writes the target on EVERY path: traced, or cleared to the open sky while the TLAS is not ready --
+  lighting and compose read it on the strength of `decisions_.skyVisTraced`, set by the builder.
+- Cost is the ray count, not the reach: 4 rays 0.28-0.34 ms on wind_test's grove, 8 rays 0.63, 2 rays 0.18.
+- A/B it with the exposure PINNED (`exposure.autoExposure:0` after metering): the metering brightens the whole
+  frame to make up for the darker shade, which reads as "the sky got brighter".

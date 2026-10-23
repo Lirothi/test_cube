@@ -117,6 +117,8 @@ enum class RenderPass : uint16_t {
     Main_DLSS,
     Main_Tonemap,
     Main_Debug,
+    // Interior lighting plan S: the RT sky visibility (UE DFAO's bent normal, traced) -> lighting, compose.
+    Main_SkyVis,
     Main_Count,
 
     Epilogue_Overlay = Main_Count,
@@ -215,6 +217,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_DLSS: return L"DLSS";
     case RenderPass::Main_Tonemap: return L"Tonemap";
     case RenderPass::Main_Debug: return L"Debug";
+    case RenderPass::Main_SkyVis: return L"SkyVis";
     case RenderPass::Epilogue_Overlay: return L"Overlay";
     case RenderPass::GBuffer_Driver: return L"GBuffer.Driver";
     case RenderPass::GBuffer_OpaqueSimple: return L"GBuffer.OpaqueSimple";

@@ -3328,6 +3328,24 @@ void TestLeafCards()
         const materialgen::GlassVerdict pane = materialgen::ClassifyGlass(gltf + "#node:Wall_corner_shelf", 1);
         Check(pane.glass && !pane.split, "the corner shelf's pane is all glass: " + pane.reason);
         Check(!materialgen::ClassifyGlass(gltf + "#node:Wall_corner_shelf", 0).glass, "and its frame is not");
+
+        // The bake drops a triangle lying under an earlier one of its group in the same plane
+        // (MeshManager DropCoplanarDuplicates): the corner shelf carries its niche ceiling twice --
+        // 352 triangles authored, 2 of them the second copy, which z-fought the first under DLSS
+        // jitter. Wall_Dam1_long's near-duplicates sit ~0.9 mm apart: no tie, all kept.
+        const auto lod0Triangles = [](const std::string& path, size_t group) -> size_t
+        {
+            MeshCpuData cpu;
+            MeshLoadOptions options;
+            options.generateTangentSpace = false;
+            MeshManager parser;
+            if (!parser.ParseFileCpu(path, cpu, options) || group >= cpu.submeshes.size()) { return 0; }
+            return cpu.submeshes[group].indexCount / 3;
+        };
+        const size_t shelf = lod0Triangles(gltf + "#node:Wall_corner_shelf.001", 0);
+        Check(shelf == 350, "the corner shelf bakes without its duplicated niche ceiling (350 of 352): " + std::to_string(shelf));
+        const size_t damaged = lod0Triangles(gltf + "#node:Wall_Dam1_long.001", 0);
+        Check(damaged == 1095, "a wall whose near-copies are 0.9 mm apart keeps all 1095: " + std::to_string(damaged));
     }
 }
 

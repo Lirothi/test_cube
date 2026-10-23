@@ -143,6 +143,10 @@ cbuffer PerFrame : register(b0)
     // partition buffer -- in Legacy and VSM a placeholder SRV sits in its slot.
     uint csmSdsmPartitions;
     uint3 _padSdsm;
+    // Interior lighting plan S: the RT sky visibility (sky_visibility.hlsli). x 1 = applied this
+    // frame (SkyVisTex is real), y the diffuse strength, z the specular strength (0..1, 1 = UE).
+    // MIRRORED in compose's own cbuffer: lighting adds the sky specular, compose subtracts it.
+    float4 skyVisParams;
 }
 
 

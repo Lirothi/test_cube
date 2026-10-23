@@ -815,6 +815,13 @@ namespace
             return true;
         }
         if (setting == "rt.alphaTest") { renderSettings.rtAlphaMode = value != 0.0f ? 2u : 0u; return true; }
+        // Interior lighting plan S: the RT sky visibility (SceneRenderSettings::skyVis*).
+        if (setting == "skyVis.enabled") { renderSettings.skyVisEnabled = value != 0.0f; return true; }
+        if (setting == "skyVis.rays") { renderSettings.skyVisRays = static_cast<uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
+        if (setting == "skyVis.maxDistance") { renderSettings.skyVisMaxDistance = std::clamp(value, 0.5f, 500.0f); return true; }
+        if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.98f); return true; }
+        if (setting == "skyVis.diffuse") { renderSettings.skyVisDiffuse = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "skyVis.specular") { renderSettings.skyVisSpecular = std::clamp(value, 0.0f, 1.0f); return true; }
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
         if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }

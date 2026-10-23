@@ -1,4 +1,4 @@
-#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=20, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define COMPOSE_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=21, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 // t0: LightTarget (HDR)
 // t1: GB2 (DefaultLit emissive or foliage subsurface/transmission payload)
 // t2: GB0 (Albedo+Metal encoded in A)
@@ -21,6 +21,7 @@
 #include "fog_common.hlsli"
 #include "sky_aerial_common.hlsli"
 #include "sky_view_mapping.hlsli"
+#include "sky_visibility.hlsli" // plan S: the sky specular's occlusion, lighting_cs's own line
 
 Texture2D LightTarget : register(t0);
 Texture2D GB2 : register(t1);
@@ -52,6 +53,8 @@ Texture2D<float> CloudDepthTex : register(t17);
 Texture2D<float> CloudHzbTex : register(t18);
 // t19: the sky's transmittance LUT, for the sun's disc (gated by `sunDiscDir.w`).
 Texture2D<float4> SunTransmittanceLut : register(t19);
+// t20: plan S, the RT sky visibility (lighting_cs t17, the same texture), gated by skyVisParams.x.
+Texture2D<float4> SkyVisTex : register(t20);
 
 RWTexture2D<float4> SceneColor : register(u0);
 
@@ -119,6 +122,8 @@ cbuffer PerFrame : register(b0)
     // rgb the disc's outer-space luminance -- UE GetLightDiskLuminance, illuminance / solid angle
     // (SkyAtmosphereRendering.cpp:577-582) -- w the atmosphere's top radius (km).
     float4 sunDiscLuminance;
+    // Plan S: lighting_cb.hlsli's skyVisParams, the same values -- x on, y diffuse, z specular strength.
+    float4 skyVisParams;
 }
 
 static const float kEps = 1e-6;
@@ -518,6 +523,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // occlusion. The plan is explicit that widening this to all indirect methods needs its own
         // A/B, and this is the conservative half.
         skyCol *= IblSpecularOcclusion(cosT, CombinedAo(materialAo, uv), rough);
+        // Plan S: lighting_cs's own line, on the same texel -- or the subtraction below stops
+        // cancelling the sky that lighting added.
+        if (skyVisParams.x != 0.0f)
+        {
+            const float4 skyVisBent = SkyVisUpsample(SkyVisTex, uv, z);
+            if (skyVisBent.w > 0.0f)
+            {
+                skyCol *= SkyVisSpecular(skyVisBent.xyz, Rw, rough, skyVisParams.z);
+            }
+        }
 
         // ONLY THE DIFFERENCE THE REFLECTION MAKES. The sky term is already in the light target --
         // the lighting pass adds it now, so that the screen-space reflection pass, which samples

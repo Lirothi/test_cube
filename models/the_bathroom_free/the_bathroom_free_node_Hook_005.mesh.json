@@ -1,5 +1,6 @@
 {
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Hook_005.mesh.bin",
+  "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Hook_005_0",
   "pivot": "base",
   "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Hook.005",

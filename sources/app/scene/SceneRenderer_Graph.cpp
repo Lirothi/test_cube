@@ -1317,6 +1317,61 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                 };
             });
     }
+
+    // Interior lighting plan S: the RT sky visibility (UE DFAO's bent normal, traced on the TLAS at
+    // half resolution, accumulated over frames in the same dispatch). On the DIRECT queue: lighting
+    // waits on it, and its cost is measured before it is moved anywhere. The mtDep on Pass_BuildAS is
+    // load-bearing as for RTTrace: the TLAS and the bindless table are undeclared reads, and the body
+    // decides from FrameReady, which the BuildAS recording sets.
+    if (!decisions_.skyVis || gb.pBuildAS == static_cast<size_t>(-1))
+    {
+        skyVisHistoryFrames_ = 0u; // off this frame: whatever the history holds is stale when it returns
+    }
+    else
+    {
+        gb.pSkyVis = rg.AddPass2(RenderPass::Main_SkyVis, { gb.pGbufDone, gb.pBuildAS, gb.pHzb }, { gb.pBuildAS }, {},
+            [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                const auto& D = renderer->GetDeferredForFrame();
+                const auto& P = renderer->GetDeferredForPrevFrame();
+                if (!resources_.GetSkyVisMaterial() || D.skyVisUAV.ptr == 0 || D.skyVisSRV.ptr == 0 ||
+                    P.skyVisSRV.ptr == 0 || D.gbSRV[1].ptr == 0 || D.gbSRV[3].ptr == 0 || D.depthSRV.ptr == 0)
+                {
+                    skyVisHistoryFrames_ = 0u;
+                    return {};
+                }
+                decisions_.skyVisTraced = true;
+                SkyVisChain chain{};
+                chain.frameIndex = skyVisFrameCounter_++;
+                // Cross-frame state, committed here in the serial Prepare (GTAO's rule).
+                const uint32_t w = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
+                const uint32_t h = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
+                if (w != skyVisHistoryWidth_ || h != skyVisHistoryHeight_)
+                {
+                    skyVisHistoryWidth_ = w;
+                    skyVisHistoryHeight_ = h;
+                    skyVisHistoryFrames_ = 0u; // the Deferred sets were recreated
+                }
+                chain.historyValid = skyVisHistoryFrames_ > 0u;
+                skyVisHistoryFrames_ = std::min(skyVisHistoryFrames_ + 1u, 4u);
+
+                ctx.NextPoint();
+                chain.point = ctx.usePoint ? *ctx.usePoint : 0u;
+                // NON_PIXEL for depth/gb1, as GTAO and RTTrace leave them (D7); the velocity as GTAO reads it.
+                ctx.Use(D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(D.gbVelocity.Get(), kSrvAll);
+                ctx.Use(P.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // last frame's, at rest
+                ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                // ...and back to its resting state for lighting and compose (and next frame's history).
+                ctx.NextPoint();
+                chain.pointRestore = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                return [this, renderer, chain](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassSkyVis);
+                    Pass_SkyVis(renderer, c, *frame_->camera, chain);
+                };
+            });
+    }
 }
 
 // directional, spot and point lighting, skybox.
@@ -1490,6 +1545,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     if (gb.pSdsmShadow != GraphBuild::kNone) { lightPrereqs.push_back(gb.pSdsmShadow); }
     lightPrereqs.push_back(gb.pGtao);
     if (gb.pCloudShadow != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(lightPrereqs, gb.pCloudShadow); }
+    // Plan S: the RT sky visibility, read by lighting (and by compose, transitively after it).
+    if (gb.pSkyVis != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(lightPrereqs, gb.pSkyVis); }
     if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1))
     {
         ID3D12Resource* vpool = frame_->vsm->PagePool();
@@ -1501,6 +1558,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
               { vpool, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { vpt, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE }, // plan S (its rest; bound every frame)
               { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             lightBuilder);
     }
@@ -1515,6 +1573,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
               { D.depth.Get(), kSrvAll },
               { D.shadow, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE }, // plan S (its rest; bound every frame)
               { D.light.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             lightBuilder);
     }
@@ -1878,6 +1937,8 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
           // P6B item 7: compose samples the AO for specular occlusion. Ordering to the AO pass is
           // transitive through lighting, which now depends on it directly.
           { D.gtaoUpsampled.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          // Plan S: the sky specular's occlusion, lighting's own texel (ordered through lighting).
+          { D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.scene.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
         // pass-flow S6: the wetness read is gated, the hand-back point is NOT — Compose gives
         // `scene` back to the transparent pass as a render target on EVERY path, both early-outs

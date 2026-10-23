@@ -93,6 +93,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle enableSkySpecular, skySpecMipCount, skyboxIntensity;
     Material::CBFieldHandle cloudShadowViewProj, cloudShadowParams; // plan C3: the cloud shadow map
     Material::CBFieldHandle csmSdsmPartitions; // S15: 0 = not SDSM mode
+    Material::CBFieldHandle skyVisParams;      // plan S: the RT sky visibility (on, diffuse, specular)
 
     void Populate(Material* material);
 };
@@ -211,6 +212,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle cloudParams;   // plan C2: the resolved clouds, applied under the fog
     Material::CBFieldHandle cloudJitter;   // ... read at the jittered pixel's unjittered uv
     Material::CBFieldHandle sunDiscDir, sunDiscLuminance; // the sun's disc, drawn pre-exposed in compose
+    Material::CBFieldHandle skyVisParams; // plan S: lighting's own values, for the sky specular it subtracts
 
     void Populate(Material* material);
 };
@@ -746,6 +748,9 @@ struct LightingPassConstants
     // S15: active SDSM partitions this frame; 0 = the mode is not SDSM and the partition SRV
     // slot holds a placeholder. The ONE gate on reading it in lighting_cb.hlsli.
     uint32_t csmSdsmPartitions = 0;
+    // Plan S: x 1 = the RT sky visibility was traced this frame (t17 is real), y diffuse and z specular
+    // strength. compose gets the same values (ComposePassConstants::skyVisParams).
+    float4 skyVisParams{};
 };
 
 struct PointLightPassConstants
@@ -917,6 +922,7 @@ struct ComposePassConstants
     // luminance (illuminance / solid angle), w the atmosphere's top radius (km).
     float4 sunDiscDir{};
     float4 sunDiscLuminance{};
+    float4 skyVisParams{}; // plan S: LightingPassConstants::skyVisParams, the same values
 };
 
 // B6.1. MIRROR of fog_apply.hlsl's `FogApply` cbuffer, field for field and in order: it is uploaded
@@ -1114,6 +1120,7 @@ public:
     std::shared_ptr<Material> GetRtReflectMaterial() const { return matRtReflect_; } // S7, null on non-RT HW
     // Gather-then-shade split of the opaque RT reflection (async prep); null on non-RT HW.
     std::shared_ptr<Material> GetRtTraceMaterial() const { return matRtTrace_; }
+    std::shared_ptr<Material> GetSkyVisMaterial() const { return matSkyVis_; } // plan S
     std::shared_ptr<Material> GetRtResolveMaterial() const { return matRtResolve_; }
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
 #if WITH_EDITOR
@@ -1218,6 +1225,7 @@ private:
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matRtReflect_;
     std::shared_ptr<Material> matRtTrace_;   // gather phase of the opaque RT reflection split
+    std::shared_ptr<Material> matSkyVis_;    // plan S: rt_sky_visibility_cs.hlsl
     std::shared_ptr<Material> matRtResolve_; // shade phase (the only RT consumer of lightT)
     std::shared_ptr<Material> matRtWindDeform_; // RW wind deform for dynamic BLASes  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW

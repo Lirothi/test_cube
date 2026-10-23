@@ -155,6 +155,9 @@ inline constexpr DXGI_FORMAT kReflectionFormat              = DXGI_FORMAT_R16G16
 // over the same guide. Every stage of the chain and both consumers move together; the change is
 // the format here plus `.r` -> `.rg` in six kernels. No new resource, descriptor or barrier.
 inline constexpr DXGI_FORMAT kGtaoFormat                    = DXGI_FORMAT_R8G8_UNORM;
+// Plan S: the RT sky visibility -- a signed bent normal (xyz) and the device depth (w). FP16: the
+// depth is only ever compared relatively (sky_visibility.hlsli), and a half's 11 bits are 0.05 %.
+inline constexpr DXGI_FORMAT kSkyVisFormat                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // P6C hierarchical depth. R32_FLOAT, not the fp16 UE uses: the pyramid stores DEVICE Z, whose
 // useful precision under reversed-Z sits near 0 for distant geometry, and 16-bit floats have
 // their coarsest spacing exactly there. The extra bandwidth is a half-res chain; correctness

@@ -1826,6 +1826,92 @@ static void addTri(std::vector<uint32_t>& I, uint32_t a, uint32_t b, uint32_t c,
     }
 }
 
+// Coplanar duplicates inside one material group: a triangle lying in the plane of EARLIER triangles,
+// facing the same way, and wholly covered by them. Exporters leave such pairs behind --
+// the_bathroom_free's corner shelf carries its niche ceiling twice (a painted plank and a strip of
+// plaster from the same atlas, triangulated along different diagonals) -- and their depths then differ
+// only by interpolation rounding, so under DLSS's jitter the winner changed from frame to frame: the
+// niche ceiling flickered between two textures (2026-10-23). A depth test LESS keeps the FIRST triangle
+// drawn at a tie, so the later copy goes. A triangle only partly covered stays. Returns how many went.
+static size_t DropCoplanarDuplicates(const std::vector<VertexPNTUV>& verts, std::vector<uint32_t>& indices,
+                                     size_t firstIndex)
+{
+    constexpr float kPlaneTolerance = 1.0e-4f; // metres off the plane (the shelf's two copies: 0.000 mm)
+    constexpr float kNormalCos = 0.9999f;      // ~0.8 degrees
+    struct Kept { DirectX::XMFLOAT3 a, b, c, n; float d; };
+    const auto load = [&](uint32_t i) { return DirectX::XMLoadFloat3(&verts[i].position); };
+    std::unordered_map<std::int64_t, std::vector<Kept>> byOffset; // keyed by the quantized plane offset
+    std::vector<uint32_t> keptIndices;
+    keptIndices.reserve(indices.size() - firstIndex);
+    size_t dropped = 0;
+    for (size_t t = firstIndex; t + 2 < indices.size(); t += 3)
+    {
+        const uint32_t i0 = indices[t], i1 = indices[t + 1], i2 = indices[t + 2];
+        const DirectX::XMVECTOR A = load(i0), B = load(i1), C = load(i2);
+        const DirectX::XMVECTOR cross = DirectX::XMVector3Cross(DirectX::XMVectorSubtract(B, A), DirectX::XMVectorSubtract(C, A));
+        const float len = DirectX::XMVectorGetX(DirectX::XMVector3Length(cross));
+        if (!(len > 1.0e-12f))
+        {
+            keptIndices.insert(keptIndices.end(), { i0, i1, i2 }); // degenerate: not ours to judge
+            continue;
+        }
+        const DirectX::XMVECTOR N = DirectX::XMVectorScale(cross, 1.0f / len);
+        const float d = DirectX::XMVectorGetX(DirectX::XMVector3Dot(N, A));
+        const std::int64_t key = static_cast<std::int64_t>(std::floor(d / kPlaneTolerance));
+
+        // Seven points of this triangle (centroid, near each corner, each edge's middle) must all lie in
+        // some earlier triangle of the same plane and facing.
+        const float w[7][3] = { { 1 / 3.f, 1 / 3.f, 1 / 3.f }, { 0.8f, 0.1f, 0.1f }, { 0.1f, 0.8f, 0.1f }, { 0.1f, 0.1f, 0.8f },
+                                { 0.45f, 0.45f, 0.1f }, { 0.1f, 0.45f, 0.45f }, { 0.45f, 0.1f, 0.45f } };
+        bool covered = true;
+        for (int s = 0; s < 7 && covered; ++s)
+        {
+            const DirectX::XMVECTOR P = DirectX::XMVectorAdd(DirectX::XMVectorAdd(DirectX::XMVectorScale(A, w[s][0]),
+                                                                                  DirectX::XMVectorScale(B, w[s][1])),
+                                                             DirectX::XMVectorScale(C, w[s][2]));
+            bool inside = false;
+            for (std::int64_t k = key - 1; k <= key + 1 && !inside; ++k)
+            {
+                const auto it = byOffset.find(k);
+                if (it == byOffset.end()) { continue; }
+                for (const Kept& e : it->second)
+                {
+                    const DirectX::XMVECTOR En = DirectX::XMLoadFloat3(&e.n);
+                    if (DirectX::XMVectorGetX(DirectX::XMVector3Dot(En, N)) < kNormalCos) { continue; }
+                    if (std::fabs(e.d - d) > kPlaneTolerance) { continue; }
+                    const DirectX::XMVECTOR Ea = DirectX::XMLoadFloat3(&e.a), Eb = DirectX::XMLoadFloat3(&e.b),
+                                            Ec = DirectX::XMLoadFloat3(&e.c);
+                    const auto side = [&](DirectX::XMVECTOR u, DirectX::XMVECTOR v)
+                    {
+                        return DirectX::XMVectorGetX(DirectX::XMVector3Dot(
+                            DirectX::XMVector3Cross(DirectX::XMVectorSubtract(v, u), DirectX::XMVectorSubtract(P, u)), En));
+                    };
+                    const float eps = -1.0e-7f; // on an edge counts as inside
+                    if (side(Ea, Eb) >= eps && side(Eb, Ec) >= eps && side(Ec, Ea) >= eps) { inside = true; break; }
+                }
+            }
+            covered = inside;
+        }
+        if (covered)
+        {
+            ++dropped;
+            continue;
+        }
+        Kept e;
+        DirectX::XMStoreFloat3(&e.a, A); DirectX::XMStoreFloat3(&e.b, B); DirectX::XMStoreFloat3(&e.c, C);
+        DirectX::XMStoreFloat3(&e.n, N);
+        e.d = d;
+        byOffset[key].push_back(e);
+        keptIndices.insert(keptIndices.end(), { i0, i1, i2 });
+    }
+    if (dropped > 0)
+    {
+        indices.resize(firstIndex);
+        indices.insert(indices.end(), keptIndices.begin(), keptIndices.end());
+    }
+    return dropped;
+}
+
 bool MeshManager::ParseTextFile(const std::string& path,
     std::vector<VertexPNTUV>& outVerts,
     std::vector<uint32_t>& outIndices,
@@ -2276,6 +2362,13 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
                     base + static_cast<uint32_t>(i + 2), wantCW);
             }
         }
+    }
+
+    // Within ONE material group only: a different material in the same plane is a decal's business.
+    if (const size_t dropped = DropCoplanarDuplicates(outVerts, outIndices, submeshFirstIndex))
+    {
+        GltfLog(logging::LogLevel::Info, "'" + fullPath + "' group " + std::to_string(g) + ": dropped " +
+            std::to_string(dropped) + " triangle(s) lying under an earlier one in the same plane (z-fighting duplicates)");
     }
 
     outSubmeshes.push_back(Mesh::Submesh{ submeshFirstIndex,

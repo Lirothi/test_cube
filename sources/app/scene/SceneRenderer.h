@@ -95,6 +95,11 @@ private:
         bool rtDebugView = false;      // the RT debug visualisation is up
         bool rtReflect = false;        // reflections trace the TLAS (was rtReflectActive_)
         bool rtBuildAS = false;        // ...so the acceleration structures have to be built
+        bool skyVis = false;           // plan S: the RT sky visibility is wanted (setting + RT hardware)
+        // ...and its pass was registered with everything it needs: the one flag lighting and compose
+        // read (skyVisParams.x). The body writes the target on every path (traced, or cleared to the
+        // open sky when the TLAS is not ready), so "registered" is enough for them to read it.
+        bool skyVisTraced = false;
         bool clearReflections = false; // source is None/SkyOnly: nothing traces, the target is cleared
         bool glassRefl = false;        // glass gets traced reflections (was glassReflActive_)
         bool reflectionTemporal = false; // the reflection temporal resolve runs (SSR or RT source)
@@ -224,6 +229,7 @@ private:
         size_t pCloudShadow = kNone; // plan C3: cloud shadow map -> lighting, fog
         size_t pCloud = kNone;       // plan C2: half-res trace + resolve -> compose
         size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)
+        size_t pSkyVis = kNone;    // plan S: gbuffer/AS -> lighting, compose (the RT sky visibility)
         size_t pSky = kNone;       // lighting -> reflection source
         size_t pCompose = kNone;   // reflections -> transparent
         size_t pGlassReflect = kNone;
@@ -507,6 +513,19 @@ private:
     // the pass that later moves to the compute queue); Resolve = payload + lightT -> reflection.
     void Pass_RTTrace(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, std::uint32_t point);
+    // Interior lighting plan S: the RT sky visibility (rt_sky_visibility_cs.hlsl). The decision -- and
+    // the cross-frame history state -- is made once in the AddPass2 builder; `point` declares the
+    // inputs + the target as a UAV, `pointRestore` hands the target back shader-readable.
+    struct SkyVisChain
+    {
+        bool historyValid = false;
+        uint32_t frameIndex = 0u;
+        uint32_t point = 0u;
+        uint32_t pointRestore = 0u;
+    };
+    void Pass_SkyVis(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const SkyVisChain& chain);
+    // lighting_cb.hlsli / compose_cs.hlsl `skyVisParams`: x 1 = applied this frame, y diffuse, z specular strength.
+    Math::float4 SkyVisShaderParams() const;
     void Pass_RTResolve(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
     // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
@@ -739,6 +758,11 @@ private:
     uint32_t gtaoHistoryFrames_ = 0u;
     uint32_t gtaoHistoryWidth_ = 0u;
     uint32_t gtaoHistoryHeight_ = 0u;
+    // Plan S: the RT sky visibility's history, the same rules (0 frames = nothing to blend in).
+    uint32_t skyVisFrameCounter_ = 0u;
+    uint32_t skyVisHistoryFrames_ = 0u;
+    uint32_t skyVisHistoryWidth_ = 0u;
+    uint32_t skyVisHistoryHeight_ = 0u;
     // VSM (Rung 2) skip-when-still: the last camera view matrix, whether the VSM has been rendered
     // since the gate turned on, and how many consecutive still frames have passed. When nothing
     // moved the pool + page table persist and the whole VSM update is skipped — DecideFrame reads

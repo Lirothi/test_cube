@@ -100,6 +100,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     cloudShadowViewProj = material->ComputeCB0FieldHandle("cloudShadowViewProj");
     cloudShadowParams = material->ComputeCB0FieldHandle("cloudShadowParams");
     csmSdsmPartitions = material->ComputeCB0FieldHandle("csmSdsmPartitions");
+    skyVisParams = material->ComputeCB0FieldHandle("skyVisParams");
 
     // A name that does not resolve leaves `field` null, UpdateCBField writes NOTHING, and the
     // shader then reads whatever was in that constant-buffer memory. That is normally a cosmetic
@@ -298,6 +299,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     cloudJitter = material->ComputeCB0FieldHandle("cloudJitter");
     sunDiscDir = material->ComputeCB0FieldHandle("sunDiscDir");
     sunDiscLuminance = material->ComputeCB0FieldHandle("sunDiscLuminance");
+    skyVisParams = material->ComputeCB0FieldHandle("skyVisParams");
 }
 
 void SceneFxaaCBHandles::Populate(Material* material)
@@ -860,6 +862,14 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/rt_trace_cs.hlsl";
         cd.csEntry = "CSMain";
         matRtTrace_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    // Interior lighting plan S: the RT sky visibility (bent normal + its temporal accumulation).
+    if (!matSkyVis_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_sky_visibility_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matSkyVis_ = mm->GetOrCreateCompute(renderer, cd);
     }
     if (!matRtResolve_ && renderer->IsRaytracingSupported())
     {
@@ -1664,6 +1674,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.cloudShadowViewProj, data.cloudShadowViewProj, dest);
     matLighting_->UpdateCBField(handles.cloudShadowParams, data.cloudShadowParams, dest);
     matLighting_->UpdateCBField(handles.csmSdsmPartitions, data.csmSdsmPartitions, dest);
+    matLighting_->UpdateCBField(handles.skyVisParams, data.skyVisParams, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));
@@ -1956,6 +1967,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.cloudJitter, data.cloudJitter, dest);
     matComposeCS_->UpdateCBField(handles.sunDiscDir, data.sunDiscDir, dest);
     matComposeCS_->UpdateCBField(handles.sunDiscLuminance, data.sunDiscLuminance, dest);
+    matComposeCS_->UpdateCBField(handles.skyVisParams, data.skyVisParams, dest);
 }
 
 void SceneResourceBootstrapper::WriteFxaaConstants(const FxaaPassConstants& data, uint8_t* dest) const

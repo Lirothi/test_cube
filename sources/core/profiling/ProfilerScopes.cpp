@@ -123,6 +123,7 @@ const Profiler::ScopeNameKey kPassSkybox = Profiler::RegisterTraceLiteral(L"Pass
 const Profiler::ScopeNameKey kPassBuildAS = Profiler::RegisterTraceLiteral(L"Pass_BuildAS");
 const Profiler::ScopeNameKey kPassReflectionSource = Profiler::RegisterTraceLiteral(L"Pass_ReflectionSource");
 const Profiler::ScopeNameKey kPassRTTrace = Profiler::RegisterTraceLiteral(L"Pass_RTTrace");
+const Profiler::ScopeNameKey kPassSkyVis = Profiler::RegisterTraceLiteral(L"Pass_SkyVis");
 const Profiler::ScopeNameKey kPassRTResolve = Profiler::RegisterTraceLiteral(L"Pass_RTResolve");
 const Profiler::ScopeNameKey kPassReflectionTemporal = Profiler::RegisterTraceLiteral(L"Pass_Reflection.Temporal");
 const Profiler::ScopeNameKey kWaterReflectionTemporal = Profiler::RegisterTraceLiteral(L"WaterReflection.Temporal");

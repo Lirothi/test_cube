@@ -54,6 +54,9 @@ Texture2D<float4> CloudShadowMap : register(t15);
 // t16: S15, this frame's SDSM partitions. `csmSdsmPartitions` (0 in Legacy and VSM) gates the read;
 // a placeholder SRV is bound otherwise, because a VOLATILE table may not have a hole.
 StructuredBuffer<SdsmPartition> SdsmPartitions : register(t16);
+// Interior lighting plan S: the RT sky visibility's bent normal (rt_sky_visibility_cs.hlsl, half res,
+// .w its device depth). Gated by the cbuffer's skyVisParams.x; a dummy sits here when it is off.
+Texture2D<float4> SkyVisTex : register(t17);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -67,6 +70,7 @@ SamplerState gSmpLinearWrap : register(s2);
 SamplerState gSmpLinearClamp : register(s3);
 
 #include "lighting_cb.hlsli" // the b0 cbuffer + MakeCsmParams, shared with fog_scatter_cs.hlsl
+#include "sky_visibility.hlsli" // plan S: UE's DFAO formulas, shared with compose
 
 // P6B item 6 -- the one place the two occlusion terms meet. Shared shape with compose_cs; if this
 // rule ever changes, both change together or the diffuse and specular halves disagree about how
@@ -259,7 +263,7 @@ float CloudSunVisibility(float3 P)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=17, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -334,10 +338,25 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // NOTE the local `ambient` above already carries albedo * (1 - metal) * ambientIntensity, so the
     // IBL branch has to re-apply albedo and the metal gate itself -- dropping them makes the fill
     // independent of the material, which reads as a uniform grey wash over the whole scene.
+    // Plan S: how much of the sky this point sees, and from where (UE DFAO's bent normal, traced).
+    // Off, or over a texel the trace never saw: the open sky, exactly the build before it.
+    float4 skyVisBent = 0.0f.xxxx;
+    if (skyVisParams.x != 0.0f)
+    {
+        skyVisBent = SkyVisUpsample(SkyVisTex, uv, z);
+    }
+    float3 skyLookupN = N;
+    float skyVisibility = 1.0f;
+    float skyDotFactor = 1.0f;
+    if (skyVisBent.w > 0.0f)
+    {
+        SkyVisDiffuse(skyVisBent.xyz, N, skyVisParams.y, skyLookupN, skyVisibility, skyDotFactor);
+    }
+
     float3 color;
     if (skyIrradianceEnabled != 0u)
     {
-        const float3 irradiance = SkyIrradiance.SampleLevel(gSmpLinearWrap, N, 0).rgb;
+        const float3 irradiance = SkyIrradiance.SampleLevel(gSmpLinearWrap, skyLookupN, 0).rgb * skyDotFactor;
         // P16.12: the sky above and the ground below are the two halves of the same fill, so they
         // are summed BEFORE the albedo multiply rather than added as a second lit result.
         // Deliberately not extended to the flat-fill branch below: `ambient` there is a fraction
@@ -361,7 +380,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // identity at 1 -- so a scene with neither term is bit-identical to the build before this.
     // (`min` was the alternative: it never double-counts, but it also refuses to let a cavity deepen
     // a contact, which is exactly the case this pass exists to render.)
-    color *= CombinedAo(materialAo, uv);
+    //
+    // Plan S: the sky's visibility joins with a MIN -- UE's OcclusionCombineMode Minimum, the
+    // SkyLightComponent default (SkyLightingDiffuseShared.ush:68): both measure how much of the sky a
+    // point sees, at a few centimetres and at metres; their product would square a corner both see.
+    color *= min(CombinedAo(materialAo, uv), skyVisibility);
 
     // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
     // sample a shadow (facing away from the sun) still show their zone. A real sample below
@@ -460,6 +483,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // already saw the geometry AO stands in for. compose applies the identical line to the
         // term it subtracts, so the two stay each other's exact inverse.
         skyCol *= IblSpecularOcclusion(cosT, CombinedAo(materialAo, uv), rough);
+        // Plan S: and the sky the bent normal's cone does not see (UE DFAO's specular occlusion, which
+        // UE applies to the sky light and captures, never to a traced/SSR hit). compose: same line.
+        if (skyVisBent.w > 0.0f)
+        {
+            skyCol *= SkyVisSpecular(skyVisBent.xyz, R, rough, skyVisParams.z);
+        }
         const float indirectSpecularScale = saturate(gbAux.g);
         skySpecular = skyCol * indirectSpecularScale *
                       IblSpecularWeight(BrdfLut, gSmpLinearClamp, F0, cosT, rough, skySpecMipCount);

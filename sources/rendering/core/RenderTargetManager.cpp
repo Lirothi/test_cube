@@ -488,6 +488,12 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             DeferredSrvSlot::GtaoHistory, DeferredSrvSlot::GtaoHistoryUAV, f,
             D.gtaoHistory, D.gtaoHistorySRV, D.gtaoHistoryUAV,
             sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"GtaoHistory");
+        // Plan S: the RT sky visibility, on the same half-resolution grid (and read across frames
+        // the same way: frame N blends in the copy frame N-1 wrote).
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, render::kSkyVisFormat,
+            DeferredSrvSlot::SkyVis, DeferredSrvSlot::SkyVisUAV, f,
+            D.skyVis, D.skyVisSRV, D.skyVisUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibility");
 
         // The upsampled result is at RENDER resolution: it is consumed by lighting and compose,
         // which run before the upscaler.
@@ -864,6 +870,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoFiltered.Get(), L"GtaoFiltered", kNps);
         nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
+        nameRes(D.skyVis.Get(), L"SkyVisibility", kNps);
         // The bloom's convolution grids: ONE set since the 2026-10-22 census, named where they are created.
         nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
         nameRes(D.streakA.Get(), L"StreakPyramidA", kNps);

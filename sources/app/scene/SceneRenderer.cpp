@@ -353,7 +353,10 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                            frame.settings.reflectionSource == ReflectionSource::RT;
     decisions_.clearReflections = frame.settings.reflectionSource == ReflectionSource::None ||
                                   frame.settings.reflectionSource == ReflectionSource::SkyOnly;
-    decisions_.rtBuildAS = decisions_.rtReflect || decisions_.rtDebugView;
+    // Interior lighting plan S: the RT sky visibility traces the same TLAS, so it is one more reason
+    // to build it. Without RT hardware (or after an AS failure) the sky stays open, as before.
+    decisions_.skyVis = decisions_.rtSupported && !rtFailed && frame.settings.skyVisEnabled;
+    decisions_.rtBuildAS = decisions_.rtReflect || decisions_.rtDebugView || decisions_.skyVis;
     // S15b: glass gets traced reflections in SSR/RT modes. SkyOnly and None skip
     // the glass reflection prepass; the forward shader uses the cubemap only in
     // SkyOnly and suppresses it in None via lightCounts.w.

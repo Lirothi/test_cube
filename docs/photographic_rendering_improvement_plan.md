@@ -2942,6 +2942,12 @@ over-occlude it grossly. This is the same open item as AS-readiness gap 1 in
 
 **Status:** P9A closed (P16.12). P9B and P9C **deferred and re-scoped above**, not deleted.
 
+**2026-10-23: item 2 DONE** -- `Main_SkyVis` (`rt_sky_visibility_cs.hlsl` + `sky_visibility.hlsli`): the bent
+normal traced with RayQuery against the shadow casters, half resolution, 4 rays, temporal in the same
+dispatch, applied with UE's own DFAO formulas to the sky diffuse and specular. Item 1 (alpha test in
+the BLAS) had already landed. 0.28-0.34 ms on the grove. Details and numbers:
+`docs/interior_lighting_plan.md`, step S.
+
 ---
 
 

@@ -1,5 +1,6 @@
 {
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Wall_Window_003.mesh.bin",
+  "lodDistanceScale": 1.5,
   "materials": [
     "the_bathroom_free_Wall_Window_003_0",
     "the_bathroom_free_Wall_Window_003_1"

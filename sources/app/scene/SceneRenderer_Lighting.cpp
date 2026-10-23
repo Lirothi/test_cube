@@ -332,6 +332,9 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     // Not under a closed deck (FrameDecisions::sunShadowsOff): no analyze wrote the partitions this
     // frame -- possibly none ever has, if the level opened overcast -- so even the cascade debug
     // tint, the one read the lightRgb == 0 branch does not skip, stays on the CPU's finite fit.
+    // Plan S: the RT sky visibility -- applied when its pass was registered this frame (the body
+    // writes the target on every path), with the settings' strengths. compose takes the same values.
+    constants.skyVisParams = SkyVisShaderParams();
     constants.csmSdsmPartitions = decisions_.sdsmActive && frame_->sdsm && !decisions_.sunShadowsOff
         ? std::min<std::uint32_t>(frame_->sdsm->FrameParams().partitions, render::sdsm::kMaxPartitions)
         : 0u;
@@ -849,7 +852,10 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               // in Legacy and VSM, where the shader never reads it.
               (frame_->sdsm && frame_->sdsm->PartitionSrv().ptr != 0)
                   ? frame_->sdsm->PartitionSrv()
-                  : renderer->VsmDummyBufferSrv() },
+                  : renderer->VsmDummyBufferSrv(),
+              // t17: plan S, the RT sky visibility. Always the real target (it exists on every frame
+              // and is declared at its rest); read only when skyVisParams.x says it was written.
+              D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
@@ -1087,6 +1093,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         constants.gtaoStrength = std::clamp(frame_->settings.gtao.strength, 0.0f, 1.0f);
         constants.screenSize = float2(width, height);
         constants.invScreenSize = float2(1.0f / width, 1.0f / height);
+        constants.skyVisParams = SkyVisShaderParams(); // plan S: lighting's own values
 
         // P7 aerial perspective. Disabled, or with no directional light to colour the scattering,
         // the density goes to zero and compose skips the block entirely -- the whole feature is
@@ -1201,7 +1208,9 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
               // t18: the furthest HZB, trace mode 0's bilateral upsampling (gated by `cloudParams.w`).
               D.hzbSRV.ptr != 0 ? D.hzbSRV : renderer->VsmDummyTexSrv(),
               // t19: the sky's transmittance LUT, the sun's disc (gated by `sunDiscDir.w`).
-              skyAtmosphere_.TransmittanceSrv().ptr != 0 ? skyAtmosphere_.TransmittanceSrv() : renderer->VsmDummyTexSrv() },
+              skyAtmosphere_.TransmittanceSrv().ptr != 0 ? skyAtmosphere_.TransmittanceSrv() : renderer->VsmDummyTexSrv(),
+              // t20: plan S, the RT sky visibility (lighting's t17), gated by `skyVisParams.x`.
+              D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv() },
             { D.sceneUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),
