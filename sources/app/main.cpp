@@ -818,8 +818,9 @@ int WINAPI WinMain(
             readFloats("--cam-fly-delay=", &g_camFlyDelay, 1);
             // "--cam-fly-yaw=<deg/s>": turn while drifting (headless mouse look; moves the cascade boxes).
             readFloats("--cam-fly-yaw=", &g_camFlyYaw, 1);
-            // "--cam-orbit=<radius>,<deg/s>": ring around the start position (grove fly-through).
-            readFloats("--cam-orbit=", g_camOrbit, 2);
+            // "--cam-orbit=<radius>,<deg/s>[,<sec per frame>]": ring around the start position (grove
+            // fly-through); the third value steps the orbit by a fixed time per frame (App.h).
+            readFloats("--cam-orbit=", g_camOrbit, 3);
         }
         // W8: "--wind-freeze[=<seconds>]" pins the wind clock, so a --shot is reproducible to the
         // pixel without touching a single authored wind parameter. Two runs at the SAME value must

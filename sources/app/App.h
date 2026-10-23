@@ -35,9 +35,12 @@ extern float g_camFly[2];
 extern float g_camFlyDelay;
 // "--cam-fly-yaw=<deg/s>": constant yaw rate on top of the drift (headless mouse look).
 extern float g_camFlyYaw;
-// "--cam-orbit=<radius m>,<deg/s>": circle the START position at that radius, looking along the
-// tangent -- the headless stand-in for flying rings over a grove (the RT retire-bin leak's repro).
-extern float g_camOrbit[2];
+// "--cam-orbit=<radius m>,<deg/s>[,<sec per frame>]": circle the START position at that radius, looking
+// along the tangent -- the headless stand-in for flying rings over a grove (the RT retire-bin leak's
+// repro). The optional third value advances the orbit by a FIXED time per frame instead of the wall
+// clock: a consecutive --shot-count series saves each PNG synchronously (~150 ms), so on the wall clock
+// its frames are ten 60 fps frames apart; with 0.016667 they move exactly as at 60 fps.
+extern float g_camOrbit[3];
 extern float g_camRot[4]; // orientation quaternion (x,y,z,w)
 
 // "--shot=<path>" one-shot capture: after g_shotDelaySec of runtime, read back the presented

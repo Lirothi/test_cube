@@ -1439,12 +1439,12 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         // A3: the conservative depth reads this frame's FINAL furthest pyramid.
         if (decisions_.fogConservativeDepth && gb.pHzb != GraphBuild::kNone) { fogPrereqs.push_back(gb.pHzb); }
         // C3: the cloud shadow map, on the frames it was built.
-        if (gb.pCloudShadow != GraphBuild::kNone && fogPrereqs.size() < fogPrereqs.capacity()) { fogPrereqs.push_back(gb.pCloudShadow); }
+        if (gb.pCloudShadow != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogPrereqs, gb.pCloudShadow); }
         // A4: the local lights' shadows -- the point cube pass is a prereq (as Main_PointLights
         // takes it), the spot atlas an mtDep (as Main_SpotLights takes it).
-        if (decisions_.fogLocalLights && gb.pPointShadow != GraphBuild::kNone && fogPrereqs.size() < fogPrereqs.capacity())
+        if (decisions_.fogLocalLights && gb.pPointShadow != GraphBuild::kNone)
         {
-            fogPrereqs.push_back(gb.pPointShadow);
+            RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogPrereqs, gb.pPointShadow);
         }
         gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs, /*mtDeps=*/{ gb.pShadow, gb.pSpotShadow }, {}, fogBuilder);
     }
@@ -1489,7 +1489,7 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     // just the mtDep `gb.pShadow` already carries: the atlas content is what this pass samples.
     if (gb.pSdsmShadow != GraphBuild::kNone) { lightPrereqs.push_back(gb.pSdsmShadow); }
     lightPrereqs.push_back(gb.pGtao);
-    if (gb.pCloudShadow != GraphBuild::kNone && lightPrereqs.size() < lightPrereqs.capacity()) { lightPrereqs.push_back(gb.pCloudShadow); }
+    if (gb.pCloudShadow != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(lightPrereqs, gb.pCloudShadow); }
     if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1))
     {
         ID3D12Resource* vpool = frame_->vsm->PagePool();
@@ -1747,8 +1747,10 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
         RenderGraph<kMainRenderGraphPassCount>::DependencyList deps;
         for (size_t d : base) { deps.push_back(d); }
         if (gb.pFog != GraphBuild::kNone) { deps.push_back(gb.pFog); }
-        // Plan C2: compose reads the resolved clouds too, under the same group rule.
-        if (gb.pCloud != GraphBuild::kNone && deps.size() < deps.capacity()) { deps.push_back(gb.pCloud); }
+        // Plan C2: compose reads the resolved clouds too, under the same group rule. This is compose's
+        // ONLY wait on the async trace: dropped (the list was full at 4), compose read the slot's pair
+        // from kFrameCount frames back whenever it got there first.
+        if (gb.pCloud != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(deps, gb.pCloud); }
         return deps;
     };
     size_t pReflectionSource; // node the blur depends on (reflection chain end)

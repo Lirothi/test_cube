@@ -42,7 +42,7 @@ float g_camFlyYaw = 0.0f;
 // "--cam-orbit=<radius>,<deg/s>": circle the start position, looking along the tangent. A
 // straight drift leaves a grove in seconds; a ring keeps crossing it, which is what churns the
 // RT wind-BLAS slots (and what leaked their retired buffers until 2026-09-03).
-float g_camOrbit[2] = { 0.0f, 0.0f };
+float g_camOrbit[3] = { 0.0f, 0.0f, 0.0f };
 float g_camRot[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
 // One-shot screenshot; see App.h. Set by main.cpp from "--shot=<path>" / "--shot-delay=<sec>".
 std::string g_shotPath;
@@ -2226,9 +2226,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     static const double orbitStart = GetTimeSeconds();
                     static float3 orbitCentre;
                     static bool orbitInit = false;
+                    static std::uint64_t orbitFrames = 0; // the fixed-step clock (third value)
                     Camera& cam = scene.CameraRef();
                     if (!orbitInit) { orbitCentre = cam.GetPosition(); orbitInit = true; }
-                    const double t = now - orbitStart - (double)g_camFlyDelay;
+                    const double t = g_camOrbit[2] > 0.0f
+                        ? static_cast<double>(orbitFrames++) * g_camOrbit[2] - (double)g_camFlyDelay
+                        : now - orbitStart - (double)g_camFlyDelay;
                     if (t >= 0.0)
                     {
                         const float ang = DirectX::XMConvertToRadians(g_camOrbit[1]) * static_cast<float>(t);

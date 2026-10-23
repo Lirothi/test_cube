@@ -929,6 +929,10 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     // 2026-10-14 on the owner's view (wind_test 15:00, DLSS Balanced, --profdump, one binary, the A arm
     // `--async-pass=BuildAS,ObjectCompute,RTTrace`, interleaved x3, no overlap between the arms):
     // GPU.Frame trace mode 1 2.994 -> 2.795 ms, mode 0 2.803 -> 2.656; pixels within the run-to-run floor.
+    // THOSE RUNS HAD NO WAIT: compose's edge to this pass was dropped (a full dependency list, see
+    // RenderGraph::kPassDependencyCapacity), so compose sometimes read the pair kFrameCount frames old --
+    // the clouds jumped back three frames of camera motion. With the wait (2026-10-23, the level's own
+    // camera, 15:00, DLSS Balanced, A/B/A/B): 3.57 (and a noisy 3.93) on graphics -> 3.44 / 3.46 async.
     return graph.AddPass2(RenderPass::Main_CloudTrace, RenderQueue::AsyncCompute, list, {}, {},
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const TracePassFrame& f = tracePass_;

@@ -1663,6 +1663,33 @@ draw) is ~0.078 ms of the old `Pass_BloomConv` 0.25.
 enough downstream that the waits land on a busy queue -- RTTrace/CloudTrace have both; a pass whose
 only partner is the frame's last 0.3 ms does not.
 
+### A dropped edge: the CloudTrace measurement had no wait (2026-10-23)
+
+The owner saw the clouds jump left/right against the sky in every camera fly-by. Measured on an
+open-sea orbit with a fixed time step (`--cam-orbit=35,14,0.016667`, 60 consecutive `--shot`s, the
+previous frame warped by the KNOWN yaw, the sea under the horizon as the control): the sea followed
+the camera to 0.05 px on every pair, while on ~40 % of the frames the middle of the cloud field stood
+three frames of camera motion BEHIND and was back the next frame -- with DLSS, without it at the DLSS
+render resolution, and with the cloud history off. Three frames is `kFrameCount`: compose was reading
+this slot's `cloudResolved` before the async trace had written it.
+
+Compose waits on `Main_CloudTrace` through the reflection group's first member (`withFog`), whose list
+is sky, wetness, RT trace or HZB, fog -- four -- and `RenderGraph::kPassDependencyCapacity` was 4. The
+cloud edge was appended under `deps.size() < deps.capacity()`, i.e. silently skipped whenever the fog
+ran. No barrier error, no GBV message: the only symptom of a lost cross-queue edge is stale data, and a
+triple-buffered target makes it three frames stale. At 2560 without DLSS the graphics work before
+compose was long enough that the trace always won, which is why that configuration looked clean.
+The fog's own list lost its point-shadow edge the same way when `fogLocalLights` was on.
+
+Fixed: capacity 8, every guarded append goes through `RenderGraph::PushDependency` (an overflow is a
+`RendererInvariantFailure`, as are `AddPass`'s copy and `CollectNodeDeps`). Flicker pairs 25/59 -> 0/59
+(DLSS), 25/59 -> 0/59 (1485 no DLSS), 16/59 -> 0/59 (no cloud history). The step-8 numbers for
+CloudTrace were therefore measured without the wait; with it the async trace still pays: GPU.Frame
+3.57 (and a noisy 3.93) on graphics -> 3.44 / 3.46 async (level camera, 15:00, DLSS Balanced, A/B/A/B).
+
+**Rule.** A dependency the frame needs is never appended conditionally on room in the list. An edge
+that does not fit is a broken invariant; dropping it trades a crash today for a race nobody can see.
+
 ## Non-goals
 
 - **A copy queue** for uploads. The same architecture makes it straightforward afterwards, but it

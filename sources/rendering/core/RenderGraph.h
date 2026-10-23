@@ -343,8 +343,24 @@ public:
 
     using SuccessorList = tc::inl_vector<size_t, kAdjacencyCapacity>;
 
-    static constexpr size_t kPassDependencyCapacity = 4;
+    // Five edges are real: the reflection group's first member carries the sky, the wetness, the RT
+    // trace (or the HZB), the volumetric fog and the cloud trace, and the fog's own list reaches five
+    // with the local lights' shadows. At 4 the call sites guarded the LAST edge with
+    // `size() < capacity()` and dropped it: compose lost its one wait on the async cloud trace and, on
+    // the frames the graphics queue got there first, read that slot's cloud pair from kFrameCount
+    // frames back -- the clouds jumped back three frames of camera motion and returned the next frame
+    // (2026-10-23). An overflow is now an invariant failure, never a dropped edge.
+    static constexpr size_t kPassDependencyCapacity = 8;
     using DependencyList = tc::inl_vector<size_t, kPassDependencyCapacity>;
+
+    // Appends an edge the caller needs; a full list is a broken invariant, not an optional edge.
+    static void PushDependency(DependencyList& list, size_t pass)
+    {
+        if (list.size() >= list.capacity()) {
+            RendererInvariantFailure("RenderGraph: dependency list overflow (raise kPassDependencyCapacity)");
+        }
+        list.push_back(pass);
+    }
 
     static constexpr size_t kNoGroup = (size_t)-1;
     static constexpr size_t kMaxGroupMembers = 8;
@@ -1538,8 +1554,7 @@ private:
                 bool dup = false;
                 for (size_t e : out) { if (e == od) { dup = true; break; } }
                 if (dup) { continue; }
-                assert(out.size() < out.capacity() && "node dependency capacity exceeded");
-                if (out.size() < out.capacity()) { out.push_back(od); }
+                PushDependency(out, od);
             }
         };
         const size_t gid = passes_[ownerIdx].groupId;
@@ -1718,11 +1733,12 @@ private:
 
         Pass& p = passes_[newIndex];
         p.name = name;
-        const bool prereqCopyOk = CopyRange(p.prereqs, prereqs);
-        const bool depCopyOk = CopyRange(p.mtDeps, deps);
-        assert(prereqCopyOk && depCopyOk && "RenderGraph dependency list capacity exceeded");
-        (void)prereqCopyOk;
-        (void)depCopyOk;
+        if (!CopyRange(p.prereqs, prereqs) || !CopyRange(p.mtDeps, deps)) {
+            char msg[192];
+            std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' has more dependencies than "
+                          "kPassDependencyCapacity; the extra edges would be lost", RenderPassToWString(name).data());
+            RendererInvariantFailure(msg);
+        }
 
         assert(declares.size() <= p.declares.capacity() && "RenderGraph declaration list capacity exceeded");
         p.declares.clear_fast();
