@@ -505,6 +505,24 @@ void ReduceBounds(uint3 groupId : SV_GroupID, uint3 groupThreadId : SV_GroupThre
             boundsMin[part] = min(boundsMin[part], ls);
             boundsMax[part] = max(boundsMax[part], ls);
             ++boundsCount[part];
+
+            // A receiver in this partition's cross-fade band samples the NEXT partition too
+            // (csm_sample.hlsli S10, the same band: this slice's length x blendFraction), so it must
+            // lie inside that partition's box as well. Finalize already widened the next partition's
+            // CULL volume by this band; its box was left to its own interval, and a band receiver
+            // outside it fell through CsmSampleChain to "lit" -- a bright chevron where the band crossed
+            // the corner of a shadowed room (the_bathroom_free, 2026-10-23). Legacy fits the band in
+            // (Scene.cpp, the previous slice's blendFraction).
+            [flatten] if (part + 1u < count)
+            {
+                const float band = (Partitions[part].intervalEnd - Partitions[part].intervalBegin) * gBlendFraction;
+                [flatten] if (viewZ > Partitions[part].intervalEnd - band)
+                {
+                    boundsMin[part + 1u] = min(boundsMin[part + 1u], ls);
+                    boundsMax[part + 1u] = max(boundsMax[part + 1u], ls);
+                    ++boundsCount[part + 1u];
+                }
+            }
         }
     }
 
