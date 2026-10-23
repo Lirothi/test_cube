@@ -204,13 +204,14 @@ private:
         explicit McpImportHost(EditorController& owner) : owner_(owner) {}
         ~McpImportHost() override { editormcp::SetImportHost(nullptr); }
         std::string Staging() override { return owner_.importPanel_.StagingJson(); }
-        bool Start(const std::string& name, float targetSizeM, bool split, std::string& outText) override
+        bool Start(const std::string& name, float targetSizeM, bool split,
+            const std::map<std::string, std::string>& surfaces, std::string& outText) override
         {
             // Opened for the import's sake only -> closed again once it has finished (Tick), so a
             // scripted batch does not leave the window over the viewport the next screenshot needs.
             openedWindow_ = openedWindow_ || !owner_.showImportPanel_;
             owner_.showImportPanel_ = true;
-            return owner_.importPanel_.StartMeshImport(name, targetSizeM, split, outText);
+            return owner_.importPanel_.StartMeshImport(name, targetSizeM, split, surfaces, outText);
         }
         std::string Status() override { return owner_.importPanel_.StatusJson(); }
         // Once a frame, after the window has drawn (its Draw is what finishes an import).

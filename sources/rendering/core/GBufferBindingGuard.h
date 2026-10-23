@@ -7,10 +7,11 @@
 #include <string>
 
 // gbuffer.hlsl's root signature declares root parameter 3 as the material's SRV table (t0..t2) and
-// root parameter 4 as its sampler table. A mesh slot with NO MaterialData -- or a material with no
-// textures at all -- leaves both handles null. Material::Bind then skips those binds, because it has
-// nothing to bind, and the draw goes out anyway with two root parameters UNBOUND while the pixel
-// shader samples them (gbuffer_common.hlsli, `txAlbedo.Sample`).
+// root parameter 4 as its sampler table. A mesh slot with NO MaterialData leaves both handles null
+// (a material with no textures at all used to as well; since 2026-10-23 it binds the renderer's null
+// texture and the sampler, MaterialData::StageGBufferBindings). Material::Bind then skips those
+// binds, because it has nothing to bind, and the draw goes out anyway with two root parameters
+// UNBOUND while the pixel shader samples them (gbuffer_common.hlsli, `txAlbedo.Sample`).
 //
 // The consequence is not a cosmetic glitch. GPU-based validation names it
 //   "Draw, Uninitialized root argument accessed. Root Parameter Index: [3] / [4]"

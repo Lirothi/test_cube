@@ -2392,6 +2392,8 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
             continue; // null-material group -> valid stays false
         }
         const cgltf_material& m = data->materials[mi];
+        d.materialIndex = static_cast<int>(mi);
+        d.name = m.name ? m.name : "";
         if (m.has_pbr_metallic_roughness) {
             const cgltf_pbr_metallic_roughness& pbr = m.pbr_metallic_roughness;
             for (int i = 0; i < 4; ++i) { d.baseColor[i] = pbr.base_color_factor[i]; }

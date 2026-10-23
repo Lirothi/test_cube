@@ -373,7 +373,7 @@ namespace SceneObjectFactory
             mesh.SetWindStrength(o["windStrength"].get<float>());
         }
 
-        // Per-ASSET wind tuning. These normally live in models/<name>.mesh.json and reach us here
+        // Per-ASSET wind tuning. These normally live in models/<name>/<name>.mesh.json and reach us here
         // because ResolveMeshAsset folds every asset key the object does not already carry, so a
         // level object can still override either one.
         if (o.contains("windTrunkStiffness") && o["windTrunkStiffness"].is_number())

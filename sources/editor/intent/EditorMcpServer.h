@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -78,8 +79,10 @@ namespace editormcp
     public:
         virtual ~ImportHost() = default;
         virtual std::string Staging() = 0;          // JSON array of what import_staging holds
+        // `surfaces`: glTF material name -> "leaf" | "surface", the Import window's per-material
+        // choice; the rest take the measured verdict. False + the reason when it cannot start.
         virtual bool Start(const std::string& name, float targetSizeM, bool split,
-            std::string& outText) = 0;              // false + the reason when it cannot start
+            const std::map<std::string, std::string>& surfaces, std::string& outText) = 0;
         virtual std::string Status() = 0;           // JSON object
     };
     void SetImportHost(ImportHost* host);

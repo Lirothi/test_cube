@@ -1,0 +1,12 @@
+{
+  "geometry": "models/the_bathroom_free/the_bathroom_free_node_Door_Hinges.mesh.bin",
+  "material": "the_bathroom_free_Door_Hinges_0",
+  "pivot": "base",
+  "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Door_Hinges",
+  "uvDensity": [
+    1.7477905750274658
+  ],
+  "windFoliage": [
+    1.0
+  ]
+}

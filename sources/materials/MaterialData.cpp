@@ -128,7 +128,7 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
 // Absent slots are filled with a sibling's SRV rather than a dedicated dummy texture. The content
 // is irrelevant -- `texFlags` guarantees the shader discards it -- and what actually matters is
 // that the descriptor is VALID and the positions are right. A material with no textures at all
-// still returns 0 and stages nothing, which is what it did before and is safe for the same reason.
+// returns 0; StageGBufferBindings then binds the renderer's null texture in all three places.
 size_t MaterialData::GatherGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst) const
 {
     D3D12_CPU_DESCRIPTOR_HANDLE filler{};
@@ -182,21 +182,25 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
 {
     const uint64_t frameNumber = r->GetTotalFrameNumber();
     std::lock_guard lck(cacheMtx_);
+    // A material with NO textures -- only a tint and metal/rough, which is what the importer writes
+    // for a glTF material without images (the_bathroom_free's Glass) -- is a surface like any other:
+    // texFlags keeps the shader on its tint. It used to stage nothing here, so Material::Bind refused
+    // the draw and logged UNBOUND: the bathroom's glass shelves never drew, and on the indirect pass a
+    // run whose sampler came from such a material dropped every group in it to per-group draws.
     if (bindless) {
-        // A6: the textures travel as indices in SurfaceParams; the table is not a root parameter
-        // of this PSO. A material with no textures stages nothing (not even the sampler), so
-        // Material::Bind refuses the draw the way the table path's missing table does.
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
-        if (GatherGBufferSRVs(srvs.data()) == 0) { return; }
+        // A6: the textures travel as indices in SurfaceParams (a textureless material's are the
+        // bindless null texture, GatherGBufferIndices); the table is not a root parameter of this PSO.
     }
     else if (gbufferSrvCache_.frameNumber == frameNumber && gbufferSrvCache_.gpu.ptr != 0) {
         ctx.srvTable[srvTableRegister] = gbufferSrvCache_.gpu;
     }
     else {
         std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
-        const size_t count = GatherGBufferSRVs(srvs.data());
-        if (count > 0) {
-            auto tbl = r->StageSrvUavTable(srvs, count);
+        if (GatherGBufferSRVs(srvs.data()) == 0) {
+            srvs.fill(r->NullMaterialTextureSrv()); // the root signature declares t0..t2 regardless
+        }
+        if (srvs[0].ptr != 0) {
+            auto tbl = r->StageSrvUavTable(srvs, kGBufferSrvCount);
             ctx.srvTable[srvTableRegister] = tbl.gpu;
             gbufferSrvCache_.frameNumber = frameNumber;
             gbufferSrvCache_.gpu = tbl.gpu;

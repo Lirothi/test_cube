@@ -1,10 +1,13 @@
 #pragma once
 #if WITH_EDITOR
 
+#include <optional>
 #include <string>
 #include <vector>
 
 struct GltfMaterialDesc; // rendering/meshes/MeshManager.h
+struct MeshCpuData;      // rendering/meshes/MeshManager.h
+namespace assets { struct AlphaImage; } // assets/AssetImporter.h
 
 // Part I3 — write a schema-v2 material file (data/materials/<name>.json) from a glTF material,
 // shared by the importer (auto-materials -> named files at import) and the inspector's
@@ -51,9 +54,44 @@ namespace materialgen
     // cut-out foliage, and this renderer has no blended opaque path -- drawn opaque, every leaf card
     // is a rectangle. A BLEND material with no texture (tinted glass) stays opaque.
     bool IsAlphaCutout(const GltfMaterialDesc& d, float* cutoffOut = nullptr);
-    // A two-sided alpha cutout is a leaf / frond / grass card: it gets the palms' foliage shading
-    // (twoSidedFoliage, light through the leaf) and its slot is marked wind foliage at import.
-    bool IsFoliageCard(const GltfMaterialDesc& d);
+
+    // LEAF CARD or SURFACE. A leaf card (frond, fern, grass blade) gets the palms' foliage shading
+    // -- twoSidedFoliage, light through the leaf -- and its slot is marked wind foliage at import;
+    // a surface is lit as an opaque card and stands rigid.
+    //
+    // A leaf is a two-sided alpha cutout whose cutout REMOVES a real share of the surface. The
+    // flags alone said leaf for anything Sketchfab touched: it exports every material doubleSided
+    // and every material with a hint of opacity as BLEND, so the_bathroom_free's curtains, doors,
+    // towels and carpets came in as leaf cards and swayed in the wind indoors (2026-10-23). The
+    // share of the textured surface whose alpha is below the cutoff, measured over import_staging/:
+    // the leaf materials 34-77 % (coconut, curly and date palm fronds, fern_02, ground_palm,
+    // young_palm); the bathroom's Door_and_windows 4.5 %, Fabric 0.5 %, Cups 11.8 %.
+    //
+    // doubleSided stays a condition: curly_palm's single-sided frond boot cuts 43 % away and is
+    // bark, rigid and defaultLit by hand. The price is date_palm's fronds, also single-sided and
+    // leaves -- the import dialog's per-material choice is for those.
+    constexpr float kLeafCutShare = 0.2f;
+
+    struct LeafVerdict
+    {
+        int materialIndex = -1;  // the glTF material (GltfMaterialDesc::materialIndex); -1 = none
+        std::string name;        // its glTF name
+        bool candidate = false;  // a valid two-sided alpha cutout: the only kind that can be a leaf
+        float cutShare = -1.0f;  // share of the surface the cutout removes; -1 = not measured
+        bool leaf = false;
+        std::string reason;      // one line, for the dialog, the log and the MCP answer
+    };
+    // One verdict per material group of `geometry`, in submesh order (a "#node:" selector narrows it
+    // to that node's groups, the whole file gives every material it draws). Only candidates cost
+    // anything: the geometry is parsed once and each candidate's albedo alpha decoded once.
+    std::vector<LeafVerdict> ClassifyLeafCards(const std::string& geometry);
+    // The measurement itself: the share of submesh `submesh`'s area whose texcoord-0 lands on alpha
+    // below `cutoff` (0..1), sampled at `samples` area-weighted points, the UVs wrapped as the
+    // sampler repeats them. -1 when the submesh has no area or the image is empty.
+    float MeasureCutShare(const MeshCpuData& cpu, size_t submesh, const assets::AlphaImage& alpha,
+        float cutoff, int samples = 16384);
+    // The rule, given the measurement: candidates at or over kLeafCutShare are leaves.
+    LeafVerdict DecideLeafCard(const GltfMaterialDesc& d, float cutShare);
 
     // Write data/materials/<name>.json for material `ordinal` of `geometry` (a glTF/GLB path, with
     // an optional #node: selector). If `overwrite` is false an existing file is preserved (keeps
@@ -64,9 +102,20 @@ namespace materialgen
     // material on a closed surface (see SurfaceMeasure) is written single-sided, because exporters
     // such as Sketchfab's mark EVERY material double-sided. Alpha-masked materials keep the flag
     // unconditionally -- a card is open by construction. `measure` lets a caller writing several
-    // slots of one geometry parse it once; null = measure here if needed.
+    // slots of one geometry parse it once; null = measure here if needed. `leaf` is the caller's
+    // decision (the import's, which may be the person's); empty = ClassifyLeafCards here.
     std::string WriteFromGltf(const std::string& geometry, int ordinal,
-        const std::string& name, bool overwrite = false, SurfaceMeasure* measure = nullptr);
+        const std::string& name, bool overwrite = false, SurfaceMeasure* measure = nullptr,
+        std::optional<bool> leaf = std::nullopt);
+
+    // Switch an EXISTING data/materials/<name>.json between leaf and surface shading: the four keys
+    // WriteFromGltf writes differently for a leaf (shadingModel, transmissionStrength,
+    // transmissionNormalWeight, indirectSpecularScale). A leaf also gets twoSided (twoSidedFoliage
+    // draws both faces regardless); a surface keeps the twoSided it has, because a cut-out curtain
+    // still needs its back face -- unlike the Material Editor's combo, which clears it. Every other
+    // key, edits included, is kept. True when the file was rewritten; false when it already said so
+    // or cannot be read.
+    bool ApplyLeafShading(const std::string& name, bool leaf);
 }
 
 #endif // WITH_EDITOR

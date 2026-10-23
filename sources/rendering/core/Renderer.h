@@ -390,6 +390,9 @@ public:
     // isn't resident (Legacy mode) — valid to bind, never sampled (useVsm=0). See the spot/point passes.
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyBufferSrv() { EnsureVsmDummySrvs(); return vsmDummyBufferSrv_; }
     D3D12_CPU_DESCRIPTOR_HANDLE VsmDummyTexSrv()    { EnsureVsmDummySrvs(); return vsmDummyTexSrv_; }
+    // Null Texture2D (RGBA8) for a material with NO textures on the G-buffer's table path: the root
+    // signature declares t0..t2 whether or not the material has anything to put there.
+    D3D12_CPU_DESCRIPTOR_HANDLE NullMaterialTextureSrv() { EnsureVsmDummySrvs(); return nullMaterialTexSrv_; }
 
 #if WITH_EDITOR
     bool RequestObjectIdPick(float displayX, float displayY);
@@ -963,7 +966,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyBufferSrv_{};                     // null StructuredBuffer<uint> (t7/t9)
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyTexSrv_{};                        // null Texture2D (t8/t10)
-    void EnsureVsmDummySrvs();                                                  // lazily create the two null SRVs
+    D3D12_CPU_DESCRIPTOR_HANDLE       nullMaterialTexSrv_{};                    // null Texture2D RGBA8 (G-buffer t0..t2)
+    void EnsureVsmDummySrvs();                                                  // lazily create the three null SRVs
     // The passes that ask for these record on WORKER lists in parallel: two of them used to find the heap missing at the
     // same frame and both create it, the second CreateDescriptorHeap writing over the first through GetAddressOf()
     // without a Release -- the one "Live ID3D12DescriptorHeap ... VSM.DummySrvs" at exit, only now and then (it took

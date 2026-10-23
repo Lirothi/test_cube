@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "editor/assets/AssetRegistry.h"
+#include "editor/assets/MaterialFileGen.h" // materialgen::LeafVerdict, the dialog's per-material row
+#include "rendering/meshes/MeshManager.h"   // GltfMaterialDesc, the same
 
 struct MeshLoadOptions; // rendering/meshes/MeshManager.h — LOD/bake knobs a mesh import carries
 struct ImVec4;
@@ -32,8 +34,8 @@ public:
     bool Draw(AssetRegistry& registry, bool* open);
 
     // Name of the asset the LAST completed import wrote (the folder/file stem, so
-    // models/<name>.mesh.json and the split-node models/<name>_<part>.mesh.json both start with
-    // it). Valid when Draw() returned true; the caller uses it to refresh exactly the placed
+    // models/<name>/<name>.mesh.json and the split-node models/<name>/<name>_node_<part>.mesh.json
+    // both start with models/<name>). Valid when Draw() returned true; the caller uses it to refresh exactly the placed
     // instances that changed rather than every static mesh in the level.
     const std::string& LastImportedName() const { return lastImportedName_; }
 
@@ -61,9 +63,12 @@ public:
     // Start a MESH import exactly as the dialog's Import button does, with the dialog's defaults:
     // the longest side normalised to `targetSizeM` metres INTO THE VERTICES (0 = keep the source's
     // own size), split into one asset per top-level node when `split`, the dialog's current LOD
-    // knobs. False and a reason when it cannot start. The import only FINISHES while this window
-    // is drawn -- PollImport runs from Draw -- so the caller must open it.
-    bool StartMeshImport(const std::string& name, float targetSizeM, bool split, std::string& outStatus);
+    // knobs, and `surfaces` -- glTF material name -> "leaf" or "surface" -- as the dialog's
+    // per-material choice (the rest take the measured verdict). False and a reason when it cannot
+    // start; the status names what each material will be. The import only FINISHES while this
+    // window is drawn -- PollImport runs from Draw -- so the caller must open it.
+    bool StartMeshImport(const std::string& name, float targetSizeM, bool split,
+        const std::map<std::string, std::string>& surfaces, std::string& outStatus);
     // Running or not, progress, the status line the window shows, what the last import wrote.
     std::string StatusJson() const;
     // An import is converting or still waiting for the Draw that finishes it.
@@ -112,7 +117,11 @@ private:
         // live widget fields then means a dialog reopened mid-import re-bakes with the wrong
         // values. Null (every bulk / per-resource caller) = reproduce the asset's OWN
         // mesh.json settings, never the dialog's leftovers.
-        const MeshLoadOptions* meshLodFromDialog = nullptr);
+        const MeshLoadOptions* meshLodFromDialog = nullptr,
+        // The person's leaf-card / surface choices, glTF material index -> leaf, snapshotted the
+        // same way. Null or empty = every material takes the measured verdict (new assets) or
+        // keeps what it has (existing ones).
+        const std::map<int, bool>* meshLeafChoices = nullptr);
     void PollImport(AssetRegistry& registry, bool& finishedOut);
 
     // The window is a LIST (left) and the selected item's IMPORT SETTINGS (right). The right pane is
@@ -144,7 +153,8 @@ private:
     // an existing grid or the dialog's checkbox could be cleared and silently do nothing.
     bool RecreateMeshAssets(const Item& item, float spawnScale,
         const std::vector<std::string>& splitNodes, int chunkGrid,
-        const MeshLoadOptions* dialogLod); // null = preserve the asset's own mesh.json knobs
+        const MeshLoadOptions* dialogLod, // null = preserve the asset's own mesh.json knobs
+        const std::map<int, bool>* leafChoices = nullptr); // see BeginImport's meshLeafChoices
 
     // The import dialog's LOD + bake-scale widget values as MeshLoadOptions. The ONLY reader
     // of those widgets on a bake path — snapshot the result at click time (see BeginImport).
@@ -204,6 +214,7 @@ private:
     // Snapshot of the dialog's LOD values for the running async import (see BeginImport's
     // meshLodFromDialog). Null for non-dialog imports = preserve per-asset mesh.json knobs.
     std::unique_ptr<MeshLoadOptions> activeMeshLodOpt_;
+    std::map<int, bool> activeMeshLeafChoices_; // snapshot of BeginImport's meshLeafChoices
     std::string activeMeshSplitGltf_;
     std::vector<std::string> activeMeshSplitNodes_;
     bool joinPending_ = false;
@@ -236,9 +247,13 @@ private:
     // Mesh details. Size normalization is intentionally decided per mesh here rather than being a
     // persistent global importer option.
     Item meshDialogItem_;
-    // One line per material slot: what the importer will write for it (MaterialFileGen's own
-    // IsFoliageCard / IsAlphaCutout), so a leaf card is seen to be one BEFORE the import.
-    std::vector<std::string> meshDialogMaterials_;
+    // One row per material of the whole file: its glTF description, the measured leaf-card verdict
+    // (materialgen::ClassifyLeafCards, the call the import makes) and the person's choice -- 0 =
+    // auto (the verdict), 1 = leaf card, 2 = surface -- so a leaf card is seen to be one, and a
+    // curtain that is not one can be told so, BEFORE the import.
+    std::vector<GltfMaterialDesc> meshDialogMaterials_;
+    std::vector<materialgen::LeafVerdict> meshDialogLeaf_;
+    std::vector<int> meshDialogLeafChoice_;
     bool meshDialogNormalizeSpawn_ = false;
     float meshDialogTargetM_ = 6.0f;
     // How the unit correction is expressed. Target-side is the readable one when you know the real

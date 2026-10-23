@@ -154,7 +154,7 @@ struct EditorActionDesc
     // It used to guess: any Objects action carrying an `asset` entered asset resolution,
     // and the grammar lets `asset` appear in any target. A delete that picked one up was
     // then refused outright when the name did not resolve, or -- worse when it did --
-    // previewed as "delete 183 objects -> models/coconut_palm.mesh.json", which any reader
+    // previewed as "delete 183 objects -> models/coconut_palm/coconut_palm.mesh.json", which any reader
     // takes for a replace.
     bool takesDestinationAsset = false;
 

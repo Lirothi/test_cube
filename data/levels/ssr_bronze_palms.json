@@ -30,7 +30,7 @@
       "enabled": true,
       "id": 1,
       "material": "bronze",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "metalRough": [
         1.0,
         0.07999999821186066
@@ -64,7 +64,7 @@
     {
       "enabled": true,
       "id": 2,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 2",
       "position": [
         3.255000114440918,
@@ -87,7 +87,7 @@
     {
       "enabled": true,
       "id": 3,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 3",
       "position": [
         8.572999954223633,
@@ -110,7 +110,7 @@
     {
       "enabled": true,
       "id": 4,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 4",
       "position": [
         12.847000122070313,
@@ -133,7 +133,7 @@
     {
       "enabled": true,
       "id": 5,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 5",
       "position": [
         9.322999954223633,
@@ -156,7 +156,7 @@
     {
       "enabled": true,
       "id": 6,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 6",
       "position": [
         7.519000053405762,
@@ -179,7 +179,7 @@
     {
       "enabled": true,
       "id": 7,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 7",
       "position": [
         1.3769999742507935,
@@ -202,7 +202,7 @@
     {
       "enabled": true,
       "id": 8,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 8",
       "position": [
         -3.9779999256134033,
@@ -225,7 +225,7 @@
     {
       "enabled": true,
       "id": 9,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 9",
       "position": [
         -10.130999565124512,
@@ -248,7 +248,7 @@
     {
       "enabled": true,
       "id": 10,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 10",
       "position": [
         -9.881999969482422,
@@ -271,7 +271,7 @@
     {
       "enabled": true,
       "id": 11,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 11",
       "position": [
         -11.187999725341797,
@@ -294,7 +294,7 @@
     {
       "enabled": true,
       "id": 12,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 12",
       "position": [
         -5.639999866485596,
@@ -317,7 +317,7 @@
     {
       "enabled": true,
       "id": 13,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 13",
       "position": [
         -1.6829999685287476,
@@ -340,7 +340,7 @@
     {
       "enabled": true,
       "id": 14,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 14",
       "position": [
         9.781999588012695,
@@ -363,7 +363,7 @@
     {
       "enabled": true,
       "id": 15,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 15",
       "position": [
         16.520000457763672,
@@ -386,7 +386,7 @@
     {
       "enabled": true,
       "id": 16,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 16",
       "position": [
         23.034000396728516,
@@ -409,7 +409,7 @@
     {
       "enabled": true,
       "id": 17,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 17",
       "position": [
         17.992000579833984,
@@ -432,7 +432,7 @@
     {
       "enabled": true,
       "id": 18,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 18",
       "position": [
         20.714000701904297,
@@ -455,7 +455,7 @@
     {
       "enabled": true,
       "id": 19,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 19",
       "position": [
         12.661999702453613,
@@ -478,7 +478,7 @@
     {
       "enabled": true,
       "id": 20,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 20",
       "position": [
         11.27400016784668,
@@ -501,7 +501,7 @@
     {
       "enabled": true,
       "id": 21,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 21",
       "position": [
         6.741000175476074,
@@ -524,7 +524,7 @@
     {
       "enabled": true,
       "id": 22,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 22",
       "position": [
         -0.5299999713897705,
@@ -547,7 +547,7 @@
     {
       "enabled": true,
       "id": 23,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 23",
       "position": [
         -7.4120001792907715,
@@ -570,7 +570,7 @@
     {
       "enabled": true,
       "id": 24,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 24",
       "position": [
         -9.781999588012695,
@@ -593,7 +593,7 @@
     {
       "enabled": true,
       "id": 25,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 25",
       "position": [
         -16.520000457763672,
@@ -616,7 +616,7 @@
     {
       "enabled": true,
       "id": 26,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 26",
       "position": [
         -23.034000396728516,
@@ -639,7 +639,7 @@
     {
       "enabled": true,
       "id": 27,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 27",
       "position": [
         -17.992000579833984,
@@ -662,7 +662,7 @@
     {
       "enabled": true,
       "id": 28,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 28",
       "position": [
         -20.714000701904297,
@@ -685,7 +685,7 @@
     {
       "enabled": true,
       "id": 29,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 29",
       "position": [
         -12.661999702453613,
@@ -708,7 +708,7 @@
     {
       "enabled": true,
       "id": 30,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 30",
       "position": [
         -11.27400016784668,
@@ -731,7 +731,7 @@
     {
       "enabled": true,
       "id": 31,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 31",
       "position": [
         -6.741000175476074,
@@ -754,7 +754,7 @@
     {
       "enabled": true,
       "id": 32,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 32",
       "position": [
         0.5299999713897705,
@@ -777,7 +777,7 @@
     {
       "enabled": true,
       "id": 33,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 33",
       "position": [
         7.4120001792907715,
@@ -800,7 +800,7 @@
     {
       "enabled": true,
       "id": 34,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 34",
       "position": [
         24.18400001525879,
@@ -823,7 +823,7 @@
     {
       "enabled": true,
       "id": 35,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 35",
       "position": [
         31.722999572753906,
@@ -846,7 +846,7 @@
     {
       "enabled": true,
       "id": 36,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 36",
       "position": [
         37.9900016784668,
@@ -869,7 +869,7 @@
     {
       "enabled": true,
       "id": 37,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 37",
       "position": [
         28.718000411987305,
@@ -892,7 +892,7 @@
     {
       "enabled": true,
       "id": 38,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 38",
       "position": [
         30.834999084472656,
@@ -915,7 +915,7 @@
     {
       "enabled": true,
       "id": 39,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 39",
       "position": [
         19.801000595092773,
@@ -938,7 +938,7 @@
     {
       "enabled": true,
       "id": 40,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 40",
       "position": [
         17.854999542236328,
@@ -961,7 +961,7 @@
     {
       "enabled": true,
       "id": 41,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 41",
       "position": [
         12.670999526977539,
@@ -984,7 +984,7 @@
     {
       "enabled": true,
       "id": 42,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 42",
       "position": [
         2.9200000762939453,
@@ -1007,7 +1007,7 @@
     {
       "enabled": true,
       "id": 43,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 43",
       "position": [
         -5.035999774932861,
@@ -1030,7 +1030,7 @@
     {
       "enabled": true,
       "id": 44,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 44",
       "position": [
         -10.140999794006348,
@@ -1053,7 +1053,7 @@
     {
       "enabled": true,
       "id": 45,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 45",
       "position": [
         -19.059999465942383,
@@ -1076,7 +1076,7 @@
     {
       "enabled": true,
       "id": 46,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 46",
       "position": [
         -29.003999710083008,
@@ -1099,7 +1099,7 @@
     {
       "enabled": true,
       "id": 47,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 47",
       "position": [
         -26.64699935913086,
@@ -1122,7 +1122,7 @@
     {
       "enabled": true,
       "id": 48,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 48",
       "position": [
         -34.40700149536133,
@@ -1145,7 +1145,7 @@
     {
       "enabled": true,
       "id": 49,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 49",
       "position": [
         -26.993000030517578,
@@ -1168,7 +1168,7 @@
     {
       "enabled": true,
       "id": 50,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 50",
       "position": [
         -31.371999740600586,
@@ -1191,7 +1191,7 @@
     {
       "enabled": true,
       "id": 51,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 51",
       "position": [
         -33.24100112915039,
@@ -1214,7 +1214,7 @@
     {
       "enabled": true,
       "id": 52,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 52",
       "position": [
         -21.81800079345703,
@@ -1237,7 +1237,7 @@
     {
       "enabled": true,
       "id": 53,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 53",
       "position": [
         -19.365999221801758,
@@ -1260,7 +1260,7 @@
     {
       "enabled": true,
       "id": 54,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 54",
       "position": [
         -9.003000259399414,
@@ -1283,7 +1283,7 @@
     {
       "enabled": true,
       "id": 55,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 55",
       "position": [
         -3.190000057220459,
@@ -1306,7 +1306,7 @@
     {
       "enabled": true,
       "id": 56,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 56",
       "position": [
         5.428999900817871,
@@ -1329,7 +1329,7 @@
     {
       "enabled": true,
       "id": 57,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 57",
       "position": [
         11.17300033569336,
@@ -1352,7 +1352,7 @@
     {
       "enabled": true,
       "id": 58,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 58",
       "position": [
         20.67300033569336,
@@ -1375,7 +1375,7 @@
     {
       "enabled": true,
       "id": 59,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 59",
       "position": [
         20.607999801635742,
@@ -1398,7 +1398,7 @@
     {
       "enabled": true,
       "id": 60,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 60",
       "position": [
         -4.5,
@@ -1421,7 +1421,7 @@
     {
       "enabled": true,
       "id": 61,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 61",
       "position": [
         5.5,
@@ -1444,7 +1444,7 @@
     {
       "enabled": true,
       "id": 62,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 62",
       "position": [
         -8.0,
@@ -1467,7 +1467,7 @@
     {
       "enabled": true,
       "id": 63,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 63",
       "position": [
         9.0,
@@ -1490,7 +1490,7 @@
     {
       "enabled": true,
       "id": 64,
-      "mesh": "models/date_palm.mesh.json",
+      "mesh": "models/date_palm/date_palm.mesh.json",
       "name": "palm 64",
       "position": [
         -1.5,
@@ -1513,7 +1513,7 @@
     {
       "enabled": true,
       "id": 65,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 65",
       "position": [
         13.0,
@@ -1536,7 +1536,7 @@
     {
       "enabled": true,
       "id": 66,
-      "mesh": "models/coconut_palm.mesh.json",
+      "mesh": "models/coconut_palm/coconut_palm.mesh.json",
       "name": "palm 66",
       "position": [
         -13.5,
@@ -1559,7 +1559,7 @@
     {
       "enabled": true,
       "id": 67,
-      "mesh": "models/curly_palm.mesh.json",
+      "mesh": "models/curly_palm/curly_palm.mesh.json",
       "name": "palm 67",
       "position": [
         2.0,
@@ -1583,7 +1583,7 @@
       "enabled": true,
       "id": 68,
       "material": "bronze",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "metalRough": [
         1.0,
         0.25
@@ -1611,7 +1611,7 @@
       "enabled": true,
       "id": 69,
       "material": "bronze",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "metalRough": [
         1.0,
         0.25
@@ -1639,7 +1639,7 @@
       "enabled": true,
       "id": 70,
       "material": "bronze",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "metalRough": [
         1.0,
         0.25
@@ -1667,7 +1667,7 @@
       "enabled": true,
       "id": 71,
       "material": "bronze",
-      "mesh": "models/sphere.mesh.json",
+      "mesh": "models/sphere/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.12
@@ -1695,7 +1695,7 @@
       "enabled": true,
       "id": 72,
       "material": "bronze",
-      "mesh": "models/sphere.mesh.json",
+      "mesh": "models/sphere/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.12
@@ -1723,7 +1723,7 @@
       "enabled": true,
       "id": 73,
       "material": "bronze",
-      "mesh": "models/sphere.mesh.json",
+      "mesh": "models/sphere/sphere.mesh.json",
       "metalRough": [
         1.0,
         0.12

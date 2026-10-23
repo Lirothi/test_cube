@@ -381,7 +381,7 @@ namespace editormcp
                   "Ask the level questions that change nothing -- bounds of a filter, the "
                   "water level, ground height at a point, what is selected, what the camera is "
                   "looking at, a summary of what is in the level. `ask` is a list, "
-                  "[{\"query\": \"bounds\", \"target\": {\"filter\": [\"models/tent.mesh.json\"]}}, "
+                  "[{\"query\": \"bounds\", \"target\": {\"filter\": [\"models/tent/tent.mesh.json\"]}}, "
                   "{\"query\": \"waterLevel\"}], answered in one JSON object keyed by query. "
                   "editor_guide lists the queries and what each takes." },
                 { "inputSchema", ObjectSchema({ { "ask", {
@@ -541,7 +541,7 @@ namespace editormcp
                 { "description",
                   "Import one MESH folder from import_staging/ into the project, exactly as the "
                   "Import window's Import button does: textures to DDS, geometry baked with LODs, "
-                  "models/<name>.mesh.json written, a CREDITS.md entry added. It WRITES FILES "
+                  "models/<name>/<name>.mesh.json written, a CREDITS.md entry added. It WRITES FILES "
                   "(models/, data/materials/, CREDITS.md) and is not undoable -- only import what "
                   "the person asked for. It returns at once; the work runs in the background, "
                   "one import at a time, and finishes only while the Import window is open (this "
@@ -549,14 +549,23 @@ namespace editormcp
                   "that many metres inside the vertices (0 or absent keeps the source size -- "
                   "check longestSideM in list_staging first, Sketchfab sources are often in "
                   "centimetres); `split` makes one asset per top-level node, "
-                  "models/<name>_node_<node>.mesh.json." },
+                  "models/<name>/<name>_node_<node>.mesh.json. Each glTF material is read as a LEAF CARD "
+                  "(foliage shading, wind sway) when it is a two-sided alpha cutout whose cutout "
+                  "removes 20 % or more of its surface, otherwise as a SURFACE (lit opaque, rigid); "
+                  "the answer lists every material with its verdict and the measurement. `surfaces` "
+                  "overrides it by material name, and also switches an already-imported asset's "
+                  "wind slot and material shading -- the Import window's per-material choice." },
                 { "inputSchema", ObjectSchema({
                     { "name", { { "type", "string" },
                         { "description", "the folder name under import_staging/" } } },
                     { "targetSizeM", { { "type", "number" },
                         { "description", "longest side in metres after import; 0 = keep" } } },
                     { "split", { { "type", "boolean" },
-                        { "description", "one asset per top-level node (default false)" } } } },
+                        { "description", "one asset per top-level node (default false)" } } },
+                    { "surfaces", { { "type", "object" },
+                        { "additionalProperties", { { "type", "string" }, { "enum", json::array({ "leaf", "surface" }) } } },
+                        { "description", "glTF material name -> \"leaf\" or \"surface\"; unnamed "
+                                         "materials take the measured verdict" } } } },
                     json::array({ "name" })) },
             },
             {
@@ -883,8 +892,24 @@ namespace editormcp
             const float targetSizeM = arguments.contains("targetSizeM") &&
                 arguments["targetSizeM"].is_number() ? arguments["targetSizeM"].get<float>() : 0.0f;
             const bool split = arguments.value("split", false);
+            std::map<std::string, std::string> surfaces;
+            if (arguments.contains("surfaces"))
+            {
+                if (!arguments["surfaces"].is_object())
+                {
+                    return Error("import_asset `surfaces` is an object: {\"<material>\": \"leaf\" | \"surface\"}.");
+                }
+                for (const auto& [material, what] : arguments["surfaces"].items())
+                {
+                    if (!what.is_string())
+                    {
+                        return Error("import_asset `surfaces`['" + material + "'] must be \"leaf\" or \"surface\".");
+                    }
+                    surfaces[material] = what.get<std::string>();
+                }
+            }
             std::string text;
-            const bool started = g_importHost->Start(asset, targetSizeM, split, text);
+            const bool started = g_importHost->Start(asset, targetSizeM, split, surfaces, text);
             outRecord.title = "import_asset " + asset;
             outRecord.verdict = text;
             outRecord.failed = !started;

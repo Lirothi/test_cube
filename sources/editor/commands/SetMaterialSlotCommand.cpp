@@ -75,7 +75,7 @@ bool SetMaterialSlotCommand::Apply(EditorContext& ctx, const std::string& materi
     // object's own properties.
     //
     // An object that names a mesh asset inherits that asset's `materials` list: the factory folds
-    // models/<name>.mesh.json UNDER the object's keys, so a freshly spawned tent draws with
+    // models/<name>/<name>.mesh.json UNDER the object's keys, so a freshly spawned tent draws with
     // tent_0/tent_1/tent_2 while `obj->properties` carries no `materials` at all. Synthesizing the
     // untouched slots as the literal "auto" therefore did not preserve the status quo, it ERASED
     // it: editing one slot wrote "auto" over the other two, and they fell back to the glTF

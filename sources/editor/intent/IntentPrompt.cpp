@@ -392,10 +392,10 @@ namespace intentprompt
         p += "EXAMPLES\n";
         p += "  \"zaroy vse palmy\" (bury all palms)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"bury\","
-             "\"target\":{\"filter\":[\"models/coconut_palm.mesh.json\"],\"scope\":\"all\"}}\n";
+             "\"target\":{\"filter\":[\"models/coconut_palm/coconut_palm.mesh.json\"],\"scope\":\"all\"}}\n";
         p += "  \"rassadi 10 novyh palm\" (plant 10 new palms)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"spawn\","
-             "\"target\":{\"asset\":\"models/coconut_palm.mesh.json\"},\"params\":{\"count\":10}}\n";
+             "\"target\":{\"asset\":\"models/coconut_palm/coconut_palm.mesh.json\"},\"params\":{\"count\":10}}\n";
         // The multi-asset example earns its place the hard way: `assets` shipped working and
         // went UNUSED -- across a whole battery the model wrote `asset` every time, because
         // every example it could see wrote `asset`. Described but never demonstrated is the
@@ -403,20 +403,20 @@ namespace intentprompt
         // a count per kind, and a run without this said 10 when asked for 30.
         p += "  \"posadi 20 palm raznogo tipa\" (plant 20 palms of different types)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"spawn\","
-             "\"target\":{\"assets\":[\"models/coconut_palm.mesh.json\","
-             "\"models/curly_palm.mesh.json\",\"models/date_palm.mesh.json\"]},"
+             "\"target\":{\"assets\":[\"models/coconut_palm/coconut_palm.mesh.json\","
+             "\"models/curly_palm/curly_palm.mesh.json\",\"models/date_palm/date_palm.mesh.json\"]},"
              "\"params\":{\"count\":20}}\n";
         p += "  \"spryach' vsyo krome palm\" (hide everything except the palms)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"setEnabled\","
-             "\"target\":{\"exclude\":[\"models/coconut_palm.mesh.json\"],\"scope\":\"all\"},"
+             "\"target\":{\"exclude\":[\"models/coconut_palm/coconut_palm.mesh.json\"],\"scope\":\"all\"},"
              "\"params\":{\"enabled\":false}}\n";
         p += "  \"zameni finikovye palmy na kokosovye\" (replace the date palms with coconut ones)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"replace\","
-             "\"target\":{\"filter\":[\"models/date_palm.mesh.json\"],"
-             "\"asset\":\"models/coconut_palm.mesh.json\",\"scope\":\"all\"}}\n";
+             "\"target\":{\"filter\":[\"models/date_palm/date_palm.mesh.json\"],"
+             "\"asset\":\"models/coconut_palm/coconut_palm.mesh.json\",\"scope\":\"all\"}}\n";
         p += "  \"uberi kamni v radiuse 50 metrov ot kamery\" (remove the rocks within 50 m of the camera)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"delete\","
-             "\"target\":{\"filter\":[\"models/beach_rock.mesh.json\"],\"scope\":\"all\","
+             "\"target\":{\"filter\":[\"models/beach_rock/beach_rock.mesh.json\"],\"scope\":\"all\","
              "\"where\":{\"anchor\":\"camera\",\"radius\":50}}}\n";
         // The two shapes that were described and never shown. `assets` taught this lesson
         // once already: a field the examples do not use is a field the model does not use.
@@ -443,7 +443,7 @@ namespace intentprompt
              "\"target\":{\"scope\":\"all\",\"where\":{\"maxY\":0}}}\n";
         p += "  \"skolko palm na urovne?\" (how many palms are in the level?)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"count\","
-             "\"target\":{\"filter\":[\"models/coconut_palm.mesh.json\"],\"scope\":\"all\"}}\n";
+             "\"target\":{\"filter\":[\"models/coconut_palm/coconut_palm.mesh.json\"],\"scope\":\"all\"}}\n";
         p += "  \"sdelay veter silnee\" (make the wind stronger)\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"setEnvironment\","
              "\"target\":{\"setting\":\"wind.strength\"},\"params\":{\"scale\":1.5}}\n";
@@ -458,13 +458,13 @@ namespace intentprompt
              "island's edge, only above water) -- ask for BOTH facts in one turn\n";
         p += "  -> {\"kind\":\"query\",\"ask\":["
              "{\"query\":\"bounds\",\"target\":{\"filter\":"
-             "[\"models/atoll_island.mesh.json\"],\"scope\":\"all\"}},"
+             "[\"models/atoll_island/atoll_island.mesh.json\"],\"scope\":\"all\"}},"
              "{\"query\":\"waterLevel\"}]}\n";
         p += "     ...the editor answers {\"bounds\":{\"centre\":[-2,-4.7,-4],"
              "\"size\":[361,15,388],...},\"waterLevel\":{\"y\":0}}, and THEN you act on the\n";
         p += "     NUMBERS THAT CAME BACK -- not on the ones in this example:\n";
         p += "  -> {\"kind\":\"command\",\"action\":\"spawn\","
-             "\"target\":{\"asset\":\"models/coconut_palm.mesh.json\"},"
+             "\"target\":{\"asset\":\"models/coconut_palm/coconut_palm.mesh.json\"},"
              "\"params\":{\"count\":10,\"at\":[-2,0,-4],\"radius\":180,\"minHeight\":0.3}}\n";
 
         // THIS ENGINE HAS NO COMPASS, and the first version of this example invented one --

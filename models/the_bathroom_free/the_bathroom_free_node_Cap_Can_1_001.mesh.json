@@ -1,0 +1,9 @@
+{
+  "geometry": "models/the_bathroom_free/the_bathroom_free_node_Cap_Can_1_001.mesh.bin",
+  "material": "the_bathroom_free_Cap_Can_1_001_0",
+  "pivot": "base",
+  "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Cap_Can_1.001",
+  "uvDensity": [
+    0.9870580434799194
+  ]
+}

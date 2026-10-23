@@ -142,7 +142,7 @@ namespace intentschema
         // ENVIRONMENT TYPES ARE DELIBERATELY NOT HERE, and they used to be. `needles` is what
         // the prompt presents as "what is ALREADY in the level -- use the exact strings
         // below", and a filter is resolved against `document.Objects()` only. So listing
-        // `directionalLight`, `ocean` and `wind` beside `models/coconut_palm.mesh.json`
+        // `directionalLight`, `ocean` and `wind` beside `models/coconut_palm/coconut_palm.mesh.json`
         // offered the model a word that can never match anything: "выключи солнце" came back
         // as setEnabled with filter ["directionalLight"] -- correct-looking, and empty every
         // time. The right answer for those is `setEnvironment`, and the vocabulary was

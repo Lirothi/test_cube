@@ -1,0 +1,9 @@
+{
+  "geometry": "models/the_bathroom_free/the_bathroom_free_node_Cup_Ceramic_4.mesh.bin",
+  "material": "the_bathroom_free_Cup_Ceramic_4_0",
+  "pivot": "base",
+  "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Cup_Ceramic_4",
+  "uvDensity": [
+    0.8851659297943115
+  ]
+}

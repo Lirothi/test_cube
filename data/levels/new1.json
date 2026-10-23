@@ -43,7 +43,7 @@
     {
       "enabled": true,
       "id": 11,
-      "mesh": "models/atoll_island.mesh.json",
+      "mesh": "models/atoll_island/atoll_island.mesh.json",
       "name": "staticMesh #11",
       "position": [
         0.0,
@@ -65,7 +65,7 @@
     {
       "enabled": true,
       "id": 12,
-      "mesh": "models/atoll_lagoon_floor.mesh.json",
+      "mesh": "models/atoll_lagoon_floor/atoll_lagoon_floor.mesh.json",
       "name": "staticMesh #12",
       "position": [
         0.0,

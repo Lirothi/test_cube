@@ -1327,7 +1327,7 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
             MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
         }
         ctx.srvTable[3] = tail;
-        // GBufferBindingGuard.h: a root parameter left unbound (a textureless material) is not a
+        // GBufferBindingGuard.h: a root parameter left unbound (a group with no material) is not a
         // draw to issue -- the CPU path skips that submesh the same way.
         if (!gg.mat->Bind(cl, ctx, wireframe)) { continue; }
 

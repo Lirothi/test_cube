@@ -100,7 +100,7 @@ enable already-visible then undo: expected=true actual=false
 - [SetMaterialCommand.cpp:28](/D:/Programming/test_cube/sources/editor/commands/SetMaterialCommand.cpp:28): Apply всегда записывает ключ `material`.
 - [SetMaterialCommand.cpp:66](/D:/Programming/test_cube/sources/editor/commands/SetMaterialCommand.cpp:66): Undo вызывает тот же Apply с сохранённой строкой.
 - [SceneObjectFactory.cpp:106](/D:/Programming/test_cube/sources/app/scene/SceneObjectFactory.cpp:106): `ResolveMeshAsset` подставляет значения asset только для отсутствующих ключей объекта.
-- [models/box.mesh.json:4](/D:/Programming/test_cube/models/box.mesh.json:4): asset задаёт `"material": "bronze"`.
+- [models/box/box.mesh.json:4](/D:/Programming/test_cube/models/box.mesh.json:4): asset задаёт `"material": "bronze"`.
 
 ### Минимальное воспроизведение
 
@@ -109,7 +109,7 @@ enable already-visible then undo: expected=true actual=false
 ```json
 {
   "type": "staticMesh",
-  "mesh": "models/box.mesh.json"
+  "mesh": "models/box/box.mesh.json"
 }
 ```
 
@@ -168,7 +168,7 @@ Ctrl+Z не возвращает исходную привязку матери�
 
 ### Минимальное воспроизведение
 
-Объект с `mesh: "models/tent.mesh.json"`, без собственных `material` и `materials`.
+Объект с `mesh: "models/tent/tent.mesh.json"`, без собственных `material` и `materials`.
 
 Asset [tent.mesh.json:4](/D:/Programming/test_cube/models/tent.mesh.json:4) содержит:
 
@@ -243,7 +243,7 @@ Whole-object assignment должен формировать effective перео
 ```json
 {
   "type": "staticMesh",
-  "mesh": "models/box.mesh.json",
+  "mesh": "models/box/box.mesh.json",
   "enabled": false
 }
 ```
@@ -437,7 +437,7 @@ int main()
     {
         EditorSceneDocument document;
         document.Add(EditorSceneDocument::ObjectFromJson({1},
-            Json{{"type", "staticMesh"}, {"enabled", true}, {"mesh", "models/box.mesh.json"}}));
+            Json{{"type", "staticMesh"}, {"enabled", true}, {"mesh", "models/box/box.mesh.json"}}));
         EditorContext ctx{*renderer, *scene, levels, document, selection};
         SetEnabledCommand command({1}, true);
         command.Execute(ctx);
@@ -449,7 +449,7 @@ int main()
     {
         EditorSceneDocument document;
         document.Add(EditorSceneDocument::ObjectFromJson({1},
-            Json{{"type", "staticMesh"}, {"mesh", "models/box.mesh.json"}}));
+            Json{{"type", "staticMesh"}, {"mesh", "models/box/box.mesh.json"}}));
         EditorContext ctx{*renderer, *scene, levels, document, selection};
         const Json original = EditorSceneDocument::ObjectToJson(*document.Find({1}));
         const Json before = SceneObjectFactory::ResolveMeshAsset(original);
@@ -467,7 +467,7 @@ int main()
     {
         EditorSceneDocument document;
         document.Add(EditorSceneDocument::ObjectFromJson({1},
-            Json{{"type", "staticMesh"}, {"mesh", "models/tent.mesh.json"}}));
+            Json{{"type", "staticMesh"}, {"mesh", "models/tent/tent.mesh.json"}}));
         EditorContext ctx{*renderer, *scene, levels, document, selection};
         SetMaterialCommand command({1}, "bronze");
         command.Execute(ctx);
@@ -479,7 +479,7 @@ int main()
         confirmed += gb->SlotPreset(0) != "bronze";
     }
     {
-        const Json object{{"type", "staticMesh"}, {"mesh", "models/box.mesh.json"}, {"enabled", false}};
+        const Json object{{"type", "staticMesh"}, {"mesh", "models/box/box.mesh.json"}, {"enabled", false}};
         auto runtime = SceneObjectFactory::CreateStaticMeshFromJson(object);
         std::printf("factory used by material/mesh respawn on disabled object: expected=false actual=%s\n",
             runtime->IsVisible() ? "true" : "false");

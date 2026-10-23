@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -154,21 +155,211 @@ namespace materialgen
         return cutout;
     }
 
-    bool IsFoliageCard(const GltfMaterialDesc& d)
+    float MeasureCutShare(const MeshCpuData& cpu, size_t submesh, const assets::AlphaImage& alpha,
+        float cutoff, int samples)
     {
-        // Two-sided by the glTF's own say: a cutout card is open by construction, so the seam
-        // measure DecideTwoSided applies to opaque surfaces never overrules it.
-        return d.valid && d.doubleSided && IsAlphaCutout(d);
+        if (alpha.width == 0 || alpha.height == 0 || alpha.alpha.size() < alpha.width * alpha.height ||
+            samples <= 0)
+        {
+            return -1.0f;
+        }
+        size_t first = 0;
+        size_t count = cpu.indices.size();
+        if (!cpu.submeshes.empty())
+        {
+            if (submesh >= cpu.submeshes.size()) { return -1.0f; }
+            first = cpu.submeshes[submesh].indexOffset;
+            count = cpu.submeshes[submesh].indexCount;
+        }
+        else if (submesh != 0)
+        {
+            return -1.0f;
+        }
+        const size_t end = std::min(cpu.indices.size(), first + count);
+
+        // Area-weighted samples: equal steps along the running sum of triangle areas, so a triangle
+        // takes samples in proportion to its area, each placed in it by a low-discrepancy (R2) point.
+        // Deterministic, so the dialog, the import and the gate read the same number.
+        std::vector<double> runningArea;
+        runningArea.reserve((end - std::min(first, end)) / 3);
+        double total = 0.0;
+        for (size_t t = first; t + 2 < end; t += 3)
+        {
+            const DirectX::XMFLOAT3& a = cpu.vertices[cpu.indices[t]].position;
+            const DirectX::XMFLOAT3& b = cpu.vertices[cpu.indices[t + 1]].position;
+            const DirectX::XMFLOAT3& c = cpu.vertices[cpu.indices[t + 2]].position;
+            const double ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+            const double vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+            const double cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+            total += 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+            runningArea.push_back(total);
+        }
+        if (!(total > 0.0)) { return -1.0f; }
+
+        const float threshold = cutoff * 255.0f;
+        const double step = total / samples;
+        size_t tri = 0;
+        int counted = 0;
+        int below = 0;
+        for (int k = 0; k < samples; ++k)
+        {
+            const double target = (k + 0.5) * step;
+            while (tri + 1 < runningArea.size() && runningArea[tri] < target) { ++tri; }
+            const double r1 = std::fmod(0.5 + k * 0.7548776662466927, 1.0);
+            const double r2 = std::fmod(0.5 + k * 0.5698402909980532, 1.0);
+            const double s = std::sqrt(r1);
+            const double wa = 1.0 - s, wb = s * (1.0 - r2), wc = s * r2;
+            const size_t t = first + tri * 3;
+            const DirectX::XMFLOAT2& ua = cpu.vertices[cpu.indices[t]].uv;
+            const DirectX::XMFLOAT2& ub = cpu.vertices[cpu.indices[t + 1]].uv;
+            const DirectX::XMFLOAT2& uc = cpu.vertices[cpu.indices[t + 2]].uv;
+            double u = wa * ua.x + wb * ub.x + wc * uc.x;
+            double v = wa * ua.y + wb * ub.y + wc * uc.y;
+            if (!std::isfinite(u) || !std::isfinite(v)) { continue; }
+            u -= std::floor(u);
+            v -= std::floor(v);
+            const size_t x = std::min(alpha.width - 1, static_cast<size_t>(u * alpha.width));
+            const size_t y = std::min(alpha.height - 1, static_cast<size_t>(v * alpha.height));
+            ++counted;
+            below += alpha.alpha[y * alpha.width + x] < threshold ? 1 : 0;
+        }
+        return counted > 0 ? static_cast<float>(below) / static_cast<float>(counted) : -1.0f;
+    }
+
+    LeafVerdict DecideLeafCard(const GltfMaterialDesc& d, float cutShare)
+    {
+        LeafVerdict v;
+        v.materialIndex = d.materialIndex;
+        v.name = d.name;
+        v.cutShare = cutShare;
+        if (!d.valid)
+        {
+            v.reason = "no material";
+            return v;
+        }
+        if (!IsAlphaCutout(d))
+        {
+            v.reason = "surface: opaque";
+            return v;
+        }
+        if (!d.doubleSided)
+        {
+            v.reason = "surface: a single-sided cutout";
+            return v;
+        }
+        v.candidate = true;
+        char text[192];
+        if (cutShare < 0.0f)
+        {
+            // Nothing to measure with is not evidence against a leaf: keep what the flags say.
+            v.leaf = true;
+            v.reason = d.albedoPath.empty()
+                ? "leaf card by its flags alone: no albedo file to measure the cutout on"
+                : "leaf card by its flags alone: " + fs::path(d.albedoPath).filename().string() +
+                  " could not be read to measure the cutout";
+            return v;
+        }
+        v.leaf = cutShare >= kLeafCutShare;
+        std::snprintf(text, sizeof(text), "%s: the cutout removes %.1f%% of the surface (a leaf: %.0f%% or more)",
+            v.leaf ? "leaf card" : "surface", cutShare * 100.0f, kLeafCutShare * 100.0f);
+        v.reason = text;
+        return v;
+    }
+
+    std::vector<LeafVerdict> ClassifyLeafCards(const std::string& geometry)
+    {
+        const size_t groups = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
+        std::vector<GltfMaterialDesc> descs(groups);
+        bool anyToMeasure = false;
+        for (size_t i = 0; i < groups; ++i)
+        {
+            descs[i] = MeshManager::DescribeGltfMaterial(geometry, static_cast<int>(i));
+            anyToMeasure = anyToMeasure || (descs[i].valid && descs[i].doubleSided && IsAlphaCutout(descs[i]) &&
+                !descs[i].albedoPath.empty());
+        }
+        MeshCpuData cpu;
+        bool parsed = false;
+        if (anyToMeasure)
+        {
+            MeshLoadOptions options;
+            options.generateTangentSpace = false; // positions and texcoords are all this reads
+            MeshManager parser;
+            parsed = parser.ParseFileCpu(geometry, cpu, options) && !cpu.indices.empty();
+        }
+        // One decode per texture: a file's materials often share an atlas.
+        std::unordered_map<std::string, assets::AlphaImage> images;
+        std::vector<LeafVerdict> out;
+        out.reserve(groups);
+        for (size_t i = 0; i < groups; ++i)
+        {
+            const GltfMaterialDesc& d = descs[i];
+            float cutoff = 0.5f;
+            float cutShare = -1.0f;
+            if (parsed && d.valid && d.doubleSided && IsAlphaCutout(d, &cutoff) && !d.albedoPath.empty())
+            {
+                const auto [it, inserted] = images.try_emplace(d.albedoPath);
+                if (inserted) { assets::LoadAlphaChannel(d.albedoPath, 1024, it->second); }
+                cutShare = MeasureCutShare(cpu, i, it->second, cutoff);
+            }
+            out.push_back(DecideLeafCard(d, cutShare));
+        }
+        return out;
+    }
+
+    namespace
+    {
+        // The keys a leaf card's material says differently from a surface's. WriteFromGltf writes
+        // them for a new file and ApplyLeafShading switches them in an existing one, so the two
+        // cannot drift apart.
+        void WriteLeafKeys(nlohmann::json& m, bool leaf)
+        {
+            // A leaf card gets the shading the hand-tuned palm leaves carry (coconut_palm_2,
+            // curly_palm_1): light through the leaf at full strength, the leaf's own normal deciding
+            // it, a little less sky specular. It used to come in defaultLit like a rock -- every
+            // imported fern, grass tuft and frond lit as an opaque card with nothing behind it.
+            m["shadingModel"] = leaf ? "twoSidedFoliage" : "defaultLit";
+            m["transmissionStrength"] = leaf ? 1.0f : 0.0f;
+            m["transmissionNormalWeight"] = leaf ? 1.0f : 0.35f;
+            m["indirectSpecularScale"] = leaf ? 0.7f : 1.0f;
+        }
+    }
+
+    bool ApplyLeafShading(const std::string& name, bool leaf)
+    {
+        const fs::path matPath = fs::path("data/materials") / (name + ".json");
+        nlohmann::json m;
+        {
+            std::ifstream in(matPath);
+            if (!in) { return false; }
+            m = nlohmann::json::parse(in, nullptr, false, true);
+        }
+        if (m.is_discarded() || !m.is_object()) { return false; }
+        const nlohmann::json before = m;
+        WriteLeafKeys(m, leaf);
+        if (leaf) { m["twoSided"] = true; }
+        if (m == before) { return false; }
+        std::ofstream out(matPath, std::ios::trunc);
+        if (!out) { return false; }
+        out << m.dump(2) << '\n';
+        LOG_INFO(logging::LogCategory::Asset, "material {}: switched to {}", name,
+            leaf ? "leaf-card shading (twoSidedFoliage)" : "surface shading (defaultLit)");
+        return static_cast<bool>(out);
     }
 
     std::string WriteFromGltf(const std::string& geometry, int ordinal,
-        const std::string& name, bool overwrite, SurfaceMeasure* measure)
+        const std::string& name, bool overwrite, SurfaceMeasure* measure, std::optional<bool> leaf)
     {
         const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(geometry, ordinal);
         if (!d.valid) { return "auto"; } // null-material slot -> resolve from glTF at runtime
         float cutoff = 0.5f;
         const bool cutout = IsAlphaCutout(d, &cutoff);
-        const bool foliage = IsFoliageCard(d);
+        if (!leaf.has_value())
+        {
+            const std::vector<LeafVerdict> verdicts = ClassifyLeafCards(geometry);
+            leaf = ordinal >= 0 && static_cast<size_t>(ordinal) < verdicts.size() &&
+                verdicts[static_cast<size_t>(ordinal)].leaf;
+        }
+        const bool foliage = *leaf;
 
         const fs::path matPath = fs::path("data/materials") / (name + ".json");
         std::error_code ec;
@@ -243,16 +434,9 @@ namespace materialgen
                     steep.coverage * 100.0f, steep.meanZ, strength);
             }
         }
-        // A leaf card gets the shading the hand-tuned palm leaves carry (coconut_palm_2,
-        // curly_palm_1): light through the leaf at full strength, the leaf's own normal deciding
-        // it, a little less sky specular. It used to come in defaultLit like a rock -- every
-        // imported fern, grass tuft and frond lit as an opaque card with nothing behind it.
-        m["shadingModel"] = foliage ? "twoSidedFoliage" : "defaultLit";
+        WriteLeafKeys(m, foliage);
         m["subsurfaceColor"] = { 1.0f, 1.0f, 1.0f };
-        m["transmissionStrength"] = foliage ? 1.0f : 0.0f;
         m["transmissionAlbedoPower"] = 0.6f;
-        m["transmissionNormalWeight"] = foliage ? 1.0f : 0.35f;
-        m["indirectSpecularScale"] = foliage ? 0.7f : 1.0f;
         m["ambientOcclusion"] = 1.0f;
         m["normalIsRG"] = false;
         if (cutout) { m["alphaTest"] = true; m["alphaCutoff"] = cutoff; }

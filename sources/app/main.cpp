@@ -1182,7 +1182,7 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--sdsm-readout")) {
             render::sdsm::g_dumpReadout = true;
         }
-        // "--uv-density=models/x.mesh.json[,models/y.mesh.json...]" (texture streaming A1): measure
+        // "--uv-density=models/x/x.mesh.json[,models/y/y.mesh.json...]" (texture streaming A1): measure
         // the per-slot UV density of each manifest's geometry as it is on disk (the baked .bin) and
         // write it as "uvDensity" -- nothing else in the file and nothing in the .bin changes. For
         // manifests that predate the key; a bake writes it on its own. Exit code = failures.
@@ -1211,9 +1211,10 @@ int WINAPI WinMain(
         }
 #if WITH_EDITOR
         // "--seam-ratio=<geometry>[,<geometry>...]": how OPEN each submesh's surface is, measured
-        // exactly as the importer measures it, next to that slot's glTF flags and the twoSided the
-        // importer would write (materialgen::DecideTwoSided). Read-only: one line per submesh,
-        // nothing written. Exit code = geometries that could not be read.
+        // exactly as the importer measures it, next to that slot's glTF flags, the twoSided the
+        // importer would write (materialgen::DecideTwoSided) and its leaf-card verdict with the
+        // share of the surface the cutout removes (materialgen::ClassifyLeafCards). Read-only: one
+        // line per submesh, nothing written. Exit code = geometries that could not be read.
         if (const char* flag = std::strstr(lpCmdLine, "--seam-ratio=")) {
             const char* p = flag + std::strlen("--seam-ratio=");
             std::string list;
@@ -1231,6 +1232,8 @@ int WINAPI WinMain(
                     ++failed;
                     continue;
                 }
+                // The leaf-card verdict the importer reaches for each slot, from the same call.
+                const std::vector<materialgen::LeafVerdict> leaves = materialgen::ClassifyLeafCards(path);
                 for (size_t s = 0; s < ratios.size(); ++s) {
                     const GltfMaterialDesc material =
                         MeshManager::DescribeGltfMaterial(path, static_cast<int>(s));
@@ -1243,9 +1246,10 @@ int WINAPI WinMain(
                     const materialgen::TwoSidedDecision decision = materialgen::DecideTwoSided(
                         material.doubleSided, material.alphaMask, true, ratios[s]);
                     LOG_INFO(logging::LogCategory::Asset,
-                        "--seam-ratio: {} submesh {}: {:.5f}, glTF doubleSided={}{} -> {}",
-                        path, s, ratios[s], material.doubleSided ? 1 : 0,
-                        material.alphaMask ? " MASK" : "", decision.reason);
+                        "--seam-ratio: {} submesh {} '{}': {:.5f}, glTF doubleSided={}{} -> {}; {}",
+                        path, s, material.name, ratios[s], material.doubleSided ? 1 : 0,
+                        material.alphaMask ? " MASK" : (material.alphaBlend ? " BLEND" : ""), decision.reason,
+                        s < leaves.size() ? leaves[s].reason : std::string("leaf verdict missing"));
                 }
             }
             return failed;
@@ -1299,7 +1303,7 @@ int WINAPI WinMain(
             if (!chunk.empty()) {
                 opt.chunkGrid = static_cast<unsigned int>(std::atoi(chunk.c_str()));
             }
-            // "--reimport-manifest=models/x.mesh.json": take EVERY bake option from the manifest.
+            // "--reimport-manifest=models/x/x.mesh.json": take EVERY bake option from the manifest.
             // Applied before the individual flags below so an explicit flag still wins, which is
             // what makes "re-bake exactly what this asset says, but with one thing changed" a
             // one-liner. Without it a headless re-bake silently dropped every manifest key that had

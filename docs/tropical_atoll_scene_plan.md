@@ -803,7 +803,7 @@ AssetRegistry indexes `.mesh.json` under the models root (Mesh type, id.key = pa
 writes `models/<name>/<name>.mesh.json` on a whole-asset mesh import (`geometry` = the copied
 glTF, `spawnScale` from the size-normalizer). Back-compat is intact — legacy `model`+inline
 objects load byte-identically (ResolveMeshAsset returns them untouched) and round-trip verbatim.
-Verified: a compact `{"mesh":"models/atoll_island.mesh.json"}` level booted headless → 1 caster,
+Verified: a compact `{"mesh":"models/atoll_island/atoll_island.mesh.json"}` level booted headless → 1 caster,
 RT + cull-validation PASS (material/renderLayer/texOffsScale all pulled from the asset);
 scene-stress on the legacy demo levels CLEAN.
 **BULK MIGRATION done (user: "собери меши... замени на левелах", scope = every mesh/every level):**
@@ -830,7 +830,7 @@ One file describes how to RENDER a piece of geometry:
 }
 ```
 - **Level objects shrink** to placement + reference: `{"type":"staticMesh", "mesh":
-  "models/atoll_island.mesh.json", position/rotation/scale, name, id}`. Per-object overrides
+  "models/atoll_island/atoll_island.mesh.json", position/rotation/scale, name, id}`. Per-object overrides
   (material/materials/shader/texOffsScale/renderLayer/params) REMAIN LEGAL and WIN over the mesh
   asset's defaults — same layering rule as I0 material params.
 - **Back-compat is a hard rule**: existing objects using `model` + inline plumbing keep loading

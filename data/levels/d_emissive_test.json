@@ -45,7 +45,7 @@
       "enabled": true,
       "id": 2,
       "material": "sandstone_cracks",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "name": "ground",
       "position": [
         0.0,
@@ -76,7 +76,7 @@
       "enabled": true,
       "id": 10,
       "material": "damaged_plaster",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "name": "ember.orange.strong",
       "position": [
         -2.5,
@@ -100,7 +100,7 @@
       "enabled": true,
       "id": 11,
       "material": "damaged_plaster",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "name": "ember.orange.subtle",
       "position": [
         0.0,
@@ -118,7 +118,7 @@
       "enabled": true,
       "id": 12,
       "material": "damaged_plaster",
-      "mesh": "models/box.mesh.json",
+      "mesh": "models/box/box.mesh.json",
       "name": "no.emissive.reference",
       "position": [
         2.5,

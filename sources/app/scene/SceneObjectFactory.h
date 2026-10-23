@@ -24,7 +24,7 @@ class Scene;
 namespace SceneObjectFactory
 {
     // J1: expand a mesh-asset reference. If `objectJson` has a `"mesh"` key (path to a
-    // models/<name>.mesh.json), fold that asset's render defaults UNDER the object's own keys
+    // models/<name>/<name>.mesh.json), fold that asset's render defaults UNDER the object's own keys
     // (object wins; `geometry`->`model`; `spawnScale` skipped as a spawn-time hint) and return the
     // effective JSON. Returns the input unchanged when there is no `mesh` key or the file is
     // unreadable. Public so alternate creators (RotatingObject) resolve the reference too.

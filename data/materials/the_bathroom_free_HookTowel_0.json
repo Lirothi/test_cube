@@ -1,0 +1,21 @@
+{
+  "albedo": "models/the_bathroom_free/textures/Fabric_baseColor.png",
+  "alphaCutoff": 0.5,
+  "alphaTest": true,
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "mr": "models/the_bathroom_free/textures/Fabric_metallicRoughness.png",
+  "normal": "models/the_bathroom_free/textures/Fabric_normal.png",
+  "normalIsRG": false,
+  "normalStrength": 0.4099999964237213,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0,
+  "twoSided": true
+}

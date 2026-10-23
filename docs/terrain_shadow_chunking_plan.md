@@ -22,7 +22,7 @@ LOD0 near the camera" cheap — the finest clipmap ring (12 m) sits inside 1–4
 
 ## Facts already established — do NOT re-derive
 
-- **F1. The island asset**: `models/atoll_island.mesh.json` → `models/atoll_island/atoll_island.mesh.bin`.
+- **F1. The island asset**: `models/atoll_island/atoll_island.mesh.json` → `models/atoll_island/atoll_island.mesh.bin`.
   41,760 verts, 1 submesh, 4 LODs: 82,944 / 41,471 / 20,736 / 9,952 tris. World AABB
   361 × 15.8 × 388 m. Source: `import_staging/atoll_island/atoll_island.obj`. Companion
   `atoll_lagoon_floor` is 256 tris — ignore it, it costs nothing.
@@ -188,7 +188,7 @@ file is added (C++ paths use forward slashes; filters use backslashes).
    aligned across LODs — slot ↔ chunk identity is positional).
 4. Offline verification WITHOUT touching models/: bake the island to the session scratchpad
    (`--reimport-src=import_staging/atoll_island/atoll_island.obj --reimport-out=<scratchpad>/...
-   --reimport-chunk=6` + whatever recompute flags `models/atoll_island.mesh.json` implies — check
+   --reimport-chunk=6` + whatever recompute flags `models/atoll_island/atoll_island.mesh.json` implies — check
    it), then python-parse the .bin (header 32 B; verts 52 B each; per LOD: u32 ic, u32 sc,
    indices, submeshes 12 B) and assert:
    - LOD0 total tris == 82,944 and equals the sum over submeshes;
@@ -324,7 +324,7 @@ in the level is chunked yet, so every new branch is provably unreached.
 
 **This step writes into `models/` — the user runs or explicitly approves each command.**
 
-1. Proposed edit to `models/atoll_island.mesh.json`: add `"chunkGrid": 6` and (if S1 chose to
+1. Proposed edit to `models/atoll_island/atoll_island.mesh.json`: add `"chunkGrid": 6` and (if S1 chose to
    route flags via mesh.json) the simplify-flag value. Show the diff to the user first.
 2. Proposed bake command (adjust flags to match the mesh.json exactly):
 
@@ -351,7 +351,7 @@ Everything else is in place; this is the only step that writes an asset. Two rou
 **Route A — the mesh import dialog (preferred).** Debug build → content browser → *Import Assets* →
 `atoll_island` → **Shadow chunking** → tick *Split into shadow chunks*, *Tiles per axis* = 6 →
 **Recreate mesh JSON only**. That button re-bakes `models/atoll_island/atoll_island.mesh.bin` AND
-writes `"chunkGrid": 6` into `models/atoll_island.mesh.json` from the same value, which is the point:
+writes `"chunkGrid": 6` into `models/atoll_island/atoll_island.mesh.json` from the same value, which is the point:
 the .bin carries no chunk flag of its own, so mesh.json is the only thing telling the runtime those
 submeshes are spatial tiles, and the two must never be set separately. It also leaves the asset's
 `material` / `texOffsScale` / `renderLayer` alone (the writer starts from the existing file) and does
@@ -364,7 +364,7 @@ mesh.json — the control can be turned off, not just on.
 **Route B — the headless CLI.** Two steps, in order; the mesh.json edit is NOT optional (without it
 the runtime sees 36 submeshes of one caster, i.e. today's cost plus 36 draw ranges).
 
-1. Add one line to `models/atoll_island.mesh.json` (the only tracked file this touches — a plain
+1. Add one line to `models/atoll_island/atoll_island.mesh.json` (the only tracked file this touches — a plain
    `git checkout` reverts it):
 
 ```json
@@ -391,7 +391,7 @@ checkout` will not bring it back. Two ways back, either is exact:
 
 The user re-imported through the dialog. Everything predicted came out exactly:
 
-* `models/atoll_island.mesh.json` gained **only** `"chunkGrid": 6` — `material`, `texOffsScale`,
+* `models/atoll_island/atoll_island.mesh.json` gained **only** `"chunkGrid": 6` — `material`, `texOffsScale`,
   `renderLayer` and `source` all preserved.
 * The shipped `.mesh.bin` is **byte-identical from offset 32 to the scratch bake validated in S1**
   (identical `optionsHash` too), so S1's proofs — LOD0 a pure partition, zero cracks at every LOD —

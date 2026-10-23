@@ -310,7 +310,7 @@ namespace
         return manifest.value("spawnScale", 0.0f);
     }
 
-    // J1: a `models/<name>.mesh.json` record is spawned as a compact reference (the mesh asset
+    // J1: a `models/<name>/<name>.mesh.json` record is spawned as a compact reference (the mesh asset
     // owns geometry/layout/shader/material); raw .obj/.gltf records keep the legacy inline form.
     bool IsMeshAsset(const std::string& key)
     {

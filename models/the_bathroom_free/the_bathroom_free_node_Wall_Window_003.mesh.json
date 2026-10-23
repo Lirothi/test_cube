@@ -1,0 +1,17 @@
+{
+  "geometry": "models/the_bathroom_free/the_bathroom_free_node_Wall_Window_003.mesh.bin",
+  "materials": [
+    "the_bathroom_free_Wall_Window_003_0",
+    "the_bathroom_free_Wall_Window_003_1"
+  ],
+  "pivot": "base",
+  "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Wall_Window.003",
+  "uvDensity": [
+    1.5974955558776855,
+    4.231871604919434
+  ],
+  "windFoliage": [
+    1.0,
+    0.0
+  ]
+}

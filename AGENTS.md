@@ -439,8 +439,8 @@ editor frame both happen before the panels look settled.
 
 `--show-import[=<name>]` (implies `--editor`) opens the Import Assets window with the staged item
 `<name>` selected, so its details pane -- size, split, material preview, LOD, chunking -- can be
-photographed; `--edit-mesh=<models/x.mesh.json>` does the same for the Mesh Editor, and
-`--edit-mesh=<models/x.mesh.json>#buoyancy` opens it with the Buoyancy section expanded.
+photographed; `--edit-mesh=<models/x/x.mesh.json>` does the same for the Mesh Editor, and
+`--edit-mesh=<models/x/x.mesh.json>#buoyancy` opens it with the Buoyancy section expanded.
 
 **Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
 hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
@@ -511,3 +511,29 @@ because switching it on moves the geometry under every placed copy: re-place the
 `T' = T + R (s * offset)` with the logged offset. Every node-split asset carries it since 2026-09-24
 (fern_02, lowpoly_sticks, rocks_node, seashells, beach_grass), and wind_test's copies were re-placed
 that way; for a rock or a stick the footing is its contact patch, up to 0.3 m off its box centre.
+
+## Import — Where a Mesh Asset Lives, and Leaf Card or Surface
+
+A mesh asset is `models/<name>/<name>.mesh.json`, beside its `.mesh.bin` and textures; a split import
+writes `models/<name>/<name>_node_<part>.mesh.json`. Until 2026-10-23 they lay flat in `models/` (a
+hundred-node pack spilled a hundred files between every other asset); all 148 were moved and every
+level re-pointed then, and nothing resolves the old flat path -- a stale one reports `mesh asset not
+found`. A mesh.json inside an import folder stands for the WHOLE import (registry status, Content
+Browser Reimport), like a material preset: it is not a copied output, and the per-resource reimport
+would have read it as an orphan and deleted it.
+
+Each glTF material is read as a LEAF CARD (twoSidedFoliage shading, its slot marked wind foliage, an
+auto windStrength) or a SURFACE (defaultLit, rigid). Leaf = a two-sided alpha cutout whose cutout
+removes at least 20 % of its surface (`materialgen::ClassifyLeafCards`: the albedo alpha sampled at
+area-weighted points over the material's triangles). The flags alone said leaf for anything Sketchfab
+exported -- it marks every material doubleSided and anything with a hint of opacity BLEND -- and
+the_bathroom_free's curtains, doors, towels and carpets swayed in the wind indoors. Measured: palm
+fronds, fern_02, ground/young palm 35-68 %; that bathroom's Door_and_windows 2.2 %, Fabric 0.9 %. A
+single-sided cutout stays a surface (curly_palm's frond boot is bark), which misses date_palm's
+single-sided fronds -- that is what the choice is for. The Import window's Materials list shows each
+material's verdict and measurement and takes a per-material choice (Auto / Leaf card / Surface); MCP
+`import_asset {surfaces: {"<material>": "leaf"|"surface"}}` is the same choice and its answer lists
+every verdict. Auto only decides NEW assets and NEW material files; a choice also switches an existing
+asset's wind slot and its material's four shading keys (`materialgen::ApplyLeafShading`), every other
+edit kept. `--seam-ratio=<gltf>` prints the verdict per slot headless; `intent_regression`'s
+`TestLeafCards` holds the rule on the staged sources.

@@ -2374,7 +2374,7 @@ void Renderer::EnsureVsmDummySrvs() {
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    hd.NumDescriptors = 2;
+    hd.NumDescriptors = 3;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE; // CPU-only: these are copy SOURCES for StageSrvUavTable
     if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.DummySrvs",
             IID_PPV_ARGS(vsmDummyHeap_.GetAddressOf()))) || !vsmDummyHeap_) {
@@ -2410,6 +2410,19 @@ void Renderer::EnsureVsmDummySrvs() {
         d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         d.Texture2D.MipLevels = 1;
         dev->CreateShaderResourceView(nullptr, &d, vsmDummyTexSrv_);
+    }
+
+    // Slot 2: null Texture2D (RGBA8) -- a textureless MATERIAL's albedo/MR/normal on the G-buffer table
+    // path (MaterialData::StageGBufferBindings). Samples as zero; texFlags keeps the shader on the tint.
+    nullMaterialTexSrv_ = base;
+    nullMaterialTexSrv_.ptr += 2 * inc;
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC d{};
+        d.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        d.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        d.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        d.Texture2D.MipLevels = 1;
+        dev->CreateShaderResourceView(nullptr, &d, nullMaterialTexSrv_);
     }
     vsmDummyReady_.store(true, std::memory_order_release); // the handles above are published with it
 }

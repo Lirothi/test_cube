@@ -159,6 +159,8 @@ struct MeshCpuData {
 // paths are resolved relative to the glTF file (URI-decoded); empty when the channel is absent.
 struct GltfMaterialDesc {
     bool  valid = false;          // false => no material (null-material group) or unresolved
+    int   materialIndex = -1;     // index into the file's materials[]: the same material under every selector
+    std::string name;             // the glTF material's name (may be empty)
     std::string albedoPath;
     std::string mrPath;
     std::string normalPath;

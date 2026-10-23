@@ -190,7 +190,7 @@ namespace
             {
                 continue;
             }
-            if (rec.id.key == "models/box.mesh.json")
+            if (rec.id.key == "models/box/box.mesh.json")
             {
                 return rec.id.key;
             }
@@ -472,8 +472,8 @@ namespace
     // the scene copy live, so "add the object" should capture what is on screen rather than snapping
     // the level back to neutral.
     // Placed static meshes whose geometry comes from under `assetPrefix` ("models/<name>"). The
-    // prefix covers both models/<name>.mesh.json and the split-node models/<name>_<part>.mesh.json
-    // that "Split by top-level nodes" produces.
+    // prefix covers both models/<name>/<name>.mesh.json and the split-node
+    // models/<name>/<name>_node_<part>.mesh.json that "Split by top-level nodes" produces.
     std::vector<EditorObjectId> PlacedMeshesUnderAsset(EditorContext& ctx,
         const std::string& assetPrefix)
     {
@@ -1132,7 +1132,7 @@ namespace
             {
                 { "name", "Floor" },
                 { "type", "staticMesh" },
-                { "mesh", "models/box.mesh.json" },
+                { "mesh", "models/box/box.mesh.json" },
                 { "material", "sandstone_cracks" },
                 { "shader", "shaders/gbuffer.hlsl" },
                 { "inputLayout", "PosNormTanUV" },
@@ -3000,7 +3000,7 @@ void EditorController::Draw(
     }
 
     EditorContext ctx{ renderer, scene, levelManager, document_, selection_ };
-    // "models/x.mesh.json#buoyancy" opens the asset with that section expanded (the Inspector's
+    // "models/x/x.mesh.json#buoyancy" opens the asset with that section expanded (the Inspector's
     // "Edit pontoons" button, and --edit-mesh=...#buoyancy for a headless capture of it).
     ctx.openMeshEditor = [this](const std::string& meshPath)
     {
@@ -3194,7 +3194,7 @@ void EditorController::Draw(
             true,
             [this](EditorContext& panelCtx)
             {
-                // J: edit a models/<name>.mesh.json's render defaults (materials/renderLayer/
+                // J: edit a models/<name>/<name>.mesh.json's render defaults (materials/renderLayer/
                 // spawnScale/texOffsScale). Opened by double-clicking the mesh asset in the browser.
                 // Save live-applies to placed instances via panelCtx (scene/document/renderer).
                 meshEditor_.Draw(panelCtx, assetRegistry_, &showMeshEditor_,

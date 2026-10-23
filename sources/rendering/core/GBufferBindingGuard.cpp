@@ -21,7 +21,7 @@ void ReportMissingGBufferBindings(const void* owner, std::size_t slot, const cha
     if (reported.fetch_or(bit, std::memory_order_relaxed) & bit) { return; }
     diag::WriteArtifactf("missing_material.log", diag::ArtifactMode::Append,
                          "%s: gbuffer slot %zu (owner %p) has no SRV/sampler table -- submesh SKIPPED\n"
-                         "  cause: the mesh has no material, or its material has no textures at all\n"
+                         "  cause: the mesh slot has no material (MaterialData)\n"
                          "  drawing it would leave gbuffer.hlsl root parameters 3 and 4 unbound\n",
                          where ? where : "?", slot, owner);
 }

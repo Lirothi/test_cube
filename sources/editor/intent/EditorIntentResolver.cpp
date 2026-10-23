@@ -644,7 +644,7 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
             (preview.targets.size() == 1 ? " object" : " objects");
     // Only for the verb that actually turns them into it. The field can hold a stray asset
     // the grammar allowed into any target, and appending it read as a replace: "delete 183
-    // objects -> models/coconut_palm.mesh.json" is a sentence about a different command.
+    // objects -> models/coconut_palm/coconut_palm.mesh.json" is a sentence about a different command.
     if (action->takesDestinationAsset && !preview.resolved.target.asset.empty())
     {
         preview.summary += " -> " + preview.resolved.target.asset;

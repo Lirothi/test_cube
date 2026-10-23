@@ -14,7 +14,7 @@
 class AssetRegistry;
 struct EditorContext;
 
-// Part J — dedicated Mesh Editor window. Opened by double-clicking a `models/<name>.mesh.json`
+// Part J — dedicated Mesh Editor window. Opened by double-clicking a `models/<name>/<name>.mesh.json`
 // asset in the content browser. Edits the mesh asset's render defaults — per-slot materials and
 // normal generation, renderLayer, spawnScale, texOffsScale tiling — and writes them back while
 // preserving unknown keys. Shader is intentionally NOT editable here: it is a MATERIAL concern

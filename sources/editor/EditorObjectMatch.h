@@ -20,7 +20,7 @@ namespace editormatch
     constexpr const char* kSearchPropertyKeys[] = {
         // "mesh" FIRST because it is what current levels actually use: a .mesh.json
         // reference carries the geometry, layout, shader and material defaults, and the
-        // atoll's hundred palms are all `"mesh": "models/date_palm.mesh.json"`. It was
+        // atoll's hundred palms are all `"mesh": "models/date_palm/date_palm.mesh.json"`. It was
         // missing from this list, which meant the outliner's search box -- and anything
         // else sharing this predicate -- could not find them by asset at all. Typing
         // "date_palm" into the search box returned nothing on a level made of date palms.
@@ -80,11 +80,11 @@ namespace editormatch
         return object.type.empty() ? object.name : object.type;
     }
 
-    // The same thing, as a person would write it: "models/coconut_palm.mesh.json" becomes
+    // The same thing, as a person would write it: "models/coconut_palm/coconut_palm.mesh.json" becomes
     // "Coconut Palm". AssetLabel returns the PATH, which is right for matching and filtering
     // -- it is the identity -- and wrong the moment it is used as a label somebody reads.
     // Asked to give the level sensible names, the first version named 107 objects
-    // "models/coconut_palm.mesh.json 001", which is the opposite of what was asked for.
+    // "models/coconut_palm/coconut_palm.mesh.json 001", which is the opposite of what was asked for.
     // Split out from PrettyAssetLabel because a thing that does not EXIST yet still needs
     // the name its kind would get: `spawn` has an asset path and no object, and has to
     // arrive at the same spelling `group perAsset` uses, or a new rock would land in a

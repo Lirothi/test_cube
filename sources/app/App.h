@@ -118,7 +118,7 @@ extern bool g_bootMemoryWindow;
 // so a headless --shot can capture a panel that otherwise needs a keypress to appear.
 // WITH_EDITOR only; ignored elsewhere.
 extern bool g_bootEditor;
-// "--edit-mesh=<models/x.mesh.json>": open the Mesh Editor on that asset at boot (implies
+// "--edit-mesh=<models/x/x.mesh.json>": open the Mesh Editor on that asset at boot (implies
 // --editor). Same reason again: its preview is otherwise reachable only by a double-click in
 // the content browser, and a lighting change there is judged by LOOKING at it.
 extern std::string g_bootEditMesh;

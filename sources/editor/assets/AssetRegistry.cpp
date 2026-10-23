@@ -1718,6 +1718,7 @@ void AssetRegistry::Refresh()
     // listing) is cached per import folder — a palm has ~17 records that would
     // otherwise each re-parse the manifest and re-walk the staging tree.
     std::unordered_map<std::string, ImportFolderContext> folderContexts;
+    std::unordered_map<std::string, EditorAssetImportStatus> folderStatuses;
     for (EditorAssetRecord& record : assets_)
     {
         fs::path source;
@@ -1730,6 +1731,14 @@ void AssetRegistry::Refresh()
         {
             ec.clear();
             isProjectResource = fs::equivalent(fs::path(record.path), project, ec);
+        }
+        else if (record.extension == ".mesh.json")
+        {
+            // The mesh asset lives in its import's folder (models/<name>/) but is no copied
+            // output -- the bake writes it, the manifest never lists it -- so as a per-resource
+            // record it would read as an orphan whose source is gone. It stands for the whole
+            // import, as a material preset does.
+            isProjectResource = false;
         }
         else
         {
@@ -1753,8 +1762,16 @@ void AssetRegistry::Refresh()
         }
         else
         {
-            record.importStatus = InspectAssetImportStatus(
-                source.generic_string(), project.generic_string());
+            // Once per import folder: a split pack's hundred mesh assets share one answer, and
+            // each would otherwise re-parse the manifest and re-walk the staging tree.
+            const std::string statusKey = source.generic_string() + "|" + project.generic_string();
+            auto statusIt = folderStatuses.find(statusKey);
+            if (statusIt == folderStatuses.end())
+            {
+                statusIt = folderStatuses.emplace(statusKey, InspectAssetImportStatus(
+                    source.generic_string(), project.generic_string())).first;
+            }
+            record.importStatus = statusIt->second;
         }
         if (record.importStatus != EditorAssetImportStatus::Untracked)
         {

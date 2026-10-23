@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -103,5 +104,15 @@ struct NormalMapSteepness
     float StrengthFor(float targetMeanZ) const; // 1 when the map already reaches it
 };
 NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, const std::string& albedoPath);
+
+// The alpha channel of an image file (WIC formats or TGA), one byte per texel, row-major from the
+// top, scaled down so its longer edge is at most `maxEdge`. An image without alpha reads as all 255.
+struct AlphaImage
+{
+    size_t width = 0;
+    size_t height = 0;
+    std::vector<uint8_t> alpha;
+};
+bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out);
 
 } // namespace assets

@@ -55,13 +55,13 @@
   ],
   "pointLights": [],
   "objects": [
-    { "enabled": true, "id": 1, "name": "ground", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "sandstone_cracks",
+    { "enabled": true, "id": 1, "name": "ground", "type": "staticMesh", "mesh": "models/box/box.mesh.json", "material": "sandstone_cracks",
       "position": [0.0, -0.5, 0.0], "rotationDeg": [0.0, 0.0, 0.0], "scale": [60.0, 1.0, 60.0], "normalStrength": 1.0 },
-    { "enabled": true, "id": 2, "name": "pillar a", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "damaged_plaster",
+    { "enabled": true, "id": 2, "name": "pillar a", "type": "staticMesh", "mesh": "models/box/box.mesh.json", "material": "damaged_plaster",
       "position": [1.2, 1.5, 0.8], "rotationDeg": [0.0, 15.0, 0.0], "scale": [0.6, 3.0, 0.6], "normalStrength": 1.0 },
-    { "enabled": true, "id": 3, "name": "pillar b", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "damaged_plaster",
+    { "enabled": true, "id": 3, "name": "pillar b", "type": "staticMesh", "mesh": "models/box/box.mesh.json", "material": "damaged_plaster",
       "position": [-1.5, 1.0, 1.6], "rotationDeg": [0.0, -30.0, 0.0], "scale": [0.5, 2.0, 0.5], "normalStrength": 1.0 },
-    { "enabled": true, "id": 4, "name": "slab", "type": "staticMesh", "mesh": "models/box.mesh.json", "material": "damaged_plaster",
+    { "enabled": true, "id": 4, "name": "slab", "type": "staticMesh", "mesh": "models/box/box.mesh.json", "material": "damaged_plaster",
       "position": [2.6, 2.4, 1.9], "rotationDeg": [0.0, 25.0, 0.0], "scale": [1.6, 0.2, 1.0], "normalStrength": 1.0 },
     { "enabled": true, "id": 5, "name": "FreeCameraStart", "type": "freeCameraStart",
       "position": [10.0, 3.0, 10.0], "rotationDeg": [6.0, -135.0, 0.0], "scale": [1.0, 1.0, 1.0] }

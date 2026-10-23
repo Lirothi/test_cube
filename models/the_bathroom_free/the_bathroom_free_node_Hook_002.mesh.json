@@ -1,0 +1,12 @@
+{
+  "geometry": "models/the_bathroom_free/the_bathroom_free_node_Hook_002.mesh.bin",
+  "material": "the_bathroom_free_Hook_002_0",
+  "pivot": "base",
+  "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Hook.002",
+  "uvDensity": [
+    0.8888002634048462
+  ],
+  "windFoliage": [
+    1.0
+  ]
+}

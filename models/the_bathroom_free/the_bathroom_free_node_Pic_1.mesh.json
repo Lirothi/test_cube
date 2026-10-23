@@ -1,0 +1,9 @@
+{
+  "geometry": "models/the_bathroom_free/the_bathroom_free_node_Pic_1.mesh.bin",
+  "material": "the_bathroom_free_Pic_1_0",
+  "pivot": "base",
+  "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Pic 1",
+  "uvDensity": [
+    0.6713046431541443
+  ]
+}

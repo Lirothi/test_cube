@@ -798,6 +798,57 @@ namespace
         return result.empty() ? std::string("node") : result;
     }
 
+    // Which glTF materials of ONE import are leaf cards (materialgen::ClassifyLeafCards over the
+    // whole file) with the person's choices from the import dialog or MCP import_asset on top. Built
+    // once per import and measured on first need, so a split import of a hundred nodes measures each
+    // texture once, not once per node -- and a node holding three triangles of a material is judged
+    // by the whole material. Keyed by the glTF material index: the one name a material has under
+    // every #node: selector.
+    struct LeafPlan
+    {
+        std::string file;            // the staging glTF, no selector
+        std::map<int, bool> chosen;  // material index -> leaf, the person's choice
+        bool measured = false;
+        std::map<int, materialgen::LeafVerdict> verdicts;
+
+        bool Leaf(int materialIndex)
+        {
+            if (materialIndex < 0) { return false; }
+            if (const auto c = chosen.find(materialIndex); c != chosen.end()) { return c->second; }
+            if (!measured)
+            {
+                measured = true;
+                for (materialgen::LeafVerdict& v : materialgen::ClassifyLeafCards(file))
+                {
+                    if (v.materialIndex < 0) { continue; }
+                    LOG_INFO(logging::LogCategory::Asset, "import {}: material '{}' -> {}{}", file, v.name,
+                        v.reason, chosen.count(v.materialIndex) ? " (overridden by the person's choice)" : "");
+                    verdicts[v.materialIndex] = std::move(v);
+                }
+            }
+            const auto it = verdicts.find(materialIndex);
+            return it != verdicts.end() && it->second.leaf;
+        }
+        std::optional<bool> Chosen(int materialIndex) const
+        {
+            const auto c = chosen.find(materialIndex);
+            return c != chosen.end() ? std::optional<bool>(c->second) : std::nullopt;
+        }
+    };
+
+    // The glTF material index behind each submesh slot of `geometry` (-1 = a null-material slot).
+    std::vector<int> SlotMaterialIndices(const std::string& geometry)
+    {
+        const size_t slots = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
+        std::vector<int> out(slots, -1);
+        for (size_t i = 0; i < slots; ++i)
+        {
+            const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(geometry, static_cast<int>(i));
+            out[i] = d.valid ? d.materialIndex : -1;
+        }
+        return out;
+    }
+
     // I3: promote a glTF's runtime "auto" materials to real named material files, one per submesh
     // slot, so imported meshes are fully authorable (editable in the material editor, reusable).
     // Uses the SAME ordinal->material mapping the runtime uses (MeshManager::DescribeGltfMaterial),
@@ -807,22 +858,22 @@ namespace
     // re-import keeps material-editor edits; the DDS behind them is overwritten in place). Returns
     // the per-slot names ("auto" for null-material slots); empty on parse failure.
     std::vector<std::string> GenerateMaterialFilesForGltf(const std::string& geometry,
-        const std::string& baseName)
+        const std::string& baseName, LeafPlan& leafPlan)
     {
         std::vector<std::string> names;
         // .obj has no embedded PBR materials to promote. Return nothing so the mesh.json is written
-        // WITHOUT a materials key (same shape as models/box.mesh.json) and the slot is assigned by
+        // WITHOUT a materials key (same shape as models/box/box.mesh.json) and the slot is assigned by
         // hand in the Mesh Editor — better than emitting a bogus "auto" the runtime cannot resolve.
         if (!IsGltfPath(geometry)) { return names; }
-        const size_t slotCount = std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
+        const std::vector<int> materialOf = SlotMaterialIndices(geometry);
         // Parsed at most once for all slots, and only if some slot's glTF says doubleSided.
         materialgen::SurfaceMeasure surface;
-        for (size_t i = 0; i < slotCount; ++i)
+        for (size_t i = 0; i < materialOf.size(); ++i)
         {
             // Preserve existing files (overwrite=false) so a re-import keeps material-editor edits.
             const std::string result = materialgen::WriteFromGltf(
                 geometry, static_cast<int>(i), baseName + "_" + std::to_string(i), /*overwrite=*/false,
-                &surface);
+                &surface, leafPlan.Leaf(materialOf[i]));
             names.push_back(result.empty() ? std::string("auto") : result);
         }
         return names;
@@ -866,7 +917,8 @@ namespace
         int chunkGrid, // -1 = keep the asset's existing value; see RecreateMeshAssets
         // true = ignore lodOpt's LOD/bakeScale fields and reproduce what THIS asset's
         // mesh.json carries (non-dialog re-imports must not inherit dialog leftovers).
-        bool preserveLodFromAsset)
+        bool preserveLodFromAsset,
+        LeafPlan& leafPlan)
     {
         nlohmann::json asset = nlohmann::json::object();
         std::ifstream existingFile(path);
@@ -964,25 +1016,26 @@ namespace
         // windFoliage tells the bake which slots are wood, so the along-limb weight can be a distance
         // from the wood surface instead of a per-component ramp. A re-import that dropped it would
         // silently re-introduce the step at every junction a leaf was cut at.
-        if (asset.contains("windFoliage") && asset["windFoliage"].is_array())
+        const bool hadFoliage = asset.contains("windFoliage") && asset["windFoliage"].is_array();
+        if (hadFoliage)
         {
             for (const nlohmann::json& f : asset["windFoliage"])
             {
                 if (f.is_number()) { bakeOpt.slotFoliage.push_back(f.get<float>()); }
             }
         }
-        else if (IsGltfPath(sourceGltf))
+        const std::vector<int> materialOf = IsGltfPath(sourceGltf) ? SlotMaterialIndices(sourceGltf) : std::vector<int>{};
+        if (!hadFoliage && !materialOf.empty())
         {
-            // First import: which slots are LEAVES, read off the glTF by the same rule the material
-            // files follow (a two-sided alpha cutout), and decided HERE, before the bake -- the
-            // bake's wind weights need it, and a foliage asset imported without it stood rigid in
-            // a wind that swayed every hand-set-up palm beside it.
-            const size_t slots = std::max<size_t>(1, MeshManager::CountSubmeshes(sourceGltf));
-            std::vector<float> foliage(slots, 0.0f);
+            // First import: which slots are LEAVES (the measured rule, the person's choice on top --
+            // LeafPlan), decided HERE, before the bake -- the bake's wind weights need it, and a
+            // foliage asset imported without it stood rigid in a wind that swayed every hand-set-up
+            // palm beside it. The material files below follow the same plan.
+            std::vector<float> foliage(materialOf.size(), 0.0f);
             bool anyFoliage = false;
-            for (size_t i = 0; i < slots; ++i)
+            for (size_t i = 0; i < materialOf.size(); ++i)
             {
-                if (materialgen::IsFoliageCard(MeshManager::DescribeGltfMaterial(sourceGltf, static_cast<int>(i))))
+                if (leafPlan.Leaf(materialOf[i]))
                 {
                     foliage[i] = 1.0f;
                     anyFoliage = true;
@@ -993,6 +1046,32 @@ namespace
                 bakeOpt.slotFoliage = foliage;
                 asset["windFoliage"] = foliage;
                 autoWindStrength = !asset.contains("windStrength");
+            }
+        }
+        else if (hadFoliage && !materialOf.empty())
+        {
+            // A re-import keeps what the asset says -- except where the person chose. That choice is
+            // why they re-imported: a curtain read as a leaf card is fixed by saying "surface" here,
+            // not by editing three files by hand.
+            std::vector<float> foliage = bakeOpt.slotFoliage;
+            foliage.resize(std::max(foliage.size(), materialOf.size()), 0.0f);
+            bool changed = false;
+            for (size_t i = 0; i < materialOf.size(); ++i)
+            {
+                const std::optional<bool> chosen = leafPlan.Chosen(materialOf[i]);
+                if (chosen && (foliage[i] > 0.0f) != *chosen)
+                {
+                    foliage[i] = *chosen ? 1.0f : 0.0f;
+                    changed = true;
+                }
+            }
+            if (changed)
+            {
+                bakeOpt.slotFoliage = foliage;
+                asset["windFoliage"] = foliage;
+                const bool anyFoliage = std::any_of(foliage.begin(), foliage.end(), [](float f) { return f > 0.0f; });
+                if (anyFoliage) { autoWindStrength = !asset.contains("windStrength"); }
+                else { asset.erase("windStrength"); } // absent == rigid, as the Mesh Editor's 0 writes it
             }
         }
         // Mesh chunking. The bake and mesh.json MUST agree: the .bin carries no flag of its own,
@@ -1057,16 +1136,35 @@ namespace
             asset.erase("material");
             asset.erase("materials");
             const std::vector<std::string> names =
-                GenerateMaterialFilesForGltf(sourceGltf, materialBaseName);
+                GenerateMaterialFilesForGltf(sourceGltf, materialBaseName, leafPlan);
             bool anyNamed = false;
             for (const std::string& n : names) { if (n != "auto") { anyNamed = true; break; } }
             // names.empty() == the source has no promotable materials at all (.obj). Leave BOTH
-            // keys off, matching models/box.mesh.json; "auto" would be a binding the runtime cannot
+            // keys off, matching models/box/box.mesh.json; "auto" would be a binding the runtime cannot
             // resolve now that nothing loads the glTF at draw time.
             if (names.empty()) { /* no material binding; assign one in the Mesh Editor */ }
             else if (!anyNamed) { asset["material"] = "auto"; }
             else if (names.size() == 1) { asset["material"] = names[0]; }
             else { asset["materials"] = names; }
+        }
+        // The person's leaf/surface choice reaches material files that already exist too: a
+        // re-import keeps them (Material Editor edits), which would leave a curtain chosen as a
+        // surface still lit as a leaf. Only the shading keys switch; every other edit stays.
+        for (size_t i = 0; i < materialOf.size(); ++i)
+        {
+            const std::optional<bool> chosen = leafPlan.Chosen(materialOf[i]);
+            if (!chosen) { continue; }
+            std::string material;
+            if (asset.contains("materials") && asset["materials"].is_array() && i < asset["materials"].size() &&
+                asset["materials"][i].is_string())
+            {
+                material = asset["materials"][i].get<std::string>();
+            }
+            else if (i == 0 && asset.contains("material") && asset["material"].is_string())
+            {
+                material = asset["material"].get<std::string>();
+            }
+            if (!material.empty() && material != "auto") { materialgen::ApplyLeafShading(material, *chosen); }
         }
         if (spawnScale > 0.0f) { asset["spawnScale"] = spawnScale; }
         else { asset.erase("spawnScale"); }
@@ -1227,26 +1325,32 @@ namespace
         return {};
     }
 
-    // What the importer will write for one glTF material slot, in one line -- decided by the same
-    // MaterialFileGen predicates the import uses.
-    std::string MaterialImportPreview(const GltfMaterialDesc& d, int slot)
+    // What the importer will write for one glTF material slot, in one line -- from the same verdict
+    // (materialgen::ClassifyLeafCards) and the same choice the import uses. `choice`: 0 = auto (the
+    // verdict), 1 = leaf card, 2 = surface.
+    std::string MaterialImportPreview(const GltfMaterialDesc& d, int slot,
+        const materialgen::LeafVerdict& verdict, int choice)
     {
         std::string line = "slot " + std::to_string(slot);
+        if (!d.name.empty()) { line += " '" + d.name + "'"; }
         if (!d.albedoPath.empty()) { line += " (" + fs::path(d.albedoPath).filename().string() + ")"; }
+        if (!d.valid) { return line + ": no material - the slot imports as 'auto'"; }
         float cutoff = 0.5f;
-        char what[128];
-        if (!d.valid)
+        const bool cutout = materialgen::IsAlphaCutout(d, &cutoff);
+        const bool leaf = choice == 1 || (choice == 0 && verdict.leaf);
+        char what[160];
+        if (leaf && cutout)
         {
-            snprintf(what, sizeof(what), "no material - the slot imports as 'auto'");
-        }
-        else if (materialgen::IsFoliageCard(d))
-        {
-            materialgen::IsAlphaCutout(d, &cutoff);
             snprintf(what, sizeof(what), "leaf card - twoSidedFoliage, alpha cutout %.2f, wind foliage", cutoff);
         }
-        else if (materialgen::IsAlphaCutout(d, &cutoff))
+        else if (leaf)
         {
-            snprintf(what, sizeof(what), "alpha cutout %.2f, single-sided", cutoff);
+            snprintf(what, sizeof(what), "leaf card - twoSidedFoliage, opaque, wind foliage");
+        }
+        else if (cutout)
+        {
+            snprintf(what, sizeof(what), "surface - alpha cutout %.2f, %s", cutoff,
+                d.doubleSided ? "two-sided" : "single-sided");
         }
         else if (d.doubleSided)
         {
@@ -1256,7 +1360,11 @@ namespace
         {
             snprintf(what, sizeof(what), "opaque");
         }
-        return line + ": " + what;
+        line += std::string(": ") + what;
+        // Auto says why; a choice says it was one.
+        if (choice != 0) { line += " (chosen; measured: " + verdict.reason + ")"; }
+        else if (verdict.candidate) { line += ". " + verdict.reason; }
+        return line;
     }
 
     // One "## <name>" section per asset. The header must match the WHOLE line: a substring test
@@ -1347,7 +1455,7 @@ MeshLoadOptions ImportPanel::DialogLodOptions() const
 
 bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
     const std::vector<std::string>& splitNodes, int chunkGrid,
-    const MeshLoadOptions* dialogLod)
+    const MeshLoadOptions* dialogLod, const std::map<int, bool>* leafChoices)
 {
     if (item.kind != Kind::Mesh || item.gltfFile.empty()) { return false; }
 
@@ -1356,21 +1464,28 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
     // re-bakes with the settings its OWN mesh.json carries — never the dialog's leftovers.
     const bool preserveLodFromAsset = dialogLod == nullptr;
     const MeshLoadOptions lodOpt = dialogLod ? *dialogLod : MeshLoadOptions{};
+    // One plan for every asset this import writes (see LeafPlan): the whole file is measured once.
+    LeafPlan leafPlan;
+    leafPlan.file = item.gltfFile;
+    if (leafChoices) { leafPlan.chosen = *leafChoices; }
 
     std::error_code relEc;
     const fs::path rel = fs::relative(
         fs::path(item.gltfFile), fs::path(item.path), relEc);
     if (relEc || !IsSafeRelativePath(rel)) { return false; }
 
+    // The mesh.json files live in the asset's own folder, beside its .mesh.bin and textures: a
+    // split pack of a hundred nodes used to spill a hundred files into models/ itself, between
+    // every other asset (the_bathroom_free, 2026-10-23).
     const fs::path dst = ProjectDest(item);           // models/<name>
-    const fs::path meshAssetRoot = dst.parent_path(); // models/
+    const fs::path meshAssetRoot = dst;               // models/<name>/<name>[_node_<part>].mesh.json
     const std::string source = item.gltfFile;         // import_staging/<name>/scene.gltf (stays there)
     if (splitNodes.empty())
     {
         const std::string binGeom = (dst / (item.name + ".mesh.bin")).generic_string();
         return WriteImportedMeshAsset(
             meshAssetRoot / (item.name + ".mesh.json"), binGeom, source, spawnScale, item.name,
-            lodOpt, chunkGrid, preserveLodFromAsset);
+            lodOpt, chunkGrid, preserveLodFromAsset, leafPlan);
     }
 
     for (const std::string& node : splitNodes)
@@ -1385,7 +1500,7 @@ bool ImportPanel::RecreateMeshAssets(const Item& item, float spawnScale,
         // dialog greys the control out when splitting is on; this makes it true for every caller.
         if (!WriteImportedMeshAsset(meshAssetPath, binGeom,
                 source + "#node:" + node, spawnScale, item.name + "_" + component, lodOpt, 0,
-                preserveLodFromAsset))
+                preserveLodFromAsset, leafPlan))
         {
             return false;
         }
@@ -1434,9 +1549,16 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
             fs::absolute(destination, ec).lexically_normal());
         isProjectResource = !ec && IsSafeRelativePath(outputRelative);
 
-        // Material presets and staging records represent the whole import. The
-        // texture/mesh records below are true per-resource reimports.
-        if (!isProjectResource)
+        // Material presets, staging records and the mesh assets represent the whole import. The
+        // texture/mesh records below are true per-resource reimports. A .mesh.json sits inside
+        // models/<name>/ but is no copied output: it has no producing source in the manifest,
+        // and the per-resource path would read it as an orphan and DELETE it.
+        std::string assetName = fs::path(asset.path).filename().string();
+        std::transform(assetName.begin(), assetName.end(), assetName.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const bool isMeshAsset = assetName.size() > 10 &&
+            assetName.compare(assetName.size() - 10, 10, ".mesh.json") == 0;
+        if (!isProjectResource || isMeshAsset)
         {
             BeginImport(item, {}, true);
             return true;
@@ -1497,7 +1619,7 @@ bool ImportPanel::BeginReimport(const EditorAssetRecord& asset, AssetRegistry& r
 namespace
 {
     // "Brain Coral 3.3.zip" -> "brain_coral_3_3": the folder name becomes the asset name
-    // (models/<name>.mesh.json), so it keeps to what every later lookup handles -- a dot in it
+    // (models/<name>/<name>.mesh.json), so it keeps to what every later lookup handles -- a dot in it
     // reads as an extension. A trailing "_2k.gltf" style suffix of a Poly Haven download goes too.
     std::string StagingNameFromArchive(const fs::path& zip)
     {
@@ -1694,7 +1816,8 @@ void ImportPanel::BeginImport(const Item& item,
     const std::vector<std::string>& meshSplitNodes,
     bool meshSplitChoiceProvided,
     int meshChunkGrid,
-    const MeshLoadOptions* meshLodFromDialog)
+    const MeshLoadOptions* meshLodFromDialog,
+    const std::map<int, bool>* meshLeafChoices)
 {
     if (running_.load()) { return; }
     activeItem_ = item;
@@ -1702,6 +1825,7 @@ void ImportPanel::BeginImport(const Item& item,
     // to open another mesh's dialog while the worker converts textures.
     activeMeshLodOpt_ = meshLodFromDialog ?
         std::make_unique<MeshLoadOptions>(*meshLodFromDialog) : nullptr;
+    activeMeshLeafChoices_ = meshLeafChoices ? *meshLeafChoices : std::map<int, bool>{};
     // Baseline for "which material definitions did this run touch" — see PollImport.
     materialsBeforeImport_ = SnapshotMaterialDefinitions();
     activeTargetOutputs_.clear();
@@ -1823,7 +1947,7 @@ std::string ImportPanel::StagingJson()
 }
 
 bool ImportPanel::StartMeshImport(const std::string& name, float targetSizeM, bool split,
-    std::string& outStatus)
+    const std::map<std::string, std::string>& surfaces, std::string& outStatus)
 {
     if (running_.load() || joinPending_)
     {
@@ -1864,17 +1988,67 @@ bool ImportPanel::StartMeshImport(const std::string& name, float targetSizeM, bo
         nodes = ListSplittableTopLevelNodes(it->gltfFile);
         if (nodes.size() < 2) { nodes.clear(); }
     }
+    // Leaf card or surface, per glTF material: the measured verdict, or what `surfaces` says. A name
+    // the file does not have is refused rather than dropped -- an unmatched "surface" would import
+    // the curtain as a leaf card anyway, with an answer that said it would not.
+    const std::vector<materialgen::LeafVerdict> verdicts =
+        IsGltfPath(it->gltfFile) ? materialgen::ClassifyLeafCards(it->gltfFile) : std::vector<materialgen::LeafVerdict>{};
+    std::map<int, bool> choices;
+    for (const auto& [material, what] : surfaces)
+    {
+        if (what != "leaf" && what != "surface")
+        {
+            outStatus = "surfaces['" + material + "'] is '" + what + "'; it takes \"leaf\" or \"surface\"";
+            return false;
+        }
+        bool found = false;
+        for (const materialgen::LeafVerdict& v : verdicts)
+        {
+            if (v.materialIndex >= 0 && v.name == material)
+            {
+                choices[v.materialIndex] = what == "leaf";
+                found = true;
+            }
+        }
+        if (!found)
+        {
+            outStatus = "'" + name + "' has no material '" + material + "'; its materials:";
+            for (const materialgen::LeafVerdict& v : verdicts)
+            {
+                if (v.materialIndex >= 0) { outStatus += " '" + v.name + "'"; }
+            }
+            if (verdicts.empty()) { outStatus += " none (not a glTF)"; }
+            return false;
+        }
+    }
     const Item item = *it;
     selectedPath_ = item.path; // the window opens on what is importing
     batch_.clear();
     revealPending_ = true;
-    BeginImport(item, {}, true, {}, {}, 0.0f, nodes, true, 0, &lod);
+    BeginImport(item, {}, true, {}, {}, 0.0f, nodes, true, 0, &lod, &choices);
     char scale[96];
     std::snprintf(scale, sizeof(scale), "longest side %.3f m -> %.3f m (x%.4f in the vertices)",
         item.worldSizeM, item.worldSizeM * lod.bakeScale, lod.bakeScale);
     outStatus = "importing " + item.name + " (" + item.meta + "); " + scale +
         (nodes.empty() ? std::string("; one asset") :
                          "; split into " + std::to_string(nodes.size()) + " assets");
+    // Every material and what it becomes -- a NEW asset's; an existing one keeps what it has
+    // unless `surfaces` named it.
+    std::string materials;
+    for (const materialgen::LeafVerdict& v : verdicts)
+    {
+        if (v.materialIndex < 0) { continue; }
+        const auto chosen = choices.find(v.materialIndex);
+        materials += (materials.empty() ? "" : "; ") + ("'" + v.name + "' ") +
+            (chosen != choices.end()
+                ? std::string(chosen->second ? "leaf card" : "surface") + " (as asked; measured: " + v.reason + ")"
+                : v.reason);
+    }
+    if (!materials.empty())
+    {
+        outStatus += ". Materials (a new asset's; an existing one keeps its own unless named in surfaces): " +
+            materials;
+    }
     return true;
 }
 
@@ -2132,7 +2306,7 @@ void ImportPanel::LoadMeshDetails(const Item& item)
     // the manifest left "Correct scale" off, and Re-import then baked the source's own size back
     // in: a palm imported at 4.5 m came back at its authored 11.2 m.
     {
-        const fs::path meshAssetRoot = fs::path(ProjectDest(item)).parent_path();
+        const fs::path meshAssetRoot = fs::path(ProjectDest(item)); // models/<name>/, see RecreateMeshAssets
         fs::path meshJson = meshAssetRoot / (item.name + ".mesh.json");
         if (!fs::is_regular_file(meshJson, ec) && !existingSplitNodes.empty())
         {
@@ -2168,7 +2342,7 @@ void ImportPanel::LoadMeshDetails(const Item& item)
     // truth rather than the previous mesh's widget state. Whole-file assets only (a split import
     // writes one sidecar per node and none of them is chunked — see RecreateMeshAssets).
     const int existingChunkGrid = ReadAssetChunkGrid(
-        fs::path(ProjectDest(item)).parent_path() / (item.name + ".mesh.json"));
+        fs::path(ProjectDest(item)) / (item.name + ".mesh.json"));
     meshDialogChunk_ = existingChunkGrid > 0;
     meshDialogChunkGrid_ = existingChunkGrid > 0 ? existingChunkGrid : 6;
     // v1 chunks single-submesh meshes only. Read it once here (the bake would otherwise reject the
@@ -2185,15 +2359,20 @@ void ImportPanel::LoadMeshDetails(const Item& item)
     }
 
     // What each slot's material file will say -- the same calls WriteImportedMeshAsset and
-    // MaterialFileGen make, so the preview cannot promise what the import does not do.
+    // MaterialFileGen make, so the preview cannot promise what the import does not do. The leaf
+    // verdict is measured here (the geometry parsed, each two-sided cutout's alpha decoded): the
+    // one moment the person can still say otherwise.
     meshDialogMaterials_.clear();
+    meshDialogLeaf_.clear();
+    meshDialogLeafChoice_.clear();
     if (IsGltfPath(item.gltfFile))
     {
-        for (int slot = 0; slot < meshDialogSubmeshCount_; ++slot)
+        meshDialogLeaf_ = materialgen::ClassifyLeafCards(item.gltfFile);
+        for (int slot = 0; slot < static_cast<int>(meshDialogLeaf_.size()); ++slot)
         {
-            meshDialogMaterials_.push_back(MaterialImportPreview(
-                MeshManager::DescribeGltfMaterial(item.gltfFile, slot), slot));
+            meshDialogMaterials_.push_back(MeshManager::DescribeGltfMaterial(item.gltfFile, slot));
         }
+        meshDialogLeafChoice_.assign(meshDialogLeaf_.size(), 0);
     }
 }
 
@@ -2345,12 +2524,44 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
     }
     else
     {
-        for (const std::string& line : meshDialogMaterials_)
+        for (size_t i = 0; i < meshDialogMaterials_.size(); ++i)
         {
-            ImGui::Bullet();
-            ImGui::TextWrapped("%s", line.c_str());
+            const GltfMaterialDesc& d = meshDialogMaterials_[i];
+            const materialgen::LeafVerdict& verdict = meshDialogLeaf_[i];
+            int& choice = meshDialogLeafChoice_[i];
+            ImGui::PushID(static_cast<int>(i));
+            if (d.valid)
+            {
+                // Leaf card or surface, per material: auto is the measured verdict, the other two
+                // are the person's word and reach existing assets too (see the note below).
+                const std::string autoLabel = verdict.leaf ? "Auto: leaf card" : "Auto: surface";
+                const char* labels[] = { autoLabel.c_str(), "Leaf card", "Surface" };
+                // Wide enough for the longest label and the arrow: at 8.5 font sizes "Auto: surface"
+                // was clipped to "Auto: surfac".
+                ImGui::SetNextItemWidth(ImGui::CalcTextSize("Auto: leaf card").x +
+                    ImGui::GetFrameHeight() + ImGui::GetStyle().FramePadding.x * 2.0f);
+                ImGui::Combo("##leaf", &choice, labels, IM_ARRAYSIZE(labels));
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(
+                        "Leaf card: twoSidedFoliage shading (light through the leaf) and wind sway.\n"
+                        "Surface: lit as an opaque card, rigid.\n"
+                        "Auto measures how much of the surface the alpha cutout removes:\n"
+                        "a leaf card cuts %.0f%% or more away; a curtain or a door barely any.",
+                        materialgen::kLeafCutShare * 100.0f);
+                }
+                ImGui::SameLine();
+            }
+            else
+            {
+                ImGui::Bullet();
+            }
+            ImGui::TextWrapped("%s", MaterialImportPreview(d, static_cast<int>(i), verdict, choice).c_str());
+            ImGui::PopID();
         }
-        TextDisabledWrapped("What a NEW data/materials file gets; an existing one is kept.");
+        TextDisabledWrapped("Auto: what a NEW asset and its NEW data/materials file get; an existing one keeps "
+            "what it has. Leaf card / Surface: applied on Import, Re-import and Recreate, to the existing "
+            "assets too -- their wind slot and their material's shading are switched, every other edit stays.");
     }
 
     // --- LOD generation (collapsed: the defaults are the shipped chain and rarely need touching) ---
@@ -2661,13 +2872,22 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
     const int selectedChunkGrid =
         (meshDialogChunk_ && selectedSplitNodes.empty() && meshDialogSubmeshCount_ <= 1)
             ? meshDialogChunkGrid_ : 0;
+    // The per-material leaf/surface choices that are not "auto", by glTF material index.
+    std::map<int, bool> selectedLeafChoices;
+    for (size_t i = 0; i < meshDialogLeaf_.size() && i < meshDialogLeafChoice_.size(); ++i)
+    {
+        if (meshDialogLeafChoice_[i] != 0 && meshDialogLeaf_[i].materialIndex >= 0)
+        {
+            selectedLeafChoices[meshDialogLeaf_[i].materialIndex] = meshDialogLeafChoice_[i] == 1;
+        }
+    }
 
     ImGui::BeginDisabled(running_.load());
     if (ImGui::Button(meshDialogItem_.alreadyInProject ? "Re-import" : "Import", ImVec2(120.0f, 0.0f)))
     {
         const MeshLoadOptions dialogLod = DialogLodOptions();
         BeginImport(meshDialogItem_, {}, true, {}, {}, selectedSpawnScale,
-            selectedSplitNodes, true, selectedChunkGrid, &dialogLod);
+            selectedSplitNodes, true, selectedChunkGrid, &dialogLod, &selectedLeafChoices);
     }
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -2684,8 +2904,11 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
     if (recreateMeshJson)
     {
         const MeshLoadOptions dialogLod = DialogLodOptions();
+        // A leaf/surface choice rewrites material definitions in place; the session's caches hold
+        // those by path, so they are published below like the async import's (see PollImport).
+        const std::map<std::string, std::uint64_t> materialsBefore = SnapshotMaterialDefinitions();
         const bool recreated = RecreateMeshAssets(meshDialogItem_,
-            selectedSpawnScale, selectedSplitNodes, selectedChunkGrid, &dialogLod);
+            selectedSpawnScale, selectedSplitNodes, selectedChunkGrid, &dialogLod, &selectedLeafChoices);
         status_ = recreated ?
             (selectedSplitNodes.empty() ?
                 "Recreated mesh JSON for " + meshDialogItem_.name :
@@ -2702,9 +2925,13 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
             lastImportedFiles_.clear();
             const fs::path dst = ProjectDest(meshDialogItem_);
             lastImportedFiles_.push_back(NormalizeRelativePath(
-                dst.parent_path() / (meshDialogItem_.name + ".mesh.json")));
+                dst / (meshDialogItem_.name + ".mesh.json")));
             lastImportedFiles_.push_back(NormalizeRelativePath(
                 dst / (meshDialogItem_.name + ".mesh.bin")));
+            for (std::string& changed : ChangedMaterialDefinitions(materialsBefore, SnapshotMaterialDefinitions()))
+            {
+                lastImportedFiles_.push_back(std::move(changed));
+            }
             pendingInvalidate_ = true;
         }
     }
@@ -3016,15 +3243,16 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
                     activeMeshSplitGltf_, activeMeshSplitNodes_);
             }
 
-            // Emit first-class mesh assets next to the imported pack directory. A whole-pack
-            // import owns models/<name>.mesh.json; a split import owns one sidecar per selected
-            // top-level node. Existing sidecars retain Mesh Editor overrides when re-imported.
+            // Emit first-class mesh assets inside the imported pack directory. A whole-pack
+            // import owns models/<name>/<name>.mesh.json; a split import owns one sidecar per
+            // selected top-level node, models/<name>/<name>_node_<part>.mesh.json. Existing
+            // sidecars retain Mesh Editor overrides when re-imported.
             if (!finalizeFailed && activeItem_.kind == Kind::Mesh &&
                 !activeItem_.gltfFile.empty())
             {
                 finalizeFailed = !RecreateMeshAssets(activeItem_,
                     activeMeshSpawnScale_, activeMeshSplitNodes_, activeMeshChunkGrid_,
-                    activeMeshLodOpt_.get());
+                    activeMeshLodOpt_.get(), &activeMeshLeafChoices_);
                 // W7.1b: RecreateMeshAssets generated material files from the STAGING glTF, so their
                 // texture paths point into import_staging/; repoint them to the copied models/ DDS
                 // (mirrors the TextureSet repoint above). No-op on re-import (files preserved).

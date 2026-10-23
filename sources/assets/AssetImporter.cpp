@@ -2057,14 +2057,11 @@ float NormalMapSteepness::StrengthFor(float targetMeanZ) const
     return lo;
 }
 
-NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, const std::string& albedoPath)
+namespace
 {
-    NormalMapSteepness out;
-    // WIC needs COM on the calling thread; the import worker may not have it.
-    const HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    const bool coInited = SUCCEEDED(hrCo);
-    constexpr size_t kMaxEdge = 512;
-    const auto load = [](const std::string& path, size_t width, size_t height, ScratchImage& img) -> bool
+    // A source image as RGBA8 at exactly width x height, or -- width 0 -- at its own size scaled
+    // down so its longer edge is at most `maxEdge`. The caller has COM up (WIC needs it).
+    bool LoadRgba8(const std::string& path, size_t width, size_t height, size_t maxEdge, ScratchImage& img)
     {
         const fs::path p(path);
         TexMetadata meta{};
@@ -2084,8 +2081,8 @@ NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, cons
         {
             const size_t w = rgba.GetMetadata().width, h = rgba.GetMetadata().height;
             const size_t edge = std::max(w, h);
-            width = edge > kMaxEdge ? std::max<size_t>(1, w * kMaxEdge / edge) : w;
-            height = edge > kMaxEdge ? std::max<size_t>(1, h * kMaxEdge / edge) : h;
+            width = edge > maxEdge ? std::max<size_t>(1, w * maxEdge / edge) : w;
+            height = edge > maxEdge ? std::max<size_t>(1, h * maxEdge / edge) : h;
         }
         if (rgba.GetMetadata().width == width && rgba.GetMetadata().height == height)
         {
@@ -2093,6 +2090,47 @@ NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, cons
             return true;
         }
         return SUCCEEDED(Resize(*rgba.GetImage(0, 0, 0), width, height, TEX_FILTER_LINEAR, img));
+    }
+}
+
+bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out)
+{
+    out = {};
+    // WIC needs COM on the calling thread, and DirectXTex keeps ONE WIC factory for the process. A
+    // CoInitializeEx/CoUninitialize pair around each read tears the apartment down after the first
+    // file wherever nothing else holds it (a console tool, a headless probe before App's own
+    // init), and the next read calls into a factory that is gone -- an access violation in
+    // LoadFromWICFile, found by intent_regression reading its second texture. Up once per thread
+    // and left up.
+    thread_local const bool comUp = SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
+    (void)comUp;
+    ScratchImage img;
+    const bool loaded = LoadRgba8(path, 0, 0, maxEdge, img);
+    if (loaded)
+    {
+        const Image& a = *img.GetImage(0, 0, 0);
+        out.width = a.width;
+        out.height = a.height;
+        out.alpha.resize(a.width * a.height);
+        for (size_t y = 0; y < a.height; ++y)
+        {
+            const uint8_t* row = a.pixels + y * a.rowPitch;
+            for (size_t x = 0; x < a.width; ++x) { out.alpha[y * a.width + x] = row[x * 4 + 3]; }
+        }
+    }
+    return loaded;
+}
+
+NormalMapSteepness MeasureNormalMapSteepness(const std::string& normalPath, const std::string& albedoPath)
+{
+    NormalMapSteepness out;
+    // WIC needs COM on the calling thread; the import worker may not have it.
+    const HRESULT hrCo = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const bool coInited = SUCCEEDED(hrCo);
+    constexpr size_t kMaxEdge = 512;
+    const auto load = [](const std::string& path, size_t width, size_t height, ScratchImage& img) -> bool
+    {
+        return LoadRgba8(path, width, height, kMaxEdge, img);
     };
 
     ScratchImage normal;
