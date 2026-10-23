@@ -249,42 +249,8 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
     const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
     if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
-    if (decisions_.volumetricCloud)
-    {
-        gb.pCloudShadow = volumetricCloud_.BuildShadow(renderer, rg, MakeCloudInputs(renderer), gb.pCloudNoise);
-    }
-
-
-    // RT acceleration-structure build (S5): the first pass when RT is enabled.
-    // No consumer yet, so it's an independent node (no prereqs/dependents); a
-    // future RT reflections pass (S7) will depend on it. The pass declares no
-    // resource states and never transitions the AS buffers, so they bypass the
-    // the barrier compile entirely and stay in RAYTRACING_ACCELERATION_STRUCTURE.
+    // The cloud shadow map and the AS build are registered after the prologue clear, below.
     gb.pBuildAS = (size_t)-1;
-    if (decisions_.rtBuildAS)
-    {
-        // pass-flow S5: AddPass2, though this pass declares NOTHING — measured: it performs no
-        // transitions (the AS build bypasses the barrier compile entirely). The builder is the
-        // whole registration, so there is no second lambda that could start declaring behind the
-        // body's back.
-        // ASYNC COMPUTE (step 10). The cleanest mover in the frame, and the one that tests a
-        // different WORKLOAD character than RTTrace did:
-        //   - it declares NOTHING (the AS buffers bypass the barrier compile entirely), so it has
-        //     no D7 hand-over problem at all — the class of blocker that stopped the ocean sim;
-        //   - it is the FIRST pass of the frame and its only consumer is Main_RTTrace, so the slack
-        //     is ~1 ms;
-        //   - its cross-queue edge comes from Main_RTTrace's explicit mtDep on it, NOT from any
-        //     resource declaration. That mtDep is load-bearing (R14) and must not be tidied away.
-        // An acceleration-structure build is more fixed-function than the bandwidth-bound compute
-        // RTTrace runs, which is exactly why it is worth measuring separately.
-        gb.pBuildAS = rg.AddPass2(RenderPass::Main_BuildAS, RenderQueue::AsyncCompute, {},
-            [this, renderer](RenderGraphPassContext&) -> std::function<void(RenderGraphPassContext)> {
-                return [this, renderer](RenderGraphPassContext c) {
-                    CPU_SCOPE(ProfilerScopes::kPassBuildAS);
-                    rtAs_.Build(renderer, c, *frame_, resources_.GetRtWindDeformMaterial().get());
-                };
-            });
-    }
 
     // CL group (step 5): the prologue clear and the object-compute dispatches are
     // two tiny back-to-back lists with no mtDeps; share one command list.
@@ -399,6 +365,44 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     gb.pObjectCompute = rg.AddPass2(RenderPass::Main_ObjectCompute, RenderQueue::AsyncCompute,
         { pClear, pGiCompute },
         computeBuilder(/*feedsShadowCull=*/false, ProfilerScopes::kPassObjectCompute));
+
+    // The two async passes with nothing to wait for -- the RT acceleration-structure build and the cloud shadow map --
+    // are ANCHORED to this frame's prologue clear (2026-10-23). With no prereq they floated onto the PREVIOUS frame's
+    // tail: the CPU runs ahead of a GPU-bound frame, so a compute segment that waits on nothing executes the moment
+    // the compute queue is free, and they landed beside Main_SpotLights / Main_PointLights -- compute against compute.
+    // Waiting on `pClear` puts them beside this frame's shadow cull, point shadows and G-buffer raster, where the SMs
+    // have room. Measured (wind_test, level camera, wind running, interleaved x3 in one binary, every anchored run
+    // faster): CPU.Frame 3.846 -> 3.812 ms, PointLights -0.022, SpotLights -0.010, PointShadows +0.019.
+    // `pClear` covers the cloud noise too: that is a graphics pass registered before it, and a cross-queue wait is
+    // signalled after the producer's batch, so everything earlier on the graphics queue has completed.
+    if (decisions_.rtBuildAS)
+    {
+        // pass-flow S5: AddPass2, though this pass declares NOTHING — measured: it performs no
+        // transitions (the AS build bypasses the barrier compile entirely, the AS buffers stay in
+        // RAYTRACING_ACCELERATION_STRUCTURE). The builder is the whole registration, so there is no
+        // second lambda that could start declaring behind the body's back.
+        // ASYNC COMPUTE (step 10). The cleanest mover in the frame, and the one that tests a
+        // different WORKLOAD character than RTTrace did:
+        //   - it declares NOTHING, so it has no D7 hand-over problem at all — the class of blocker
+        //     that stopped the ocean sim;
+        //   - it runs at the top of the frame and its only consumer is Main_RTTrace, after the
+        //     G-buffer, so the slack is ~1.5 ms;
+        //   - its cross-queue edge comes from Main_RTTrace's explicit mtDep on it, NOT from any
+        //     resource declaration. That mtDep is load-bearing (R14) and must not be tidied away.
+        // An acceleration-structure build is more fixed-function than the bandwidth-bound compute
+        // RTTrace runs, which is exactly why it is worth measuring separately.
+        gb.pBuildAS = rg.AddPass2(RenderPass::Main_BuildAS, RenderQueue::AsyncCompute, { pClear },
+            [this, renderer](RenderGraphPassContext&) -> std::function<void(RenderGraphPassContext)> {
+                return [this, renderer](RenderGraphPassContext c) {
+                    CPU_SCOPE(ProfilerScopes::kPassBuildAS);
+                    rtAs_.Build(renderer, c, *frame_, resources_.GetRtWindDeformMaterial().get());
+                };
+            });
+    }
+    if (decisions_.volumetricCloud)
+    {
+        gb.pCloudShadow = volumetricCloud_.BuildShadow(renderer, rg, MakeCloudInputs(renderer), pClear);
+    }
 
     // The surf sim and the wetness update follow the ocean sim and are grouped with each other:
     // both are tiny, both are ocean, and neither is an async candidate on its own. SurfSim is the

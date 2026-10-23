@@ -224,6 +224,11 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
 // splits the local views' static casters into their own rows. S9e: the clipmap slots (the views past the cascades that
 // are NOT local), the first GI caster (exempt from the radius threshold) and that threshold: the camera's position and
 // (r.Shadow.RadiusThreshold x LODDistanceFactor)^2, 0 = off.
+// The unified instance buffer's read (and resting) state: the shadow / G-buffer vertex shaders and the culls read it, and
+// the indirect G-buffer's pixel shader its material values (gbuffer_indirect.hlsl, 2026-10-23).
+constexpr D3D12_RESOURCE_STATES kInstancesReadState =
+    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+
 // render::g_localShadowWindRange: windRigid -- one bit per view slot, set for a local view whose light is past the range
 // (its wind-only casters go to its static rows).
 struct ShadowCullCB
@@ -990,7 +995,9 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
 
         ctx.NextPoint();
         dec.unifiedRead = ctx.usePoint ? *ctx.usePoint : 0u;
-        ctx.Use(instancesUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        // The instances rest PIXEL | NON_PIXEL (kInstancesReadState): the indirect G-buffer's PIXEL shader reads its
+        // material values out of them by caster id (gbuffer_indirect.hlsl), the shadow / G-buffer VS and the culls the rest.
+        ctx.Use(instancesUnified_.buffer.Get(), kInstancesReadState);
         ctx.Use(boundsUnified_.buffer.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     }
 
@@ -2236,7 +2243,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // Step 2 (GI→VSM): DEFAULT-heap mirrors of instances_/bounds_, sized to `casters` per region.
     // RecordCull copies the ring's region into these each frame (verbatim at this step; Step 4 also
     // scatters GI casters into them). Their per-region SRVs feed the cull (bounds) + indirect VS (t0).
-    EnsureUavRing(renderer, instancesUnified_, casters * sizeof(render::InstancePerObject), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.InstancesUnified");
+    EnsureUavRing(renderer, instancesUnified_, casters * sizeof(render::InstancePerObject), kInstancesReadState, L"ShadowGpuData.InstancesUnified");
     EnsureUavRing(renderer, boundsUnified_, casters * sizeof(render::CasterBounds), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"ShadowGpuData.BoundsUnified");
     // Instantiate the shared DRAW_INDEXED indirect command signature so it exists post-load.
     renderer->GetDrawIndexedCommandSignature();

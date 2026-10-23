@@ -1548,8 +1548,8 @@ queue intermittently hung the GPU: **DXGI_ERROR_DEVICE_HUNG, no page fault**.
 
 **Cause.** `AccelerationStructureManager::BuildOrRefitWindSlot` updated the wind BLAS **in place**
 (`Source == Dest == s.blas`, one buffer and one scratch per slot, no per-frame copies), while
-`Main_BuildAS` is registered with **no prereqs at all** — its compute segment is submitted first,
-with no cross-queue wait. With kFrameCount frames in flight, frame N+1's refit therefore overwrote a
+`Main_BuildAS` was registered with **no prereqs at all** — its compute segment was submitted first,
+with no cross-queue wait (since 2026-10-23 it waits on `Main_PrologueClear`, see the next section). With kFrameCount frames in flight, frame N+1's refit therefore overwrote a
 BLAS that frame N's graphics RT passes (RTResolve / GlassReflections / RTDebug) were still tracing.
 A traversal over a half-rewritten BVH does not fault, it spins. On the graphics queue the same refit
 was strictly ordered after those readers, which is why it never bit before step 10.
@@ -1590,6 +1590,50 @@ by ~17 MB and is not a real budget item. Gate `--scene-stress-gbv=20 --barrier-c
   before the next BeginFrame. One hang in three left nothing on disk until a `std::set_terminate`
   handler was installed.
 - **A breadcrumb count names nothing.** "op 17 of 29" became useful only as `op[17] BUILD_AS`.
+
+## Anchored to the prologue (2026-10-23): BuildAS and CloudShadow wait on `Main_PrologueClear`
+
+**What the trace showed.** Both passes were registered with nothing to wait for (`Main_CloudShadow` only
+on the cloud noise, which is absent on most frames). On a GPU-bound frame the CPU is a frame or two
+ahead, so a compute segment that waits on nothing executes the moment the compute queue frees up --
+and frame N+1's AS build and cloud shadow map ran at the END of frame N, after its CloudTrace, beside
+`Pass_SpotLights` / `Pass_PointLights` (tiled compute, the worst partner). Meanwhile the compute queue
+sat idle through this frame's point shadows and G-buffer raster (~0.95 ms of window, read per frame
+off a two-queue `--trace`). On the trace the tell is the order on the
+compute track: `ObjectCompute, RTTrace, CloudTrace, CloudShadow, BuildAS` -- RTTrace has an mtDep on
+BuildAS, so a BuildAS after it can only be the next frame's.
+
+**Change.** Both are registered after `Main_ObjectCompute` with a prereq on `pClear` (the same
+segment ObjectCompute already waits in, so no extra cross-queue wait). `pClear` covers the noise too:
+it is a graphics pass registered earlier, and the wait is signalled after the producer's batch.
+
+**Measured** (Release, wind_test, level camera, DLSS balanced, wind running, one binary with a
+temporary switch, interleaved x3; every anchored run faster than every floating one):
+
+| | floating | anchored |
+|---|---|---|
+| CPU.Frame (wall clock, GPU-bound) | 3.831 / 3.858 / 3.848 | **3.814 / 3.803 / 3.819** (-0.034 ms) |
+| GPU.Frame | 3.701 / 3.714 / 3.711 | 3.687 / 3.672 / 3.680 |
+| Pass_PointLights / SpotLights | 0.185 / 0.091 | **0.163 / 0.081** |
+| Pass_BuildAS | 0.227 | 0.209 |
+| Pass_PointShadows / ObjectCompute | 0.467 / 0.175 | 0.486 / 0.213 (they share the window now) |
+
+Small, but free: no new pass, no new barrier, no new wait.
+
+**Where the compute queue is still idle** (same trace, DLSS on, GPU.Frame median 3.60 ms, compute
+idle 2.65 ms of it): graphics time inside those windows -- `Pass_Tonemap` 302 us (of it the bloom FFT
+~230), `Pass_DLSS` 289, `GBuffer_Indirect` 275, `Pass_PointShadows` 228, `Pass_PointLights` 142,
+`Pass_ExposureMetering` 79. Everything in the first two windows' frame needs the G-buffer (RTTrace,
+CloudTrace, Gtao, the lights), so nothing more of THIS frame can go there. The one structural candidate
+left is the **tail**: the bloom convolution reads the scene BEFORE the upscaler
+(`bloom.convBeforeUpscale`) and the metered exposure, never DLSS's output, so it could run on the
+compute queue beside `Pass_DLSS` -- up to ~0.25 ms, realistically less (DLSS is compute too). It needs
+a split, not a flag: the ghost scatter draws into a RENDER_TARGET (graphics only) and stays behind,
+the FFT chain, the temporal input and the composites move, and the scene / depth / velocity have to
+be handed over in a compute-legal state by `Main_ExposureMetering` (it already leaves the scene
+NON_PIXEL). `Main_ExposureMetering` itself beside DLSS is worth ~0.08 ms at most and has no
+unconditional graphics pass before it to hand the scene over in (LightShafts / DebugDraw /
+SelectionOutline are all conditional, the transparent pass fans out over several lists).
 
 ## Non-goals
 

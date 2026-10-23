@@ -3,8 +3,12 @@
 // camera visible list (slot 1, per-instance -- the shadow_indirect_csm.hlsl shape), and the
 // per-object data comes out of the registry's per-caster record (t3, the SAME buffer the shadow
 // VS reads). The pixel shader is gbuffer.hlsl's line for line; the per-object values it used to
-// read from `cbuffer PerObject` (b0) travel from the VS as flat attributes instead, so the PS never
-// touches the instance buffer (which therefore stays in its NON_PIXEL resting state).
+// read from `cbuffer PerObject` (b0) it reads from that record itself, by the caster id the VS
+// passes (one flat uint) -- 2026-10-23: the VS used to carry them as five flat float4 outputs (~42
+// floats per vertex with the shared ones), and at foliage triangle sizes the pass was bound by its
+// outputs: GBuffer_Indirect 0.38-0.40 -> 0.30-0.31 ms on wind_test. Dropping the unjittered clip
+// position as well (rebuilt from SV_Position) measured nothing more and was not kept. The instance
+// buffer therefore rests PIXEL | NON_PIXEL (ShadowGpuData kInstancesReadState).
 //
 // Parity with the CPU path (RenderableObject::Render / GBufferRenderable::Render) is the whole
 // point: same BaseVS, same FetchShadingValuesP/FinalizeGBuffer, same wind, same dithered LOD
@@ -86,15 +90,12 @@ struct VSInIndirect
     uint casterId : CASTERID; // slot 1, per instance: the camera visible list
 };
 
-// VSOut plus the per-object material values the PS needs, flat.
+// VSOut plus what the PS needs to find the object's material values: its caster id, and this draw's crossfade.
 struct VSOutIndirect
 {
     VSOut b;
-    nointerpolation float4 baseColor : TEXCOORD6;
-    nointerpolation float4 mrCut : TEXCOORD7;      // metalRough.xy, alphaCutoff, mrMultiply
-    nointerpolation float4 texOffsScale : TEXCOORD8;
-    nointerpolation float4 texFlags : TEXCOORD9;
-    nointerpolation float4 emissiveFade : TEXCOORD10; // emissive.xyz, lodFade
+    nointerpolation uint casterId : TEXCOORD6;
+    nointerpolation float lodFade : TEXCOORD7;
 };
 
 [RootSignature(GBUFFER_INDIRECT_RS)]
@@ -104,16 +105,12 @@ VSOutIndirect VSMain(VSInIndirect i)
     VSOutIndirect v;
     v.b = BaseVS(i.P, o.world, o.prevWorld, viewProj, i.N, i.T, i.UV, o.objectId,
                  i.WIND, o.windStrength, o.windFoliage, o.windTrunkStiff, o.windLeafScale);
-    v.baseColor = o.baseColor;
-    v.mrCut = float4(o.metalRough, o.alphaCutoff, o.mrMultiply);
-    v.texOffsScale = o.texOffsScale;
-    v.texFlags = o.texFlags;
+    v.casterId = i.casterId;
     // The crossfade: a fading caster sits in two buckets, its own tier (fading OUT, -f) and the
     // next (fading IN, +f) -- RenderableObject::Render's pass 0 / pass 1.
     const float f = gCasterFade[i.casterId];
     const uint lod = gCasterLod[i.casterId] & kCasterLodMask;
-    const float fade = (f > 0.0f) ? ((gGroupLod == lod) ? -f : f) : 0.0f;
-    v.emissiveFade = float4(o.emissive, fade);
+    v.lodFade = (f > 0.0f) ? ((gGroupLod == lod) ? -f : f) : 0.0f;
     return v;
 }
 
@@ -126,15 +123,16 @@ PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
     Texture2D gNormalMap = ResourceDescriptorHeap[texIndices.z];
 #endif
     const VSOut i = v.b;
-    const float4 baseColor = v.baseColor;
-    const float2 metalRough = v.mrCut.xy;
-    const float alphaCutoff = v.mrCut.z;
-    const float mrMultiply = v.mrCut.w;
-    const float4 texOffsScale = v.texOffsScale;
-    const float4 texFlags = v.texFlags;
-    const float3 emissive = v.emissiveFade.xyz;
+    const InstancePerObject o = gInstances[v.casterId];
+    const float4 baseColor = o.baseColor;
+    const float2 metalRough = o.metalRough;
+    const float alphaCutoff = o.alphaCutoff;
+    const float mrMultiply = o.mrMultiply;
+    const float4 texOffsScale = o.texOffsScale;
+    const float4 texFlags = o.texFlags;
+    const float3 emissive = o.emissive;
 
-    LodFadeClip(i.H.xy, v.emissiveFade.w);
+    LodFadeClip(i.H.xy, v.lodFade);
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
                   baseColor.a, alphaCutoff);
 
