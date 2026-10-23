@@ -1130,12 +1130,95 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             "Per-asset multiplier on the DISTANCE at which every LOD switch of this mesh happens.\n"
             "2 = each level starts twice as far away (keeps detail longer), 0.5 = half -- UE's\n"
             "per-component LOD factor. Applies live - no re-import.");
-        lodFloat("LOD pixel error", "lodPixelError", 0.0f, 0.0f, 64.0f, "%.1f px",
+        lodFloat("LOD pixel error (0 = global)", "lodPixelError", 0.0f, 0.0f, 64.0f, "%.1f px",
             "UE's reduction PixelError for THIS mesh (0 = the global one, dev window LOD tab, default 8).\n"
             "With 'UE screen size' on, each LOD's screen size is estimated from its baked deviation:\n"
             "the level switches in where that deviation spans this many pixels at 1080p, 90 deg.\n"
             "Higher = coarser sooner. mesh.json \"lodScreenSize\" (authored, LOD0 first) replaces the\n"
             "estimate altogether. Applies live - no re-import.");
+
+        // UE's per-LOD ScreenSize, AUTHORED (mesh.json "lodScreenSize", LOD0 first; UE's
+        // bAutoComputeLODScreenSize off). Unticked, the mesh takes what the line below the box says:
+        // the automatic estimate from its baked deviation, or -- foliage -- the global ratio curve.
+        {
+            bool foliage = false;
+            for (size_t s = 0; s < slots_.size(); ++s) { foliage = foliage || WindFoliageForSlot(s) > 0.0f; }
+            float pixelError = render::g_lodPixelError;
+            if (const auto it = doc_.find("lodPixelError"); it != doc_.end() && it->is_number() && it->get<float>() > 0.0f)
+            {
+                pixelError = it->get<float>();
+            }
+            float estimate[render::kLodScreenSizes] = {};
+            const bool haveEstimate = previewScene_.GetLodScreenSizes(pixelError, estimate);
+            unsigned int lodCount = 1u;
+            for (unsigned int i = 1; i < render::kLodScreenSizes; ++i) { if (estimate[i] > 0.0f) { lodCount = i + 1u; } }
+            // What the mesh selects with when nothing is authored -- the seed when the box is ticked.
+            // The global curve is the distance/radius bounds as screen sizes at 90 degrees, 16:9.
+            float effective[render::kLodScreenSizes] = { 1.0f, 0.0f, 0.0f, 0.0f };
+            const float bounds[3] = { render::g_lodBound0, render::g_lodBound1, render::g_lodBound2 };
+            for (unsigned int i = 1; i < lodCount; ++i)
+            {
+                effective[i] = foliage ? (2.0f * 0.8889f) / std::max(bounds[i - 1u], 0.5f) : estimate[i];
+            }
+
+            const auto it = doc_.find("lodScreenSize");
+            bool authored = it != doc_.end() && it->is_array();
+            if (ImGui::Checkbox("Author LOD screen sizes (UE)", &authored))
+            {
+                if (authored)
+                {
+                    nlohmann::json arr = nlohmann::json::array();
+                    for (unsigned int i = 0; i < lodCount; ++i)
+                    {
+                        arr.push_back(std::round(effective[i] * 1000.0f) / 1000.0f);
+                    }
+                    doc_["lodScreenSize"] = arr;
+                }
+                else
+                {
+                    doc_.erase("lodScreenSize");
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("UE's ScreenSize per LOD: a level is drawn while the object's screen size\n"
+                                  "(bounding-sphere diameter / screen height) is at most its value, so a SMALLER\n"
+                                  "number keeps the finer level longer. Ticking seeds the list with what the mesh\n"
+                                  "uses now. The per-asset 'LOD switch distance' still multiplies on top (UE's\n"
+                                  "per-component factor). Only used with 'UE screen size' on (dev window LOD tab).\n"
+                                  "Applies live - no re-import.");
+            }
+            if (authored)
+            {
+                nlohmann::json& arr = doc_["lodScreenSize"];
+                while (arr.size() < lodCount) { arr.push_back(0.0f); }
+                for (unsigned int i = 1; i < lodCount && i < arr.size(); ++i)
+                {
+                    float v = arr[i].is_number() ? arr[i].get<float>() : 0.0f;
+                    char label[32];
+                    std::snprintf(label, sizeof(label), "LOD%u screen size", i);
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::SliderFloat(label, &v, 0.005f, 2.0f, "%.3f", ImGuiSliderFlags_Logarithmic))
+                    {
+                        arr[i] = std::round(v * 1000.0f) / 1000.0f;
+                    }
+                    if (haveEstimate && !foliage)
+                    {
+                        ImGui::SameLine();
+                        ImGui::TextDisabled("(auto %.3f)", static_cast<double>(estimate[i]));
+                    }
+                }
+            }
+            else if (haveEstimate && lodCount > 1u)
+            {
+                char line[160];
+                std::snprintf(line, sizeof(line), "%s:  LOD1 %.3f   LOD2 %.3f   LOD3 %.3f",
+                              foliage ? "Foliage, the global curve" : "Automatic (UE estimate)",
+                              static_cast<double>(effective[1]), static_cast<double>(lodCount > 2u ? effective[2] : 0.0f),
+                              static_cast<double>(lodCount > 3u ? effective[3] : 0.0f));
+                ImGui::TextDisabled("%s", line);
+            }
+        }
 
         // The baked per-level deviation, which UE's automatic screen size is estimated from
         // (render::AutoLodScreenSizes). Measured across this project's assets it holds palms (a lot

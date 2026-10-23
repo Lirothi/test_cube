@@ -330,6 +330,13 @@ MeshEditorPreviewScene::MeshEditorPreviewScene()
 
 MeshEditorPreviewScene::~MeshEditorPreviewScene() = default;
 
+bool MeshEditorPreviewScene::GetLodScreenSizes(float pixelError, float (&out)[render::kLodScreenSizes]) const
+{
+    if (!impl_ || !impl_->loaded || !impl_->mesh) { return false; }
+    impl_->mesh->GetLodScreenSizes(pixelError, out);
+    return true;
+}
+
 void MeshEditorPreviewScene::Reset(Renderer& renderer)
 {
     bool hasGpuResources = impl_->mesh != nullptr;

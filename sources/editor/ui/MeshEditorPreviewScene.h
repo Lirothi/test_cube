@@ -10,6 +10,7 @@
 #include "editor/assets/EditorPreviewMode.h"
 #include "editor/assets/EditorPreviewRenderer.h" // PhysicalLighting
 #include "imgui.h"
+#include "rendering/meshes/LodSelect.h" // render::kLodScreenSizes
 
 class Renderer;
 class TextureCube;
@@ -105,6 +106,11 @@ public:
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.
     void Reset(Renderer& renderer);
+
+    // UE's AUTOMATIC screen size of each LOD of the loaded mesh (Mesh::GetLodScreenSizes) -- what an
+    // authored mesh.json "lodScreenSize" replaces. Levels the mesh lacks read 0. False while nothing
+    // is loaded.
+    bool GetLodScreenSizes(float pixelError, float (&out)[render::kLodScreenSizes]) const;
 
 private:
     struct Impl;
