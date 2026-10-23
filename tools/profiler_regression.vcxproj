@@ -34,6 +34,7 @@
     <ClCompile Include="..\sources\core\profiling\Profiler.cpp" />
     <ClCompile Include="..\sources\core\task\TaskSystemLockFree.cpp" />
     <ClCompile Include="..\sources\core\memory\MemNew.cpp" />
+    <ClCompile Include="..\sources\core\memory\MemTrace.cpp" />
     <ClCompile Include="..\sources\core\diagnostics\ArtifactWriter.cpp" />
     <ClCompile Include="..\sources\rendering\core\GpuAlloc.cpp" />
     <ClCompile Include="..\sources\rendering\core\TextureCreate.cpp" />
