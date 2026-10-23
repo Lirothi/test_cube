@@ -23,7 +23,19 @@ namespace render
     };
 
     // Places `items` into pages of pageWidth x pageHeight, at most maxPages of them; `out` is parallel to `items`.
-    // Returns the number of pages used.
+    // Returns the number of pages used. `orderScratch`: storage for the sort order, kept by a caller that packs every
+    // frame (null = a local vector).
     std::uint32_t PackShadowAtlas(const std::vector<ShadowAtlasItem>& items, std::uint32_t pageWidth,
-                                  std::uint32_t pageHeight, std::uint32_t maxPages, std::vector<ShadowAtlasSlot>& out);
+                                  std::uint32_t pageHeight, std::uint32_t maxPages, std::vector<ShadowAtlasSlot>& out,
+                                  std::vector<std::uint32_t>* orderScratch = nullptr);
+
+    // A frame packer's working storage (LightManager keeps one): the vectors keep their capacity from frame to frame.
+    struct ShadowPackScratch
+    {
+        std::vector<ShadowAtlasItem> items;
+        std::vector<ShadowAtlasSlot> placed;
+        std::vector<std::uint32_t> order;
+        std::vector<std::uint32_t> kept;
+        std::vector<std::uint8_t> shrunk;
+    };
 }

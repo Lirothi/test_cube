@@ -17,10 +17,10 @@ public:
 
     bool LoadActions(const std::wstring& path);
 
-    bool  IsActionDown(const std::string& name) const;
-    bool  WasActionPressed(const std::string& name) const;
-    bool  WasActionReleased(const std::string& name) const;
-    float GetActionAxis(const std::string& name) const;
+    bool  IsActionDown(std::string_view name) const;
+    bool  WasActionPressed(std::string_view name) const;
+    bool  WasActionReleased(std::string_view name) const;
+    float GetActionAxis(std::string_view name) const;
 
     // Bindings in file order, for the on-screen controls overlay.
     const std::vector<ActionMap::BindingDesc>& GetBindingDescs() const { return actions_.GetBindingDescs(); }

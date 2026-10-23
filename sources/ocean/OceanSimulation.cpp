@@ -341,11 +341,9 @@ OceanSimulationInputs OceanSimulation::EvaluateInputs() const
     return result;
 }
 
-OceanSimulationInputs OceanSimulation::EvaluateInputsAt(float windForce01) const
+float OceanSimulation::ReferenceWaveHeightAt(float windForce01) const
 {
-    OceanSimulationInputs result;
-    inputsProvider_.PopulateInputs(result, Math::Saturate(windForce01));
-    return result;
+    return inputsProvider_.ReferenceWaveHeightAt(Math::Saturate(windForce01));
 }
 
 void OceanSimulation::RefreshDerivedSettings()

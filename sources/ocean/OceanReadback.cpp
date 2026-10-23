@@ -222,13 +222,13 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
         ctx.Use(shore, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 
-    ID3D12Resource* const dst = buffer_.Get();
-    const UINT64 base = static_cast<UINT64>(slotIndex) * slotBytes_;
-    const auto cascadeFp = cascadeFootprint_;
-    const auto shoreFp = shoreFootprint_;
-    return [dst, base, cascadeFp, shoreFp, subresource, cascades, copyShore, displacement, shore,
-               copyPoint, restorePoint](RenderGraphPassContext pass)
+    copyPass_ = CopyPass{buffer_.Get(), static_cast<UINT64>(slotIndex) * slotBytes_, cascadeFootprint_, shoreFootprint_,
+                         subresource, cascades, copyShore, displacement, shore, copyPoint, restorePoint};
+    return [this](RenderGraphPassContext pass)
     {
+        const CopyPass& p = copyPass_;
+        ID3D12Resource* const dst = p.dst;
+        const UINT64 base = p.base;
         auto token = pass.BeginCL();
         SetCommandListName(token.cl, pass.pass);
         ID3D12GraphicsCommandList* cl = token.cl;
@@ -236,7 +236,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
             // Scoped INSIDE the list's lifetime: this pass is not in a CL group, so EndCL really
             // closes the list, and a GPU scope still open then writes into a closed one.
             GPU_SCOPE(cl, ProfilerScopes::kPassOceanReadback);
-            pass.renderer->EmitPoint(cl, copyPoint);
+            pass.renderer->EmitPoint(cl, p.copyPoint);
             const auto copy = [cl, dst, base](ID3D12Resource* source, UINT subresourceIndex,
                                     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint)
             {
@@ -251,9 +251,9 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
                 from.SubresourceIndex = subresourceIndex;
                 cl->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
             };
-            for (std::uint32_t c = 0; c < cascades; ++c) { copy(displacement, subresource[c], cascadeFp[c]); }
-            if (copyShore) { copy(shore, 0u, shoreFp); }
-            pass.renderer->EmitPoint(cl, restorePoint);
+            for (std::uint32_t c = 0; c < p.cascades; ++c) { copy(p.displacement, p.subresource[c], p.cascadeFp[c]); }
+            if (p.copyShore) { copy(p.shore, 0u, p.shoreFp); }
+            pass.renderer->EmitPoint(cl, p.restorePoint);
         }
         pass.EndCL(token);
     };

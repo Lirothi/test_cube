@@ -1539,7 +1539,8 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex, uint32_t l
 void Renderer::ExecuteTimelineAndPresent() {
     CPU_SCOPE(ProfilerScopes::kRendererExecuteTimelineAndPresent);
 
-    submitSegmentsScratch_.clear();
+    // GatherFrameLists empties submitSegmentsScratch_ itself, recycling its list vectors -- a
+    // clear() here would free them first.
 
     // Gather batches in order, split into per-queue SEGMENTS (step 6). With every pass on the
     // graphics queue — which is every pass until step 8 — this yields exactly ONE segment holding

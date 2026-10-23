@@ -12,6 +12,7 @@
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/lighting/PointLight.h"
 #include "rendering/lighting/SpotLight.h"
+#include "rendering/shadows/ShadowAtlasPacker.h" // ShadowPackScratch
 
 class Renderer;
 class Frustum;
@@ -297,6 +298,14 @@ private:
     std::vector<ShadowAtlasPlacement> pointShadowDirect_;   // ...and to pointLights_
     std::uint32_t wantedSpotPages_ = 1, wantedPointPages_ = 1;
     std::uint32_t atlasShrunk_ = 0, atlasDropped_ = 0;
+    // Working storage of the selection and the pack (SelectShadowed*, PackShadowAtlases: one thread, one after
+    // another), kept so a frame reuses the last one's capacity -- as locals they were ~35 vectors allocated and
+    // freed a frame (memtrace, 2026-10-23).
+    struct ShadowCandidate { std::uint32_t index; float score; };
+    std::vector<ShadowCandidate> shadowCandidates_;
+    std::vector<std::uint8_t> shadowWasShadowed_, shadowSlotHoles_;
+    std::vector<std::uint32_t> shadowPreviousSlots_, shadowSelected_;
+    render::ShadowPackScratch shadowPack_;
     // Each buffer holds render::kFrameCount contiguous regions of pointLightCapacity_
     // / spotLightCapacity_ elements; region f is written+read only by in-flight frame
     // f, with its own SRV in the *SrvHandles_ array. Capacity is PER REGION.

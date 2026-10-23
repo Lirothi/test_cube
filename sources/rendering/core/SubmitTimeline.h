@@ -131,6 +131,14 @@ public:
     {
         std::lock_guard<std::mutex> lk(mtx_);
         ApplySubmitOrderLocked_();
+        // Last frame's segments hand their list vectors to the pool, capacity and all, instead of
+        // freeing them in out.clear(): a fresh vector per segment re-grew by push_back every frame
+        // (33 allocations a frame on wind_test). Pushed in reverse, so segment i takes back the
+        // vector segment i had -- the sizes repeat frame to frame and nothing grows after the first.
+        for (size_t i = out.size(); i-- > 0;) {
+            out[i].lists.clear();
+            listPool_.push_back(std::move(out[i].lists));
+        }
         out.clear();
         // Which batches are the TARGET of some cross-queue wait. Computed first, because a segment
         // boundary is needed AFTER each of them and the walk below is single-pass.
@@ -154,6 +162,10 @@ public:
                 (!out.empty() && out.back().signalAfter); // previous segment ends at a signal point
             if (needsNewSegment) {
                 out.push_back(Submission{});
+                if (!listPool_.empty()) {
+                    out.back().lists = std::move(listPool_.back());
+                    listPool_.pop_back();
+                }
                 out.back().queue = pb.queue;
                 out.back().waitForBatch = pb.crossQueueWait;
             }
@@ -206,6 +218,7 @@ private:
 
     std::vector<PassBatch> batches_; // persistent pool; the first activeBatchCount_ belong to this frame
     std::vector<bool> waitTargets_;  // step 8: batches some other queue waits for (reused per frame)
+    std::vector<std::vector<ID3D12CommandList*>> listPool_; // segments' list vectors between frames
     size_t activeBatchCount_ = 0;
     std::mutex mtx_;
 };

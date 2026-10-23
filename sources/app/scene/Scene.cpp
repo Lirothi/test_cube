@@ -2582,7 +2582,8 @@ void Scene::PrepareViews(Renderer* renderer)
     // main + shore + shore SDF + cascades + the shadowed spots' views + 6 cube faces per shadowed point -- plan S9e: as
     // many as the view capacity holds, so a growing vector (tc::inl_vector does not grow: past its capacity Release
     // wrote over the stack once, S10b).
-    std::vector<SceneView*> viewsToCull;
+    std::vector<SceneView*>& viewsToCull = viewsToCull_;
+    viewsToCull.clear();
     viewsToCull.reserve(3u + static_cast<size_t>(kCascades) + lightManager_.GetShadowedSpotCount() +
                         6u * lightManager_.GetShadowedPointCount());
     auto enqueueView = [this, camMask, &viewsToCull](SceneView& view)
@@ -2634,7 +2635,8 @@ void Scene::PrepareViews(Renderer* renderer)
     // Camera preparation was published before cascade/light-view setup. Publish the remaining
     // independent views now; while waiting for the camera task, main may help drain these tasks.
     // One task per view to cull (plan S9e: as many as there are views).
-    std::vector<TaskSystem::TaskHandle> viewTasks;
+    std::vector<TaskSystem::TaskHandle>& viewTasks = viewTasks_;
+    viewTasks.clear();
     viewTasks.reserve(viewsToCull.size());
     {
         CPU_SCOPE(ProfilerScopes::kPrepareViewsDispatch);

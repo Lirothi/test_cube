@@ -494,7 +494,9 @@ void SceneRenderer::Pass_CSM(Renderer* renderer, RenderGraphPassContext ctx,
         renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(cascadeIndex) + 1u);
     };
 
-    TaskSystem::Get().DispatchWait(cascadeViews.size(), renderCascade, 1);
+    // By reference: DispatchWait returns only when every job has, and the lambda's captures copied into a
+    // std::function were a heap allocation per dispatch (past its 48 B small buffer).
+    TaskSystem::Get().DispatchWait(cascadeViews.size(), [&renderCascade](std::size_t i) { renderCascade(i); }, 1);
 #else
     for (size_t idx = 0; idx < cascadeViews.size(); ++idx)
     {
@@ -931,7 +933,8 @@ void SceneRenderer::Pass_SpotShadows(Renderer* renderer, RenderGraphPassContext 
         renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(listIndex));
     };
 
-    TaskSystem::Get().DispatchWait(lists, renderSpotShadow, 1);
+    // By reference, as the cascades' (DispatchWait outlives no job; a copy was a heap allocation per frame).
+    TaskSystem::Get().DispatchWait(lists, [&renderSpotShadow](std::size_t i) { renderSpotShadow(i); }, 1);
 #else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);
@@ -1082,7 +1085,8 @@ void SceneRenderer::Pass_PointShadows(Renderer* renderer, RenderGraphPassContext
         renderer->EndThreadCommandList(t, batchIndex, static_cast<uint32_t>(listIndex));
     };
 
-    TaskSystem::Get().DispatchWait(lists, renderPointShadow, 1);
+    // By reference, as the cascades' (DispatchWait outlives no job; a copy was a heap allocation per frame).
+    TaskSystem::Get().DispatchWait(lists, [&renderPointShadow](std::size_t i) { renderPointShadow(i); }, 1);
 #else
     auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
     SetCommandListName(t.cl, ctx.pass);

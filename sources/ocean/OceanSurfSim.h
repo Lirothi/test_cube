@@ -172,4 +172,28 @@ private:
     // heaps are NOT guaranteed zeroed — the foam pair held NaN garbage that survived every
     // read-modify-write frame and rendered as permanent black.
     bool needsInitialClear_ = true;
+
+    // BuildPass' decisions as its body records them, read here rather than captured: ~200 B of
+    // capture was a heap allocation every frame (std::function keeps 48 B inline). Written by the
+    // builder, read by the body during the same frame's graph run.
+    struct RecordPass
+    {
+        float timeSeconds = 0.0f;
+        bool relocate = false;
+        int shiftX = 0;
+        int shiftY = 0;
+        Math::float2 center = Math::float2(0.0f, 0.0f);
+        uint32_t readIndex = 0;
+        int substeps = 0;
+        float pokeAmp = 0.0f;
+        bool spawn = false;
+        float candX = 0.0f;
+        float candZ = 0.0f;
+        uint32_t spawnSlot = 0;
+        float spawnAmp = 0.0f;
+        ShoreDepthWindow shore{};
+        Tuning tuning{};
+        std::uint32_t uavPoint = 0;
+    };
+    RecordPass record_;
 };

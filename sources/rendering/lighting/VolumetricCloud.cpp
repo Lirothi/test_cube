@@ -715,9 +715,11 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     overlay.material = capture_.get();
     overlay.cbBytes = captureCbBytes_;
     overlay.ownBytes = static_cast<UINT>(sizeof(VolumetricCloudConstants));
-    overlay.writeConstants = [constants](uint8_t* dst, unsigned mipSize) mutable {
-        constants.output[0] = constants.output[1] = static_cast<float>(mipSize);
-        std::memcpy(dst, &constants, sizeof(constants));
+    overlayConstants_ = constants; // read by the closure, which stays inside the small buffer (see the member)
+    overlay.writeConstants = [this](uint8_t* dst, unsigned mipSize) {
+        VolumetricCloudConstants mip = overlayConstants_;
+        mip.output[0] = mip.output[1] = static_cast<float>(mipSize);
+        std::memcpy(dst, &mip, sizeof(mip));
     };
     const DensityBinding bind = Binding();
     overlay.reads = {bind.formation, bind.cells, weather_.Get(), distant ? in.distantResource : nullptr, bind.profile};
@@ -846,10 +848,14 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
     // samples it in a pixel shader (`Main_Transparent`, SceneRenderer_Graph.cpp:1785) and hands it
     // to the NEXT frame's write in that state -- and no compute acquire may begin from it.
     // `Main_TransparentFog` hands it back; see the note there.
-    // The density model's textures: generated, or the files that replaced them.
-    const DensityBinding bind = Binding();
+    // The density model's textures: generated, or the files that replaced them. The pass reads all of it from
+    // shadowPass_ (see the member: closures that copied it were heap allocations every frame).
+    shadowPass_.constants = constants;
+    shadowPass_.bind = Binding();
+    shadowPass_.traceSize = traceSize;
     return graph.AddPass2(RenderPass::Main_CloudShadow, RenderQueue::AsyncCompute, deps, {}, {},
-        [this, renderer, constants, traceSize, bind](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const DensityBinding& bind = shadowPass_.bind;
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(bind.formation, kRest); ctx.Use(bind.cells, kRest); ctx.Use(weather_.Get(), kRest);
@@ -862,10 +868,13 @@ size_t VolumetricCloud::BuildShadow(Renderer* renderer, RenderGraph<static_cast<
             ctx.Use(shadowFiltered_.Get(), kRest);
             // Serial builder: what the consumers registered after this read.
             shadowBuilt_ = true;
-            std::memcpy(&shadowViewProj_.m, constants.shadowViewProj, sizeof(float) * 16);
-            shadowFarKm_ = constants.shadowMap[2];
-            return [this, renderer, constants, points, traceSize, bind](RenderGraphPassContext c) {
+            std::memcpy(&shadowViewProj_.m, shadowPass_.constants.shadowViewProj, sizeof(float) * 16);
+            shadowFarKm_ = shadowPass_.constants.shadowMap[2];
+            return [this, renderer, points](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudShadow);
+                const VolumetricCloudConstants& constants = shadowPass_.constants;
+                const DensityBinding& bind = shadowPass_.bind;
+                const UINT traceSize = shadowPass_.traceSize;
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
                     GPU_SCOPE(t.cl, ProfilerScopes::kPassCloudShadow);
@@ -891,21 +900,25 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     const VolumetricCloudConstants constants = MakeConstants(in);
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList list;
     for (size_t i = 0; i < depCount && i < deps.size(); ++i) { if (deps[i] != kNone) { list.push_back(deps[i]); } }
+    // Everything the pass reads, in tracePass_ (see the member: closures that copied it were heap allocations every
+    // frame).
+    TracePassFrame& f = tracePass_;
+    f.constants = constants;
     const bool aerial = in.aerialBuilt && in.aerialResource && in.aerialSrv.ptr != 0;
     const bool distant = in.distantActive && in.distantResource && in.distantSrv.ptr != 0;
-    ID3D12Resource* aerialResource = aerial ? in.aerialResource : nullptr;
-    ID3D12Resource* distantResource = distant ? in.distantResource : nullptr;
-    const D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv = aerial ? in.aerialSrv : renderer->VsmDummyTexSrv();
-    const D3D12_CPU_DESCRIPTOR_HANDLE distantSrv = distant ? in.distantSrv : renderer->VsmDummyTexSrv();
+    f.aerialResource = aerial ? in.aerialResource : nullptr;
+    f.distantResource = distant ? in.distantResource : nullptr;
+    f.aerialSrv = aerial ? in.aerialSrv : renderer->VsmDummyTexSrv();
+    f.distantSrv = distant ? in.distantSrv : renderer->VsmDummyTexSrv();
     // N3: the sky's transmittance LUT (t7), for the light at each sample; read only when constants say so.
     const bool transmittance = constants.light[1] > 0.0f && in.transmittanceResource && in.transmittanceSrv.ptr != 0;
-    ID3D12Resource* transmittanceResource = transmittance ? in.transmittanceResource : nullptr;
-    const D3D12_CPU_DESCRIPTOR_HANDLE transmittanceSrv = transmittance ? in.transmittanceSrv : renderer->VsmDummyTexSrv();
+    f.transmittanceResource = transmittance ? in.transmittanceResource : nullptr;
+    f.transmittanceSrv = transmittance ? in.transmittanceSrv : renderer->VsmDummyTexSrv();
     // The density model's textures: generated, or the files that replaced them.
-    const DensityBinding bind = Binding();
+    f.bind = Binding();
     // t8: the blue-noise mask (read only when the constants say so; a placeholder otherwise).
-    ID3D12Resource* blueNoiseResource = blueNoise_.Get();
-    const D3D12_CPU_DESCRIPTOR_HANDLE blueNoiseSrv = blueNoiseResource ? blueNoiseSrv_ : renderer->VsmDummyTexSrv();
+    f.blueNoiseResource = blueNoise_.Get();
+    f.blueNoiseSrv = f.blueNoiseResource ? blueNoiseSrv_ : renderer->VsmDummyTexSrv();
     // ON THE ASYNC COMPUTE QUEUE (`--async-pass` name CloudTrace). The march is latency-bound -- a
     // long serial loop per ray, and in trace mode 0 too few rays to fill the GPU -- which is the
     // character that overlaps (docs/async_compute_plan.md: BuildAS won, GTAO lost to a saturating
@@ -917,19 +930,20 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     // `--async-pass=BuildAS,ObjectCompute,RTTrace`, interleaved x3, no overlap between the arms):
     // GPU.Frame trace mode 1 2.994 -> 2.795 ms, mode 0 2.803 -> 2.656; pixels within the run-to-run floor.
     return graph.AddPass2(RenderPass::Main_CloudTrace, RenderQueue::AsyncCompute, list, {}, {},
-        [this, renderer, constants, aerialResource, distantResource, transmittanceResource, aerialSrv, distantSrv, transmittanceSrv, bind,
-         blueNoiseResource, blueNoiseSrv](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const TracePassFrame& f = tracePass_;
+            const DensityBinding& bind = f.bind;
             const auto& D = renderer->GetDeferredForFrame();
             const auto& P = renderer->GetDeferredForPrevFrame();
             std::array<std::uint32_t, 3> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(bind.formation, kRest); ctx.Use(bind.cells, kRest); ctx.Use(weather_.Get(), kRest);
             ctx.Use(bind.profile, kRest);
-            if (blueNoiseResource) { ctx.Use(blueNoiseResource, kRest); }
+            if (f.blueNoiseResource) { ctx.Use(f.blueNoiseResource, kRest); }
             // The sky's volume and distant light, at their rest; declared so the reads are named.
-            if (aerialResource) { ctx.Use(aerialResource, kRest); }
-            if (distantResource) { ctx.Use(distantResource, kRest); }
-            if (transmittanceResource) { ctx.Use(transmittanceResource, kRest); }
+            if (f.aerialResource) { ctx.Use(f.aerialResource, kRest); }
+            if (f.distantResource) { ctx.Use(f.distantResource, kRest); }
+            if (f.transmittanceResource) { ctx.Use(f.transmittanceResource, kRest); }
             // The depth NON_PIXEL only: the PIXEL bit is illegal on the compute queue.
             ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
             ctx.Use(D.cloudTrace.Get(), kUav); ctx.Use(D.cloudTraceDepth.Get(), kUav);
@@ -939,8 +953,11 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
             ctx.Use(D.cloudResolved.Get(), kUav); ctx.Use(D.cloudResolvedDepth.Get(), kUav);
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(D.cloudResolved.Get(), kRest); ctx.Use(D.cloudResolvedDepth.Get(), kRest);
-            return [this, renderer, constants, aerialSrv, distantSrv, transmittanceSrv, points, bind, blueNoiseSrv](RenderGraphPassContext c) {
+            return [this, renderer, points](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassCloudTrace);
+                const TracePassFrame& f = tracePass_;
+                const VolumetricCloudConstants& constants = f.constants;
+                const DensityBinding& bind = f.bind;
                 const auto& DF = renderer->GetDeferredForFrame();
                 const auto& PF = renderer->GetDeferredForPrevFrame();
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
@@ -953,8 +970,8 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
                         const auto samplers = renderer->GetSamplerManager()->GetTable(renderer,
                             std::array{*SamplerManager::LinearWrap(), *SamplerManager::LinearClamp()});
                         RecordComputeDispatch(renderer, t.cl, trace_.get(), cbBytes_, write,
-                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, aerialSrv, distantSrv, bind.profileSrv, transmittanceSrv,
-                             blueNoiseSrv},
+                            {bind.formationSrv, bind.cellsSrv, weatherSrv_, DF.depthSRV, f.aerialSrv, f.distantSrv, bind.profileSrv, f.transmittanceSrv,
+                             f.blueNoiseSrv},
                             {DF.cloudTraceUAV, DF.cloudTraceDepthUAV}, samplers, DF.cloudWidth, DF.cloudHeight);
                     }
                     renderer->EmitPoint(t.cl, points[1]);

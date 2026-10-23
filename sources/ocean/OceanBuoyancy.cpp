@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstring>
 #include <mutex>
-#include <unordered_set>
 
 #include "core/logging/Log.h"
 #include "core/profiling/Profiler.h"
@@ -229,7 +228,8 @@ void OceanBuoyancy::Step(Body& body, const OceanRenderable& ocean, float deltaTi
     }
     const float age = readback.HasSurface() ?
         std::clamp(ocean.GetElapsedTime() - body.waterTime, 0.0f, kMaxCarrySeconds) : 0.0f;
-    std::vector<float> water(count);
+    std::vector<float>& water = body.water; // kept on the body: no allocation a frame
+    water.resize(count);
     for (size_t i = 0; i < count; ++i)
     {
         water[i] = readback.HasSurface() ? body.waterHeight[i] + body.waterRate[i] * age
@@ -301,15 +301,16 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
         bodies_.clear();
         lastOcean_ = ocean;
     }
-    std::vector<RenderableObject*> registered;
+    std::vector<RenderableObject*>& registered = registered_;
     {
         Registry& registry = TheRegistry();
         std::lock_guard<std::mutex> lock(registry.mutex);
         if (registry.objects.empty() && bodies_.empty()) { return; } // nothing floats: free
-        registered = registry.objects;
+        registered = registry.objects; // into the kept capacity
     }
     const bool oceanOn = ocean && ocean->IsVisible() && ocean->GetSimulation();
-    std::vector<RenderableObject*> floating;
+    std::vector<RenderableObject*>& floating = floating_;
+    floating.clear();
     for (RenderableObject* object : registered)
     {
         if (oceanOn && object->IsVisible())
@@ -322,12 +323,12 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
         }
     }
     // Bodies of objects that stopped floating or no longer exist. Keys only -- never dereferenced.
+    // A linear search: a level floats a handful of objects, and a set built for it was a node
+    // allocation per object per frame.
+    for (auto it = bodies_.begin(); it != bodies_.end();)
     {
-        const std::unordered_set<const RenderableObject*> alive(floating.begin(), floating.end());
-        for (auto it = bodies_.begin(); it != bodies_.end();)
-        {
-            it = alive.count(it->first) ? std::next(it) : bodies_.erase(it);
-        }
+        const bool alive = std::find(floating.begin(), floating.end(), it->first) != floating.end();
+        it = alive ? std::next(it) : bodies_.erase(it);
     }
     if (floating.empty()) { return; }
 

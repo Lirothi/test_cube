@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include <string_view>
 #include "third_party/robin_hood.h"
 #include <vector>
 #include <cstdint>
@@ -17,11 +18,12 @@ public:
     // Load a JSON schema. Returns false if reading/parsing failed.
     bool LoadFromJsonFile(const std::wstring& path);
 
-    // Queries (provide the InputManager each frame)
-    bool  IsActionDown(const std::string& name, const InputManager& input) const;
-    bool  WasActionPressed(const std::string& name, const InputManager& input) const;
-    bool  WasActionReleased(const std::string& name, const InputManager& input) const;
-    float GetAxis(const std::string& name, const InputManager& input) const;
+    // Queries (provide the InputManager each frame). A string_view, looked up without a std::string: a literal
+    // name past the 15-character small buffer ("ToggleDeveloperPanel") was a heap allocation per query per frame.
+    bool  IsActionDown(std::string_view name, const InputManager& input) const;
+    bool  WasActionPressed(std::string_view name, const InputManager& input) const;
+    bool  WasActionReleased(std::string_view name, const InputManager& input) const;
+    float GetAxis(std::string_view name, const InputManager& input) const;
 
     // Bindings in file order, for the on-screen controls overlay.
     const std::vector<BindingDesc>& GetBindingDescs() const { return bindingDescs_; }
@@ -47,13 +49,22 @@ private:
         std::vector<Axis>    axes;
     };
 
-    const Action* Find(const std::string& name) const;
+    const Action* Find(std::string_view name) const;
 
     // Helpers
     static int  VkFromString(const std::string& s);
     static int  MouseButtonFromString(const std::string& s);
 
 private:
-    robin_hood::unordered_map<std::string, Action> actions_;
+    // Transparent: find() takes a string_view as it is.
+    struct NameHash {
+        using is_transparent = void;
+        size_t operator()(std::string_view s) const noexcept { return robin_hood::hash_bytes(s.data(), s.size()); }
+    };
+    struct NameEqual {
+        using is_transparent = void;
+        bool operator()(std::string_view a, std::string_view b) const noexcept { return a == b; }
+    };
+    robin_hood::unordered_map<std::string, Action, NameHash, NameEqual> actions_;
     std::vector<BindingDesc> bindingDescs_;
 };

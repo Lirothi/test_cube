@@ -140,6 +140,9 @@ private:
         std::function<void(std::size_t)> fn_;
         std::size_t jobCount_;
         std::size_t batchSize_;
+        // Execute's child chunks. Kept with the pooled task for its capacity: a local vector was an
+        // allocation per dispatch.
+        std::vector<TaskHandle> chunks_;
     };
 
     TaskSystem();

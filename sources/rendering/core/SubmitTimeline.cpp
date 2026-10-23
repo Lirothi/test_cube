@@ -86,6 +86,7 @@ void SubmitTimeline::Clear()
 {
     std::lock_guard<std::mutex> lk(mtx_);
     batches_.clear(); // real destroy — releases the pooled per-batch vectors
+    listPool_.clear();
     activeBatchCount_ = 0;
 }
 

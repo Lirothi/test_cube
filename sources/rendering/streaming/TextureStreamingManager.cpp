@@ -145,7 +145,8 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
 
     const std::size_t count = ts.EntryCount();
     if (persist_.size() < count) { persist_.resize(count); }
-    std::vector<int> textureSlot(count, -1);
+    std::vector<int>& textureSlot = textureSlot_;
+    textureSlot.assign(count, -1);
     d.textures.reserve(count);
     for (std::uint32_t e = 0; e < count; ++e)
     {
@@ -305,7 +306,8 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
     {
         return textures[a].retentionPriority > textures[b].retentionPriority;
     };
-    std::vector<std::uint32_t> prioritized;
+    std::vector<std::uint32_t>& prioritized = d.prioritized;
+    prioritized.clear();
     if (memBudgeted > memoryBudget)
     {
         for (std::uint32_t i = 0; i < textures.size(); ++i)
@@ -412,7 +414,10 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
     {
         return textures[a].loadOrderPriority > textures[b].loadOrderPriority;
     });
-    std::vector<std::uint32_t> outs, ins;
+    std::vector<std::uint32_t>& outs = d.outs;
+    std::vector<std::uint32_t>& ins = d.ins;
+    outs.clear();
+    ins.clear();
     for (std::uint32_t i : prioritized)
     {
         const StreamingTexture& t = textures[i];
@@ -453,8 +458,10 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
     s.screenSize = d.screenSize;
     s.calcMs = d.calcMs;
     s.cycles = stats_.cycles + 1;
-    rows_.clear();
-    rows_.reserve(d.textures.size());
+    // rows_ keeps its elements from cycle to cycle and a row's path is assigned into the string it already holds:
+    // rebuilding the rows copied every texture's path into a fresh string each cycle (23 allocations a frame on
+    // wind_test). Every field of a reused row is written below.
+    std::size_t rowCount = 0;
     for (const StreamingTexture& t : d.textures)
     {
         if (!ts.EntryAlive(t.entry, t.gen)) { continue; }
@@ -464,16 +471,18 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
         const int delta = std::clamp(static_cast<int>(t.wantedMips) - static_cast<int>(t.residentMips), -4, 4);
         ++s.deltaHistogram[static_cast<std::size_t>(delta + 4)];
         if (ts.InFlightTarget(t.entry) != 0) { ++s.inFlight; }
-        Row r;
-        if (const Texture2D* tex = ts.EntryTexture(t.entry)) { r.path = tex->GetSourcePath(); }
+        if (rowCount == rows_.size()) { rows_.emplace_back(); }
+        Row& r = rows_[rowCount++];
+        r.path.clear();
+        if (const Texture2D* tex = ts.EntryTexture(t.entry)) { r.path.assign(tex->GetSourcePath()); }
         r.mipCount = t.mipCount; r.resident = t.residentMips; r.wanted = t.wantedMips; r.budgeted = t.budgetedMips;
         r.requested = t.requestedMips; r.maxAllowed = t.maxAllowedMips;
         r.visibleWanted = t.visibleWantedMips; r.hiddenWanted = t.hiddenWantedMips;
         r.texelFactor = t.texelFactorMax; r.lastSeen = t.lastRenderTime; r.maxSize = t.maxSize;
         r.retention = t.retentionPriority; r.loadOrder = t.loadOrderPriority; r.bias = t.budgetMipBias;
         r.unknownRef = t.unknownRef; r.terrain = t.isTerrain;
-        rows_.push_back(std::move(r));
     }
+    rows_.resize(rowCount); // fewer textures than last cycle: drop the tail
     for (std::uint32_t i : d.cancels)
     {
         const StreamingTexture& t = d.textures[i];

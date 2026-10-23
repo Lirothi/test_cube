@@ -22,6 +22,7 @@
 #include "app/scene/SceneView.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderer.h"
+#include "core/task/TaskSystem.h" // viewTasks_
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a
 #include "rendering/visibility/OcclusionQueries.h"
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
@@ -317,6 +318,9 @@ private:
     std::uint32_t selectionOutlineRadius_ = 1;
 #endif
     std::array<SceneView, kCascades> cascadeViews_{};
+    // PrepareViews' working lists, kept between frames for their capacity (two allocations a frame as locals).
+    std::vector<SceneView*> viewsToCull_;
+    std::vector<TaskSystem::TaskHandle> viewTasks_;
     // S14 cross-check state: the ortho box and the accurate volume each cascade was culled with
     // LAST frame. UpdateCascades runs before this frame's queues are rebuilt, so the survivors it
     // can inspect were chosen by these planes and no others -- testing them against THIS frame's

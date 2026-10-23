@@ -274,8 +274,8 @@ private:
     // queue — the ocean maps handed over in a compute-legal state. Empty on an ocean-less level.
     void Pass_PrologueClear(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     // pass-flow S7b: the objects whose compute records something this frame, collected by the
-    // Main_ObjectCompute builder as it declares for them. Fixed capacity because it rides into the
-    // record lambda by value — an overflow is an invariant failure, never a silent drop.
+    // Main_ObjectCompute builder as it declares for them (into graphPass_, which the body reads).
+    // Fixed capacity -- an overflow is an invariant failure, never a silent drop.
     static constexpr size_t kMaxComputeObjects = 64;
     using ObjectComputeList = tc::inl_vector<RenderableObjectBase*, kMaxComputeObjects>;
     void Pass_ObjectCompute(Renderer* r, RenderGraphPassContext ctx,
@@ -654,6 +654,19 @@ private:
     // same reason once it carries a Prepare.
     std::unique_ptr<RenderGraph<kMainRenderGraphPassCount>> mainRenderGraph_;
     std::unique_ptr<RenderGraph<kEpilogueRenderGraphPassCount>> epilogueRenderGraph_;
+    // The pass inputs too big for a closure: std::function keeps 48 B of capture inline, and past that every
+    // builder or body that copied them was a heap allocation each frame (memtrace, 2026-10-23). Written by a
+    // builder, read by its body during the same frame's graph run, overwritten by the next frame's: no reset.
+    struct GraphPassFrame
+    {
+        std::array<ObjectComputeList, 2> computeObjects; // [feedsShadowCull]: Main_ObjectCompute, Main_GpuInstanceCompute
+        SkyViewFrameData skyDrawView{};                  // Main_Skybox
+        NightSkyFrameData skyNightView{};
+        TonemapPoints tonemap{};                         // Main_Tonemap
+        ShadowGpuData::CullDecisions shadowCull{};       // Main_ShadowCull (~750 B)
+        ShadowGpuData::DirectionalCullDecisions sdsmCull{}; // Main_SdsmCull
+    };
+    GraphPassFrame graphPass_;
 
     // ---- CROSS-FRAME STATE: this frame READS what the last one wrote. ----
     // Every member here is a history or the validity of one, and every one of them has the same

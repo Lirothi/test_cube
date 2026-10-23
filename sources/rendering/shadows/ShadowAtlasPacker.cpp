@@ -6,12 +6,15 @@
 namespace render
 {
     std::uint32_t PackShadowAtlas(const std::vector<ShadowAtlasItem>& items, std::uint32_t pageWidth,
-                                  std::uint32_t pageHeight, std::uint32_t maxPages, std::vector<ShadowAtlasSlot>& out)
+                                  std::uint32_t pageHeight, std::uint32_t maxPages, std::vector<ShadowAtlasSlot>& out,
+                                  std::vector<std::uint32_t>* orderScratch)
     {
         out.assign(items.size(), ShadowAtlasSlot{});
         if (items.empty() || pageWidth == 0u || pageHeight == 0u || maxPages == 0u) { return 0u; }
 
-        std::vector<std::uint32_t> order(items.size());
+        std::vector<std::uint32_t> localOrder;
+        std::vector<std::uint32_t>& order = orderScratch ? *orderScratch : localOrder;
+        order.resize(items.size());
         std::iota(order.begin(), order.end(), 0u);
         std::sort(order.begin(), order.end(), [&](std::uint32_t a, std::uint32_t b)
         {

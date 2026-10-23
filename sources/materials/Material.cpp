@@ -1301,7 +1301,7 @@ void Material::CreateGraphics(Renderer* r, const GraphicsDesc& gd)
 
     {
         std::lock_guard<std::mutex> lk(watchMtx_);
-        watchedFiles_ = std::move(inc);
+        watchedFiles_.assign(std::make_move_iterator(inc.begin()), std::make_move_iterator(inc.end()));
     }
     RefreshWatchTimes_();
 }
@@ -1362,7 +1362,7 @@ void Material::CreateCompute(Renderer* r, const ComputeDesc& cd)
 
     {
         std::lock_guard<std::mutex> lk(watchMtx_);
-        watchedFiles_ = std::move(inc);
+        watchedFiles_.assign(std::make_move_iterator(inc.begin()), std::make_move_iterator(inc.end()));
     }
     RefreshWatchTimes_();
 }
@@ -1406,7 +1406,7 @@ bool Material::HotReloadIfPending(Renderer* r, uint64_t frameNumber, uint64_t ke
 
     {
         std::lock_guard<std::mutex> lk(watchMtx_);
-        watchedFiles_ = std::move(inc);
+        watchedFiles_.assign(std::make_move_iterator(inc.begin()), std::make_move_iterator(inc.end()));
     }
     RefreshWatchTimes_();
 

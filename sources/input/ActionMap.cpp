@@ -249,7 +249,7 @@ bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
     return true;
 }
 
-const ActionMap::Action* ActionMap::Find(const std::string& name) const {
+const ActionMap::Action* ActionMap::Find(std::string_view name) const {
     auto it = actions_.find(name);
     if (it == actions_.end()) {
         return nullptr;
@@ -259,7 +259,7 @@ const ActionMap::Action* ActionMap::Find(const std::string& name) const {
 
 // === Queries ===
 
-bool ActionMap::IsActionDown(const std::string& name, const InputManager& input) const {
+bool ActionMap::IsActionDown(std::string_view name, const InputManager& input) const {
     auto a = Find(name);
     if (a == nullptr) { return false; }
 
@@ -303,7 +303,7 @@ bool ActionMap::IsActionDown(const std::string& name, const InputManager& input)
     return false;
 }
 
-bool ActionMap::WasActionPressed(const std::string& name, const InputManager& input) const {
+bool ActionMap::WasActionPressed(std::string_view name, const InputManager& input) const {
     auto a = Find(name);
     if (a == nullptr) { return false; }
     for (const auto& d : a->digitals) {
@@ -358,7 +358,7 @@ bool ActionMap::WasActionPressed(const std::string& name, const InputManager& in
     return false;
 }
 
-bool ActionMap::WasActionReleased(const std::string& name, const InputManager& input) const {
+bool ActionMap::WasActionReleased(std::string_view name, const InputManager& input) const {
     auto a = Find(name);
     if (a == nullptr) { return false; }
     for (const auto& d : a->digitals) {
@@ -369,7 +369,7 @@ bool ActionMap::WasActionReleased(const std::string& name, const InputManager& i
     return false;
 }
 
-float ActionMap::GetAxis(const std::string& name, const InputManager& input) const {
+float ActionMap::GetAxis(std::string_view name, const InputManager& input) const {
     auto a = Find(name);
     if (a == nullptr) {
         return 0.0f;

@@ -1585,7 +1585,7 @@ Math::float4 OceanRenderable::GetShoreSwashParams() const
     // evaluation — the live FFT is untouched.
     const float fullWind = std::clamp(render.shoreContactFoamFullWindForce, 0.0f, 1.0f);
     const float fullWindWaveHeight = simulation_
-        ? simulation_->EvaluateInputsAt(fullWind).referenceWaveHeight
+        ? simulation_->ReferenceWaveHeightAt(fullWind)
         : 0.0f;
     return Math::float4(
         std::clamp(render.shoreSwashAmplitude, 0.0f, 1.0f),

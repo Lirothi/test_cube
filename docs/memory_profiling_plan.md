@@ -813,6 +813,30 @@ Release-имена стандартных шаблонов в стеках не�
   ← `Renderer::DestroyDeferredTargets` −1481.75 МБ, `LocalShadowCache::EnsurePool` ← `Scene::ReconcileShadowMode`
   −224 МБ, `VirtualShadowMap::ReleaseResources` −64.56 МБ. Ядро вьюера в node дало те же числа и тот же топ-5, что CLI.
 
+### Чистка churn по трассе (2026-10-23, владелец: «сделай анализ трейса, может ещё похожие вещи найдёшь»)
+
+Первое применение трассы по делу: `AafB` по точным строкам аллокации (скрипт scratchpad `site_breakdown.js` на ядре
+вьюера), wind_test, `all,stacks=all`, орбита 35 м / 14°/с вокруг камеры владельца. Все места — «временное на каждый
+кадр», ни одной утечки (`tags` по третям орбиты: рост ёмкости выходит на плато; `rt.as.retired` в `mem:` — счётчик
+трафика, удерживаемое `rt.as.bin` 0–2 МБ).
+
+| Место | За кадр | Причина → правка |
+|---|---|---|
+| `RenderGraph::AddPass2Internal` | 53 | обёртка Prepare `[this, idx, BuildFn]` 80 B > small buffer → хранить сами `BuildFn` (`c43efa08`) |
+| `SubmitTimeline::GatherFrameLists` | 33 | `out.clear()` убивал `Submission::lists` → пул векторов между кадрами |
+| LightManager (выбор + упаковка атласа) | ~35 | локальные векторы, `hole`/`items` без `reserve` → scratch-члены, `ShadowPackScratch`, `order` упаковщика |
+| `TextureStreamingManager::Apply_` / `DoWork_` | 23 + 2 | копия `wstring` пути в строку вкладки каждый цикл → `assign` в живые строки; `prioritized/outs/ins` в `AsyncData` |
+| OceanBuoyancy Tick/Step | 18 | копия реестра, `unordered_set alive`, `water` на тело → члены, линейный поиск, `Body::water` |
+| AppController / InputManager | 16 | `WasActionPressed(const std::string&)` от литерала > 15 символов → `std::string_view` + прозрачный поиск |
+| `Material::FSProbeAndFlagPending` | 10 | `wstring` → `filesystem::path` на каждый файл → `watchedFiles_` сразу `path` |
+| замыкания > 48 B (std::function) | ~20 | облака (константы ~800 B ×4), небо (environment, aerial 400 B, view 256 B), compute-списки, Skybox, Tonemap, ShadowCull 750 B, SdsmCull, OceanSurfSim, OceanReadback → данные кадра в членах, замыкание `[this, ...]`; тени: `DispatchWait` по ссылке (он ждёт) |
+| мелочь | ~11 | `OceanSimulationInputs` (2 `make_shared` ради одной высоты → `ReferenceWaveHeightAt`), `mergedVg` (thread_local), `RangeTaskSet::chunks_`, `PrepareViews` |
+
+Итог (Release, орбита, кадры 270–2397): **CPU-churn 175 → 3.4 аллокации/кадр** (статика 239 → ~4), `verify` PASS,
+выход чистый, кадр цел. Осталось на кадр одно: `RenderObjectBatch` (`DispatchTrack` не ждёт, замыкание 88 B — по
+ссылке нельзя); прочее — события движения (wind-BLAS, пулы очередей) < 0.5/кадр. Правило для данных кадра в членах:
+пишет билдер (или Build*), читает тело того же кадра, следующая запись — сборка следующего кадра.
+
 ### M7 (по желанию). Освобождённые GPU VA для page fault
 
 - Кольцо последних N освобождённых буферов `{имя, тег, VA-диапазон, кадр}` (у текстур VA нет — только буферы);

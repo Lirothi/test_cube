@@ -210,11 +210,9 @@ void OceanSimulationInputsProvider::PopulateInputs(OceanSimulationInputs& target
     target.timeScale = timeScale_;
     target.depth = depth_;
 
-    float referenceWaveHeight = 0.0f;
     if (swell_)
     {
         target.swell = swell_->GetSpectrum();
-        referenceWaveHeight += swell_->GetReferenceWaveHeight();
     }
     else
     {
@@ -227,7 +225,6 @@ void OceanSimulationInputsProvider::PopulateInputs(OceanSimulationInputs& target
         if (localPreset_)
         {
             ApplyPreset(target, *localPreset_);
-            referenceWaveHeight += localPreset_->GetReferenceWaveHeight();
         }
     }
     else
@@ -237,12 +234,37 @@ void OceanSimulationInputsProvider::PopulateInputs(OceanSimulationInputs& target
         if (lerp.start && lerp.end)
         {
             ApplyPreset(target, *lerp.start, *lerp.end, lerp.t);
+        }
+    }
+
+    target.referenceWaveHeight = ReferenceWaveHeightAt(windForce01);
+}
+
+float OceanSimulationInputsProvider::ReferenceWaveHeightAt(float windForce01) const
+{
+    // The swell's plus the local waves' -- the fixed preset's, or the two the wind force lerps between.
+    float referenceWaveHeight = 0.0f;
+    if (swell_)
+    {
+        referenceWaveHeight += swell_->GetReferenceWaveHeight();
+    }
+    if (mode_ == InputsProviderMode::Fixed || localPresets_.size() < 2)
+    {
+        if (localPreset_)
+        {
+            referenceWaveHeight += localPreset_->GetReferenceWaveHeight();
+        }
+    }
+    else
+    {
+        const LerpVars lerp = GetLerpVars(windForce01, maxWindForce_, localPresets_);
+        if (lerp.start && lerp.end)
+        {
             referenceWaveHeight += Math::Lerp(lerp.start->GetReferenceWaveHeight(),
                 lerp.end->GetReferenceWaveHeight(), lerp.t);
         }
     }
-
-    target.referenceWaveHeight = referenceWaveHeight;
+    return referenceWaveHeight;
 }
 
 OceanSimulationInputsProvider::LerpVars OceanSimulationInputsProvider::GetLerpVars(float windForce01,

@@ -341,11 +341,28 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     ctx.Use(foam_[finalIndex].Get(),
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
-    // ---- record, capturing the decisions by value ----
-    return [this, timeSeconds, relocate, shiftX, shiftY, center, readIndex, substeps, pokeAmp,
-            spawn, candX, candZ, spawnSlot, spawnAmp, shore, tuning,
-            uavPoint](RenderGraphPassContext c)
+    // ---- record, from the decisions kept in record_ (see the member) ----
+    record_ = RecordPass{timeSeconds, relocate, shiftX, shiftY, center, readIndex, substeps, pokeAmp,
+                         spawn, candX, candZ, spawnSlot, spawnAmp, shore, tuning, uavPoint};
+    return [this](RenderGraphPassContext c)
     {
+        const RecordPass& r = record_;
+        const float timeSeconds = r.timeSeconds;
+        const bool relocate = r.relocate;
+        const int shiftX = r.shiftX;
+        const int shiftY = r.shiftY;
+        const Math::float2 center = r.center;
+        const uint32_t readIndex = r.readIndex;
+        const int substeps = r.substeps;
+        const float pokeAmp = r.pokeAmp;
+        const bool spawn = r.spawn;
+        const float candX = r.candX;
+        const float candZ = r.candZ;
+        const uint32_t spawnSlot = r.spawnSlot;
+        const float spawnAmp = r.spawnAmp;
+        const ShoreDepthWindow& shore = r.shore;
+        const Tuning& tuning = r.tuning;
+        const std::uint32_t uavPoint = r.uavPoint;
         Renderer* renderer = c.renderer;
         auto t = c.BeginCL();
         SetCommandListName(t.cl, c.pass);

@@ -1242,7 +1242,10 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
     const UavRing& cmds = passB ? camCmdsB_ : camCmds_;
     const bool merged = cmdFrameReady_ && cmdMerge_[passB ? 1u : 0u] && cmds.Valid() && !cmdRuns_.empty() &&
                         vgBegin == 0u && vgEnd >= numVirtualGroups_ && cmdOrder_.size() == cmdCountFrame_;
-    std::vector<std::uint8_t> mergedVg; // per virtual group: 1 = a merged run drew it
+    // Per virtual group: 1 = a merged run drew it. Per THREAD and kept for its capacity (two passes can record at
+    // once; as a local it was an allocation per pass per frame).
+    thread_local std::vector<std::uint8_t> mergedVg;
+    mergedVg.clear();
     std::uint32_t mergedCalls = 0, mergedCmds = 0, perGroupDraws = 0;
     if (merged)
     {

@@ -215,6 +215,9 @@ Pick the tool by the question:
   To look rather than grep: `python tools/memtrace.py view [file]` opens `tools/memtrace_viewer.html` on the
   trace (timeline by tag, markers A-D by click/drag, the same rules, stack trees, tag table, verify badge;
   served on 127.0.0.1 only) -- or drop a `.mtrace` on that page. Its core gives the CLI's numbers exactly.
+  `memtrace.bat [app switches]` in the repo root does the three in one go: the run (wind_test unless a
+  `--level=` is given, Release; `set MEMTRACE_CFG=Debug` for exact names, `MEMTRACE_OPTS` = the switch's value),
+  `verify`, `view`.
   **Who freed it**: since trace format 2 every free carries the freeing stack (same `stacks=` policy) --
   `query AfB A B --by fstack|ftree|finverted`, the viewer's "free callstack" groupings and its Frees /
   Decline presets; a row's details show both "Allocated at" and "Freed at". Frees are negative sizes.

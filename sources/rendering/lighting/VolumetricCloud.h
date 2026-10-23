@@ -226,4 +226,28 @@ private:
     std::uint32_t shadowKeyCheap_ = ~0u; // cheap-density bits the map was traced with (never a valid value at start)
     Math::float2 shadowKeyWind_{}; // LAST frame's drift offset (m): a jump beyond a quarter texel re-traces
     std::uint32_t shadowSlicePhase_ = 0;
+
+    // The frame's pass inputs, which the graph builders and bodies read here instead of copying them into their
+    // closures: a closure past std::function's 56 B small buffer is a heap allocation, and the constants alone are
+    // ~800 B (four allocations a frame, plus one per copy of the overlay). Written by MakeEnvironmentOverlay /
+    // BuildShadow / BuildTrace, read while the same frame's graph runs; the next write is the next frame's build.
+    VolumetricCloudConstants overlayConstants_{};
+    struct ShadowPassFrame
+    {
+        VolumetricCloudConstants constants{};
+        DensityBinding bind{};
+        UINT traceSize = 0;
+    };
+    ShadowPassFrame shadowPass_;
+    struct TracePassFrame
+    {
+        VolumetricCloudConstants constants{};
+        DensityBinding bind{};
+        ID3D12Resource* aerialResource = nullptr;
+        ID3D12Resource* distantResource = nullptr;
+        ID3D12Resource* transmittanceResource = nullptr;
+        ID3D12Resource* blueNoiseResource = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv{}, distantSrv{}, transmittanceSrv{}, blueNoiseSrv{};
+    };
+    TracePassFrame tracePass_;
 };

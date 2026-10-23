@@ -181,6 +181,9 @@ public:
 
     void PopulateInputs(OceanSimulationInputs& target) const;
     void PopulateInputs(OceanSimulationInputs& target, float windForce01) const;
+    // PopulateInputs' referenceWaveHeight alone (it is computed HERE): no OceanSimulationInputs to
+    // build, whose default equalizers are two heap allocations.
+    float ReferenceWaveHeightAt(float windForce01) const;
 
 private:
     struct LerpVars

@@ -226,7 +226,8 @@ void TaskSystem::RangeTaskSet::Execute()
     // Avoid overflow in jobCount + batchSize - 1. Each child is a normal task:
     // RunTask catches its exception and completes it even when its body throws.
     const std::size_t chunkCount = 1 + (jobCount_ - 1) / batchSize_;
-    std::vector<TaskHandle> chunks;
+    std::vector<TaskHandle>& chunks = chunks_;
+    chunks.clear();
     chunks.reserve(chunkCount - 1);
     std::exception_ptr failure;
     try {
@@ -254,6 +255,7 @@ void TaskSystem::RangeTaskSet::Execute()
         owner_.Wait(child);
         owner_.Release(child);
     }
+    chunks.clear();
     if (failure) {
         std::rethrow_exception(failure);
     }

@@ -92,14 +92,15 @@ namespace
     // are slots, so a light that changes slot re-renders every page (its new view starts empty) and hands its old view,
     // pages and all, to whichever light lands there; ascending-index slots shifted EVERY light after a newcomer or a
     // leaver. The hole a leaver leaves takes the LAST light (one light moves, never the rest), newcomers append in
-    // ascending light index (the old order for a set that starts fresh). `previous` = last frame's slot order.
-    std::vector<std::uint32_t> StickyShadowSlots(const std::vector<std::uint32_t>& previous, std::vector<std::uint32_t> selected)
+    // ascending light index (the old order for a set that starts fresh). `previous` = last frame's slot order; the
+    // result goes to `slots` (not `previous`); `selected` is sorted in place and `hole` is working storage.
+    void StickyShadowSlots(const std::vector<std::uint32_t>& previous, std::vector<std::uint32_t>& selected,
+                           std::vector<std::uint32_t>& slots, std::vector<std::uint8_t>& hole)
     {
         std::sort(selected.begin(), selected.end());
         const auto chosen = [&selected](std::uint32_t light) { return std::binary_search(selected.begin(), selected.end(), light); };
-        std::vector<std::uint32_t> slots;
-        slots.reserve(selected.size());
-        std::vector<std::uint8_t> hole;
+        slots.clear();
+        hole.clear();
         for (const std::uint32_t light : previous)
         {
             slots.push_back(light);
@@ -119,7 +120,6 @@ namespace
         {
             if (std::find(previous.begin(), previous.end(), light) == previous.end()) { slots.push_back(light); }
         }
-        return slots;
     }
 }
 
@@ -129,13 +129,14 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     CPU_SCOPE(ProfilerScopes::kSelectShadowedSpots);
 
     // S3: who had a slot last frame (the hysteresis), before the reset.
-    std::vector<std::uint8_t> wasShadowed(spotLights_.size(), 0u);
+    std::vector<std::uint8_t>& wasShadowed = shadowWasShadowed_;
+    wasShadowed.assign(spotLights_.size(), 0u);
     for (const std::uint32_t index : shadowedSpotLightIndices_)
     {
         if (index < wasShadowed.size()) { wasShadowed[index] = 1u; }
     }
 
-    const std::vector<std::uint32_t> previousSlots = shadowedSpotLightIndices_; // S10c: last frame's slot order
+    shadowPreviousSlots_ = shadowedSpotLightIndices_; // S10c: last frame's slot order
 
     // Reset every spot to "unshadowed"; sized to the full spot list so
     // GetSpotShadowSlot is safe for any lit index.
@@ -162,8 +163,8 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     // Influence bound: the cached world-space AABB of the finite outer cone. It
     // encloses the real cone, so this remains conservative, while rejecting many
     // false positives from the previous apex-centered sphere.
-    struct Candidate { std::uint32_t index; float score; };
-    std::vector<Candidate> candidates;
+    std::vector<ShadowCandidate>& candidates = shadowCandidates_;
+    candidates.clear();
     candidates.reserve(candidateCount);
     for (size_t i = 0; i < candidateCount; ++i)
     {
@@ -205,7 +206,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     wantedShadowedSpots_ = static_cast<std::uint32_t>(candidates.size());
     const size_t shadowCount = std::min<size_t>(candidates.size(), maxCount);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
-        [](const Candidate& a, const Candidate& b)
+        [](const ShadowCandidate& a, const ShadowCandidate& b)
         {
             if (a.score == b.score)
             {
@@ -219,10 +220,10 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     // lights that stay keep their slots (StickyShadowSlots; VSM's page cache lives in the slot's view). Cross-frame
     // correctness of `shadowParams.y` is guaranteed by the per-frame ring buffering of the spot-light buffer (see
     // EnsureSpotLightBuffer), not by this ordering.
-    std::vector<std::uint32_t> selected;
-    selected.reserve(shadowCount);
+    std::vector<std::uint32_t>& selected = shadowSelected_;
+    selected.clear();
     for (size_t s = 0; s < shadowCount; ++s) { selected.push_back(candidates[s].index); }
-    shadowedSpotLightIndices_ = StickyShadowSlots(previousSlots, std::move(selected));
+    StickyShadowSlots(shadowPreviousSlots_, selected, shadowedSpotLightIndices_, shadowSlotHoles_);
     for (size_t s = 0; s < shadowedSpotLightIndices_.size(); ++s)
     {
         spotShadowSlot_[shadowedSpotLightIndices_[s]] = static_cast<int>(s);
@@ -238,12 +239,13 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     // on frustum-cull-then-projected-size and the stable index-order slot assignment).
     // The only difference: a point light is omnidirectional, so its influence bound is
     // exactly a sphere (position, radius) rather than a cone AABB.
-    std::vector<std::uint8_t> wasShadowed(pointLights_.size(), 0u); // S3 hysteresis
+    std::vector<std::uint8_t>& wasShadowed = shadowWasShadowed_; // S3 hysteresis
+    wasShadowed.assign(pointLights_.size(), 0u);
     for (const std::uint32_t index : shadowedPointLightIndices_)
     {
         if (index < wasShadowed.size()) { wasShadowed[index] = 1u; }
     }
-    const std::vector<std::uint32_t> previousSlots = shadowedPointLightIndices_; // S10c: last frame's slot order
+    shadowPreviousSlots_ = shadowedPointLightIndices_; // S10c: last frame's slot order
     pointShadowSlot_.assign(pointLights_.size(), -1);
     pointShadowFade_.assign(pointLights_.size(), 1.0f);
     pointShadowRes_.assign(pointLights_.size(), std::max(maxRes / 2u, render::kLocalShadowMinRes));
@@ -258,8 +260,8 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
         return;
     }
 
-    struct Candidate { std::uint32_t index; float score; };
-    std::vector<Candidate> candidates;
+    std::vector<ShadowCandidate>& candidates = shadowCandidates_;
+    candidates.clear();
     candidates.reserve(candidateCount);
     for (size_t i = 0; i < candidateCount; ++i)
     {
@@ -294,7 +296,7 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     wantedShadowedPoints_ = static_cast<std::uint32_t>(candidates.size());
     const size_t shadowCount = std::min<size_t>(candidates.size(), maxCount);
     std::partial_sort(candidates.begin(), candidates.begin() + shadowCount, candidates.end(),
-        [](const Candidate& a, const Candidate& b)
+        [](const ShadowCandidate& a, const ShadowCandidate& b)
         {
             if (a.score == b.score)
             {
@@ -303,10 +305,10 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
             return a.score > b.score;
         });
     // Plan S10c: sticky slots, as the spots'.
-    std::vector<std::uint32_t> selected;
-    selected.reserve(shadowCount);
+    std::vector<std::uint32_t>& selected = shadowSelected_;
+    selected.clear();
     for (size_t s = 0; s < shadowCount; ++s) { selected.push_back(candidates[s].index); }
-    shadowedPointLightIndices_ = StickyShadowSlots(previousSlots, std::move(selected));
+    StickyShadowSlots(shadowPreviousSlots_, selected, shadowedPointLightIndices_, shadowSlotHoles_);
     for (size_t s = 0; s < shadowedPointLightIndices_.size(); ++s)
     {
         pointShadowSlot_[shadowedPointLightIndices_[s]] = static_cast<int>(s);
@@ -326,10 +328,12 @@ namespace
                                  std::vector<std::uint32_t>& res, const std::vector<float>& score,
                                  std::vector<LightManager::ShadowAtlasPlacement>& place, bool pointBlocks,
                                  std::uint32_t pageWidth, std::uint32_t pageHeight, std::uint32_t residentPages,
-                                 std::uint32_t maxPages, std::uint32_t& shrunk, std::uint32_t& dropped)
+                                 std::uint32_t maxPages, std::uint32_t& shrunk, std::uint32_t& dropped,
+                                 render::ShadowPackScratch& scratch)
     {
-        std::vector<render::ShadowAtlasItem> items;
-        std::vector<render::ShadowAtlasSlot> placed;
+        std::vector<render::ShadowAtlasItem>& items = scratch.items;
+        std::vector<render::ShadowAtlasSlot>& placed = scratch.placed;
+        items.reserve(shadowed.size());
         const auto build = [&]()
         {
             items.clear();
@@ -341,13 +345,15 @@ namespace
             }
         };
         build();
-        const std::uint32_t wanted = std::max(render::PackShadowAtlas(items, pageWidth, pageHeight, maxPages, placed), 1u);
+        const std::uint32_t wanted = std::max(render::PackShadowAtlas(items, pageWidth, pageHeight, maxPages, placed,
+                                                                      &scratch.order), 1u);
 
-        std::vector<std::uint8_t> wasShrunk(res.size(), 0u);
+        std::vector<std::uint8_t>& wasShrunk = scratch.shrunk;
+        wasShrunk.assign(res.size(), 0u);
         for (std::uint32_t guard = 0; guard < 4096u; ++guard)
         {
             build();
-            render::PackShadowAtlas(items, pageWidth, pageHeight, residentPages, placed);
+            render::PackShadowAtlas(items, pageWidth, pageHeight, residentPages, placed, &scratch.order);
             if (std::all_of(placed.begin(), placed.end(), [](const render::ShadowAtlasSlot& s) { return s.page >= 0; }))
             {
                 break;
@@ -373,8 +379,8 @@ namespace
             ++dropped;
         }
         // A light without a place (only if the guard ran out) loses its slot rather than render nowhere.
-        std::vector<std::uint32_t> kept;
-        kept.reserve(shadowed.size());
+        std::vector<std::uint32_t>& kept = scratch.kept;
+        kept.clear();
         for (std::uint32_t s = 0; s < shadowed.size(); ++s)
         {
             const std::uint32_t light = shadowed[s];
@@ -419,10 +425,10 @@ void LightManager::PackShadowAtlases(const ShadowAtlasPages& pages)
     // exactly one block of the largest face (3 * pointFaceMax by 2 * pointFaceMax).
     wantedSpotPages_ = PackShadowPool(shadowedSpotLightIndices_, spotShadowSlot_, spotShadowRes_, spotShadowScore_,
                                       spotShadowPlace_, false, pages.spotPageSize, pages.spotPageSize,
-                                      pages.spotPages, pages.maxPages, atlasShrunk_, atlasDropped_);
+                                      pages.spotPages, pages.maxPages, atlasShrunk_, atlasDropped_, shadowPack_);
     wantedPointPages_ = PackShadowPool(shadowedPointLightIndices_, pointShadowSlot_, pointShadowRes_, pointShadowScore_,
                                        pointShadowPlace_, true, 3u * pages.pointFaceMax, 2u * pages.pointFaceMax,
-                                       pages.pointPages, pages.maxPages, atlasShrunk_, atlasDropped_);
+                                       pages.pointPages, pages.maxPages, atlasShrunk_, atlasDropped_, shadowPack_);
 }
 
 void LightManager::ReleasePointLightBuffer(Renderer* renderer)

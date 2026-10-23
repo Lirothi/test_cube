@@ -80,6 +80,7 @@ private:
         std::vector<float> waterRate;
         std::uint64_t waterFrame = 0;
         float waterTime = 0.0f;
+        std::vector<float> water;         // Step's working copy: this frame's carried water per pontoon
     };
 
     bool Setup(Body& body, const RenderableObject& object, const OceanRenderable& ocean) const;
@@ -88,6 +89,10 @@ private:
     static Math::mat4 RenderOffset(const Body& body);
 
     std::unordered_map<const RenderableObject*, Body> bodies_;
+    // Tick's working lists, kept between frames for their capacity (as locals, with a set of the
+    // living, they were ~12 allocations a frame for five boats).
+    std::vector<RenderableObject*> registered_;
+    std::vector<RenderableObject*> floating_;
     // A different ocean (a level switch) drops every body: an object pointer reused by the new level
     // must not inherit the old one's water.
     const OceanRenderable* lastOcean_ = nullptr;

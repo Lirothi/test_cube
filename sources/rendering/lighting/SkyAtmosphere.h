@@ -3,6 +3,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include "core/math/Math.h" // AerialConstants
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderPass.h"
 #include "rendering/core/ResourceDeclarations.h"
@@ -159,11 +160,41 @@ private:
     bool environmentReady_ = false, environmentFailed_ = false;
     bool environmentOverlayActive_ = false; // what the last build composited: a switch either way rebuilds
     unsigned environmentBuilds_ = 0;
+    // The rebuild's inputs, which its builder and body read here rather than copy into their closures (a closure
+    // past std::function's 56 B small buffer is a heap allocation, and these are ~1 KB -- with the overlay's own
+    // closure copied each time). Written by BuildEnvironment, read while the same frame's graph runs.
+    struct EnvironmentPassFrame
+    {
+        SkyAtmosphereParameters params{};
+        SkyViewFrameData view{};
+        SkyEnvironmentOverlay ov{};
+        std::array<float, 4> groundSun{};
+        std::array<float, 3> groundAlbedo{};
+        NightSkyFrameData night{};
+    };
+    EnvironmentPassFrame environmentPass_;
     std::array<GpuResource, 2> lut_;
     GpuResource aerial_;
     D3D12_CPU_DESCRIPTOR_HANDLE aerialSrv_{}, aerialUav_{};
     std::shared_ptr<Material> aerialMaterial_;
     bool aerialBuilt_ = false; // reset/committed by each frame's serial builder
+    // BuildAerial's constants (400 B), which its builder and body read here rather than copy (two heap allocations
+    // a frame past std::function's small buffer). Written by BuildAerial, read while the same frame's graph runs.
+    struct AerialConstants
+    {
+        SkyAtmosphereParameters atmosphere;
+        SkyViewFrameData sky;
+        Math::mat4 invView, invProj;
+        Math::float4 start;
+    };
+    AerialConstants aerialConstants_{};
+    // BuildView's inputs (256 B), the same way: written by BuildView, read by its body this frame.
+    struct ViewPassFrame
+    {
+        SkyAtmosphereParameters params{};
+        SkyViewFrameData view{};
+    };
+    ViewPassFrame viewPass_;
     GpuResource skyView_;
     D3D12_CPU_DESCRIPTOR_HANDLE viewSrv_{}, viewUav_{};
     std::shared_ptr<Material> viewMaterial_;

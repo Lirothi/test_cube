@@ -318,7 +318,8 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
         return [this, renderer, feedsShadowCull, scope](RenderGraphPassContext& ctx)
             -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->objects) { return {}; }
-            ObjectComputeList list;
+            ObjectComputeList& list = graphPass_.computeObjects[feedsShadowCull ? 1u : 0u]; // read by the body
+            list.clear();
             for (const auto& obj : *frame_->objects)
             {
                 if (!obj) { continue; }
@@ -333,9 +334,9 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
                 list.push_back(obj.get());
             }
             if (list.empty()) { return {}; }
-            return [this, renderer, list, scope](RenderGraphPassContext c) {
+            return [this, renderer, feedsShadowCull, scope](RenderGraphPassContext c) {
                 CPU_SCOPE(scope);
-                Pass_ObjectCompute(renderer, c, list, scope);
+                Pass_ObjectCompute(renderer, c, graphPass_.computeObjects[feedsShadowCull ? 1u : 0u], scope);
             };
         };
     };
@@ -519,11 +520,12 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
     auto pShadowCull = rg.AddPass2(RenderPass::Main_ShadowCull, { gb.pShoreDepth },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->shadowGpu) { return {}; }
-            const ShadowGpuData::CullDecisions dec = frame_->shadowGpu->PrepareCullPass(ctx);
+            ShadowGpuData::CullDecisions& dec = graphPass_.shadowCull; // read by the body (too big for its closure)
+            dec = frame_->shadowGpu->PrepareCullPass(ctx);
             if (!dec.active) { return {}; }
-            return [this, renderer, dec](RenderGraphPassContext c) {
+            return [this, renderer](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassShadowCull);
-                Pass_ShadowCull(renderer, c, dec);
+                Pass_ShadowCull(renderer, c, graphPass_.shadowCull);
             };
         });
 
@@ -945,15 +947,15 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         gb.pSdsmCull = rg.AddPass2(RenderPass::Main_SdsmCull, { gb.pSdsmAnalyze },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 if (!frame_->sdsm || !frame_->shadowGpu || decisions_.sunShadowsOff) { return {}; }
-                const ShadowGpuData::DirectionalCullDecisions dec =
-                    frame_->shadowGpu->PrepareDirectionalCullPass(ctx, frame_->sdsm->FrustumSrv(),
-                                                                  frame_->sdsm->FrameParams().partitions,
-                                                                  frame_->sdsm->CullCbAddress(),
-                                                                  decisions_.sdsmHzb);
+                ShadowGpuData::DirectionalCullDecisions& dec = graphPass_.sdsmCull; // read by the body
+                dec = frame_->shadowGpu->PrepareDirectionalCullPass(ctx, frame_->sdsm->FrustumSrv(),
+                                                                    frame_->sdsm->FrameParams().partitions,
+                                                                    frame_->sdsm->CullCbAddress(),
+                                                                    decisions_.sdsmHzb);
                 if (!dec.active) { return {}; }
-                return [this, renderer, dec](RenderGraphPassContext c) {
+                return [this, renderer](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassShadowCull);
-                    Pass_SdsmCull(renderer, c, dec);
+                    Pass_SdsmCull(renderer, c, graphPass_.sdsmCull);
                 };
             });
 
@@ -1659,18 +1661,22 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     if (gb.pSkyMoon != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyMoon); }
     if (gb.pSkyNight != GraphBuild::kNone) { skyDeps.push_back(gb.pSkyNight); }
     // The moon's texture is drawn from only once generated (or generating this frame, ordered above).
-    SkyViewFrameData drawView = skyView;
+    // The two views go to graphPass_ (too big for the builder's closure).
+    SkyViewFrameData& drawView = graphPass_.skyDrawView;
+    drawView = skyView;
     const bool moonTexture = skyView.planet[3] != 0 && skyView.light1Direction[3] > 0.0f && skyAtmosphere_.MoonReady();
     drawView.moonDisc2[1] = moonTexture ? 1.0f : 0.0f;
     // N2: so is the Milky Way's map.
-    const NightSkyFrameData nightView = MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady());
-    const bool nightMap = skyView.planet[3] != 0 && nightView.layers[1] > 0.0f;
+    graphPass_.skyNightView = MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady());
+    const bool nightMap = skyView.planet[3] != 0 && graphPass_.skyNightView.layers[1] > 0.0f;
     gb.pSky = rg.AddPass2(RenderPass::Main_Skybox, skyDeps, /*mtDeps=*/{},
         { { D.light.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET },
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_READ } },
-        [this, renderer, drawView, moonTexture, nightView, nightMap](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer, moonTexture, nightMap](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->skybox) { return {}; }
+            const SkyViewFrameData& drawView = graphPass_.skyDrawView;
+            const NightSkyFrameData& nightView = graphPass_.skyNightView;
             ctx.UseDeclared();
             if (drawView.planet[3] != 0)
             {
@@ -2621,7 +2627,8 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
         [this, renderer, willDlss](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
         RenderGraphPassContext& p = ctx;
         constexpr D3D12_RESOURCE_STATES kNps = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-        TonemapPoints pts{};
+        TonemapPoints& pts = graphPass_.tonemap; // read by the body (too big for its closure)
+        pts = TonemapPoints{};
         pts.ranDlss = willDlss;
         // The body records the bloom, the FXAA and the resolve only AFTER it has a tone-curve
         // material, so every one of those points has to be gated on it too — declaring them
@@ -2712,9 +2719,9 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
             // dropped and the pass left `tonemap` shader-readable instead of at its canonical UAV.
             if (pts.fxaa) { p.Use(DTM.tonemap.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
         }
-        return [this, renderer, pts](RenderGraphPassContext c) {
+        return [this, renderer](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassTonemap);
-            Pass_Tonemap(renderer, c, pts);
+            Pass_Tonemap(renderer, c, graphPass_.tonemap);
         };
     });
 

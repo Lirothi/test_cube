@@ -111,6 +111,22 @@ private:
     UINT64 slotBytes_ = 0;
     std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> cascadeFootprint_{};
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT shoreFootprint_{};
+    // BuildPass' copy as its body records it, read here rather than captured (~150 B of capture was a heap
+    // allocation per copy). Written by the builder, read by the body in the same frame's graph run.
+    struct CopyPass
+    {
+        ID3D12Resource* dst = nullptr;
+        UINT64 base = 0;
+        std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> cascadeFp{};
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT shoreFp{};
+        std::array<UINT, 2> subresource{};
+        std::uint32_t cascades = 0;
+        bool copyShore = false;
+        ID3D12Resource* displacement = nullptr;
+        ID3D12Resource* shore = nullptr;
+        std::uint32_t copyPoint = 0, restorePoint = 0;
+    };
+    CopyPass copyPass_;
     std::uint32_t layoutResolution_ = 0;
     std::uint32_t layoutCascades_ = 0;
     std::uint32_t layoutShoreW_ = 0;

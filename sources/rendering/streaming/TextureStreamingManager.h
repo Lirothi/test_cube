@@ -85,6 +85,7 @@ private:
         std::vector<std::uint32_t> cancels;
         std::uint64_t memBudgeted = 0, memUsed = 0, memWanted = 0;
         double calcMs = 0.0;
+        std::vector<std::uint32_t> prioritized, outs, ins; // DoWork_'s working storage, reused cycle to cycle
     };
     struct Persist { std::uint32_t gen = 0; int budgetMipBias = 0; };
 
@@ -101,6 +102,7 @@ private:
     std::chrono::steady_clock::time_point start_{};
     BoundsBuilder bounds_; // the next snapshot's boxes, built over the idle stages
     std::vector<Persist> persist_;
+    std::vector<int> textureSlot_; // Snapshot_'s entry -> snapshot index, reused
     std::uint64_t memoryBudget_ = 0;
     std::uint64_t perfectResetThreshold_ = 0;
     std::uint64_t dedicatedVram_ = 0;

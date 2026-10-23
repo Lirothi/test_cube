@@ -291,9 +291,10 @@ size_t SkyAtmosphere::BuildView(Renderer* renderer, RenderGraph<static_cast<size
     if (!settings.mode || failed_ || !viewMaterial_) return after;
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps{after};
     if (luts != static_cast<size_t>(-1)) deps.push_back(luts);
-    const auto params = settings.parameters;
+    viewPass_.params = settings.parameters; // read by the body (see the member)
+    viewPass_.view = view;
     return graph.AddPass2(RenderPass::Main_SkyView, deps, {}, {},
-        [this, renderer, params, view](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto point = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& resource : lut_) ctx.Use(resource.Get(), kRest);
             ctx.Use(skyView_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -301,8 +302,10 @@ size_t SkyAtmosphere::BuildView(Renderer* renderer, RenderGraph<static_cast<size
             const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(skyView_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
             ctx.Use(lut_[0].Get(), kRest | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            return [this, renderer, params, view, point, restore](RenderGraphPassContext c) {
+            return [this, renderer, point, restore](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyView);
+                const SkyAtmosphereParameters& params = viewPass_.params;
+                const SkyViewFrameData& view = viewPass_.view;
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
                     GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyView);
@@ -326,33 +329,27 @@ size_t SkyAtmosphere::BuildAerial(Renderer* renderer, RenderGraph<static_cast<si
 {
     aerialBuilt_ = false;
     if (!settings.mode || !settings.aerialPerspective || failed_ || !aerialMaterial_) return after;
-    struct Constants
-    {
-        SkyAtmosphereParameters atmosphere;
-        SkyViewFrameData sky;
-        Math::mat4 invView, invProj;
-        Math::float4 start;
-    };
-    static_assert(sizeof(Constants) == 400);
-    const Constants data{settings.parameters, view, camera.GetInvViewMatrix(), camera.GetInvProjMatrixNoJitter(),
+    static_assert(sizeof(AerialConstants) == 400);
+    aerialConstants_ = AerialConstants{settings.parameters, view, camera.GetInvViewMatrix(), camera.GetInvProjMatrixNoJitter(),
         Math::float4(std::max(0.0f, startDepthMetres) / kMetresPerKm,
                      std::clamp(settings.aerialViewDistanceScale, 0.01f, 100.0f), 0, 0)};
     aerialBuilt_ = true;
     return graph.AddPass2(RenderPass::Main_SkyAerial, {after}, {}, {},
-        [this, renderer, data](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto point = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& resource : lut_) ctx.Use(resource.Get(), kRest);
             ctx.Use(aerial_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.NextPoint();
             const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(aerial_.Get(), kRest);
-            return [this, renderer, data, point, restore](RenderGraphPassContext c) {
+            return [this, renderer, point, restore](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyAerial);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
                     GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyAerial);
                     renderer->EmitPoint(t.cl, point);
                     const auto samplers = std::array{*SamplerManager::LinearClamp()};
+                    const AerialConstants& data = aerialConstants_;
                     RecordComputeDispatch(renderer, t.cl, aerialMaterial_.get(), 2u * render::kConstantBufferAlignment,
                         [&data](uint8_t* dst) { std::memcpy(dst, &data, sizeof(data)); },
                         {srv_[0], srv_[1]}, {aerialUav_}, renderer->GetSamplerManager()->GetTable(renderer, samplers), 32, 32 * 16);
@@ -633,7 +630,9 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     if (luts != none) deps.push_back(luts);
     if (nightPass != none) deps.push_back(nightPass);
     if (overlayActive && overlay->dependency != none) deps.push_back(overlay->dependency);
-    const SkyEnvironmentOverlay ov = overlayActive ? *overlay : SkyEnvironmentOverlay{};
+    // Everything the pass reads, in environmentPass_ (see the member: closures copying it allocated every rebuild).
+    EnvironmentPassFrame& pass = environmentPass_;
+    pass.ov = overlayActive ? *overlay : SkyEnvironmentOverlay{};
     // The ground's outgoing radiance for the probes' lower hemisphere, solved HERE rather than in
     // the record body: it is a pure function of `params` + `view`, which are exactly the two things
     // the `dirty` test above keys on, so it changes once per rebuild and never per dispatch.
@@ -654,15 +653,20 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
         SkyTransmittanceTowardSun(params, std::asin(moonSinElevation), moonTransmittance);
     }
     const float moonCosine = std::max(0.0f, moonSinElevation) * (overlayActive ? std::clamp(overlay->groundSunScale, 0.0f, 1.0f) : 1.0f);
-    const std::array<float, 4> groundSun{
+    pass.groundSun = {
         (view.illuminance[0] * sunTransmittance[0] * groundCosine + view.light1Illuminance[0] * moonTransmittance[0] * moonCosine) * kInvPi,
         (view.illuminance[1] * sunTransmittance[1] * groundCosine + view.light1Illuminance[1] * moonTransmittance[1] * moonCosine) * kInvPi,
         (view.illuminance[2] * sunTransmittance[2] * groundCosine + view.light1Illuminance[2] * moonTransmittance[2] * moonCosine) * kInvPi,
         7.0f};
-    const std::array<float, 3> groundAlbedo{params.groundAlbedo[0], params.groundAlbedo[1],
-                                            params.groundAlbedo[2]};
+    pass.groundAlbedo = {params.groundAlbedo[0], params.groundAlbedo[1], params.groundAlbedo[2]};
+    pass.params = params;
+    pass.view = view;
+    pass.night = night;
     return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
-        [this, renderer, params, view, ov, groundSun, groundAlbedo, night](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            const EnvironmentPassFrame& pass = environmentPass_;
+            const SkyEnvironmentOverlay& ov = pass.ov;
+            const NightSkyFrameData& night = pass.night;
             std::array<std::uint32_t, 4> points{};
             points[0] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : lut_) ctx.Use(r.Get(), kRest);
@@ -679,12 +683,19 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.Use(environment_[2].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.NextPoint(); points[3] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : environment_) ctx.Use(r.Get(), kRest);
-            environmentReady_ = true; environmentParameters_ = params; environmentKey_ = view; environmentNightKey_ = night;
+            environmentReady_ = true; environmentParameters_ = pass.params; environmentKey_ = pass.view; environmentNightKey_ = night;
             environmentOverlayActive_ = ov.material != nullptr;
             //LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
             //          ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
-            return [this, renderer, params, view, points, ov, groundSun, groundAlbedo, night, nightMap](RenderGraphPassContext c) {
+            return [this, renderer, points, nightMap](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
+                const EnvironmentPassFrame& pass = environmentPass_;
+                const SkyAtmosphereParameters& params = pass.params;
+                const SkyViewFrameData& view = pass.view;
+                const SkyEnvironmentOverlay& ov = pass.ov;
+                const NightSkyFrameData& night = pass.night;
+                const std::array<float, 4>& groundSun = pass.groundSun;
+                const std::array<float, 3>& groundAlbedo = pass.groundAlbedo;
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
                     GPU_SCOPE(t.cl, ProfilerScopes::kPassSkyEnvironment);

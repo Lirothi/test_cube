@@ -125,18 +125,18 @@ bool InputManager::LoadActions(const std::wstring& path) {
     return actions_.LoadFromJsonFile(path);
 }
 
-bool InputManager::IsActionDown(const std::string& name) const {
+bool InputManager::IsActionDown(std::string_view name) const {
     return actions_.IsActionDown(name, *this);
 }
 
-bool InputManager::WasActionPressed(const std::string& name) const {
+bool InputManager::WasActionPressed(std::string_view name) const {
     return actions_.WasActionPressed(name, *this);
 }
 
-bool InputManager::WasActionReleased(const std::string& name) const {
+bool InputManager::WasActionReleased(std::string_view name) const {
     return actions_.WasActionReleased(name, *this);
 }
 
-float InputManager::GetActionAxis(const std::string& name) const {
+float InputManager::GetActionAxis(std::string_view name) const {
     return actions_.GetAxis(name, *this);
 }
