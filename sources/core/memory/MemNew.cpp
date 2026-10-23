@@ -222,7 +222,7 @@ bool MapInsert(std::uintptr_t p, std::uint8_t tag, std::uint64_t size, std::uint
         s.tags[i] = tag;
         if (s.traced)
         {
-            if (existed) { memtrace::EmitFree(p, memtrace::kHeapCpu); }
+            if (existed) { memtrace::EmitFree(p, memtrace::kHeapCpu, 0); }
             memtrace::EmitAlloc(p, size, tag, memtrace::kHeapCpu, memtrace::kKindCpu, stack, nullptr);
         }
     }
@@ -230,7 +230,8 @@ bool MapInsert(std::uintptr_t p, std::uint8_t tag, std::uint64_t size, std::uint
     return ok;
 }
 
-bool MapRemove(std::uintptr_t p, std::uint8_t& outTag) noexcept
+// `stack` (who frees) only feeds the trace, like MapInsert's.
+bool MapRemove(std::uintptr_t p, std::uint8_t& outTag, std::uint32_t stack) noexcept
 {
     const std::uint64_t h = HashPtr(p);
     Stripe& s = g_stripes[h >> kStripeShift];
@@ -264,7 +265,7 @@ bool MapRemove(std::uintptr_t p, std::uint8_t& outTag) noexcept
             }
             s.keys[i] = 0;
             --s.count;
-            if (s.traced) { memtrace::EmitFree(p, memtrace::kHeapCpu); }
+            if (s.traced) { memtrace::EmitFree(p, memtrace::kHeapCpu, stack); }
         }
     }
     ReleaseSRWLockExclusive(&s.lock);
@@ -287,9 +288,11 @@ __declspec(noinline) void TrackAlloc(void* p, CounterBlock* b, bool shared) noex
 __declspec(noinline) void TrackFree(void* p, CounterBlock* b, bool shared) noexcept
 {
     std::uint8_t tag = 0;
-    if (MapRemove(reinterpret_cast<std::uintptr_t>(p), tag))
+    const std::uint64_t size = mi_usable_size(p);
+    const std::uint32_t stack = memtrace::CaptureCpuStack(size); // who frees -- 0 unless a CPU trace wants this one
+    if (MapRemove(reinterpret_cast<std::uintptr_t>(p), tag, stack))
     {
-        AddSigned(b->tagBytes[tag], -static_cast<std::int64_t>(mi_usable_size(p)), shared);
+        AddSigned(b->tagBytes[tag], -static_cast<std::int64_t>(size), shared);
         AddSigned(b->tagCount[tag], -1, shared);
     }
     else

@@ -1,0 +1,1970 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memtrace Viewer</title>
+<!--
+  Memory profiling: the trace viewer (docs/memory_profiling_plan.md). Open a traces/memtrace_*.mtrace
+  written by --memtrace -- drop it on the page, pick it with "Open", or `python tools/memtrace.py view`
+  (serves this page on localhost with ?file=<the newest trace>). Everything runs in the browser: the
+  trace never leaves the machine. No dependencies.
+
+  What it does is UE Memory Insights' memory views on our format: a timeline of live bytes by tag with
+  the time markers A/B/C/D, the allocation query rules (TraceServices AllocationsProvider.h:25-52,
+  AllocationsQuery.cpp:196-397 -- every bound inclusive, f = infinity for what is never freed), the
+  groupings of SMemAllocTableTreeView.cpp:201-222 (by tag, by size in powers of two, by callstack
+  top-down and inverted, by heap; plus by GPU resource name), the LLM tag table A/B/Diff/Min/Max/Avg
+  (MemTagTable.cpp:289-497), and the trace's own check: the replay against the End record, as
+  `memtrace.py verify`. The decoder is a transcription of tools/memtrace.py (format: MemTrace.cpp).
+-->
+<style>
+:root {
+  --bg: #15171c; --panel: #1c1f26; --panel2: #232731; --line: #2f3440; --text: #d7dbe3; --dim: #8b93a3;
+  --accent: #5aa9ff; --good: #4fc27a; --bad: #ff6b5e;
+  --mA: #ff7a59; --mB: #4fc3f7; --mC: #c38bff; --mD: #f7d154;
+  --left-w: 250px; --right-w: 440px; --timeline-h: 250px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+  font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { display: flex; flex-direction: column; overflow: hidden; }
+button, select, input { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 4px; padding: 3px 8px; }
+button { cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: #24486e; border-color: #2f6aa3; }
+button:disabled { opacity: 0.45; cursor: default; }
+header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: var(--panel);
+  border-bottom: 1px solid var(--line); flex-wrap: wrap; flex: none; }
+header .brand { font-weight: 600; letter-spacing: 0.02em; }
+header .stats { color: var(--dim); }
+.badge { padding: 2px 8px; border-radius: 10px; font-weight: 600; font-size: 12px; }
+.badge.pass { background: #1f4d33; color: #8ef0b4; }
+.badge.fail { background: #5a2222; color: #ffb3aa; cursor: pointer; }
+#empty { margin: 60px auto; max-width: 640px; text-align: center; color: var(--dim); }
+#empty h1 { color: var(--text); font-size: 20px; font-weight: 600; }
+#empty code { background: var(--panel2); padding: 1px 5px; border-radius: 3px; }
+#progress { display: none; padding: 8px 14px; color: var(--dim); }
+#app { display: none; flex-direction: column; flex: 1; min-height: 0; }
+.toolbar { display: flex; align-items: center; gap: 8px 14px; padding: 6px 14px; flex-wrap: wrap; flex: none; }
+.toolbar label { color: var(--dim); }
+.chips { display: inline-flex; gap: 6px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px 2px 8px; border: 1px solid var(--line);
+  border-radius: 14px; background: var(--panel2); cursor: pointer; }
+.chip.on { border-color: var(--text); box-shadow: 0 0 0 1px var(--text) inset; }
+.chip b { width: 12px; }
+.chip input { width: 64px; padding: 1px 5px; border-radius: 10px; }
+.chip .x { color: var(--dim); padding: 0 4px; }
+.chip .x:hover { color: var(--text); }
+.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.hint { color: var(--dim); font-size: 12px; }
+kbd { background: var(--panel2); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px;
+  padding: 0 4px; font-size: 11px; }
+#timelineWrap { position: relative; padding: 0 14px; flex: none; }
+#timeline { width: 100%; height: var(--timeline-h); display: block; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 4px; cursor: crosshair; }
+#tip { position: absolute; pointer-events: none; background: #0d0f13ee; border: 1px solid var(--line);
+  border-radius: 4px; padding: 6px 8px; font-size: 12px; display: none; white-space: nowrap; z-index: 5; }
+#legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 6px 14px 0; font-size: 12px; color: var(--dim); flex: none; }
+#legend .lane { color: var(--text); font-weight: 600; }
+#legend span.item { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+#legend span.off { opacity: 0.35; }
+#legend i { width: 10px; height: 10px; display: inline-block; border-radius: 2px; }
+.split-h { height: 8px; cursor: row-resize; margin: 2px 14px 0; border-radius: 3px; flex: none; position: relative; }
+.split-h::after { content: ''; position: absolute; left: 50%; top: 3px; width: 40px; height: 2px; margin-left: -20px;
+  background: var(--line); border-radius: 1px; }
+.split-h:hover, .split-v:hover, .dragging { background: #2a3a52; }
+#main { flex: 1; display: grid; grid-template-columns: var(--left-w) 6px minmax(0, 1fr) 6px var(--right-w);
+  padding: 4px 14px 12px; min-height: 0; }
+.split-v { cursor: col-resize; border-radius: 3px; margin: 0 1px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; display: flex;
+  flex-direction: column; min-height: 0; min-width: 0; }
+.panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 0;
+  padding: 8px 10px; border-bottom: 1px solid var(--line); font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.panel h2 .grow { flex: 1; }
+.panel .body { padding: 8px 10px; overflow: auto; min-height: 0; flex: 1; }
+.field { display: flex; flex-direction: column; gap: 3px; margin-bottom: 9px; }
+.field label { color: var(--dim); font-size: 12px; }
+.field select, .field input { width: 100%; }
+.check { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; margin-bottom: 9px; }
+.presets { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; margin-bottom: 10px; }
+.help { color: var(--dim); font-size: 12px; margin-top: 8px; }
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); padding: 0 8px; flex: none; }
+.tabs button { border: none; border-bottom: 2px solid transparent; border-radius: 0; background: none;
+  padding: 7px 10px; color: var(--dim); }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+#queryLine { padding: 6px 10px; color: var(--dim); font-size: 12px; border-bottom: 1px solid var(--line); flex: none; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th { position: sticky; top: 0; background: var(--panel2); text-align: left; font-weight: 600; color: var(--dim);
+  font-size: 12px; padding: 5px 8px; border-bottom: 1px solid var(--line); z-index: 1; white-space: nowrap; user-select: none; }
+th.sortable { cursor: pointer; }
+th.sortable:hover { color: var(--text); }
+th.sorted { color: var(--text); }
+td { padding: 3px 8px; border-bottom: 1px solid #262a33; vertical-align: top; overflow-wrap: break-word; }
+td .sub, .label .sub { display: block; font-size: 12px; }
+/* The first column (the group, the tag) stays in view while a narrow panel scrolls the numbers sideways. */
+th:first-child, td:first-child { position: sticky; left: 0; }
+th:first-child { z-index: 2; }
+td:first-child { background: var(--panel); }
+td.num, th.num { text-align: right; white-space: nowrap; }
+tbody tr { cursor: default; }
+tr.sel td { background: #24364d; }
+tbody tr:hover td { background: #222833; }
+tr.sel:hover td { background: #2a3f5a; }
+.bar { height: 3px; background: var(--accent); border-radius: 2px; margin-top: 2px; opacity: 0.7; }
+.bar.neg { background: var(--good); }
+.sub { color: var(--dim); }
+.tw { cursor: pointer; display: inline-block; width: 14px; color: var(--dim); }
+.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+.frames div { padding: 2px 0; border-bottom: 1px dotted #2a2f3a; }
+.frames .file { color: var(--dim); }
+.frames .stackHead { margin-top: 8px; font-weight: 600; color: var(--text); border-bottom: 1px solid var(--line); }
+.up { color: var(--bad); } .down { color: var(--good); }
+.more { padding: 6px 8px; color: var(--accent); cursor: pointer; }
+.note { padding: 14px; color: var(--dim); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; }
+.kv div:nth-child(odd) { color: var(--dim); }
+.detailHead { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.detailHead .grow { flex: 1; word-break: break-all; }
+.formula { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 12px; background: var(--panel2);
+  padding: 1px 6px; border-radius: 3px; white-space: nowrap; }
+.sym { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--dim); font-size: 12px; }
+.ruleIntro { padding: 12px 14px; color: var(--dim); border-bottom: 1px solid var(--line); }
+.ruleIntro p { margin: 4px 0; }
+.rulecard { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.rulecard.cur { background: #1f2836; }
+.rulecard h3 { margin: 0 0 6px; font-size: 14px; display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.rulecard h3 .grow { flex: 1; }
+.rulecard .cols { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.rulecard .text { flex: 1; min-width: 240px; }
+.rulecard p { margin: 0 0 6px; }
+.k { color: var(--dim); font-weight: 600; }
+.legendNote { color: var(--dim); font-size: 11px; margin-top: 2px; }
+#ruleHelp .card p { margin: 4px 0; }
+#ruleHelp .formula { white-space: normal; display: inline-block; }
+#ruleHelp a { color: var(--accent); cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">memtrace viewer</span>
+  <button id="openBtn" class="primary">Open .mtrace</button>
+  <input id="fileInput" type="file" accept=".mtrace" hidden>
+  <span id="fileName"></span>
+  <span id="stats" class="stats"></span>
+  <span id="verify" class="badge" style="display:none"></span>
+</header>
+<div id="progress"></div>
+<div id="empty">
+  <h1>Memory trace viewer</h1>
+  <p>Drop a <code>traces/memtrace_*.mtrace</code> here or press <b>Open</b>.<br>
+  Record one with <code>test_cube.exe --memtrace</code>; <code>python tools/memtrace.py view</code> opens the newest.</p>
+  <p>Nothing is uploaded: the file is read by this page.</p>
+</div>
+<div id="app">
+  <div class="toolbar">
+    <label>Timeline
+      <select id="seriesMode">
+        <option value="all">GPU + CPU lanes</option><option value="gpu">GPU (census)</option><option value="cpu">CPU (tags)</option>
+      </select></label>
+    <span class="chips" id="chips"></span>
+    <button id="resetZoom" title="Show the whole run (key 0)" disabled>Whole run</button>
+    <span class="hint">click: place the active marker &middot; drag a marker &middot; wheel: zoom &middot; shift+drag: pan &middot;
+      <kbd>A</kbd>-<kbd>D</kbd> active marker</span>
+  </div>
+  <div id="timelineWrap"><canvas id="timeline"></canvas><div id="tip"></div></div>
+  <div id="legend"></div>
+  <div class="split-h" id="splitH" title="Drag to resize the timeline; double-click resets the layout"></div>
+  <div id="main">
+    <div class="panel">
+      <h2>Query</h2>
+      <div class="body">
+        <div class="presets">
+          <button data-preset="leaks" title="AaBCf by callstack: allocated in [A, B], still alive at C">Leaks</button>
+          <button data-preset="growth" title="AaBf by callstack: allocated in [A, B], alive at B">Growth</button>
+          <button data-preset="churn" title="AafB, inverted tree by count: allocated and freed inside [A, B]">Churn</button>
+          <button data-preset="live" title="aAf by tag: live at A">Live at A</button>
+          <button data-preset="frees" title="AfB, inverted FREE callstack: who freed what between A and B">Frees</button>
+          <button data-preset="decline" title="aAfB by FREE callstack: what was alive at A and who freed it by B">Decline</button>
+        </div>
+        <div class="field"><label for="rule">Rule</label><select id="rule"></select></div>
+        <div class="field"><label for="heap">Heap</label>
+          <select id="heap"><option value="all">all</option><option value="cpu">cpu</option><option value="gpu">gpu (local + nonlocal)</option></select></div>
+        <div class="field"><label for="groupBy">Group by</label>
+          <select id="groupBy">
+            <option value="tag">tag</option><option value="stack">callstack</option>
+            <option value="tree">callstack tree (root &rarr; site)</option><option value="inverted">callstack inverted (site &rarr; callers)</option>
+            <option value="fstack">free callstack (who freed it)</option>
+            <option value="ftree">free callstack tree (root &rarr; free site)</option><option value="finverted">free callstack inverted (free site &rarr; callers)</option>
+            <option value="name">GPU resource name</option><option value="size">size (powers of two)</option><option value="heap">heap</option>
+          </select></div>
+        <div class="field"><label for="depth">Tree depth</label><input id="depth" type="number" min="1" max="32" value="10"></div>
+        <label class="check"><input id="shortNames" type="checkbox" checked> short C++ names (template arguments folded)</label>
+        <div id="ruleHelp" class="help"></div>
+        <div class="help">Results follow every change of the rule, the grouping or a marker. Sort a table by its header.</div>
+      </div>
+    </div>
+    <div class="split-v" id="splitL" title="Drag to resize; double-click resets the layout"></div>
+    <div class="panel">
+      <div class="tabs">
+        <button data-tab="results" class="on">Results</button>
+        <button data-tab="tags">Tag table A / B</button>
+        <button data-tab="rules">Rules</button>
+        <button data-tab="summary">Summary</button>
+      </div>
+      <div id="queryLine"></div>
+      <div class="body" id="tabBody" style="padding:0"></div>
+    </div>
+    <div class="split-v" id="splitR" title="Drag to resize; double-click resets the layout"></div>
+    <div class="panel">
+      <h2><span class="grow" id="detailTitle">Details</span><button id="copyStack" style="display:none">Copy stack</button></h2>
+      <div class="body" id="detail"><div class="note">Select a row: its stack and its allocations show here.</div></div>
+    </div>
+  </div>
+</div>
+
+<script id="memtrace-core">
+// ===================================================================================== core
+// Decoder, replay, rules and groupings. No DOM: the page runs it in a Web Worker (parse + replay) and on
+// its own thread (queries); tools can load it in node. Numbers, not BigInt: addresses, serials, sizes
+// and QPC ticks all stay below 2^53, so doubles hold them exactly.
+'use strict';
+const EV_RESET = 1, EV_ALLOC = 2, EV_FREE = 3, EV_MARKER = 4, EV_STACK = 5;
+const HEAP_CPU = 0;
+const HEAP_NAMES = ['cpu', 'gpu.local', 'gpu.nonlocal'];
+const KIND_NAMES = ['cpu', 'buffer', 'texture', 'descheap', 'queryheap'];
+const SYNTHETIC = 0x80;
+// Leaf frames that only say "it allocated" (tools/memtrace.py NOISE_PREFIXES): a stack is shown and
+// grouped from the first frame past them -- the code that made the container grow.
+const NOISE_PREFIXES = ['std::', 'operator new', 'operator delete', "gpu::`anonymous namespace'::", 'gpu::Create',
+  'gpu::TrackExternalResource', 'mi_', '_malloc', 'malloc', '_free', 'free'];
+
+// UE's rules, AllocationsQuery.cpp:196-397: [name, markers, meaning, test(a, f, A, B, C, D)].
+const RULES = [
+  ['aAf', 1, 'live at A', (a, f, A) => a <= A && A <= f],
+  ['afA', 1, 'freed by A', (a, f, A) => f <= A],
+  ['Aaf', 1, 'allocated from A on', (a, f, A) => a >= A],
+  ['aAfB', 2, 'decline: alive at A, freed by B', (a, f, A, B) => a <= A && A <= f && f <= B],
+  ['AaBf', 2, 'growth: allocated in [A, B], alive at B', (a, f, A, B) => A <= a && a <= B && f >= B],
+  ['aAfaBf', 2, 'decline + growth', (a, f, A, B) => (a <= A && A <= f && f <= B) || (A <= a && a <= B && f >= B)],
+  ['AfB', 2, 'free events in [A, B]', (a, f, A, B) => A <= f && f <= B],
+  ['AaB', 2, 'alloc events in [A, B]', (a, f, A, B) => A <= a && a <= B],
+  ['AafB', 2, 'short-living: allocated and freed inside [A, B] (churn)', (a, f, A, B) => a >= A && f <= B],
+  ['aABf', 2, 'long-living: alive through [A, B]', (a, f, A, B) => a <= A && f >= B],
+  ['AaBCf', 3, 'leaks: allocated in [A, B], still alive at C', (a, f, A, B, C) => A <= a && a <= B && f >= C],
+  ['AaBfC', 3, 'limited lifetime: allocated in [A, B], freed in [B, C]', (a, f, A, B, C) => A <= a && a <= B && B <= f && f <= C],
+  ['aABfC', 3, 'decline of long-living: alive at A, freed in [B, C]', (a, f, A, B, C) => a <= A && B <= f && f <= C],
+  ['AaBCfD', 4, 'specific lifetime: allocated in [A, B], freed in [C, D]', (a, f, A, B, C, D) => A <= a && a <= B && C <= f && f <= D],
+];
+
+class Cols {
+  constructor(spec, cap) {
+    this.n = 0; this.cap = cap; this.spec = spec;
+    for (const [k, T] of spec) this[k] = new T(cap);
+  }
+  grow() {
+    this.cap *= 2;
+    for (const [k, T] of this.spec) { const a = new T(this.cap); a.set(this[k]); this[k] = a; }
+  }
+}
+
+const utf8 = new TextDecoder('utf-8');
+
+function parseTrace(buffer, progress) {
+  const u8 = new Uint8Array(buffer);
+  const dv = new DataView(buffer);
+  const n = u8.length;
+  const tr = {
+    header: {}, tags: [], heaps: {}, modules: [], end: null, symbols: new Map(), stacks: new Map(),
+    names: [], threads: new Set(), chunks: 0, truncated: false, fileBytes: n,
+    alloc: new Cols([['serial', Float64Array], ['key', Float64Array], ['size', Float64Array], ['tag', Uint8Array],
+      ['heap', Uint8Array], ['kind', Uint8Array], ['stack', Uint32Array], ['name', Int32Array]], 1 << 16),
+    free: new Cols([['serial', Float64Array], ['key', Float64Array], ['heap', Uint8Array], ['stack', Uint32Array]], 1 << 16),
+    marker: new Cols([['serial', Float64Array], ['qpc', Float64Array], ['frame', Float64Array]], 1 << 12),
+  };
+  const u64 = (o) => Number(dv.getBigUint64(o, true));
+  const str16 = (o) => { const len = dv.getUint16(o, true); return [utf8.decode(u8.subarray(o + 2, o + 2 + len)), o + 2 + len]; };
+  const states = new Map();
+  let pos = 0, lastReport = 0;
+  while (pos + 5 <= n) {
+    const type = String.fromCharCode(u8[pos]);
+    const len = dv.getUint32(pos + 1, true);
+    const body = pos + 5;
+    if (body + len > n) { tr.truncated = true; break; }
+    if (type === 'H') {
+      if (utf8.decode(u8.subarray(body, body + 4)) !== 'MTRC') throw new Error('not a memory trace (no MTRC header)');
+      const stacksMode = u8[body + 30], sample = dv.getUint32(body + 32, true);
+      tr.header = {
+        version: dv.getUint32(body + 4, true), qpcFreq: u64(body + 8), startQpc: u64(body + 16),
+        pid: dv.getUint32(body + 24, true), cpu: u8[body + 28], gpu: u8[body + 29],
+        stacks: ['off', 'big', 'all', '1/' + sample][stacksMode] || '?', sample,
+        startFrame: u64(body + 36), markerPeriod: dv.getUint32(body + 44, true), tagCount: dv.getUint32(body + 48, true),
+        exe: str16(body + 52)[0],
+      };
+    } else if (type === 'T') {
+      const count = dv.getUint32(body, true);
+      let p = body + 4;
+      for (let i = 0; i < count; i++) { const parent = u8[p]; const [name, q] = str16(p + 1); tr.tags.push({ name, parent }); p = q; }
+    } else if (type === 'P') {
+      const count = dv.getUint32(body, true);
+      let p = body + 4;
+      for (let i = 0; i < count; i++) { const id = u8[p]; const [name, q] = str16(p + 1); tr.heaps[id] = name; p = q; }
+    } else if (type === 'D') {
+      const count = dv.getUint32(body, true);
+      let p = body + 4;
+      const mods = [];
+      for (let i = 0; i < count; i++) {
+        const base = u64(p), size = dv.getUint32(p + 8, true), age = dv.getUint32(p + 28, true);
+        const [path, q] = str16(p + 32);
+        mods.push({ base, size, age, path });
+        p = q;
+      }
+      tr.modules = mods; // the last table wins: the one written at the stop has the late DLLs
+    } else if (type === 'C') {
+      const buf = dv.getUint32(body, true);
+      let st = states.get(buf);
+      if (!st) { st = { s: 0, k: 0 }; states.set(buf, st); }
+      decodeChunk(tr, u8, body + 4, body + len, st);
+      tr.chunks++;
+    } else if (type === 'E') {
+      const rows = [];
+      const tagCount = dv.getUint32(body + 26, true);
+      let p = body + 30;
+      for (let i = 0; i < tagCount; i++) {
+        rows.push([Number(dv.getBigInt64(p, true)), Number(dv.getBigInt64(p + 8, true)), u64(p + 16), u64(p + 24), u64(p + 32),
+          dv.getUint32(p + 40, true), dv.getUint32(p + 44, true)]);
+        p += 48;
+      }
+      tr.end = { drops: u64(body), lastSerial: u64(body + 8), stacks: dv.getUint32(body + 16, true),
+        buffers: dv.getUint32(body + 20, true), cpuOn: !!u8[body + 24], gpuOn: !!u8[body + 25], rows };
+    } else if (type === 'Y') {
+      const count = dv.getUint32(body, true);
+      let p = body + 4;
+      for (let i = 0; i < count; i++) {
+        const addr = u64(p);
+        const [func, q1] = str16(p + 8);
+        const [file, q2] = str16(q1);
+        tr.symbols.set(addr, [func, file, dv.getUint32(q2, true)]);
+        p = q2 + 4;
+      }
+    }
+    pos = body + len;
+    if (progress && pos - lastReport > (16 << 20)) { lastReport = pos; progress('reading', pos / n); }
+  }
+  if (pos < n) tr.truncated = true;
+  return tr;
+}
+
+function decodeChunk(tr, u8, pos, end, st) {
+  const A = tr.alloc, F = tr.free, M = tr.marker;
+  const freeStacks = (tr.header.version || 1) >= 2; // format 2: a free carries the stack of whoever freed
+  let ps = st.s, pk = st.k;
+  let v, m, b;
+  while (pos < end) {
+    const ev = u8[pos++];
+    if (ev === EV_ALLOC || ev === EV_FREE || ev === EV_MARKER) {
+      v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+      ps += v;
+      const serial = ps;
+      if (ev === EV_MARKER) {
+        v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+        const qpc = v;
+        v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+        if (M.n === M.cap) M.grow();
+        const i = M.n++;
+        M.serial[i] = serial; M.qpc[i] = qpc; M.frame[i] = v ? v - 1 : -1;
+        continue;
+      }
+      v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+      pk += (v % 2 === 0) ? v / 2 : -(v + 1) / 2;
+      const key = pk;
+      if (ev === EV_FREE) {
+        if (F.n === F.cap) F.grow();
+        const i = F.n++;
+        F.serial[i] = serial; F.key[i] = key; F.heap[i] = u8[pos++];
+        let fs = 0;
+        if (freeStacks) { v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128); fs = v; }
+        F.stack[i] = fs;
+        continue;
+      }
+      v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+      const size = v;
+      const tag = u8[pos], heap = u8[pos + 1], kind = u8[pos + 2];
+      pos += 3;
+      v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+      const stack = v;
+      let name = -1;
+      if (heap !== HEAP_CPU) {
+        v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+        name = tr.names.length;
+        tr.names.push(utf8.decode(u8.subarray(pos, pos + v)));
+        pos += v;
+      }
+      if (A.n === A.cap) A.grow();
+      const i = A.n++;
+      A.serial[i] = serial; A.key[i] = key; A.size[i] = size; A.tag[i] = tag; A.heap[i] = heap; A.kind[i] = kind;
+      A.stack[i] = stack; A.name[i] = name;
+    } else if (ev === EV_RESET) {
+      v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+      tr.threads.add(v);
+      ps = 0; pk = 0;
+    } else if (ev === EV_STACK) {
+      v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+      const id = v;
+      const count = u8[pos++];
+      const frames = new Array(count);
+      let addr = 0;
+      for (let k = 0; k < count; k++) {
+        v = 0; m = 1; do { b = u8[pos++]; v += (b & 127) * m; m *= 128; } while (b & 128);
+        addr += (v % 2 === 0) ? v / 2 : -(v + 1) / 2;
+        frames[k] = addr;
+      }
+      tr.stacks.set(id, frames);
+    } else {
+      throw new Error('unknown event ' + ev + ' at byte ' + (pos - 1));
+    }
+  }
+  st.s = ps; st.k = pk;
+}
+
+// Indices of `serial[0..n)` in increasing order: LSD radix on two 16-bit digits (serials < 2^32).
+function sortBySerial(serial, n) {
+  let max = 0;
+  for (let i = 0; i < n; i++) if (serial[i] > max) max = serial[i];
+  if (max >= 4294967296) {
+    const o = new Uint32Array(n);
+    for (let i = 0; i < n; i++) o[i] = i;
+    return o.sort((x, y) => serial[x] - serial[y]);
+  }
+  const keys = new Uint32Array(n);
+  for (let i = 0; i < n; i++) keys[i] = serial[i];
+  let idx = new Uint32Array(n), tmp = new Uint32Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+  for (const shift of [0, 16]) {
+    const cnt = new Uint32Array(65537);
+    for (let i = 0; i < n; i++) cnt[((keys[idx[i]] >>> shift) & 0xffff) + 1]++;
+    for (let d = 0; d < 65536; d++) cnt[d + 1] += cnt[d];
+    for (let i = 0; i < n; i++) { const d = (keys[idx[i]] >>> shift) & 0xffff; tmp[cnt[d]++] = idx[i]; }
+    const t = idx; idx = tmp; tmp = t;
+  }
+  return idx;
+}
+
+// The replay (tools/memtrace.py Model): one row per allocation in serial order -- a (alloc serial),
+// f (free serial, Infinity = never), size, tag, heap, kind, stack -- and the live bytes by tag (cpu and
+// gpu) at the end of every frame.
+function buildModel(tr, progress) {
+  const A = tr.alloc, F = tr.free, M = tr.marker;
+  const nA = A.n, nF = F.n;
+  if (progress) progress('sorting', 0);
+  const ordA = sortBySerial(A.serial, nA);
+  const ordF = sortBySerial(F.serial, nF);
+  const fm = [];
+  for (let i = 0; i < M.n; i++) if (M.frame[i] >= 0) fm.push(i);
+  fm.sort((x, y) => M.serial[x] - M.serial[y]);
+  const ntags = Math.max(tr.tags.length, 1);
+  const md = {
+    n: nA, ntags, a: new Float64Array(nA), f: new Float64Array(nA).fill(Infinity), size: new Float64Array(nA),
+    tag: new Uint8Array(nA), heap: new Uint8Array(nA), kind: new Uint8Array(nA), stack: new Uint32Array(nA),
+    fstack: new Uint32Array(nA), // the stack of whoever freed it (format 2; 0 = never freed or not captured)
+    names: new Map(), live: new Uint8Array(nA),
+    frames: { n: fm.length, frame: new Float64Array(fm.length), serial: new Float64Array(fm.length), qpc: new Float64Array(fm.length),
+      series: new Float64Array(fm.length * ntags * 2) },
+    anomalies: { doubleAlloc: 0, unknownFree: 0 }, lastSerial: 0,
+    freq: tr.header.qpcFreq || 1, startQpc: tr.header.startQpc || 0,
+  };
+  const key = new Float64Array(nA);
+  for (let r = 0; r < nA; r++) {
+    const i = ordA[r];
+    md.a[r] = A.serial[i]; key[r] = A.key[i]; md.size[r] = A.size[i]; md.tag[r] = A.tag[i]; md.heap[r] = A.heap[i];
+    md.kind[r] = A.kind[i]; md.stack[r] = A.stack[i];
+    if (A.name[i] >= 0) md.names.set(r, tr.names[A.name[i]]);
+  }
+  const cpuLive = new Map(), gpuLive = new Map();
+  const cpu = new Float64Array(ntags), gpu = new Float64Array(ntags);
+  const fr = md.frames;
+  let i = 0, j = 0, k = 0, done = 0;
+  const total = nA + nF;
+  for (;;) {
+    const sa = i < nA ? md.a[i] : Infinity;
+    const sf = j < nF ? F.serial[ordF[j]] : Infinity;
+    const s = sa < sf ? sa : sf;
+    while (k < fm.length && M.serial[fm[k]] < s) {
+      const mi = fm[k];
+      fr.frame[k] = M.frame[mi]; fr.serial[k] = M.serial[mi]; fr.qpc[k] = M.qpc[mi];
+      fr.series.set(cpu, k * ntags * 2);
+      fr.series.set(gpu, k * ntags * 2 + ntags);
+      k++;
+    }
+    if (s === Infinity) break;
+    if (sa < sf) {
+      const live = md.heap[i] === HEAP_CPU ? cpuLive : gpuLive;
+      if (live.has(key[i])) md.anomalies.doubleAlloc++;
+      live.set(key[i], i);
+      (md.heap[i] === HEAP_CPU ? cpu : gpu)[md.tag[i]] += md.size[i];
+      i++;
+    } else {
+      const fi = ordF[j];
+      const live = F.heap[fi] === HEAP_CPU ? cpuLive : gpuLive;
+      const r = live.get(F.key[fi]);
+      if (r === undefined) md.anomalies.unknownFree++;
+      else {
+        live.delete(F.key[fi]);
+        md.f[r] = F.serial[fi];
+        md.fstack[r] = F.stack[fi];
+        (md.heap[r] === HEAP_CPU ? cpu : gpu)[md.tag[r]] -= md.size[r];
+      }
+      j++;
+    }
+    if (progress && ((++done) & 0xfffff) === 0) progress('replaying', done / total);
+  }
+  for (const r of cpuLive.values()) md.live[r] = 1;
+  for (const r of gpuLive.values()) md.live[r] = 1;
+  md.lastSerial = Math.max(nA ? md.a[nA - 1] : 0, nF ? F.serial[ordF[nF - 1]] : 0, fm.length ? fr.serial[fm.length - 1] : 0);
+  return md;
+}
+
+// ---- time markers ----
+function frameTime(md, k) { return (md.frames.qpc[k] - md.startQpc) / md.freq; }
+
+// '600' / 'f600' (the end of that frame), '12.5s' (since the trace started), 'start', 'end' -> {serial, label, k}
+function resolveMarker(md, spec) {
+  const s = String(spec).trim().toLowerCase();
+  const fr = md.frames;
+  if (s === '' ) return null;
+  if (s === 'start' || s === 'begin') return { serial: 0, label: 'start', k: -1 };
+  if (s === 'end') return { serial: md.lastSerial + 1, label: 'end', k: fr.n - 1 };
+  if (s.endsWith('s')) {
+    const secs = parseFloat(s);
+    if (!isFinite(secs)) return null;
+    const target = md.startQpc + secs * md.freq;
+    for (let k = 0; k < fr.n; k++) if (fr.qpc[k] >= target) return { serial: fr.serial[k], label: secs + 's (frame ' + fr.frame[k] + ')', k };
+    return { serial: md.lastSerial + 1, label: secs + 's (past the end)', k: fr.n - 1 };
+  }
+  const frame = parseInt(s.replace(/^f/, ''), 10);
+  if (!isFinite(frame)) return null;
+  for (let k = 0; k < fr.n; k++) if (fr.frame[k] >= frame) return { serial: fr.serial[k], label: 'frame ' + fr.frame[k], k };
+  return { serial: md.lastSerial + 1, label: 'frame ' + frame + ' (past the end)', k: fr.n - 1 };
+}
+
+// ---- queries ----
+function selectRule(md, ruleName, marks, heap) {
+  const rule = RULES.find((r) => r[0] === ruleName);
+  if (!rule) throw new Error('unknown rule ' + ruleName);
+  const test = rule[3];
+  const [A, B, C, D] = [marks[0] ?? 0, marks[1] ?? 0, marks[2] ?? 0, marks[3] ?? 0];
+  const out = [];
+  const a = md.a, f = md.f, hp = md.heap;
+  for (let i = 0; i < md.n; i++) {
+    if (heap === 'cpu' && hp[i] !== HEAP_CPU) continue;
+    if (heap === 'gpu' && hp[i] === HEAP_CPU) continue;
+    if (test(a[i], f[i], A, B, C, D)) out.push(i);
+  }
+  return Uint32Array.from(out);
+}
+
+function funcName(tr, addr) {
+  const s = tr.symbols.get(addr);
+  return s && s[0] ? s[0] : '0x' + addr.toString(16);
+}
+
+function frameText(tr, addr) {
+  const s = tr.symbols.get(addr);
+  if (!s || !s[0]) return { func: '0x' + addr.toString(16), file: '' };
+  const file = s[1] ? s[1].split(/[\\/]/).pop() + ':' + s[2] : '';
+  return { func: s[0], file, path: s[1], line: s[2] };
+}
+
+// [base, end) of the modules under Windows\ (d3d12, dxgi, kernel32, ntdll): a free's stack starts inside them
+// -- the D3D object's destructor, HeapFree -- before it reaches the code that let go.
+function systemRanges(tr) {
+  if (!tr.sysRanges) tr.sysRanges = tr.modules.filter((m) => /\\windows\\/i.test(m.path)).map((m) => [m.base, m.base + m.size]);
+  return tr.sysRanges;
+}
+
+// The stack past the allocator frames and the system DLLs under them, leaf first (memtrace.py caller_frames),
+// and its function names.
+function callerFrames(tr, cache, id) {
+  let c = cache.get(id);
+  if (c) return c;
+  const frames = tr.stacks.get(id) || [];
+  const sys = systemRanges(tr);
+  let start = 0;
+  while (start < frames.length && (NOISE_PREFIXES.some((p) => funcName(tr, frames[start]).startsWith(p)) ||
+    sys.some(([lo, hi]) => frames[start] >= lo && frames[start] < hi))) start++;
+  const kept = start < frames.length ? frames.slice(start) : frames.slice();
+  c = { frames: kept, funcs: kept.map((a) => funcName(tr, a)) };
+  cache.set(id, c);
+  return c;
+}
+
+function sizeBucket(size) {
+  return size <= 0 ? 0 : (size < 4294967296 ? 32 - Math.clz32(size) : Math.floor(Math.log2(size)) + 1);
+}
+
+// The sign an allocation carries in a result: a free counts negative, an allocation positive (owner,
+// 2026-10-23: frees with a minus everywhere). The rules that pick allocations BY THEIR FREE -- freed by A,
+// decline, free events, decline of long-living -- are negative; under "growth vs. decline" (aAfaBf) the decline
+// part only (a <= A, f <= B), which is all UE flips (SMemAllocTableTreeView.cpp:682-688). State rules (aAf,
+// aABf), allocation rules (Aaf, AaB, AaBf, AaBCf) and lifetime rules (AafB, AaBfC, AaBCfD -- each of their
+// allocations made AND freed inside the windows: traffic, not memory leaving) are positive.
+const FREE_RULES = new Set(['afA', 'aAfB', 'AfB', 'aABfC']);
+function ruleSign(ruleName, a, f, marks) {
+  if (FREE_RULES.has(ruleName)) return -1;
+  if (ruleName === 'aAfaBf' && a <= marks[0] && f <= marks[1]) return -1;
+  return 1;
+}
+
+function sizeFn(md, ruleName, marks) {
+  if (FREE_RULES.has(ruleName)) return (i) => -md.size[i];
+  if (ruleName !== 'aAfaBf') return (i) => md.size[i];
+  return (i) => ruleSign(ruleName, md.a[i], md.f[i], marks) * md.size[i];
+}
+
+function groupFlat(md, tr, picked, by, sizeOf = (i) => md.size[i]) {
+  const rows = new Map();
+  for (let x = 0; x < picked.length; x++) {
+    const i = picked[x];
+    let key;
+    switch (by) {
+      case 'tag': key = md.tag[i]; break;
+      case 'heap': key = md.heap[i]; break;
+      case 'size': key = sizeBucket(md.size[i]); break;
+      case 'name': key = md.names.get(i) || '(cpu) ' + tagName(tr, md.tag[i]); break;
+      case 'fstack': key = md.f[i] === Infinity ? -1 : md.fstack[i]; break; // -1 never freed, 0 not captured
+      default: key = md.stack[i]; break;
+    }
+    let row = rows.get(key);
+    if (!row) { row = { key, bytes: 0, count: 0, sample: i }; rows.set(key, row); }
+    row.bytes += sizeOf(i); row.count++;
+  }
+  return [...rows.values()];
+}
+
+// The function names a tree files allocation i under: its allocation stack, or (`free`) the stack of whoever
+// freed it -- a never-freed one under "(never freed)".
+function treeFuncs(md, tr, cache, i, free) {
+  if (free && md.f[i] === Infinity) return ['(never freed)'];
+  const id = free ? md.fstack[i] : md.stack[i];
+  return id ? callerFrames(tr, cache, id).funcs : [];
+}
+
+// Callstack grouping by function: top-down from the root, or inverted from the allocation (or free) site.
+function groupTree(md, tr, cache, picked, inverted, depth, sizeOf = (i) => md.size[i], free = false) {
+  const root = { name: '', bytes: 0, count: 0, kids: new Map(), path: [] };
+  for (let x = 0; x < picked.length; x++) {
+    const i = picked[x];
+    const funcs = treeFuncs(md, tr, cache, i, free);
+    const len = funcs.length ? funcs.length : 1;
+    const size = sizeOf(i);
+    root.bytes += size; root.count++;
+    let node = root;
+    for (let d = 0; d < Math.min(depth, len); d++) {
+      const nm = funcs.length ? funcs[inverted ? d : funcs.length - 1 - d] : '(no stack)';
+      let child = node.kids.get(nm);
+      if (!child) { child = { name: nm, bytes: 0, count: 0, kids: new Map(), path: node.path.concat([nm]) }; node.kids.set(nm, child); }
+      child.bytes += size; child.count++;
+      node = child;
+    }
+  }
+  return root;
+}
+
+// Does allocation i sit under the tree node `path`?
+function underPath(md, tr, cache, i, path, inverted, free = false) {
+  const funcs = treeFuncs(md, tr, cache, i, free);
+  if (!funcs.length) return path.length === 1 && path[0] === '(no stack)';
+  if (path.length > funcs.length) return false;
+  for (let d = 0; d < path.length; d++) {
+    if (funcs[inverted ? d : funcs.length - 1 - d] !== path[d]) return false;
+  }
+  return true;
+}
+
+function tagName(tr, t) { return t < tr.tags.length ? tr.tags[t].name : 'tag' + t; }
+
+// UE's LLM tag table: size at A, at B, B - A, and min/max/avg over the frames between them.
+function tagTable(md, tr, a, b, heap) {
+  const nt = md.ntags;
+  const at = (serial) => {
+    const v = new Float64Array(nt);
+    const picked = selectRule(md, 'aAf', [serial], heap);
+    for (let x = 0; x < picked.length; x++) v[md.tag[picked[x]]] += md.size[picked[x]];
+    return v;
+  };
+  const va = at(a.serial), vb = at(b.serial);
+  const fr = md.frames;
+  const rows = [];
+  for (let t = 0; t < nt; t++) {
+    let lo = Infinity, hi = -Infinity, sum = 0, cnt = 0;
+    for (let k = 0; k < fr.n; k++) {
+      if (fr.serial[k] < a.serial || fr.serial[k] > b.serial) continue;
+      const base = k * nt * 2;
+      const v = (heap !== 'gpu' ? fr.series[base + t] : 0) + (heap !== 'cpu' ? fr.series[base + nt + t] : 0);
+      lo = Math.min(lo, v); hi = Math.max(hi, v); sum += v; cnt++;
+    }
+    if (!cnt) { lo = hi = 0; }
+    if (va[t] === 0 && vb[t] === 0 && hi === 0) continue;
+    rows.push({ tag: t, a: va[t], b: vb[t], min: lo, max: hi, avg: cnt ? sum / cnt : 0, samples: cnt });
+  }
+  return rows;
+}
+
+// The trace's own check (memtrace.py verify): what the replay leaves alive == the process's End record.
+function verifyModel(md, tr) {
+  if (!tr.end) return { pass: false, failures: ['no End record (the process did not stop the trace)'] };
+  const nt = md.ntags;
+  const rows = Array.from({ length: nt }, () => [0, 0, 0, 0, 0, 0, 0]);
+  for (let i = 0; i < md.n; i++) {
+    if (!md.live[i]) continue;
+    const r = rows[md.tag[i]];
+    if (md.heap[i] === HEAP_CPU) { r[0] += md.size[i]; r[1]++; }
+    else if ((md.kind[i] & 0x7f) === 3 || (md.kind[i] & 0x7f) === 4) { r[4] += md.size[i]; r[6]++; }
+    else { r[md.heap[i] === 1 ? 2 : 3] += md.size[i]; r[5]++; }
+  }
+  const failures = [];
+  const end = tr.end;
+  if (end.drops) failures.push(end.drops + ' events dropped');
+  if (tr.truncated) failures.push('file truncated');
+  if (md.anomalies.doubleAlloc || md.anomalies.unknownFree)
+    failures.push(md.anomalies.doubleAlloc + ' allocs of a live key, ' + md.anomalies.unknownFree + ' frees of an unknown key');
+  const cols = ['cpu bytes', 'cpu count', 'gpu local', 'gpu nonlocal', 'gpu descriptor', 'gpu resources', 'gpu heaps'];
+  const use = (end.cpuOn ? [0, 1] : []).concat(end.gpuOn ? [2, 3, 4, 5, 6] : []);
+  end.rows.forEach((want, t) => {
+    const have = rows[t] || [0, 0, 0, 0, 0, 0, 0];
+    for (const c of use) if (have[c] !== want[c]) failures.push(tagName(tr, t) + ' ' + cols[c] + ': replay ' + have[c] + ' != process ' + want[c]);
+  });
+  let cpuB = 0, gpuB = 0;
+  for (const r of end.rows) { cpuB += r[0]; gpuB += r[2] + r[3]; }
+  return { pass: failures.length === 0, failures, cpuBytes: end.cpuOn ? cpuB : null, gpuBytes: end.gpuOn ? gpuB : null };
+}
+
+function human(x) {
+  const ax = Math.abs(x);
+  if (ax >= 1048576) return (x / 1048576).toFixed(2) + ' MB';
+  if (ax >= 1024) return (x / 1024).toFixed(1) + ' KB';
+  return Math.round(x) + ' B';
+}
+
+// The worker's entry: parse + replay off the page's thread, the model handed back by transfer.
+if (typeof self !== 'undefined' && typeof document === 'undefined' && typeof importScripts === 'function') {
+  self.onmessage = (e) => {
+    try {
+      const progress = (phase, frac) => self.postMessage({ type: 'progress', phase, frac });
+      const tr = parseTrace(e.data, progress);
+      const md = buildModel(tr, progress);
+      delete tr.alloc; delete tr.free; delete tr.marker; // the model holds what the page needs
+      const fr = md.frames;
+      self.postMessage({ type: 'done', tr, md }, [md.a.buffer, md.f.buffer, md.size.buffer, md.tag.buffer, md.heap.buffer,
+        md.kind.buffer, md.stack.buffer, md.fstack.buffer, md.live.buffer, fr.frame.buffer, fr.serial.buffer, fr.qpc.buffer, fr.series.buffer]);
+    } catch (err) {
+      self.postMessage({ type: 'error', message: String(err && err.stack || err) });
+    }
+  };
+}
+</script>
+
+<script>
+// ======================================================================================= page
+'use strict';
+const $ = (id) => document.getElementById(id);
+const PALETTE = ['#5aa9ff', '#ff7a59', '#4fc27a', '#c38bff', '#f7d154', '#4fd1c5', '#ff5fa2', '#9bd65b', '#ffa94d',
+  '#8f9bff', '#5f7a8c'];
+const cssVar = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const MARKER_COLORS = ['--mA', '--mB', '--mC', '--mD'].map(cssVar);
+const LETTERS = 'ABCD';
+const LANE_LAYERS = 10; // tags with their own layer per lane; the rest is "other"
+
+// Per-viewer conveniences only (layout, sort orders, short names). Wrapped: the page works without storage.
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('memtrace.' + k); return v === null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem('memtrace.' + k, JSON.stringify(v)); } catch (e) { /* private window, blocked storage */ } },
+};
+const DEFAULT_LAYOUT = { left: 250, right: 440, timeline: 250 };
+
+const S = {
+  tr: null, md: null, cache: new Map(), fileName: '', verify: null,
+  // A marker is a frame index k into md.frames (the end of that frame), -1 (start), 'end' (past every event) or null.
+  markers: [null, null, null, null], active: 0,
+  lanes: [], hidden: new Set(), view: null, tab: 'results', result: null,
+  sorts: store.get('sorts', {}), layout: Object.assign({}, DEFAULT_LAYOUT, store.get('layout', {})),
+  shortNames: store.get('shortNames', true),
+};
+
+// ---------------------------------------------------------------------------------- loading
+function setProgress(text) {
+  const p = $('progress');
+  p.style.display = text ? 'block' : 'none';
+  p.textContent = text || '';
+}
+
+function loadBuffer(buffer, name) {
+  S.fileName = name;
+  $('empty').style.display = 'none';
+  setProgress('Reading ' + name + ' (' + human(buffer.byteLength) + ')...');
+  const t0 = performance.now();
+  const finish = (tr, md) => {
+    setProgress('');
+    Object.assign(S, { tr, md, cache: new Map(), hidden: new Set(), view: null, result: null });
+    onLoaded((performance.now() - t0) / 1000);
+  };
+  let worker = null;
+  try {
+    worker = new Worker(URL.createObjectURL(new Blob([$('memtrace-core').textContent], { type: 'text/javascript' })));
+  } catch (e) { worker = null; }
+  if (!worker) { // a browser that refuses blob workers on this origin: the page's own thread
+    setTimeout(() => {
+      try { const tr = parseTrace(buffer); finish(tr, buildModel(tr)); } catch (err) { setProgress('Failed: ' + err.message); }
+    }, 20);
+    return;
+  }
+  worker.onmessage = (e) => {
+    const m = e.data;
+    if (m.type === 'progress') setProgress(name + ': ' + m.phase + ' ' + Math.round(m.frac * 100) + '%');
+    else if (m.type === 'done') { worker.terminate(); finish(m.tr, m.md); }
+    else if (m.type === 'error') { worker.terminate(); setProgress('Failed: ' + m.message); }
+  };
+  worker.onerror = (e) => setProgress('Worker failed: ' + e.message);
+  worker.postMessage(buffer, [buffer]);
+}
+
+function loadFile(file) { file.arrayBuffer().then((b) => loadBuffer(b, file.name)); }
+
+$('openBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+document.addEventListener('dragover', (e) => e.preventDefault());
+document.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) loadFile(f);
+});
+
+const params = new URLSearchParams(location.search);
+if (params.get('file')) {
+  const url = params.get('file');
+  setProgress('Fetching ' + url + '...');
+  $('empty').style.display = 'none';
+  fetch(url).then((r) => { if (!r.ok) throw new Error(r.status + ' ' + r.statusText); return r.arrayBuffer(); })
+    .then((b) => loadBuffer(b, url.split('/').pop()))
+    .catch((err) => { setProgress('Could not fetch ' + url + ': ' + err.message); $('empty').style.display = 'block'; });
+}
+
+// --------------------------------------------------------------------------------- on loaded
+function onLoaded(seconds) {
+  const { tr, md } = S;
+  $('app').style.display = 'flex';
+  $('fileName').textContent = S.fileName;
+  const fr = md.frames;
+  let frees = 0;
+  for (let i = 0; i < md.n; i++) if (md.f[i] !== Infinity) frees++;
+  $('stats').textContent = md.n.toLocaleString() + ' allocs, ' + frees.toLocaleString() + ' freed, ' +
+    (fr.n ? 'frames ' + fr.frame[0] + '..' + fr.frame[fr.n - 1] + ', ' + frameTime(md, fr.n - 1).toFixed(1) + ' s, ' : 'no frames, ') +
+    tr.stacks.size.toLocaleString() + ' stacks (' + tr.header.stacks + '), cpu ' + (tr.header.cpu ? 'on' : 'off') +
+    ', gpu ' + (tr.header.gpu ? 'on' : 'off') + ' | loaded in ' + seconds.toFixed(1) + ' s';
+  const v = verifyModel(md, tr);
+  S.verify = v;
+  const badge = $('verify');
+  badge.style.display = '';
+  badge.className = 'badge ' + (v.pass ? 'pass' : 'fail');
+  badge.textContent = v.pass ? 'verify PASS' : 'verify FAIL (' + v.failures.length + ')';
+  badge.title = v.pass ? 'The replay matches what the process counted alive when the trace stopped, byte for byte.'
+    : 'Click for the list.\n' + v.failures.slice(0, 20).join('\n');
+  badge.onclick = () => setTab('summary');
+  // A past the boot, B mid-run, C at the end; the first screen is "live at A" by tag (the owner's pick, 2026-10-23).
+  S.markers = fr.n ? [Math.round((fr.n - 1) * 0.1), Math.round((fr.n - 1) * 0.6), 'end', null] : [-1, 'end', 'end', null];
+  S.active = 0;
+  $('shortNames').checked = S.shortNames;
+  buildChips();
+  buildLanes();
+  setView(null);
+  fillRules();
+  applyPreset('live');
+}
+
+// ----------------------------------------------------------------------------------- layout
+function applyLayout() {
+  const r = document.documentElement.style;
+  r.setProperty('--left-w', S.layout.left + 'px');
+  r.setProperty('--right-w', S.layout.right + 'px');
+  r.setProperty('--timeline-h', S.layout.timeline + 'px');
+}
+
+function initSplitters() {
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  const drag = (el, move) => {
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const x0 = e.clientX, y0 = e.clientY, from = Object.assign({}, S.layout);
+      el.classList.add('dragging');
+      const mm = (ev) => { move(ev.clientX - x0, ev.clientY - y0, from); applyLayout(); if (S.md && el.id === 'splitH') drawTimeline(); };
+      const mu = () => {
+        el.classList.remove('dragging');
+        window.removeEventListener('mousemove', mm);
+        window.removeEventListener('mouseup', mu);
+        store.set('layout', S.layout);
+        if (S.md) drawTimeline();
+      };
+      window.addEventListener('mousemove', mm);
+      window.addEventListener('mouseup', mu);
+    });
+    el.addEventListener('dblclick', () => { S.layout = Object.assign({}, DEFAULT_LAYOUT); applyLayout(); store.set('layout', S.layout); if (S.md) drawTimeline(); });
+  };
+  // The results column keeps 320 px whatever the side panels do.
+  const room = (other) => Math.max(170, window.innerWidth - other - 320 - 40);
+  drag($('splitL'), (dx, dy, f) => { S.layout.left = clamp(f.left + dx, 170, room(S.layout.right)); });
+  drag($('splitR'), (dx, dy, f) => { S.layout.right = clamp(f.right - dx, 220, room(S.layout.left)); });
+  drag($('splitH'), (dx, dy, f) => { S.layout.timeline = clamp(f.timeline + dy, 110, window.innerHeight - 260); });
+}
+applyLayout();
+initSplitters();
+
+// ---------------------------------------------------------------------------------- markers
+function markerTime(m) {
+  const v = S.markers[m], md = S.md;
+  if (v === null || !md.frames.n) return null;
+  if (v === -1) return frameTime(md, 0);
+  if (v === 'end') return frameTime(md, md.frames.n - 1);
+  return frameTime(md, v);
+}
+
+// The serial a marker stands for: the end of its frame; 'end' = past every event.
+function markerSerial(m) {
+  const v = S.markers[m], md = S.md;
+  if (v === null) return null;
+  if (v === -1) return { serial: 0, label: 'start' };
+  if (v === 'end') return { serial: md.lastSerial + 1, label: 'end' };
+  return { serial: md.frames.serial[v], label: 'frame ' + md.frames.frame[v] + ' (' + frameTime(md, v).toFixed(1) + ' s)' };
+}
+
+function markerText(v) {
+  if (v === null) return '';
+  if (v === -1) return 'start';
+  if (v === 'end') return 'end';
+  return String(S.md.frames.frame[v]);
+}
+
+function parseMarker(text) {
+  const s = text.trim().toLowerCase();
+  if (!s) return null;
+  if (s === 'start' || s === 'begin') return -1;
+  if (s === 'end') return 'end';
+  const r = resolveMarker(S.md, s);
+  return r ? r.k : undefined;
+}
+
+function buildChips() {
+  const box = $('chips');
+  box.innerHTML = '';
+  for (let m = 0; m < 4; m++) {
+    const L = LETTERS[m];
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.title = 'Marker ' + L + ' -- click to make it the active one (key ' + L + '); type a frame, 12.5s, start or end';
+    chip.innerHTML = '<i class="dot" style="background:' + MARKER_COLORS[m] + '"></i><b>' + L + '</b>' +
+      '<input type="text" spellcheck="false" placeholder="unset"><span class="x" title="Clear ' + L + '">&times;</span>';
+    const input = chip.querySelector('input');
+    chip.addEventListener('mousedown', (e) => { if (e.target !== input) { e.preventDefault(); setActive(m); } });
+    input.addEventListener('focus', () => setActive(m));
+    input.addEventListener('change', () => {
+      const v = parseMarker(input.value);
+      if (v === undefined) { input.value = markerText(S.markers[m]); return; }
+      S.markers[m] = v;
+      markersChanged();
+    });
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') input.blur(); });
+    chip.querySelector('.x').addEventListener('click', () => { S.markers[m] = null; markersChanged(); });
+    box.appendChild(chip);
+  }
+  syncChips();
+}
+
+function syncChips() {
+  [...$('chips').children].forEach((chip, m) => {
+    chip.classList.toggle('on', m === S.active);
+    const input = chip.querySelector('input');
+    if (document.activeElement !== input) input.value = markerText(S.markers[m]);
+  });
+}
+
+function setActive(m) {
+  S.active = m;
+  syncChips();
+  if (S.md) drawTimeline();
+}
+
+let refreshTimer = 0;
+function markersChanged() {
+  syncChips();
+  drawTimeline();
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(refreshTab, 0);
+}
+
+// ---------------------------------------------------------------------------------- timeline
+function laneKinds() {
+  const mode = $('seriesMode').value;
+  return mode === 'all' ? ['gpu', 'cpu'] : [mode];
+}
+
+function laneValue(k, kind, t) {
+  const md = S.md;
+  return md.frames.series[k * md.ntags * 2 + (kind === 'gpu' ? md.ntags : 0) + t];
+}
+
+// Each lane: the LANE_LAYERS tags with the largest peak get a layer of their own, the rest one "other".
+function buildLanes() {
+  const { md, tr } = S;
+  const kinds = laneKinds();
+  S.lanes = [];
+  for (const kind of kinds) {
+    const peaks = [];
+    for (let t = 0; t < md.ntags; t++) {
+      let p = 0;
+      for (let k = 0; k < md.frames.n; k++) p = Math.max(p, laneValue(k, kind, t));
+      if (p > 0) peaks.push([t, p]);
+    }
+    if (!peaks.length && kinds.length > 1) continue; // a trace without that side
+    peaks.sort((x, y) => y[1] - x[1]);
+    const layers = peaks.slice(0, LANE_LAYERS).map(([t], n) => ({ key: kind + ':' + tagName(tr, t), name: tagName(tr, t), tags: [t], color: PALETTE[n] }));
+    const rest = peaks.slice(LANE_LAYERS).map((x) => x[0]);
+    if (rest.length) layers.push({ key: kind + ':other', name: 'other (' + rest.length + ')', tags: rest, color: PALETTE[LANE_LAYERS] });
+    S.lanes.push({ kind, title: kind === 'gpu' ? 'GPU (census)' : 'CPU (tags, --memtrack)', layers });
+  }
+  const lg = $('legend');
+  lg.innerHTML = '';
+  for (const lane of S.lanes) {
+    const head = document.createElement('span');
+    head.className = 'lane';
+    head.textContent = lane.kind.toUpperCase() + ':';
+    lg.appendChild(head);
+    for (const L of lane.layers) {
+      const s = document.createElement('span');
+      s.className = 'item' + (S.hidden.has(L.key) ? ' off' : '');
+      s.title = 'Click to hide / show';
+      s.innerHTML = '<i style="background:' + L.color + '"></i>' + escapeHtml(L.name);
+      s.onclick = () => { if (S.hidden.has(L.key)) S.hidden.delete(L.key); else S.hidden.add(L.key); s.classList.toggle('off', S.hidden.has(L.key)); drawTimeline(); };
+      lg.appendChild(s);
+    }
+  }
+  if (!S.lanes.length) lg.textContent = 'No tag series in this trace.';
+}
+
+function layerValue(k, lane, L) {
+  let v = 0;
+  for (const t of L.tags) v += laneValue(k, lane.kind, t);
+  return v;
+}
+
+const TL = { pad: { l: 70, r: 14, t: 6, b: 22 }, gap: 16, t0: 0, t1: 1, rects: [] };
+
+function fullRange() {
+  const md = S.md, n = md.frames.n;
+  const t0 = n ? frameTime(md, 0) : 0, t1 = n ? frameTime(md, n - 1) : 1;
+  return { t0, t1: Math.max(t1, t0 + 1e-6) };
+}
+
+function setView(v) {
+  S.view = v;
+  $('resetZoom').disabled = !v;
+  drawTimeline();
+}
+
+function kAtTime(sec) {
+  const md = S.md, fr = md.frames;
+  let lo = 0, hi = fr.n - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (frameTime(md, mid) < sec) lo = mid + 1; else hi = mid; }
+  if (lo > 0 && Math.abs(frameTime(md, lo - 1) - sec) < Math.abs(frameTime(md, lo) - sec)) lo--;
+  return lo;
+}
+
+function plotWidth() { return $('timeline').clientWidth - TL.pad.l - TL.pad.r; }
+function xOfTime(sec) { return TL.pad.l + (sec - TL.t0) / (TL.t1 - TL.t0) * plotWidth(); }
+function timeOfX(px) { return TL.t0 + (px - TL.pad.l) / plotWidth() * (TL.t1 - TL.t0); }
+
+function drawTimeline() {
+  const md = S.md;
+  if (!md) return;
+  const cv = $('timeline');
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  g.font = '11px system-ui';
+  const fr = md.frames;
+  if (!fr.n) { g.fillStyle = '#8b93a3'; g.fillText('No frame markers in this trace: markers take start / end only.', 20, 30); return; }
+  const P = TL.pad, pw = w - P.l - P.r;
+  const vr = S.view || fullRange();
+  TL.t0 = vr.t0; TL.t1 = vr.t1;
+  // The frames in view, thinned to about two per pixel column.
+  let k0 = kAtTime(TL.t0), k1 = kAtTime(TL.t1);
+  if (k0 > 0 && frameTime(md, k0) > TL.t0) k0--;
+  if (k1 < fr.n - 1 && frameTime(md, k1) < TL.t1) k1++;
+  const stride = Math.max(1, Math.floor((k1 - k0 + 1) / (pw * 2)));
+  const ks = [];
+  for (let k = k0; k <= k1; k += stride) ks.push(k);
+  if (ks[ks.length - 1] !== k1) ks.push(k1);
+  const lanes = S.lanes;
+  const avail = h - P.t - P.b;
+  const laneH = lanes.length ? (avail - (lanes.length - 1) * TL.gap) / lanes.length : avail;
+  TL.rects = [];
+  g.save();
+  g.beginPath(); g.rect(P.l, 0, pw, h); g.clip();
+  // A..B shaded: the interval most rules look at.
+  const ta = markerTime(0), tb = markerTime(1);
+  if (ta !== null && tb !== null && tb > ta) {
+    g.fillStyle = 'rgba(255,255,255,0.045)';
+    g.fillRect(xOfTime(ta), P.t, xOfTime(tb) - xOfTime(ta), avail);
+  }
+  g.restore();
+  lanes.forEach((lane, li) => {
+    const y0 = P.t + li * (laneH + TL.gap);
+    const layers = lane.layers.filter((L) => !S.hidden.has(L.key));
+    const stacks = ks.map((k) => { let acc = 0; return layers.map((L) => (acc += layerValue(k, lane, L))); });
+    let peak = 0;
+    for (const s of stacks) if (s.length) peak = Math.max(peak, s[s.length - 1]);
+    const ymax = niceMax((peak || 1048576) / 1048576) * 1048576; // round in MB: gridlines read 500 MB, not 476.84
+    TL.rects.push({ lane, y0, h: laneH, ymax });
+    const Y = (v) => y0 + laneH - v / ymax * laneH;
+    g.strokeStyle = '#2a2f3a'; g.lineWidth = 1; g.fillStyle = '#8b93a3'; g.textAlign = 'right';
+    const lines = laneH > 90 ? 4 : 2;
+    for (let n = 0; n <= lines; n++) {
+      const v = ymax * n / lines, y = Math.round(Y(v)) + 0.5;
+      g.beginPath(); g.moveTo(P.l, y); g.lineTo(w - P.r, y); g.stroke();
+      g.fillText(human(v), P.l - 6, y + 4);
+    }
+    g.save();
+    g.beginPath(); g.rect(P.l, y0, pw, laneH); g.clip();
+    for (let n = layers.length - 1; n >= 0; n--) {
+      g.beginPath();
+      g.moveTo(xOfTime(frameTime(md, ks[0])), Y(0));
+      for (let x = 0; x < ks.length; x++) g.lineTo(xOfTime(frameTime(md, ks[x])), Y(stacks[x][n]));
+      g.lineTo(xOfTime(frameTime(md, ks[ks.length - 1])), Y(0));
+      g.closePath();
+      g.fillStyle = layers[n].color + 'cc';
+      g.fill();
+    }
+    g.restore();
+    lane.label = lane.title + '  peak ' + human(peak); // drawn after the markers, on a backing, so a marker never crosses it
+  });
+  // time axis
+  const step = niceStep((TL.t1 - TL.t0) / Math.max(2, Math.floor(pw / 110)));
+  g.textAlign = 'center'; g.fillStyle = '#8b93a3'; g.strokeStyle = '#262a33';
+  for (let s = Math.ceil(TL.t0 / step) * step; s <= TL.t1 + 1e-9; s += step) {
+    const x = Math.round(xOfTime(s)) + 0.5;
+    g.beginPath(); g.moveTo(x, P.t); g.lineTo(x, P.t + avail); g.stroke();
+    g.fillText(s.toFixed(step < 0.1 ? 2 : step < 1 ? 1 : 0) + ' s', x, h - 6);
+  }
+  // markers
+  g.save();
+  g.beginPath(); g.rect(P.l - 1, 0, pw + 2, h); g.clip();
+  S.markers.forEach((v, m) => {
+    const t = markerTime(m);
+    if (t === null) return;
+    const x = Math.round(xOfTime(t)) + 0.5;
+    g.strokeStyle = MARKER_COLORS[m]; g.lineWidth = m === S.active ? 2.5 : 1.5;
+    g.beginPath(); g.moveTo(x, P.t); g.lineTo(x, P.t + avail); g.stroke();
+    g.fillStyle = MARKER_COLORS[m]; g.font = 'bold 11px system-ui';
+    const label = LETTERS[m] + ' ' + (v === 'end' ? 'end' : v === -1 ? 'start' : t.toFixed(1) + 's');
+    const lw = g.measureText(label).width;
+    const right = x + 4 + lw > w - P.r;
+    const lx = right ? x - 6 - lw : x + 4, ly = P.t + 30 + m * 13;
+    g.fillStyle = '#15171cd9';
+    g.fillRect(lx - 2, ly - 10, lw + 4, 13);
+    g.fillStyle = MARKER_COLORS[m];
+    g.textAlign = 'left';
+    g.fillText(label, lx, ly);
+  });
+  g.restore();
+  g.lineWidth = 1;
+  g.font = '600 11px system-ui'; g.textAlign = 'left';
+  for (const r of TL.rects) {
+    const tw = g.measureText(r.lane.label).width;
+    g.fillStyle = '#1c1f26e6';
+    g.fillRect(P.l + 2, r.y0 + 2, tw + 10, 15);
+    g.fillStyle = '#d7dbe3';
+    g.fillText(r.lane.label, P.l + 7, r.y0 + 13);
+  }
+  g.font = '11px system-ui';
+}
+
+function niceMax(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+function niceStep(v) {
+  const p = Math.pow(10, Math.floor(Math.log10(v || 1)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+function markerNearX(x) {
+  let best = -1, dist = 7;
+  S.markers.forEach((v, m) => {
+    const t = markerTime(m);
+    if (t === null) return;
+    const d = Math.abs(xOfTime(t) - x);
+    if (d < dist) { dist = d; best = m; }
+  });
+  return best;
+}
+
+let dragMarker = -1, pan = null;
+const cv = $('timeline');
+cv.addEventListener('mousedown', (e) => {
+  if (!S.md || !S.md.frames.n || e.button !== 0) return;
+  if (e.shiftKey) { pan = { x: e.offsetX, view: S.view || fullRange() }; cv.style.cursor = 'grabbing'; return; }
+  const m = markerNearX(e.offsetX);
+  if (m >= 0) { dragMarker = m; setActive(m); return; }
+  S.markers[S.active] = kAtTime(timeOfX(e.offsetX));
+  markersChanged();
+});
+window.addEventListener('mouseup', () => {
+  if (dragMarker >= 0) { dragMarker = -1; markersChanged(); }
+  if (pan) { pan = null; cv.style.cursor = ''; }
+});
+cv.addEventListener('mousemove', (e) => {
+  if (!S.md || !S.md.frames.n) return;
+  if (pan) {
+    const full = fullRange(), span = pan.view.t1 - pan.view.t0;
+    let t0 = pan.view.t0 - (e.offsetX - pan.x) / plotWidth() * span;
+    t0 = Math.max(full.t0, Math.min(full.t1 - span, t0));
+    S.view = { t0, t1: t0 + span };
+    drawTimeline();
+    return;
+  }
+  if (dragMarker >= 0) { S.markers[dragMarker] = kAtTime(timeOfX(e.offsetX)); syncChips(); drawTimeline(); }
+  cv.style.cursor = markerNearX(e.offsetX) >= 0 ? 'ew-resize' : '';
+  showTip(e);
+});
+cv.addEventListener('mouseleave', () => { $('tip').style.display = 'none'; });
+cv.addEventListener('wheel', (e) => {
+  if (!S.md || !S.md.frames.n) return;
+  e.preventDefault();
+  const full = fullRange(), vr = S.view || full;
+  const t = Math.max(vr.t0, Math.min(vr.t1, timeOfX(e.offsetX)));
+  const f = e.deltaY > 0 ? 1.25 : 0.8;
+  const fullSpan = full.t1 - full.t0;
+  const span = Math.max(Math.min(fullSpan / 4000 * 50, fullSpan), Math.min(fullSpan, (vr.t1 - vr.t0) * f));
+  if (span >= fullSpan * 0.999) { setView(null); return; }
+  let t0 = t - (t - vr.t0) * span / (vr.t1 - vr.t0);
+  t0 = Math.max(full.t0, Math.min(full.t1 - span, t0));
+  setView({ t0, t1: t0 + span });
+}, { passive: false });
+$('resetZoom').onclick = () => setView(null);
+$('seriesMode').onchange = () => { buildLanes(); drawTimeline(); };
+window.addEventListener('resize', () => { if (S.md) drawTimeline(); });
+
+function showTip(e) {
+  const md = S.md, tip = $('tip');
+  const k = kAtTime(timeOfX(e.offsetX));
+  const rect = TL.rects.find((r) => e.offsetY >= r.y0 - TL.gap / 2 && e.offsetY <= r.y0 + r.h + TL.gap / 2) || TL.rects[0];
+  if (!rect) return;
+  const lane = rect.lane;
+  const rows = lane.layers.filter((L) => !S.hidden.has(L.key)).map((L) => [L, layerValue(k, lane, L)]);
+  const total = rows.reduce((s, r) => s + r[1], 0);
+  tip.innerHTML = '<b>frame ' + md.frames.frame[k] + '</b> &middot; ' + frameTime(md, k).toFixed(2) + ' s &middot; ' + lane.title + ' ' + human(total) +
+    rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]).slice(0, 10).map(([L, v]) =>
+      '<div><i style="display:inline-block;width:8px;height:8px;background:' + L.color + ';margin-right:5px"></i>' + escapeHtml(L.name) + ' ' + human(v) + '</div>').join('');
+  tip.style.display = 'block';
+  const wrapW = $('timelineWrap').clientWidth;
+  tip.style.left = Math.min(e.offsetX + 28, wrapW - tip.offsetWidth - 16) + 'px';
+  tip.style.top = Math.max(0, e.offsetY - 10) + 'px';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!S.md || e.ctrlKey || e.metaKey || e.altKey) return;
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  const k = e.key.toLowerCase();
+  const m = LETTERS.toLowerCase().indexOf(k);
+  if (m >= 0 && k.length === 1) { setActive(m); e.preventDefault(); }
+  else if (k === '0') setView(null);
+});
+
+// ------------------------------------------------------------------------------------- query
+// ------------------------------------------------------------------------------ rule docs
+// UE's names, symbols and formulas (TraceInsights MemorySharedState.cpp:1137-1231); the rest says what each
+// rule is for in this engine. a = when the allocation was made, f = when it was freed (infinity if never),
+// A..D = the markers, each the end of its frame; every bound inclusive.
+const RULE_DOCS = {
+  aAf: {
+    ue: 'Active Allocs', sym: '*A*', formula: 'a ≤ A ≤ f',
+    what: 'Everything alive at the moment A: allocated at or before A and not freed before it. A snapshot of the heap and of the GPU census at A.',
+    when: 'Who holds the memory at a moment -- group by tag for the owners, by callstack or GPU name for the culprits. With A = end it is exactly the set `verify` checks against the process.',
+    markers: 'A on the frame you want to look at (a click on the timeline). Drag it along the run and the table follows.',
+    note: 'An allocation freed exactly at A still counts (inclusive bounds, as UE).',
+  },
+  afA: {
+    ue: 'Before', sym: '**A', formula: 'a ≤ f ≤ A',
+    what: 'Allocations whose whole life ended by A: made and freed before the marker.',
+    when: 'What a phase used and threw away -- put A after a level load to see the loader’s temporaries (decode buffers, staging copies, parse trees) and who made them; group by free callstack for who threw them away.',
+    markers: 'A at the end of the phase. Everything earlier in the trace is considered.',
+    note: 'Sizes are negative (frees). Says nothing about what is alive at A -- that is aAf.',
+  },
+  Aaf: {
+    ue: 'After', sym: 'A**', formula: 'A ≤ a ≤ f',
+    what: 'Every allocation made from A on, whatever happened to it afterwards (freed or still alive).',
+    when: 'The allocation traffic of the steady state: A after the boot, group by callstack and sort by count to find who allocates every frame.',
+    markers: 'A where the part you care about begins.',
+    note: 'Mixes temporaries and lasting memory; split them with AafB (temporaries) and AaBf (survivors).',
+  },
+  aAfB: {
+    ue: 'Decline', sym: '*A*B', formula: 'a ≤ A ≤ f ≤ B',
+    what: 'Alive at A and freed by B: the memory that went away between the two markers.',
+    when: 'The "minus" side of a drop on the timeline -- what a level unload, a cache eviction or a pool shrink released: group by callstack for who had allocated it, by free callstack for who released it (the Decline preset).',
+    markers: 'A just before the drop, B just after it.',
+    note: 'Sizes are negative (memory leaving). Pairs with AaBf (growth); aAfaBf shows both at once as a net change.',
+  },
+  AaBf: {
+    ue: 'Growth', sym: 'A*B*', formula: 'A ≤ a ≤ B ≤ f',
+    what: 'Allocated between A and B and still alive at B: what was added to memory in that interval and stayed.',
+    when: 'The timeline climbs between A and B -- this names who climbed. Group by callstack for the site, by GPU name for the resource.',
+    markers: 'A at the foot of the climb, B at its top.',
+    note: 'A resize counts here in full (the new buffer is growth; the old one is a decline elsewhere). For the net change use aAfaBf.',
+  },
+  aAfaBf: {
+    ue: 'Growth vs. Decline', sym: 'A*B*/*A*B', formula: '(A ≤ a ≤ B ≤ f) or (a ≤ A ≤ f ≤ B)',
+    what: 'The growth allocations (made in [A, B], alive at B) together with the decline allocations (alive at A, freed by B); as in UE, every decline allocation counts with a NEGATIVE size, so a group’s sum is its net change between A and B.',
+    when: 'The real delta of the range: growth - decline = live(B) - live(A), exactly (checked byte for byte on a trace, per heap). Did this owner grow or shrink between A and B, and by how much net? A resize that kept its size nets out to ~0; a real growth stays positive. By tag it is the Tag table’s B - A column, now with the stacks behind it.',
+    markers: 'A and B around the interval.',
+    note: 'Allocations made and freed inside [A, B] are not counted -- they change nothing between A and B (see AafB for those). Sort by bytes: growths on top, declines at the bottom.',
+  },
+  AfB: {
+    ue: 'Free Events', sym: '*A**B', formula: 'A ≤ f ≤ B',
+    what: 'Everything freed between A and B, whenever it was allocated.',
+    when: 'Who frees in a window -- an unload, a frame’s cleanup: a free-callstack grouping names the code that freed (the Frees preset), a callstack grouping where the freed memory had come from.',
+    markers: 'A and B around the window.',
+    note: 'Every size is negative here (frees), unlike UE, which keeps them positive; it includes allocations made inside [A, B] too -- for the net change use aAfaBf.',
+  },
+  AaB: {
+    ue: 'Alloc Events', sym: 'A**B*', formula: 'A ≤ a ≤ B',
+    what: 'Every allocation made between A and B, freed or not.',
+    when: 'Allocation rate in a window: count / frames between the markers = allocations per frame; sort by count to see who calls the allocator most.',
+    markers: 'A and B around the window (a few hundred frames of steady state is plenty).',
+    note: 'The sum of AafB (died inside) and AaBf (survived B).',
+  },
+  AafB: {
+    ue: 'Short Living Allocs', sym: 'A**B', formula: 'A ≤ a ≤ f ≤ B',
+    what: 'Allocated and freed inside [A, B]: the temporaries -- churn.',
+    when: 'Allocator pressure per frame, a CPU cost rather than a memory one: group by callstack inverted, sort by count -- the top site is where a reserve() or a reused buffer pays (that is how RtSceneAs::Build’s 140 000 reallocations were found).',
+    markers: 'A and B around a stretch of steady frames, after the loading.',
+    note: 'Its bytes are traffic, not footprint: a 1 KB buffer made 10 000 times shows 10 MB.',
+  },
+  aABf: {
+    ue: 'Long Living Allocs', sym: '*A B*', formula: 'a ≤ A ≤ B ≤ f',
+    what: 'Alive through the whole interval: allocated by A and still there at B.',
+    when: 'The resident set that persisted -- render targets, loaded assets, pools -- without anything that came or went in between.',
+    markers: 'A and B at the two ends of a phase.',
+    note: 'With A = start and B = end: what lived for the entire trace.',
+  },
+  AaBCf: {
+    ue: 'Memory Leaks', sym: 'A*B C*', formula: 'A ≤ a ≤ B ≤ C ≤ f',
+    what: 'Allocated between A and B and still alive at C (or never freed).',
+    when: 'Leak hunting: [A, B] around an action that should leave nothing behind (a level visit, an orbit lap, an editor operation), C well after it. Whatever that window made and still holds at C is a suspect.',
+    markers: 'A and B around the action, C later -- often end.',
+    note: 'Caches and one-time capacity growth show up too. A real leak repeats: move [A, B] to a later lap and the same stack comes back; the Tag table or --mem-readout tell a climb from a step.',
+  },
+  AaBfC: {
+    ue: 'Limited Lifetime', sym: 'A*B*C', formula: 'A ≤ a ≤ B ≤ f ≤ C',
+    what: 'Allocated in [A, B], survived past B, freed by C.',
+    when: 'Deferred releases -- retire bins, frames-in-flight buffers, async uploads: memory that outlives the frames that allocated it but is eventually returned. Shows how long things linger.',
+    markers: 'A and B around the allocating phase, C where everything should have been returned.',
+    note: 'If something you expect here shows under AaBCf instead, it was never returned.',
+  },
+  aABfC: {
+    ue: 'Decline of Long Living Allocs', sym: '*A B*C', formula: 'a ≤ A ≤ B ≤ f ≤ C',
+    what: 'Alive since before A, still alive at B, freed between B and C.',
+    when: 'What a late event released of the memory that had been stable -- e.g. A and B inside a calm stretch, C after a level switch: the old level’s resident set, and by free callstack the code that let it go.',
+    markers: 'A and B in the stable stretch, C after the event.',
+    note: 'Sizes are negative (memory leaving). Unlike aAfB, the allocations must have survived the whole [A, B] first.',
+  },
+  AaBCfD: {
+    ue: 'Specific Lifetime', sym: 'A*B C*D', formula: 'A ≤ a ≤ B ≤ C ≤ f ≤ D',
+    what: 'Allocated in [A, B] and freed in [C, D].',
+    when: 'Matching a creation window to a release window: [A, B] around a level load, [C, D] around its unload -- exactly the level’s own memory. Whatever the load made that is missing here outlived the unload.',
+    markers: 'A-B around the creation, C-D around the release.',
+    note: 'The most selective rule; its complement within AaB is everything the load made that lived on or died early.',
+  },
+};
+
+// Sample lifetimes on a 0..10 axis, markers at 2, 5, 7, 9. Each rule colours them with its own test, so a
+// diagram cannot disagree with what the query does.
+const DIAGRAM_SAMPLES = [[0.4, Infinity], [0.4, 1.4], [1.0, 3.4], [1.0, 6.0], [2.8, 4.2], [3.4, Infinity], [3.0, 6.4], [4.0, 8.0],
+  [5.8, 8.6], [0.6, 8.4]];
+const DIAGRAM_MARKS = [2, 5, 7, 9];
+
+function ruleDiagram(rule, width) {
+  const [name, n, , test] = rule;
+  const pad = 8, top = 16, row = 11, h = top + DIAGRAM_SAMPLES.length * row + 4;
+  const X = (t) => pad + t / 10 * (width - 2 * pad - 8);
+  // Drawn at `width`, shown at most that wide and never wider than its box (a scrollbar appearing later
+  // must not push it out of the panel).
+  let s = '<svg viewBox="0 0 ' + width + ' ' + h + '" style="display:block;width:100%;max-width:' + width + 'px;height:auto" role="img" aria-label="lifetimes ' + name + ' selects">';
+  for (let m = 0; m < n; m++) {
+    const x = X(DIAGRAM_MARKS[m]).toFixed(1);
+    s += '<line x1="' + x + '" x2="' + x + '" y1="12" y2="' + (h - 2) + '" stroke="' + MARKER_COLORS[m] + '" stroke-dasharray="3 2"/>' +
+      '<text x="' + x + '" y="10" fill="' + MARKER_COLORS[m] + '" font-size="10" font-weight="700" text-anchor="middle">' + LETTERS[m] + '</text>';
+  }
+  DIAGRAM_SAMPLES.forEach(([a, f], k) => {
+    const hit = test(a, f, ...DIAGRAM_MARKS);
+    const negative = hit && ruleSign(name, a, f, DIAGRAM_MARKS) < 0;
+    const color = !hit ? '#454b58' : negative ? '#4fc27a' : '#5aa9ff';
+    const y = top + k * row + 4, x1 = X(a), x2 = f === Infinity ? X(10) + 4 : X(f);
+    s += '<line x1="' + x1.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y1="' + y + '" y2="' + y + '" stroke="' + color + '" stroke-width="' + (hit ? 3 : 2) + '" stroke-linecap="round"/>' +
+      '<circle cx="' + x1.toFixed(1) + '" cy="' + y + '" r="2.6" fill="' + color + '"/>';
+    if (f === Infinity) s += '<path d="M' + (x2 + 1).toFixed(1) + ' ' + (y - 3.5) + ' l5 3.5 l-5 3.5 z" fill="' + color + '"/>';
+    else s += '<line x1="' + x2.toFixed(1) + '" x2="' + x2.toFixed(1) + '" y1="' + (y - 3.5) + '" y2="' + (y + 3.5) + '" stroke="' + color + '" stroke-width="1.5"/>';
+  });
+  return s + '</svg>';
+}
+
+const DIAGRAM_LEGEND = '● allocated, | freed, ▶ never freed; <span style="color:#5aa9ff">blue</span> = selected, counted +' +
+  ', <span style="color:#4fc27a">green</span> = selected as a free, counted -, grey = not selected';
+
+// How a rule signs its sizes, for the cards (ruleSign is the rule itself).
+function signText(name) {
+  if (FREE_RULES.has(name)) return 'negative -- every allocation here is counted by its free';
+  if (name === 'aAfaBf') return 'growth +, decline - (the sum is the net change)';
+  if (['AafB', 'AaBfC', 'AaBCfD'].includes(name)) return 'positive -- each allocation was made AND freed inside the windows: bytes that came and went';
+  if (name === 'aAf' || name === 'aABf') return 'positive -- memory alive (a snapshot, not events)';
+  return 'positive -- allocations';
+}
+
+function fillRules() {
+  const sel = $('rule');
+  if (sel.options.length) return;
+  for (const [name, , meaning] of RULES) {
+    const o = document.createElement('option');
+    const doc = RULE_DOCS[name];
+    o.value = name; o.textContent = name + ' -- ' + meaning;
+    o.title = doc.ue + ' (' + doc.sym + '): ' + doc.formula + '\n' + doc.what;
+    sel.appendChild(o);
+  }
+}
+
+function updateRuleHelp() {
+  const r = RULES.find((x) => x[0] === $('rule').value);
+  const doc = RULE_DOCS[r[0]];
+  const width = Math.max(180, $('ruleHelp').clientWidth || 220);
+  $('ruleHelp').innerHTML = '<div class="card"><p><b>' + r[0] + '</b> &middot; ' + escapeHtml(doc.ue) + ' <span class="sym">' + escapeHtml(doc.sym) + '</span></p>' +
+    '<p><span class="formula">' + escapeHtml(doc.formula) + '</span></p>' + ruleDiagram(r, width) +
+    '<p>' + escapeHtml(doc.what) + '</p><p><span class="k">Use it for</span> ' + escapeHtml(doc.when) + '</p>' +
+    '<p><a id="allRules">All rules, in detail &rarr;</a></p></div>';
+  $('allRules').onclick = () => setTab('rules');
+}
+
+function renderRules(body) {
+  $('queryLine').textContent = 'How each rule picks allocations -- UE Memory Insights’ query rules (AllocationsQuery.cpp:196-397, MemorySharedState.cpp:1137-1231)';
+  const intro = document.createElement('div');
+  intro.className = 'ruleIntro';
+  intro.innerHTML = '<p>Every allocation has a lifetime: <b>a</b>, when it was made, and <b>f</b>, when it was freed -- infinity if it never was. ' +
+    'A rule is a condition on <b>a</b> and <b>f</b> against the markers <b>A</b>-<b>D</b>; each marker is the end of its frame (or start / end of the trace). ' +
+    'Every bound is inclusive. The result is a set of allocations; the grouping then says whose they are.</p>' +
+    '<p><b>Signs:</b> an allocation counts +, a free counts -. The rules that select allocations by their free inside a window ' +
+    '(afA, aAfB, AfB, aABfC, and the decline part of aAfaBf) show negative sizes; snapshot, growth and lifetime rules show positive ones. ' +
+    'UE flips only aAfaBf’s decline; the rest is this viewer’s rule, so a minus always means memory going away.</p>' +
+    '<p>In the diagrams the markers sit at fixed places over ten sample lifetimes. ' + DIAGRAM_LEGEND + '.</p>';
+  body.appendChild(intro);
+  const current = $('rule').value;
+  for (const r of RULES) {
+    const doc = RULE_DOCS[r[0]];
+    const card = document.createElement('div');
+    card.className = 'rulecard' + (r[0] === current ? ' cur' : '');
+    card.innerHTML = '<h3><span>' + r[0] + '</span><span>' + escapeHtml(doc.ue) + '</span><span class="sym">' + escapeHtml(doc.sym) + '</span>' +
+      '<span class="formula">' + escapeHtml(doc.formula) + '</span><span class="grow"></span><button>Use this rule</button></h3>' +
+      '<div class="cols"><div>' + ruleDiagram(r, 300) + '<div class="legendNote">markers: ' + LETTERS.slice(0, r[1]).split('').join(', ') + '</div></div>' +
+      '<div class="text"><p><span class="k">Selects</span> ' + escapeHtml(doc.what) + '</p><p><span class="k">Use it for</span> ' + escapeHtml(doc.when) +
+      '</p><p><span class="k">Markers</span> ' + escapeHtml(doc.markers) + '</p><p><span class="k">Sizes</span> ' + escapeHtml(signText(r[0])) +
+      '</p><p class="sub">' + escapeHtml(doc.note) + '</p></div></div>';
+    card.querySelector('button').onclick = () => { $('rule').value = r[0]; S.tab = 'results'; runQuery(); };
+    body.appendChild(card);
+  }
+}
+
+const PRESETS = {
+  leaks: ['AaBCf', 'stack', 'bytes'], growth: ['AaBf', 'stack', 'bytes'], churn: ['AafB', 'inverted', 'count'], live: ['aAf', 'tag', 'bytes'],
+  frees: ['AfB', 'finverted', 'bytes'], decline: ['aAfB', 'fstack', 'bytes'],
+};
+const isTree = (by) => by === 'tree' || by === 'inverted' || by === 'ftree' || by === 'finverted';
+function applyPreset(p) {
+  const [rule, by, sort] = PRESETS[p];
+  $('rule').value = rule; $('groupBy').value = by;
+  // Bytes: a rule of frees lists its biggest free (most negative) first.
+  S.sorts[isTree(by) ? 'tree' : 'results'] = { col: sort, dir: sort === 'bytes' && FREE_RULES.has(rule) ? 1 : -1 };
+  runQuery(); // turns the other tables' byte sorts on a change of rule
+}
+document.querySelectorAll('[data-preset]').forEach((b) => b.addEventListener('click', () => applyPreset(b.dataset.preset)));
+['rule', 'heap', 'groupBy', 'depth'].forEach((id) => $(id).addEventListener('change', () => runQuery()));
+$('shortNames').addEventListener('change', () => { S.shortNames = $('shortNames').checked; store.set('shortNames', S.shortNames); refreshTab(); });
+
+// `show`: an explicit action (a preset, a control) brings the Results tab up; a marker moving keeps the tab
+// the reader is on and only recomputes underneath.
+function runQuery(show = true) {
+  if (!S.md) return;
+  updateRuleHelp();
+  if (show && (S.tab === 'summary' || S.tab === 'rules')) S.tab = 'results';
+  const rule = RULES.find((x) => x[0] === $('rule').value);
+  if (S.lastRule !== rule[0]) {
+    // Sorted by bytes, a rule of frees lists its most negative (the biggest free) first, any other rule its
+    // biggest positive -- turned once per change of rule, so a header click still decides after that.
+    S.lastRule = rule[0];
+    const dir = FREE_RULES.has(rule[0]) ? 1 : -1;
+    for (const [id, col] of [['results', 'bytes'], ['tree', 'bytes'], ['allocs', 'size']]) {
+      const st = S.sorts[id] || (S.sorts[id] = { col, dir });
+      if (st.col === col) st.dir = dir;
+    }
+  }
+  const marks = [], labels = [];
+  for (let m = 0; m < rule[1]; m++) {
+    const r = markerSerial(m);
+    if (!r) {
+      S.result = { missing: LETTERS[m], rule: rule[0] };
+      setTab(S.tab);
+      return;
+    }
+    marks.push(r.serial); labels.push(LETTERS[m] + ' = ' + r.label);
+  }
+  const t0 = performance.now();
+  const heap = $('heap').value;
+  const picked = selectRule(S.md, rule[0], marks, heap);
+  const sizeOf = sizeFn(S.md, rule[0], marks);
+  let bytes = 0, growth = 0, decline = 0;
+  for (let x = 0; x < picked.length; x++) { const s = sizeOf(picked[x]); bytes += s; if (s < 0) decline -= s; else growth += s; }
+  S.result = { rule: rule[0], meaning: rule[2], marks, labels, heap, picked, sizeOf, bytes, growth, decline,
+    absBytes: growth + decline, by: $('groupBy').value, depth: Math.max(1, Math.min(32, +$('depth').value || 10)), ms: performance.now() - t0 };
+  clearDetails(); // they described a row of the previous result
+  setTab(S.tab);
+}
+
+function clearDetails() {
+  $('detailTitle').textContent = 'Details';
+  $('copyStack').style.display = 'none';
+  $('detail').innerHTML = '<div class="note">Select a row: its stack and its allocations show here.</div>';
+}
+
+// ---------------------------------------------------------------------------------- results
+document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+function setTab(tab) {
+  S.tab = tab;
+  document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
+  const body = $('tabBody');
+  body.innerHTML = '';
+  if (tab === 'results') renderResults(body);
+  else if (tab === 'tags') renderTagTable(body);
+  else if (tab === 'rules') renderRules(body);
+  else renderSummary(body);
+}
+
+// A marker moved or a display setting changed: the result is recomputed (milliseconds) and the open tab redrawn,
+// so going back to Results never shows a result for the old markers.
+function refreshTab() {
+  if (S.md) runQuery(false);
+}
+
+function renderResults(body) {
+  const q = S.result;
+  if (!q) { $('queryLine').textContent = 'Pick a rule or a preset.'; return; }
+  if (q.missing) {
+    $('queryLine').textContent = q.rule + ' needs marker ' + q.missing + ': click the timeline with ' + q.missing + ' active, or type a frame / 12.5s / end in its box.';
+    return;
+  }
+  const amount = q.decline && q.growth ? 'net ' + (q.bytes > 0 ? '+' : '') + human(q.bytes) + ' (growth ' + human(q.growth) + ', decline -' + human(q.decline) + ')'
+    : q.decline ? '-' + human(q.decline) + ' freed' : human(q.bytes);
+  $('queryLine').textContent = q.rule + ' -- ' + q.meaning + ' | ' + q.labels.join(', ') + ' | heap ' + q.heap + ' | ' +
+    q.picked.length.toLocaleString() + ' allocations, ' + amount + ' (' + q.ms.toFixed(0) + ' ms)';
+  if (!q.picked.length) { body.innerHTML = '<div class="note">Nothing matches.</div>'; return; }
+  if (isTree(q.by)) renderTree(body, q);
+  else renderFlat(body, q);
+}
+
+function groupText(q, row) {
+  const { tr, md } = S;
+  switch (q.by) {
+    case 'tag': return { text: tagName(tr, row.key) };
+    case 'heap': return { text: HEAP_NAMES[row.key] || 'heap ' + row.key };
+    case 'size': return { text: '[' + (row.key ? human(Math.pow(2, row.key - 1)) : '0 B') + ', ' + human(Math.pow(2, row.key)) + ')' };
+    case 'name': return { text: row.key };
+    default: { // stack / fstack
+      const ctx = tagName(tr, md.tag[row.sample]) + ', ' + (HEAP_NAMES[md.heap[row.sample]] || '') +
+        (md.names.has(row.sample) ? ', ' + md.names.get(row.sample) : '');
+      if (row.key === -1) return { text: '(never freed)', sub: 'e.g. ' + ctx };
+      if (!row.key) return { text: q.by === 'fstack' ? '(freed, no stack captured)' : '(no stack)', sub: 'e.g. ' + ctx };
+      const f = callerFrames(tr, S.cache, row.key).funcs[0] || '?';
+      return { text: f, sub: ctx };
+    }
+  }
+}
+
+// A share bar: its length the share of the query's bytes (absolute, so a decline is as long as a growth),
+// red when the bytes are negative.
+function barHtml(bytes, base, indent) {
+  return '<div class="bar' + (bytes < 0 ? ' neg' : '') + '" style="' + (indent ? 'margin-left:' + indent + 'px;' : '') + 'width:' +
+    Math.max(0.5, 100 * Math.abs(bytes) / (base || 1)).toFixed(1) + '%"></div>';
+}
+
+function signedHuman(bytes) {
+  return bytes < 0 ? '<span class="down">' + human(bytes) + '</span>' : human(bytes);
+}
+
+function renderFlat(body, q) {
+  const rows = groupFlat(S.md, S.tr, q.picked, q.by, q.sizeOf);
+  for (const r of rows) r.label = groupText(q, r);
+  const isStack = q.by === 'stack' || q.by === 'fstack';
+  const cols = [
+    { id: 'group', label: (q.by === 'fstack' ? 'Free site' : isStack ? 'Allocation site' : 'Group') + ' (' + rows.length.toLocaleString() + ')', value: (r) => r.label.text.toLowerCase(),
+      html: (r) => '<div class="label" title="' + escapeHtml(r.label.text) + '">' + nameHtml(isStack ? disp(r.label.text) : r.label.text) +
+        (r.label.sub ? '<span class="sub">' + nameHtml(r.label.sub) + '</span>' : '') + '</div>' + barHtml(r.bytes, q.absBytes) },
+    { id: 'bytes', label: 'Bytes', num: true, value: (r) => r.bytes, html: (r) => signedHuman(r.bytes) },
+    { id: 'count', label: 'Count', num: true, value: (r) => r.count, html: (r) => r.count.toLocaleString() },
+    { id: 'pct', label: '% bytes', num: true, value: (r) => r.bytes, html: (r) => (100 * r.bytes / (q.absBytes || 1)).toFixed(1) },
+  ];
+  body.appendChild(sortableTable('results', cols, rows, { col: 'bytes', onRow: (r) => showGroup(q, r) }));
+}
+
+function renderTree(body, q) {
+  const inverted = q.by === 'inverted' || q.by === 'finverted';
+  const free = q.by === 'ftree' || q.by === 'finverted';
+  const root = groupTree(S.md, S.tr, S.cache, q.picked, inverted, q.depth, q.sizeOf, free);
+  const st = S.sorts.tree || (S.sorts.tree = { col: 'bytes', dir: -1 });
+  const key = (n) => (st.col === 'count' ? n.count : n.bytes);
+  const total = (st.col === 'count' ? root.count : q.absBytes) || 1; // absolute: under aAfaBf the net may be ~0
+  const table = document.createElement('table');
+  const head = document.createElement('tr');
+  const th = (label, col, num) => {
+    const c = document.createElement('th');
+    c.className = (num ? 'num ' : '') + (col ? 'sortable' : '') + (col === st.col ? ' sorted' : '');
+    c.textContent = label + (col === st.col ? (st.dir < 0 ? ' ▼' : ' ▲') : '');
+    if (col) c.onclick = () => { if (st.col === col) st.dir = -st.dir; else { st.col = col; st.dir = -1; } store.set('sorts', S.sorts); setTab('results'); };
+    head.appendChild(c);
+  };
+  const site = free ? 'free site' : 'allocation site';
+  th(inverted ? site[0].toUpperCase() + site.slice(1) + ' → callers' : 'Root → ' + site, null, false);
+  th('Bytes', 'bytes', true); th('Count', 'count', true); th('%', null, true);
+  const thead = document.createElement('thead'); thead.appendChild(head); table.appendChild(thead);
+  const tb = document.createElement('tbody');
+  table.appendChild(tb);
+  const sorted = (node) => [...node.kids.values()].sort((x, y) => (key(x) - key(y)) * st.dir);
+  const lastDescendant = (r) => (r._kids && r._kids.length ? lastDescendant(r._kids[r._kids.length - 1]) : r);
+  const addNode = (node, depth, after) => {
+    const tr = document.createElement('tr');
+    const frac = key(node) / total;
+    const hasKids = node.kids.size > 0;
+    tr.innerHTML = '<td title="' + escapeHtml(node.name) + '"><span style="padding-left:' + (depth * 14) + 'px"></span><span class="tw">' +
+      (hasKids ? '&#9656;' : '') + '</span>' + nameHtml(disp(node.name)) +
+      barHtml(st.col === 'count' ? node.count : node.bytes, total, depth * 14 + 14) + '</td>' +
+      '<td class="num">' + signedHuman(node.bytes) + '</td><td class="num">' + node.count.toLocaleString() + '</td><td class="num">' + (frac * 100).toFixed(1) + '</td>';
+    if (after) after.after(tr); else tb.appendChild(tr);
+    const toggle = tr.querySelector('.tw');
+    const expand = () => {
+      if (tr._kids) {
+        const remove = (rows) => { for (const r of rows) { if (r._kids) remove(r._kids); r.remove(); } };
+        remove(tr._kids); tr._kids = null; toggle.innerHTML = '&#9656;';
+        return;
+      }
+      tr._kids = [];
+      let last = tr;
+      for (const child of sorted(node).slice(0, 100)) {
+        if (tr._kids.length >= 5 && key(child) * 1000 < total) break; // under 0.1 % of the query: noise
+        const r = addNode(child, depth + 1, last);
+        tr._kids.push(r);
+        last = lastDescendant(r);
+      }
+      toggle.innerHTML = '&#9662;';
+    };
+    toggle.onclick = (e) => { e.stopPropagation(); if (hasKids) expand(); };
+    tr.onclick = () => { selectRow(tr); showTreeNode(q, node, inverted, free); };
+    tr.ondblclick = () => { if (hasKids) expand(); };
+    tr._node = node;
+    tr._expand = hasKids ? expand : null;
+    return tr;
+  };
+  body.appendChild(table);
+  const tops = sorted(root).slice(0, 200).map((n) => addNode(n, 0, null));
+  // The hot path opens by itself: a top-down tree starts with a chain every allocation shares
+  // (RtlUserThreadStart -> ... -> App::Run), so keep expanding while one child holds 80 % of its parent.
+  let row = tops[0];
+  for (let d = 0; row && row._expand && d < 24; d++) {
+    row._expand();
+    const next = row._kids && row._kids[0];
+    if (!next || Math.abs(key(next._node)) < 0.8 * Math.abs(key(row._node))) break;
+    row = next;
+  }
+}
+
+// A table sorted by its header (click; again to reverse), the order remembered per table `id`.
+function sortableTable(id, cols, rows, opts) {
+  const wrap = document.createElement('div');
+  const st = S.sorts[id] || (S.sorts[id] = { col: opts.col, dir: opts.dir || -1 });
+  let limit = opts.page || 200;
+  const cmp = (a, b) => (a === b ? 0 : (typeof a === 'string' ? a.localeCompare(b) : (a < b ? -1 : 1)));
+  const render = () => {
+    wrap.innerHTML = '';
+    const col = cols.find((c) => c.id === st.col && c.value) || cols.find((c) => c.value);
+    const sorted = rows.slice().sort((x, y) => cmp(col.value(x), col.value(y)) * st.dir);
+    wrap.firstRow = sorted[0];
+    const table = document.createElement('table');
+    const head = document.createElement('tr');
+    for (const c of cols) {
+      const th = document.createElement('th');
+      th.className = (c.num ? 'num ' : '') + (c.value ? 'sortable' : '') + (c.id === col.id ? ' sorted' : '');
+      th.textContent = c.label + (c.id === col.id ? (st.dir < 0 ? ' ▼' : ' ▲') : '');
+      if (c.value) th.title = 'Sort by ' + c.label;
+      if (c.value) th.onclick = () => {
+        if (st.col === c.id) st.dir = -st.dir; else { st.col = c.id; st.dir = c.num ? -1 : 1; }
+        store.set('sorts', S.sorts);
+        render();
+      };
+      head.appendChild(th);
+    }
+    const thead = document.createElement('thead'); thead.appendChild(head); table.appendChild(thead);
+    const tb = document.createElement('tbody');
+    for (const r of sorted.slice(0, limit)) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = cols.map((c) => '<td' + (c.num ? ' class="num"' : '') + '>' + c.html(r) + '</td>').join('');
+      if (opts.onRow) tr.onclick = () => { selectRow(tr, wrap); opts.onRow(r, tr); };
+      tb.appendChild(tr);
+    }
+    table.appendChild(tb);
+    wrap.appendChild(table);
+    if (sorted.length > limit) {
+      const more = document.createElement('div');
+      more.className = 'more';
+      more.textContent = (sorted.length - limit).toLocaleString() + ' more -- show 200 more';
+      more.onclick = () => { limit += 200; render(); };
+      wrap.appendChild(more);
+    }
+  };
+  render();
+  return wrap;
+}
+
+function selectRow(tr, scope) {
+  (scope || $('tabBody')).querySelectorAll('tr.sel').forEach((x) => x.classList.remove('sel'));
+  tr.classList.add('sel');
+}
+
+// ---------------------------------------------------------------------------------- details
+function showGroup(q, row) {
+  const { md, tr } = S;
+  const match = (i) => {
+    switch (q.by) {
+      case 'tag': return md.tag[i] === row.key;
+      case 'heap': return md.heap[i] === row.key;
+      case 'size': return sizeBucket(md.size[i]) === row.key;
+      case 'name': return (md.names.get(i) || '(cpu) ' + tagName(tr, md.tag[i])) === row.key;
+      case 'fstack': return (md.f[i] === Infinity ? -1 : md.fstack[i]) === row.key;
+      default: return md.stack[i] === row.key;
+    }
+  };
+  showAllocations(q, match, row.label ? row.label.text : '');
+}
+
+function showTreeNode(q, node, inverted, free) {
+  showAllocations(q, (i) => underPath(S.md, S.tr, S.cache, i, node.path, inverted, free), node.name);
+}
+
+const DETAIL_ROWS = 5000;
+function showAllocations(q, match, title) {
+  const { md, tr } = S;
+  let list = [];
+  let bytes = 0;
+  for (let x = 0; x < q.picked.length; x++) { const i = q.picked[x]; if (match(i)) { list.push(i); bytes += q.sizeOf(i); } }
+  const count = list.length;
+  if (list.length > DETAIL_ROWS) list = list.sort((x, y) => md.size[y] - md.size[x]).slice(0, DETAIL_ROWS);
+  $('detailTitle').textContent = count.toLocaleString() + ' allocations, ' + human(bytes) + ' (' + (100 * bytes / (q.absBytes || 1)).toFixed(1) + ' % of the query)';
+  const d = $('detail');
+  d.innerHTML = '';
+  if (title) {
+    const h = document.createElement('div');
+    h.className = 'detailHead';
+    h.innerHTML = '<span class="grow" title="' + escapeHtml(title) + '">' + nameHtml(disp(title)) + '</span>';
+    d.appendChild(h);
+  }
+  const stackBox = document.createElement('div');
+  stackBox.className = 'frames mono';
+  d.appendChild(stackBox);
+  // Both stacks of allocation i: who allocated it and who freed it. Grouped by a free stack, the free comes first.
+  const freeFirst = q.by === 'fstack' || q.by === 'ftree' || q.by === 'finverted';
+  const showStack = (i) => {
+    stackBox.innerHTML = '';
+    const line = (cls, text) => {
+      const e = document.createElement('div');
+      e.className = cls;
+      e.textContent = text;
+      stackBox.appendChild(e);
+    };
+    line('sub', describeAlloc(i));
+    const freeMissing = md.f[i] === Infinity ? 'never freed: alive at the end of the trace'
+      : (tr.header.version || 1) < 2 ? 'not recorded: a format 1 trace carries no free stacks'
+      : 'none captured (stacks=' + tr.header.stacks + '; a CPU free is captured by the same size policy as an allocation)';
+    const sections = [
+      { title: 'Allocated at', id: md.stack[i], missing: 'none captured (stacks=' + tr.header.stacks + ')' },
+      { title: 'Freed at', id: md.f[i] === Infinity ? 0 : md.fstack[i], missing: freeMissing },
+    ];
+    if (freeFirst) sections.reverse();
+    const copied = [describeAlloc(i)];
+    for (const s of sections) {
+      line('stackHead', s.title);
+      if (!s.id) { line('sub', s.missing); copied.push(s.title + ': ' + s.missing); continue; }
+      const frames = callerFrames(tr, S.cache, s.id).frames.map((a) => frameText(tr, a));
+      for (const f of frames) {
+        const e = document.createElement('div');
+        e.title = f.func + (f.path ? '\n' + f.path + ':' + f.line : '');
+        e.innerHTML = nameHtml(disp(f.func)) + (f.file ? ' <span class="file">' + escapeHtml(f.file) + '</span>' : '');
+        stackBox.appendChild(e);
+      }
+      copied.push(s.title + ':\n' + frames.map((f) => '  ' + f.func + (f.path ? '  ' + f.path + ':' + f.line : '')).join('\n'));
+    }
+    const copy = $('copyStack');
+    copy.style.display = '';
+    copy.onclick = () => copyText(copied.join('\n'), copy);
+  };
+  const cols = [
+    { id: 'size', label: 'Size', num: true, value: (i) => q.sizeOf(i), html: (i) => signedHuman(q.sizeOf(i)) },
+    { id: 'tag', label: 'Tag', value: (i) => tagName(tr, md.tag[i]), html: (i) => escapeHtml(tagName(tr, md.tag[i])) },
+    { id: 'alloc', label: 'Alloc', num: true, value: (i) => md.a[i], html: (i) => serialTime(md.a[i]) },
+    { id: 'free', label: 'Free', num: true, value: (i) => md.f[i], html: (i) => (md.f[i] === Infinity ? '<span class="up">alive</span>' : serialTime(md.f[i])) },
+    { id: 'name', label: 'Name / heap', value: (i) => md.names.get(i) || HEAP_NAMES[md.heap[i]],
+      html: (i) => escapeHtml(md.names.get(i) || (HEAP_NAMES[md.heap[i]] + (md.kind[i] & SYNTHETIC ? ' (alive at start)' : ''))) },
+  ];
+  const tableWrap = sortableTable('allocs', cols, list, { col: 'size', onRow: (i) => showStack(i) });
+  if (list.length) { // the table's top row, as sorted
+    showStack(tableWrap.firstRow);
+    selectRow(tableWrap.querySelector('tbody tr'), tableWrap);
+  }
+  tableWrap.style.marginTop = '10px';
+  d.appendChild(tableWrap);
+  if (count > list.length) {
+    const m = document.createElement('div');
+    m.className = 'sub';
+    m.style.padding = '6px 8px';
+    m.textContent = 'The ' + DETAIL_ROWS.toLocaleString() + ' largest of ' + count.toLocaleString() + ' are listed.';
+    d.appendChild(m);
+  }
+}
+
+function describeAlloc(i) {
+  const { md, tr } = S;
+  return human(md.size[i]) + ', ' + tagName(tr, md.tag[i]) + ', ' + (HEAP_NAMES[md.heap[i]] || '') + ', ' +
+    (KIND_NAMES[md.kind[i] & 0x7f] || '') + (md.names.has(i) ? ', ' + md.names.get(i) : '') + ' -- allocated ' + serialTime(md.a[i]) +
+    (md.f[i] === Infinity ? ', never freed' : ', freed ' + serialTime(md.f[i]));
+}
+
+// A serial as the time of the frame it fell in (the end of that frame).
+function serialTime(serial) {
+  const fr = S.md.frames;
+  if (!fr.n) return '#' + serial;
+  let lo = 0, hi = fr.n - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (fr.serial[mid] < serial) lo = mid + 1; else hi = mid; }
+  return frameTime(S.md, lo).toFixed(2) + ' s';
+}
+
+function copyText(text, button) {
+  const done = () => { const t = button.textContent; button.textContent = 'Copied'; setTimeout(() => { button.textContent = t; }, 1200); };
+  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, () => fallback()); return; }
+  fallback();
+  function fallback() {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); done(); } catch (e) { /* nothing to do */ }
+    ta.remove();
+  }
+}
+
+// -------------------------------------------------------------------------------- tag table
+function renderTagTable(body) {
+  const a = markerSerial(0), b = markerSerial(1);
+  if (!a || !b) { $('queryLine').textContent = 'The tag table needs markers A and B.'; return; }
+  const heap = $('heap').value;
+  const rows = tagTable(S.md, S.tr, a, b, heap);
+  $('queryLine').textContent = 'Tag table (UE LLM, MemTagTable) | A = ' + a.label + ', B = ' + b.label + ' | heap ' + heap +
+    ' | min / max / avg over the frames between';
+  const cols = [
+    { id: 'tag', label: 'Tag', value: (r) => tagName(S.tr, r.tag), html: (r) => escapeHtml(tagName(S.tr, r.tag)) },
+    { id: 'a', label: 'Size A', num: true, value: (r) => r.a, html: (r) => human(r.a) },
+    { id: 'b', label: 'Size B', num: true, value: (r) => r.b, html: (r) => human(r.b) },
+    { id: 'diff', label: 'B - A', num: true, value: (r) => r.b - r.a,
+      html: (r) => { const d = r.b - r.a; return '<span class="' + (d > 0 ? 'up' : d < 0 ? 'down' : '') + '">' + (d > 0 ? '+' : '') + human(d) + '</span>'; } },
+    { id: 'min', label: 'Min', num: true, value: (r) => r.min, html: (r) => human(r.min) },
+    { id: 'max', label: 'Max', num: true, value: (r) => r.max, html: (r) => human(r.max) },
+    { id: 'avg', label: 'Avg', num: true, value: (r) => r.avg, html: (r) => human(r.avg) },
+  ];
+  body.appendChild(sortableTable('tags', cols, rows, { col: 'b', page: 500 }));
+}
+
+// ---------------------------------------------------------------------------------- summary
+function renderSummary(body) {
+  const { tr, md } = S;
+  const v = S.verify;
+  const h = tr.header;
+  $('queryLine').textContent = 'The trace as recorded, and its check against the process.';
+  let synth = 0;
+  for (let i = 0; i < md.n; i++) if (md.kind[i] & SYNTHETIC) synth++;
+  const kv = [
+    ['file', S.fileName + ' (' + human(tr.fileBytes) + (tr.truncated ? ', TRUNCATED' : '') + ')'],
+    ['process', 'pid ' + h.pid + ', ' + (h.exe || '').split(/[\\/]/).pop()],
+    ['recorded', 'cpu ' + (h.cpu ? 'on' : 'off') + ', gpu ' + (h.gpu ? 'on' : 'off') + ', stacks ' + h.stacks + ', started at frame ' + h.startFrame],
+    ['events', md.n.toLocaleString() + ' allocs (' + synth.toLocaleString() + ' alive at the start), ' + tr.chunks.toLocaleString() + ' chunks, ' + tr.threads.size + ' threads'],
+    ['stacks', tr.stacks.size.toLocaleString() + ' stacks, ' + tr.symbols.size.toLocaleString() + ' symbols, ' + tr.modules.length + ' modules'],
+    ['end record', tr.end ? 'drops ' + tr.end.drops + ', buffers ' + tr.end.buffers : 'none -- the process did not stop the trace'],
+    ['replay', 'allocs of a live key ' + md.anomalies.doubleAlloc + ', frees of an unknown key ' + md.anomalies.unknownFree],
+    ['verify', v.pass ? 'PASS -- the replay matches the process byte for byte, every tag' +
+      ' (' + [v.cpuBytes !== null ? 'cpu ' + human(v.cpuBytes) : '', v.gpuBytes !== null ? 'gpu ' + human(v.gpuBytes) : ''].filter(Boolean).join(', ') + ')' : 'FAIL'],
+  ];
+  const box = document.createElement('div');
+  box.style.padding = '10px';
+  box.innerHTML = '<div class="kv">' + kv.map(([k, x]) => '<div>' + k + '</div><div>' + escapeHtml(x) + '</div>').join('') + '</div>';
+  if (!v.pass) {
+    const ul = document.createElement('div');
+    ul.className = 'mono';
+    ul.style.marginTop = '10px';
+    ul.innerHTML = v.failures.slice(0, 60).map((f) => '<div class="up">' + escapeHtml(f) + '</div>').join('');
+    box.appendChild(ul);
+  }
+  body.appendChild(box);
+}
+
+// ------------------------------------------------------------------------------------ utils
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// A C++ name or a path, escaped, with line breaks allowed only at its seams (after ::, a comma, a slash):
+// a narrow column wraps "SceneRenderer::|BuildGBufferAndAo", never "BuildGBufferAndA|o".
+function nameHtml(s) {
+  return escapeHtml(s).replace(/(::|,|\/|\\)/g, '$1<wbr>');
+}
+
+// "Short C++ names": template arguments folded to <...>, lambdas and operator< kept; the full name stays
+// in the tooltip and in what is copied.
+function disp(name) {
+  return S.shortNames ? shortSym(name) : name;
+}
+
+function shortSym(name) {
+  if (name.indexOf('<') < 0) return name;
+  let out = '';
+  for (let i = 0; i < name.length; i++) {
+    const c = name[i];
+    if (c !== '<') { out += c; continue; }
+    let depth = 0, j = i;
+    for (; j < name.length; j++) {
+      if (name[j] === '<') depth++;
+      else if (name[j] === '>' && --depth === 0) break;
+    }
+    if (j >= name.length) { out += name.slice(i); break; }
+    const inner = name.slice(i + 1, j);
+    const operator = /operator\s*$/.test(name.slice(Math.max(0, i - 9), i));
+    out += inner.startsWith('lambda_') || operator ? name.slice(i, j + 1) : '<…>';
+    i = j;
+  }
+  return out;
+}
+</script>
+</body>
+</html>

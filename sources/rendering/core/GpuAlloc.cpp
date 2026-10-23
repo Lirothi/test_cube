@@ -74,7 +74,7 @@ struct Census
     }
 
     void Add(CensusRecord* rec, std::uint32_t stack);
-    void Remove(CensusRecord* rec);
+    void Remove(CensusRecord* rec, std::uint32_t stack);
 };
 
 // The trace's view of a record: the key is the record (the object's identity while it lives).
@@ -119,7 +119,9 @@ public:
         const ULONG left = refs_.fetch_sub(1, std::memory_order_acq_rel) - 1;
         if (left == 0)
         {
-            Census::Get().Remove(this);
+            // The D3D object is being destroyed: this stack names whoever let go of it last (a ComPtr, a retire
+            // bin) -- 0 unless a GPU trace is running. Outside the census lock.
+            Census::Get().Remove(this, memtrace::CaptureGpuStack());
             delete this;
         }
         return left;
@@ -149,7 +151,7 @@ void Census::Add(CensusRecord* rec, std::uint32_t stack)
     }
 }
 
-void Census::Remove(CensusRecord* rec)
+void Census::Remove(CensusRecord* rec, std::uint32_t stack)
 {
     std::lock_guard<std::mutex> lk(mtx);
     if (rec->prev != nullptr) { rec->prev->next = rec->next; }
@@ -157,7 +159,7 @@ void Census::Remove(CensusRecord* rec)
     if (rec->next != nullptr) { rec->next->prev = rec->prev; }
     Apply(rec->record, -1);
     ++totals.released;
-    if (traced) { memtrace::EmitFree(reinterpret_cast<std::uintptr_t>(rec), TraceHeap(rec->record)); }
+    if (traced) { memtrace::EmitFree(reinterpret_cast<std::uintptr_t>(rec), TraceHeap(rec->record), stack); }
 }
 
 // memtrace's GPU side: start = events on + every live object as a synthetic alloc; stop = events

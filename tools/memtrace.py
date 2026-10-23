@@ -14,6 +14,9 @@
     python tools/memtrace.py tags A B                   per tag: size at A, at B, B - A, min/max/avg over the frames
     python tools/memtrace.py timeline [--out x.json]    per-tag MB per frame as Chrome-trace counters (Perfetto)
     python tools/memtrace.py selftest                   the rules and the replay on a synthetic trace
+    python tools/memtrace.py view [file] [--port N] [--no-open]
+                                                        the browser viewer (tools/memtrace_viewer.html) on the
+                                                        trace: timeline, markers, the same rules and groupings
 
 Time markers A..D: a frame (`600`, `f600` -- the end of that frame), seconds since the trace started
 (`12.5s`), `start` or `end`. The rules are UE's (TraceServices AllocationsProvider.h:25-52,
@@ -22,7 +25,8 @@ AllocationsQuery.cpp:196-397), every bound inclusive, `f` = infinity for what is
     aABf long-living       AaBCf leaks            AaBfC limited life   aABfC decline of long-living
     AaBCfD specific life   AaB alloc events       AfB free events      afA freed before  Aaf allocated after
     aAfaBf decline + growth
-Options: --by tag|stack|tree|inverted|name|size|heap  --sort bytes|count  --top N  --heap cpu|gpu|all
+Options: --by tag|stack|tree|inverted|fstack|ftree|finverted|name|size|heap  --sort bytes|count  --top N
+         --heap cpu|gpu|all   (fstack / ftree / finverted: by the stack of whoever FREED it -- format 2 traces)
          --depth N (tree/inverted)  --file PATH (or the file as the last argument)
 Groupings follow Insights (SMemAllocTableTreeView.cpp:201-222): by size (power-of-two buckets, as
 MemAllocGroupingBySize), by tag, by callstack top-down (`tree`) and inverted, by function, by heap; `name`
@@ -63,6 +67,8 @@ RULES = {
     "aABfC": (3, "a <= A and B <= f <= C", "decline of long-living: alive at A, freed in [B, C]"),
     "AaBCfD": (4, "A <= a <= B and C <= f <= D", "specific lifetime: allocated in [A, B], freed in [C, D]"),
 }
+# Rules that pick allocations by their free: their sizes are negative (Model.size_fn).
+FREE_RULES = {"afA", "aAfB", "AfB", "aABfC"}
 ALIASES = {
     "leaks": ("AaBCf", "stack", "bytes"),
     "growth": ("AaBf", "stack", "bytes"),
@@ -74,8 +80,8 @@ ALIASES = {
 # allocator and the census wrappers. A stack is shown and grouped from the first frame past them -- the
 # code that made the container grow. (Release names of such frames are unreliable anyway: identical
 # COMDAT folding gives one body many types -- a vector of pointers shows up as nlohmann's.)
-NOISE_PREFIXES = ("std::", "operator new", "gpu::`anonymous namespace'::", "gpu::Create", "gpu::TrackExternalResource",
-                  "mi_", "_malloc", "malloc")
+NOISE_PREFIXES = ("std::", "operator new", "operator delete", "gpu::`anonymous namespace'::", "gpu::Create",
+                  "gpu::TrackExternalResource", "mi_", "_malloc", "malloc", "_free", "free")
 
 
 # ---------------------------------------------------------------------------------------------- file
@@ -90,7 +96,7 @@ class Trace:
         self.symbols = {}       # addr -> (func, file, line)
         self.stacks = {}        # id -> [addr...]
         self.allocs = []        # (serial, key, size, tag, heap, kind, stack, name)
-        self.frees = []         # (serial, key, heap)
+        self.frees = []         # (serial, key, heap, stack of the free -- 0 before format 2)
         self.markers = []       # (serial, qpc, frame or None)
         self.threads = set()
         self.chunks = 0
@@ -106,6 +112,7 @@ def str16(data, pos):
 def decode_chunk(tr, data, pos, end, state):
     """Events of one chunk. `state` = [prevSerial, prevKey] of its buffer, carried across chunks."""
     allocs, frees, markers, stacks = tr.allocs, tr.frees, tr.markers, tr.stacks
+    free_stacks = tr.header.get("version", 1) >= 2
     prev_serial, prev_key = state
     mask = 0xFFFFFFFFFFFFFFFF
 
@@ -146,8 +153,18 @@ def decode_chunk(tr, data, pos, end, state):
             prev_key = (prev_key + ((v >> 1) ^ -(v & 1))) & mask
             key = prev_key
             if ev == EV_FREE:
-                frees.append((serial, key, data[pos]))
+                heap = data[pos]
                 pos += 1
+                fstack = 0
+                if free_stacks:  # format 2: who freed it
+                    v = 0; s = 0
+                    while True:
+                        b = data[pos]; pos += 1
+                        v |= (b & 0x7F) << s
+                        if b < 0x80: break
+                        s += 7
+                    fstack = v
+                frees.append((serial, key, heap, fstack))
                 continue
             v = 0; s = 0
             while True:
@@ -310,6 +327,8 @@ class Model:
         self.stack = array("I", map(itemgetter(6), allocs))
         self.names = {i: x[7] for i, x in enumerate(allocs) if x[7] is not None}
         self.f = array("Q", [INF]) * n
+        self.fstack = array("I", [0]) * n  # the stack of whoever freed it (format 2; 0 = never freed / not captured)
+        fstack = self.fstack
         ntags = max(len(tr.tags), 1)
         self.ntags = ntags
         cpu = [0] * ntags
@@ -347,6 +366,7 @@ class Model:
                     unknown_free += 1
                 else:
                     f[idx] = x[0]
+                    fstack[idx] = x[3] if len(x) > 3 else 0
                     if allocs[idx][4] == HEAP_CPU:
                         cpu[allocs[idx][3]] -= allocs[idx][2]
                     else:
@@ -390,6 +410,21 @@ class Model:
         return (self.frames[-1][2] - self.start_qpc) / self.freq if self.frames else 0.0
 
     # ---- queries ----
+    def size_fn(self, rule, marks):
+        """The size an allocation adds to a result: a free negative, an allocation positive (owner, 2026-10-23:
+        frees with a minus everywhere). The rules that pick allocations by their free inside a window (decline,
+        free events, decline of long-living: FREE_RULES) are negative; under aAfaBf the decline part only
+        (a <= A, f <= B) -- all UE flips (SMemAllocTableTreeView.cpp:682-688). State, allocation and lifetime
+        rules are positive. The viewer's sizeFn is the same rule."""
+        size = self.size
+        if rule in FREE_RULES:
+            return lambda i: -size[i]
+        if rule != "aAfaBf":
+            return lambda i: size[i]
+        A, B = marks[0], marks[1]
+        a, f = self.a, self.f
+        return lambda i: -size[i] if a[i] <= A and f[i] <= B else size[i]
+
     def select(self, rule, marks, heap="all"):
         """Indices of the allocations the rule picks (UE QueryLiveAllocs). `marks` = serials A..D."""
         need, cond, _meaning = RULES[rule]
@@ -426,9 +461,9 @@ def mb(x):
 
 
 def human(x):
-    if x >= 1 << 20:
+    if abs(x) >= 1 << 20:
         return f"{mb(x):.2f} MB"
-    if x >= 1 << 10:
+    if abs(x) >= 1 << 10:
         return f"{x / 1024.0:.1f} KB"
     return f"{x} B"
 
@@ -446,20 +481,31 @@ def frame_text(tr, addr):
     return f"{func} ({os.path.basename(file_)}:{line})" if file_ else func
 
 
+def system_ranges(tr):
+    """[base, end) of the modules under Windows\\ (d3d12, dxgi, kernel32, ntdll): a free's stack starts inside
+    them -- the D3D object's destructor, HeapFree -- before it reaches the code that let go."""
+    if not hasattr(tr, "_sys"):
+        tr._sys = [(b, b + s) for (b, s, _g, _a, p) in tr.modules if "\\windows\\" in p.lower()]
+    return tr._sys
+
+
 def caller_frames(tr, stack_id):
-    """The stack leaf first, past the allocator/census frames."""
+    """The stack leaf first, past the allocator/census frames and the system DLLs under them."""
     frames = tr.stacks.get(stack_id, [])
+    sys = system_ranges(tr)
     start = 0
-    while start < len(frames) and func_name(tr, frames[start]).startswith(NOISE_PREFIXES):
+    while start < len(frames) and (func_name(tr, frames[start]).startswith(NOISE_PREFIXES) or
+                                   any(lo <= frames[start] < hi for lo, hi in sys)):
         start += 1
     return frames[start:] if start < len(frames) else frames
 
 
-def group(model, picked, by):
-    """{key: [bytes, count, example index]} and a label function."""
+def group(model, picked, by, size_of=None):
+    """{key: [bytes, count, example index]} and a label function. `size_of(i)`: Model.size_fn's signed size."""
     tr = model.tr
     out = {}
     size, tag, heap, kind, stack = model.size, model.tag, model.heap, model.kind, model.stack
+    size_of = size_of or (lambda i: size[i])
     if by == "tag":
         keyf = lambda i: tag[i]
         label = lambda k: tag_name(tr, k)
@@ -476,30 +522,35 @@ def group(model, picked, by):
     elif by == "stack":
         keyf = lambda i: stack[i]
         label = lambda k: "(no stack)" if k == 0 else f"stack {k}"
+    elif by == "fstack":  # who freed it (UE's grouping by free callstack)
+        f, fstack = model.f, model.fstack
+        keyf = lambda i: -1 if f[i] == INF else fstack[i]
+        label = lambda k: "(never freed)" if k == -1 else "(freed, no stack captured)" if k == 0 else f"free stack {k}"
     else:
         raise ValueError(by)
     for i in picked:
         k = keyf(i)
         row = out.get(k)
         if row is None:
-            out[k] = [size[i], 1, i]
+            out[k] = [size_of(i), 1, i]
         else:
-            row[0] += size[i]
+            row[0] += size_of(i)
             row[1] += 1
     return out, label
 
 
 def print_rows(model, rows, label, sort, top, total_b, total_n, show_stack=False):
     tr = model.tr
-    order = sorted(rows.items(), key=lambda kv: -(kv[1][1] if sort == "count" else kv[1][0]))
+    # Bytes by magnitude: a free is negative, and the biggest one is what --top has to keep.
+    order = sorted(rows.items(), key=lambda kv: -(kv[1][1] if sort == "count" else abs(kv[1][0])))
     print(f"  {'bytes':>12} {'%':>6} {'count':>9}  group")
     for k, (b, c, ex) in order[:top]:
         pct = 100.0 * (c / total_n if sort == "count" else b / total_b) if (total_n if sort == "count" else total_b) else 0.0
         extra = ""
-        if show_stack and k == 0:
+        if show_stack and k <= 0:
             extra = f"  e.g. {tag_name(tr, model.tag[ex])}"
         print(f"  {human(b):>12} {pct:5.1f}% {c:9d}  {label(k)}{extra}")
-        if show_stack and k != 0:
+        if show_stack and k > 0:
             print(f"      {tag_name(tr, model.tag[ex])}, {HEAP_NAMES.get(model.heap[ex])}"
                   + (f", {model.names[ex]}" if ex in model.names else ""))
             for addr in caller_frames(tr, k)[:8]:
@@ -510,15 +561,20 @@ def print_rows(model, rows, label, sort, top, total_b, total_n, show_stack=False
         print(f"  {human(rest_b):>12}        {rest_c:9d}  ... {len(order) - top} more groups")
 
 
-def print_tree(model, picked, inverted, depth, top, sort):
+def print_tree(model, picked, inverted, depth, top, sort, size_of=None, free=False):
     """Callstack grouping by function: top-down from the root (`tree`) or from the allocation site
-    (`inverted`), each node with the bytes/count of the allocations under it."""
+    (`inverted`), each node with the bytes/count of the allocations under it. `free`: by the stack of the
+    free instead (UE's free-callstack groupings)."""
     tr = model.tr
-    size, stack = model.size, model.stack
+    stack = model.fstack if free else model.stack
+    size_of = size_of or (lambda i: model.size[i])
     root = {}
     for i in picked:
         frames = caller_frames(tr, stack[i]) if stack[i] else []
-        names = [func_name(tr, a) for a in frames] or ["(no stack)"]
+        if free and model.f[i] == INF:
+            names = ["(never freed)"]
+        else:
+            names = [func_name(tr, a) for a in frames] or ["(no stack)"]
         if not inverted:
             names = names[::-1]
         node = root
@@ -526,33 +582,36 @@ def print_tree(model, picked, inverted, depth, top, sort):
             child = node.get(nm)
             if child is None:
                 child = node[nm] = [0, 0, {}]
-            child[0] += size[i]
+            child[0] += size_of(i)
             child[1] += 1
             node = child[2]
-    total = sum(v[0] for v in root.values()) or 1
+    total = sum(abs(size_of(i)) for i in picked) or 1  # absolute: under aAfaBf the net may be ~0
 
     def walk(node, indent):
-        items = sorted(node.items(), key=lambda kv: -(kv[1][1] if sort == "count" else kv[1][0]))
+        items = sorted(node.items(), key=lambda kv: -(kv[1][1] if sort == "count" else abs(kv[1][0])))
         for nm, (b, c, kids) in items[:top]:
-            if b * 200 < total and indent > 0:  # below 0.5 % of the query: not worth a line
+            if abs(b) * 200 < total and indent > 0:  # below 0.5 % of the query: not worth a line
                 continue
             print(f"  {human(b):>12} {100.0 * b / total:5.1f}% {c:9d}  {'  ' * indent}{nm}")
             walk(kids, indent + 1)
 
-    print(f"  {'bytes':>12} {'%':>6} {'count':>9}  {'allocation site -> callers' if inverted else 'root -> allocation site'}")
+    site = "free site" if free else "allocation site"
+    print(f"  {'bytes':>12} {'%':>6} {'count':>9}  {site + ' -> callers' if inverted else 'root -> ' + site}")
     walk(root, 0)
 
 
 # ------------------------------------------------------------------------------------------ commands
 
 def parse_args(argv):
-    opts = dict(by=None, sort=None, top=15, heap="all", depth=8, file=None, out=None)
+    opts = dict(by=None, sort=None, top=15, heap="all", depth=8, file=None, out=None, port=0, open=True)
     pos = []
     it = iter(argv)
     for x in it:
-        if x in ("--by", "--sort", "--top", "--heap", "--depth", "--file", "--out"):
+        if x in ("--by", "--sort", "--top", "--heap", "--depth", "--file", "--out", "--port"):
             v = next(it)
-            opts[x[2:]] = int(v) if x in ("--top", "--depth") else v
+            opts[x[2:]] = int(v) if x in ("--top", "--depth", "--port") else v
+        elif x == "--no-open":
+            opts["open"] = False
         elif x.startswith("--"):
             raise SystemExit(f"unknown option {x}")
         else:
@@ -681,16 +740,25 @@ def run_query(model, rule, specs, by, sort, top, heap, depth):
         labels.append(lab)
     t0 = time.perf_counter()
     picked = model.select(rule, marks, heap)
-    total_b = sum(model.size[i] for i in picked)
+    size_of = model.size_fn(rule, marks)
+    sizes = [size_of(i) for i in picked]
+    growth = sum(s for s in sizes if s > 0)
+    decline = -sum(s for s in sizes if s < 0)
+    if decline and growth:
+        amount = f"net {'+' if growth >= decline else ''}{human(growth - decline)} (growth {human(growth)}, decline -{human(decline)})"
+    elif decline:
+        amount = f"-{human(decline)} freed"
+    else:
+        amount = human(growth)
     print(f"{rule} -- {RULES[rule][2]}; " + ", ".join(f"{'ABCD'[n]} = {labels[n]}" for n in range(need))
-          + f"; heap {heap}: {len(picked)} allocations, {human(total_b)} ({time.perf_counter() - t0:.1f} s)")
+          + f"; heap {heap}: {len(picked)} allocations, {amount} ({time.perf_counter() - t0:.1f} s)")
     if not picked:
         return 0
-    if by in ("tree", "inverted"):
-        print_tree(model, picked, by == "inverted", depth, top, sort)
+    if by in ("tree", "inverted", "ftree", "finverted"):
+        print_tree(model, picked, by in ("inverted", "finverted"), depth, top, sort, size_of, free=by.startswith("f"))
         return 0
-    rows, label = group(model, picked, by)
-    print_rows(model, rows, label, sort, top, total_b, len(picked), show_stack=(by == "stack"))
+    rows, label = group(model, picked, by, size_of)
+    print_rows(model, rows, label, sort, top, (growth + decline) or 1, len(picked), show_stack=by in ("stack", "fstack"))
     return 0
 
 
@@ -775,7 +843,7 @@ def cmd_selftest():
         heap = 1 if n == "G" else HEAP_CPU  # one GPU allocation: the namespaces must not collide
         tr.allocs.append((a, key, size, tag, heap, 1 if heap else 0, 0, "gpu-res" if heap else None))
         if f is not None:
-            tr.frees.append((f, key, heap))
+            tr.frees.append((f, key, heap, 0))
     # a CPU key equal to the GPU one (G's), alive the whole time: the GPU free must not take it
     tr.allocs.append((1, 0x1000 + 16 * 5, 1, 0, HEAP_CPU, 0, 0, None))
     by_serial[1] = "K"
@@ -814,11 +882,63 @@ def cmd_selftest():
     series_ok = fr2[3] == [100 + 1, 400 + 800] and fr2[4] == [0, 3200]
     failures += not series_ok
     print(f"  {'ok  ' if series_ok else 'FAIL'} series at frame 2: cpu {fr2[3]} gpu {fr2[4]}")
+    # aAfaBf on f1..f2: W declined (-200, freed at 18), Y and Z grew (+400 +800) -> net +1000, as UE sums it
+    m1, m2 = model.resolve("f1")[0], model.resolve("f2")[0]
+    size_of = model.size_fn("aAfaBf", [m1, m2])
+    net = sum(size_of(i) for i in model.select("aAfaBf", [m1, m2]))
+    net_ok = net == 1000
+    failures += not net_ok
+    print(f"  {'ok  ' if net_ok else 'FAIL'} aAfaBf f1 f2 net bytes {net} (decline counted negative, UE SMemAllocTableTreeView.cpp:682)")
+    # frees are negative in every rule that picks by a free: AfB/aAfB f1 f2 = W (-200), aABfC f1 f2 f4 = G (-3200);
+    # a lifetime rule stays positive: AafB f1 f3 = Y (+400)
+    for (rule, specs, want) in (("afA", ("f2",), -200), ("AfB", ("f1", "f2"), -200), ("aAfB", ("f1", "f2"), -200),
+                                ("aABfC", ("f1", "f2", "f4"), -3200), ("AafB", ("f1", "f3"), 400)):
+        marks = [model.resolve(s)[0] for s in specs]
+        got = sum(model.size_fn(rule, marks)(i) for i in model.select(rule, marks))
+        ok = got == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {rule:<7} {' '.join(specs):<16} signed bytes {got}{'' if ok else f' != {want}'}")
     an_ok = model.anomalies == dict(double_alloc=0, unknown_free=0)
     failures += not an_ok
     print(f"  {'ok  ' if an_ok else 'FAIL'} anomalies {model.anomalies}")
     print(f"memtrace selftest: {'PASS' if failures == 0 else f'FAIL ({failures})'}")
     return 1 if failures else 0
+
+
+def cmd_view(path, opts):
+    """Serves tools/memtrace_viewer.html and the traces on 127.0.0.1 and opens the viewer on `path`. Only
+    those two kinds of file are served: nothing else of the repository is reachable through the port."""
+    import http.server
+    import webbrowser
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rel = os.path.relpath(os.path.abspath(path), root).replace(os.sep, "/")
+    if rel.startswith("../") or not rel.startswith("traces/"):
+        raise SystemExit(f"view serves traces/ only; open {path} by dropping it on tools/memtrace_viewer.html instead")
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=root, **kwargs)
+
+        def do_GET(self):
+            p = self.path.split("?", 1)[0]
+            if p == "/tools/memtrace_viewer.html" or (p.startswith("/traces/") and p.endswith(".mtrace") and ".." not in p):
+                return super().do_GET()
+            self.send_error(404)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", opts["port"]), Handler)
+    url = f"http://127.0.0.1:{server.server_address[1]}/tools/memtrace_viewer.html?file=/{rel}"
+    print(f"memtrace view: {url}\n  serving the viewer and traces/ on 127.0.0.1 only; Ctrl+C stops it")
+    if opts["open"]:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    return 0
 
 
 def main(argv):
@@ -830,6 +950,8 @@ def main(argv):
         return cmd_selftest()
     pos, opts = parse_args(argv[2:])
     path = opts["file"] or newest()
+    if cmd == "view":
+        return cmd_view(path, opts)
     if cmd == "verify":
         return cmd_verify(path)
     if cmd == "summary":

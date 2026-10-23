@@ -5,7 +5,7 @@
 // D modules, C chunk (a writer's slice of one thread buffer: `[buffer id u32][events]`), E end
 // (the process's own totals), Y symbols. Events inside a chunk are a varint stream (LEB128; signed
 // values zigzag): Reset{thread}, Alloc{serial delta, key delta, size, tag, heap, kind, stack,
-// [name]}, Free{serial delta, key delta, heap}, Marker{serial delta, qpc, frame + 1 (0 = periodic)},
+// [name]}, Free{serial delta, key delta, heap, stack (version 2)}, Marker{serial delta, qpc, frame + 1 (0 = periodic)},
 // Stack{id, n, frame deltas}. Deltas run per buffer fill and restart at its Reset.
 //
 // Nothing on the emission path allocates: buffers, the stack table and the address set live on
@@ -41,7 +41,7 @@ namespace memtrace
 {
 namespace
 {
-constexpr std::uint32_t kVersion = 1;
+constexpr std::uint32_t kVersion = 2; // 2: Free carries the stack of whoever freed (readers take 1 and 2)
 constexpr std::uint32_t kBufferBytes = 64u * 1024u;
 constexpr std::uint32_t kNameMax = 480u;           // a GPU name longer than this is cut
 constexpr std::uint32_t kMaxBuffers = 2048u;       // 128 MB, if the writer ever fell that far behind
@@ -835,10 +835,10 @@ void EmitAlloc(std::uint64_t key, std::uint64_t size, std::uint8_t tag, std::uin
     Publish(b, p);
 }
 
-void EmitFree(std::uint64_t key, std::uint8_t heap) noexcept
+void EmitFree(std::uint64_t key, std::uint8_t heap, std::uint32_t stack) noexcept
 {
     Buffer* b = nullptr;
-    std::uint8_t* p = Reserve(b, 64u);
+    std::uint8_t* p = Reserve(b, 72u);
     if (p == nullptr) { g_drops.fetch_add(1, std::memory_order_relaxed); return; }
     const std::uint64_t serial = g_serial.fetch_add(1, std::memory_order_relaxed);
     p = MaybeMarker(p, b, serial);
@@ -846,6 +846,7 @@ void EmitFree(std::uint64_t key, std::uint8_t heap) noexcept
     p = PutSerial(p, b, serial);
     p = PutKey(p, b, key);
     *p++ = heap;
+    p = PutVar(p, stack);
     Publish(b, p);
 }
 

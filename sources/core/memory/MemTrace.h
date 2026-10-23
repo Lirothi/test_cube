@@ -79,8 +79,9 @@ void Stop();
 // ---- Emission. Allocation-free; the caller holds the lock that owns `key` (see above). ----
 void EmitAlloc(std::uint64_t key, std::uint64_t size, std::uint8_t tag, std::uint8_t heap, std::uint8_t kind,
                std::uint32_t stack, const char* name) noexcept;
-void EmitFree(std::uint64_t key, std::uint8_t heap) noexcept;
-// A stack id for the caller's allocation (0 = none): the CPU policy for `size` / every GPU one.
+// `stack`: who freed it (format version 2, as UE's Free event carries a CallstackId since its version 2).
+void EmitFree(std::uint64_t key, std::uint8_t heap, std::uint32_t stack) noexcept;
+// A stack id for the caller's allocation or free (0 = none): the CPU policy for `size` / every GPU one.
 // Call it OUTSIDE the key's lock -- the capture is the slow part.
 std::uint32_t CaptureCpuStack(std::uint64_t size) noexcept;
 std::uint32_t CaptureGpuStack() noexcept;
