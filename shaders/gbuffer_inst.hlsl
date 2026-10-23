@@ -6,7 +6,7 @@
 #if GBUFFER_BINDLESS
 #define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT | CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), CBV(b0), CBV(b1), CBV(b2), CBV(b3), DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #else
-#define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), CBV(b3), DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
+#define GBUFFER_INST_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), CBV(b3), DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #endif
 #pragma pack_matrix(row_major)
 #include "gbuffer_common.hlsli"
@@ -25,6 +25,7 @@ StructuredBuffer<InstanceData> gInstances : register(t0);
 Texture2D gAlbedo : register(t1);
 Texture2D gMR : register(t2);
 Texture2D gNormalMap : register(t3);
+Texture2D gEmissiveMap : register(t4); // Part E: read only when texIndices.w says there is one
 #endif
 SamplerState gSmp : register(s0);
 
@@ -43,7 +44,7 @@ cbuffer InstDraw : register(b2)
     float transmissionNormalWeight;
     float4 terrainTiling;
     float4 terrainEdgeParams;
-    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap (read under GBUFFER_BINDLESS)
+    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap; w = the emissive map's (kNoEmissiveMap = none)
 };
 cbuffer InstRemap : register(b3) { uint4 gRemap[64]; };
 
@@ -66,6 +67,7 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     Texture2D gAlbedo = ResourceDescriptorHeap[texIndices.x];
     Texture2D gMR = ResourceDescriptorHeap[texIndices.y];
     Texture2D gNormalMap = ResourceDescriptorHeap[texIndices.z];
+    Texture2D gEmissiveMap = ResourceDescriptorHeap[EMISSIVE_MAP_INDEX(texIndices)];
 #endif
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
                   baseColor.a, alphaCutoff);
@@ -97,7 +99,8 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, emissive, subsurfaceColor, transmissionStrength,
+    const float3 emissiveOut = ApplyEmissiveMap(emissive, gEmissiveMap, gSmp, i.UV, texOffsScale, texIndices.w);
+    return FinalizeGBuffer(albedo, mr, N, emissiveOut, subsurfaceColor, transmissionStrength,
                            ambientOcclusion, indirectSpecularScale, transmissionAlbedoPower,
                            transmissionNormalWeight, motion, i.objectId);
 }

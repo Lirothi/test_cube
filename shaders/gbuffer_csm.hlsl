@@ -59,13 +59,16 @@ VSOutD VSMain(VSIn i)
     return o;
 }
 
-// Plan S8: the slot's cutoff (-1 = an opaque slot sharing the masked PSO: never clips). No terrain is masked, so the
-// tiling arguments are zero.
+// Plan S8: the slot's cutoff (-1 = an opaque slot sharing the masked PSO: never clips). No terrain is masked. A glass
+// slot's cutoff comes raised by kGlassShadowCutoff: its glass texels cast a dithered share (shadow_depth_common.hlsli).
 void ShadowMaskClip(VSOutD i)
 {
 #if GBUFFER_CSM_MASKED
-    AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, float4(0.0f, 0.0f, 0.0f, 0.0f), float4(0.0f, 0.0f, 0.0f, 0.0f),
-                  baseColor.a, alphaCutoff);
+    if (alphaCutoff >= 0.0f)
+    {
+        const float a = gAlbedo.Sample(gSmp, tfUVp(i.UV, texOffsScale)).a * baseColor.a;
+        ShadowAlphaClip(a, alphaCutoff, i.H.xy);
+    }
 #endif
 }
 

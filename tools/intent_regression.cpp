@@ -909,15 +909,24 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
 
     const std::optional<json> list = call(2, "tools/list", json::object());
     bool hasRun = false;
-    bool hasSave = false;
+    std::vector<std::string> saveTools;
+    std::string saveDescription;
     for (const json& tool : (*list)["result"]["tools"])
     {
         const std::string name = tool.value("name", "");
         hasRun = hasRun || name == "run_action";
-        hasSave = hasSave || name.find("save") != std::string::npos;
+        if (name.find("save") != std::string::npos)
+        {
+            saveTools.push_back(name);
+            saveDescription = tool.value("description", "");
+        }
     }
     Check(hasRun, "the tool list offers run_action");
-    Check(!hasSave, "and nothing that saves -- the level is saved by the person, only");
+    // The level was saved by the person only until the owner said «сам все сохраняй что надо»
+    // (2026-10-23). Still exactly ONE way to write it, and that one says when it may be used.
+    Check(saveTools == std::vector<std::string>{ "save_level" } &&
+          saveDescription.find("ONLY when the person asked") != std::string::npos,
+          "one tool saves -- save_level -- and it says it is only for when the person asked");
 
     const json hidePalms = { { "action", "setEnabled" },
         { "target", { { "filter", json::array({ "models/coconut_palm/coconut_palm.mesh.json" }) },
@@ -966,6 +975,13 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     const std::optional<json> noImporter = call(9, "tools/call", { { "name", "list_staging" } });
     Check((*noImporter)["result"]["isError"].get<bool>(),
         "list_staging without an Import window is refused: " + text(noImporter));
+    // save_level is listed, and with no level host (this harness has none) refuses rather than
+    // reaching for a file nobody opened.
+    bool listsSave = false;
+    for (const json& tool : (*list)["result"]["tools"]) { listsSave = listsSave || tool.value("name", "") == "save_level"; }
+    Check(listsSave, "the tool list offers save_level");
+    const std::optional<json> noLevel = call(10, "tools/call", { { "name", "save_level" } });
+    Check((*noLevel)["result"]["isError"].get<bool>(), "save_level without a level host is refused: " + text(noLevel));
 
     // The runtime door (set_settings / reset_settings / get_readouts): listed; refused without an app
     // behind it; with one, --set's own syntax reaches it name by name, an unknown name is reported
@@ -1090,7 +1106,7 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         }
     }
 
-    const std::optional<json> noTool = call(7, "tools/call", { { "name", "save_level" } });
+    const std::optional<json> noTool = call(7, "tools/call", { { "name", "format_disk" } });
     Check(noTool && (*noTool)["error"]["code"] == -32602, "a tool that does not exist is a protocol error");
     const std::optional<json> noMethod = call(8, "resources/list", json::object());
     Check(noMethod && (*noMethod)["error"]["code"] == -32601, "so is a method that does not");
@@ -1680,6 +1696,64 @@ void TestMoveReachesLights(const EditorActionContext& actionCtx)
 
     const EditorIntentPreview remove = preview(R"({"kind":"command","action":"delete","target":{"filter":["Porch"]}})");
     Check(!remove.executable, "delete does not reach lights by name");
+}
+
+// addLights creates point and spot lights where it is told, with the fields it is given and the
+// Create > Light defaults for the rest, as ONE undo entry -- the candles of a dressed room were the
+// first thing MCP could place and not light.
+void TestAddLightsIsExact(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    const EditorActionDesc& addLights = *EditorActionRegistry::Builtin().Find("addLights");
+    std::string error;
+
+    EditorIntent intent;
+    Check(intentschema::ParseAnswer(
+        R"({"kind":"command","action":"addLights","target":{},"params":{"group":"Candles","items":[)"
+        R"({"position":[1,1.4,2],"name":"candle 1","lumens":12,"radius":3,"color":[1,0.55,0.2],"shadows":true,"onAt":"night"},)"
+        R"({"position":[4,3,4],"type":"spot","direction":[0,-1,0],"outerAngleDeg":40}]}})",
+        intent, error), "an addLights answer parses: " + error);
+
+    Json noPosition = Json{ { "items", Json::array({ Json{ { "lumens", 12 } } }) } };
+    Check(!ValidateParams(addLights, noPosition, error) && error.find("light 1") != std::string::npos,
+        "a light without a position is refused BY NUMBER: " + error);
+    Json invented = Json{ { "items", Json::array({ Json{ { "position", Json::array({ 1, 2, 3 }) }, { "flicker", 1 } } }) } };
+    Check(!ValidateParams(addLights, invented, error) && error.find("flicker") != std::string::npos,
+        "a field a light does not take is refused, not dropped: " + error);
+    Json badType = Json{ { "items", Json::array({ Json{ { "position", Json::array({ 1, 2, 3 }) }, { "type", "area" } } }) } };
+    Check(!ValidateParams(addLights, badType, error), "a light type the engine has not got is refused");
+
+    const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+    Check(preview.executable && preview.summary.find("2 lights") != std::string::npos,
+        "addLights previews how many lights it makes: " + preview.summary + " " + preview.problem);
+
+    const std::size_t before = ctx.document.Environment().size();
+    EditorCommandStack stack;
+    std::string status;
+    Check(ExecuteIntent(actionCtx, stack, preview, status), status);
+    Check(stack.HistorySize() == 1 && status.find("1 point and 1 spot") != std::string::npos,
+        "one undo entry, and it says what it made: " + status);
+    Check(ctx.document.Environment().size() == before + 2, "two lights reached the document");
+    const EditorObject* candle = nullptr;
+    const EditorObject* spot = nullptr;
+    for (const EditorObject& env : ctx.document.Environment())
+    {
+        if (env.properties.value("name", std::string()) == "candle 1") { candle = &env; }
+        if (env.type == "spotLight" && env.properties.value("outerAngleDeg", 0.0f) == 40.0f) { spot = &env; }
+    }
+    Check(candle && candle->type == "pointLight", "the candle is a point light under its name");
+    if (candle)
+    {
+        const Json& p = candle->properties;
+        Check(p["position"] == Json::array({ 1.0, 1.4f, 2.0 }) && p["luminousFluxLm"] == 12.0f && p["radius"] == 3.0f &&
+              p["shadowsEnabled"] == true && p["onAt"] == "night" && p["group"] == "Candles",
+              "and carries exactly what it was given: " + p.dump());
+    }
+    Check(spot && spot->properties["shadowsEnabled"] == true && spot->properties["range"] == 14.0f &&
+          spot->properties["direction"] == Json::array({ 0.0, -1.0, 0.0 }) && !spot->properties.contains("onAt"),
+          "the spot takes the menu's defaults for what it was not given (always on = no onAt key)");
+    stack.Undo(ctx);
+    Check(ctx.document.Environment().size() == before, "undo takes both lights away again");
 }
 
 // setSurface and setColor go through the Inspector's live path (InspectorMultiEdit::ApplySnapshot),
@@ -3239,6 +3313,21 @@ void TestLeafCards()
         bool anyLeaf = false;
         for (const materialgen::LeafVerdict& v : bathroom) { anyLeaf = anyLeaf || v.leaf; }
         Check(!anyLeaf, "nothing in a bathroom is a leaf card");
+
+        // Glass (thinTranslucent) is decided per NODE: "Cups" is one atlas for the mugs and the
+        // tumblers, and only its transmission map says which texels are glass.
+        const std::string gltf = "import_staging/the_bathroom_free/scene.gltf";
+        const materialgen::GlassVerdict tumbler = materialgen::ClassifyGlass(gltf + "#node:Cup_glass_1", -1);
+        Check(tumbler.glass && tumbler.split && tumbler.glassShare > 0.9f,
+            "the glass tumbler is glass, its cutout keeping a sliver opaque: " + tumbler.reason);
+        const materialgen::GlassVerdict brush = materialgen::ClassifyGlass(gltf + "#node:Cup_glass_2", -1);
+        Check(brush.glass && brush.split && brush.glassShare > 0.1f && brush.glassShare < 0.3f,
+            "the second tumbler is a fifth glass, the rest opaque: " + brush.reason);
+        const materialgen::GlassVerdict mug = materialgen::ClassifyGlass(gltf + "#node:Cup_Ceramic_1", -1);
+        Check(!mug.glass && mug.glassShare == 0.0f, "a ceramic mug of the same material is not glass: " + mug.reason);
+        const materialgen::GlassVerdict pane = materialgen::ClassifyGlass(gltf + "#node:Wall_corner_shelf", 1);
+        Check(pane.glass && !pane.split, "the corner shelf's pane is all glass: " + pane.reason);
+        Check(!materialgen::ClassifyGlass(gltf + "#node:Wall_corner_shelf", 0).glass, "and its frame is not");
     }
 }
 
@@ -3764,6 +3853,7 @@ int main(int argc, char** argv)
             const EditorActionContext lampActionCtx{ lampCtx, assets, extensions };
             TestLampsComeOnAtNight(lampActionCtx);
             TestMoveReachesLights(lampActionCtx);
+            TestAddLightsIsExact(lampActionCtx);
         }
         TestSurfaceAndColourUndo(actionCtx);
         TestRestPose();

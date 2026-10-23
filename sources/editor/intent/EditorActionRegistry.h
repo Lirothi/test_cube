@@ -59,6 +59,10 @@ enum class EditorParamKind
     // has no object production -- the action would be described to the model and
     // unreachable by it, the way groundHeight's point list once was.
     Placements,
+    // `addLights`' list: [{position, type?, name?, lumens?, radius?, color?, shadows?, onAt?,
+    // direction?, range?, innerAngleDeg?, outerAngleDeg?}, ...]. Its own kind for Placements'
+    // reason -- an object list needs its own grammar rule to be sampled at all.
+    LightPlacements,
 };
 
 struct EditorActionParam

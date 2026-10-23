@@ -1217,8 +1217,8 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
         std::memcpy(cb.cpu, &c, sizeof(c));
         lodCb[L] = cb.gpu;
     }
-    // t3..t5 for every draw: the records (the unified copy the shadow VS reads too), the fades,
-    // the camera LODs. Staged once.
+    // t4..t6 for every draw: the records (the unified copy the shadow VS reads too), the fades,
+    // the camera LODs (t3 is the material's emissive map, Part E). Staged once.
     const D3D12_GPU_DESCRIPTOR_HANDLE tail = renderer->StageSrvUavTable({ InstanceReadSrv(f), casterFade_.Srv(f), CasterLodSrv(f) }).gpu;
 
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1260,7 +1260,7 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
             RenderContext& ctx = h.ref();
             ctx.cbv[1] = viewCB;
             run.md->StageGBufferBindings(renderer, ctx, 0, 0, /*bindless=*/true); // the sampler; textures by index
-            ctx.srvTable[3] = tail;
+            ctx.srvTable[4] = tail;
             if (!run.mat->Bind(cl, ctx, wireframe)) { continue; }
             renderer->ExecuteIndirect(cl, runSig, run.count, cmds.buffer.Get(),
                                       cmdRegionBase + static_cast<UINT64>(run.first) * Renderer::kBindlessIndirectCommandBytes, nullptr, 0);
@@ -1326,7 +1326,7 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
         {
             MaterialData::StageNeutralGBufferSurfaceParams(renderer, ctx, 2);
         }
-        ctx.srvTable[3] = tail;
+        ctx.srvTable[4] = tail;
         // GBufferBindingGuard.h: a root parameter left unbound (a group with no material) is not a
         // draw to issue -- the CPU path skips that submesh the same way.
         if (!gg.mat->Bind(cl, ctx, wireframe)) { continue; }
@@ -1396,9 +1396,9 @@ void ShadowGpuData::BuildGBufferCommandOrder_()
     {
         const GroupGbuf& gg = groupGbuf_[g];
         const Mesh* mesh = groupMesh_[g];
+        // A textureless material merges like any other since 2026-10-23: its slots are the heap's
+        // null texture and the sampler is staged regardless (MaterialData::StageGBufferBindings).
         if (!gg.mat || !gg.md || !mesh || !mesh->GetVertexBufferResource()) { continue; }
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
-        if (gg.md->GatherGBufferSRVs(srvs.data()) == 0) { continue; } // textureless: the per-group path skips it too
         for (std::uint32_t lod = 0; lod < render::kMaxShadowLods; ++lod)
         {
             if (!mesh->GetLodIndexBufferResource(mesh->ClampExplicitLod(lod))) { continue; }
@@ -1658,7 +1658,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                     {
                         const std::uint32_t slot = MaterialSlotOf(mesh, s, gb->SlotCount());
                         gg.md = gb->GetMaterialDataForSlot(slot);
-                        gg.mat = gb->IndirectGraphicsMaterialForSlot(slot);
+                        gg.mat = gb->IndirectGraphicsMaterialForSlot(slot); // null for a glass-only slot
+                        // Glass with no opaque texel (GBufferRenderable::SlotIsGlassOnly): the group draws
+                        // nothing anywhere -- its index count is zeroed below for the camera and every
+                        // shadow view; the slot's glass is drawn by Main_Translucent.
+                        gg.glassOnly = gb->SlotIsGlassOnly(slot);
                     }
                     groupGbufCpu.push_back(gg);
                 }
@@ -1672,7 +1676,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                     // the 16-slot cap below.
                     maskMd = md;
                     ++maskedGroupCount_;
-                    const float cutoff = md->alphaCutoff;
+                    const float cutoff = md->ShadowAlphaCutoff(); // a glass split's is raised: dithered glass texels
                     std::memcpy(&gm.y, &cutoff, sizeof(gm.y));
                     if (maskedAlbedoCount_ < kMaxMaskedGroups)
                     {
@@ -1713,6 +1717,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             {
                 const std::uint32_t slot = MaterialSlotOf(mesh, s, gbFoliage->SlotCount());
                 const GroupGbuf& gg = groupGbufCpu[g0 + s];
+                if (gbFoliage->SlotIsGlassOnly(slot))
+                {
+                    eligible = gg.glassOnly; // nothing to draw, as long as the group draws nothing too
+                    continue;
+                }
                 Material* mat = gbFoliage->IndirectGraphicsMaterialForSlot(slot);
                 eligible = mat != nullptr && mat == gg.mat && gbFoliage->GetMaterialDataForSlot(slot) == gg.md;
             }
@@ -1877,6 +1886,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             {
                 groupIndexCount[g] = static_cast<std::uint32_t>(kv.first->GetIndexCount());
             }
+            // A glass-only slot's group: no triangles in the Rung0 / Legacy args (shadow_cull_clear_cs).
+            if (g < groupGbuf_.size() && groupGbuf_[g].glassOnly) { groupIndexCount[g] = 0u; }
         }
     }
     for (size_t j = 0; j < giCasters_.size(); ++j)
@@ -1979,6 +1990,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                 const auto& subs = m->SubmeshesForLod(cl);
                 if (sOrd < subs.size()) { lodRel = subs[sOrd].indexOffset; count = subs[sOrd].indexCount; }
                 else                    { lodRel = 0u; count = m->GetLodIndexCount(cl); }
+                // A glass-only slot's group: no triangles for the VSM pages or the camera's indirect G-buffer.
+                if (g < groupGbuf_.size() && groupGbuf_[g].glassOnly) { count = 0u; }
             }
             const size_t o = (static_cast<size_t>(g) * render::kMaxShadowLods + L) * 4u;
             groupLodMega_[o + 1] = lodRel;

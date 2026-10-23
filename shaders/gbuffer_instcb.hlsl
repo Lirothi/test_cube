@@ -16,6 +16,7 @@
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
+Texture2D gEmissiveMap : register(t3); // Part E: read only when the tex indices' w says there is one
 #endif
 SamplerState gSmp : register(s0);
 
@@ -24,7 +25,7 @@ SamplerState gSmp : register(s0);
 #define GBUFFER_INSTCB_RS_TEX ""
 #else
 #define GBUFFER_INSTCB_RS_FLAGS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT),"
-#define GBUFFER_INSTCB_RS_TEX "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)),"
+#define GBUFFER_INSTCB_RS_TEX "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)),"
 #endif
 
 // B2b multi-slot instancing: material params come from a per-SUBMESH-draw CB (b2, one upload
@@ -54,7 +55,7 @@ cbuffer SlotParams : register(b2)
     float slotTransmissionNormalWeight;
     float4 slotTerrainTiling;
     float4 slotTerrainEdgeParams;
-    uint4 slotTexIndices; // A6: albedo, MR, normal slots in the bindless heap
+    uint4 slotTexIndices; // A6: albedo, MR, normal slots in the bindless heap; w = emissive map (kNoEmissiveMap = none)
 };
 #else
 cbuffer SurfaceParams : register(b2)
@@ -67,7 +68,7 @@ cbuffer SurfaceParams : register(b2)
     float surfaceTransmissionNormalWeight;
     float4 surfaceTerrainTiling;
     float4 surfaceTerrainEdgeParams;
-    uint4 surfaceTexIndices; // A6: albedo, MR, normal slots in the bindless heap
+    uint4 surfaceTexIndices; // A6: albedo, MR, normal slots in the bindless heap; w = emissive map (kNoEmissiveMap = none)
 };
 #endif
 
@@ -174,6 +175,7 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     Texture2D gAlbedo = ResourceDescriptorHeap[mTexIndices.x];
     Texture2D gMR = ResourceDescriptorHeap[mTexIndices.y];
     Texture2D gNormalMap = ResourceDescriptorHeap[mTexIndices.z];
+    Texture2D gEmissiveMap = ResourceDescriptorHeap[EMISSIVE_MAP_INDEX(mTexIndices)];
 #endif
 
     AlphaTestClip(gAlbedo, gSmp, i.UV, mTexOffsScale, mTerrainTiling, mTerrainEdgeParams,
@@ -205,7 +207,8 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, mEmissive, mSubsurfaceColor, mTransmissionStrength,
+    const float3 emissiveOut = ApplyEmissiveMap(mEmissive, gEmissiveMap, gSmp, i.UV, mTexOffsScale, mTexIndices.w);
+    return FinalizeGBuffer(albedo, mr, N, emissiveOut, mSubsurfaceColor, mTransmissionStrength,
                            mAmbientOcclusion, mIndirectSpecularScale, mTransmissionAlbedoPower,
                            mTransmissionNormalWeight, motion, i.objectId);
 }

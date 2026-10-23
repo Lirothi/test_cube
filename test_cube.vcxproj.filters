@@ -726,6 +726,9 @@
     <ClCompile Include="sources/rendering/renderables/TransparentStaticMesh.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/renderables/GlassPassSrvs.cpp">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp">
       <Filter>sources\rendering\renderables</Filter>
     </ClCompile>
@@ -1494,6 +1497,9 @@
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h">
+      <Filter>sources\rendering\renderables</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/renderables/GlassPassSrvs.h">
       <Filter>sources\rendering\renderables</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h">

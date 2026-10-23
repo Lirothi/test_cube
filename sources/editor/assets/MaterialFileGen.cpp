@@ -306,6 +306,65 @@ namespace materialgen
         return out;
     }
 
+    GlassVerdict ClassifyGlass(const std::string& geometry, int ordinal)
+    {
+        GlassVerdict v;
+        const GltfMaterialDesc d = MeshManager::DescribeGltfMaterial(geometry, ordinal);
+        if (!d.valid || !(d.transmission > 0.0f))
+        {
+            v.reason = "not glass: no KHR_materials_transmission";
+            return v;
+        }
+        float cutoff = 0.5f;
+        const bool cutout = IsAlphaCutout(d, &cutoff);
+        const bool needGeometry = !d.transmissionPath.empty() || cutout;
+        MeshCpuData cpu;
+        bool parsed = false;
+        if (needGeometry)
+        {
+            MeshLoadOptions options;
+            options.generateTangentSpace = false; // positions and texcoords are all this reads
+            MeshManager parser;
+            parsed = parser.ParseFileCpu(geometry, cpu, options) && !cpu.indices.empty();
+        }
+        // A split import's geometry is the node: its own group 0. A whole file numbers them.
+        const size_t submesh = ordinal > 0 ? static_cast<size_t>(ordinal) : 0u;
+        // The transmitting share: factor * map R over kGlassTransmissionMin (MeasureCutShare counts BELOW).
+        v.glassShare = 1.0f;
+        if (!d.transmissionPath.empty())
+        {
+            assets::AlphaImage red;
+            const float below = (parsed && assets::LoadAlphaChannel(d.transmissionPath, 1024, red, 0))
+                ? MeasureCutShare(cpu, submesh, red, kGlassTransmissionMin / d.transmission)
+                : -1.0f;
+            v.glassShare = below >= 0.0f ? 1.0f - below : -1.0f;
+        }
+        char text[224];
+        if (v.glassShare == 0.0f)
+        {
+            v.reason = "not glass: no texel of its surface transmits (the transmission map is 0 there)";
+            return v;
+        }
+        v.glass = true; // unmeasurable (-1) is not evidence against the glTF's own word
+        if (cutout && parsed && !d.albedoPath.empty())
+        {
+            assets::AlphaImage alpha;
+            const float cut = assets::LoadAlphaChannel(d.albedoPath, 1024, alpha)
+                ? MeasureCutShare(cpu, submesh, alpha, cutoff) : -1.0f;
+            v.opaqueShare = cut >= 0.0f ? 1.0f - cut : -1.0f;
+        }
+        v.split = cutout && v.opaqueShare >= kGlassOpaqueShareMin;
+        std::snprintf(text, sizeof(text), "glass: %.1f%% of the surface transmits; %s", v.glassShare * 100.0f,
+            v.split ? "its cutout keeps an opaque part, which stays in the G-buffer" : "all of it is glass");
+        v.reason = text;
+        if (v.split)
+        {
+            std::snprintf(text, sizeof(text), " (%.1f%% opaque at alpha %.2f)", v.opaqueShare * 100.0f, cutoff);
+            v.reason += text;
+        }
+        return v;
+    }
+
     namespace
     {
         // The keys a leaf card's material says differently from a surface's. WriteFromGltf writes
@@ -359,12 +418,19 @@ namespace materialgen
             leaf = ordinal >= 0 && static_cast<size_t>(ordinal) < verdicts.size() &&
                 verdicts[static_cast<size_t>(ordinal)].leaf;
         }
-        const bool foliage = *leaf;
-
         const fs::path matPath = fs::path("data/materials") / (name + ".json");
         std::error_code ec;
         fs::create_directories("data/materials", ec);
         if (!overwrite && fs::exists(matPath, ec)) { return name; } // preserve prior/edited file
+
+        // Glass first: a glass slot is never a leaf card, and its cutout survives only as the split.
+        const GlassVerdict glass = d.transmission > 0.0f ? ClassifyGlass(geometry, ordinal) : GlassVerdict{};
+        if (d.transmission > 0.0f)
+        {
+            LOG_INFO(logging::LogCategory::Asset, "material {}: submesh {} of {}: {}", name, ordinal, geometry,
+                glass.reason);
+        }
+        const bool foliage = *leaf && !glass.glass;
 
         // Only an opaque double-sided material is worth measuring: nothing else can change.
         bool measured = false;
@@ -439,7 +505,14 @@ namespace materialgen
         m["transmissionAlbedoPower"] = 0.6f;
         m["ambientOcclusion"] = 1.0f;
         m["normalIsRG"] = false;
-        if (cutout) { m["alphaTest"] = true; m["alphaCutoff"] = cutoff; }
+        if (cutout && (!glass.glass || glass.split)) { m["alphaTest"] = true; m["alphaCutoff"] = cutoff; }
+        if (glass.glass)
+        {
+            m["shadingModel"] = "thinTranslucent";
+            m["transmission"] = d.transmission;
+            if (!d.transmissionPath.empty()) { m["transmissionMap"] = normalize(d.transmissionPath); }
+            m["ior"] = d.ior;
+        }
         if (d.alphaBlend || foliage)
         {
             LOG_INFO(logging::LogCategory::Asset, "material {}: {}{}", name,
@@ -460,7 +533,11 @@ namespace materialgen
         if (d.emissive[0] != 0.0f || d.emissive[1] != 0.0f || d.emissive[2] != 0.0f)
         {
             m["emissiveColor"] = { d.emissive[0], d.emissive[1], d.emissive[2] };
-            m["emissiveStrength"] = 1.0f;
+            // KHR_materials_emissive_strength (1 without it). The bathroom's candles ship 10 and an
+            // emissive map that says WHERE -- both used to be dropped, and the whole candle glowed
+            // at 1 or nothing did.
+            m["emissiveStrength"] = d.emissiveStrength;
+            if (!d.emissivePath.empty()) { m["emissive"] = normalize(d.emissivePath); }
         }
 
         std::ofstream mo(matPath, std::ios::trunc);

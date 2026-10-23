@@ -144,7 +144,7 @@ void InstancedDrawBatch::PrepareSlotBindings(Renderer* renderer, bool shadow)
 
         {
             uint32_t idx[4] = { render::BindlessHeap::kNullTextureIndex, render::BindlessHeap::kNullTextureIndex,
-                                render::BindlessHeap::kNullTextureIndex, 0u };
+                                render::BindlessHeap::kNullTextureIndex, MaterialData::kNoEmissiveMap };
             if (slotData) { slotData->GatherGBufferIndices(idx); }
             sp->surface.texIndices = DirectX::XMUINT4(idx[0], idx[1], idx[2], idx[3]); // A6
         }

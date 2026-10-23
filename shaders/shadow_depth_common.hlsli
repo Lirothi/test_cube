@@ -76,4 +76,26 @@ float ShadowLinearDepth(float4 H, float3 normalWS, float4x4 lightVP, float4 para
     return (H.w + bias - params.w) * (-params.z);
 }
 
+// The masked caster's clip, shared by gbuffer_csm (CPU) and shadow_indirect_csm (GPU-driven, VSM pages). `a` is the
+// texel's coverage (albedo.a * baseColor.a), `cutoff` the slot's (< 0 = never clips).
+//
+// GLASS (MaterialData::IsThinTranslucent with an alpha test -- the split): its cutoff arrives raised by
+// kGlassShadowCutoff (GBufferRenderable's shadow CB, ShadowGpuData's group mask; never the G-buffer's own). The texels
+// the cutout keeps are its opaque part and cast like any mask; a GLASS texel casts a dithered share equal to its
+// coverage, which the shadow filters (PCF, the local lights' tent, SMRT) average into a partial shadow -- light goes
+// through glass. It used to cast nothing, and a tumbler's shadow was the speckle of its few opaque texels.
+static const float kGlassShadowCutoff = 1.0f;
+void ShadowAlphaClip(float a, float cutoff, float2 svPosition)
+{
+    if (cutoff >= kGlassShadowCutoff)
+    {
+        if (a >= cutoff - kGlassShadowCutoff) { return; }
+        // Interleaved gradient noise on the shadow map's own texel grid: stable, so cached pages stay valid.
+        const float noise = frac(52.9829189f * frac(dot(svPosition, float2(0.06711056f, 0.00583715f))));
+        clip(a - noise);
+        return;
+    }
+    clip(a - cutoff);
+}
+
 #endif // SHADOW_DEPTH_COMMON_HLSLI

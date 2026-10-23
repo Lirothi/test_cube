@@ -1806,6 +1806,30 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
             (obj->IsDepthWritingTransparent() ? view.transparentWater : view.translucentComplex)
                 .push_back(obj);
         }
+        // Glass as a shading model: an OPAQUE object with glass material slots (thinTranslucent) draws
+        // those slots in Main_Translucent too (RenderObjectBatch -> RenderTranslucent), blended back to
+        // front with the glass objects by the key SortTransparent uses. Taken from the frustum's
+        // survivors, before occlusion and the indirect G-buffer take objects out of the opaque buckets.
+        const size_t glassBefore = view.translucentComplex.size();
+        for (const SceneRenderQueue::BucketType type : { SceneRenderQueue::BucketType::OpaqueSimple,
+                                                          SceneRenderQueue::BucketType::OpaqueComplex })
+        {
+            for (RenderableObjectBase* o : view.queue.GetVisibleBucket(type))
+            {
+                if (o && o->HasTranslucentSlots()) { view.translucentComplex.push_back(o); }
+            }
+        }
+        if (view.translucentComplex.size() > glassBefore)
+        {
+            const auto depthOf = [&view](const RenderableObjectBase* o)
+            {
+                const AABB& b = o->GetWorldBounds();
+                return b.IsValid() ? view.view.TransformPoint(b.GetCenter()).z : std::numeric_limits<float>::infinity();
+            };
+            std::stable_sort(view.translucentComplex.begin(), view.translucentComplex.end(),
+                             [&depthOf](const RenderableObjectBase* a, const RenderableObjectBase* b)
+                             { return depthOf(a) > depthOf(b); });
+        }
         // Camera LOD must be selected before camera batches build their per-tier member lists.
         // S1: the view's own frustum rides along -- the chunk/instance masks use the planes the
         // object cull above used, so "object in, chunk out" is the same test at a finer grain.

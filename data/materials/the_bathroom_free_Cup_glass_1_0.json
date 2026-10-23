@@ -4,16 +4,19 @@
   "alphaTest": true,
   "ambientOcclusion": 1.0,
   "indirectSpecularScale": 1.0,
+  "ior": 1.5,
   "mr": "models/the_bathroom_free/textures/Cups_metallicRoughness.png",
   "normal": "models/the_bathroom_free/textures/Cups_normal.png",
   "normalIsRG": false,
-  "shadingModel": "defaultLit",
+  "shadingModel": "thinTranslucent",
   "subsurfaceColor": [
     1.0,
     1.0,
     1.0
   ],
+  "transmission": 1.0,
   "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionMap": "models/the_bathroom_free/textures/Cups_transmission.png",
   "transmissionNormalWeight": 0.3499999940395355,
   "transmissionStrength": 0.0
 }

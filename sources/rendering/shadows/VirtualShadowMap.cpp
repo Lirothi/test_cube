@@ -2379,7 +2379,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         // ONE table based at t0. The VSM_PAGE root signature folds what the loop path splits across
         // t0 and t3, because Material::Bind keys tables by their base register and silently drops any
-        // base >= RenderContext::kMaxBindings (4) — a second table at t4 would never be bound.
+        // base >= RenderContext::kMaxBindings (4 when this was written, 8 since Part E) — a second
+        // table past it would never be bound.
         // Only the descriptors actually used are staged (pageProj sits BEFORE the albedos precisely
         // so the unused albedo slots of the 20-wide range need no dummy descriptors), matching what
         // the loop path already does with its 16-wide albedo range.

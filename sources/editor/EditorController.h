@@ -229,6 +229,20 @@ private:
         bool openedWindow_ = false;
     };
     McpImportHost mcpImportHost_{ *this };
+
+    // save_level: the open level written as Ctrl+S writes it, minus the per-level camera state
+    // (MCP moves the camera for screenshots). Registered next to the import host every frame.
+    class McpLevelHost final : public editormcp::LevelHost
+    {
+    public:
+        explicit McpLevelHost(EditorController& owner) : owner_(owner) {}
+        ~McpLevelHost() override { editormcp::SetLevelHost(nullptr); }
+        bool Save(std::string& outText) override;
+
+    private:
+        EditorController& owner_;
+    };
+    McpLevelHost mcpLevelHost_{ *this };
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
     EditorExtensionRegistry extensions_;

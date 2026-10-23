@@ -170,6 +170,10 @@ struct GltfMaterialDesc {
     float roughness    = 1.0f;    // roughnessFactor (multiplies MR.G)
     float normalScale  = 1.0f;
     float emissive[3]  = {0.0f, 0.0f, 0.0f};
+    float emissiveStrength = 1.0f; // KHR_materials_emissive_strength (1 = the core spec's ceiling)
+    float transmission = 0.0f;    // KHR_materials_transmission factor (0 = opaque)
+    std::string transmissionPath; // its texture, R channel; empty when absent
+    float ior = 1.5f;             // KHR_materials_ior (1.5 = the spec's default)
     bool  alphaMask    = false;   // alphaMode == MASK
     bool  alphaBlend   = false;   // alphaMode == BLEND (the importer reads a textured one as a cutout)
     float alphaCutoff  = 0.5f;

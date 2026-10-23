@@ -233,6 +233,7 @@ namespace intentschema
         // the old wide rule, which is exactly what that comment was always describing.
         case EditorParamKind::Any: return "pvalue";
         case EditorParamKind::Placements: return "placelist";
+        case EditorParamKind::LightPlacements: return "lightlist";
         }
         return "pvalue";
     }
@@ -452,6 +453,14 @@ namespace intentschema
              " ( \",\" placemember )* \"}\"\n";
         g += "placemember ::= \"\\\"yawDeg\\\":\" number | \"\\\"rotationDeg\\\":\" vec3"
              " | \"\\\"scale\\\":\" ( number | vec3 )\n";
+        // `addLights`' lights: position leads and is required; the rest are ValidateParams' fields.
+        g += "lightlist ::= \"[\" lightitem ( \",\" lightitem )* \"]\"\n";
+        g += "lightitem ::= \"{\\\"position\\\":\" vec3 ( \",\" lightmember )* \"}\"\n";
+        g += "lightmember ::= \"\\\"type\\\":\" ( \"\\\"point\\\"\" | \"\\\"spot\\\"\" )"
+             " | \"\\\"name\\\":\" string | \"\\\"lumens\\\":\" number | \"\\\"radius\\\":\" number"
+             " | \"\\\"range\\\":\" number | \"\\\"color\\\":\" vec3 | \"\\\"shadows\\\":\" ( \"true\" | \"false\" )"
+             " | \"\\\"onAt\\\":\" ( \"\\\"night\\\"\" | \"\\\"day\\\"\" | \"\\\"always\\\"\" )"
+             " | \"\\\"direction\\\":\" vec3 | \"\\\"innerAngleDeg\\\":\" number | \"\\\"outerAngleDeg\\\":\" number\n";
         g += "pstring ::= string\n\n";
 
         // --- query ----------------------------------------------------------------

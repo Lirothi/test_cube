@@ -289,6 +289,7 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
         if (!shadingModelValid) { shadingModelPreview = "Invalid (Default Lit fallback)"; }
         else if (shadingModel == ShadingModel::TwoSidedFoliage) { shadingModelPreview = "Two-Sided Foliage"; }
         else if (shadingModel == ShadingModel::Terrain) { shadingModelPreview = "Terrain"; }
+        else if (shadingModel == ShadingModel::ThinTranslucent) { shadingModelPreview = "Thin Translucent (glass)"; }
 
         if (ImGui::BeginCombo("Shading Model", shadingModelPreview))
         {
@@ -300,7 +301,8 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             constexpr ShadingModelOption kOptions[] = {
                 { ShadingModel::DefaultLit, "Default Lit" },
                 { ShadingModel::TwoSidedFoliage, "Two-Sided Foliage" },
-                { ShadingModel::Terrain, "Terrain" }
+                { ShadingModel::Terrain, "Terrain" },
+                { ShadingModel::ThinTranslucent, "Thin Translucent (glass)" }
             };
             for (const ShadingModelOption& option : kOptions)
             {
@@ -389,6 +391,33 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
                 ImGui::SetTooltip("0 keeps broad two-sided wrap; 1 uses abs(N.L) projected-area weighting.\n"
                                   "Fresnel still suppresses grazing-angle transmission.");
             }
+        }
+        if (shadingModelValid && shadingModel == ShadingModel::ThinTranslucent)
+        {
+            ImGui::Spacing();
+            ImGui::SeparatorText("Glass");
+            // glTF KHR_materials_transmission / _ior; MaterialData::glassTransmission.
+            float transmission = std::clamp(doc_.value("transmission", 1.0f), 0.0f, 1.0f);
+            if (ImGui::DragFloat("Transmission", &transmission, 0.01f, 0.0f, 1.0f, "%.2f",
+                                 ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["transmission"] = transmission;
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("The share of light that goes THROUGH, tinted by the base colour;\n"
+                                  "the rest is the surface's own diffuse. The transmission map's R multiplies it.");
+            }
+            float ior = std::clamp(doc_.value("ior", 1.5f), 1.0f, 3.0f);
+            if (ImGui::DragFloat("IOR", &ior, 0.01f, 1.0f, 3.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+            {
+                doc_["ior"] = ior;
+            }
+            const std::string map = doc_.value("transmissionMap", std::string{});
+            ImGui::TextDisabled("Transmission map: %s", map.empty() ? "none" : map.c_str());
+            ImGui::TextDisabled(doc_.value("alphaTest", false)
+                ? "Alpha test on: the texels it keeps are opaque, the rest is glass."
+                : "Alpha test off: all of it is glass (no G-buffer, no shadow).");
         }
         if (terrain)
         {

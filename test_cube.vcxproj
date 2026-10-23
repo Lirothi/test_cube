@@ -427,6 +427,7 @@
     <ClCompile Include="sources/rendering/meshes/MeshManager.cpp" />
     <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp" />
     <ClCompile Include="sources/rendering/renderables/TransparentStaticMesh.cpp" />
+    <ClCompile Include="sources/rendering/renderables/GlassPassSrvs.cpp" />
     <ClCompile Include="sources/rendering/renderables/GBufferRenderable.cpp" />
     <ClCompile Include="sources/rendering/renderables/InstancedDrawBatch.cpp" />
     <ClCompile Include="sources/rendering/renderables/RenderableObject.cpp" />
@@ -702,6 +703,7 @@
     <ClInclude Include="sources/rendering/renderables/InstancedDrawBatch.h" />
     <ClInclude Include="sources/rendering/renderables/InstanceTypes.h" />
     <ClInclude Include="sources/rendering/renderables/TransparentStaticMesh.h" />
+    <ClInclude Include="sources/rendering/renderables/GlassPassSrvs.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObject.h" />
     <ClInclude Include="sources/rendering/renderables/RenderableObjectBase.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h" />

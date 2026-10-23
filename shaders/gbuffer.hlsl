@@ -12,6 +12,7 @@
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
+Texture2D gEmissiveMap : register(t3); // Part E: read only when texIndices.w says there is one
 #endif
 SamplerState gSmp : register(s0);
 
@@ -25,7 +26,7 @@ cbuffer SurfaceParams : register(b2)
     float transmissionNormalWeight;
     float4 terrainTiling;
     float4 terrainEdgeParams;
-    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap (read under GBUFFER_BINDLESS)
+    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap; w = the emissive map's (kNoEmissiveMap = none)
 };
 
 #if GBUFFER_BINDLESS
@@ -41,7 +42,7 @@ cbuffer SurfaceParams : register(b2)
     "CBV(b0)," \
     "CBV(b1)," \
     "CBV(b2)," \
-    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #endif
 
@@ -59,6 +60,7 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     Texture2D gAlbedo = ResourceDescriptorHeap[texIndices.x];
     Texture2D gMR = ResourceDescriptorHeap[texIndices.y];
     Texture2D gNormalMap = ResourceDescriptorHeap[texIndices.z];
+    Texture2D gEmissiveMap = ResourceDescriptorHeap[EMISSIVE_MAP_INDEX(texIndices)];
 #endif
     LodFadeClip(i.H.xy, lodFade);
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
@@ -94,7 +96,8 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, emissive, subsurfaceColor, transmissionStrength,
+    const float3 emissiveOut = ApplyEmissiveMap(emissive, gEmissiveMap, gSmp, i.UV, texOffsScale, texIndices.w);
+    return FinalizeGBuffer(albedo, mr, N, emissiveOut, subsurfaceColor, transmissionStrength,
                            ambientOcclusion, indirectSpecularScale, transmissionAlbedoPower,
                            transmissionNormalWeight, motion, i.objectId);
 }

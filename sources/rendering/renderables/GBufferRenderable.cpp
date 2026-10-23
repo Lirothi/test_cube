@@ -8,7 +8,10 @@
 #include <cstring>
 
 #include "app/camera/Camera.h"
+#include "core/containers/inl_vector.h"
 #include "rendering/core/Renderer.h"
+#include "rendering/descriptors/SamplerManager.h"
+#include "rendering/renderables/GlassPassSrvs.h" // RenderTranslucent: the glass pass's table
 #include "materials/MaterialDataManager.h"
 #include "vfx/WindState.h" // W8: WindDistanceFade
 
@@ -18,6 +21,31 @@ uint32_t ToObjectId32(std::uint64_t id)
 {
     return id > 0xffffffffull ? 0xffffffffu : static_cast<uint32_t>(id);
 }
+
+// glass.hlsl's `cbuffer GlassParams : register(b0)`, field for field (row-major matrices, 16-byte rows).
+// BuildGlassMaterials checks every offset against the reflection and refuses a PSO that disagrees.
+struct GlassMaterialCB
+{
+    Math::mat4 world;
+    Math::mat4 prevWorld;
+    Math::float4 absorptionThickness; // xyz unused (no absorption in the thin model), w = thickness (m)
+    Math::float4 tintRoughness;       // unread by GLASS_MATERIAL
+    Math::float4 matExtra;            // x = IOR, y = reflection strength
+    std::uint32_t objectId;
+    std::uint32_t objectIdPad[3];
+    Math::float4 matBaseColor;
+    Math::float4 matSurface;          // metal, rough, transmission factor, alpha cutoff (-1 = no split)
+    Math::float4 matTexFlags;
+    Math::float4 matTexOffsScale;
+    Math::float4 matGlass;            // x = transmission map present, y = mrMultiply
+};
+static_assert(sizeof(Math::mat4) == 64, "GlassMaterialCB mirrors glass.hlsl's float4x4");
+static_assert(sizeof(GlassMaterialCB) == 272, "GlassMaterialCB mirrors glass.hlsl's GlassParams");
+
+// glTF without KHR_materials_volume is THIN-WALLED: the light goes through unbent (UE ThinTranslucent
+// has no refraction either), so glass.hlsl reads the scene straight behind the pixel. A volume's
+// thicknessFactor would go here -- the_bathroom_free ships none.
+constexpr float kGlassMaterialThickness = 0.0f;
 
 class GBufferUniformBinder final : public RenderableObject::UniformBinder
 {
@@ -118,8 +146,12 @@ public:
                       gb ? gb->GetWindTrunkStiffness() : 1.0f, cbData);
         UpdateUniform(owner, shadowHandles_.windLeafScale, material,
                       gb ? gb->GetWindLeafScaleWorld() : 0.0f, cbData);
-        // Plan S8: the slot's mask (-1 = never clips), read only by the masked shadow PSO.
-        UpdateUniform(owner, shadowHandles_.alphaCutoff, material, sp.alphaCutoff, cbData);
+        // Plan S8: the slot's mask (-1 = never clips), read only by the masked shadow PSO. A glass slot's is raised by
+        // kGlassShadowCutoff (shadow_depth_common.hlsli): its glass texels cast a dithered share, not nothing.
+        const MaterialData* smd = gb ? gb->GetMaterialDataForSlot(slot) : nullptr;
+        const float shadowCutoff = (smd && smd->IsThinTranslucent() && sp.alphaCutoff >= 0.0f)
+            ? sp.alphaCutoff + MaterialData::kGlassShadowCutoff : sp.alphaCutoff;
+        UpdateUniform(owner, shadowHandles_.alphaCutoff, material, shadowCutoff, cbData);
         UpdateUniform(owner, shadowHandles_.texOffsScale, material, sp.texOffsScale, cbData);
         UpdateUniform(owner, shadowHandles_.baseColor, material, sp.baseColor, cbData);
     }
@@ -292,6 +324,7 @@ void GBufferRenderable::Init(Renderer* renderer,
     RenderableObject::Init(renderer, uploadCmdList, uploadKeepAlive);
 
     BuildSlotMaterials(renderer);
+    BuildGlassMaterials(renderer); // before the two below: both read hasGlassOnlySlot_
     BuildInstancedMaterials(renderer);
     BuildIndirectMaterials(renderer); // S4
 }
@@ -404,7 +437,10 @@ void GBufferRenderable::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLi
     const Frustum* chunkCullFrustum, bool linearDepth)
 {
     Mesh* mesh = GetMesh();
-    if (!MultiSlotDraw() || slotShadowMaterials_.empty() || !mesh)
+    // A glass-only slot casts nothing (its material lets the light through): a single-material draw of
+    // one is skipped whole, and a multi-slot object with one takes the per-submesh loop, which skips it.
+    if (!MultiSlotDraw() && SlotIsGlassOnly(0)) { return; }
+    if (!MultiSlotDraw() || (slotShadowMaterials_.empty() && !hasGlassOnlySlot_) || !mesh)
     {
         RenderableObject::RenderShadow(renderer, cl, lightView, lightProj, viewCB, lod, chunkCameraLods, chunkCullFrustum,
                                        linearDepth);
@@ -421,6 +457,7 @@ void GBufferRenderable::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLi
     for (size_t s = 0; s < subs.size(); ++s)
     {
         const size_t slot = subs[s].materialSlot < matDatas_.size() ? subs[s].materialSlot : matDatas_.size() - 1;
+        if (SlotIsGlassOnly(slot)) { continue; }
         Material* const slotMaterial = (slot < slotShadowMaterials_.size() && slotShadowMaterials_[slot])
             ? slotShadowMaterials_[slot].get()
             : shadowMaterial_.get();
@@ -616,6 +653,7 @@ void GBufferRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl
     Mesh* mesh = GetMesh();
     if (!MultiSlotDraw())
     {
+        if (SlotIsGlassOnly(0)) { return; } // all glass: drawn by RenderTranslucent alone
         currentDrawSlot_ = 0;
         RenderableObject::Render(renderer, cl, camera, viewCB);
         return;
@@ -645,6 +683,7 @@ void GBufferRenderable::Render(Renderer* renderer, ID3D12GraphicsCommandList* cl
             currentDrawSlot_ = subs[s].materialSlot < matDatas_.size()
                 ? subs[s].materialSlot
                 : static_cast<uint32_t>(matDatas_.size() - 1);
+            if (SlotIsGlassOnly(currentDrawSlot_)) { continue; } // its glass is RenderTranslucent's
 
             auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, kAlign);
             uint8_t* cbData = static_cast<uint8_t*>(alloc.cpu);
@@ -682,6 +721,13 @@ void GBufferRenderable::BuildInstancedMaterials(Renderer* renderer)
     for (const auto& md : matDatas_)
     {
         if (md && !md->shaderOverride.empty()) { return; }
+    }
+    // Glass: a glass-only slot has no G-buffer or shadow draw at all (the batch draws every submesh), and a
+    // split slot's shadow cutoff differs from its G-buffer one (kGlassShadowCutoff) while the instanced
+    // shaders read one value for both.
+    for (const auto& md : matDatas_)
+    {
+        if (md && md->IsThinTranslucent()) { return; }
     }
 
     Material::GraphicsDesc gd = BuildGraphicsDesc(renderer);
@@ -771,6 +817,9 @@ void GBufferRenderable::BuildIndirectMaterials(Renderer* renderer)
     std::vector<std::shared_ptr<Material>> built(slots);
     for (size_t i = 0; i < slots; ++i)
     {
+        // A glass-only slot has no G-buffer draw: null, which ShadowGpuData reads as "this group draws
+        // nothing anywhere" (its index count is zeroed for the camera and every shadow view alike).
+        if (SlotIsGlassOnly(i)) { continue; }
         Material::GraphicsDesc gd = BuildGraphicsDesc(renderer); // slot-0 configured desc
         ApplySlotPipelineOverrides(gd, i);
         gd.shaderFile = L"shaders/gbuffer_indirect.hlsl";
@@ -898,4 +947,236 @@ void GBufferRenderable::ConfigureGraphicsPipeline(Renderer* renderer, Material::
     desc.depth.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
     desc.depth.FrontFace.StencilPassOp = D3D12_STENCIL_OP_REPLACE;
     desc.depth.BackFace = desc.depth.FrontFace;
+}
+
+bool GBufferRenderable::AllSlotsGlassOnly() const
+{
+    if (!hasGlassOnlySlot_) { return false; }
+    // A single-material draw is slot 0's (Render); a multi-slot one draws every slot.
+    const size_t drawn = MultiSlotDraw() ? matDatas_.size() : std::min<size_t>(matDatas_.size(), 1);
+    for (size_t i = 0; i < drawn; ++i)
+    {
+        if (!SlotIsGlassOnly(i)) { return false; }
+    }
+    return drawn > 0;
+}
+
+void GBufferRenderable::BuildGlassMaterials(Renderer* renderer)
+{
+    slotGlassMaterials_.clear();
+    slotGlassDepthMaterials_.clear();
+    hasGlassOnlySlot_ = false;
+    bool anyGlass = false;
+    for (const auto& md : matDatas_)
+    {
+        if (md && md->IsThinTranslucent()) { anyGlass = true; }
+        if (md && md->IsGlassOnly()) { hasGlassOnlySlot_ = true; }
+    }
+    if (!renderer || !anyGlass) { return; }
+    // glass.hlsl's VS reads the PNTUV vertex (POSITION/NORMAL/TANGENT/TEXCOORD0) the MeshManager produces.
+    if (GetInputLayoutKey() != "PosNormTanUV")
+    {
+        LOG_WARNING(logging::LogCategory::Render, "glass material slots need the PosNormTanUV layout (this object has {}): not drawn",
+                    GetInputLayoutKey());
+        return;
+    }
+
+    std::vector<std::shared_ptr<Material>> built(matDatas_.size());
+    std::vector<std::shared_ptr<Material>> builtDepth(matDatas_.size());
+    bool anyBuilt = false;
+    for (size_t i = 0; i < matDatas_.size(); ++i)
+    {
+        const MaterialData* md = matDatas_[i].get();
+        if (!md || !md->IsThinTranslucent()) { continue; }
+
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/glass.hlsl";
+        gd.inputLayoutKey = GetInputLayoutKey();
+        gd.defines.emplace_back("GLASS_MATERIAL", "1");
+        gd.defines.emplace_back("NORMALMAP_IS_RG", md->normalIsRG ? "1" : "0");
+        gd.defines.emplace_back("MR_LAYOUT_GLTF", md->mrLayoutGltf ? "1" : "0");
+        // The translucent pass's targets (TransparentStaticMesh's): scene colour, velocity, object id.
+#if WITH_EDITOR
+        gd.numRT = 3;
+        gd.rtvFormats[2] = renderer->GetObjectIdFormat();
+        gd.defines.emplace_back("EDITOR_OBJECT_ID", "1");
+        gd.blend.RenderTarget[2].BlendEnable = FALSE;
+        gd.blend.RenderTarget[2].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+#else
+        gd.numRT = 2;
+#endif
+        gd.rtvFormats[0] = renderer->GetSceneColorFormat();
+        gd.rtvFormats[1] = renderer->GetGBufferVelocityFormat();
+        gd.dsvFormat = renderer->GetDsvFormat();
+        gd.depth.DepthEnable = TRUE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        gd.depth.DepthFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
+        gd.depth.StencilEnable = FALSE;
+        // Over what is behind: target = colour + target * (1 - alpha), alpha = 1 - the share that
+        // goes through (glass.hlsl), so a glass behind this one stays in the picture.
+        gd.blend.IndependentBlendEnable = TRUE;
+        gd.blend.RenderTarget[0].BlendEnable = TRUE;
+        gd.blend.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
+        gd.blend.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        gd.blend.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        gd.blend.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        gd.blend.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        gd.blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        gd.blend.RenderTarget[1].BlendEnable = FALSE;
+        gd.blend.RenderTarget[1].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+        gd.raster.CullMode = md->doubleSided ? D3D12_CULL_MODE_NONE : D3D12_CULL_MODE_BACK;
+
+        auto m = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        bool usable = m && m->GetPipelineState() &&
+                      m->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) >= sizeof(GlassMaterialCB);
+        // The CB is written as one struct: every field must sit where the shader reads it.
+        const struct { const char* name; size_t offset; } kFields[] = {
+            { "world", offsetof(GlassMaterialCB, world) },
+            { "prevWorld", offsetof(GlassMaterialCB, prevWorld) },
+            { "absorptionThickness", offsetof(GlassMaterialCB, absorptionThickness) },
+            { "matExtra", offsetof(GlassMaterialCB, matExtra) },
+            { "objectId", offsetof(GlassMaterialCB, objectId) },
+            { "matBaseColor", offsetof(GlassMaterialCB, matBaseColor) },
+            { "matSurface", offsetof(GlassMaterialCB, matSurface) },
+            { "matTexFlags", offsetof(GlassMaterialCB, matTexFlags) },
+            { "matTexOffsScale", offsetof(GlassMaterialCB, matTexOffsScale) },
+            { "matGlass", offsetof(GlassMaterialCB, matGlass) },
+        };
+        for (const auto& f : kFields)
+        {
+            Material::CBufferField info{};
+            // An unread field may be stripped from the reflection; only a PRESENT field must agree.
+            if (usable && m->GetCBFieldInfo(0, f.name, info) && info.offset != f.offset)
+            {
+                LOG_ERROR(logging::LogCategory::Render, "glass.hlsl GlassParams.{} is at {} in the shader, {} in GlassMaterialCB",
+                          f.name, info.offset, f.offset);
+                usable = false;
+            }
+        }
+        // The depth prepass twin: the same VS (so the colour pass's GREATER_EQUAL meets the very same
+        // depth), PSDepthOnly, every colour write off, depth written.
+        Material::GraphicsDesc dd = gd;
+        dd.psEntry = "PSDepthOnly";
+        dd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+        for (UINT rt = 0; rt < dd.numRT; ++rt)
+        {
+            dd.blend.RenderTarget[rt].BlendEnable = FALSE;
+            dd.blend.RenderTarget[rt].RenderTargetWriteMask = 0;
+        }
+        auto depth = usable ? renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, dd) : nullptr;
+        usable = usable && depth && depth->GetPipelineState() &&
+                 depth->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment) ==
+                     m->GetCBSizeBytesAligned(0, render::kConstantBufferAlignment);
+        if (!usable)
+        {
+            LOG_WARNING(logging::LogCategory::Render, "glass material slot {} has no usable PSO: not drawn", i);
+            continue;
+        }
+        built[i] = std::move(m);
+        builtDepth[i] = std::move(depth);
+        anyBuilt = true;
+    }
+    if (anyBuilt)
+    {
+        slotGlassMaterials_ = std::move(built);
+        slotGlassDepthMaterials_ = std::move(builtDepth);
+    }
+}
+
+void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& /*camera*/,
+                                          D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    Mesh* mesh = GetMesh();
+    if (!renderer || !cl || !mesh || slotGlassMaterials_.empty() || matDatas_.empty()) { return; }
+    const render::GlassPassSrvs* passSrvs = renderer->GetGlassPassSrvs();
+    if (!passSrvs) { return; } // a shadow map is missing this frame: no glass, as for the panes
+
+    // s0..s2 as the panes' (TransparentStaticMesh), s3 the G-buffer's material sampler with its DLSS bias.
+    D3D12_SAMPLER_DESC aniso = *SamplerManager::AnisoWrap(16);
+    aniso.MipLODBias = renderer->GetDlssMipBias();
+    const auto samplerDescs = std::array{
+        *SamplerManager::LinearClamp(),
+        *SamplerManager::ComparisonLinearClamp(),
+        *SamplerManager::LinearClamp(),
+        aniso
+    };
+    const D3D12_GPU_DESCRIPTOR_HANDLE samplers = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
+    const D3D12_CPU_DESCRIPTOR_HANDLE nullTex = renderer->NullMaterialTextureSrv();
+
+    // The camera tier, no dithered crossfade: a BLENDED surface drawn at two tiers would be drawn twice.
+    const UINT lod = GetCameraLod();
+    const auto& subs = mesh->SubmeshesForLod(lod);
+    const bool multi = MultiSlotDraw();
+    constexpr UINT kAlign = render::kConstantBufferAlignment;
+    // Each glass submesh's bindings, staged once for its two draws: the depth prepass over ALL of them
+    // first (the object's nearest glass surface wins the depth test), then the colour pass.
+    struct GlassDraw
+    {
+        UINT submesh = 0;
+        uint32_t slot = 0;
+        D3D12_GPU_VIRTUAL_ADDRESS cb = 0;
+        D3D12_GPU_DESCRIPTOR_HANDLE srvs{};
+    };
+    tc::inl_vector<GlassDraw, 8> draws;
+    for (size_t s = 0; s < subs.size(); ++s)
+    {
+        const size_t slot = multi ? std::min<size_t>(subs[s].materialSlot, matDatas_.size() - 1) : 0;
+        Material* const glass = slot < slotGlassMaterials_.size() ? slotGlassMaterials_[slot].get() : nullptr;
+        const MaterialData* const md = matDatas_[slot].get();
+        if (!glass || !md) { continue; }
+        const MaterialParams& p = DrawParamsForSlot(slot);
+
+        const UINT cbSize = glass->GetCBSizeBytesAligned(0, kAlign);
+        auto alloc = renderer->GetFrameResource()->AllocDynamic(cbSize, kAlign);
+        if (!alloc.cpu) { continue; }
+        std::memset(alloc.cpu, 0, cbSize); // the ring-poison guard (RenderableObject::Render)
+        GlassMaterialCB cb{};
+        cb.world = GetModelMatrix();
+        cb.prevWorld = GetPreviousModelMatrix();
+        cb.absorptionThickness = Math::float4(0.0f, 0.0f, 0.0f, kGlassMaterialThickness);
+        cb.tintRoughness = Math::float4(1.0f, 1.0f, 1.0f, p.metalRough.y);
+        cb.matExtra = Math::float4(md->glassIor, 1.0f, 0.0f, 0.0f);
+        cb.objectId = ToObjectId32(GetEditorObjectId());
+        cb.matBaseColor = p.baseColor;
+        cb.matSurface = Math::float4(p.metalRough.x, p.metalRough.y, md->glassTransmission, p.alphaCutoff);
+        cb.matTexFlags = p.texFlags;
+        cb.matTexOffsScale = p.texOffsScale;
+        cb.matGlass = Math::float4(md->hasTransmission ? 1.0f : 0.0f, p.mrMultiply, 0.0f, 0.0f);
+        std::memcpy(alloc.cpu, &cb, sizeof(cb));
+
+        // The pass's t0..t14 with the slot's normal map at t6, then albedo / MR / transmission at t15..t17.
+        // An absent map binds the null texture; its flag keeps the shader from reading it.
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kGlassPassSrvCount + 3> srvs{};
+        std::copy(passSrvs->begin(), passSrvs->end(), srvs.begin());
+        srvs[render::kGlassNormalMapSlot] = md->hasNormal ? md->normal.GetSRVCPU() : nullTex;
+        srvs[render::kGlassPassSrvCount + 0] = md->hasAlbedo ? md->albedo.GetSRVCPU() : nullTex;
+        srvs[render::kGlassPassSrvCount + 1] = md->hasMR ? md->mr.GetSRVCPU() : nullTex;
+        srvs[render::kGlassPassSrvCount + 2] = md->hasTransmission ? md->transmission.GetSRVCPU() : nullTex;
+
+        draws.push_back(GlassDraw{ static_cast<UINT>(s), static_cast<uint32_t>(slot), alloc.gpu,
+                                   renderer->StageSrvUavTable(srvs).gpu });
+    }
+
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        const std::vector<std::shared_ptr<Material>>& psos = pass == 0 ? slotGlassDepthMaterials_ : slotGlassMaterials_;
+        for (const GlassDraw& d : draws)
+        {
+            Material* const pso = d.slot < psos.size() ? psos[d.slot].get() : nullptr;
+            if (!pso) { continue; }
+            auto h = renderer->GetRenderContextPool()->Acquire();
+            auto& ctx = h.ref();
+            ctx.cbv[0] = d.cb;
+            ctx.cbv[1] = viewCB; // Pass_Translucent's GlassView CB
+            ctx.srvTable[0] = d.srvs;
+            ctx.samplerTable[0] = samplers;
+            if (!pso->Bind(cl, ctx, false))
+            {
+                render::ReportMissingGBufferBindings(this, d.slot, "GBufferRenderable::RenderTranslucent");
+                continue;
+            }
+            mesh->DrawSubmesh(cl, d.submesh, lod);
+        }
+    }
 }

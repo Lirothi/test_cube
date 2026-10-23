@@ -322,11 +322,17 @@ namespace editormcp
     {
         ImportHost* g_importHost = nullptr; // frame thread only, like every document tool
         RuntimeHost* g_runtimeHost = nullptr; // the same
+        LevelHost* g_levelHost = nullptr; // the same
     }
 
     void SetImportHost(ImportHost* host)
     {
         g_importHost = host;
+    }
+
+    void SetLevelHost(LevelHost* host)
+    {
+        g_levelHost = host;
     }
 
     void SetRuntimeHost(RuntimeHost* host)
@@ -358,8 +364,8 @@ namespace editormcp
                   "it is refused with a reason rather than half-applied, lands as ONE undo "
                   "entry, and answers with the same status line the person sees (\"Spawned 143 "
                   "... into Rocks; asked for 200; too crowded: ...\"). It shows up in the "
-                  "person's command bar as it happens. It never saves the level; nothing here "
-                  "can." },
+                  "person's command bar as it happens. It never saves the level; save_level "
+                  "does, and only when the person asked for it." },
                 { "inputSchema", ObjectSchema({ { "command", {
                     { "type", "object" }, { "description", kCommandDescription } } } },
                     json::array({ "command" })) },
@@ -569,6 +575,17 @@ namespace editormcp
                     json::array({ "name" })) },
             },
             {
+                { "name", "save_level" },
+                { "description",
+                  "Save the open level to its file, exactly as Ctrl+S writes it (the editor's own "
+                  "serializer): every unsaved edit -- yours and the person's -- goes to disk. Call it "
+                  "ONLY when the person asked you to save; otherwise edits stay theirs to keep or "
+                  "discard. Refused when the level has no file yet (Save As is the person's). The "
+                  "editor camera's per-level state is not saved with it: set_camera moved it for "
+                  "screenshots." },
+                { "inputSchema", ObjectSchema() },
+            },
+            {
                 { "name", "import_status" },
                 { "description",
                   "Whether an import is running, its texture progress, the Import window's "
@@ -622,7 +639,8 @@ namespace editormcp
                   "complete list of what the editor can do and of the names the open level uses. "
                   "Then run_action / preview_action to edit, query to ask, set_camera + "
                   "screenshot to look. Every edit is one undo entry and appears in the person's "
-                  "command bar. Nothing here saves the level -- that is the person's call." },
+                  "command bar. Edits stay unsaved until save_level, which writes the level as "
+                  "Ctrl+S does -- call it only when the person asked you to save." },
             });
         }
         if (method == "ping")
@@ -864,6 +882,24 @@ namespace editormcp
             outRecord.show = true;
             ToolResult result;
             result.text = "Undid: " + label;
+            return result;
+        }
+
+        if (name == "save_level")
+        {
+            if (!g_levelHost)
+            {
+                return Error("There is no open level here to save.");
+            }
+            std::string text;
+            const bool saved = g_levelHost->Save(text);
+            outRecord.title = "save_level";
+            outRecord.verdict = text;
+            outRecord.failed = !saved;
+            outRecord.show = true;
+            ToolResult result;
+            result.text = text;
+            result.isError = !saved;
             return result;
         }
 

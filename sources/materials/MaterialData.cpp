@@ -18,6 +18,7 @@ const char* ShadingModelToString(ShadingModel model)
     case ShadingModel::TwoSidedFoliage: return "twoSidedFoliage";
     case ShadingModel::Terrain: return "terrain";
     case ShadingModel::Water: return "water"; // logs only; deliberately not parseable
+    case ShadingModel::ThinTranslucent: return "thinTranslucent";
     default: return "defaultLit";
     }
 }
@@ -39,15 +40,22 @@ bool TryParseShadingModel(std::string_view text, ShadingModel& outModel)
         outModel = ShadingModel::Terrain;
         return true;
     }
+    if (text == "thinTranslucent")
+    {
+        outModel = ShadingModel::ThinTranslucent;
+        return true;
+    }
     return false;
 }
 
 bool MaterialData::UsesTexture(const std::function<bool(const std::wstring&)>& pred) const
 {
     if (!pred) { return false; }
-    return (!albedoSourcePath.empty() && pred(albedoSourcePath)) ||
-           (!mrSourcePath.empty()     && pred(mrSourcePath))     ||
-           (!normalSourcePath.empty() && pred(normalSourcePath));
+    return (!albedoSourcePath.empty()   && pred(albedoSourcePath)) ||
+           (!mrSourcePath.empty()       && pred(mrSourcePath))     ||
+           (!normalSourcePath.empty()   && pred(normalSourcePath)) ||
+           (!emissiveSourcePath.empty() && pred(emissiveSourcePath)) ||
+           (!transmissionSourcePath.empty() && pred(transmissionSourcePath));
 }
 
 bool MaterialData::LoadAlbedo(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
@@ -98,6 +106,30 @@ bool MaterialData::LoadNormal(Renderer* r, ID3D12GraphicsCommandList* upload, co
     return false;
 }
 
+bool MaterialData::LoadEmissive(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
+                                std::vector<ComPtr<ID3D12Resource>>* keepAlive)
+{
+    emissiveSourcePath = path;
+    Texture2D::CreateDesc d{};
+    d.path  = path;
+    d.usage = Texture2D::Usage::AlbedoSRGB; // a colour, authored in sRGB like the base colour
+    SetStreamable(d);
+    if (emissive.CreateFromFile(r, upload, d, keepAlive)) { hasEmissive = true; return true; }
+    return false;
+}
+
+bool MaterialData::LoadTransmission(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
+                                    std::vector<ComPtr<ID3D12Resource>>* keepAlive)
+{
+    transmissionSourcePath = path;
+    Texture2D::CreateDesc d{};
+    d.path  = path;
+    d.usage = Texture2D::Usage::LinearData; // glTF's transmission texture is linear (R); an _SRGB DDS reads UNORM
+    SetStreamable(d);
+    if (transmission.CreateFromFile(r, upload, d, keepAlive)) { hasTransmission = true; return true; }
+    return false;
+}
+
 void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
 {
     auto& defs = gd.defines;
@@ -111,7 +143,10 @@ void MaterialData::ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const
 
     defs.emplace_back("NORMALMAP_IS_RG", normalIsRG   ? "1" : "0");
     defs.emplace_back("MR_LAYOUT_GLTF",  mrLayoutGltf ? "1" : "0");
-    defs.emplace_back("SHADING_MODEL_ID", std::to_string(static_cast<uint32_t>(shadingModel)));
+    // A glass slot's G-buffer draw is its OPAQUE half (the texels its alpha test keeps): plain
+    // default-lit. ThinTranslucent itself never reaches the G-buffer -- the light pass has no case for it.
+    const ShadingModel gbufferModel = IsThinTranslucent() ? ShadingModel::DefaultLit : shadingModel;
+    defs.emplace_back("SHADING_MODEL_ID", std::to_string(static_cast<uint32_t>(gbufferModel)));
 }
 
 // The material textures in the FIXED order the shaders declare them (albedo, MR, normal) --
@@ -142,10 +177,11 @@ size_t MaterialData::GatherGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst) const
     dst[0] = hasAlbedo ? albedo.GetSRVCPU() : filler;
     dst[1] = hasMR     ? mr.GetSRVCPU()     : filler;
     dst[2] = hasNormal ? normal.GetSRVCPU() : filler;
+    dst[3] = hasEmissive ? emissive.GetSRVCPU() : filler; // unread without the map (texIndices.w)
     return kGBufferSrvCount;
 }
 
-size_t MaterialData::AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset) const
+size_t MaterialData::AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kGBufferSrvCount>& dst, size_t offset) const
 {
     return GatherGBufferSRVs(dst.data() + offset);
 }
@@ -173,7 +209,11 @@ void MaterialData::GatherGBufferIndices(std::uint32_t dst[4]) const
     dst[0] = pick(hasAlbedo, albedo);
     dst[1] = pick(hasMR, mr);
     dst[2] = pick(hasNormal, normal);
-    dst[3] = 0u;
+    // The flag as well as the slot: no map = kNoEmissiveMap. A map not in the heap yet still says
+    // "present" (the null slot samples black for a frame, then the swap names it).
+    dst[3] = hasEmissive ? (emissive.BindlessIndex() == kInvalid ? render::BindlessHeap::kNullTextureIndex
+                                                                 : emissive.BindlessIndex())
+                         : kNoEmissiveMap;
 }
 
 void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
@@ -195,7 +235,7 @@ void MaterialData::StageGBufferBindings(Renderer* r, RenderContext& ctx,
         ctx.srvTable[srvTableRegister] = gbufferSrvCache_.gpu;
     }
     else {
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> srvs{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kGBufferSrvCount> srvs{};
         if (GatherGBufferSRVs(srvs.data()) == 0) {
             srvs.fill(r->NullMaterialTextureSrv()); // the root signature declares t0..t2 regardless
         }

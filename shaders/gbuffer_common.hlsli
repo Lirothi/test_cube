@@ -213,6 +213,20 @@ inline VSOut BaseVS(float3 pos,
     return o;
 }
 
+// Part E: the emissive MAP. SurfaceParams.texIndices.w is its bindless slot, or kNoEmissiveMap when
+// the material has none (MaterialData::GatherGBufferIndices) -- the flag in BOTH permutations: the
+// table ones bind the map in the slot after the normal map. Without a map the emissive stays the
+// flat colour * strength it always was; with one, the map says WHERE (a candle's flame, not its wax).
+static const uint kNoEmissiveMap = 0xFFFFFFFFu;
+inline float3 ApplyEmissiveMap(float3 emissiveValue, Texture2D emissiveMap, SamplerState samp,
+                               float2 uv, float4 texOffsScale, uint emissiveSlot)
+{
+    [branch] if (emissiveSlot == kNoEmissiveMap || all(emissiveValue == 0.0f)) { return emissiveValue; }
+    return emissiveValue * emissiveMap.Sample(samp, tfUVp(uv, texOffsScale)).rgb;
+}
+// The bindless permutations' map: its own slot, or -- with none -- any valid one (never sampled).
+#define EMISSIVE_MAP_INDEX(t) ((t).w == kNoEmissiveMap ? (t).x : (t).w)
+
 // Final MRT output using prepared values
 inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
                              float3 emissiveValue, float3 subsurfaceColorValue,

@@ -2418,6 +2418,12 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         d.normalScale = (m.normal_texture.texture ? m.normal_texture.scale : 1.0f);
         for (int i = 0; i < 3; ++i) { d.emissive[i] = m.emissive_factor[i]; }
         d.emissivePath = ResolveTexUri(m.emissive_texture.texture, dir);
+        if (m.has_emissive_strength) { d.emissiveStrength = m.emissive_strength.emissive_strength; }
+        if (m.has_transmission) {
+            d.transmission = m.transmission.transmission_factor;
+            d.transmissionPath = ResolveTexUri(m.transmission.transmission_texture.texture, dir);
+        }
+        if (m.has_ior) { d.ior = m.ior.ior; }
         d.alphaMask = (m.alpha_mode == cgltf_alpha_mode_mask);
         d.alphaBlend = (m.alpha_mode == cgltf_alpha_mode_blend);
         d.alphaCutoff = m.alpha_cutoff;

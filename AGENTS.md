@@ -410,7 +410,9 @@ ExposureMetering's ring, filled as each readback slot retires. That is how the c
 frame-to-frame flicker and the ghosts' DLSS ringing were found (2026-10-15). `set_settings` with
 `resetExposure: false` changes a knob the way the Inspector does, without re-metering.
 
-- **There is no save.** The level is saved by the person, and nothing over MCP can do it.
+- **`save_level` writes the open level exactly as Ctrl+S does** -- only when the person asked
+  (owner, 2026-10-23: «сам все сохраняй что надо»). Every other call leaves an unsaved edit that is the
+  person's to keep or discard. The per-level editor camera is not saved with it.
 - Each edit is one undo entry and shows in the command bar's transcript under **claude**.
 - Only while the editor is open with a level; calls wait up to 60 s for a frame, then fail.
 - Browser requests are refused (`Origin`/`Host` must be this machine), so a web page cannot
@@ -419,7 +421,7 @@ frame-to-frame flicker and the ghosts' DLSS ringing were found (2026-10-15). `se
   `editor_state.json` → `levelEditor.intentModel`.
 - The gate covers the protocol without a socket (`TestMcpDrivesTheSameRoad`); for a live check,
   launch `--editor --level=...` and POST JSON-RPC to the endpoint. Kill the process afterwards
-  rather than closing it, so nothing can save the level.
+  rather than closing it, so a check never saves the level by accident.
 - **Codex reaches the same door** through `.codex/config.toml` (project-scoped; read because this
   project is trusted in `~/.codex/config.toml`), with `default_tools_approval_mode = "approve"` —
   without it every call needs approval and `codex exec` (approval `never`) fails them all. Codex
@@ -537,3 +539,36 @@ every verdict. Auto only decides NEW assets and NEW material files; a choice als
 asset's wind slot and its material's four shading keys (`materialgen::ApplyLeafShading`), every other
 edit kept. `--seam-ratio=<gltf>` prints the verdict per slot headless; `intent_regression`'s
 `TestLeafCards` holds the rule on the staged sources.
+
+## Glass -- the thinTranslucent Shading Model
+
+Glass is a material SLOT's shading model, not an object type: `"shadingModel": "thinTranslucent"` (UE
+MSM_ThinTranslucent, glTF KHR_materials_transmission) with `"transmission"` (factor), `"transmissionMap"` (its R
+multiplies it) and `"ior"` -- not the foliage's `transmissionStrength`. `TransparentStaticMesh` (the `glass.hlsl`
+panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hlsl`'s GLASS_MATERIAL permutation
+(`GBufferRenderable::RenderTranslucent`, reached because `Scene::PrepareViewQueue` adds every visible object with
+`HasTranslucentSlots()` to `translucentComplex` and RenderObjectBatch calls `RenderTranslucent` in that pass).
+
+- **A slot with an alpha test SPLITS**: the texels its cutout keeps are opaque and take every opaque path as before
+  (written DefaultLit); the ones it removes are glass. **A slot without one is glass only**
+  (`MaterialData::IsGlassOnly`) and leaves every opaque path: `Render` / `RenderShadow` skip it, instancing refuses
+  the object, its indirect PSO is null and ShadowGpuData zeroes its group's index count (camera and every shadow
+  view), an object of nothing else is not in the TLAS. Any glass slot refuses instancing (the instanced shaders read
+  one cutoff for the G-buffer and the shadow).
+- **glTF BLEND alpha is coverage on top of the transmission model** (three.js and Blender do the same): Sketchfab's
+  exporter writes a pane's opacity as BOTH the alpha and 1 - transmission. Left out, the_bathroom_free's shelf was a
+  full sheet of blue glass.
+- **No refraction, by the spec**: glTF without KHR_materials_volume is thin-walled (`kGlassMaterialThickness` 0);
+  roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the sky's (a slot
+  is not in the glass-reflection G-buffer).
+- It blends OVER the target (ONE / INV_SRC_ALPHA) so glass behind glass shows, after a **depth prepass**
+  (`PSDepthOnly`): a concave cup has two front-facing surfaces per pixel, and in index order the far inner wall
+  blended over the near one -- the owner's "стаканы вывернуты". The prepass's depth stays: a particle behind glass
+  is hidden by it.
+- **Shadow**: a split slot's SHADOW cutoff is raised by `kGlassShadowCutoff` (CPU shadow CB, ShadowGpuData's group
+  mask -- never the G-buffer's); its glass texels then cast a dithered share equal to their coverage
+  (`shadow_depth_common.hlsli ShadowAlphaClip`), which the shadow filters average into a partial shadow. A glass-only
+  slot casts nothing.
+- The importer decides per NODE (`materialgen::ClassifyGlass`: the share of the surface whose transmission is over
+  `kGlassTransmissionMin`; a split needs `kGlassOpaqueShareMin` of it opaque): one glTF material is often an atlas
+  for mugs and tumblers alike. `intent_regression` holds it on the staged bathroom.

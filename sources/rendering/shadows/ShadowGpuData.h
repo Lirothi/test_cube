@@ -676,6 +676,7 @@ private:
     {
         MaterialData* md = nullptr;
         Material* mat = nullptr;
+        bool glassOnly = false; // a glass-only material slot: index count 0 in every draw (Rebuild)
     };
     std::vector<GroupGbuf> groupGbuf_;
     std::vector<std::uint8_t> casterEligible_;    // per caster id (static after Rebuild)

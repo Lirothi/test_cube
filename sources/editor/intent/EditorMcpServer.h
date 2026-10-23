@@ -87,6 +87,18 @@ namespace editormcp
     };
     void SetImportHost(ImportHost* host);
 
+    // The open level's FILE, for save_level: written exactly as Ctrl+S writes it (the editor's own
+    // serializer). Only when the person asked -- owner, 2026-10-23: «сам все сохраняй что надо»; an
+    // edit over MCP is otherwise theirs to keep or discard. Registered by the editor like the import
+    // window; a host without one (the gate) refuses. Frame thread only.
+    class LevelHost
+    {
+    public:
+        virtual ~LevelHost() = default;
+        virtual bool Save(std::string& outText) = 0; // false + the reason (no file yet, write failed)
+    };
+    void SetLevelHost(LevelHost* host);
+
     // The running app's own knobs, for set_settings / get_readouts: the `--set` name table (App.cpp
     // ApplySweepValue) and what the renderer measured. App registers it -- it owns both -- and a
     // host without one (the gate) answers those tools with a refusal. Frame thread only.

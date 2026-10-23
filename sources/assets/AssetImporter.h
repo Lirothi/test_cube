@@ -113,6 +113,7 @@ struct AlphaImage
     size_t height = 0;
     std::vector<uint8_t> alpha;
 };
-bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out);
+// `channel`: 3 = alpha (the cutout), 0 = red (a glTF transmission map) -- any of RGBA8's four.
+bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out, int channel = 3);
 
 } // namespace assets

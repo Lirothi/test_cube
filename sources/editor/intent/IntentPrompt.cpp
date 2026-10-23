@@ -29,6 +29,9 @@ namespace
         case EditorParamKind::Any:    return "value";
         case EditorParamKind::Placements:
             return "list of {asset, position [x, y, z], yawDeg?, rotationDeg? [p, y, r], scale?}";
+        case EditorParamKind::LightPlacements:
+            return "list of {position [x, y, z], type?, name?, lumens?, radius?, color? [r, g, b], shadows?, onAt?, "
+                   "direction?, range?, innerAngleDeg?, outerAngleDeg?}";
         }
         return "value";
     }

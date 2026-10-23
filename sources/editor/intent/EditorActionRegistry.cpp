@@ -26,6 +26,7 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/CreateDocumentObjectCommand.h"
+#include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/EditObjectPropertiesCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
 #include "editor/commands/DuplicateObjectCommand.h"
@@ -3469,6 +3470,74 @@ namespace
         const std::size_t count = commands.size();
         return FoldIntoOneEntry(std::move(commands), "Place " + std::to_string(count) + " objects");
     }
+
+    // ADD LIGHTS: point and spot lights at the positions the caller worked out -- a candle's flame,
+    // a lamp's bulb. `move` and `setOnAt` reach lights that exist; nothing reached one that does not,
+    // so a scene could be dressed with meshes over MCP and never lit. Each item starts from what the
+    // Create > Light menu makes (EditorController's BuildPointLightObject / BuildSpotLightObject) and
+    // takes the fields it names.
+    std::unique_ptr<EditorCommand> BuildAddLights(const EditorActionContext&,
+        const std::vector<EditorObjectId>&,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const auto itemsIt = intent.params.find("items");
+        if (itemsIt == intent.params.end() || !itemsIt->is_array() || itemsIt->empty())
+        {
+            outStatus = "addLights needs a list of lights";
+            return nullptr;
+        }
+        const std::string group = StringOr(intent.params, "group", "");
+        const auto vec3 = [](const nlohmann::json& v)
+        {
+            return nlohmann::json::array({ v[0].get<float>(), v[1].get<float>(), v[2].get<float>() });
+        };
+
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        commands.reserve(itemsIt->size());
+        std::size_t points = 0, spots = 0, shadowed = 0;
+        for (const nlohmann::json& item : *itemsIt)
+        {
+            const bool spot = item.value("type", std::string("point")) == "spot";
+            EditorObject light;
+            light.type = spot ? "spotLight" : "pointLight";
+            light.name = spot ? "Spot Light" : "Point Light";
+            light.properties = {
+                { "enabled", true },
+                { "position", vec3(item["position"]) },
+                { "color", item.contains("color") ? vec3(item["color"]) : nlohmann::json::array({ 1.0f, 0.92f, 0.78f }) },
+                { "luminousFluxLm", item.value("lumens", spot ? 12000.0f : 3000.0f) },
+                { "shadowsEnabled", item.value("shadows", spot) },
+            };
+            if (spot)
+            {
+                light.properties["direction"] = item.contains("direction")
+                    ? vec3(item["direction"]) : nlohmann::json::array({ 0.0f, -1.0f, 0.0f });
+                light.properties["range"] = item.value("range", 14.0f);
+                light.properties["innerAngleDeg"] = item.value("innerAngleDeg", 15.0f);
+                light.properties["outerAngleDeg"] = item.value("outerAngleDeg", 28.0f);
+                light.properties["shadowNormalBias"] = 0.05f;
+                light.properties["shadowDepthBias"] = 0.0001f;
+            }
+            else
+            {
+                light.properties["radius"] = item.value("radius", 6.0f);
+            }
+            if (item.contains("name")) { light.properties["name"] = item["name"]; }
+            // "always" is the absence of the key, as SetLampSwitchCommand writes it.
+            const std::string onAt = item.value("onAt", std::string("always"));
+            if (onAt != "always") { light.properties["onAt"] = onAt; }
+            if (!group.empty()) { light.properties["group"] = group; }
+            (spot ? spots : points) += 1;
+            shadowed += light.properties["shadowsEnabled"].get<bool>() ? 1u : 0u;
+            commands.push_back(std::make_unique<CreateEnvironmentCommand>(std::move(light)));
+        }
+        outStatus = "Added " + std::to_string(points) + " point and " + std::to_string(spots) +
+            " spot light(s), " + std::to_string(shadowed) + " casting shadows" +
+            (group.empty() ? std::string() : " into " + group);
+        const std::size_t count = commands.size();
+        return FoldIntoOneEntry(std::move(commands), "Add " + std::to_string(count) + " lights");
+    }
 }
 
 // ----------------------------------------------------------------- the registry
@@ -3678,6 +3747,28 @@ EditorActionRegistry::EditorActionRegistry()
               "put every placed object into this group instead of its kind's own" },
         },
         &BuildPlace,
+    });
+
+    actions_.push_back({
+        "addLights",
+        "Create point or spot LIGHTS at exact positions, one per item of params.items: each item "
+        "is {position [x, y, z]} with an optional type (point, the default, or spot), name, "
+        "lumens (a candle ~12, a household bulb ~800, the default 3000; a spot 12000), radius "
+        "(metres the point light reaches, default 6), color [r, g, b] (linear, e.g. a candle "
+        "[1, 0.55, 0.2]), shadows (true/false; a point light defaults to none, a spot to on) and "
+        "onAt (night, day or always, the default -- night lamps follow the time of day), and for "
+        "a spot direction [x, y, z], range, innerAngleDeg and outerAngleDeg. Positions are used "
+        "as given: put a candle's light at its flame, not at its foot. params.group puts every "
+        "light into that group. Up to 100 items, all of them one undo entry.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::None,
+        {
+            { "items", EditorParamKind::LightPlacements, true,
+              "the lights: [{position, type?, name?, lumens?, radius?, color?, shadows?, onAt?, "
+              "direction?, range?, innerAngleDeg?, outerAngleDeg?}, ...], 1-100" },
+            { "group", EditorParamKind::String, false, "put every light into this group" },
+        },
+        &BuildAddLights,
     });
 
     // Both of these were REFUSALS first. The editor could already do them -- RenameObject
@@ -4296,6 +4387,71 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
                 if (!item.contains("asset") || !item.contains("position"))
                 {
                     outError = at + " needs both 'asset' and 'position'";
+                    return false;
+                }
+            }
+            break;
+        }
+        case EditorParamKind::LightPlacements:
+        {
+            // Item by item and by number, like Placements: a lamp list half right is a level half lit.
+            constexpr std::size_t kMaxLights = 100;
+            if (!it->is_array() || it->empty() || it->size() > kMaxLights)
+            {
+                outError = "'" + name + "' must be a list of 1-" + std::to_string(kMaxLights) +
+                    " lights, each {position, ...}";
+                return false;
+            }
+            const auto isVec3 = [](const nlohmann::json& v)
+            {
+                return v.is_array() && v.size() == 3 && v[0].is_number() && v[1].is_number() &&
+                    v[2].is_number();
+            };
+            const auto positive = [](const nlohmann::json& v) { return v.is_number() && v.get<float>() > 0.0f; };
+            for (std::size_t index = 0; index < it->size(); ++index)
+            {
+                const nlohmann::json& item = (*it)[index];
+                const std::string at = "'" + name + "' light " + std::to_string(index + 1);
+                if (!item.is_object())
+                {
+                    outError = at + " must be an object {position, ...}";
+                    return false;
+                }
+                for (const auto& field : item.items())
+                {
+                    const std::string& key = field.key();
+                    const nlohmann::json& v = field.value();
+                    const std::string text = v.is_string() ? v.get<std::string>() : std::string();
+                    const bool ok =
+                        (key == "position" && isVec3(v)) ||
+                        (key == "type" && (text == "point" || text == "spot")) ||
+                        (key == "name" && !text.empty()) ||
+                        (key == "lumens" && positive(v)) ||
+                        (key == "radius" && positive(v)) ||
+                        (key == "range" && positive(v)) ||
+                        (key == "color" && isVec3(v)) ||
+                        (key == "shadows" && v.is_boolean()) ||
+                        (key == "onAt" && (text == "night" || text == "day" || text == "always")) ||
+                        (key == "direction" && isVec3(v)) ||
+                        (key == "innerAngleDeg" && positive(v)) ||
+                        (key == "outerAngleDeg" && positive(v));
+                    if (!ok)
+                    {
+                        const bool known = key == "position" || key == "type" || key == "name" ||
+                            key == "lumens" || key == "radius" || key == "range" || key == "color" ||
+                            key == "shadows" || key == "onAt" || key == "direction" ||
+                            key == "innerAngleDeg" || key == "outerAngleDeg";
+                        outError = at + (known ? " has a malformed '" + key + "'"
+                                               : " has no field '" + key + "'") +
+                            "; a light is {position [x, y, z], type? point|spot, name?, lumens?, radius?, "
+                            "color? [r, g, b], shadows? true/false, onAt? night|day|always, and for a spot "
+                            "direction? [x, y, z], range?, innerAngleDeg?, outerAngleDeg?}";
+                        return false;
+                    }
+                }
+                if (!item.contains("position"))
+                {
+                    outError = at + " needs a 'position'";
                     return false;
                 }
             }

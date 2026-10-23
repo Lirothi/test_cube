@@ -12,7 +12,9 @@
 // a UAV table at u0 -> uavTable[0]). This makes binding invariant to root-parameter
 // declaration order and to dropping unused tables (no positional counter).
 struct RenderContext {
-    static constexpr size_t kMaxBindings = 4;          // shader registers 0..3 per type
+    // Shader registers 0..7 per type. Was 4 until Part E put the emissive map at t3 and moved the
+    // indirect G-buffer's record table to t4 -- a table based past the limit is never bound.
+    static constexpr size_t kMaxBindings = 8;
     static constexpr size_t kMaxConstantsBindings = 1; // root constants live at b0
     static constexpr size_t kMaxConstants = 16;
 

@@ -25,13 +25,19 @@ enum class ShadingModel : uint8_t
     Terrain = 2,
     // Reserved for the ocean surface, which writes it from its own forward draw after compose. Not a
     // material's choice: TryParseShadingModel does not accept it, so no material file can select it.
-    Water = 3
+    Water = 3,
+    // UE's MSM_ThinTranslucent (glTF KHR_materials_transmission): glass, drawn by the forward
+    // translucent pass (glass.hlsl GLASS_MATERIAL) and never written to the G-buffer. A slot with an
+    // alpha test SPLITS -- the texels the cutout keeps are opaque and take the G-buffer as before,
+    // the ones it removes are glass; a slot without one is all glass and leaves every opaque path
+    // (G-buffer, shadows, RT). See MaterialData::IsGlassOnly.
+    ThinTranslucent = 4
 };
 static_assert(static_cast<uint8_t>(ShadingModel::DefaultLit) == 0);
 static_assert(static_cast<uint8_t>(ShadingModel::TwoSidedFoliage) == 1);
 static_assert(static_cast<uint8_t>(ShadingModel::Terrain) == 2);
 static_assert(static_cast<uint8_t>(ShadingModel::Water) == 3);
-static_assert(static_cast<uint8_t>(ShadingModel::Water) < 16);
+static_assert(static_cast<uint8_t>(ShadingModel::ThinTranslucent) < 16);
 
 const char* ShadingModelToString(ShadingModel model);
 bool TryParseShadingModel(std::string_view text, ShadingModel& outModel);
@@ -148,25 +154,45 @@ public:
     float         alphaCutoff = 0.5f;      // (Part C)
     bool          doubleSided = false;     // (Part C)
     float3        emissiveFactor = {0.0f, 0.0f, 0.0f}; // (Part D)
-    std::string   emissiveTexPath;         // resolved path, empty if none (Part D loads it)
+
+    // Glass (ShadingModel::ThinTranslucent): glTF KHR_materials_transmission's factor, times the
+    // transmission map's R where there is one -- the share of light that goes THROUGH (tinted by the
+    // base colour) instead of being reflected diffusely. Not the foliage's `transmissionStrength`
+    // (surfaceParams), which is a leaf's back-lighting. ior: KHR_materials_ior, 1.5 = glTF's default.
+    float         glassTransmission = 1.0f;
+    float         glassIor = 1.5f;
+    bool IsThinTranslucent() const { return shadingModel == ShadingModel::ThinTranslucent; }
+    // Glass with no alpha test: no texel of it is opaque, so it takes no opaque path at all.
+    bool IsGlassOnly() const { return IsThinTranslucent() && !alphaMask; }
+    // A split glass slot's cutoff in the SHADOW passes is raised by this (shadow_depth_common.hlsli
+    // kGlassShadowCutoff): its glass texels then cast a dithered share equal to their coverage.
+    static constexpr float kGlassShadowCutoff = 1.0f;
+    float ShadowAlphaCutoff() const { return alphaCutoff + (IsThinTranslucent() ? kGlassShadowCutoff : 0.0f); }
 
     // Texture ownership
-    // The shaders declare albedo/MR/normal at consecutive FIXED registers, so the table is
+    // The shaders declare albedo/MR/normal/emissive at consecutive FIXED registers, so the table is
     // always this wide -- see GatherGBufferSRVs for why a skipped slot was a bug.
-    static constexpr size_t kGBufferSrvCount = 3;
+    static constexpr size_t kGBufferSrvCount = 4;
     size_t GatherGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst) const;
-    // A6: the same three slots as bindless heap indices (albedo, MR, normal, spare), with the
-    // same filler rule -- an absent map takes a sibling's index, and a material with no textures
-    // at all points every slot at the heap's null SRV. Read fresh every frame: a streaming swap or
-    // a fade clamp renames a texture's slot.
+    // A6: the same slots as bindless heap indices (albedo, MR, normal, emissive), with the same
+    // filler rule for the first three -- an absent map takes a sibling's index, and a material with
+    // no textures at all points every slot at the heap's null SRV. The EMISSIVE index is also the
+    // shaders' flag: kNoEmissiveMap = no map (the emissive is the flat colour), anything else = the
+    // map multiplies it -- in the table permutations it sits at the fourth table slot. Read fresh
+    // every frame: a streaming swap or a fade clamp renames a texture's slot.
+    static constexpr std::uint32_t kNoEmissiveMap = 0xFFFFFFFFu; // gbuffer_common.hlsli kNoEmissiveMap
     void GatherGBufferIndices(std::uint32_t dst[4]) const;
 
     bool      hasAlbedo = false;
     bool      hasMR     = false;
     bool      hasNormal = false;
+    bool      hasEmissive = false;
+    bool      hasTransmission = false;
     Texture2D albedo; // sRGB
     Texture2D mr;     // UNORM: R=metal, G=rough
     Texture2D normal; // UNORM: RG (or RGB if normalIsRG=false)
+    Texture2D emissive; // sRGB: multiplies emissiveColor * emissiveStrength (a candle's flame mask)
+    Texture2D transmission; // UNORM R: multiplies glassTransmission (read by the glass pass only)
 
     // The files this material was BUILT from, so a re-import can find the built materials it
     // invalidated (see MaterialDataManager::EvictCachedForTextures). Recorded even when the load
@@ -176,6 +202,8 @@ public:
     std::wstring albedoSourcePath;
     std::wstring mrSourcePath;
     std::wstring normalSourcePath;
+    std::wstring emissiveSourcePath;
+    std::wstring transmissionSourcePath;
     // True when any recorded source path satisfies `pred`.
     bool UsesTexture(const std::function<bool(const std::wstring&)>& pred) const;
 
@@ -186,16 +214,20 @@ public:
                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
     bool LoadNormal(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
                     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+    bool LoadEmissive(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
+                      std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
+    bool LoadTransmission(Renderer* r, ID3D12GraphicsCommandList* upload, const std::wstring& path,
+                          std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
 
     // Configure sampling and shading-model defines for the GBuffer variant.
     void ConfigureDefinesForGBuffer(Material::GraphicsDesc& gd) const;
 
     // Assemble the SRV table and sampler for the standard GBuffer pass:
-    // TABLE(SRV(t0) SRV(t1) SRV(t2)) + TABLE(SAMPLER(s0))
+    // TABLE(SRV(t0) SRV(t1) SRV(t2) SRV(t3)) + TABLE(SAMPLER(s0))
     // A6: `bindless` = the material's PSO is a GBUFFER_BINDLESS permutation (Material::IsBindless):
     // no SRV table exists, the textures are reached by the indices StageGBufferSurfaceParams
-    // writes; only the sampler is staged -- and not at all for a textureless material, so
-    // Material::Bind refuses the draw exactly as the table path does (GBufferBindingGuard.h).
+    // writes; only the sampler is staged. A textureless material binds the renderer's null texture
+    // (table) or the heap's null slot (bindless) and draws on its tint.
     void StageGBufferBindings(Renderer* r, RenderContext& ctx,
                               UINT srvTableRegister = 0, UINT samplerTableRegister = 0,
                               bool bindless = false);
@@ -204,9 +236,9 @@ public:
     void StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);
     static void StageNeutralGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);
 
-    // For the instanced path (t0 = instances), append t1..t3 starting at the provided offset.
+    // For the instanced path (t0 = instances), append t1..t4 starting at the provided offset.
     // Returns the number of descriptors appended.
-    size_t AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& dst, size_t offset = 0) const;
+    size_t AppendGBufferSRVs(std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kGBufferSrvCount>& dst, size_t offset = 0) const;
     size_t AppendGBufferSRVs(D3D12_CPU_DESCRIPTOR_HANDLE* dst, size_t& inoutCount) const;
 
 private:

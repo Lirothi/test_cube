@@ -47,6 +47,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/containers/inl_vector.h"
+#include "rendering/renderables/GlassPassSrvs.h" // Pass_Translucent: glass.hlsl's per-pass table
 
 // R1 (docs/scene_renderer_refactor_plan.md): the helpers every pass body uses moved to an
 // INTERNAL header, verbatim, so the bodies can be split across translation units. The
@@ -120,7 +121,8 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
             render::gbv::ApplyPassPatchMode(b.cl, j.pass);
             for (size_t i = begin; i < end; ++i) {
                 if (auto* obj = objects[i]) {
-                    obj->Render(renderer, b.cl, camera, j.viewCB);
+                    if (j.pass == RenderPass::Translucent_Complex) { obj->RenderTranslucent(renderer, b.cl, camera, j.viewCB); }
+                    else { obj->Render(renderer, b.cl, camera, j.viewCB); }
                 }
             }
             // Base + chunk index is the deterministic submit order within the batch's
@@ -163,9 +165,12 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
                     }
                 }
 
+                // Main_Translucent's glass list also holds OPAQUE objects with glass material slots
+                // (HasTranslucentSlots): there they draw those slots, not their G-buffer.
                 for (size_t i = begin; i < end; ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->Render(renderer, t.cl, camera, j.viewCB);
+                        if (j.pass == RenderPass::Translucent_Complex) { obj->RenderTranslucent(renderer, t.cl, camera, j.viewCB); }
+                        else { obj->Render(renderer, t.cl, camera, j.viewCB); }
                     }
                 }
             }
@@ -505,6 +510,14 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
     renderer->SetLocalShadowPoolSrv(LocalShadowPoolSrv({})); // plan S7 (t14) -- see Pass_Transparent
     renderer->SetSdsmMomentsSrv((decisions_.sdsmEvsm && frame_->sdsm)
                                     ? frame_->sdsm->MomentsSrv() : D3D12_CPU_DESCRIPTOR_HANDLE{});
+    // glass.hlsl's per-pass table, gathered ONCE for every glass draw of the pass (the panes and the
+    // glass material slots alike) -- after the transports above, which it reads.
+    {
+        render::GlassPassSrvs glassSrvs{};
+        const bool glassReady = frame_->lightManager &&
+            render::GatherGlassPassSrvs(renderer, *frame_->lightManager, frame_->skybox, glassSrvs);
+        renderer->SetGlassPassSrvs(glassReady ? &glassSrvs : nullptr);
+    }
 
     RenderGraph<kTranslucentRenderGraphPassCount> rgTl(ctx.batchIndex);
 

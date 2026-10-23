@@ -512,12 +512,14 @@ EditorIntentPreview BuildIntentPreview(const EditorActionContext& actionCtx,
     if (action->target == EditorTargetKind::None)
     {
         preview.summary = std::string(action->id);
-        // `place` carries its objects in a list, and how many is what the button will do.
+        // `place` and `addLights` carry their objects in a list, and how many is what the button will do.
         if (preview.resolved.params.is_object() && preview.resolved.params.contains("items") &&
             preview.resolved.params["items"].is_array())
         {
             const std::size_t count = preview.resolved.params["items"].size();
-            preview.summary += " " + std::to_string(count) + (count == 1 ? " object" : " objects");
+            const bool lights = action->id == "addLights";
+            preview.summary += " " + std::to_string(count) +
+                (lights ? (count == 1 ? " light" : " lights") : (count == 1 ? " object" : " objects"));
         }
         preview.executable = true;
         // A verb with no noun can still know what it will do: setTime says "15:08 -> 18:30" (and

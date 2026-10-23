@@ -1,7 +1,7 @@
 // Occlusion plan S4: the GPU-driven G-buffer. One ExecuteIndirect per virtual group (mesh submesh
 // x camera LOD); every instance of the draw is a caster id the input assembler delivers from the
 // camera visible list (slot 1, per-instance -- the shadow_indirect_csm.hlsl shape), and the
-// per-object data comes out of the registry's per-caster record (t3, the SAME buffer the shadow
+// per-object data comes out of the registry's per-caster record (t4, the SAME buffer the shadow
 // VS reads). The pixel shader is gbuffer.hlsl's line for line; the per-object values it used to
 // read from `cbuffer PerObject` (b0) it reads from that record itself, by the caster id the VS
 // passes (one flat uint) -- 2026-10-23: the VS used to carry them as five flat float4 outputs (~42
@@ -16,8 +16,8 @@
 // the CPU path writes into lodFade for its two draws of a fading object.
 //
 // b0: IndirectDraw (the virtual group's LOD)   b1: PerView (gbuffer_common)   b2: SurfaceParams
-// t0..t2: the group's material textures       t3: InstancePerObject[]   t4: caster fade[]
-// t5: caster camera LOD[]                     s0: the material sampler
+// t0..t3: the group's material textures (t3 = Part E's emissive map)   t4: InstancePerObject[]
+// t5: caster fade[]   t6: caster camera LOD[]   s0: the material sampler
 #pragma pack_matrix(row_major)
 #define GBUFFER_SKIP_PEROBJECT
 #include "gbuffer_common.hlsli"
@@ -34,10 +34,11 @@
 Texture2D gAlbedo : register(t0);
 Texture2D gMR : register(t1); // R=metal, G=rough
 Texture2D gNormalMap : register(t2); // tangent-space, +Z
+Texture2D gEmissiveMap : register(t3); // Part E: read only when texIndices.w says there is one
 #endif
-StructuredBuffer<InstancePerObject> gInstances : register(t3);
-StructuredBuffer<float> gCasterFade : register(t4); // > 0: the caster fades between lod and lod + 1
-StructuredBuffer<uint>  gCasterLod  : register(t5); // the caster's camera tier (bit 7 = chunk EXACT)
+StructuredBuffer<InstancePerObject> gInstances : register(t4);
+StructuredBuffer<float> gCasterFade : register(t5); // > 0: the caster fades between lod and lod + 1
+StructuredBuffer<uint>  gCasterLod  : register(t6); // the caster's camera tier (bit 7 = chunk EXACT)
 SamplerState gSmp : register(s0);
 
 cbuffer IndirectDraw : register(b0)
@@ -56,7 +57,7 @@ cbuffer SurfaceParams : register(b2)
     float transmissionNormalWeight;
     float4 terrainTiling;
     float4 terrainEdgeParams;
-    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap (read under GBUFFER_BINDLESS)
+    uint4 texIndices; // A6: albedo, MR, normal slots in the bindless heap; w = the emissive map's (kNoEmissiveMap = none)
 };
 
 #if GBUFFER_BINDLESS
@@ -65,7 +66,7 @@ cbuffer SurfaceParams : register(b2)
     "RootConstants(num32BitConstants=4, b0)," \
     "CBV(b1)," \
     "CBV(b2)," \
-    "DescriptorTable(SRV(t3, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t4, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #else
 #define GBUFFER_INDIRECT_RS \
@@ -73,8 +74,8 @@ cbuffer SurfaceParams : register(b2)
     "CBV(b0)," \
     "CBV(b1)," \
     "CBV(b2)," \
-    "DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
-    "DescriptorTable(SRV(t3, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t4, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 #endif
 
@@ -121,6 +122,7 @@ PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
     Texture2D gAlbedo = ResourceDescriptorHeap[texIndices.x];
     Texture2D gMR = ResourceDescriptorHeap[texIndices.y];
     Texture2D gNormalMap = ResourceDescriptorHeap[texIndices.z];
+    Texture2D gEmissiveMap = ResourceDescriptorHeap[EMISSIVE_MAP_INDEX(texIndices)];
 #endif
     const VSOut i = v.b;
     const InstancePerObject o = gInstances[v.casterId];
@@ -161,7 +163,8 @@ PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;
 
-    return FinalizeGBuffer(albedo, mr, N, emissive, subsurfaceColor, transmissionStrength,
+    const float3 emissiveOut = ApplyEmissiveMap(emissive, gEmissiveMap, gSmp, i.UV, texOffsScale, texIndices.w);
+    return FinalizeGBuffer(albedo, mr, N, emissiveOut, subsurfaceColor, transmissionStrength,
                            ambientOcclusion, indirectSpecularScale, transmissionAlbedoPower,
                            transmissionNormalWeight, motion, i.objectId);
 }

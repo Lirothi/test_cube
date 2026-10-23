@@ -16814,18 +16814,18 @@
       "mesh": "models/young_palm/young_palm.mesh.json",
       "name": "young_palm 009",
       "position": [
-        -24.81399917602539,
-        -0.02800000086426735,
-        86.75299835205078
+        -30.413997650146484,
+        -0.0279999990016222,
+        85.5530014038086
       ],
       "rotationDeg": [
-        0.0,
-        138.3000030517578,
-        0.0
+        180.0,
+        41.70000076293945,
+        180.0
       ],
       "scale": [
         0.9570000171661377,
-        0.9570000171661377,
+        0.9569999575614929,
         0.9570000171661377
       ],
       "type": "staticMesh"
@@ -35646,19 +35646,21 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "enabled": true,
       "group": "the_bathroom",
       "id": 2352,
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Candle_001.mesh.json",
       "name": "the_bathroom_free_node_Candle_001 001",
+      "onAt": "night",
       "position": [
-        -29.07110023498535,
+        -23.238967895507813,
         0.9442999958992004,
-        85.85299682617188
+        88.50177764892578
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35675,13 +35677,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Bath_001.mesh.json",
       "name": "the_bathroom_free_node_Bath_001 001",
       "position": [
-        -27.904199600219727,
-        0.10270000249147415,
-        84.10140228271484
+        -23.104198455810547,
+        0.10270000994205475,
+        86.40140533447266
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35698,13 +35700,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Sink_001.mesh.json",
       "name": "the_bathroom_free_node_Sink_001 001",
       "position": [
-        -28.657499313354492,
-        0.10100000351667404,
-        86.14759826660156
+        -22.733478546142578,
+        0.10100001096725464,
+        88.55010986328125
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35721,13 +35723,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Pic_1_001.mesh.json",
       "name": "the_bathroom_free_node_Pic_1_001 001",
       "position": [
-        -31.291099548339844,
+        -24.8046932220459,
         1.3782000541687012,
-        86.56669616699219
+        90.2298583984375
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35744,13 +35746,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Pic_2_001.mesh.json",
       "name": "the_bathroom_free_node_Pic_2_001 001",
       "position": [
-        -31.119199752807617,
+        -26.435224533081055,
         1.6079000234603882,
-        83.00789642333984
+        87.06189727783203
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35767,13 +35769,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Mirror_001.mesh.json",
       "name": "the_bathroom_free_node_Mirror_001 001",
       "position": [
-        -28.63129997253418,
+        -22.518787384033203,
         1.177899956703186,
-        86.53160095214844
+        88.86956787109375
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35790,13 +35792,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_001.mesh.json",
       "name": "the_bathroom_free_node_Hook_001 001",
       "position": [
-        -29.66349983215332,
+        -23.405351638793945,
         1.2015000581741333,
-        86.54629516601563
+        89.39839172363281
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35813,13 +35815,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_HookTowel_001.mesh.json",
       "name": "the_bathroom_free_node_HookTowel_001 001",
       "position": [
-        -29.542200088500977,
+        -23.318300247192383,
         0.5954999923706055,
-        86.51029968261719
+        89.30657196044922
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35836,13 +35838,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Door_001.mesh.json",
       "name": "the_bathroom_free_node_Door_001 001",
       "position": [
-        -30.19059944152832,
+        -23.980981826782227,
         0.13130000233650208,
-        86.30799865722656
+        89.45556640625
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35859,13 +35861,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Door_Hinges_001.mesh.json",
       "name": "the_bathroom_free_node_Door_Hinges_001 001",
       "position": [
-        -29.868799209594727,
+        -23.55804443359375,
         0.6223999857902527,
-        86.59649658203125
+        89.54451751708984
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35882,13 +35884,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Fabric_Towel_folded2_001.mesh.json",
       "name": "the_bathroom_free_node_Fabric_Towel_folded2_001 001",
       "position": [
-        -27.456600189208984,
+        -21.67686653137207,
         1.124500036239624,
-        86.18080139160156
+        87.9784164428711
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35905,13 +35907,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Fabric_Towel_folded_001.mesh.json",
       "name": "the_bathroom_free_node_Fabric_Towel_folded_001 001",
       "position": [
-        -27.314800262451172,
+        -21.767818450927734,
         1.2660000324249268,
-        85.7532958984375
+        87.53728485107422
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35928,13 +35930,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Fabric_Sponge_001.mesh.json",
       "name": "the_bathroom_free_node_Fabric_Sponge_001 001",
       "position": [
-        -29.04129981994629,
+        -22.921907424926758,
         0.9243999719619751,
-        86.43550109863281
+        88.99134063720703
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35951,13 +35953,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Curtain_flat_001.mesh.json",
       "name": "the_bathroom_free_node_Curtain_flat_001 001",
       "position": [
-        -27.18709945678711,
-        0.01889999955892563,
-        85.12120056152344
+        -21.9732723236084,
+        0.018900007009506226,
+        86.926025390625
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35974,13 +35976,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Fabric_Towel_Bath_001.mesh.json",
       "name": "the_bathroom_free_node_Fabric_Towel_Bath_001 001",
       "position": [
-        -28.120399475097656,
+        -23.323583602905273,
         0.1712000072002411,
-        84.03710174560547
+        86.45381164550781
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -35997,13 +35999,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Fabric_Carpet_001.mesh.json",
       "name": "the_bathroom_free_node_Fabric_Carpet_001 001",
       "position": [
-        -29.37700080871582,
-        0.1023000031709671,
-        84.13899993896484
+        -24.360883712768555,
+        0.1023000106215477,
+        87.17036437988281
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36020,13 +36022,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Fabric_Carpet_Small_001.mesh.json",
       "name": "the_bathroom_free_node_Fabric_Carpet_Small_001 001",
       "position": [
-        -30.941999435424805,
-        0.11400000005960464,
-        85.15729522705078
+        -25.207063674926758,
+        0.11400000751018524,
+        88.83473205566406
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36043,13 +36045,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Floor_tile_001.mesh.json",
       "name": "the_bathroom_free_node_Floor_tile_001 001",
       "position": [
-        -29.54360008239746,
-        0.11410000175237656,
-        82.777099609375
+        -25.186113357543945,
+        0.11410000920295715,
+        86.07421875
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36066,13 +36068,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Selling_holder_Big_001.mesh.json",
       "name": "the_bathroom_free_node_Selling_holder_Big_001 001",
       "position": [
-        -29.71489906311035,
+        -23.917362213134766,
         2.631500005722046,
-        85.61129760742188
+        88.61436462402344
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36089,13 +36091,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Selling_holder_Small_001.mesh.json",
       "name": "the_bathroom_free_node_Selling_holder_Small_001 001",
       "position": [
-        -29.685699462890625,
+        -24.27442741394043,
         2.7448999881744385,
-        84.84659576416016
+        87.93750762939453
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36112,13 +36114,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Selling_top_001.mesh.json",
       "name": "the_bathroom_free_node_Selling_top_001 001",
       "position": [
-        -29.100099563598633,
+        -24.871530532836914,
         2.809000015258789,
-        82.63809967041016
+        85.73209381103516
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36135,13 +36137,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_corner_shelf_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_corner_shelf_001 001",
       "position": [
-        -27.025999069213867,
-        0.09950000047683716,
-        85.66390228271484
+        -21.56240463256836,
+        0.09950000792741776,
+        87.31546783447266
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36158,13 +36160,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Doorway_Door_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_Doorway_Door_001 001",
       "position": [
-        -30.297500610351563,
-        0.09809999912977219,
-        86.64579772949219
+        -23.904661178588867,
+        0.09810000658035278,
+        89.80155944824219
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36181,13 +36183,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Window_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_Window_001 001",
       "position": [
-        -27.07349967956543,
-        0.09950000047683716,
-        83.98200225830078
+        -22.44449234008789,
+        0.09950000792741776,
+        85.88264465332031
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36204,13 +36206,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_long_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_Clear_long_001 001",
       "position": [
-        -29.614200592041016,
-        0.09950000047683716,
-        82.92749786376953
+        -25.172056198120117,
+        0.09950000792741776,
+        86.2397689819336
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36227,13 +36229,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Dam1_long_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_Dam1_long_001 001",
       "position": [
-        -28.250499725341797,
-        0.09950000047683716,
-        86.64530181884766
+        -22.13215446472168,
+        0.09950000792741776,
+        88.77763366699219
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36250,13 +36252,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cap_Can_1_001.mesh.json",
       "name": "the_bathroom_free_node_Cap_Can_1_001 001",
       "position": [
-        -31.52440071105957,
+        -25.911088943481445,
         0.9465000033378601,
-        84.75799560546875
+        88.7801284790039
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36273,13 +36275,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_Can_2_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_Can_2_001 001",
       "position": [
-        -31.558900833129883,
+        -26.036962509155273,
         0.9465000033378601,
-        84.56600189208984
+        88.631103515625
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36296,13 +36298,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_Ceramic_1_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_Ceramic_1_001 001",
       "position": [
-        -27.26020050048828,
+        -21.53788185119629,
         1.5313999652862549,
-        86.11859893798828
+        87.82633972167969
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36319,13 +36321,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_Ceramic_2_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_Ceramic_2_001 001",
       "position": [
-        -27.261199951171875,
+        -21.641496658325195,
         1.5332000255584717,
-        85.91310119628906
+        87.64888000488281
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36342,13 +36344,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_Ceramic_3_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_Ceramic_3_001 001",
       "position": [
-        -27.267000198364258,
+        -21.746971130371094,
         1.523300051689148,
-        85.71219635009766
+        87.47779083251953
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36365,13 +36367,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_Ceramic_4_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_Ceramic_4_001 001",
       "position": [
-        -27.354000091552734,
+        -21.736713409423828,
         1.0293999910354614,
-        85.8833999633789
+        87.6695556640625
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36388,13 +36390,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_Ceramic_5_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_Ceramic_5_001 001",
       "position": [
-        -27.350000381469727,
+        -21.588050842285156,
         1.0362999439239502,
-        86.17379760742188
+        87.91905212402344
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36411,13 +36413,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_glass_1_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_glass_1_001 001",
       "position": [
-        -27.251100540161133,
+        -21.45530128479004,
         1.5290000438690186,
-        86.26799774169922
+        87.95117950439453
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36434,13 +36436,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_glass_2_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_glass_2_001 001",
       "position": [
-        -28.316499710083008,
+        -22.540264129638672,
         0.9376999735832214,
-        85.94339752197266
+        88.20276641845703
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36457,13 +36459,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Cup_sanitazer_001.mesh.json",
       "name": "the_bathroom_free_node_Cup_sanitazer_001 001",
       "position": [
-        -28.77280044555664,
+        -22.693031311035156,
         0.9445000290870667,
-        86.4281997680664
+        88.85076141357422
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36480,13 +36482,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Corner_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_Corner_001 001",
       "position": [
-        -31.82309913635254,
-        0.09950000047683716,
-        86.31430053710938
+        -25.391616821289063,
+        0.09950000792741776,
+        90.27728271484375
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36503,13 +36505,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_Short_002.mesh.json",
       "name": "the_bathroom_free_node_Wall_Clear_Short_002 001",
       "position": [
-        -27.07159996032715,
-        0.09950000047683716,
-        85.34559631347656
+        -21.761049270629883,
+        0.09950000792741776,
+        87.0625991821289
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36526,13 +36528,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Window_002.mesh.json",
       "name": "the_bathroom_free_node_Wall_Window_002 001",
       "position": [
-        -32.15489959716797,
-        0.09950000047683716,
-        84.7864990234375
+        -26.4428653717041,
+        0.09950000792741776,
+        89.12005615234375
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36549,13 +36551,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Corner_002.mesh.json",
       "name": "the_bathroom_free_node_Wall_Corner_002 001",
       "position": [
-        -31.82379913330078,
-        0.09950000047683716,
-        83.2593994140625
+        -26.919675827026367,
+        0.09950000792741776,
+        87.63200378417969
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36572,13 +36574,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Sink_002.mesh.json",
       "name": "the_bathroom_free_node_Sink_002 001",
       "position": [
-        -31.65959930419922,
-        0.10100000351667404,
-        84.81629943847656
+        -25.999021530151367,
+        0.10100001096725464,
+        88.89822387695313
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36595,13 +36597,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_002.mesh.json",
       "name": "the_bathroom_free_node_Hook_002 001",
       "position": [
-        -29.493600845336914,
+        -23.258214950561523,
         1.2015000581741333,
-        86.54629516601563
+        89.31344604492188
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36618,13 +36620,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_003.mesh.json",
       "name": "the_bathroom_free_node_Hook_003 001",
       "position": [
-        -29.297800064086914,
+        -23.088645935058594,
         1.2023999691009521,
-        86.54629516601563
+        89.21554565429688
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36641,13 +36643,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Window_003.mesh.json",
       "name": "the_bathroom_free_node_Wall_Window_003 001",
       "position": [
-        -32.141998291015625,
-        0.09950000047683716,
-        87.36000061035156
+        -25.144941329956055,
+        0.09950000792741776,
+        91.34233093261719
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36664,13 +36666,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_long_002.mesh.json",
       "name": "the_bathroom_free_node_Wall_Clear_long_002 001",
       "position": [
-        -31.022300720214844,
-        0.09950000047683716,
-        88.0531005859375
+        -23.828704833984375,
+        0.09950000792741776,
+        91.38272094726563
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36687,13 +36689,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Doorway_Door_002.mesh.json",
       "name": "the_bathroom_free_node_Wall_Doorway_Door_002 001",
       "position": [
-        -28.978300094604492,
-        0.09809999912977219,
-        88.05349731445313
+        -22.058349609375,
+        0.09810000658035278,
+        90.36106872558594
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36710,13 +36712,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Corner_004.mesh.json",
       "name": "the_bathroom_free_node_Wall_Corner_004 001",
       "position": [
-        -27.449100494384766,
-        0.09950000047683716,
-        87.72129821777344
+        -20.900123596191406,
+        0.09950000792741776,
+        89.30876922607422
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36733,13 +36735,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Curtain_flat_002.mesh.json",
       "name": "the_bathroom_free_node_Curtain_flat_002 001",
       "position": [
-        -32.04359817504883,
-        0.01889999955892563,
-        84.8292007446289
+        -26.325124740600586,
+        0.018900007009506226,
+        89.10138702392578
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36756,13 +36758,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_Short_001.mesh.json",
       "name": "the_bathroom_free_node_Wall_Clear_Short_001 001",
       "position": [
-        -27.07159996032715,
-        0.09950000047683716,
-        82.61840057373047
+        -23.12464714050293,
+        0.09950000792741776,
+        84.7007827758789
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36779,13 +36781,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_Short_003.mesh.json",
       "name": "the_bathroom_free_node_Wall_Clear_Short_003 001",
       "position": [
-        -27.568700790405273,
-        0.09950000047683716,
-        82.92559814453125
+        -23.40155029296875,
+        0.09950000792741776,
+        85.21537017822266
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36796,19 +36798,21 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "enabled": true,
       "group": "the_bathroom",
       "id": 2402,
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Candle_002.mesh.json",
       "name": "the_bathroom_free_node_Candle_002 001",
+      "onAt": "night",
       "position": [
-        -29.069299697875977,
+        -24.62665557861328,
         1.493399977684021,
-        83.07450103759766
+        86.09463500976563
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36825,13 +36829,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_004.mesh.json",
       "name": "the_bathroom_free_node_Hook_004 001",
       "position": [
-        -29.069700241088867,
+        -24.65255355834961,
         1.496999979019165,
-        83.02339935302734
+        86.05057525634766
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36842,19 +36846,21 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "enabled": true,
       "group": "the_bathroom",
       "id": 2404,
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Candle_003.mesh.json",
       "name": "the_bathroom_free_node_Candle_003 001",
+      "onAt": "night",
       "position": [
-        -30.364900588989258,
+        -25.748680114746094,
         1.493399977684021,
-        83.07450103759766
+        86.742431640625
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36871,13 +36877,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_005.mesh.json",
       "name": "the_bathroom_free_node_Hook_005 001",
       "position": [
-        -30.365299224853516,
+        -25.77457618713379,
         1.496999979019165,
-        83.02339935302734
+        86.69837188720703
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36888,19 +36894,21 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "enabled": true,
       "group": "the_bathroom",
       "id": 2406,
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Candle_004.mesh.json",
       "name": "the_bathroom_free_node_Candle_004 001",
+      "onAt": "night",
       "position": [
-        -29.23859977722168,
+        -23.060474395751953,
         1.493399977684021,
-        86.5000991821289
+        89.14593505859375
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36917,13 +36925,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_006.mesh.json",
       "name": "the_bathroom_free_node_Hook_006 001",
       "position": [
-        -29.23819923400879,
+        -23.034578323364258,
         1.496999979019165,
-        86.55120086669922
+        89.18999481201172
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36934,19 +36942,21 @@
       "type": "staticMesh"
     },
     {
+      "castShadow": false,
       "enabled": true,
       "group": "the_bathroom",
       "id": 2408,
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Candle_005.mesh.json",
       "name": "the_bathroom_free_node_Candle_005 001",
+      "onAt": "night",
       "position": [
-        -27.943099975585938,
+        -21.938539505004883,
         1.493399977684021,
-        86.5000991821289
+        88.49818420410156
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36963,13 +36973,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Hook_007.mesh.json",
       "name": "the_bathroom_free_node_Hook_007 001",
       "position": [
-        -27.942699432373047,
+        -21.912641525268555,
         1.496999979019165,
-        86.55120086669922
+        88.54224395751953
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -36986,13 +36996,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Selling_holder_Big_002.mesh.json",
       "name": "the_bathroom_free_node_Selling_holder_Big_002 001",
       "position": [
-        -29.70509910583496,
+        -24.934476852416992,
         2.631500005722046,
-        83.56009674072266
+        86.83306121826172
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -37009,13 +37019,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Selling_holder_Small_002.mesh.json",
       "name": "the_bathroom_free_node_Selling_holder_Small_002 001",
       "position": [
-        -29.582199096679688,
+        -22.92254066467285,
         2.7448999881744385,
-        87.37110137939453
+        90.0720443725586
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -37032,13 +37042,13 @@
       "mesh": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_Short_004.mesh.json",
       "name": "the_bathroom_free_node_Wall_Clear_Short_004 001",
       "position": [
-        -27.355100631713867,
-        0.09950000047683716,
-        87.27379608154297
+        -21.042469024658203,
+        0.09950000792741776,
+        88.87422943115234
       ],
       "rotationDeg": [
         0.0,
-        -0.0,
+        30.0,
         0.0
       ],
       "scale": [
@@ -38653,6 +38663,96 @@
       "radius": 10.0,
       "shadowsEnabled": true,
       "volumetricIntensity": 1.0
+    },
+    {
+      "color": [
+        1.0,
+        0.699999988079071,
+        0.41999998688697815
+      ],
+      "enabled": true,
+      "group": "Bathroom Candles",
+      "luminousFluxLm": 12.0,
+      "name": "Candle sink",
+      "position": [
+        -23.23900032043457,
+        1.1770000457763672,
+        88.50199890136719
+      ],
+      "radius": 2.5,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.699999988079071,
+        0.41999998688697815
+      ],
+      "enabled": true,
+      "group": "Bathroom Candles",
+      "luminousFluxLm": 12.0,
+      "name": "Candle south 1",
+      "position": [
+        -24.62700080871582,
+        1.7259999513626099,
+        86.09500122070313
+      ],
+      "radius": 2.5,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.699999988079071,
+        0.41999998688697815
+      ],
+      "enabled": true,
+      "group": "Bathroom Candles",
+      "luminousFluxLm": 12.0,
+      "name": "Candle south 2",
+      "position": [
+        -25.749000549316406,
+        1.7259999513626099,
+        86.74199676513672
+      ],
+      "radius": 2.5,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.699999988079071,
+        0.41999998688697815
+      ],
+      "enabled": true,
+      "group": "Bathroom Candles",
+      "luminousFluxLm": 12.0,
+      "name": "Candle mirror left",
+      "position": [
+        -23.059999465942383,
+        1.7259999513626099,
+        89.14600372314453
+      ],
+      "radius": 2.5,
+      "shadowsEnabled": true
+    },
+    {
+      "color": [
+        1.0,
+        0.699999988079071,
+        0.41999998688697815
+      ],
+      "enabled": true,
+      "group": "Bathroom Candles",
+      "luminousFluxLm": 12.0,
+      "name": "Candle mirror right",
+      "position": [
+        -21.93899917602539,
+        1.7259999513626099,
+        88.49800109863281
+      ],
+      "radius": 2.5,
+      "shadowsEnabled": true
     }
   ],
   "postProcess": {

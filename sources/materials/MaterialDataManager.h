@@ -20,7 +20,12 @@ struct MaterialPreset {
     std::wstring albedoPath;
     std::wstring mrPath;      // R=metal, G=rough (H6: always engine layout on disk)
     std::wstring normalPath;
-    std::wstring emissivePath; // RESERVED: parsed + persisted, not consumed yet (gbuffer SRV table is 3)
+    std::wstring emissivePath; // the emissive map (MaterialData::LoadEmissive): multiplies emissiveColor * emissiveStrength
+    // Glass (shadingModel thinTranslucent): "transmission" (factor), "transmissionMap" (R multiplies
+    // it), "ior" -- glTF KHR_materials_transmission / _ior, MaterialData::glassTransmission.
+    std::wstring transmissionPath;
+    float transmission = 1.0f;
+    float ior = 1.5f;
     bool normalIsRG = true;
     ShadingModel shadingModel = ShadingModel::DefaultLit;
     MaterialSurfaceParams surfaceParams;

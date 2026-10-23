@@ -93,6 +93,26 @@ namespace materialgen
     // The rule, given the measurement: candidates at or over kLeafCutShare are leaves.
     LeafVerdict DecideLeafCard(const GltfMaterialDesc& d, float cutShare);
 
+    // GLASS (shadingModel thinTranslucent, glTF KHR_materials_transmission) or not, per material group
+    // of `geometry` -- per NODE for a split import, because one glTF material is often a whole atlas:
+    // the_bathroom_free's "Cups" covers ceramic mugs and glass tumblers alike, and only its
+    // transmission map says which texels are glass (measured: Cup_glass_1 99 %, Cup_glass_2 18 %,
+    // Cup_Ceramic_* 0 %). A group none of whose surface transmits stays as it was (defaultLit). A glass
+    // group that is also a cutout KEEPS its alpha test when some of its surface is opaque (alpha at or
+    // over the cutoff) -- that half takes the G-buffer, the rest is glass; with nothing opaque it drops
+    // the test and is all glass (MaterialData::IsGlassOnly).
+    constexpr float kGlassTransmissionMin = 0.02f; // a texel transmits from here (factor * map)
+    constexpr float kGlassOpaqueShareMin = 0.001f; // a split needs at least this much opaque surface
+    struct GlassVerdict
+    {
+        bool glass = false;
+        bool split = false;         // keeps the alpha test (see above)
+        float glassShare = -1.0f;   // share of the surface that transmits; -1 = not measured
+        float opaqueShare = -1.0f;  // share the cutout keeps; -1 = not a cutout / not measured
+        std::string reason;         // one line, for the log
+    };
+    GlassVerdict ClassifyGlass(const std::string& geometry, int ordinal);
+
     // Write data/materials/<name>.json for material `ordinal` of `geometry` (a glTF/GLB path, with
     // an optional #node: selector). If `overwrite` is false an existing file is preserved (keeps
     // material-editor edits across a re-import). Returns `name` when a material was found/kept,

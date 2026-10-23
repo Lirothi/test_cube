@@ -159,6 +159,16 @@ public:
     // fog, and fogs itself per material. A transparent object that writes depth and does not blend is
     // our water, and it must draw in Main_Transparent; everything else draws in Main_Translucent.
     virtual bool IsDepthWritingTransparent() const { return false; }
+    // Glass as a SHADING MODEL (MaterialData::IsThinTranslucent): an OPAQUE object some of whose material
+    // slots are glass. It stays in the opaque buckets for those slots' opaque halves and is ALSO drawn
+    // by Main_Translucent (Scene::PrepareView adds it to translucentComplex), where RenderObjectBatch calls
+    // RenderTranslucent instead of Render. A transparent object's RenderTranslucent is its Render.
+    virtual bool HasTranslucentSlots() const { return false; }
+    virtual void RenderTranslucent(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera,
+                                   D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+    {
+        Render(renderer, cl, camera, viewCB);
+    }
     virtual bool IsSimpleRender() const = 0;
     // Editor: does the viewport ray-vs-bounds pick consider this object? False for helpers that
     // have no solid surface (e.g. particle emitters, whose swept culling AABB is huge and would

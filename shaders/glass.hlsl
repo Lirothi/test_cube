@@ -1,7 +1,20 @@
 // t7 = GlassReflection: the off-screen RT glass reflection (S15b), computed by the
 // GlassReflGbuffer + GlassReflections passes and sampled here. It's a normal texture
 // (no RayQuery in this shader), so the glass PSO is identical on RT and non-RT HW.
+//
+// GLASS_MATERIAL = 1: the thinTranslucent shading model (UE MSM_ThinTranslucent, glTF
+// KHR_materials_transmission) -- a GBufferRenderable's glass material SLOT drawn by
+// GBufferRenderable::RenderTranslucent with the slot's own textures (t15 albedo, t16 MR, t17
+// transmission, t6 normal; s3 the material sampler) and MaterialParams (the mat* fields of b0). It
+// blends OVER what is behind (ONE / INV_SRC_ALPHA) instead of replacing it, so glass behind glass shows.
+#ifndef GLASS_MATERIAL
+#define GLASS_MATERIAL 0
+#endif
+#if GLASS_MATERIAL
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#else
 #define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
+#endif
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "ibl_common.hlsli" // P5: the shared roughness <-> mip mapping
@@ -51,6 +64,13 @@ cbuffer GlassParams : register(b0)
     float4 matExtra;              // x = IOR, y = reflection strength, z = refraction distortion, w = normal map enabled (0=disabled, 1=enabled)
     uint objectId;
     uint3 _objectIdPad;
+    // GLASS_MATERIAL only (GBufferRenderable::RenderTranslucent; zero from TransparentStaticMesh, unread there):
+    // the slot's MaterialParams and glass values.
+    float4 matBaseColor;          // linear tint (rgb, multiplies the albedo map) + alpha factor (a)
+    float4 matSurface;            // x = metallic, y = roughness, z = transmission factor, w = alpha cutoff (-1 = no split)
+    float4 matTexFlags;           // x = useAlbedo, y = useMR, z = useNormal, w = normal strength
+    float4 matTexOffsScale;       // UV offset (xy), scale (zw) -- gbuffer_common.hlsli's tfUVp
+    float4 matGlass;              // x = transmission map present, y = mrMultiply, z = unused, w = unused
 };
 
 #include "glass_view_cb.hlsli" // b1: the transparent pass's shared per-view CB (also particles)
@@ -76,10 +96,18 @@ StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
 // Plan S7, the direct read: the local shadow cache's pool -- a light whose atlas page is negative is read there (page
 // -page - 1, the atlas layout). The spot atlas stands in while there is no pool.
 Texture2DArray LocalShadowPool : register(t14);
+#if GLASS_MATERIAL
+Texture2D MatAlbedo : register(t15);       // sRGB view
+Texture2D MatMR : register(t16);           // R = metal, G = rough (B/G when MR_LAYOUT_GLTF)
+Texture2D MatTransmission : register(t17); // R multiplies matSurface.z
+#endif
 
 SamplerState LinearSampler : register(s0);
 SamplerComparisonState ShadowSampler : register(s1);
 SamplerState EnvSampler : register(s2);
+#if GLASS_MATERIAL
+SamplerState MatSampler : register(s3);    // the G-buffer's own (anisotropic, wrap): material UVs tile
+#endif
 
 // Omnidirectional (cube) point shadow, depth-cube approach (B3). Mirrors PointShadowFactor
 // in pointlight_cs.hlsl: normal-offset receiver, WORLD-space depth bias subtracted from the
@@ -376,6 +404,30 @@ float SampleSpotShadow(const SpotLightData light, float3 P, float3 N, float3 Ng,
     return lerp(1.0f, SampleSpotShadowMap(light, P, N, Ng, NdotL), light.shadowParams2.z);
 }
 
+#if GLASS_MATERIAL
+// What a ROUGH pane shows of the scene behind it: SceneOpaque has one mip, so the GGX lobe's spread is
+// taken as a disc of 8 taps + the centre, rough^2 * 3 % of the frame's height across (the frosted
+// shelf glass of the_bathroom_free is 0.73). Clear glass (< 1 px) reads one tap. Pre-exposed, as stored.
+float3 SampleBehindGlass(float2 uv, float rough)
+{
+    const float radius = rough * rough * 0.03f;                       // UV units of the height
+    const float3 centre = SceneOpaque.SampleLevel(LinearSampler, uv, 0).rgb;
+    if (radius < screenSizeInv.w) { return centre; }
+    static const float2 kDisc[8] = {
+        float2( 0.707f,  0.707f), float2(-0.707f,  0.707f), float2(-0.707f, -0.707f), float2( 0.707f, -0.707f),
+        float2( 0.5f,    0.0f),   float2(-0.5f,    0.0f),   float2( 0.0f,    0.5f),   float2( 0.0f,   -0.5f)
+    };
+    const float2 scale = float2(radius * screenSizeInv.z / screenSizeInv.w, radius);
+    float3 acc = centre;
+    [unroll]
+    for (int k = 0; k < 8; ++k)
+    {
+        acc += SceneOpaque.SampleLevel(LinearSampler, saturate(uv + kDisc[k] * scale), 0).rgb;
+    }
+    return acc * (1.0f / 9.0f);
+}
+#endif
+
 struct PSOut
 {
     float4 color : SV_Target0;
@@ -386,9 +438,16 @@ struct PSOut
 };
 
 [RootSignature(GLASS_RS)]
+#if GLASS_MATERIAL
+PSOut PSMain(VSOut i, bool isFront : SV_IsFrontFace)
+#else
 PSOut PSMain(VSOut i)
+#endif
 {
     float3 N = normalize(i.normalWS);
+#if GLASS_MATERIAL
+    if (!isFront) { N = -N; } // a two-sided slot (CULL_NONE) shades the face it shows
+#endif
     const float3 geomN = N; // the local shadows' texel bias pushes along this, never the normal map's
     float3 camPos = camPosSky.xyz;
     float3 V = normalize(camPos - i.posWS);
@@ -404,7 +463,51 @@ PSOut PSMain(VSOut i)
     float normalInfo = matExtra.w;
     float normalStrength = max(refractionDistortion, 0.0f);
 
+    float metal = 0.0f;
+#if GLASS_MATERIAL
+    // The slot's material, as the G-buffer reads it (gbuffer_common.hlsli FetchShadingValuesP).
+    const float2 matUv = i.uv * matTexOffsScale.zw + matTexOffsScale.xy;
+    const float4 albedoTex = (matTexFlags.x > 0.5f) ? MatAlbedo.Sample(MatSampler, matUv) : float4(1.0f, 1.0f, 1.0f, 1.0f);
+    // The alpha-test SPLIT: the texels the cutout keeps were drawn opaque by the G-buffer (a glass
+    // slot's G-buffer half); this pass draws what it removed. Cutoff -1 = no split, the slot is all glass.
+    if (matSurface.w >= 0.0f && albedoTex.a * matBaseColor.a >= matSurface.w) { discard; }
+    // glTF BLEND alpha is COVERAGE on top of the transmission model -- what three.js and Blender do
+    // with it. Sketchfab's exporter writes a pane's opacity both as this alpha and as 1 - transmission
+    // (the_bathroom_free's shelf 0.404 / 0.596, the tumblers 0.498 / 0.502): left out, the shelf was a
+    // full sheet of blue glass where the source shows 60 % of the room through it untouched.
+    const float coverage = saturate(albedoTex.a * matBaseColor.a);
+    tint = saturate(albedoTex.rgb * matBaseColor.rgb);
+    float2 mr = matSurface.xy;
+    if (matTexFlags.y > 0.5f)
+    {
+#if MR_LAYOUT_GLTF
+        const float2 mrTex = MatMR.Sample(MatSampler, matUv).bg;
+#else
+        const float2 mrTex = MatMR.Sample(MatSampler, matUv).rg;
+#endif
+        mr = lerp(mrTex, mrTex * matSurface.xy, matGlass.y);
+    }
+    metal = saturate(mr.x);
+    rough = saturate(mr.y);
+    const float transmissionShare = saturate(matSurface.z *
+        ((matGlass.x > 0.5f) ? MatTransmission.Sample(MatSampler, matUv).r : 1.0f));
+    if (matTexFlags.z > 0.5f)
+    {
+        const float3 T = normalize(i.tangentWS);
+        const float3 B = normalize(i.bitangentWS);
+#if NORMALMAP_IS_RG
+        const float2 nrg = NormalMap.Sample(MatSampler, matUv).rg * 2.0f - 1.0f;
+        const float3 nTS = normalize(float3(nrg * matTexFlags.w, max(sqrt(saturate(1.0f - dot(nrg, nrg))), 1e-4f)));
+#else
+        float3 nTS = NormalMap.Sample(MatSampler, matUv).xyz * 2.0f - 1.0f;
+        nTS = normalize(float3(nTS.xy * matTexFlags.w, nTS.z));
+#endif
+        N = normalize(T * nTS.x + B * nTS.y + N * nTS.z);
+    }
+    bool useNormalMap = false; // the material's map, applied above
+#else
     bool useNormalMap = (normalInfo > 0.5f) && (normalStrength > 0.0f);
+#endif
     if (useNormalMap)
     {
         float3 baseN = N;
@@ -439,7 +542,7 @@ PSOut PSMain(VSOut i)
         BRDFInput bi;
         bi.albedo = tint;
         bi.rough = rough;
-        bi.metal = 0.0f;
+        bi.metal = metal;
         bi.N = N;
         bi.V = V;
         bi.L = normalize(-sunDir);
@@ -471,7 +574,7 @@ PSOut PSMain(VSOut i)
         BRDFInput bi;
         bi.albedo = tint;
         bi.rough = rough;
-        bi.metal = 0.0f;
+        bi.metal = metal;
         bi.N = N;
         bi.V = V;
         bi.L = L;
@@ -519,7 +622,7 @@ PSOut PSMain(VSOut i)
         BRDFInput bi;
         bi.albedo = tint;
         bi.rough = rough;
-        bi.metal = 0.0f;
+        bi.metal = metal;
         bi.N = N;
         bi.V = V;
         bi.L = L;
@@ -554,12 +657,15 @@ PSOut PSMain(VSOut i)
     // ray missed (a < 1). Gated by lightCounts.z (reflection source is SSR/RT); when off,
     // GlassReflection is not produced this frame and is never read here. lightCounts.w
     // independently suppresses the cubemap in the true None mode.
+#if !GLASS_MATERIAL
+    // (A material slot is not rasterized into the glass-reflection G-buffer, so its reflection is the sky's.)
     if (lightCounts.z > 0.5f)
     {
         float2 reflUV = i.posH.xy * screenSizeInv.zw; // SV_POSITION pixel -> normalized screen UV
         float4 gr = GlassReflection.SampleLevel(LinearSampler, reflUV, 0);
         envRefl = gr.rgb + skyRefl * (1.0f - gr.a);
     }
+#endif
     //return float4(envRefl, 1.0f);
 
     //ior = 1.0f;
@@ -569,6 +675,8 @@ PSOut PSMain(VSOut i)
 
     //thickness = 0.01f;
     float3 refrColor = 0.0f.xxx;
+    const float2 pixelUv = i.posH.xy * screenSizeInv.zw;
+    float2 refrUv = pixelUv;
     if (!totalInternal)
     {
         float3 refrPosWS = i.posWS + refrDir * thickness;
@@ -576,12 +684,34 @@ PSOut PSMain(VSOut i)
         float2 uv = clip.xy / max(clip.w, 1e-6f);
         uv = uv * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
         uv = saturate(uv);
+        refrUv = uv;
         // P16.1: this is a COPY OF SCENE COLOUR and is therefore already pre-exposed, while
         // everything else in this shader is raw radiance. Bring it back to raw here; the whole
         // result is scaled once at the end. Scaling it twice is a plain brightness error on
         // whatever is seen THROUGH the glass, which is most of what glass shows.
         refrColor = SceneOpaque.Sample(LinearSampler, uv).rgb / max(preExposureParams.x, 1.0e-8f);
     }
+
+#if GLASS_MATERIAL
+    // UE ThinTranslucent / glTF transmission, thin-walled. The interface reflects Fenv (roughness-aware
+    // Schlick, Fdez-Aguera: a frosted pane does not turn into a mirror at grazing angles); of the rest,
+    // the transmission share goes THROUGH tinted by the base colour, and 1 - share is the surface's own
+    // diffuse, lit as an opaque one. A metal transmits nothing.
+    const float invPreExposure = 1.0f / max(preExposureParams.x, 1.0e-8f);
+    const float cosV = saturate(dot(N, V));
+    const float r0g = (ior - 1.0f) / (ior + 1.0f);
+    const float3 F0g = lerp((r0g * r0g).xxx, tint, metal);
+    const float3 Fenv = totalInternal ? 1.0f.xxx
+                                      : F0g + (max((1.0f - rough).xxx, F0g) - F0g) * pow(1.0f - cosV, 5.0f);
+    const float3 surface = (1.0f - transmissionShare) * diffuseAccum + specAccum + envRefl * Fenv;
+    const float3 through = transmissionShare * (1.0f - metal) * (1.0f - Fenv) * tint;
+    const float throughAvg = (through.x + through.y + through.z) * (1.0f / 3.0f);
+    // ONE / INV_SRC_ALPHA keeps throughAvg of what the target already holds -- the opaque scene AND any
+    // glass drawn behind this one. The tint's colour and the refraction's bend are put on here against
+    // the opaque copy: exact where only opaque lies behind, the tint's average where more glass does.
+    const float3 behind = SampleBehindGlass(refrUv, rough) * invPreExposure;
+    const float3 behindHere = SceneOpaque.SampleLevel(LinearSampler, pixelUv, 0).rgb * invPreExposure;
+#else
     //return float4(refrColor, 1.0f);
     //absorption = float3(0.16f, 0.07f, 0.03f) * 1.0f;
     float3 transmittance = exp(-absorption * thickness);
@@ -613,11 +743,16 @@ PSOut PSMain(VSOut i)
     //alpha = 1.0f;
     //color = envRefl;
     //color = diffuseAccum;
+#endif
 
     // Volumetric fog (plan A5): the air between the camera and this glass, the same split compose
     // applies to the opaque scene -- the froxel volume to its far plane, the analytic medium beyond
     // (its start pushed out along the ray, UE CombineVolumetricFog). Applied to the FINAL colour
     // (refraction included: what is seen through the glass is behind the same air as the glass).
+    // GLASS_MATERIAL: only on the surface's own light -- what shows through it is the scene copy,
+    // which compose has already fogged along the whole ray, this glass's stretch of air included.
+    float fogTransmit = 1.0f;
+    float3 fogAdd = 0.0f.xxx;
     {
         const float3 toPoint = i.posWS - camPos;
         const float dist = length(toPoint);
@@ -649,8 +784,21 @@ PSOut PSMain(VSOut i)
             fogIn = HeightFogInscatter(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
                                         dot(viewDir, toSun), fogShared, dist, headroom, fog);
         }
-        color = (color * fogT + fogIn * (1.0f - fogT)) * vol.a + vol.rgb;
+        // == (c * fogT + fogIn * (1 - fogT)) * vol.a + vol.rgb, split into its two factors
+        fogTransmit = fogT * vol.a;
+        fogAdd = fogIn * (1.0f - fogT) * vol.a + vol.rgb;
     }
+#if GLASS_MATERIAL
+    // The surface covers 1 - throughAvg of the pixel, so it takes that share of the air's in-scatter
+    // (the rest is already in the fogged scene behind it). Coverage then scales the whole glass over
+    // what is behind: target = c * glass + (1 - c) * target.
+    const float3 color = coverage * (max(surface * fogTransmit + fogAdd * (1.0f - throughAvg), 0.0f.xxx)
+                                     + through * behind - throughAvg * behindHere);
+    const float outAlpha = coverage * (1.0f - throughAvg);
+#else
+    color = color * fogTransmit + fogAdd;
+    const float outAlpha = 1.0f;
+#endif
 
     float2 currUv = ClipToUV(i.clipPos);
     float2 prevUv = ClipToUV(i.prevPosH);
@@ -658,10 +806,26 @@ PSOut PSMain(VSOut i)
 
     PSOut o;
     // P16.1: the one place the factor goes on. Alpha is a blend weight, not a colour, so it stays.
-    o.color = float4(color * preExposureParams.x, 1.0f);
+    o.color = float4(color * preExposureParams.x, outAlpha);
     o.velocity = motion;
 #ifdef EDITOR_OBJECT_ID
     o.objectId = objectId;
 #endif
     return o;
 }
+
+#if GLASS_MATERIAL
+// The glass slot's DEPTH PREPASS (GBufferRenderable::RenderTranslucent, colour writes off, depth on):
+// a cup has two surfaces facing the camera on most pixels -- the near wall's outside and the far
+// wall's inside -- and drawn in index order without depth the far one blended OVER the near one: the
+// cup looked inside out. The prepass leaves the object's nearest glass surface in the depth buffer, so
+// the colour pass (GREATER_EQUAL, same VS) shades exactly that one (HDRP's transparent depth prepass).
+// The split's opaque texels are skipped: the G-buffer already put them there.
+[RootSignature(GLASS_RS)]
+void PSDepthOnly(VSOut i)
+{
+    const float2 matUv = i.uv * matTexOffsScale.zw + matTexOffsScale.xy;
+    const float alpha = (matTexFlags.x > 0.5f) ? MatAlbedo.Sample(MatSampler, matUv).a : 1.0f;
+    if (matSurface.w >= 0.0f && alpha * matBaseColor.a >= matSurface.w) { discard; }
+}
+#endif

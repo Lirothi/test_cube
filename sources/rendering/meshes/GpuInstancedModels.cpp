@@ -228,10 +228,10 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
     ctx.cbv[1] = viewCB;
     ctx.cbv[3] = remapCB.gpu;
 
-    // Instance SRV (t0) + material textures (t1..t3) + sampler (s0). A6: a bindless PSO has a
-    // one-descriptor table (the instances); the textures go by index in InstDraw below.
+    // Instance SRV (t0) + material textures (t1..t4, Part E's emissive last) + sampler (s0). A6: a
+    // bindless PSO has a one-descriptor table (the instances); the textures go by index in InstDraw below.
     const bool bindless = mat->IsBindless();
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 4> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 1 + MaterialData::kGBufferSrvCount> srvs{};
     size_t count = 0;
     srvs[count++] = instanceBuffer_.GetSRVCPU();
     if (auto* data = GetMaterialData(); data && !bindless) { data->AppendGBufferSRVs(srvs.data(), count); }
@@ -258,7 +258,7 @@ void GpuInstancedModels::Render(Renderer* renderer, ID3D12GraphicsCommandList* c
             : MaterialSurfaceParams{};
         {
             uint32_t idx[4] = { render::BindlessHeap::kNullTextureIndex, render::BindlessHeap::kNullTextureIndex,
-                                render::BindlessHeap::kNullTextureIndex, 0u };
+                                render::BindlessHeap::kNullTextureIndex, MaterialData::kNoEmissiveMap };
             if (auto* data = GetMaterialData()) { data->GatherGBufferIndices(idx); }
             drawParams->surface.texIndices = XMUINT4(idx[0], idx[1], idx[2], idx[3]);
         }

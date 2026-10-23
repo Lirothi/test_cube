@@ -367,7 +367,7 @@ void MaskedClip(PSInMasked i)
 #else
     const float a = gMaskAlbedo[NonUniformResourceIndex(i.texSlot)].Sample(gMaskSmp, i.UV).a;
 #endif
-    clip(a * i.baseAlpha - i.cutoff);
+    ShadowAlphaClip(a * i.baseAlpha, i.cutoff, i.H.xy); // glass: a dithered share (shadow_depth_common.hlsli)
 }
 
 #if SHADOW_LINEAR_DEPTH

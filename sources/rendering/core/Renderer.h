@@ -372,6 +372,18 @@ public:
     // there instead).
     void SetLocalShadowPoolSrv(D3D12_CPU_DESCRIPTOR_HANDLE pool) { localShadowPoolSrv_ = pool; }
     D3D12_CPU_DESCRIPTOR_HANDLE GetLocalShadowPoolSrv() const { return localShadowPoolSrv_; }
+    // glass.hlsl's per-pass table (rendering/renderables/GlassPassSrvs.h), gathered once by
+    // SceneRenderer::Pass_Translucent; null = not this frame (a shadow map was missing), the glass
+    // draws skip. Read by the recording workers after the pass set it.
+    void SetGlassPassSrvs(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15>* srvs)
+    {
+        glassPassSrvsValid_ = srvs != nullptr;
+        if (srvs) { glassPassSrvs_ = *srvs; }
+    }
+    const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15>* GetGlassPassSrvs() const
+    {
+        return glassPassSrvsValid_ ? &glassPassSrvs_ : nullptr;
+    }
     // S15: the same transport for the SDSM partition buffer (t13 of glass.hlsl). The glass draws
     // have no frame access either, and a null handle here substitutes the inert dummy buffer -- the
     // shader reads it only when csmSdsmParams.x != 0.
@@ -962,6 +974,8 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE       sdsmMomentsSrv_{};                        // S16: glass EVSM atlas slot
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPageTableSrv_{};                       // Step 21: glass VSM sampling
     D3D12_CPU_DESCRIPTOR_HANDLE       localShadowPoolSrv_{};                    // S7 direct read: glass's t14
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 15> glassPassSrvs_{};               // render::GlassPassSrvs
+    bool                              glassPassSrvsValid_ = false;
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmPoolSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> vsmDummyHeap_;                 // Step 24b: inert VSM stand-in SRVs
     D3D12_CPU_DESCRIPTOR_HANDLE       vsmDummyBufferSrv_{};                     // null StructuredBuffer<uint> (t7/t9)

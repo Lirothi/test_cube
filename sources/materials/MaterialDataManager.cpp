@@ -29,6 +29,9 @@ namespace
         preset.mrPath       = widen(p.value("mr", std::string{}));
         preset.normalPath   = widen(p.value("normal", std::string{}));
         preset.emissivePath = widen(p.value("emissive", std::string{}));
+        preset.transmissionPath = widen(p.value("transmissionMap", std::string{}));
+        preset.transmission = std::clamp(p.value("transmission", 1.0f), 0.0f, 1.0f);
+        preset.ior          = std::clamp(p.value("ior", 1.5f), 1.0f, 3.0f);
         preset.shaderPath   = widen(p.value("shader", std::string{}));
         preset.normalIsRG   = p.value("normalIsRG", true);
 
@@ -291,6 +294,8 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     md->alphaCutoff = p.alphaCutoff;
     md->doubleSided = p.twoSided || p.shadingModel == ShadingModel::TwoSidedFoliage;
     md->shaderOverride = p.shaderPath;
+    md->glassTransmission = p.transmission;
+    md->glassIor = p.ior;
     if (p.hasParams)
     {
         md->hasPresetParams = true;
@@ -300,6 +305,11 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     if (!p.albedoPath.empty()) { (void)md->LoadAlbedo(renderer, uploadCmdList, p.albedoPath, uploadKeepAlive); }
     if (!p.mrPath.empty())     { (void)md->LoadMR    (renderer, uploadCmdList, p.mrPath,     uploadKeepAlive); }
     if (!p.normalPath.empty()) { (void)md->LoadNormal(renderer, uploadCmdList, p.normalPath, uploadKeepAlive); }
+    if (!p.emissivePath.empty()) { (void)md->LoadEmissive(renderer, uploadCmdList, p.emissivePath, uploadKeepAlive); }
+    if (md->IsThinTranslucent() && !p.transmissionPath.empty())
+    {
+        (void)md->LoadTransmission(renderer, uploadCmdList, p.transmissionPath, uploadKeepAlive);
+    }
 
     cache_[name] = md;
     return md;
@@ -360,6 +370,20 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     if (!d.albedoPath.empty()) { (void)md->LoadAlbedo(renderer, uploadCmdList, widen(d.albedoPath), uploadKeepAlive); }
     if (!d.mrPath.empty())     { (void)md->LoadMR    (renderer, uploadCmdList, widen(d.mrPath),     uploadKeepAlive); }
     if (!d.normalPath.empty()) { (void)md->LoadNormal(renderer, uploadCmdList, widen(d.normalPath), uploadKeepAlive); }
+    if (!d.emissivePath.empty()) { (void)md->LoadEmissive(renderer, uploadCmdList, widen(d.emissivePath), uploadKeepAlive); }
+    // KHR_materials_transmission: glass. A raw preview has no measurement of which texels are glass
+    // (the importer's ClassifyGlass), so a transmissive material is glass in full -- its MASK cutoff,
+    // if any, still splits it.
+    if (d.transmission > 0.0f)
+    {
+        md->shadingModel = ShadingModel::ThinTranslucent;
+        md->glassTransmission = std::clamp(d.transmission, 0.0f, 1.0f);
+        md->glassIor = std::clamp(d.ior, 1.0f, 3.0f);
+        if (!d.transmissionPath.empty())
+        {
+            (void)md->LoadTransmission(renderer, uploadCmdList, widen(d.transmissionPath), uploadKeepAlive);
+        }
+    }
 
     // Imported per-object defaults (seeded into GBufferRenderable::matParams_ at Init). Factors
     // MULTIPLY the texture channels in-shader, so baseColorFactor -> tint and metallic/roughness
@@ -389,15 +413,15 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     p.SetMultiplyMR(md->mrLayoutGltf); // raw glTF factors multiply; imported DDS already bakes them
     p.SetUseNormal(md->hasNormal);
     p.SetNormalStrength(d.normalScale);
-    // D: glTF emissiveFactor drives self-illumination (strength 1; KHR_emissive_strength not
-    // parsed — no staged asset uses it). emissiveTexture recorded below but not sampled yet.
+    // D: glTF emissiveFactor drives self-illumination at KHR_materials_emissive_strength (the
+    // bathroom's candles ship 10); the emissive texture, loaded above, multiplies it in-shader.
     p.emissiveColor = float3(d.emissive[0], d.emissive[1], d.emissive[2]);
-    p.emissiveStrength = (d.emissive[0] != 0.0f || d.emissive[1] != 0.0f || d.emissive[2] != 0.0f) ? 1.0f : 0.0f;
+    p.emissiveStrength = (d.emissive[0] != 0.0f || d.emissive[1] != 0.0f || d.emissive[2] != 0.0f)
+        ? d.emissiveStrength : 0.0f;
 
     // Recorded for later parts (not applied in A3). alphaMask/alphaCutoff moved above LoadAlbedo.
     md->doubleSided = d.doubleSided;
     md->emissiveFactor = float3(d.emissive[0], d.emissive[1], d.emissive[2]);
-    md->emissiveTexPath = d.emissivePath;
 
     cache_[key] = md;
     return md;

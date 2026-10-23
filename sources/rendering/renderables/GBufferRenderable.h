@@ -170,11 +170,30 @@ public:
     // B2: multi-slot objects draw per-submesh (own CB slice + SRV table + ranged draw each).
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
 
+    // Glass as a shading model (MaterialData::IsThinTranslucent, UE MSM_ThinTranslucent): the glass
+    // slots draw in Main_Translucent through glass.hlsl's GLASS_MATERIAL permutation, one PSO per glass
+    // slot built at Init, with the slot's own textures and params. A slot with an alpha test keeps its
+    // opaque half (the texels the cutout keeps) in every opaque path and draws the rest as glass.
+    bool HasTranslucentSlots() const override { return !slotGlassMaterials_.empty(); }
+    void RenderTranslucent(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera,
+                           D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
+    // A glass slot with NO alpha test (MaterialData::IsGlassOnly): no texel of it is opaque, so it takes
+    // no opaque path -- Render / RenderShadow skip it, instancing refuses the object, its indirect
+    // G-buffer PSO is null and ShadowGpuData zeroes its group, and an object made only of such slots
+    // is not in the TLAS. The slot is the one a submesh draws with (slot 0 for a single-material draw).
+    bool SlotIsGlassOnly(size_t slot) const
+    {
+        const MaterialData* md = GetMaterialDataForSlot(slot);
+        return md && md->IsGlassOnly();
+    }
+    bool AllSlotsGlassOnly() const;
+
     // RT (S10): augment the base instance with this object's albedo texture +
     // base-color tint so ray hits can be shaded with the real material color.
     bool GetRtInstance(RtInstanceDesc& out) const override
     {
-        if (!RenderableObject::GetRtInstance(out))
+        // All glass (no opaque texel anywhere): not a solid in the BVH -- no RT shadow, no opaque cup in a reflection.
+        if (AllSlotsGlassOnly() || !RenderableObject::GetRtInstance(out))
         {
             return false;
         }
@@ -311,6 +330,7 @@ protected:
 private:
     void BuildInstancedMaterials(Renderer* renderer);
     void BuildIndirectMaterials(Renderer* renderer); // S4
+    void BuildGlassMaterials(Renderer* renderer);    // thinTranslucent slots: slotGlassMaterials_
     void ResolveMaterialSlots(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
@@ -356,4 +376,11 @@ private:
     std::vector<std::shared_ptr<Material>> slotInstancedShadowMaterials_;
     // S4: per-slot indirect G-buffer PSOs (one entry for single-slot objects); empty = CPU path.
     std::vector<std::shared_ptr<Material>> slotIndirectGraphicsMaterials_;
+    // Per slot, the glass.hlsl GLASS_MATERIAL PSO of a thinTranslucent slot (null for the others);
+    // EMPTY when no slot is glass -- HasTranslucentSlots. hasGlassOnlySlot_: some slot is IsGlassOnly.
+    std::vector<std::shared_ptr<Material>> slotGlassMaterials_;
+    // Its depth prepass twin (glass.hlsl PSDepthOnly: no colour, depth written): the object's nearest
+    // glass surface goes into the depth buffer first, so a cup's far inner wall cannot blend over its near wall.
+    std::vector<std::shared_ptr<Material>> slotGlassDepthMaterials_;
+    bool hasGlassOnlySlot_ = false;
 };

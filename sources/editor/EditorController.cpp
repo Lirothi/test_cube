@@ -2713,6 +2713,29 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     }
 }
 
+bool EditorController::McpLevelHost::Save(std::string& outText)
+{
+    EditorSceneDocument& document = owner_.document_;
+    const std::string path = NormalizeLevelPath(document.LevelPath());
+    if (path.empty())
+    {
+        outText = "the level has no file yet; Save As is the person's (File > Save As)";
+        return false;
+    }
+    if (!LevelDocumentSerializer::SaveToFile(document, path))
+    {
+        owner_.levelStatus_ = "Save failed";
+        outText = "writing " + path + " failed; the level is unchanged on disk";
+        return false;
+    }
+    document.SetDirty(false);
+    owner_.levelStatus_ = "Saved " + path + " (MCP)";
+    LOG_INFO(logging::LogCategory::Editor, "MCP: saved {} ({} objects)", path, document.Objects().size());
+    outText = "Saved " + path + " (" + std::to_string(document.Objects().size()) + " objects, " +
+        std::to_string(document.Environment().size()) + " environment entries)";
+    return true;
+}
+
 void EditorController::RefreshAssetErrors()
 {
     const bool wasClean = assetErrors_.empty();
@@ -2977,6 +3000,7 @@ void EditorController::Draw(
             EditorContext closedCtx{ renderer, scene, levelManager, document_, selection_ };
             const EditorActionContext closedActionCtx{ closedCtx, assetRegistry_, extensions_ };
             editormcp::SetImportHost(&mcpImportHost_);
+            editormcp::SetLevelHost(&mcpLevelHost_);
             mcpImportHost_.Tick();
             commandBar_.ServiceMcp(closedActionCtx, commandStack_);
         }
@@ -4227,6 +4251,7 @@ void EditorController::Draw(
     // Claude Code's calls (MCP), every frame. Here rather than in the command bar's Draw so a
     // closed panel cannot leave a caller waiting out its timeout for a frame that never comes.
     editormcp::SetImportHost(&mcpImportHost_);
+    editormcp::SetLevelHost(&mcpLevelHost_);
     mcpImportHost_.Tick();
     commandBar_.ServiceMcp(actionCtx, commandStack_);
 

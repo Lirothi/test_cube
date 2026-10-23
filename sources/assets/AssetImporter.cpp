@@ -2093,8 +2093,9 @@ namespace
     }
 }
 
-bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out)
+bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out, int channel)
 {
+    const size_t component = static_cast<size_t>(std::clamp(channel, 0, 3));
     out = {};
     // WIC needs COM on the calling thread, and DirectXTex keeps ONE WIC factory for the process. A
     // CoInitializeEx/CoUninitialize pair around each read tears the apartment down after the first
@@ -2115,7 +2116,7 @@ bool LoadAlphaChannel(const std::string& path, size_t maxEdge, AlphaImage& out)
         for (size_t y = 0; y < a.height; ++y)
         {
             const uint8_t* row = a.pixels + y * a.rowPitch;
-            for (size_t x = 0; x < a.width; ++x) { out.alpha[y * a.width + x] = row[x * 4 + 3]; }
+            for (size_t x = 0; x < a.width; ++x) { out.alpha[y * a.width + x] = row[x * 4 + component]; }
         }
     }
     return loaded;
