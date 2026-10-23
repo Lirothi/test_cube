@@ -20,13 +20,16 @@
   "lod": {
     "chunkDistance": 24.0,
     "chunkFactor": 2.0,
-    "crossfadeBand": 0.10000000149011612,
+    "distanceScale": 1.0,
     "enabled": true,
+    "pixelError": 8.0,
     "regularMeshRatios": [
-      10.0,
-      20.0,
-      40.0
-    ]
+      8.0,
+      16.0,
+      32.0
+    ],
+    "temporalLag": 0.5,
+    "ueScreenSize": true
   },
   "performance": {
     "asyncCompute": true,
@@ -115,6 +118,7 @@
       ],
       "zPadding": 25.0
     },
+    "localLightWindRange": 30.0,
     "mode": "sdsm",
     "sdsm": {
       "borderTexels": 4.0,
