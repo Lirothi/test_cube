@@ -6,6 +6,7 @@
 #include <atomic>
 
 #include "rendering/core/GpuAlloc.h"
+#include "core/logging/Log.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -58,7 +59,10 @@ public:
     GpuDescHandle Allocate(uint32_t count = 1) {
         uint32_t old = cursor_.load(std::memory_order_relaxed);
         for (;;) {
-            if (old + count > capacity_) {
+            if (old > capacity_ || count > capacity_ - old) {
+                LOG_ERROR(logging::LogCategory::RenderRhi,
+                    "DescriptorHeapGPU overflow: type={} base={} used={} capacity={} requested={}",
+                    static_cast<unsigned>(type_), base_, old, capacity_, count);
                 throw std::runtime_error("DescriptorHeapGPU overflow");
             }
             if (cursor_.compare_exchange_weak(old, old + count, std::memory_order_relaxed)) {

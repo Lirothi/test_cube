@@ -450,7 +450,7 @@ private:
         // Render K real frames to pump the pipeline (K rotates 2..4).
         const int framesToRender = 2 + (iter % 3);
         const auto frameBegin = std::chrono::steady_clock::now();
-        const bool framesOk = RenderFrames_(framesToRender, OpName(op));
+        const bool framesOk = RenderFrames_(framesToRender, OpName(op), op == Op::ResizeWindow);
         boot::AddBucket("stress frames (after op)",
                         std::chrono::duration<double, std::milli>(
                             std::chrono::steady_clock::now() - frameBegin).count(),
@@ -901,8 +901,9 @@ private:
     // Renders `count` real frames. Mirrors the essential per-frame steps of the
     // interactive App loop (message pump + BeginFrame + level-request pump +
     // scene render). Returns false if a frame render threw (caught here).
-    bool RenderFrames_(int count, const char* label)
+    bool RenderFrames_(int count, const char* label, bool resizeDuringFrame = false)
     {
+        UINT expectedResizeWidth = 0;
         for (int f = 0; f < count && !faultCaught_; ++f)
         {
             // Per-FRAME breakdown, in buckets rather than tree scopes: a stress run renders
@@ -933,6 +934,29 @@ private:
             {
                 TranslateMessage(&msg);
                 DispatchMessage(&msg);
+            }
+
+            if (resizeDuringFrame)
+            {
+                // WM_SIZE is serviced AFTER BeginFrame by App::Run. Before the fix, this changed
+                // frame slots without resetting the new slot's pools; repeated events overflowed
+                // the 4096-entry descriptor ring. Exercise that exact ordering every resize step.
+                const UINT width = renderer_.GetWidth();
+                const UINT height = renderer_.GetHeight();
+                const auto generation = renderer_.GetDeferredTargetsGeneration();
+                const bool applied = !expectedResizeWidth || width == expectedResizeWidth;
+                renderer_.OnResize(width + 1, height);
+                renderer_.OnResize(width + 2, height); // only the latest request must be applied
+                expectedResizeWidth = width + 2;
+                if (!applied || renderer_.GetWidth() != width ||
+                    renderer_.GetDeferredTargetsGeneration() != generation)
+                {
+                    std::snprintf(faultDetail_, sizeof(faultDetail_),
+                                  "resize boundary regression: resize was not deferred/coalesced at BeginFrame");
+                    LOG_ERROR(logging::LogCategory::RenderRhi, "{}", faultDetail_);
+                    Profiler::Get().EndFrame();
+                    return false;
+                }
             }
 
             try
@@ -968,6 +992,11 @@ private:
                                 std::chrono::steady_clock::now() - frameBegin).count(),
                             label);
             boot::AddCount("frames rendered");
+        }
+        if (resizeDuringFrame)
+        {
+            LOG_INFO(logging::LogCategory::RenderRhi,
+                     "resize boundary regression PASS: {} frames, deferred and coalesced requests", count);
         }
         return true;
     }
@@ -1064,11 +1093,8 @@ private:
         }
     }
 
-    // Resize the OS window to the next size in the rotation. WM_SIZE is dispatched
-    // during the next frame's message pump, which calls Renderer::OnResize ->
-    // DestroyDeferredTargets + CreateDeferredTargets (the prime suspect). We also
-    // call OnResize directly so the recreate happens right now, tightly against
-    // the churn, in addition to the message-driven one.
+    // Resize the OS window to the next size in the rotation. The message-driven and direct
+    // requests coalesce at BeginFrame, before the new swapchain slot's pools are recycled.
     void CycleResize_()
     {
         static const struct { UINT w; UINT h; } kSizes[] = {
@@ -1085,7 +1111,7 @@ private:
                          rect.right - rect.left, rect.bottom - rect.top,
                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
-        // Direct recreate too (the WM_SIZE path may be coalesced/deferred).
+        // Queue directly too, in case the OS did not send a notification.
         renderer_.OnResize(w, h);
     }
 

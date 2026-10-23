@@ -407,6 +407,7 @@ public:
     // The non-blocking half: has the GPU finished the frame last submitted in this slot? A reader
     // that can use ANY finished copy (the ocean readback) asks this instead of waiting.
     bool IsFrameSlotComplete(UINT frameIndex) const { return frameScheduler_.IsFrameComplete(frameIndex); }
+    // Main/window thread: coalesce notifications; apply before recycling the next frame slot.
     void OnResize(UINT width, UINT height);
 
     ThreadCL BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* initialPSO = nullptr);
@@ -846,6 +847,7 @@ private:
     Renderer(const Renderer&) = delete;
     Renderer& operator=(const Renderer&) = delete;
 
+    void ApplyPendingResize();
     void CreateSwapChainAndRTVs(UINT width, UINT height);
     void CreateDepthResources(UINT width, UINT height);
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
@@ -902,6 +904,8 @@ private:
     HWND  hWnd_ = nullptr;
     UINT  width_ = 1600;
     UINT  height_ = 900;
+    UINT  pendingResizeWidth_ = 0;
+    UINT  pendingResizeHeight_ = 0;
     float renderResolutionScale_ = 1.0f;
     UINT  renderWidth_ = width_;
     UINT  renderHeight_ = height_;

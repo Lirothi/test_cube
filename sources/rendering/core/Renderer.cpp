@@ -693,6 +693,12 @@ void Renderer::DumpDredBreadcrumbs(diag::ArtifactFile& f)
 void Renderer::BeginFrame() {
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
 
+    // WM_SIZE can arrive after BeginFrame (including reentrantly inside DXGI). Rebuilding the
+    // swapchain there switches currentFrameIndex_ after only the OLD slot's pools were reset:
+    // repeated resizes then exhaust slot 0's descriptors and reuse stale command/upload pools.
+    // Select the resized swapchain's slot before waiting on and recycling any per-frame state.
+    ApplyPendingResize();
+
     // Volumetric fog cell size: the knob (render::g_fogGridPixels, set by --set / the Render tab /
     // graphics_settings.json) is applied HERE, at the frame boundary, before anything of this frame
     // touches the GPU -- a ring recreate at GPU idle. Here and not in the app loop, because every
@@ -1866,6 +1872,18 @@ void Renderer::WaitForPreviousFrame() {
 
 void Renderer::OnResize(UINT width, UINT height) {
     if (width == 0 || height == 0) {
+        return;
+    }
+    pendingResizeWidth_ = width;
+    pendingResizeHeight_ = height;
+}
+
+void Renderer::ApplyPendingResize() {
+    const UINT width = pendingResizeWidth_;
+    const UINT height = pendingResizeHeight_;
+    // Consume first: a notification delivered by DXGI during the recreate belongs to NEXT frame.
+    pendingResizeWidth_ = pendingResizeHeight_ = 0;
+    if (width == 0 || height == 0 || (width == width_ && height == height_)) {
         return;
     }
     width_ = width;
