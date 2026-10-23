@@ -80,9 +80,9 @@ namespace
         float rtWindBlasRadius = 40.0f;
 
         bool lodEnabled = true;
-        float lodBound0 = 10.0f;
-        float lodBound1 = 20.0f;
-        float lodBound2 = 40.0f;
+        float lodBound0 = 8.0f;  // render::g_lodBound0..2 (LodSelect.h says why these)
+        float lodBound1 = 16.0f;
+        float lodBound2 = 32.0f;
         float lodFadeBand = 0.10f;
         float chunkLodDistance = 24.0f;
         float chunkLodFactor = 2.0f;
@@ -314,9 +314,9 @@ namespace
         s.rtAlphaMissKeep = std::clamp(finite(s.rtAlphaMissKeep, 0.15f), 0.0f, 1.0f);
         s.rtWindBlasRadius = std::clamp(finite(s.rtWindBlasRadius, 40.0f), 0.0f, 100.0f);
 
-        s.lodBound0 = std::clamp(finite(s.lodBound0, 10.0f), 2.0f, 60.0f);
-        s.lodBound1 = std::clamp(finite(s.lodBound1, 20.0f), 4.0f, 120.0f);
-        s.lodBound2 = std::clamp(finite(s.lodBound2, 40.0f), 8.0f, 240.0f);
+        s.lodBound0 = std::clamp(finite(s.lodBound0, 8.0f), 2.0f, 60.0f);
+        s.lodBound1 = std::clamp(finite(s.lodBound1, 16.0f), 4.0f, 120.0f);
+        s.lodBound2 = std::clamp(finite(s.lodBound2, 32.0f), 8.0f, 240.0f);
         s.lodFadeBand = std::clamp(finite(s.lodFadeBand, 0.10f), 0.0f, 0.35f);
         s.chunkLodDistance = std::clamp(finite(s.chunkLodDistance, 24.0f), 24.0f, 400.0f);
         s.chunkLodFactor = std::clamp(finite(s.chunkLodFactor, 2.0f), 1.2f, 4.0f);

@@ -1635,6 +1635,34 @@ NON_PIXEL). `Main_ExposureMetering` itself beside DLSS is worth ~0.08 ms at most
 unconditional graphics pass before it to hand the scene over in (LightShafts / DebugDraw /
 SelectionOutline are all conditional, the transparent pass fans out over several lists).
 
+### Bloom beside DLSS -- BUILT, MEASURED, REJECTED (2026-10-23)
+
+Built as described: the bloom split out of `Main_Tonemap` into `Main_BloomPrep` (graphics: temporal
+input + ghost scatter, and the hand-over of scene / depth NON_PIXEL) and `Main_Bloom` (sun probe,
+streak, FFT, composites) on the compute queue, `Main_DLSS` after the prep, the tonemap waiting on the
+bloom (prereq + mtDep: the tone curve reads the kernel survey the bloom's record updates). It
+scheduled as designed and LOST. Release, wind_test, level camera, DLSS balanced, wind running, one
+binary, interleaved x3, `--async-pass` without Bloom as the control:
+
+| | bloom on graphics (split) | bloom async beside DLSS |
+|---|---|---|
+| CPU.Frame (wall clock) | 3.834 / 3.829 / 3.838 | **4.115 / 4.145 / 4.102** (+0.287 ms, +7.5 %) |
+| Pass_BloomConv | 0.176 | 0.436 |
+| Pass_DLSS | 0.322 | 0.507 |
+
+Two reasons, both visible on the two-queue trace. (1) DLSS is not an idle partner: it is compute too
+(and bandwidth), so the overlap costs each of them what the other saved -- the GTAO lesson again.
+(2) The window is too short for two queue hand-overs: the compute queue started ~260-300 us after
+`Main_BloomPrep` signalled, and the tonemap resumed ~280-370 us after the bloom finished -- on an idle
+waiting queue a hand-over here costs ~0.3 ms (the same figure as the OceanReadback hole), against a
+~0.3 ms DLSS window. The split on graphics alone measured the same as before (3.834 vs 3.817), so
+nothing was kept; the patch is not in the tree. Measured on the way: the ghost scatter (a raster
+draw) is ~0.078 ms of the old `Pass_BloomConv` 0.25.
+
+**Rule.** An async move needs a window longer than two hand-overs (~0.6 ms here) or a consumer far
+enough downstream that the waits land on a busy queue -- RTTrace/CloudTrace have both; a pass whose
+only partner is the frame's last 0.3 ms does not.
+
 ## Non-goals
 
 - **A copy queue** for uploads. The same architecture makes it straightforward afterwards, but it

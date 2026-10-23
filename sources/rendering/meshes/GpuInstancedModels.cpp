@@ -169,13 +169,18 @@ void GpuInstancedModels::BuildLodPartition(const Math::float3& camPos, const Fru
     const bool cull = render::g_visChunkMask && cameraFrustum.IsValid();
     constexpr uint8_t kCulled = 0xFFu;
 
-    // Per-instance tier from its world position (rotation/scale don't move the center).
+    // Per-instance tier from its world position (rotation/scale don't move the center), with the radius
+    // every other path selects with (RenderableObject::LodSelectionRadius: the mesh's enclosing sphere
+    // times the object's largest scale axis times its lodDistanceScale). It used to be the UNSCALED box
+    // radius above, so a scaled cloud switched as if it were its unscaled size and ignored the asset's
+    // lodDistanceScale (2026-10-23, the UE comparison).
+    const float lodRadius = LodSelectionRadius();
     std::array<uint8_t, kMaxLodInstances> tierOf{};
     for (UINT i = 0; i < n; ++i)
     {
         const Math::float3 wp = model.TransformPoint(ComputeInstanceOffset(i));
         if (cull && !cameraFrustum.Intersects(wp, cullRadius)) { tierOf[i] = kCulled; continue; }
-        UINT t = render::SelectLodTier(wp, radius, camPos, instanceLastTier_[i]); // per-instance hysteresis
+        UINT t = render::SelectLodTier(wp, lodRadius, camPos, instanceLastTier_[i]); // per-instance hysteresis
         if (t > maxTier) { t = maxTier; }
         instanceLastTier_[i] = static_cast<uint8_t>(t);
         tierOf[i] = static_cast<uint8_t>(t);

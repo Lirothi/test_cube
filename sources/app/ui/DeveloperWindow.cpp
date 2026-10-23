@@ -1726,8 +1726,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                        2.0f, 60.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("distance / instance radius where LOD0 steps to LOD1. A 2 m-radius palm\n"
-                                      "at ratio 15 switches at 30 m. +/-15%% hysteresis on every boundary; each\n"
-                                      "boundary is forced at least 5%% past the previous one.");
+                                      "at ratio 8 switches at 16 m. UE screen size = 1.778 / ratio at 90 deg hfov\n"
+                                      "16:9 (8 = 0.22). Each boundary is forced at least 5%% past the previous one;\n"
+                                      "with the crossfade band on the switch is that dithered band, else +/-15%%\n"
+                                      "hysteresis.");
                 GRAPHICS_CONTROL(LodBound1, "lodBound1",
                     ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1,
                                        4.0f, 120.0f, "%.0f"));

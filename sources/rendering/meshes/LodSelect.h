@@ -145,10 +145,15 @@ inline int ShadowTierBaseLod(unsigned int tier)
 
 // Step 6 boundaries, now TUNABLE (dev window "LOD" tab; --set=lod.bound0/1/2). The unit is
 // distance / instance RADIUS — object-size-relative on purpose, so a palm switches later than a
-// pebble at the same distance. Defaults = the original deliberately conservative curve.
-inline float g_lodBound0 = 10.0f; // ratio where LOD0 -> 1
-inline float g_lodBound1 = 20.0f; // ratio where LOD1 -> 2
-inline float g_lodBound2 = 40.0f; // ratio where LOD2 -> 3
+// pebble at the same distance. In UE's terms (ComputeBoundsScreenSize: the bounding sphere's diameter
+// over the screen height) a ratio r is a screen size of aspect / (r * tan(hfov/2)) = 1.778 / r at the
+// reference 90 degrees on 16:9. 2026-10-23 (owner: "a bit more aggressive"): 10/20/40 -> 8/16/32,
+// i.e. screen size 0.18/0.09/0.044 -> 0.22/0.11/0.056 -- the same as UE's r.StaticMeshLODDistanceScale
+// 1.25, and still on the detailed side of UE's usual hand-authored 0.5/0.25/0.125 (ratio 3.6/7/14).
+// Measured on wind_test (level camera, interleaved x3): frame -0.03 ms.
+inline float g_lodBound0 = 8.0f;  // ratio where LOD0 -> 1
+inline float g_lodBound1 = 16.0f; // ratio where LOD1 -> 2
+inline float g_lodBound2 = 32.0f; // ratio where LOD2 -> 3
 
 // --- FOV normalization ---------------------------------------------------------------------------
 //
