@@ -323,8 +323,9 @@ public:
     using PassContext = RenderGraphPassContext;
 
     using ExecFn = std::function<void(PassContext)>;
-    // A.1s: runs serially before any recording; registers state usage via ctx.Use().
-    using PrepareFn = std::function<void(PassContext&)>;
+    // A pass's builder (AddPass2): runs serially before any recording, registers state usage via
+    // ctx.Use() and returns the body.
+    using BuildFn = std::function<ExecFn(PassContext&)>;
 
     explicit RenderGraph(size_t submitBatchIndex = (size_t)-1)
         : submitBatchIndex_(submitBatchIndex) {
@@ -369,7 +370,7 @@ public:
     // stack. `SceneRenderer::Render` builds its RenderGraph as a local and already sits
     // at ~16.2 KB against C6262's 16 KB threshold, so `Pass` has no room left: adding
     // one std::function per pass (64 B x MaxPasses) plus an inline arena tripped the
-    // warning immediately. This block is heap-allocated lazily by SetPassPrepare, so a
+    // warning immediately. This block is heap-allocated lazily by SetPassBuilder, so a
     // graph with no Prepare (every graph, at A.1s) costs exactly one pointer.
     //
     // NOTE for A.4s: the first real conversion makes this allocate once per graph
@@ -381,7 +382,11 @@ public:
             std::uint32_t count = 0;
             std::uint32_t points = 0; // barrier points this pass declared
         };
-        std::array<PrepareFn, MaxPasses> fns{};
+        // The builders themselves, not a std::function wrapping one: a wrapper capturing
+        // {this, idx, BuildFn} is 80 B, past MSVC's 56 B small buffer, so it was one heap
+        // allocation per pass per frame (53 a frame on wind_test, freed by the next Reset --
+        // the steady state's biggest churn site in a --memtrace).
+        std::array<BuildFn, MaxPasses> builders{};
         std::array<Slice, MaxPasses>     slices{};
         ResourceUse   arena[MaxPasses * kResourceUsesPerPassBudget]{};
         std::uint32_t arenaSize = 0;
@@ -544,8 +549,6 @@ public:
     // Implementation note: the pass is created with a placeholder body because RunPrepareOne
     // skips a pass whose exec is empty; the builder's return REPLACES it. RunPrepares is serial
     // and runs before any record task exists, so writing passes_[idx].exec there is safe.
-    using BuildFn = std::function<ExecFn(PassContext&)>;
-
     size_t AddPass2(RenderPass name, std::initializer_list<size_t> prereqs, BuildFn builder)
     {
         return AddPass2Internal(name, prereqs, std::initializer_list<size_t>{}, {},
@@ -804,7 +807,7 @@ public:
         submitBatchIndex_ = submitBatchIndex;
         if (prepare_) {
             // Keep the allocation (that is the point of reuse), drop last frame's content.
-            for (auto& fn : prepare_->fns) { fn = nullptr; }
+            for (auto& build : prepare_->builders) { build = nullptr; }
             for (auto& slice : prepare_->slices) { slice = {}; }
             prepare_->arenaSize = 0;
         }
@@ -826,8 +829,8 @@ private:
         PrepareState& ps = *prepare_;
         auto& slice = ps.slices[passIdx]; // `typename PrepareState::Slice&` here trips MSVC's
         slice = { ps.arenaSize, 0u, 0u };  // dependent-name parse; auto sidesteps it
-        const PrepareFn& fn = ps.fns[passIdx];
-        if (!fn || !passes_[passIdx].exec) { return; }
+        const BuildFn& build = ps.builders[passIdx];
+        if (!build || !passes_[passIdx].exec) { return; }
         PassContext ctx;
         ctx.renderer = renderer;
         ctx.batchIndex = batch;
@@ -839,7 +842,9 @@ private:
         ctx.useCount = &ps.arenaSize;
         ctx.useCapacity = static_cast<std::uint32_t>(std::size(ps.arena));
         ctx.usePoint = &slice.points;
-        fn(ctx);
+        // The builder's body REPLACES the placeholder AddPass2Internal installed.
+        ExecFn exec = build(ctx);
+        passes_[passIdx].exec = exec ? std::move(exec) : ExecFn([](PassContext) {});
         slice.count = ps.arenaSize - slice.begin;
         ++slice.points; // points = count; NextPoint() only closed the earlier ones
     }
@@ -1323,7 +1328,7 @@ private:
         // /analyze cannot prove that and fires C28020 on the array index for a one-pass graph
         // (the epilogue). Stated in the loop condition, which it does follow.
         for (size_t i = 0; i < passesNum_ && i < MaxPasses; ++i) {
-            if (!prepare_->fns[i]) { continue; }
+            if (!prepare_->builders[i]) { continue; }
             auto& obs = prepare_->observed[i];
             if (!obs.ran) { continue; } // pass early-outed before its body ran
             const auto& slice = prepare_->slices[i];
@@ -1448,7 +1453,7 @@ private:
         // Step 7: install this pass's compiled barriers for the duration of its body — this is
         // what its Transition calls emit. Independent of the comparator: barriers must work with
         // every diagnostic off.
-        const bool flip = prepare_ && prepare_->compiled && prepare_->fns[passIdx];
+        const bool flip = prepare_ && prepare_->compiled && prepare_->builders[passIdx];
         if (flip) {
             Renderer::CompiledBarriers& cbs = prepare_->passBarriers[passIdx];
             BuildPassBarrierView(passIdx, cbs);
@@ -1459,7 +1464,7 @@ private:
             ~Restore() { if (on) { Renderer::SetThreadCompiledBarriers(nullptr); } }
         } restore{ flip };
 
-        if (!prepare_ || !render::g_barrierComparator || !prepare_->fns[passIdx]) {
+        if (!prepare_ || !render::g_barrierComparator || !prepare_->builders[passIdx]) {
             passes_[passIdx].exec(ctx);
             return;
         }
@@ -1641,16 +1646,16 @@ private:
     // shape — the one this plan removed, because a Prepare and a Record kept in step by hand is
     // exactly what drifts. `AddPass2Internal` is its only caller now, so the two-phase machinery
     // survives as an implementation detail and no new pass can be written as a mirror.
-    void SetPassPrepare(size_t passIndex, PrepareFn fn)
+    void SetPassBuilder(size_t passIndex, BuildFn build)
     {
-        assert(passIndex < passesNum_ && "SetPassPrepare on an unknown pass");
+        assert(passIndex < passesNum_ && "SetPassBuilder on an unknown pass");
         if (passIndex >= passesNum_) { return; }
         if (!prepare_) { prepare_ = std::make_unique<PrepareState>(); }
-        prepare_->fns[passIndex] = std::move(fn);
+        prepare_->builders[passIndex] = std::move(build); // a move: no allocation
     }
 
     // Pass-flow S2: create the pass with a placeholder body (RunPrepareOne skips an empty exec),
-    // then install a Prepare that runs the builder and replaces the body with its return.
+    // then install the builder; RunPrepareOne runs it and replaces the body with its return.
     template <typename RangePrereqs, typename RangeDeps>
     size_t AddPass2Internal(RenderPass name,
         const RangePrereqs& prereqs,
@@ -1696,12 +1701,7 @@ private:
                           RenderPassToWString(name).data());
             RendererInvariantFailure(msg);
         }
-        SetPassPrepare(idx, [this, idx, builder = std::move(builder)](PassContext& ctx)
-        {
-            ExecFn exec = builder(ctx);
-            passes_[idx].exec = exec ? std::move(exec)
-                                     : ExecFn([](PassContext) {});
-        });
+        SetPassBuilder(idx, std::move(builder));
         return idx;
     }
 
