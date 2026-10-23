@@ -77,44 +77,66 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
     auto& tasks = TaskSystem::Get();
     const size_t N = objects.size();
 
+    // The call's state goes to a frame slot (ObjectBatchJob): the workers outlive this call, and a
+    // lambda carrying it all spilled out of std::function's small buffer -- an allocation per call.
+    const uint32_t slot = objectBatchJobCount_.fetch_add(1, std::memory_order_relaxed);
+    if (slot >= kMaxObjectBatchJobs)
+    {
+        RendererInvariantFailure("RenderObjectBatch: out of job slots this frame (raise kMaxObjectBatchJobs)");
+    }
+    ObjectBatchJob& job = objectBatchJobs_[slot];
+    job.renderer = renderer;
+    job.camera = &camera;
+    job.objects = &objects;
+    job.viewCB = viewCB;
     // Barrier plan step 5: carry the pass's transition log onto the fan-out workers, so the
     // comparator observes what they record. Captured HERE, on the pass thread, where the log is
     // installed; without it these passes look silent because they are unobserved, not correct.
-    Renderer::TransitionLog* const cmpLog = Renderer::CurrentThreadTransitionLog();
+    job.cmpLog = Renderer::CurrentThreadTransitionLog();
     // Step 7: the compiled barriers travel with the log — a fan-out worker must emit its
     // pass's barriers too, or the flip loses exactly the passes that record in parallel.
-    Renderer::CompiledBarriers* const cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
-    auto renderJob = [renderer, &camera, &objects, useBundles, chunkSize, batchIndex, pass, targets, viewCB, localOrderBase, cmpLog, cmpBarriers](std::size_t jobIndex)
+    job.cmpBarriers = Renderer::CurrentThreadCompiledBarriers();
+    job.chunkSize = chunkSize;
+    job.batchIndex = batchIndex;
+    job.localOrderBase = localOrderBase;
+    job.pass = pass;
+    job.targets = targets;
+    job.useBundles = useBundles;
+    auto renderJob = [&j = static_cast<const ObjectBatchJob&>(job)](std::size_t jobIndex)
     {
-        Renderer::TransitionLogScope cmpScope(cmpLog);
-        Renderer::CompiledBarrierScope cmpBarrierScope(cmpBarriers);
+        Renderer::TransitionLogScope cmpScope(j.cmpLog);
+        Renderer::CompiledBarrierScope cmpBarrierScope(j.cmpBarriers);
         CPU_SCOPE(ProfilerScopes::kRenderObjectBatchAsync);
-        const size_t begin = jobIndex * chunkSize;
-        const size_t end = std::min(begin + chunkSize, objects.size());
+        Renderer* const renderer = j.renderer;
+        const Camera& camera = *j.camera;
+        const std::vector<RenderableObjectBase*>& objects = *j.objects;
+        const size_t begin = jobIndex * j.chunkSize;
+        const size_t end = std::min(begin + j.chunkSize, objects.size());
 
-        if (useBundles) {
+        if (j.useBundles) {
             auto b = renderer->BeginThreadCommandBundle(nullptr);
             // Bundles are never named, so they take --gbv-passes' verdict here: a listed pass's
             // bundle draws are validated with the rest of the pass.
-            render::gbv::ApplyPassPatchMode(b.cl, pass);
+            render::gbv::ApplyPassPatchMode(b.cl, j.pass);
             for (size_t i = begin; i < end; ++i) {
                 if (auto* obj = objects[i]) {
-                    obj->Render(renderer, b.cl, camera, viewCB);
+                    obj->Render(renderer, b.cl, camera, j.viewCB);
                 }
             }
             // Base + chunk index is the deterministic submit order within the batch's
             // bundle namespace (transparents must blend in sorted-queue order).
-            renderer->EndThreadCommandBundle(b, batchIndex,
-                localOrderBase + static_cast<uint32_t>(jobIndex));
+            renderer->EndThreadCommandBundle(b, j.batchIndex,
+                j.localOrderBase + static_cast<uint32_t>(jobIndex));
         }
         else {
             auto t = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
             // Named after the pass that fanned out, like every other list. Unnamed, a pooled list
             // kept whatever name its last owner gave it, and the ocean's triangles were reported
             // (in PIX, in DRED breadcrumbs, in the Frame tab) as "Lighting" or "VolumetricFog".
-            SetCommandListName(t.cl, pass);
+            SetCommandListName(t.cl, j.pass);
             {
                 GPU_SCOPE(t.cl, ProfilerScopes::kRenderObjectBatchGpu);
+                const BatchTargets targets = j.targets;
                 if (targets == BatchTargets::GBuffer)
                 {
                     renderer->BindGBuffer(t.cl, Renderer::ClearMode::None); // no clear!
@@ -143,16 +165,17 @@ void SceneRenderer::RenderObjectBatch(Renderer* renderer,
 
                 for (size_t i = begin; i < end; ++i) {
                     if (auto* obj = objects[i]) {
-                        obj->Render(renderer, t.cl, camera, viewCB);
+                        obj->Render(renderer, t.cl, camera, j.viewCB);
                     }
                 }
             }
             // Base + chunk index is the deterministic submit order within the batch's
             // direct namespace (transparents must blend in sorted-queue order).
-            renderer->EndThreadCommandList(t, batchIndex,
-                localOrderBase + static_cast<uint32_t>(jobIndex));
+            renderer->EndThreadCommandList(t, j.batchIndex,
+                j.localOrderBase + static_cast<uint32_t>(jobIndex));
         }
     };
+    static_assert(sizeof(renderJob) <= 48, "renderJob must stay inside std::function's small buffer");
 
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     tasks.DispatchTrack((N + chunkSize - 1) / chunkSize, renderJob, 1);

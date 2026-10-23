@@ -942,6 +942,8 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     gb.pSelectionOutline = skyAtmosphere_.BuildDebug(renderer, rg, frame_->settings.skyAtmosphere, *frame_->camera, frame_->settings.skyAtmosphere.aerialStartDepthMetres, gb.pSelectionOutline, gb.pSkyLuts);
     BuildPost(renderer, gb);
 
+    // RenderObjectBatch's slots: every job of the last frame was joined by the wait below.
+    objectBatchJobCount_.store(0, std::memory_order_relaxed);
 #if TASKSYSTEM_ENABLE_PARALLEL_EXECUTION
     rg.ExecuteParallel(renderer, TaskSystem::Get());
 #else

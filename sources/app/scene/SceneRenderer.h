@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -667,6 +668,29 @@ private:
         ShadowGpuData::DirectionalCullDecisions sdsmCull{}; // Main_SdsmCull
     };
     GraphPassFrame graphPass_;
+    // RenderObjectBatch's per-call state. Its fan-out workers read it until the frame's
+    // WaitForTrackedAsyncTasks, so it cannot live on the caller's stack, and a job lambda carrying it all
+    // (~96 B) was a heap allocation per call -- the last per-frame churn in the trace (two a frame,
+    // 2026-10-23). The job captures its slot instead. Claimed atomically (the G-buffer and transparent
+    // bodies run concurrently), reset before each frame's graph runs; running out is an invariant failure.
+    struct ObjectBatchJob
+    {
+        Renderer* renderer = nullptr;
+        const Camera* camera = nullptr;
+        const std::vector<RenderableObjectBase*>* objects = nullptr;
+        D3D12_GPU_VIRTUAL_ADDRESS viewCB = 0;
+        Renderer::TransitionLog* cmpLog = nullptr;
+        Renderer::CompiledBarriers* cmpBarriers = nullptr;
+        size_t chunkSize = 1;
+        size_t batchIndex = 0;
+        uint32_t localOrderBase = 0;
+        RenderPass pass{};
+        BatchTargets targets = BatchTargets::GBuffer;
+        bool useBundles = false;
+    };
+    static constexpr uint32_t kMaxObjectBatchJobs = 16; // five call sites, each once a frame
+    std::array<ObjectBatchJob, kMaxObjectBatchJobs> objectBatchJobs_{};
+    std::atomic<uint32_t> objectBatchJobCount_{0};
 
     // ---- CROSS-FRAME STATE: this frame READS what the last one wrote. ----
     // Every member here is a history or the validity of one, and every one of them has the same
