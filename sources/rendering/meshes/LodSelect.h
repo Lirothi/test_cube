@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 
@@ -143,7 +144,8 @@ inline int ShadowTierBaseLod(unsigned int tier)
     return lod < cap ? lod : cap;
 }
 
-// Step 6 boundaries, now TUNABLE (dev window "LOD" tab; --set=lod.bound0/1/2). The unit is
+// Step 6 boundaries, now TUNABLE (dev window "LOD" tab; --set=lod.bound0/1/2) -- the DISTANCE/RADIUS
+// method, used when g_lodUeScreenSize (below) is off. The unit is
 // distance / instance RADIUS — object-size-relative on purpose, so a palm switches later than a
 // pebble at the same distance. In UE's terms (ComputeBoundsScreenSize: the bounding sphere's diameter
 // over the screen height) a ratio r is a screen size of aspect / (r * tan(hfov/2)) = 1.778 / r at the
@@ -168,28 +170,6 @@ inline float g_lodBound2 = 32.0f; // ratio where LOD2 -> 3
 // numbers stay tuned at the reference FOV (the factor is exactly 1 there), a window resize does not
 // move any LOD, and only an actual FOV change does. Absolute screen sizes would have re-tuned every
 // bound the moment this shipped.
-// Reference deviation/radius that maps to an auto scale of 1.0 (Mesh::GetLodAutoDistanceScale).
-// The median over this project baked meshes.
-inline constexpr float kLodAutoErrorRef = 0.00422f;
-//
-// DEFAULT OFF, and the measurement is why. Deriving a switch distance from the baked geometric
-// error is an appealing idea -- a deviation projects to pixels, and pixels have an obviously
-// right threshold -- but measured over the v2 bake it ORDERS THE ASSETS WRONG. deviation/radius
-// at LOD1: date_palm 0.0535, curly_palm 0.0314, sphere 0.0285, coconut_palm 0.0099, rocks and
-// teapot and tent 0.003-0.005, atoll_island 0.00016. So the palms deform MORE for their size
-// than the sphere does, and this rule would hold palms fine longer than spheres -- the opposite
-// of what the eye asks for.
-//
-// Geometric error is not perceptual salience. A sphere errs by little but STRUCTURALLY: a smooth
-// silhouette becomes a polygon and the eye tracks that instantly. A palm errs by a lot, spread
-// over noisy fronds where nothing is trackable. This is exactly why Unreal AUTHORS ScreenSize per
-// LOD per mesh instead of deriving it -- a deliberate choice, not an omission.
-//
-// The baked errors are kept and surfaced (Mesh::GetLodError, the Mesh Editor, the LOD debug
-// probe) so per-asset lodDistanceScale is set from evidence. Turn this on only with a rule that
-// survives its own measurement. --set=lod.autoScale
-inline bool g_lodAutoScaleFromError = false;
-
 inline float g_lodRefHFovDeg = 90.0f;  // the camera's own default hfov; see Camera::view_.hfov
 inline float g_lodFovRatioScale = 1.0f; // refreshed once per frame from the camera, before selection
 
@@ -201,57 +181,216 @@ inline void UpdateLodFovScale(float hfovRadians)
     g_lodFovRatioScale = (b > 1e-6f) ? (a / b) : 1.0f;
 }
 
-// Dithered LOD crossfade: half-width of the transition band around each boundary, as a
-// fraction of the boundary ratio (0 = off -> hard switches with the classic hysteresis).
-// Inside the band BOTH tiers draw with complementary screen-door masks (see LodFadeClip in
-// gbuffer_common.hlsli), so the switch is a gradual pixel handover instead of a pop; DLSS/TAA
-// resolves the 4x4 Bayer pattern into a smooth blend. Selection inside the band is STATELESS
-// (fade is a pure function of distance), which is also why the band needs no hysteresis: the
-// blend is continuous in distance, so there is nothing to flip-flop.
-// Default OFF (user decision 2026-08-25): the band costs a SECOND draw of every object crossing it,
-// and the pop it hides stopped being the thing you notice once the LOD normal drift was fixed
-// (see MeshLoadOptions::lodNormalWeight). Raise it to bring the dithered handover back.
+// --- UE's static-mesh LOD: selection AND estimation (2026-10-23, owner: "do it as UE does") --------
 //
-// KNOWN INTERACTION if you do, measured on demo.json 2026-08-25: the band draws the object TWICE,
-// as two geometrically DIFFERENT surfaces, but the shadow map holds only one of them (this is a
-// camera-pass-only effect). Under VSM's local spot/point shadows -- whose bias is a tight,
-// texel-sized world push -- the tier the shadow map never saw lands on the wrong side of that bias
-// and self-shadows, so the screen-door mask itself becomes visible as squares of dark dots on the
-// lit side of every fading object. Legacy CSM shows the same scene clean: it shadows the same local
-// lights, but its softer/coarser lookup keeps the tier displacement inside the bias. Proven by
-// same-binary toggles: lod.fadeBand:0 removes it, lod.enabled:0 removes it, and
-// vsm.shadowLodBias:0 does NOT (it makes it slightly worse) -- so this is the crossfade, not a
-// caster-vs-receiver LOD mismatch.
-inline float g_lodFadeBand = 0.10f;
+// SELECTION, ComputeLODForMeshes / ComputeStaticMeshLOD (D:\zalupa\Engine\Source\Runtime\Engine\
+// Private\SceneManagement.cpp:1028-1050, 1138-1161). The object's screen size is its bounding sphere's
+// projected DIAMETER,
+//     SS = 2 * max(0.5 * P[0][0], 0.5 * P[1][1]) * R / max(1, D)        (ComputeBoundsScreenSize, :966)
+// and the LOD drawn is the COARSEST one whose ScreenSize[i] * LODScale is still >= SS, walking down from
+// the last LOD; LOD0 when none is. LODScale = r.StaticMeshLODDistanceScale * View.LODDistanceFactor
+// (Renderer/Private/SceneVisibility.cpp:1250) -- above 1 switches EARLIER. UE has no hysteresis; its
+// transition is the temporal dither below, which both methods use.
+//
+// ESTIMATION, FStaticMeshRenderData::ResolveSectionInfo with bAutoComputeLODScreenSize
+// (Engine/Private/StaticMesh.cpp:3105-3142). LOD0 = 2.0; LOD i = the screen size at which that level's
+// MaxDeviation projects to PixelError pixels on a 1920x1080 screen at 90 degrees:
+//     ViewDistance = MaxDeviation * 960 / PixelError                     (CalculateViewDistance, :3064)
+//     ScreenSize   = ComputeBoundsScreenSize(0, R, view at ViewDistance + R, 90 deg, 1920 x 1080)
+//                  = 1.778 * R / (ViewDistance + R)
+// A level with no measured deviation gets 0.75^i, and no level may ask for a LARGER screen size than the
+// one before it (it then takes half of that). PixelError defaults to 8 (FMeshReductionSettings,
+// MeshReductionSettings.cpp:13). Mesh::GetLodScreenSizes is this.
+//
+// The deviation is the bake's (Mesh::GetLodError: meshopt's error in object units, the worst range). UE's
+// MaxDeviation is `sqrt(quadric error) / 8` of its OWN simplifier (Developer/MeshSimplifier/Private/
+// QuadricMeshReduction.cpp:355) -- a calibration of that metric to a distance; meshopt's already is one,
+// so it goes in as it is.
+//
+// Per asset, as in UE: mesh.json "lodScreenSize" (the authored ScreenSize of each LOD, LOD0 first, i.e.
+// bAutoComputeLODScreenSize off) and "lodPixelError" (the reduction's PixelError); "lodDistanceScale"
+// still multiplies the selection radius (UE's per-component FactorScale).
+//
+// History worth keeping: an error-derived per-asset DISTANCE scale was tried in August and left off,
+// because measured over the bake it holds palms (deviation/radius at LOD1 0.0535: a lot of error, spread
+// over noisy fronds) finer for longer than spheres (0.0285, a silhouette the eye tracks) and rocks /
+// tent / teapot (0.003-0.005) the coarsest. UE's rule has exactly that shape -- it is what UE ships and
+// what the owner asked for; an asset the eye disagrees with takes an authored "lodScreenSize".
+// FOLIAGE is not estimated at all (RenderableObject::LodSelectionBounds): UE's Foliage LOD group
+// generates no LODs, and our foliage chain removes whole parts no recorded deviation sees.
+//
+// Both methods feed the SAME selector below as per-object distance/radius BOUNDS:
+//     SS <= T  <=>  D / R >= 2 * M / T,   M = max(0.5 P[0][0], 0.5 P[1][1]).
+inline bool g_lodUeScreenSize = true;       // false = the global distance/radius bounds g_lodBound0..2
+inline float g_lodPixelError = 8.0f;        // UE FMeshReductionSettings::PixelError
+inline float g_lodDistanceScale = 1.0f;     // UE r.StaticMeshLODDistanceScale
+inline float g_lodScreenMultiple = 0.8889f; // max(0.5 P[0][0], 0.5 P[1][1]) of this frame's camera
+inline constexpr unsigned int kLodScreenSizes = 4u; // LOD0..3, the most any mesh bakes
+
+// Once per frame from the camera's projection (unjittered), before selection -- UpdateLodFovScale's
+// sibling.
+inline void UpdateLodScreenMultiple(float p00, float p11)
+{
+    const float m = 0.5f * std::max(std::abs(p00), std::abs(p11));
+    g_lodScreenMultiple = m > 1e-6f ? m : 0.8889f;
+}
+
+// The distance / radius at which tier t steps to t+1, for the selector below. A level that is never
+// reached keeps its bound at "infinity".
+struct LodBounds
+{
+    float b[3] = { 1e30f, 1e30f, 1e30f };
+};
+
+// The distance/radius method: the global bounds, with the FOV scale divided out of the bound instead
+// of multiplied into the ratio (the same test).
+inline LodBounds RatioLodBounds()
+{
+    const float s = g_lodFovRatioScale > 1e-6f ? g_lodFovRatioScale : 1.0f;
+    LodBounds out;
+    out.b[0] = g_lodBound0 / s;
+    out.b[1] = g_lodBound1 / s;
+    out.b[2] = g_lodBound2 / s;
+    return out;
+}
+
+// UE's walk as bounds: at least LOD k+1 once SS <= ScreenSize[k+1] * LODScale, i.e. once
+// D / R >= 2M / (ScreenSize[k+1] * LODScale). A level the mesh lacks, or one whose screen size is 0,
+// is never reached.
+inline LodBounds ScreenSizeLodBounds(const float (&screenSize)[kLodScreenSizes], unsigned int lodCount)
+{
+    LodBounds out;
+    const float scale = g_lodDistanceScale > 1e-3f ? g_lodDistanceScale : 1e-3f;
+    for (unsigned int k = 0; k < 3u; ++k)
+    {
+        const float t = screenSize[k + 1u] * scale;
+        if (k + 1u < lodCount && t > 0.0f) { out.b[k] = 2.0f * g_lodScreenMultiple / t; }
+    }
+    return out;
+}
+
+// UE's auto screen sizes for one mesh: `deviation[i]` the level's MaxDeviation in the units of
+// `sphereRadius` (0 = not measured; deviation[0] is ignored), `count` levels. See the block above.
+inline void AutoLodScreenSizes(const float* deviation, unsigned int count, float sphereRadius, float pixelError,
+                               float (&out)[kLodScreenSizes])
+{
+    constexpr float kLod0ScreenSize = 2.0f;   // UE::StaticMesh::Private::Constants::LOD0ScreenSize
+    constexpr float kPowerBase = 0.75f;       // ...::AutoComputeLODPowerBase
+    constexpr float kRefScreenMultiple = 0.5f * 1920.0f / 1080.0f; // max(0.5 P00, 0.5 P11), 90 deg 1920x1080
+    const float pe = pixelError > 1e-3f ? pixelError : 1e-3f;
+    for (unsigned int i = 0; i < kLodScreenSizes; ++i)
+    {
+        float ss = 0.0f;
+        if (i == 0u) { ss = kLod0ScreenSize; }
+        else if (i < count)
+        {
+            if (deviation[i] <= 0.0f || sphereRadius <= 1e-6f) { ss = std::pow(kPowerBase, static_cast<float>(i)); }
+            else
+            {
+                const float viewDistance = deviation[i] * 960.0f / pe;
+                ss = 2.0f * kRefScreenMultiple * sphereRadius / std::max(viewDistance + sphereRadius, 1e-2f);
+            }
+            if (ss > out[i - 1u]) { ss = out[i - 1u] * 0.5f; } // screen-size coherence between LODs
+        }
+        out[i] = ss;
+    }
+}
+
+// --- TEMPORAL LOD dither: UE's FTemporalLODState (SceneManagement.cpp:93-138), 2026-10-23 --------
+//
+// The owner: "the dither between LODs should be temporal, like UE's, not spatial". It used to be a
+// SPATIAL band -- every object within +/-10 % of a boundary's distance drew both tiers, permanently,
+// with the mask weight a function of distance. UE does it in TIME: the view keeps two camera origins
+// lod.TemporalLag (0.5 s) apart, selects the LOD from each, and when they disagree draws BOTH with
+// complementary screen-door masks while the weight runs 0 -> 1 over the lag:
+//     every lag, origin[0] = origin[1] (with its time) and origin[1] = the camera now;
+//     alpha = clamp((now - lag - time[0]) / (time[1] - time[0]), 0, 1).
+// So a LOD change DISSOLVES over ~0.5 s and a standing camera dithers nothing at all; selection is
+// stateless (no hysteresis -- UE has none; the lagged origins are what keep a boundary still). A
+// camera cut (the camera's history revision) or a stall restarts the state on the current origin,
+// UE's bOk = false. lag 0 = hard switches with the old +/-15 % hysteresis.
+//
+// The masks are the same 4x4 Bayer screen door (LodFadeClip, gbuffer_common.hlsli) the band used,
+// resolved by DLSS/TAA. Measured with the band 2026-08-25 and still true for any dither: the shadow
+// map holds ONE of the two surfaces, so under VSM's local-light shadows the other can self-shadow
+// into the mask's dots -- the band made that permanent on every object near a boundary; in time it
+// lasts the half second of the dissolve.
+inline float g_lodTemporalLag = 0.5f; // UE lod.TemporalLag, seconds; 0 = no dither (hard switches)
+
+struct TemporalLodState
+{
+    Math::float3 origin[2]{};
+    double time[2] = { 0.0, 0.0 };
+    float lag = 0.0f;
+    float alpha = 0.0f;            // this frame's handover from origin[0]'s LOD to origin[1]'s
+    std::uint64_t revision = ~0ull; // the camera history the samples belong to (a cut restarts them)
+    Math::float3 current{};        // the camera origin the state was last updated with
+};
+inline TemporalLodState g_lodTemporal;
+
+// Once per frame from the main camera, before selection (SceneRenderQueue::SelectLods). Calling it
+// again within the same frame changes nothing.
+inline void UpdateTemporalLod(const Math::float3& viewOrigin, double nowSeconds, std::uint64_t cameraRevision)
+{
+    TemporalLodState& s = g_lodTemporal;
+    bool ok = g_lodTemporalLag > 0.0f && cameraRevision == s.revision;
+    if (ok)
+    {
+        s.lag = g_lodTemporalLag;
+        if (s.time[1] < nowSeconds - s.lag)
+        {
+            if (s.time[0] < s.time[1])
+            {
+                s.origin[0] = s.origin[1];
+                s.time[0] = s.time[1];
+            }
+            s.origin[1] = viewOrigin;
+            s.time[1] = nowSeconds;
+            if (s.time[1] <= s.time[0]) { ok = false; } // paused, or no good sample
+        }
+    }
+    if (!ok)
+    {
+        s.origin[0] = s.origin[1] = viewOrigin;
+        s.time[0] = s.time[1] = nowSeconds;
+        s.lag = 0.0f;
+    }
+    s.revision = cameraRevision;
+    s.current = viewOrigin;
+    const double span = s.time[1] - s.time[0];
+    s.alpha = (s.lag > 0.0f && span > 1e-6)
+        ? static_cast<float>(std::clamp((nowSeconds - s.lag - s.time[0]) / span, 0.0, 1.0))
+        : 0.0f;
+}
 
 // Tier + crossfade state for one object. fade == 0: draw `tier` solid. fade in (0,1): `tier`
 // is fading OUT (weight 1-fade) and `tier+1` is fading IN (weight fade) — the caller issues
-// both draws, clamping tier+1 to the mesh's available LODs.
+// both draws, clamping tier+1 to the mesh's available LODs. With the temporal dither `fade` is the
+// weight of the COARSER of the pair whichever way the handover runs.
 struct LodTierFade
 {
     unsigned int tier = 0u;
     float fade = 0.0f;
 };
 
-// Step 6: pick a LOD tier (0 = full) from screen size (distance / instance radius), with
+// Step 6: pick a LOD tier (0 = full) from screen size (distance / instance radius against the
+// object's bounds -- RatioLodBounds or ScreenSizeLodBounds, which carry the field of view), with
 // HYSTERESIS off the current tier so it doesn't flip back and forth near a boundary. Called
 // once per frame per object in Scene::PrepareViews (NOT during recording); the result is
 // stored and read at draw time. `radius` must be a single drawn instance's size, not an
 // aggregate (cloud/run) bound. Mesh::SelectLod clamps to the LODs actually available.
 inline unsigned int SelectLodTier(const Math::float3& center, float radius,
-                                  const Math::float3& camPos, unsigned int currentTier)
+                                  const Math::float3& camPos, unsigned int currentTier, const LodBounds& lb)
 {
     if (radius <= 1e-4f) { return 0u; }
-    // g_lodFovRatioScale folds the field of view in (see UpdateLodFovScale): 1 at the reference
-    // FOV, below 1 when zoomed in, which pulls every boundary nearer in ratio terms = finer LOD.
-    const float ratio = (center - camPos).Length() / radius * g_lodFovRatioScale;
+    const float ratio = (center - camPos).Length() / radius;
 
     // Monotonic enforcement (each bound at least 5% past the previous) keeps the hysteresis bands
-    // from overlapping however the three sliders are dragged.
+    // from overlapping however the three sliders are dragged (or a mesh's screen sizes authored).
     float bound[3];
-    bound[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;
-    bound[1] = g_lodBound1 > bound[0] * 1.05f ? g_lodBound1 : bound[0] * 1.05f;
-    bound[2] = g_lodBound2 > bound[1] * 1.05f ? g_lodBound2 : bound[1] * 1.05f;
+    bound[0] = lb.b[0] > 0.5f ? lb.b[0] : 0.5f;
+    bound[1] = lb.b[1] > bound[0] * 1.05f ? lb.b[1] : bound[0] * 1.05f;
+    bound[2] = lb.b[2] > bound[1] * 1.05f ? lb.b[2] : bound[1] * 1.05f;
     constexpr float kHyst = 0.15f;                       // +/-15% dead band around each boundary
     unsigned int t = currentTier > 3u ? 3u : currentTier;
     while (t < 3u && ratio > bound[t] * (1.0f + kHyst)) { ++t; }           // go coarser
@@ -259,35 +398,45 @@ inline unsigned int SelectLodTier(const Math::float3& center, float radius,
     return t;
 }
 
-// Crossfade-aware tier selection. With the band off this is exactly SelectLodTier; with it on
-// the result is STATELESS (currentTier unused): outside every band the tier the ratio falls
-// in, inside boundary t's band tier t with fade = position across the band (0 at the near
-// edge, 1 at the far edge). Same monotonic bound enforcement as SelectLodTier.
-inline LodTierFade SelectLodTierFade(const Math::float3& center, float radius,
-                                     const Math::float3& camPos, unsigned int currentTier)
+// The tier at one origin with no hysteresis -- UE's walk, used for each temporal sample.
+inline unsigned int SelectLodTierAt(const Math::float3& center, float radius,
+                                    const Math::float3& origin, const LodBounds& lb)
 {
-    if (g_lodFadeBand <= 0.0f)
-    {
-        return { SelectLodTier(center, radius, camPos, currentTier), 0.0f };
-    }
-    if (radius <= 1e-4f) { return { 0u, 0.0f }; }
-    const float ratio = (center - camPos).Length() / radius * g_lodFovRatioScale;
-
+    if (radius <= 1e-4f) { return 0u; }
+    const float ratio = (center - origin).Length() / radius;
     float bound[3];
-    bound[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;
-    bound[1] = g_lodBound1 > bound[0] * 1.05f ? g_lodBound1 : bound[0] * 1.05f;
-    bound[2] = g_lodBound2 > bound[1] * 1.05f ? g_lodBound2 : bound[1] * 1.05f;
-    // Clamp the half-width so adjacent bands can never overlap (bounds are >= 5% apart).
-    const float w = std::min(g_lodFadeBand, 0.35f);
-
+    bound[0] = lb.b[0] > 0.5f ? lb.b[0] : 0.5f;
+    bound[1] = lb.b[1] > bound[0] * 1.05f ? lb.b[1] : bound[0] * 1.05f;
+    bound[2] = lb.b[2] > bound[1] * 1.05f ? lb.b[2] : bound[1] * 1.05f;
     unsigned int t = 0u;
-    while (t < 3u && ratio > bound[t] * (1.0f + w)) { ++t; }
-    if (t < 3u && ratio > bound[t] * (1.0f - w))
+    while (t < 3u && ratio > bound[t]) { ++t; }
+    return t;
+}
+
+// The camera pass's selection: UE's temporal LOD. The two lagged origins belong to the main camera;
+// any other camera (a preview, a thumbnail) selects at its own position with no dither. With the
+// lag at 0 this is SelectLodTier and its hysteresis.
+inline LodTierFade SelectLodTierTemporal(const Math::float3& center, float radius,
+                                         const Math::float3& camPos, unsigned int currentTier, const LodBounds& lb)
+{
+    if (g_lodTemporalLag <= 0.0f)
     {
-        const float lo = bound[t] * (1.0f - w);
-        const float span = bound[t] * (2.0f * w);
-        return { t, span > 1e-6f ? (ratio - lo) / span : 1.0f };
+        return { SelectLodTier(center, radius, camPos, currentTier, lb), 0.0f };
     }
-    return { t, 0.0f };
+    const TemporalLodState& s = g_lodTemporal;
+    const Math::float3 d = camPos - s.current;
+    if (d.x * d.x + d.y * d.y + d.z * d.z > 1e-6f)
+    {
+        return { SelectLodTierAt(center, radius, camPos, lb), 0.0f };
+    }
+    const unsigned int a = SelectLodTierAt(center, radius, s.origin[0], lb); // outgoing
+    const unsigned int b = SelectLodTierAt(center, radius, s.origin[1], lb); // incoming
+    if (a == b || s.alpha >= 1.0f) { return { b, 0.0f }; }
+    if (s.alpha <= 0.0f) { return { a, 0.0f }; }
+    if (a + 1u == b) { return { a, s.alpha }; }        // going coarser: b (= a + 1) fades in
+    if (b + 1u == a) { return { b, 1.0f - s.alpha }; } // going finer: a (= b + 1) fades out
+    // Two tiers apart (the camera moved a whole tier's worth within one lag): the masks pair a tier
+    // with the next one only, so take the nearer end of the handover instead of dithering.
+    return { s.alpha < 0.5f ? a : b, 0.0f };
 }
 } // namespace render

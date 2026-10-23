@@ -2,6 +2,12 @@
   "geometry": "models/sphere/sphere.mesh.bin",
   "lod3Aggressive": false,
   "lodDistanceScale": 2.0,
+  "lodScreenSize": [
+    1.0,
+    0.222,
+    0.111,
+    0.056
+  ],
   "material": "bronze",
   "source": "import_staging\\sphere\\sphere.obj",
   "texOffsScale": null,

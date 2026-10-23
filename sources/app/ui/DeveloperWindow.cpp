@@ -1720,7 +1720,33 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     render::g_forcedLod = forcedLodCombo - 1;
                 }
 
+                ImGui::SeparatorText("Regular meshes (UE screen size)");
+                GRAPHICS_CONTROL(LodUeScreenSize, "lodUeScreenSize",
+                    ImGui::Checkbox("UE screen size, per mesh", &render::g_lodUeScreenSize));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE's static-mesh LOD: a LOD is drawn while the object's screen size\n"
+                                      "(bounding-sphere diameter / screen height) is at most that LOD's screen\n"
+                                      "size, estimated per mesh from its baked deviation (UE's automatic screen\n"
+                                      "size: the deviation spans 'Pixel error' pixels at 1080p, 90 deg) or authored\n"
+                                      "in mesh.json \"lodScreenSize\". Off = the global distance/radius ratios below.");
+                ImGui::BeginDisabled(!render::g_lodUeScreenSize);
+                GRAPHICS_CONTROL(LodPixelError, "lodPixelError",
+                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError, 0.5f, 64.0f, "%.1f px"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE FMeshReductionSettings::PixelError (default 8): how many 1080p pixels a\n"
+                                      "LOD's baked deviation may span at the distance it switches in. Higher =\n"
+                                      "coarser sooner. mesh.json \"lodPixelError\" overrides it per asset.");
+                GRAPHICS_CONTROL(LodDistanceScale, "lodDistanceScale",
+                    ImGui::SliderFloat("LOD distance scale", &render::g_lodDistanceScale, 0.1f, 8.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE r.StaticMeshLODDistanceScale (default 1): multiplies every LOD's screen\n"
+                                      "size, so ABOVE 1 SWITCHES EARLIER (2 = half the distance) -- the opposite\n"
+                                      "direction to the per-asset mesh.json \"lodDistanceScale\", which multiplies\n"
+                                      "the object's radius (UE's per-component factor) and keeps detail longer.");
+                ImGui::EndDisabled();
+
                 ImGui::SeparatorText("Regular meshes (distance / radius)");
+                ImGui::BeginDisabled(render::g_lodUeScreenSize);
                 GRAPHICS_CONTROL(LodBound0, "lodBound0",
                     ImGui::SliderFloat("LOD1 at ratio", &render::g_lodBound0,
                                        2.0f, 60.0f, "%.0f"));
@@ -1728,23 +1754,24 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("distance / instance radius where LOD0 steps to LOD1. A 2 m-radius palm\n"
                                       "at ratio 8 switches at 16 m. UE screen size = 1.778 / ratio at 90 deg hfov\n"
                                       "16:9 (8 = 0.22). Each boundary is forced at least 5%% past the previous one;\n"
-                                      "with the crossfade band on the switch is that dithered band, else +/-15%%\n"
-                                      "hysteresis.");
+                                      "with the LOD dither time > 0 a switch is a temporal dissolve, else +/-15%%\n"
+                                      "hysteresis. Foliage takes these in UE mode too (no automatic estimate).");
                 GRAPHICS_CONTROL(LodBound1, "lodBound1",
                     ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1,
                                        4.0f, 120.0f, "%.0f"));
                 GRAPHICS_CONTROL(LodBound2, "lodBound2",
                     ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2,
                                        8.0f, 240.0f, "%.0f"));
-                GRAPHICS_CONTROL(LodFadeBand, "lodFadeBand",
-                    ImGui::SliderFloat("Crossfade band", &render::g_lodFadeBand,
-                                       0.0f, 0.35f, "%.2f"));
+                ImGui::EndDisabled();
+                GRAPHICS_CONTROL(LodTemporalLag, "lodTemporalLag",
+                    ImGui::SliderFloat("LOD dither time", &render::g_lodTemporalLag,
+                                       0.0f, 2.0f, "%.2f s"));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Dithered LOD crossfade: half-width of the transition band around each\n"
-                                      "boundary (fraction of the boundary ratio). Inside it BOTH tiers draw with\n"
-                                      "complementary screen-door masks that DLSS/TAA resolves into a smooth\n"
-                                      "blend - no pop. Costs a second draw of the object across the band.\n"
-                                      "0 = off (hard switches with the classic +/-15%% hysteresis).");
+                    ImGui::SetTooltip("UE's temporal LOD (lod.TemporalLag, default 0.5 s): the LOD is selected from\n"
+                                      "two camera positions this far apart in time, and when they disagree BOTH\n"
+                                      "levels draw with complementary screen-door masks while the handover runs\n"
+                                      "0 -> 1 over this time - a dissolve instead of a pop, resolved by DLSS/TAA.\n"
+                                      "A standing camera dithers nothing. 0 = hard switches with +/-15%% hysteresis.");
 
                 ImGui::SeparatorText("Chunked terrain (metres, per chunk)");
                 GRAPHICS_CONTROL(ChunkLodDistance, "chunkLodDistance",

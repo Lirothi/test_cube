@@ -256,6 +256,28 @@ namespace SceneObjectFactory
         {
             mesh.SetLodDistanceScale(o["lodDistanceScale"].get<float>());
         }
+        // mesh.json "lodScreenSize" ([LOD0, LOD1, ...], UE's authored ScreenSize per LOD) and
+        // "lodPixelError" (the PixelError UE's automatic screen sizes are estimated with): the per-mesh
+        // half of UE's LOD selection (render::g_lodUeScreenSize, LodSelect.h). Runtime only, like the scale.
+        if (o.contains("lodScreenSize") && o["lodScreenSize"].is_array())
+        {
+            std::vector<float> sizes;
+            for (const json& v : o["lodScreenSize"]) { sizes.push_back(v.is_number() ? v.get<float>() : 0.0f); }
+            mesh.SetLodScreenSizes(sizes);
+        }
+        if (o.contains("lodPixelError") && o["lodPixelError"].is_number())
+        {
+            mesh.SetLodPixelError(o["lodPixelError"].get<float>());
+        }
+        // A foliage asset (any "windFoliage" slot weight > 0) bakes its LODs with the leaf prune and
+        // the slot drops, which its recorded deviation does not see -- see RenderableObject::
+        // LodSelectionBounds for what it selects with instead.
+        if (o.contains("windFoliage") && o["windFoliage"].is_array())
+        {
+            bool foliage = false;
+            for (const json& v : o["windFoliage"]) { foliage = foliage || (v.is_number() && v.get<float>() > 0.0f); }
+            mesh.SetLodFoliage(foliage);
+        }
 
         // mesh.json "uvDensity" (texture streaming A1): per-slot world size of a unit-UV square,
         // measured by the bake. Read, never derived here: the geometry is in the .bin and the

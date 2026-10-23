@@ -80,10 +80,13 @@ namespace
         float rtWindBlasRadius = 40.0f;
 
         bool lodEnabled = true;
+        bool lodUeScreenSize = true; // render::g_lodUeScreenSize / g_lodPixelError / g_lodDistanceScale
+        float lodPixelError = 8.0f;
+        float lodDistanceScale = 1.0f;
         float lodBound0 = 8.0f;  // render::g_lodBound0..2 (LodSelect.h says why these)
         float lodBound1 = 16.0f;
         float lodBound2 = 32.0f;
-        float lodFadeBand = 0.10f;
+        float lodTemporalLag = 0.5f; // render::g_lodTemporalLag (UE lod.TemporalLag)
         float chunkLodDistance = 24.0f;
         float chunkLodFactor = 2.0f;
 
@@ -314,10 +317,12 @@ namespace
         s.rtAlphaMissKeep = std::clamp(finite(s.rtAlphaMissKeep, 0.15f), 0.0f, 1.0f);
         s.rtWindBlasRadius = std::clamp(finite(s.rtWindBlasRadius, 40.0f), 0.0f, 100.0f);
 
+        s.lodPixelError = std::clamp(finite(s.lodPixelError, 8.0f), 0.5f, 64.0f);
+        s.lodDistanceScale = std::clamp(finite(s.lodDistanceScale, 1.0f), 0.1f, 8.0f);
         s.lodBound0 = std::clamp(finite(s.lodBound0, 8.0f), 2.0f, 60.0f);
         s.lodBound1 = std::clamp(finite(s.lodBound1, 16.0f), 4.0f, 120.0f);
         s.lodBound2 = std::clamp(finite(s.lodBound2, 32.0f), 8.0f, 240.0f);
-        s.lodFadeBand = std::clamp(finite(s.lodFadeBand, 0.10f), 0.0f, 0.35f);
+        s.lodTemporalLag = std::clamp(finite(s.lodTemporalLag, 0.5f), 0.0f, 2.0f);
         s.chunkLodDistance = std::clamp(finite(s.chunkLodDistance, 24.0f), 24.0f, 400.0f);
         s.chunkLodFactor = std::clamp(finite(s.chunkLodFactor, 2.0f), 1.2f, 4.0f);
 
@@ -461,10 +466,13 @@ namespace
         s.rtWindBlasRadius = settings.rtWindBlasRadius;
 
         s.lodEnabled = render::g_lodEnabled;
+        s.lodUeScreenSize = render::g_lodUeScreenSize;
+        s.lodPixelError = render::g_lodPixelError;
+        s.lodDistanceScale = render::g_lodDistanceScale;
         s.lodBound0 = render::g_lodBound0;
         s.lodBound1 = render::g_lodBound1;
         s.lodBound2 = render::g_lodBound2;
-        s.lodFadeBand = render::g_lodFadeBand;
+        s.lodTemporalLag = render::g_lodTemporalLag;
         s.chunkLodDistance = render::g_chunkLodDist0;
         s.chunkLodFactor = render::g_chunkLodDistFactor;
 
@@ -618,10 +626,13 @@ namespace
     void ApplyLod(const GraphicsSettingsSnapshot& s)
     {
         render::g_lodEnabled = s.lodEnabled;
+        render::g_lodUeScreenSize = s.lodUeScreenSize;
+        render::g_lodPixelError = s.lodPixelError;
+        render::g_lodDistanceScale = s.lodDistanceScale;
         render::g_lodBound0 = s.lodBound0;
         render::g_lodBound1 = s.lodBound1;
         render::g_lodBound2 = s.lodBound2;
-        render::g_lodFadeBand = s.lodFadeBand;
+        render::g_lodTemporalLag = s.lodTemporalLag;
         render::g_chunkLodDist0 = s.chunkLodDistance;
         render::g_chunkLodDistFactor = s.chunkLodFactor;
     }
@@ -798,8 +809,11 @@ namespace
             } },
             { "lod", {
                 { "enabled", s.lodEnabled },
+                { "ueScreenSize", s.lodUeScreenSize },
+                { "pixelError", s.lodPixelError },
+                { "distanceScale", s.lodDistanceScale },
                 { "regularMeshRatios", { s.lodBound0, s.lodBound1, s.lodBound2 } },
-                { "crossfadeBand", s.lodFadeBand },
+                { "temporalLag", s.lodTemporalLag },
                 { "chunkDistance", s.chunkLodDistance },
                 { "chunkFactor", s.chunkLodFactor }
             } },
@@ -988,6 +1002,9 @@ namespace
         Read(reflections, "rtWindRadius", s.rtWindBlasRadius);
 
         Read(lod, "enabled", s.lodEnabled);
+        Read(lod, "ueScreenSize", s.lodUeScreenSize);
+        Read(lod, "pixelError", s.lodPixelError);
+        Read(lod, "distanceScale", s.lodDistanceScale);
         const auto ratios = lod.find("regularMeshRatios");
         if (ratios != lod.end() && ratios->is_array() && ratios->size() >= 3)
         {
@@ -995,7 +1012,7 @@ namespace
             if ((*ratios)[1].is_number()) { s.lodBound1 = (*ratios)[1].get<float>(); }
             if ((*ratios)[2].is_number()) { s.lodBound2 = (*ratios)[2].get<float>(); }
         }
-        Read(lod, "crossfadeBand", s.lodFadeBand);
+        Read(lod, "temporalLag", s.lodTemporalLag); // the old spatial "crossfadeBand" is gone (2026-10-23)
         Read(lod, "chunkDistance", s.chunkLodDistance);
         Read(lod, "chunkFactor", s.chunkLodFactor);
 
@@ -1315,10 +1332,13 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::RtWindBlasRadius:               current.rtWindBlasRadius = defaults.rtWindBlasRadius; break;
     case GraphicsControl::RenderScale:                    current.renderScale = defaults.renderScale; break;
     case GraphicsControl::LodEnabled:                     current.lodEnabled = defaults.lodEnabled; break;
+    case GraphicsControl::LodUeScreenSize:                current.lodUeScreenSize = defaults.lodUeScreenSize; break;
+    case GraphicsControl::LodPixelError:                  current.lodPixelError = defaults.lodPixelError; break;
+    case GraphicsControl::LodDistanceScale:               current.lodDistanceScale = defaults.lodDistanceScale; break;
     case GraphicsControl::LodBound0:                      current.lodBound0 = defaults.lodBound0; break;
     case GraphicsControl::LodBound1:                      current.lodBound1 = defaults.lodBound1; break;
     case GraphicsControl::LodBound2:                      current.lodBound2 = defaults.lodBound2; break;
-    case GraphicsControl::LodFadeBand:                    current.lodFadeBand = defaults.lodFadeBand; break;
+    case GraphicsControl::LodTemporalLag:                 current.lodTemporalLag = defaults.lodTemporalLag; break;
     case GraphicsControl::ChunkLodDistance:               current.chunkLodDistance = defaults.chunkLodDistance; break;
     case GraphicsControl::ChunkLodFactor:                 current.chunkLodFactor = defaults.chunkLodFactor; break;
     case GraphicsControl::ShadowMode:                     current.shadowMode = defaults.shadowMode; break;

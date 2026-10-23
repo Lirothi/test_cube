@@ -275,17 +275,43 @@ void RenderableObject::RenderSelectionStencil(Renderer* renderer, ID3D12Graphics
 }
 #endif
 
-float RenderableObject::LodAutoScale() const
+void RenderableObject::SetLodScreenSizes(const std::vector<float>& sizes)
 {
-    if (!render::g_lodAutoScaleFromError) { return 1.0f; }
+    lodScreenSizesAuthored_ = !sizes.empty();
+    for (unsigned int i = 0; i < render::kLodScreenSizes; ++i)
+    {
+        lodScreenSizes_[i] = i < sizes.size() ? std::max(sizes[i], 0.0f) : 0.0f;
+    }
+}
+
+render::LodBounds RenderableObject::LodSelectionBounds() const
+{
+    // FOLIAGE takes no automatic estimate, as in UE, whose Foliage LOD group generates no LODs at
+    // all (BaseEngine.ini [StaticMeshLODSettings] Foliage NumLODs=1): foliage LODs there come
+    // AUTHORED (SpeedTree's screen sizes). Ours are worse than unmeasured -- the leaf prune (LOD3) and
+    // the dropped slots (coconuts at LOD2) remove whole parts, which no deviation the bake records
+    // reflects, so the estimate put coconut_palm's LOD3 at 3.4 radii (screen size 0.52). Without an
+    // authored "lodScreenSize" a foliage mesh takes the authored global curve (the distance/radius
+    // bounds, 8/16/32 = screen size 0.22/0.11/0.056).
+    if (!render::g_lodUeScreenSize || (lodFoliage_ && !lodScreenSizesAuthored_)) { return render::RatioLodBounds(); }
     const Mesh* mesh = GetMesh();
-    return mesh ? mesh->GetLodAutoDistanceScale() : 1.0f;
+    const unsigned int lodCount = mesh ? mesh->GetLodCount() : 1u;
+    float sizes[render::kLodScreenSizes] = {};
+    if (lodScreenSizesAuthored_)
+    {
+        for (unsigned int i = 0; i < render::kLodScreenSizes; ++i) { sizes[i] = lodScreenSizes_[i]; }
+    }
+    else if (mesh)
+    {
+        mesh->GetLodScreenSizes(lodPixelError_ > 0.0f ? lodPixelError_ : render::g_lodPixelError, sizes);
+    }
+    return render::ScreenSizeLodBounds(sizes, lodCount);
 }
 
 unsigned int RenderableObject::ComputeReceiverLodTier(const Math::float3& cameraPos) const
 {
-    return render::SelectLodTierFade(
-        GetWorldBounds().GetCenter(), LodSelectionRadius(), cameraPos, cameraLod_).tier;
+    return render::SelectLodTierTemporal(
+        GetWorldBounds().GetCenter(), LodSelectionRadius(), cameraPos, cameraLod_, LodSelectionBounds()).tier;
 }
 
 float RenderableObject::GetLodRadius() const
@@ -310,14 +336,15 @@ bool RenderableObject::ChunkInFrustum(const AABB& worldBox, const Frustum& frust
 
 void RenderableObject::SelectLod(const Camera& camera, const Frustum& cameraFrustum)
 {
-    // Hysteresis off the current tier (or the stateless crossfade band when g_lodFadeBand is
-    // on); per-instance radius (GetLodRadius) so cloud/instanced objects select on their
-    // single-mesh size, not their aggregate bound.
+    // UE's temporal LOD (render::SelectLodTierTemporal: two lagged camera origins, a dissolve over
+    // lod.TemporalLag), or hysteresis off the current tier with the lag at 0; per-instance radius
+    // (GetLodRadius) so cloud/instanced objects select on their single-mesh size, not their
+    // aggregate bound.
     // lodDistanceScale rides the RADIUS because the selector's input is distance/radius: scaling the
     // radius by k scales every switch distance by k, without touching the shared curve's shape.
     // LodSelectionRadius() is shared with the shadow path's receiver recompute — see its comment.
-    const render::LodTierFade sel = render::SelectLodTierFade(
-        GetWorldBounds().GetCenter(), LodSelectionRadius(), camera.GetPosition(), cameraLod_);
+    const render::LodTierFade sel = render::SelectLodTierTemporal(
+        GetWorldBounds().GetCenter(), LodSelectionRadius(), camera.GetPosition(), cameraLod_, LodSelectionBounds());
     cameraLod_ = sel.tier;
     cameraLodFade_ = sel.fade;
 

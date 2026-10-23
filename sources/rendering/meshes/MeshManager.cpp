@@ -1525,6 +1525,18 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
             lods[i].indices.data(), static_cast<UINT>(lods[i].indices.size()), lods[i].submeshes,
             lods[i].error);
     }
+    // What UE's automatic screen size makes of this bake (render::AutoLodScreenSizes), at the global
+    // PixelError: the number to read before authoring a "lodScreenSize" or a "lodPixelError".
+    if (lods.size() > 1u)
+    {
+        float ss[render::kLodScreenSizes] = {};
+        mesh->GetLodScreenSizes(render::g_lodPixelError, ss);
+        const float r = std::max(mesh->GetBoundingSphereRadius(), 1e-6f);
+        LOG_DEBUG(logging::LogCategory::Asset,
+                  "lod screen sizes '{}' (PixelError {:.1f}): LOD1 {:.3f} LOD2 {:.3f} LOD3 {:.3f}; deviation/radius {:.4f} {:.4f} {:.4f}",
+                  binPath, render::g_lodPixelError, ss[1], ss[2], ss[3],
+                  mesh->GetLodError(1) / r, mesh->GetLodError(2) / r, mesh->GetLodError(3) / r);
+    }
     // mesh.json "chunkGrid": this .bin's LOD0 submeshes are spatial chunks, so give each one its own
     // local AABB (the shadow path turns those into independent casters). The .bin format carries no
     // flag of its own — mesh.json is the single place that says a mesh is chunked, which is why the

@@ -60,10 +60,13 @@ enum class GraphicsControl
     CloudShadowDetailMean,
     CloudTraceMode,
     LodEnabled,                   // LOD ...
-    LodBound0,
+    LodUeScreenSize,              // UE's per-mesh screen sizes (render::g_lodUeScreenSize) ...
+    LodPixelError,
+    LodDistanceScale,
+    LodBound0,                    // ... or the global distance/radius bounds
     LodBound1,
     LodBound2,
-    LodFadeBand,
+    LodTemporalLag,
     ChunkLodDistance,
     ChunkLodFactor,
     ShadowMode,

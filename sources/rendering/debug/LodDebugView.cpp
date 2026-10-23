@@ -95,7 +95,8 @@ struct Entry
     float ratio = 0.0f;
     float fade = 0.0f;    // crossfade weight into tier+1 (0 = solid); chunked meshes never fade
     float lodErr = 0.0f;    // baked object-space deviation of the SELECTED lod from LOD0
-    float autoScale = 1.0f; // Mesh::GetLodAutoDistanceScale, shown even when it is not applied
+    float screenSize = 0.0f; // UE's: the bounding sphere's projected diameter / screen height
+    LodBounds lb;            // the object's own distance/radius bounds (RenderableObject::LodSelectionBounds)
     float sx = 0.0f, sy = 0.0f;
     bool onScreen = false;
 };
@@ -198,14 +199,17 @@ void DrawLodDebug(Renderer* renderer,
             e.metricAt = e.box.GetCenter();
             e.dist = (cam - e.metricAt).Length();
             if (!selectedOnly && e.dist > range) { continue; }
-            e.radius = ro->GetLodRadius();
+            // The selector's own inputs: the radius with the per-asset scale in it, and the object's
+            // bounds (UE's screen sizes for this mesh, or the global ratios).
+            e.radius = ro->LodSelectionRadius();
             e.ratio = e.radius > 1e-4f ? e.dist / e.radius : 0.0f;
+            e.screenSize = 2.0f * g_lodScreenMultiple * e.radius / std::max(e.dist, 1e-2f);
+            e.lb = ro->LodSelectionBounds();
             e.tier = ro->GetCameraLod();
             e.fade = ro->GetCameraLodFade();
             const unsigned int lod = mesh->ClampExplicitLod(e.tier);
             e.tris = mesh->GetLodIndexCount(lod) / 3u;
             e.lodErr = mesh->GetLodError(lod);
-            e.autoScale = mesh->GetLodAutoDistanceScale();
             e.edgeM = EstimateEdgeMeters(e.box, e.tris);
             e.mrad = e.dist > 1e-3f ? 1000.0f * e.edgeM / e.dist : 0.0f;
             e.onScreen = project(e.metricAt, e.sx, e.sy);
@@ -437,9 +441,18 @@ void DrawLodDebug(Renderer* renderer,
                   L"metres to the closest box point   dist0 %.0f  factor %.2f  hyst 15%%  ->  boundaries %.0f / %.0f / %.0f m",
                   d0, factor, bounds[0], bounds[1], bounds[2]);
     wchar_t meshCurve[192];
-    std::swprintf(meshCurve, 192,
-                  L"distance / instance RADIUS from the centre   hyst 15%%  ->  boundaries %.0f / %.0f / %.0f   fade band %.2f",
-                  g_lodBound0, g_lodBound1, g_lodBound2, g_lodFadeBand);
+    if (g_lodUeScreenSize)
+    {
+        std::swprintf(meshCurve, 192,
+                      L"UE screen size per mesh (PixelError %.1f, distance scale %.2f; foliage: ratios %.0f / %.0f / %.0f)   dither %.2f s",
+                      g_lodPixelError, g_lodDistanceScale, g_lodBound0, g_lodBound1, g_lodBound2, g_lodTemporalLag);
+    }
+    else
+    {
+        std::swprintf(meshCurve, 192,
+                      L"distance / instance RADIUS from the centre  ->  boundaries %.0f / %.0f / %.0f   dither %.2f s",
+                      g_lodBound0, g_lodBound1, g_lodBound2, g_lodTemporalLag);
+    }
     emitFamily(chunkStats, L"chunked terrain:", chunkCurve);
     emitFamily(meshStats, L"regular meshes:", meshCurve);
 
@@ -482,36 +495,42 @@ void DrawLodDebug(Renderer* renderer,
         else
         {
             tm->AddTextfShadow(8, y, 15.0f, head, true,
-                               L"probe: mesh   dist %.1f m / radius %.2f m = ratio %.1f   LOD%u%s   %u tris   ~%.2f m edge   %.1f mrad   baked LOD error %.4f m (auto x%.2f)",
-                               probe->dist, probe->radius, probe->ratio, probe->tier,
+                               L"probe: mesh   dist %.1f m / radius %.2f m = ratio %.1f (screen size %.3f)   LOD%u%s   %u tris   ~%.2f m edge   %.1f mrad   baked LOD error %.4f m",
+                               probe->dist, probe->radius, probe->ratio, probe->screenSize, probe->tier,
                                probe->fade > 0.001f ? L" (crossfading)" : L"",
-                               probe->tris, probe->edgeM, probe->mrad,
-                               probe->lodErr, probe->autoScale);
+                               probe->tris, probe->edgeM, probe->mrad, probe->lodErr);
             y += 18;
+            // The object's own bounds, with the selector's monotonic enforcement; a boundary's screen
+            // size is 2M / bound (UE's ScreenSize[t + 1] * LODScale).
             float rb[3];
-            rb[0] = g_lodBound0 > 0.5f ? g_lodBound0 : 0.5f;
-            rb[1] = g_lodBound1 > rb[0] * 1.05f ? g_lodBound1 : rb[0] * 1.05f;
-            rb[2] = g_lodBound2 > rb[1] * 1.05f ? g_lodBound2 : rb[1] * 1.05f;
+            rb[0] = probe->lb.b[0] > 0.5f ? probe->lb.b[0] : 0.5f;
+            rb[1] = probe->lb.b[1] > rb[0] * 1.05f ? probe->lb.b[1] : rb[0] * 1.05f;
+            rb[2] = probe->lb.b[2] > rb[1] * 1.05f ? probe->lb.b[2] : rb[1] * 1.05f;
+            const float m2 = 2.0f * g_lodScreenMultiple;
+            // The switch edge is the bound itself with the temporal dither (stateless, UE), the
+            // +/-15% hysteresis with the lag at 0.
+            const float w = g_lodTemporalLag > 0.0f ? 0.0f : 0.15f;
             if (probe->fade > 0.001f)
             {
-                // Inside the crossfade band selection is STATELESS and BOTH tiers draw, so quoting
-                // a hysteresis edge here would be quoting a rule that is not currently in force.
+                // A temporal dissolve is running: the two lagged camera samples disagree, and BOTH
+                // tiers draw while the handover runs -- quoting an edge would be quoting the wrong rule.
                 tm->AddTextfShadow(24, y, 14.0f, dim, true,
-                                   L"ratio %.1f is inside boundary %u's fade band (%.1f) -> LOD%u and LOD%u both draw, %.0f%% handed over",
-                                   probe->ratio, t, rb[t < 3u ? t : 2u], t, t + 1u, probe->fade * 100.0f);
+                                   L"ratio %.1f: LOD%u and LOD%u dissolving (temporal, %.0f%% of the way to LOD%u); boundary %.1f, screen size %.3f",
+                                   probe->ratio, t, t + 1u, probe->fade * 100.0f, t + 1u,
+                                   rb[t < 3u ? t : 2u], m2 / rb[t < 3u ? t : 2u]);
             }
             else if (t == 0u)
             {
                 tm->AddTextfShadow(24, y, 14.0f, dim, true,
-                                   L"ratio %.1f is below the first boundary (%.1f = %.0f * 1.15) -> LOD0; that is %.0f m for this radius",
-                                   probe->ratio, rb[0] * 1.15f, rb[0], rb[0] * 1.15f * probe->radius);
+                                   L"ratio %.1f is below the first boundary (%.1f = %.1f * %.2f, screen size %.3f) -> LOD0; that is %.0f m for this radius",
+                                   probe->ratio, rb[0] * (1.0f + w), rb[0], 1.0f + w, m2 / rb[0], rb[0] * (1.0f + w) * probe->radius);
             }
             else
             {
                 tm->AddTextfShadow(24, y, 14.0f, dim, true,
-                                   L"ratio %.1f is past boundary %u (%.1f = %.0f * 1.15) -> LOD%u; drops back to LOD%u below ratio %.1f (%.0f m)",
-                                   probe->ratio, t, rb[t - 1u] * 1.15f, rb[t - 1u], t, t - 1u,
-                                   rb[t - 1u] * 0.85f, rb[t - 1u] * 0.85f * probe->radius);
+                                   L"ratio %.1f is past boundary %u (%.1f = %.1f * %.2f, screen size %.3f) -> LOD%u; drops back to LOD%u below ratio %.1f (%.0f m)",
+                                   probe->ratio, t, rb[t - 1u] * (1.0f + w), rb[t - 1u], 1.0f + w, m2 / rb[t - 1u], t, t - 1u,
+                                   rb[t - 1u] * (1.0f - w), rb[t - 1u] * (1.0f - w) * probe->radius);
             }
         }
     }

@@ -5,6 +5,10 @@
 #include <limits>
 
 #include "core/math/Math.h"
+#include "core/Helpers.h" // GetTimeSeconds: the temporal LOD samples
+#include "core/logging/Log.h"
+#include <chrono>
+#include <cstdint>
 #include "app/camera/Camera.h"
 #include "rendering/meshes/LodSelect.h" // render::UpdateLodFovScale (per-frame FOV normalization)
 #include "rendering/renderables/RenderableObjectBase.h"
@@ -243,13 +247,28 @@ void SceneRenderQueue::SelectLods(const Camera& camera, const Frustum& cameraFru
     // reference FOV, so the factor that carries the current one has to be current too. Set here
     // rather than in the camera because this is the single point every LOD decision passes through.
     render::UpdateLodFovScale(camera.GetHFov());
+    // ...and UE's ScreenMultiple, max(0.5 P[0][0], 0.5 P[1][1]) of the same projection (unjittered).
+    const auto& proj = camera.GetProjMatrixNoJitter();
+    render::UpdateLodScreenMultiple(proj.m._11, proj.m._22);
+    // ...and UE's temporal LOD samples (two camera origins lod.TemporalLag apart), on real time; a cut
+    // in the camera's history restarts them.
+    render::UpdateTemporalLod(camera.GetPosition(), GetTimeSeconds(), camera.GetHistoryRevision());
+    std::uint32_t selected = 0u, dissolving = 0u;
     for (auto& bucket : visibleBuckets_)
     {
         for (RenderableObjectBase* obj : bucket)
         {
-            if (obj) { obj->SelectLod(camera, cameraFrustum); }
+            if (!obj) { continue; }
+            obj->SelectLod(camera, cameraFrustum);
+            ++selected;
+            if (obj->GetCameraLodFade() > 0.0f) { ++dissolving; }
         }
     }
+    // How many LOD changes are dissolving right now -- the one number that says the temporal dither is
+    // live (a standing camera must read 0).
+    LOG_DEBUG_THROTTLED(std::chrono::seconds(2), logging::LogCategory::Render,
+                        "lod: {} of {} visible objects dissolving (temporal alpha {:.2f}, lag {:.2f} s)",
+                        dissolving, selected, render::g_lodTemporal.alpha, render::g_lodTemporal.lag);
 }
 
 void SceneRenderQueue::BuildInstancedBatchesForBucket(BucketType type, size_t& batchCursor, bool computeLodBuckets)

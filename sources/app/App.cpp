@@ -526,7 +526,13 @@ namespace
         if (setting == "lod.bound0")  { render::g_lodBound0 = std::max(0.5f, value); return true; }
         if (setting == "lod.bound1")  { render::g_lodBound1 = std::max(0.5f, value); return true; }
         if (setting == "lod.bound2")  { render::g_lodBound2 = std::max(0.5f, value); return true; }
-        if (setting == "lod.fadeBand") { render::g_lodFadeBand = std::clamp(value, 0.0f, 0.35f); return true; }
+        // UE's lod.TemporalLag: the seconds a LOD change dissolves over (temporal dither); 0 = hard switches.
+        if (setting == "lod.temporalLag") { render::g_lodTemporalLag = std::clamp(value, 0.0f, 2.0f); return true; }
+        // UE's static-mesh LOD (LodSelect.h): 1 = per-mesh screen sizes (default), 0 = the bounds above;
+        // its PixelError (the automatic screen sizes) and r.StaticMeshLODDistanceScale.
+        if (setting == "lod.ue") { render::g_lodUeScreenSize = value != 0.0f; return true; }
+        if (setting == "lod.pixelError") { render::g_lodPixelError = std::clamp(value, 0.5f, 64.0f); return true; }
+        if (setting == "lod.distanceScale") { render::g_lodDistanceScale = std::clamp(value, 0.1f, 8.0f); return true; }
         // S8 A/B lever: 1 = soft ramp + Gather tent (default), 0 = the legacy 3x3 SampleCmp box.
         if (setting == "csm.filterMode") { scene.CascadeConfig().filterMode = (uint32_t)std::clamp((int)value, 0, 2); return true; }
         // The three filter knobs beside the kernel selector, so a softness A/B is a command line.

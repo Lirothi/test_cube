@@ -178,11 +178,10 @@ public:
     //
     // This is the knob Unreal has and this engine did not. UE authors a ScreenSize PER LOD PER MESH
     // (FStaticMeshRenderData::ScreenSize, consumed by ComputeStaticMeshLOD) and multiplies it by a
-    // per-component FactorScale, so a palm and a sphere never share one switch curve. Here the curve
-    // is global (g_lodBound0/1/2, "distance / instance radius"), so tuning it for foliage mistunes
-    // everything else -- which is exactly the "palms are right now but spheres switch too early"
-    // case. A per-asset multiplier is the smallest thing that buys UE's separation without changing
-    // the shape of the curve everyone is already tuned against.
+    // per-component FactorScale, so a palm and a sphere never share one switch curve. With
+    // render::g_lodUeScreenSize this engine does the same (per-mesh screen sizes, SetLodScreenSizes);
+    // with the distance/radius method the curve is global (g_lodBound0/1/2), and this multiplier is
+    // the per-asset separation. It multiplies the selection radius in both.
     void SetLodDistanceScale(float s) { lodDistanceScale_ = s > 0.01f ? s : 0.01f; }
     float GetLodDistanceScale() const { return lodDistanceScale_; }
 
@@ -196,15 +195,24 @@ public:
     const std::vector<float>& GetUvDensities() const { return uvDensities_; }
     float UvDensityForSlot(std::size_t slot) const { return slot < uvDensities_.size() ? uvDensities_[slot] : 0.0f; }
 
-    // The mesh's own DERIVED scale (Mesh::GetLodAutoDistanceScale), or 1 when the derivation is
-    // switched off. Multiplied with the authored lodDistanceScale above, so the manifest tunes ON
-    // TOP of the automatic answer instead of replacing it.
-    float LodAutoScale() const;
+    // mesh.json "lodScreenSize" / "lodPixelError" -- UE's per-mesh LOD authoring (render::
+    // g_lodUeScreenSize, LodSelect.h): the ScreenSize of each LOD, LOD0 first (bAutoComputeLODScreenSize
+    // off; an entry past the list = never), and the PixelError the automatic sizes are estimated with
+    // (<= 0 = the global render::g_lodPixelError). Neither is used by the distance/radius method.
+    void SetLodScreenSizes(const std::vector<float>& sizes);
+    void SetLodPixelError(float pixelError) { lodPixelError_ = pixelError; }
+    // The asset has foliage slots (mesh.json "windFoliage" > 0): its LOD chain removes whole parts
+    // the baked deviation does not measure, so it takes no automatic screen size (LodSelectionBounds).
+    void SetLodFoliage(bool foliage) { lodFoliage_ = foliage; }
 
     // The exact radius LOD selection divides distance by — every per-asset factor folded in. The
     // ONE place this expression lives: SelectLod and the shadow path's receiver-LOD recompute
     // (ShadowGpuData::RefreshCasterLods) must agree to the bit, or caster and receiver drift.
-    float LodSelectionRadius() const { return GetLodRadius() * lodDistanceScale_ * LodAutoScale(); }
+    float LodSelectionRadius() const { return GetLodRadius() * lodDistanceScale_; }
+    // ...and the distance/radius bounds it is compared with: UE's screen sizes for this mesh (authored
+    // or estimated) as bounds under this frame's projection, or the global bounds. The same ONE-place
+    // rule as the radius.
+    render::LodBounds LodSelectionBounds() const;
 
     // The LOD tier the camera pass would select for this object RIGHT NOW, stateless apart from
     // the hysteresis seed. For an object SelectLod visited this frame it returns cameraLod_
@@ -385,6 +393,10 @@ private:
     unsigned int cameraLod_ = 0u; // Step 6: camera LOD chosen in PrepareViews (persists for hysteresis)
     float cameraLodFade_ = 0.0f;  // crossfade weight to cameraLod_+1 (0 = solid), from PrepareViews
     float lodDistanceScale_ = 1.0f; // mesh.json "lodDistanceScale"; see SetLodDistanceScale
+    float lodScreenSizes_[render::kLodScreenSizes] = {}; // mesh.json "lodScreenSize"; see SetLodScreenSizes
+    bool lodScreenSizesAuthored_ = false;
+    bool lodFoliage_ = false;       // mesh.json "windFoliage" has a foliage slot; see SetLodFoliage
+    float lodPixelError_ = 0.0f;    // mesh.json "lodPixelError"; <= 0 = render::g_lodPixelError
     std::vector<float> uvDensities_; // mesh.json "uvDensity"; see SetUvDensities
     float drawLodFade_ = 0.0f;    // transient: the fade of the draw being recorded (binder reads it)
     std::vector<std::uint8_t> chunkLods_; // per-chunk camera tier (chunked meshes only; hysteresis state)

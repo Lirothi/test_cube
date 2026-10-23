@@ -1128,18 +1128,20 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         // which is why it sits above the separator that starts the bake settings.
         lodFloat("LOD switch distance", "lodDistanceScale", 1.0f, 0.25f, 6.0f, "x%.2f",
             "Per-asset multiplier on the DISTANCE at which every LOD switch of this mesh happens.\n"
-            "2 = each level starts twice as far away (keeps detail longer), 0.5 = half.\n\n"
-            "The global curve (dev window LOD tab, 'distance / instance radius') is shared by every\n"
-            "mesh, so tuning it for foliage mistunes props. Unreal does not have that problem because\n"
-            "it authors a ScreenSize PER LOD PER MESH; this is the per-asset half of that, without\n"
-            "changing the shape of the curve you already tuned. Applies live - no re-import.");
+            "2 = each level starts twice as far away (keeps detail longer), 0.5 = half -- UE's\n"
+            "per-component LOD factor. Applies live - no re-import.");
+        lodFloat("LOD pixel error", "lodPixelError", 0.0f, 0.0f, 64.0f, "%.1f px",
+            "UE's reduction PixelError for THIS mesh (0 = the global one, dev window LOD tab, default 8).\n"
+            "With 'UE screen size' on, each LOD's screen size is estimated from its baked deviation:\n"
+            "the level switches in where that deviation spans this many pixels at 1080p, 90 deg.\n"
+            "Higher = coarser sooner. mesh.json \"lodScreenSize\" (authored, LOD0 first) replaces the\n"
+            "estimate altogether. Applies live - no re-import.");
 
-        // The baked per-level deviation, so the slider above is set from evidence instead of feel.
-        // Deliberately NOT auto-applied: measured across this project's assets, deviation/radius
-        // orders the assets the wrong way round (palms deform more for their size than a sphere,
-        // yet a sphere shows its LOD far sooner), because geometric error is not perceptual
-        // salience. Unreal authors ScreenSize per LOD per mesh for the same reason. Read it, then
-        // decide.
+        // The baked per-level deviation, which UE's automatic screen size is estimated from
+        // (render::AutoLodScreenSizes). Measured across this project's assets it holds palms (a lot
+        // of deviation for their size) finer for longer than spheres and rocks -- geometric error is
+        // not perceptual salience; an asset the eye disagrees with takes a per-asset pixel error or
+        // an authored "lodScreenSize".
         if (!binInfo_.lods.empty())
         {
             ImGui::TextDisabled("Baked deviation from LOD0 (object units):");
