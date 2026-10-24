@@ -57,6 +57,11 @@ StructuredBuffer<SdsmPartition> SdsmPartitions : register(t16);
 // Interior lighting plan S: the RT sky visibility's bent normal (rt_sky_visibility_cs.hlsl, half res,
 // .w its device depth). Gated by the cbuffer's skyVisParams.x; a dummy sits here when it is off.
 Texture2D<float4> SkyVisTex : register(t17);
+// Interior lighting plan D: the GI probe volume (ddgi_common.hlsli) -- irradiance and depth-moment
+// atlases and the per-probe state. Gated by ddgiParams.x; placeholders sit here when it is off.
+Texture2D<float4> DdgiIrradianceTex : register(t18);
+Texture2D<float4> DdgiDepthTex : register(t19);
+StructuredBuffer<uint4> DdgiProbeState : register(t20);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -71,6 +76,7 @@ SamplerState gSmpLinearClamp : register(s3);
 
 #include "lighting_cb.hlsli" // the b0 cbuffer + MakeCsmParams, shared with fog_scatter_cs.hlsl
 #include "sky_visibility.hlsli" // plan S: UE's DFAO formulas, shared with compose
+#include "ddgi_common.hlsli"    // plan D: the GI probe volume's sampling
 
 // P6B item 6 -- the one place the two occlusion terms meet. Shared shape with compose_cs; if this
 // rule ever changes, both change together or the diffuse and specular halves disagree about how
@@ -263,7 +269,7 @@ float CloudSunVisibility(float3 P)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=21, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -353,6 +359,21 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         SkyVisDiffuse(skyVisBent.xyz, N, skyVisParams.y, skyLookupN, skyVisibility, skyDotFactor);
     }
 
+    // Plan D: the BOUNCE from the GI probe volume -- light arriving from geometry (the sky term below is
+    // the sky's, occluded by plan S; the probes never count it). Inside the volume it takes over from
+    // the analytic ground bounce, which approximates the same light; the volume's edge fades it out.
+    float giWeight = 0.0f;
+    float3 giIrradiance = 0.0f.xxx;
+    if (ddgiParams.x > 0.0f)
+    {
+        DdgiVolumeDesc giVolume;
+        giVolume.base = ddgiBase.xyz;
+        giVolume.generation = uint(ddgiBase.w);
+        giVolume.spacing = ddgiParams.x;
+        giIrradiance = DdgiIrradiance(DdgiIrradianceTex, DdgiDepthTex, DdgiProbeState, gSmpLinearClamp, giVolume,
+                                      P, N, V, giWeight) * ddgiParams.y;
+    }
+
     float3 color;
     if (skyIrradianceEnabled != 0u)
     {
@@ -362,7 +383,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // Deliberately not extended to the flat-fill branch below: `ambient` there is a fraction
         // of the SUN COLOUR authored against a different equation, and a physical bounce added to
         // it would be two units in one sum.
-        color = albedo * (1.0 - metal) * (irradiance * skyIrradianceScale + GroundBounceOverPi(N));
+        color = albedo * (1.0 - metal) * (irradiance * skyIrradianceScale + GroundBounceOverPi(N) * (1.0f - giWeight));
     }
     else
     {
@@ -385,6 +406,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // SkyLightComponent default (SkyLightingDiffuseShared.ush:68): both measure how much of the sky a
     // point sees, at a few centimetres and at metres; their product would square a corner both see.
     color *= min(CombinedAo(materialAo, uv), skyVisibility);
+    // Plan D: the bounce is not the sky -- the small-scale AO occludes it, the sky visibility does not.
+    const float3 giBounce = albedo * (1.0f - metal) * giIrradiance * (giWeight * CombinedAo(materialAo, uv));
+    color += giBounce;
 
     // S0.3: seed the debug cascade with the one the split selection picks, so surfaces that never
     // sample a shadow (facing away from the sun) still show their zone. A real sample below
@@ -496,5 +520,13 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
     // PRE-EXPOSED, as UE write it (View.PreExposure): in raw cd/m2 an FP16 target clips at 65504,
     // which put every sun glint on a glossy surface at the same white ~2.1 after exposure.
+    // Plan D debug view (gi.debug): the bounce alone, nothing else lighting adds (the lamps' own passes
+    // still do) -- and RED where no usable probe surrounds the point (beyond the volume, or every probe
+    // around it inside geometry), so a black patch reads as "no bounce here" or "no probes here".
+    if (ddgiParams.z > 0.0f)
+    {
+        color = giWeight > 0.0f ? giBounce : float3(0.5f, 0.0f, 0.0f) / max(lightPreExposure, 1.0e-12f);
+        skySpecular = 0.0f.xxx;
+    }
     LightTarget[dispatchThreadId.xy] = float4((color * exposure + skySpecular) * lightPreExposure, 1.0);
 }

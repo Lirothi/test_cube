@@ -331,6 +331,7 @@
     <ClCompile Include="sources/app/scene/SceneRenderer_Graph.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Lighting.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Reflections.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_Gi.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp" />
     <ClCompile Include="sources/rendering/post/BloomRenderer.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp" />
@@ -421,6 +422,7 @@
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp" />
     <ClCompile Include="sources/rendering/lighting/SkyAtmosphere.cpp" />
     <ClCompile Include="sources/rendering/lighting/VolumetricCloud.cpp" />
+    <ClCompile Include="sources/rendering/lighting/DdgiVolume.cpp" />
     <ClCompile Include="sources/rendering/meshes/GpuInstancedModels.cpp" />
     <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp" />
     <ClCompile Include="sources/rendering/meshes/Mesh.cpp" />
@@ -683,6 +685,7 @@
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphere.h" />
     <ClInclude Include="sources/rendering/lighting/SkyAtmosphereSettings.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h" />
+    <ClInclude Include="sources/rendering/lighting/DdgiVolume.h" />
     <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h" />
     <ClInclude Include="sources/rendering/lighting/TimeOfDaySettings.h" />
     <ClInclude Include="sources/rendering/lighting/NightLamps.h" />

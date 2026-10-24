@@ -611,6 +611,29 @@ struct SceneRenderSettings
     float skyVisHistory = 0.9f;
     float skyVisDiffuse = 1.0f;
     float skyVisSpecular = 1.0f;
+    // Interior lighting plan D: the GI probe volume (DDGI over RayQuery, rendering/lighting/DdgiVolume.h):
+    // 32x16x32 probes `giSpacing` m apart around the camera, 1 / `giUpdateDivisor` of them tracing 64
+    // rays a frame and blending them in with `giHysteresis`. They hold the BOUNCE only (a miss brings
+    // nothing; the sky is plan S's), which lighting_cs adds to the indirect diffuse x `giIntensity`
+    // (1 = physical). `giRayDistance` m of ray; `giInfiniteBounce` feeds the volume back into its own
+    // hits; `giDebug` 1 = the lit frame shows the bounce alone. Needs RT hardware; off = no bounce.
+    bool giEnabled = true;
+    float giSpacing = 0.5f;
+    uint32_t giUpdateDivisor = 4u;
+    // 0.98, not RTXGI's 0.97 at its 288 rays: 64 rays an update left the bathroom's walls and ceiling
+    // breathing in metre-sized blotches (frame-to-frame std 0.68 sRGB levels at 0.9, 0.37 at 0.97, 0.29
+    // at 0.98 -- 0.17 without GI; owner 2026-10-24 "dark spots dancing"). The divisor does not change the
+    // noise (0.61 at 1/1), only how fast it decorrelates: 4 / (1 - 0.98) = 200 frames to settle.
+    float giHysteresis = 0.98f;
+    float giIntensity = 1.0f;
+    float giRayDistance = 30.0f;
+    bool giInfiniteBounce = true;
+    uint32_t giDebug = 0u;
+    // Glass refraction (owner 2026-10-24: "the glasses pass the background straight through"): a
+    // thinTranslucent slot bends what is behind it as a HOLLOW glass shell -- the surface's own
+    // curvature, walls this thick (m), refracted in and out through both walls onto the opaque scene
+    // behind (glass.hlsl GlassRefractedUv). 0 = straight through, the flat transmission before it.
+    float glassWallThickness = 0.004f;
     // RW: wind-deformed per-instance BLASes for near casters, so foliage sway reaches RT
     // reflections (and later RT shadows). Off = every caster reflects its rest pose.
     bool rtWindBlas = true;

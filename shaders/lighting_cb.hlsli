@@ -147,6 +147,12 @@ cbuffer PerFrame : register(b0)
     // frame (SkyVisTex is real), y the diffuse strength, z the specular strength (0..1, 1 = UE).
     // MIRRORED in compose's own cbuffer: lighting adds the sky specular, compose subtracts it.
     float4 skyVisParams;
+    // Interior lighting plan D: the GI probe volume (ddgi_common.hlsli). ddgiBase xyz = its first world
+    // cell, w = the generation traced; ddgiParams x = the spacing (0 = not applied this frame: the
+    // atlases at t18-t20 are then placeholders), y = the bounce's intensity (1 = physical), z = 1 shows
+    // the bounce alone (a debug view).
+    int4 ddgiBase;
+    float4 ddgiParams;
 }
 
 

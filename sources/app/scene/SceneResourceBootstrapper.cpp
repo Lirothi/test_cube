@@ -101,6 +101,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     cloudShadowParams = material->ComputeCB0FieldHandle("cloudShadowParams");
     csmSdsmPartitions = material->ComputeCB0FieldHandle("csmSdsmPartitions");
     skyVisParams = material->ComputeCB0FieldHandle("skyVisParams");
+    ddgiBase = material->ComputeCB0FieldHandle("ddgiBase");
+    ddgiParams = material->ComputeCB0FieldHandle("ddgiParams");
 
     // A name that does not resolve leaves `field` null, UpdateCBField writes NOTHING, and the
     // shader then reads whatever was in that constant-buffer memory. That is normally a cosmetic
@@ -1675,6 +1677,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.cloudShadowParams, data.cloudShadowParams, dest);
     matLighting_->UpdateCBField(handles.csmSdsmPartitions, data.csmSdsmPartitions, dest);
     matLighting_->UpdateCBField(handles.skyVisParams, data.skyVisParams, dest);
+    matLighting_->UpdateCBField(handles.ddgiBase, data.ddgiBase, dest);
+    matLighting_->UpdateCBField(handles.ddgiParams, data.ddgiParams, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));

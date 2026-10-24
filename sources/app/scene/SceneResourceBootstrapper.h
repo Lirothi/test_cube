@@ -94,6 +94,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle cloudShadowViewProj, cloudShadowParams; // plan C3: the cloud shadow map
     Material::CBFieldHandle csmSdsmPartitions; // S15: 0 = not SDSM mode
     Material::CBFieldHandle skyVisParams;      // plan S: the RT sky visibility (on, diffuse, specular)
+    Material::CBFieldHandle ddgiBase, ddgiParams; // plan D: the GI probe volume
 
     void Populate(Material* material);
 };
@@ -751,6 +752,9 @@ struct LightingPassConstants
     // Plan S: x 1 = the RT sky visibility was traced this frame (t17 is real), y diffuse and z specular
     // strength. compose gets the same values (ComposePassConstants::skyVisParams).
     float4 skyVisParams{};
+    // Plan D: the GI probe volume -- its first cell + generation, and (spacing, intensity, debug).
+    std::array<int32_t, 4> ddgiBase{};
+    float4 ddgiParams{};
 };
 
 struct PointLightPassConstants

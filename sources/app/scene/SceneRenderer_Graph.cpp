@@ -1522,6 +1522,13 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         // Plan C3: the cloud shadow map, at its rest; declared so the read is named (GBV flags a
         // descriptor over an undeclared resource even unread).
         if (volumetricCloud_.ShadowBuilt()) ctx.Use(volumetricCloud_.ShadowResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        // Plan D: the GI probe volume, bound whenever it exists (t18-t20), at its rest.
+        if (ddgi_.Ready())
+        {
+            ctx.Use(ddgi_.Irradiance(), DdgiVolume::kRestState);
+            ctx.Use(ddgi_.Depth(), DdgiVolume::kRestState);
+            ctx.Use(ddgi_.State(), DdgiVolume::kRestState);
+        }
         const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
         return [this, renderer, point](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassLighting);
@@ -1547,6 +1554,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
     if (gb.pCloudShadow != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(lightPrereqs, gb.pCloudShadow); }
     // Plan S: the RT sky visibility, read by lighting (and by compose, transitively after it).
     if (gb.pSkyVis != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(lightPrereqs, gb.pSkyVis); }
+    // Plan D: the GI probe volume's update, read by lighting.
+    if (gb.pGiUpdate != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(lightPrereqs, gb.pGiUpdate); }
     if (decisions_.vsmActive && gb.pVsmPageRender != static_cast<size_t>(-1))
     {
         ID3D12Resource* vpool = frame_->vsm->PagePool();
@@ -2398,6 +2407,8 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             p.Use(DT.fogIntegrated.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         }
         p.Use(DT.glassReflection.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // Plan S on glass slots (t19): bound every frame, read when glassSkyVis.x says it was traced.
+        if (DT.skyVis.Get()) { p.Use(DT.skyVis.Get(), kSrvAll); }
         p.Use(DT.scene.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);
         p.Use(DT.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
         p.Use(DT.gbVelocity.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET);

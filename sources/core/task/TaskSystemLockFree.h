@@ -46,7 +46,10 @@ public:
         // The ready queue owns a reference until that consumer releases the entry.
         TaskWithDeps* nextReady_{nullptr};
         std::atomic<std::size_t> pendingDeps_{0};
-        tc::inl_vector<TaskHandle, 4> dependents_;
+        // 8: the render graph's Pass_BuildAS recording task fans out to every RT pass that reads the
+        // TLAS (RTTrace, the RT resolve, the RT debug view, the glass reflections, the sky visibility,
+        // the GI probe trace) -- five of them at once overflowed 4 and aborted the first frame.
+        tc::inl_vector<TaskHandle, 8> dependents_;
         // Immutable after dependency setup; owns references for targeted helping.
         std::vector<TaskHandle> prerequisites_;
         // Completion flag, waited on via C++20 atomic wait. Waiters must hold a

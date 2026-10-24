@@ -6,7 +6,7 @@
   "restRotationDeg": [
     -54.79,
     0.0,
-    -0.01
+    0.009999999999999998
   ],
   "source": "import_staging\\seashells\\scene.gltf#node:scoica_01",
   "uvDensity": [

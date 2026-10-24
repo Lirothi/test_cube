@@ -54,7 +54,9 @@ only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--tim
 Night lamps (plan L, `rendering/lighting/NightLamps.h`): a point/spot light or a glowing mesh with `"onAt": "night"`
 (or `"day"`) switches when the sun crosses `timeOfDay.lamps.sunElevationDeg` (0 = UDS's Sunset), UDS-style delay and
 warm-up, instant when the clock is set by hand; a night lamp takes `nightBrightness` as the night comes in. Brightness,
-never `enabled` (that rebuilds the lights behind a GPU wait). MCP: `setOnAt` -- lights through the selection.
+never `enabled` (that rebuilds the lights behind a GPU wait). MCP: `setOnAt` -- lights through the selection;
+`setLight {lumens | scale, radius, color, shadows}` retunes lights that exist, by name or group ("Bathroom
+Candles"), one undo entry -- `scale` multiplies each light's own flux, a spot's radius is its range.
 
 ## Line Endings
 
@@ -170,7 +172,10 @@ its pipeline is bound, so the cost is minutes, not milliseconds: a full wind_tes
 - **Prove a mode catches before trusting its silence**: `--gbv-selftest=1@<Pass>` injects an
   uninitialized-root-argument draw into that pass. Listed -> `ERROR id=935`. The line
   `gbv self-test: injected ... into command list '<Pass>'` must be in the log; without it nothing was
-  injected and the silence proves nothing.
+  injected and the silence proves nothing. Aim it at a list whose shader READS the tables it unbinds:
+  `Skybox` is proven (id=935); `TerrainDepth` (gbuffer_csm) takes the injection and stays SILENT (2026-10-24),
+  and a compute pass (GiUpdate, PointLights, ...) cannot take one at all -- list Skybox beside it as the run's
+  catcher.
 
 Reading it: errors land in the session log as `[ERROR][render.validation] ERROR id=...` (and in
 `logs/gbv.log`); `[render.rhi] [gbv] requested patch mode = ... device default = ...` and the
@@ -540,6 +545,20 @@ asset's wind slot and its material's four shading keys (`materialgen::ApplyLeafS
 edit kept. `--seam-ratio=<gltf>` prints the verdict per slot headless; `intent_regression`'s
 `TestLeafCards` holds the rule on the staged sources.
 
+**Handedness.** glTF is right-handed (front +Z, up +Y, the asset's right -X), the engine left-handed
+(`LookAtLH`): `MeshManager::ParseGltfFile` negates X after each node's world transform (UnityGLTF's
+convention) and the det -1 turns the winding through the negative-scale rule. Until 2026-10-24 it read the
+coordinates as they were and every glTF asset rendered as its own mirror image -- the_bathroom_free back to
+front against its Sketchfab render; the CCW winding only looked right because the mirror flipped it too.
+`intent_regression`'s `TestGltfHandedness` holds it (a vertex on glTF -X lands on +X; the front stays
+clockwise). `kMeshBinVersion` 3 marks converted bakes; all 148 .mesh.bin were re-baked from their manifests
+(`--reimport --reimport-src="<src>" --reimport-out=<bin> --reimport-manifest=<mesh.json>`; a quoted value may
+hold spaces -- node names do). The levels were migrated so every copy stays its own mirror where it stood: the
+`the_bathroom` group and its candles mirrored about the room's centre plane, 459 tilted copies (pitch/roll)
+about the vertical plane nearest their local X (keeping their ground contact; keeping the rotation would
+have mirrored them about a tilted plane, into the sand), the fishing boat about its hull centre (2.3 m off its
+origin); seashells' `restRotationDeg` -> (p, -y, -r). OBJ is still read as it was (teapot, corgi).
+
 ## Glass -- the thinTranslucent Shading Model
 
 Glass is a material SLOT's shading model, not an object type: `"shadingModel": "thinTranslucent"` (UE
@@ -558,9 +577,17 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
 - **glTF BLEND alpha is coverage on top of the transmission model** (three.js and Blender do the same): Sketchfab's
   exporter writes a pane's opacity as BOTH the alpha and 1 - transmission. Left out, the_bathroom_free's shelf was a
   full sheet of blue glass.
-- **No refraction, by the spec**: glTF without KHR_materials_volume is thin-walled (`kGlassMaterialThickness` 0);
-  roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the sky's (a slot
-  is not in the glass-reflection G-buffer).
+- **Refraction through a HOLLOW shell** (owner 2026-10-24, "no distortion"): glTF without KHR_materials_volume is
+  thin-walled, so `glass.hlsl GlassRefractedUv` takes the surface locally as a hollow sphere -- radius = the
+  interpolated GEOMETRIC normal's curvature over the pixel quad, wall `glass.wall` (4 mm, 0 = straight through) --
+  and refracts the view ray through both walls exactly, then lands it on the opaque scene by HDRP's proxy raycast
+  (the depth copy at t18, one refinement; a landing in front of the glass keeps the straight sample). A pane or a
+  concave face is not bent. A SOLID ball's lensing (HDRP RefractionModelSphere) would make every tumbler a
+  paperweight. Roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the
+  sky's (a slot is not in the glass-reflection G-buffer) -- **occluded by plan S**: the glass has no bent normal of
+  its own, so the opaque surface behind it lends its RT sky visibility (t19, `glassSkyVis` = lighting's
+  skyVisParams) to the sky fill and the sky reflection (2026-10-24, owner: "why are the transparent objects so
+  blue" -- a tumbler in a closed room reflected the whole night sky x nightBrightness).
 - It blends OVER the target (ONE / INV_SRC_ALPHA) so glass behind glass shows, after a **depth prepass**
   (`PSDepthOnly`): a concave cup has two front-facing surfaces per pixel, and in index order the far inner wall
   blended over the near one -- the owner's "стаканы вывернуты". The prepass's depth stays: a particle behind glass
@@ -591,3 +618,53 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
 - Cost is the ray count, not the reach: 4 rays 0.28-0.34 ms on wind_test's grove, 8 rays 0.63, 2 rays 0.18.
 - A/B it with the exposure PINNED (`exposure.autoExposure:0` after metering): the metering brightens the whole
   frame to make up for the darker shade, which reads as "the sky got brighter".
+
+## GI Probe Volume (DDGI) -- the Bounce
+
+`rendering/lighting/DdgiVolume` (resources, per-frame placement) + `SceneRenderer_Gi.cpp` (Main_GiTrace, Main_GiUpdate)
++ `shaders/ddgi_common.hlsli` / `ddgi_trace_cs.hlsl` / `ddgi_update_cs.hlsl`: RTXGI's layout and formulas over inline
+RayQuery. 32x16x32 probes `gi.spacing` (0.5 m) apart, camera-centred and SCROLLING (a slot records the cell and the
+generation it was traced for; a mismatch weighs 0); 1 / `gi.divisor` (4) of them trace 64 rays a frame, blended with
+`gi.hysteresis` (0.98) into octahedral irradiance (6x6) and depth-moment (14x14) atlases. Interior lighting plan D.
+0.98, not RTXGI's 0.97: at 64 rays an update 0.9 left the bathroom breathing in metre-sized blotches (frame-to-
+frame std 0.68 sRGB levels; 0.37 at 0.97, 0.29 at 0.98, 0.17 without GI -- scratchpad flicker_map: per-pixel std
+over 8 clean shots 3 frames apart). The divisor does not change that noise, only how fast it moves.
+
+- The probes hold the BOUNCE only: a ray that misses brings 0. The sky reaches a surface through plan S (RT sky
+  visibility), and lighting_cs ADDS the bounce to the indirect diffuse -- occluded by the AO, never by the sky
+  visibility -- so nothing is counted twice and the volume's edge fades an addition, not a seam. Inside the volume it
+  replaces the analytic `GroundBounceOverPi`, which approximates the same light.
+- A hit is shaded diffusely: the directional light with an RT shadow ray, every spot/point light in reach with its
+  shadow ray, the sky through ONE cosine visibility ray (plan S's reach), the volume's previous irradiance (the
+  infinite bounce, `gi.infiniteBounce`). A back-face hit of a one-sided surface stores -0.2 t (RTXGI): more than a
+  quarter of them switches the probe off (inside geometry). Masked geometry (leaf cards) is two-sided.
+- Bindless scene slots 32-39 are the trace's (`BindlessTable::kScenePerFrame` 48). Lighting binds t18-t20 whenever
+  the volume exists and reads them when `ddgiParams.x` (the spacing) is non-zero -- `decisions_.giApplied`.
+- `Pass_BuildAS`'s recording task now fans out to six RT passes; `TaskSystemLockFree` dependents_ holds 8 (4 aborted
+  the first frame with a bare 0xC0000409 and no log line -- `--log-sync` did not help; the minidump's stack scan did).
+- Cost (wind_test, 1440p DLSS Balanced): trace 0.10 ms in the bathroom, 0.18 ms on the grove; update 0.06 ms.
+  `gi.debug:1` shows the bounce alone (the lamps' own passes still add), RED where no usable probe surrounds a
+  point. `gi.enabled:0` = the frame before it.
+- A black patch WITH probes around it is albedo, not a hole: the_bathroom_free's dark wood (cabinet, wainscot, floor)
+  measured albedo x AO ~0.07 under a bounce ~1/16 of the candle-lit wallpaper -- check `gi.debug` before blaming GI.
+- A/B a look with the exposure pinned to the metered value (`exposure.autoExposure:0;exposure.manualEv100:<adapted
+  EV100 from get_readouts>`), not `autoExposure:0` alone -- that jumps to the manual default.
+- A LARGE change is followed fast (RTXGI's probeIrradianceThreshold, made scale-free -- the units run from the
+  day's 1e5 to the boosted night): when a probe's mean radiance over its 64 rays and its previous mean irradiance
+  differ by more than 4x in the same direction for 3 updates running (ProbeState bits 2-4), the irradiance blends
+  at hysteresis - 0.75 until they are within 1.25x; the depth keeps the plain hysteresis. A noon -> 23:00 jump
+  (setTime, the slider): 0.98 alone still had +26 % of the day's bounce at a palm's foot 400 frames later, now +3 %
+  at 40. The confirmation is what keeps 0.98's calm: taken at once, the 4x test pulsed a probe under the
+  bathroom's countertop that sees the lit room through a few rays (+50..+89 % for 4-24 frames, 12 % frame to frame
+  on the cabinet); confirmed, 0.05 % -- as before it.
+
+## Local-Light Falloff -- Metres, Not UE's Centimetres
+
+`LightDistanceAttenuation` (`shaders/utils.hlsli`, every point/spot path: the light passes, glass, the RT
+hit shading, the GI trace) is UE's `saturate(1 - (d/r)^4)^2 / (d^2 + bias)` with the bias **1 cm² =
+`kLightDistanceBiasSqr` 1e-4 m²**. UE's literal `+1` is in UE units (cm); copied as `+1 m²` it dimmed every
+lamp near its source -- 2x at 1 m, 5x at 0.5 m, 17x at 0.25 m -- until 2026-10-24. The volumetric fog's
+`max(cellRadius * scale, 1)` floor is 0.01 m for the same reason. Any UE constant that is a LENGTH (a bias,
+a radius, a distance) must be divided by 100 when it is transcribed. A light's `radius` is UE's attenuation
+radius -- a culling window, not physics: it cuts 12 % at r/2 and 65 % at 0.8 r, so a room-sized light wants a
+radius about twice the room.

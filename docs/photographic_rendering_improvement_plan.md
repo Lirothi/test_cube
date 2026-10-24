@@ -5105,6 +5105,13 @@ inverse-square where it matters, a window that reaches exactly zero at the range
 a still-bright light, and a `+1` that keeps `d -> 0` finite — a real lamp has a size, and without it
 a texel landing on the light's own position renders as an infinity.
 
+**2026-10-24 correction: UE's `+1` is in ITS units, cm** (DeferredLightingCommon.ush:482, "technically just
+1/d2 but this avoids inf"). Transcribed in metres it was `+1 m²` — every lamp 2x too dim at 1 m, 5x at
+0.5 m, 17x at 0.25 m, so a candle never lit a pool on the wall behind it. Now `kLightDistanceBiasSqr` =
+1e-4 m² (1 cm²), and the volumetric fog's floor `max(cellRadius * scale, 1)` is 0.01 m for the same
+reason (VolumetricFog.usf:1061). Measured on wind_test at night with the exposure pinned: the bathroom
+frame mean 46.8 -> 72.0 sRGB, the beach lamps 51.2 -> 53.9 (their pools are mostly metres away).
+
 **It lived in SEVEN places across six files** — the two compute passes, the two glass loops, the two
 RT reflection evaluators and the legacy stencil pixel shader — which is exactly how a lighting model
 drifts apart one pass at a time. It is now one function in `utils.hlsli`, which all six already

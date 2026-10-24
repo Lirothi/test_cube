@@ -1103,6 +1103,8 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
     };
     const D3D12_GPU_DESCRIPTOR_HANDLE samplers = renderer->GetSamplerManager()->GetTable(renderer, samplerDescs);
     const D3D12_CPU_DESCRIPTOR_HANDLE nullTex = renderer->NullMaterialTextureSrv();
+    const D3D12_CPU_DESCRIPTOR_HANDLE depthCopySrv = renderer->GetDeferredForFrame().depthCopySRV;
+    const D3D12_CPU_DESCRIPTOR_HANDLE skyVisSrv = renderer->GetDeferredForFrame().skyVisSRV;
 
     // The camera tier, no dithered crossfade: a BLENDED surface drawn at two tiers would be drawn twice.
     const UINT lod = GetCameraLod();
@@ -1145,14 +1147,18 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
         cb.matGlass = Math::float4(md->hasTransmission ? 1.0f : 0.0f, p.mrMultiply, 0.0f, 0.0f);
         std::memcpy(alloc.cpu, &cb, sizeof(cb));
 
-        // The pass's t0..t14 with the slot's normal map at t6, then albedo / MR / transmission at t15..t17.
-        // An absent map binds the null texture; its flag keeps the shader from reading it.
-        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kGlassPassSrvCount + 3> srvs{};
+        // The pass's t0..t14 with the slot's normal map at t6, then albedo / MR / transmission at t15..t17,
+        // the opaque depth copy at t18 (the refraction's landing; glassRefraction.x is 0 without it), the RT sky
+        // visibility at t19 (glassSkyVis.x gates it). An absent map binds the null texture; its flag keeps the
+        // shader from reading it.
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, render::kGlassPassSrvCount + 5> srvs{};
         std::copy(passSrvs->begin(), passSrvs->end(), srvs.begin());
         srvs[render::kGlassNormalMapSlot] = md->hasNormal ? md->normal.GetSRVCPU() : nullTex;
         srvs[render::kGlassPassSrvCount + 0] = md->hasAlbedo ? md->albedo.GetSRVCPU() : nullTex;
         srvs[render::kGlassPassSrvCount + 1] = md->hasMR ? md->mr.GetSRVCPU() : nullTex;
         srvs[render::kGlassPassSrvCount + 2] = md->hasTransmission ? md->transmission.GetSRVCPU() : nullTex;
+        srvs[render::kGlassPassSrvCount + 3] = depthCopySrv.ptr != 0 ? depthCopySrv : nullTex;
+        srvs[render::kGlassPassSrvCount + 4] = skyVisSrv.ptr != 0 ? skyVisSrv : nullTex;
 
         draws.push_back(GlassDraw{ static_cast<UINT>(s), static_cast<uint32_t>(slot), alloc.gpu,
                                    renderer->StageSrvUavTable(srvs).gpu });

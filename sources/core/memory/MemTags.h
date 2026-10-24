@@ -59,7 +59,8 @@
     X(Tasks,          "tasks",           Root)           \
     X(Log,            "log",             Root)           \
     X(Profiler,       "profiler",        Root)           \
-    X(Memtrack,       "memtrack",        Root)
+    X(Memtrack,       "memtrack",        Root)           \
+    X(Gi,             "gi",              Root)
 
 enum class MemTag : std::uint8_t
 {

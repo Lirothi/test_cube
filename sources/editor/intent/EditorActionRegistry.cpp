@@ -537,6 +537,94 @@ namespace
         return FoldIntoOneEntry(std::move(commands), std::string("Set On At (") + when + ") " + std::to_string(count) + " Objects");
     }
 
+    // ------------------------------------------------------------------ setLight
+
+    // THE LAMPS THAT EXIST, retuned: brightness, reach, colour, shadows. addLights could make a candle and nothing could
+    // dim it afterwards -- the bathroom's candles were tuned by restarting the editor on level copies, fifteen seconds a
+    // picture. The keys are the ones the Inspector writes (luminousFluxLm, radius / a spot's range, color,
+    // shadowsEnabled), through its EditEnvironmentCommand, so the runtime rebuilds the light as it would from there.
+    // `scale` multiplies each light's own flux, so a group of different lamps dims together and keeps its ratios.
+    std::unique_ptr<EditorCommand> BuildSetLight(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const auto number = [&](const char* key) -> const nlohmann::json* {
+            const auto it = intent.params.find(key);
+            return it != intent.params.end() && it->is_number() ? &*it : nullptr;
+        };
+        const nlohmann::json* lumens = number("lumens");
+        const nlohmann::json* scale = number("scale");
+        const nlohmann::json* radius = number("radius");
+        const auto colorIt = intent.params.find("color");
+        const bool hasColor = colorIt != intent.params.end() && colorIt->is_array() && colorIt->size() == 3 &&
+            (*colorIt)[0].is_number() && (*colorIt)[1].is_number() && (*colorIt)[2].is_number();
+        const auto shadowsIt = intent.params.find("shadows");
+        const bool hasShadows = shadowsIt != intent.params.end() && shadowsIt->is_boolean();
+        if (!lumens && !scale && !radius && !hasColor && !hasShadows)
+        {
+            outStatus = "setLight needs lumens, scale, radius, color and/or shadows";
+            return nullptr;
+        }
+        if ((lumens && lumens->get<float>() < 0.0f) || (scale && scale->get<float>() < 0.0f) ||
+            (radius && radius->get<float>() <= 0.0f))
+        {
+            outStatus = "setLight: lumens and scale must be 0 or more, radius more than 0";
+            return nullptr;
+        }
+
+        const EditorSceneDocument& document = actionCtx.editor.document;
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t skipped = 0, unchanged = 0;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* light = FindEnvironmentObject(document, id);
+            if (!light || (light->type != "pointLight" && light->type != "spotLight")) { ++skipped; continue; }
+            nlohmann::json after = light->properties;
+            if (lumens) { after["luminousFluxLm"] = lumens->get<float>(); }
+            if (scale)
+            {
+                // A light written before P16.5 carries no flux yet: it starts from what the Inspector would show.
+                const float now = after.value("luminousFluxLm", light->type == "spotLight" ? 12000.0f : 3000.0f);
+                after["luminousFluxLm"] = now * scale->get<float>();
+            }
+            if (radius) { after[light->type == "spotLight" ? "range" : "radius"] = radius->get<float>(); }
+            if (hasColor)
+            {
+                after["color"] = nlohmann::json::array(
+                    { (*colorIt)[0].get<float>(), (*colorIt)[1].get<float>(), (*colorIt)[2].get<float>() });
+            }
+            if (hasShadows) { after["shadowsEnabled"] = shadowsIt->get<bool>(); }
+            // A light already at these values: EditEnvironmentCommand refuses an edit that changes nothing, and the
+            // whole phrase read "Changed 5 light(s) ... -- failed" when the candles were simply as asked.
+            if (after == light->properties) { ++unchanged; continue; }
+            commands.push_back(std::make_unique<EditEnvironmentCommand>(id, light->properties, std::move(after), "Set Light"));
+        }
+        if (commands.empty())
+        {
+            outStatus = unchanged > 0
+                ? "Nothing to change: the " + std::to_string(unchanged) + " light(s) already have these values"
+                : std::string("Nothing to change: setLight is for point and spot lights");
+            return nullptr;
+        }
+        const auto text = [](const nlohmann::json& value)
+        {
+            char buffer[32];
+            std::snprintf(buffer, sizeof(buffer), "%g", value.get<float>());
+            return std::string(buffer);
+        };
+        const std::size_t count = commands.size();
+        outStatus = "Changed " + std::to_string(count) + " light(s):";
+        if (lumens) { outStatus += " " + text(*lumens) + " lm"; }
+        if (scale) { outStatus += " flux x" + text(*scale); }
+        if (radius) { outStatus += " reach " + text(*radius) + " m"; }
+        if (hasColor) { outStatus += " colour"; }
+        if (hasShadows) { outStatus += shadowsIt->get<bool>() ? " shadows on" : " shadows off"; }
+        if (unchanged > 0) { outStatus += " (" + std::to_string(unchanged) + " already so)"; }
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not lights)"; }
+        return FoldIntoOneEntry(std::move(commands), "Set " + std::to_string(count) + " Lights");
+    }
+
     // ------------------------------------------------------------------ rename
 
     // Defined further down with the scatter it was written for. Declared here because
@@ -3612,6 +3700,30 @@ EditorActionRegistry::EditorActionRegistry()
         { { "onAt", EditorParamKind::Enum, true, "night = on after sunset, day = on after sunrise, always = never switched",
             { "night", "day", "always" } } },
         &BuildSetOnAt,
+        false,   // filterFromSelection
+        nullptr, // refinePreview
+        false,   // takesDestinationAsset
+        false,   // wholeLevelIsFine
+        nullptr, // wholeLevelNeedsParam
+        true,    // reachesLights
+    });
+
+    actions_.push_back({
+        "setLight",
+        "Change the matching point and spot lights that already exist: how bright (lumens -- a candle ~12, a household "
+        "bulb ~800 -- or scale, a multiplier of each light's own brightness: 0.5 = half), how far a point light reaches "
+        "(radius in metres; a spot's range), its colour and whether it casts shadows. Anything left out stays. Lights "
+        "are reached by name or group (\"Bathroom Candles\"), or through the selection (target scope \"selected\").",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        {
+            { "lumens", EditorParamKind::Number, false, "luminous flux in lumens, the same for every matching light" },
+            { "scale", EditorParamKind::Number, false, "multiplies each light's own lumens (0.5 = half as bright)" },
+            { "radius", EditorParamKind::Number, false, "metres a point light reaches (a spot's range)" },
+            { "color", EditorParamKind::Vec3, false, "[r, g, b] linear, e.g. a candle [1, 0.55, 0.2]" },
+            { "shadows", EditorParamKind::Bool, false, "true = casts shadows, false = none" },
+        },
+        &BuildSetLight,
         false,   // filterFromSelection
         nullptr, // refinePreview
         false,   // takesDestinationAsset

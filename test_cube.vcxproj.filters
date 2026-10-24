@@ -441,6 +441,9 @@
     <ClCompile Include="sources/app/scene/SceneRenderer_Reflections.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_Gi.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
@@ -703,6 +706,9 @@
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/lighting/VolumetricCloud.cpp">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/lighting/DdgiVolume.cpp">
       <Filter>sources\rendering\lighting</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/lighting/Skybox.cpp">
@@ -1410,6 +1416,9 @@
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/VolumetricCloud.h">
+      <Filter>sources\rendering\lighting</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/lighting/DdgiVolume.h">
       <Filter>sources\rendering\lighting</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/lighting/VolumetricCloudSettings.h">

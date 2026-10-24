@@ -81,6 +81,7 @@ void SceneRenderer::Reset()
     rtAs_.Reset();
     skyAtmosphere_.Reset();
     volumetricCloud_.Reset();
+    ddgi_.Reset();
     cloudHistoryFrames_ = 0u; cloudLogged_ = -1;
     lightShaftHistoryFrames_ = 0u; lightShaftLastSeconds_ = -1.0;
     fogDistantRevision_ = 0u;
@@ -129,6 +130,11 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
     if (frame_->settings.skyAtmosphere.mode != 0u)
     {
         volumetricCloud_.Prepare(renderer, frame_->settings.volumetricCloud);
+    }
+    // Plan D: the GI probe volume's fixed resources, once GI is wanted on RT hardware.
+    if (frame_->settings.giEnabled && renderer->IsRaytracingSupported())
+    {
+        ddgi_.Prepare(renderer);
     }
 
     if (frame_->shadowGpu)
@@ -356,7 +362,11 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // Interior lighting plan S: the RT sky visibility traces the same TLAS, so it is one more reason
     // to build it. Without RT hardware (or after an AS failure) the sky stays open, as before.
     decisions_.skyVis = decisions_.rtSupported && !rtFailed && frame.settings.skyVisEnabled;
-    decisions_.rtBuildAS = decisions_.rtReflect || decisions_.rtDebugView || decisions_.skyVis;
+    // Plan D: the GI probe volume traces the same TLAS. Lighting reads it while some generation of
+    // it was traced (a frame whose passes skip keeps the last atlases).
+    decisions_.gi = decisions_.rtSupported && !rtFailed && frame.settings.giEnabled;
+    decisions_.giApplied = decisions_.gi && ddgi_.Ready() && ddgi_.AppliedGeneration() != 0u;
+    decisions_.rtBuildAS = decisions_.rtReflect || decisions_.rtDebugView || decisions_.skyVis || decisions_.gi;
     // S15b: glass gets traced reflections in SSR/RT modes. SkyOnly and None skip
     // the glass reflection prepass; the forward shader uses the cubemap only in
     // SkyOnly and suppresses it in None via lightCounts.w.
@@ -939,6 +949,7 @@ void SceneRenderer::Render(Renderer* renderer, const SceneFrameData& frame)
     BuildPrologue(renderer, gb);
     BuildShadows(renderer, gb);
     BuildGBufferAndAo(renderer, gb);
+    BuildGi(renderer, gb); // plan D: the GI probe volume (trace + update), read by lighting
     BuildLighting(renderer, gb);
     BuildReflections(renderer, gb);
     BuildForwardAndEditor(renderer, gb);

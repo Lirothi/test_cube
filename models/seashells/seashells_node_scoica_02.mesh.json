@@ -5,8 +5,8 @@
   "pivot": "base",
   "restRotationDeg": [
     -35.04,
-    0.1,
-    0.33
+    -0.1,
+    -0.33
   ],
   "source": "import_staging\\seashells\\scene.gltf#node:scoica_02",
   "uvDensity": [

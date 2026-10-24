@@ -331,7 +331,7 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
     }
     // Local lights (plan A4, UE :944-1030): every spot / point whose range reaches the cell, with
     // its shadow map -- of the lights whose range touches the cell's group (plan S9e, the masks
-    // above), and the range test is the per-cell cull. The +1 in
+    // above), and the range test is the per-cell cull. The bias in
     // LightDistanceAttenuation's denominator is the singularity bias next to the source (UE
     // InverseSquaredLightDistanceBiasScale); the cone's soft edge is the light passes' squared
     // ramp (UE additionally soften it by the cell radius, LightSoftFading -- not done). Literal
@@ -341,7 +341,9 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
         // UE :951-956: the cell radii (to the diagonal neighbour in 3D and within the slice) size the
         // cone soft edge (LightSoftFading * the 2D radius) and the inverse-square bias
         // (max(radius * scale, 1)^2 added to d^2), so a cell straddling the cone edge or containing
-        // the source is a blend, not a coin flip -- the stepped, flickering edge the user saw.
+        // the source is a blend, not a coin flip -- the stepped, flickering edge the user saw. UE's
+        // floor of 1 is 1 cm (its units): 0.01 m here, as LightDistanceAttenuation's kLightDistanceBiasSqr
+        // (it was 1 m, which dimmed every lamp's glow near the bulb).
         // From the UNJITTERED cell centre: a per-frame jitter in the bias / soft-fade sizes was one more
         // thing making a cell's light differ frame to frame (docs/bug_fog_spot_flicker.md, defect 2).
         const float3 Pc0 = FogCellWorldPosition(coord, 0.5f.xxx, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
@@ -349,7 +351,7 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
         const float3 Pn2 = FogCellWorldPosition(coord + uint3(1u, 1u, 0u), 0.5f.xxx, fogGridSize, fogGridZParams, fogProjZ, fogInvViewProjNoJitter);
         const float cellRadius = length(Pc0 - Pn3);
         const float softFadeDistance = fogLocalParams2.x * length(Pc0 - Pn2);
-        float distanceBiasSqr = max(cellRadius * fogLocalParams2.y, 1.0f);
+        float distanceBiasSqr = max(cellRadius * fogLocalParams2.y, 0.01f);
         distanceBiasSqr *= distanceBiasSqr;
         const bool spotAll = fogLocal.x > kFogTileLights;
         uint spotWord = 0u;

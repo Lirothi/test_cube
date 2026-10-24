@@ -638,7 +638,9 @@ namespace
         }
 
         // World-space bounding box: union of every node-instanced primitive's
-        // POSITION min/max, transformed through the node's world matrix.
+        // POSITION min/max, transformed through the node's world matrix -- and into the engine's
+        // left-handed frame, X negated, as MeshManager::ParseGltfFile bakes it (the size it reports
+        // does not change; the box's place does).
         float bbMin[3] = { FLT_MAX, FLT_MAX, FLT_MAX };
         float bbMax[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
         bool anyBounds = false;
@@ -668,10 +670,11 @@ namespace
                         };
                         for (int axis = 0; axis < 3; ++axis)
                         {
-                            const float v = world[0 + axis] * local[0] +
-                                            world[4 + axis] * local[1] +
-                                            world[8 + axis] * local[2] +
-                                            world[12 + axis];
+                            const float glTF = world[0 + axis] * local[0] +
+                                               world[4 + axis] * local[1] +
+                                               world[8 + axis] * local[2] +
+                                               world[12 + axis];
+                            const float v = axis == 0 ? -glTF : glTF;
                             bbMin[axis] = std::min(bbMin[axis], v);
                             bbMax[axis] = std::max(bbMax[axis], v);
                             anyBounds = true;

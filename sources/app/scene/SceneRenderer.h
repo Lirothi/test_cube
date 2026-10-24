@@ -22,6 +22,7 @@
 #include "app/scene/SceneResourceBootstrapper.h"
 #include "rendering/lighting/SkyAtmosphere.h"
 #include "rendering/lighting/VolumetricCloud.h"
+#include "rendering/lighting/DdgiVolume.h"
 #include "rendering/post/BloomRenderer.h" // R3: the bloom subsystem, a member below
 
 class Renderer;
@@ -100,6 +101,10 @@ private:
         // read (skyVisParams.x). The body writes the target on every path (traced, or cleared to the
         // open sky when the TLAS is not ready), so "registered" is enough for them to read it.
         bool skyVisTraced = false;
+        bool gi = false;               // plan D: the GI probe volume is wanted (setting + RT hardware)
+        // ...and lighting reads it this frame: its resources exist and some generation was traced
+        // (the passes may skip a frame -- the TLAS not ready -- and the atlases still hold the last one).
+        bool giApplied = false;
         bool clearReflections = false; // source is None/SkyOnly: nothing traces, the target is cleared
         bool glassRefl = false;        // glass gets traced reflections (was glassReflActive_)
         bool reflectionTemporal = false; // the reflection temporal resolve runs (SSR or RT source)
@@ -230,6 +235,7 @@ private:
         size_t pCloud = kNone;       // plan C2: half-res trace + resolve -> compose
         size_t pRtTrace = kNone;   // gbuffer/AS -> RT resolve (gather phase of the RT split)
         size_t pSkyVis = kNone;    // plan S: gbuffer/AS -> lighting, compose (the RT sky visibility)
+        size_t pGiUpdate = kNone;  // plan D: AS -> GI trace -> GI update -> lighting
         size_t pSky = kNone;       // lighting -> reflection source
         size_t pCompose = kNone;   // reflections -> transparent
         size_t pGlassReflect = kNone;
@@ -526,6 +532,20 @@ private:
     void Pass_SkyVis(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const SkyVisChain& chain);
     // lighting_cb.hlsli / compose_cs.hlsl `skyVisParams`: x 1 = applied this frame, y diffuse, z specular strength.
     Math::float4 SkyVisShaderParams() const;
+    // Interior lighting plan D: the GI probe volume (SceneRenderer_Gi.cpp). Both passes take the frame
+    // the builder placed; `point` declares the writes as UAV, `pointRestore` hands them back at rest.
+    // The update blends only what the trace wrote THIS frame (giTraced_, set by the trace's body).
+    struct GiChain
+    {
+        DdgiVolume::Frame frame;
+        uint32_t point = 0u;
+        uint32_t pointRestore = 0u;
+    };
+    void BuildGi(Renderer* r, GraphBuild& gb);
+    void Pass_GiTrace(Renderer* r, RenderGraphPassContext ctx, const GiChain& chain);
+    void Pass_GiUpdate(Renderer* r, RenderGraphPassContext ctx, const GiChain& chain);
+    // lighting_cb.hlsli `ddgiBase` / `ddgiParams` (x spacing, 0 = off; y intensity; z debug view).
+    void FillGiShaderParams(int32_t outBase[4], Math::float4& outParams) const;
     void Pass_RTResolve(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
     // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
@@ -663,6 +683,8 @@ private:
     BloomRenderer bloom_;
     SkyAtmosphere skyAtmosphere_;
     VolumetricCloud volumetricCloud_; // plan part C: noise set, shadow map, the half-res trace passes
+    DdgiVolume ddgi_;                 // plan D: the GI probe volume
+    std::atomic<bool> giTraced_{ false }; // plan D: the trace body dispatched this frame (its update blends)
     // R4: the RT acceleration structures (S5), the bindless table (S9) and the two caches that keep
     // their rebuild incremental, together with the build body that was Pass_BuildAS. The RT passes
     // reach them through rtAs_.Manager() / rtAs_.Bindless().

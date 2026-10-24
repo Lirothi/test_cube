@@ -822,6 +822,17 @@ namespace
         if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.98f); return true; }
         if (setting == "skyVis.diffuse") { renderSettings.skyVisDiffuse = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "skyVis.specular") { renderSettings.skyVisSpecular = std::clamp(value, 0.0f, 1.0f); return true; }
+        // Interior lighting plan D: the GI probe volume (SceneRenderSettings::gi*).
+        if (setting == "gi.enabled") { renderSettings.giEnabled = value != 0.0f; return true; }
+        if (setting == "gi.spacing") { renderSettings.giSpacing = std::clamp(value, 0.1f, 8.0f); return true; }
+        if (setting == "gi.divisor") { renderSettings.giUpdateDivisor = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
+        if (setting == "gi.hysteresis") { renderSettings.giHysteresis = std::clamp(value, 0.0f, 0.99f); return true; }
+        if (setting == "gi.intensity") { renderSettings.giIntensity = std::clamp(value, 0.0f, 16.0f); return true; }
+        if (setting == "gi.rayDistance") { renderSettings.giRayDistance = std::clamp(value, 1.0f, 1000.0f); return true; }
+        if (setting == "gi.infiniteBounce") { renderSettings.giInfiniteBounce = value != 0.0f; return true; }
+        if (setting == "gi.debug") { renderSettings.giDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f)); return true; }
+        // Glass refraction: the hollow shell's wall in metres (0 = straight through).
+        if (setting == "glass.wall") { renderSettings.glassWallThickness = std::clamp(value, 0.0f, 0.5f); return true; }
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
         if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }

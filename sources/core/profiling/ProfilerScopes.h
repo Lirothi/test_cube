@@ -137,6 +137,8 @@ extern const Profiler::ScopeNameKey kPassBuildAS;
 extern const Profiler::ScopeNameKey kPassReflectionSource;
 extern const Profiler::ScopeNameKey kPassRTTrace;
 extern const Profiler::ScopeNameKey kPassSkyVis; // plan S: the RT sky visibility
+extern const Profiler::ScopeNameKey kPassGiTrace;  // plan D: the GI probe volume's rays
+extern const Profiler::ScopeNameKey kPassGiUpdate; // plan D: ...blended into its atlases
 extern const Profiler::ScopeNameKey kPassRTResolve;
 extern const Profiler::ScopeNameKey kPassReflectionTemporal;
 extern const Profiler::ScopeNameKey kWaterReflectionTemporal; // the water reflection's resolve (inside Main_WaterReflection)

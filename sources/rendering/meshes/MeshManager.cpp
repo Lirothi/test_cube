@@ -589,7 +589,9 @@ constexpr uint32_t kMeshBinMagic   = 0x4253484Du; // 'MSHB'
 // projected pixels instead of a hand-tuned distance/radius curve. Every .bin must be re-baked; all
 // 14 mesh.json manifests carry a "source", so every one of them is regenerable (audited before the
 // bump -- a manifest without a source would have been bricked by it).
-constexpr uint32_t kMeshBinVersion = 2u;          // bump on any bake-algo / format change -> stale
+// v3 (2026-10-24): glTF geometry is converted to the engine's left-handed frame (X negated, winding turned)
+// instead of being read as its mirror image. Every .bin re-baked from its manifest (all 148 have a source).
+constexpr uint32_t kMeshBinVersion = 3u;          // bump on any bake-algo / format change -> stale
 // NOTE when bumping: a directly-referenced models/*.mesh.bin has no runtime source to rebuild from,
 // so a bump makes every one of them stale -> they must ALL be re-baked (--reimport-src/--reimport-out)
 // or their meshes silently fail to load. LOD *settings* do not need a bump: they ride in optionsHash.
@@ -2301,13 +2303,22 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
         // glTF stores column-major matrices; copying those bytes into an XMFLOAT4X4 (row-major)
         // yields the transpose == the row-vector matrix DirectXMath's transforms expect, with
         // translation landing in the last row. So XMVector3Transform(v, W) == M * v.
+        //
+        // glTF is RIGHT-handed (+Y up, an asset's front faces +Z, its right is -X); this engine is
+        // LEFT-handed (Camera: LookAtLH). Read as they were, the coordinates rendered every glTF asset
+        // as its own mirror image -- the_bathroom_free laid out back to front against its Sketchfab
+        // render, owner 2026-10-24 -- and the CCW winding only looked right because the mirror also
+        // flipped it. X is negated after the node's world transform (UnityGLTF's convention: the front
+        // stays +Z, up stays +Y), so the asset's right lands on the engine's +X as it should. The
+        // flip is a mirror, det -1, and the negative-scale rule below turns the winding with it.
         DirectX::XMFLOAT4X4 f;
         std::memcpy(&f, pr.world, sizeof(f));
-        const DirectX::XMMATRIX W = DirectX::XMLoadFloat4x4(&f);
+        const DirectX::XMMATRIX W = DirectX::XMMatrixMultiply(DirectX::XMLoadFloat4x4(&f),
+                                                              DirectX::XMMatrixScaling(-1.0f, 1.0f, 1.0f));
         const DirectX::XMMATRIX Wn = DirectX::XMMatrixTranspose(DirectX::XMMatrixInverse(nullptr, W));
         const float det = DirectX::XMVectorGetX(DirectX::XMMatrixDeterminant(W));
         bool wantCW = opt.wantCW;
-        if (det < 0.0f) { wantCW = !wantCW; } // mirrored (negative-scale) node flips winding
+        if (det < 0.0f) { wantCW = !wantCW; } // mirrored (negative-scale) node -- and the handedness flip -- turn the winding
 
         const cgltf_accessor* accPos = nullptr;
         const cgltf_accessor* accNrm = nullptr;

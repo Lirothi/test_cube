@@ -1264,6 +1264,13 @@ int WINAPI WinMain(
                 if (!flag) { return {}; }
                 const char* p = flag + std::strlen(key);
                 std::string v;
+                // A quoted value may hold spaces: a split import's node selector does
+                // ("scene.gltf#node:Floor tile", the_bathroom_free).
+                if (*p == '"')
+                {
+                    for (++p; *p && *p != '"'; ++p) { v.push_back(*p); }
+                    return v;
+                }
                 while (*p && !std::isspace(static_cast<unsigned char>(*p))) { v.push_back(*p); ++p; }
                 return v;
             };
@@ -1271,9 +1278,10 @@ int WINAPI WinMain(
             const std::string out = getArg("--reimport-out=");
             if (src.empty() || out.empty()) { return 2; }
             MeshLoadOptions opt{};
-            // Match the runtime mesh load exactly (StaticMesh/TransparentStaticMesh): the engine
-            // loads glTF with CCW winding (wantCW=false) for its FrontCounterClockwise=FALSE PSOs.
-            // Baking with the default wantCW=true flips the triangles -> the .bin renders backfaces.
+            // Match the runtime mesh load exactly (StaticMesh/TransparentStaticMesh): wantCW=false keeps
+            // the file's own order, and ParseGltfFile's right- to left-handed flip (det -1) turns it for the
+            // FrontCounterClockwise=FALSE PSOs. Baking with the default wantCW=true flips the triangles a
+            // second time -> the .bin renders backfaces.
             opt.wantCW = false;
             // "--reimport-recompute=2,3,4" mirrors the mesh.json recomputeNormalSlots so the baked
             // normals/tangents match what the runtime glTF path produced (two-sided foliage fix).

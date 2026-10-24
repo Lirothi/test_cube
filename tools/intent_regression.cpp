@@ -1698,6 +1698,73 @@ void TestMoveReachesLights(const EditorActionContext& actionCtx)
     Check(!remove.executable, "delete does not reach lights by name");
 }
 
+// setLight retunes lights that exist, reached by name: absolute lumens and a reach on one, a scale on two that keeps
+// their own ratio (one history entry, undo puts both back), a spot's reach is its range, and a palm is refused.
+void TestSetLightRetunes(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    ctx.selection.Clear();
+    Check(EditorActionRegistry::Builtin().Find("setLight") != nullptr, "setLight is a registered action");
+    const auto property = [&](std::uint64_t id, const char* key)
+    {
+        for (const EditorObject& light : ctx.document.Environment())
+        {
+            if (light.id.value == id) { return light.properties.value(key, Json()); }
+        }
+        return Json();
+    };
+    const auto preview = [&](const char* answer)
+    {
+        std::string error;
+        EditorIntent intent;
+        Check(intentschema::ParseAnswer(answer, intent, error), std::string("parses: ") + error);
+        return BuildIntentPreview(actionCtx, intent);
+    };
+
+    EditorCommandStack stack;
+    std::string status;
+    const EditorIntentPreview porch = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Porch"]},"params":{"lumens":12,"radius":9}})");
+    Check(porch.executable && porch.targets.size() == 1 && porch.targets[0].value == 920,
+          "setLight reaches the porch light by its name: " + porch.problem);
+    Check(ExecuteIntent(actionCtx, stack, porch, status), status);
+    Check(property(920, "luminousFluxLm") == Json(12.0f) && property(920, "radius") == Json(9.0f),
+          "the porch light is a candle reaching 9 m: " + property(920, "luminousFluxLm").dump());
+    Check(property(921, "luminousFluxLm") == Json(3000.0), "the street light stayed");
+    stack.Undo(ctx);
+    Check(property(920, "luminousFluxLm") == Json(3000.0) && property(920, "radius") == Json(6.0), "undo puts it back");
+
+    const EditorIntentPreview both = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Light"]},"params":{"scale":0.5,"radius":20}})");
+    Check(both.executable && both.targets.size() == 2, "the two lights: " + both.problem);
+    EditorCommandStack bothStack;
+    status.clear();
+    Check(ExecuteIntent(actionCtx, bothStack, both, status), status);
+    Check(bothStack.HistorySize() == 1 && status.find("2 light") != std::string::npos, "ONE entry, and it says so: " + status);
+    Check(property(920, "luminousFluxLm") == Json(1500.0f) && property(921, "luminousFluxLm") == Json(1500.0f),
+          "each at half its own flux");
+    Check(property(921, "range") == Json(20.0f) && property(921, "radius") == Json(6.0), "a spot's reach is its range");
+    bothStack.Undo(ctx);
+    Check(property(921, "luminousFluxLm") == Json(3000.0) && property(921, "range") == Json(14.0), "undo puts the spot back");
+
+    const EditorIntentPreview palms = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["palm"]},"params":{"lumens":12}})");
+    status.clear();
+    Check(!ExecuteIntent(actionCtx, stack, palms, status) && status.find("point and spot") != std::string::npos,
+          "palms are not lights, and the refusal says so: " + status);
+    const EditorIntentPreview nothing = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Porch"]},"params":{}})");
+    status.clear();
+    Check(!ExecuteIntent(actionCtx, stack, nothing, status) && status.find("needs") != std::string::npos,
+          "a setLight that changes nothing is refused: " + status);
+    // The values a light already has: said so, not "Changed ... -- failed".
+    const EditorIntentPreview same = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Porch"]},"params":{"radius":6}})");
+    status.clear();
+    Check(!ExecuteIntent(actionCtx, stack, same, status) && status.find("already have") != std::string::npos,
+          "a light already as asked is reported as such: " + status);
+}
+
 // addLights creates point and spot lights where it is told, with the fields it is given and the
 // Create > Light defaults for the rest, as ONE undo entry -- the candles of a dressed room were the
 // first thing MCP could place and not light.
@@ -3230,6 +3297,64 @@ void TestPivotToBase()
     std::filesystem::remove(out);
 }
 
+// glTF is right-handed and this engine left-handed: read as they were, the coordinates rendered every
+// glTF asset as its mirror image (the_bathroom_free back to front against its Sketchfab render, owner
+// 2026-10-24). One triangle written to disk says which way round the import puts things: its vertex on
+// glTF's -X -- the asset's RIGHT, by the spec (front +Z, up +Y) -- must land on the engine's +X, which is
+// the right of anything facing +Z here; and its front face (normal +Z) must keep the winding the PSOs
+// call front (FrontCounterClockwise = FALSE: in a left-handed frame the edge cross product of a clockwise
+// front face points out of it, along the normal).
+void TestGltfHandedness()
+{
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "intent_regression_handedness";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    // P0 origin, P1 at -X (the asset's right), P2 at +Y; indices 0, 2, 1 = counter-clockwise seen from +Z,
+    // glTF's front face, with the normal +Z.
+    const float positions[9] = { 0, 0, 0, -1, 0, 0, 0, 1, 0 };
+    const float normals[9] = { 0, 0, 1, 0, 0, 1, 0, 0, 1 };
+    const std::uint16_t triangle[4] = { 0, 2, 1, 0 }; // the last is padding to 4 bytes
+    {
+        std::ofstream bin(dir / "triangle.bin", std::ios::binary | std::ios::trunc);
+        bin.write(reinterpret_cast<const char*>(positions), sizeof(positions));
+        bin.write(reinterpret_cast<const char*>(normals), sizeof(normals));
+        bin.write(reinterpret_cast<const char*>(triangle), sizeof(triangle));
+    }
+    {
+        std::ofstream gltf(dir / "triangle.gltf", std::ios::trunc);
+        gltf << R"({"asset":{"version":"2.0"},"scene":0,"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],)"
+                R"("meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1},"indices":2}]}],)"
+                R"("buffers":[{"uri":"triangle.bin","byteLength":80}],)"
+                R"("bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36},)"
+                R"({"buffer":0,"byteOffset":72,"byteLength":6}],)"
+                R"("accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,0,0],"max":[0,1,0]},)"
+                R"({"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"},)"
+                R"({"bufferView":2,"componentType":5123,"count":3,"type":"SCALAR"}]})";
+    }
+    MeshCpuData cpu;
+    MeshLoadOptions opt; // the runtime load's: wantCW false
+    opt.generateTangentSpace = false;
+    MeshManager manager;
+    Check(manager.ParseFileCpu((dir / "triangle.gltf").string(), cpu, opt) && cpu.vertices.size() == 3 &&
+          cpu.indices.size() == 3, "reads the one-triangle glTF");
+    if (cpu.vertices.size() != 3 || cpu.indices.size() != 3) { return; }
+    const VertexPNTUV& right = cpu.vertices[1];
+    Check(right.position.x > 0.99f && std::fabs(right.position.y) < 1e-4f && std::fabs(right.position.z) < 1e-4f,
+        "the asset's right (glTF -X) lands on the engine's +X: (" + std::to_string(right.position.x) + ", " +
+        std::to_string(right.position.y) + ", " + std::to_string(right.position.z) + ")");
+    Check(cpu.vertices[2].position.y > 0.99f, "up stays up");
+    const auto& a = cpu.vertices[cpu.indices[0]].position;
+    const auto& b = cpu.vertices[cpu.indices[1]].position;
+    const auto& c = cpu.vertices[cpu.indices[2]].position;
+    const Math::float3 e1(b.x - a.x, b.y - a.y, b.z - a.z), e2(c.x - a.x, c.y - a.y, c.z - a.z);
+    const Math::float3 face(e1.y * e2.z - e1.z * e2.y, e1.z * e2.x - e1.x * e2.z, e1.x * e2.y - e1.y * e2.x);
+    const auto& n = cpu.vertices[0].normal;
+    Check(n.z > 0.99f, "the normal still faces the front (+Z): z " + std::to_string(n.z));
+    Check(face.x * n.x + face.y * n.y + face.z * n.z > 0.0f,
+        "the front face is clockwise for the PSOs (its edge cross product points along the normal)");
+    std::filesystem::remove_all(dir, ec);
+}
+
 // A leaf card is a two-sided alpha cutout whose cutout removes materialgen::kLeafCutShare of its
 // surface or more. The flags alone made the_bathroom_free's curtains, doors and towels leaf cards
 // that swayed indoors; the old rule would fail section 3.
@@ -3871,11 +3996,13 @@ int main(int argc, char** argv)
             const EditorActionContext lampActionCtx{ lampCtx, assets, extensions };
             TestLampsComeOnAtNight(lampActionCtx);
             TestMoveReachesLights(lampActionCtx);
+            TestSetLightRetunes(lampActionCtx);
             TestAddLightsIsExact(lampActionCtx);
         }
         TestSurfaceAndColourUndo(actionCtx);
         TestRestPose();
         TestPivotToBase();
+        TestGltfHandedness();
         TestLeafCards();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);

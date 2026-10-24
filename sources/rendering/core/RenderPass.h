@@ -119,6 +119,9 @@ enum class RenderPass : uint16_t {
     Main_Debug,
     // Interior lighting plan S: the RT sky visibility (UE DFAO's bent normal, traced) -> lighting, compose.
     Main_SkyVis,
+    // Interior lighting plan D: the GI probe volume -- trace its rays, then blend them into the atlases -> lighting.
+    Main_GiTrace,
+    Main_GiUpdate,
     Main_Count,
 
     Epilogue_Overlay = Main_Count,
@@ -218,6 +221,8 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_Tonemap: return L"Tonemap";
     case RenderPass::Main_Debug: return L"Debug";
     case RenderPass::Main_SkyVis: return L"SkyVis";
+    case RenderPass::Main_GiTrace: return L"GiTrace";
+    case RenderPass::Main_GiUpdate: return L"GiUpdate";
     case RenderPass::Epilogue_Overlay: return L"Overlay";
     case RenderPass::GBuffer_Driver: return L"GBuffer.Driver";
     case RenderPass::GBuffer_OpaqueSimple: return L"GBuffer.OpaqueSimple";

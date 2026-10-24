@@ -1,0 +1,205 @@
+// Interior lighting plan D: the probe volume's TRACE (DDGI; RTXGI's ProbeTraceRGS as inline RayQuery).
+// One group per probe updated this frame, one thread per ray: the closest hit along the ray, shaded
+// diffusely as the light it sends back toward the probe -- the sun with an RT shadow ray, every spot
+// and point light in reach with a shadow ray, the sky through ONE cosine ray of visibility (the probe
+// average does the integral), and the volume's own previous irradiance at the hit (the infinite
+// bounce). A miss brings nothing: the probes hold the bounce, the sky is plan S's (ddgi_common.hlsli).
+// A hit on the back of a one-sided surface stores a negative, shortened distance (RTXGI): the update
+// counts them to switch off probes inside geometry, and the depth sees a near occluder there.
+#define DDGI_TRACE_RS \
+    "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
+    "CBV(b0)," \
+    "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, addressW=TEXTURE_ADDRESS_CLAMP)," \
+    "StaticSampler(s1, filter=FILTER_MIN_MAG_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP, addressW=TEXTURE_ADDRESS_CLAMP)"
+
+#pragma pack_matrix(row_major)
+#include "utils.hlsli"
+#include "rt_geometry.hlsli"
+#include "rt_lights.hlsli"
+#include "ddgi_common.hlsli"
+#include "ddgi_constants.hlsli"
+
+SamplerState gSmp      : register(s0); // linear clamp
+SamplerState gSmpPoint : register(s1); // point clamp
+
+static const uint kDdgiMaskShadow = 0x02u; // rt::kInstanceMaskShadow: what casts no shadow blocks no light
+// The albedo is read a few mips down: a probe averages over a sphere, and a mip-0 texel per ray is noise.
+static const float kDdgiAlbedoMip = 3.0f;
+
+// rt_sky_visibility_cs.hlsl SkyRayBlocked: anything opaque (or a kept alpha-tested texel) in the way.
+bool DdgiOccluded(RaytracingAccelerationStructure tlas, StructuredBuffer<GeometryInfo> geom, float3 origin,
+                  float3 dir, float maxDistance)
+{
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = 1.0e-3f;
+    ray.TMax = maxDistance;
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, kDdgiMaskShadow, ray);
+    while (q.Proceed())
+    {
+        if (RtAlphaCandidatePasses(geom, gSmp, q.CandidateInstanceID(), q.CandidateGeometryIndex(),
+                                   q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+        {
+            q.CommitNonOpaqueTriangleHit();
+        }
+    }
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return false; }
+    return !(alphaMode == 1u &&
+             !RtAlphaCandidatePasses(geom, gSmp, q.CommittedInstanceID(), q.CommittedGeometryIndex(),
+                                     q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics()));
+}
+
+[numthreads(64, 1, 1)]
+[RootSignature(DDGI_TRACE_RS)]
+void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
+{
+    const uint probeIndex = gid.x * max(schedule.x, 1u) + schedule.y;
+    if (gid.x >= schedule.z || probeIndex >= kDdgiProbeCount || gi >= kDdgiRays)
+    {
+        return;
+    }
+    RWTexture2D<float4> rays = ResourceDescriptorHeap[rayUavIndex];
+    const uint2 rayTexel = uint2(gi, gid.x);
+    const DdgiVolumeDesc volume = DdgiVolumeFromConstants();
+    const int3 cell = DdgiCellOfSlot(DdgiSlotFromIndex(probeIndex), volume.base);
+    const float3 origin = float3(cell) * volume.spacing;
+    const float3 dir = DdgiRayDirection(gi);
+
+    RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
+    StructuredBuffer<GeometryInfo> geom = ResourceDescriptorHeap[geomInfoIndex];
+    RayDesc ray;
+    ray.Origin = origin;
+    ray.Direction = dir;
+    ray.TMin = 0.0f;
+    ray.TMax = volumeParams.z;
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
+    while (q.Proceed())
+    {
+        if (RtAlphaCandidatePasses(geom, gSmp, q.CandidateInstanceID(), q.CandidateGeometryIndex(),
+                                   q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
+        {
+            q.CommitNonOpaqueTriangleHit();
+        }
+    }
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+    {
+        rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, 1.0e4f); // nothing in reach: no bounce from here
+        return;
+    }
+    const float t = q.CommittedRayT();
+
+    const GeometryInfo g = geom[GeometryRecordIndex(q.CommittedInstanceID(), q.CommittedGeometryIndex())];
+    ByteAddressBuffer vb = ResourceDescriptorHeap[g.vbIndex];
+    ByteAddressBuffer ib = ResourceDescriptorHeap[g.ibIndex];
+    const uint3 tri = LoadTriangle(ib, g.firstTri + q.CommittedPrimitiveIndex(), g.indexIs32);
+    const float2 bary = q.CommittedTriangleBarycentrics();
+    const float bw = 1.0f - bary.x - bary.y;
+    const float3 nObj = LoadNormal(vb, tri.x, g.vertexStride) * bw + LoadNormal(vb, tri.y, g.vertexStride) * bary.x +
+                        LoadNormal(vb, tri.z, g.vertexStride) * bary.y;
+    float3 N = normalize(mul((float3x3)q.CommittedObjectToWorld3x4(), nObj));
+    // A masked surface (a leaf card) is two-sided; anything else seen from behind is the inside of a solid.
+    if (dot(N, dir) > 0.0f)
+    {
+        if (g.alphaCutoff < 0.0f)
+        {
+            rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, -0.2f * t);
+            return;
+        }
+        N = -N;
+    }
+
+    const float2 uv = LoadUV(vb, tri.x, g.vertexStride) * bw + LoadUV(vb, tri.y, g.vertexStride) * bary.x +
+                      LoadUV(vb, tri.z, g.vertexStride) * bary.y;
+    float3 albedo = g.baseColor.rgb;
+    if (g.albedoTexIndex != 0xFFFFFFFFu)
+    {
+        Texture2D albedoTex = ResourceDescriptorHeap[g.albedoTexIndex];
+        albedo *= albedoTex.SampleLevel(gSmp, uv, kDdgiAlbedoMip).rgb;
+    }
+    float metal = saturate(g.metalness);
+    if (g.mrTexIndex != 0xFFFFFFFFu)
+    {
+        Texture2D mrTex = ResourceDescriptorHeap[g.mrTexIndex];
+        const float m = mrTex.SampleLevel(gSmp, uv, kDdgiAlbedoMip).r;
+        metal = saturate(g.mrMultiply != 0u ? m * metal : m);
+    }
+    // lighting_cs's Lambert half: (1 - metal) * albedo / pi per unit of irradiance.
+    const float3 diffuse = albedo * (1.0f - metal);
+
+    const float3 P = origin + dir * t;
+    const float3 shadowOrigin = P + N * 0.02f;
+    float3 irradiance = 0.0f.xxx; // E at the hit; the outgoing radiance is diffuse / pi times it
+
+    // The sun (or the moon, whichever holds the light): lighting_cs's lightRgb, an RT shadow ray.
+    const float3 L = normalize(-sunDirWS);
+    const float sunNdotL = dot(N, L);
+    if (sunNdotL > 0.0f && any(lightRgb > 0.0f) && !DdgiOccluded(tlas, geom, shadowOrigin, L, 1.0e4f))
+    {
+        irradiance += lightRgb * sunNdotL;
+    }
+    // The lamps in reach, each with its shadow ray (a candle behind a wall lights nothing here).
+    if (spotCount > 0u)
+    {
+        StructuredBuffer<SpotLightData> spots = ResourceDescriptorHeap[spotLightIndex];
+        for (uint si = 0u; si < spotCount; ++si)
+        {
+            float3 sl; float sdist;
+            const float3 rad = RtEvalSpotLight(spots[si], P, sl, sdist);
+            const float ndl = dot(N, sl);
+            if (ndl <= 0.0f || dot(rad, rad) <= 0.0f) { continue; }
+            if (!DdgiOccluded(tlas, geom, shadowOrigin, sl, max(sdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
+        }
+    }
+    if (pointCount > 0u)
+    {
+        StructuredBuffer<PointLightData> points = ResourceDescriptorHeap[pointLightIndex];
+        for (uint pi = 0u; pi < pointCount; ++pi)
+        {
+            float3 pl; float pdist;
+            const float3 rad = RtEvalPointLight(points[pi], P, pl, pdist);
+            const float ndl = dot(N, pl);
+            if (ndl <= 0.0f || dot(rad, rad) <= 0.0f) { continue; }
+            if (!DdgiOccluded(tlas, geom, shadowOrigin, pl, max(pdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
+        }
+    }
+    float3 radiance = diffuse * kInvPi * irradiance;
+
+    // The sky at the hit, seen through one cosine ray (plan S's reach): the probe's 64 rays and its
+    // hysteresis average it, as SkyVis averages its four over frames.
+    if (skyIrradianceIndex != 0u)
+    {
+        const uint seed = RtWangHash(probeIndex * 9781u + gi * 6271u + schedule.w * 26699u);
+        const float u1 = float(seed & 0xFFFFu) * (1.0f / 65536.0f);
+        const float u2 = float(seed >> 16) * (1.0f / 65536.0f);
+        const float3 up = abs(N.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+        const float3 T = normalize(cross(up, N));
+        const float3 B = cross(N, T);
+        const float r = sqrt(u1);
+        const float phi = 2.0f * kPi * u2;
+        const float3 skyDir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(saturate(1.0f - u1)));
+        if (!DdgiOccluded(tlas, geom, shadowOrigin, skyDir, skyRayDistance))
+        {
+            TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
+            radiance += diffuse * skyIrradiance.SampleLevel(gSmp, N, 0).rgb * skyIrradianceScale;
+        }
+    }
+    else
+    {
+        radiance += diffuse * ambientIntensity * lightRgb; // lighting_cs's flat fill without a sky IBL
+    }
+
+    // The infinite bounce: the volume's own previous irradiance arriving at the hit.
+    if (bounceOn != 0u)
+    {
+        Texture2D irradianceAtlas = ResourceDescriptorHeap[irradianceIndex];
+        Texture2D depthAtlas = ResourceDescriptorHeap[depthIndex];
+        StructuredBuffer<uint4> state = ResourceDescriptorHeap[stateIndex];
+        float w;
+        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, state, gSmp, volume, P, N, -dir, w);
+        radiance += diffuse * bounce * w;
+    }
+    rays[rayTexel] = float4(radiance, t);
+}

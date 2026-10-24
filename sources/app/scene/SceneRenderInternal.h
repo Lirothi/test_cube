@@ -207,6 +207,8 @@ namespace scene_internal
         float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
         float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
         float4 csmSdsmParams;         // S15: x = active SDSM partitions, 0 = not SDSM mode
+        float4 glassRefraction;       // x = the glass shell's wall (m), 0 = straight through (glass.hlsl)
+        float4 glassSkyVis;           // plan S: lighting's skyVisParams, for the glass slots' sky terms
     };
 
     // MIRRORS WaterCompositeCB in shaders/water_composite_cs.hlsl (ocean G-buffer plan S4), uploaded
@@ -334,7 +336,7 @@ namespace scene_internal
 
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildGlassViewCB(Renderer* renderer, const Camera& camera, const SceneFrameData& frame,
                                                      const float4& fogVolumeParams, const float4& fogVolumeZParams,
-                                                      bool glassReflActive)
+                                                      bool glassReflActive, const float4& skyVisParams)
     {
         GlassViewCB vc{};
         vc.view = camera.GetViewMatrix();
@@ -423,6 +425,14 @@ namespace scene_internal
         // geometry beside it -- that disagreement is what S3 existed to remove.
         vc.csmSdsmParams = float4(frame.sdsm ? (float)frame.sdsm->FrameParams().partitions : 0.0f,
                                   0.0f, 0.0f, 0.0f);
+        // Glass refraction through a hollow shell (glass.hlsl GlassRefractedUv): its wall, and only
+        // with the opaque depth copy it lands on (t18 of a glass material slot).
+        vc.glassRefraction = float4(renderer->GetDeferredForFrame().depthCopySRV.ptr != 0
+                                        ? std::max(frame.settings.glassWallThickness, 0.0f) : 0.0f,
+                                    0.0f, 0.0f, 0.0f);
+        // Plan S: the RT sky visibility occludes a glass slot's sky fill and reflection (t19, the opaque
+        // scene's bent normal behind the glass); lighting's own gate and strengths.
+        vc.glassSkyVis = skyVisParams;
         if (frame.clipmapViews)
         {
             for (size_t i = 0; i < vsm::kNumClipmapLevels && i < frame.clipmapViews->size(); ++i)

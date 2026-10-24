@@ -4,9 +4,9 @@
   "material": "seashells_Cylinder009_0",
   "pivot": "base",
   "restRotationDeg": [
-    48.13,
-    -33.4,
-    67.78
+    48.129999999999995,
+    33.4,
+    -67.78
   ],
   "source": "import_staging\\seashells\\scene.gltf#node:Cylinder009",
   "uvDensity": [

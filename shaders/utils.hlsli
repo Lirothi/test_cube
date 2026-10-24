@@ -304,17 +304,20 @@ inline float3 F_Schlick(float cosT, float3 F0)
 //   * inverse-square in the middle, which is what makes the unit mean anything;
 //   * a window that reaches exactly ZERO at the range, so a light does not clip off while still
 //     bright the way a hard `d > range` cut does;
-//   * `+1` in the denominator so d -> 0 is finite. Not a fudge: a real lamp has a size, and without
-//     it a texel that lands on the light's own position renders as an infinity.
+//   * a bias in the denominator so d -> 0 is finite ("technically just 1/d2 but this avoids inf",
+//     DeferredLightingCommon.ush:482). UE's 1 is in ITS units, cm: 1 cm^2 = 1e-4 m^2 here. Transcribed
+//     as 1 m^2 it dimmed every lamp near its source -- 2x at 1 m, 5x at 0.5 m, 17x at 0.25 m (owner,
+//     2026-10-24: the candles had no bright pool on the wall behind them).
 //
 // It REPLACED `(1 - d/r)^2`, which was a window pretending to be a falloff -- no unit, no
 // inverse-square, and a brightness that moved whenever someone dragged the radius.
+static const float kLightDistanceBiasSqr = 1.0e-4f; // UE's +1 cm^2, in m^2
 float LightDistanceAttenuation(float dist, float range)
 {
     const float invRange = (range > 1e-6f) ? (1.0f / range) : 0.0f;
     const float t = saturate(dist * dist * invRange * invRange); // (d/r)^2
     const float w = saturate(1.0f - t * t);                      // 1 - (d/r)^4
-    return (w * w) / (dist * dist + 1.0f);
+    return (w * w) / (dist * dist + kLightDistanceBiasSqr);
 }
 
 struct BRDFInput

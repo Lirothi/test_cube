@@ -347,7 +347,7 @@ struct SkyVisConstants
 };
 static_assert(sizeof(SkyVisConstants) == 2 * 64 + 4 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
 
-// Bindless scene slots of this pass (BindlessTable kScenePerFrame = 32): reflections own 0-12, the
+// Bindless scene slots of this pass (BindlessTable kScenePerFrame = 48): reflections own 0-12, the
 // debug view 13-16, the glass dispatch 17-25. Its own copies of the TLAS / GB1 / depth, because the
 // reflection trace (which writes 0/2/3) does not run when reflections are not RT.
 constexpr UINT kSkyVisSlotUav = 26;

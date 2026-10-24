@@ -11,7 +11,7 @@
 #define GLASS_MATERIAL 0
 #endif
 #if GLASS_MATERIAL
-#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=18, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+#define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=20, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 #else
 #define GLASS_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE))"
 #endif
@@ -24,6 +24,7 @@
 #include "local_shadow_filter.hlsli" // plan S2: the light passes' spot / point filters
 #include "height_fog.hlsli" // plan A5: the analytic medium beyond the fog volume
 #include "fog_common.hlsli"  // plan A5: the froxel volume
+#include "sky_visibility.hlsli" // plan S: UE's DFAO formulas, lighting_cs's own
 
 struct PointLightData
 {
@@ -100,6 +101,8 @@ Texture2DArray LocalShadowPool : register(t14);
 Texture2D MatAlbedo : register(t15);       // sRGB view
 Texture2D MatMR : register(t16);           // R = metal, G = rough (B/G when MR_LAYOUT_GLTF)
 Texture2D MatTransmission : register(t17); // R multiplies matSurface.z
+Texture2D SceneOpaqueDepth : register(t18); // the opaque depth (Main_Transparent's snapshot, SceneOpaque's pair)
+Texture2D<float4> SkyVisTex : register(t19); // plan S: the RT sky visibility of the opaque scene (gated by glassSkyVis.x)
 #endif
 
 SamplerState LinearSampler : register(s0);
@@ -426,6 +429,109 @@ float3 SampleBehindGlass(float2 uv, float rough)
     }
     return acc * (1.0f / 9.0f);
 }
+
+// Ray (o, unit d) against the sphere (c, r): both distances along the ray, false on a miss.
+bool GlassRaySphere(float3 o, float3 d, float3 c, float r, out float t0, out float t1)
+{
+    const float3 oc = o - c;
+    const float b = dot(oc, d);
+    const float h = b * b - (dot(oc, oc) - r * r);
+    t0 = 0.0f;
+    t1 = 0.0f;
+    if (h < 0.0f) { return false; }
+    const float s = sqrt(h);
+    t0 = -b - s;
+    t1 = -b + s;
+    return true;
+}
+
+// Out of the glass through the outer sphere (c, r), from `o` inside it along `d`: the exit point and
+// direction. Total internal reflection there keeps the direction (one more bounce inside a wall is a
+// sliver of the rim that no screen copy can show anyway).
+void GlassExitOuter(inout float3 o, inout float3 d, float3 c, float r, float ior)
+{
+    float t0, t1;
+    if (!GlassRaySphere(o, d, c, r, t0, t1)) { return; }
+    o += d * max(t1, 0.0f);
+    const float3 n = normalize(o - c);
+    const float3 outDir = refract(d, -n, ior);
+    if (dot(outDir, outDir) > 1.0e-6f) { d = outDir; }
+}
+
+// Glass refraction (owner 2026-10-24, "the glasses pass the background straight through, no distortion").
+// The thin-walled glTF glass is a SHELL, so the surface is taken locally as a HOLLOW sphere: its radius
+// the curvature of the interpolated geometric normal across the pixel quad (the normal map would read as
+// bumps), its wall `wall` m thick, its centre behind the surface. The view ray is refracted through it
+// exactly -- into the near wall, out into the hollow, into the far wall, out -- with a total internal
+// reflection at the hollow (the band just inside the rim, b > R - wall) bounced once and sent out
+// through the wall. HDRP's RefractionModelSphere, made hollow: a solid ball's lensing would turn every
+// tumbler into a paperweight. A flat pane or a concave face (the inside of a cup seen over its rim) is
+// not bent. The exit ray then meets the opaque scene on the proxy plane at the depth behind the pixel,
+// refined once at the depth it lands on (HDRP's proxy raycast); a landing IN FRONT of the glass (an
+// object between the camera and the cup) keeps the straight-through sample.
+float2 GlassRefractedUv(float3 P, float3 Ngeo, float3 V, float ior, float wall, float2 pixelUv, float glassDeviceZ)
+{
+    const float3 dPx = ddx(P);
+    const float3 dPy = ddy(P);
+    const float3 dNx = ddx(Ngeo);
+    const float3 dNy = ddy(Ngeo);
+    // Convex = the normal turns the way the surface runs (its centre of curvature behind it).
+    if (dot(dNx, dPx) + dot(dNy, dPy) <= 0.0f) { return pixelUv; }
+    const float curvature = max(length(dNx) / max(length(dPx), 1.0e-6f), length(dNy) / max(length(dPy), 1.0e-6f));
+    if (curvature < 0.01f) { return pixelUv; } // flatter than a 100 m sphere: a pane, a sub-millimetre shift
+    const float R = 1.0f / curvature;
+    const float3 C = P - Ngeo * R;
+    const float Ri = R - wall; // <= 0: a wall thicker than the shape is round -- solid glass
+
+    float3 o = P;
+    float3 d = refract(-V, Ngeo, 1.0f / ior); // into the near wall
+    float t0, t1;
+    if (Ri > 0.0f && GlassRaySphere(o, d, C, Ri, t0, t1) && t0 > 0.0f)
+    {
+        o += d * t0;
+        const float3 n = normalize(o - C);
+        const float3 intoHollow = refract(d, n, ior);
+        if (dot(intoHollow, intoHollow) > 1.0e-6f)
+        {
+            // Across the hollow to its far side, into the far wall, out of it.
+            d = intoHollow;
+            if (GlassRaySphere(o, d, C, Ri, t0, t1))
+            {
+                o += d * max(t1, 0.0f);
+                const float3 n2 = normalize(o - C);
+                const float3 intoWall = refract(d, -n2, 1.0f / ior);
+                if (dot(intoWall, intoWall) > 1.0e-6f) { d = intoWall; }
+            }
+        }
+        else
+        {
+            d = reflect(d, n); // total internal reflection at the hollow: back into the near wall
+        }
+    }
+    GlassExitOuter(o, d, C, R, ior); // ...and out of whichever wall the ray is in
+
+    const float3 fwd = camDirWS.xyz;
+    const float3 camPos = camPosSky.xyz;
+    const float dz = dot(d, fwd);
+    if (dz < 1.0e-3f) { return pixelUv; } // leaves sideways or back toward the camera
+    const float exitViewZ = dot(o - camPos, fwd);
+    float2 uv = pixelUv;
+    [unroll]
+    for (int k = 0; k < 2; ++k)
+    {
+        const int2 texel = clamp(int2(uv * screenSizeInv.xy), 0, int2(screenSizeInv.xy) - 1);
+        const float zb = SceneOpaqueDepth.Load(int3(texel, 0)).r;
+        const float behindViewZ = zb > 1.0e-6f ? dot(ReconstructPosWS(uv, zb, invProj, invView) - camPos, fwd)
+                                               : exitViewZ + 1000.0f; // the sky: far enough to be a direction
+        const float3 hit = o + d * (max(behindViewZ - exitViewZ, 0.0f) / dz);
+        const float4 clip = mul(float4(hit, 1.0f), viewProj);
+        if (clip.w <= 1.0e-4f) { return pixelUv; }
+        uv = saturate(clip.xy / clip.w * float2(0.5f, -0.5f) + 0.5f);
+    }
+    const int2 landed = clamp(int2(uv * screenSizeInv.xy), 0, int2(screenSizeInv.xy) - 1);
+    // Reverse-Z: a larger device depth is nearer. What lies in front of the glass is not behind it.
+    return SceneOpaqueDepth.Load(int3(landed, 0)).r > glassDeviceZ ? pixelUv : uv;
+}
 #endif
 
 struct PSOut
@@ -536,6 +642,25 @@ PSOut PSMain(VSOut i)
     // scene sat near 1, a thousandth of the frame once the sun was in lux.
     float3 diffuseAccum = tint * ambientIntensity * sunColor;
     float3 specAccum = 0.0f.xxx;
+#if GLASS_MATERIAL
+    // Plan S on glass (owner 2026-10-24, "why are the transparent objects so blue"): the sky's fill and its
+    // reflection were unoccluded, so a tumbler in a closed room at night reflected the whole night sky (x the
+    // night brightness) and took a tenth of the moonlight as ambient. Glass has no bent normal of its own; the
+    // opaque surface right behind it does -- for a cup on a shelf, the shelf's -- and stands in for it (the
+    // same proxy UE's translucency takes from the opaque scene's AO). Off, or no surface behind: the open sky.
+    float4 glassSkyVisBent = 0.0f.xxxx;
+    if (glassSkyVis.x > 0.0f)
+    {
+        const int2 skyTexel = clamp(int2(i.posH.xy), 0, int2(screenSizeInv.xy) - 1);
+        glassSkyVisBent = SkyVisUpsample(SkyVisTex, i.posH.xy * screenSizeInv.zw, SceneOpaqueDepth.Load(int3(skyTexel, 0)).r);
+    }
+    if (glassSkyVisBent.w > 0.0f)
+    {
+        float3 lookupN; float visibility; float dotFactor;
+        SkyVisDiffuse(glassSkyVisBent.xyz, geomN, glassSkyVis.y, lookupN, visibility, dotFactor);
+        diffuseAccum *= visibility * dotFactor;
+    }
+#endif
 
     // Directional light
     {
@@ -649,6 +774,12 @@ PSOut PSMain(VSOut i)
             ? SkySpecular.SampleLevel(EnvSampler, reflectionDir,
                                       IblMipFromRoughness(rough, skySpecMipCount)).rgb * skyIntensity
             : SkyboxTex.SampleLevel(EnvSampler, reflectionDir, rough * 5.0f).rgb * skyIntensity;
+#if GLASS_MATERIAL
+        if (glassSkyVisBent.w > 0.0f)
+        {
+            skyRefl *= SkyVisSpecular(glassSkyVisBent.xyz, reflectionDir, rough, glassSkyVis.z); // lighting_cs's line
+        }
+#endif
     }
     float3 envRefl = skyRefl;
     // S15b off-screen RT reflection: the GlassReflGbuffer + GlassReflections passes traced this
@@ -709,6 +840,11 @@ PSOut PSMain(VSOut i)
     // ONE / INV_SRC_ALPHA keeps throughAvg of what the target already holds -- the opaque scene AND any
     // glass drawn behind this one. The tint's colour and the refraction's bend are put on here against
     // the opaque copy: exact where only opaque lies behind, the tint's average where more glass does.
+    // glassRefraction.x: the shell's wall (m), 0 = straight through (the flat transmission before it).
+    if (glassRefraction.x > 0.0f) // uniform: the quad derivatives inside need every lane
+    {
+        refrUv = GlassRefractedUv(i.posWS, geomN, V, ior, glassRefraction.x, pixelUv, i.posH.z);
+    }
     const float3 behind = SampleBehindGlass(refrUv, rough) * invPreExposure;
     const float3 behindHere = SceneOpaque.SampleLevel(LinearSampler, pixelUv, 0).rgb * invPreExposure;
 #else
