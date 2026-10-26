@@ -649,6 +649,9 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         Material::ComputeDesc cd{};
         cd.shaderFile = L"shaders/fog_scatter_cs.hlsl";
         cd.csEntry = "CSMain";
+        // The sky's visibility in the air traces the TLAS (inline RayQuery): compiled in only where RT exists.
+        fogScatterTracesSky_ = renderer->IsRaytracingSupported();
+        if (fogScatterTracesSky_) { cd.defines.emplace_back("FOG_SKY_OCCLUSION", "1"); }
         matFogScatterCS_ = mm->GetOrCreateCompute(renderer, cd);
         if (!matFogScatterCS_ || !matFogScatterCS_->GetPipelineState())
         {
@@ -1204,6 +1207,7 @@ void FogHandles::Populate(Material* material, UINT cbRegister)
     local = material->ComputeCBFieldHandle(cbRegister, "fogLocal");
     localParams = material->ComputeCBFieldHandle(cbRegister, "fogLocalParams");
     localParams2 = material->ComputeCBFieldHandle(cbRegister, "fogLocalParams2");
+    depthParams = material->ComputeCBFieldHandle(cbRegister, "fogDepthParams");
 }
 
 namespace
@@ -1226,6 +1230,7 @@ namespace
         material->UpdateCBField(h.local, d.local, dest);
         material->UpdateCBField(h.localParams, d.localParams, dest);
         material->UpdateCBField(h.localParams2, d.localParams2, dest);
+        material->UpdateCBField(h.depthParams, d.depthParams, dest);
     }
 }
 
@@ -1397,6 +1402,12 @@ void SsrTemporalHandles::Populate(Material* material)
     blendWeight = material->ComputeCB0FieldHandle("blendWeight");
     historyValid = material->ComputeCB0FieldHandle("historyValid");
     clampExpand = material->ComputeCB0FieldHandle("clampExpand");
+    hitReprojection = material->ComputeCB0FieldHandle("hitReprojection");
+    invProj = material->ComputeCB0FieldHandle("invProj");
+    invView = material->ComputeCB0FieldHandle("invView");
+    viewProjNoJitter = material->ComputeCB0FieldHandle("viewProjNoJitter");
+    prevViewProjNoJitter = material->ComputeCB0FieldHandle("prevViewProjNoJitter");
+    missDistance = material->ComputeCB0FieldHandle("missDistance");
 }
 
 UINT SceneResourceBootstrapper::GetSsrTemporalCBSizeBytes() const
@@ -1414,6 +1425,12 @@ void SceneResourceBootstrapper::WriteSsrTemporalConstants(const SsrTemporalConst
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.blendWeight, d.blendWeight, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.historyValid, d.historyValid, dest);
     matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.clampExpand, d.clampExpand, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.hitReprojection, d.hitReprojection, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.invProj, d.invProj, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.invView, d.invView, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.viewProjNoJitter, d.viewProjNoJitter, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.prevViewProjNoJitter, d.prevViewProjNoJitter, dest);
+    matSsrTemporalCS_->UpdateCBField(ssrTemporalHandles_.missDistance, d.missDistance, dest);
 }
 
 void SceneResourceBootstrapper::WriteHzbConstants(const HzbPassConstants& d, uint8_t* dest) const

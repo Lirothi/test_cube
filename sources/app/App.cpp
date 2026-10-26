@@ -59,6 +59,9 @@ std::string g_profDumpPath;
 uint32_t g_traceFrames = 0;
 // Boot upscaler mode; see App.h. Set by main.cpp from "--dlss=<mode>". -1 = compiled default.
 int g_bootDlssMode = -1;
+// "--set=dlss.mode:<sl::DLSSMode>" / MCP set_settings: switch the upscaler in a RUNNING process, at the frame's safe
+// point (the dev window's combo path). 0 = off (native), 2 = Balanced, 6 = DLAA. -1 = nothing asked.
+int g_requestDlssMode = -1;
 // Borderless client size; see App.h. Set by main.cpp from "--window=<w>x<h>". 0 = default window.
 int g_windowSize[2] = { 0, 0 };
 // Empty-HUD capture mode; see App.h. Set by main.cpp from "--no-hud".
@@ -395,6 +398,10 @@ namespace
         if (setting == "wind.freeze") { vfx::g_windFreeze = value != 0.0f; return true; }
         // Fly along the view at this many m/s (negative = backwards, 0 stops) -- motion through a running editor.
         if (setting == "camera.fly") { g_camFlyForward = std::clamp(value, -100.0f, 100.0f); return true; }
+        // ...and turn at this many degrees a second (positive = to the right, 0 stops): --cam-fly-yaw for a running
+        // editor, the other motion a temporal history has to survive.
+        if (setting == "camera.spin") { g_camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
+        if (setting == "dlss.mode") { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
         // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
         if (setting == "cloudShadow.updateFrames")
@@ -777,6 +784,7 @@ namespace
         if (setting == "reflections.glossyBlur") { renderSettings.reflectionGlossyScale = std::clamp(value, 0.0f, 24.0f); return true; }
         // The RT reflection's GGX-lobe glossy filter; 0 = the separable blur above, the A/B.
         if (setting == "reflections.lobe") { renderSettings.reflectionLobeBlur = value != 0.0f; return true; }
+        if (setting == "reflections.hitReprojection") { renderSettings.reflectionHitReprojection = value != 0.0f; return true; }
         // P6C/P13: which screen-space search the reflection ray uses. 0 = log march (fixed growing
         // steps against full depth), 1 = UE SSRT fixed-step Batch4 march against the furthest HZB.
         // The A/B switch for the SSR retrofit, and the only way to compare both inside one binary.
@@ -837,7 +845,10 @@ namespace
         if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
         if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
         if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f)); return true; }
-        if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }
+        if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }        if (setting == "skyVis.fogRays") { renderSettings.skyVisFogRays = static_cast<uint32_t>(std::clamp(value, 0.0f, 8.0f)); return true; }
+        // Project-wide like fog.gridPixels (the level's fog keys are the medium): UE's GridCenterOffsetFromDepthBuffer.
+        if (setting == "fog.depthOffset") { renderSettings.fogDepthOffset = std::clamp(value, -1.0f, 4.0f); return true; }
+        if (setting == "fog.depthThreshold") { renderSettings.fogDepthThreshold = std::clamp(value, 0.0f, 128.0f); return true; }
         // Interior lighting plan D: the GI probe volume (SceneRenderSettings::gi*).
         if (setting == "gi.enabled") { renderSettings.giEnabled = value != 0.0f; return true; }
         if (setting == "gi.spacing") { renderSettings.giSpacing = std::clamp(value, 0.1f, 8.0f); return true; }
@@ -2374,11 +2385,18 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
             }
 
+            // dlss.mode asked for by --set / set_settings: here, where the frame has been presented.
+            if (g_requestDlssMode >= 0)
+            {
+                renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_requestDlssMode));
+                g_requestDlssMode = -1;
+            }
+
 #if WITH_EDITOR
             // A screenshot Claude Code asked for over MCP. Same safe point as --shot below: the
             // frame has been presented and the GPU can be waited on. One uncontended lock when
             // nobody asked.
-            editormcp::ServiceScreenshot(renderer);
+            editormcp::ServiceScreenshot(renderer, scene.CameraRef());
 #endif
 
             // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the

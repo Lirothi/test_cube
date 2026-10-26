@@ -46,9 +46,9 @@ public:
         // lens-flare target and P8C-2l the streak pyramid's two halves.
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            38; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts, +2 sky visibility, +2 reflection pyramids).
+            40; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts, +3 sky visibility, +2 reflection pyramids, +1 sky payload).
 #else
-            37;
+            39;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -78,6 +78,9 @@ public:
         // fetch by more than a pixel); rt_resolve_cs reads both. Reflection-resolution sized.
         GpuResource rtPayload;
         GpuResource rtPayloadUv;
+        // ...and an off-screen hit's sky lighting, apart (rgba16f): the resolve occludes it by the reflector's sky
+        // visibility (rt_resolve_cs.hlsl).
+        GpuResource rtPayloadSky;
         GpuResource oceanReflection;   // premultiplied ocean SSR sampled by transparent ocean
         // The ocean reflection's temporal history: this frame's resolved result (what the water
         // samples when the resolve ran) AND next frame's history, per frame set like reflectionHistory.
@@ -121,6 +124,9 @@ public:
         // previous frame's copy is the previous Deferred set's, like gtaoHistory). Never blurred -- a blurred
         // history would widen the blur every frame. Rests NON_PIXEL.
         GpuResource skyVisAccum;
+        // ...and how many frames each texel of it has accumulated (R8_UNORM, n / 255; Lumen's NumFramesAccumulated):
+        // a texel new this frame blends at 1 / (n + 1), a running mean, until the history weight's own share.
+        GpuResource skyVisCount;
         // SSR temporal resolve: the accumulated reflection. This frame's output AND next frame's
         // history (the previous frame's copy lives in the previous Deferred set -- see
         // Renderer::GetDeferredForPrevFrame), exactly like gtaoHistory.
@@ -217,6 +223,7 @@ public:
         UINT reflectionPyramidMips = 0; // levels actually created for the reflection's size (both pyramids)
         D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadSRV{}, rtPayloadUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadUvSRV{}, rtPayloadUvUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadSkySRV{}, rtPayloadSkyUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionHistorySRV{}, oceanReflectionHistoryUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE shadowDSV{}, shadowSRV{};
@@ -236,6 +243,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE gtaoUpsampledSRV{}, gtaoUpsampledUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE skyVisSRV{}, skyVisUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE skyVisAccumSRV{}, skyVisAccumUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE skyVisCountSRV{}, skyVisCountUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE hzbSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE hzbClosestSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE debugPreviewSRV{}, debugPreviewUAV{};
@@ -385,7 +393,7 @@ private:
 #endif
         Light, Scene, GlassReflNormal, LensFlare, Count
     };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, SkyVis, SkyVisUAV, SkyVisAccum, SkyVisAccumUAV, ReflectionHistory, ReflectionHistoryUAV,
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, SkyVis, SkyVisUAV, SkyVisAccum, SkyVisAccumUAV, SkyVisCount, SkyVisCountUAV, ReflectionHistory, ReflectionHistoryUAV,
     // P6C hierarchical depth. One SRV over the whole chain plus one UAV PER MIP: the build writes
     // mip N while reading mip N-1, and this engine's barrier layer transitions whole resources
     // (ALL_SUBRESOURCES), so the chain stays in UNORDERED_ACCESS for the duration of the build and
@@ -417,7 +425,7 @@ private:
     // The bloom's light accumulated over frames.
     BloomHistory, BloomHistoryUAV,
     // RT gather-then-shade payload (async prep).
-    RtPayload, RtPayloadUAV, RtPayloadUv, RtPayloadUvUAV,
+    RtPayload, RtPayloadUAV, RtPayloadUv, RtPayloadUvUAV, RtPayloadSky, RtPayloadSkyUAV,
     // Volumetric fog froxel volumes (3D).
     FogScatter, FogScatterUAV, FogIntegrated, FogIntegratedUAV,
     // Plan A7 light shafts: the half-res ping-pong pair.

@@ -619,16 +619,25 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
                 D.hzb.Get() != nullptr && D.hzbSRV.ptr != 0 && D.hzbMips > hzbMip &&
                 P.hzb.Get() != nullptr && P.hzbSRV.ptr != 0 && P.hzbMips > hzbMip;
         }
+        // UE's depth constraint on the cells' samples: this frame's furthest pyramid at mip 0.
+        decisions_.fogDepthConstraint = decisions_.volumetricFog && frame.settings.fogDepthOffset >= 0.0f &&
+                                        D.hzb.Get() != nullptr && D.hzbSRV.ptr != 0 && D.hzbMips > 0u;
+        // The air's sky visibility rides plan S: the same switch, the same TLAS (decisions_.skyVis builds it).
+        decisions_.fogSkyVis = decisions_.volumetricFog && decisions_.skyVis && frame.settings.skyVisFogRays > 0u &&
+                               resources_.FogScatterTracesSky();
         // A4: local lights, when the level has any (their buffers are filled in EnsureFrameResources).
         decisions_.fogLocalLights = decisions_.volumetricFog && a.localLights && a.localLightScatter > 0.0f &&
             frame.lightManager != nullptr &&
             (frame.lightManager->GetSpotLightCount() > 0 || !frame.lightManager->PointLights().empty());
         // The lookup parameters every consumer shares (A5). Off = x 0: the shaders take the identity.
+        // zParams.w = the volume's start in view depth: a surface nearer than it takes no volume at all
+        // (fog_common.hlsli FogVolumeSampleAt, compose), UE HeightFogCommon.ush:568-570.
         {
+            const float volumeNear = frame.camera ? FogVolumeNear(a, *frame.camera) : 0.0f;
             const float3 zp = frame.camera
-                ? FogGridZParams(FogVolumeNear(a, *frame.camera), a.volumetricDistance, render::kFogDepthDistributionScale, D.fogGridDepth)
+                ? FogGridZParams(volumeNear, a.volumetricDistance, render::kFogDepthDistributionScale, D.fogGridDepth)
                 : float3(1.0f, 0.0f, 1.0f);
-            decisions_.fogVolumeZParams = Math::float4(zp.x, zp.y, zp.z, 0.0f);
+            decisions_.fogVolumeZParams = Math::float4(zp.x, zp.y, zp.z, volumeNear);
             decisions_.fogVolumeParams = Math::float4(decisions_.volumetricFog ? 1.0f : 0.0f, a.volumetricDistance,
                                                       preExposure_ > 0.0f ? 1.0f / preExposure_ : 1.0f,
                                                       static_cast<float>(D.fogGridDepth));

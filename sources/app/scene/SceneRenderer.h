@@ -148,6 +148,8 @@ private:
         bool fogHistoryValid = false;
         // A3: the furthest HZB (this and the previous slot) exists at the mip whose texel is a cell.
         bool fogConservativeDepth = false;
+        bool fogSkyVis = false; // the fog's sky term is occluded by RT rays (skyVis.fogRays; needs plan S's TLAS)
+        bool fogDepthConstraint = false; // samples kept in front of the depth (fog.depthOffset; reads this frame's HZB mip 0)
         std::uint32_t fogHzbMip = 3u; // furthest-HZB mip whose texel is one cell: log2(cell px) - 1 (base = half res)
         // A4: spots / points light the volume this frame (the knob, and there are any).
         bool fogLocalLights = false;

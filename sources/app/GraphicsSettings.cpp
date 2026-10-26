@@ -68,6 +68,7 @@ namespace
         float skyVisDiffuse = 1.0f;
         float skyVisSpecular = 1.0f;
         bool skyVisFilter = true;
+        std::uint32_t skyVisFogRays = 2u;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -391,6 +392,7 @@ namespace
         s.skyVisMaxDistance = std::clamp(finite(s.skyVisMaxDistance, 15.0f), 0.5f, 500.0f);
         s.skyVisDiffuse = std::clamp(finite(s.skyVisDiffuse, 1.0f), 0.0f, 1.0f);
         s.skyVisSpecular = std::clamp(finite(s.skyVisSpecular, 1.0f), 0.0f, 1.0f);
+        s.skyVisFogRays = std::min(s.skyVisFogRays, 8u);
 
         s.shadowLodBias = std::clamp(s.shadowLodBias, -2, 3);
         s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
@@ -479,6 +481,7 @@ namespace
         s.skyVisDiffuse = settings.skyVisDiffuse;
         s.skyVisSpecular = settings.skyVisSpecular;
         s.skyVisFilter = settings.skyVisFilter;
+        s.skyVisFogRays = settings.skyVisFogRays;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -653,6 +656,7 @@ namespace
         settings.skyVisDiffuse = s.skyVisDiffuse;
         settings.skyVisSpecular = s.skyVisSpecular;
         settings.skyVisFilter = s.skyVisFilter;
+        settings.skyVisFogRays = s.skyVisFogRays;
     }
 
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -837,7 +841,8 @@ namespace
                 { "maxDistance", s.skyVisMaxDistance },
                 { "diffuse", s.skyVisDiffuse },
                 { "specular", s.skyVisSpecular },
-                { "spatialFilter", s.skyVisFilter }
+                { "spatialFilter", s.skyVisFilter },
+                { "fogRays", s.skyVisFogRays }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -1040,6 +1045,7 @@ namespace
         Read(skyVis, "diffuse", s.skyVisDiffuse);
         Read(skyVis, "specular", s.skyVisSpecular);
         Read(skyVis, "spatialFilter", s.skyVisFilter);
+        Read(skyVis, "fogRays", s.skyVisFogRays);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1515,6 +1521,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::SkyVisDiffuse:                  current.skyVisDiffuse = defaults.skyVisDiffuse; break;
     case GraphicsControl::SkyVisSpecular:                 current.skyVisSpecular = defaults.skyVisSpecular; break;
     case GraphicsControl::SkyVisFilter:                   current.skyVisFilter = defaults.skyVisFilter; break;
+    case GraphicsControl::SkyVisFogRays:                  current.skyVisFogRays = defaults.skyVisFogRays; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1598,7 +1605,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyStreaming(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::GiEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::SkyVisFilter))
+             value <= static_cast<unsigned>(GraphicsControl::SkyVisFogRays))
     {
         ApplyGi(current, settings);
     }

@@ -540,7 +540,8 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.gridSize[0] = D.fogGridWidth;
         fc.gridSize[1] = D.fogGridHeight;
         fc.gridSize[2] = D.fogGridDepth;
-        fc.flags = (decisions_.fogHistoryValid ? 1u : 0u) | (decisions_.fogConservativeDepth ? 4u : 0u) | (a.temporal ? 8u : 0u);
+        fc.flags = (decisions_.fogHistoryValid ? 1u : 0u) | (decisions_.fogConservativeDepth ? 4u : 0u) | (a.temporal ? 8u : 0u) |
+                   (decisions_.fogDepthConstraint ? 32u : 0u);
         if (skyAtmosphere_.DistantActive()) fc.flags |= 16u;
         fc.misc[0] = decisions_.fogHzbMip; // furthest HZB mip whose texel is one cell (base = half res)
         fc.misc[1] = 4u; // UE HistoryMissSupersampleCount
@@ -568,7 +569,15 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.localParams = float4(std::max(a.localLightScatter, 0.0f),
                                 1.0f / static_cast<float>(std::max(D.spotShadowRes, 1u)),
                                 1.0f / static_cast<float>(std::max(D.pointShadowRes, 1u)), vsm::LocalRefDist());
-        fc.localParams2 = float4(std::max(a.localSoftFading, 0.0f), std::max(a.localDistanceBias, 0.0f), 0.0f, 0.0f);
+        // The air's sky visibility (FogSkyVisibility): rays per cell sample while the TLAS of this frame is there.
+        const D3D12_CPU_DESCRIPTOR_HANDLE fogTlasSrv = decisions_.fogSkyVis ? rtAs_.Manager().TlasSrvCpu(frameIdx)
+                                                                            : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        const bool fogTracesSky = fogTlasSrv.ptr != 0 && rtAs_.Manager().TlasInstanceCount(frameIdx) != 0;
+        fc.local[3] = fogTracesSky ? std::min(frame_->settings.skyVisFogRays, 8u) : 0u;
+        fc.localParams2 = float4(std::max(a.localSoftFading, 0.0f), std::max(a.localDistanceBias, 0.0f),
+                                 std::max(frame_->settings.skyVisMaxDistance, 0.5f), 0.0f);
+        fc.depthParams = float4(std::max(frame_->settings.fogDepthOffset, 0.0f), std::max(frame_->settings.fogDepthThreshold, 0.0f),
+                                0.0f, 0.0f);
         // Row-vector convention (mul(v, M)): clip.z = z * _33 + _43, clip.w = z * _34 + _44.
         const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
         fc.projZ = float4(projNoJitter.m._33, projNoJitter.m._43, projNoJitter.m._34, projNoJitter.m._44);
@@ -622,8 +631,8 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                 (frame_->skybox && frame_->skybox->HasIbl()) ? frame_->skybox->IrradianceSrv()
                                                              : renderer->VsmDummyTexSrv(),
                 P.fogScatterSRV,
-                // t5/t6: the furthest pyramids (A3 conservative depth); dummies when the flag is off.
-                decisions_.fogConservativeDepth ? D.hzbSRV : renderer->VsmDummyTexSrv(),
+                // t5/t6: the furthest pyramids (A3 conservative depth; t5's mip 0 the depth constraint); dummies when off.
+                (decisions_.fogConservativeDepth || decisions_.fogDepthConstraint) ? D.hzbSRV : renderer->VsmDummyTexSrv(),
                 decisions_.fogConservativeDepth ? P.hzbSRV : renderer->VsmDummyTexSrv(),
                 // t7..t10 (A4): the light buffers and the Legacy atlases; dummies keep the VOLATILE
                 // range populated when there are none / in VSM mode (never sampled then).
@@ -640,7 +649,9 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
                     : renderer->VsmDummyBufferSrv(),
                 // t14: plan S7, the local shadow cache pool (a light with a negative atlas page reads there).
                 (!localVsm && (fc.local[0] || fc.local[1])) ? LocalShadowPoolSrv(renderer->VsmDummyTexSrv())
-                                                            : renderer->VsmDummyTexSrv() }).gpu;
+                                                            : renderer->VsmDummyTexSrv(),
+                // t15: the TLAS for the sky visibility; a placeholder (never traced) while fogLocal.w is 0.
+                fogTracesSky ? fogTlasSrv : renderer->VsmDummyBufferSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ D.fogScatterUAV }).gpu;
             const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                                   *SamplerManager::ComparisonLinearClamp(),

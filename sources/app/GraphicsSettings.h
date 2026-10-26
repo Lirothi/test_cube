@@ -175,6 +175,7 @@ enum class GraphicsControl
     SkyVisDiffuse,
     SkyVisSpecular,
     SkyVisFilter,
+    SkyVisFogRays,                // ...and the volumetric fog's (SceneRenderSettings::skyVisFogRays)
 };
 
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,

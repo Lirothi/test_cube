@@ -97,7 +97,7 @@ cbuffer PerFrame : register(b0)
     // Volumetric fog: x = 1 when the froxel volume was built this frame (0 = the analytic model
     // alone, exactly the pre-plan image), y = the volume's far plane in view depth (metres),
     // z = 1 / preExposure (the volume is stored pre-exposed, UE HeightFogCommon.ush:448),
-    // w = the grid's slice count. `fogVolumeZParams` = (B, O, S) of fog_common.hlsli.
+    // w = the grid's slice count. `fogVolumeZParams` = (B, O, S) of fog_common.hlsli, w = the volume's start.
     float4 fogVolumeParams;
     float4 fogVolumeZParams;
     // P16.1: everything this pass writes is scaled by the exposure the tonemap is about to apply,
@@ -614,6 +614,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         }
         vol = FogVolume.SampleLevel(gSmp, FogVolumeUV(uv, viewDepth, fogVolumeZParams.xyz, (uint)fogVolumeParams.w), 0);
         vol.rgb *= fogVolumeParams.z; // stored pre-exposed
+        if (FogVolumeInFront(viewDepth, fogVolumeZParams)) { vol = float4(0.0f, 0.0f, 0.0f, 1.0f); } // nearer than its start
         if (fogDebugView == 3u)
         {
             // The slice grid: a stripe per slice, so the depth distribution can be read off the image.

@@ -1300,11 +1300,12 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             { { DT.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { DT.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { DT.rtPayload.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
-              { DT.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
+              { DT.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+              { DT.rtPayloadSky.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 const auto& DP = renderer->GetDeferredForFrame();
                 if (!resources_.GetRtTraceMaterial() || DP.rtPayloadUAV.ptr == 0 ||
-                    DP.rtPayloadUvUAV.ptr == 0)
+                    DP.rtPayloadUvUAV.ptr == 0 || DP.rtPayloadSkyUAV.ptr == 0)
                 {
                     return {};
                 }
@@ -1335,7 +1336,8 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                 const auto& P = renderer->GetDeferredForPrevFrame();
                 if (!resources_.GetSkyVisMaterial() || !resources_.GetSkyVisFilterMaterial() || D.skyVisUAV.ptr == 0 ||
                     D.skyVisSRV.ptr == 0 || D.skyVisAccumUAV.ptr == 0 || D.skyVisAccumSRV.ptr == 0 ||
-                    P.skyVisAccumSRV.ptr == 0 || D.gbSRV[1].ptr == 0 || D.gbSRV[3].ptr == 0 || D.depthSRV.ptr == 0)
+                    P.skyVisAccumSRV.ptr == 0 || D.skyVisCountUAV.ptr == 0 || P.skyVisCountSRV.ptr == 0 ||
+                    D.gbSRV[1].ptr == 0 || D.gbSRV[3].ptr == 0 || D.depthSRV.ptr == 0)
                 {
                     skyVisHistoryFrames_ = 0u;
                     return {};
@@ -1363,11 +1365,14 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                 ctx.Use(D.gbVelocity.Get(), kSrvAll);
                 ctx.Use(P.skyVisAccum.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // last frame's, at rest
                 ctx.Use(D.skyVisAccum.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                ctx.Use(P.skyVisCount.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // the counts likewise
+                ctx.Use(D.skyVisCount.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 // The spatial filter reads the accumulation (next frame's history, at rest from here) and writes
                 // the target lighting and compose read...
                 ctx.NextPoint();
                 chain.pointFilter = ctx.usePoint ? *ctx.usePoint : 0u;
                 ctx.Use(D.skyVisAccum.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(D.skyVisCount.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 // ...and back to its resting state for them.
                 ctx.NextPoint();
@@ -1472,11 +1477,12 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
                 // Plan S7, the direct read: the shadow cache pool (t14), at its rest.
                 if (ID3D12Resource* pool = LocalShadowPoolResource()) { ctx.Use(pool, render::LocalShadowCache::kRestState); }
             }
-            if (decisions_.fogConservativeDepth)
+            if (decisions_.fogConservativeDepth || decisions_.fogDepthConstraint)
             {
-                // A3: both furthest pyramids, already at rest; declared so the reads are named.
+                // A3: this frame's furthest pyramid (and the depth constraint's mip 0), already at rest; declared so
+                // the reads are named. The conservative depth's history test reads last frame's too.
                 ctx.Use(DF.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                ctx.Use(PF.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                if (decisions_.fogConservativeDepth) { ctx.Use(PF.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
             }
             ctx.NextPoint();
             pts.integrate = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -1498,8 +1504,11 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         // S15: same reason as lighting -- the fog's scatter samples the sun's shadow map, and in
         // SDSM that map is not finished until after the G-buffer.
         if (gb.pSdsmShadow != GraphBuild::kNone) { fogPrereqs.push_back(gb.pSdsmShadow); }
-        // A3: the conservative depth reads this frame's FINAL furthest pyramid.
-        if (decisions_.fogConservativeDepth && gb.pHzb != GraphBuild::kNone) { fogPrereqs.push_back(gb.pHzb); }
+        // A3: the conservative depth (and the depth constraint) reads this frame's FINAL furthest pyramid.
+        if ((decisions_.fogConservativeDepth || decisions_.fogDepthConstraint) && gb.pHzb != GraphBuild::kNone)
+        {
+            fogPrereqs.push_back(gb.pHzb);
+        }
         // C3: the cloud shadow map, on the frames it was built.
         if (gb.pCloudShadow != GraphBuild::kNone) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogPrereqs, gb.pCloudShadow); }
         // A4: the local lights' shadows -- the point cube pass is a prereq (as Main_PointLights
@@ -1508,7 +1517,13 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         {
             RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogPrereqs, gb.pPointShadow);
         }
-        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs, /*mtDeps=*/{ gb.pShadow, gb.pSpotShadow }, {}, fogBuilder);
+        // The air's sky visibility traces the TLAS, an undeclared read like Main_SkyVis's: the prereq orders it, the
+        // mtDep makes the cross-queue edge to the async build an explicit fence (the body checks the TLAS is there).
+        const bool fogTracesSky = decisions_.fogSkyVis && gb.pBuildAS != static_cast<size_t>(-1);
+        if (fogTracesSky) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogPrereqs, gb.pBuildAS); }
+        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs,
+                              /*mtDeps=*/{ gb.pShadow, gb.pSpotShadow, fogTracesSky ? gb.pBuildAS : static_cast<size_t>(-1) },
+                              {}, fogBuilder);
     }
 
     auto lightBuilder = [this, renderer](RenderGraphPassContext& ctx)
@@ -1839,6 +1854,9 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             { { D.light.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.rtPayload.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.rtPayloadUv.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.rtPayloadSky.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              // An off-screen hit's sky is occluded by the reflector's sky visibility (rt_resolve_cs.hlsl).
+              { D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ctx.UseDeclared();
@@ -1891,6 +1909,10 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             /*mtDeps=*/{},
             { { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.gbVelocity.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              // The reflection hit's history (RT): the depth, GB0's roughness and the payload's hit distance, at rest.
+              { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+              { D.rtPayload.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
               { D.reflectionHistory.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 ctx.UseDeclared();
@@ -2101,6 +2123,9 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
             // P6C step 6: only the SSR variant reads it, but the RT variant declaring a resource
             // already in that state costs nothing and keeps ONE decl list for both branches.
             { D.hzb.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+            // The RT variant occludes an off-screen hit's sky by it (rt_reflect_common.hlsli
+            // RtReflectorSkyVisibility); already in that state, as the HZB.
+            { D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
             { D.glassReflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS } };
         if (useRtReflections && gb.pBuildAS != (size_t)-1)
         {

@@ -68,8 +68,11 @@ cbuffer Probe : register(b0)
     uint screenDepthIndex; float alphaMissKeep; uint frameSeed; uint alphaMode;
     // Gather-then-shade payload slots. For the TRACE dispatch these are the payload UAV heap
     // indices; for the RESOLVE dispatch the payload SRV heap indices. The monolithic (glass)
-    // dispatch leaves them 0 and never reads them.
-    uint payloadRadianceIndex; uint payloadUvIndex; uint _rtPad2; uint _rtPad3;
+    // dispatch leaves them 0 and never reads them. payloadSkyIndex: the off-screen hit's SKY
+    // lighting, apart (RtTraceResult.skyPart). skyVisIndex (resolve only, 0 = none this frame):
+    // the RT sky visibility the resolve scales that part by, at skyVisStrength (skyVis.diffuse).
+    uint payloadRadianceIndex; uint payloadUvIndex; uint payloadSkyIndex; uint skyVisIndex;
+    float skyVisStrength; uint _rtPad5; uint _rtPad6; uint _rtPad7;
 }
 
 SamplerState gSmp      : register(s0);
@@ -112,6 +115,12 @@ struct RtTraceResult
     bool   reuseScreen;
     float2 reuseUv;
     float  hitT;     // the ray's length to the hit (m): the glossy filter's lobe footprint
+    // An off-screen hit's SKY lighting -- the sky's fill (with the ground bounce lighting_cs pairs with it) and its
+    // reflection of the sky -- kept apart from radiancePart, because the sky reaches that point only where the sky
+    // visibility says it does and the trace cannot afford rays at the hit to find out: the resolve scales it by the
+    // REFLECTOR's sky visibility (rt_resolve_cs.hlsl). 0 for an on-screen hit: the lit HDR it reuses already holds
+    // its sky, occluded.
+    float3 skyPart;
 };
 
 // Trace one reflection ray; on hit, shade it like the base pass EXCEPT the on-screen lit-HDR
@@ -125,6 +134,7 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
     res.reuseScreen = false;
     res.reuseUv = float2(0.0f, 0.0f);
     res.hitT = 0.0f;
+    res.skyPart = float3(0.0f, 0.0f, 0.0f);
 
     RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
     // P16.11: TMin was 0, so the ray was free to hit the very triangle it started on. See the
@@ -259,7 +269,7 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
         // That is also why the defect was BIMODAL. A hit that IS on screen reuses the frame's own
         // colour and stayed correct and sharp; only the off-screen re-shade went black, and those
         // are the blurry ones.
-        float3 col;
+        float3 skyFill;
         if (skyIrradianceIndex != 0u)
         {
             TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
@@ -277,13 +287,18 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
                 groundBounceOverPi = groundAlbedoRgb * (sunOnGroundOverPi + skyOnGroundOverPi) *
                                      ((1.0f - N.y) * 0.5f);
             }
-            col = albedo * (1.0f - metal) * (irradiance * skyIrradianceScale + groundBounceOverPi);
+            skyFill = albedo * (1.0f - metal) * (irradiance * skyIrradianceScale + groundBounceOverPi);
         }
         else
         {
-            col = albedo * ambientIntensity * lightRgb;
+            skyFill = albedo * ambientIntensity * lightRgb;
         }
-        if (br.NdotL > 0.0f) { col += (br.diffBRDF + br.specBRDF) * br.NdotL * lightRgb * shadow; }
+        // The sky fill goes apart (RtTraceResult.skyPart): left in, it lit every off-screen hit as if
+        // under the open sky -- the bathroom's walls behind the camera came back daylit and blue in
+        // the panelling and the brass (2026-10-26, owner: "SSR is far more realistic").
+        res.skyPart = skyFill * exposure;
+        float3 col = float3(0.0f, 0.0f, 0.0f);
+        if (br.NdotL > 0.0f) { col = (br.diffBRDF + br.specBRDF) * br.NdotL * lightRgb * shadow; }
         direct = col * exposure;
 
         // Spot lights -- accumulated WITHOUT exposure, matching spotlight_cs.hlsl.
@@ -322,18 +337,41 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
         }
     }
 
-    // --- Environment (skybox) reflection at the hit (same as compose's spec) ---
-    // This is what makes metals reflect the sky and look metallic.
-    TextureCube skybox = ResourceDescriptorHeap[skyboxIndex];
-    float3 Rhit = reflect(-V, N);
-    float3 skyCol = skybox.SampleLevel(gSmp, Rhit, 0).rgb * skyboxIntensity;
-    float3 F0 = lerp(kF0Dielectric, albedo, metal);
-    float3 F = F_Schlick(saturate(dot(N, V)), F0);
-    float gloss = saturate(1.0f - rough);
-    float3 env = skyCol * F * gloss;
+    // --- Environment (skybox) reflection at an OFF-SCREEN hit -- what makes metals reflect the sky.
+    // Sky lighting too, so it joins skyPart. An on-screen hit gets none: the lit HDR it reuses holds its
+    // sky specular already (lighting_cs adds it, occluded by the sky visibility) -- adding this as well
+    // counted the hit's sky twice, the second time unoccluded.
+    if (!res.reuseScreen)
+    {
+        TextureCube skybox = ResourceDescriptorHeap[skyboxIndex];
+        float3 Rhit = reflect(-V, N);
+        float3 skyCol = skybox.SampleLevel(gSmp, Rhit, 0).rgb * skyboxIntensity;
+        float3 F0 = lerp(kF0Dielectric, albedo, metal);
+        float3 F = F_Schlick(saturate(dot(N, V)), F0);
+        float gloss = saturate(1.0f - rough);
+        res.skyPart += skyCol * F * gloss;
+    }
 
-    res.radiancePart = direct + env;
+    res.radiancePart = direct;
     return true;
+}
+
+// How much sky the REFLECTOR at this pixel sees (its RT sky visibility's bent-normal length, at skyVisStrength;
+// 1 when none was traced this frame) -- what an off-screen hit's sky lighting (RtTraceResult.skyPart) is scaled
+// by: the trace cannot afford rays at the hit to ask the hit itself, and the reflector stands in for it -- indoors
+// both see the room's windows, outdoors both the open sky. Compose makes the same stand-in for a MISS, whose sky
+// fallback it occludes with the reflector's visibility.
+float RtReflectorSkyVisibility(uint2 pixel)
+{
+    if (skyVisIndex == 0u)
+    {
+        return 1.0f;
+    }
+    Texture2D skyVis = ResourceDescriptorHeap[skyVisIndex];
+    const float2 uv = (float2(pixel) + 0.5f) / float2(outWidth, outHeight);
+    const float4 bent = skyVis.SampleLevel(gSmpPoint, uv, 0);
+    // .w 0 = the sky itself, nothing traced there
+    return bent.w > 0.0f ? lerp(1.0f, saturate(length(bent.xyz)), saturate(skyVisStrength)) : 1.0f;
 }
 
 // The primary-surface half of the dispatch: reconstruct the reflector at this pixel and set up

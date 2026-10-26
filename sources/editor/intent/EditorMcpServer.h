@@ -14,6 +14,7 @@
 #include "editor/scene/EditorSceneDocument.h" // nlohmann::json
 
 struct EditorActionContext;
+class Camera;
 class EditorCommandStack;
 class Renderer;
 
@@ -187,8 +188,10 @@ namespace editormcp
 
     // The screenshot handoff. The socket thread asks; App's frame loop fulfils it at the same
     // safe point `--shot` uses, where the frame has been presented and the GPU can be waited
-    // on. Called by App every frame; costs one uncontended lock when nobody asked.
-    void ServiceScreenshot(Renderer& renderer);
+    // on. Called by App every frame; costs one uncontended lock when nobody asked. `camera` is the
+    // camera this frame was drawn with: the reply names its pose, so a frame taken mid-motion can be
+    // retaken still from exactly there.
+    void ServiceScreenshot(Renderer& renderer, const Camera& camera);
 }
 
 #endif // WITH_EDITOR

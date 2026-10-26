@@ -67,10 +67,12 @@ inline constexpr uint32_t kGeomFlagNoScreenReuse = 1u;
 class BindlessTable
 {
 public:
-    static constexpr UINT kScenePerFrame = 48; // per-frame scene descriptors, partitioned
+    static constexpr UINT kScenePerFrame = 54; // per-frame scene descriptors, partitioned
                                                // across the RT passes (reflections 0-12,
                                                // debug 13-16, glass refl 17-25, sky
-                                               // visibility 26-31, GI probe trace 32-39)
+                                               // visibility 26-31 + 40-41 + 50-51, GI probe
+                                               // trace 32-39 + 42-45, the reflections' sky
+                                               // payload / sky visibility 46-49)
                                                // so passes in the same frame never alias slots
     static constexpr UINT kDescPerGeom = 4;    // VB raw, IB raw, albedo texture, MR texture
     static constexpr UINT kSceneBase = render::kFrameCount;

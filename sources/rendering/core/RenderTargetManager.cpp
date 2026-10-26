@@ -455,6 +455,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         // HDR format, the lit-HDR reuse uv in RG16_UNORM (see RenderTargetManager.h note).
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::RtPayload, DeferredSrvSlot::RtPayloadUAV, f, D.rtPayload, D.rtPayloadSRV, D.rtPayloadUAV, sizes.reflectionWidth, sizes.reflectionHeight, MemTag::Reflect, L"RtPayload");
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, DXGI_FORMAT_R16G16_UNORM, DeferredSrvSlot::RtPayloadUv, DeferredSrvSlot::RtPayloadUvUAV, f, D.rtPayloadUv, D.rtPayloadUvSRV, D.rtPayloadUvUAV, sizes.reflectionWidth, sizes.reflectionHeight, MemTag::Reflect, L"RtPayloadUv");
+        // ...and an off-screen hit's sky lighting, apart, for the resolve to occlude.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.reflection, DeferredSrvSlot::RtPayloadSky, DeferredSrvSlot::RtPayloadSkyUAV, f, D.rtPayloadSky, D.rtPayloadSkySRV, D.rtPayloadSkyUAV, sizes.reflectionWidth, sizes.reflectionHeight, MemTag::Reflect, L"RtPayloadSky");
         // The water's screen-space reflection (ocean G-buffer plan S3): written, resolved and read by
         // compute only (Main_WaterReflection), so both it and its history rest NON_PIXEL.
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, formats.oceanReflection, DeferredSrvSlot::OceanReflection, DeferredSrvSlot::OceanReflectionUAV, f, D.oceanReflection, D.oceanReflectionSRV, D.oceanReflectionUAV, sizes.oceanReflectionWidth, sizes.oceanReflectionHeight, MemTag::Reflect, L"OceanReflection");
@@ -499,6 +501,11 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             DeferredSrvSlot::SkyVisAccum, DeferredSrvSlot::SkyVisAccumUAV, f,
             D.skyVisAccum, D.skyVisAccumSRV, D.skyVisAccumUAV,
             sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibilityAccum");
+        // ...and each texel's count of accumulated frames (Lumen's NumFramesAccumulated), read across frames the same way.
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, DXGI_FORMAT_R8_UNORM,
+            DeferredSrvSlot::SkyVisCount, DeferredSrvSlot::SkyVisCountUAV, f,
+            D.skyVisCount, D.skyVisCountSRV, D.skyVisCountUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibilityCount");
 
         // The upsampled result is at RENDER resolution: it is consumed by lighting and compose,
         // which run before the upscaler.
@@ -943,6 +950,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
         nameRes(D.skyVis.Get(), L"SkyVisibility", kNps);
         nameRes(D.skyVisAccum.Get(), L"SkyVisibilityAccum", kNps);
+        nameRes(D.skyVisCount.Get(), L"SkyVisibilityCount", kNps);
         // The bloom's convolution grids: ONE set since the 2026-10-22 census, named where they are created.
         nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
         nameRes(D.streakA.Get(), L"StreakPyramidA", kNps);

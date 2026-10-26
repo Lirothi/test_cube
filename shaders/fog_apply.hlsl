@@ -55,7 +55,7 @@ cbuffer FogApply : register(b0)
                                 //      direction the ocean shader used to be handed
     float4   fogSunColor;       // rgb: pre-exposed sun colour, as compose receives it
     float4   fogVolumeParams;   // on, far view depth, 1/preExposure, slice count
-    float4   fogVolumeZParams;  // (B, O, S)
+    float4   fogVolumeZParams;  // (B, O, S, the volume's start)
     float4   fogApplyMisc;      // x: sky intensity, y: debug view, z: preExposure, w: unused
     float4   aerialParams;      // enabled, start view depth (m), 1/preExposure, reserved -- compose's, byte for byte
 };

@@ -52,7 +52,7 @@ cbuffer GlassView : register(b1)
     // parameters and the analytic medium (PackHeightFog), so glass and particles sit in the
     // air the sand is in.
     float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
-    float4 fogVolumeZParams;      // (B, O, S, 0)
+    float4 fogVolumeZParams;      // (B, O, S, the volume's start)
     float4 fogParams0;            // density, height falloff, reference height, start distance
     float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
     float4 fogParams2;            // sky blur, sky back-scatter, zw reserved

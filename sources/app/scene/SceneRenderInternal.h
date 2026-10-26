@@ -202,7 +202,7 @@ namespace scene_internal
         // Volumetric fog plan A5 (APPENDED at the tail, same rule as above): the volume's lookup
         // parameters and the analytic medium, so glass and particles sit in the air the sand is in.
         float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
-        float4 fogVolumeZParams;      // (B, O, S, 0)
+        float4 fogVolumeZParams;      // (B, O, S, the volume's start in view depth)
         float4 fogParams0;            // PackHeightFog: density, height falloff, reference height, start distance
         float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
         float4 fogParams2;            // sky blur, sky back-scatter, zw reserved

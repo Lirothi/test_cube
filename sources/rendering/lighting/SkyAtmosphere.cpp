@@ -301,7 +301,10 @@ size_t SkyAtmosphere::BuildView(Renderer* renderer, RenderGraph<static_cast<size
             ctx.NextPoint();
             const auto restore = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(skyView_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-            ctx.Use(lut_[0].Get(), kRest | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            // The transmittance LUT stays at rest (NON_PIXEL): Main_CloudTrace reads it on the async queue, where the
+            // PIXEL bit is illegal (design D7), and Main_Skybox adds that bit itself for the sun's disc. It used to be
+            // added here and dropped by Main_SkyAerial -- which does not run with sky.aerialPerspective:0, and then
+            // CloudTrace took the LUT in 0xC0: RenderGraph::CompileBarriers' invariant, a FATAL (2026-10-26).
             return [this, renderer, point, restore](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyView);
                 const SkyAtmosphereParameters& params = viewPass_.params;

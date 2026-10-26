@@ -1,4 +1,4 @@
-#define SSR_TEMPORAL_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
+#define SSR_TEMPORAL_CS_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
 
 // Temporal resolve for the screen-space reflection buffer.
 //
@@ -39,11 +39,18 @@
 // t1: the previous frame's accumulated reflection -- Deferred[(frame-1)].reflectionHistory
 // t2: gbVelocity (render res); motion = currUv - prevUv. The water's reflection (plan S3) is
 //     resolved AFTER the water draws, so the velocity under a water pixel is the water's own.
+// t3: scene depth, t4: GB0 (packed roughness in .a), t5: the RT payload (alpha = the hit distance, signed:
+//     rt_reflect_common.hlsli RtPayloadAlpha) -- the reflection-hit history below; placeholders while hitReprojection is 0
 // u0: accumulated reflection -> what the blur and compose consume, AND next frame's history
+
+#include "utils.hlsli" // ReconstructPosWS, UnpackRM
 
 Texture2D CurrTex : register(t0);
 Texture2D HistTex : register(t1);
 Texture2D VelocityTex : register(t2);
+Texture2D DepthTex : register(t3);
+Texture2D GB0 : register(t4);
+Texture2D PayloadTex : register(t5);
 RWTexture2D<float4> OutTex : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -56,6 +63,12 @@ cbuffer SsrTemporalCB : register(b0)
     float  blendWeight;  // weight of THIS frame; small = long history
     uint   historyValid; // 0 on the first frame after a resize / level switch / stage toggle
     float  clampExpand;  // how much the neighbourhood box may be widened when the camera is still
+    uint   hitReprojection; // 1 = RT reflections: also reproject the history by the reflection hit (t3-t5 bound)
+    float4x4 invProj;                // this frame's (jittered, as the depth): the surface point
+    float4x4 invView;
+    float4x4 viewProjNoJitter;       // this frame's and last frame's unjittered view-projections: the hit point's
+    float4x4 prevViewProjNoJitter;   // screen motion, in the velocity buffer's own convention
+    float  missDistance;             // a ray that hit nothing: the sky, this far behind the reflector
 };
 
 // UE's scale on both velocity tests: a UV motion of 0.01 in one frame is already "fast" for the
@@ -153,10 +166,48 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float2 motion = VelocityTex.SampleLevel(gSmpLinear, uv, 0).xy; // currUv - prevUv
     const float2 prevUv = uv - motion;
 
+    // THE REFLECTION HIT'S HISTORY (Lumen LumenReflectionDenoiserTemporal.usf:362-385, LightingHistoryFromHit; the
+    // reprojection is LumenPosition.ush GetHistoryScreenPosition with the hit's depth). The history above follows the
+    // REFLECTOR. A mirror's image does not: it is a virtual scene `hitT` behind the surface along the view ray, and when
+    // the camera moves it slides across the reflector by the parallax of THAT depth -- the sunlit tunnel mouth in the
+    // metal walls trailed behind the camera flying through (2026-10-26, owner: "the reflections' temporal lags in motion,
+    // the metal walls in the tunnel"; moving frame vs its still retake, DLSS Balanced: flying 8 m/s 5.9-6.1 with the
+    // resolve, 4.4-4.5 without it). Only for a narrow lobe, as Lumen (GetSpecularDominantDirFactor > 0.5,
+    // StochasticLightingCommon.ush:222 -- roughness up to ~0.6): a rough reflection follows its surface.
+    bool hitValid = false;
+    float2 hitPrevUv = prevUv;
+    if (hitReprojection != 0u)
+    {
+        const float rough = saturate(UnpackRM(GB0.SampleLevel(gSmpPoint, uv, 0).a).x);
+        const float s = saturate(1.0f - rough);
+        const float z = DepthTex.SampleLevel(gSmpPoint, uv, 0).r;
+        if (s * (sqrt(s) + rough) > 0.5f && z > 0.0f)
+        {
+            const float3 P = ReconstructPosWS(uv, z, invProj, invView);
+            const float3 cam = mul(float4(0.0f, 0.0f, 0.0f, 1.0f), invView).xyz;
+            const float d = max(length(P - cam), 1.0e-4f);
+            const float payloadA = PayloadTex.SampleLevel(gSmpPoint, uv, 0).a;
+            const float hitT = payloadA != 0.0f ? abs(payloadA) : missDistance; // 0 = a miss: the sky, at the far plane
+            const float3 Pv = cam + (P - cam) * ((d + hitT) / d);
+            const float4 currClip = mul(float4(Pv, 1.0f), viewProjNoJitter);
+            const float4 prevClip = mul(float4(Pv, 1.0f), prevViewProjNoJitter);
+            if (currClip.w > 1.0e-4f && prevClip.w > 1.0e-4f)
+            {
+                const float2 currHit = currClip.xy / currClip.w * float2(0.5f, -0.5f) + 0.5f;
+                const float2 prevHit = prevClip.xy / prevClip.w * float2(0.5f, -0.5f) + 0.5f;
+                hitPrevUv = uv - (currHit - prevHit); // the hit's own motion, as the velocity buffer writes a surface's
+                hitValid = all(hitPrevUv >= 0.0f) && all(hitPrevUv <= 1.0f);
+            }
+        }
+    }
+
     if (any(prevUv < 0.0f) || any(prevUv > 1.0f))
     {
-        OutTex[px] = newC; // nothing on screen last frame to reproject from
-        return;
+        if (!hitValid)
+        {
+            OutTex[px] = newC; // nothing on screen last frame to reproject from
+            return;
+        }
     }
 
     // DISOCCLUSION: does the pixel we are about to read move the way we do? Sampling velocity at
@@ -194,7 +245,21 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float4 hereRaw = HistTex.Load(int3(px, 0));
     const float4 here = lerp(ClampSample(hereRaw, lo, hi), hereRaw, relax);
 
-    const float4 history = lerp(here, reprojected, agreement);
+    float4 history = lerp(here, reprojected, agreement);
+    if (hitValid)
+    {
+        // Lumen's pick (LumenReflectionDenoiserTemporal.usf:492-507): both histories go through the same clamp, and the
+        // one whose UNCLAMPED read lies nearer this frame's neighbourhood wins -- the surface's only at 0.8, "one error
+        // can cause complete history loss so still blend some of the from-hit history in". A surface history off the
+        // screen leaves the hit's alone. (Lumen's +0.01 bias lives in their denoiser space; the comparison is strict here.)
+        const float4 hitRaw = HistTex.SampleLevel(gSmpLinear, hitPrevUv, 0.0f);
+        const float4 hitHistory = lerp(ReadHistoryClamp(hitPrevUv, lo, hi), hitRaw, relax);
+        const bool surfaceValid = all(prevUv >= 0.0f) && all(prevUv <= 1.0f);
+        const float hitError = length(float4(RGBToYCoCg(hitRaw.rgb), hitRaw.a) - centre);
+        const float surfaceError = length(float4(RGBToYCoCg(reprojectedRaw.rgb), reprojectedRaw.a) - centre);
+        const float surfaceAlpha = (surfaceValid && hitError > surfaceError) ? 0.8f : 0.0f;
+        history = lerp(hitHistory, history, surfaceAlpha);
+    }
     // NOTE a flat lerp is a MEASURED decision, not an omission. UE's final TAA blend is luma-
     // weighted (HdrWeightY + WeightedLerpFactors, "Tone map to kill fireflies") and runs for the
     // SSR config too -- but transcribing it HERE tripled the frame-to-frame boil on the

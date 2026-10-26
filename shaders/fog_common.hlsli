@@ -21,7 +21,7 @@ cbuffer FogCB : register(reg) \
     float3 fogGridZParams;      /* (B, O, S) */ \
     float  fogNearFadeInInv;    /* 1 / near fade-in distance (UE VolumetricFogNearFadeInDistanceInv) */ \
     uint3  fogGridSize;         /* cells: (W, H, Z) */ \
-    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on, bit 4 distant sky ambient */ \
+    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on, bit 4 distant sky ambient, bit 5 samples kept in front of the depth */ \
     float4x4 fogInvViewProjNoJitter;   /* clip -> world, this frame's UNJITTERED camera */ \
     float4x4 fogPrevViewProjNoJitter;  /* world -> clip, last frame's unjittered camera (history UV) */ \
     float4 fogProjZ;            /* (proj._33, proj._43, proj._34, proj._44): view z -> device z */ \
@@ -30,9 +30,10 @@ cbuffer FogCB : register(reg) \
     float4 fogMedium1;          /* albedo, extinction scale, phase g, sun scatter intensity */ \
     float4 fogMedium2;          /* sky scatter intensity, preExposure, 1 / previous preExposure, volumetric distance */ \
     uint4  fogMisc;             /* x: HZB mip whose texel is one cell, y: supersample count on a history miss, z: frame index, w: samples per cell every frame */ \
-    uint4  fogLocal;            /* x: spot count, y: point count, z: local shadows from the VSM pages (else the Legacy atlases), w: 0 */ \
+    uint4  fogLocal;            /* x: spot count, y: point count, z: local shadows from the VSM pages (else the Legacy atlases), w: sky visibility rays (0 = the open sky) */ \
     float4 fogLocalParams;      /* x: local light scatter intensity, y: 1/spot atlas size, z: 1/point cube face size, w: VSM refDist */ \
-    float4 fogLocalParams2;     /* x: cone soft fading (froxels), y: inverse-square distance bias scale (cell radii), zw: 0 */ \
+    float4 fogLocalParams2;     /* x: cone soft fading (froxels), y: inverse-square distance bias scale (cell radii), z: sky visibility reach (m), w: 0 */ \
+    float4 fogDepthParams;      /* the samples' depth constraint, in slices: x the offset in front of the depth (UE GridCenterOffsetFromDepthBuffer), y how far behind it a sample is still moved (UE OffsetThresholdToAcceptDepthBufferOffset), zw 0 */ \
 };
 
 // UE ComputeZSliceFromDepth / ComputeDepthFromZSlice.
@@ -65,6 +66,12 @@ float FogDeviceZFromViewDepth(float4 projZ, float viewDepth)
     return (viewDepth * projZ.x + projZ.y) / max(viewDepth * projZ.z + projZ.w, 1.0e-6f);
 }
 
+// ...and back: the view depth of a device z (the same row and column solved for z).
+float FogViewDepthFromDeviceZ(float4 projZ, float deviceZ)
+{
+    return (projZ.y - deviceZ * projZ.w) / (deviceZ * projZ.z - projZ.x);
+}
+
 // The world position of a cell (integer coordinate + [0,1]^3 offset inside it), UE's
 // ComputeCellTranslatedWorldPosition: uv over the grid, NDC with y flipped, the slice's depth to
 // device z, then the UNJITTERED inverse view-projection. `viewDepth` returns the slice depth.
@@ -88,13 +95,24 @@ float3 FogCellWorldPosition(uint3 coord, float3 cellOffset, uint3 gridSize, floa
 
 // The integrated volume at a fragment, ready to combine: rgb = the in-scattered light re-exposed
 // to the scene's raw units, a = transmittance; the identity (0, 0, 0, 1) while the volume is off.
-// `params` = (on, far plane in view depth, 1 / preExposure, slice count), `zp` = (B, O, S). The
+// `params` = (on, far plane in view depth, 1 / preExposure, slice count), `zp` = (B, O, S, start). The
 // lookup depth is clamped to the far plane -- the sky and anything beyond read the last slice --
 // exactly as compose does for the opaque scene, so a shoreline sees the SAME air on both sides.
+//
+// A point NEARER than the volume's start (`zp.w`, the fog's start distance) takes the identity: the air in
+// front of it holds no fog. Clamped to slice 0, it read the light gathered over the first slice -- air BEHIND
+// it -- and wherever the conservative depth did not empty that slice (the grid's edge columns, whose 3x3
+// tile search reaches past the pyramid) a dark tunnel wall 3 m away wore the sky-lit haze of the air beyond
+// 10 m: a bright frame around the screen (2026-10-26). UE HeightFogCommon.ush:568-570, the same step.
+bool FogVolumeInFront(float viewDepth, float4 zp)
+{
+    return viewDepth < zp.w;
+}
+
 float4 FogVolumeSampleAt(Texture3D<float4> volume, SamplerState smp, float2 screenUv, float viewDepth,
                          float4 params, float4 zp)
 {
-    if (params.x < 0.5f) { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
+    if (params.x < 0.5f || FogVolumeInFront(viewDepth, zp)) { return float4(0.0f, 0.0f, 0.0f, 1.0f); }
     float4 v = volume.SampleLevel(smp, FogVolumeUV(screenUv, min(viewDepth, params.y), zp.xyz, (uint)params.w), 0);
     v.rgb *= params.z;
     return v;

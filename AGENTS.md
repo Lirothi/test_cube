@@ -422,7 +422,15 @@ editor; `0` releases it, `reset_settings` does not): without it two looks of the
 seas. `set_settings {set: "camera.fly:-3.8"}` flies the camera along its own view at that many m/s (negative =
 backwards, `0` stops it, `reset_settings` does not): a temporal history's artefact that only shows in MOTION is
 looked at in the running editor, `screenshot` with `settleFrames` taking it mid-flight (`--set=camera.fly:` headless;
-`--cam-fly` drifts along the WORLD's x/z instead). Stop it in a `finally` -- a script that dies leaves it flying. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
+`--cam-fly` drifts along the WORLD's x/z instead). Stop it in a `finally` -- a script that dies leaves it flying.
+`camera.spin:<deg/s>` turns it the same way (positive = right; `--cam-fly-yaw` headless). A motion artefact is MEASURED
+against the same view still: every `screenshot` reply names its frame's camera ("Camera of this frame: {position,
+yawDeg, pitchDeg}", full precision), so a frame taken on the move is retaken with `set_camera` at that pose once the
+histories converge (400 frames) and the two are diffed; cap the frame rate (`frame.maxFps:120`) so the arms of an A/B
+land on the same yaws. `dlss.mode:<sl::DLSSMode>` (0 off, 2 Balanced, 6 DLAA) switches the upscaler in the running
+process -- DLSS's own motion reconstruction swamps a small temporal artefact otherwise. scratchpad-style
+`motion_err.py` (2026-10-26): moving frame vs still retake, mean |d| and the high-pass grain, the arm
+`skyVis.enabled:0` (or whatever feature) the control. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
 -- set `bloom.ghostIntensity:0` for that read.
 A FLICKER IS READ FRAME BY FRAME: two `get_readouts` calls land ~10 frames apart and see a drift, never
 a flicker. `get_readouts {history: N}` (N <= 512) adds the newest N frames, one row EACH (frame,
@@ -701,6 +709,25 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   whatever the reflections' mode -- the old mode 1's own traversal. Tried first, dropped: the NEAREST hit's texel
   deciding (deterministic too, but +0.10 / +0.23 ms SkyVis and a ray through a wall behind a transparent texel), and
   closing that leak (1.49 / 1.94 ms on the grove); mode 2 throughout costs the grove's SkyVis 2.0 ms.
+- **In motion the history is read as UE and Lumen read theirs** (2026-10-26, owner: "SkyVis is very noisy and trails
+  when the camera moves or turns fast"). Three things, each cited in `rt_sky_visibility_cs.hlsl SkyVisHistoryAt`:
+  (1) the four texels around the reprojected point, bilinearly, each kept only if the point its own depth puts there
+  last frame lies on this point's PLANE within 3 % of the view depth (UE UpdateHistoryDepthRejectionPS's manual
+  resample with a weight per corner; the plane test is UE GeometryAwareUpsample's -- the 3D distance of the history's
+  own test threw history away on walls at grazing angles under DLSS jitter). It was ONE point sample, whose rounding
+  in a steady turn slid the history the same fraction of a texel every frame, and a 10 % device-depth test.
+  (2) Each texel counts the frames it has accumulated (`skyVisCount`, R8_UNORM per Deferred set, bindless 50-51,
+  `kScenePerFrame` 54) and blends the new rays at 1 / (1 + count) up to `skyVis.history`'s own share (0.98 = 49
+  frames): Lumen's NumFramesAccumulated (LumenScreenProbeGatherTemporal.usf:481-527). A fixed 0.98 kept a texel's
+  FIRST frame at 0.98^n -- 82 % after 10 frames -- and a 90 degree/s turn at 120 fps brings ~10 new half-res columns a
+  frame, out of the seed's reach. (3) A seeded texel counts as UE DFAO's history (0.85 = 5.67 frames), not 49.
+  Owner's tunnel (cam -57.89,2.27,65.68 yaw 57.8, 15:00), moving frame vs its still retake, one launch, old/new:
+  turning 90 degrees/s at 120 fps 6.86 -> 2.26 mean |d| native (DLSS Balanced + bloom 7.27 -> 2.30; SkyVis off 0.32 /
+  0.50); flying 4 m/s 3.78 -> 3.17, grain 1.32 -> 1.05; flying backwards (band_noise.py) bottom band 19-21 % -> 18 %.
+  Still: the same (floor 11.9-12.4 % per-pixel temporal std both, the whole frame 2.9-3.2 %). Pass_SkyVis +0.004 ms
+  still, +0.007 turning. What is left in a turn is the young texels' own noise at the leading edge and the
+  reflections' temporal resolve (below, "RT Reflections"): the metal walls' sky reflection is where the sky
+  visibility shows most.
 - Developer Controls > GI "Sky visibility": on/off, rays, history, reach, diffuse, specular, spatial filter --
   persisted in graphics_settings.json `skyVis` (`--set=skyVis.*` the same knobs, transient); "Reset GI to defaults"
   resets them with the probes. The filter's depth/normal weights stay `--set` only.
@@ -733,6 +760,63 @@ panelling's roughness 0.40 got 0.4 px where its lobe is ~35 -- a mirror image of
   SSR's. `--set=reflections.lobe:0` = the old blur on RT too, the A/B. Verified: the bathroom's frame-to-frame
   noise 1.72 % (1.8 before), mean brightness unchanged (energy kept: the DFG weight is compose's as before), the
   mirror sharper than the old blur left it, GBV (Reflection.Blur, RTTrace, RTResolve) clean.
+- **An off-screen hit's SKY is occluded by the reflector's sky visibility** (2026-10-26, owner with SSR and RT shots of
+  the bathroom, cam -25.27 0.64 88.47: "SSR is much more realistic" -- RT's reflections were blue). A hit shaded off
+  screen used to add the sky's fill, the ground bounce and the environment specular at full strength, the open sky in
+  a closed room. The trace now writes that sky part apart (`rtPayloadSky`, rgba16f at the reflection's size) and the
+  resolve multiplies it by the REFLECTOR's plan-S visibility (`RtReflectorSkyVisibility`, lerped by `skyVis.diffuse`):
+  the reflected point sees about the sky the reflector sees. A reuse hit (finished from the lit HDR) takes no
+  environment term at all -- its lit colour already holds the occluded sky specular, which was the double count. The
+  glass dispatch does the same with the visibility the opaque surface behind it lends. Bindless scene slots 46-49
+  (`kScenePerFrame` 54): the trace's sky payload UAV, the resolve's SRV of it and of the sky visibility, the glass's.
+- **The temporal resolve also follows the reflection HIT** (`ssr_temporal_cs.hlsl`, 2026-10-26, owner: "the reflections'
+  temporal lags in motion -- the metal walls in the tunnel"). Its history followed the REFLECTOR's velocity; a mirror's
+  image is a virtual scene `hitT` behind the surface along the view ray and slides across it with THAT depth's parallax,
+  so the sunlit tunnel mouth in the metal walls trailed a flying camera. Now Lumen's pair
+  (LumenReflectionDenoiserTemporal.usf:362-507): a second history reprojected by the virtual point at `d + hitT` (the
+  payload's alpha; a miss = the far plane), for narrow lobes only (UE GetSpecularDominantDirFactor > 0.5, roughness up to
+  ~0.6), both through the same YCoCg clamp, the one whose unclamped read lies nearer the neighbourhood's centre wins (the
+  surface's at 0.8). RT only -- SSR and the water keep the reflector's (`hitReprojection` 0, t3-t5 placeholders).
+  Owner's tunnel, moving frame vs its still retake, DLSS Balanced + bloom: flying 8 m/s 5.91-5.98 -> 4.98-5.20 (the
+  resolve off: 4.49 -- ~70 % of what it added is gone); turning 90 degrees/s unchanged, 2.37 / 2.45 (a pure turn moves
+  both points alike; the 0.7 the resolve still adds there is its bilinear resampling's softening, not lag). Still: the
+  same (tunnel 3.1-3.25 %, house 2.2-2.6 %). +0.002 ms. `--set reflections.hitReprojection:0` = before (the A/B). GBV
+  (the reflections' CL group, a flying camera) clean. MEASURING it: name `ssr.temporal`, `reflections.*` and
+  `skyVis.specular/diffuse` in every arm's base -- they are project knobs and an arm that turned one off left it off
+  for every later arm (a whole afternoon's wrong conclusions, 2026-10-26).
+
+## Volumetric Fog -- What the Air Sees
+
+The froxel volume (`fog_scatter_cs.hlsl` / `fog_integrate_cs.hlsl`, UE's VolumetricFog.usf) lit the air of a closed
+space with the open sky, and one fix uncovered the next (2026-10-26, owner in a box tunnel he built on wind_test at
+15:00: "what is this light frame at the screen's edges", then "look at the centre -- a whole rectangle"):
+
+- **Nothing nearer than the volume's start** (`fogVolumeZParams.w` = `FogVolumeNear`, the fog's start distance):
+  `fog_common.hlsli FogVolumeInFront`, in compose and every `FogVolumeSampleAt` consumer, is UE's step at
+  `HeightFogCommon.ush:568-570`. Clamped to slice 0, a wall 3 m away read the light of the first slice -- air BEHIND it,
+  10 m out. The conservative depth emptied that slice in most columns and hid it, but `FogTileFarthest`'s 3x3 reaches
+  past the HZB on the grid's border columns (Load returns 0 = the far plane, never culled): the frame, 38 px left and
+  ~65 px right at 1440p, one cell plus the bilinear blend (`fog.gridPixels:8` halved it).
+- **The sky term sees the sky** (`FogSkyVisibility`): UE's `ComputeSkyVisibility` (VolumetricFog.usf:713-735, one
+  45-degree cone straight up against the global distance field) as `skyVis.fogRays` (2, GI tab, persisted
+  `graphics_settings.json skyVis.fogRays`) RT rays spread over that cone against the TLAS, solid geometry
+  (`RtVisibilityBlocked`), out to `skyVis.maxDistance`; averaged by the fog's own history. Compiled in on RT hardware
+  only (`FOG_SKY_OCCLUSION`, t15 = the TLAS), rides plan S (`skyVis.enabled:0` = the open sky in the air too). It
+  was the rectangle: the tunnel's air from the 10 m start on glowed with the whole sky in front of dark walls. Cost
+  (Scatter, editor closed): +0.008-0.017 ms at 2 rays on the tunnel / sea / grove, up to +0.05 at 4. Frame-to-frame
+  noise (10 shots, wind frozen): grove median 0.49 % at 0, 2 and 4 rays, the tunnel 1.92 / 1.95 / 2.07 % -- nothing
+  measurable. Open views barely move (mean <= 0.15 %).
+- **Samples are kept in front of the depth** (`FogApplyDepthConstraint`, UE `ApplyDepthConstraintsToOffset`
+  VolumetricFog.usf:87-114, on the medium and every lighting sample): a cell sample behind the surface its own pixel
+  sees (this frame's furthest HZB, mip 0) moves `fog.depthOffset` (0.5, UE's) slices in front of it. With the sky
+  occluded the cells straddling the tunnel's walls showed: their samples behind a thin wall saw the open sky and the
+  sun past the roof, one ring per slice down both walls. UE moves only samples within ONE slice
+  (`fog.depthThreshold` 1); a wall at a grazing angle still leaked at 1 (the next column's cell at this pixel's depth
+  sits several slices behind ITS wall and the trilinear read takes it), so ours moves every sample behind (128). On
+  three open views the constraint at 1 or 128 moves the mean <= 0.15 %, the changed pixels at the noise floor of the
+  same shot taken twice. `--set=fog.depthOffset:-1` = off, the A/B. Both `fog.depthOffset/depthThreshold` are
+  project knobs under fog.* (like `fog.gridPixels`): `reset_settings` leaves them as set.
+- GBV (`--gbv-passes=VolumetricFog,Compose,Skybox --gbv-selftest=1@Skybox`, the injection caught): clean.
 
 ## GI Probe Volume (DDGI) -- the Bounce
 
@@ -810,7 +894,7 @@ over 8 clean shots 3 frames apart). The divisor does not change that noise, only
   switched off in the cabinet's back now lights it). Cost alternated on one exe
   (fixes / + relocation, twice each): trace 0.153, 0.135 / 0.135, 0.142 ms, update 0.081, 0.071 / 0.069, 0.066 ms
   -- launch noise, nothing measurable. The noon -> 23:00 jump: nothing of the day left at +40 frames.
-- Bindless scene slots 32-39 are the trace's (`BindlessTable::kScenePerFrame` 48). Lighting binds t18-t20 whenever
+- Bindless scene slots 32-39 are the trace's (`BindlessTable::kScenePerFrame` 54). Lighting binds t18-t20 whenever
   the volume exists and reads them when `ddgiParams.x` (the spacing) is non-zero -- `decisions_.giApplied`.
 - `Pass_BuildAS`'s recording task now fans out to six RT passes; `TaskSystemLockFree` dependents_ holds 8 (4 aborted
   the first frame with a bare 0xC0000409 and no log line -- `--log-sync` did not help; the minidump's stack scan did).

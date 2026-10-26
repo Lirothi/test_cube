@@ -427,11 +427,20 @@ struct SsrTemporalConstants
     float blendWeight = 0.125f;
     uint32_t historyValid = 0u;
     float clampExpand = 0.5f;
+    // RT reflections: also reproject the history by the reflection hit (Lumen's LightingHistoryFromHit). 0 = the
+    // reflector's motion alone (SSR, the water) -- the matrices are then unread.
+    uint32_t hitReprojection = 0u;
+    mat4 invProj = mat4::Identity();
+    mat4 invView = mat4::Identity();
+    mat4 viewProjNoJitter = mat4::Identity();
+    mat4 prevViewProjNoJitter = mat4::Identity();
+    float missDistance = 1.0e4f; // a ray that hit nothing: the sky, as far as the far plane
 };
 
 struct SsrTemporalHandles
 {
-    Material::CBFieldHandle texSize, invTexSize, blendWeight, historyValid, clampExpand;
+    Material::CBFieldHandle texSize, invTexSize, blendWeight, historyValid, clampExpand, hitReprojection, invProj, invView,
+                            viewProjNoJitter, prevViewProjNoJitter, missDistance;
     void Populate(Material* material);
 };
 
@@ -486,12 +495,13 @@ struct FogPassConstants
     uint32_t misc[4] = { 3u, 4u, 0u, 0u }; // HZB mip whose texel is one cell, supersample count on a history miss, frame index, 0
     uint32_t local[4] = { 0u, 0u, 0u, 0u }; // spot count, point count, local shadows from the VSM pages, 0 (plan A4)
     float4 localParams{};            // local light scatter, 1/spot atlas size, 1/point cube face size, VSM refDist
-    float4 localParams2{};           // cone soft fading (froxels), distance bias scale, 0, 0
+    float4 localParams2{};           // cone soft fading (froxels), distance bias scale, sky visibility reach, 0
+    float4 depthParams{};            // the samples' depth constraint: offset, threshold (slices), 0, 0
 };
 struct FogHandles
 {
     Material::CBFieldHandle gridZParams, nearFadeInInv, gridSize, flags, invViewProjNoJitter, prevViewProjNoJitter,
-                            projZ, jitter, medium0, medium1, medium2, misc, local, localParams, localParams2;
+                            projZ, jitter, medium0, medium1, medium2, misc, local, localParams, localParams2, depthParams;
     void Populate(Material* material, UINT cbRegister);
 };
 
@@ -1081,6 +1091,8 @@ public:
     // shared constants (the scatter's b0 is the LIGHTING cbuffer, written by WriteLightingConstants
     // into the scatter's own allocation -- same layout, lighting_cb.hlsli).
     std::shared_ptr<Material> GetFogScatterMaterial() const { return matFogScatterCS_; }
+    // The scatter was compiled with FOG_SKY_OCCLUSION (RT hardware): t15 takes the TLAS, fogLocal.w its ray count.
+    bool FogScatterTracesSky() const { return matFogScatterCS_ && fogScatterTracesSky_; }
     std::shared_ptr<Material> GetFogIntegrateMaterial() const { return matFogIntegrateCS_; }
     UINT GetFogScatterCBSizeBytes() const;   // b1 of the scatter
     UINT GetFogIntegrateCBSizeBytes() const; // b0 of the integration
@@ -1222,6 +1234,7 @@ private:
     std::shared_ptr<Material> matGtaoUpsampleCS_;
     std::shared_ptr<Material> matHzbCS_;
     std::shared_ptr<Material> matFogScatterCS_;   // shaders/fog_scatter_cs.hlsl
+    bool fogScatterTracesSky_ = false;            // ...compiled with FOG_SKY_OCCLUSION
     std::shared_ptr<Material> matFogIntegrateCS_; // shaders/fog_integrate_cs.hlsl
     FogHandles fogScatterHandles_{};
     FogHandles fogIntegrateHandles_{};

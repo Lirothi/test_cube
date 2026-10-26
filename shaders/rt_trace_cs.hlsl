@@ -11,6 +11,8 @@
 //                                  reuses the lit-HDR screen (rt_reflect_common.hlsli RtPayloadAlpha);
 //   payloadUv       rg16unorm: the lit-HDR sample position when mode == Reuse. UNORM16 keeps the
 //                            fetch within ~0.04 px at 2560 wide; fp16 would wobble it by >1 px.
+//   payloadSky      rgba16f: an off-screen hit's sky lighting (RtTraceResult.skyPart), for the
+//                            resolve to occlude; 0 otherwise.
 #include "rt_reflect_common.hlsli"
 
 [numthreads(8, 8, 1)]
@@ -24,9 +26,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     RWTexture2D<float4> payloadRadiance = ResourceDescriptorHeap[payloadRadianceIndex];
     RWTexture2D<float2> payloadUv = ResourceDescriptorHeap[payloadUvIndex];
+    RWTexture2D<float4> payloadSky = ResourceDescriptorHeap[payloadSkyIndex];
 
     float4 payload = float4(0.0f, 0.0f, 0.0f, kRtPayloadMiss);
     float2 reuseUv = float2(0.0f, 0.0f);
+    float3 skyPart = float3(0.0f, 0.0f, 0.0f);
     float3 origin, dir, camPos;
     float tMin;
     uint raySeed;
@@ -37,9 +41,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         {
             payload = float4(tr.radiancePart, RtPayloadAlpha(tr.hitT, tr.reuseScreen));
             reuseUv = tr.reuseUv;
+            skyPart = tr.skyPart;
         }
     }
 
     payloadRadiance[dtid.xy] = payload;
     payloadUv[dtid.xy] = reuseUv;
+    payloadSky[dtid.xy] = float4(skyPart, 0.0f);
 }

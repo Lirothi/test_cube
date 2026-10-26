@@ -37,7 +37,7 @@ struct DdgiConstants
 };
 static_assert(sizeof(DdgiConstants) == 64 + 9 * 16, "DdgiConstants mirrors ddgi_constants.hlsli");
 
-// Bindless scene slots of the trace (BindlessTable kScenePerFrame = 48): reflections own 0-12, the debug
+// Bindless scene slots of the trace (BindlessTable kScenePerFrame = 52): reflections own 0-12 and 46-49, the debug
 // view 13-16, the glass dispatch 17-25, the sky visibility 26-31 and 40-41. Per cascade: rays,
 // irradiance, depth, state -- the near one 33-36, the far one 42-45; the rest is shared.
 constexpr UINT kGiSlotTlas = 32;

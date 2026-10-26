@@ -200,9 +200,19 @@ struct RtReflectConstants
     uint32_t screenDepthIndex = 0; float alphaMissKeep = 0.0f; uint32_t frameSeed = 0;
     uint32_t alphaMode = 2; // 0 off (solid cards), 1 first-hit holes, 2 full candidates
     // Gather-then-shade payload slots: UAV heap indices for the trace dispatch, SRV heap indices
-    // for the resolve dispatch; the monolithic glass dispatch leaves them 0.
-    uint32_t payloadRadianceIndex = 0; uint32_t payloadUvIndex = 0; uint32_t rtPad2 = 0; uint32_t rtPad3 = 0;
+    // for the resolve dispatch; the monolithic glass dispatch leaves them 0. payloadSkyIndex: an
+    // off-screen hit's sky lighting, apart; skyVisIndex (0 = none this frame): the RT sky visibility
+    // the resolve and the glass dispatch occlude it by, at skyVisStrength (skyVis.diffuse).
+    uint32_t payloadRadianceIndex = 0; uint32_t payloadUvIndex = 0; uint32_t payloadSkyIndex = 0; uint32_t skyVisIndex = 0;
+    float skyVisStrength = 1.0f; uint32_t rtPad5 = 0; uint32_t rtPad6 = 0; uint32_t rtPad7 = 0;
 };
+
+// The reflections' scene slots past the trace's 0-12 (BindlessTable kScenePerFrame): the sky payload the trace
+// writes (46) and the resolve reads (47), the sky visibility the resolve (48) and the glass dispatch (49) read.
+constexpr UINT kRtSlotPayloadSkyUav = 46;
+constexpr UINT kRtSlotPayloadSkySrv = 47;
+constexpr UINT kRtSlotSkyVisResolve = 48;
+constexpr UINT kRtSlotSkyVisGlass = 49;
 
 } // namespace
 
@@ -250,6 +260,7 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
         }
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 9, D.rtPayloadUAV);    // payload radiance+mode
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 10, D.rtPayloadUvUAV); // payload reuse uv
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kRtSlotPayloadSkyUav, D.rtPayloadSkyUAV); // an off-screen hit's sky
 
         // Spot/point light buffers -- filled on the CPU in EnsureFrameResources, so this pass
         // does NOT depend on the lighting passes for them.
@@ -308,6 +319,7 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
         c.pointCount = havePoints ? pointCount : 0u;
         c.payloadRadianceIndex = rtAs_.Bindless().SceneIndex(frameIndex, 9);
         c.payloadUvIndex = rtAs_.Bindless().SceneIndex(frameIndex, 10);
+        c.payloadSkyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotPayloadSkyUav);
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
@@ -340,15 +352,16 @@ struct SkyVisConstants
 {
     Math::mat4 invView;
     Math::mat4 invProj;
+    Math::mat4 prevInvViewProj; // last frame's clip -> world (the history's reprojection test)
     uint32_t tlasIndex = 0;     uint32_t gb1Index = 0;      uint32_t depthIndex = 0;    uint32_t velocityIndex = 0;
-    uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t pad0 = 0;          uint32_t pad1 = 0;
+    uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t countUavIndex = 0; uint32_t countHistoryIndex = 0;
     uint32_t outWidth = 0;      uint32_t outHeight = 0;     uint32_t rayCount = 4;      uint32_t frameIndex = 0;
     float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t seedEnabled = 1;
     float seedDepthTolerance = 0.05f; float seedNormalPower = 8.0f; uint32_t pad2[2] = { 0, 0 };
 };
-static_assert(sizeof(SkyVisConstants) == 2 * 64 + 5 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
+static_assert(sizeof(SkyVisConstants) == 3 * 64 + 5 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
 
-// Bindless scene slots of this pass (BindlessTable kScenePerFrame = 48): reflections own 0-12, the
+// Bindless scene slots of this pass (BindlessTable kScenePerFrame = 54): reflections own 0-12 and 46-49, the
 // debug view 13-16, the glass dispatch 17-25. Its own copies of the TLAS / GB1 / depth, because the
 // reflection trace (which writes 0/2/3) does not run when reflections are not RT.
 constexpr UINT kSkyVisSlotUav = 26;
@@ -361,6 +374,9 @@ constexpr UINT kSkyVisSlotDepth = 31;
 // trace owns 32-39.
 constexpr UINT kSkyVisSlotFilterIn = 40;
 constexpr UINT kSkyVisSlotFilterOut = 41;
+// The accumulated-frame counts (Lumen's NumFramesAccumulated): this frame's written, last frame's read.
+constexpr UINT kSkyVisSlotCountUav = 50;
+constexpr UINT kSkyVisSlotCountHistory = 51;
 
 // Mirrors `cbuffer SkyVisibilityFilter` in rt_sky_visibility_filter_cs.hlsl.
 struct SkyVisFilterConstants
@@ -407,17 +423,23 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotTlas, tlasSrv);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotGb1, D.gbSRV[1]);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotDepth, D.depthSRV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotCountUav, D.skyVisCountUAV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotCountHistory, P.skyVisCountSRV);
 
             const SceneRenderSettings& s = frame_->settings;
             SkyVisConstants c{};
             c.invView = camera.GetInvViewMatrix();
             c.invProj = camera.GetInvProjMatrix();
+            // Jittered, as the depths the history stores were (this frame's point is rebuilt with the jittered invProj).
+            c.prevInvViewProj = Math::mat4::Inverse(camera.GetPrevViewProjMatrix());
             c.tlasIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotTlas);
             c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotGb1);
             c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotDepth);
             c.velocityIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotVelocity);
             c.outUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotUav);
             c.historyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotHistory);
+            c.countUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotCountUav);
+            c.countHistoryIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotCountHistory);
             // No alpha mode: the sky visibility sees the geometry, a leaf card solid (rt_geometry.hlsli RtVisibilityBlocked).
             c.outWidth = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
             c.outHeight = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
@@ -471,6 +493,8 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
             const D3D12_GPU_DESCRIPTOR_HANDLE accumGpu = renderer->StageSrvUavTable({ D.skyVisAccumUAV }).gpu;
             t.cl->ClearUnorderedAccessViewFloat(accumGpu, D.skyVisAccumUAV, D.skyVisAccum.Get(), zero, 0, nullptr);
+            const D3D12_GPU_DESCRIPTOR_HANDLE countGpu = renderer->StageSrvUavTable({ D.skyVisCountUAV }).gpu;
+            t.cl->ClearUnorderedAccessViewFloat(countGpu, D.skyVisCountUAV, D.skyVisCount.Get(), zero, 0, nullptr);
             renderer->EmitPoint(t.cl, chain.pointFilter); // the accumulation -> NON_PIXEL, the target -> UAV
             const D3D12_GPU_DESCRIPTOR_HANDLE gpu = renderer->StageSrvUavTable({ D.skyVisUAV }).gpu;
             t.cl->ClearUnorderedAccessViewFloat(gpu, D.skyVisUAV, D.skyVis.Get(), zero, 0, nullptr);
@@ -512,6 +536,7 @@ void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ct
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 4, D.reflectionUAV);   // reflection out
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 11, D.rtPayloadSRV);   // payload radiance+mode
         rtAs_.Bindless().WriteSceneDescriptor(frameIndex, 12, D.rtPayloadUvSRV); // payload reuse uv
+        rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kRtSlotPayloadSkySrv, D.rtPayloadSkySRV); // an off-screen hit's sky
 
         RtReflectConstants c{};
         c.outWidth = renderer->GetReflectionTextureWidth();
@@ -521,6 +546,14 @@ void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ct
         c.reflectionUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, 4);
         c.payloadRadianceIndex = rtAs_.Bindless().SceneIndex(frameIndex, 11);
         c.payloadUvIndex = rtAs_.Bindless().SceneIndex(frameIndex, 12);
+        c.payloadSkyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotPayloadSkySrv);
+        // The off-screen hit's sky, occluded by the reflector's sky visibility when it was traced this frame.
+        if (decisions_.skyVisTraced && D.skyVisSRV.ptr != 0)
+        {
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kRtSlotSkyVisResolve, D.skyVisSRV);
+            c.skyVisIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotSkyVisResolve);
+            c.skyVisStrength = std::clamp(frame_->settings.skyVisDiffuse, 0.0f, 1.0f);
+        }
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
@@ -692,6 +725,13 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.spotCount = haveSpots ? spotCount : 0u;
         c.pointLightIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 7);
         c.pointCount = havePoints ? pointCount : 0u;
+        // An off-screen hit's sky, occluded as the resolve does (the glass lends the opaque surface's visibility).
+        if (decisions_.skyVisTraced && D.skyVisSRV.ptr != 0)
+        {
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kRtSlotSkyVisGlass, D.skyVisSRV);
+            c.skyVisIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotSkyVisGlass);
+            c.skyVisStrength = std::clamp(frame_->settings.skyVisDiffuse, 0.0f, 1.0f);
+        }
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
@@ -832,12 +872,29 @@ void SceneRenderer::Pass_SsrTemporal(Renderer* renderer, RenderGraphPassContext 
         // makes the first frame after a resize or a level switch noisy-but-correct instead of
         // whatever the texture happened to hold.
         c.historyValid = ssrHistoryValid_ ? 1u : 0u;
+        // RT reflections carry their hit distance (the payload's alpha): the history is also reprojected by the
+        // reflection hit, which is what a mirror's image follows (Lumen's LightingHistoryFromHit; the shader says why).
+        const bool fromHit = decisions_.rtReflect && frame_->settings.reflectionHitReprojection && D.rtPayloadSRV.ptr != 0 &&
+                             D.depthSRV.ptr != 0 && frame_->camera;
+        c.hitReprojection = fromHit ? 1u : 0u;
+        if (fromHit)
+        {
+            const Camera& camera = *frame_->camera;
+            c.invProj = camera.GetInvProjMatrix();
+            c.invView = camera.GetInvViewMatrix();
+            c.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
+            c.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
+            c.missDistance = camera.GetZFar();
+        }
 
         const auto samplerDescs = std::array{ *SamplerManager::PointClamp(),
                                               *SamplerManager::LinearClamp() };
         RecordComputeDispatch(renderer, t.cl, material.get(), cbSize,
             [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(c, dest); },
-            { D.reflectionSRV, P.reflectionHistorySRV, D.gbSRV[3] }, // t0 raw, t1 history, t2 velocity
+            { D.reflectionSRV, P.reflectionHistorySRV, D.gbSRV[3], // t0 raw, t1 history, t2 velocity
+              fromHit ? D.depthSRV : renderer->VsmDummyTexSrv(),     // t3-t5 the hit's (placeholders without it)
+              fromHit ? D.gbSRV[0] : renderer->VsmDummyTexSrv(),
+              fromHit ? D.rtPayloadSRV : renderer->VsmDummyTexSrv() },
             { D.reflectionHistoryUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             w, h,
@@ -1173,7 +1230,8 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             const auto temporalSamplers = std::array{ *SamplerManager::PointClamp(), *SamplerManager::LinearClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetSsrTemporalMaterial().get(), resources_.GetSsrTemporalCBSizeBytes(),
                 [&](uint8_t* dest) { resources_.WriteSsrTemporalConstants(tc, dest); },
-                { D.oceanReflectionSRV, P.oceanReflectionHistorySRV, D.gbSRV[3] }, // t0 raw, t1 history, t2 velocity
+                { D.oceanReflectionSRV, P.oceanReflectionHistorySRV, D.gbSRV[3], // t0 raw, t1 history, t2 velocity
+                  renderer->VsmDummyTexSrv(), renderer->VsmDummyTexSrv(), renderer->VsmDummyTexSrv() }, // t3-t5 unread
                 { D.oceanReflectionHistoryUAV },
                 renderer->GetSamplerManager()->GetTable(renderer, temporalSamplers),
                 w, h, D.oceanReflectionHistory.Get());

@@ -925,7 +925,7 @@ size_t VolumetricCloud::BuildTrace(Renderer* renderer, RenderGraph<static_cast<s
     // partner). SceneRenderer::BuildLighting registers it before the fog and the lights, so it runs
     // beside them; compose's wait is the one fence back. Everything it reads is left compute-legal by
     // its last graphics user: the depth NON_PIXEL by Main_Hzb, the transmittance LUT at rest by
-    // Main_SkyAerial (which drops the PIXEL bit Main_SkyView adds for the sky's disc). Measured
+    // Main_SkyView (Main_Skybox adds the PIXEL bit for the sun's disc after this pass). Measured
     // 2026-10-14 on the owner's view (wind_test 15:00, DLSS Balanced, --profdump, one binary, the A arm
     // `--async-pass=BuildAS,ObjectCompute,RTTrace`, interleaved x3, no overlap between the arms):
     // GPU.Frame trace mode 1 2.994 -> 2.795 ms, mode 0 2.803 -> 2.656; pixels within the run-to-run floor.

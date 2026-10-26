@@ -6,7 +6,7 @@
 //   sigma  = extinction of the analytic height fog at the cell's height (fog_common.hlsli)
 //   S      = albedo * sigma
 //   L      = sunColor * shadow(P) * HG(g, dot(toSun, -V)) * sunScatter          (:888)
-//          + skyIrradiance(-V) * skyScatter                                     (:936-942, SH -> our cube)
+//          + skyIrradiance(-V) * skyScatter * skyVisibility(P)                  (:1013-1039, SH -> our cube)
 //   out    = (preExposure * L * S, sigma), lerped with the reprojected history (:1027-1033)
 // The sun's shadow is the lighting pass's own sampler (lighting_cb.hlsli maps the same b0): CSM
 // atlas or the VSM clipmap, single tap, no receiver biases beyond the normal offset towards the
@@ -17,6 +17,7 @@
 // t0 ShadowAtlas  t1 VsmPageTable  t2 VsmPool  t3 SkyIrradiance (cube)  t4 FogHistory (3D, prev slot)
 // t5 HzbFurthest (this frame)  t6 PrevHzbFurthest (last frame) -- conservative depth (plan A3)
 // t7 SpotLights  t8 PointLights  t9 SpotShadowAtlas  t10 PointShadowAtlas -- local lights (plan A4)
+// t15 the scene TLAS -- the sky's visibility (FOG_SKY_OCCLUSION, compiled on RT hardware only)
 // u0 FogScatter (3D)
 // s0 point clamp  s1 comparison linear  s2 linear wrap  s3 linear clamp (the lighting pass's set)
 #pragma pack_matrix(row_major)
@@ -31,7 +32,7 @@
 
 #define FOG_SCATTER_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=15, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -55,6 +56,13 @@ StructuredBuffer<SdsmPartition> SdsmPartitions : register(t13);
 // Plan S7, the direct read: the local shadow cache's pool -- a light whose atlas page is negative is read there (page
 // -page - 1, the atlas layout). A Legacy atlas stands in while there is no pool.
 Texture2DArray LocalShadowPool : register(t14);
+#ifndef FOG_SKY_OCCLUSION
+#define FOG_SKY_OCCLUSION 0
+#endif
+#if FOG_SKY_OCCLUSION
+#include "rt_geometry.hlsli" // RtVisibilityBlocked, RtWangHash
+RaytracingAccelerationStructure FogTlas : register(t15); // a placeholder while fogLocal.w is 0 (never traced)
+#endif
 RWTexture3D<float4>     FogScatter    : register(u0);
 
 // S15: AFTER the resource declarations, not before. MakeCsmParams reads SdsmPartitions, so the
@@ -71,6 +79,7 @@ static const uint kFogHistoryValid = 1u;
 static const uint kFogJitterOn = 2u;
 static const uint kFogConservativeDepth = 4u;
 static const uint kFogTemporalOn = 8u;
+static const uint kFogDepthConstraint = 32u; // FogApplyDepthConstraint (bit 4 = the distant sky ambient)
 // R3 low-discrepancy sequence (Roberts): the extra cell offsets of a history-miss supersample.
 static const float3 kFogR3 = float3(0.8191725134f, 0.6710436067f, 0.5497004779f);
 
@@ -289,8 +298,74 @@ float FogTileFarthest(Texture2D<float> pyramid, int2 tile, uint mip)
     return farthest;
 }
 
+// How much of the sky a point in the air sees: UE ComputeSkyVisibility (VolumetricFog.usf:713-735) traces "one 45 degree
+// cone straight up" against the global distance field and multiplies the skylight's scattering by it (:1038-1039); with
+// Lumen the translucency volume carries the same occlusion. Here the cone is `fogLocal.w` rays spread uniformly over its
+// solid angle against the TLAS -- the shadow casters, a leaf card solid, as every visibility ray (rt_geometry.hlsli) --
+// out to `fogLocalParams2.z` metres (the sky visibility's reach, skyVis.maxDistance), and the share that gets through.
+// Rotated per cell, sample and frame: the fog's history (fogJitter.w) is what averages the few rays.
+// Without it the air of a tunnel glowed with the whole open sky: a lit box of haze from the fog's start distance on,
+// in front of walls the sky never reaches (2026-10-26, owner: "what is this rectangle in the centre").
+float FogSkyVisibility(float3 P, uint3 coord, uint sampleIndex)
+{
+#if FOG_SKY_OCCLUSION
+    const uint rays = min(fogLocal.w, 8u);
+    if (rays == 0u) { return 1.0f; }
+    const uint seed = RtWangHash(coord.x * 1973u + coord.y * 9277u + coord.z * 26699u + fogMisc.z * 7919u + sampleIndex * 104729u);
+    const float2 rotation = float2(float(seed & 0xFFFFu), float(seed >> 16)) * (1.0f / 65536.0f);
+    const float cosHalfAngle = 0.70710678f; // UE: tan(PI / 4), a 45-degree half angle
+    RayDesc ray;
+    ray.Origin = P;
+    ray.TMin = 0.0f;
+    ray.TMax = max(fogLocalParams2.z, 0.5f);
+    uint open = 0u;
+    [loop]
+    for (uint k = 0u; k < 8u; ++k)
+    {
+        if (k >= rays) { break; }
+        const float u1 = frac(rotation.x + float(k) * 0.7548776662f);
+        const float u2 = frac(rotation.y + float(k) * 0.5698402910f);
+        const float cosTheta = 1.0f - u1 * (1.0f - cosHalfAngle); // uniform over the cone's solid angle
+        const float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
+        const float phi = 2.0f * kPi * u2;
+        ray.Direction = float3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi)); // +Y is up
+        if (!RtVisibilityBlocked(FogTlas, ray, 0x02u)) { ++open; } // rt::kInstanceMaskShadow
+    }
+    return float(open) / float(rays);
+#else
+    return 1.0f;
+#endif
+}
+
+// UE ApplyDepthConstraintsToOffset (VolumetricFog.usf:87-114; r.VolumetricFog.GridCenterOffsetFromDepthBuffer 0.5,
+// r.VolumetricFog.OffsetThresholdToAcceptDepthBufferOffset 1): a sample less than `fogDepthParams.y` slices behind the
+// surface its own pixel sees is moved to `fogDepthParams.x` slices in front of it; a sample farther behind stays (pulling
+// every hidden sample forward would light the edges of meshes wrongly, their comment -- ours does pull every one by
+// default, fog.depthThreshold 128: SceneFrameData.h fogDepthThreshold says why and what it measured). UE applies it to the medium
+// and to every lighting sample, as here. The surface is this frame's furthest pyramid at mip 0 (the farthest of a
+// 2x2 of render pixels; UE reads the scene depth itself) -- the same on a wall, a hair farther at a silhouette.
+// Without it a cell straddling a thin wall carried the light of the air BEHIND the wall -- the open sky, the sun past
+// the roof -- into the air in front of it, and in a tunnel each slice's cells along the walls lit a ring: concentric
+// bands, one per slice (2026-10-26, once the sky term was occluded and the uniform haze no longer hid them).
+void FogApplyDepthConstraint(uint3 coord, inout float3 cellOffset)
+{
+    if ((fogFlags & kFogDepthConstraint) == 0u) { return; }
+    uint w, h, mips;
+    HzbFurthest.GetDimensions(0, w, h, mips);
+    const float2 uv = (float2(coord.xy) + cellOffset.xy) / float2(fogGridSize.xy); // the cell's uv IS its screen uv
+    const int2 texel = clamp(int2(uv * float2(w, h)), int2(0, 0), int2(w, h) - 1);
+    const float surfaceZ = HzbFurthest.Load(int3(texel, 0)).r;
+    if (surfaceZ <= 0.0f) { return; } // the sky: nothing to stay in front of
+    const float surfaceSlice = FogSliceFromDepth(fogGridZParams, FogViewDepthFromDeviceZ(fogProjZ, surfaceZ)) - fogDepthParams.x;
+    const float toSurface = surfaceSlice - (float(coord.z) + cellOffset.z); // < 0: the sample is behind it
+    if (toSurface < 0.0f && -toSurface < fogDepthParams.y)
+    {
+        cellOffset.z += toSurface;
+    }
+}
+
 // One lighting sample of a cell at `cellOffset` inside it: (preExposure * L * scattering, sigma).
-float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
+float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient, uint sampleIndex)
 {
     float viewDepth;
     const float3 P = FogCellWorldPosition(coord, cellOffset, fogGridSize, fogGridZParams,
@@ -320,14 +395,16 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient)
     }
     // Sky: UE evaluate the skylight SH at -V * g; the irradiance cube in the direction the air
     // is looked THROUGH is the same term without the SH's directional damping (delta, plan Â§3).
+    // Times the share of the sky the cell sees (FogSkyVisibility, UE :1038-1039).
     if (fogMedium2.x > 0.0f && (fogFlags & 16u) != 0u)
     {
         // B5 already integrates the full sphere with uniform phase: no extra PI/HG or HDRI scale.
-        L += distantAmbient;
+        L += distantAmbient * FogSkyVisibility(P, coord, sampleIndex);
     }
     else if (fogMedium2.x > 0.0f && skyIrradianceEnabled != 0u)
     {
-        L += SkyIrradiance.SampleLevel(gSmpLinearClamp, -V, 0).rgb * skyIrradianceScale * fogMedium2.x;
+        L += SkyIrradiance.SampleLevel(gSmpLinearClamp, -V, 0).rgb * skyIrradianceScale * fogMedium2.x *
+             FogSkyVisibility(P, coord, sampleIndex);
     }
     // Local lights (plan A4, UE :944-1030): every spot / point whose range reaches the cell, with
     // its shadow map -- of the lights whose range touches the cell's group (plan S9e, the masks
@@ -497,10 +574,11 @@ void CSMain(uint3 coord : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint 
     for (uint si = 0u; si < 4u; ++si)
     {
         if (si >= superCount) { break; }
-        const float3 cellOffset = (si == 0u) ? fogJitter.xyz
-                                : (si == 1u) ? (1.0f.xxx - fogJitter.xyz)
-                                : frac(fogJitter.xyz + kFogR3 * (float)si);
-        result += FogSampleCell(coord, cellOffset, distantAmbient);
+        float3 cellOffset = (si == 0u) ? fogJitter.xyz
+                          : (si == 1u) ? (1.0f.xxx - fogJitter.xyz)
+                          : frac(fogJitter.xyz + kFogR3 * (float)si);
+        FogApplyDepthConstraint(coord, cellOffset);
+        result += FogSampleCell(coord, cellOffset, distantAmbient, si);
     }
     result /= (float)superCount;
 

@@ -131,6 +131,7 @@ namespace
         unsigned maxWidth = 0;
         std::string path;
         bool clean = false;   // the UI is not drawn until the capture (g_suppressImGuiDraw)
+        std::string camera;   // the captured frame's camera, CameraText's form at full precision
     };
 
     ShotRequest& Shot()
@@ -213,6 +214,7 @@ namespace
                 "minimised, or is the editor closed?");
         }
         const bool ok = shot.ok;
+        const std::string camera = shot.camera;
         lock.unlock();
         if (!ok)
         {
@@ -245,7 +247,10 @@ namespace
             std::to_string(settle) + " frames after this call arrived." +
             (clean ? "" : " The 3D view is the large pane in the middle; the panels around it are "
                           "the editor's own.") +
-            (keep ? " Saved to " + path + "." : "");
+            (keep ? " Saved to " + path + "." : "") +
+            // The frame's own camera: a frame taken mid-motion (camera.fly / camera.spin) is retaken still from
+            // exactly here with set_camera, the reference a temporal filter's lag is measured against.
+            (camera.empty() ? "" : " Camera of this frame: " + camera);
         if (sendImage)
         {
             result.pngBase64 = Base64(png);
@@ -431,7 +436,11 @@ namespace editormcp
                   "of set_settings variants, a diff against a headless --shot): `clean` drops "
                   "the editor's panels (scene + HUD only), `path` keeps the full-size PNG there "
                   "and sends no picture back unless `image`, `settleFrames` ~60 lets exposure, "
-                  "the temporal filters and the clouds settle after a change." },
+                  "the temporal filters and the clouds settle after a change. The reply names the "
+                  "captured frame's camera (position, yawDeg, pitchDeg at full precision): a frame "
+                  "taken while set_settings camera.fly / camera.spin move the camera is retaken still "
+                  "from there with set_camera -- the reference a temporal filter's lag is measured "
+                  "against." },
                 { "inputSchema", ObjectSchema({
                     { "maxWidth", { { "type", "integer" },
                         { "description", "downscale to at most this many pixels wide, 320-3840; "
@@ -1527,7 +1536,7 @@ namespace editormcp
         send(200, "OK", message.is_array() ? replies.dump() : replies[0].dump());
     }
 
-    void ServiceScreenshot(Renderer& renderer)
+    void ServiceScreenshot(Renderer& renderer, const Camera& camera)
     {
         ShotRequest& shot = Shot();
         std::unique_lock<std::mutex> lock(shot.mutex);
@@ -1543,6 +1552,15 @@ namespace editormcp
         const unsigned maxWidth = shot.maxWidth;
         lock.unlock();
 
+        // CameraText's fields at the precision set_camera needs to land on the same pixels (0.1 degree is ~3 px of
+        // a 2560-wide frame at 90 degrees).
+        char cameraText[256];
+        {
+            const Math::float3& p = camera.GetPosition();
+            std::snprintf(cameraText, sizeof(cameraText), "{\"position\":[%.5f,%.5f,%.5f],\"yawDeg\":%.5f,\"pitchDeg\":%.5f}",
+                p.x, p.y, p.z, camera.GetYaw() * 180.0f / kPi, camera.GetPitch() * 180.0f / kPi);
+        }
+
         const bool ok = Screenshot::SaveBackbufferPng(renderer, path, maxWidth);
         if (!ok)
         {
@@ -1551,6 +1569,7 @@ namespace editormcp
 
         lock.lock();
         shot.ok = ok;
+        shot.camera = cameraText;
         shot.done = true;
         shot.pending = false;
         if (shot.clean)

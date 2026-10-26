@@ -44,6 +44,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 // exact lit HDR; the light target is pre-exposed, the reflection buffer holds radiance
                 radiance += lightT.SampleLevel(gSmp, tr.reuseUv, 0).rgb * lightInvPreExposure;
             }
+            else
+            {
+                // The hit's sky lighting, occluded as the resolve does (the glass lends the visibility of
+                // the opaque surface behind it, as glass.hlsl does for its own sky).
+                radiance += tr.skyPart * RtReflectorSkyVisibility(dtid.xy);
+            }
             result = float4(radiance, 1.0f); // premultiplied, full coverage
         }
     }

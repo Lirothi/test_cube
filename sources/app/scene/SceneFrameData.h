@@ -631,6 +631,23 @@ struct SceneRenderSettings
     // A texel without history is seeded from the neighbours that kept theirs (UE DFAO FilterHistoryPS). Off = it
     // starts from its own few rays, the behaviour before 2026-10-26 -- kept for the A/B (`--set skyVis.seed:0`).
     bool skyVisSeed = true;
+    // ...and the AIR's: the volumetric fog's sky term times the share of UE's 45-degree cone straight up that a cell
+    // sees (fog_scatter_cs.hlsl FogSkyVisibility, UE VolumetricFog.usf:713-735), `skyVisFogRays` per cell sample per
+    // frame out to skyVisMaxDistance, averaged by the fog's own history. 0 = the open sky in the air, the frame before.
+    uint32_t skyVisFogRays = 2u;
+    // The volumetric fog's samples less than a slice behind the surface their pixel sees are moved this many slices in
+    // front of it (fog_scatter_cs.hlsl FogApplyDepthConstraint, UE r.VolumetricFog.GridCenterOffsetFromDepthBuffer 0.5);
+    // < 0 = off, the cells straddling a wall then light the air in front of it with the air behind (`--set fog.depthOffset:-1`).
+    float fogDepthOffset = 0.5f;
+    // ...and how many slices behind the surface a sample may be and still be moved (UE
+    // r.VolumetricFog.OffsetThresholdToAcceptDepthBufferOffset, 1: "only the first layer of froxels intersecting depth").
+    // Ours moves EVERY sample behind its pixel's surface (128 = the grid's depth and more): at UE's 1 a wall seen at a
+    // grazing angle still leaked -- the next column's cell at this pixel's depth lies several slices behind ITS wall,
+    // out of reach, and the trilinear read took its outside light (wind_test's tunnel, 15:00: one ring per slice on
+    // both walls at 1, none at 64). UE's worry, the edges of meshes, measured on three open views (toward the sun over
+    // the palms and the sea, away from it, low in the grove): against the constraint off, 1 and 128 both move the mean
+    // by <= 0.15 % and the changed pixels sit at the noise floor of the same shot twice (foliage under DLSS).
+    float fogDepthThreshold = 128.0f;
     // Interior lighting plan D: the GI probe volume (DDGI over RayQuery, rendering/lighting/DdgiVolume.h):
     // 32x16x32 probes `giSpacing` m apart around the camera, 1 / `giUpdateDivisor` of them tracing 64
     // rays a frame and blending them in with `giHysteresis`. They hold the BOUNCE only (a miss brings
@@ -751,6 +768,10 @@ struct SceneRenderSettings
     // width, the projection. Off = S16's roughness-scaled separable blur, as before 2026-10-26 (the A/B; --set
     // reflections.lobe:0).
     bool reflectionLobeBlur = true;
+    // The reflections' temporal resolve also reprojects its history by the RT reflection HIT (Lumen's
+    // LightingHistoryFromHit, ssr_temporal_cs.hlsl), for narrow lobes: a mirror's image moves with the reflected scene,
+    // not with the mirror. Off = the reflector's motion alone, as before 2026-10-26 (`--set reflections.hitReprojection:0`).
+    bool reflectionHitReprojection = true;
     // Analytic sun specular boost on metals. The sun's specular lobe is scaled by
     // (1 + metal*sunMetalSpecInfluence) in the lighting pass so a smooth metal shows a
     // distinct sun highlight (which otherwise merges into the environment reflection,

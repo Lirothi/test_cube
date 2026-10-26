@@ -1830,6 +1830,18 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE DFAO's 5x5 depth- and normal-aware filter over the accumulation (default on).\n"
                                       "Off = the accumulation as it is, grainier.");
+                {
+                    int fogRays = static_cast<int>(std::min(settings.skyVisFogRays, 8u));
+                    if (GRAPHICS_CONTROL(SkyVisFogRays, "skyVisFogRays", ImGui::SliderInt("Fog rays", &fogRays, 0, 8)))
+                    {
+                        settings.skyVisFogRays = static_cast<std::uint32_t>(fogRays);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The volumetric fog's sky light: rays per cell sample in UE's 45-degree cone straight\n"
+                                      "up (default 2; the fog's history averages them). 0 = the air sees the open sky\n"
+                                      "everywhere -- a tunnel's air glows blue from the fog's start distance on.\n"
+                                      "2 rays +0.01-0.02 ms, 4 rays up to +0.05 ms; no measurable frame-to-frame noise.");
                 ImGui::EndDisabled();
 
                 ImGui::SeparatorText("Debug view");
