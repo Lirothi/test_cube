@@ -1541,6 +1541,26 @@ none`.
 the schedule. Register it where the graphics queue already waits for that producer, or where it has
 work to overlap -- never ahead of the frame's first heavy pass.
 
+### The same hole again, FIXED (2026-10-26): the GI trace parked the graphics queue on BuildAS
+
+Owner: "look whether something new can go into async compute". The two-queue trace (`--trace=120`, Release,
+wind_test as saved, wind running; scratchpad `gpu_queues.py`) answered with the rule above instead:
+`Main_GiTrace` (interior lighting plan D) takes `Main_BuildAS` as its only prereq, and BuildAS is async, so the
+graph scheduled it straight after the prologue -- **518 us of graphics idle in every frame** (108/108; 529 in the
+bathroom view): the compute queue starts BuildAS ~350 us after the prologue's signal, the graphics queue resumes
+~160 us after BuildAS's, two hand-overs for 0.08 ms of AS work. The trace needs no G-buffer, so it now also takes
+`gb.pGbufDone` and runs behind the G-buffer, where the wait is long satisfied: graphics idle inside the frame
+754 -> 230 us; interleaved x3 in one binary (temporary env switch, removed), every run apart:
+GPU.Frame 3.985/4.032/4.039 -> 3.489/3.524/3.551 ms, **CPU.Frame 4.242 -> 3.628 ms (-14 %)**. BuildAS itself
+got slower (0.147 -> 0.25 ms: it now overlaps the G-buffer instead of an idle GPU), as an overlap should.
+
+Not moved to the compute queue: the GI trace and update (0.26 + 0.06 ms) would add at most that overlap, RT
+traversal overlapped poorly before (RTTrace +88 %), and the trace reads the sky's irradiance cube UNDECLARED --
+`Main_SkyEnvironment` writes it on the graphics queue a quarter of the frames, the hand-back that sank
+SkyEnvironment's own move. Main_SkyVis (0.30 ms) has no window: the compute queue already runs RTTrace +
+CloudTrace beside it. The compute queue is still idle ~2.2 ms a frame, mostly under Tonemap/DLSS (bloom || DLSS
+was tried and lost) and Lighting.
+
 ## FIXED: async BuildAS hung the device (in-place wind BLAS refit)
 
 Open since step 10 and only caught once the diagnostics below existed. `Main_BuildAS` on the compute

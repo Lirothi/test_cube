@@ -97,8 +97,17 @@ void SceneRenderer::BuildGi(Renderer* renderer, GraphBuild& gb)
 
     // The trace: on the DIRECT queue, after Pass_BuildAS -- the TLAS and the bindless table are
     // undeclared reads, and the body decides from FrameReady, which the BuildAS recording sets (the
-    // mtDep, as for RTTrace and SkyVis). It needs no G-buffer: it runs as early as the AS allows.
-    const size_t pTrace = rg.AddPass2(RenderPass::Main_GiTrace, { gb.pBuildAS }, { gb.pBuildAS }, {},
+    // mtDep, as for RTTrace and SkyVis). It needs no G-buffer, but it WAITS for one: BuildAS is on the
+    // async queue, so a graphics pass with nothing else before it is scheduled right after the prologue
+    // and parks the whole graphics queue on that cross-queue wait -- 518 us idle every frame on
+    // wind_test (the compute queue starts BuildAS ~350 us after the prologue's signal, the graphics
+    // queue resumes ~160 us after BuildAS's). Behind the G-buffer the wait is long satisfied: GPU.Frame
+    // 4.019 -> 3.521 ms, CPU.Frame 4.242 -> 3.628 (interleaved x3, every run apart). The rule of
+    // Main_OceanReadback's hole (docs/async_compute_plan.md, "the GI trace parked the graphics queue").
+    RenderGraph<kMainRenderGraphPassCount>::DependencyList tracePrereqs{};
+    RenderGraph<kMainRenderGraphPassCount>::PushDependency(tracePrereqs, gb.pBuildAS);
+    RenderGraph<kMainRenderGraphPassCount>::PushDependency(tracePrereqs, gb.pGbufDone);
+    const size_t pTrace = rg.AddPass2(RenderPass::Main_GiTrace, tracePrereqs, { gb.pBuildAS }, {},
         [this, renderer, chain](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             GiChain c = chain;
             ctx.NextPoint();
