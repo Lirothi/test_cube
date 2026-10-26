@@ -89,8 +89,14 @@ struct alignas(16) Partition
     // can continue the average. It cannot be read back off intervalBegin/intervalEnd any
     // more -- those are the RAW ends now, deliberately (see LogPartitions).
     float smoothedRange[2] = { 0.0f, 0.0f };
+
+    // --- 160 --- S20: the view-Z interval this partition's TILE was last rendered for. A kept (cached) partition
+    // carries it, and LogPartitions never hands that partition a receiver outside it -- its box holds that interval's
+    // samples and nothing else (sdsm_analyze_cs.hlsl, the boundaries).
+    float renderedInterval[2] = { 0.0f, 0.0f };
+    float pad[2] = { 0.0f, 0.0f };
 };
-static_assert(sizeof(Partition) == 160, "sdsm::Partition must match SdsmPartition in shaders/sdsm_partitions.hlsli");
+static_assert(sizeof(Partition) == 176, "sdsm::Partition must match SdsmPartition in shaders/sdsm_partitions.hlsli");
 
 // Flags of Partition::flags.
 inline constexpr std::uint32_t kPartitionFlagScaleClamped = 1u << 0;

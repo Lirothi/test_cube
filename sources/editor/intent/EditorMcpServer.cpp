@@ -132,6 +132,12 @@ namespace
         std::string path;
         bool clean = false;   // the UI is not drawn until the capture (g_suppressImGuiDraw)
         std::string camera;   // the captured frame's camera, CameraText's form at full precision
+        // `burst`: that many CONSECUTIVE frames from the settle frame on, as <stem>_000.png ... -- how a
+        // history that adapts over a few frames is watched frame by frame (one call, no frame skipped).
+        int burst = 1;
+        int burstIndex = 0;
+        std::string stem;          // `path` without ".png", for a burst
+        std::string firstCamera;   // the burst's first frame's camera (`camera` ends as the last one's)
     };
 
     ShotRequest& Shot()
@@ -169,7 +175,12 @@ namespace
             return Error("`path` must name a .png file.");
         }
         const bool keep = !keepPath.empty();
-        const bool sendImage = args.is_object() ? args.value("image", !keep) : true;
+        const int burst = std::clamp(args.is_object() ? args.value("burst", 1) : 1, 1, 240);
+        if (burst > 1 && !keep)
+        {
+            return Error("`burst` writes its frames next to `path` (<stem>_000.png ...): give a `path`.");
+        }
+        const bool sendImage = burst == 1 && (args.is_object() ? args.value("image", !keep) : true);
         const int requested = args.is_object() ? args.value("maxWidth", keep ? 0 : 1280) : 1280;
         const unsigned maxWidth = requested <= 0 ? 0u : static_cast<unsigned>(std::clamp(requested, 320, 3840));
         // How many frames to let pass first: the default suits a placement; after set_settings the
@@ -196,6 +207,10 @@ namespace
             shot.maxWidth = maxWidth;
             shot.path = path;
             shot.clean = clean;
+            shot.burst = burst;
+            shot.burstIndex = 0;
+            shot.stem = path.substr(0, path.size() - 4);
+            shot.firstCamera.clear();
         }
         if (clean)
         {
@@ -204,7 +219,7 @@ namespace
         }
 
         std::unique_lock<std::mutex> lock(shot.mutex);
-        const auto timeout = std::chrono::seconds(15 + settle / 10);
+        const auto timeout = std::chrono::seconds(15 + settle / 10 + burst / 2);
         if (!shot.changed.wait_for(lock, timeout, [&] { return shot.done; }))
         {
             shot.pending = false;
@@ -215,10 +230,22 @@ namespace
         }
         const bool ok = shot.ok;
         const std::string camera = shot.camera;
+        const std::string firstCamera = shot.firstCamera;
         lock.unlock();
         if (!ok)
         {
             return Error("The capture failed; the session log says why.");
+        }
+        if (burst > 1)
+        {
+            ToolResult result;
+            char last[16];
+            std::snprintf(last, sizeof(last), "_%03d.png", burst - 1);
+            const std::string stem = path.substr(0, path.size() - 4);
+            result.text = std::to_string(burst) + " consecutive frames" + (clean ? " without the editor's panels" : "") +
+                ", the first " + std::to_string(settle) + " frames after this call arrived: " + stem + "_000.png .. " +
+                stem + last + ". Camera of the first: " + firstCamera + ", of the last: " + camera;
+            return result;
         }
 
         std::ifstream file(path, std::ios::binary);
@@ -413,7 +440,10 @@ namespace editormcp
                   "sky's sun or moon wherever the time of day has it, with offsetYawDeg/offsetPitchDeg to "
                   "put it off-centre -- or yawDeg/pitchDeg; with none it keeps its heading, and without "
                   "`position` its place. It moves the person's view too, and they will see it move "
-                  "-- so move it when you need to look, not for fun." },
+                  "-- so move it when you need to look, not for fun. A jump is a camera CUT (every "
+                  "temporal history restarts); `cut: false` makes it a very fast move instead, the way "
+                  "a person's dash looks to the renderer -- follow it with screenshot `burst` to watch "
+                  "the histories adapt frame by frame." },
                 { "inputSchema", ObjectSchema({
                     { "position", Vec3Schema("world position [x, y, z]; y is up (default: where it is)") },
                     { "lookAt", { { "description",
@@ -425,7 +455,10 @@ namespace editormcp
                     { "yawDeg", { { "type", "number" },
                         { "description", "heading, 0 = +z, 90 = +x" } } },
                     { "pitchDeg", { { "type", "number" },
-                        { "description", "positive looks DOWN" } } } }) },
+                        { "description", "positive looks DOWN" } } },
+                    { "cut", { { "type", "boolean" },
+                        { "description", "restart every temporal history (default true); false = a fast move "
+                                         "the histories follow" } } } }) },
             },
             {
                 { "name", "screenshot" },
@@ -453,7 +486,10 @@ namespace editormcp
                     { "clean", { { "type", "boolean" },
                         { "description", "the frame without the editor's panels or the selection outline (default false)" } } },
                     { "settleFrames", { { "type", "integer" },
-                        { "description", "frames to wait before the capture, 1-600 (default 6)" } } } }) },
+                        { "description", "frames to wait before the capture, 1-600 (default 6)" } } },
+                    { "burst", { { "type", "integer" },
+                        { "description", "capture this many CONSECUTIVE frames (1-240, default 1) as "
+                                         "<path stem>_000.png ...; needs `path`, sends no picture" } } } }) },
             },
             {
                 { "name", "set_settings" },
@@ -868,8 +904,16 @@ namespace editormcp
             camera.SetPosition(position);
             camera.SetYawPitchRoll(yaw, pitch, 0.0f);
             camera.CalcMatrices(&ctx.renderer);
-            // A jump, not a pan: the temporal filters must not blend the old view into the new.
-            camera.ResetHistory();
+            // A jump, not a pan: the temporal filters must not blend the old view into the new -- unless `cut` is false:
+            // then it is a very fast move (the camera history, the SDSM partition cache and every temporal filter keep
+            // theirs and follow it), which is what a person's quick dash looks like to the renderer.
+            const bool cut = !arguments.contains("cut") ||
+                !((arguments["cut"].is_boolean() && !arguments["cut"].get<bool>()) ||
+                  (arguments["cut"].is_number() && arguments["cut"].get<double>() == 0.0));
+            if (cut)
+            {
+                camera.ResetHistory();
+            }
             outRecord.verdict = "camera moved";
             outRecord.show = true;
             ToolResult result;
@@ -1548,7 +1592,13 @@ namespace editormcp
         {
             return;
         }
-        const std::string path = shot.path;
+        std::string path = shot.path;
+        if (shot.burst > 1)
+        {
+            char suffix[16];
+            std::snprintf(suffix, sizeof(suffix), "_%03d.png", shot.burstIndex);
+            path = shot.stem + suffix;
+        }
         const unsigned maxWidth = shot.maxWidth;
         lock.unlock();
 
@@ -1568,8 +1618,18 @@ namespace editormcp
         }
 
         lock.lock();
-        shot.ok = ok;
         shot.camera = cameraText;
+        if (shot.burstIndex == 0)
+        {
+            shot.firstCamera = cameraText;
+        }
+        // A burst takes the very next frame again, until its last one or the first failure.
+        if (ok && ++shot.burstIndex < shot.burst)
+        {
+            shot.framesLeft = 1;
+            return;
+        }
+        shot.ok = ok;
         shot.done = true;
         shot.pending = false;
         if (shot.clean)

@@ -41,7 +41,9 @@ struct SdsmPartition
     uint   flags;             // 140
     float2 evsmExponents;     // 144 S16: (c+, c-), already clamped -- see SdsmEvsmExponents
     float2 smoothedRange;     // 152  S16.7: partition 0 only -- smoothed (minZ, maxZ)
-};                            // 160
+    float2 renderedInterval;  // 160  S20: the interval its tile was last RENDERED for (a kept partition carries it)
+    float2 pad;               // 168
+};                            // 176
 
 #define SDSM_FLAG_SCALE_CLAMPED 1u
 #define SDSM_FLAG_EMPTY         2u

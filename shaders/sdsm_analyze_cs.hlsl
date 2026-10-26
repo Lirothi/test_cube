@@ -444,10 +444,38 @@ void LogPartitions(uint groupIndex : SV_GroupIndex)
     // the reduction reads) therefore still lands in the last partition and is still bounded by its
     // box test in `CsmSampleChain` -- exactly as before, because the BOX did not move: the samples
     // that define it are the same samples that define maxZ.
-    Partitions[groupIndex].intervalBegin =
-        (groupIndex == 0u) ? rawMin : SdsmLogPartitionFromRange(groupIndex, splitMin, splitMax, count);
-    Partitions[groupIndex].intervalEnd =
-        (groupIndex == (count - 1u)) ? rawMax : SdsmLogPartitionFromRange(groupIndex + 1u, splitMin, splitMax, count);
+    //
+    // S20 x S16.7 -- A KEPT PARTITION IS HANDED ONLY WHAT ITS TILE WAS RENDERED FOR. A cached partition's box holds
+    // the samples of the interval it was last rendered with (`renderedInterval`), and nothing else; the smoothed
+    // splits slide every frame while it re-renders every 2nd or 4th. A boundary sliding NEARER handed the next,
+    // kept partition receivers its box never held -- they fell through CsmSampleChain to "lit": bright triangles on
+    // the owner's far bathroom wall, frames 65-75 after a quick step out of a view with the sea in it, in a rhythm
+    // of four (2026-10-26; `sdsm.cacheFrames:1` or `sdsm.stabilityFrames:0` alone made them go). So a boundary
+    // next to a kept partition moves only toward handing receivers to the FRESH side, which is fitted to whatever
+    // it gets: a kept partition's interval stays inside its rendered one (empty if the splits passed it). Computed
+    // the same way, left to right, by every thread, so the intervals stay contiguous and ordered. No gap opens
+    // between two kept neighbours: whichever rendered last was fitted up to the other's rendered end.
+    float b = rawMin;
+    float begin = rawMin;
+    float end = rawMax;
+    [unroll] for (uint k = 1u; k < SDSM_MAX_PARTITIONS; ++k)
+    {
+        if (k >= count) { break; }
+        float next = max(SdsmLogPartitionFromRange(k, splitMin, splitMax, count), b);
+        if (((gUpdateMask >> (k - 1u)) & 1u) == 0u)
+        {
+            next = min(next, max(PrevPartitions[k - 1u].renderedInterval.y, b));
+        }
+        if (((gUpdateMask >> k) & 1u) == 0u)
+        {
+            next = max(next, PrevPartitions[k].renderedInterval.x);
+        }
+        if (k == groupIndex) { begin = next; }
+        if (k == groupIndex + 1u) { end = next; }
+        b = next;
+    }
+    Partitions[groupIndex].intervalBegin = begin;
+    Partitions[groupIndex].intervalEnd = end;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -597,11 +625,12 @@ void Finalize(uint groupIndex : SV_GroupIndex)
     }
 
     // S20 PARTITION CACHE: a partition that does not re-render this frame keeps EVERYTHING its tile
-    // was rendered with -- matrix, atlas rect, biases, texel -- from last frame's copy (which was
-    // itself carried, back to the frame it rendered). Only its INTERVAL is this frame's, the one
-    // LogPartitions just wrote: receivers pick a partition by interval, and fresh intervals keep
-    // that choice contiguous however the partitions are cached. A receiver the kept box does not
-    // cover falls to the next partition in CsmSampleChain, as at any box edge. Nothing is drawn
+    // was rendered with -- matrix, atlas rect, biases, texel, the rendered interval -- from last frame's
+    // copy (which was itself carried, back to the frame it rendered). Only its INTERVAL is this frame's,
+    // the one LogPartitions just wrote, which lies inside the rendered one: receivers pick a partition by
+    // interval, and the intervals stay contiguous however the partitions are cached. A receiver the kept
+    // box does not cover (geometry that came into view since) falls to the next partition in
+    // CsmSampleChain, as at any box edge. Nothing is drawn
     // into a kept tile, so its cull rows reject every caster; its PerView and cull-CB blocks are
     // left as they are -- the next render overwrites them, and HZB pairs last frame's matrix with
     // a tile that still holds exactly that render.
@@ -800,6 +829,8 @@ void Finalize(uint groupIndex : SV_GroupIndex)
     Partitions[p].texelWS = texelWS;
     Partitions[p].sampleCount = samples;
     Partitions[p].flags = flags;
+    // What a kept copy of this tile may be handed later (LogPartitions): the interval its box was just fitted to.
+    Partitions[p].renderedInterval = float2(intervalBegin, intervalEnd);
     // S16: the warp exponents, clamped on the CPU, stored here so the converter and the sampler
     // read ONE value rather than two copies of a knob.
     Partitions[p].evsmExponents = float2(gEvsmPos, gEvsmNeg);

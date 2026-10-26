@@ -432,6 +432,14 @@ process -- DLSS's own motion reconstruction swamps a small temporal artefact oth
 `motion_err.py` (2026-10-26): moving frame vs still retake, mean |d| and the high-pass grain, the arm
 `skyVis.enabled:0` (or whatever feature) the control. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
 -- set `bloom.ghostIntensity:0` for that read.
+**A HISTORY THAT ADAPTS AFTER A MOVE IS WATCHED FRAME BY FRAME, AND NOT AFTER A CUT** (2026-10-26, owner: "you
+don't know how to take pictures -- jump the camera and take frequent shots while the cascades adapt"). `set_camera`
+is a camera CUT by default (`Camera::ResetHistory`: DLSS, every temporal filter and the SDSM partition cache restart),
+so a cut can never show what a person's quick dash shows -- one trial per frame offset found nothing. `set_camera
+{..., cut: false}` is a very fast move the histories follow, and `screenshot {path, burst: N}` (1-240) writes N
+CONSECUTIVE frames as `<stem>_000.png ...` in one call (settleFrames = the first one's delay; no picture sent back).
+Settle at A, `cut: false` to B, burst 120, diff every frame against B settled: that is how the SDSM flash below was
+caught at frames 65-75 -- long after any single-shot trial looked. scratchpad-style `sdsm_burst.py`.
 A FLICKER IS READ FRAME BY FRAME: two `get_readouts` calls land ~10 frames apart and see a drift, never
 a flicker. `get_readouts {history: N}` (N <= 512) adds the newest N frames, one row EACH (frame,
 adapted/metered EV100, pre-exposure, the probe's window mean rgb and max luminance, the sun probe) --
@@ -605,6 +613,26 @@ none inside 1 m (the candles at ~2 m); every model: median 1.2 -> 6.4 m. Cost on
 grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / -0.007 / +0.015 ms, noise. A
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
+
+## SDSM Partition Cache -- a Kept Tile Is Handed Only What It Was Rendered For
+
+SDSM (`--shadow-mode=sdsm`, `shaders/sdsm_analyze_cs.hlsl`) re-renders partition 0 every frame and partition p >= 1
+every min(`sdsm.cacheFrames`, 2^p) frames (S20); a kept partition carries its matrix, box and tile. The interior
+splits are smoothed over frames (`sdsm.stabilityFrames`, S16.7), so after a quick step out of a deep view (the sea
+through two doorways) they slide nearer for ~100 frames -- and a boundary sliding nearer handed the next, KEPT
+partition receivers its box never held: they fell through `CsmSampleChain` to "lit". The owner's lit triangles on
+the far bathroom wall (2026-10-26; cam -22.52,1.73,87.46 -> -22.82,1.73,87.51 at 15:00), frames 65-75 after the step
+in a rhythm of four; `sdsm.cacheFrames:1` or `sdsm.stabilityFrames:0` alone made them go. Now each partition records
+the interval its tile was rendered for (`SdsmPartition.renderedInterval`, the struct is 176 bytes), and LogPartitions
+moves a boundary next to a kept partition only toward handing receivers to the FRESH side (fitted to whatever it
+gets); a kept partition's interval stays inside its rendered one, empty if the splits passed it. No gap can open
+between two kept neighbours (whichever rendered last was fitted up to the other's rendered end). The cross-fade band
+blends into the next partition only when that partition's box holds the point (`csm_sample.hlsli`): a kept partner
+holds the band it was rendered with. Measured with the burst (3 runs): flashes after frame 33: none (were 0.03-0.28 %
+of the frame at f65-75); what remains before it is every temporal filter settling, as with the cache off. The reverse
+step (B -> A) never flashed. Geometry that comes into view inside a kept interval (disocclusion) is still the camera
+guard's (`Scene::UpdateSdsmFrameParams`: a move or turn past half the cache dilation re-renders out of turn).
+GBV (`SdsmAnalyze,SdsmCull,SdsmShadow,Lighting,Skybox` + self-test): clean.
 
 ## Glass -- the thinTranslucent Shading Model
 

@@ -392,9 +392,16 @@ float CsmSampleShadow(CsmParams p, Texture2D atlas, SamplerComparisonState cmp, 
         {
             // The partner's resolved index is deliberately dropped: outCascade stays the primary
             // cascade so the debug tint shows zones, not a striped band.
+            // A partner whose box does not hold the point is no partner: the chain would fall past it
+            // to a coarser tile or to "lit" and fade that in. Legacy and a freshly fitted SDSM partition
+            // always hold their neighbour's band (both fit it in); a CACHED SDSM partition holds the band
+            // it was rendered with, and the band follows its neighbour's length.
             int blendCascade;
             const float shadowNext = CsmSampleChain(p, atlas, cmp, smp, idx + 1, Pws, Nws, NdotL, blendCascade);
-            shadow = lerp(shadow, shadowNext, t);
+            if (blendCascade == idx + 1)
+            {
+                shadow = lerp(shadow, shadowNext, t);
+            }
         }
     }
     else if (p.distanceFadeFraction > 0.0f)

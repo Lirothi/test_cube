@@ -1106,6 +1106,28 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         }
     }
 
+    // set_camera is a CUT by default (the camera history restarts); `cut: false` is a fast move the histories follow.
+    {
+        Camera& camera = ctx.scene.CameraRef();
+        const std::uint64_t before = camera.GetHistoryRevision();
+        const json jumpArgs = { { "position", { 1.0, 2.0, 3.0 } }, { "yawDeg", 10.0 }, { "pitchDeg", 5.0 } };
+        const std::optional<json> jump = call(16, "tools/call", { { "name", "set_camera" }, { "arguments", jumpArgs } });
+        Check(!(*jump)["result"]["isError"].get<bool>() && camera.GetHistoryRevision() == before + 1,
+            "set_camera cuts the camera history by default: " + text(jump));
+        const json dashArgs = { { "position", { 1.3, 2.0, 3.0 } }, { "cut", false } };
+        const std::optional<json> dash = call(17, "tools/call", { { "name", "set_camera" }, { "arguments", dashArgs } });
+        Check(!(*dash)["result"]["isError"].get<bool>() && camera.GetHistoryRevision() == before + 1 &&
+              std::fabs(camera.GetPosition().x - 1.3f) < 1e-4f,
+            "...and with cut:false moves it without restarting the history: " + text(dash));
+    }
+    // screenshot {burst}: consecutive frames next to `path`, so a burst without one is a tool error (checked before
+    // the call waits for any frame -- this gate draws none).
+    {
+        const json burstArgs = { { "burst", 8 } };
+        const std::optional<json> burst = call(18, "tools/call", { { "name", "screenshot" }, { "arguments", burstArgs } });
+        Check((*burst)["result"]["isError"].get<bool>(), "screenshot burst without a path is a tool error: " + text(burst));
+    }
+
     const std::optional<json> noTool = call(7, "tools/call", { { "name", "format_disk" } });
     Check(noTool && (*noTool)["error"]["code"] == -32602, "a tool that does not exist is a protocol error");
     const std::optional<json> noMethod = call(8, "resources/list", json::object());
