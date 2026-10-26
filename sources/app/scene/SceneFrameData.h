@@ -186,7 +186,7 @@ struct HeightFogSettings
     // SHIPS OFF (both 0 => the fade is a no-op and the sample is always directional), and it has to,
     // because their structure is not ours. UE MULTIPLY the cubemap into an authored fog colour
     // (Inscattering = FogColor * lerp(NonDir, Dir, t)); we feed the sample straight into
-    // HeightFogInscatter as the base. So their safe near-field average -- the whole sphere,
+    // HeightFogColor as the base. So their safe near-field average -- the whole sphere,
     // sun included -- becomes an injection of energy here, and with UE's own 10 m / 1000 m the open
     // water inside a kilometre went milk-white. Measured on the owner's HDRI camera, 2026-09-09.
     //
@@ -204,7 +204,21 @@ struct HeightFogSettings
     // lit, shadowed volume (light shafts through the palms); beyond it the analytic fog continues.
     // Off = the pre-plan image exactly (no pass, no volume). Defaults are UE's where dimensionless.
     bool volumetric = false;
-    float volumetricDistance = 300.0f;  // m: the froxel volume's far plane (UE VolumetricFogDistance)
+    // m: the froxel volume's far plane (UE VolumetricFogDistance). NOT UE's 60 m, measured 2026-10-26: beyond the
+    // far plane the analytic model fogs the SKY with the sky itself (an identity, compose_cs), where UE's authored fog
+    // colour keeps hazing it -- so this distance is how much air stands between the camera and the sky. At 60 m a
+    // dense fog (density 0.02 on wind_test's grove) left the sky clear behind 60 m of haze; at the level's 0.0015 the
+    // two are the same picture (mean +0.2 of 255, the noise). UE's 60 would give the near field 5x thinner slices
+    // (the first 0.44 m deep instead of 2.2) for +0.02 ms.
+    float volumetricDistance = 300.0f;
+    // UE VolumetricFogStartDistance (default 0): the volume's own near plane, NOT the analytic `startDistance` --
+    // that one only keeps the analytic model off the near field, which the volume already excludes up to its far
+    // plane (HeightFogCommon.ush:449, :288). Tied together, wind_test's 10 m start emptied a 4 m room of air: no
+    // candle glow, no shafts nearer than 10 m, and the 64 slices spread over 10-300 m instead of 0-300.
+    float volumetricStartDistance = 0.0f;
+    // UE VolumetricFogNearFadeInDistance (default 0): the volume fades in over this much of every ray from its start
+    // (VolumetricFog.usf FinalIntegrationCS, the accumulated step length x 1 / this).
+    float volumetricNearFadeInDistance = 0.0f;
     float albedo = 1.0f;                // UE VolumetricFogAlbedo: scattering / extinction (white)
     float extinctionScale = 1.0f;       // UE VolumetricFogExtinctionScale
     float phaseG = 0.2f;                // UE VolumetricFogScatteringDistribution (Henyey-Greenstein g)

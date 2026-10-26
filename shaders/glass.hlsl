@@ -980,12 +980,12 @@ PSOut PSMain(VSOut i)
             const float3 skyAlongView = FogSkyAlongView(SkyboxTex, EnvSampler, viewDir, dist,
                 HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyIntensity);
             const float3 toSun = -normalize(sunDirAmbient.xyz);
-            fogIn = HeightFogInscatter(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
-                                        dot(viewDir, toSun), fogShared, dist, headroom, fog);
+            fogIn = HeightFogColor(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
+                                   dot(viewDir, toSun), fogShared, dist, fogT, fog);
         }
-        // == (c * fogT + fogIn * (1 - fogT)) * vol.a + vol.rgb, split into its two factors
+        // == (c * fogT + fogIn) * vol.a + vol.rgb, split into its two factors (fogIn is UE's FogColor, weighted)
         fogTransmit = fogT * vol.a;
-        fogAdd = fogIn * (1.0f - fogT) * vol.a + vol.rgb;
+        fogAdd = fogIn * vol.a + vol.rgb;
     }
 #if GLASS_MATERIAL
     // The surface covers 1 - throughAvg of the pixel, so it takes that share of the air's in-scatter

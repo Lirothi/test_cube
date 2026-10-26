@@ -647,13 +647,18 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             }
         }
         const std::uint64_t rev = frame.camera ? frame.camera->GetHistoryRevision() : 0ull;
-        const bool sameHistory = fogHistoryWidth_ == w && fogHistoryHeight_ == h && fogHistoryDepth_ == D.fogGridDepth && fogHistoryRevision_ == rev;
+        // The slices' depths are part of the history's layout: a cell read at another start or far plane is other air.
+        const Math::float4& zp = decisions_.fogVolumeZParams;
+        const bool sameSlices = fogHistoryZParams_.x == zp.x && fogHistoryZParams_.y == zp.y && fogHistoryZParams_.w == zp.w;
+        const bool sameHistory = fogHistoryWidth_ == w && fogHistoryHeight_ == h && fogHistoryDepth_ == D.fogGridDepth &&
+                                 fogHistoryRevision_ == rev && sameSlices;
         decisions_.fogHistoryValid = decisions_.volumetricFog && a.temporal && fogHistoryFrames_ > 0u && sameHistory;
         fogHistoryFrames_ = decisions_.volumetricFog ? (sameHistory ? fogHistoryFrames_ + 1u : 1u) : 0u;
         fogHistoryWidth_ = w;
         fogHistoryHeight_ = h;
         fogHistoryDepth_ = D.fogGridDepth;
         fogHistoryRevision_ = rev;
+        fogHistoryZParams_ = zp;
         const int state = decisions_.volumetricFog
             ? (1 + (decisions_.fogHistoryValid ? 1 : 0) + (decisions_.fogConservativeDepth ? 2 : 0) + (decisions_.fogLocalLights ? 4 : 0))
             : 0;

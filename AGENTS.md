@@ -818,6 +818,35 @@ space with the open sky, and one fix uncovered the next (2026-10-26, owner in a 
   project knobs under fog.* (like `fog.gridPixels`): `reset_settings` leaves them as set.
 - GBV (`--gbv-passes=VolumetricFog,Compose,Skybox --gbv-selftest=1@Skybox`, the injection caught): clean.
 
+The UE review that followed (owner: "fix the volumetric fog"), each against `VolumetricFog.usf` / `HeightFogCommon.ush`:
+
+- **The volume has its own start**, `heightFog.volumetricStartDistance` (UE VolumetricFogStartDistance, 0; Inspector
+  "Volume Start", `--set=fog.volumetricStart`) and `volumetricNearFadeInDistance` (UE's, 0; `fog.volumetricFadeIn`).
+  `FogVolumeNear` used the ANALYTIC `startDistance` -- wind_test's 10 m emptied a 4 m room of air and spread the 64
+  slices over 10-300 m. The analytic start still keeps the analytic model off the near field, which the volume
+  excludes up to its far plane anyway (UE `ExcludeDistance = max(VolumetricFogMaxDistance / cos, StartDistance)`).
+  The history now resets when the slices move (start or far changed: `fogHistoryZParams_`).
+- **The far plane stays 300 m, not UE's 60** (`SceneFrameData.h volumetricDistance` says why): beyond it the analytic
+  model fogs the SKY with the sky itself (an identity), so the far plane is how much air hides the sky -- at 60 m a
+  dense fog (0.02) left the sky clear behind 60 m of haze. At the level's density 60 and 300 are the same picture.
+- **The sky term is UE's SH at g·V** (`GetSkySHDiffuseSimple`, their note: "+PhaseG", not the -PhaseG they keep for
+  compatibility): the diffuse cube's two opposite taps, `((1+g) E(V) + (1-g) E(-V)) / 2` = DC + g x the linear band.
+  It read E(-V) alone -- five times UE's tilt, away from the view. HDRI sky only: the procedural sky always feeds the
+  volume B5's isotropic distant light (`SkyAtmosphere::DistantActive`; the level key `distantSkyLight` is read by nothing).
+- **The history is rejected in depth too** (UE :900): a cell whose last-frame position lay beyond the far plane or
+  nearer than the start read the clamped last/first slice. **`FogTileFarthest` clamps its 3x3 to the pyramid** (UE
+  clamps its conservative depth read): the border columns never culled.
+- **The analytic sun lobe is added beside the fog colour** (`height_fog.hlsli HeightFogColor` = UE's FogColor,
+  `Inscattering * (1 - T) + DirectionalInscattering`, :407): it was returned inside the colour and multiplied by
+  (1 - T) with it -- (1 - T)^2. On wind_test (strength 0.1, exponent 32) the difference is under 1.3 of 255; levels
+  at the default 0.35 / 8 see it more. The line integral switches to its Taylor pair at |f| 0.01 (UE FLT_EPSILON2), not
+  1e-6 (float cancellation). The lobe's strength (0.35 default vs UE's 1/4pi on a colour with no sun in it) stands:
+  our base is the sky along the view, which already holds the sun's aureole.
+- Every local light stays shadowed in the volume (UE's points and spots default `bCastVolumetricShadow` off).
+- Cost (Scatter + Integrate, editor open, alternated x3): the start at 0 instead of 10 m +0.01 ms on the grove, 0 in
+  the tunnel and over the sea; 60 m instead of 300 would add +0.02. GBV (`VolumetricFog,Compose,Skybox,
+  TransparentFog,Translucent` + Skybox self-test, the bathroom at 00:00): clean.
+
 ## GI Probe Volume (DDGI) -- the Bounce
 
 `rendering/lighting/DdgiVolume` (resources, per-frame placement) + `SceneRenderer_Gi.cpp` (Main_GiTrace, Main_GiUpdate)

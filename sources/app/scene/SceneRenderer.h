@@ -837,6 +837,7 @@ private:
     UINT fogHistoryHeight_ = 0u;
     UINT fogHistoryDepth_ = 0u;
     std::uint64_t fogHistoryRevision_ = 0u;
+    Math::float4 fogHistoryZParams_{}; // the slices the history was written in (start / far changed = another grid)
     int fogLogged_ = -1;             // last logged (on, historyValid) state
     // Volumetric cloud temporal history (plan part C): the same rule as the fog's.
     uint32_t cloudHistoryFrames_ = 0u;

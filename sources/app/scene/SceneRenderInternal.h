@@ -44,11 +44,11 @@ namespace scene_internal
         return float3(static_cast<float>(B), static_cast<float>(O), static_cast<float>(S));
     }
 
-    // The volume's near plane: UE take max(view near, VolumetricFogStartDistance)
-    // (VolumetricFog.cpp:1204-1209); the analytic model's fog-free band is that start distance here.
+    // The volume's near plane: UE take max(view near, VolumetricFogStartDistance) (VolumetricFog.cpp:1364-1367),
+    // the volume's own start -- the analytic model's `startDistance` is a different distance (HeightFogSettings).
     inline float FogVolumeNear(const HeightFogSettings& a, const Camera& camera)
     {
-        return std::max(camera.GetZNear(), std::max(a.startDistance, 0.0f));
+        return std::max(camera.GetZNear(), std::max(a.volumetricStartDistance, 0.0f));
     }
 
 #if WITH_EDITOR

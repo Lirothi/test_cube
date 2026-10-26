@@ -534,9 +534,8 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         FogPassConstants fc{};
         fc.gridZParams = float3(decisions_.fogVolumeZParams.x, decisions_.fogVolumeZParams.y, decisions_.fogVolumeZParams.z);
         // UE: 1 / max(VolumetricFogNearFadeInDistance, tiny); the component's default distance is 0,
-        // so the fade is over before the first slice ends. Kept as their default (a hard start at
-        // the volume's near, which is what the analytic model's start distance is too).
-        fc.nearFadeInInv = 1.0f / 0.00001f;
+        // so the fade is over before the first slice ends (a hard start at the volume's near).
+        fc.nearFadeInInv = 1.0f / std::max(a.volumetricNearFadeInDistance, 0.00001f);
         fc.gridSize[0] = D.fogGridWidth;
         fc.gridSize[1] = D.fogGridHeight;
         fc.gridSize[2] = D.fogGridDepth;

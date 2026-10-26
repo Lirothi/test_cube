@@ -1181,6 +1181,8 @@ namespace
         // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).
         if (setting == "fog.volumetric") { scene.HeightFogRef().volumetric = value != 0.0f; return true; }
         if (setting == "fog.volumetricDistance") { scene.HeightFogRef().volumetricDistance = std::max(1.0f, value); return true; }
+        if (setting == "fog.volumetricStart") { scene.HeightFogRef().volumetricStartDistance = std::max(0.0f, value); return true; }
+        if (setting == "fog.volumetricFadeIn") { scene.HeightFogRef().volumetricNearFadeInDistance = std::max(0.0f, value); return true; }
         if (setting == "fog.albedo") { scene.HeightFogRef().albedo = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "fog.extinctionScale") { scene.HeightFogRef().extinctionScale = std::max(0.0f, value); return true; }
         if (setting == "fog.phaseG") { scene.HeightFogRef().phaseG = std::clamp(value, -0.99f, 0.99f); return true; }

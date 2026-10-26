@@ -6,7 +6,7 @@
 //   sigma  = extinction of the analytic height fog at the cell's height (fog_common.hlsli)
 //   S      = albedo * sigma
 //   L      = sunColor * shadow(P) * HG(g, dot(toSun, -V)) * sunScatter          (:888)
-//          + skyIrradiance(-V) * skyScatter * skyVisibility(P)                  (:1013-1039, SH -> our cube)
+//          + skySH(g * V) * skyScatter * skyVisibility(P)                       (:1013-1039, SH -> two cube taps)
 //   out    = (preExposure * L * S, sigma), lerped with the reprojected history (:1027-1033)
 // The sun's shadow is the lighting pass's own sampler (lighting_cb.hlsli maps the same b0): CSM
 // atlas or the VSM clipmap, single tap, no receiver biases beyond the normal offset towards the
@@ -281,10 +281,16 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
 // read with a trilinear filter, so a screen ray in column c blends columns c-1..c+1 -- a column culled
 // against ITS OWN tile alone stops accumulating at its floor and the sky pixels next to it read a
 // dark, flickering halo (docs/bug_fog_spot_flicker.md, defect 1). Culling only against the farthest
-// surface of the whole footprint keeps every column a filtered read can touch fully lit. Beyond the
-// pyramid Load returns 0 = the far plane, which never culls.
+// surface of the whole footprint keeps every column a filtered read can touch fully lit.
+// The neighbours are CLAMPED to the pyramid, as the volume's sampler clamps to the grid: a column past
+// the screen's edge does not exist for a filtered read. Unclamped, Load returned 0 there (the far plane),
+// so the grid's border columns never culled anything (UE clamps its conservative depth read the same
+// way, VolumetricFog.usf:872).
 float FogTileFarthest(Texture2D<float> pyramid, int2 tile, uint mip)
 {
+    uint w, h, mips;
+    pyramid.GetDimensions(mip, w, h, mips);
+    const int2 last = int2(max(w, 1u), max(h, 1u)) - 1;
     float farthest = 1.0f;
     [unroll]
     for (int dy = -1; dy <= 1; ++dy)
@@ -292,7 +298,7 @@ float FogTileFarthest(Texture2D<float> pyramid, int2 tile, uint mip)
         [unroll]
         for (int dx = -1; dx <= 1; ++dx)
         {
-            farthest = min(farthest, pyramid.Load(int3(tile + int2(dx, dy), (int)mip)).r);
+            farthest = min(farthest, pyramid.Load(int3(clamp(tile + int2(dx, dy), int2(0, 0), last), (int)mip)).r);
         }
     }
     return farthest;
@@ -393,9 +399,15 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient, uint
         const float shadow = FogSunShadow(P);
         L += lightRgb * fogMedium1.w * shadow * FogPhaseHG(g, dot(toSun, V));
     }
-    // Sky: UE evaluate the skylight SH at -V * g; the irradiance cube in the direction the air
-    // is looked THROUGH is the same term without the SH's directional damping (delta, plan Â§3).
-    // Times the share of the sky the cell sees (FogSkyVisibility, UE :1038-1039).
+    // Sky: UE's GetSkySHDiffuseSimple(CameraVector * PhaseG) -- the skylight's diffuse SH at a normal of
+    // length g, i.e. its DC term plus g times its linear band: the sphere's mean radiance tilted toward the
+    // view by the phase (UE :1035 write -PhaseG and note "it should be CameraVector * PhaseG", kept there for
+    // backward compatibility; forward scattering brings the sky BEHIND the cell, along +V). Our diffuse cube
+    // holds the same E / pi, so the two bands come from two opposite taps: (E(V) + E(-V)) / 2 is the DC (plus
+    // the even second band, which two taps cannot separate) and (E(V) - E(-V)) / 2 the linear band along V.
+    // It read the cube at -V alone: the whole linear band, tilted AWAY from the view -- 1/g = five times
+    // UE's tilt, on the side their note calls wrong. Times the share of the sky the cell sees
+    // (FogSkyVisibility, UE :1038-1039).
     if (fogMedium2.x > 0.0f && (fogFlags & 16u) != 0u)
     {
         // B5 already integrates the full sphere with uniform phase: no extra PI/HG or HDRI scale.
@@ -403,16 +415,19 @@ float4 FogSampleCell(uint3 coord, float3 cellOffset, float3 distantAmbient, uint
     }
     else if (fogMedium2.x > 0.0f && skyIrradianceEnabled != 0u)
     {
-        L += SkyIrradiance.SampleLevel(gSmpLinearClamp, -V, 0).rgb * skyIrradianceScale * fogMedium2.x *
-             FogSkyVisibility(P, coord, sampleIndex);
+        const float3 skyAlong = SkyIrradiance.SampleLevel(gSmpLinearClamp, V, 0).rgb;
+        const float3 skyBehind = SkyIrradiance.SampleLevel(gSmpLinearClamp, -V, 0).rgb;
+        const float3 skySh = max(0.5f * ((1.0f + g) * skyAlong + (1.0f - g) * skyBehind), 0.0f.xxx);
+        L += skySh * skyIrradianceScale * fogMedium2.x * FogSkyVisibility(P, coord, sampleIndex);
     }
     // Local lights (plan A4, UE :944-1030): every spot / point whose range reaches the cell, with
     // its shadow map -- of the lights whose range touches the cell's group (plan S9e, the masks
-    // above), and the range test is the per-cell cull. The bias in
-    // LightDistanceAttenuation's denominator is the singularity bias next to the source (UE
-    // InverseSquaredLightDistanceBiasScale); the cone's soft edge is the light passes' squared
-    // ramp (UE additionally soften it by the cell radius, LightSoftFading -- not done). Literal
-    // loop bounds; the counts only shorten them.
+    // above), and the range test is the per-cell cull. The cone's edge is the light passes' squared
+    // ramp times UE's LightSoftFading over the cell radius; the inverse-square bias is UE's
+    // InverseSquaredLightDistanceBiasScale (both below). Literal loop bounds; the counts only shorten them.
+    // Every local light is shadowed here: UE leave bCastVolumetricShadow off for points and spots (only
+    // DirectionalLightComponent.cpp:1061 and the sky light set it) to save the cost; ours costs nothing
+    // measurable (plan A4) and a lamp's shadow in the air is the point of putting it there.
     if (fogLocalParams.x > 0.0f)
     {
         // UE :951-956: the cell radii (to the diagonal neighbour in 3D and within the slice) size the
@@ -503,8 +518,7 @@ void CSMain(uint3 coord : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint 
     // the FARTHEST surface any of them sees (min reverse-Z). If even that is in front of the cell's
     // near face -- half a voxel towards the camera, so a bilinear read of the cell still lands on
     // lit data -- nothing on screen looks through this cell: it stores nothing and the sampling
-    // (the shadow lookups above all) is skipped. Beyond the pyramid (a grid column past its last
-    // texel) Load returns 0 = the far plane, which never culls.
+    // (the shadow lookups above all) is skipped. FogTileFarthest clamps its footprint to the pyramid.
     const bool conservative = (fogFlags & kFogConservativeDepth) != 0u;
     if (conservative)
     {
@@ -534,7 +548,11 @@ void CSMain(uint3 coord : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint 
         {
             const float2 prevUv = (prevClip.xy / prevClip.w) * float2(0.5f, -0.5f) + 0.5f;
             historyUv = FogVolumeUV(prevUv, prevClip.w, fogGridZParams, fogGridSize.z);
-            if (all(historyUv.xy >= 0.0f) && all(historyUv.xy < 1.0f))
+            // UE :900 rejects in depth as well (any(HistoryUV < 0) || any(HistoryUV >= (UVMax, 1))): air that was
+            // beyond the far plane or nearer than the start last frame is in no slice of the history -- clamped onto
+            // the last or the first one, it read other air (a camera backing away took the far slice's light).
+            const float prevSlice = FogSliceFromDepth(fogGridZParams, prevClip.w) / (float)fogGridSize.z;
+            if (all(historyUv.xy >= 0.0f) && all(historyUv.xy < 1.0f) && prevSlice >= 0.0f && prevSlice < 1.0f)
             {
                 historyWeight = fogJitter.w;
                 if (conservative)

@@ -33,6 +33,8 @@ inline void ApplyOverrides(const nlohmann::json& j, HeightFogSettings& s)
     s.fullyDirectionalDistance = j.value("fullyDirectionalDistance", s.fullyDirectionalDistance);
     s.volumetric = j.value("volumetric", s.volumetric);
     s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
+    s.volumetricStartDistance = j.value("volumetricStartDistance", s.volumetricStartDistance);
+    s.volumetricNearFadeInDistance = j.value("volumetricNearFadeInDistance", s.volumetricNearFadeInDistance);
     s.albedo = j.value("albedo", s.albedo);
     s.extinctionScale = j.value("extinctionScale", s.extinctionScale);
     s.phaseG = j.value("phaseG", s.phaseG);
@@ -66,6 +68,8 @@ inline nlohmann::json ToJson(const HeightFogSettings& s)
     j["fullyDirectionalDistance"] = s.fullyDirectionalDistance;
     j["volumetric"] = s.volumetric;
     j["volumetricDistance"] = s.volumetricDistance;
+    j["volumetricStartDistance"] = s.volumetricStartDistance;
+    j["volumetricNearFadeInDistance"] = s.volumetricNearFadeInDistance;
     j["albedo"] = s.albedo;
     j["extinctionScale"] = s.extinctionScale;
     j["phaseG"] = s.phaseG;

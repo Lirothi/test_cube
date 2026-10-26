@@ -81,13 +81,18 @@ struct HeightFogParams
 // (3) The Falloff clamp is theirs too, and it is not decoration: without it exp2 of a large
 //     negative number is what they describe as going "crazy", and a horizon line of NaNs is
 //     exactly where an unclamped version lands.
+// (4) THE SWITCH SITS AT |falloff| = 0.01, theirs (FLT_EPSILON2, HeightFogCommon.ush:62).
+//     1 - exp2(-f) cancels in float: at f = 1e-5 it is off by ~0.5 %, at 1e-6 by a few per cent.
+//     With the switch at 1e-6 a ray within millimetres of level (falloff 0.02: a height delta under
+//     0.05 mm .. 5 mm) carried that rounding. The Taylor pair is exact to 1e-5 of the value at 0.01
+//     (the next term is (ln2)^3 f^2 / 6), so the switch costs nothing anywhere.
 float HeightFogLineIntegral(float heightFalloff, float rayDirectionY, float rayOriginTerms)
 {
     const float falloff = max(-127.0f, heightFalloff * rayDirectionY);
     const float lineIntegral = (1.0f - exp2(-falloff)) / falloff;
     const float kLn2 = 0.69314718f;
     const float taylor = kLn2 - (0.5f * kLn2 * kLn2) * falloff;
-    return rayOriginTerms * (abs(falloff) > 1.0e-6f ? lineIntegral : taylor);
+    return rayOriginTerms * (abs(falloff) > 0.01f ? lineIntegral : taylor);
 }
 
 // The per-unit line integral of the exponential profile along the view ray -- UE's
@@ -170,18 +175,9 @@ float HeightFogTransmittance(float opticalDepth, float minTransmittance)
 // colour and the pixel behind it converge on the same sample, so there is no seam to hide. That is
 // the plan's item 4, and it is the one place this file is knowingly not a transcription.
 //
-// AND THAT DEPARTURE IS WHY THE SUN LOBE IS FADED OUT BY `headroom`, WHERE UE LET THEIRS GROW
-// WITHOUT LIMIT. Their non-directional colour is an authored constant that contains no sun, so the
-// directional term is the only place the sun's forward scattering can come from and must survive to
-// infinity. Ours is the sky itself, which ALREADY contains the sun's glow around it -- so a lobe
-// that survives to infinity adds the sun a second time, and adds it only to geometry, never to the
-// sky pixel next door. That is exactly the horizon seam the user reported: a warm band on the water
-// stopping dead at the horizon line. Faded, the fog converges on the sky and the seam cannot exist;
-// the lobe keeps doing its job over the distances where the base colour has NOT yet saturated,
-// which is the only place it was ever describing something the sky sample was missing.
+// The lobe was once faded out by `headroom` (a warm band on the water stopping dead at the horizon,
+// while the sky was not fogged); that gate is gone with its reason -- see inside HeightFogColor.
 //
-// Copying the multiplier without copying what cancels it is the same trap as
-// [[transcription-half-a-pair]]: half a pair transcribed out of UE is not a transcription.
 // THE PHASE FUNCTION IS GONE, and `skyBackScatter` with it. It was `lerp(b, 1, forward*forward)`
 // multiplying the base haze, sold as "how bright the haze is with the sun behind you". That is
 // not a phase function: a phase function redistributes energy and integrates to 1 over the
@@ -209,9 +205,17 @@ float3 HeightFogClampSkySample(float3 blurred, float3 unblurred)
     return IblClampToSharp(blurred, unblurred);
 }
 
-float3 HeightFogInscatter(float3 skyAlongView, float3 sunColor, float viewDotSun,
-                           float opticalDepthShared, float distance, float headroom,
-                           HeightFogParams p)
+// THE FOG'S COLOUR OVER A SURFACE, UE's FogColor (HeightFogCommon.ush:407):
+//     base * (1 - transmittance) + sun lobe
+// already weighted -- the caller blends `surface * transmittance + this`. The lobe is NOT multiplied by
+// the coverage: its own `1 - exp2(-sunIntegral)` (:364-368) is the share of the ray that scatters the
+// sun. It used to be returned inside `base + lobe` and every caller multiplied the sum by (1 - T), so the
+// lobe took the coverage twice -- with the two start distances equal (the volume's far plane sets both),
+// (1 - T)^2 where UE have 1 - T: a third of it at 1 - T = 0.3, nine tenths at the horizon's 0.9. Half a pair transcribed
+// out of UE is not a transcription ([[transcription-half-a-pair]]).
+float3 HeightFogColor(float3 skyAlongView, float3 sunColor, float viewDotSun,
+                      float opticalDepthShared, float distance, float transmittance,
+                      HeightFogParams p)
 {
     // 1 looking into the sun, 0 looking away. Squared because Mie is forward-PEAKED rather than
     // linear across the sphere: a view 90 degrees off the sun already sits much nearer the backward
@@ -258,7 +262,7 @@ float3 HeightFogInscatter(float3 skyAlongView, float3 sunColor, float viewDotSun
     // form. What is left is UE's own term, unmodified: DirectionalInscatteringColor weighted by
     // DirectionalInscatteringExponent and held off the near field by its own start distance.
     const float sun = lobe * max(p.sunScatterStrength, 0.0f) * sunFactor;
-    return base + sunColor * sun;
+    return base * (1.0f - transmittance) + sunColor * sun;
 }
 
 #endif // ATMOSPHERE_HLSLI

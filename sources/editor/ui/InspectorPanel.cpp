@@ -1440,12 +1440,10 @@ namespace
             dragF("Sun Scatter Start", "sunScatterStartDistance", 100.0f, 1.0f, 0.0f, 1000.0f, "%.0f m");
             InspectorHelp("UE's DirectionalInscatteringStartDistance: the sun lobe builds up on its "
                           "OWN line integral past this distance, so it does not tint the near "
-                          "field. Theirs is 10000 in centimetres. The lobe then FADES BACK OUT as "
-                          "the fog saturates, which UE's does not: their base colour is an authored "
-                          "constant with no sun in it, ours is the sky, which already has the sun's "
-                          "glow. A lobe surviving to the horizon would add it twice - and only to "
-                          "geometry, never to the sky pixel beside it, which reads as a hard warm "
-                          "band stopping dead at the horizon line.");
+                          "field. Theirs is 10000 in centimetres. As in UE the lobe is added beside "
+                          "the fog colour, not scaled by the fog's coverage a second time, and it "
+                          "reaches the sky pixels too (the sky is fogged), so no seam forms at the "
+                          "horizon.");
 
             ImGui::SeparatorText("Volumetric fog");
             checkB("Volumetric (froxel) fog", "volumetric", false);
@@ -1453,6 +1451,13 @@ namespace
                           "air is a lit, sun-shadowed volume (light shafts through the palms), beyond it the "
                           "analytic fog continues. --set=fog.volumetric:1");
             dragF("Volume Distance", "volumetricDistance", 300.0f, 1.0f, 10.0f, 2000.0f, "%.0f m");
+            dragF("Volume Start", "volumetricStartDistance", 0.0f, 0.1f, 0.0f, 500.0f, "%.1f m");
+            InspectorHelp("UE's VolumetricFogStartDistance (default 0): the volume's own near plane. Not the "
+                          "analytic Start Distance above -- the analytic fog is already kept out of the volume's "
+                          "range. --set=fog.volumetricStart");
+            dragF("Volume Fade-in", "volumetricNearFadeInDistance", 0.0f, 0.1f, 0.0f, 100.0f, "%.1f m");
+            InspectorHelp("UE's VolumetricFogNearFadeInDistance (default 0): the volume fades in over this "
+                          "much of every ray from its start. --set=fog.volumetricFadeIn");
             dragF("Albedo", "albedo", 1.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             dragF("Extinction Scale", "extinctionScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             dragF("Phase G", "phaseG", 0.2f, 0.01f, -0.99f, 0.99f, "%.2f");

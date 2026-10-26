@@ -17,9 +17,9 @@
 // THE BLEND. Output is (in-scattered light, transmittance) and the PSO blends ONE / SRC_ALPHA, so
 // the hardware computes dst * T + inscatter -- the same shape as UE's fog pass
 // (TStaticBlendState<CW_RGB, BO_Add, BF_One, BF_SourceAlpha> in RenderViewFog). The volumetric
-// composite folds into the same pair: the ocean used to write
-//     (color * T + inscatter * (1 - T)) * vol.a + vol.rgb
-// which is exactly dst * (T * vol.a) + (inscatter * (1 - T) * vol.a + vol.rgb).
+// composite folds into the same pair:
+//     (color * T + fogColor) * vol.a + vol.rgb = dst * (T * vol.a) + (fogColor * vol.a + vol.rgb)
+// with fogColor UE's FogColor, already weighted by the coverage (height_fog.hlsli HeightFogColor).
 #define FOG_APPLY_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), " \
     "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(Sampler(s0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE))"
@@ -139,9 +139,8 @@ float4 PSMain(VSOut i) : SV_Target
     const float3 skyAlongView = FogSkyAlongView(SkyboxTex, LinearClampSmp, viewRay, dist,
         HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, fogApplyMisc.x);
     const float3 toSun = normalize(fogSunDir.xyz);
-    const float3 inscatter = HeightFogInscatter(skyAlongView, fogSunColor.rgb,
-                                                 dot(viewRay, toSun), fogShared, dist,
-                                                 headroom, fog);
+    const float3 fogColor = HeightFogColor(skyAlongView, fogSunColor.rgb, dot(viewRay, toSun), fogShared, dist,
+                                           transmittance, fog);
 
     // Part-B review (2026-09-11): THE AERIAL PERSPECTIVE THE WATER NEVER HAD. UE's SingleLayerWater
     // is fogged by the same screen passes as the opaque scene -- sky atmosphere first, height fog OVER
@@ -157,7 +156,7 @@ float4 PSMain(VSOut i) : SV_Target
         ap = SampleSkyAerial(SkyAerialVolume, LinearClampSmp, fogUv, distanceKm, startKm, aerialParams.z);
     }
     // The analytic model and the froxel volume as ONE "fog to apply over" pair, as compose has them...
-    const float3 overRgb = inscatter * (1.0f - transmittance) * vol.a + vol.rgb;
+    const float3 overRgb = fogColor * vol.a + vol.rgb;
     const float overA = transmittance * vol.a;
 
     const uint debugView = (uint)fogApplyMisc.y;

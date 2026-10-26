@@ -630,7 +630,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
 
     float transmittance = 1.0f;
-    float3 inscatter = 0.0f.xxx;
+    float3 fogColor = 0.0f.xxx; // UE's FogColor: what the air adds, already weighted (HeightFogColor)
     // THE SKY IS FOGGED TOO, and that is UE's behaviour rather than an embellishment.
     // HeightFogPixelShader.usf reads the depth buffer, notes `bIsRendered = (DeviceZ != 0.0)`, and
     // the only thing that spares an unrendered pixel is `bOnlyOnRenderedOpaque` -- initialised to
@@ -729,9 +729,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             ? lit
             : FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
                               HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);
-        inscatter = HeightFogInscatter(skyAlongView, fogSunColor.rgb,
-                                        dot(viewDir, fogSunDir.xyz), fogShared, dist,
-                                        headroom, fog);
+        fogColor = HeightFogColor(skyAlongView, fogSunColor.rgb, dot(viewDir, fogSunDir.xyz), fogShared, dist,
+                                  transmittance, fog);
     }
 
     // A debug view must not leave the pixels it does NOT describe showing "no fog": the sky is
@@ -753,7 +752,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // What the AIR adds, already weighted by coverage -- i.e. the term actually summed
         // into the image, not the raw scattering colour. Reading the unweighted one would say
         // the fog is bright everywhere including where it contributes nothing.
-        color = debugUnmeasured ? 0.0.xxx : inscatter * (1.0 - transmittance) * vol.a + vol.rgb;
+        color = debugUnmeasured ? 0.0.xxx : fogColor * vol.a + vol.rgb;
     }
     else if (fogDebugView == 6u || fogDebugView == 7u)
     {
@@ -831,7 +830,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
 
         // The analytic model and the froxel volume, gathered into ONE "fog to apply over" pair. With
         // the analytic model off this is the volume alone; with both off it is the identity.
-        float3 overRgb = inscatter * (1.0f - transmittance);
+        float3 overRgb = fogColor;
         float overA = transmittance;
         overRgb = vol.rgb + overRgb * vol.a; // the volume sits over the analytic model, as before
         overA *= vol.a;
