@@ -17,17 +17,25 @@
     "maxFps": 0,
     "vsync": false
   },
+  "gi": {
+    "enabled": true,
+    "farCascade": true,
+    "farSpacing": 2.0,
+    "hysteresis": 0.9800000190734863,
+    "intensity": 1.0,
+    "spacing": 0.5
+  },
   "lod": {
     "chunkDistance": 24.0,
     "chunkFactor": 2.0,
     "distanceScale": 1.0,
     "enabled": true,
-    "pixelError": 8.0,
     "regularMeshRatios": [
       8.0,
       16.0,
       32.0
     ],
+    "screenPixelError": 1.0,
     "temporalLag": 0.5,
     "ueScreenSize": true
   },
@@ -91,7 +99,7 @@
       "accurateCasterCull": true,
       "atlasResolution": 4096,
       "autoSplits": false,
-      "blendFraction": 0.125,
+      "blendFraction": 0.10000000149011612,
       "casterReach": 150.0,
       "depthBiasTexels": 1.0,
       "distanceFadeFraction": 0.0,
@@ -167,6 +175,16 @@
       "smrtTexelDither": 2.0,
       "windAnimateBelowLevel": 4
     }
+  },
+  "skyVis": {
+    "diffuse": 1.0,
+    "enabled": true,
+    "fogRays": 2,
+    "history": 0.9800000190734863,
+    "maxDistance": 15.0,
+    "rays": 8,
+    "spatialFilter": true,
+    "specular": 1.0
   },
   "streaming": {
     "boost": 1.0,

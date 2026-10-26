@@ -37057,6 +37057,72 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 2532,
+      "mesh": "models/box/box.mesh.json",
+      "name": "staticMesh #2532",
+      "position": [
+        -59.75919723510742,
+        1.6656638383865356,
+        68.34719848632813
+      ],
+      "rotationDeg": [
+        0.0,
+        -29.998842239379883,
+        0.0
+      ],
+      "scale": [
+        57.7599983215332,
+        5.5,
+        0.30000048875808716
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 2534,
+      "mesh": "models/box/box.mesh.json",
+      "name": "staticMesh #2534",
+      "position": [
+        -58.048866271972656,
+        4.396325588226318,
+        65.72392272949219
+      ],
+      "rotationDeg": [
+        0.0,
+        -30.034263610839844,
+        0.0
+      ],
+      "scale": [
+        68.88960266113281,
+        0.4000001847743988,
+        6.099998950958252
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 2535,
+      "mesh": "models/box/box.mesh.json",
+      "name": "staticMesh #2532 Copy",
+      "position": [
+        -56.82282638549805,
+        1.665663719177246,
+        63.72602844238281
+      ],
+      "rotationDeg": [
+        0.0,
+        -29.998842239379883,
+        0.0
+      ],
+      "scale": [
+        57.7599983215332,
+        5.5,
+        0.30000048875808716
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -39931,7 +39997,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 24.0,
+    "time": 15.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,
