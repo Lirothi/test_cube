@@ -335,8 +335,9 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     // Plan S: the RT sky visibility -- applied when its pass was registered this frame (the body
     // writes the target on every path), with the settings' strengths. compose takes the same values.
     constants.skyVisParams = SkyVisShaderParams();
-    // Plan D: the GI probe volume -- where it stands and whether lighting adds its bounce this frame.
-    FillGiShaderParams(constants.ddgiBase.data(), constants.ddgiParams);
+    // Plan D: the GI probe volumes -- where each stands and whether lighting adds its bounce this frame.
+    FillGiShaderParams(0u, constants.ddgiBase.data(), constants.ddgiParams);
+    FillGiShaderParams(1u, constants.ddgiFarBase.data(), constants.ddgiFarParams);
     constants.csmSdsmPartitions = decisions_.sdsmActive && frame_->sdsm && !decisions_.sunShadowsOff
         ? std::min<std::uint32_t>(frame_->sdsm->FrameParams().partitions, render::sdsm::kMaxPartitions)
         : 0u;
@@ -858,11 +859,15 @@ void SceneRenderer::Pass_Lighting(Renderer* renderer, RenderGraphPassContext ctx
               // t17: plan S, the RT sky visibility. Always the real target (it exists on every frame
               // and is declared at its rest); read only when skyVisParams.x says it was written.
               D.skyVisSRV.ptr != 0 ? D.skyVisSRV : renderer->VsmDummyTexSrv(),
-              // t18-t20: plan D, the GI probe volume (irradiance, depth moments, probe state), declared
+              // t18-t20: plan D, the near GI cascade (irradiance, depth moments, probe state), declared
               // at rest whenever it exists; read only when ddgiParams.x says a generation is applied.
-              ddgi_.Ready() ? ddgi_.IrradianceSrv() : renderer->VsmDummyTexSrv(),
-              ddgi_.Ready() ? ddgi_.DepthSrv() : renderer->VsmDummyTexSrv(),
-              ddgi_.Ready() ? ddgi_.StateSrv() : renderer->VsmDummyBufferSrv() },
+              ddgi_[0].Ready() ? ddgi_[0].IrradianceSrv() : renderer->VsmDummyTexSrv(),
+              ddgi_[0].Ready() ? ddgi_[0].DepthSrv() : renderer->VsmDummyTexSrv(),
+              ddgi_[0].Ready() ? ddgi_[0].StateSrv() : renderer->VsmDummyBufferSrv(),
+              // t21-t23: the far cascade, the same three; read only when ddgiFarParams.x says so.
+              ddgi_[1].Ready() ? ddgi_[1].IrradianceSrv() : renderer->VsmDummyTexSrv(),
+              ddgi_[1].Ready() ? ddgi_[1].DepthSrv() : renderer->VsmDummyTexSrv(),
+              ddgi_[1].Ready() ? ddgi_[1].StateSrv() : renderer->VsmDummyBufferSrv() },
             { D.lightUAV },
             renderer->GetSamplerManager()->GetTable(renderer, samplerDescs),
             renderer->GetRenderWidth(), renderer->GetRenderHeight(),

@@ -58,6 +58,16 @@ namespace
         float giSpacing = 0.5f;
         float giHysteresis = 0.98f;
         float giIntensity = 1.0f;
+        bool giFar = true;
+        float giFarSpacing = 2.0f;
+        // The RT sky visibility (SceneRenderSettings::skyVis*, the same defaults), on the GI tab.
+        bool skyVisEnabled = true;
+        std::uint32_t skyVisRays = 8u;
+        float skyVisHistory = 0.98f;
+        float skyVisMaxDistance = 15.0f;
+        float skyVisDiffuse = 1.0f;
+        float skyVisSpecular = 1.0f;
+        bool skyVisFilter = true;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -374,6 +384,13 @@ namespace
         s.giSpacing = std::clamp(finite(s.giSpacing, 0.5f), 0.1f, 8.0f);
         s.giHysteresis = std::clamp(finite(s.giHysteresis, 0.98f), 0.0f, 0.99f);
         s.giIntensity = std::clamp(finite(s.giIntensity, 1.0f), 0.0f, 16.0f);
+        s.giFarSpacing = std::clamp(finite(s.giFarSpacing, 2.0f), 0.5f, 8.0f);
+        // --set skyVis.*'s own ranges (App.cpp ApplySweepValue).
+        s.skyVisRays = std::clamp(s.skyVisRays, 1u, 16u);
+        s.skyVisHistory = std::clamp(finite(s.skyVisHistory, 0.98f), 0.0f, 0.98f);
+        s.skyVisMaxDistance = std::clamp(finite(s.skyVisMaxDistance, 15.0f), 0.5f, 500.0f);
+        s.skyVisDiffuse = std::clamp(finite(s.skyVisDiffuse, 1.0f), 0.0f, 1.0f);
+        s.skyVisSpecular = std::clamp(finite(s.skyVisSpecular, 1.0f), 0.0f, 1.0f);
 
         s.shadowLodBias = std::clamp(s.shadowLodBias, -2, 3);
         s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
@@ -453,6 +470,15 @@ namespace
         s.giSpacing = settings.giSpacing;
         s.giHysteresis = settings.giHysteresis;
         s.giIntensity = settings.giIntensity;
+        s.giFar = settings.giFarCascade;
+        s.giFarSpacing = settings.giFarSpacing;
+        s.skyVisEnabled = settings.skyVisEnabled;
+        s.skyVisRays = settings.skyVisRays;
+        s.skyVisHistory = settings.skyVisHistory;
+        s.skyVisMaxDistance = settings.skyVisMaxDistance;
+        s.skyVisDiffuse = settings.skyVisDiffuse;
+        s.skyVisSpecular = settings.skyVisSpecular;
+        s.skyVisFilter = settings.skyVisFilter;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -618,6 +644,15 @@ namespace
         settings.giSpacing = s.giSpacing; // a new spacing starts the volume over (DdgiVolume::BeginFrame)
         settings.giHysteresis = s.giHysteresis;
         settings.giIntensity = s.giIntensity;
+        settings.giFarCascade = s.giFar;
+        settings.giFarSpacing = s.giFarSpacing;
+        settings.skyVisEnabled = s.skyVisEnabled;
+        settings.skyVisRays = s.skyVisRays;
+        settings.skyVisHistory = s.skyVisHistory;
+        settings.skyVisMaxDistance = s.skyVisMaxDistance;
+        settings.skyVisDiffuse = s.skyVisDiffuse;
+        settings.skyVisSpecular = s.skyVisSpecular;
+        settings.skyVisFilter = s.skyVisFilter;
     }
 
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -791,7 +826,18 @@ namespace
                 { "enabled", s.giEnabled },
                 { "spacing", s.giSpacing },
                 { "hysteresis", s.giHysteresis },
-                { "intensity", s.giIntensity }
+                { "intensity", s.giIntensity },
+                { "farCascade", s.giFar },
+                { "farSpacing", s.giFarSpacing }
+            } },
+            { "skyVis", {
+                { "enabled", s.skyVisEnabled },
+                { "rays", s.skyVisRays },
+                { "history", s.skyVisHistory },
+                { "maxDistance", s.skyVisMaxDistance },
+                { "diffuse", s.skyVisDiffuse },
+                { "specular", s.skyVisSpecular },
+                { "spatialFilter", s.skyVisFilter }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -984,6 +1030,16 @@ namespace
         Read(gi, "spacing", s.giSpacing);
         Read(gi, "hysteresis", s.giHysteresis);
         Read(gi, "intensity", s.giIntensity);
+        Read(gi, "farCascade", s.giFar);
+        Read(gi, "farSpacing", s.giFarSpacing);
+        const json& skyVis = Section(root, "skyVis");
+        Read(skyVis, "enabled", s.skyVisEnabled);
+        Read(skyVis, "rays", s.skyVisRays);
+        Read(skyVis, "history", s.skyVisHistory);
+        Read(skyVis, "maxDistance", s.skyVisMaxDistance);
+        Read(skyVis, "diffuse", s.skyVisDiffuse);
+        Read(skyVis, "specular", s.skyVisSpecular);
+        Read(skyVis, "spatialFilter", s.skyVisFilter);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1450,6 +1506,15 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::GiSpacing:                      current.giSpacing = defaults.giSpacing; break;
     case GraphicsControl::GiHysteresis:                   current.giHysteresis = defaults.giHysteresis; break;
     case GraphicsControl::GiIntensity:                    current.giIntensity = defaults.giIntensity; break;
+    case GraphicsControl::GiFar:                          current.giFar = defaults.giFar; break;
+    case GraphicsControl::GiFarSpacing:                   current.giFarSpacing = defaults.giFarSpacing; break;
+    case GraphicsControl::SkyVisEnabled:                  current.skyVisEnabled = defaults.skyVisEnabled; break;
+    case GraphicsControl::SkyVisRays:                     current.skyVisRays = defaults.skyVisRays; break;
+    case GraphicsControl::SkyVisHistory:                  current.skyVisHistory = defaults.skyVisHistory; break;
+    case GraphicsControl::SkyVisMaxDistance:              current.skyVisMaxDistance = defaults.skyVisMaxDistance; break;
+    case GraphicsControl::SkyVisDiffuse:                  current.skyVisDiffuse = defaults.skyVisDiffuse; break;
+    case GraphicsControl::SkyVisSpecular:                 current.skyVisSpecular = defaults.skyVisSpecular; break;
+    case GraphicsControl::SkyVisFilter:                   current.skyVisFilter = defaults.skyVisFilter; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1533,7 +1598,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyStreaming(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::GiEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::GiIntensity))
+             value <= static_cast<unsigned>(GraphicsControl::SkyVisFilter))
     {
         ApplyGi(current, settings);
     }

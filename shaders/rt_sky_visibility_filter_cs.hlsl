@@ -13,7 +13,9 @@
 // Weights, per tap: a Gaussian over the 5x5 (sigma 1.5 texels); the relative depth step (reverse-Z device depth is
 // 1/distance, so |z_i - z| / z is the relative distance step) against `depthTolerance`; the normals' agreement
 // raised to `normalPower`. A tap on the sky (.w 0) has none. The centre always counts, so an isolated texel keeps
-// its own value.
+// its own value. The accumulation's .w is the device depth, NEGATIVE where the texel had no history this frame
+// (rt_sky_visibility_cs.hlsl); the target's is always positive. `debugView` 1 (skyVis.debug) paints those texels as
+// the open sky -- bright wherever the sky is otherwise shut out.
 #define RT_SKYVIS_FILTER_CS_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
     "CBV(b0)," \
@@ -25,6 +27,7 @@ cbuffer SkyVisibilityFilter : register(b0)
 {
     uint accumIndex;     uint outUavIndex;   uint gb1Index;       uint filterEnabled; // 0 = copy (skyVis.filter)
     uint outWidth;       uint outHeight;     float depthTolerance; float normalPower;
+    uint debugView;      uint3 _filterPad;
 }
 
 SamplerState gSmpPoint : register(s0);
@@ -44,14 +47,25 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     RWTexture2D<float4> outTex = ResourceDescriptorHeap[outUavIndex];
 
     const float4 centre = accum[dtid.xy];
-    if (centre.w <= 0.0f || filterEnabled == 0u)
+    const float centreZ = abs(centre.w);
+    if (centreZ <= 0.0f)
     {
-        outTex[dtid.xy] = centre; // the sky, or a texel the trace cleared: as it is
+        outTex[dtid.xy] = 0.0f.xxxx; // the sky, or a texel the trace cleared: as it is
         return;
     }
     const float2 texel = 1.0f / float2(outWidth, outHeight);
     // The trace's own normal for each texel: the full-resolution pixel under its centre (GTAO's convention).
     const float3 N = normalize(gb1.SampleLevel(gSmpPoint, (float2(dtid.xy) + 0.5f) * texel, 0).rgb * 2.0f - 1.0f);
+    if (debugView == 1u && centre.w < 0.0f)
+    {
+        outTex[dtid.xy] = float4(N, centreZ); // no history this frame: shown as the whole sky
+        return;
+    }
+    if (filterEnabled == 0u)
+    {
+        outTex[dtid.xy] = float4(centre.xyz, centreZ);
+        return;
+    }
 
     float4 sum = float4(centre.xyz, 1.0f);
     [unroll]
@@ -64,15 +78,16 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             const int2 p = int2(dtid.xy) + int2(x, y);
             if (any(p < 0) || p.x >= int(outWidth) || p.y >= int(outHeight)) { continue; }
             const float4 s = accum[p];
-            if (s.w <= 0.0f) { continue; }
+            const float sZ = abs(s.w);
+            if (sZ <= 0.0f) { continue; }
             const float3 Ns = normalize(gb1.SampleLevel(gSmpPoint, (float2(p) + 0.5f) * texel, 0).rgb * 2.0f - 1.0f);
             const float spatial = exp(-float(x * x + y * y) * (1.0f / (2.0f * 1.5f * 1.5f)));
-            const float depthStep = abs(s.w - centre.w) / centre.w;
+            const float depthStep = abs(sZ - centreZ) / centreZ;
             const float wDepth = saturate(1.0f - depthStep / max(depthTolerance, 1.0e-4f));
             const float wNormal = pow(saturate(dot(N, Ns)), normalPower);
             const float w = spatial * wDepth * wNormal;
             sum += float4(s.xyz * w, w);
         }
     }
-    outTex[dtid.xy] = float4(sum.xyz / sum.w, centre.w);
+    outTex[dtid.xy] = float4(sum.xyz / sum.w, centreZ);
 }

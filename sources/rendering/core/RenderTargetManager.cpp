@@ -598,6 +598,70 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             D.hzbHeight = h;
         }
 
+        // The glossy filter's two pyramids (reflection_pyramid_cs.hlsl / reflection_glossy_cs.hlsl): the reflection's
+        // and, on the same grid, the geometry under it (world normal, device depth -- fp16 holds a reverse-Z depth to
+        // 0.05 %). The HZB's shape and rule: built in UNORDERED_ACCESS (mip N reads mip N-1 through its UAV), rest --
+        // and are read -- as mipped SRVs.
+        {
+            const UINT w = std::max(1u, sizes.reflectionWidth);
+            const UINT h = std::max(1u, sizes.reflectionHeight);
+            UINT mips = 1;
+            while (((w >> mips) > 0 || (h >> mips) > 0) && mips < kReflectionPyramidMaxMips)
+            {
+                ++mips;
+            }
+            D3D12_RESOURCE_DESC rd{};
+            rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+            rd.Width = w;
+            rd.Height = h;
+            rd.DepthOrArraySize = 1;
+            rd.MipLevels = static_cast<UINT16>(mips);
+            rd.Format = formats.reflection;
+            rd.SampleDesc.Count = 1;
+            rd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+            rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+
+            auto createReflectionPyramid = [&](GpuResource& res,
+                                               D3D12_CPU_DESCRIPTOR_HANDLE& srv,
+                                               std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kReflectionPyramidMaxMips>& mipUavs,
+                                               DeferredSrvSlot srvSlot,
+                                               DeferredSrvSlot firstUavSlot,
+                                               const wchar_t* name)
+            {
+                ThrowIfFailed(gpu::CreateCommittedTexture(dev,
+                    heapProps, D3D12_HEAP_FLAG_NONE, rd,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr,
+                    MemTag::Reflect, DeferredName(f, name).data(),
+                    res.GetAddressOfForCreate()));
+                res.DeclareCreated(decls, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+
+                D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+                sd.Format = formats.reflection;
+                sd.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                sd.Texture2D.MipLevels = mips;
+                srv = DeferredSrvCPU(f, srvSlot);
+                dev->CreateShaderResourceView(res.Get(), &sd, srv);
+                for (UINT m = 0; m < kReflectionPyramidMaxMips; ++m)
+                {
+                    // The HZB's rule: slots past the real mip count still get a descriptor, at the last real mip.
+                    D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+                    ud.Format = formats.reflection;
+                    ud.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+                    ud.Texture2D.MipSlice = (m < mips) ? m : (mips - 1);
+                    mipUavs[m] = DeferredSrvCPU(f, static_cast<DeferredSrvSlot>(static_cast<UINT>(firstUavSlot) + m));
+                    dev->CreateUnorderedAccessView(res.Get(), nullptr, &ud, mipUavs[m]);
+                }
+            };
+            createReflectionPyramid(D.reflectionPyramid, D.reflectionPyramidSRV, D.reflectionPyramidMipUAV,
+                DeferredSrvSlot::ReflectionPyramid, DeferredSrvSlot::ReflectionPyramidMipUav0, L"ReflectionPyramid");
+            createReflectionPyramid(D.reflectionGeomPyramid, D.reflectionGeomPyramidSRV, D.reflectionGeomPyramidMipUAV,
+                DeferredSrvSlot::ReflectionGeomPyramid, DeferredSrvSlot::ReflectionGeomPyramidMipUav0,
+                L"ReflectionGeomPyramid");
+            D.reflectionPyramidMips = mips;
+        }
+
         // Volumetric fog (plan part A): the two froxel volumes, RGBA16F 3D, one SRV + one UAV each,
         // resting NON_PIXEL (both are written and read by compute; compose reads the integrated one).
         // Sized from the render resolution over kFogGridPixels, like everything else in this set.
@@ -865,6 +929,8 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.reflection.Get(), L"Reflection", kNps);
         nameRes(D.reflectionScratch.Get(), L"ReflectionScratch", kNps);
         nameRes(D.reflectionHistory.Get(), L"ReflectionHistory", kNps);
+        nameRes(D.reflectionPyramid.Get(), L"ReflectionPyramid", kNps);
+        nameRes(D.reflectionGeomPyramid.Get(), L"ReflectionGeomPyramid", kNps);
         // Sampled by the forward ocean/glass draws, so they rest PIXEL-readable, not NPS.
         nameRes(D.oceanReflection.Get(), L"OceanReflection", kNps);
         nameRes(D.oceanReflectionHistory.Get(), L"OceanReflectionHistory", kNps);
@@ -1275,6 +1341,8 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
         collect(D.reflection);
         collect(D.reflectionScratch);
         collect(D.reflectionHistory);
+        collect(D.reflectionPyramid);
+        collect(D.reflectionGeomPyramid);
         collect(D.oceanReflection);
         collect(D.oceanReflectionHistory);
         D.shadow = nullptr; // S3.5: non-owning alias; shadowAtlas_ below is the owner

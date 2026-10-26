@@ -1055,6 +1055,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 GRAPHICS_CONTROL(ReflectionGlossyScale, "reflectionGlossyScale",
                     ImGui::SliderFloat("Glossy blur", &settings.reflectionGlossyScale,
                                        0.0f, 24.0f, "%.1f"));
+                DevHelp("SSR reflections: reflection pixels of blur added at roughness 1 (0 = sharp). RT "
+                        "reflections do not use it: each pixel's mirror reflection is spread over its GGX "
+                        "lobe as seen on the screen -- the hit distance against the surface's, the roughness, "
+                        "the projection (reflection_glossy_cs.hlsl). Headless: --set=reflections.glossyBlur:<px>; "
+                        "--set=reflections.lobe:0 puts this blur back on RT too (the A/B).");
 
                 ImGui::SeparatorText("SSR");
                 int ssrTechnique = static_cast<int>(settings.ssrTechnique);
@@ -1164,13 +1169,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     {
                         settings.rtAlphaMode = static_cast<uint32_t>(alphaMode);
                     }
-                    DevHelp("Off: FORCE_OPAQUE traversal, leaves reflect/occlude as solid cards "
-                            "-- cheapest. First hit: same cheap traversal, but the committed hit "
-                            "is alpha-tested with the albedo sample shading fetches anyway; a "
-                            "transparent texel becomes a MISS, so crowns get their holes -- the "
-                            "holes show the sky fallback, not what is really behind, and crown "
-                            "shadows lean lighter. Costs the same as Off. Full: exact "
-                            "per-candidate testing during traversal -- the expensive one. "
+                    DevHelp("The REFLECTION rays' alpha test. Off: FORCE_OPAQUE traversal, leaves "
+                            "reflect as solid cards -- cheapest. First hit: same cheap traversal, "
+                            "but the committed hit is alpha-tested with the albedo sample shading "
+                            "fetches anyway; a transparent texel becomes a MISS, so crowns get "
+                            "their holes -- the holes show the sky fallback, not what is really "
+                            "behind. Costs the same as Off. Full: exact per-candidate testing "
+                            "during traversal -- the expensive one. Every other RT ray (the sky "
+                            "visibility, the GI, the shadow rays of what a reflection hits) sees "
+                            "the geometry, a leaf card solid, whatever this says. "
                             "Headless: --set=rt.alphaMode:0/1/2.");
                 }
                 ImGui::BeginDisabled(settings.rtAlphaMode == 0u);
@@ -1755,6 +1762,74 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Multiplies the bounce. 1 = physical (the_bathroom_free checked against UE's\n"
                                       "path tracer within ~20 %%); anything else is a look, not lighting.");
+
+                ImGui::SeparatorText("Far cascade");
+                GRAPHICS_CONTROL(GiFar, "giFar",
+                    ImGui::Checkbox("Far cascade", &settings.giFarCascade));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A second volume of the same 32 x 16 x 32 probes, coarser, around the near one:\n"
+                                      "the bounce reaches past the near volume instead of ending at it (beyond both,\n"
+                                      "the analytic ground bounce). Lighting blends to it over the near volume's outer\n"
+                                      "2 m, and reads it only there. Costs a second trace + update and ~51 MB of VRAM.");
+                ImGui::BeginDisabled(!settings.giFarCascade);
+                GRAPHICS_CONTROL(GiFarSpacing, "giFarSpacing",
+                    ImGui::SliderFloat("Far spacing", &settings.giFarSpacing, 1.0f, 8.0f, "%.1f m"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Metres between the far probes (at least twice the near spacing). Coarser = farther\n"
+                                      "reach, blurrier bounce; the same cost. A change starts the far volume over.");
+                ImGui::TextDisabled("Covers %.0f x %.0f x %.0f m around the camera.",
+                                    32.0f * std::max(settings.giFarSpacing, 2.0f * settings.giSpacing),
+                                    16.0f * std::max(settings.giFarSpacing, 2.0f * settings.giSpacing),
+                                    32.0f * std::max(settings.giFarSpacing, 2.0f * settings.giSpacing));
+                ImGui::EndDisabled();
+                ImGui::EndDisabled();
+
+                // Plan S: the RT sky visibility (SceneRenderSettings::skyVis*). Its own system -- the sky's fill and
+                // reflection, not the bounce -- here because it is the other half of how an interior is lit.
+                ImGui::SeparatorText("Sky visibility");
+                GRAPHICS_CONTROL(SkyVisEnabled, "skyVisEnabled",
+                    ImGui::Checkbox("Sky visibility (RT)", &settings.skyVisEnabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How much sky each point sees (UE's DFAO bent normal, traced on the TLAS at half\n"
+                                      "resolution after the G-buffer, before Lighting): the sky's fill and reflection stop\n"
+                                      "where the sky cannot reach -- inside a room, a tunnel, under a canopy. Off = the open\n"
+                                      "sky everywhere (a tunnel's floor lit like the beach).");
+                ImGui::BeginDisabled(!settings.skyVisEnabled);
+                {
+                    int skyVisRays = static_cast<int>(std::clamp(settings.skyVisRays, 1u, 16u));
+                    if (GRAPHICS_CONTROL(SkyVisRays, "skyVisRays", ImGui::SliderInt("Rays", &skyVisRays, 1, 16)))
+                    {
+                        settings.skyVisRays = static_cast<std::uint32_t>(skyVisRays);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Rays per half-resolution pixel per frame (default 8). The cost is the ray count:\n"
+                                      "4 rays 0.14 ms, 8 rays 0.25 ms in a tunnel (0.3 / 0.63 ms on the grove). A surface\n"
+                                      "that sees the sky through a small opening needs more of them, or it grains.");
+                GRAPHICS_CONTROL(SkyVisHistory, "skyVisHistory",
+                    ImGui::SliderFloat("History", &settings.skyVisHistory, 0.8f, 0.98f, "%.3f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The weight of the reprojected past (default 0.98). Higher = calmer, but surfaces a\n"
+                                      "moving camera uncovers take longer to settle. A tunnel floor at 4 rays: 8.6 %% frame\n"
+                                      "to frame at 0.95, 5.2 %% at 0.98; with 8 rays 3.5 %%.");
+                GRAPHICS_CONTROL(SkyVisMaxDistance, "skyVisMaxDistance",
+                    ImGui::SliderFloat("Reach", &settings.skyVisMaxDistance, 2.0f, 60.0f, "%.0f m"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How far a ray looks for something in the way (default 15 m; UE's SkyLight\n"
+                                      "OcclusionMaxDistance is 10). An occluder farther than this does not count.");
+                GRAPHICS_CONTROL(SkyVisDiffuse, "skyVisDiffuse",
+                    ImGui::SliderFloat("Diffuse", &settings.skyVisDiffuse, 0.0f, 1.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How much it occludes the sky's diffuse fill: 1 = UE, 0 = not at all.");
+                GRAPHICS_CONTROL(SkyVisSpecular, "skyVisSpecular",
+                    ImGui::SliderFloat("Specular", &settings.skyVisSpecular, 0.0f, 1.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How much it occludes the sky's reflection: 1 = UE, 0 = not at all.");
+                GRAPHICS_CONTROL(SkyVisFilter, "skyVisFilter",
+                    ImGui::Checkbox("Spatial filter", &settings.skyVisFilter));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE DFAO's 5x5 depth- and normal-aware filter over the accumulation (default on).\n"
+                                      "Off = the accumulation as it is, grainier.");
                 ImGui::EndDisabled();
 
                 ImGui::SeparatorText("Debug view");

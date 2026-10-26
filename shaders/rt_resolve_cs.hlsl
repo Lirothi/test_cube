@@ -23,7 +23,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (payload.a != kRtPayloadMiss)
     {
         float3 radiance = payload.rgb;
-        if (payload.a == kRtPayloadReuse)
+        if (payload.a < 0.0f) // the hit is on screen: finish with its lit HDR (RtPayloadAlpha)
         {
             Texture2D lightT = ResourceDescriptorHeap[lightIndex];
             // exact lit HDR; the light target is pre-exposed, the reflection buffer holds radiance

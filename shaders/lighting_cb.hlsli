@@ -150,9 +150,12 @@ cbuffer PerFrame : register(b0)
     // Interior lighting plan D: the GI probe volume (ddgi_common.hlsli). ddgiBase xyz = its first world
     // cell, w = the generation traced; ddgiParams x = the spacing (0 = not applied this frame: the
     // atlases at t18-t20 are then placeholders), y = the bounce's intensity (1 = physical), z = 1 shows
-    // the bounce alone (a debug view).
+    // the bounce alone (a debug view), w = the cells its edge fades over (wider when the far cascade
+    // takes over). ddgiFarBase / ddgiFarParams: the far cascade (t21-t23), the same fields.
     int4 ddgiBase;
     float4 ddgiParams;
+    int4 ddgiFarBase;
+    float4 ddgiFarParams;
 }
 
 

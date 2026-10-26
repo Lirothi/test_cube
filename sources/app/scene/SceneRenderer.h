@@ -105,6 +105,9 @@ private:
         // ...and lighting reads it this frame: its resources exist and some generation was traced
         // (the passes may skip a frame -- the TLAS not ready -- and the atlases still hold the last one).
         bool giApplied = false;
+        // ...and the FAR cascade (gi.far): wanted, and read by lighting this frame, the same two rules.
+        bool giFar = false;
+        bool giFarApplied = false;
         bool clearReflections = false; // source is None/SkyOnly: nothing traces, the target is cleared
         bool glassRefl = false;        // glass gets traced reflections (was glassReflActive_)
         bool reflectionTemporal = false; // the reflection temporal resolve runs (SSR or RT source)
@@ -538,15 +541,17 @@ private:
     // The update blends only what the trace wrote THIS frame (giTraced_, set by the trace's body).
     struct GiChain
     {
-        DdgiVolume::Frame frame;
+        DdgiVolume::Frame frame[2];   // per cascade (kGiCascades)
+        uint32_t cascades = 1u;       // 1 = the near one only, 2 = with the far one
         uint32_t point = 0u;
         uint32_t pointRestore = 0u;
     };
     void BuildGi(Renderer* r, GraphBuild& gb);
     void Pass_GiTrace(Renderer* r, RenderGraphPassContext ctx, const GiChain& chain);
     void Pass_GiUpdate(Renderer* r, RenderGraphPassContext ctx, const GiChain& chain);
-    // lighting_cb.hlsli `ddgiBase` / `ddgiParams` (x spacing, 0 = off; y intensity; z debug view).
-    void FillGiShaderParams(int32_t outBase[4], Math::float4& outParams) const;
+    // lighting_cb.hlsli `ddgiBase` / `ddgiParams` (cascade 0) and `ddgiFarBase` / `ddgiFarParams` (cascade 1):
+    // x spacing, 0 = not applied; y intensity; z debug view; w the cells its edge fades over.
+    void FillGiShaderParams(uint32_t cascade, int32_t outBase[4], Math::float4& outParams) const;
     void Pass_RTResolve(Renderer* r, RenderGraphPassContext ctx, std::uint32_t point);
     // S15b off-screen glass reflections: render a glass front-face normal/depth G-buffer,
     // then dispatch rt_reflections_cs over it into glassReflection (sampled by forward glass).
@@ -564,9 +569,14 @@ private:
     // whether to record the pair.
     struct BlurPoints
     {
-        std::uint32_t apply = 0;     // first-use states for the horizontal dispatch
+        std::uint32_t apply = 0;     // first-use states for the horizontal dispatch (or the pyramid's build)
         std::uint32_t pingPong = 0;  // scratch -> readable, reflection -> UAV, for the vertical
         bool blur = false;
+        // The RT reflection's GLOSSY filter instead of the separable blur (reflection_glossy_cs.hlsl): the reflection's
+        // mip pyramid, then a gather over each pixel's GGX lobe. `gather` hands the pyramid over readable and the
+        // reflection back as the UAV it writes.
+        bool lobe = false;
+        std::uint32_t gather = 0;
     };
     void Pass_ReflectionBlur(Renderer* r, RenderGraphPassContext ctx, const BlurPoints& pts);
     // pass-flow S6: `apply` is the first-use point (plus the shore-wetness read when the ocean has
@@ -684,7 +694,10 @@ private:
     BloomRenderer bloom_;
     SkyAtmosphere skyAtmosphere_;
     VolumetricCloud volumetricCloud_; // plan part C: noise set, shadow map, the half-res trace passes
-    DdgiVolume ddgi_;                 // plan D: the GI probe volume
+    // Plan D: the GI probe volumes -- [0] the near cascade (gi.spacing), [1] the far one around it
+    // (gi.farSpacing, gi.far), the same 32x16x32 probes each.
+    static constexpr uint32_t kGiCascades = 2;
+    std::array<DdgiVolume, kGiCascades> ddgi_{ DdgiVolume(0), DdgiVolume(1) };
     std::atomic<bool> giTraced_{ false }; // plan D: the trace body dispatched this frame (its update blends)
     // R4: the RT acceleration structures (S5), the bindless table (S9) and the two caches that keep
     // their rebuild incremental, together with the build body that was Pass_BuildAS. The RT passes

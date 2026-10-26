@@ -81,7 +81,7 @@ void SceneRenderer::Reset()
     rtAs_.Reset();
     skyAtmosphere_.Reset();
     volumetricCloud_.Reset();
-    ddgi_.Reset();
+    for (DdgiVolume& volume : ddgi_) { volume.Reset(); }
     cloudHistoryFrames_ = 0u; cloudLogged_ = -1;
     lightShaftHistoryFrames_ = 0u; lightShaftLastSeconds_ = -1.0;
     fogDistantRevision_ = 0u;
@@ -131,10 +131,11 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
     {
         volumetricCloud_.Prepare(renderer, frame_->settings.volumetricCloud);
     }
-    // Plan D: the GI probe volume's fixed resources, once GI is wanted on RT hardware.
+    // Plan D: the GI probe volumes' fixed resources, once GI (and its far cascade) is wanted on RT hardware.
     if (frame_->settings.giEnabled && renderer->IsRaytracingSupported())
     {
-        ddgi_.Prepare(renderer);
+        ddgi_[0].Prepare(renderer);
+        if (frame_->settings.giFarCascade) { ddgi_[1].Prepare(renderer); }
     }
 
     if (frame_->shadowGpu)
@@ -365,7 +366,9 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     // Plan D: the GI probe volume traces the same TLAS. Lighting reads it while some generation of
     // it was traced (a frame whose passes skip keeps the last atlases).
     decisions_.gi = decisions_.rtSupported && !rtFailed && frame.settings.giEnabled;
-    decisions_.giApplied = decisions_.gi && ddgi_.Ready() && ddgi_.AppliedGeneration() != 0u;
+    decisions_.giApplied = decisions_.gi && ddgi_[0].Ready() && ddgi_[0].AppliedGeneration() != 0u;
+    decisions_.giFar = decisions_.gi && frame.settings.giFarCascade && ddgi_[0].Ready() && ddgi_[1].Ready();
+    decisions_.giFarApplied = decisions_.giFar && ddgi_[1].AppliedGeneration() != 0u;
     decisions_.rtBuildAS = decisions_.rtReflect || decisions_.rtDebugView || decisions_.skyVis || decisions_.gi;
     // S15b: glass gets traced reflections in SSR/RT modes. SkyOnly and None skip
     // the glass reflection prepass; the forward shader uses the cubemap only in

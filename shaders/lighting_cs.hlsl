@@ -62,6 +62,10 @@ Texture2D<float4> SkyVisTex : register(t17);
 Texture2D<float4> DdgiIrradianceTex : register(t18);
 Texture2D<float4> DdgiDepthTex : register(t19);
 StructuredBuffer<uint4> DdgiProbeState : register(t20);
+// ...and its far cascade (gated by ddgiFarParams.x), the same three.
+Texture2D<float4> DdgiFarIrradianceTex : register(t21);
+Texture2D<float4> DdgiFarDepthTex : register(t22);
+StructuredBuffer<uint4> DdgiFarProbeState : register(t23);
 RWTexture2D<float4> LightTarget : register(u0);
 
 SamplerState gSmpPoint : register(s0);
@@ -269,7 +273,7 @@ float CloudSunVisibility(float3 P)
 
 #define LIGHTING_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=21, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=24, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
 
@@ -371,8 +375,25 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         giVolume.generation = uint(ddgiBase.w);
         giVolume.spacing = ddgiParams.x;
         giIrradiance = DdgiIrradiance(DdgiIrradianceTex, DdgiDepthTex, DdgiProbeState, gSmpLinearClamp, giVolume,
-                                      P, N, V, giWeight) * ddgiParams.y;
+                                      P, N, V, ddgiParams.w, giWeight);
     }
+    // The far cascade takes what the near one leaves -- beyond it, its faded edge, and a point no usable
+    // near probe surrounds -- so a pixel well inside the near cascade never reads it.
+    if (ddgiFarParams.x > 0.0f && giWeight < 1.0f)
+    {
+        DdgiVolumeDesc farVolume;
+        farVolume.base = ddgiFarBase.xyz;
+        farVolume.generation = uint(ddgiFarBase.w);
+        farVolume.spacing = ddgiFarParams.x;
+        float farWeight = 0.0f;
+        const float3 farIrradiance = DdgiIrradiance(DdgiFarIrradianceTex, DdgiFarDepthTex, DdgiFarProbeState,
+                                                    gSmpLinearClamp, farVolume, P, N, V, ddgiFarParams.w, farWeight);
+        const float farShare = farWeight * (1.0f - giWeight);
+        const float total = giWeight + farShare;
+        giIrradiance = total > 0.0f ? (giIrradiance * giWeight + farIrradiance * farShare) / total : 0.0f.xxx;
+        giWeight = total;
+    }
+    giIrradiance *= ddgiParams.y;
 
     float3 color;
     if (skyIrradianceEnabled != 0u)

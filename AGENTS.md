@@ -389,8 +389,9 @@ entry, nothing to save, an Inspector edit of the same object re-applies the docu
 re-meters the exposure; `screenshot {clean: true, path: "...png", settleFrames: 60}` writes the
 frame WITHOUT the editor's panels (scene + HUD, comparable with a headless `--shot`) at full size and
 sends no picture back unless `image`; `reset_settings` puts every environment object back to the open
-document (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*` -- are not in the
-document and stay as last set); `get_readouts` returns the metered/adapted EV100, the pre-exposure,
+document (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*`, `skyVis.*`, `gi.*`,
+`render.*` -- are not in the document and stay as last set: a bisect that turns `skyVis.enabled:0` off for one
+arm runs every later arm without it unless each arm names it); `get_readouts` returns the metered/adapted EV100, the pre-exposure,
 the sun probe (disc colour, visible share) and the frame rate; `set_camera {lookAt: "sun",
 offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has it (`position`
 optional; `lookAt: "moon"` the moon; positive offsetPitchDeg tilts DOWN, so a view 4 degrees over the horizon
@@ -418,7 +419,10 @@ the night with the daytime HDRI's 12,000 lux fill (x skyFillIntensity 2) and rea
 `hdriLux`, `irradianceScale`) to tell which fill is lighting the frame.
 `set_settings {set: "wind.freeze:1"}` holds the wind + ocean pose (`--wind-freeze` for a running
 editor; `0` releases it, `reset_settings` does not): without it two looks of the sea are two different
-seas. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
+seas. `set_settings {set: "camera.fly:-3.8"}` flies the camera along its own view at that many m/s (negative =
+backwards, `0` stops it, `reset_settings` does not): a temporal history's artefact that only shows in MOTION is
+looked at in the running editor, `screenshot` with `settleFrames` taking it mid-flight (`--set=camera.fly:` headless;
+`--cam-fly` drifts along the WORLD's x/z instead). Stop it in a `finally` -- a script that dies leaves it flying. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
 -- set `bloom.ghostIntensity:0` for that read.
 A FLICKER IS READ FRAME BY FRAME: two `get_readouts` calls land ~10 frames apart and see a drift, never
 a flicker. `get_readouts {history: N}` (N <= 512) adds the newest N frames, one row EACH (frame,
@@ -646,9 +650,9 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
 ## RT Sky Visibility -- the Sky Stops Lighting What It Cannot See
 
 `Main_SkyVis` (`shaders/rt_sky_visibility_cs.hlsl`) is UE's Distance Field AO bent normal traced with inline
-RayQuery on the TLAS: half resolution, `skyVis.rays` (4) cosine rays per pixel against the SHADOW casters, alpha-
-tested like the RT reflections, out to `skyVis.maxDistance` (15 m), accumulated over frames in the same dispatch
-(`skyVis.history` 0.95, reprojected through the G-buffer velocity) into `skyVisAccum`, then filtered in space by
+RayQuery on the TLAS: half resolution, `skyVis.rays` (8) cosine rays per pixel against the SHADOW casters' geometry
+(a leaf card solid, below), out to `skyVis.maxDistance` (15 m), accumulated over frames in the same dispatch
+(`skyVis.history` 0.98, reprojected through the G-buffer velocity) into `skyVisAccum`, then filtered in space by
 `shaders/rt_sky_visibility_filter_cs.hlsl` (UE DFAO's spatial filter: a 5x5 half-resolution gather weighted by
 relative depth `skyVis.filterDepth` 0.05 and normal agreement^`skyVis.filterNormalPower` 8; `skyVis.filter:0` = the
 accumulation as it is) into `skyVis`, the target every consumer reads. The history is the UNFILTERED accumulation
@@ -668,8 +672,67 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   temporal std over 12 clean shots (scratchpad noise_map.py): 0.9 and no filter 9.4 % median (p90 18 %), 0.95 +
   the filter 3.2 % (5.7 %), 0.97 2.8 %, 0.97 + 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. Bindless slots 40-41
   are the filter's.
+- 8 rays and 0.98 are the defaults since 2026-10-26 (owner's tunnel of boxes, cam -58.63,1.72,65.12 at 15:00, whose
+  floor sees the sky only through the mouth; per-pixel temporal std over 16 shots, scratchpad tunnel_variants.py):
+  4 rays / 0.95 8.6 % median (p90 12.3 %), 8 rays 5.6 %, 0.98 5.2 %, both 3.5 % (5.1 %); SkyVis off 0.2 %.
+  Pass_SkyVis 0.14 -> 0.25 ms there. 0.98 is also the top of the history's range (`--set`, the settings file).
+- **A texel without history is SEEDED** (UE DFAO `FilterHistoryPS`, DistanceFieldLightingPost.usf:297-361; 2026-10-26,
+  owner: "flying backwards down the tunnel, noise artifacts"): disoccluded or come in over the screen's edge, it takes
+  `lerp(own rays, mean of the neighbours within 4 texels that kept their history, skyVis.history)` -- each neighbour's
+  own reprojected history, weighted as the spatial filter weighs (`skyVis.filterDepth` / `filterNormalPower`; UE's
+  exp2(-1000 x depth step) drops the next row of a floor seen at 30 degrees). Before, the few rays of that first frame
+  went into every later blend at 0.98^n: a camera flying backwards, the floor coming in under the bottom edge every
+  frame, wore a band of grain ~50 half-res rows deep. Owner's view (cam -57.89,2.27,65.68 yaw 57.8, 15:00) flying
+  back at 3.8 m/s, the floor's bottom band (std of luminance minus an 8-px blur / mean, scratchpad band_noise.py; the
+  same frame still = 10.7 %): 300 fps 16.0-17.7 % -> 9.3-9.9 %, 60 fps 22.7-23.5 % -> 9.6-10.2 %; Pass_SkyVis
+  0.230-0.239 -> 0.237-0.249 ms. `skyVis.seed:0` = before (the A/B); `skyVis.debug:1` paints the texels that lost
+  their history this frame as the open sky (the accumulation's .w is negative there, UE's sign bit -- the target's
+  stays positive). A wholly new region (no neighbour kept anything) still starts from its own rays, as in UE.
+- **No RT ray but a reflection's alpha-tests** (owner, 2026-10-26): this pass, the GI (probe rays and their
+  shadow/sky rays) and the shadow rays of what a reflection hits see the GEOMETRY, a leaf card solid --
+  `rt_geometry.hlsli RtVisibilityBlocked` (FORCE_OPAQUE + ACCEPT_FIRST_HIT_AND_END_SEARCH) and ddgi_trace's
+  FORCE_OPAQUE closest hit. `rt.alphaMode` / Reflections "RT foliage alpha" is the reflection rays' alone. Why
+  (owner: "SkyVis dances inside the house"): they followed the reflections' mode, and its mode 1 alpha-tested the hit
+  the traversal met FIRST -- the BVH's order, not the ray's; the palms' wind BLAS are rebuilt every frame, so a crown
+  went "blocked" / "open" for every ray through it at once and the bathroom, lit through one window with palms
+  outside, pulsed. Owner's view (cam -24.51,1.36,87.74, 15:00), 11 headless shots 0.5 s apart, per-pixel std (scratchpad
+  house_series.ps1 + series_noise.py): median 5.08 % / p90 19.9 % -> 1.82-1.88 % / 3.1-3.2 % (twice); the wind frozen
+  1.84 %, SkyVis off 0.70 %. Cost (editor closed, alternated x3): SkyVis 0.31 ms in the bathroom, 0.48 on the grove,
+  whatever the reflections' mode -- the old mode 1's own traversal. Tried first, dropped: the NEAREST hit's texel
+  deciding (deterministic too, but +0.10 / +0.23 ms SkyVis and a ray through a wall behind a transparent texel), and
+  closing that leak (1.49 / 1.94 ms on the grove); mode 2 throughout costs the grove's SkyVis 2.0 ms.
+- Developer Controls > GI "Sky visibility": on/off, rays, history, reach, diffuse, specular, spatial filter --
+  persisted in graphics_settings.json `skyVis` (`--set=skyVis.*` the same knobs, transient); "Reset GI to defaults"
+  resets them with the probes. The filter's depth/normal weights stay `--set` only.
 - A/B it with the exposure PINNED (`exposure.autoExposure:0` after metering): the metering brightens the whole
   frame to make up for the darker shade, which reads as "the sky got brighter".
+
+## RT Reflections -- Glossy by the GGX Lobe
+
+The RT reflection is ONE sharp mirror ray a pixel whatever the roughness (stochastic GGX rays were tried and parked:
+noisy without a production denoiser, RT reflections plan S11). Glossiness is a filter of that image in the
+reflector's screen space, `shaders/reflection_glossy_cs.hlsl` (2026-10-26, owner: "the wood under the bathroom window
+reflects too much"): through a planar reflector the reflected point `hitT` behind it is a virtual image `d + hitT`
+from the eye, so the lobe's spread is `tan(angle) x hitT / (d + hitT)` radians of view, x `0.5 x height x P[1][1]`
+pixels a radian. The angle: GGX's half maximum (`tan theta_h = alpha sqrt(sqrt2 - 1)`), twice that for the reflected
+direction, as a Gaussian's sigma. A mirror stays sharp (sigma under half a texel copies the pixel), a contact stays
+crisp, a far reflection spreads. Before, S16's separable blur added `roughness x Glossy blur` (1.0) pixels: the
+panelling's roughness 0.40 got 0.4 px where its lobe is ~35 -- a mirror image of the window and the curtain.
+
+- The trace stores the hit distance in the payload's alpha (`rt_reflect_common.hlsli RtPayloadAlpha`: 0 = miss,
+  +t = shaded off screen, -t = finished from the lit HDR); the resolve decides by the sign.
+- `Pass_Reflection.Blur` builds two pyramids on the reflection's grid (`reflection_pyramid_cs.hlsl`, the HZB's
+  UAV-chain rule): the reflection (after the temporal resolve) and the GEOMETRY under it (world normal, device depth).
+  The gather takes 16 taps on a golden-angle spiral out to 2 sigma, each read at the mip its spacing spans, weighted by
+  the Gaussian, the centre's plane (2 % of the view distance) and normals^8 -- the bathtub in front of the panelling
+  is another surface. Reading the taps' depth/normal from the full-resolution G-buffer missed the cache and cost
+  0.11 ms of the gather's 0.13; from the geometry pyramid at the tap's mip the whole filter costs (alternated x3,
+  editor closed) 0.077 ms in the bathroom and 0.062 on the grove, against the old blur's 0.024 / 0.022. The tap count
+  barely mattered (8 vs 16: the same) -- the footprint's cache misses did.
+- RT only (it needs the hit distance); SSR keeps the old blur and "Glossy blur" (`reflections.glossyBlur`) is now the
+  SSR's. `--set=reflections.lobe:0` = the old blur on RT too, the A/B. Verified: the bathroom's frame-to-frame
+  noise 1.72 % (1.8 before), mean brightness unchanged (energy kept: the DFG weight is compose's as before), the
+  mirror sharper than the old blur left it, GBV (Reflection.Blur, RTTrace, RTResolve) clean.
 
 ## GI Probe Volume (DDGI) -- the Bounce
 
@@ -683,6 +746,20 @@ depth-moment (14x14) atlases. Interior lighting plan D.
 frame std 0.68 sRGB levels; 0.37 at 0.97, 0.29 at 0.98, 0.17 without GI -- scratchpad flicker_map: per-pixel std
 over 8 clean shots 3 frames apart). The divisor does not change that noise, only how fast it moves.
 
+- **The FAR cascade** (owner 2026-10-26, "сделай второй каскад проб"): `ddgi_[1]`, the same 32x16x32 probes
+  `gi.farSpacing` (2 m) apart -- 64 x 32 x 64 m around the camera, where the near one is 16 x 8 x 16 (+-4 m up and
+  down: a camera 5 m up had NO bounce on the ground). Same shaders, its own atlases/state (`DdgiFar.*`), bindless
+  slots 42-45, its own infinite bounce; traced and updated in the same two passes (a second dispatch each, GPU
+  scopes `Pass_GiTraceFar` / `Pass_GiUpdateFar`), 1 / `gi.farDivisor` (4) of its probes a frame. Lighting
+  (t21-t23, `ddgiFarBase/Params`) takes the near cascade where it is whole and the far one for what it leaves --
+  beyond it, the near one's outer 2 m (its edge fade widens to `kGiNearFadeMetres` while the far one is applied),
+  a point no usable near probe surrounds; a pixel well inside the near cascade never reads it. `gi.far:0` = the near
+  one alone. Developer Controls > GI "Far cascade" / "Far spacing", persisted (`gi.farCascade`, `gi.farSpacing`).
+  Cost, wind_test's start camera, interleaved x3 in one binary: CPU.Frame 3.648 -> 3.889 ms (+0.24) at divisor 4,
+  3.840 (+0.19) at 8; far trace 0.113 / 0.070 ms, far update 0.094 / 0.043, Lighting 0.179 -> 0.244 (that view
+  is mostly outside the near cascade). VRAM ~51 MB (rays 25.2 -- every probe's row, for any divisor -- irradiance
+  8.4, depth 16.8, state 1.0). In the frame the difference is subtle outdoors (the analytic ground bounce
+  approximates an open-sky bounce well); `gi.debug:1` shows what it covers (red = no probes).
 - The probes hold the BOUNCE only: a ray that misses brings 0. The sky reaches a surface through plan S (RT sky
   visibility), and lighting_cs ADDS the bounce to the indirect diffuse -- occluded by the AO, never by the sky
   visibility -- so nothing is counted twice and the volume's edge fades an addition, not a seam. Inside the volume it

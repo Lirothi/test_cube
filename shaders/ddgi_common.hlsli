@@ -174,11 +174,12 @@ float2 DdgiAtlasUv(uint3 slot, float3 dir, uint n, float2 invAtlasSize)
 
 // RTXGI DDGIGetVolumeIrradiance (Irradiance.hlsl), with the self-shadow bias of DDGIGetSurfaceBias
 // (normal 0.2 / view 0.8 of 0.3 x 0.75 spacing). `weight` = how much of the volume this point is in:
-// 1 inside, 0 at and beyond its last plane of probes (the caller fades the bounce with it), and 0
+// 1 inside, 0 at and beyond its last plane of probes, ramping over the outer `fadeCells` (the caller
+// fades the bounce with it, or hands it to the far cascade -- lighting_cs), and 0
 // when no usable probe surrounds it. P the surface, N its normal, V toward the camera (or the ray's
 // origin, for the trace's infinite bounce).
 float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<uint4> state, SamplerState linearClamp,
-                      DdgiVolumeDesc v, float3 P, float3 N, float3 V, out float weight)
+                      DdgiVolumeDesc v, float3 P, float3 N, float3 V, float fadeCells, out float weight)
 {
     weight = 0.0f;
     const float3 biased = P + (N * 0.2f + V * 0.8f) * (0.75f * v.spacing * 0.3f);
@@ -236,9 +237,10 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
     }
     if (wsum <= 0.0f) { return 0.0f.xxx; }
 
-    // Fade over the outermost cell of the volume (the bounce, not a model, ends there).
+    // Fade over the outer `fadeCells` cells of the volume (the bounce, not a model, ends there; a wider
+    // band where a far cascade takes over, so the hand-over is not a seam).
     const float3 inside = min(g - float3(v.base), float3(v.base + kDdgiDims - 1) - g);
-    weight = saturate(min(inside.x, min(inside.y, inside.z)));
+    weight = saturate(min(inside.x, min(inside.y, inside.z)) / max(fadeCells, 1.0f));
     const float3 root = sum / wsum;
     return root * root;
 }

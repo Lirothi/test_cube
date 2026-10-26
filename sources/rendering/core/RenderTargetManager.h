@@ -23,6 +23,11 @@ inline constexpr unsigned kHzbMaxMips = 13;
 // per mip, and the whole chain sits in UNORDERED_ACCESS while it is built.
 inline constexpr unsigned kBloomMaxMips = 8;
 
+// The reflection's mip pyramid (reflection_pyramid_cs.hlsl), the glossy filter's source: mip 0 at the reflection's
+// own resolution (half the render's at the default), 10 levels take a 4K render's 1920x1080 to 3x2 -- a GGX lobe
+// wider than that is wider than the screen. Same shape as the HZB chain.
+inline constexpr unsigned kReflectionPyramidMaxMips = 10;
+
 // P8C: the convolution transform is one thread per element PAIR, so a group is half the longest
 // scan line it must handle. 1024 is D3D12's ceiling on group size, which puts the largest usable
 // transform at 2048 -- well past what a quarter-resolution frame needs.
@@ -41,9 +46,9 @@ public:
         // lens-flare target and P8C-2l the streak pyramid's two halves.
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            36; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts, +2 sky visibility).
+            38; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts, +2 sky visibility, +2 reflection pyramids).
 #else
-            35;
+            37;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -63,6 +68,11 @@ public:
         GpuResource fxaa;    // FXAA output (R8G8B8A8)
         GpuResource reflection;        // premultiplied; compose samples this after blur
         GpuResource reflectionScratch; // ping-pong/scratch target for reflection filtering
+        // The reflection's mip pyramid: the glossy filter's source (RT only). Built from the temporal resolve's
+        // output into UNORDERED_ACCESS, read as a mipped SRV, rests NON_PIXEL like the HZB. Its twin on the same
+        // grid holds the geometry under it (world normal, device depth) for the filter's same-surface test.
+        GpuResource reflectionPyramid;
+        GpuResource reflectionGeomPyramid;
         // RT gather-then-shade payload (async prep): rt_trace_cs writes radiancePart + mode
         // (rgba16f) and the lit-HDR reuse uv (rg16unorm -- fp16 would wobble the exact screen
         // fetch by more than a pixel); rt_resolve_cs reads both. Reflection-resolution sized.
@@ -201,6 +211,10 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionSRV{}, reflectionUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionScratchSRV{}, reflectionScratchUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE reflectionHistorySRV{}, reflectionHistoryUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE reflectionPyramidSRV{}, reflectionGeomPyramidSRV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kReflectionPyramidMaxMips> reflectionPyramidMipUAV{};
+        std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kReflectionPyramidMaxMips> reflectionGeomPyramidMipUAV{};
+        UINT reflectionPyramidMips = 0; // levels actually created for the reflection's size (both pyramids)
         D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadSRV{}, rtPayloadUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE rtPayloadUvSRV{}, rtPayloadUvUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE oceanReflectionSRV{}, oceanReflectionUAV{};
@@ -413,6 +427,16 @@ private:
     // Plan C2 volumetric clouds: the half-res march and its resolve, each with its depth.
     CloudTrace, CloudTraceUAV, CloudTraceDepth, CloudTraceDepthUAV,
     CloudResolved, CloudResolvedUAV, CloudResolvedDepth, CloudResolvedDepthUAV,
+    // The reflection's mip pyramid and its geometry twin (the glossy filter's sources): one SRV, one UAV per mip.
+    ReflectionPyramid,
+    ReflectionPyramidMipUav0, ReflectionPyramidMipUav1, ReflectionPyramidMipUav2, ReflectionPyramidMipUav3,
+    ReflectionPyramidMipUav4, ReflectionPyramidMipUav5, ReflectionPyramidMipUav6, ReflectionPyramidMipUav7,
+    ReflectionPyramidMipUav8, ReflectionPyramidMipUav9,
+    ReflectionGeomPyramid,
+    ReflectionGeomPyramidMipUav0, ReflectionGeomPyramidMipUav1, ReflectionGeomPyramidMipUav2,
+    ReflectionGeomPyramidMipUav3, ReflectionGeomPyramidMipUav4, ReflectionGeomPyramidMipUav5,
+    ReflectionGeomPyramidMipUav6, ReflectionGeomPyramidMipUav7, ReflectionGeomPyramidMipUav8,
+    ReflectionGeomPyramidMipUav9,
     Count };
     enum class DeferredDsvSlot : UINT { Depth, Shadow, GlassReflDepth, Count };
 

@@ -103,6 +103,8 @@ void SceneLightingCBHandles::Populate(Material* material)
     skyVisParams = material->ComputeCB0FieldHandle("skyVisParams");
     ddgiBase = material->ComputeCB0FieldHandle("ddgiBase");
     ddgiParams = material->ComputeCB0FieldHandle("ddgiParams");
+    ddgiFarBase = material->ComputeCB0FieldHandle("ddgiFarBase");
+    ddgiFarParams = material->ComputeCB0FieldHandle("ddgiFarParams");
 
     // A name that does not resolve leaves `field` null, UpdateCBField writes NOTHING, and the
     // shader then reads whatever was in that constant-buffer memory. That is normally a cosmetic
@@ -881,6 +883,21 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/rt_sky_visibility_filter_cs.hlsl";
         cd.csEntry = "CSMain";
         matSkyVisFilter_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    // The RT reflection's glossy filter: the reflection's mip pyramid and the GGX-lobe gather from it.
+    if (!matReflectionPyramid_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/reflection_pyramid_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matReflectionPyramid_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    if (!matReflectionGlossy_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/reflection_glossy_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matReflectionGlossy_ = mm->GetOrCreateCompute(renderer, cd);
     }
     if (!matRtResolve_ && renderer->IsRaytracingSupported())
     {
@@ -1688,6 +1705,8 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.skyVisParams, data.skyVisParams, dest);
     matLighting_->UpdateCBField(handles.ddgiBase, data.ddgiBase, dest);
     matLighting_->UpdateCBField(handles.ddgiParams, data.ddgiParams, dest);
+    matLighting_->UpdateCBField(handles.ddgiFarBase, data.ddgiFarBase, dest);
+    matLighting_->UpdateCBField(handles.ddgiFarParams, data.ddgiFarParams, dest);
     for (size_t i = 0; i < data.clipmapViewProj.size(); ++i)
     {
         matLighting_->UpdateCBField(handles.clipmapViewProj, data.clipmapViewProj[i], dest, static_cast<uint32_t>(i));

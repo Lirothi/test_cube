@@ -102,4 +102,21 @@ bool RtAlphaCandidatePasses(StructuredBuffer<GeometryInfo> geomBuf, SamplerState
     return (float(h & 0xFFFFu) * (1.0f / 65535.0f)) < missKeep;
 }
 
+// A VISIBILITY ray ("is anything in the way") -- every RT ray that is not a reflection's: the sky visibility, the GI's
+// shadow and sky rays, a reflection hit's shadow rays. It sees the GEOMETRY, a leaf card as a solid card, no alpha test
+// (owner, 2026-10-26): the alpha modes (rt_reflect_common.hlsli alphaMode) are the reflection rays' alone. Any triangle
+// in the way blocks, so the first one the traversal meets ends it -- the answer cannot depend on the order.
+//
+// They used to follow the reflections' mode, and its mode 1 alpha-tested the hit the traversal met FIRST -- the BVH's
+// order, not the ray's: the palms' wind BLAS are rebuilt every frame, so a crown turned "blocked" into "open" and back
+// for every ray through it at once and the bathroom, lit through one window, pulsed (owner: "SkyVis dances inside the
+// house"; per-pixel std over 11 shots 0.5 s apart, median 5.1 % / p90 19.9 %, the wind frozen 1.8 %).
+bool RtVisibilityBlocked(RaytracingAccelerationStructure tlas, RayDesc ray, uint instanceMask)
+{
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, ray);
+    q.Proceed();
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
 #endif // RT_GEOMETRY_HLSLI

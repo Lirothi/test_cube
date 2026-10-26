@@ -21,9 +21,15 @@ uint32_t HashU32(uint32_t s)
     return s ^ (s >> 15);
 }
 float Unit(uint32_t h) { return float(h & 0xFFFFFFu) * (1.0f / 16777216.0f); }
+
+// Debug names per cascade: heap, rays, irradiance, depth, probe state.
+constexpr const wchar_t* kNames[2][5] = {
+    { L"Ddgi.Heap", L"Ddgi.Rays", L"Ddgi.Irradiance", L"Ddgi.Depth", L"Ddgi.ProbeState" },
+    { L"DdgiFar.Heap", L"DdgiFar.Rays", L"DdgiFar.Irradiance", L"DdgiFar.Depth", L"DdgiFar.ProbeState" },
+};
 } // namespace
 
-DdgiVolume::DdgiVolume() = default;
+DdgiVolume::DdgiVolume(uint32_t cascade) : cascade_(std::min(cascade, 1u)) {}
 DdgiVolume::~DdgiVolume() = default;
 
 void DdgiVolume::Reset()
@@ -48,14 +54,14 @@ void DdgiVolume::Prepare(Renderer* renderer)
     if (ready_ || failed_ || !renderer) { return; }
     ID3D12Device* device = renderer->GetDevice();
     const auto fail = [this](const char* what) {
-        LOG_ERROR(logging::LogCategory::Render, "GI probe volume: {} failed -- the bounce stays off", what);
+        LOG_ERROR(logging::LogCategory::Render, "GI probe volume {}: {} failed -- its bounce stays off", cascade_, what);
         failed_ = true;
     };
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.NumDescriptors = static_cast<UINT>(handles_.size());
-    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Gi, L"Ddgi.Heap", IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
+    if (FAILED(gpu::CreateDescriptorHeap(device, &hd, MemTag::Gi, kNames[cascade_][0], IID_PPV_ARGS(&heap_)))) { fail("descriptor heap"); return; }
     const D3D12_CPU_DESCRIPTOR_HANDLE base = heap_->GetCPUDescriptorHandleForHeapStart();
     const UINT step = device->GetDescriptorHandleIncrementSize(hd.Type);
     for (size_t i = 0; i < handles_.size(); ++i) { handles_[i] = { base.ptr + i * step }; }
@@ -94,11 +100,11 @@ void DdgiVolume::Prepare(Renderer* renderer)
         return true;
     };
     // The ray buffer holds every probe's row, so any divisor (down to 1) fits.
-    if (!makeTexture(rays_, kRaysPerProbe, kProbeCount, DXGI_FORMAT_R16G16B16A16_FLOAT, L"Ddgi.Rays", handles_[0], handles_[1]) ||
+    if (!makeTexture(rays_, kRaysPerProbe, kProbeCount, DXGI_FORMAT_R16G16B16A16_FLOAT, kNames[cascade_][1], handles_[0], handles_[1]) ||
         !makeTexture(irradiance_, kAtlasTilesX * kIrradianceTile, kAtlasTilesY * kIrradianceTile,
-                     DXGI_FORMAT_R16G16B16A16_FLOAT, L"Ddgi.Irradiance", handles_[2], handles_[3]) ||
+                     DXGI_FORMAT_R16G16B16A16_FLOAT, kNames[cascade_][2], handles_[2], handles_[3]) ||
         !makeTexture(depth_, kAtlasTilesX * kDepthTile, kAtlasTilesY * kDepthTile, DXGI_FORMAT_R16G16_FLOAT,
-                     L"Ddgi.Depth", handles_[4], handles_[5]))
+                     kNames[cascade_][3], handles_[4], handles_[5]))
     {
         fail("texture");
         return;
@@ -123,12 +129,12 @@ void DdgiVolume::Prepare(Renderer* renderer)
         // A buffer is created in COMMON whatever it is asked for (GBV id=1328); it rests in kRestState
         // from its first use (SdsmShadows' rule).
         if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
-                                                nullptr, MemTag::Gi, L"Ddgi.ProbeState", IID_PPV_ARGS(&resource))))
+                                                nullptr, MemTag::Gi, kNames[cascade_][4], IID_PPV_ARGS(&resource))))
         {
             fail("probe state buffer");
             return;
         }
-        state_.Attach(renderer->Declarations(), resource, D3D12_RESOURCE_STATE_COMMON, kRestState, L"Ddgi.ProbeState");
+        state_.Attach(renderer->Declarations(), resource, D3D12_RESOURCE_STATE_COMMON, kRestState, kNames[cascade_][4]);
         D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format = DXGI_FORMAT_UNKNOWN;
         sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
@@ -156,7 +162,8 @@ void DdgiVolume::Prepare(Renderer* renderer)
         return;
     }
     ready_ = true;
-    LOG_INFO(logging::LogCategory::Render, "GI probe volume: {}x{}x{} probes, {} rays each, atlases {}x{} + {}x{}",
+    LOG_INFO(logging::LogCategory::Render, "GI probe volume {}: {}x{}x{} probes, {} rays each, atlases {}x{} + {}x{}",
+             cascade_,
              kDimX, kDimY, kDimZ, kRaysPerProbe, kAtlasTilesX * kIrradianceTile, kAtlasTilesY * kIrradianceTile,
              kAtlasTilesX * kDepthTile, kAtlasTilesY * kDepthTile);
 }

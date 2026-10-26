@@ -94,7 +94,8 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle cloudShadowViewProj, cloudShadowParams; // plan C3: the cloud shadow map
     Material::CBFieldHandle csmSdsmPartitions; // S15: 0 = not SDSM mode
     Material::CBFieldHandle skyVisParams;      // plan S: the RT sky visibility (on, diffuse, specular)
-    Material::CBFieldHandle ddgiBase, ddgiParams; // plan D: the GI probe volume
+    Material::CBFieldHandle ddgiBase, ddgiParams; // plan D: the GI probe volume (near cascade)
+    Material::CBFieldHandle ddgiFarBase, ddgiFarParams; // ...and its far cascade
 
     void Populate(Material* material);
 };
@@ -753,9 +754,12 @@ struct LightingPassConstants
     // Plan S: x 1 = the RT sky visibility was traced this frame (t17 is real), y diffuse and z specular
     // strength. compose gets the same values (ComposePassConstants::skyVisParams).
     float4 skyVisParams{};
-    // Plan D: the GI probe volume -- its first cell + generation, and (spacing, intensity, debug).
+    // Plan D: the GI probe volumes -- each one's first cell + generation, and (spacing, intensity, debug,
+    // edge fade in cells); the near cascade, then the far one.
     std::array<int32_t, 4> ddgiBase{};
     float4 ddgiParams{};
+    std::array<int32_t, 4> ddgiFarBase{};
+    float4 ddgiFarParams{};
 };
 
 struct PointLightPassConstants
@@ -1120,6 +1124,9 @@ public:
     std::shared_ptr<Material> GetSsrMaterial() const { return matSSR_; }
     std::shared_ptr<Material> GetWaterCompositeMaterial() const { return matWaterComposite_; }
     std::shared_ptr<Material> GetBlurMaterial() const { return matBlur_; }
+    // The RT reflection's glossy filter: its mip pyramid and the GGX-lobe gather (null on non-RT HW).
+    std::shared_ptr<Material> GetReflectionPyramidMaterial() const { return matReflectionPyramid_; }
+    std::shared_ptr<Material> GetReflectionGlossyMaterial() const { return matReflectionGlossy_; }
     std::shared_ptr<Material> GetDebugMaterial() const { return matDebug_; }
     // RW: rt_wind_deform_cs PSO (null on non-RT HW / before Finalize).
     std::shared_ptr<Material> GetRtWindDeformMaterial() const { return matRtWindDeform_; }
@@ -1233,6 +1240,8 @@ private:
     std::shared_ptr<Material> matRtDebug_;   // S6 RT debug viz (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matRtReflect_;
     std::shared_ptr<Material> matRtTrace_;   // gather phase of the opaque RT reflection split
+    std::shared_ptr<Material> matReflectionPyramid_; // reflection_pyramid_cs.hlsl
+    std::shared_ptr<Material> matReflectionGlossy_;  // reflection_glossy_cs.hlsl
     std::shared_ptr<Material> matSkyVis_;    // plan S: rt_sky_visibility_cs.hlsl
     std::shared_ptr<Material> matSkyVisFilter_; // ...its spatial filter, rt_sky_visibility_filter_cs.hlsl
     std::shared_ptr<Material> matRtResolve_; // shade phase (the only RT consumer of lightT)

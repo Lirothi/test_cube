@@ -341,11 +341,12 @@ struct SkyVisConstants
     Math::mat4 invView;
     Math::mat4 invProj;
     uint32_t tlasIndex = 0;     uint32_t gb1Index = 0;      uint32_t depthIndex = 0;    uint32_t velocityIndex = 0;
-    uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t geomInfoIndex = 0; uint32_t alphaMode = 2;
+    uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t pad0 = 0;          uint32_t pad1 = 0;
     uint32_t outWidth = 0;      uint32_t outHeight = 0;     uint32_t rayCount = 4;      uint32_t frameIndex = 0;
-    float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t pad = 0;
+    float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t seedEnabled = 1;
+    float seedDepthTolerance = 0.05f; float seedNormalPower = 8.0f; uint32_t pad2[2] = { 0, 0 };
 };
-static_assert(sizeof(SkyVisConstants) == 2 * 64 + 4 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
+static_assert(sizeof(SkyVisConstants) == 2 * 64 + 5 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
 
 // Bindless scene slots of this pass (BindlessTable kScenePerFrame = 48): reflections own 0-12, the
 // debug view 13-16, the glass dispatch 17-25. Its own copies of the TLAS / GB1 / depth, because the
@@ -366,8 +367,9 @@ struct SkyVisFilterConstants
 {
     uint32_t accumIndex = 0;  uint32_t outUavIndex = 0;  uint32_t gb1Index = 0;       uint32_t filterEnabled = 1;
     uint32_t outWidth = 0;    uint32_t outHeight = 0;    float depthTolerance = 0.05f; float normalPower = 8.0f;
+    uint32_t debugView = 0;   uint32_t pad[3] = { 0, 0, 0 };
 };
-static_assert(sizeof(SkyVisFilterConstants) == 2 * 16, "SkyVisFilterConstants mirrors rt_sky_visibility_filter_cs.hlsl");
+static_assert(sizeof(SkyVisFilterConstants) == 3 * 16, "SkyVisFilterConstants mirrors rt_sky_visibility_filter_cs.hlsl");
 } // namespace
 
 Math::float4 SceneRenderer::SkyVisShaderParams() const
@@ -416,8 +418,7 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.velocityIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotVelocity);
             c.outUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotUav);
             c.historyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotHistory);
-            c.geomInfoIndex = rtAs_.Bindless().GeomInfoIndex(frameIndex);
-            c.alphaMode = std::min(s.rtAlphaMode, 2u); // the foliage cut-out exactly as the reflections see it
+            // No alpha mode: the sky visibility sees the geometry, a leaf card solid (rt_geometry.hlsli RtVisibilityBlocked).
             c.outWidth = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
             c.outHeight = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
             c.rayCount = std::clamp(s.skyVisRays, 1u, 16u);
@@ -425,6 +426,10 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.maxDistance = std::max(s.skyVisMaxDistance, 0.5f);
             c.historyWeight = std::clamp(s.skyVisHistory, 0.0f, 0.98f);
             c.historyValid = chain.historyValid ? 1u : 0u;
+            // A texel without history is seeded from the neighbours the spatial filter would call the same surface.
+            c.seedEnabled = s.skyVisSeed ? 1u : 0u;
+            c.seedDepthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
+            c.seedNormalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
 
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisConstants), render::kConstantBufferAlignment);
             std::memcpy(cb.cpu, &c, sizeof(c));
@@ -447,6 +452,7 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             fc.outHeight = c.outHeight;
             fc.depthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
             fc.normalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
+            fc.debugView = std::min(s.skyVisDebug, 1u);
             auto fcb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisFilterConstants), render::kConstantBufferAlignment);
             std::memcpy(fcb.cpu, &fc, sizeof(fc));
             t.cl->SetComputeRootSignature(filterMaterial->GetRootSignature());
@@ -840,6 +846,45 @@ void SceneRenderer::Pass_SsrTemporal(Renderer* renderer, RenderGraphPassContext 
     ctx.EndCL(t);
 }
 
+namespace
+{
+// Mirrors `cbuffer ReflectionPyramidCB` in reflection_pyramid_cs.hlsl.
+struct ReflectionPyramidConstants
+{
+    uint32_t dstSize[2] = { 1, 1 };
+    uint32_t srcSize[2] = { 1, 1 };
+    uint32_t fromInput = 0;
+    uint32_t pad[3] = { 0, 0, 0 };
+};
+static_assert(sizeof(ReflectionPyramidConstants) == 2 * 16, "ReflectionPyramidConstants mirrors reflection_pyramid_cs.hlsl");
+
+// Mirrors `cbuffer ReflectionGlossyCB` in reflection_glossy_cs.hlsl.
+struct ReflectionGlossyConstants
+{
+    Math::mat4 invView;
+    Math::mat4 invProj;
+    uint32_t outSize[2] = { 1, 1 };
+    float invOutSize[2] = { 1.0f, 1.0f };
+    float pixelsPerRadian = 1.0f;
+    float planeTolerance = 0.02f;
+    float normalPower = 8.0f;
+    uint32_t mipCount = 1;
+};
+static_assert(sizeof(ReflectionGlossyConstants) == 2 * 64 + 2 * 16, "ReflectionGlossyConstants mirrors reflection_glossy_cs.hlsl");
+
+// The glossy gather's same-surface test: a tap off the centre's plane by 2 % of the view distance (4 cm at 2 m -- a
+// panel's moulding stays in, the bathtub in front of it does not), normals agreeing to the 8th power (the sky
+// visibility filter's).
+constexpr float kGlossyPlaneTolerance = 0.02f;
+constexpr float kGlossyNormalPower = 8.0f;
+
+UINT AlignedCbSize(size_t bytes)
+{
+    const UINT a = render::kConstantBufferAlignment;
+    return (static_cast<UINT>(bytes) + a - 1u) & ~(a - 1u);
+}
+} // namespace
+
 void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassContext ctx,
     const BlurPoints& pts)
 {
@@ -855,6 +900,64 @@ void SceneRenderer::Pass_ReflectionBlur(Renderer* renderer, RenderGraphPassConte
 
         // Horizontal pass (first-use states come from the pass declarations)
         renderer->EmitPoint(t.cl, pts.apply);
+
+        if (pts.lobe)
+        {
+            // The RT reflection's GLOSSY filter (reflection_glossy_cs.hlsl). The pyramids: mip 0 a copy of the
+            // reflection -- the temporal resolve's output when it ran -- and the normal + depth under it, then 2x2 means,
+            // mip N reading mip N-1 through its UAV with a UAV barrier between (the HZB's build).
+            const auto pointTable = renderer->GetSamplerManager()->GetTable(renderer,
+                std::array{ *SamplerManager::PointClamp() });
+            auto pyramidMaterial = resources_.GetReflectionPyramidMaterial();
+            const D3D12_CPU_DESCRIPTOR_HANDLE input = decisions_.reflectionTemporal ? D.reflectionHistorySRV : D.reflectionSRV;
+            UINT srcW = ssrWidth;
+            UINT srcH = ssrHeight;
+            for (UINT mip = 0; mip < D.reflectionPyramidMips; ++mip)
+            {
+                ReflectionPyramidConstants pc{};
+                pc.dstSize[0] = std::max(1u, ssrWidth >> mip);
+                pc.dstSize[1] = std::max(1u, ssrHeight >> mip);
+                pc.srcSize[0] = srcW;
+                pc.srcSize[1] = srcH;
+                pc.fromInput = mip == 0 ? 1u : 0u;
+                const UINT srcMip = mip == 0 ? 0u : mip - 1u; // mip 0's u0/u2 are inert placeholders
+                RecordComputeDispatch(renderer, t.cl, pyramidMaterial.get(), AlignedCbSize(sizeof(pc)),
+                    [&](uint8_t* dest) { std::memcpy(dest, &pc, sizeof(pc)); },
+                    { input, D.depthSRV, D.gbSRV[1] },
+                    { D.reflectionPyramidMipUAV[srcMip], D.reflectionPyramidMipUAV[mip],
+                      D.reflectionGeomPyramidMipUAV[srcMip], D.reflectionGeomPyramidMipUAV[mip] },
+                    pointTable, pc.dstSize[0], pc.dstSize[1],
+                    D.reflectionPyramid.Get()); // UAV barrier: the next level reads this one
+                renderer->UAVBarrier(t.cl, D.reflectionGeomPyramid.Get()); // ...and the geometry's, likewise
+                srcW = pc.dstSize[0];
+                srcH = pc.dstSize[1];
+            }
+
+            // The gather over each pixel's GGX lobe, from the pyramid into the reflection compose reads.
+            renderer->EmitPoint(t.cl, pts.gather);
+            const Camera& camera = *frame_->camera;
+            ReflectionGlossyConstants gc{};
+            gc.invView = camera.GetInvViewMatrix();
+            gc.invProj = camera.GetInvProjMatrix();
+            gc.outSize[0] = ssrWidth;
+            gc.outSize[1] = ssrHeight;
+            gc.invOutSize[0] = 1.0f / static_cast<float>(std::max(1u, ssrWidth));
+            gc.invOutSize[1] = 1.0f / static_cast<float>(std::max(1u, ssrHeight));
+            gc.pixelsPerRadian = 0.5f * static_cast<float>(ssrHeight) * std::abs(camera.GetProjMatrixNoJitter().m._22);
+            gc.planeTolerance = kGlossyPlaneTolerance;
+            gc.normalPower = kGlossyNormalPower;
+            gc.mipCount = D.reflectionPyramidMips;
+            const auto gatherSamplers = renderer->GetSamplerManager()->GetTable(renderer,
+                std::array{ *SamplerManager::LinearClamp(), *SamplerManager::PointClamp() });
+            RecordComputeDispatch(renderer, t.cl, resources_.GetReflectionGlossyMaterial().get(), AlignedCbSize(sizeof(gc)),
+                [&](uint8_t* dest) { std::memcpy(dest, &gc, sizeof(gc)); },
+                // t0 the reflection's pyramid, t1 the geometry's, t2 GB0 (roughness), t3 payload (hit distance)
+                { D.reflectionPyramidSRV, D.reflectionGeomPyramidSRV, D.gbSRV[0], D.rtPayloadSRV },
+                { D.reflectionUAV }, gatherSamplers,
+                ssrWidth, ssrHeight,
+                D.reflection.Get());
+            break;
+        }
 
         // pass-flow S6: `pts.blur` IS the material/CB check — made once in the builder, which
         // declared the ping-pong point from the same value.

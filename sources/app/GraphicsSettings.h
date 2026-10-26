@@ -166,6 +166,15 @@ enum class GraphicsControl
     GiSpacing,
     GiHysteresis,
     GiIntensity,
+    GiFar,                        // the far cascade (SceneRenderSettings::giFarCascade)
+    GiFarSpacing,
+    SkyVisEnabled,                // the RT sky visibility (SceneRenderSettings::skyVis*), on the GI tab
+    SkyVisRays,
+    SkyVisHistory,
+    SkyVisMaxDistance,
+    SkyVisDiffuse,
+    SkyVisSpecular,
+    SkyVisFilter,
 };
 
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,

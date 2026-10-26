@@ -1529,12 +1529,13 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         // Plan C3: the cloud shadow map, at its rest; declared so the read is named (GBV flags a
         // descriptor over an undeclared resource even unread).
         if (volumetricCloud_.ShadowBuilt()) ctx.Use(volumetricCloud_.ShadowResource(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        // Plan D: the GI probe volume, bound whenever it exists (t18-t20), at its rest.
-        if (ddgi_.Ready())
+        // Plan D: the GI probe volumes, each bound whenever it exists (near t18-t20, far t21-t23), at rest.
+        for (const DdgiVolume& volume : ddgi_)
         {
-            ctx.Use(ddgi_.Irradiance(), DdgiVolume::kRestState);
-            ctx.Use(ddgi_.Depth(), DdgiVolume::kRestState);
-            ctx.Use(ddgi_.State(), DdgiVolume::kRestState);
+            if (!volume.Ready()) { continue; }
+            ctx.Use(volume.Irradiance(), DdgiVolume::kRestState);
+            ctx.Use(volume.Depth(), DdgiVolume::kRestState);
+            ctx.Use(volume.State(), DdgiVolume::kRestState);
         }
         const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
         return [this, renderer, point](RenderGraphPassContext c) {
@@ -1910,20 +1911,40 @@ void SceneRenderer::BuildReflections(Renderer* renderer, GraphBuild& gb)
     // exactly what D1.1 forbids; step 5 hoists it into pass state". Step 5 never did.
     // pass-flow S6 does: the builder decides `blur` once, declares the ping-pong point from it,
     // and the body emits markers for both points and re-decides nothing.
+    // The RT reflection's glossy filter (reflection_glossy_cs.hlsl) needs the trace's hit distances (the payload), so it
+    // is the RT path's alone; SSR keeps the separable blur. Decided here, once, with the graph's shape.
+    const bool lobeBlur = useRtReflections && frame_->settings.reflectionLobeBlur && D.reflectionPyramidMips > 0 &&
+                          resources_.GetReflectionPyramidMaterial() && resources_.GetReflectionGlossyMaterial();
     auto pBlur = rg.AddPass2(RenderPass::Main_ReflectionBlur, { pReflectionFiltered }, /*mtDeps=*/{},
         { { D.reflection.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           // The resolve's output is the blur's first input; declared unconditionally so the
           // compiled barrier set does not change with a UI toggle.
           { D.reflectionHistory.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
           { D.reflectionScratch.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
-          { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } }, // S16: roughness drives glossy blur
-        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+          { D.gb0.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE }, // S16: roughness drives glossy blur
+          // The glossy filter's, on the same rule: the two pyramids it builds (the reflection's, the geometry's from the
+          // normals and depth), the trace's hit distances.
+          { D.reflectionPyramid.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+          { D.reflectionGeomPyramid.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS },
+          { D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          { D.rtPayload.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+        [this, renderer, lobeBlur](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const auto& DB = renderer->GetDeferredForFrame();
             BlurPoints pts{};
             ctx.UseDeclared();
             pts.apply = ctx.usePoint ? *ctx.usePoint : 0u;
-            pts.blur = resources_.GetBlurMaterial() && resources_.GetBlurCBSizeBytes() != 0;
-            if (pts.blur)
+            pts.lobe = lobeBlur;
+            pts.blur = !lobeBlur && resources_.GetBlurMaterial() && resources_.GetBlurCBSizeBytes() != 0;
+            if (pts.lobe)
+            {
+                ctx.NextPoint(); // the gather reads the built pyramids and writes the reflection
+                pts.gather = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(DB.reflectionPyramid.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DB.reflectionGeomPyramid.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(DB.reflection.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+            else if (pts.blur)
             {
                 ctx.NextPoint(); // the vertical dispatch ping-pongs the two targets
                 pts.pingPong = ctx.usePoint ? *ctx.usePoint : 0u;

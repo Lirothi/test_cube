@@ -14,7 +14,7 @@ cbuffer DdgiConstants : register(b0)
     float3 lightRgb;  float skyIrradianceScale;
     uint tlasIndex;   uint geomInfoIndex;    uint rayUavIndex;        uint irradianceIndex;
     uint depthIndex;  uint stateIndex;       uint skyIrradianceIndex; uint spotLightIndex;
-    uint spotCount;   uint pointLightIndex;  uint pointCount;         uint alphaMode;
+    uint spotCount;   uint pointLightIndex;  uint pointCount;         uint _ddgiPad2; // was the alpha mode: GI rays see solid cards
     uint bounceOn;    float skyRayDistance;  uint _ddgiPad0;          uint _ddgiPad1;
 }
 

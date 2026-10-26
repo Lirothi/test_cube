@@ -27,29 +27,15 @@ static const uint kDdgiMaskShadow = 0x02u; // rt::kInstanceMaskShadow: what cast
 // The albedo is read a few mips down: a probe averages over a sphere, and a mip-0 texel per ray is noise.
 static const float kDdgiAlbedoMip = 3.0f;
 
-// rt_sky_visibility_cs.hlsl SkyRayBlocked: anything opaque (or a kept alpha-tested texel) in the way.
-bool DdgiOccluded(RaytracingAccelerationStructure tlas, StructuredBuffer<GeometryInfo> geom, float3 origin,
-                  float3 dir, float maxDistance)
+// rt_sky_visibility_cs.hlsl SkyRayBlocked: anything in the way, a leaf card solid (rt_geometry.hlsli RtVisibilityBlocked).
+bool DdgiOccluded(RaytracingAccelerationStructure tlas, float3 origin, float3 dir, float maxDistance)
 {
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = dir;
     ray.TMin = 1.0e-3f;
     ray.TMax = maxDistance;
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, kDdgiMaskShadow, ray);
-    while (q.Proceed())
-    {
-        if (RtAlphaCandidatePasses(geom, gSmp, q.CandidateInstanceID(), q.CandidateGeometryIndex(),
-                                   q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
-        {
-            q.CommitNonOpaqueTriangleHit();
-        }
-    }
-    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return false; }
-    return !(alphaMode == 1u &&
-             !RtAlphaCandidatePasses(geom, gSmp, q.CommittedInstanceID(), q.CommittedGeometryIndex(),
-                                     q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics()));
+    return RtVisibilityBlocked(tlas, ray, kDdgiMaskShadow);
 }
 
 [numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + the 64 blended
@@ -82,16 +68,10 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     ray.Direction = dir;
     ray.TMin = 0.0f;
     ray.TMax = volumeParams.z;
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
-    while (q.Proceed())
-    {
-        if (RtAlphaCandidatePasses(geom, gSmp, q.CandidateInstanceID(), q.CandidateGeometryIndex(),
-                                   q.CandidatePrimitiveIndex(), q.CandidateTriangleBarycentrics()))
-        {
-            q.CommitNonOpaqueTriangleHit();
-        }
-    }
+    // The closest GEOMETRY, a leaf card solid: no RT ray but the reflections' alpha-tests (rt_geometry.hlsli).
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    q.Proceed();
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
     {
         rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, 1.0e4f); // nothing in reach: no bounce from here
@@ -150,7 +130,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     // The sun (or the moon, whichever holds the light): lighting_cs's lightRgb, an RT shadow ray.
     const float3 L = normalize(-sunDirWS);
     const float sunNdotL = dot(N, L);
-    if (sunNdotL > 0.0f && any(lightRgb > 0.0f) && !DdgiOccluded(tlas, geom, shadowOrigin, L, 1.0e4f))
+    if (sunNdotL > 0.0f && any(lightRgb > 0.0f) && !DdgiOccluded(tlas,shadowOrigin, L, 1.0e4f))
     {
         irradiance += lightRgb * sunNdotL;
     }
@@ -164,7 +144,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             const float3 rad = RtEvalSpotLight(spots[si], P, sl, sdist);
             const float ndl = dot(N, sl);
             if (ndl <= 0.0f || dot(rad, rad) <= 0.0f) { continue; }
-            if (!DdgiOccluded(tlas, geom, shadowOrigin, sl, max(sdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
+            if (!DdgiOccluded(tlas,shadowOrigin, sl, max(sdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
         }
     }
     if (pointCount > 0u)
@@ -176,7 +156,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             const float3 rad = RtEvalPointLight(points[pi], P, pl, pdist);
             const float ndl = dot(N, pl);
             if (ndl <= 0.0f || dot(rad, rad) <= 0.0f) { continue; }
-            if (!DdgiOccluded(tlas, geom, shadowOrigin, pl, max(pdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
+            if (!DdgiOccluded(tlas,shadowOrigin, pl, max(pdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
         }
     }
     float3 radiance = diffuse * kInvPi * irradiance;
@@ -194,7 +174,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         const float r = sqrt(u1);
         const float phi = 2.0f * kPi * u2;
         const float3 skyDir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(saturate(1.0f - u1)));
-        if (!DdgiOccluded(tlas, geom, shadowOrigin, skyDir, skyRayDistance))
+        if (!DdgiOccluded(tlas,shadowOrigin, skyDir, skyRayDistance))
         {
             TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
             radiance += diffuse * skyIrradiance.SampleLevel(gSmp, N, 0).rgb * skyIrradianceScale;
@@ -211,7 +191,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         Texture2D irradianceAtlas = ResourceDescriptorHeap[irradianceIndex];
         Texture2D depthAtlas = ResourceDescriptorHeap[depthIndex];
         float w;
-        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, probeState, gSmp, volume, P, N, -dir, w);
+        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, probeState, gSmp, volume, P, N, -dir, 1.0f, w);
         radiance += diffuse * bounce * w;
     }
     rays[rayTexel] = float4(radiance, t);

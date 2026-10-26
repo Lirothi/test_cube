@@ -39,6 +39,9 @@ float g_camFlyDelay = 0.0f;
 // "--cam-fly-yaw=<deg/s>": constant yaw rate on top of the drift -- the headless stand-in for
 // mouse look. A turning camera is what moves the cascade boxes between frames (S14 cross-check).
 float g_camFlyYaw = 0.0f;
+// "--set=camera.fly:<m/s>" / MCP set_settings: fly along the camera's own view, negative = backwards, 0 stops --
+// a person flying through a tunnel in a running editor (the camera's heading is its own; --cam-fly's is the world's).
+float g_camFlyForward = 0.0f;
 // "--cam-orbit=<radius>,<deg/s>": circle the start position, looking along the tangent. A
 // straight drift leaves a grove in seconds; a ring keeps crossing it, which is what churns the
 // RT wind-BLAS slots (and what leaked their retired buffers until 2026-09-03).
@@ -390,6 +393,8 @@ namespace
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze = value != 0.0f; return true; }
+        // Fly along the view at this many m/s (negative = backwards, 0 stops) -- motion through a running editor.
+        if (setting == "camera.fly") { g_camFlyForward = std::clamp(value, -100.0f, 100.0f); return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
         // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
         if (setting == "cloudShadow.updateFrames")
@@ -767,6 +772,11 @@ namespace
                 ? (ReflectionSource)r : ReflectionSource::RT;
             return true;
         }
+        // S16's roughness-driven reflection blur (Reflections "Glossy blur", graphics_settings `glossyBlur`):
+        // reflection-resolution pixels added to the blur at roughness 1.
+        if (setting == "reflections.glossyBlur") { renderSettings.reflectionGlossyScale = std::clamp(value, 0.0f, 24.0f); return true; }
+        // The RT reflection's GGX-lobe glossy filter; 0 = the separable blur above, the A/B.
+        if (setting == "reflections.lobe") { renderSettings.reflectionLobeBlur = value != 0.0f; return true; }
         // P6C/P13: which screen-space search the reflection ray uses. 0 = log march (fixed growing
         // steps against full depth), 1 = UE SSRT fixed-step Batch4 march against the furthest HZB.
         // The A/B switch for the SSR retrofit, and the only way to compare both inside one binary.
@@ -826,6 +836,8 @@ namespace
         if (setting == "skyVis.filter") { renderSettings.skyVisFilter = value != 0.0f; return true; }
         if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
         if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
+        if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f)); return true; }
+        if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }
         // Interior lighting plan D: the GI probe volume (SceneRenderSettings::gi*).
         if (setting == "gi.enabled") { renderSettings.giEnabled = value != 0.0f; return true; }
         if (setting == "gi.spacing") { renderSettings.giSpacing = std::clamp(value, 0.1f, 8.0f); return true; }
@@ -834,6 +846,9 @@ namespace
         if (setting == "gi.intensity") { renderSettings.giIntensity = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "gi.rayDistance") { renderSettings.giRayDistance = std::clamp(value, 1.0f, 1000.0f); return true; }
         if (setting == "gi.infiniteBounce") { renderSettings.giInfiniteBounce = value != 0.0f; return true; }
+        if (setting == "gi.far") { renderSettings.giFarCascade = value != 0.0f; return true; }
+        if (setting == "gi.farSpacing") { renderSettings.giFarSpacing = std::clamp(value, 0.5f, 8.0f); return true; }
+        if (setting == "gi.farDivisor") { renderSettings.giFarDivisor = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
         if (setting == "gi.debug") { renderSettings.giDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
         // Glass refraction: the glass under the surface in metres (0 = straight through, a few mm = a hollow
         // tumbler, >= the shape's radius = solid -- the 0.5 default).
@@ -2259,6 +2274,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                             cam.AddYaw(DirectX::XMConvertToRadians(g_camFlyYaw) * deltaTime);
                         }
                     }
+                }
+                if (g_camFlyForward != 0.0f)
+                {
+                    Camera& cam = scene.CameraRef();
+                    cam.SetPosition(cam.GetPosition() + cam.GetDirection() * (g_camFlyForward * deltaTime));
                 }
                 if (g_camOrbit[0] > 0.0f)
                 {

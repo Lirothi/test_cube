@@ -7,7 +7,8 @@
 //
 // Payload (reflection res):
 //   payloadRadiance rgba16f: rgb = radiancePart (env + analytic direct when off-screen),
-//                            a   = mode code (kRtPayloadMiss/Complete/Reuse -- exact in fp16);
+//                            a   = 0 on a miss, else the hit distance -- negative when the resolve
+//                                  reuses the lit-HDR screen (rt_reflect_common.hlsli RtPayloadAlpha);
 //   payloadUv       rg16unorm: the lit-HDR sample position when mode == Reuse. UNORM16 keeps the
 //                            fetch within ~0.04 px at 2560 wide; fp16 would wobble it by >1 px.
 #include "rt_reflect_common.hlsli"
@@ -34,8 +35,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         RtTraceResult tr;
         if (TraceReflectionCore(origin, dir, camPos, tMin, raySeed, tr))
         {
-            payload = float4(tr.radiancePart,
-                             tr.reuseScreen ? kRtPayloadReuse : kRtPayloadComplete);
+            payload = float4(tr.radiancePart, RtPayloadAlpha(tr.hitT, tr.reuseScreen));
             reuseUv = tr.reuseUv;
         }
     }

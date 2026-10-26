@@ -53,8 +53,11 @@ public:
         Math::mat4 rayRotation;        // this update's random rotation of the ray set
     };
 
-    DdgiVolume();
+    // `cascade` 0 = the near volume, 1 = the far one around it (its resources are named DdgiFar.*).
+    explicit DdgiVolume(uint32_t cascade = 0);
     ~DdgiVolume();
+    DdgiVolume(const DdgiVolume&) = delete;
+    DdgiVolume& operator=(const DdgiVolume&) = delete;
 
     // Creates the atlases, the ray buffer, the probe state and the two PSOs once; idempotent.
     void Prepare(Renderer* renderer);
@@ -88,6 +91,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE StateUav() const { return handles_[7]; }
 
 private:
+    uint32_t cascade_ = 0;
     GpuResource rays_;
     GpuResource irradiance_;
     GpuResource depth_;

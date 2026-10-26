@@ -605,13 +605,18 @@ struct SceneRenderSettings
     // `skyVisDiffuse` / `skyVisSpecular` scale the two effects (0 off .. 1 UE).
     // Measured 2026-10-23 (wind_test grove, half of 2560x1440, GPU): 4 rays 0.28 / 0.31 / 0.34 ms at
     // 10 / 15 / 30 m, 8 rays 0.63 ms, 2 rays 0.18 ms -- the cost is the ray count, not the reach.
+    // 8 rays and 0.98 since 2026-10-26 (owner: "what makes the noise here", a tunnel he built of boxes to watch the
+    // light inside): a floor that sees the sky only through the tunnel's mouth gets it from a ray in a few, frame to
+    // frame median 8.6 % (p90 12.3) at 4 rays / 0.95; 8 rays 5.6 %, 0.98 5.2 %, both 3.5 % (p90 5.1); SkyVis off
+    // 0.2 % but the floor then takes the whole sky. 0.14 -> 0.25 ms there. The longer history costs the newly
+    // uncovered surfaces of a moving camera a slower settle.
     bool skyVisEnabled = true;
-    uint32_t skyVisRays = 4u;
+    uint32_t skyVisRays = 8u;
     float skyVisMaxDistance = 15.0f;
-    // 0.95 with the spatial filter below (2026-10-24): wind_test's second room at 24:00, a wall lit by its window's
-    // moonlit sky, per-pixel temporal noise over 12 shots median 9.4 % -> 3.2 % (p90 18 -> 5.7 %); 0.97 2.8 %,
-    // 0.97 with 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. scratchpad noise_map.py.
-    float skyVisHistory = 0.95f;
+    // With the spatial filter below (2026-10-24): wind_test's second room at 24:00, a wall lit by its window's
+    // moonlit sky, per-pixel temporal noise over 12 shots median 9.4 % -> 3.2 % at 0.95 (p90 18 -> 5.7 %); 0.97
+    // 2.8 %, 0.97 with 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. scratchpad noise_map.py.
+    float skyVisHistory = 0.98f;
     float skyVisDiffuse = 1.0f;
     float skyVisSpecular = 1.0f;
     // The spatial half of the denoise (rt_sky_visibility_filter_cs.hlsl, UE DFAO's spatial filter): a 5x5
@@ -620,6 +625,12 @@ struct SceneRenderSettings
     bool skyVisFilter = true;
     float skyVisFilterDepth = 0.05f;
     float skyVisFilterNormalPower = 8.0f;
+    // 1 = paint the texels that had no history this frame as the open sky (bright wherever the sky is shut out):
+    // what the temporal accumulation rejects -- a disocclusion, the screen's edge, a failed same-surface test.
+    uint32_t skyVisDebug = 0u;
+    // A texel without history is seeded from the neighbours that kept theirs (UE DFAO FilterHistoryPS). Off = it
+    // starts from its own few rays, the behaviour before 2026-10-26 -- kept for the A/B (`--set skyVis.seed:0`).
+    bool skyVisSeed = true;
     // Interior lighting plan D: the GI probe volume (DDGI over RayQuery, rendering/lighting/DdgiVolume.h):
     // 32x16x32 probes `giSpacing` m apart around the camera, 1 / `giUpdateDivisor` of them tracing 64
     // rays a frame and blending them in with `giHysteresis`. They hold the BOUNCE only (a miss brings
@@ -639,6 +650,13 @@ struct SceneRenderSettings
     float giIntensity = 1.0f;
     float giRayDistance = 30.0f;
     bool giInfiniteBounce = true;
+    // The FAR cascade: a second volume of the same 32x16x32 probes, `giFarSpacing` m apart, around the
+    // near one, so the bounce reaches past +-8 m (64 x 32 x 64 m at 2 m). Lighting takes the near cascade
+    // where it is whole and blends to the far one over the near's outer 2 m. It updates 1 / giFarDivisor
+    // of its probes a frame, its own infinite bounce. Off = the near cascade alone, as before.
+    bool giFarCascade = true;
+    float giFarSpacing = 2.0f;
+    uint32_t giFarDivisor = 4u;
     uint32_t giDebug = 0u;
     // Glass refraction (owner 2026-10-24: "the glasses pass the background straight through"): a
     // thinTranslucent slot bends what is behind it as a glass shell of the surface's own curvatures,
@@ -725,8 +743,14 @@ struct SceneRenderSettings
     bool rtDebugView = false;
     // S16: glossy reflections. The reflection blur radius scales with the reflector's
     // roughness by this factor (in reflection-res pixels at full roughness); 0 = sharp
-    // mirror reflections. Applies to both RT and SSR. Tunable in the developer window.
+    // mirror reflections. The SSR's only, since the RT reflection spreads over its GGX lobe
+    // (reflectionLobeBlur). Tunable in the developer window.
     float reflectionGlossyScale = 1.0f;
+    // The RT reflection's glossy filter (reflection_glossy_cs.hlsl): each pixel's sharp mirror reflection spread
+    // over its GGX lobe as seen on the screen -- the hit distance against the reflector's, the roughness's lobe
+    // width, the projection. Off = S16's roughness-scaled separable blur, as before 2026-10-26 (the A/B; --set
+    // reflections.lobe:0).
+    bool reflectionLobeBlur = true;
     // Analytic sun specular boost on metals. The sun's specular lobe is scaled by
     // (1 + metal*sunMetalSpecInfluence) in the lighting pass so a smooth metal shows a
     // distinct sun highlight (which otherwise merges into the environment reflection,

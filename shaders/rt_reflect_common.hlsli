@@ -57,7 +57,9 @@ cbuffer Probe : register(b0)
     // depth); for opaque reflections screenDepthIndex == depthIndex.
     // alphaMissKeep: stochastic coverage inflation for the foliage alpha test (see
     // RtAlphaCandidatePasses); frameSeed is FROZEN by the CPU (see the fill site).
-    // alphaMode: 0 = OFF (FORCE_OPAQUE traversal, foliage = solid cards, cheapest);
+    // alphaMode -- the REFLECTION ray's only (its shadow rays, the sky visibility and the GI see
+    // the geometry, a leaf card solid: rt_geometry.hlsli RtVisibilityBlocked):
+    // 0 = OFF (FORCE_OPAQUE traversal, foliage = solid cards, cheapest);
     // 1 = FIRST HIT (FORCE_OPAQUE traversal, then the COMMITTED hit is alpha-tested with the
     //     albedo sample the shading already fetches -- a transparent texel becomes a miss, so
     //     crowns get holes showing the sky fallback instead of what is truly behind them; the
@@ -73,10 +75,16 @@ cbuffer Probe : register(b0)
 SamplerState gSmp      : register(s0);
 SamplerState gSmpPoint : register(s1);
 
-// Payload mode codes carried in rt_trace's radiance alpha (small integers are exact in fp16).
-static const float kRtPayloadMiss = 0.0f;     // no surface / ray missed / alpha hole -> coverage 0
-static const float kRtPayloadComplete = 1.0f; // radiancePart is the final radiance (off-screen re-shade)
-static const float kRtPayloadReuse = 2.0f;    // finish with + lightT.Sample(reuseUv)
+// rt_trace's radiance alpha: 0 = no surface / ray missed / alpha hole (coverage 0); else the HIT DISTANCE (m),
+// POSITIVE when radiancePart is the final radiance (off-screen re-shade), NEGATIVE when the resolve finishes it
+// with + lightT.Sample(reuseUv). The distance is the glossy filter's (reflection_glossy_cs.hlsl): a GGX lobe
+// spreads the reflected image over hitT x its angle. fp16 holds it to 0.05 % out to the ray's 1e4 m.
+static const float kRtPayloadMiss = 0.0f;
+float RtPayloadAlpha(float hitT, bool reuseScreen)
+{
+    const float t = max(hitT, 1.0e-3f); // never 0: that is the miss
+    return reuseScreen ? -t : t;
+}
 
 // TLAS instance mask bit of the shadow casters (rt::kInstanceMaskShadow): an object with Cast Shadow off lacks it.
 static const uint RT_MASK_SHADOW = 0x02u;
@@ -90,31 +98,9 @@ float RtTraceShadow(RaytracingAccelerationStructure tlas, float3 origin, float3 
     // surface, which at a grazing sun angle is acne. The caller offsets along the normal; this
     // skips the distance needed to clear that offset at the ray's own angle.
     RayDesc sray; sray.Origin = origin; sray.Direction = L; sray.TMin = tMin; sray.TMax = maxDist;
-    // Part C: FORCE_OPAQUE dropped — masked foliage (non-opaque BLAS geometry) must alpha-test,
-    // or every leaf quad occludes as a solid card. Opaque geometry still never surfaces as a
-    // candidate, and committing any passing candidate ends the search (ACCEPT_FIRST_HIT).
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> sq;
-    sq.TraceRayInline(tlas, alphaMode != 2u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, RT_MASK_SHADOW, sray);
-    StructuredBuffer<GeometryInfo> sgeom = ResourceDescriptorHeap[geomInfoIndex];
-    while (sq.Proceed())
-    {
-        if (RtAlphaCandidatePasses(sgeom, gSmp, sq.CandidateInstanceID(), sq.CandidateGeometryIndex(),
-                                   sq.CandidatePrimitiveIndex(), sq.CandidateTriangleBarycentrics()))
-        {
-            sq.CommitNonOpaqueTriangleHit();
-        }
-    }
-    if (sq.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return 1.0f; }
-    // First-hit mode: alpha-test the committed hit only. A transparent first leaf lets the light
-    // through even if a second leaf behind it would have blocked -- crown shadows lean lighter,
-    // which is the cheap half of the trade.
-    if (alphaMode == 1u &&
-        !RtAlphaCandidatePasses(sgeom, gSmp, sq.CommittedInstanceID(), sq.CommittedGeometryIndex(),
-                                sq.CommittedPrimitiveIndex(), sq.CommittedTriangleBarycentrics()))
-    {
-        return 1.0f;
-    }
-    return 0.0f;
+    // The geometry, a leaf card solid: the alpha mode is the reflection ray's, not its shadow rays'
+    // (rt_geometry.hlsli RtVisibilityBlocked).
+    return RtVisibilityBlocked(tlas, sray, RT_MASK_SHADOW) ? 0.0f : 1.0f;
 }
 
 // The GATHER half's result. `radiancePart` is env (+ the full analytic direct term when the
@@ -125,6 +111,7 @@ struct RtTraceResult
     float3 radiancePart;
     bool   reuseScreen;
     float2 reuseUv;
+    float  hitT;     // the ray's length to the hit (m): the glossy filter's lobe footprint
 };
 
 // Trace one reflection ray; on hit, shade it like the base pass EXCEPT the on-screen lit-HDR
@@ -137,6 +124,7 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
     res.radiancePart = float3(0.0f, 0.0f, 0.0f);
     res.reuseScreen = false;
     res.reuseUv = float2(0.0f, 0.0f);
+    res.hitT = 0.0f;
 
     RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
     // P16.11: TMin was 0, so the ray was free to hit the very triangle it started on. See the
@@ -158,6 +146,7 @@ bool TraceReflectionCore(float3 origin, float3 dir, float3 camPos, float tMin, u
     }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) { return false; }
 
+    res.hitT = q.CommittedRayT();
     float3 hitWS = origin + dir * q.CommittedRayT();
 
     // --- Bindless geometry + material at the hit ---
