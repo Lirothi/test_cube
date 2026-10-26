@@ -949,6 +949,13 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--mem-window")) {
             g_bootMemoryWindow = true;
         }
+        // "--dev-tab=<label>": open Developer Controls on that tab at boot (see App.h).
+        if (const char* flag = std::strstr(lpCmdLine, "--dev-tab=")) {
+            const char* value = flag + std::strlen("--dev-tab=");
+            const char* end = value;
+            while (*end && *end != ' ' && *end != '\t') { ++end; }
+            g_bootDevTab.assign(value, end);
+        }
         // "--editor": open the Level Editor at boot, so a --shot can photograph its panels.
         if (std::strstr(lpCmdLine, "--editor")) {
             g_bootEditor = true;

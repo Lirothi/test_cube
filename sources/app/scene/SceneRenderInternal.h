@@ -425,7 +425,7 @@ namespace scene_internal
         // geometry beside it -- that disagreement is what S3 existed to remove.
         vc.csmSdsmParams = float4(frame.sdsm ? (float)frame.sdsm->FrameParams().partitions : 0.0f,
                                   0.0f, 0.0f, 0.0f);
-        // Glass refraction through a hollow shell (glass.hlsl GlassRefractedUv): its wall, and only
+        // Glass refraction through a glass shell (glass.hlsl GlassRefractedUv): its wall, and only
         // with the opaque depth copy it lands on (t18 of a glass material slot).
         vc.glassRefraction = float4(renderer->GetDeferredForFrame().depthCopySRV.ptr != 0
                                         ? std::max(frame.settings.glassWallThickness, 0.0f) : 0.0f,

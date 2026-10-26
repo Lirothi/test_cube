@@ -153,6 +153,14 @@ struct TimeOfDaySettings
     // only: the light, the meter, the curve's key (the scene's own EV) and the night vision (the eye) stay as they
     // are, so it moves the night's picture and nothing else. Negative darkens; 0 = none.
     float nightExposureEv = 0.0f;
+    // The STEADY night camera (owner, 2026-10-24: "at night the camera should hardly chase the candles, so dim
+    // candles look dim"). With nightCameraEv100 non-zero the frame camera is held near that EV100 by the night's
+    // share (the same -6 -> -12 degree smoothstep) and follows only `nightCameraFollow` of where the auto exposure
+    // would take it: camera = steady + follow * (auto - steady). The eye -- the meter, the curve's key, night
+    // vision -- is untouched. 0 = off, the auto camera as before. Set it to what the open night meters (wind_test's
+    // moonlit beach at 24:00: 12.9), so the outdoors keeps its picture and a lit room keeps its own brightness.
+    float nightCameraEv100 = 0.0f;
+    float nightCameraFollow = 0.2f;
 
     // --- Night lamps (plan L, rendering/lighting/NightLamps.h) ---------------------------------------
     // Lights and glowing meshes marked "onAt": "night" (or "day") switch when the SUN crosses this elevation:

@@ -441,6 +441,7 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
     curveEvB = material->ComputeCB0FieldHandle("curveEvB");
     curveCompA = material->ComputeCB0FieldHandle("curveCompA");
     curveCompB = material->ComputeCB0FieldHandle("curveCompB");
+    nightSteady = material->ComputeCB0FieldHandle("nightSteady");
 }
 
 #if WITH_EDITOR
@@ -872,6 +873,14 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.shaderFile = L"shaders/rt_sky_visibility_cs.hlsl";
         cd.csEntry = "CSMain";
         matSkyVis_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    // ...and its spatial filter (the denoise's second half).
+    if (!matSkyVisFilter_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_sky_visibility_filter_cs.hlsl";
+        cd.csEntry = "CSMain";
+        matSkyVisFilter_ = mm->GetOrCreateCompute(renderer, cd);
     }
     if (!matRtResolve_ && renderer->IsRaytracingSupported())
     {
@@ -1928,6 +1937,7 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
     matExposureSolveCS_->UpdateCBField(handles.curveEvB, data.curveEvB, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveCompA, data.curveCompA, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveCompB, data.curveCompB, dest);
+    matExposureSolveCS_->UpdateCBField(handles.nightSteady, data.nightSteady, dest);
 }
 
 void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const

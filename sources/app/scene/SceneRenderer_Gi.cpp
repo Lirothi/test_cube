@@ -80,7 +80,7 @@ void SceneRenderer::FillGiShaderParams(int32_t outBase[4], Math::float4& outPara
     outBase[3] = static_cast<int32_t>(ddgi_.AppliedGeneration());
     const SceneRenderSettings& s = frame_->settings;
     outParams = Math::float4(decisions_.giApplied ? ddgi_.Spacing() : 0.0f, std::max(s.giIntensity, 0.0f),
-                             s.giDebug != 0u ? 1.0f : 0.0f, 0.0f);
+                             static_cast<float>(s.giDebug), 0.0f);
 }
 
 void SceneRenderer::BuildGi(Renderer* renderer, GraphBuild& gb)

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -253,6 +254,33 @@ void DeveloperWindow::RefreshLevelList()
     {
         levelChangeStatus_ = "No JSON levels found in data/levels";
     }
+}
+
+const DeveloperWindow::TabEntry DeveloperWindow::kTabs[15] = {
+    { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
+    { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" }, { Tab::Gi, "GI" },
+    { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
+    { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
+    { Tab::Vsm, "VSM" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
+    { Tab::Bindings, "Bindings" }
+};
+
+bool DeveloperWindow::OpenTab(const std::string& label)
+{
+    for (const TabEntry& entry : kTabs)
+    {
+        const std::string_view name(entry.label);
+        if (name.size() == label.size() &&
+            std::equal(name.begin(), name.end(), label.begin(), [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+            }))
+        {
+            open_ = true;
+            activeTab_ = entry.tab;
+            return true;
+        }
+    }
+    return false;
 }
 
 void DeveloperWindow::ToggleTextureInspector()
@@ -548,19 +576,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         }
         ImGui::TextDisabled("Global quality autosaves after an edit; level look stays in the level file.");
 
-        struct TabEntry { Tab tab; const char* label; };
-        static constexpr TabEntry tabs[] = {
-            { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
-            { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" },
-            { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
-            { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
-            { Tab::Vsm, "VSM" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
-            { Tab::Bindings, "Bindings" }
-        };
         const float navigationWidth = ImGui::GetFontSize() * 8.0f;
         if (ImGui::BeginChild("DeveloperControlsNavigation", ImVec2(navigationWidth, 0), true))
         {
-            for (const auto& entry : tabs)
+            for (const auto& entry : kTabs)
             {
                 if (ImGui::Selectable(entry.label, activeTab_ == entry.tab))
                     activeTab_ = entry.tab;
@@ -1689,6 +1708,73 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
             }
 
+            if (activeTab_ == Tab::Gi)
+            {
+                // Interior lighting plan D: the bounce (SceneRenderSettings::gi*). The rest of its knobs
+                // (gi.divisor, gi.rayDistance, gi.infiniteBounce) stay --set / MCP set_settings only.
+                ImGui::TextWrapped("The bounce: light arriving from geometry, from a volume of probes "
+                    "around the camera (DDGI, RTXGI's). Each probe traces rays a few frames apart and "
+                    "keeps what it sees; a surface takes the 8 probes around it. Beyond the volume the "
+                    "analytic ground bounce stands in. The sky's own light is RT sky visibility's, not this.");
+                const bool rtSupported = renderer.IsRaytracingSupported();
+                if (!rtSupported)
+                {
+                    ImGui::TextDisabled("Needs ray-tracing hardware: no bounce on this GPU.");
+                }
+                ImGui::BeginDisabled(!rtSupported);
+                if (ImGui::Button("Reset GI to defaults"))
+                {
+                    graphicsSettings.ResetGi(renderer, scene, settings);
+                }
+                GRAPHICS_CONTROL(GiEnabled, "giEnabled",
+                    ImGui::Checkbox("GI (probe volume)", &settings.giEnabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Off = no bounce: a room lit by candles keeps only their direct light (its\n"
+                                      "corners and the cabinet under a sink go near black), and outdoors the\n"
+                                      "analytic ground bounce takes over everywhere. Frees ~0.2 ms of GPU.");
+                ImGui::BeginDisabled(!settings.giEnabled);
+                GRAPHICS_CONTROL(GiSpacing, "giSpacing",
+                    ImGui::SliderFloat("Probe spacing", &settings.giSpacing, 0.25f, 2.0f, "%.2f m"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Metres between probes; the volume is 32 x 16 x 32 of them around the camera,\n"
+                                      "so this also sets how far the bounce reaches. Finer = smaller rooms and\n"
+                                      "cabinets resolved, less light through thin walls, a smaller reach; coarser =\n"
+                                      "the opposite. Same cost either way. A change starts the volume over.");
+                ImGui::TextDisabled("Covers %.0f x %.0f x %.0f m around the camera (%.0f m each side, %.0f m up and down).",
+                                    32.0f * settings.giSpacing, 16.0f * settings.giSpacing, 32.0f * settings.giSpacing,
+                                    16.0f * settings.giSpacing, 8.0f * settings.giSpacing);
+                GRAPHICS_CONTROL(GiHysteresis, "giHysteresis",
+                    ImGui::SliderFloat("Hysteresis", &settings.giHysteresis, 0.8f, 0.99f, "%.3f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How much of its old light a probe keeps per update (default 0.98). Higher =\n"
+                                      "calmer and slower: at 0.9 the bathroom's walls breathe in metre-sized\n"
+                                      "blotches. A large change (a light switched off, the clock jumped) is followed\n"
+                                      "fast whatever this is; the probes' distances keep a slower one of their own.");
+                GRAPHICS_CONTROL(GiIntensity, "giIntensity",
+                    ImGui::SliderFloat("Intensity", &settings.giIntensity, 0.0f, 4.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Multiplies the bounce. 1 = physical (the_bathroom_free checked against UE's\n"
+                                      "path tracer within ~20 %%); anything else is a look, not lighting.");
+                ImGui::EndDisabled();
+
+                ImGui::SeparatorText("Debug view");
+                // Not persisted: a debug view is for now, not for the next launch.
+                static const char* kGiDebugLabels[] = { "Off", "Bounce only", "Probe states" };
+                int giDebug = static_cast<int>(std::min<std::uint32_t>(settings.giDebug, 2u));
+                if (ImGui::Combo("GI debug view", &giDebug, kGiDebugLabels, IM_ARRAYSIZE(kGiDebugLabels)))
+                {
+                    settings.giDebug = static_cast<std::uint32_t>(giDebug);
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Bounce only: the lit frame shows the bounce alone (the lamps' own passes\n"
+                                      "still add); RED where no usable probe surrounds a point.\n"
+                                      "Probe states: the 8 probes around each point -- red moved by their last\n"
+                                      "update (red that stays = a probe that never settles), green off their grid\n"
+                                      "point (most surfaces: probes inside a wall were pushed out), blue switched\n"
+                                      "off as inside geometry.");
+                ImGui::EndDisabled();
+            }
+
             if (activeTab_ == Tab::Lod)
             {
                 // Every mesh-LOD SELECTION control in one place (shadow-specific LOD lives with the
@@ -1727,14 +1813,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::SetTooltip("UE's static-mesh LOD: a LOD is drawn while the object's screen size\n"
                                       "(bounding-sphere diameter / screen height) is at most that LOD's screen\n"
                                       "size, estimated per mesh from its baked deviation (UE's automatic screen\n"
-                                      "size: the deviation spans 'Pixel error' pixels at 1080p, 90 deg) or authored\n"
+                                      "size: the deviation spans 'Pixel error' pixels of this screen) or authored\n"
                                       "in mesh.json \"lodScreenSize\". Off = the global distance/radius ratios below.");
                 ImGui::BeginDisabled(!render::g_lodUeScreenSize);
                 GRAPHICS_CONTROL(LodPixelError, "lodPixelError",
-                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError, 0.5f, 64.0f, "%.1f px"));
+                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError, 0.25f, 16.0f, "%.2f px"));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("UE FMeshReductionSettings::PixelError (default 8): how many 1080p pixels a\n"
-                                      "LOD's baked deviation may span at the distance it switches in. Higher =\n"
+                    ImGui::SetTooltip("How many pixels OF THIS SCREEN a LOD's baked deviation may span at the\n"
+                                      "distance it switches in (default 1). UE's PixelError is 8 pixels of a fixed\n"
+                                      "1080p screen -- a visible pop, tuned to UE's own deviation metric. Higher =\n"
                                       "coarser sooner. mesh.json \"lodPixelError\" overrides it per asset.");
                 GRAPHICS_CONTROL(LodDistanceScale, "lodDistanceScale",
                     ImGui::SliderFloat("LOD distance scale", &render::g_lodDistanceScale, 0.1f, 8.0f, "%.2f"));

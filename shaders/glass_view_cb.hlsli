@@ -59,7 +59,8 @@ cbuffer GlassView : register(b1)
     // S15: x = active SDSM partitions, 0 = not SDSM mode (the gate on reading SdsmPartitions).
     // APPENDED at the tail, the same rule the fog block above followed.
     float4 csmSdsmParams;
-    // Glass refraction (glass.hlsl GlassRefractedUv): x = the hollow shell's wall (m), 0 = straight through.
+    // Glass refraction (glass.hlsl GlassRefractedUv): x = the shell's wall (m), 0 = straight through,
+    // >= the shape's radius = solid glass (the default, glass.wall 0.5).
     // Appended at the tail, the same rule.
     float4 glassRefraction;
     // Plan S on glass slots: lighting_cb.hlsli's skyVisParams (x 1 = SkyVisTex is real this frame, y diffuse,

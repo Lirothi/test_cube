@@ -293,6 +293,9 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             (i < 4u ? constants.curveEvA : constants.curveEvB)[i & 3u] = settings.exposureCurveEv[i];
             (i < 4u ? constants.curveCompA : constants.curveCompB)[i & 3u] = settings.exposureCurveComp[i];
         }
+        constants.nightSteady[0] = settings.nightSteadyEv100;
+        constants.nightSteady[1] = settings.nightSteadyFollow;
+        constants.nightSteady[2] = settings.nightSteadyWeight;
         constants.startDistance = settings.adaptationStartDistance;
         // Slope-match factors for the hybrid adaptation, derived exactly as UE derives them: make
         // the exponential's slope equal the linear's at the switch point so the two halves join

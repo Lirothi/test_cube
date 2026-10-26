@@ -104,10 +104,13 @@ void DdgiVolume::Prepare(Renderer* renderer)
         return;
     }
     {
-        constexpr UINT kStride = 16; // uint4 per probe
+        // Two uint4 per probe (ddgi_common.hlsli DdgiStateIndex / DdgiOffsetIndex): the cell, generation and flags;
+        // the relocation offset.
+        constexpr UINT kStride = 16;
+        constexpr UINT kElements = kProbeCount * 2u;
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        desc.Width = UINT64(kProbeCount) * kStride;
+        desc.Width = UINT64(kElements) * kStride;
         desc.Height = 1;
         desc.DepthOrArraySize = 1;
         desc.MipLevels = 1;
@@ -130,13 +133,13 @@ void DdgiVolume::Prepare(Renderer* renderer)
         sd.Format = DXGI_FORMAT_UNKNOWN;
         sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sd.Buffer.NumElements = kProbeCount;
+        sd.Buffer.NumElements = kElements;
         sd.Buffer.StructureByteStride = kStride;
         device->CreateShaderResourceView(resource.Get(), &sd, handles_[6]);
         D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
         ud.Format = DXGI_FORMAT_UNKNOWN;
         ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        ud.Buffer.NumElements = kProbeCount;
+        ud.Buffer.NumElements = kElements;
         ud.Buffer.StructureByteStride = kStride;
         device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, handles_[7]);
     }

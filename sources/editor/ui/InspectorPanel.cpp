@@ -2614,6 +2614,15 @@ namespace
                           "with the sun above -6 degrees, all of it from -12, smooth between. Only the picture: "
                           "the light, the meter, the exposure curve and the night vision stay as they are. "
                           "Negative darkens; 0 = none.");
+            dragF("Night Camera EV100", "nightCameraEv100", 0.0f, 0.05f, -20.0f, 30.0f, "%.2f");
+            InspectorHelp("The steady night: the camera held near this EV100 at night (by the same night share), "
+                          "so dim candles stay dim instead of being exposed back up. Set it to what the open "
+                          "night meters (get_readouts' adaptedEv100 on the moonlit beach). 0 = off, the auto "
+                          "exposure as before.");
+            dragF("Night Camera Follow", "nightCameraFollow", 0.2f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How much of the auto exposure's departure from the Night Camera EV100 the camera "
+                          "still follows: 0 = held exactly, 1 = the auto exposure. The eye's own adaptation "
+                          "(the meter, night vision) is not touched.");
             ImGui::SeparatorText("Cost");
             dragF("Light Update Threshold (deg)", "lightUpdateThresholdDeg", 0.05f, 0.005f, 0.0f, 5.0f, "%.3f");
             InspectorHelp("While the clock runs, the scene light (and with it every shadow) turns only once "

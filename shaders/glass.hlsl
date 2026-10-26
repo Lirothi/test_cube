@@ -430,75 +430,136 @@ float3 SampleBehindGlass(float2 uv, float rough)
     return acc * (1.0f / 9.0f);
 }
 
-// Ray (o, unit d) against the sphere (c, r): both distances along the ray, false on a miss.
-bool GlassRaySphere(float3 o, float3 d, float3 c, float r, out float t0, out float t1)
+// The glass's local shape at a pixel: the quadric that has the surface's two principal curvatures there --
+// an ellipsoid centred R behind the surface (R = 1 / k1, the larger curvature) with semi-axes R along the
+// normal and along t1, R / s along t2 (s = sqrt(k2 / k1)). A sphere where the surface is round both ways
+// (s = 1), a cylinder along a tumbler's side (s = 0: its axis runs up the wall, which does not bend what is
+// above or below), exactly what the curvatures say in between. Every ray test runs where it is a sphere
+// of radius R: t2 scaled by s.
+struct GlassShell
 {
-    const float3 oc = o - c;
-    const float b = dot(oc, d);
-    const float h = b * b - (dot(oc, oc) - r * r);
+    float3 c;  // centre
+    float3 t1; // the strongly curved direction
+    float3 t2; // the weakly curved one (a cylinder's axis)
+    float3 n;  // the normal at the pixel
+    float s;   // sqrt(k2 / k1)
+};
+
+float3 GlassShellLocal(GlassShell sh, float3 v)
+{
+    return float3(dot(v, sh.t1), dot(v, sh.t2) * sh.s, dot(v, sh.n));
+}
+
+// Ray (o, unit d) against the shell scaled to radius r (r = R: the outer surface, R - wall: the hollow):
+// both distances along the world ray, false on a miss or along a cylinder's axis.
+bool GlassRayShell(GlassShell sh, float3 o, float3 d, float r, out float t0, out float t1)
+{
+    const float3 oc = GlassShellLocal(sh, o - sh.c);
+    const float3 dl = GlassShellLocal(sh, d);
+    const float a = dot(dl, dl);
     t0 = 0.0f;
     t1 = 0.0f;
+    if (a < 1.0e-8f) { return false; }
+    const float b = dot(oc, dl) / a;
+    const float h = b * b - (dot(oc, oc) - r * r) / a;
     if (h < 0.0f) { return false; }
-    const float s = sqrt(h);
-    t0 = -b - s;
-    t1 = -b + s;
+    const float sq = sqrt(h);
+    t0 = -b - sq;
+    t1 = -b + sq;
     return true;
 }
 
-// Out of the glass through the outer sphere (c, r), from `o` inside it along `d`: the exit point and
+// The shell's outward normal at a point on it: the gradient of |GlassShellLocal(x - c)|^2.
+float3 GlassShellNormal(GlassShell sh, float3 x)
+{
+    const float3 v = x - sh.c;
+    return normalize(sh.t1 * dot(v, sh.t1) + sh.t2 * (sh.s * sh.s * dot(v, sh.t2)) + sh.n * dot(v, sh.n));
+}
+
+// Out of the glass through the outer surface (radius R), from `o` inside it along `d`: the exit point and
 // direction. Total internal reflection there keeps the direction (one more bounce inside a wall is a
 // sliver of the rim that no screen copy can show anyway).
-void GlassExitOuter(inout float3 o, inout float3 d, float3 c, float r, float ior)
+void GlassExitOuter(inout float3 o, inout float3 d, GlassShell sh, float R, float ior)
 {
     float t0, t1;
-    if (!GlassRaySphere(o, d, c, r, t0, t1)) { return; }
+    if (!GlassRayShell(sh, o, d, R, t0, t1)) { return; }
     o += d * max(t1, 0.0f);
-    const float3 n = normalize(o - c);
-    const float3 outDir = refract(d, -n, ior);
+    const float3 outDir = refract(d, -GlassShellNormal(sh, o), ior);
     if (dot(outDir, outDir) > 1.0e-6f) { d = outDir; }
 }
 
 // Glass refraction (owner 2026-10-24, "the glasses pass the background straight through, no distortion").
-// The thin-walled glTF glass is a SHELL, so the surface is taken locally as a HOLLOW sphere: its radius
-// the curvature of the interpolated geometric normal across the pixel quad (the normal map would read as
-// bumps), its wall `wall` m thick, its centre behind the surface. The view ray is refracted through it
-// exactly -- into the near wall, out into the hollow, into the far wall, out -- with a total internal
-// reflection at the hollow (the band just inside the rim, b > R - wall) bounced once and sent out
-// through the wall. HDRP's RefractionModelSphere, made hollow: a solid ball's lensing would turn every
-// tumbler into a paperweight. A flat pane or a concave face (the inside of a cup seen over its rim) is
-// not bent. The exit ray then meets the opaque scene on the proxy plane at the depth behind the pixel,
-// refined once at the depth it lands on (HDRP's proxy raycast); a landing IN FRONT of the glass (an
-// object between the camera and the cup) keeps the straight-through sample.
+// The surface is taken locally as a GlassShell: its curvatures those of the interpolated geometric normal
+// across the pixel quad (the normal map would read as bumps), `wall` m of glass under it. A wall thinner
+// than the shape is round is HOLLOW: the view ray is refracted through it exactly -- into the near wall,
+// out into the hollow, into the far wall, out -- with a total internal reflection at the hollow (the band
+// just inside the rim) bounced once and sent out through the wall. A wall at least that thick is SOLID
+// glass, the default (glass.wall 0.5): the owner picked Sketchfab's look, whose screen-space refraction
+// bends every cup like a block, over the hollow tumbler the_bathroom_free models (4.3 mm). HDRP's
+// RefractionModelSphere given the surface's own two curvatures: a sphere of the larger one bent a
+// tumbler's background into a dome, where its side is a cylinder. A flat pane
+// or a concave face (the inside of a cup seen over its rim) is not bent. The exit ray then meets the opaque
+// scene on the proxy plane at the depth behind the pixel, refined once at the depth it lands on (HDRP's
+// proxy raycast); a landing IN FRONT of the glass (an object between the camera and the cup) keeps the
+// straight-through sample.
 float2 GlassRefractedUv(float3 P, float3 Ngeo, float3 V, float ior, float wall, float2 pixelUv, float glassDeviceZ)
 {
     const float3 dPx = ddx(P);
     const float3 dPy = ddy(P);
     const float3 dNx = ddx(Ngeo);
     const float3 dNy = ddy(Ngeo);
-    // Convex = the normal turns the way the surface runs (its centre of curvature behind it).
-    if (dot(dNx, dPx) + dot(dNy, dPy) <= 0.0f) { return pixelUv; }
-    const float curvature = max(length(dNx) / max(length(dPx), 1.0e-6f), length(dNy) / max(length(dPy), 1.0e-6f));
-    if (curvature < 0.01f) { return pixelUv; } // flatter than a 100 m sphere: a pane, a sub-millimetre shift
-    const float R = 1.0f / curvature;
-    const float3 C = P - Ngeo * R;
+    // The shape operator S (dN = S dP) in a tangent basis, from the quad: its eigenvalues are the principal
+    // curvatures, its eigenvectors their directions (positive = convex, the normal turning the way the
+    // surface runs).
+    const float3 dPxT = dPx - Ngeo * dot(dPx, Ngeo);
+    if (dot(dPxT, dPxT) < 1.0e-14f) { return pixelUv; }
+    const float3 e1 = normalize(dPxT);
+    const float3 e2 = cross(Ngeo, e1);
+    const float2 px = float2(dot(dPx, e1), dot(dPx, e2));
+    const float2 py = float2(dot(dPy, e1), dot(dPy, e2));
+    const float2 nx = float2(dot(dNx, e1), dot(dNx, e2));
+    const float2 ny = float2(dot(dNy, e1), dot(dNy, e2));
+    const float det = px.x * py.y - py.x * px.y;
+    if (abs(det) < 1.0e-14f) { return pixelUv; } // the quad edge-on
+    const float s00 = (nx.x * py.y - ny.x * px.y) / det;
+    const float s01 = (ny.x * px.x - nx.x * py.x) / det;
+    const float s10 = (nx.y * py.y - ny.y * px.y) / det;
+    const float s11 = (ny.y * px.x - nx.y * py.x) / det;
+    const float sb = 0.5f * (s01 + s10); // symmetric in theory; the interpolated normal is not quite
+    const float sm = 0.5f * (s00 + s11);
+    const float sr = sqrt(0.25f * (s00 - s11) * (s00 - s11) + sb * sb);
+    const float k1 = sm + sr;
+    const float k2 = sm - sr;
+    if (k1 < 0.01f) { return pixelUv; } // concave, or flatter than a 100 m sphere: a pane, a sub-millimetre shift
+    // k1's eigenvector: the longer of the two forms of (S - k1 I) v = 0.
+    const float2 va = float2(sb, k1 - s00);
+    const float2 vb = float2(k1 - s11, sb);
+    const float2 v = dot(va, va) > dot(vb, vb) ? va : vb;
+    GlassShell sh;
+    sh.n = Ngeo;
+    sh.t1 = dot(v, v) > 1.0e-12f ? normalize(v.x * e1 + v.y * e2) : e1; // umbilic (a sphere): any direction
+    sh.t2 = cross(Ngeo, sh.t1);
+    sh.s = sqrt(saturate(k2 / k1)); // a saddle's concave direction is taken as straight
+    const float R = 1.0f / k1;
+    sh.c = P - Ngeo * R;
     const float Ri = R - wall; // <= 0: a wall thicker than the shape is round -- solid glass
 
     float3 o = P;
     float3 d = refract(-V, Ngeo, 1.0f / ior); // into the near wall
     float t0, t1;
-    if (Ri > 0.0f && GlassRaySphere(o, d, C, Ri, t0, t1) && t0 > 0.0f)
+    if (Ri > 0.0f && GlassRayShell(sh, o, d, Ri, t0, t1) && t0 > 0.0f)
     {
         o += d * t0;
-        const float3 n = normalize(o - C);
+        const float3 n = GlassShellNormal(sh, o);
         const float3 intoHollow = refract(d, n, ior);
         if (dot(intoHollow, intoHollow) > 1.0e-6f)
         {
             // Across the hollow to its far side, into the far wall, out of it.
             d = intoHollow;
-            if (GlassRaySphere(o, d, C, Ri, t0, t1))
+            if (GlassRayShell(sh, o, d, Ri, t0, t1))
             {
                 o += d * max(t1, 0.0f);
-                const float3 n2 = normalize(o - C);
+                const float3 n2 = GlassShellNormal(sh, o);
                 const float3 intoWall = refract(d, -n2, 1.0f / ior);
                 if (dot(intoWall, intoWall) > 1.0e-6f) { d = intoWall; }
             }
@@ -508,7 +569,7 @@ float2 GlassRefractedUv(float3 P, float3 Ngeo, float3 V, float ior, float wall, 
             d = reflect(d, n); // total internal reflection at the hollow: back into the near wall
         }
     }
-    GlassExitOuter(o, d, C, R, ior); // ...and out of whichever wall the ray is in
+    GlassExitOuter(o, d, sh, R, ior); // ...and out of whichever wall the ray is in
 
     const float3 fwd = camDirWS.xyz;
     const float3 camPos = camPosSky.xyz;
@@ -580,7 +641,9 @@ PSOut PSMain(VSOut i)
     // glTF BLEND alpha is COVERAGE on top of the transmission model -- what three.js and Blender do
     // with it. Sketchfab's exporter writes a pane's opacity both as this alpha and as 1 - transmission
     // (the_bathroom_free's shelf 0.404 / 0.596, the tumblers 0.498 / 0.502): left out, the shelf was a
-    // full sheet of blue glass where the source shows 60 % of the room through it untouched.
+    // full sheet of blue glass where the source shows 60 % of the room through it untouched. The share
+    // it leaves open is still THIS glass seen through, not a hole beside it: it takes the same bend
+    // (untinted, unblurred -- see the blend below), or half of every tumbler showed the room straight.
     const float coverage = saturate(albedoTex.a * matBaseColor.a);
     tint = saturate(albedoTex.rgb * matBaseColor.rgb);
     float2 mr = matSurface.xy;
@@ -927,9 +990,14 @@ PSOut PSMain(VSOut i)
 #if GLASS_MATERIAL
     // The surface covers 1 - throughAvg of the pixel, so it takes that share of the air's in-scatter
     // (the rest is already in the fogged scene behind it). Coverage then scales the whole glass over
-    // what is behind: target = c * glass + (1 - c) * target.
+    // what is behind: target = c * glass + (1 - c) * target. The open share (1 - c) is seen through the
+    // same shell, so its straight-through target is swapped for the refracted copy, sharp and untinted
+    // (Sketchfab's refraction opacity: a mix of the bent scene and the surface, never the scene straight).
+    // A pane does not bend (refrUv == pixelUv): nothing changes there.
+    const float3 behindOpen = SceneOpaque.SampleLevel(LinearSampler, refrUv, 0).rgb * invPreExposure;
     const float3 color = coverage * (max(surface * fogTransmit + fogAdd * (1.0f - throughAvg), 0.0f.xxx)
-                                     + through * behind - throughAvg * behindHere);
+                                     + through * behind - throughAvg * behindHere)
+                         + (1.0f - coverage) * (behindOpen - behindHere);
     const float outAlpha = coverage * (1.0f - throughAvg);
 #else
     color = color * fogTransmit + fogAdd;

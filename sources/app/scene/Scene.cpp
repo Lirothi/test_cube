@@ -2041,6 +2041,8 @@ void Scene::PrepareViews(Renderer* renderer)
     {
         return;
     }
+    // The LOD estimate projects each level's deviation onto the screen it is seen on (LodSelect.h).
+    render::g_lodOutputWidthPx = static_cast<float>(std::max(renderer->GetWidth(), 1u));
 
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
     SceneView& mainView = camera_.GetView();
@@ -2148,6 +2150,13 @@ void Scene::PrepareViews(Renderer* renderer)
     // The owner's night exposure (TimeOfDaySettings::nightExposureEv), on the FRAME's camera: the level keeps
     // its compensation as written. Into the static trim, so the curve stays keyed on the scene's own EV.
     if (timeOfDay_.Present()) { frameData_.cameraExposure.compensationEv += timeOfDay_.NightExposureEv(); }
+    // ...and the steady night camera (TimeOfDaySettings::nightCameraEv100), by the same night share.
+    if (timeOfDay_.Present() && timeOfDay_.Settings().nightCameraEv100 != 0.0f)
+    {
+        frameData_.cameraExposure.nightSteadyEv100 = timeOfDay_.Settings().nightCameraEv100;
+        frameData_.cameraExposure.nightSteadyFollow = timeOfDay_.Settings().nightCameraFollow;
+        frameData_.cameraExposure.nightSteadyWeight = timeOfDay_.NightShare();
+    }
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
     frameData_.selectedEditorObjectIds =

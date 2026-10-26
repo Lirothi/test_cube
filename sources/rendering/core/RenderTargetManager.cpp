@@ -494,6 +494,11 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             DeferredSrvSlot::SkyVis, DeferredSrvSlot::SkyVisUAV, f,
             D.skyVis, D.skyVisSRV, D.skyVisUAV,
             sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibility");
+        // ...its temporal accumulation, before the spatial filter (the history the next frame reads).
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, render::kSkyVisFormat,
+            DeferredSrvSlot::SkyVisAccum, DeferredSrvSlot::SkyVisAccumUAV, f,
+            D.skyVisAccum, D.skyVisAccumSRV, D.skyVisAccumUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibilityAccum");
 
         // The upsampled result is at RENDER resolution: it is consumed by lighting and compose,
         // which run before the upscaler.
@@ -871,6 +876,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.gtaoHistory.Get(), L"GtaoHistory", kNps);
         nameRes(D.gtaoUpsampled.Get(), L"GtaoUpsampled", kNps);
         nameRes(D.skyVis.Get(), L"SkyVisibility", kNps);
+        nameRes(D.skyVisAccum.Get(), L"SkyVisibilityAccum", kNps);
         // The bloom's convolution grids: ONE set since the 2026-10-22 census, named where they are created.
         nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
         nameRes(D.streakA.Get(), L"StreakPyramidA", kNps);

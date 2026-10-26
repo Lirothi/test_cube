@@ -27,10 +27,12 @@ DdgiVolumeDesc DdgiVolumeFromConstants()
     return v;
 }
 
-// The ray `k` of this update, the same in the trace and the update.
+// The ray `k` of this update, the same in the trace and the update: a fixed ray (k < kDdgiFixedRays) is its own
+// Fibonacci set, unrotated (RTXGI DDGIGetProbeRayDirection); a blended one this update's rotation of the other set.
 float3 DdgiRayDirection(uint k)
 {
-    return normalize(mul(DdgiSphericalFibonacci(float(k), float(kDdgiRays)), (float3x3)rayRotation));
+    if (k < kDdgiFixedRays) { return DdgiSphericalFibonacci(float(k), float(kDdgiFixedRays)); }
+    return normalize(mul(DdgiSphericalFibonacci(float(k - kDdgiFixedRays), float(kDdgiBlendRays)), (float3x3)rayRotation));
 }
 
 #endif // DDGI_CONSTANTS_HLSLI

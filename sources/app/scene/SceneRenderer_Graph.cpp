@@ -1333,8 +1333,9 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 const auto& D = renderer->GetDeferredForFrame();
                 const auto& P = renderer->GetDeferredForPrevFrame();
-                if (!resources_.GetSkyVisMaterial() || D.skyVisUAV.ptr == 0 || D.skyVisSRV.ptr == 0 ||
-                    P.skyVisSRV.ptr == 0 || D.gbSRV[1].ptr == 0 || D.gbSRV[3].ptr == 0 || D.depthSRV.ptr == 0)
+                if (!resources_.GetSkyVisMaterial() || !resources_.GetSkyVisFilterMaterial() || D.skyVisUAV.ptr == 0 ||
+                    D.skyVisSRV.ptr == 0 || D.skyVisAccumUAV.ptr == 0 || D.skyVisAccumSRV.ptr == 0 ||
+                    P.skyVisAccumSRV.ptr == 0 || D.gbSRV[1].ptr == 0 || D.gbSRV[3].ptr == 0 || D.depthSRV.ptr == 0)
                 {
                     skyVisHistoryFrames_ = 0u;
                     return {};
@@ -1360,9 +1361,15 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                 ctx.Use(D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 ctx.Use(D.gbVelocity.Get(), kSrvAll);
-                ctx.Use(P.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // last frame's, at rest
+                ctx.Use(P.skyVisAccum.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); // last frame's, at rest
+                ctx.Use(D.skyVisAccum.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                // The spatial filter reads the accumulation (next frame's history, at rest from here) and writes
+                // the target lighting and compose read...
+                ctx.NextPoint();
+                chain.pointFilter = ctx.usePoint ? *ctx.usePoint : 0u;
+                ctx.Use(D.skyVisAccum.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-                // ...and back to its resting state for lighting and compose (and next frame's history).
+                // ...and back to its resting state for them.
                 ctx.NextPoint();
                 chain.pointRestore = ctx.usePoint ? *ctx.usePoint : 0u;
                 ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);

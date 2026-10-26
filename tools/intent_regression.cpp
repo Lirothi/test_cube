@@ -1757,6 +1757,21 @@ void TestSetLightRetunes(const EditorActionContext& actionCtx)
     status.clear();
     Check(!ExecuteIntent(actionCtx, stack, nothing, status) && status.find("needs") != std::string::npos,
           "a setLight that changes nothing is refused: " + status);
+    // A point light's flicker: the amplitude given, a candle's 3 Hz when no frequency is, its own seed; a spot has none.
+    const EditorIntentPreview flick = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Light"]},"params":{"flicker":0.15}})");
+    EditorCommandStack flickStack;
+    status.clear();
+    Check(ExecuteIntent(actionCtx, flickStack, flick, status) && status.find("flicker") != std::string::npos,
+          "setLight flicker runs and says so: " + status);
+    const Json porchFlicker = property(920, "flicker");
+    Check(porchFlicker.is_object() && porchFlicker.value("amplitude", 0.0f) == 0.15f &&
+          porchFlicker.value("frequencyHz", 0.0f) == 3.0f && porchFlicker.value("seed", 0) > 0,
+          "the porch light flickers +/-15 % at 3 Hz with its own seed: " + porchFlicker.dump());
+    Check(property(921, "flicker").is_null(), "the spot does not flicker");
+    flickStack.Undo(ctx);
+    Check(property(920, "flicker").is_null(), "undo takes the flicker away");
+
     // The values a light already has: said so, not "Changed ... -- failed".
     const EditorIntentPreview same = preview(
         R"({"kind":"command","action":"setLight","target":{"filter":["Porch"]},"params":{"radius":6}})");

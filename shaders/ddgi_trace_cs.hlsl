@@ -5,7 +5,8 @@
 // average does the integral), and the volume's own previous irradiance at the hit (the infinite
 // bounce). A miss brings nothing: the probes hold the bounce, the sky is plan S's (ddgi_common.hlsli).
 // A hit on the back of a one-sided surface stores a negative, shortened distance (RTXGI): the update
-// counts them to switch off probes inside geometry, and the depth sees a near occluder there.
+// counts the FIXED rays' to switch off probes inside geometry, and the depth sees a near occluder there.
+// A fixed ray (ddgi_common.hlsli kDdgiFixedRays) stops at its hit: it classifies, it does not light.
 #define DDGI_TRACE_RS \
     "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED)," \
     "CBV(b0)," \
@@ -51,7 +52,7 @@ bool DdgiOccluded(RaytracingAccelerationStructure tlas, StructuredBuffer<Geometr
                                      q.CommittedPrimitiveIndex(), q.CommittedTriangleBarycentrics()));
 }
 
-[numthreads(64, 1, 1)]
+[numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + the 64 blended
 [RootSignature(DDGI_TRACE_RS)]
 void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 {
@@ -64,7 +65,14 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     const uint2 rayTexel = uint2(gi, gid.x);
     const DdgiVolumeDesc volume = DdgiVolumeFromConstants();
     const int3 cell = DdgiCellOfSlot(DdgiSlotFromIndex(probeIndex), volume.base);
-    const float3 origin = float3(cell) * volume.spacing;
+    // From where the probe stands (ddgi_update_cs relocates it): its offset while the slot was traced for this cell
+    // in this generation, its grid point otherwise -- the update reads the same state before it writes.
+    StructuredBuffer<uint4> probeState = ResourceDescriptorHeap[stateIndex];
+    const uint4 ownState = probeState[DdgiStateIndex(probeIndex)];
+    const bool placed = all(int3(asint(ownState.x), asint(ownState.y), asint(ownState.z)) == cell) &&
+                        (ownState.w >> 8) == volume.generation && (ownState.w & kDdgiStateValid) != 0u;
+    const float3 origin = float3(cell) * volume.spacing +
+                          (placed ? asfloat(probeState[DdgiOffsetIndex(probeIndex)].xyz) : 0.0f.xxx);
     const float3 dir = DdgiRayDirection(gi);
 
     RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
@@ -109,6 +117,12 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             return;
         }
         N = -N;
+    }
+    // A fixed ray only classifies the probe (ddgi_update_cs): its distance and side, no light.
+    if (gi < kDdgiFixedRays)
+    {
+        rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, t);
+        return;
     }
 
     const float2 uv = LoadUV(vb, tri.x, g.vertexStride) * bw + LoadUV(vb, tri.y, g.vertexStride) * bary.x +
@@ -167,7 +181,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     }
     float3 radiance = diffuse * kInvPi * irradiance;
 
-    // The sky at the hit, seen through one cosine ray (plan S's reach): the probe's 64 rays and its
+    // The sky at the hit, seen through one cosine ray (plan S's reach): the probe's 64 blended rays and its
     // hysteresis average it, as SkyVis averages its four over frames.
     if (skyIrradianceIndex != 0u)
     {
@@ -196,9 +210,8 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     {
         Texture2D irradianceAtlas = ResourceDescriptorHeap[irradianceIndex];
         Texture2D depthAtlas = ResourceDescriptorHeap[depthIndex];
-        StructuredBuffer<uint4> state = ResourceDescriptorHeap[stateIndex];
         float w;
-        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, state, gSmp, volume, P, N, -dir, w);
+        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, probeState, gSmp, volume, P, N, -dir, w);
         radiance += diffuse * bounce * w;
     }
     rays[rayTexel] = float4(radiance, t);

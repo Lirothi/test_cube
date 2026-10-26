@@ -334,6 +334,7 @@ struct SceneExposureSolveCBHandles
     Material::CBFieldHandle blackBucketInfluence;
     Material::CBFieldHandle curvePoints; // time-of-day E1
     Material::CBFieldHandle curveEvA, curveEvB, curveCompA, curveCompB;
+    Material::CBFieldHandle nightSteady; // time of day: the steady night camera
 
     void Populate(Material* material);
 };
@@ -1022,6 +1023,8 @@ struct ExposureMeteringConstants
     uint32_t curvePoints = 0;
     float curveEvA[4] = {}, curveEvB[4] = {};
     float curveCompA[4] = {}, curveCompB[4] = {};
+    // Time of day: the steady night camera -- EV100, follow share, weight (0 = off), unused.
+    float nightSteady[4] = {};
 };
 
 #if WITH_EDITOR
@@ -1125,6 +1128,7 @@ public:
     // Gather-then-shade split of the opaque RT reflection (async prep); null on non-RT HW.
     std::shared_ptr<Material> GetRtTraceMaterial() const { return matRtTrace_; }
     std::shared_ptr<Material> GetSkyVisMaterial() const { return matSkyVis_; } // plan S
+    std::shared_ptr<Material> GetSkyVisFilterMaterial() const { return matSkyVisFilter_; }
     std::shared_ptr<Material> GetRtResolveMaterial() const { return matRtResolve_; }
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
 #if WITH_EDITOR
@@ -1230,6 +1234,7 @@ private:
     std::shared_ptr<Material> matRtReflect_;
     std::shared_ptr<Material> matRtTrace_;   // gather phase of the opaque RT reflection split
     std::shared_ptr<Material> matSkyVis_;    // plan S: rt_sky_visibility_cs.hlsl
+    std::shared_ptr<Material> matSkyVisFilter_; // ...its spatial filter, rt_sky_visibility_filter_cs.hlsl
     std::shared_ptr<Material> matRtResolve_; // shade phase (the only RT consumer of lightT)
     std::shared_ptr<Material> matRtWindDeform_; // RW wind deform for dynamic BLASes  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW

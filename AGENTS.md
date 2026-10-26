@@ -47,7 +47,11 @@ Levels written before 2026-10-13 carry the sun as `directionalLight`. Exactly tw
 stands exactly where it was authored -- the frame does not change (measured, within noise). A level takes
 the new section the next time it is saved. `--tod-legacy-light` reads the old section as before (runtime
 only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--time-freeze`,
-`--set/--sweep=tod.<key>`; the HUD prints `Time: HH:MM` under `Cam:`. In the editor (command bar, MCP):
+`--set/--sweep=tod.<key>`; the HUD prints `Time: HH:MM` under `Cam:`. The STEADY night camera
+(`timeOfDay.nightCameraEv100`, 0 = off; `nightCameraFollow`, 0.2): at night (the -6 -> -12 degree share) the camera
+is held near that EV100 and follows only `follow` of where the auto exposure goes -- `exposure_solve_cs.hlsl`
+`nightSteady`, after the curve, the eye untouched -- so dim lamps look dim (wind_test: 13.13 = the moonlit beach's
+auto camera at 24:00; candles 4 -> 0.5 lm move the camera 0.21 stop instead of the auto exposure's 0.96). In the editor (command bar, MCP):
 `setTime` ("18:30", "sunset", "+2h") and `setDate` ("2026-06-21", switches to real positions); every
 `timeOfDay.*` key is in the document, so `setEnvironment` reaches the rest.
 
@@ -55,8 +59,10 @@ Night lamps (plan L, `rendering/lighting/NightLamps.h`): a point/spot light or a
 (or `"day"`) switches when the sun crosses `timeOfDay.lamps.sunElevationDeg` (0 = UDS's Sunset), UDS-style delay and
 warm-up, instant when the clock is set by hand; a night lamp takes `nightBrightness` as the night comes in. Brightness,
 never `enabled` (that rebuilds the lights behind a GPU wait). MCP: `setOnAt` -- lights through the selection;
-`setLight {lumens | scale, radius, color, shadows}` retunes lights that exist, by name or group ("Bathroom
-Candles"), one undo entry -- `scale` multiplies each light's own flux, a spot's radius is its range.
+`setLight {lumens | scale, radius, color, shadows, flicker, flickerHz}` retunes lights that exist, by name or group
+("Bathroom Candles"), one undo entry -- `scale` multiplies each light's own flux, a spot's radius is its range;
+`flicker` is a point light's +/- share of its flux (PointLightFlickerDesc, three incommensurate sines; a candle 0.15
+at 3 Hz), each lamp seeded on its own so a row of candles does not breathe in step.
 
 ## Line Endings
 
@@ -404,6 +410,12 @@ carries `pixelProbe`: the brightest PRE-EXPOSED pixel of the window (rgb), the s
 input's local exposure, a 4x4 box at it and the window's mean (bloom_conv_cs.hlsl stage 11, read back
 with the exposure record). That is how the 65504-nit clip of the light target was found (2026-10-15).
 `run_action setSurface {metal, roughness}` makes an object chrome/lacquer/matte live (undo restores).
+**`set_settings` is transient but STICKY**: a knob stays as last set until `reset_settings` (or a relaunch), so a
+script that toggles one and dies, or a later script that never names it, measures a different scene. Start every
+series with `reset_settings`. It cost a wrong conclusion on 2026-10-24: a leftover `sky.environmentLighting:0` lit
+the night with the daytime HDRI's 12,000 lux fill (x skyFillIntensity 2) and read as "the night sky is 1.8 lux".
+`get_readouts` carries `skyFill` (`environment` true = the procedural sky's capture, false = the HDRI; `exposure`,
+`hdriLux`, `irradianceScale`) to tell which fill is lighting the frame.
 `set_settings {set: "wind.freeze:1"}` holds the wind + ocean pose (`--wind-freeze` for a running
 editor; `0` releases it, `reset_settings` does not): without it two looks of the sea are two different
 seas. The probe's window mean of a bloom target over water is dominated by any lens ghost lying on it
@@ -443,6 +455,12 @@ headless `--shot` can capture a panel that otherwise needs a keypress. Which pan
 whatever `editor_state.json` -> `levelEditor.panelState.*Visible` last held, so set those first.
 Allow a long `--shot-delay` (40 frames is comfortable) -- the asset registry scan and the first
 editor frame both happen before the panels look settled.
+
+`--dev-tab=<label>` opens Developer Controls on that tab at boot (`gi`, `lod`, `memory`, ... -- the navigation's
+labels, case-insensitive; an unknown one logs a warning naming them), as `--mem-window` does for Memory. Driving
+ImGui with posted mouse messages does not work: while the window has focus the backend reads the real cursor
+(`GetCursorPos`), so a test checks a persisted control by its load (a `graphics_settings.json` section shows in
+the tab) and its save (delete the file: the boot writes it whole from Capture -- back it up and restore it).
 
 `--show-import[=<name>]` (implies `--editor`) opens the Import Assets window with the staged item
 `<name>` selected, so its details pane -- size, split, material preview, LOD, chunking -- can be
@@ -559,6 +577,23 @@ about the vertical plane nearest their local X (keeping their ground contact; ke
 have mirrored them about a tilted plane, into the sand), the fishing boat about its hull centre (2.3 m off its
 origin); seashells' `restRotationDeg` -> (p, -y, -r). OBJ is still read as it was (teapot, corgi).
 
+## Mesh LOD -- the Error Is Measured on the Screen It Is Seen On
+
+Selection is UE's (`rendering/meshes/LodSelect.h`: screen size against a per-mesh estimate from the baked deviation,
+temporal dither), and so is the estimate's form -- `ViewDistance = deviation * pixelsPerUnit / PixelError + R`
+(`StaticMesh.cpp:3064-3134`). UE fixes `pixelsPerUnit` at 960 (1920 wide, 90 degrees) and PixelError at 8: eight
+1080p pixels, a visible pop, tuned to UE's own deviation metric (`sqrt(quadric)/8`, which reads small). With
+meshopt's distance at 8, the_bathroom_free's props switched in arm's reach (LOD1 from a median 1.6 m, 36 of 100
+inside 1 m, the candles at 0.37 m where their 0.9 mm was 3 pixels of a 1440p screen). Since 2026-10-24
+`pixelsPerUnit` is THIS frame's -- 0.5 x output width x P[0][0] (1280 at 2560 wide, 90 degrees), the screen size
+taken with this frame's multiple too -- and `lod.pixelError` (Developer Controls > LOD "Pixel error", graphics
+settings `lod.screenPixelError`; the old key `pixelError` is ignored on purpose) is in those pixels, default 1:
+a LOD comes in where its worst deviation spans one pixel of the output. The bathroom: LOD1 from a median 8.6 m,
+none inside 1 m (the candles at ~2 m); every model: median 1.2 -> 6.4 m. Cost on wind_test (level start, the
+grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / -0.007 / +0.015 ms, noise. A
+mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
+each LOD comes in; `LOD_K` = pixels per unit / PixelError).
+
 ## Glass -- the thinTranslucent Shading Model
 
 Glass is a material SLOT's shading model, not an object type: `"shadingModel": "thinTranslucent"` (UE
@@ -576,14 +611,22 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
   one cutoff for the G-buffer and the shadow).
 - **glTF BLEND alpha is coverage on top of the transmission model** (three.js and Blender do the same): Sketchfab's
   exporter writes a pane's opacity as BOTH the alpha and 1 - transmission. Left out, the_bathroom_free's shelf was a
-  full sheet of blue glass.
-- **Refraction through a HOLLOW shell** (owner 2026-10-24, "no distortion"): glTF without KHR_materials_volume is
-  thin-walled, so `glass.hlsl GlassRefractedUv` takes the surface locally as a hollow sphere -- radius = the
-  interpolated GEOMETRIC normal's curvature over the pixel quad, wall `glass.wall` (4 mm, 0 = straight through) --
-  and refracts the view ray through both walls exactly, then lands it on the opaque scene by HDRP's proxy raycast
-  (the depth copy at t18, one refinement; a landing in front of the glass keeps the straight sample). A pane or a
-  concave face is not bent. A SOLID ball's lensing (HDRP RefractionModelSphere) would make every tumbler a
-  paperweight. Roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the
+  full sheet of blue glass. The share the alpha leaves open is still that glass seen through: it takes the same bend
+  as the transmission (sharp, untinted -- Sketchfab's refraction opacity mixes the BENT scene with the surface).
+  Until 2026-10-24 it showed the scene straight, and the tumblers (alpha 0.498) passed half their background
+  unbent: no wall thickness, not even solid glass, changed the picture. A pane does not bend, so the shelf is as it was.
+- **Refraction through a glass shell** (owner 2026-10-24, "no distortion", then "like Sketchfab"): `glass.hlsl
+  GlassRefractedUv` takes the surface locally as a quadric with BOTH principal curvatures of the interpolated
+  GEOMETRIC normal (the shape operator from the pixel quad): an ellipsoid with semi-axes R, R/s, R (R = 1/k1,
+  s = sqrt(k2/k1)) -- a sphere where the surface is round both ways, a cylinder up a tumbler's side (a sphere of
+  the larger curvature bent a tumbler's background into a dome). `glass.wall` m of glass lie under the surface:
+  thinner than the shape is round = HOLLOW, refracted through both walls exactly; at least that thick = SOLID.
+  The view ray then lands on the opaque scene by HDRP's proxy raycast (the depth copy at t18, one refinement; a
+  landing in front of the glass keeps the straight sample). A pane or a concave face is not bent. **The default
+  is solid (`glass.wall` 0.5)**: the owner picked Sketchfab's preview, whose screen-space refraction bends every
+  cup like a magnifying block, over what the_bathroom_free models -- hollow tumblers with a 4.3 mm wall (outer
+  and inner surface), `glass.wall:0.004`. 0 = straight through. The only curved glass in the levels is those
+  tumblers; the corner shelf's panes measure the same under every value (0.4 % of pixels, noise). Roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the
   sky's (a slot is not in the glass-reflection G-buffer) -- **occluded by plan S**: the glass has no bent normal of
   its own, so the opaque surface behind it lends its RT sky visibility (t19, `glassSkyVis` = lighting's
   skyVisParams) to the sky fill and the sky reflection (2026-10-24, owner: "why are the transparent objects so
@@ -605,7 +648,11 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
 `Main_SkyVis` (`shaders/rt_sky_visibility_cs.hlsl`) is UE's Distance Field AO bent normal traced with inline
 RayQuery on the TLAS: half resolution, `skyVis.rays` (4) cosine rays per pixel against the SHADOW casters, alpha-
 tested like the RT reflections, out to `skyVis.maxDistance` (15 m), accumulated over frames in the same dispatch
-(`skyVis.history` 0.9, reprojected through the G-buffer velocity). Its length is how much sky a point sees, its
+(`skyVis.history` 0.95, reprojected through the G-buffer velocity) into `skyVisAccum`, then filtered in space by
+`shaders/rt_sky_visibility_filter_cs.hlsl` (UE DFAO's spatial filter: a 5x5 half-resolution gather weighted by
+relative depth `skyVis.filterDepth` 0.05 and normal agreement^`skyVis.filterNormalPower` 8; `skyVis.filter:0` = the
+accumulation as it is) into `skyVis`, the target every consumer reads. The history is the UNFILTERED accumulation
+(SVGF's rule: a filtered history widens the blur every frame). Its length is how much sky a point sees, its
 direction where from. `shaders/sky_visibility.hlsli` applies it with UE's formulas, file and line cited there:
 the sky diffuse takes min() with the AO (UE's Minimum combine) and a bent lookup normal, the sky specular a cone-cone
 occlusion -- in lighting_cs AND compose_cs, the same line, because compose subtracts the sky specular lighting
@@ -616,6 +663,11 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
 - The body writes the target on EVERY path: traced, or cleared to the open sky while the TLAS is not ready --
   lighting and compose read it on the strength of `decisions_.skyVisTraced`, set by the builder.
 - Cost is the ray count, not the reach: 4 rays 0.28-0.34 ms on wind_test's grove, 8 rays 0.63, 2 rays 0.18.
+- Noise (2026-10-24, owner: "the wall is noisy"): a wall lit by a window that fills a few % of its hemisphere gets
+  the sky from a few of its rays now and then. wind_test's second room at 24:00 (cam -21.92,1.07,89.75), per-pixel
+  temporal std over 12 clean shots (scratchpad noise_map.py): 0.9 and no filter 9.4 % median (p90 18 %), 0.95 +
+  the filter 3.2 % (5.7 %), 0.97 2.8 %, 0.97 + 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. Bindless slots 40-41
+  are the filter's.
 - A/B it with the exposure PINNED (`exposure.autoExposure:0` after metering): the metering brightens the whole
   frame to make up for the darker shade, which reads as "the sky got brighter".
 
@@ -624,8 +676,9 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
 `rendering/lighting/DdgiVolume` (resources, per-frame placement) + `SceneRenderer_Gi.cpp` (Main_GiTrace, Main_GiUpdate)
 + `shaders/ddgi_common.hlsli` / `ddgi_trace_cs.hlsl` / `ddgi_update_cs.hlsl`: RTXGI's layout and formulas over inline
 RayQuery. 32x16x32 probes `gi.spacing` (0.5 m) apart, camera-centred and SCROLLING (a slot records the cell and the
-generation it was traced for; a mismatch weighs 0); 1 / `gi.divisor` (4) of them trace 64 rays a frame, blended with
-`gi.hysteresis` (0.98) into octahedral irradiance (6x6) and depth-moment (14x14) atlases. Interior lighting plan D.
+generation it was traced for; a mismatch weighs 0); 1 / `gi.divisor` (4) of them trace 64 rays a frame (+ RTXGI's 32
+FIXED rays, below), blended with `gi.hysteresis` (0.98) into octahedral irradiance (6x6, stored as E^(1/5)) and
+depth-moment (14x14) atlases. Interior lighting plan D.
 0.98, not RTXGI's 0.97: at 64 rays an update 0.9 left the bathroom breathing in metre-sized blotches (frame-to-
 frame std 0.68 sRGB levels; 0.37 at 0.97, 0.29 at 0.98, 0.17 without GI -- scratchpad flicker_map: per-pixel std
 over 8 clean shots 3 frames apart). The divisor does not change that noise, only how fast it moves.
@@ -637,22 +690,68 @@ over 8 clean shots 3 frames apart). The divisor does not change that noise, only
 - A hit is shaded diffusely: the directional light with an RT shadow ray, every spot/point light in reach with its
   shadow ray, the sky through ONE cosine visibility ray (plan S's reach), the volume's previous irradiance (the
   infinite bounce, `gi.infiniteBounce`). A back-face hit of a one-sided surface stores -0.2 t (RTXGI): more than a
-  quarter of them switches the probe off (inside geometry). Masked geometry (leaf cards) is two-sided.
+  quarter of the 32 FIXED rays (`kDdgiFixedRays`: RTXGI's, the same directions every update, never blended, traced
+  to their hit and not lit) switches the probe off (inside geometry). Masked geometry (leaf cards) is two-sided.
+- **The "shadow flicker" in the corner cabinet (2026-10-25, owner: "вот тут тени мерцают")** was the bounce: in a
+  shadow the probes are nearly all the light, and `gi.enabled:0` took the niche's frame-to-frame std (candles
+  steady, exposure pinned, 16 clean shots) from 1.4 % to 0. Three causes, each RTXGI's own answer: (1) classified
+  on the 64 RANDOMLY rotated rays, a probe beside the cabinet wall saw a quarter of them on back faces now and then
+  and dropped out for exactly one update -- its patch +6 % for 4 frames; the fixed rays answer the same each time.
+  (2) Blended linearly, a probe in the dark cabinet that sees the candle-lit room through its opening (a few rays
+  of ~100x its mean) walked +-10 % an update; the atlas now holds E^(1/5) (`kDdgiIrradianceGamma`, RTXGI's
+  probeIrradianceEncodingGamma; DdgiIrradiance decodes to E^(1/2) per probe and squares the blend), and the large-
+  change test compares the mean of the NEW texels with the old ones in that encoding (the rays' arithmetic mean let
+  one hot ray read as a 16x brighter probe). (3) The depth texel (cos^50 lobe, 0.63 rays an update on average, RTXGI
+  tunes it for 256) took a lone ray 40 degrees off as a full estimate: it now enters by its weight, at a slower
+  `1 - (1 - gi.hysteresis) x 64/256` = 0.995 (geometry rarely moves; a moved door settles its visibility in ~200
+  updates). Owner's view (cam -24.90 1.35 89.34, rot -0.0431 -0.4556 -0.0221 0.8889, 00:00), HEAD vs now, candles
+  steady: niche median 1.66 -> 1.10 %, p90 3.56 -> 2.56 %; the patch behind the cups 1.76 -> 0.11 % (largest step a
+  frame 6.6 -> 0.2 %), the corner under the towel 10.4 -> 2.7 % (12.3 -> 2.5 %). With the level's candle flicker the
+  niche stays at 2.7 % -- that is the flicker itself. Price: E^(1/5) averages a noisy probe low (Jensen): the room
+  view -2.1 %, the niche view -3.7 %, its darkest corner -28 % (linear blending with the other fixes: -1.6 % on the
+  niche, but hot patches 2.2 % instead of 1.4 %). Cost: trace 0.134 ms, update 0.068 ms (0.14 / 0.11 before); the ray
+  target 25 MB (+8). A noon -> 23:00 jump still follows: 0.5 % of the day's bounce left at +40 frames.
+- **Probe relocation** (RTXGI ProbeRelocationCS, owner: "добей остаток в углу шкафа"): ddgi_update_cs `DdgiRelocate`
+  moves a probe by its 32 fixed rays -- inside geometry (a quarter on back faces) through the nearest back face and
+  half the minimum beyond; nearer a front face than `kDdgiMinFrontfaceSpacing` (0.225 spacing = DdgiIrradiance's
+  surface bias reach; RTXGI's probeMinFrontfaceDistance is 1 world unit) toward the farthest one by just what clears
+  it, below 0.9 of the minimum only; at most 0.45 spacing off its grid point (clamped, where RTXGI rejects the move).
+  RTXGI's move back toward the grid point is left out (a probe pushed out of a wall would walk back in and out), and
+  a cell allows `kDdgiMaxMoves` (3, state bits 6-7): RTXGI runs relocation for a while and switches it off; without
+  the budget probes between the one-sided curtain and its wall stepped clear of one face onto another none of the 32
+  rays saw and started over every update (the curtain: p90 3.8 -> 7.1 %, 7 % of it over 10 % frame to frame). A
+  door moved afterwards is not relocated around until the cell is re-entered or the generation changes. The
+  offset is the second uint4 of the probe's slot in the state buffer (`DdgiStateIndex` / `DdgiOffsetIndex`); the
+  trace starts there, DdgiIrradiance weighs visibility from there (trilinear weights stay the grid's), and a probe
+  that moved starts over at its next update (`kDdgiStateMoved`: its history was seen from elsewhere). The fixed
+  rays make it a fixed point: settled, nothing moves (gi.debug:2 after 3000 frames: no red in the niche or the room). `gi.debug:2` shows it -- per point, the 8 probes around it:
+  red moved by their last update (red that stays = a probe that never settles), green off their grid point (most
+  surfaces: the probes behind a wall were pushed out of it), blue inside geometry. The corner cabinet, candles steady,
+  two launches: niche median 1.10 -> 0.94 / 0.93 %, p90 2.56 -> 2.41 / 2.40 %, the corner under the towel 2.7 ->
+  1.0 / 1.1 % (largest step a frame 2.5 -> 1.0 %), the curtain beside it 2.16 -> 2.11 / 2.07 % (p90 3.8 -> 3.6 /
+  3.5); HEAD had 1.66 % / 10.4 % / 2.86 % there. The patch behind the cups is ~15-20 % brighter (a probe that sat
+  switched off in the cabinet's back now lights it). Cost alternated on one exe
+  (fixes / + relocation, twice each): trace 0.153, 0.135 / 0.135, 0.142 ms, update 0.081, 0.071 / 0.069, 0.066 ms
+  -- launch noise, nothing measurable. The noon -> 23:00 jump: nothing of the day left at +40 frames.
 - Bindless scene slots 32-39 are the trace's (`BindlessTable::kScenePerFrame` 48). Lighting binds t18-t20 whenever
   the volume exists and reads them when `ddgiParams.x` (the spacing) is non-zero -- `decisions_.giApplied`.
 - `Pass_BuildAS`'s recording task now fans out to six RT passes; `TaskSystemLockFree` dependents_ holds 8 (4 aborted
   the first frame with a bare 0xC0000409 and no log line -- `--log-sync` did not help; the minidump's stack scan did).
 - Cost (wind_test, 1440p DLSS Balanced): trace 0.10 ms in the bathroom, 0.18 ms on the grove; update 0.06 ms.
   `gi.debug:1` shows the bounce alone (the lamps' own passes still add), RED where no usable probe surrounds a
-  point. `gi.enabled:0` = the frame before it.
+  point; `gi.debug:2` the probes' relocation and classification (below). `gi.enabled:0` = the frame before it.
+  Developer Controls > GI: on/off, spacing, hysteresis, intensity -- persisted in graphics_settings.json `gi`,
+  which overrides the compiled defaults at boot (a `--set gi.*` still wins, it is applied after) -- and the debug
+  view (not persisted). `gi.divisor`, `gi.rayDistance`, `gi.infiniteBounce` stay --set / MCP only.
 - A black patch WITH probes around it is albedo, not a hole: the_bathroom_free's dark wood (cabinet, wainscot, floor)
   measured albedo x AO ~0.07 under a bounce ~1/16 of the candle-lit wallpaper -- check `gi.debug` before blaming GI.
 - A/B a look with the exposure pinned to the metered value (`exposure.autoExposure:0;exposure.manualEv100:<adapted
   EV100 from get_readouts>`), not `autoExposure:0` alone -- that jumps to the manual default.
 - A LARGE change is followed fast (RTXGI's probeIrradianceThreshold, made scale-free -- the units run from the
-  day's 1e5 to the boosted night): when a probe's mean radiance over its 64 rays and its previous mean irradiance
-  differ by more than 4x in the same direction for 3 updates running (ProbeState bits 2-4), the irradiance blends
-  at hysteresis - 0.75 until they are within 1.25x; the depth keeps the plain hysteresis. A noon -> 23:00 jump
+  day's 1e5 to the boosted night): when the mean of a probe's new texels and of its previous ones (both as
+  E^(1/5), the atlas's encoding, so 4^(1/5) there) differ by more than 4x in the same direction for 3 updates running
+  (ProbeState bits 2-4), the irradiance blends at hysteresis - 0.75 until they are within 1.25x; the depth keeps its
+  own slower hysteresis. A noon -> 23:00 jump
   (setTime, the slider): 0.98 alone still had +26 % of the day's bounce at a palm's foot 400 frames later, now +3 %
   at 40. The confirmation is what keeps 0.98's calm: taken at once, the 4x test pulsed a probe under the
   bathroom's countertop that sees the lit room through a few rays (+50..+89 % for 4-24 frames, 12 % frame to frame
@@ -668,3 +767,16 @@ lamp near its source -- 2x at 1 m, 5x at 0.5 m, 17x at 0.25 m -- until 2026-10-2
 a radius, a distance) must be divided by 100 when it is transcribed. A light's `radius` is UE's attenuation
 radius -- a culling window, not physics: it cuts 12 % at r/2 and 65 % at 0.8 r, so a room-sized light wants a
 radius about twice the room.
+
+**Checked against UE 5.8 itself (2026-10-24)**: the source (`DeferredLightingCommon.ush` / `CapsuleLightIntegrate.ush`
+`rcp(DistSqr + DistBiasSqr)`, `DistBiasSqr = 1` cm², `PointLightComponent.cpp:145` lumens x 1e4 / 4pi) and a render:
+the_bathroom_free imported into the owner's UE (Interchange `import_scene`, an unsaved blank map), the five candles
+4 lm / 12 m / (1, 0.7, 0.42) at the fitted positions (0.2 cm), the moon 0.32 lux, manual exposure matched (UE
+manual = 2^bias with the physical camera off, so bias = log2(1.44) + log2(nightBrightness) - our EV100), a linear
+PPV (ToneCurveAmount 0, no bloom / local exposure). Direct light only (UE Lumen off, our GI off): ours / UE 1.2-1.6
+at all eight points of the reference view, near a candle and across the room alike -- the same falloff, a uniform
+~0.45-stop calibration offset of the comparison. With GI: ours / UE's PATH TRACER 1.14-1.70 (the same offset: our
+DDGI within ~20 % of the reference), while Lumen gives about half that bounce in this room. Spot lights DIFFER:
+UE 5.8 puts a spot's lumens into its cone (`SpotLightComponent.cpp:97`, 1e4 / (2pi (1 - cos outer))), ours spreads
+them over the sphere (`CandelaFromLumens`, UE4's old rule) -- with a 30-degree outer half-angle the same lumens
+are ~15x brighter in UE. Not changed (every spot in the levels would brighten); decide before porting a UE spot.

@@ -62,6 +62,7 @@ int g_windowSize[2] = { 0, 0 };
 bool g_hudHidden = false;
 bool g_bootLogWindow = false;
 bool g_bootMemoryWindow = false;
+std::string g_bootDevTab;
 bool g_bootEditor = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
@@ -531,7 +532,7 @@ namespace
         // UE's static-mesh LOD (LodSelect.h): 1 = per-mesh screen sizes (default), 0 = the bounds above;
         // its PixelError (the automatic screen sizes) and r.StaticMeshLODDistanceScale.
         if (setting == "lod.ue") { render::g_lodUeScreenSize = value != 0.0f; return true; }
-        if (setting == "lod.pixelError") { render::g_lodPixelError = std::clamp(value, 0.5f, 64.0f); return true; }
+        if (setting == "lod.pixelError") { render::g_lodPixelError = std::clamp(value, 0.25f, 64.0f); return true; }
         if (setting == "lod.distanceScale") { render::g_lodDistanceScale = std::clamp(value, 0.1f, 8.0f); return true; }
         // S8 A/B lever: 1 = soft ramp + Gather tent (default), 0 = the legacy 3x3 SampleCmp box.
         if (setting == "csm.filterMode") { scene.CascadeConfig().filterMode = (uint32_t)std::clamp((int)value, 0, 2); return true; }
@@ -822,6 +823,9 @@ namespace
         if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.98f); return true; }
         if (setting == "skyVis.diffuse") { renderSettings.skyVisDiffuse = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "skyVis.specular") { renderSettings.skyVisSpecular = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "skyVis.filter") { renderSettings.skyVisFilter = value != 0.0f; return true; }
+        if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
+        if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
         // Interior lighting plan D: the GI probe volume (SceneRenderSettings::gi*).
         if (setting == "gi.enabled") { renderSettings.giEnabled = value != 0.0f; return true; }
         if (setting == "gi.spacing") { renderSettings.giSpacing = std::clamp(value, 0.1f, 8.0f); return true; }
@@ -830,8 +834,9 @@ namespace
         if (setting == "gi.intensity") { renderSettings.giIntensity = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "gi.rayDistance") { renderSettings.giRayDistance = std::clamp(value, 1.0f, 1000.0f); return true; }
         if (setting == "gi.infiniteBounce") { renderSettings.giInfiniteBounce = value != 0.0f; return true; }
-        if (setting == "gi.debug") { renderSettings.giDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f)); return true; }
-        // Glass refraction: the hollow shell's wall in metres (0 = straight through).
+        if (setting == "gi.debug") { renderSettings.giDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
+        // Glass refraction: the glass under the surface in metres (0 = straight through, a few mm = a hollow
+        // tumbler, >= the shape's radius = solid -- the 0.5 default).
         if (setting == "glass.wall") { renderSettings.glassWallThickness = std::clamp(value, 0.0f, 0.5f); return true; }
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
@@ -1001,6 +1006,8 @@ namespace
                 { "nightBrightness", &t.nightBrightness, 0.0f, 100000.0f },
                 { "daySkyBrightness", &t.daySkyBrightness, 0.0f, 10.0f },
                 { "nightExposureEv", &t.nightExposureEv, -10.0f, 10.0f },
+                { "nightCameraEv100", &t.nightCameraEv100, -20.0f, 30.0f },
+                { "nightCameraFollow", &t.nightCameraFollow, 0.0f, 1.0f },
                 // Plan L: the night lamps' switch (timeOfDay.lamps.*).
                 { "lampSunElevationDeg", &t.lampSunElevationDeg, -90.0f, 90.0f },
                 { "lampRandomDelaySec", &t.lampRandomDelaySec, 0.0f, 600.0f },
@@ -1972,6 +1979,20 @@ namespace
                               ds.lights, static_cast<unsigned long long>(ds.updates),
                               static_cast<unsigned long long>(ds.turned), scene_.GetLightManager().GetMobileLightCount());
                 out += vsmItem;
+            }
+            // The sky's diffuse fill as lighting_cs takes it: the procedural sky's environment capture, or the
+            // HDRI skybox with its lux calibration, times the light's skyFillIntensity (FillLightingConstants).
+            if (const Skybox* sky = scene_.GetSkybox())
+            {
+                const float fill = scene_.SunLightRef().GetSkyFillIntensity();
+                char skyItem[256];
+                std::snprintf(skyItem, sizeof(skyItem),
+                              ",\"skyFill\":{\"environment\":%s,\"ibl\":%s,\"exposure\":%.6g,\"hdriLux\":%.6g,"
+                              "\"physicalScale\":%.6g,\"fillIntensity\":%.4g,\"irradianceScale\":%.6g}",
+                              sky->HasEnvironment() ? "true" : "false", sky->HasIbl() ? "true" : "false",
+                              sky->GetExposure(), sky->GetIlluminanceLux(), sky->PhysicalScale(), fill,
+                              sky->GetExposure() * fill);
+                out += skyItem;
             }
             if (historyRows <= 0)
             {

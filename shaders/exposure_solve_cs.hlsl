@@ -64,6 +64,11 @@ cbuffer ExposureSolveCB : register(b0)
     float4 curveEvB;      // points 4-5 in xy
     float4 curveCompA;
     float4 curveCompB;
+    // Time of day: the STEADY night camera (TimeOfDaySettings::nightCameraEv100 / nightCameraFollow). x the camera
+    // EV100 the night is held at, y the share of the auto camera's departure from it that is still followed, z the
+    // weight (the night's share; 0 = off). Applied to the CAMERA after the curve, so the eye's adaptation, the meter
+    // and night vision are untouched.
+    float4 nightSteady;
 };
 
 static const uint kBins = 256u;
@@ -294,6 +299,16 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     {
         cameraEv = clamp(adapted - ExposureCurve(adapted + compensationEv), minEv100, maxEv100);
         cameraTargetEv = clamp(targetEv - ExposureCurve(targetEv + compensationEv), minEv100, maxEv100);
+        // The steady night: the camera stays near the night's EV and follows only `nightSteady.y` of where the
+        // meter would take it -- dim candles stay dim instead of being exposed back up to a lamp-lit room.
+        if (nightSteady.z > 0.0f)
+        {
+            const float follow = saturate(nightSteady.y);
+            const float weight = saturate(nightSteady.z);
+            cameraEv = clamp(lerp(cameraEv, nightSteady.x + follow * (cameraEv - nightSteady.x), weight), minEv100, maxEv100);
+            cameraTargetEv = clamp(lerp(cameraTargetEv, nightSteady.x + follow * (cameraTargetEv - nightSteady.x), weight),
+                                   minEv100, maxEv100);
+        }
         // Everything between the scene the eye is adapted to (adapted + compensationEv) and the
         // camera, as the camera finally applies it -- clamps included.
         compensation = adapted + compensationEv - cameraEv;

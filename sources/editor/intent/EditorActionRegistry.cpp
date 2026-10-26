@@ -561,9 +561,17 @@ namespace
             (*colorIt)[0].is_number() && (*colorIt)[1].is_number() && (*colorIt)[2].is_number();
         const auto shadowsIt = intent.params.find("shadows");
         const bool hasShadows = shadowsIt != intent.params.end() && shadowsIt->is_boolean();
-        if (!lumens && !scale && !radius && !hasColor && !hasShadows)
+        // A point light's flicker (PointLightFlickerDesc): +/- amplitude of its flux, around frequencyHz.
+        const nlohmann::json* flicker = number("flicker");
+        const nlohmann::json* flickerHz = number("flickerHz");
+        if (!lumens && !scale && !radius && !hasColor && !hasShadows && !flicker && !flickerHz)
         {
-            outStatus = "setLight needs lumens, scale, radius, color and/or shadows";
+            outStatus = "setLight needs lumens, scale, radius, color, shadows and/or flicker";
+            return nullptr;
+        }
+        if (flicker && (flicker->get<float>() < 0.0f || flicker->get<float>() > 1.0f))
+        {
+            outStatus = "setLight: flicker is a share of the flux, 0..1";
             return nullptr;
         }
         if ((lumens && lumens->get<float>() < 0.0f) || (scale && scale->get<float>() < 0.0f) ||
@@ -595,6 +603,17 @@ namespace
                     { (*colorIt)[0].get<float>(), (*colorIt)[1].get<float>(), (*colorIt)[2].get<float>() });
             }
             if (hasShadows) { after["shadowsEnabled"] = shadowsIt->get<bool>(); }
+            if ((flicker || flickerHz) && light->type == "pointLight")
+            {
+                nlohmann::json f = after.value("flicker", nlohmann::json::object());
+                if (!f.is_object()) { f = nlohmann::json::object(); }
+                if (flicker) { f["amplitude"] = flicker->get<float>(); }
+                if (flickerHz) { f["frequencyHz"] = flickerHz->get<float>(); }
+                // Each lamp its own phase: candles in step read as one machine. Kept once given.
+                if (!f.contains("seed")) { f["seed"] = static_cast<std::int64_t>((id.value * 2654435761ull) & 0x7FFFFFFFull) + 1; }
+                if (f.value("amplitude", 0.0f) > 0.0f && !f.contains("frequencyHz")) { f["frequencyHz"] = 3.0f; }
+                after["flicker"] = std::move(f);
+            }
             // A light already at these values: EditEnvironmentCommand refuses an edit that changes nothing, and the
             // whole phrase read "Changed 5 light(s) ... -- failed" when the candles were simply as asked.
             if (after == light->properties) { ++unchanged; continue; }
@@ -620,6 +639,8 @@ namespace
         if (radius) { outStatus += " reach " + text(*radius) + " m"; }
         if (hasColor) { outStatus += " colour"; }
         if (hasShadows) { outStatus += shadowsIt->get<bool>() ? " shadows on" : " shadows off"; }
+        if (flicker) { outStatus += " flicker " + text(*flicker); }
+        if (flickerHz) { outStatus += " at " + text(*flickerHz) + " Hz"; }
         if (unchanged > 0) { outStatus += " (" + std::to_string(unchanged) + " already so)"; }
         if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not lights)"; }
         return FoldIntoOneEntry(std::move(commands), "Set " + std::to_string(count) + " Lights");
@@ -3712,8 +3733,9 @@ EditorActionRegistry::EditorActionRegistry()
         "setLight",
         "Change the matching point and spot lights that already exist: how bright (lumens -- a candle ~12, a household "
         "bulb ~800 -- or scale, a multiplier of each light's own brightness: 0.5 = half), how far a point light reaches "
-        "(radius in metres; a spot's range), its colour and whether it casts shadows. Anything left out stays. Lights "
-        "are reached by name or group (\"Bathroom Candles\"), or through the selection (target scope \"selected\").",
+        "(radius in metres; a spot's range), its colour, whether it casts shadows, and a point light's flicker (a "
+        "candle ~0.15 at ~3 Hz; 0 = steady). Anything left out stays. Lights are reached by name or group (\"Bathroom "
+        "Candles\"), or through the selection (target scope \"selected\").",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
         {
@@ -3722,6 +3744,8 @@ EditorActionRegistry::EditorActionRegistry()
             { "radius", EditorParamKind::Number, false, "metres a point light reaches (a spot's range)" },
             { "color", EditorParamKind::Vec3, false, "[r, g, b] linear, e.g. a candle [1, 0.55, 0.2]" },
             { "shadows", EditorParamKind::Bool, false, "true = casts shadows, false = none" },
+            { "flicker", EditorParamKind::Number, false, "point lights: +/- this share of the flux, 0..1 (a candle ~0.15)" },
+            { "flickerHz", EditorParamKind::Number, false, "point lights: the flicker's base frequency (a candle ~3)" },
         },
         &BuildSetLight,
         false,   // filterFromSelection

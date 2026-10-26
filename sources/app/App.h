@@ -114,6 +114,9 @@ extern bool g_bootLogWindow;
 // "--mem-window": open Developer Controls on the Memory tab at boot (memory profiling plan M2), for
 // the same reason -- a --shot can then photograph the tab.
 extern bool g_bootMemoryWindow;
+// "--dev-tab=<label>": open Developer Controls on that tab at boot ("gi", "lod", ... case-insensitive), for the
+// same reason; an unknown label logs a warning naming the tabs.
+extern std::string g_bootDevTab;
 // "--editor": open the Level Editor at boot, for the same reason g_bootLogWindow exists --
 // so a headless --shot can capture a panel that otherwise needs a keypress to appear.
 // WITH_EDITOR only; ignored elsewhere.

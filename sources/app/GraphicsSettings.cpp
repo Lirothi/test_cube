@@ -53,6 +53,11 @@ namespace
         float streamingHiddenScale = 0.5f;
         bool streamingMipFade = true;
         bool streamingPerTextureBias = true; // UE r.Streaming.UsePerTextureBias: mip bias is a budget ceiling, not a cap
+        // GI: the DDGI probe volume (SceneFrameData.h SceneRenderSettings::gi*, the same defaults).
+        bool giEnabled = true;
+        float giSpacing = 0.5f;
+        float giHysteresis = 0.98f;
+        float giIntensity = 1.0f;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -81,7 +86,7 @@ namespace
 
         bool lodEnabled = true;
         bool lodUeScreenSize = true; // render::g_lodUeScreenSize / g_lodPixelError / g_lodDistanceScale
-        float lodPixelError = 8.0f;
+        float lodPixelError = 1.0f; // pixels of THIS screen (LodSelect.h); persisted as "screenPixelError"
         float lodDistanceScale = 1.0f;
         float lodBound0 = 8.0f;  // render::g_lodBound0..2 (LodSelect.h says why these)
         float lodBound1 = 16.0f;
@@ -365,6 +370,10 @@ namespace
         s.contactMaxDistance = std::clamp(finite(s.contactMaxDistance, 0.0f), 0.0f, 2000.0f);
         s.contactFadeBand = std::clamp(finite(s.contactFadeBand, 10.0f), 0.1f, 200.0f);
         s.localShadowWindRange = std::clamp(finite(s.localShadowWindRange, 30.0f), -1.0f, 2000.0f);
+        // --set gi.*'s own ranges (App.cpp ApplySweepValue).
+        s.giSpacing = std::clamp(finite(s.giSpacing, 0.5f), 0.1f, 8.0f);
+        s.giHysteresis = std::clamp(finite(s.giHysteresis, 0.98f), 0.0f, 0.99f);
+        s.giIntensity = std::clamp(finite(s.giIntensity, 1.0f), 0.0f, 16.0f);
 
         s.shadowLodBias = std::clamp(s.shadowLodBias, -2, 3);
         s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
@@ -440,6 +449,10 @@ namespace
         s.streamingHiddenScale = streaming::g_hiddenScale;
         s.streamingMipFade = streaming::g_mipFade;
         s.streamingPerTextureBias = streaming::g_perTextureBias;
+        s.giEnabled = settings.giEnabled;
+        s.giSpacing = settings.giSpacing;
+        s.giHysteresis = settings.giHysteresis;
+        s.giIntensity = settings.giIntensity;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -599,6 +612,14 @@ namespace
         streaming::g_perTextureBias = s.streamingPerTextureBias;
     }
 
+    void ApplyGi(const GraphicsSettingsSnapshot& s, SceneRenderSettings& settings)
+    {
+        settings.giEnabled = s.giEnabled;
+        settings.giSpacing = s.giSpacing; // a new spacing starts the volume over (DdgiVolume::BeginFrame)
+        settings.giHysteresis = s.giHysteresis;
+        settings.giIntensity = s.giIntensity;
+    }
+
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
     {
         settings.ssrTechnique = s.ssrTechnique;
@@ -721,6 +742,7 @@ namespace
         ApplyFog(s);
         ApplySky(s);
         ApplyStreaming(s);
+        ApplyGi(s, settings);
         ApplyLod(s);
         ApplyContact(s);
         ApplySdsm(s);
@@ -764,6 +786,12 @@ namespace
                 { "hiddenScale", s.streamingHiddenScale },
                 { "mipFade", s.streamingMipFade },
                 { "perTextureBias", s.streamingPerTextureBias }
+            } },
+            { "gi", {
+                { "enabled", s.giEnabled },
+                { "spacing", s.giSpacing },
+                { "hysteresis", s.giHysteresis },
+                { "intensity", s.giIntensity }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -810,7 +838,7 @@ namespace
             { "lod", {
                 { "enabled", s.lodEnabled },
                 { "ueScreenSize", s.lodUeScreenSize },
-                { "pixelError", s.lodPixelError },
+                { "screenPixelError", s.lodPixelError },
                 { "distanceScale", s.lodDistanceScale },
                 { "regularMeshRatios", { s.lodBound0, s.lodBound1, s.lodBound2 } },
                 { "temporalLag", s.lodTemporalLag },
@@ -951,6 +979,11 @@ namespace
         Read(streamingSec, "hiddenScale", s.streamingHiddenScale);
         Read(streamingSec, "mipFade", s.streamingMipFade);
         Read(streamingSec, "perTextureBias", s.streamingPerTextureBias);
+        const json& gi = Section(root, "gi");
+        Read(gi, "enabled", s.giEnabled);
+        Read(gi, "spacing", s.giSpacing);
+        Read(gi, "hysteresis", s.giHysteresis);
+        Read(gi, "intensity", s.giIntensity);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1003,7 +1036,8 @@ namespace
 
         Read(lod, "enabled", s.lodEnabled);
         Read(lod, "ueScreenSize", s.lodUeScreenSize);
-        Read(lod, "pixelError", s.lodPixelError);
+        // Not the old "pixelError": that was UE's 1080p pixels (8), read now as screen pixels it would undo the fix.
+        Read(lod, "screenPixelError", s.lodPixelError);
         Read(lod, "distanceScale", s.lodDistanceScale);
         const auto ratios = lod.find("regularMeshRatios");
         if (ratios != lod.end() && ratios->is_array() && ratios->size() >= 3)
@@ -1412,6 +1446,10 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::StreamingHiddenScale:           current.streamingHiddenScale = defaults.streamingHiddenScale; break;
     case GraphicsControl::StreamingMipFade:               current.streamingMipFade = defaults.streamingMipFade; break;
     case GraphicsControl::StreamingPerTextureBias:        current.streamingPerTextureBias = defaults.streamingPerTextureBias; break;
+    case GraphicsControl::GiEnabled:                      current.giEnabled = defaults.giEnabled; break;
+    case GraphicsControl::GiSpacing:                      current.giSpacing = defaults.giSpacing; break;
+    case GraphicsControl::GiHysteresis:                   current.giHysteresis = defaults.giHysteresis; break;
+    case GraphicsControl::GiIntensity:                    current.giIntensity = defaults.giIntensity; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1494,6 +1532,11 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     {
         ApplyStreaming(current);
     }
+    else if (value >= static_cast<unsigned>(GraphicsControl::GiEnabled) &&
+             value <= static_cast<unsigned>(GraphicsControl::GiIntensity))
+    {
+        ApplyGi(current, settings);
+    }
     else
     {
         ApplyVsm(current);
@@ -1540,6 +1583,12 @@ bool GraphicsSettingsManager::ResetStreaming(Renderer& renderer, const Scene& sc
                                              const SceneRenderSettings& settings)
 {
     ApplyStreaming(GraphicsSettingsSnapshot{});
+    return SaveCurrent(renderer, scene, settings);
+}
+
+bool GraphicsSettingsManager::ResetGi(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings)
+{
+    ApplyGi(GraphicsSettingsSnapshot{}, settings);
     return SaveCurrent(renderer, scene, settings);
 }
 

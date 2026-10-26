@@ -28,7 +28,9 @@ class DdgiVolume
 public:
     static constexpr int kDimX = 32, kDimY = 16, kDimZ = 32; // mirrors ddgi_common.hlsli kDdgiDims
     static constexpr uint32_t kProbeCount = uint32_t(kDimX) * kDimY * kDimZ;
-    static constexpr uint32_t kRaysPerProbe = 64;          // ddgi_common.hlsli kDdgiRays
+    // ddgi_common.hlsli kDdgiRays: RTXGI's 32 FIXED rays (the classification's, never rotated, not blended)
+    // + the 64 rotated each update that light the probe.
+    static constexpr uint32_t kRaysPerProbe = 32 + 64;
     static constexpr uint32_t kIrradianceTile = 6 + 2;     // octahedral interior + border
     static constexpr uint32_t kDepthTile = 14 + 2;
     static constexpr uint32_t kAtlasTilesX = uint32_t(kDimX) * kDimY;

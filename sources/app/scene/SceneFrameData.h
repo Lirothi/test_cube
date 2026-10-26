@@ -608,19 +608,30 @@ struct SceneRenderSettings
     bool skyVisEnabled = true;
     uint32_t skyVisRays = 4u;
     float skyVisMaxDistance = 15.0f;
-    float skyVisHistory = 0.9f;
+    // 0.95 with the spatial filter below (2026-10-24): wind_test's second room at 24:00, a wall lit by its window's
+    // moonlit sky, per-pixel temporal noise over 12 shots median 9.4 % -> 3.2 % (p90 18 -> 5.7 %); 0.97 2.8 %,
+    // 0.97 with 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. scratchpad noise_map.py.
+    float skyVisHistory = 0.95f;
     float skyVisDiffuse = 1.0f;
     float skyVisSpecular = 1.0f;
+    // The spatial half of the denoise (rt_sky_visibility_filter_cs.hlsl, UE DFAO's spatial filter): a 5x5
+    // half-resolution gather of the accumulation, a tap counting while its relative depth step is under
+    // `skyVisFilterDepth` and by its normal's agreement to the `skyVisFilterNormalPower`. Off = the accumulation.
+    bool skyVisFilter = true;
+    float skyVisFilterDepth = 0.05f;
+    float skyVisFilterNormalPower = 8.0f;
     // Interior lighting plan D: the GI probe volume (DDGI over RayQuery, rendering/lighting/DdgiVolume.h):
     // 32x16x32 probes `giSpacing` m apart around the camera, 1 / `giUpdateDivisor` of them tracing 64
     // rays a frame and blending them in with `giHysteresis`. They hold the BOUNCE only (a miss brings
     // nothing; the sky is plan S's), which lighting_cs adds to the indirect diffuse x `giIntensity`
     // (1 = physical). `giRayDistance` m of ray; `giInfiniteBounce` feeds the volume back into its own
-    // hits; `giDebug` 1 = the lit frame shows the bounce alone. Needs RT hardware; off = no bounce.
+    // hits; `giDebug` 1 = the lit frame shows the bounce alone, 2 = the probes around each point (red moved by
+    // their last update, green relocated off their grid point, blue inside geometry; ddgi_common.hlsli
+    // DdgiProbeStates). Needs RT hardware; off = no bounce.
     bool giEnabled = true;
     float giSpacing = 0.5f;
     uint32_t giUpdateDivisor = 4u;
-    // 0.98, not RTXGI's 0.97 at its 288 rays: 64 rays an update left the bathroom's walls and ceiling
+    // 0.98, not RTXGI's 0.97 at its 256 rays: 64 rays an update left the bathroom's walls and ceiling
     // breathing in metre-sized blotches (frame-to-frame std 0.68 sRGB levels at 0.9, 0.37 at 0.97, 0.29
     // at 0.98 -- 0.17 without GI; owner 2026-10-24 "dark spots dancing"). The divisor does not change the
     // noise (0.61 at 1/1), only how fast it decorrelates: 4 / (1 - 0.98) = 200 frames to settle.
@@ -630,10 +641,13 @@ struct SceneRenderSettings
     bool giInfiniteBounce = true;
     uint32_t giDebug = 0u;
     // Glass refraction (owner 2026-10-24: "the glasses pass the background straight through"): a
-    // thinTranslucent slot bends what is behind it as a HOLLOW glass shell -- the surface's own
-    // curvature, walls this thick (m), refracted in and out through both walls onto the opaque scene
-    // behind (glass.hlsl GlassRefractedUv). 0 = straight through, the flat transmission before it.
-    float glassWallThickness = 0.004f;
+    // thinTranslucent slot bends what is behind it as a glass shell of the surface's own curvatures,
+    // this thick under its surface (m), refracted in and out onto the opaque scene behind (glass.hlsl
+    // GlassRefractedUv). 0 = straight through, the flat transmission before it; a few mm = a hollow
+    // tumbler's wall (the_bathroom_free's are modelled 4.3 mm); at least the shape's radius = SOLID glass,
+    // the default since the owner picked Sketchfab's look ("сделай чтобы как в скечфабе", 2026-10-24) --
+    // its screen-space refraction bends every cup like a solid block. A pane is flat: no bend either way.
+    float glassWallThickness = 0.5f;
     // RW: wind-deformed per-instance BLASes for near casters, so foliage sway reaches RT
     // reflections (and later RT shadows). Off = every caster reflects its rest pose.
     bool rtWindBlas = true;

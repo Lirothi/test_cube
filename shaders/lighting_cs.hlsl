@@ -528,5 +528,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         color = giWeight > 0.0f ? giBounce : float3(0.5f, 0.0f, 0.0f) / max(lightPreExposure, 1.0e-12f);
         skySpecular = 0.0f.xxx;
     }
+    // gi.debug:2: the probes' relocation and classification around each point (DdgiProbeStates) over a dim bounce --
+    // red = moved by its last update, green = off its grid point, blue = inside geometry.
+    if (ddgiParams.z > 1.5f && ddgiParams.x > 0.0f)
+    {
+        DdgiVolumeDesc giVolume;
+        giVolume.base = ddgiBase.xyz;
+        giVolume.generation = uint(ddgiBase.w);
+        giVolume.spacing = ddgiParams.x;
+        color = DdgiProbeStates(DdgiProbeState, giVolume, P, N, V) * (0.5f / max(lightPreExposure, 1.0e-12f)) +
+                giBounce * 0.25f;
+    }
     LightTarget[dispatchThreadId.xy] = float4((color * exposure + skySpecular) * lightPreExposure, 1.0);
 }

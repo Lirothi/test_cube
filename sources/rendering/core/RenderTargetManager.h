@@ -41,9 +41,9 @@ public:
         // lens-flare target and P8C-2l the streak pyramid's two halves.
         static constexpr size_t kResourceCount =
 #if WITH_EDITOR
-            35; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts, +1 sky visibility).
+            36; // Runtime targets plus the editor-only objectID target (+2 fog volumes, +3 light shafts, +2 sky visibility).
 #else
-            34;
+            35;
 #endif
         // Resources
         GpuResource gb0;   // albedo+metal
@@ -104,9 +104,13 @@ public:
         GpuResource gtaoUpsampled;
         // Interior lighting plan S: the RT sky visibility (rt_sky_visibility_cs.hlsl) on the GTAO grid --
         // xyz the bent normal (length = how much sky is seen), w the device depth it was traced at, for
-        // the consumers' bilateral upsample. This frame's result AND next frame's history (the
-        // previous frame's copy is the previous Deferred set's, like gtaoHistory). Rests NON_PIXEL.
+        // the consumers' bilateral upsample. The SPATIALLY filtered result (rt_sky_visibility_filter_cs.hlsl).
+        // Rests NON_PIXEL.
         GpuResource skyVis;
+        // ...and its temporal accumulation before the filter: the trace's output and next frame's history (the
+        // previous frame's copy is the previous Deferred set's, like gtaoHistory). Never blurred -- a blurred
+        // history would widen the blur every frame. Rests NON_PIXEL.
+        GpuResource skyVisAccum;
         // SSR temporal resolve: the accumulated reflection. This frame's output AND next frame's
         // history (the previous frame's copy lives in the previous Deferred set -- see
         // Renderer::GetDeferredForPrevFrame), exactly like gtaoHistory.
@@ -217,6 +221,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE gtaoHistorySRV{}, gtaoHistoryUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE gtaoUpsampledSRV{}, gtaoUpsampledUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE skyVisSRV{}, skyVisUAV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE skyVisAccumSRV{}, skyVisAccumUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE hzbSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE hzbClosestSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE debugPreviewSRV{}, debugPreviewUAV{};
@@ -366,7 +371,7 @@ private:
 #endif
         Light, Scene, GlassReflNormal, LensFlare, Count
     };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, SkyVis, SkyVisUAV, ReflectionHistory, ReflectionHistoryUAV,
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, SkyVis, SkyVisUAV, SkyVisAccum, SkyVisAccumUAV, ReflectionHistory, ReflectionHistoryUAV,
     // P6C hierarchical depth. One SRV over the whole chain plus one UAV PER MIP: the build writes
     // mip N while reading mip N-1, and this engine's barrier layer transitions whole resources
     // (ALL_SUBRESOURCES), so the chain stays in UNORDERED_ACCESS for the duration of the build and

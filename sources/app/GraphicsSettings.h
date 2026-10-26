@@ -162,6 +162,10 @@ enum class GraphicsControl
     StreamingHiddenScale,
     StreamingMipFade,
     StreamingPerTextureBias,
+    GiEnabled,                    // GI (the DDGI probe volume, SceneRenderSettings::gi*)
+    GiSpacing,
+    GiHysteresis,
+    GiIntensity,
 };
 
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,
@@ -194,6 +198,7 @@ public:
                              const SceneRenderSettings& settings);
     bool ResetVsm(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
     bool ResetStreaming(Renderer& renderer, const Scene& scene, const SceneRenderSettings& settings);
+    bool ResetGi(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings);
     bool ResetControl(GraphicsControl control, Renderer& renderer, Scene& scene,
                       SceneRenderSettings& settings);
 

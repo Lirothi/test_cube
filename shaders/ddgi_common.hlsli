@@ -16,12 +16,49 @@
 
 static const int3 kDdgiDims = int3(32, 16, 32);       // probes; mirrors DdgiVolume::kDims
 static const uint kDdgiProbeCount = 32u * 16u * 32u;
-static const uint kDdgiRays = 64u;                    // per probe per update; mirrors DdgiVolume::kRaysPerProbe
+// The rays of one probe update: first RTXGI's FIXED rays (RTXGI_DDGI_NUM_FIXED_RAYS) -- the same directions every
+// update, never rotated, never blended: they answer the classification (inside geometry?) the same way each time --
+// then the blended rays, rotated at random each update. Classified on 64 rotated rays, a probe beside the wall of
+// the_bathroom_free's corner cabinet saw a quarter of them on back faces now and then and dropped out of the
+// interpolation for one update: its patch of the cabinet +6 % for exactly 4 frames, a "shadow flicker" (2026-10-24).
+static const uint kDdgiFixedRays = 32u;
+static const uint kDdgiBlendRays = 64u;
+static const uint kDdgiRays = kDdgiFixedRays + kDdgiBlendRays; // per probe per update; mirrors DdgiVolume::kRaysPerProbe
 static const uint kDdgiIrrInterior = 6u;              // octahedral texels per side, + a 1-texel border each
 static const uint kDdgiDepthInterior = 14u;
 static const uint kDdgiStateValid = 1u;               // ProbeState.w bit 0: traced for the cell in .xyz
 static const uint kDdgiStateInactive = 2u;            // bit 1: inside geometry (RTXGI probe classification)
 static const uint kDdgiStateChangeShift = 2u;         // bits 2-3: consecutive large changes (ddgi_update_cs), bit 4 up
+static const uint kDdgiStateMoved = 32u;              // bit 5: relocated by the last update -- the next one starts it over
+// Bits 6-7: the moves made in this cell. RTXGI runs relocation for a while and then switches it off
+// (probeRelocationNeedsReset); here each cell gets kDdgiMaxMoves: out of a wall, then clear of the nearest face, is
+// two or three. Without the budget a probe between the_bathroom_free's one-sided curtain and its wall stepped clear of
+// one surface onto another that none of its 32 rays saw, back and forth, and started over every update (the curtain
+// beside the corner cabinet: p90 3.8 -> 7.1 %, 7 % of it over 10 % frame to frame).
+static const uint kDdgiStateMovesShift = 6u;
+static const uint kDdgiMaxMoves = 3u;
+
+// The state buffer holds TWO uint4 per probe slot (RTXGI's probe data texture beside its classification): [2 i] the
+// cell traced for, (generation << 8 | flags); [2 i + 1] the probe's relocation offset from its grid point, float3 m
+// (asuint). An offset counts only while the cell and the generation match: a slot traced for another cell sits on
+// its grid point.
+uint DdgiStateIndex(uint slotIndex) { return 2u * slotIndex; }
+uint DdgiOffsetIndex(uint slotIndex) { return 2u * slotIndex + 1u; }
+
+// RTXGI probeMinFrontfaceDistance, as a share of the spacing: a probe nearer a surface than the shading points are
+// pushed off it (DdgiIrradiance's bias reaches 0.3 x 0.75 of the spacing) is moved away from it.
+static const float kDdgiMinFrontfaceSpacing = 0.3f * 0.75f;
+// RTXGI: a probe moves at most this far from its grid point (an ellipsoid of 0.45 spacing; half way to a neighbour).
+static const float kDdgiMaxOffsetSpacing = 0.45f;
+
+// RTXGI probeIrradianceEncodingGamma: the irradiance atlas holds E^(1/5), and the update blends in that space. A
+// probe in a dark enclosure that sees a lit room through its opening, or a hot spot beside a candle, gets a few rays
+// of a hundred times its mean now and then; blended linearly at 0.98 one such update moved the_bathroom_free's corner
+// cabinet by +7..+23 % (13 % frame to frame, candles steady), blended as E^(1/5) a tenfold spike moves it as 1.6x.
+// Readers decode through DdgiIrradiance only.
+static const float kDdgiIrradianceGamma = 5.0f;
+float3 DdgiEncodeIrradiance(float3 e) { return pow(max(e, 0.0f.xxx), 1.0f / kDdgiIrradianceGamma); }
+float3 DdgiDecodeIrradiance(float3 encoded) { return pow(max(encoded, 0.0f.xxx), kDdgiIrradianceGamma); }
 
 // RTXGI DDGISignNotZero / DDGIGetOctahedralCoordinates / DDGIGetOctahedralDirection (Irradiance.hlsl).
 float2 DdgiSignNotZero(float2 v) { return float2(v.x >= 0.0f ? 1.0f : -1.0f, v.y >= 0.0f ? 1.0f : -1.0f); }
@@ -92,9 +129,41 @@ struct DdgiVolumeDesc
 // The probe in `cell` if it was traced for it in this generation and is not inside geometry.
 bool DdgiProbeUsable(StructuredBuffer<uint4> state, DdgiVolumeDesc v, int3 cell)
 {
-    const uint4 s = state[DdgiSlotIndex(DdgiSlotOfCell(cell))];
+    const uint4 s = state[DdgiStateIndex(DdgiSlotIndex(DdgiSlotOfCell(cell)))];
     return all(int3(asint(s.x), asint(s.y), asint(s.z)) == cell) && (s.w >> 8) == v.generation &&
            (s.w & (kDdgiStateValid | kDdgiStateInactive)) == kDdgiStateValid;
+}
+
+// Where a usable probe stands: its grid point plus its relocation offset (RTXGI DDGIGetProbeWorldPosition).
+float3 DdgiProbePosition(StructuredBuffer<uint4> state, DdgiVolumeDesc v, int3 cell)
+{
+    return float3(cell) * v.spacing + asfloat(state[DdgiOffsetIndex(DdgiSlotIndex(DdgiSlotOfCell(cell)))].xyz);
+}
+
+// gi.debug:2 -- what the 8 probes around P are doing, as shares of 8 (only those traced for their cell in this
+// generation): x moved by their last update (relocating; one that moves every update starts over every update),
+// y stand off their grid point, z switched off as inside geometry. P biased as DdgiIrradiance biases it.
+float3 DdgiProbeStates(StructuredBuffer<uint4> state, DdgiVolumeDesc v, float3 P, float3 N, float3 V)
+{
+    const float3 biased = P + (N * 0.2f + V * 0.8f) * (0.75f * v.spacing * 0.3f);
+    const int3 cell0 = int3(floor(biased / v.spacing));
+    float3 n = 0.0f.xxx;
+    [unroll]
+    for (uint i = 0u; i < 8u; ++i)
+    {
+        const int3 cell = cell0 + int3(i & 1u, (i >> 1) & 1u, (i >> 2) & 1u);
+        const uint slotIndex = DdgiSlotIndex(DdgiSlotOfCell(cell));
+        const uint4 s = state[DdgiStateIndex(slotIndex)];
+        if (any(int3(asint(s.x), asint(s.y), asint(s.z)) != cell) || (s.w >> 8) != v.generation ||
+            (s.w & kDdgiStateValid) == 0u)
+        {
+            continue;
+        }
+        n.x += (s.w & kDdgiStateMoved) != 0u ? 1.0f : 0.0f;
+        n.y += any(asfloat(state[DdgiOffsetIndex(slotIndex)].xyz) != 0.0f) ? 1.0f : 0.0f;
+        n.z += (s.w & kDdgiStateInactive) != 0u ? 1.0f : 0.0f;
+    }
+    return n * (1.0f / 8.0f);
 }
 
 float2 DdgiAtlasUv(uint3 slot, float3 dir, uint n, float2 invAtlasSize)
@@ -134,7 +203,7 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
         const int3 cell = cell0 + offset;
         if (!DdgiProbeUsable(state, v, cell)) { continue; }
         const uint3 slot = DdgiSlotOfCell(cell);
-        const float3 probePos = float3(cell) * v.spacing;
+        const float3 probePos = DdgiProbePosition(state, v, cell); // the weights stay the grid's (alpha above)
         const float3 trilinear3 = lerp(1.0f - alpha, alpha, float3(offset));
         const float trilinear = trilinear3.x * trilinear3.y * trilinear3.z;
 
@@ -160,7 +229,9 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
         if (w < kCrush) { w *= w * w / (kCrush * kCrush); }
         w *= trilinear;
 
-        sum += w * irradiance.SampleLevel(linearClamp, DdgiAtlasUv(slot, N, kDdgiIrrInterior, invIrr), 0).rgb;
+        // RTXGI: decode the atlas's E^(1/5) only to E^(1/2), so the probes blend as sRGB-ish values; squared below.
+        const float3 encoded = irradiance.SampleLevel(linearClamp, DdgiAtlasUv(slot, N, kDdgiIrrInterior, invIrr), 0).rgb;
+        sum += w * pow(max(encoded, 0.0f.xxx), kDdgiIrradianceGamma * 0.5f);
         wsum += w;
     }
     if (wsum <= 0.0f) { return 0.0f.xxx; }
@@ -168,7 +239,8 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
     // Fade over the outermost cell of the volume (the bounce, not a model, ends there).
     const float3 inside = min(g - float3(v.base), float3(v.base + kDdgiDims - 1) - g);
     weight = saturate(min(inside.x, min(inside.y, inside.z)));
-    return sum / wsum;
+    const float3 root = sum / wsum;
+    return root * root;
 }
 
 #endif // DDGI_COMMON_HLSLI

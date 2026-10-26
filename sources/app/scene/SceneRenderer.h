@@ -527,6 +527,7 @@ private:
         bool historyValid = false;
         uint32_t frameIndex = 0u;
         uint32_t point = 0u;
+        uint32_t pointFilter = 0u; // the accumulation -> NON_PIXEL, the filtered target -> UAV
         uint32_t pointRestore = 0u;
     };
     void Pass_SkyVis(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const SkyVisChain& chain);

@@ -120,6 +120,11 @@ struct CameraExposureSettings
     std::uint32_t exposureCurvePoints = 0;
     float exposureCurveEv[kExposureCurveMaxPoints] = {};   // scene EV100, ascending
     float exposureCurveComp[kExposureCurveMaxPoints] = {}; // compensation EV at that scene EV
+    // The FRAME's steady night camera (TimeOfDaySettings::nightCameraEv100 / nightCameraFollow, written by Scene each
+    // frame, never serialized): camera = lerp(auto, steady + follow * (auto - steady), weight). Weight 0 = off.
+    float nightSteadyEv100 = 0.0f;
+    float nightSteadyFollow = 1.0f;
+    float nightSteadyWeight = 0.0f;
     // Histogram percentiles used to derive the metered luminance. Clipping the tails is what keeps
     // a sun glint or a patch of sky from dragging the whole frame, without hard-coding what water
     // or sky look like.

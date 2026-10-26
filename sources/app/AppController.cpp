@@ -4,6 +4,7 @@
 #include "app/App.h" // g_hudHidden (--no-hud)
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "core/logging/Log.h"
 #include "core/math/Math.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
@@ -77,6 +78,16 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     {
         g_bootMemoryWindow = false; // once: "--mem-window" opens the Memory tab for a headless capture
         developerWindow_.OpenMemoryTab();
+    }
+    if (!g_bootDevTab.empty())
+    {
+        if (!developerWindow_.OpenTab(g_bootDevTab)) // once, like --mem-window
+        {
+            LOG_WARNING(logging::LogCategory::App, "--dev-tab={}: no Developer Controls tab has that label "
+                        "(Frame, AA / Scale, Visibility, Reflections, GI, Fog, Sky, Debug, LOD, CSM, Contact, VSM, "
+                        "Streaming, Memory, Bindings)", g_bootDevTab);
+        }
+        g_bootDevTab.clear();
     }
 #if WITH_EDITOR
     if (g_bootEditor)

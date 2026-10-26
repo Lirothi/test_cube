@@ -31,6 +31,9 @@ public:
     void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
     // "--mem-window": the window open on the Memory tab, so a headless --shot can photograph it.
     void OpenMemoryTab() { open_ = true; activeTab_ = Tab::Memory; }
+    // "--dev-tab=<label>": the window open on the tab of that label (case-insensitive: "gi", "lod"), for the
+    // same reason. False (and the window left as it was) when no tab has that label.
+    bool OpenTab(const std::string& label);
     bool IsLogWindowOpen() const { return logWindow_.IsOpen(); }
     void ToggleLogWindow() { logWindow_.ToggleOpen(); }
 
@@ -45,9 +48,12 @@ public:
 private:
     enum class Tab
     {
-        Frame, AntiAliasing, Visibility, Reflections, Fog, Sky,
+        Frame, AntiAliasing, Visibility, Reflections, Gi, Fog, Sky,
         Debug, Lod, Csm, Contact, Vsm, Streaming, Memory, Bindings
     };
+    struct TabEntry { Tab tab; const char* label; };
+    // The navigation list, in its order: Draw's and OpenTab's one table.
+    static const TabEntry kTabs[15];
     Tab activeTab_ = Tab::Frame;
 
     void RefreshLevelList();

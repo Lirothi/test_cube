@@ -356,6 +356,18 @@ constexpr UINT kSkyVisSlotVelocity = 28;
 constexpr UINT kSkyVisSlotTlas = 29;
 constexpr UINT kSkyVisSlotGb1 = 30;
 constexpr UINT kSkyVisSlotDepth = 31;
+// The spatial filter's (rt_sky_visibility_filter_cs.hlsl): the accumulation it reads, the target it writes. The GI
+// trace owns 32-39.
+constexpr UINT kSkyVisSlotFilterIn = 40;
+constexpr UINT kSkyVisSlotFilterOut = 41;
+
+// Mirrors `cbuffer SkyVisibilityFilter` in rt_sky_visibility_filter_cs.hlsl.
+struct SkyVisFilterConstants
+{
+    uint32_t accumIndex = 0;  uint32_t outUavIndex = 0;  uint32_t gb1Index = 0;       uint32_t filterEnabled = 1;
+    uint32_t outWidth = 0;    uint32_t outHeight = 0;    float depthTolerance = 0.05f; float normalPower = 8.0f;
+};
+static_assert(sizeof(SkyVisFilterConstants) == 2 * 16, "SkyVisFilterConstants mirrors rt_sky_visibility_filter_cs.hlsl");
 } // namespace
 
 Math::float4 SceneRenderer::SkyVisShaderParams() const
@@ -377,14 +389,18 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
         renderer->EmitPoint(t.cl, chain.point); // inputs -> NPS, the target -> UAV
 
         auto material = resources_.GetSkyVisMaterial();
+        auto filterMaterial = resources_.GetSkyVisFilterMaterial();
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = rtAs_.Manager().TlasSrvCpu(frameIndex);
-        const bool traceable = material && rtAs_.Bindless().FrameReady(frameIndex) && tlasSrv.ptr != 0 &&
+        const bool traceable = material && filterMaterial && rtAs_.Bindless().FrameReady(frameIndex) && tlasSrv.ptr != 0 &&
                                rtAs_.Manager().TlasInstanceCount(frameIndex) != 0;
         if (traceable)
         {
-            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotUav, D.skyVisUAV);
-            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotHistory, P.skyVisSRV);
+            // The trace writes the ACCUMULATION and blends in last frame's; the filter below makes the target.
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotUav, D.skyVisAccumUAV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotHistory, P.skyVisAccumSRV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotFilterIn, D.skyVisAccumSRV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotFilterOut, D.skyVisUAV);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotVelocity, D.gbSRV[3]);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotTlas, tlasSrv);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotGb1, D.gbSRV[1]);
@@ -420,16 +436,37 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             t.cl->SetPipelineState(material->GetPipelineState());
             t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
             t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+
+            renderer->EmitPoint(t.cl, chain.pointFilter); // the accumulation -> NON_PIXEL, the target -> UAV
+            SkyVisFilterConstants fc{};
+            fc.accumIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotFilterIn);
+            fc.outUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotFilterOut);
+            fc.gb1Index = c.gb1Index;
+            fc.filterEnabled = s.skyVisFilter ? 1u : 0u;
+            fc.outWidth = c.outWidth;
+            fc.outHeight = c.outHeight;
+            fc.depthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
+            fc.normalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
+            auto fcb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisFilterConstants), render::kConstantBufferAlignment);
+            std::memcpy(fcb.cpu, &fc, sizeof(fc));
+            t.cl->SetComputeRootSignature(filterMaterial->GetRootSignature());
+            t.cl->SetPipelineState(filterMaterial->GetPipelineState());
+            t.cl->SetComputeRootConstantBufferView(0, fcb.gpu);
+            t.cl->Dispatch((fc.outWidth + 7u) / 8u, (fc.outHeight + 7u) / 8u, 1);
             renderer->BindDescriptorHeaps(t.cl);
         }
         else
         {
             // Nothing to trace against yet (the first frames of a level, before the TLAS is built):
             // the open sky. CLEARED, not left alone -- lighting and compose read this target on the
-            // strength of the frame's decision, and last level's bent normals are not this one's.
-            renderer->BindDescriptorHeaps(t.cl); // the frame heap the staged descriptor lives in
-            const D3D12_GPU_DESCRIPTOR_HANDLE gpu = renderer->StageSrvUavTable({ D.skyVisUAV }).gpu;
+            // strength of the frame's decision, and last level's bent normals are not this one's. The
+            // accumulation too: it is next frame's history.
+            renderer->BindDescriptorHeaps(t.cl); // the frame heap the staged descriptors live in
             const float zero[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+            const D3D12_GPU_DESCRIPTOR_HANDLE accumGpu = renderer->StageSrvUavTable({ D.skyVisAccumUAV }).gpu;
+            t.cl->ClearUnorderedAccessViewFloat(accumGpu, D.skyVisAccumUAV, D.skyVisAccum.Get(), zero, 0, nullptr);
+            renderer->EmitPoint(t.cl, chain.pointFilter); // the accumulation -> NON_PIXEL, the target -> UAV
+            const D3D12_GPU_DESCRIPTOR_HANDLE gpu = renderer->StageSrvUavTable({ D.skyVisUAV }).gpu;
             t.cl->ClearUnorderedAccessViewFloat(gpu, D.skyVisUAV, D.skyVis.Get(), zero, 0, nullptr);
         }
         renderer->EmitPoint(t.cl, chain.pointRestore); // the target -> NON_PIXEL, its rest

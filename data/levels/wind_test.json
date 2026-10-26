@@ -38671,8 +38671,13 @@
         0.41999998688697815
       ],
       "enabled": true,
+      "flicker": {
+        "amplitude": 0.15000000596046448,
+        "frequencyHz": 3.0,
+        "seed": 273506314
+      },
       "group": "Bathroom Candles",
-      "luminousFluxLm": 4.0,
+      "luminousFluxLm": 1.0,
       "name": "Candle sink",
       "position": [
         -24.138295960001454,
@@ -38689,8 +38694,13 @@
         0.41999998688697815
       ],
       "enabled": true,
+      "flicker": {
+        "amplitude": 0.15000000596046448,
+        "frequencyHz": 3.0,
+        "seed": 780458427
+      },
       "group": "Bathroom Candles",
-      "luminousFluxLm": 4.0,
+      "luminousFluxLm": 1.0,
       "name": "Candle south 1",
       "position": [
         -25.528816854166124,
@@ -38707,8 +38717,13 @@
         0.41999998688697815
       ],
       "enabled": true,
+      "flicker": {
+        "amplitude": 0.15000000596046448,
+        "frequencyHz": 3.0,
+        "seed": 1287410540
+      },
       "group": "Bathroom Candles",
-      "luminousFluxLm": 4.0,
+      "luminousFluxLm": 1.0,
       "name": "Candle south 2",
       "position": [
         -24.40750240625099,
@@ -38725,8 +38740,13 @@
         0.41999998688697815
       ],
       "enabled": true,
+      "flicker": {
+        "amplitude": 0.15000000596046448,
+        "frequencyHz": 3.0,
+        "seed": 1794362653
+      },
       "group": "Bathroom Candles",
-      "luminousFluxLm": 4.0,
+      "luminousFluxLm": 1.0,
       "name": "Candle mirror left",
       "position": [
         -23.670071851428688,
@@ -38743,8 +38763,13 @@
         0.41999998688697815
       ],
       "enabled": true,
+      "flicker": {
+        "amplitude": 0.15000000596046448,
+        "frequencyHz": 3.0,
+        "seed": 153831118
+      },
       "group": "Bathroom Candles",
-      "luminousFluxLm": 4.0,
+      "luminousFluxLm": 1.0,
       "name": "Candle mirror right",
       "position": [
         -24.791758730933328,
@@ -39851,6 +39876,8 @@
       "phaseAuto": true
     },
     "nightBrightness": 11364.0,
+    "nightCameraEv100": 13.13,
+    "nightCameraFollow": 0.2,
     "nightExposureEv": -1.5,
     "nightLengthMin": 2.0,
     "nightSky": {
