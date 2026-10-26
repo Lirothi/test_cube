@@ -844,7 +844,9 @@ namespace
         if (setting == "skyVis.filter") { renderSettings.skyVisFilter = value != 0.0f; return true; }
         if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
         if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
-        if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 1.0f)); return true; }
+        if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
+        if (setting == "skyVis.sampling") { renderSettings.skyVisSampling = value >= 0.5f ? 1u : 0u; return true; }
+        if (setting == "skyVis.filterRadius") { renderSettings.skyVisFilterRadius = static_cast<uint32_t>(std::clamp(value, 1.0f, 4.0f)); return true; }
         if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }        if (setting == "skyVis.fogRays") { renderSettings.skyVisFogRays = static_cast<uint32_t>(std::clamp(value, 0.0f, 8.0f)); return true; }
         // Project-wide like fog.gridPixels (the level's fog keys are the medium): UE's GridCenterOffsetFromDepthBuffer.
         if (setting == "fog.depthOffset") { renderSettings.fogDepthOffset = std::clamp(value, -1.0f, 4.0f); return true; }

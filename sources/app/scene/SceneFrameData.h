@@ -641,7 +641,14 @@ struct SceneRenderSettings
     float skyVisFilterNormalPower = 8.0f;
     // 1 = paint the texels that had no history this frame as the open sky (bright wherever the sky is shut out):
     // what the temporal accumulation rejects -- a disocclusion, the screen's edge, a failed same-surface test.
+    // 2 = the lit frame is the sky visibility alone, a gray (four times it: a quarter of the sky is white): the estimator without textures.
     uint32_t skyVisDebug = 0u;
+    // How a texel's rays are rotated: 0 = white noise per texel and frame, 1 = UE's interleaved gradient noise
+    // (rt_sky_visibility_cs.hlsl says what it measured).
+    uint32_t skyVisSampling = 1u;
+    // The spatial filter's reach in half-resolution texels (1-4; 2 = the 5x5 UE DFAO gathers), its Gaussian sigma
+    // 0.75 of it. 4 since 2026-10-26 (rt_sky_visibility_filter_cs.hlsl says what it measured).
+    uint32_t skyVisFilterRadius = 4u;
     // A texel without history is seeded from the neighbours that kept theirs (UE DFAO FilterHistoryPS). Off = it
     // starts from its own few rays, the behaviour before 2026-10-26 -- kept for the A/B (`--set skyVis.seed:0`).
     bool skyVisSeed = true;

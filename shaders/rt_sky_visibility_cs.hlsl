@@ -40,7 +40,8 @@ cbuffer SkyVisibility : register(b0)
     uint outUavIndex;   uint historyIndex;  uint countUavIndex; uint countHistoryIndex; // counts: R8_UNORM, n / 255
     uint outWidth;      uint outHeight;     uint rayCount;      uint frameIndex;
     float maxDistance;  float historyWeight; uint historyValid; uint seedEnabled; // skyVis.seed (0 = start from own rays)
-    float seedDepthTolerance; float seedNormalPower; uint2 _skyVisPad2; // the spatial filter's own (skyVis.filter*)
+    float seedDepthTolerance; float seedNormalPower; // the spatial filter's own (skyVis.filter*)
+    uint samplingMode; uint _skyVisPad2;              // skyVis.sampling: 0 white noise, 1 interleaved gradient noise
 }
 
 SamplerState gSmp      : register(s0); // linear clamp
@@ -160,8 +161,31 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     RaytracingAccelerationStructure tlas = ResourceDescriptorHeap[tlasIndex];
     // Per-pixel, per-frame rotation of an R2 sequence: the rays of successive frames fill the
     // hemisphere between each other, which is what the accumulation below integrates.
-    const uint seed = RtWangHash(dtid.x * 1973u + dtid.y * 9277u + frameIndex * 26699u);
-    const float2 rotation = float2(float(seed & 0xFFFFu), float(seed >> 16)) * (1.0f / 65536.0f);
+    //
+    // ...and the rotations of NEIGHBOURING texels fill it between each other too: UE's InterleavedGradientNoise
+    // (Random.ush), offset per frame as UE offsets it (5.588238 x frame % 64). Any 3x3 of texels holds nearly every
+    // rotation, so the spatial filter's 5x5 averages rays that cover the hemisphere instead of independent draws
+    // that may all miss a small opening. A ray is a 0/1 point sample: where the sky is a small share p of the
+    // hemisphere (the walls by a tunnel's mouth) its estimate carries 1 / sqrt(p x rays) of noise, which a
+    // distance-field cone (UE DFAO) does not -- it measures the share of its own section the geometry closes. The
+    // stratification is what rays can do about it for free. Owner's tunnel (cam -57.89,2.27,65.68 yaw 57.8, 15:00),
+    // the visibility alone (skyVis.debug:2), 24 still frames, white noise -> interleaved: grain (|mean - 8 px blur| /
+    // blur) median 6.7 -> 4.7 %, p90 20.5 -> 16.7 %; flicker p90 9.0 -> 5.9 %; the mean unchanged (35.2 / 35.1).
+    // 16 rays would take it to 3.7 % / 3.7 % at twice the cost. Tried and dropped: half the rays into a cone around
+    // the history's bent normal (Lumen-style guiding, balance-heuristic weights) -- grainier (7.7 %) and, with the
+    // interleaving, 12 % darker. `skyVis.sampling:0` = the white noise, the A/B.
+    float2 rotation;
+    if (samplingMode == 0u)
+    {
+        const uint seed = RtWangHash(dtid.x * 1973u + dtid.y * 9277u + frameIndex * 26699u);
+        rotation = float2(float(seed & 0xFFFFu), float(seed >> 16)) * (1.0f / 65536.0f);
+    }
+    else
+    {
+        const float2 px = float2(dtid.xy) + 5.588238f * float(frameIndex & 63u);
+        rotation = float2(frac(52.9829189f * frac(dot(px, float2(0.06711056f, 0.00583715f)))),
+                          frac(52.9829189f * frac(dot(px.yx + 17.0f, float2(0.06711056f, 0.00583715f)))));
+    }
     const uint rays = clamp(rayCount, 1u, 16u);
     float3 unoccluded = 0.0f.xxx;
     for (uint k = 0; k < rays; ++k)

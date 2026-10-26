@@ -756,6 +756,19 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   still, +0.007 turning. What is left in a turn is the young texels' own noise at the leading edge and the
   reflections' temporal resolve (below, "RT Reflections"): the metal walls' sky reflection is where the sky
   visibility shows most.
+- **Rays are point samples, a distance-field cone is not** (2026-10-26, owner: "SkyVis noises like a bastard" in his
+  tunnel; "think what the principal difference from DF tracing is"). UE's DFAO cone measures what SHARE of its own
+  section the geometry closes -- deterministic, smooth, blurred. A ray says 0 or 1, so where the sky is a share p of
+  the hemisphere (the walls by a tunnel's mouth, p a few per cent) 8 rays and the history leave ~1 / sqrt(p x samples)
+  of noise per texel: the grain. What rays can do about it, measured on the owner's tunnel with `skyVis.debug:2`
+  (the visibility alone, x4, no textures; scratchpad `tunnel_burst.py`, 24 still frames): STRATIFY across texels --
+  UE's interleaved gradient noise rotates each texel's rays (`skyVis.sampling` 1; 0 = the old white noise), so the
+  spatial filter averages rays that cover the hemisphere between each other: grain median 6.7 -> 4.7 %, flicker p90
+  9.0 -> 5.9 %, free -- and WIDEN the spatial filter (`skyVis.filterRadius` 4 = 9x9 half-resolution, was UE's 5x5):
+  2.3 % / 3.5 %, +0.01-0.04 ms, the diagonal hatching in flight gone (filter header has the numbers). 16 rays alone:
+  3.8 % for +0.12-0.27 ms. Tried and DROPPED: half the rays into a cone around the history's bent normal (Lumen-style
+  guiding, balance-heuristic weights) -- grainier and, interleaved, 12 % darker. The means agree within 1 % across
+  every kept arm. Not tried yet: screen-space probes with many rays each (Lumen's gather) -- a redesign.
 - Developer Controls > GI "Sky visibility": on/off, rays, history, reach, diffuse, specular, spatial filter --
   persisted in graphics_settings.json `skyVis` (`--set=skyVis.*` the same knobs, transient); "Reset GI to defaults"
   resets them with the probes. The filter's depth/normal weights stay `--set` only.

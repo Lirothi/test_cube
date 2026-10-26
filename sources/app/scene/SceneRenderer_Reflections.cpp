@@ -357,7 +357,7 @@ struct SkyVisConstants
     uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t countUavIndex = 0; uint32_t countHistoryIndex = 0;
     uint32_t outWidth = 0;      uint32_t outHeight = 0;     uint32_t rayCount = 4;      uint32_t frameIndex = 0;
     float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t seedEnabled = 1;
-    float seedDepthTolerance = 0.05f; float seedNormalPower = 8.0f; uint32_t pad2[2] = { 0, 0 };
+    float seedDepthTolerance = 0.05f; float seedNormalPower = 8.0f; uint32_t samplingMode = 1; uint32_t pad2 = 0;
 };
 static_assert(sizeof(SkyVisConstants) == 3 * 64 + 5 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
 
@@ -383,7 +383,7 @@ struct SkyVisFilterConstants
 {
     uint32_t accumIndex = 0;  uint32_t outUavIndex = 0;  uint32_t gb1Index = 0;       uint32_t filterEnabled = 1;
     uint32_t outWidth = 0;    uint32_t outHeight = 0;    float depthTolerance = 0.05f; float normalPower = 8.0f;
-    uint32_t debugView = 0;   uint32_t pad[3] = { 0, 0, 0 };
+    uint32_t debugView = 0;   uint32_t radius = 4;       uint32_t pad[2] = { 0, 0 };
 };
 static_assert(sizeof(SkyVisFilterConstants) == 3 * 16, "SkyVisFilterConstants mirrors rt_sky_visibility_filter_cs.hlsl");
 } // namespace
@@ -391,8 +391,9 @@ static_assert(sizeof(SkyVisFilterConstants) == 3 * 16, "SkyVisFilterConstants mi
 Math::float4 SceneRenderer::SkyVisShaderParams() const
 {
     const SceneRenderSettings& s = frame_->settings;
+    // w: skyVis.debug 2 -- lighting shows the sky visibility alone, a gray (the estimator's noise without textures).
     return Math::float4(decisions_.skyVisTraced ? 1.0f : 0.0f, std::clamp(s.skyVisDiffuse, 0.0f, 1.0f),
-                        std::clamp(s.skyVisSpecular, 0.0f, 1.0f), 0.0f);
+                        std::clamp(s.skyVisSpecular, 0.0f, 1.0f), s.skyVisDebug == 2u ? 2.0f : 0.0f);
 }
 
 void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
@@ -452,6 +453,7 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.seedEnabled = s.skyVisSeed ? 1u : 0u;
             c.seedDepthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
             c.seedNormalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
+            c.samplingMode = s.skyVisSampling;
 
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisConstants), render::kConstantBufferAlignment);
             std::memcpy(cb.cpu, &c, sizeof(c));
@@ -475,6 +477,7 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             fc.depthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
             fc.normalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
             fc.debugView = std::min(s.skyVisDebug, 1u);
+            fc.radius = std::clamp(s.skyVisFilterRadius, 1u, 4u);
             auto fcb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisFilterConstants), render::kConstantBufferAlignment);
             std::memcpy(fcb.cpu, &fc, sizeof(fc));
             t.cl->SetComputeRootSignature(filterMaterial->GetRootSignature());

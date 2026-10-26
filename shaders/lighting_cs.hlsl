@@ -560,5 +560,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         color = DdgiProbeStates(DdgiProbeState, giVolume, P, N, V) * (0.5f / max(lightPreExposure, 1.0e-12f)) +
                 giBounce * 0.25f;
     }
+    // skyVis.debug:2: the sky visibility alone (plan S, before the AO combine), a gray four times it, so a quarter of
+    // the sky is white -- how its estimator's noise is measured in the dim places it shows, without textures or light.
+    if (skyVisParams.w > 1.5f)
+    {
+        color = (4.0f * skyVisibility / max(lightPreExposure, 1.0e-12f)).xxx;
+        skySpecular = 0.0f.xxx;
+    }
     LightTarget[dispatchThreadId.xy] = float4((color * exposure + skySpecular) * lightPreExposure, 1.0);
 }
