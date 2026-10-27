@@ -549,6 +549,17 @@ namespace
         auto dragF = [&](const char* label, const char* key, float def, float speed, float lo, float hi,
                          const char* fmt = "%.3f", ImGuiSliderFlags flags = 0)
         {
+            // ImGui's logarithmic drag moves its 0..1 PARAMETER by speed x pixels / (max - min)
+            // (imgui_widgets.cpp DragBehaviorT): a speed in value units -- 1 lm a pixel over 0-200000 -- crawled 5e-6 of
+            // the range a pixel, and "%.0f" rounded the value back every frame, so the flux jumped between 0 and 1
+            // (owner, 2026-10-27). A logarithmic row crosses its whole range in kLogDragPixels (Shift x10, Alt x0.1)
+            // and keeps what it is dragged to; `speed` is the linear rows'.
+            constexpr float kLogDragPixels = 600.0f;
+            if (flags & ImGuiSliderFlags_Logarithmic)
+            {
+                speed = (hi - lo) / kLogDragPixels;
+                flags |= ImGuiSliderFlags_NoRoundToFormat;
+            }
             float v = JsonFloat(tgt(), key, def);
             const bool changed = ImGui::DragFloat(label, &v, speed, lo, hi, fmt, flags);
             beginContinuousEdit(changed);
@@ -2021,7 +2032,7 @@ namespace
         {
             colorEdit();
             dragF("Luminous Flux (lm)", "luminousFluxLm", 1000.0f, 1.0f, 0.0f, 200000.0f,
-                  "%.0f", ImGuiSliderFlags_Logarithmic);
+                  "%.2f", ImGuiSliderFlags_Logarithmic); // hundredths: a candle is 0.5-4 lm
             dragF("Volumetric Intensity", "volumetricIntensity", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("This light's weight in the volumetric fog (UE VolumetricScatteringIntensity): 0 = lights "
                           "surfaces only, no cone / halo in the air. Multiplied by the fog's Local Light Intensity.");
@@ -2040,6 +2051,11 @@ namespace
                 "radius was dragged. A level authored before this is migrated by matching the old "
                 "brightness at HALF the range; nearer than that it is now brighter and further it "
                 "falls off faster, which is the correction, not a regression.");
+            dragF("Day Brightness", "dayBrightness", 1.0f, 1.0f, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            InspectorHelp("This light's own multiplier BY DAY, on its lumens: 1 = as authored, 0 = dark by day. Full "
+                          "while the sun is up, it fades out in stops as the night comes in (the sun -6 -> -12 "
+                          "degrees) and is gone at night. On an always-on lamp it multiplies with Time of Day's lamp "
+                          "Day Brightness, which weighs every such lamp against the day.");
             dragF("Radius", "radius", 1.0f, 0.05f, 0.0f, 1000.0f);
             dragF3("Position", "position", Math::float3(0.0f, 0.0f, 0.0f), 0.05f);
             checkB("Cast Shadows", "shadowsEnabled", false);
@@ -2102,7 +2118,7 @@ namespace
         {
             colorEdit();
             dragF("Luminous Flux (lm)", "luminousFluxLm", 1000.0f, 1.0f, 0.0f, 200000.0f,
-                  "%.0f", ImGuiSliderFlags_Logarithmic);
+                  "%.2f", ImGuiSliderFlags_Logarithmic); // hundredths: a candle is 0.5-4 lm
             dragF("Volumetric Intensity", "volumetricIntensity", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("This light's weight in the volumetric fog (UE VolumetricScatteringIntensity): 0 = lights "
                           "surfaces only, no cone / halo in the air. Multiplied by the fog's Local Light Intensity.");
@@ -2121,6 +2137,11 @@ namespace
                 "radius was dragged. A level authored before this is migrated by matching the old "
                 "brightness at HALF the range; nearer than that it is now brighter and further it "
                 "falls off faster, which is the correction, not a regression.");
+            dragF("Day Brightness", "dayBrightness", 1.0f, 1.0f, 0.0f, 1000.0f, "%.2f", ImGuiSliderFlags_Logarithmic);
+            InspectorHelp("This light's own multiplier BY DAY, on its lumens: 1 = as authored, 0 = dark by day. Full "
+                          "while the sun is up, it fades out in stops as the night comes in (the sun -6 -> -12 "
+                          "degrees) and is gone at night. On an always-on lamp it multiplies with Time of Day's lamp "
+                          "Day Brightness, which weighs every such lamp against the day.");
             dragF("Range", "range", 10.0f, 0.1f, 0.0f, 10000.0f);
             dragF("Inner Angle (deg)", "innerAngleDeg", 15.0f, 0.2f, 0.0f, 89.0f);
             dragF("Outer Angle (deg)", "outerAngleDeg", 25.0f, 0.2f, 0.0f, 89.0f);

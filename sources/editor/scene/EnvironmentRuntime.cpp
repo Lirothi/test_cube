@@ -186,6 +186,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
         ParsePointLightFlicker(p, d);
         d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
+        d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
         d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
         d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
         points[i].SetDesc(d);
@@ -210,6 +211,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
         d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
         d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
+        d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
         d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
         d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
         d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
@@ -542,6 +544,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
             d.shadowsEnabled = p.value("shadowsEnabled", d.shadowsEnabled);
             d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
+            d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
             d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
             d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
             d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
@@ -561,6 +564,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.volumetricIntensity = JF(p, "volumetricIntensity", d.volumetricIntensity); // plan A4d
             ParsePointLightFlicker(p, d);
             d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
+            d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
             d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
             d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
             lm.PointLights().push_back({});

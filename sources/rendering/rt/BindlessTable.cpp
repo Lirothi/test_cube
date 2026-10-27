@@ -65,6 +65,7 @@ void BindlessTable::Init(ID3D12Device* device, render::BindlessHeap* shared)
     if (SUCCEEDED(gpu::CreateDescriptorHeap(device_, &desc, MemTag::RtBindless, L"RtBindless.Heap", IID_PPV_ARGS(&heap_)))) {
         incr_ = device_->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     } else {
+        LOG_ERROR(logging::LogCategory::RenderRt, "RT off: the bindless descriptor heap ({} descriptors) could not be created", kMaxDescriptors);
         buildFailed_ = true;
     }
 }
@@ -201,6 +202,10 @@ uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh,
     if (newOwner) {
         // InstanceID is 24 bits. Check the entire contiguous submesh run before appending.
         if (geomInfo_.size() + submeshCount > (1u << 24)) {
+            if (!buildFailed_) {
+                LOG_ERROR(logging::LogCategory::RenderRt, "RT off: geometry records past InstanceID's 24 bits ({} + {})",
+                          geomInfo_.size(), submeshCount);
+            }
             buildFailed_ = true;
             return kInvalidGeometry;
         }
@@ -300,6 +305,10 @@ bool BindlessTable::UploadGeometryInfo(UINT frameIndex)
                                                 D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                 MemTag::RtBindless, L"RtBindless.GeometryInfo",
                                                 IID_PPV_ARGS(&buffer)))) {
+            if (!buildFailed_) {
+                LOG_ERROR(logging::LogCategory::RenderRt, "RT off: geometry-info buffer allocation failed ({} records, {} B)",
+                          capacity, static_cast<UINT64>(capacity) * sizeof(GeometryInfoGPU));
+            }
             buildFailed_ = true;
             return false;
         }
@@ -311,6 +320,7 @@ bool BindlessTable::UploadGeometryInfo(UINT frameIndex)
     void* mapped = nullptr;
     D3D12_RANGE noRead{ 0, 0 };
     if (FAILED(frame.buffer->Map(0, &noRead, &mapped))) {
+        if (!buildFailed_) { LOG_ERROR(logging::LogCategory::RenderRt, "RT off: geometry-info buffer Map failed ({} records)", count); }
         buildFailed_ = true;
         return false;
     }

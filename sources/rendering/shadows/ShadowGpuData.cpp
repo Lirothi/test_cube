@@ -1569,6 +1569,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
 {
     if (!renderer) { return; }
+    ++drawTablesGeneration_; // the shadow views' staged tables name what this replaces
     // Scoped because a rebuild is never just its own cost: it resizes casterLod_, which reads as a
     // LOD change, which sets VSM forceAll -- a full page-pool re-render. In a trace that lands in
     // Pass_VsmPageRender, nowhere near here, so without this scope the cause is invisible.
@@ -2313,6 +2314,13 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         newGiInstances != giFoldableInstances_ ||
         newStatic > instances_.capacity || newStatic > bounds_.capacity)
     {
+        // Rebuild re-creates the rings it outgrows (EnsureRing / EnsureUavRing release the old buffer AT ONCE), and
+        // all kFrameCount regions live in one buffer: the frames still in flight -- on either queue -- read the old
+        // one. Wait for them first, as Scene::RebuildShadowCasters does. Without it, switching the 104 bulbs of
+        // wind_test's "Lamps" group on mid-session freed ShadowGpuData.Bounds under the GPU: a DRED page fault on
+        // the freed buffer, DEVICE_HUNG about 1 time in 3 early in a session with async compute (2026-10-27).
+        // Mid-session caster-set changes are editor edits; the first build has nothing in flight to wait for.
+        if (instances_.Valid() || bounds_.Valid()) { renderer->WaitForPreviousFrame(); }
         Rebuild(renderer, objects);
         forceContentRefresh_ = false; // this frame's mover signal already covers the rebuild
         lastMoverCount_ = count_; // full rebuild -> treat everything as changed (don't skip VSM)
@@ -3846,15 +3854,28 @@ bool ShadowGpuData::RecordIndirectShadowDraws(Renderer* renderer, ID3D12Graphics
     auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = viewCB;
-    if (MaskedShadowsActive())
     {
-        ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f), CasterGroupSrv(), GroupMaskSrv() }).gpu;
-        // A6: the bindless masked PSO has no albedo table -- GroupMask.x is the heap index.
-        if (!MaskedShadowsBindless()) { ctx.srvTable[3] = renderer->StageSrvUavTable(maskedAlbedoSrvs_, maskedAlbedoCount_).gpu; }
-    }
-    else
-    {
-        ctx.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
+        // Once a frame for every view (drawTablesMutex_ says why).
+        std::lock_guard<std::mutex> lock(drawTablesMutex_);
+        const std::uint64_t frame = renderer->GetTotalFrameNumber();
+        if (drawTablesFrame_ != frame || drawTablesStagedGeneration_ != drawTablesGeneration_)
+        {
+            drawTable3_ = {};
+            if (MaskedShadowsActive())
+            {
+                drawTable0_ = renderer->StageSrvUavTable({ InstanceReadSrv(f), CasterGroupSrv(), GroupMaskSrv() }).gpu;
+                // A6: the bindless masked PSO has no albedo table -- GroupMask.x is the heap index.
+                if (!MaskedShadowsBindless()) { drawTable3_ = renderer->StageSrvUavTable(maskedAlbedoSrvs_, maskedAlbedoCount_).gpu; }
+            }
+            else
+            {
+                drawTable0_ = renderer->StageSrvUavTable({ InstanceReadSrv(f) }).gpu; // unified copy (Step 2), else ring
+            }
+            drawTablesFrame_ = frame;
+            drawTablesStagedGeneration_ = drawTablesGeneration_;
+        }
+        ctx.srvTable[0] = drawTable0_;
+        if (drawTable3_.ptr != 0) { ctx.srvTable[3] = drawTable3_; }
     }
     Material* const mat = IndirectShadowMaterial();
     Material* const linear = linearDepth ? mat->LinearDepthVariant() : nullptr; // plan S4
@@ -4227,6 +4248,7 @@ void ShadowGpuData::PollValidation(Renderer* renderer)
 
 void ShadowGpuData::Reset()
 {
+    ++drawTablesGeneration_;
     // Retain the GPU buffers + SRV descriptors across a level unload (a pass may reference an
     // SRV while frames are in flight). Only CPU-side state is dropped; the next Rebuild reuses
     // the allocations when their capacity still suffices.

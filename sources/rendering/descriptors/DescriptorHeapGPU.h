@@ -80,6 +80,10 @@ public:
         cursor_ = 0;
     }
 
+    uint32_t Used() const { return cursor_.load(std::memory_order_relaxed); }
+    uint32_t Capacity() const { return capacity_; }
+    D3D12_DESCRIPTOR_HEAP_TYPE Type() const { return type_; }
+
     ID3D12DescriptorHeap* GetHeap() const {
         return heap_.Get();
     }

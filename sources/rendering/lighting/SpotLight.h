@@ -24,6 +24,7 @@ struct SpotLightDesc {
     float        nearPlane = 0.0f;
     bool         shadowsEnabled = false; // if false, the spot lights the scene but never casts a shadow
     LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
+    float        dayBrightness = 1.0f;   // "dayBrightness": this light's own multiplier by day, gone as the night comes in (Scene::TickNightLamps)
     // Local-light shadow plan S1: UE's ShadowBias / ShadowSlopeBias (LightComponent.cpp:466-467, both 0.5). The depth
     // pass's constant is 15.36/Res m x 2 x shadowBias, its slope part that x 3 x shadowSlopeBias x tan (<= 1).
     // Under the texel bias (the atlas default) they scale its normal / slope push instead, 0.5 = the global texels

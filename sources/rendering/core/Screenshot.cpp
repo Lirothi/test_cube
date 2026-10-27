@@ -1,6 +1,7 @@
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/GpuAlloc.h"
+#include "core/logging/Log.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -78,9 +79,18 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path, unsigned max
 {
     ID3D12Device* device = renderer.GetDevice();
     ID3D12Resource* src = renderer.GetLastPresentedBackbuffer();
+    // Which step failed, and whether the device was gone by then: a capture that fails on a removed device is a
+    // symptom to report, not a cause.
+    const auto fail = [device, &renderer](const char* step, HRESULT hr) {
+        const HRESULT removed = device ? device->GetDeviceRemovedReason() : S_OK;
+        LOG_WARNING(logging::LogCategory::Render, "screenshot: {} failed (hr=0x{:08X}, deviceRemovedReason=0x{:08X})", step,
+                    static_cast<unsigned>(hr), static_cast<unsigned>(removed));
+        if (FAILED(removed)) { renderer.ReportDeviceRemovalOnce(); } // the device_removed.log + DRED record, now
+        return false;
+    };
     if (!device || !src || path.empty())
     {
-        return false;
+        return fail(!src ? "no presented backbuffer" : "no device or path", E_FAIL);
     }
 
     renderer.WaitForPreviousFrame(); // GPU idle: the presented image is stable in VRAM
@@ -106,17 +116,17 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path, unsigned max
     buf.SampleDesc.Count = 1;
     buf.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
     ComPtr<ID3D12Resource> readback;
-    if (FAILED(gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &buf,
+    if (const HRESULT hr = gpu::CreateCommittedResource(device, &heap, D3D12_HEAP_FLAG_NONE, &buf,
             D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Renderer, L"Screenshot.Readback",
-            IID_PPV_ARGS(&readback))))
+            IID_PPV_ARGS(&readback)); FAILED(hr))
     {
-        return false;
+        return fail("readback allocation", hr);
     }
 
     UploadBatch batch;
     if (!batch.Begin(&renderer))
     {
-        return false;
+        return fail("upload batch", E_FAIL);
     }
     ID3D12GraphicsCommandList* cl = batch.CommandList();
 
@@ -150,9 +160,9 @@ bool SaveBackbufferPng(Renderer& renderer, const std::string& path, unsigned max
     std::vector<std::uint8_t> px(static_cast<size_t>(w) * h * 4);
     void* mapped = nullptr;
     D3D12_RANGE rr{ 0, static_cast<SIZE_T>(total) };
-    if (FAILED(readback->Map(0, &rr, &mapped)))
+    if (const HRESULT hr = readback->Map(0, &rr, &mapped); FAILED(hr))
     {
-        return false;
+        return fail("readback Map", hr);
     }
     const auto* srcp = static_cast<const std::uint8_t*>(mapped) + fp.Offset;
     for (UINT y = 0; y < h; ++y)

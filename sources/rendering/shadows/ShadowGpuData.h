@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <d3d12.h>
@@ -798,6 +799,17 @@ private:
     Ring groupMask_;
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, kMaxMaskedGroups> maskedAlbedoSrvs_{};
     std::uint32_t maskedAlbedoCount_ = 0;
+    // RecordIndirectShadowDraws' SRV tables (instances + caster groups + group mask, the albedo table), staged into the
+    // frame's descriptor ring ONCE a frame and shared by every shadow view: they are the same for all of them. Staged
+    // per view, 128 shadowed points + 32 spots (814 views) took ~2.4k of the ring's 4096 and overflowed it -- a crash
+    // the moment a level switched its lamps on (owner, 2026-10-27). Keyed by the renderer's total frame number (the
+    // ring is reset per frame) and by `drawTablesGeneration_`, which Rebuild and Reset bump. Views record in parallel.
+    std::mutex drawTablesMutex_;
+    std::uint64_t drawTablesFrame_ = ~0ull;
+    std::uint64_t drawTablesStagedGeneration_ = ~0ull;
+    std::uint64_t drawTablesGeneration_ = 0;
+    D3D12_GPU_DESCRIPTOR_HANDLE drawTable0_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE drawTable3_{};
     bool hasMaskedGroups_ = false;
     // A6: the per-group mask as built (x = table slot), the masked groups' MaterialData (null =
     // opaque) and the region GroupMaskSrv() serves: 0 = the static table-path copy, f = this

@@ -354,6 +354,9 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         LOG_WARNING(logging::LogCategory::RenderRt,
                     "acceleration-structure or bindless-table allocation failed; disabling RT, falling back to SSR");
         rtFailureLogged_ = true;
+        // An allocation or Map that fails on a REMOVED device is the first symptom the frame sees -- the GPU hung a
+        // frame earlier and nothing else noticed for ~50 s (2026-10-27). Report the removal (and DRED) now.
+        renderer->ReportDeviceRemovalOnce();
     }
     decisions_.rtDebugView = decisions_.rtSupported && !rtFailed && frame.settings.rtDebugView;
     decisions_.rtReflect = decisions_.rtSupported && !rtFailed &&

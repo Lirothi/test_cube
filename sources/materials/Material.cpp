@@ -9,6 +9,7 @@
 #include "rendering/meshes/LodSelect.h"     // S10a: render::kMaxShadowLods, likewise
 
 #include <d3dcompiler.h>
+#include <dxgi1_4.h> // the PSO cache's driver key: the adapter by LUID, its user-mode driver version
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -530,13 +531,86 @@ bool PipelineCacheEnabled()
     return enabled;
 }
 
-std::filesystem::path PipelineCachePath(const std::wstring& name)
+// The driver a blob was compiled by: vendor, device and the user-mode driver's version (DXGI reports it for
+// IDXGIDevice). "0000-0000-0.0.0.0" when the adapter cannot be asked -- one folder for all, as before.
+std::wstring PipelineCacheDriverKey(ID3D12Device* device)
 {
-    // A driver blob names the device it was compiled for, and a GBV device is not the plain one: a blob stored by
-    // either is refused by the other (id=886, "a cached PSO intended for a different driver version") and then
-    // overwritten, so GBV and ordinary runs kept spoiling each other's cache -- and a GBV run, which owes the owner
-    // zero warnings, logged one per such pipeline. GBV keeps its own.
-    return ShaderCacheDirectory() / (GraphicsDevice::GbvEnabled() ? L"pso_gbv" : L"pso") / (name + L".bin");
+    DXGI_ADAPTER_DESC1 desc{};
+    LARGE_INTEGER umd{};
+    ComPtr<IDXGIFactory4> factory;
+    ComPtr<IDXGIAdapter1> adapter;
+    if (device && SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) &&
+        SUCCEEDED(factory->EnumAdapterByLuid(device->GetAdapterLuid(), IID_PPV_ARGS(&adapter))) &&
+        SUCCEEDED(adapter->GetDesc1(&desc)) &&
+        FAILED(adapter->CheckInterfaceSupport(__uuidof(IDXGIDevice), &umd)))
+    {
+        umd.QuadPart = 0;
+    }
+    wchar_t key[64]{};
+    swprintf_s(key, L"%04x-%04x-%u.%u.%u.%u", desc.VendorId, desc.DeviceId,
+               HIWORD(umd.HighPart), LOWORD(umd.HighPart), HIWORD(umd.LowPart), LOWORD(umd.LowPart));
+    return key;
+}
+
+// A driver blob is refused (id=886, "a cached PSO intended for a different driver version") by any other driver --
+// and by the same driver behind another layer: the debug layer (every Debug run) and GBV each make a different
+// device. One folder held them all, so Debug and Release refused each other's blobs and overwrote them on every
+// switch (2026-10-27: a Debug wind_test run after Release_Editor refused 69 of 158), and GBV the same until it got
+// its own. So one folder per flavour, and inside it one per driver: a driver update starts an empty folder and the
+// old ones are deleted, so the cache regenerates itself instead of being refused pipeline by pipeline. Blobs of the
+// flat layout before this are moved into the folder once (most are this driver's; the driver refuses the rest and
+// they are replaced as before).
+const std::filesystem::path& PipelineCacheDirectory(ID3D12Device* device)
+{
+    static const std::filesystem::path directory = [device]
+    {
+#ifdef _DEBUG
+        const wchar_t* flavour = GraphicsDevice::GbvEnabled() ? L"pso_gbv" : L"pso_debug";
+#else
+        const wchar_t* flavour = L"pso";
+#endif
+        const std::filesystem::path root = ShaderCacheDirectory() / flavour;
+        const std::wstring key = PipelineCacheDriverKey(device);
+        const std::filesystem::path dir = root / key;
+        std::error_code ec;
+        const bool fresh = !std::filesystem::exists(dir, ec);
+        std::filesystem::create_directories(dir, ec);
+        std::uintmax_t removed = 0;
+        std::uint32_t moved = 0;
+        for (auto it = std::filesystem::directory_iterator(root, ec);
+             !ec && it != std::filesystem::directory_iterator(); it.increment(ec))
+        {
+            const std::filesystem::path entry = it->path();
+            std::error_code entryEc;
+            if (entry.filename() == key)
+            {
+                continue;
+            }
+            if (it->is_directory(entryEc))
+            {
+                const std::uintmax_t n = std::filesystem::remove_all(entry, entryEc); // another driver's folder
+                removed += n == static_cast<std::uintmax_t>(-1) ? 0 : n;
+            }
+            else if (entry.extension() == L".bin" && fresh)
+            {
+                std::filesystem::rename(entry, dir / entry.filename(), entryEc);
+                moved += entryEc ? 0u : 1u;
+            }
+            else if (entry.extension() == L".bin")
+            {
+                removed += std::filesystem::remove(entry, entryEc) ? 1u : 0u; // a flat blob left after the move
+            }
+        }
+        LOG_INFO(logging::LogCategory::Render, "PSO cache: {} ({} files of other drivers removed, {} moved in from the flat layout)",
+                 dir.generic_string(), removed, moved);
+        return dir;
+    }();
+    return directory;
+}
+
+std::filesystem::path PipelineCachePath(ID3D12Device* device, const std::wstring& name)
+{
+    return PipelineCacheDirectory(device) / (name + L".bin");
 }
 
 uint64_t ElapsedMicroseconds(std::chrono::steady_clock::time_point begin)
@@ -755,10 +829,10 @@ std::string NarrowForLog(const std::wstring& w)
 // proxy objects. Loading objects directly from ID3D12PipelineLibrary is unsafe with
 // the current Streamline interposer; D3D12_CACHED_PIPELINE_STATE preserves the
 // driver-compiled payload while still going through Create*PipelineState.
-bool TryLoadPipelineBlob(const std::wstring& name, std::vector<uint8_t>& outBytes)
+bool TryLoadPipelineBlob(ID3D12Device* device, const std::wstring& name, std::vector<uint8_t>& outBytes)
 {
     outBytes.clear();
-    std::ifstream file(PipelineCachePath(name), std::ios::binary);
+    std::ifstream file(PipelineCachePath(device, name), std::ios::binary);
     if (!file)
     {
         return false;
@@ -793,7 +867,7 @@ bool TryLoadPipelineBlob(const std::wstring& name, std::vector<uint8_t>& outByte
     return true;
 }
 
-void StorePipelineBlob(const std::wstring& name, ID3D12PipelineState* pipeline)
+void StorePipelineBlob(ID3D12Device* device, const std::wstring& name, ID3D12PipelineState* pipeline)
 {
     if (!PipelineCacheEnabled() || !pipeline)
     {
@@ -811,7 +885,7 @@ void StorePipelineBlob(const std::wstring& name, ID3D12PipelineState* pipeline)
     uint64_t blobHash = kFnvOffset;
     CacheHashBytes(blobHash, blob->GetBufferPointer(), static_cast<size_t>(blobSize));
 
-    const std::filesystem::path finalPath = PipelineCachePath(name);
+    const std::filesystem::path finalPath = PipelineCachePath(device, name);
     std::error_code ec;
     std::filesystem::create_directories(finalPath.parent_path(), ec);
     if (ec)
@@ -860,7 +934,7 @@ HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
         g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
         const auto begin = std::chrono::steady_clock::now();
         std::vector<uint8_t> cachedBytes;
-        if (TryLoadPipelineBlob(name, cachedBytes))
+        if (TryLoadPipelineBlob(device, name, cachedBytes))
         {
             D3D12_GRAPHICS_PIPELINE_STATE_DESC cachedDesc = desc;
             cachedDesc.CachedPSO = { cachedBytes.data(), cachedBytes.size() };
@@ -878,6 +952,8 @@ HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
                 return cachedHr;
             }
             g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            LOG_INFO_ONCE(logging::LogCategory::Render, "PSO cache: the driver refused a stored blob (hr=0x{:08X}, '{}') -- "
+                          "compiled again and replaced", static_cast<unsigned>(cachedHr), label);
             fromCache = true;
             out.Reset();
         }
@@ -896,7 +972,7 @@ HRESULT CreateGraphicsPipelineStateCached(ID3D12Device* device,
     g_psoCacheCreateUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
     if (SUCCEEDED(hr))
     {
-        StorePipelineBlob(name, out.Get());
+        StorePipelineBlob(device, name, out.Get());
     }
     // Separate bucket from the cache-blob path on purpose: "87 pipelines, 0 from cache" is a
     // different bug from "87 pipelines, all cached, still slow".
@@ -919,7 +995,7 @@ HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
         g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
         const auto begin = std::chrono::steady_clock::now();
         std::vector<uint8_t> cachedBytes;
-        if (TryLoadPipelineBlob(name, cachedBytes))
+        if (TryLoadPipelineBlob(device, name, cachedBytes))
         {
             D3D12_COMPUTE_PIPELINE_STATE_DESC cachedDesc = desc;
             cachedDesc.CachedPSO = { cachedBytes.data(), cachedBytes.size() };
@@ -937,6 +1013,8 @@ HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
                 return cachedHr;
             }
             g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            LOG_INFO_ONCE(logging::LogCategory::Render, "PSO cache: the driver refused a stored blob (hr=0x{:08X}, '{}') -- "
+                          "compiled again and replaced", static_cast<unsigned>(cachedHr), label);
             fromCache = true;
             out.Reset();
         }
@@ -955,7 +1033,7 @@ HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
     g_psoCacheCreateUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
     if (SUCCEEDED(hr))
     {
-        StorePipelineBlob(name, out.Get());
+        StorePipelineBlob(device, name, out.Get());
     }
     // Separate bucket from the cache-blob path on purpose: "87 pipelines, 0 from cache" is a
     // different bug from "87 pipelines, all cached, still slow".

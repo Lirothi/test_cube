@@ -55,6 +55,10 @@ void UnregisterMemoryProvider(const void* self);
 // after the previous frame's work has been joined -- providers read their owners' state.
 void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec = 5.0);
 
+// The frame's CBV/SRV/UAV descriptor ring as a frame left it (DescriptorAllocator::ResetPerFrame): the mem: line prints
+// the period's peak as `desc ring <peak>/<capacity>`. An overflow is a crash; this is how close the frames come.
+void NoteDescriptorRingUse(std::uint32_t used, std::uint32_t capacity);
+
 // The memory REPORT (UE's MemReport / rhi.DumpResourceMemory, memory profiling plan M1-M2): one
 // multi-line Info dump into the session log -- the platform breakdown with the address-space walk,
 // the GPU census as a tag tree, and every live GPU object by size. "--memreport[=<sec>]" schedules

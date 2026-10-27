@@ -62,7 +62,13 @@ never `enabled` (that rebuilds the lights behind a GPU wait). MCP: `setOnAt` -- 
 `setLight {lumens | scale, radius, color, shadows, flicker, flickerHz}` retunes lights that exist, by name or group
 ("Bathroom Candles"), one undo entry -- `scale` multiplies each light's own flux, a spot's radius is its range;
 `flicker` is a point light's +/- share of its flux (PointLightFlickerDesc, three incommensurate sines; a candle 0.15
-at 3 Hz), each lamp seeded on its own so a row of candles does not breathe in step.
+at 3 Hz), each lamp seeded on its own so a row of candles does not breathe in step. A point/spot light's own
+`"dayBrightness"` (Inspector "Day Brightness", `setLight {dayBrightness}`; absent = 1, 0 = dark by day) multiplies its
+flux by day and goes in stops by the night's share (`Scene::TickNightLamps`), on top of the lamps' global Day
+Brightness for an always-on lamp; without a time of day it is always day. Checked live: the bathroom candles x1000 at
+15:00 blew the frame (mean 77 -> 241), at 24:00 no pixel moved > 8 levels. The Inspector's logarithmic drags cross
+their range in ~600 px (`dragF`: ImGui moves a log drag's 0..1 parameter by speed x px / (max - min), and a "%.0f"
+row rounded the flux back to 0 or 1 every frame).
 
 ## Line Endings
 
@@ -137,7 +143,13 @@ The `mem:` line (Info, `core`, every 5 s; `rendering/core/MemoryReport.h`) puts 
 bytes, VRAM and mimalloc commit beside per-owner byte counts; a subsystem that owns memory the
 process counters cannot attribute registers a provider (`RegisterMemoryProvider`). A number that
 grows while the others stay flat names the owner -- read it before reaching for a profiler
-(docs/bug_rt_retire_bin_leak.md).
+(docs/bug_rt_retire_bin_leak.md). It ends with `desc ring <peak>/<capacity>`: the period's fullest frame of the
+per-frame CBV/SRV/UAV staging ring (`Renderer::StageSrvUavTable`, 4096 a frame, `BindlessHeap::kFrameRingCapacity`).
+An overflow THROWS -- a crash -- and a frame past three quarters logs `frame descriptor ring ... used` (render.rhi)
+first. The rule it came from (2026-10-27, owner: wind_test's "Lamps" group switched on at runtime crashed): a table
+that is the same for every view or draw is staged ONCE a frame and its GPU handle reused -- `ShadowGpuData::
+RecordIndirectShadowDraws` staged its three SRVs per shadow view, and 128 shadowed points + 32 spots are 814 views:
+~2.4k of the 4096. Staged once, the same switch-on peaks at 1257/4096.
 
 Structured reports a SCRIPT parses as a table (`csm_readout.log`, `visibility_readout.log`,
 `cull_benchmark.txt`, the stress verdicts) are ARTIFACTS, not events -- an existing, closed set;
@@ -199,6 +211,16 @@ runs. Look at the `--shot` before trusting a time -- a frame missing a mesh meas
 frame (a worktree without `import_staging/sandy_gravel_1k/textures/*.dds` skips the island's draw).
 Run it in a normal visible window: a minimized one has a degenerate backbuffer, so neither its time
 nor its shot is the frame you think. Numbers and the trade-offs: `docs/gbv_startup_profile.md`.
+
+**The PSO cache is one folder per device flavour and driver**: `shader_cache/pso` (Release, Release_Editor),
+`pso_debug` (Debug: the debug layer), `pso_gbv` (Debug + GBV), each holding `<vendor>-<device>-<driver version>/`
+(`Material.cpp PipelineCacheDirectory`, logged once as `PSO cache: <folder> (...)`). A driver refuses a blob stored
+behind another layer or by another driver (`0x887E0002`, the debug layer's `id=886` "a cached PSO intended for a
+different driver version"), so one shared folder ping-ponged: a Debug wind_test run after Release_Editor refused 69
+of 158 blobs and overwrote them for the next Release run to refuse (2026-10-27). A driver update now starts an empty
+folder and deletes the others; a refused blob is still compiled again and replaced (`PSO cache: the driver refused a
+stored blob`, once a process). Measured after the split: Release / Release_Editor (Streamline on or off) / Debug /
+Debug + GBV in any order -- all hits, 0 rejects. Neither `--dred` nor the GBV device's patch mode changes a blob.
 
 ## Memory Profiling — How to Run It
 
@@ -533,6 +555,16 @@ those on a separate `bCastContactShadow`).
   `ShadowGpuData::Rebuild` flushes the VSM page cache once (`casterLodsChanged_`) -- the switch no longer resizes the table,
   which is what used to flush it.
 - Only casters count for `HasWindCasters()`: grass with its shadow off does not keep VSM redrawing for the wind.
+- **A caster-set change mid-session waits for the GPU before it rebuilds** (`ShadowGpuData::UpdateForFrame`, as
+  `Scene::RebuildShadowCasters` always did): `Rebuild` re-creates every ring it outgrows and `EnsureRing` /
+  `EnsureUavRing` release the old buffer AT ONCE, while the frames in flight on both queues still read it. Switching
+  wind_test's 104 "Lamps" bulbs on early in a session hung the GPU about one launch in three (DRED, `--dred`: a page
+  fault on the freed `ShadowGpuData.Bounds`; frames of 400-800 ms, then DEVICE_HUNG; never with
+  `--no-async-compute`). After: 15 of 15 launches clean. The per-frame rings that grow with it (`RefreshVirtualGroups`,
+  `UploadCasterLods`, `UpdateViewFrustums`) grow only in the frame of such a rebuild, after the wait. Diagnosing a
+  hang like it: every RT build failure logs `RT off: ...` with its HRESULT, and the RT-off path and a failed capture
+  call `ReportDeviceRemovalOnce` (DRED into `device_removed.log`), so a removal nobody noticed still leaves its
+  record; an intermittent hang needs 12+ launches an arm before an arm counts as clean (6 clean of one arm was luck).
 
 ## Rest Pose — How a New Copy Lies
 

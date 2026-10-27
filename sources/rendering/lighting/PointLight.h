@@ -26,6 +26,7 @@ struct PointLightDesc {
     bool         shadowsEnabled = false; // if false, the point lights the scene but never casts a shadow (honored once Part B point shadows land)
     PointLightFlickerDesc flicker{};
     LampSwitch   onAt = LampSwitch::Always; // plan L: "onAt" -- comes on at night (or by day), NightLamps.h
+    float        dayBrightness = 1.0f;   // "dayBrightness": this light's own multiplier by day, gone as the night comes in (Scene::TickNightLamps)
     // Local-light shadow plan S1: UE's ShadowBias / ShadowSlopeBias (both 0.5). UE biases a point light at projection:
     // the compare distance moves toward the light by 0.02 x 512/Res x 2 x shadowBias of itself, times
     // (1 + 3 x shadowSlopeBias x (1 - NoL)) -- local_shadow_bias.hlsli. Under the texel bias (the atlas default) they

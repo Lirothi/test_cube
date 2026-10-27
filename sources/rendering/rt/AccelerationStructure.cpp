@@ -7,6 +7,7 @@
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/meshes/Mesh.h"
+#include "core/logging/Log.h"
 
 namespace rt {
 
@@ -137,6 +138,11 @@ const Blas& AccelerationStructureManager::GetOrBuildBlas(Mesh* mesh, uint64_t no
         CreateUavBuffer(device5_, info.ScratchDataSizeInBytes,
                         D3D12_RESOURCE_STATE_COMMON, L"RtAs.BlasScratch");
     if (!result || !scratch) {
+        if (!buildFailed_) {
+            LOG_ERROR(logging::LogCategory::RenderRt, "RT off: BLAS allocation failed (result {} B {}, scratch {} B {}, {} submeshes)",
+                      info.ResultDataMaxSizeInBytes, result ? "ok" : "FAILED", info.ScratchDataSizeInBytes,
+                      scratch ? "ok" : "FAILED", geoms.size());
+        }
         buildFailed_ = true; // out of VRAM / device lost -> caller disables RT, falls back to SSR
         return slot;
     }
@@ -184,7 +190,11 @@ bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
     const UINT stride = mesh->GetVertexStride();
     if (!vb || stride == 0) { return false; }
     EnsureWindDescHeap();
-    if (!windDescHeap_) { buildFailed_ = true; return false; }
+    if (!windDescHeap_) {
+        if (!buildFailed_) { LOG_ERROR(logging::LogCategory::RenderRt, "RT off: the wind-deform descriptor heap could not be created"); }
+        buildFailed_ = true;
+        return false;
+    }
 
     WindBlasSlot& s = windSlots_[slot];
     const UINT count = static_cast<UINT>(vb->GetDesc().Width / stride);
@@ -204,7 +214,13 @@ bool AccelerationStructureManager::PrepareWindSlot(UINT slot, Mesh* mesh,
         }
         s.deformedVb = CreateUavBuffer(device5_, static_cast<UINT64>(count) * 12ull,
                                        D3D12_RESOURCE_STATE_COMMON, L"RtAs.WindStream");
-        if (!s.deformedVb) { buildFailed_ = true; return false; }
+        if (!s.deformedVb) {
+            if (!buildFailed_) {
+                LOG_ERROR(logging::LogCategory::RenderRt, "RT off: wind-deformed vertex stream allocation failed ({} vertices)", count);
+            }
+            buildFailed_ = true;
+            return false;
+        }
         s.mesh = mesh;
         s.vertexCount = count;
         // Every per-frame copy was reset with its buffers in the retire loop above; nothing left
@@ -329,7 +345,14 @@ D3D12_GPU_VIRTUAL_ADDRESS AccelerationStructureManager::BuildOrRefitWindSlot(
         f.scratch = CreateUavBuffer(device5_, wantScratch, D3D12_RESOURCE_STATE_COMMON, L"RtAs.WindBlasScratch");
         f.scratchSize = wantScratch;
     }
-    if (!f.blas || !f.scratch) { buildFailed_ = true; return 0; }
+    if (!f.blas || !f.scratch) {
+        if (!buildFailed_) {
+            LOG_ERROR(logging::LogCategory::RenderRt, "RT off: wind BLAS allocation failed (result {} B, scratch {} B)",
+                      info.ResultDataMaxSizeInBytes, wantScratch);
+        }
+        buildFailed_ = true;
+        return 0;
+    }
 
     D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
     build.Inputs = inputs;
@@ -410,13 +433,20 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         f.instanceCapacity = f.instanceUpload ? count : 0;
     }
     if (!f.instanceUpload) {
+        if (!buildFailed_) {
+            LOG_ERROR(logging::LogCategory::RenderRt, "RT off: TLAS instance upload allocation failed ({} instances, {} B)", count, instBytes);
+        }
         buildFailed_ = true;
         return;
     }
 
     D3D12_RAYTRACING_INSTANCE_DESC* descs = nullptr;
     D3D12_RANGE noRead{ 0, 0 };
-    if (FAILED(f.instanceUpload->Map(0, &noRead, reinterpret_cast<void**>(&descs)))) {
+    if (const HRESULT mapHr = f.instanceUpload->Map(0, &noRead, reinterpret_cast<void**>(&descs)); FAILED(mapHr)) {
+        if (!buildFailed_) {
+            LOG_ERROR(logging::LogCategory::RenderRt, "RT off: TLAS instance upload Map failed ({} instances): hr=0x{:08X} deviceRemovedReason=0x{:08X}",
+                      count, static_cast<unsigned>(mapHr), static_cast<unsigned>(device5_->GetDeviceRemovedReason()));
+        }
         buildFailed_ = true;
         return;
     }
@@ -456,6 +486,13 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
             d.AccelerationStructure = lastBlasAddress;
         }
         if (d.AccelerationStructure == 0) {
+            if (!buildFailed_) {
+                ID3D12Resource* vb = e.mesh ? e.mesh->GetVertexBufferResource() : nullptr;
+                LOG_ERROR(logging::LogCategory::RenderRt,
+                          "RT off: TLAS instance {} of {} has no BLAS (mesh {}, vertex buffer {}, stride {}, {} indices)",
+                          i, count, static_cast<const void*>(e.mesh), vb ? "present" : "MISSING",
+                          e.mesh ? e.mesh->GetVertexStride() : 0u, e.mesh ? e.mesh->GetIndexCount() : 0u);
+            }
             buildFailed_ = true; // a referenced BLAS failed to build (alloc/device) — disable RT
         }
         descs[i] = d;
@@ -495,6 +532,10 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         f.scratchSize = f.scratch ? info.ScratchDataSizeInBytes : 0;
     }
     if (!f.result || !f.scratch) {
+        if (!buildFailed_) {
+            LOG_ERROR(logging::LogCategory::RenderRt, "RT off: TLAS allocation failed ({} instances: result {} B, scratch {} B)",
+                      count, info.ResultDataMaxSizeInBytes, info.ScratchDataSizeInBytes);
+        }
         buildFailed_ = true; // out of VRAM / device lost -> caller disables RT, falls back to SSR
         return;
     }

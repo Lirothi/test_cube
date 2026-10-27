@@ -1723,18 +1723,27 @@ void Scene::TickNightLamps(float deltaTime)
         return lampSwitch == LampSwitch::Night ? level * nightLight
              : lampSwitch == LampSwitch::Always ? level * alwaysLight : level;
     };
+    // A light's OWN day multiplier ("dayBrightness" on the light, 1 = none; 2026-10-27, owner: "give the lights a
+    // brightness coefficient by day"): full while the sun is up, gone in stops by the night's share as Day Brightness
+    // above is, so it multiplies with that one for an always-on lamp. Without a time of day it is always day. 0 = dark
+    // until the night is the moon's.
+    const float dayShare = timeOfDay_.Present() ? 1.0f - timeOfDay_.NightShare() : 1.0f;
+    const auto dayOf = [&](float dayBrightness) {
+        if (dayBrightness == 1.0f || dayShare <= 0.0f) { return 1.0f; }
+        return dayBrightness <= 0.0f ? 0.0f : std::pow(dayBrightness, dayShare);
+    };
     std::size_t lights = 0;
     for (PointLight& light : lightManager_.PointLights())
     {
         const PointLightDesc& desc = light.GetDesc();
         if (desc.onAt != LampSwitch::Always) { ++lights; }
-        light.SetLampLevel(scaleOf(desc.onAt, desc.position));
+        light.SetLampLevel(scaleOf(desc.onAt, desc.position) * dayOf(desc.dayBrightness));
     }
     for (SpotLight& light : lightManager_.SpotLights())
     {
         const SpotLightDesc& desc = light.GetDesc();
         if (desc.onAt != LampSwitch::Always) { ++lights; }
-        light.SetLampLevel(scaleOf(desc.onAt, desc.position));
+        light.SetLampLevel(scaleOf(desc.onAt, desc.position) * dayOf(desc.dayBrightness));
     }
     const std::vector<GBufferRenderable*>& glowing = NightLamps::Registered();
     for (GBufferRenderable* object : glowing)

@@ -9,6 +9,7 @@
 #include <mimalloc-stats.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdarg>
@@ -73,6 +74,9 @@ namespace
         // Named snapshots (get_memory snapshot/diff, the Memory tab).
         std::unordered_map<std::string, MemorySnapshot> snapshots;
         ThreadPrev threadPrev[mem::kMaxThreadCounterBlocks + 1];
+        // NoteDescriptorRingUse: the period's peak of the frame descriptor ring, and its size.
+        std::atomic<std::uint32_t> ringPeak{ 0 };
+        std::atomic<std::uint32_t> ringCapacity{ 0 };
     };
     State& St()
     {
@@ -819,6 +823,14 @@ void ScheduleMemoryReport(double afterSec)
     St().reportAfterSec = afterSec >= 0.0 ? afterSec : 10.0;
 }
 
+void NoteDescriptorRingUse(std::uint32_t used, std::uint32_t capacity)
+{
+    State& s = St();
+    s.ringCapacity.store(capacity, std::memory_order_relaxed);
+    std::uint32_t peak = s.ringPeak.load(std::memory_order_relaxed);
+    while (used > peak && !s.ringPeak.compare_exchange_weak(peak, used, std::memory_order_relaxed)) {}
+}
+
 void RequestMemoryReport()
 {
     St().reportRequested = true;
@@ -892,6 +904,11 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
     }
     n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | heaps %.0f MB (%u) | other %.0f MB",
                        Mb(heaps.committed), heaps.count, otherMb);
+    if (const std::uint32_t ringCapacity = s.ringCapacity.load(std::memory_order_relaxed); ringCapacity > 0)
+    {
+        n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | desc ring %u/%u",
+                           s.ringPeak.exchange(0, std::memory_order_relaxed), ringCapacity);
+    }
     // CPU tags (--memtrack, M3): what operator new holds live, how much of it no scope claimed, the
     // allocator's own slack (mi commit - live) and the tag map's pages.
     mem::CpuTagTotals cpuTags;
