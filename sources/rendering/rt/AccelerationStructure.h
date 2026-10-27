@@ -50,6 +50,9 @@ struct InstanceEntry {
     // not from anything per-instance.
     uint64_t nonOpaqueSlots = 0;
     uint32_t mask = kInstanceMaskAll; // D3D12 InstanceMask (8 bits); see kInstanceMaskShadow
+    // 255 x (1 - the object's RtCutoutOpacity): written as InstanceContributionToHitGroupIndex, which inline RayQuery
+    // (no hit groups) leaves free; the visibility rays read it per candidate (rt_geometry.hlsli). 0 = solid cards.
+    uint32_t cutoutTransparency = 0;
 };
 
 // Builds and caches BLASes for meshes and assembles a per-frame TLAS from a list

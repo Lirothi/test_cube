@@ -63,7 +63,7 @@ namespace
         // The RT sky visibility (SceneRenderSettings::skyVis*, the same defaults), on the GI tab.
         bool skyVisEnabled = true;
         std::uint32_t skyVisRays = 8u;
-        float skyVisHistory = 0.98f;
+        float skyVisHistory = 0.995f;
         float skyVisMaxDistance = 15.0f;
         float skyVisDiffuse = 1.0f;
         float skyVisSpecular = 1.0f;
@@ -388,7 +388,7 @@ namespace
         s.giFarSpacing = std::clamp(finite(s.giFarSpacing, 2.0f), 0.5f, 8.0f);
         // --set skyVis.*'s own ranges (App.cpp ApplySweepValue).
         s.skyVisRays = std::clamp(s.skyVisRays, 1u, 16u);
-        s.skyVisHistory = std::clamp(finite(s.skyVisHistory, 0.98f), 0.0f, 0.98f);
+        s.skyVisHistory = std::clamp(finite(s.skyVisHistory, 0.995f), 0.0f, 0.995f);
         s.skyVisMaxDistance = std::clamp(finite(s.skyVisMaxDistance, 15.0f), 0.5f, 500.0f);
         s.skyVisDiffuse = std::clamp(finite(s.skyVisDiffuse, 1.0f), 0.0f, 1.0f);
         s.skyVisSpecular = std::clamp(finite(s.skyVisSpecular, 1.0f), 0.0f, 1.0f);

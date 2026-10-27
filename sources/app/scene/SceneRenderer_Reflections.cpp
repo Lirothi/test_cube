@@ -347,19 +347,23 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
 
 // ---- Interior lighting plan S: the RT sky visibility ----
 namespace {
-// Mirrors `cbuffer SkyVisibility` in rt_sky_visibility_cs.hlsl (row-major; two matrices, then rows of 4).
+// Mirrors `cbuffer SkyVisibility` in rt_sky_visibility_cs.hlsl (row-major; three matrices, then rows of 4). One block
+// for both entry points: CSTrace (this frame's rays -> skyVisRaw) and CSAccumulate (the spatial step on them, then the
+// history -> the accumulation and the target).
 struct SkyVisConstants
 {
     Math::mat4 invView;
     Math::mat4 invProj;
     Math::mat4 prevInvViewProj; // last frame's clip -> world (the history's reprojection test)
     uint32_t tlasIndex = 0;     uint32_t gb1Index = 0;      uint32_t depthIndex = 0;    uint32_t velocityIndex = 0;
-    uint32_t outUavIndex = 0;   uint32_t historyIndex = 0;  uint32_t countUavIndex = 0; uint32_t countHistoryIndex = 0;
+    uint32_t accumUavIndex = 0; uint32_t historyIndex = 0;  uint32_t countUavIndex = 0; uint32_t countHistoryIndex = 0;
     uint32_t outWidth = 0;      uint32_t outHeight = 0;     uint32_t rayCount = 4;      uint32_t frameIndex = 0;
     float maxDistance = 30.0f;  float historyWeight = 0.9f; uint32_t historyValid = 0;  uint32_t seedEnabled = 1;
-    float seedDepthTolerance = 0.05f; float seedNormalPower = 8.0f; uint32_t samplingMode = 1; uint32_t pad2 = 0;
+    float filterDepthTolerance = 0.05f; float filterNormalPower = 8.0f; uint32_t samplingMode = 1; uint32_t meshOpacity = 1;
+    uint32_t rawUavIndex = 0;   uint32_t rawIndex = 0;      uint32_t targetUavIndex = 0; uint32_t filterRadius = 4;
+    uint32_t filterEnabled = 1; uint32_t debugView = 0;     uint32_t accumIndex = 0;    uint32_t filterFirst = 1;
 };
-static_assert(sizeof(SkyVisConstants) == 3 * 64 + 5 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
+static_assert(sizeof(SkyVisConstants) == 3 * 64 + 7 * 16, "SkyVisConstants mirrors rt_sky_visibility_cs.hlsl");
 
 // Bindless scene slots of this pass (BindlessTable kScenePerFrame = 54): reflections own 0-12 and 46-49, the
 // debug view 13-16, the glass dispatch 17-25. Its own copies of the TLAS / GB1 / depth, because the
@@ -370,22 +374,16 @@ constexpr UINT kSkyVisSlotVelocity = 28;
 constexpr UINT kSkyVisSlotTlas = 29;
 constexpr UINT kSkyVisSlotGb1 = 30;
 constexpr UINT kSkyVisSlotDepth = 31;
-// The spatial filter's (rt_sky_visibility_filter_cs.hlsl): the accumulation it reads, the target it writes. The GI
-// trace owns 32-39.
-constexpr UINT kSkyVisSlotFilterIn = 40;
-constexpr UINT kSkyVisSlotFilterOut = 41;
+// This frame's rays (skyVisRaw: CSTrace writes 52, CSAccumulate reads 40) and the target CSAccumulate writes (41).
+// The GI trace owns 32-39.
+constexpr UINT kSkyVisSlotRaw = 40;
+constexpr UINT kSkyVisSlotTarget = 41;
+constexpr UINT kSkyVisSlotRawUav = 52;
+// This frame's accumulation as an SRV: the A/B's CSFilterHistory gathers it (`skyVis.filterFirst:0`).
+constexpr UINT kSkyVisSlotAccum = 53;
 // The accumulated-frame counts (Lumen's NumFramesAccumulated): this frame's written, last frame's read.
 constexpr UINT kSkyVisSlotCountUav = 50;
 constexpr UINT kSkyVisSlotCountHistory = 51;
-
-// Mirrors `cbuffer SkyVisibilityFilter` in rt_sky_visibility_filter_cs.hlsl.
-struct SkyVisFilterConstants
-{
-    uint32_t accumIndex = 0;  uint32_t outUavIndex = 0;  uint32_t gb1Index = 0;       uint32_t filterEnabled = 1;
-    uint32_t outWidth = 0;    uint32_t outHeight = 0;    float depthTolerance = 0.05f; float normalPower = 8.0f;
-    uint32_t debugView = 0;   uint32_t radius = 4;       uint32_t pad[2] = { 0, 0 };
-};
-static_assert(sizeof(SkyVisFilterConstants) == 3 * 16, "SkyVisFilterConstants mirrors rt_sky_visibility_filter_cs.hlsl");
 } // namespace
 
 Math::float4 SceneRenderer::SkyVisShaderParams() const
@@ -408,18 +406,22 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
         renderer->EmitPoint(t.cl, chain.point); // inputs -> NPS, the target -> UAV
 
         auto material = resources_.GetSkyVisMaterial();
-        auto filterMaterial = resources_.GetSkyVisFilterMaterial();
+        auto accumulateMaterial = resources_.GetSkyVisAccumulateMaterial();
+        auto filterHistoryMaterial = resources_.GetSkyVisFilterHistoryMaterial();
         const UINT frameIndex = renderer->GetCurrentFrameIndex();
         const D3D12_CPU_DESCRIPTOR_HANDLE tlasSrv = rtAs_.Manager().TlasSrvCpu(frameIndex);
-        const bool traceable = material && filterMaterial && rtAs_.Bindless().FrameReady(frameIndex) && tlasSrv.ptr != 0 &&
+        const bool traceable = material && accumulateMaterial && filterHistoryMaterial && rtAs_.Bindless().FrameReady(frameIndex) && tlasSrv.ptr != 0 &&
                                rtAs_.Manager().TlasInstanceCount(frameIndex) != 0;
         if (traceable)
         {
-            // The trace writes the ACCUMULATION and blends in last frame's; the filter below makes the target.
+            // The trace writes this frame's rays; the accumulate dispatch filters them in space, blends them into last
+            // frame's accumulation and writes the new one and the target.
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotRawUav, D.skyVisRawUAV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotRaw, D.skyVisRawSRV);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotUav, D.skyVisAccumUAV);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotHistory, P.skyVisAccumSRV);
-            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotFilterIn, D.skyVisAccumSRV);
-            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotFilterOut, D.skyVisUAV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotTarget, D.skyVisUAV);
+            rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotAccum, D.skyVisAccumSRV);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotVelocity, D.gbSRV[3]);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotTlas, tlasSrv);
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kSkyVisSlotGb1, D.gbSRV[1]);
@@ -437,7 +439,11 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.gb1Index = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotGb1);
             c.depthIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotDepth);
             c.velocityIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotVelocity);
-            c.outUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotUav);
+            c.accumUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotUav);
+            c.rawUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotRawUav);
+            c.rawIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotRaw);
+            c.targetUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotTarget);
+            c.accumIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotAccum);
             c.historyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotHistory);
             c.countUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotCountUav);
             c.countHistoryIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotCountHistory);
@@ -447,13 +453,18 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.rayCount = std::clamp(s.skyVisRays, 1u, 16u);
             c.frameIndex = chain.frameIndex;
             c.maxDistance = std::max(s.skyVisMaxDistance, 0.5f);
-            c.historyWeight = std::clamp(s.skyVisHistory, 0.0f, 0.98f);
+            c.historyWeight = std::clamp(s.skyVisHistory, 0.0f, 0.995f);
             c.historyValid = chain.historyValid ? 1u : 0u;
-            // A texel without history is seeded from the neighbours the spatial filter would call the same surface.
+            // A texel without history is seeded from the neighbours the spatial step would call the same surface.
             c.seedEnabled = s.skyVisSeed ? 1u : 0u;
-            c.seedDepthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
-            c.seedNormalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
+            c.filterEnabled = s.skyVisFilter ? 1u : 0u;
+            c.filterDepthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
+            c.filterNormalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
+            c.filterRadius = std::clamp(s.skyVisFilterRadius, 1u, 4u);
+            c.debugView = std::min(s.skyVisDebug, 1u);
+            c.filterFirst = s.skyVisFilterFirst ? 1u : 0u;
             c.samplingMode = s.skyVisSampling;
+            c.meshOpacity = s.rtMeshOpacity ? 1u : 0u;
 
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisConstants), render::kConstantBufferAlignment);
             std::memcpy(cb.cpu, &c, sizeof(c));
@@ -466,24 +477,20 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
             t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
 
-            renderer->EmitPoint(t.cl, chain.pointFilter); // the accumulation -> NON_PIXEL, the target -> UAV
-            SkyVisFilterConstants fc{};
-            fc.accumIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotFilterIn);
-            fc.outUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotFilterOut);
-            fc.gb1Index = c.gb1Index;
-            fc.filterEnabled = s.skyVisFilter ? 1u : 0u;
-            fc.outWidth = c.outWidth;
-            fc.outHeight = c.outHeight;
-            fc.depthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
-            fc.normalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
-            fc.debugView = std::min(s.skyVisDebug, 1u);
-            fc.radius = std::clamp(s.skyVisFilterRadius, 1u, 4u);
-            auto fcb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisFilterConstants), render::kConstantBufferAlignment);
-            std::memcpy(fcb.cpu, &fc, sizeof(fc));
-            t.cl->SetComputeRootSignature(filterMaterial->GetRootSignature());
-            t.cl->SetPipelineState(filterMaterial->GetPipelineState());
-            t.cl->SetComputeRootConstantBufferView(0, fcb.gpu);
-            t.cl->Dispatch((fc.outWidth + 7u) / 8u, (fc.outHeight + 7u) / 8u, 1);
+            renderer->EmitPoint(t.cl, chain.pointFilter); // this frame's rays -> NON_PIXEL
+            t.cl->SetComputeRootSignature(accumulateMaterial->GetRootSignature());
+            t.cl->SetPipelineState(accumulateMaterial->GetPipelineState());
+            t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+            t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            renderer->EmitPoint(t.cl, chain.pointAccum); // the accumulation and its counts -> NON_PIXEL
+            if (!s.skyVisFilterFirst)
+            {
+                // The A/B: the filter after the history, over the accumulation (the order before 2026-10-27).
+                t.cl->SetComputeRootSignature(filterHistoryMaterial->GetRootSignature());
+                t.cl->SetPipelineState(filterHistoryMaterial->GetPipelineState());
+                t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
+                t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            }
             renderer->BindDescriptorHeaps(t.cl);
         }
         else
@@ -498,7 +505,8 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             t.cl->ClearUnorderedAccessViewFloat(accumGpu, D.skyVisAccumUAV, D.skyVisAccum.Get(), zero, 0, nullptr);
             const D3D12_GPU_DESCRIPTOR_HANDLE countGpu = renderer->StageSrvUavTable({ D.skyVisCountUAV }).gpu;
             t.cl->ClearUnorderedAccessViewFloat(countGpu, D.skyVisCountUAV, D.skyVisCount.Get(), zero, 0, nullptr);
-            renderer->EmitPoint(t.cl, chain.pointFilter); // the accumulation -> NON_PIXEL, the target -> UAV
+            renderer->EmitPoint(t.cl, chain.pointFilter); // this frame's rays -> NON_PIXEL (none traced)
+            renderer->EmitPoint(t.cl, chain.pointAccum); // the cleared accumulation and counts -> NON_PIXEL
             const D3D12_GPU_DESCRIPTOR_HANDLE gpu = renderer->StageSrvUavTable({ D.skyVisUAV }).gpu;
             t.cl->ClearUnorderedAccessViewFloat(gpu, D.skyVisUAV, D.skyVis.Get(), zero, 0, nullptr);
         }

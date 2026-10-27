@@ -27,7 +27,8 @@ static const uint kDdgiMaskShadow = 0x02u; // rt::kInstanceMaskShadow: what cast
 // The albedo is read a few mips down: a probe averages over a sphere, and a mip-0 texel per ray is noise.
 static const float kDdgiAlbedoMip = 3.0f;
 
-// rt_sky_visibility_cs.hlsl SkyRayBlocked: anything in the way, a leaf card solid (rt_geometry.hlsli RtVisibilityBlocked).
+// rt_sky_visibility_cs.hlsl SkyRayBlocked: anything in the way, a cutout (a leaf card) at its mesh's opacity
+// (rt_geometry.hlsli RtVisibilityBlocked).
 bool DdgiOccluded(RaytracingAccelerationStructure tlas, float3 origin, float3 dir, float maxDistance)
 {
     RayDesc ray;
@@ -35,7 +36,7 @@ bool DdgiOccluded(RaytracingAccelerationStructure tlas, float3 origin, float3 di
     ray.Direction = dir;
     ray.TMin = 1.0e-3f;
     ray.TMax = maxDistance;
-    return RtVisibilityBlocked(tlas, ray, kDdgiMaskShadow);
+    return RtVisibilityBlocked(tlas, ray, kDdgiMaskShadow, meshOpacity != 0u);
 }
 
 [numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + the 64 blended
@@ -68,10 +69,21 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     ray.Direction = dir;
     ray.TMin = 0.0f;
     ray.TMax = volumeParams.z;
-    // The closest GEOMETRY, a leaf card solid: no RT ray but the reflections' alpha-tests (rt_geometry.hlsli).
-    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
-    q.Proceed();
+    // The closest GEOMETRY, no alpha test (that is the reflections' alone, rt_geometry.hlsli): of a cutout only the
+    // share of its triangles its mesh's opacity says blocks (RtCutoutCandidateBlocks) -- the closest of those, whatever
+    // the traversal's order. A mesh that says nothing: every card solid.
+    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, meshOpacity == 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
+    [loop]
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            RtCutoutCandidateBlocks(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateInstanceID(),
+                                    q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()))
+        {
+            q.CommitNonOpaqueTriangleHit();
+        }
+    }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
     {
         rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, 1.0e4f); // nothing in reach: no bounce from here
@@ -88,10 +100,14 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     const float3 nObj = LoadNormal(vb, tri.x, g.vertexStride) * bw + LoadNormal(vb, tri.y, g.vertexStride) * bary.x +
                         LoadNormal(vb, tri.z, g.vertexStride) * bary.y;
     float3 N = normalize(mul((float3x3)q.CommittedObjectToWorld3x4(), nObj));
-    // A masked surface (a leaf card) is two-sided; anything else seen from behind is the inside of a solid.
+    // A masked surface (a leaf card) or a two-sided material (the tent's fabric, glTF doubleSided) shows its other face
+    // from behind; anything else seen from behind is the inside of a solid. The two-sided material was read as a solid:
+    // a probe inside the tent saw the fabric's back faces all round, counted itself inside geometry, and was switched
+    // off or relocated OUT through the fabric -- the tent's floor then took the sunlit outside's bounce in 0.5 m cells,
+    // the owner's "squares inside the tent" (2026-10-27).
     if (dot(N, dir) > 0.0f)
     {
-        if (g.alphaCutoff < 0.0f)
+        if (g.alphaCutoff < 0.0f && ((g.flags & kGeomFlagTwoSided) == 0u || twoSidedSheets == 0u))
         {
             rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, -0.2f * t);
             return;

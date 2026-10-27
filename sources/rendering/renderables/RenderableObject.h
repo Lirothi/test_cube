@@ -275,6 +275,12 @@ public:
     // casts (the ocean, particles: their CastsShadow() override is false with the switch left on). Such an object
     // keeps its shadow PSOs and its place in the GPU-driven table (ShadowGpuData::IsCaster) so the switch can go back.
     bool ShadowSwitchedOff() const { return !castsShadow_; }
+    // The share of this mesh's cutout triangles (alpha-tested slots: a leaf card, a frond) that block the VISIBILITY
+    // rays -- the sky visibility, the GI's probe/shadow/sky rays, the fog's sky and sun (rt_geometry.hlsli
+    // RtVisibilityBlocked). The asset's mesh.json "rtCutoutOpacity" (the palms 0.8); absent = 1, every card solid.
+    // Opaque geometry always blocks. Rides the TLAS instance (RtSceneAs).
+    void SetRtCutoutOpacity(float v) { rtCutoutOpacity_ = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+    float RtCutoutOpacity() const { return rtCutoutOpacity_; }
 
     // Draw identity (no MaterialData at this tier; GBufferRenderable adds textures).
     RenderBatchKey BatchKey() const override { return RenderBatchKey{ mesh_.get(), graphicsMaterial_.get(), nullptr }; }
@@ -322,6 +328,7 @@ protected:
     void MarkTransformDirty();
 
     bool castsShadow_ = true; // see SetCastsShadow
+    float rtCutoutOpacity_ = 1.0f; // see SetRtCutoutOpacity
 
     template<typename T>
     bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)

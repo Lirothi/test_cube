@@ -1147,7 +1147,8 @@ public:
     // Gather-then-shade split of the opaque RT reflection (async prep); null on non-RT HW.
     std::shared_ptr<Material> GetRtTraceMaterial() const { return matRtTrace_; }
     std::shared_ptr<Material> GetSkyVisMaterial() const { return matSkyVis_; } // plan S
-    std::shared_ptr<Material> GetSkyVisFilterMaterial() const { return matSkyVisFilter_; }
+    std::shared_ptr<Material> GetSkyVisAccumulateMaterial() const { return matSkyVisAccumulate_; }
+    std::shared_ptr<Material> GetSkyVisFilterHistoryMaterial() const { return matSkyVisFilterHistory_; }
     std::shared_ptr<Material> GetRtResolveMaterial() const { return matRtResolve_; }
     std::shared_ptr<Material> GetGlassReflPrepassMaterial() const { return matGlassReflPrepass_; } // S15b, null on non-RT HW
 #if WITH_EDITOR
@@ -1256,7 +1257,8 @@ private:
     std::shared_ptr<Material> matReflectionPyramid_; // reflection_pyramid_cs.hlsl
     std::shared_ptr<Material> matReflectionGlossy_;  // reflection_glossy_cs.hlsl
     std::shared_ptr<Material> matSkyVis_;    // plan S: rt_sky_visibility_cs.hlsl
-    std::shared_ptr<Material> matSkyVisFilter_; // ...its spatial filter, rt_sky_visibility_filter_cs.hlsl
+    std::shared_ptr<Material> matSkyVisAccumulate_; // ...its spatial step + history, the same file's CSAccumulate
+    std::shared_ptr<Material> matSkyVisFilterHistory_; // ...the A/B's filter after the history, CSFilterHistory
     std::shared_ptr<Material> matRtResolve_; // shade phase (the only RT consumer of lightT)
     std::shared_ptr<Material> matRtWindDeform_; // RW wind deform for dynamic BLASes  // S7 Tier-1 RT reflections (RayQuery cs_6_5); only on RT HW
     std::shared_ptr<Material> matGlassReflPrepass_; // S15b glass refl G-buffer prepass; only on RT HW

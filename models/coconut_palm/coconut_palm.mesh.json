@@ -28,6 +28,7 @@
     3,
     4
   ],
+  "rtCutoutOpacity": 0.20000000298023224,
   "source": "import_staging\\coconut_palm\\scene.gltf",
   "texOffsScale": [
     0.0,

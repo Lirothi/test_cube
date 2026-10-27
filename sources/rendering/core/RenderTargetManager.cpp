@@ -496,7 +496,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             DeferredSrvSlot::SkyVis, DeferredSrvSlot::SkyVisUAV, f,
             D.skyVis, D.skyVisSRV, D.skyVisUAV,
             sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibility");
-        // ...its temporal accumulation, before the spatial filter (the history the next frame reads).
+        // ...its temporal accumulation of spatially filtered frames (the history the next frame reads).
         CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, render::kSkyVisFormat,
             DeferredSrvSlot::SkyVisAccum, DeferredSrvSlot::SkyVisAccumUAV, f,
             D.skyVisAccum, D.skyVisAccumSRV, D.skyVisAccumUAV,
@@ -506,6 +506,11 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             DeferredSrvSlot::SkyVisCount, DeferredSrvSlot::SkyVisCountUAV, f,
             D.skyVisCount, D.skyVisCountSRV, D.skyVisCountUAV,
             sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibilityCount");
+        // ...and this frame's rays alone, before the spatial step and the history (CSTrace -> CSAccumulate).
+        CreateSrvUavTexture(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, render::kSkyVisFormat,
+            DeferredSrvSlot::SkyVisRaw, DeferredSrvSlot::SkyVisRawUAV, f,
+            D.skyVisRaw, D.skyVisRawSRV, D.skyVisRawUAV,
+            sizes.gtaoWidth, sizes.gtaoHeight, MemTag::Ao, L"SkyVisibilityRaw");
 
         // The upsampled result is at RENDER resolution: it is consumed by lighting and compose,
         // which run before the upscaler.
@@ -951,6 +956,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
         nameRes(D.skyVis.Get(), L"SkyVisibility", kNps);
         nameRes(D.skyVisAccum.Get(), L"SkyVisibilityAccum", kNps);
         nameRes(D.skyVisCount.Get(), L"SkyVisibilityCount", kNps);
+        nameRes(D.skyVisRaw.Get(), L"SkyVisibilityRaw", kNps);
         // The bloom's convolution grids: ONE set since the 2026-10-22 census, named where they are created.
         nameRes(D.lensFlare.Get(), L"LensFlareAccum", kNps);
         nameRes(D.streakA.Get(), L"StreakPyramidA", kNps);

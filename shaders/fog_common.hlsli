@@ -21,7 +21,7 @@ cbuffer FogCB : register(reg) \
     float3 fogGridZParams;      /* (B, O, S) */ \
     float  fogNearFadeInInv;    /* 1 / near fade-in distance (UE VolumetricFogNearFadeInDistanceInv) */ \
     uint3  fogGridSize;         /* cells: (W, H, Z) */ \
-    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on, bit 4 distant sky ambient, bit 5 samples kept in front of the depth */ \
+    uint   fogFlags;            /* bit 0 history valid, bit 1 jitter on, bit 2 conservative depth, bit 3 temporal on, bit 4 distant sky ambient, bit 5 samples kept in front of the depth, bit 6 SDSM air outside every partition traces the sun */ \
     float4x4 fogInvViewProjNoJitter;   /* clip -> world, this frame's UNJITTERED camera */ \
     float4x4 fogPrevViewProjNoJitter;  /* world -> clip, last frame's unjittered camera (history UV) */ \
     float4 fogProjZ;            /* (proj._33, proj._43, proj._34, proj._44): view z -> device z */ \
@@ -33,7 +33,7 @@ cbuffer FogCB : register(reg) \
     uint4  fogLocal;            /* x: spot count, y: point count, z: local shadows from the VSM pages (else the Legacy atlases), w: sky visibility rays (0 = the open sky) */ \
     float4 fogLocalParams;      /* x: local light scatter intensity, y: 1/spot atlas size, z: 1/point cube face size, w: VSM refDist */ \
     float4 fogLocalParams2;     /* x: cone soft fading (froxels), y: inverse-square distance bias scale (cell radii), z: sky visibility reach (m), w: 0 */ \
-    float4 fogDepthParams;      /* the samples' depth constraint, in slices: x the offset in front of the depth (UE GridCenterOffsetFromDepthBuffer), y how far behind it a sample is still moved (UE OffsetThresholdToAcceptDepthBufferOffset), zw 0 */ \
+    float4 fogDepthParams;      /* the samples' depth constraint, in slices: x the offset in front of the depth (UE GridCenterOffsetFromDepthBuffer), y how far behind it a sample is still moved (UE OffsetThresholdToAcceptDepthBufferOffset), z 1 = the RT rays take a cutout at its mesh's opacity (rt.meshOpacity; 0 = solid cards), w 0 */ \
 };
 
 // UE ComputeZSliceFromDepth / ComputeDepthFromZSlice.

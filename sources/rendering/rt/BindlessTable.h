@@ -54,6 +54,10 @@ struct GeometryInfoGPU
 };
 
 inline constexpr uint32_t kGeomFlagNoScreenReuse = 1u;
+// bit1 = the slot's material renders BOTH faces (MaterialData::doubleSided: `twoSided` or foliage). Material-owned,
+// set by GetOrUpdateMesh. A ray that meets such a surface from behind met its other face, not the inside of a solid
+// (ddgi_trace_cs.hlsl's probe classification).
+inline constexpr uint32_t kGeomFlagTwoSided = 2u;
 
 // Persistent bindless table (S9): a single shader-visible CBV_SRV_UAV heap that
 // RT shaders index directly via SM6.6 ResourceDescriptorHeap[] (needs
@@ -70,7 +74,7 @@ public:
     static constexpr UINT kScenePerFrame = 54; // per-frame scene descriptors, partitioned
                                                // across the RT passes (reflections 0-12,
                                                // debug 13-16, glass refl 17-25, sky
-                                               // visibility 26-31 + 40-41 + 50-51, GI probe
+                                               // visibility 26-31 + 40-41 + 50-53, GI probe
                                                // trace 32-39 + 42-45, the reflections' sky
                                                // payload / sky visibility 46-49)
                                                // so passes in the same frame never alias slots
@@ -109,6 +113,9 @@ public:
         // retires the copied set instead of serving a copy of a released resource.
         uint32_t albedoGen = 0;
         uint32_t mrGen = 0;
+        // The material renders both faces (MaterialData::doubleSided) -> kGeomFlagTwoSided. Last, so the positional
+        // initialisers above keep their meaning.
+        bool twoSided = false;
     };
 
     // One stable, contiguous record run per owner + mesh (InstanceID + GeometryIndex).

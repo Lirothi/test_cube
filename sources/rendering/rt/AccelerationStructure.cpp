@@ -442,7 +442,7 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         d.Transform[2][2] = w.m[2][2]; d.Transform[2][3] = w.m[3][2];
         d.InstanceID = e.instanceId & 0xFFFFFFu;
         d.InstanceMask = e.mask & 0xFFu;
-        d.InstanceContributionToHitGroupIndex = e.instanceId & 0xFFFFFFu;
+        d.InstanceContributionToHitGroupIndex = e.cutoutTransparency & 0xFFu; // no hit groups: the cutout's transparency
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
         if (e.blasOverride != 0) {
             // RW: this instance's wind-deformed BLAS, already built earlier in this command list.

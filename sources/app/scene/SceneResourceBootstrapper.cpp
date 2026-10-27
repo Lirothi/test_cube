@@ -871,21 +871,29 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         cd.csEntry = "CSMain";
         matRtTrace_ = mm->GetOrCreateCompute(renderer, cd);
     }
-    // Interior lighting plan S: the RT sky visibility (bent normal + its temporal accumulation).
+    // Interior lighting plan S: the RT sky visibility -- this frame's rays (CSTrace)...
     if (!matSkyVis_ && renderer->IsRaytracingSupported())
     {
         Material::ComputeDesc cd{};
         cd.shaderFile = L"shaders/rt_sky_visibility_cs.hlsl";
-        cd.csEntry = "CSMain";
+        cd.csEntry = "CSTrace";
         matSkyVis_ = mm->GetOrCreateCompute(renderer, cd);
     }
-    // ...and its spatial filter (the denoise's second half).
-    if (!matSkyVisFilter_ && renderer->IsRaytracingSupported())
+    // ...filtered in space and blended into the history (CSAccumulate, UE DFAO's order).
+    if (!matSkyVisAccumulate_ && renderer->IsRaytracingSupported())
     {
         Material::ComputeDesc cd{};
-        cd.shaderFile = L"shaders/rt_sky_visibility_filter_cs.hlsl";
-        cd.csEntry = "CSMain";
-        matSkyVisFilter_ = mm->GetOrCreateCompute(renderer, cd);
+        cd.shaderFile = L"shaders/rt_sky_visibility_cs.hlsl";
+        cd.csEntry = "CSAccumulate";
+        matSkyVisAccumulate_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    // ...and the A/B's filter over the accumulation (`skyVis.filterFirst:0`, the order before 2026-10-27).
+    if (!matSkyVisFilterHistory_ && renderer->IsRaytracingSupported())
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/rt_sky_visibility_cs.hlsl";
+        cd.csEntry = "CSFilterHistory";
+        matSkyVisFilterHistory_ = mm->GetOrCreateCompute(renderer, cd);
     }
     // The RT reflection's glossy filter: the reflection's mip pyramid and the GGX-lobe gather from it.
     if (!matReflectionPyramid_ && renderer->IsRaytracingSupported())

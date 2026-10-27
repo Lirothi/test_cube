@@ -1807,7 +1807,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "4 rays 0.14 ms, 8 rays 0.25 ms in a tunnel (0.3 / 0.63 ms on the grove). A surface\n"
                                       "that sees the sky through a small opening needs more of them, or it grains.");
                 GRAPHICS_CONTROL(SkyVisHistory, "skyVisHistory",
-                    ImGui::SliderFloat("History", &settings.skyVisHistory, 0.8f, 0.98f, "%.3f"));
+                    ImGui::SliderFloat("History", &settings.skyVisHistory, 0.8f, 0.995f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The weight of the reprojected past (default 0.98). Higher = calmer, but surfaces a\n"
                                       "moving camera uncovers take longer to settle. A tunnel floor at 4 rays: 8.6 %% frame\n"
@@ -1828,8 +1828,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 GRAPHICS_CONTROL(SkyVisFilter, "skyVisFilter",
                     ImGui::Checkbox("Spatial filter", &settings.skyVisFilter));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("UE DFAO's 5x5 depth- and normal-aware filter over the accumulation (default on).\n"
-                                      "Off = the accumulation as it is, grainier.");
+                    ImGui::SetTooltip("UE DFAO's depth- and normal-aware filter on each frame's rays, before the history\n"
+                                      "(default on; 9x9 half-resolution texels, skyVis.filterRadius).\n"
+                                      "Off = the rays accumulated as they are, grainier.");
                 {
                     int fogRays = static_cast<int>(std::min(settings.skyVisFogRays, 8u));
                     if (GRAPHICS_CONTROL(SkyVisFogRays, "skyVisFogRays", ImGui::SliderInt("Fog rays", &fogRays, 0, 8)))

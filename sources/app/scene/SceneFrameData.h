@@ -630,13 +630,26 @@ struct SceneRenderSettings
     // With the spatial filter below (2026-10-24): wind_test's second room at 24:00, a wall lit by its window's
     // moonlit sky, per-pixel temporal noise over 12 shots median 9.4 % -> 3.2 % at 0.95 (p90 18 -> 5.7 %); 0.97
     // 2.8 %, 0.97 with 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. scratchpad noise_map.py.
-    float skyVisHistory = 0.98f;
+    // 0.995 since 2026-10-27 (owner: "can you remove SkyVis's dancing" -- in his tent, cam 71.17 2.11 41.16, 15:00):
+    // with the frame-count blend a still texel's estimate drifts by 1 / (1 + frames) of a few rays a frame, and the
+    // 9x9 filter turns that into crawling blotches. The visibility alone (skyVis.debug:2), wind on, 60 consecutive
+    // frames, two runs each: the fabric's frame-to-frame std median 1.5 / 0.67 / 0.40 % at 0.98 / 0.99 / 0.995 (p90
+    // 3.1 / 1.45 / 0.98 %), the floor 1.4 / 0.64 / 0.33 %; 16 rays at 0.98 only 0.94-1.18 % for +0.1-0.27 ms. Free; a
+    // moving camera is unaffected (rejected texels count from zero), but a surface whose sky a MOVED object changes
+    // follows it over up to 199 frames instead of 49 (0.7 s at 280 fps, 3.3 s at 60).
+    float skyVisHistory = 0.995f;
     float skyVisDiffuse = 1.0f;
     float skyVisSpecular = 1.0f;
-    // The spatial half of the denoise (rt_sky_visibility_filter_cs.hlsl, UE DFAO's spatial filter): a 5x5
-    // half-resolution gather of the accumulation, a tap counting while its relative depth step is under
-    // `skyVisFilterDepth` and by its normal's agreement to the `skyVisFilterNormalPower`. Off = the accumulation.
+    // The spatial half of the denoise (rt_sky_visibility_cs.hlsl CSAccumulate, UE DFAO's spatial filter): a 9x9
+    // half-resolution gather of EACH FRAME'S rays before they enter the history, a tap counting while its relative
+    // depth step is under `skyVisFilterDepth` and by its normal's agreement to the `skyVisFilterNormalPower` (also the
+    // seed's weights). Off = the rays as they are, accumulated.
     bool skyVisFilter = true;
+    // ...on each frame's rays BEFORE the history (UE DFAO's order: UpdateHistoryDepthRejectionPS runs its
+    // GeometryAwareUpsample, then blends). false = the gather over the accumulation, after it -- the order before
+    // 2026-10-27, whose weights followed the DLSS jitter unaveraged (the tent's hem trembled), kept for the A/B
+    // (`--set skyVis.filterFirst:0`).
+    bool skyVisFilterFirst = true;
     float skyVisFilterDepth = 0.05f;
     float skyVisFilterNormalPower = 8.0f;
     // 1 = paint the texels that had no history this frame as the open sky (bright wherever the sky is shut out):
@@ -647,7 +660,7 @@ struct SceneRenderSettings
     // (rt_sky_visibility_cs.hlsl says what it measured).
     uint32_t skyVisSampling = 1u;
     // The spatial filter's reach in half-resolution texels (1-4; 2 = the 5x5 UE DFAO gathers), its Gaussian sigma
-    // 0.75 of it. 4 since 2026-10-26 (rt_sky_visibility_filter_cs.hlsl says what it measured).
+    // 0.75 of it. 4 since 2026-10-26 (rt_sky_visibility_cs.hlsl CSAccumulate says what it measured).
     uint32_t skyVisFilterRadius = 4u;
     // A texel without history is seeded from the neighbours that kept theirs (UE DFAO FilterHistoryPS). Off = it
     // starts from its own few rays, the behaviour before 2026-10-26 -- kept for the A/B (`--set skyVis.seed:0`).
@@ -656,6 +669,12 @@ struct SceneRenderSettings
     // sees (fog_scatter_cs.hlsl FogSkyVisibility, UE VolumetricFog.usf:713-735), `skyVisFogRays` per cell sample per
     // frame out to skyVisMaxDistance, averaged by the fog's own history. 0 = the open sky in the air, the frame before.
     uint32_t skyVisFogRays = 2u;
+    // The visibility rays -- the sky visibility, the GI's probe, shadow and sky rays, the fog's sky and sun -- take a
+    // cutout card (an alpha-tested slot: a leaf, a frond) at its MESH's opacity (mesh.json "rtCutoutOpacity", the palms
+    // 0.8; absent = solid): that share of its triangles blocks them, a fixed pick per triangle (rt_geometry.hlsli
+    // RtCutoutTriangleBlocks). false = every card solid, the frame before 2026-10-27 (`--set rt.meshOpacity:0`, the A/B).
+    // The reflections' alpha modes (rtAlphaMode) are theirs alone.
+    bool rtMeshOpacity = true;
     // The volumetric fog's samples less than a slice behind the surface their pixel sees are moved this many slices in
     // front of it (fog_scatter_cs.hlsl FogApplyDepthConstraint, UE r.VolumetricFog.GridCenterOffsetFromDepthBuffer 0.5);
     // < 0 = off, the cells straddling a wall then light the air in front of it with the air behind (`--set fog.depthOffset:-1`).
@@ -669,6 +688,11 @@ struct SceneRenderSettings
     // the palms and the sea, away from it, low in the grove): against the constraint off, 1 and 128 both move the mean
     // by <= 0.15 % and the changed pixels sit at the noise floor of the same shot twice (foliage under DLSS).
     float fogDepthThreshold = 128.0f;
+    // Under SDSM the air outside every partition box (in front of the nearest surface, beyond the farthest) traces the
+    // sun on the TLAS the fog's sky visibility binds (fog_scatter_cs.hlsl FogSunShadow) instead of falling through to
+    // "lit": SDSM's boxes hold the receivers, never the air -- a closed tent's air glowed with the sun through its roof.
+    // false = the frame before 2026-10-27, the A/B (`--set fog.sunRtFallback:0`).
+    bool fogSunRtFallback = true;
     // Interior lighting plan D: the GI probe volume (DDGI over RayQuery, rendering/lighting/DdgiVolume.h):
     // 32x16x32 probes `giSpacing` m apart around the camera, 1 / `giUpdateDivisor` of them tracing 64
     // rays a frame and blending them in with `giHysteresis`. They hold the BOUNCE only (a miss brings
@@ -688,6 +712,9 @@ struct SceneRenderSettings
     float giIntensity = 1.0f;
     float giRayDistance = 30.0f;
     bool giInfiniteBounce = true;
+    // A probe ray that meets a two-sided material (MaterialData::doubleSided) from behind met its other face, not the
+    // inside of a solid (ddgi_trace_cs.hlsl). 0 = every opaque back face is a solid's inside, the behaviour before.
+    bool giTwoSidedSheets = true;
     // The FAR cascade: a second volume of the same 32x16x32 probes, `giFarSpacing` m apart, around the
     // near one, so the bounce reaches past +-8 m (64 x 32 x 64 m at 2 m). Lighting takes the near cascade
     // where it is whole and blends to the far one over the near's outer 2 m. It updates 1 / giFarDivisor

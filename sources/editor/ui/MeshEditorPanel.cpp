@@ -1055,6 +1055,27 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawRestPoseSection();
     }
 
+    // Ray tracing: how much of a cutout card (an alpha-tested slot: a leaf, a frond) the VISIBILITY rays see -- the sky
+    // visibility, the GI, the fog (rt_geometry.hlsli RtVisibilityBlocked). Absent = 1, every card solid: a door or a
+    // curtain with an alpha test must block as a wall does. The palms take 0.8.
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Ray tracing"))
+    {
+        float opacity = doc_.value("rtCutoutOpacity", 1.0f);
+        if (ImGui::SliderFloat("Cutout opacity", &opacity, 0.0f, 1.0f, "%.2f"))
+        {
+            if (opacity >= 0.995f) { doc_.erase("rtCutoutOpacity"); } // absent == solid
+            else { doc_["rtCutoutOpacity"] = std::round(opacity * 100.0f) / 100.0f; }
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The share of this mesh's alpha-tested triangles (leaf cards, fronds) that block the sky\n"
+                              "visibility, GI and fog rays; the rest let them through, a fixed pick per triangle.\n"
+                              "1 = solid cards (the field is dropped from the file). Opaque geometry always blocks.\n"
+                              "Trees: 0.8. Applies to placed instances on Save.");
+        }
+    }
+
     // Texturing (separate from Wind above — unrelated knobs, and mixing them made the wind block
     // look like it owned the tiling).
     ImGui::Spacing();

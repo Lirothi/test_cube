@@ -32,8 +32,8 @@ struct DdgiConstants
     Math::float3 lightRgb;    float skyIrradianceScale = 1.0f;
     uint32_t tlasIndex = 0;   uint32_t geomInfoIndex = 0;   uint32_t rayUavIndex = 0;        uint32_t irradianceIndex = 0;
     uint32_t depthIndex = 0;  uint32_t stateIndex = 0;      uint32_t skyIrradianceIndex = 0; uint32_t spotLightIndex = 0;
-    uint32_t spotCount = 0;   uint32_t pointLightIndex = 0; uint32_t pointCount = 0;         uint32_t pad2 = 0;
-    uint32_t bounceOn = 0;    float skyRayDistance = 15.0f; uint32_t pad0 = 0;               uint32_t pad1 = 0;
+    uint32_t spotCount = 0;   uint32_t pointLightIndex = 0; uint32_t pointCount = 0;         uint32_t twoSidedSheets = 1;
+    uint32_t bounceOn = 0;    float skyRayDistance = 15.0f; uint32_t meshOpacity = 1;        uint32_t pad1 = 0;
 };
 static_assert(sizeof(DdgiConstants) == 64 + 9 * 16, "DdgiConstants mirrors ddgi_constants.hlsli");
 
@@ -241,6 +241,8 @@ void SceneRenderer::Pass_GiTrace(Renderer* renderer, RenderGraphPassContext ctx,
             c.pointCount = havePoints ? pointCount : 0u;
             // Each cascade feeds back into its own hits once a generation of it exists to read.
             c.bounceOn = (s.giInfiniteBounce && ddgi_[k].AppliedGeneration() == chain.frame[k].generation) ? 1u : 0u;
+            c.twoSidedSheets = s.giTwoSidedSheets ? 1u : 0u;
+            c.meshOpacity = s.rtMeshOpacity ? 1u : 0u;
             c.skyRayDistance = std::max(s.skyVisMaxDistance, 0.5f); // plan S's reach for the sky at a hit
 
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(DdgiConstants), render::kConstantBufferAlignment);

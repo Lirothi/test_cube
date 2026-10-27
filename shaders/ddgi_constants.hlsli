@@ -14,8 +14,8 @@ cbuffer DdgiConstants : register(b0)
     float3 lightRgb;  float skyIrradianceScale;
     uint tlasIndex;   uint geomInfoIndex;    uint rayUavIndex;        uint irradianceIndex;
     uint depthIndex;  uint stateIndex;       uint skyIrradianceIndex; uint spotLightIndex;
-    uint spotCount;   uint pointLightIndex;  uint pointCount;         uint _ddgiPad2; // was the alpha mode: GI rays see solid cards
-    uint bounceOn;    float skyRayDistance;  uint _ddgiPad0;          uint _ddgiPad1;
+    uint spotCount;   uint pointLightIndex;  uint pointCount;         uint twoSidedSheets; // gi.twoSidedSheets: a two-sided material's back is its other face
+    uint bounceOn;    float skyRayDistance;  uint meshOpacity;        uint _ddgiPad1; // rt.meshOpacity: the meshes' cutout opacity
 }
 
 DdgiVolumeDesc DdgiVolumeFromConstants()

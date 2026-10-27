@@ -405,6 +405,12 @@ namespace SceneObjectFactory
         {
             mesh.SetCastsShadow(o["castShadow"].get<bool>());
         }
+        // How much of a cutout card the visibility rays see (RenderableObject::SetRtCutoutOpacity): the asset's mesh.json
+        // "rtCutoutOpacity", folded in by ResolveMeshAsset like every asset key; absent = solid.
+        if (o.contains("rtCutoutOpacity") && o["rtCutoutOpacity"].is_number())
+        {
+            mesh.SetRtCutoutOpacity(o["rtCutoutOpacity"].get<float>());
+        }
         // Buoyancy: "buoyant" is the per-OBJECT switch (the Inspector's checkbox, absent = off);
         // "buoyancy" says where and how it floats and normally comes from the asset's mesh.json,
         // folded in by ResolveMeshAsset like every other asset key. See ocean/BuoyancyLayout.h.

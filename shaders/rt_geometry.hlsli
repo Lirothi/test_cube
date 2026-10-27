@@ -20,7 +20,11 @@ struct GeometryInfo
     uint   flags;          // bit0 = raster image wind-sways while RT geometry is rest-pose:
                            // do NOT reuse the on-screen colour for hits on this record, or the
                            // reflected image slides inside a static silhouette (re-shade instead)
+                           // bit1 = kGeomFlagTwoSided: the material renders both faces
 };
+
+// rt::kGeomFlagTwoSided (BindlessTable.h): a hit on the back of such a surface is its other face, not the inside of a solid.
+static const uint kGeomFlagTwoSided = 2u;
 
 // B3: records are per (instance, submesh) — the BLAS carries one geometry per submesh, so the
 // record index is InstanceID (the mesh's FIRST record) + the committed GeometryIndex, and
@@ -116,6 +120,57 @@ bool RtVisibilityBlocked(RaytracingAccelerationStructure tlas, RayDesc ray, uint
     RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, ray);
     q.Proceed();
+    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+}
+
+// A cutout (an alpha-tested slot -- a leaf card, a frond) as a PARTLY transparent layer for the visibility rays, at
+// the opacity of the MESH it belongs to: mesh.json "rtCutoutOpacity" (absent = 1, every card solid; the palms 0.8),
+// carried by its TLAS instance as 255 x (1 - opacity) in InstanceContributionToHitGroupIndex -- inline RayQuery has no
+// hit groups (RtSceneAs, AccelerationStructure.cpp). Opaque geometry always blocks; so does every cutout of a mesh
+// that does not say otherwise -- the bathroom's door, curtains and window wall are alpha-tested too, and one global
+// 0.8 (the first version, 2026-10-27) let a fifth of the sky through them (owner: "walls must block fully").
+// Why (owner: "make the leaves partly transparent for RT rays -- UE has the like"): as solid cards a palm crown shut
+// out far more sky and sun than its fronds do (they cut 35-68 % of their cards away): the sand under the crowns lay in
+// full GI shade, a leaf's underside saw no sky through the leaves above. A FIXED share `opacity` of the mesh's cutout
+// triangles blocks, the rest lets every ray through: picked by hashing the triangle's own ids, so the answer depends
+// neither on the traversal's order (what the first-found alpha test got wrong, above) nor on the frame. A roll per ray
+// and frame (tried first) averages to the same occlusion but is noise every history has to average: the GI's probes
+// behind the tent's wall walked +-1-2 % in metre-sized blotches (wind frozen, p90 1.5 -> 1.8-2.6 %; GI off: no
+// difference). No texture fetch: the card's own alpha is the reflections' business (mode 2 cost the grove's SkyVis
+// 2.0 ms).
+bool RtCutoutTriangleBlocks(uint instanceId, uint geometryIndex, uint primitiveIndex, float cutoutOpacity)
+{
+    const uint h = RtWangHash((primitiveIndex * 9781u) ^ (geometryIndex * 6271u) ^ (instanceId * 2654435761u));
+    return float(h & 0xFFFFFFu) * (1.0f / 16777216.0f) < cutoutOpacity;
+}
+
+// A non-opaque candidate's verdict: `packed` = its instance's InstanceContributionToHitGroupIndex (0 = a solid mesh).
+bool RtCutoutCandidateBlocks(uint packed, uint instanceId, uint geometryIndex, uint primitiveIndex)
+{
+    const uint transparency = packed & 0xFFu;
+    return transparency == 0u ||
+           RtCutoutTriangleBlocks(instanceId, geometryIndex, primitiveIndex, 1.0f - float(transparency) * (1.0f / 255.0f));
+}
+
+// `meshOpacity` false (`rt.meshOpacity:0`, the A/B) = every card solid, the fast path above.
+bool RtVisibilityBlocked(RaytracingAccelerationStructure tlas, RayDesc ray, uint instanceMask, bool meshOpacity)
+{
+    if (!meshOpacity)
+    {
+        return RtVisibilityBlocked(tlas, ray, instanceMask);
+    }
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, ray);
+    [loop]
+    while (q.Proceed())
+    {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
+            RtCutoutCandidateBlocks(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateInstanceID(),
+                                    q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()))
+        {
+            q.CommitNonOpaqueTriangleHit(); // the first one blocks: ACCEPT_FIRST_HIT ends the search
+        }
+    }
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 

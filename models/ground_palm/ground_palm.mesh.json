@@ -2,6 +2,7 @@
   "bakeScale": 0.4924347698688507,
   "geometry": "models/ground_palm/ground_palm.mesh.bin",
   "material": "ground_palm_0",
+  "rtCutoutOpacity": 0.8,
   "source": "import_staging\\ground_palm\\scene.gltf",
   "texOffsScale": null,
   "uvDensity": [

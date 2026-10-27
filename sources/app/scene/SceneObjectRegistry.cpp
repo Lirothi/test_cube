@@ -161,6 +161,10 @@ SceneObjectRegistry::ObjectList CreateInstancedModels(SceneObjectRegistry::Creat
     {
         instances->SetCastsShadow(o["castShadow"].get<bool>());
     }
+    if (o.contains("rtCutoutOpacity") && o["rtCutoutOpacity"].is_number()) // as a static mesh's
+    {
+        instances->SetRtCutoutOpacity(o["rtCutoutOpacity"].get<float>());
+    }
     objects.push_back(std::move(instances));
     return objects;
 }

@@ -576,7 +576,10 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.localParams2 = float4(std::max(a.localSoftFading, 0.0f), std::max(a.localDistanceBias, 0.0f),
                                  std::max(frame_->settings.skyVisMaxDistance, 0.5f), 0.0f);
         fc.depthParams = float4(std::max(frame_->settings.fogDepthOffset, 0.0f), std::max(frame_->settings.fogDepthThreshold, 0.0f),
-                                0.0f, 0.0f);
+                                frame_->settings.rtMeshOpacity ? 1.0f : 0.0f, 0.0f);
+        // SDSM's boxes hold the surfaces, not the air before them: a cell outside every partition traces the sun on the
+        // TLAS the sky visibility already binds (fog_scatter_cs.hlsl FogSunShadow).
+        if (decisions_.sdsmActive && fogTracesSky && frame_->settings.fogSunRtFallback) { fc.flags |= 64u; }
         // Row-vector convention (mul(v, M)): clip.z = z * _33 + _43, clip.w = z * _34 + _44.
         const mat4& projNoJitter = camera.GetProjMatrixNoJitter();
         fc.projZ = float4(projNoJitter.m._33, projNoJitter.m._43, projNoJitter.m._34, projNoJitter.m._44);

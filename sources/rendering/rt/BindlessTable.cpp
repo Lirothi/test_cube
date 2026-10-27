@@ -237,7 +237,8 @@ uint32_t BindlessTable::GetOrUpdateMesh(const void* owner, Mesh* mesh,
         rec.alphaCutoff = (rec.albedoTexIndex != 0xFFFFFFFFu) ? sm.alphaCutoff : -1.0f;
 
         GeometryInfoGPU& current = geomInfo_[base + s];
-        rec.flags = current.flags; // owned by the RW reuse-deny pass, not by material state
+        // bit0 is the RW reuse-deny pass's, not material state; bit1 (two-sided) is the material's.
+        rec.flags = (current.flags & kGeomFlagNoScreenReuse) | (sm.twoSided ? kGeomFlagTwoSided : 0u);
         if (std::memcmp(&current, &rec, sizeof(rec)) != 0) {
             current = rec;
             changed = true;

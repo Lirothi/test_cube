@@ -687,12 +687,13 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
 
 `Main_SkyVis` (`shaders/rt_sky_visibility_cs.hlsl`) is UE's Distance Field AO bent normal traced with inline
 RayQuery on the TLAS: half resolution, `skyVis.rays` (8) cosine rays per pixel against the SHADOW casters' geometry
-(a leaf card solid, below), out to `skyVis.maxDistance` (15 m), accumulated over frames in the same dispatch
-(`skyVis.history` 0.98, reprojected through the G-buffer velocity) into `skyVisAccum`, then filtered in space by
-`shaders/rt_sky_visibility_filter_cs.hlsl` (UE DFAO's spatial filter: a 5x5 half-resolution gather weighted by
-relative depth `skyVis.filterDepth` 0.05 and normal agreement^`skyVis.filterNormalPower` 8; `skyVis.filter:0` = the
-accumulation as it is) into `skyVis`, the target every consumer reads. The history is the UNFILTERED accumulation
-(SVGF's rule: a filtered history widens the blur every frame). Its length is how much sky a point sees, its
+(a cutout at its mesh's opacity, below), out to `skyVis.maxDistance` (15 m). Two entry points, in UE DFAO's order
+(since 2026-10-27, below): `CSTrace` writes this frame's rays alone into `skyVisRaw`; `CSAccumulate` filters THEM in
+space (UE DFAO's spatial filter: a 9x9 half-resolution gather weighted by relative depth `skyVis.filterDepth` 0.05 and
+normal agreement^`skyVis.filterNormalPower` 8; `skyVis.filter:0` = the rays as they are) and only then blends the
+result into the history (`skyVis.history` 0.995, reprojected through the G-buffer velocity) -> `skyVisAccum` (next
+frame's history) and `skyVis`, the target every consumer reads. Only each frame's NEW value is filtered, never the
+history (a filtered history widens the blur every frame). Its length is how much sky a point sees, its
 direction where from. `shaders/sky_visibility.hlsli` applies it with UE's formulas, file and line cited there:
 the sky diffuse takes min() with the AO (UE's Minimum combine) and a bent lookup normal, the sky specular a cone-cone
 occlusion -- in lighting_cs AND compose_cs, the same line, because compose subtracts the sky specular lighting
@@ -707,11 +708,11 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   the sky from a few of its rays now and then. wind_test's second room at 24:00 (cam -21.92,1.07,89.75), per-pixel
   temporal std over 12 clean shots (scratchpad noise_map.py): 0.9 and no filter 9.4 % median (p90 18 %), 0.95 +
   the filter 3.2 % (5.7 %), 0.97 2.8 %, 0.97 + 8 rays 2.5 % (+0.075 ms); SkyVis off 0.35 %. Bindless slots 40-41
-  are the filter's.
+  and 52-53 are the second dispatch's (this frame's rays, the target; the rays' UAV, the A/B's accumulation SRV).
 - 8 rays and 0.98 are the defaults since 2026-10-26 (owner's tunnel of boxes, cam -58.63,1.72,65.12 at 15:00, whose
   floor sees the sky only through the mouth; per-pixel temporal std over 16 shots, scratchpad tunnel_variants.py):
   4 rays / 0.95 8.6 % median (p90 12.3 %), 8 rays 5.6 %, 0.98 5.2 %, both 3.5 % (5.1 %); SkyVis off 0.2 %.
-  Pass_SkyVis 0.14 -> 0.25 ms there. 0.98 is also the top of the history's range (`--set`, the settings file).
+  Pass_SkyVis 0.14 -> 0.25 ms there. **0.995 since 2026-10-27** (below, "Dancing"); the range tops out there.
 - **A texel without history is SEEDED** (UE DFAO `FilterHistoryPS`, DistanceFieldLightingPost.usf:297-361; 2026-10-26,
   owner: "flying backwards down the tunnel, noise artifacts"): disoccluded or come in over the screen's edge, it takes
   `lerp(own rays, mean of the neighbours within 4 texels that kept their history, skyVis.history)` -- each neighbour's
@@ -725,7 +726,8 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   their history this frame as the open sky (the accumulation's .w is negative there, UE's sign bit -- the target's
   stays positive). A wholly new region (no neighbour kept anything) still starts from its own rays, as in UE.
 - **No RT ray but a reflection's alpha-tests** (owner, 2026-10-26): this pass, the GI (probe rays and their
-  shadow/sky rays) and the shadow rays of what a reflection hits see the GEOMETRY, a leaf card solid --
+  shadow/sky rays) and the shadow rays of what a reflection hits see the GEOMETRY, a leaf card solid (thinned since
+  2026-10-27, next bullet) --
   `rt_geometry.hlsli RtVisibilityBlocked` (FORCE_OPAQUE + ACCEPT_FIRST_HIT_AND_END_SEARCH) and ddgi_trace's
   FORCE_OPAQUE closest hit. `rt.alphaMode` / Reflections "RT foliage alpha" is the reflection rays' alone. Why
   (owner: "SkyVis dances inside the house"): they followed the reflections' mode, and its mode 1 alpha-tested the hit
@@ -737,6 +739,25 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   whatever the reflections' mode -- the old mode 1's own traversal. Tried first, dropped: the NEAREST hit's texel
   deciding (deterministic too, but +0.10 / +0.23 ms SkyVis and a ray through a wall behind a transparent texel), and
   closing that leak (1.49 / 1.94 ms on the grove); mode 2 throughout costs the grove's SkyVis 2.0 ms.
+- **A tree's cutouts let some of the visibility rays through: mesh.json `"rtCutoutOpacity"`** (2026-10-27, owner:
+  "make the leaves partly transparent for RT rays -- UE has the like -- at 0.8", then "a per-MESH setting, only the
+  trees; walls must block fully"). As solid cards a palm crown shut out far more sky and sun than its fronds do (they
+  cut 35-68 % of their cards away): the sand under the crowns lay in full GI shade, a leaf's underside saw no sky
+  through the leaves above. Every visibility ray -- this pass, the GI's probe, shadow and sky rays, the fog's sky and
+  sun rays -- takes that share of a cutout's triangles as blocking and the rest as open (`rt_geometry.hlsli
+  RtCutoutTriangleBlocks`: a hash of instance, geometry and primitive against the opacity; order-independent, no
+  texture fetch). The value is the ASSET's (`RenderableObject::SetRtCutoutOpacity`, folded in by ResolveMeshAsset like
+  every mesh.json key; Mesh Editor > Ray tracing > "Cutout opacity"); absent = 1, every card solid -- the five
+  `*_palm` assets say 0.8, fern and grass nothing. It rides the TLAS instance as 255 x (1 - opacity) in
+  `InstanceContributionToHitGroupIndex` (inline RayQuery has no hit groups; AccelerationStructure.cpp), so the fog,
+  which has no geometry records, reads it as the others do. Opaque geometry always blocks. The first version was ONE
+  global 0.8, and the bathroom's door, curtains, towels, carpets, cups and window wall are alpha-tested too (Sketchfab):
+  a fifth of the sky came through them. A roll per ray and frame (tried before the fixed pick) has the same mean but is
+  noise every history must average: the GI probes behind the tent's wall walked 1-2 % in metre-sized blotches. Pinned
+  exposure, `rt.meshOpacity` 0 vs 1: the bathroom (palms outside the window) 0.09 % of pixels move > 8 levels, the
+  grove +2.0 % (crowns +1.9, sand +2.2). Cost (editor closed, alternated x3, grove / tunnel / tent / bathroom):
+  SkyVis +0.01-0.03 ms, GI trace +0.01-0.03, far +0.01-0.02, fog scatter +0.01. `rt.meshOpacity:0` = every card
+  solid, the A/B. The reflections keep `rt.alphaMode`.
 - **In motion the history is read as UE and Lumen read theirs** (2026-10-26, owner: "SkyVis is very noisy and trails
   when the camera moves or turns fast"). Three things, each cited in `rt_sky_visibility_cs.hlsl SkyVisHistoryAt`:
   (1) the four texels around the reprojected point, bilinearly, each kept only if the point its own depth puts there
@@ -765,10 +786,37 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   UE's interleaved gradient noise rotates each texel's rays (`skyVis.sampling` 1; 0 = the old white noise), so the
   spatial filter averages rays that cover the hemisphere between each other: grain median 6.7 -> 4.7 %, flicker p90
   9.0 -> 5.9 %, free -- and WIDEN the spatial filter (`skyVis.filterRadius` 4 = 9x9 half-resolution, was UE's 5x5):
-  2.3 % / 3.5 %, +0.01-0.04 ms, the diagonal hatching in flight gone (filter header has the numbers). 16 rays alone:
+  2.3 % / 3.5 %, +0.01-0.04 ms, the diagonal hatching in flight gone (CSAccumulate's comment has the numbers). 16 rays alone:
   3.8 % for +0.12-0.27 ms. Tried and DROPPED: half the rays into a cone around the history's bent normal (Lumen-style
   guiding, balance-heuristic weights) -- grainier and, interleaved, 12 % darker. The means agree within 1 % across
   every kept arm. Not tried yet: screen-space probes with many rays each (Lumen's gather) -- a redesign.
+- **The spatial filter runs BEFORE the history: UE's order** (2026-10-27, owner: "what trembles here?" -- the tent's
+  fabric where it meets the floor, cam 71.17 2.11 41.16, 15:00). The fabric's fold (visibility 0: every ray into the
+  floor or the fabric over it) beside the wall's bright bottom trembled 4-7 % frame to frame, 0.03 levels with
+  `dlss.mode:0`: the filter ran AFTER the accumulation, weighted by this frame's G-buffer under each texel, which the
+  DLSS jitter moves across a crease every frame, and nothing averaged those weights. UE DFAO's
+  UpdateHistoryDepthRejectionPS runs its GeometryAwareUpsample on the NEW value and then blends
+  (DistanceFieldLightingPost.usf:161-240); `CSAccumulate` does the same with our gather. A/B in one launch (scratchpad
+  seam_bisect.py: the hem's 97th-percentile band as the mask, 32 consecutive frames, wind frozen, three pairs): the hem
+  4.5-6.5 % -> 0.94-1.02 %, the whole frame 0.3 % both. The tunnel's visibility grain (24 still frames, tunnel_burst.py):
+  2.27-2.33 % / p90 6.45-6.67 % -> 2.28 % / 6.67 %, the lit frame the same; in motion (motion_err.py, moving frame vs
+  its still retake) turning 90 degrees/s 1.95-2.00 / 1.94-2.02 mean |d|, flying 4 m/s 2.82-3.32 / 3.27-3.36 -- the same.
+  Pass_SkyVis 0.53-0.59 ms on the grove (the A/B's three dispatches 0.57-0.60), 0.30-0.31 in the tunnel.
+  `skyVis.filterFirst:0` = the filter after the history (a third dispatch, `CSFilterHistory`), the A/B. Tried first,
+  no help: UE GeometryAwareUpsample's normal weights in the lighting upsample, the tap's plane distance instead of the
+  depth step (the fold is coplanar with the floor), normal power 1-2, a ray origin on the eye's side of the normal;
+  `skyVis.filterDepth:0.01` calmed the hem and doubled the tunnel's grain. Also dropped: the IGN unshifted plus each
+  texel's R2 sequence in time (grain 3.7 % / p90 11.8 % with the gather first). `skyVis.filterNormalPower:0` was NaN
+  (pow(0, 0)) -- guarded. `skyVis.debug:1` (and :2, which sets it too) paints texels without history as the open sky.
+- **Dancing: the history is 0.995** (2026-10-27, owner: "remove SkyVis's dancing", in his tent, cam 71.17 2.11 41.16,
+  15:00). In a closed space the sky comes through small openings, and with the frame-count blend a still texel's
+  estimate drifts by 1 / (1 + frames) of a few new rays a frame; the 9x9 filter turns that into crawling blotches.
+  Not the wind: the visibility alone (`skyVis.debug:2`) measured the same with the wind on, frozen, and with the palms'
+  deformed BLAS off (`rt.windBlas:0`), within the spread of two runs of one arm. 60 consecutive frames, wind on, two
+  runs each (scratchpad `dance.py`): the fabric's frame-to-frame std median 1.5 / 0.67 / 0.40 % at 0.98 / 0.99 /
+  0.995, p90 3.1 / 1.45 / 0.98 %; the floor 1.4 / 0.64 / 0.33 %; 16 rays at 0.98 only 0.94-1.18 % (+0.1-0.27 ms).
+  Free. A moving camera is unaffected (a rejected texel counts from zero); a surface whose sky a MOVED object changes
+  follows it over up to 199 frames instead of 49. The settings file's `skyVis.history` overrides it (GI tab "History").
 - Developer Controls > GI "Sky visibility": on/off, rays, history, reach, diffuse, specular, spatial filter --
   persisted in graphics_settings.json `skyVis` (`--set=skyVis.*` the same knobs, transient); "Reset GI to defaults"
   resets them with the probes. The filter's depth/normal weights stay `--set` only.
@@ -847,6 +895,13 @@ space with the open sky, and one fix uncovered the next (2026-10-26, owner in a 
   (Scatter, editor closed): +0.008-0.017 ms at 2 rays on the tunnel / sea / grove, up to +0.05 at 4. Frame-to-frame
   noise (10 shots, wind frozen): grove median 0.49 % at 0, 2 and 4 rays, the tunnel 1.92 / 1.95 / 2.07 % -- nothing
   measurable. Open views barely move (mean <= 0.15 %).
+- **SDSM's air traces the sun** (2026-10-27, owner's closed tent at 15:00, cam 71.43 1.96 40.75: "another volumetric
+  fog problem" -- sunlit haze inside). SDSM fits each partition's box to the SURFACES the camera sees, so the air in
+  front of them need not lie in any box, and `CsmSampleChain` called such a point lit; the surfaces never notice, the
+  volume is mostly that air. Legacy and VSM cover the frustum and were dark there. `fog_scatter_cs.hlsl FogSunShadow`:
+  under SDSM, with the TLAS the fog's sky term binds, a point outside every partition traces one ray to the sun
+  (shadow casters, cutouts thinned as above). The tent's sun-only fog (`fog.debugView:4`, `fog.skyVolScatter:0`): mean
+  0.4 of 255, dark as in the other modes. Scatter +0.00-0.01 ms on four views. `fog.sunRtFallback:0` = before.
 - **Samples are kept in front of the depth** (`FogApplyDepthConstraint`, UE `ApplyDepthConstraintsToOffset`
   VolumetricFog.usf:87-114, on the medium and every lighting sample): a cell sample behind the surface its own pixel
   sees (this frame's furthest HZB, mip 0) moves `fog.depthOffset` (0.5, UE's) slices in front of it. With the sky
@@ -923,6 +978,15 @@ over 8 clean shots 3 frames apart). The divisor does not change that noise, only
   infinite bounce, `gi.infiniteBounce`). A back-face hit of a one-sided surface stores -0.2 t (RTXGI): more than a
   quarter of the 32 FIXED rays (`kDdgiFixedRays`: RTXGI's, the same directions every update, never blended, traced
   to their hit and not lit) switches the probe off (inside geometry). Masked geometry (leaf cards) is two-sided.
+- **So is a two-sided material** (2026-10-27, owner: "what are these squares inside the tent", cam 71.17 2.11 41.16):
+  the trace read every OPAQUE back face as the inside of a solid, and the tent's fabric (glTF doubleSided, `twoSided`
+  in tent_2) seen from inside was walls all round -- the probes in the tent switched off or were relocated OUT
+  through the fabric, and its floor took the sunlit outside's bounce in 0.5 m cells. The RT record carries the
+  material's `doubleSided` as `kGeomFlagTwoSided` (`GeometryInfo.flags` bit1, BindlessTable / RtSceneAs), and a back
+  face of such a surface is flipped like a leaf card's. `gi.twoSidedSheets:0` = before (the A/B). Tent: mean 109 ->
+  47 of 255, no cells (a closed tent is dark: the fabric does not transmit). Sketchfab marks nearly every material
+  doubleSided (108 of 175 here), so the bathroom was the check: day and night the same (mean +0.2 / -0.1, |d| > 8 on
+  1.2 % / 0.05 % of the frame, flicker unchanged).
 - **The "shadow flicker" in the corner cabinet (2026-10-25, owner: "вот тут тени мерцают")** was the bounce: in a
   shadow the probes are nearly all the light, and `gi.enabled:0` took the niche's frame-to-frame std (candles
   steady, exposure pinned, 16 clean shots) from 1.4 % to 0. Three causes, each RTXGI's own answer: (1) classified

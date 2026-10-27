@@ -838,10 +838,11 @@ namespace
         if (setting == "skyVis.enabled") { renderSettings.skyVisEnabled = value != 0.0f; return true; }
         if (setting == "skyVis.rays") { renderSettings.skyVisRays = static_cast<uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
         if (setting == "skyVis.maxDistance") { renderSettings.skyVisMaxDistance = std::clamp(value, 0.5f, 500.0f); return true; }
-        if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.98f); return true; }
+        if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.995f); return true; }
         if (setting == "skyVis.diffuse") { renderSettings.skyVisDiffuse = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "skyVis.specular") { renderSettings.skyVisSpecular = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "skyVis.filter") { renderSettings.skyVisFilter = value != 0.0f; return true; }
+        if (setting == "skyVis.filterFirst") { renderSettings.skyVisFilterFirst = value != 0.0f; return true; }
         if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
         if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
         if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
@@ -851,6 +852,7 @@ namespace
         // Project-wide like fog.gridPixels (the level's fog keys are the medium): UE's GridCenterOffsetFromDepthBuffer.
         if (setting == "fog.depthOffset") { renderSettings.fogDepthOffset = std::clamp(value, -1.0f, 4.0f); return true; }
         if (setting == "fog.depthThreshold") { renderSettings.fogDepthThreshold = std::clamp(value, 0.0f, 128.0f); return true; }
+        if (setting == "fog.sunRtFallback") { renderSettings.fogSunRtFallback = value != 0.0f; return true; }
         // Interior lighting plan D: the GI probe volume (SceneRenderSettings::gi*).
         if (setting == "gi.enabled") { renderSettings.giEnabled = value != 0.0f; return true; }
         if (setting == "gi.spacing") { renderSettings.giSpacing = std::clamp(value, 0.1f, 8.0f); return true; }
@@ -859,6 +861,7 @@ namespace
         if (setting == "gi.intensity") { renderSettings.giIntensity = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "gi.rayDistance") { renderSettings.giRayDistance = std::clamp(value, 1.0f, 1000.0f); return true; }
         if (setting == "gi.infiniteBounce") { renderSettings.giInfiniteBounce = value != 0.0f; return true; }
+        if (setting == "gi.twoSidedSheets") { renderSettings.giTwoSidedSheets = value != 0.0f; return true; }
         if (setting == "gi.far") { renderSettings.giFarCascade = value != 0.0f; return true; }
         if (setting == "gi.farSpacing") { renderSettings.giFarSpacing = std::clamp(value, 0.5f, 8.0f); return true; }
         if (setting == "gi.farDivisor") { renderSettings.giFarDivisor = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
@@ -868,6 +871,7 @@ namespace
         if (setting == "glass.wall") { renderSettings.glassWallThickness = std::clamp(value, 0.0f, 0.5f); return true; }
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
+        if (setting == "rt.meshOpacity") { renderSettings.rtMeshOpacity = value != 0.0f; return true; }
         if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }
         if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
         if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }

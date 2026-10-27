@@ -240,6 +240,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 {
                     MaterialData* md = gb->GetMaterialDataForSlot(s);
                     const MaterialParams* p = gb->InstanceSlotParams(s);
+                    slotMats[s].twoSided = md && md->doubleSided;
                     if (md && md->hasAlbedo)
                     {
                         slotMats[s].albedoSrv = md->albedo.GetSRVCPU();
@@ -285,6 +286,8 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 entry.mesh = desc.mesh;
                 entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
                 entry.mask = desc.castsShadow ? rt::kInstanceMaskAll : (rt::kInstanceMaskAll & ~rt::kInstanceMaskShadow);
+                // The mesh's cutout opacity for the visibility rays (mesh.json "rtCutoutOpacity"; 1 = solid -> 0).
+                entry.cutoutTransparency = gb ? static_cast<uint32_t>((1.0f - gb->RtCutoutOpacity()) * 255.0f + 0.5f) : 0u;
                 // TLAS InstanceID = the mesh's bindless geometry index (S9), so a hit
                 // can index the geometry/material table directly. Same owner+mesh ->
                 // same index (all instances of a cloud share one record run). Falls back to

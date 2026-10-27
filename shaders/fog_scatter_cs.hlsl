@@ -80,6 +80,7 @@ static const uint kFogJitterOn = 2u;
 static const uint kFogConservativeDepth = 4u;
 static const uint kFogTemporalOn = 8u;
 static const uint kFogDepthConstraint = 32u; // FogApplyDepthConstraint (bit 4 = the distant sky ambient)
+static const uint kFogSunRtFallback = 64u;   // FogSunShadow: SDSM, the TLAS bound -- air outside every partition traces the sun
 // R3 low-discrepancy sequence (Roberts): the extra cell offsets of a history-miss supersample.
 static const float3 kFogR3 = float3(0.8191725134f, 0.6710436067f, 0.5497004779f);
 
@@ -189,7 +190,25 @@ float FogSunShadow(float3 P)
                                         clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
     }
     int cascade;
-    return cloud * CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, dirToLight, 1.0f, cascade);
+    float lit = CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, dirToLight, 1.0f, cascade);
+#if FOG_SKY_OCCLUSION
+    // SDSM fits each partition's box to the SURFACES the camera sees, so the AIR between the camera and those surfaces
+    // need not lie in any box -- and a point outside every box falls through CsmSampleChain to "lit". The surfaces never
+    // notice (each lies in its own box); the volume is mostly that air: inside the owner's closed tent at 15:00 the air
+    // glowed with the sun everywhere but where the tent's shadow happened to land in a box (2026-10-27; Legacy and VSM,
+    // whose maps cover the whole frustum, were dark there). Such a point asks the TLAS the fog already traces for the sky:
+    // one ray to the sun, the shadow casters (a cutout at its mesh's opacity, fogDepthParams.z: rt.meshOpacity).
+    if (cascade == kCsmNoCascade && (fogFlags & kFogSunRtFallback) != 0u)
+    {
+        RayDesc ray;
+        ray.Origin = P;
+        ray.Direction = dirToLight;
+        ray.TMin = 0.0f;
+        ray.TMax = 1000.0f;
+        lit = RtVisibilityBlocked(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f) ? 0.0f : 1.0f; // rt::kInstanceMaskShadow
+    }
+#endif
+    return cloud * lit;
 }
 
 // The light passes' LightDistanceAttenuation (utils.hlsli) with UE's volumetric distance bias in
@@ -335,7 +354,7 @@ float FogSkyVisibility(float3 P, uint3 coord, uint sampleIndex)
         const float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
         const float phi = 2.0f * kPi * u2;
         ray.Direction = float3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi)); // +Y is up
-        if (!RtVisibilityBlocked(FogTlas, ray, 0x02u)) { ++open; } // rt::kInstanceMaskShadow
+        if (!RtVisibilityBlocked(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f)) { ++open; } // rt::kInstanceMaskShadow
     }
     return float(open) / float(rays);
 #else
