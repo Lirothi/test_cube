@@ -15,6 +15,7 @@
   },
   "frame": {
     "maxFps": 0,
+    "mouseSmoothingMs": 45.0,
     "vsync": false
   },
   "gi": {
@@ -180,7 +181,7 @@
     "diffuse": 1.0,
     "enabled": true,
     "fogRays": 2,
-    "history": 0.9800000190734863,
+    "history": 0.9950000047683716,
     "maxDistance": 15.0,
     "rays": 8,
     "spatialFilter": true,

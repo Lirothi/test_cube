@@ -21571,29 +21571,6 @@
     {
       "enabled": true,
       "group": "Beach Props",
-      "id": 1541,
-      "mesh": "models/coral_dead/coral_dead.mesh.json",
-      "name": "coral_dead 018",
-      "position": [
-        -22.062999725341797,
-        -0.0,
-        89.1050033569336
-      ],
-      "rotationDeg": [
-        14.899999618530273,
-        25.700000762939453,
-        0.0
-      ],
-      "scale": [
-        1.0609999895095825,
-        1.0609999895095825,
-        1.0609999895095825
-      ],
-      "type": "staticMesh"
-    },
-    {
-      "enabled": true,
-      "group": "Beach Props",
       "id": 1542,
       "mesh": "models/coral_dead/coral_dead.mesh.json",
       "name": "coral_dead 019",
@@ -37059,7 +37036,8 @@
       "type": "staticMesh"
     },
     {
-      "enabled": true,
+      "enabled": false,
+      "group": "tunnel",
       "id": 2532,
       "mesh": "models/box/box.mesh.json",
       "name": "staticMesh #2532",
@@ -37081,7 +37059,8 @@
       "type": "staticMesh"
     },
     {
-      "enabled": true,
+      "enabled": false,
+      "group": "tunnel",
       "id": 2534,
       "mesh": "models/box/box.mesh.json",
       "name": "staticMesh #2534",
@@ -37103,7 +37082,8 @@
       "type": "staticMesh"
     },
     {
-      "enabled": true,
+      "enabled": false,
+      "group": "tunnel",
       "id": 2535,
       "mesh": "models/box/box.mesh.json",
       "name": "staticMesh #2532 Copy",
@@ -37121,6 +37101,30 @@
         57.7599983215332,
         5.5,
         0.30000048875808716
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "the_bathroom",
+      "id": 2655,
+      "material": "damaged_plaster",
+      "mesh": "models/box/box.mesh.json",
+      "name": "staticMesh #2655",
+      "position": [
+        -24.03135108947754,
+        2.8698928356170654,
+        88.3200912475586
+      ],
+      "rotationDeg": [
+        0.0,
+        30.000001907348633,
+        0.0
+      ],
+      "scale": [
+        5.830000877380371,
+        0.11000001430511475,
+        5.720000743865967
       ],
       "type": "staticMesh"
     }
@@ -38736,6 +38740,7 @@
         0.699999988079071,
         0.41999998688697815
       ],
+      "dayBrightness": 0.04916621372103691,
       "enabled": true,
       "flicker": {
         "amplitude": 0.15000000596046448,
@@ -38750,7 +38755,7 @@
         1.1770000457763672,
         89.02120748095219
       ],
-      "radius": 12.0,
+      "radius": 4.0,
       "shadowsEnabled": true
     },
     {
@@ -38759,6 +38764,7 @@
         0.699999988079071,
         0.41999998688697815
       ],
+      "dayBrightness": 0.04916621372103691,
       "enabled": true,
       "flicker": {
         "amplitude": 0.15000000596046448,
@@ -38773,7 +38779,7 @@
         1.7259999513626099,
         86.61566495730338
       ],
-      "radius": 12.0,
+      "radius": 4.0,
       "shadowsEnabled": true
     },
     {
@@ -38782,6 +38788,7 @@
         0.699999988079071,
         0.41999998688697815
       ],
+      "dayBrightness": 0.04916621372103691,
       "enabled": true,
       "flicker": {
         "amplitude": 0.15000000596046448,
@@ -38796,7 +38803,7 @@
         1.7259999513626099,
         85.96748245112052
       ],
-      "radius": 12.0,
+      "radius": 4.0,
       "shadowsEnabled": true
     },
     {
@@ -38805,6 +38812,7 @@
         0.699999988079071,
         0.41999998688697815
       ],
+      "dayBrightness": 0.04916621372103691,
       "enabled": true,
       "flicker": {
         "amplitude": 0.15000000596046448,
@@ -38819,7 +38827,7 @@
         1.7259999513626099,
         89.4982291791302
       ],
-      "radius": 12.0,
+      "radius": 4.0,
       "shadowsEnabled": true
     },
     {
@@ -38828,6 +38836,7 @@
         0.699999988079071,
         0.41999998688697815
       ],
+      "dayBrightness": 0.04916621372103691,
       "enabled": true,
       "flicker": {
         "amplitude": 0.15000000596046448,
@@ -38842,7 +38851,7 @@
         1.7259999513626099,
         90.14504259559219
       ],
-      "radius": 12.0,
+      "radius": 4.0,
       "shadowsEnabled": true
     }
   ],
@@ -38894,7 +38903,7 @@
       "softKnee": 0.5,
       "sunGlareIntensity": 0.00800000037997961,
       "sunGlareRadiusDeg": 2.0,
-      "sunGlareSmoothingSec": 0.10000000149011612,
+      "sunGlareSmoothingSec": 0.0,
       "sunGlareVeil": 0.25,
       "sunGlareVeilRadiusDeg": 7.0,
       "sunRaysBundleStrength": 0.4000000059604645,
@@ -39013,7 +39022,8 @@
       "sunScatterExponent": 32.0,
       "sunScatterStartDistance": 100.0,
       "sunScatterStrength": 0.10000000149011612,
-      "volumetric": true
+      "volumetric": true,
+      "volumetricDistance": 60.0
     }
   },
   "skyAtmosphere": {
@@ -39992,12 +40002,12 @@
       "lightShaftsEnabled": true,
       "lightSourceAngle": 2.0,
       "lightSourceSoftAngle": 0.5,
-      "skyFillIntensity": 2.0,
+      "skyFillIntensity": 1.0,
       "sunIlluminanceLux": 120000.0,
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 15.0,
+    "time": 17.989999771118164,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,
