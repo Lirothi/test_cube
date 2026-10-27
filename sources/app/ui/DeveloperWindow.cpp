@@ -666,6 +666,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "for that remainder instead of rendering frames nobody sees -- uncapped, it "
                         "never idles, and video playing on another monitor stutters. Independent "
                         "of VSync, as in UE: with both on, the lower rate wins.");
+                float mouseSmoothing = g_cameraMouseSmoothingMs;
+                if (GRAPHICS_CONTROL(MouseSmoothing, "mouseSmoothing",
+                        ImGui::SliderFloat("Mouse smoothing (ms)", &mouseSmoothing, 0.0f, 200.0f, "%.0f")))
+                {
+                    g_cameraMouseSmoothingMs = std::clamp(mouseSmoothing, 0.0f, kCameraMouseSmoothingMaxMs);
+                }
+                DevHelp("The free camera's look follows the mouse this many milliseconds behind (an exponential "
+                        "ease, the same at any frame rate) instead of taking each frame's mouse counts at once, "
+                        "which at a few hundred fps arrive unevenly and make a turn stutter. 0 = off. For "
+                        "recording a video 40-80 ms reads smooth; the turn finishes after the button is let go. "
+                        "Ctrl+click to type a value.");
 
                 ImGui::Separator();
                 // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the

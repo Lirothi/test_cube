@@ -16,6 +16,7 @@ enum class GraphicsControl
     AsyncCompute,                 // Frame ...
     VSync,
     MaxFps,
+    MouseSmoothing,
     VisibilityChunkMask,          // Visibility ...
     OcclusionMethod,
     OcclusionQueryLatency,

@@ -10,6 +10,12 @@ using namespace DirectX;
 class InputManager;
 class Renderer;
 
+// Mouse smoothing (Developer Controls > Frame "Mouse smoothing", graphics_settings.json frame.mouseSmoothingMs,
+// --set=camera.mouseSmoothing:<ms>): the time constant the look input eases in with (Camera::UpdateFromInput);
+// 0 = every frame's mouse motion is applied at once.
+inline float g_cameraMouseSmoothingMs = 0.0f;
+inline constexpr float kCameraMouseSmoothingMaxMs = 500.0f;
+
 class Camera {
 public:
     Camera(
@@ -41,13 +47,16 @@ public:
 
     // Setters
     void SetPosition(const float3& pos) { position_ = pos; }
+    // Setting the orientation drops whatever the smoothed look input still owed (UpdateFromInput): a camera put somewhere
+    // by code must not glide on from there.
     void SetYawPitch(float yaw, float pitch) {
-        yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw(); UpdateRotation();
+        yaw_ = yaw; pitch_ = pitch; ClampPitch(); WrapYaw(); UpdateRotation(); lookOwedYaw_ = lookOwedPitch_ = 0.0f;
     }
     // Roll is deliberately NOT clamped the way pitch is: banking past vertical is a legitimate
     // pose, and the gimbal-lock reason for clamping pitch does not apply to the last angle.
     void SetYawPitchRoll(float yaw, float pitch, float roll) {
         yaw_ = yaw; pitch_ = pitch; roll_ = roll; ClampPitch(); WrapYaw(); WrapRoll(); UpdateRotation();
+        lookOwedYaw_ = lookOwedPitch_ = 0.0f;
     }
     void SetRoll(float roll) { roll_ = roll; WrapRoll(); UpdateRotation(); }
     float GetYaw() const { return yaw_; }
@@ -139,6 +148,9 @@ private:
     float moveSpeed_ = 3.0f;
     float sprintMultiplier_ = 2.5f;
     float moveSpeedMultiplier_ = 1.0f;
+    // The look input not applied yet under mouse smoothing (radians; UpdateFromInput).
+    float lookOwedYaw_ = 0.0f;
+    float lookOwedPitch_ = 0.0f;
     uint32_t renderLayerMask_ = kRenderLayerAll;
     bool hasPrevViewProj_ = false;
     uint64_t historyRevision_ = 0u;

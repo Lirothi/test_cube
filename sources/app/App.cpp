@@ -400,6 +400,7 @@ namespace
         if (setting == "camera.fly") { g_camFlyForward = std::clamp(value, -100.0f, 100.0f); return true; }
         // ...and turn at this many degrees a second (positive = to the right, 0 stops): --cam-fly-yaw for a running
         // editor, the other motion a temporal history has to survive.
+        if (setting == "camera.mouseSmoothing") { g_cameraMouseSmoothingMs = std::clamp(value, 0.0f, kCameraMouseSmoothingMaxMs); return true; }
         if (setting == "camera.spin") { g_camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
         if (setting == "dlss.mode") { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):

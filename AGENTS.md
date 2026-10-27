@@ -308,6 +308,16 @@ down automatically (BloomRenderer, logs `bloom: convPercent 25.0 -> 19.0`). The 
 resolutions were then fractions of the DISPLAY; since 2026-10-10 they are fractions of the RENDER
 resolution (DLSS's input), so a cheaper DLSS mode shrinks the traces with the rest of the frame.
 
+### Mouse smoothing for a recorded turn
+
+The free camera's look input is raw mouse counts summed per frame, and at a few hundred fps against the mouse's own
+polling a steady hand arrives as 3, 5, 2, 6 counts in a row -- a turn that stutters on video (owner, 2026-10-27).
+Developer Controls > Frame "Mouse smoothing (ms)" (graphics_settings.json `frame.mouseSmoothingMs`, `--set` / MCP
+`camera.mouseSmoothing:<ms>`; 0 = off, the default) eases it in exponentially (`Camera::UpdateFromInput`: each frame
+takes `1 - exp(-dt / tau)` of the input still owed, the same at any frame rate; the turn finishes after the button is
+let go). 40-80 ms reads smooth for a recording. Any code that sets the orientation (`SetYawPitch*`, a cut) drops what was
+still owed, so `set_camera` and `--cam-rot` land exactly.
+
 ### Make the frame deterministic before diffing
 
 Add `--wind-freeze[=<seconds>]`. It pins the shared wind+ocean clock, so two runs are comparable
