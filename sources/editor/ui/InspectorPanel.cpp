@@ -1908,6 +1908,14 @@ namespace
                           "nominal area), so it follows the disc's light, not its brightness per "
                           "pixel. Colour and strength are the frame's own pixels over the sun "
                           "disc, so anything in front of the sun takes the corona with it.");
+            dragF("Partial Sun", "sunRaysVisibleExponent", 0.5f, 0.005f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("How much corona a PARTLY hidden sun keeps: the clear disc's corona x (the share of "
+                          "the disc that shows)^this. 1 = physical, the rays follow the light that gets "
+                          "through -- a sun 80 % behind leaves keeps a fifth of them and they are gone; "
+                          "0.5 keeps 45 % there and 22 % at a twentieth of the disc, like a photograph "
+                          "of a sun through fronds; 0 = any sliver of sun throws the full corona. A clear "
+                          "sun is the same at every value. The share is measured on the scene before the "
+                          "upscaler (DLSS rings on the disc).");
             {
                 static std::vector<std::string> coronaImages;
                 static bool coronaScanned = false;

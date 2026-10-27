@@ -1302,6 +1302,7 @@ namespace
         if (setting == "bloom.sunRaysSpikes") { scene.BloomRef().sunRaysSpikes = std::max(0.0f, value); return true; }
         if (setting == "bloom.sunRaysSpikeCount") { scene.BloomRef().sunRaysSpikeCount = static_cast<uint32_t>(std::clamp(value, 2.0f, 32.0f)); return true; }
         if (setting == "bloom.sunRaysRotation") { scene.BloomRef().sunRaysRotationDeg = value; return true; }
+        if (setting == "bloom.sunRaysVisibleExponent") { scene.BloomRef().sunRaysVisibleExponent = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "bloom.ghostThreshold") { scene.BloomRef().convGhostThreshold = value; return true; }
         if (setting == "bloom.ghostIntensity")
         {

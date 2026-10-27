@@ -418,8 +418,9 @@ void SceneRenderer::Pass_Tonemap(Renderer* renderer, RenderGraphPassContext ctx,
         const auto tonemapSamplers = std::array{ *SamplerManager::LinearClamp() };
         // The sun probe: the sun disc metered once into the metering record for the glare (inside
         // the bloom below) and the corona (the tone curve) to read -- before both, bloom or not.
-        // It writes the exposure buffer, which this pass already declares at UNORDERED_ACCESS.
-        bloom_.RecordSunProbe(renderer, t.cl, tonemapSrc);
+        // It writes the exposure buffer, which this pass already declares at UNORDERED_ACCESS. Where the
+        // disc shows is read before the upscaler (the graph declares that read).
+        bloom_.RecordSunProbe(renderer, t.cl, tonemapSrc, pts.ranDlss ? D.sceneSRV : tonemapSrc);
         // The debug pixel probe (MCP get_readouts) writes the same record; off unless asked for.
         bloom_.RecordPixelProbe(renderer, t.cl, tonemapSrc, /*afterBloom*/ false);
         // P8: build the bloom pyramid off whatever the tonemap is about to read — the upscaled

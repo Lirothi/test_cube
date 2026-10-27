@@ -449,6 +449,12 @@ struct BloomSettings
     float sunRaysSpikeWidthDeg = 0.1f;   // a spike's width, as sunRaysWidthDeg (was a fixed 1.5 px)
     float sunRaysSpikeLengthDeg = 10.0f; // where a spike is at half (was 4x the corona length: 10 at its default)
     float sunRaysRotationDeg = 0.0f;     // turns the pattern on screen
+    // A PARTLY HIDDEN SUN (2026-10-27, owner: "a micro-pixel is covered and the corona is gone"): the
+    // corona is the clear disc's x (visible share)^this. 1 = physical -- linear in the light that
+    // shows, so a sun 80 % behind fronds keeps a fifth of its rays and they vanish; 0.5 keeps 45 %
+    // there, as a sun through leaves throws a clear star in a photograph. A clear disc is untouched.
+    // The share is measured on the scene BEFORE the upscaler (DLSS rings on the disc).
+    float sunRaysVisibleExponent = 0.5f;
 };
 
 // P7 item 8. Deliberately NOT part of HeightFogSettings: that struct is serialized into the level,

@@ -28,7 +28,8 @@
 Texture2D HDRColor : register(t0);
 // P8C-2: the scattered-bokeh flare image (lens_flare.hlsl writes it), read by the resolve's ghost
 // composite. UE's LensFlareBlur output -- the actual defocused image of the actual bright
-// sources, with a x2 guard band folded in by the scatter.
+// sources, with a x2 guard band folded in by the scatter. The sun probe (stage 10) binds the scene
+// before the upscaler here instead.
 Texture2D FlareBlur : register(t1);
 // The photographed convolution kernel (UE's DefaultBloomKernel), FP16 with a mip chain. The mips
 // stand in for UE's successive-downsample prefilter when the kernel is drawn small.
@@ -637,15 +638,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // добро вокруг солнца пропадает"). Past the edge they now fade by the ANGLE the sun has left
         // the frame by (sunGlareParams.x, radians); the CPU stops asking beyond it.
         //   WHERE the disc shows, too. With the disc half behind a palm trunk the corona, centred on
-        // the disc, drew rays out of the trunk ("лучи из ниоткуда"). So the taps are 32 in a
-        // sunflower over the disc's flat core (0.7 of its radius: the sky draws the disc with a
-        // soft edge from there out), each weighted by its luminance -- a trunk or a leaf in front is
+        // the disc, drew rays out of the trunk ("лучи из ниоткуда"). So the taps are a sunflower
+        // over the disc and a margin round it (THE ZONE below), each weighted by its luminance -- a trunk or a leaf in front is
         // dark next to the sun and weighs nothing -- and by whether its DIRECTION is above the
         // horizon, decided geometrically (sunGlareParams.yzw = world up in view space), because the
         // sea below a low sun can glitter as bright as the disc. Their centroid is where the
         // corona's rays leave from, and the visible share how far inside it they start. The
         // horizon used to be a separate analytic segment on the CPU; this covers it and every
-        // occluder with one rule. Both are held, like the colour, unless all 32 taps are in frame.
+        // occluder with one rule. Both are held, like the colour, unless every tap is in frame.
         //   record +16  last disc colour seen (rgb) and last gate (a) -- held off the frame
         //   record +32  this frame's value (rgb) = colour x gate x off-frame fade; (a) visible share
         //   record +48  centroid of what shows: tangent-plane offset from the disc's centre (xy)
@@ -669,6 +669,22 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             const float discTan = 2.0f * discUV.x / max(sunGlareProj.x, 1.0e-6f);
             const float3 upView = sunGlareParams.yzw;
             const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
+            // THE ZONE (2026-10-27, owner: "a micro-pixel is covered and the corona is gone -- widen the
+            // test zone"): 64 taps over the WHOLE disc and a quarter of its radius beyond, where there were
+            // 32 over its flat core (0.7 R). The disc's soft edge (0.71-1 R, compose_cs.hlsl SunDiscRaw) and
+            // the gaps fronds leave round its rim were invisible to the probe: a core under leaves read as
+            // no sun while that edge still bloomed white. The zone's mean goes back to the CORE radiance a
+            // clear disc reads -- x kZone^2 / kProfileMean, the disc profile saturate(2 (1 - rho^2)) averaging
+            // 0.75 over the unit disc -- so a clear sun reads as before and a covered one by the share of its
+            // ENERGY that shows anywhere in the zone. (The sky inside the zone adds (kZone^2 - 1) / 0.75 of its
+            // own radiance: thousands of times under the disc.)
+            //   WHERE it shows -- the share and the centroid -- is read from t1, the scene BEFORE the upscaler
+            // (the same image without DLSS): DLSS rings on the disc, and its brightest tap, the share's
+            // denominator, read a clear disc as half covered. The colour stays the upscaled image's (t0),
+            // which the corona's and the glare's strength were calibrated on.
+            static const uint kZoneTaps = 64u;
+            static const float kZone = 1.25f;
+            static const float kProfileMean = 0.75f;
             float3 disc = 0.0f.xxx;
             float discTaps = 0.0f;
             float allInFrame = 1.0f;
@@ -676,10 +692,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             float2 weighted = 0.0f.xx;
             float lumMax = 0.0f;
             [unroll]
-            for (uint k = 0u; k < 32u; ++k)
+            for (uint k = 0u; k < kZoneTaps; ++k)
             {
                 // Equal area per tap, golden-angle turns; the tangent plane's y is up.
-                const float rho = 0.7f * sqrt(((float)k + 0.5f) / 32.0f);
+                const float rho = kZone * sqrt(((float)k + 0.5f) / (float)kZoneTaps);
                 const float a = (float)k * 2.39996323f;
                 const float2 t = float2(cos(a), sin(a)) * (rho * discTan);
                 const float2 tapNdc = (sunTan + t) * sunGlareProj.xy;
@@ -691,7 +707,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                     const float above =
                         saturate(dot(normalize(float3(sunTan + t, 1.0f)), upView) / (0.2f * discTan) + 0.5f);
                     const float3 col = max(HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb, 0.0f.xxx) * above;
-                    const float lum = dot(col, lumaW);
+                    const float lum = dot(max(FlareBlur.SampleLevel(gSmp, tapUV, 0.0f).rgb, 0.0f.xxx), lumaW) * above;
                     disc += col;
                     discTaps += 1.0f;
                     weight += lum;
@@ -706,7 +722,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             if (allInFrame > 0.5f)
             {
                 shownAt = weight > 0.0f ? weighted / weight : 0.0f.xx;
-                share = lumMax > 0.0f ? saturate(weight / (32.0f * lumMax)) : 0.0f;
+                // The share of the disc that shows: its energy as read (the zone's mean, normalised as the
+                // colour below) over a clear disc of the brightest tap's radiance.
+                share = lumMax > 0.0f
+                    ? saturate(weight / (float)kZoneTaps * (kZone * kZone / kProfileMean) / lumMax) : 0.0f;
             }
             // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a
             // ring 2.5 disc radii out. Glare structure comes from a POINT source far brighter than
@@ -735,7 +754,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 // it -- with no FilterPixel: the glare and the corona scale with the disc's ENERGY
                 // (BloomRenderer::SunGlareScale / SunRays), so a disc dimmed by a thin cloud or a
                 // sunset dims them in proportion, where a capped value would stay pinned at the cap.
-                held = max(min(disc / discTaps, 65504.0f.xxx), 0.0f.xxx);
+                held = max(min(disc / discTaps * (kZone * kZone / kProfileMean), 65504.0f.xxx), 0.0f.xxx);
                 if (ringTaps > 0.0f)
                 {
                     const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);

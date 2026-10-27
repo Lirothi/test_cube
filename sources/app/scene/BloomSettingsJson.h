@@ -92,6 +92,7 @@ inline void ApplyOverrides(const nlohmann::json& j, BloomSettings& s)
     s.sunRaysSpikeWidthDeg = std::clamp(j.value("sunRaysSpikeWidthDeg", s.sunRaysSpikeWidthDeg), 0.005f, 2.0f);
     s.sunRaysSpikeLengthDeg = std::clamp(j.value("sunRaysSpikeLengthDeg", s.sunRaysSpikeLengthDeg), 0.1f, 60.0f);
     s.sunRaysRotationDeg = j.value("sunRaysRotationDeg", s.sunRaysRotationDeg);
+    s.sunRaysVisibleExponent = std::clamp(j.value("sunRaysVisibleExponent", s.sunRaysVisibleExponent), 0.0f, 1.0f);
 }
 
 inline nlohmann::json ToJson(const BloomSettings& s)
@@ -151,6 +152,7 @@ inline nlohmann::json ToJson(const BloomSettings& s)
     j["sunRaysSpikeWidthDeg"] = s.sunRaysSpikeWidthDeg;
     j["sunRaysSpikeLengthDeg"] = s.sunRaysSpikeLengthDeg;
     j["sunRaysRotationDeg"] = s.sunRaysRotationDeg;
+    j["sunRaysVisibleExponent"] = s.sunRaysVisibleExponent;
     return j;
 }
 

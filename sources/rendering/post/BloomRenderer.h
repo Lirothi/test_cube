@@ -80,9 +80,11 @@ public:
     // Stage 10, the SUN PROBE: meters the sun disc once into the metering record (sun_probe.hlsli)
     // for the glare and the corona, holding its last value while the disc is off the frame. On the
     // tonemap's list BEFORE Record() and the tone curve; nothing when neither sun effect is on or
-    // the sun is not in view.
+    // the sun is not in view. `hdrSource` gives the disc's colour (the tonemap's source: the
+    // calibration), `geometrySource` where it shows -- its visible share and centroid -- and is the
+    // scene BEFORE the upscaler when DLSS runs (DLSS rings on the disc), else the same image.
     void RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource);
+                        D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, D3D12_CPU_DESCRIPTOR_HANDLE geometrySource);
     // Stage 11, the PIXEL PROBE (SceneRenderSettings::debugProbe*): a debug read-out of the HDR frame
     // around one screen position into the metering record, read back for the editor MCP's
     // get_readouts. Same list as the sun probe; nothing while its radius is 0. Sources 0/1 are read

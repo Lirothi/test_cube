@@ -2813,9 +2813,11 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
         // The scene BEFORE the upscaler is read here too: by the bloom's light when
         // BloomSettings::convBeforeUpscale -- the convolution's setup (DLSS flattens small glints) and
         // the ghosts and the streak of either method (DLSS rings on the sun disc's edge differently
-        // every frame, and the ghosts flickered with it) -- and by the debug pixel probe
-        // (debugProbeSource 1).
-        if (willDlss && ((pts.bloom && frame_->settings.bloom.convBeforeUpscale) ||
+        // every frame, and the ghosts flickered with it) -- by the sun probe (where the disc shows, its
+        // visible share) and by the debug pixel probe (debugProbeSource 1).
+        const BloomSettings& bloomSettings = frame_->settings.bloom;
+        const bool sunProbe = bloomSettings.sunGlareIntensity > 0.0f || bloomSettings.sunRaysIntensity > 0.0f;
+        if (willDlss && ((pts.bloom && bloomSettings.convBeforeUpscale) || sunProbe ||
                          (frame_->settings.debugProbeRadiusPx > 0.0f && frame_->settings.debugProbeSource == 1u)))
         {
             p.Use(DTM.scene.Get(), kNps);

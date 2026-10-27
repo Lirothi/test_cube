@@ -99,7 +99,7 @@ cbuffer TonemapCB : register(b0)
     // space is the camera's (+z forward, +y up). x of sunRaysShape = 0 turns the term off.
     float4 sunRaysDir;     // xyz: direction TO the sun's centre, view space, unit (the rays leave from the
                            // centroid of what shows, which the sun probe adds); w: halo weight
-    float4 sunRaysProj;    // xy: projection _11/_22; zw: unused
+    float4 sunRaysProj;    // xy: projection _11/_22; z: partial-sun exponent (BloomSettings::sunRaysVisibleExponent); w: unused
     float4 sunRaysShape;   // x: intensity, y: needle count, z: length (rad), w: regular-star weight
     float4 sunRaysLook;    // x: star spike length (rad), y: rotation (rad), z: disc radius (rad), w: star spike count
     float4 sunRaysExtra;   // x: bundle count, y: halo radius (rad), z: 1 = draw from SunCoronaTex, w: its width
@@ -308,8 +308,14 @@ float3 SunRays(float2 uv, float outputWidth)
     // The sun disc's colour and visibility -- metered once a frame by the sun probe
     // (bloom_conv_cs.hlsl stage 10), held while the disc is off the frame and faded by how far off,
     // gated against an overcast sky.
-    const float3 seen = asfloat(ExposureValue.Load3(kSunProbeOut));
+    float3 seen = asfloat(ExposureValue.Load3(kSunProbeOut));
     if (all(seen <= 0.0f)) { return 0.0f.xxx; }
+    // A PARTLY HIDDEN SUN (2026-10-27, owner: "a micro-pixel is covered and the corona is gone"): `seen` is
+    // the light that gets through, the clear disc's x the visible share; the corona takes share^exponent of
+    // the clear disc's instead -- x share^(exponent - 1). The share is measured on the scene before the
+    // upscaler, the colour after it (the calibration); below a hundredth of the disc both fade linearly.
+    const float visibleShare = clamp(asfloat(ExposureValue.Load(kSunProbeOut + 12u)), 0.01f, 1.0f);
+    seen *= pow(visibleShare, saturate(sunRaysProj.z) - 1.0f);
 
     // Offset from the sun on the tangent plane (the /proj un-squashes the aspect), and its polar
     // angle in turns [0, 1).

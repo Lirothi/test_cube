@@ -1191,8 +1191,9 @@ SunRaysConstants BloomRenderer::SunRays() const
         return c;
     }
     c.dir = Math::float4(v.x, v.y, v.z, std::max(settings.sunRaysHalo, 0.0f));
-    // zw unused since the sun probe took the disc taps.
-    c.proj = Math::float4(sx, sy, 0.0f, 0.0f);
+    // z: how much corona a partly hidden sun keeps (tonemap_cs.hlsl SunRays); w unused since the sun
+    // probe took the disc taps.
+    c.proj = Math::float4(sx, sy, std::clamp(settings.sunRaysVisibleExponent, 0.0f, 1.0f), 0.0f);
     // THE CORONA FOLLOWS THE DISC'S ENERGY, NOT ITS RADIANCE: glare is the eye's point-spread
     // function, so its light is the disc's ILLUMINANCE (radiance times solid angle) spread over the
     // corona. Since the disc became physical (thousands of times the sky round it, where it had been
@@ -1226,7 +1227,8 @@ SunRaysConstants BloomRenderer::SunRays() const
 }
 
 void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource)
+                                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource,
+                                   D3D12_CPU_DESCRIPTOR_HANDLE geometrySource)
 {
     if (!frame_) { return; }
     const BloomSettings& settings = frame_->settings.bloom;
@@ -1272,10 +1274,11 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     const Math::float3 upView = ToView(Math::float3(0.0f, 1.0f, 0.0f));
     g.sunGlareParams = Math::float4(kSunOffFrameFadeDeg * kDeg, upView.x, upView.y, upView.z);
     // One group, one working thread; the UAV barrier makes its record visible to the glare and the
-    // tone curve after it. u0/u1 are only there because the table is positional.
+    // tone curve after it. u0/u1 are only there because the table is positional. t1 is where the
+    // disc SHOWS (its visible share and centroid), read before the upscaler: DLSS rings on the disc.
     RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
         [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
-        { hdrSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
+        { hdrSource, geometrySource, KernelSrv(D.lensFlareSRV),
               renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
         { D.streakAUAV, D.bloomUpMipUAV[0], metering.ExposureUav() },
         samplerTable, 1u, 1u, metering.ExposureResource());
