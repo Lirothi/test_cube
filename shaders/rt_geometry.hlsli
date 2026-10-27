@@ -109,7 +109,8 @@ bool RtAlphaCandidatePasses(StructuredBuffer<GeometryInfo> geomBuf, SamplerState
 // A VISIBILITY ray ("is anything in the way") -- every RT ray that is not a reflection's: the sky visibility, the GI's
 // shadow and sky rays, a reflection hit's shadow rays. It sees the GEOMETRY, a leaf card as a solid card, no alpha test
 // (owner, 2026-10-26): the alpha modes (rt_reflect_common.hlsli alphaMode) are the reflection rays' alone. Any triangle
-// in the way blocks, so the first one the traversal meets ends it -- the answer cannot depend on the order.
+// in the way blocks, so the first one the traversal meets ends it -- the answer cannot depend on the order. (The sky
+// visibility, the GI and the fog take a tree's cutouts as partly open: RtVisibilityTransmittance below.)
 //
 // They used to follow the reflections' mode, and its mode 1 alpha-tested the hit the traversal met FIRST -- the BVH's
 // order, not the ray's: the palms' wind BLAS are rebuilt every frame, so a crown turned "blocked" into "open" and back
@@ -123,55 +124,46 @@ bool RtVisibilityBlocked(RaytracingAccelerationStructure tlas, RayDesc ray, uint
     return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
 }
 
-// A cutout (an alpha-tested slot -- a leaf card, a frond) as a PARTLY transparent layer for the visibility rays, at
-// the opacity of the MESH it belongs to: mesh.json "rtCutoutOpacity" (absent = 1, every card solid; the palms 0.8),
-// carried by its TLAS instance as 255 x (1 - opacity) in InstanceContributionToHitGroupIndex -- inline RayQuery has no
-// hit groups (RtSceneAs, AccelerationStructure.cpp). Opaque geometry always blocks; so does every cutout of a mesh
-// that does not say otherwise -- the bathroom's door, curtains and window wall are alpha-tested too, and one global
-// 0.8 (the first version, 2026-10-27) let a fifth of the sky through them (owner: "walls must block fully").
-// Why (owner: "make the leaves partly transparent for RT rays -- UE has the like"): as solid cards a palm crown shut
-// out far more sky and sun than its fronds do (they cut 35-68 % of their cards away): the sand under the crowns lay in
-// full GI shade, a leaf's underside saw no sky through the leaves above. A FIXED share `opacity` of the mesh's cutout
-// triangles blocks, the rest lets every ray through: picked by hashing the triangle's own ids, so the answer depends
-// neither on the traversal's order (what the first-found alpha test got wrong, above) nor on the frame. A roll per ray
-// and frame (tried first) averages to the same occlusion but is noise every history has to average: the GI's probes
-// behind the tent's wall walked +-1-2 % in metre-sized blotches (wind frozen, p90 1.5 -> 1.8-2.6 %; GI off: no
-// difference). No texture fetch: the card's own alpha is the reflections' business (mode 2 cost the grove's SkyVis
-// 2.0 ms).
-bool RtCutoutTriangleBlocks(uint instanceId, uint geometryIndex, uint primitiveIndex, float cutoutOpacity)
+// A cutout (an alpha-tested slot -- a leaf card, a frond) of a mesh with mesh.json "rtCutoutOpacity" < 1 (the palms
+// 0.8; absent = 1, every card solid) lets 1 - opacity of the light through: how much a visibility ray that STOPS on it
+// carries on. `packed` is the hit instance's InstanceContributionToHitGroupIndex -- inline RayQuery has no hit groups
+// (AccelerationStructure.cpp): bits 0-7 = 255 x (1 - opacity), bits 8-23 = which of its first 16 geometries (submesh
+// slots) are cutouts. Anything else blocks: a palm's trunk, every opaque mesh, and every cutout of a mesh that does
+// not say otherwise -- the bathroom's door, curtains and window wall are alpha-tested too, and one global 0.8 (the
+// first version, 2026-10-27) let a fifth of the sky through them (owner: "walls must block fully").
+float RtCutoutTransmittance(uint packed, uint geometryIndex)
 {
-    const uint h = RtWangHash((primitiveIndex * 9781u) ^ (geometryIndex * 6271u) ^ (instanceId * 2654435761u));
-    return float(h & 0xFFFFFFu) * (1.0f / 16777216.0f) < cutoutOpacity;
+    const bool cutout = geometryIndex < 16u && ((packed >> (8u + geometryIndex)) & 1u) != 0u;
+    return cutout ? float(packed & 0xFFu) * (1.0f / 255.0f) : 0.0f;
 }
 
-// A non-opaque candidate's verdict: `packed` = its instance's InstanceContributionToHitGroupIndex (0 = a solid mesh).
-bool RtCutoutCandidateBlocks(uint packed, uint instanceId, uint geometryIndex, uint primitiveIndex)
-{
-    const uint transparency = packed & 0xFFu;
-    return transparency == 0u ||
-           RtCutoutTriangleBlocks(instanceId, geometryIndex, primitiveIndex, 1.0f - float(transparency) * (1.0f / 255.0f));
-}
-
-// `meshOpacity` false (`rt.meshOpacity:0`, the A/B) = every card solid, the fast path above.
-bool RtVisibilityBlocked(RaytracingAccelerationStructure tlas, RayDesc ray, uint instanceMask, bool meshOpacity)
+// How much of the light along a visibility ray gets through: 1 nothing in the way, 0 blocked, 1 - opacity when the
+// first SURFACE along the ray is such a cutout -- and the ray goes no further (owner, 2026-10-27: "it hit a leaf, the
+// leaf lets 20 % through, that's it -- the ray goes nowhere after"): one query on the hardware's fast path, no layers.
+// The NEAREST hit, not the traversal's first: ACCEPT_FIRST_HIT (tried first) returns whichever hit the BVH happens to
+// find, and a ray up from the bathroom found the palm crowns BEYOND its ceiling before the ceiling -- the closed room
+// saw the sky through its roof (its sky visibility +75 % at the palms' 0.2). Solid cards keep the any-hit query: there
+// every hit answers the same.
+// Why a tree is partly transparent at all (owner: "make the leaves partly transparent for RT rays -- UE has the like"):
+// as solid cards a palm crown shut out far more sky and sun than its fronds do (they cut 35-68 % of their cards
+// away): the sand under the crowns lay in full GI shade, a leaf's underside saw no sky through the leaves above.
+// The first version took a fixed share of a cutout's TRIANGLES as blocking (a hash of their ids) and traced on through
+// the rest: without FORCE_OPAQUE every alpha-tested triangle in the scene was a candidate the RT core handed back to a
+// Proceed() loop, ~1.2 ms of the grove's 5 ms frame. `meshOpacity` false (`rt.meshOpacity:0`, the A/B) = every card solid.
+float RtVisibilityTransmittance(RaytracingAccelerationStructure tlas, RayDesc ray, uint instanceMask, bool meshOpacity)
 {
     if (!meshOpacity)
     {
-        return RtVisibilityBlocked(tlas, ray, instanceMask);
+        return RtVisibilityBlocked(tlas, ray, instanceMask) ? 0.0f : 1.0f;
     }
-    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, ray);
-    [loop]
-    while (q.Proceed())
+    q.Proceed();
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
     {
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
-            RtCutoutCandidateBlocks(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateInstanceID(),
-                                    q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()))
-        {
-            q.CommitNonOpaqueTriangleHit(); // the first one blocks: ACCEPT_FIRST_HIT ends the search
-        }
+        return 1.0f;
     }
-    return q.CommittedStatus() == COMMITTED_TRIANGLE_HIT;
+    return RtCutoutTransmittance(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex());
 }
 
 #endif // RT_GEOMETRY_HLSLI

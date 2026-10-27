@@ -758,8 +758,8 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   their history this frame as the open sky (the accumulation's .w is negative there, UE's sign bit -- the target's
   stays positive). A wholly new region (no neighbour kept anything) still starts from its own rays, as in UE.
 - **No RT ray but a reflection's alpha-tests** (owner, 2026-10-26): this pass, the GI (probe rays and their
-  shadow/sky rays) and the shadow rays of what a reflection hits see the GEOMETRY, a leaf card solid (thinned since
-  2026-10-27, next bullet) --
+  shadow/sky rays) and the shadow rays of what a reflection hits see the GEOMETRY, a leaf card solid (a tree's partly
+  open since 2026-10-27, next bullet) --
   `rt_geometry.hlsli RtVisibilityBlocked` (FORCE_OPAQUE + ACCEPT_FIRST_HIT_AND_END_SEARCH) and ddgi_trace's
   FORCE_OPAQUE closest hit. `rt.alphaMode` / Reflections "RT foliage alpha" is the reflection rays' alone. Why
   (owner: "SkyVis dances inside the house"): they followed the reflections' mode, and its mode 1 alpha-tested the hit
@@ -771,25 +771,41 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   whatever the reflections' mode -- the old mode 1's own traversal. Tried first, dropped: the NEAREST hit's texel
   deciding (deterministic too, but +0.10 / +0.23 ms SkyVis and a ray through a wall behind a transparent texel), and
   closing that leak (1.49 / 1.94 ms on the grove); mode 2 throughout costs the grove's SkyVis 2.0 ms.
-- **A tree's cutouts let some of the visibility rays through: mesh.json `"rtCutoutOpacity"`** (2026-10-27, owner:
-  "make the leaves partly transparent for RT rays -- UE has the like -- at 0.8", then "a per-MESH setting, only the
-  trees; walls must block fully"). As solid cards a palm crown shut out far more sky and sun than its fronds do (they
-  cut 35-68 % of their cards away): the sand under the crowns lay in full GI shade, a leaf's underside saw no sky
-  through the leaves above. Every visibility ray -- this pass, the GI's probe, shadow and sky rays, the fog's sky and
-  sun rays -- takes that share of a cutout's triangles as blocking and the rest as open (`rt_geometry.hlsli
-  RtCutoutTriangleBlocks`: a hash of instance, geometry and primitive against the opacity; order-independent, no
-  texture fetch). The value is the ASSET's (`RenderableObject::SetRtCutoutOpacity`, folded in by ResolveMeshAsset like
-  every mesh.json key; Mesh Editor > Ray tracing > "Cutout opacity"); absent = 1, every card solid -- the five
-  `*_palm` assets say 0.8, fern and grass nothing. It rides the TLAS instance as 255 x (1 - opacity) in
-  `InstanceContributionToHitGroupIndex` (inline RayQuery has no hit groups; AccelerationStructure.cpp), so the fog,
-  which has no geometry records, reads it as the others do. Opaque geometry always blocks. The first version was ONE
-  global 0.8, and the bathroom's door, curtains, towels, carpets, cups and window wall are alpha-tested too (Sketchfab):
-  a fifth of the sky came through them. A roll per ray and frame (tried before the fixed pick) has the same mean but is
-  noise every history must average: the GI probes behind the tent's wall walked 1-2 % in metre-sized blotches. Pinned
-  exposure, `rt.meshOpacity` 0 vs 1: the bathroom (palms outside the window) 0.09 % of pixels move > 8 levels, the
-  grove +2.0 % (crowns +1.9, sand +2.2). Cost (editor closed, alternated x3, grove / tunnel / tent / bathroom):
-  SkyVis +0.01-0.03 ms, GI trace +0.01-0.03, far +0.01-0.02, fog scatter +0.01. `rt.meshOpacity:0` = every card
-  solid, the A/B. The reflections keep `rt.alphaMode`.
+- **A tree's leaf card lets part of a visibility ray through: mesh.json `"rtCutoutOpacity"`** (2026-10-27, owner:
+  "make the leaves partly transparent for RT rays -- UE has the like", then "a per-MESH setting, only the trees; walls
+  must block fully", then "it hit a leaf, the leaf lets its share through, that's it -- the ray goes nowhere after").
+  As solid cards a palm crown shut out far more sky and sun than its fronds do (they cut 35-68 % of their cards away):
+  the sand under the crowns lay in full GI shade, a leaf's underside saw no sky through the leaves above. Every
+  visibility ray -- this pass, the GI's probe, shadow and sky rays, the fog's sky and sun rays -- asks the NEAREST
+  surface along it on the hardware's fast path (`rt_geometry.hlsli RtVisibilityTransmittance`: FORCE_OPAQUE, one
+  query, no candidate loop): a cutout of such a mesh lets `1 - opacity` through and the ray stops there; anything else
+  blocks. The GI probe's own ray stops on the card too and takes `opacity` of its radiance (the rest would have come from
+  behind it, not traced: no bounce). The value is the ASSET's (`RenderableObject::SetRtCutoutOpacity`, folded in by
+  ResolveMeshAsset like every mesh.json key; Mesh Editor > Ray tracing > "Cutout opacity"); absent = 1, every card solid
+  -- the five `*_palm` assets say 0.8 (20 % through; four of them sat at 0.2 for a while), fern and grass nothing. It rides the
+  TLAS instance's `InstanceContributionToHitGroupIndex` (inline RayQuery has no hit groups; AccelerationStructure.cpp):
+  bits 0-7 = 255 x (1 - opacity), bits 8-23 = which of the mesh's first 16 submesh slots are cutouts, so a palm's TRUNK
+  blocks fully -- and the fog, which has no geometry records, reads it as the others do. The first version was ONE global
+  0.8, and the bathroom's door, curtains, towels, carpets, cups and window wall are alpha-tested too (Sketchfab): a fifth
+  of the sky came through them. `rt.meshOpacity:0` = every card solid, the A/B; `rt.cutoutOpacity:<v>` (transient,
+  `--set` / MCP; < 0 off) stands in for every mesh that says < 1, to try a value live. The reflections keep `rt.alphaMode`.
+  - **Before (until 2026-10-27): a fixed share of a cutout's TRIANGLES blocked** (a hash of their ids) and the ray traced
+    on through the rest -- layers multiplied (0.8 per card: a crown of 3-5 cards passed 1 % or less), but without
+    FORCE_OPAQUE every alpha-tested triangle in the scene, a solid mesh's too, was a candidate the RT core handed back
+    to a Proceed() loop: ~1.2 ms of the grove's 5 ms frame. The number first written here (+0.01-0.03 ms) was wrong.
+  - **The NEAREST hit, not the traversal's first**: ACCEPT_FIRST_HIT (tried first) returns whichever hit the BVH finds
+    first -- a ray up from the bathroom found the palm crowns BEYOND its ceiling before the ceiling, and the closed room
+    saw the sky through its roof (sky visibility mean 66 -> 117 of 255 with the crowns at 0.2). Nearest: 65.8 / 65.8 / 65.7
+    with solid cards / 0.8 / 0.2. Solid cards (`rt.meshOpacity:0`) keep the any-hit query: there every hit answers the same.
+  - **Cost** (the live editor, panels closed, the grove camera [34,3.5,68] yaw 80 pitch 8 at 15:00, wind frozen, arms
+    alternated twice): GPU frame 4.07-4.09 ms vs 3.85-3.86 with solid cards (the triangle pick: 4.97-5.35) -- SkyVis
+    0.67 vs 0.51 (1.21-1.30), GI trace 0.29 vs 0.26 (0.43-0.47), far 0.12-0.13 vs 0.11 (0.20-0.22), fog scatter
+    0.25-0.28 vs 0.23 (0.44-0.47). GBV (`SkyVis,GiTrace,VolumetricFog,Skybox` + the Skybox self-test): clean.
+  - **The look** (the same camera, the exposure pinned to the solid-card frame, scratchpad `grove_opacity.py`): mean sRGB
+    luminance against solid cards, frame / sand / crowns -- 0.95 +2.8 / +2.9 / +3.9 %, 0.8 +9.0 / +9.8 / +12 %, 0.6 +15 /
+    +18 / +18 %, 0.4 +20 / +24 / +24 %, 0.2 +26 / +32 / +29 %, 0 +30 / +38 / +33 %. The sunlit sand and trunks brighten
+    (the sky and the bounce through the crowns); the sun's own shadows are SDSM's, not RT, and stay. The triangle pick at
+    0.8 measured +2.0 % (layers multiplied): one card now passes what a crown used to.
 - **In motion the history is read as UE and Lumen read theirs** (2026-10-26, owner: "SkyVis is very noisy and trails
   when the camera moves or turns fast"). Three things, each cited in `rt_sky_visibility_cs.hlsl SkyVisHistoryAt`:
   (1) the four texels around the reprojected point, bilinearly, each kept only if the point its own depth puts there
@@ -924,7 +940,8 @@ space with the open sky, and one fix uncovered the next (2026-10-26, owner in a 
   (`RtVisibilityBlocked`), out to `skyVis.maxDistance`; averaged by the fog's own history. Compiled in on RT hardware
   only (`FOG_SKY_OCCLUSION`, t15 = the TLAS), rides plan S (`skyVis.enabled:0` = the open sky in the air too). It
   was the rectangle: the tunnel's air from the 10 m start on glowed with the whole sky in front of dark walls. Cost
-  (Scatter, editor closed): +0.008-0.017 ms at 2 rays on the tunnel / sea / grove, up to +0.05 at 4. Frame-to-frame
+  (Scatter, editor closed): +0.008-0.017 ms at 2 rays on the tunnel / sea / grove, up to +0.05 at 4 -- with solid
+  cards; through the crowns' RT opacity (RT Sky Visibility, "A tree's leaf card") 0.25-0.28 ms of Scatter against 0.23. Frame-to-frame
   noise (10 shots, wind frozen): grove median 0.49 % at 0, 2 and 4 rays, the tunnel 1.92 / 1.95 / 2.07 % -- nothing
   measurable. Open views barely move (mean <= 0.15 %).
 - **SDSM's air traces the sun** (2026-10-27, owner's closed tent at 15:00, cam 71.43 1.96 40.75: "another volumetric
@@ -932,7 +949,7 @@ space with the open sky, and one fix uncovered the next (2026-10-26, owner in a 
   front of them need not lie in any box, and `CsmSampleChain` called such a point lit; the surfaces never notice, the
   volume is mostly that air. Legacy and VSM cover the frustum and were dark there. `fog_scatter_cs.hlsl FogSunShadow`:
   under SDSM, with the TLAS the fog's sky term binds, a point outside every partition traces one ray to the sun
-  (shadow casters, cutouts thinned as above). The tent's sun-only fog (`fog.debugView:4`, `fog.skyVolScatter:0`): mean
+  (shadow casters, a tree's leaf card partly open as above). The tent's sun-only fog (`fog.debugView:4`, `fog.skyVolScatter:0`): mean
   0.4 of 255, dark as in the other modes. Scatter +0.00-0.01 ms on four views. `fog.sunRtFallback:0` = before.
 - **Samples are kept in front of the depth** (`FogApplyDepthConstraint`, UE `ApplyDepthConstraintsToOffset`
   VolumetricFog.usf:87-114, on the medium and every lighting sample): a cell sample behind the surface its own pixel

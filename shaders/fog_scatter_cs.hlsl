@@ -60,7 +60,7 @@ Texture2DArray LocalShadowPool : register(t14);
 #define FOG_SKY_OCCLUSION 0
 #endif
 #if FOG_SKY_OCCLUSION
-#include "rt_geometry.hlsli" // RtVisibilityBlocked, RtWangHash
+#include "rt_geometry.hlsli" // RtVisibilityTransmittance, RtWangHash
 RaytracingAccelerationStructure FogTlas : register(t15); // a placeholder while fogLocal.w is 0 (never traced)
 #endif
 RWTexture3D<float4>     FogScatter    : register(u0);
@@ -197,7 +197,8 @@ float FogSunShadow(float3 P)
     // notice (each lies in its own box); the volume is mostly that air: inside the owner's closed tent at 15:00 the air
     // glowed with the sun everywhere but where the tent's shadow happened to land in a box (2026-10-27; Legacy and VSM,
     // whose maps cover the whole frustum, were dark there). Such a point asks the TLAS the fog already traces for the sky:
-    // one ray to the sun, the shadow casters (a cutout at its mesh's opacity, fogDepthParams.z: rt.meshOpacity).
+    // one ray to the sun, the shadow casters (a tree's leaf card lets 1 - its opacity through, fogDepthParams.z:
+    // rt.meshOpacity -- rt_geometry.hlsli RtVisibilityTransmittance).
     if (cascade == kCsmNoCascade && (fogFlags & kFogSunRtFallback) != 0u)
     {
         RayDesc ray;
@@ -205,7 +206,7 @@ float FogSunShadow(float3 P)
         ray.Direction = dirToLight;
         ray.TMin = 0.0f;
         ray.TMax = 1000.0f;
-        lit = RtVisibilityBlocked(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f) ? 0.0f : 1.0f; // rt::kInstanceMaskShadow
+        lit = RtVisibilityTransmittance(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f); // rt::kInstanceMaskShadow
     }
 #endif
     return cloud * lit;
@@ -343,7 +344,7 @@ float FogSkyVisibility(float3 P, uint3 coord, uint sampleIndex)
     ray.Origin = P;
     ray.TMin = 0.0f;
     ray.TMax = max(fogLocalParams2.z, 0.5f);
-    uint open = 0u;
+    float open = 0.0f;
     [loop]
     for (uint k = 0u; k < 8u; ++k)
     {
@@ -354,9 +355,9 @@ float FogSkyVisibility(float3 P, uint3 coord, uint sampleIndex)
         const float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
         const float phi = 2.0f * kPi * u2;
         ray.Direction = float3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi)); // +Y is up
-        if (!RtVisibilityBlocked(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f)) { ++open; } // rt::kInstanceMaskShadow
+        open += RtVisibilityTransmittance(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f); // rt::kInstanceMaskShadow
     }
-    return float(open) / float(rays);
+    return open / float(rays);
 #else
     return 1.0f;
 #endif

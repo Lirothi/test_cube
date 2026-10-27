@@ -27,16 +27,16 @@ static const uint kDdgiMaskShadow = 0x02u; // rt::kInstanceMaskShadow: what cast
 // The albedo is read a few mips down: a probe averages over a sphere, and a mip-0 texel per ray is noise.
 static const float kDdgiAlbedoMip = 3.0f;
 
-// rt_sky_visibility_cs.hlsl SkyRayBlocked: anything in the way, a cutout (a leaf card) at its mesh's opacity
-// (rt_geometry.hlsli RtVisibilityBlocked).
-bool DdgiOccluded(RaytracingAccelerationStructure tlas, float3 origin, float3 dir, float maxDistance)
+// rt_sky_visibility_cs.hlsl SkyRayTransmittance: the share of the light that gets through -- 0 behind the geometry,
+// 1 - opacity through a tree's leaf card (rt_geometry.hlsli RtVisibilityTransmittance), 1 open.
+float DdgiTransmittance(RaytracingAccelerationStructure tlas, float3 origin, float3 dir, float maxDistance)
 {
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = dir;
     ray.TMin = 1.0e-3f;
     ray.TMax = maxDistance;
-    return RtVisibilityBlocked(tlas, ray, kDdgiMaskShadow, meshOpacity != 0u);
+    return RtVisibilityTransmittance(tlas, ray, kDdgiMaskShadow, meshOpacity != 0u);
 }
 
 [numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + the 64 blended
@@ -69,27 +69,21 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     ray.Direction = dir;
     ray.TMin = 0.0f;
     ray.TMax = volumeParams.z;
-    // The closest GEOMETRY, no alpha test (that is the reflections' alone, rt_geometry.hlsli): of a cutout only the
-    // share of its triangles its mesh's opacity says blocks (RtCutoutCandidateBlocks) -- the closest of those, whatever
-    // the traversal's order. A mesh that says nothing: every card solid.
-    RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, meshOpacity == 0u ? RAY_FLAG_FORCE_OPAQUE : RAY_FLAG_NONE, 0xFFu, ray);
-    [loop]
-    while (q.Proceed())
-    {
-        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE &&
-            RtCutoutCandidateBlocks(q.CandidateInstanceContributionToHitGroupIndex(), q.CandidateInstanceID(),
-                                    q.CandidateGeometryIndex(), q.CandidatePrimitiveIndex()))
-        {
-            q.CommitNonOpaqueTriangleHit();
-        }
-    }
+    // The closest GEOMETRY, no alpha test (that is the reflections' alone, rt_geometry.hlsli). A tree's leaf card stops
+    // only its mesh's opacity of the ray (RtCutoutTransmittance); the rest would bring what lies behind it, which is not
+    // traced -- the ray goes no further -- and counts as a miss, no bounce: the hit's radiance is scaled by the card's share.
+    RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    q.Proceed();
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
     {
         rays[rayTexel] = float4(0.0f, 0.0f, 0.0f, 1.0e4f); // nothing in reach: no bounce from here
         return;
     }
     const float t = q.CommittedRayT();
+    const float cardShare = meshOpacity != 0u
+        ? 1.0f - RtCutoutTransmittance(q.CommittedInstanceContributionToHitGroupIndex(), q.CommittedGeometryIndex())
+        : 1.0f;
 
     const GeometryInfo g = geom[GeometryRecordIndex(q.CommittedInstanceID(), q.CommittedGeometryIndex())];
     ByteAddressBuffer vb = ResourceDescriptorHeap[g.vbIndex];
@@ -146,9 +140,9 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     // The sun (or the moon, whichever holds the light): lighting_cs's lightRgb, an RT shadow ray.
     const float3 L = normalize(-sunDirWS);
     const float sunNdotL = dot(N, L);
-    if (sunNdotL > 0.0f && any(lightRgb > 0.0f) && !DdgiOccluded(tlas,shadowOrigin, L, 1.0e4f))
+    if (sunNdotL > 0.0f && any(lightRgb > 0.0f))
     {
-        irradiance += lightRgb * sunNdotL;
+        irradiance += lightRgb * (sunNdotL * DdgiTransmittance(tlas, shadowOrigin, L, 1.0e4f));
     }
     // The lamps in reach, each with its shadow ray (a candle behind a wall lights nothing here).
     if (spotCount > 0u)
@@ -160,7 +154,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             const float3 rad = RtEvalSpotLight(spots[si], P, sl, sdist);
             const float ndl = dot(N, sl);
             if (ndl <= 0.0f || dot(rad, rad) <= 0.0f) { continue; }
-            if (!DdgiOccluded(tlas,shadowOrigin, sl, max(sdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
+            irradiance += rad * (ndl * DdgiTransmittance(tlas, shadowOrigin, sl, max(sdist - 0.04f, 0.0f)));
         }
     }
     if (pointCount > 0u)
@@ -172,7 +166,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             const float3 rad = RtEvalPointLight(points[pi], P, pl, pdist);
             const float ndl = dot(N, pl);
             if (ndl <= 0.0f || dot(rad, rad) <= 0.0f) { continue; }
-            if (!DdgiOccluded(tlas,shadowOrigin, pl, max(pdist - 0.04f, 0.0f))) { irradiance += rad * ndl; }
+            irradiance += rad * (ndl * DdgiTransmittance(tlas, shadowOrigin, pl, max(pdist - 0.04f, 0.0f)));
         }
     }
     float3 radiance = diffuse * kInvPi * irradiance;
@@ -190,10 +184,11 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         const float r = sqrt(u1);
         const float phi = 2.0f * kPi * u2;
         const float3 skyDir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(saturate(1.0f - u1)));
-        if (!DdgiOccluded(tlas,shadowOrigin, skyDir, skyRayDistance))
+        const float skyThrough = DdgiTransmittance(tlas, shadowOrigin, skyDir, skyRayDistance);
+        if (skyThrough > 0.0f)
         {
             TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
-            radiance += diffuse * skyIrradiance.SampleLevel(gSmp, N, 0).rgb * skyIrradianceScale;
+            radiance += diffuse * skyIrradiance.SampleLevel(gSmp, N, 0).rgb * (skyIrradianceScale * skyThrough);
         }
     }
     else
@@ -210,5 +205,5 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, probeState, gSmp, volume, P, N, -dir, 1.0f, w);
         radiance += diffuse * bounce * w;
     }
-    rays[rayTexel] = float4(radiance, t);
+    rays[rayTexel] = float4(radiance * cardShare, t);
 }

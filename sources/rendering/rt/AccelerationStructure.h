@@ -50,8 +50,9 @@ struct InstanceEntry {
     // not from anything per-instance.
     uint64_t nonOpaqueSlots = 0;
     uint32_t mask = kInstanceMaskAll; // D3D12 InstanceMask (8 bits); see kInstanceMaskShadow
-    // 255 x (1 - the object's RtCutoutOpacity): written as InstanceContributionToHitGroupIndex, which inline RayQuery
-    // (no hit groups) leaves free; the visibility rays read it per candidate (rt_geometry.hlsli). 0 = solid cards.
+    // 255 x (1 - the object's RtCutoutOpacity): written into InstanceContributionToHitGroupIndex with the cutout slots,
+    // which inline RayQuery (no hit groups) leaves free; the visibility rays read it at their hit (rt_geometry.hlsli
+    // RtCutoutTransmittance). 0 = solid cards.
     uint32_t cutoutTransparency = 0;
 };
 

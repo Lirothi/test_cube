@@ -5,7 +5,7 @@
     "young_palm_0",
     "young_palm_1"
   ],
-  "rtCutoutOpacity": 0.20000000298023224,
+  "rtCutoutOpacity": 0.8,
   "source": "import_staging\\young_palm\\scene.gltf",
   "texOffsScale": null,
   "uvDensity": [

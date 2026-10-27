@@ -472,7 +472,13 @@ void AccelerationStructureManager::BuildTlas(std::span<const InstanceEntry> inst
         d.Transform[2][2] = w.m[2][2]; d.Transform[2][3] = w.m[3][2];
         d.InstanceID = e.instanceId & 0xFFFFFFu;
         d.InstanceMask = e.mask & 0xFFu;
-        d.InstanceContributionToHitGroupIndex = e.cutoutTransparency & 0xFFu; // no hit groups: the cutout's transparency
+        // No hit groups (inline RayQuery only), so the field carries what the visibility rays need of a tree's cutouts
+        // (rt_geometry.hlsli RtCutoutTransmittance): bits 0-7 = the mesh's cutout transparency, bits 8-23 = which of its
+        // first 16 geometries (one per submesh slot) are cutouts -- a hit on any other (a palm's trunk) blocks fully.
+        d.InstanceContributionToHitGroupIndex =
+            e.cutoutTransparency != 0u
+                ? (e.cutoutTransparency & 0xFFu) | (static_cast<UINT>(e.nonOpaqueSlots & 0xFFFFull) << 8)
+                : 0u;
         d.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_NONE;
         if (e.blasOverride != 0) {
             // RW: this instance's wind-deformed BLAS, already built earlier in this command list.

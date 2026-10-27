@@ -287,7 +287,13 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 entry.world = desc.world.m; // Math::mat4 wraps a row-major XMFLOAT4X4
                 entry.mask = desc.castsShadow ? rt::kInstanceMaskAll : (rt::kInstanceMaskAll & ~rt::kInstanceMaskShadow);
                 // The mesh's cutout opacity for the visibility rays (mesh.json "rtCutoutOpacity"; 1 = solid -> 0).
-                entry.cutoutTransparency = gb ? static_cast<uint32_t>((1.0f - gb->RtCutoutOpacity()) * 255.0f + 0.5f) : 0u;
+                // `rt.cutoutOpacity` (SceneFrameData.h) stands in for it on every mesh that says < 1.
+                float cutoutOpacity = gb ? gb->RtCutoutOpacity() : 1.0f;
+                if (cutoutOpacity < 1.0f && frame.settings.rtCutoutOpacityOverride >= 0.0f)
+                {
+                    cutoutOpacity = frame.settings.rtCutoutOpacityOverride;
+                }
+                entry.cutoutTransparency = static_cast<uint32_t>((1.0f - cutoutOpacity) * 255.0f + 0.5f);
                 // TLAS InstanceID = the mesh's bindless geometry index (S9), so a hit
                 // can index the geometry/material table directly. Same owner+mesh ->
                 // same index (all instances of a cloud share one record run). Falls back to

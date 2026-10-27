@@ -671,10 +671,13 @@ struct SceneRenderSettings
     uint32_t skyVisFogRays = 2u;
     // The visibility rays -- the sky visibility, the GI's probe, shadow and sky rays, the fog's sky and sun -- take a
     // cutout card (an alpha-tested slot: a leaf, a frond) at its MESH's opacity (mesh.json "rtCutoutOpacity", the palms
-    // 0.8; absent = solid): that share of its triangles blocks them, a fixed pick per triangle (rt_geometry.hlsli
-    // RtCutoutTriangleBlocks). false = every card solid, the frame before 2026-10-27 (`--set rt.meshOpacity:0`, the A/B).
+    // 0.8; absent = solid): a ray that hits one carries 1 - opacity on and goes no further (rt_geometry.hlsli
+    // RtVisibilityTransmittance). false = every card solid, the frame before 2026-10-27 (`--set rt.meshOpacity:0`, the A/B).
     // The reflections' alpha modes (rtAlphaMode) are theirs alone.
     bool rtMeshOpacity = true;
+    // `rt.cutoutOpacity` (--set / MCP only, transient; < 0 = off): every mesh whose asset says rtCutoutOpacity < 1 takes
+    // this one instead -- a live A/B of the trees without editing their mesh.json. A mesh that says nothing stays solid.
+    float rtCutoutOpacityOverride = -1.0f;
     // The volumetric fog's samples less than a slice behind the surface their pixel sees are moved this many slices in
     // front of it (fog_scatter_cs.hlsl FogApplyDepthConstraint, UE r.VolumetricFog.GridCenterOffsetFromDepthBuffer 0.5);
     // < 0 = off, the cells straddling a wall then light the air in front of it with the air behind (`--set fog.depthOffset:-1`).

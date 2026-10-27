@@ -872,6 +872,7 @@ namespace
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
         if (setting == "rt.meshOpacity") { renderSettings.rtMeshOpacity = value != 0.0f; return true; }
+        if (setting == "rt.cutoutOpacity") { renderSettings.rtCutoutOpacityOverride = std::min(value, 1.0f); return true; }
         if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }
         if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
         if (setting == "ssr.temporalClampExpand") { renderSettings.ssrTemporalClampExpand = value; return true; }

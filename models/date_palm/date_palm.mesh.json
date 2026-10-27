@@ -26,7 +26,7 @@
     "date_palm_2",
     "date_palm_3"
   ],
-  "rtCutoutOpacity": 0.20000000298023224,
+  "rtCutoutOpacity": 0.8,
   "source": "import_staging\\date_palm\\scene.gltf",
   "texOffsScale": null,
   "uvDensity": [

@@ -63,16 +63,16 @@ SamplerState gSmpPoint : register(s1); // point clamp
 
 static const uint kSkyVisMaskShadow = 0x02u; // rt::kInstanceMaskShadow (rt_reflect_common.hlsli RT_MASK_SHADOW)
 
-// Anything in the way between `origin` and `maxDistance` along `dir` -- the geometry, a cutout (a leaf card) at its
-// mesh's opacity (rt_geometry.hlsli RtVisibilityBlocked).
-bool SkyRayBlocked(RaytracingAccelerationStructure tlas, float3 origin, float3 dir)
+// How much of the sky along `dir` gets through to `origin` within `maxDistance`: 0 behind the geometry, 1 - opacity
+// through a tree's leaf card (rt_geometry.hlsli RtVisibilityTransmittance), 1 open.
+float SkyRayTransmittance(RaytracingAccelerationStructure tlas, float3 origin, float3 dir)
 {
     RayDesc ray;
     ray.Origin = origin;
     ray.Direction = dir;
     ray.TMin = 1.0e-3f;
     ray.TMax = maxDistance;
-    return RtVisibilityBlocked(tlas, ray, kSkyVisMaskShadow, meshOpacity != 0u);
+    return RtVisibilityTransmittance(tlas, ray, kSkyVisMaskShadow, meshOpacity != 0u);
 }
 
 // UE r.AOHistoryDistanceThreshold 30 over its 1000 (ComputeHistoryWeightBasedOnPosition): a history corner whose
@@ -220,10 +220,7 @@ void CSTrace(uint3 dtid : SV_DispatchThreadID)
         const float r = sqrt(u1);
         const float phi = 2.0f * kPi * u2;
         const float3 d = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(saturate(1.0f - u1)));
-        if (!SkyRayBlocked(tlas, origin, d))
-        {
-            unoccluded += d;
-        }
+        unoccluded += d * SkyRayTransmittance(tlas, origin, d);
     }
     // UE's BentNormalNormalizeFactor: 1 / |mean direction of an open hemisphere|, which for
     // cosine-distributed directions is 1 / (2/3).

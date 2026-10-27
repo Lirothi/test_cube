@@ -1055,9 +1055,9 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawRestPoseSection();
     }
 
-    // Ray tracing: how much of a cutout card (an alpha-tested slot: a leaf, a frond) the VISIBILITY rays see -- the sky
-    // visibility, the GI, the fog (rt_geometry.hlsli RtVisibilityBlocked). Absent = 1, every card solid: a door or a
-    // curtain with an alpha test must block as a wall does. The palms take 0.8.
+    // Ray tracing: how much of the light a cutout card (an alpha-tested slot: a leaf, a frond) stops for the VISIBILITY
+    // rays -- the sky visibility, the GI, the fog (rt_geometry.hlsli RtVisibilityTransmittance). Absent = 1, every card
+    // solid: a door or a curtain with an alpha test must block as a wall does. The palms take 0.8.
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Ray tracing"))
     {
@@ -1069,10 +1069,10 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("The share of this mesh's alpha-tested triangles (leaf cards, fronds) that block the sky\n"
-                              "visibility, GI and fog rays; the rest let them through, a fixed pick per triangle.\n"
+            ImGui::SetTooltip("How much of the light this mesh's alpha-tested cards (leaves, fronds) stop for the sky\n"
+                              "visibility, GI and fog rays: a ray that hits one carries 1 - this on and goes no further.\n"
                               "1 = solid cards (the field is dropped from the file). Opaque geometry always blocks.\n"
-                              "Trees: 0.8. Applies to placed instances on Save.");
+                              "The palms: 0.8 (20 % through). Applies to placed instances on Save.");
         }
     }
 

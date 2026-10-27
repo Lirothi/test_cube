@@ -447,7 +447,8 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.historyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotHistory);
             c.countUavIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotCountUav);
             c.countHistoryIndex = rtAs_.Bindless().SceneIndex(frameIndex, kSkyVisSlotCountHistory);
-            // No alpha mode: the sky visibility sees the geometry, a leaf card solid (rt_geometry.hlsli RtVisibilityBlocked).
+            // No alpha mode: the sky visibility sees the geometry, a tree's leaf card at its mesh's opacity (rt_geometry.hlsli
+            // RtVisibilityTransmittance).
             c.outWidth = std::max(1u, (renderer->GetRenderWidth() + 1u) / 2u);
             c.outHeight = std::max(1u, (renderer->GetRenderHeight() + 1u) / 2u);
             c.rayCount = std::clamp(s.skyVisRays, 1u, 16u);

@@ -275,10 +275,10 @@ public:
     // casts (the ocean, particles: their CastsShadow() override is false with the switch left on). Such an object
     // keeps its shadow PSOs and its place in the GPU-driven table (ShadowGpuData::IsCaster) so the switch can go back.
     bool ShadowSwitchedOff() const { return !castsShadow_; }
-    // The share of this mesh's cutout triangles (alpha-tested slots: a leaf card, a frond) that block the VISIBILITY
-    // rays -- the sky visibility, the GI's probe/shadow/sky rays, the fog's sky and sun (rt_geometry.hlsli
-    // RtVisibilityBlocked). The asset's mesh.json "rtCutoutOpacity" (the palms 0.8); absent = 1, every card solid.
-    // Opaque geometry always blocks. Rides the TLAS instance (RtSceneAs).
+    // How much of the light this mesh's cutouts (alpha-tested slots: a leaf card, a frond) stop for the VISIBILITY rays
+    // -- the sky visibility, the GI's probe/shadow/sky rays, the fog's sky and sun: a ray that hits one carries 1 - this
+    // on and goes no further (rt_geometry.hlsli RtVisibilityTransmittance). The asset's mesh.json "rtCutoutOpacity" (the
+    // palms 0.8); absent = 1, every card solid. Opaque geometry always blocks. Rides the TLAS instance (RtSceneAs).
     void SetRtCutoutOpacity(float v) { rtCutoutOpacity_ = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
     float RtCutoutOpacity() const { return rtCutoutOpacity_; }
 
