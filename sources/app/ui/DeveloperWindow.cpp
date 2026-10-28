@@ -625,12 +625,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     {
                         for (int i = 0; i < rs.gpuTopCount; ++i)
                         {
-                            ImGui::Text("%-32s %8.3fM  %4.1f%%", rs.gpuTop[i].name,
+                            // In, its share of the frame's, and what survived the clipper (a VSM page draw feeds
+                            // every caster whole to each page it touches; the page borders throw the rest away).
+                            ImGui::Text("%-32s %8.3fM  %4.1f%%  past clipping %8.3fM", rs.gpuTop[i].name,
                                 static_cast<double>(rs.gpuTop[i].primitives) / 1.0e6,
                                 rs.gpuPrimitives > 0
                                     ? 100.0 * static_cast<double>(rs.gpuTop[i].primitives) /
                                           static_cast<double>(rs.gpuPrimitives)
-                                    : 0.0);
+                                    : 0.0,
+                                static_cast<double>(rs.gpuTop[i].rasterized) / 1.0e6);
                         }
                         ImGui::TreePop();
                     }

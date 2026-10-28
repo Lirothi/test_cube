@@ -59,6 +59,7 @@ struct RenderStats
     {
         char name[48] = {};
         uint64_t primitives = 0; // IAPrimitives of every list carrying this name, summed
+        uint64_t rasterized = 0; // CPrimitives of the same lists: what survived the clipper (VSM's page borders, a frustum)
     };
     bool gpuValid = false;
     uint64_t gpuPrimitives = 0;     // IAPrimitives: triangles the input assembler fed in

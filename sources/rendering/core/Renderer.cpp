@@ -1375,6 +1375,7 @@ void Renderer::PublishListStats(uint32_t slot)
             std::snprintf(it->name, sizeof(it->name), "%s", name);
         }
         it->primitives += data[i].IAPrimitives;
+        it->rasterized += data[i].CPrimitives;
     }
     const D3D12_RANGE noWrite{ 0, 0 };
     listStatsReadback_->Unmap(0, &noWrite);
@@ -1398,11 +1399,14 @@ void Renderer::PublishListStats(uint32_t slot)
     // so a headless run can read the same numbers the panel shows.
     LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::Render,
         "gpu stats: {:.3f}M tris in, {:.3f}M past clipping, {:.1f}M pixels shaded, {} lists ({} unmeasured); "
-        "top: {} {:.3f}M, {} {:.3f}M, {} {:.3f}M",
+        "top (in / past clipping): {} {:.3f}M / {:.3f}M, {} {:.3f}M / {:.3f}M, {} {:.3f}M / {:.3f}M",
         ia / 1.0e6, clipped / 1.0e6, ps / 1.0e6, measured, used - measured,
         stats.gpuTopCount > 0 ? stats.gpuTop[0].name : "-", stats.gpuTopCount > 0 ? stats.gpuTop[0].primitives / 1.0e6 : 0.0,
+        stats.gpuTopCount > 0 ? stats.gpuTop[0].rasterized / 1.0e6 : 0.0,
         stats.gpuTopCount > 1 ? stats.gpuTop[1].name : "-", stats.gpuTopCount > 1 ? stats.gpuTop[1].primitives / 1.0e6 : 0.0,
-        stats.gpuTopCount > 2 ? stats.gpuTop[2].name : "-", stats.gpuTopCount > 2 ? stats.gpuTop[2].primitives / 1.0e6 : 0.0);
+        stats.gpuTopCount > 1 ? stats.gpuTop[1].rasterized / 1.0e6 : 0.0,
+        stats.gpuTopCount > 2 ? stats.gpuTop[2].name : "-", stats.gpuTopCount > 2 ? stats.gpuTop[2].primitives / 1.0e6 : 0.0,
+        stats.gpuTopCount > 2 ? stats.gpuTop[2].rasterized / 1.0e6 : 0.0);
 }
 
 Renderer::ThreadCL Renderer::BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12PipelineState* pso)
