@@ -546,7 +546,7 @@ namespace
             float texOffsScale[4] = { mp.texOffsScale.x, mp.texOffsScale.y, mp.texOffsScale.z, mp.texOffsScale.w };
             if (ImGui::DragFloat4("Tex Offset/Scale", texOffsScale, 0.01f))
             {
-                gb->MaterialParamsRef().texOffsScale = Math::float4(texOffsScale[0], texOffsScale[1], texOffsScale[2], texOffsScale[3]);
+                gb->SetObjectTexOffsScale(Math::float4(texOffsScale[0], texOffsScale[1], texOffsScale[2], texOffsScale[3]));
                 obj.properties["texOffsScale"] = { texOffsScale[0], texOffsScale[1], texOffsScale[2], texOffsScale[3] };
                 ctx.document.SetDirty(true);
             }
@@ -554,7 +554,7 @@ namespace
             float normalStrength = mp.texFlags.w;
             if (ImGui::DragFloat("Normal Strength", &normalStrength, 0.01f, 0.0f, 10.0f))
             {
-                gb->MaterialParamsRef().SetNormalStrength(normalStrength);
+                gb->SetObjectNormalStrength(normalStrength); // every material slot, not slot 0 alone
                 obj.properties["normalStrength"] = normalStrength;
                 ctx.document.SetDirty(true);
             }
@@ -573,7 +573,7 @@ namespace
             bool useMR = mp.texFlags.y > 0.5f;
             if (ImGui::Checkbox("Use MR Texture", &useMR))
             {
-                gb->MaterialParamsRef().SetUseMR(useMR);
+                gb->SetObjectUseMR(useMR);
                 obj.properties["useMR"] = useMR;
                 ctx.document.SetDirty(true);
             }
@@ -581,7 +581,7 @@ namespace
             float metalRough[2] = { mp.metalRough.x, mp.metalRough.y };
             if (ImGui::DragFloat2("Metallic / Roughness", metalRough, 0.01f, 0.0f, 1.0f))
             {
-                gb->MaterialParamsRef().metalRough = Math::float2(metalRough[0], metalRough[1]);
+                gb->SetObjectMetalRough(Math::float2(metalRough[0], metalRough[1]));
                 obj.properties["metalRough"] = { metalRough[0], metalRough[1] };
                 ctx.document.SetDirty(true);
             }

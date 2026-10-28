@@ -15,10 +15,16 @@ class Mesh;
 namespace rt {
 
 // TLAS instance mask bits (UE RayTracingInstanceMask: RAY_TRACING_MASK_SHADOW and friends). A ray traces with the bits
-// it cares about; an instance answers when its mask shares one. Every instance carries everything except, for an
-// object with Cast Shadow off, kInstanceMaskShadow -- the shadow rays (rt_reflect_common.hlsli RT_MASK_SHADOW) skip it.
+// it cares about; an instance answers when its mask shares one. Every instance carries everything except the shadow
+// bits, of which a caster carries ONE: kInstanceMaskShadowTransmissive when its cutouts let light through (mesh.json
+// "rtCutoutOpacity" < 1, the palms), else kInstanceMaskShadowSolid. An object with Cast Shadow off carries neither --
+// the shadow rays (kInstanceMaskShadow, rt_geometry.hlsli kRtMaskShadow) skip it. The split lets a visibility ray ask
+// the solid casters first with an any-hit query and the transmissive ones for the nearest surface only if nothing solid
+// is in the way (rt_geometry.hlsli RtVisibilityTransmittance).
 inline constexpr uint32_t kInstanceMaskAll = 0xFFu;
-inline constexpr uint32_t kInstanceMaskShadow = 0x02u;
+inline constexpr uint32_t kInstanceMaskShadowSolid = 0x02u;
+inline constexpr uint32_t kInstanceMaskShadowTransmissive = 0x04u;
+inline constexpr uint32_t kInstanceMaskShadow = kInstanceMaskShadowSolid | kInstanceMaskShadowTransmissive;
 
 // A bottom-level acceleration structure (the built result buffer). Geometry in
 // this engine is static, so a BLAS is built once and cached per mesh.

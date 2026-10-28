@@ -23,7 +23,7 @@
 SamplerState gSmp      : register(s0); // linear clamp
 SamplerState gSmpPoint : register(s1); // point clamp
 
-static const uint kDdgiMaskShadow = 0x02u; // rt::kInstanceMaskShadow: what casts no shadow blocks no light
+static const uint kDdgiMaskShadow = kRtMaskShadow; // rt::kInstanceMaskShadow: what casts no shadow blocks no light
 // The albedo is read a few mips down: a probe averages over a sphere, and a mip-0 texel per ray is noise.
 static const float kDdgiAlbedoMip = 3.0f;
 
@@ -36,7 +36,7 @@ float DdgiTransmittance(RaytracingAccelerationStructure tlas, float3 origin, flo
     ray.Direction = dir;
     ray.TMin = 1.0e-3f;
     ray.TMax = maxDistance;
-    return RtVisibilityTransmittance(tlas, ray, kDdgiMaskShadow, meshOpacity != 0u);
+    return RtVisibilityTransmittance(tlas, ray, kDdgiMaskShadow, meshOpacity);
 }
 
 [numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + the 64 blended

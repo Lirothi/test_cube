@@ -613,9 +613,13 @@ PSOut PSMain(VSOut i)
 {
     float3 N = normalize(i.normalWS);
 #if GLASS_MATERIAL
-    if (!isFront) { N = -N; } // a two-sided slot (CULL_NONE) shades the face it shows
+    // A two-sided slot (CULL_NONE) shades the face it shows: the normal maps below are applied in the
+    // FRONT face's frame and the result is flipped (gbuffer.hlsl says why: T and B arrive unflipped).
+    const float faceSign = isFront ? 1.0f : -1.0f;
+#else
+    const float faceSign = 1.0f;
 #endif
-    const float3 geomN = N; // the local shadows' texel bias pushes along this, never the normal map's
+    const float3 geomN = N * faceSign; // the local shadows' texel bias pushes along this, never the normal map's
     float3 camPos = camPosSky.xyz;
     float3 V = normalize(camPos - i.posWS);
     float ior = max(matExtra.x, 1.0f);
@@ -693,6 +697,7 @@ PSOut PSMain(VSOut i)
 #endif
         N = normalize(T * nTS.x + B * nTS.y + baseN * nTS.z);
     }
+    N *= faceSign;
 
     float3 sunDir = normalize(sunDirAmbient.xyz);
     float ambientIntensity = sunDirAmbient.w;

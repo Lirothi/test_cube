@@ -1227,8 +1227,7 @@ SunRaysConstants BloomRenderer::SunRays() const
 }
 
 void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
-                                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource,
-                                   D3D12_CPU_DESCRIPTOR_HANDLE geometrySource)
+                                   D3D12_CPU_DESCRIPTOR_HANDLE sceneSource, bool jittered)
 {
     if (!frame_) { return; }
     const BloomSettings& settings = frame_->settings.bloom;
@@ -1273,12 +1272,23 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     // yzw: world up in view space, so the probe can tell the taps above the horizon from the sea.
     const Math::float3 upView = ToView(Math::float3(0.0f, 1.0f, 0.0f));
     g.sunGlareParams = Math::float4(kSunOffFrameFadeDeg * kDeg, upView.x, upView.y, upView.z);
+    // historyParams.xy (stage 12's, free here): this frame's jitter in NDC, what Camera added to the
+    // projection's _31/_32 -- the scene was drawn with it, so the taps follow the disc.
+    if (jittered)
+    {
+        const Math::mat4& drawn = frame_->camera->GetProjMatrix();
+        const Math::mat4& plain = frame_->camera->GetProjMatrixNoJitter();
+        g.historyParams = Math::float4(drawn.m._31 - plain.m._31, drawn.m._32 - plain.m._32, 0.0f, 0.0f);
+    }
+    else
+    {
+        g.historyParams = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
     // One group, one working thread; the UAV barrier makes its record visible to the glare and the
-    // tone curve after it. u0/u1 are only there because the table is positional. t1 is where the
-    // disc SHOWS (its visible share and centroid), read before the upscaler: DLSS rings on the disc.
+    // tone curve after it. u0/u1 are only there because the table is positional.
     RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
         [&](uint8_t* dest) { resources_->WriteBloomConvConstants(g, dest); },
-        { hdrSource, geometrySource, KernelSrv(D.lensFlareSRV),
+        { sceneSource, D.lensFlareSRV, KernelSrv(D.lensFlareSRV),
               renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
         { D.streakAUAV, D.bloomUpMipUAV[0], metering.ExposureUav() },
         samplerTable, 1u, 1u, metering.ExposureResource());

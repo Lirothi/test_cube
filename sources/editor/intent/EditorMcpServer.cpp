@@ -355,11 +355,17 @@ namespace editormcp
         ImportHost* g_importHost = nullptr; // frame thread only, like every document tool
         RuntimeHost* g_runtimeHost = nullptr; // the same
         LevelHost* g_levelHost = nullptr; // the same
+        ThumbnailHost* g_thumbnailHost = nullptr; // the same
     }
 
     void SetImportHost(ImportHost* host)
     {
         g_importHost = host;
+    }
+
+    void SetThumbnailHost(ThumbnailHost* host)
+    {
+        g_thumbnailHost = host;
     }
 
     void SetLevelHost(LevelHost* host)
@@ -577,6 +583,19 @@ namespace editormcp
                   "the person. The answer names what was undone. One entry per call, the same "
                   "as Ctrl+Z." },
                 { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "thumbnails" },
+                { "description",
+                  "Bake the Content Browser thumbnails of the named assets (mesh.json, material, texture) "
+                  "exactly as the browser does -- the same cache, the same preview renderer, the level's "
+                  "skybox as the environment -- also while the browser is hidden behind another tab (it "
+                  "bakes only what it draws). Returns at once with each asset's state; call again until "
+                  "every one is `ready` (a few frames each, one at a time), then `png` is the cached file "
+                  "under editor_cache/thumbnails. An up-to-date cached PNG answers `ready` straight away." },
+                { "inputSchema", ObjectSchema({
+                    { "assets", { { "type", "array" }, { "items", { { "type", "string" } } },
+                        { "description", "asset paths as the registry knows them, e.g. models/box/box.mesh.json" } } } }) },
             },
             {
                 { "name", "list_staging" },
@@ -953,6 +972,29 @@ namespace editormcp
             ToolResult result;
             result.text = text;
             result.isError = !saved;
+            return result;
+        }
+
+        if (name == "thumbnails")
+        {
+            if (!g_thumbnailHost)
+            {
+                return Error("There is no Content Browser here to bake thumbnails with.");
+            }
+            std::vector<std::string> assets;
+            if (arguments.contains("assets") && arguments["assets"].is_array())
+            {
+                for (const json& a : arguments["assets"])
+                {
+                    if (a.is_string()) { assets.push_back(a.get<std::string>()); }
+                }
+            }
+            if (assets.empty())
+            {
+                return Error("thumbnails needs `assets`: asset paths, e.g. [\"models/box/box.mesh.json\"].");
+            }
+            ToolResult result;
+            result.text = g_thumbnailHost->Request(assets);
             return result;
         }
 

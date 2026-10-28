@@ -413,7 +413,18 @@ localhost only; `sources/editor/intent/EditorMcpServer.*`), registered for Claud
 from the open level: every action, query and name — read it first), `run_action` /
 `preview_action` (the same `{action, target, params}` JSON the local model emits, through the same
 `ParseAnswer` → `BuildIntentPreview` → `ExecuteIntent`), `query`, `get_camera`, `set_camera`,
-`screenshot` (the editor window as a PNG, taken at the `--shot` safe point), `undo`.
+`screenshot` (the editor window as a PNG, taken at the `--shot` safe point), `undo`,
+`thumbnails {assets: [...]}` (the Content Browser's thumbnails baked through its own cache even while the
+browser is a hidden tab -- it bakes only what it draws; poll until each answers `ready`, `png` is the cached file).
+
+**When a thumbnail bakes** (`AssetThumbnailCache`, PNGs in `editor_cache/thumbnails`): when its signature changes --
+`kThumbnailSchemaVersion`, the asset's path and mtime, its materials' and textures' files, and the environment (the
+level skybox's path, mtime, intensity trim and cube size). The preview SHADER is not in it: a change to
+`editor_preview.hlsl` reaches no cached thumbnail until the schema version is bumped. Thumbnails take the preview's
+old uncalibrated path (key light 1, fill 0.3 of it, the level's HDRI cube for reflections); since 2026-10-28 (owner:
+"the thumbnails' specular is fucked" -- wallpaper like wet lacquer, cornices like chrome) the cube is brought to the
+fill's units by its log-average over 26 directions, and the cube's own sun is capped out of the reflection (16x the
+sky's level; it put white pixels on a palm's glossy fronds).
 
 The look-dev loop (2026-10-15): `set_settings {set: "bloom.intensity:0.03;tod.time:17.8"}` changes
 the running scene through `--set`'s own name table (App.cpp `ApplySweepValue`) -- TRANSIENT: no undo
@@ -474,7 +485,8 @@ Settle at A, `cut: false` to B, burst 120, diff every frame against B settled: t
 caught at frames 65-75 -- long after any single-shot trial looked. scratchpad-style `sdsm_burst.py`.
 A FLICKER IS READ FRAME BY FRAME: two `get_readouts` calls land ~10 frames apart and see a drift, never
 a flicker. `get_readouts {history: N}` (N <= 512) adds the newest N frames, one row EACH (frame,
-adapted/metered EV100, pre-exposure, the probe's window mean rgb and max luminance, the sun probe) --
+adapted/metered EV100, pre-exposure, the probe's window mean rgb and max luminance, the sun probe's luminance and visible
+share) --
 ExposureMetering's ring, filled as each readback slot retires. That is how the chrome star's 45 %
 frame-to-frame flicker and the ghosts' DLSS ringing were found (2026-10-15). `set_settings` with
 `resetExposure: false` changes a knob the way the Inspector does, without re-metering.
@@ -725,6 +737,30 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
   `kGlassTransmissionMin`; a split needs `kGlassOpaqueShareMin` of it opaque): one glTF material is often an atlas
   for mugs and tumblers alike. `intent_regression` holds it on the staged bathroom.
 
+## Two-Sided Surfaces -- the Back Face and the Sun
+
+A two-sided material's back face (`SV_IsFrontFace` false) takes its normal map in the FRONT face's frame and only then
+flips the result -- UE's order (`MaterialTemplate.ush:4369-4380`, `WorldNormal *= TwoSidedSign` after the tangent-space
+transform); every G-buffer shader, glass and the editor preview do it. Flipping the vertex normal first left the
+tangent unflipped and gave the back face (x, -y, -z) of the map instead of -(x, y, z).
+
+The sun's direct light also needs the visible side's GEOMETRIC normal to face it (`lighting_cs.hlsl
+SunGeometricTerminator`, rebuilt from the depth buffer, a ramp over N.L 0 -> 0.05; an edge pixel -- the nearer
+neighbour farther than 3 % of the distance -- is not gated). Why (2026-10-28, owner: "light leaking" inside the tent,
+cam 70.85 2.24 41.52 at 16:00): the cloth's folds are mostly its normal map, and on the inside the map tilted pixels
+toward a sun that lay behind the cloth. No shadow map catches that -- the receiver is its own caster; Legacy, SDSM and
+VSM leaked alike with every bias at zero and the LODs off. Traced on the staged glTF from that camera (scratchpad
+`tent_rays.py`): 99.5 % of the lit pixels sat on triangles facing away from the sun (N.L median -0.23), the vertex
+normals the same; the tent's normal strength at 0 made the leak go. Measured with the exposure pinned: the tent -5.9 %,
+the bathroom -1.1 % (0.07 % of pixels over 8 levels), the grove -0.13 % (1.4 %, under its 1.7 % frame-to-frame floor),
+Pass_Lighting +0.01-0.015 ms. `--set light.geometricTerminator:0` = before. Local lights are not gated (yet).
+
+Object-level surface keys (`normalStrength`, `metalRough`, `useMR`, `useAlbedo`, `baseColor`, `texOffsScale`, the
+emissive pair) reach EVERY material slot -- at load (`GBufferRenderable::MergeMaterialDefaults`) and live
+(`SetObject*`: the Inspector, MCP `setSurface`); they used to reach slot 0 alone, so on the tent (sticks, ropes, cloth)
+`setSurface` changed the sticks and reported success. No level carried such a key on a multi-slot mesh (checked
+over data/levels), so no saved look moved.
+
 ## RT Sky Visibility -- the Sky Stops Lighting What It Cannot See
 
 `Main_SkyVis` (`shaders/rt_sky_visibility_cs.hlsl`) is UE's Distance Field AO bent normal traced with inline
@@ -745,7 +781,11 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   0/2/3 does not run unless reflections are RT).
 - The body writes the target on EVERY path: traced, or cleared to the open sky while the TLAS is not ready --
   lighting and compose read it on the strength of `decisions_.skyVisTraced`, set by the builder.
-- Cost is the ray count, not the reach: 4 rays 0.28-0.34 ms on wind_test's grove, 8 rays 0.63, 2 rays 0.18.
+- Cost is the ray count: 4 rays 0.28-0.34 ms on wind_test's grove, 8 rays 0.63, 2 rays 0.18. Split (2026-10-28, 8 rays,
+  the nearest-hit query): ~0.053 ms a ray on the grove, 0.021 in the tunnel, plus ~0.2 / 0.15 that does not follow the
+  rays (the G-buffer reads and the reprojection at 743x418; the 9x9 filter is 0.01-0.05 of it). A ray's price is its
+  traversal: on the grove the reach 15 -> 5 m saved 0.24 ms and solid cards 0.2 -- which the two any-hit queries
+  (below, "A tree's leaf card") now save too.
 - Noise (2026-10-24, owner: "the wall is noisy"): a wall lit by a window that fills a few % of its hemisphere gets
   the sky from a few of its rays now and then. wind_test's second room at 24:00 (cam -21.92,1.07,89.75), per-pixel
   temporal std over 12 clean shots (scratchpad noise_map.py): 0.9 and no filter 9.4 % median (p90 18 %), 0.95 +
@@ -816,6 +856,20 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
     +18 / +18 %, 0.4 +20 / +24 / +24 %, 0.2 +26 / +32 / +29 %, 0 +30 / +38 / +33 %. The sunlit sand and trunks brighten
     (the sky and the bounce through the crowns); the sun's own shadows are SDSM's, not RT, and stay. The triangle pick at
     0.8 measured +2.0 % (layers multiplied): one card now passes what a crown used to.
+  - **Two any-hit queries, not one nearest** (2026-10-28, `rt.meshOpacity` 1; 2 = the one nearest-hit query above, the
+    A/B; 0 = solid cards): the shadow bit of the TLAS mask is split -- a caster whose mesh says rtCutoutOpacity < 1
+    answers `rt::kInstanceMaskShadowTransmissive` (0x04), every other caster `kInstanceMaskShadowSolid` (0x02), the
+    visibility rays trace both (`kRtMaskShadow`). Anything solid in the way blocks wherever it lies (any hit ends it --
+    still the ceiling between the bathroom and the crowns); a ray that met nothing solid takes the first transmissive
+    surface the traversal finds: a cutout passes 1 - opacity, a trunk nothing. A leaf in front of something solid now
+    passes nothing; a ray through a frond AND a trunk takes either (the wind BLAS's order: one of 8 rays, 0 or 0.2, under
+    the 9x9 filter and the 0.995 history -- the grove's visibility moved alike frame to frame in all modes, 48 frames, wind
+    on). Live editor, wind frozen, alternated twice, against the nearest query: SkyVis grove 0.505-0.508 vs 0.660-0.663
+    ms (solid cards 0.49-0.51), bathroom 0.31-0.32 vs 0.43-0.44, tunnel the same (0.34); GI trace grove 0.24 vs 0.27; fog
+    scatter grove 0.15-0.22 vs 0.25-0.26. The look (exposure pinned): grove -0.10 %, |d| > 8 on 1.7 % of the frame (the
+    crowns and trunks only), bathroom +0.4 %; solid cards stay -8 % on the grove. Tried first: the nearest surface among
+    the transmissive meshes in the second query -- 0.63-0.66 ms on the grove, the rays up through the crowns meet nothing
+    solid. GBV (`SkyVis,GiTrace,VolumetricFog,Tonemap,Skybox` + the Skybox self-test): clean.
 - **In motion the history is read as UE and Lumen read theirs** (2026-10-26, owner: "SkyVis is very noisy and trails
   when the camera moves or turns fast"). Three things, each cited in `rt_sky_visibility_cs.hlsl SkyVisHistoryAt`:
   (1) the four texels around the reprojected point, bilinearly, each kept only if the point its own depth puts there

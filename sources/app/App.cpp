@@ -872,7 +872,7 @@ namespace
         if (setting == "glass.wall") { renderSettings.glassWallThickness = std::clamp(value, 0.0f, 0.5f); return true; }
         // RW: wind-deformed BLASes for near casters (sway in RT reflections) + their radius.
         if (setting == "rt.windBlas") { renderSettings.rtWindBlas = value != 0.0f; return true; }
-        if (setting == "rt.meshOpacity") { renderSettings.rtMeshOpacity = value != 0.0f; return true; }
+        if (setting == "rt.meshOpacity") { renderSettings.rtMeshOpacity = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f) + 0.5f); return true; }
         if (setting == "rt.cutoutOpacity") { renderSettings.rtCutoutOpacityOverride = std::min(value, 1.0f); return true; }
         if (setting == "rt.windRadius") { renderSettings.rtWindBlasRadius = value; return true; }
         if (setting == "ssr.temporalBlend") { renderSettings.ssrTemporalBlendWeight = value; return true; }
@@ -1335,6 +1335,8 @@ namespace
         if (setting == "debug.probeV")      { renderSettings.debugProbeV = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "debug.probeRadius") { renderSettings.debugProbeRadiusPx = std::clamp(value, 0.0f, 128.0f); return true; }
         if (setting == "debug.probeSource") { renderSettings.debugProbeSource = value >= 1.5f ? 2u : (value >= 0.5f ? 1u : 0u); return true; }
+        if (setting == "debug.sunProbeAfterDlss") { renderSettings.sunProbeAfterDlss = value != 0.0f; return true; }
+        if (setting == "light.geometricTerminator") { renderSettings.sunGeometricTerminator = value != 0.0f; return true; }
         // (1 + metal * this) on the analytic sun specular (graphics_settings reflections.sunMetalSpec).
         if (setting == "light.sunMetalSpec") { renderSettings.sunMetalSpecInfluence = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "light.sunTemperatureK")
@@ -2039,15 +2041,16 @@ namespace
             std::vector<ExposureMetering::HistoryRow> rows(static_cast<size_t>(historyRows));
             rows.resize(renderer_.Exposure().History(rows.data(), rows.size()));
             out += ",\"history\":{\"columns\":[\"frame\",\"adaptedEv100\",\"targetEv100\",\"preExposure\","
-                   "\"probeMeanR\",\"probeMeanG\",\"probeMeanB\",\"probeMaxLuma\",\"sunProbeLuma\"],\"rows\":[";
+                   "\"probeMeanR\",\"probeMeanG\",\"probeMeanB\",\"probeMaxLuma\",\"sunProbeLuma\","
+                   "\"sunProbeShare\"],\"rows\":[";
             char row[256];
             for (size_t i = 0; i < rows.size(); ++i)
             {
                 const ExposureMetering::HistoryRow& r = rows[i];
-                std::snprintf(row, sizeof(row), "%s[%llu,%.4f,%.4f,%.6g,%.5g,%.5g,%.5g,%.5g,%.5g]",
+                std::snprintf(row, sizeof(row), "%s[%llu,%.4f,%.4f,%.6g,%.5g,%.5g,%.5g,%.5g,%.5g,%.4f]",
                     i ? "," : "", static_cast<unsigned long long>(r.frame), r.adaptedEv100, r.targetEv100,
                     static_cast<double>(r.preExposure), r.probeMean[0], r.probeMean[1], r.probeMean[2],
-                    r.probeMaxLuma, r.sunProbeLuma);
+                    r.probeMaxLuma, r.sunProbeLuma, r.sunProbeShare);
                 out += row;
             }
             out += "]}}";

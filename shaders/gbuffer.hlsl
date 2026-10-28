@@ -69,8 +69,14 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     // Two-sided foliage (CULL_NONE fronds): a backface reuses the front vertex normal, which points
     // away from the camera → wrong diffuse (dark) + spurious specular. Flip it to face out of the
     // visible side. No-op for single-sided meshes (backfaces are culled, isFrontFace always true).
-    float3 NNorm = normalize(i.NWS);
-    if (!isFrontFace) { NNorm = -NNorm; }
+    //   The normal map is applied in the FRONT face's frame and the RESULT is flipped -- UE's order
+    // (MaterialTemplate.ush:4369-4380: WorldNormal *= TwoSidedSign after the tangent-space transform).
+    // Flipping the vertex normal first left the tangent as it was, so a back face took the map's tilt
+    // along T with the wrong sign -- (x, -y, -z) instead of -(x, y, z): the tent's folds turned their
+    // inner sides toward a sun behind the cloth, where no shadow map can help, the receiver being the
+    // caster (owner, 2026-10-28: "light leaking" inside the tent).
+    const float3 NNorm = normalize(i.NWS);
+    const float faceSign = isFrontFace ? 1.0f : -1.0f;
 
     float3 albedo;
     float2 mr;
@@ -92,6 +98,7 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     {
         N = NNorm;
     }
+    N *= faceSign;
     float2 currUv = ClipToUV(i.clipH);
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;

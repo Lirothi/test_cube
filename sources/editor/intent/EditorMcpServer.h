@@ -88,6 +88,19 @@ namespace editormcp
     };
     void SetImportHost(ImportHost* host);
 
+    // The Content Browser's thumbnails, for `thumbnails`: the named assets' previews baked exactly as the
+    // browser bakes them (AssetThumbnailCache, the PNGs under editor_cache/thumbnails) -- also while the
+    // browser sits behind another tab, where it does not draw and so bakes nothing. Registered by the editor;
+    // a host without one (the gate) refuses. Frame thread only.
+    class ThumbnailHost
+    {
+    public:
+        virtual ~ThumbnailHost() = default;
+        // Queues what is not ready yet; a JSON array, one {asset, state, png} per asset.
+        virtual std::string Request(const std::vector<std::string>& assets) = 0;
+    };
+    void SetThumbnailHost(ThumbnailHost* host);
+
     // The open level's FILE, for save_level: written exactly as Ctrl+S writes it (the editor's own
     // serializer). Only when the person asked -- owner, 2026-10-23: «сам все сохраняй что надо»; an
     // edit over MCP is otherwise theirs to keep or discard. Registered by the editor like the import

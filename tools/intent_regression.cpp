@@ -983,6 +983,36 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     const std::optional<json> noLevel = call(10, "tools/call", { { "name", "save_level" } });
     Check((*noLevel)["result"]["isError"].get<bool>(), "save_level without a level host is refused: " + text(noLevel));
 
+    // thumbnails: listed; refused without the editor's thumbnail host and without assets; with one, the asset
+    // list reaches it as given and its answer comes back verbatim.
+    bool listsThumbnails = false;
+    for (const json& tool : (*list)["result"]["tools"]) { listsThumbnails = listsThumbnails || tool.value("name", "") == "thumbnails"; }
+    Check(listsThumbnails, "the tool list offers thumbnails");
+    const std::optional<json> noThumbHost = call(1100, "tools/call", { { "name", "thumbnails" },
+        { "arguments", { { "assets", json::array({ "models/box/box.mesh.json" }) } } } });
+    Check((*noThumbHost)["result"]["isError"].get<bool>(), "thumbnails without a thumbnail host is refused: " + text(noThumbHost));
+    {
+        struct FakeThumbnailHost final : editormcp::ThumbnailHost
+        {
+            std::vector<std::string> asked;
+            std::string Request(const std::vector<std::string>& assets) override
+            {
+                asked = assets;
+                return "[{\"asset\":\"models/box/box.mesh.json\",\"state\":\"queued\",\"png\":\"\"}]";
+            }
+        } thumbs;
+        editormcp::SetThumbnailHost(&thumbs);
+        const std::optional<json> noAssets = call(1101, "tools/call", { { "name", "thumbnails" } });
+        Check((*noAssets)["result"]["isError"].get<bool>() && thumbs.asked.empty(),
+            "thumbnails without assets is refused before the host: " + text(noAssets));
+        const std::optional<json> queued = call(1102, "tools/call", { { "name", "thumbnails" },
+            { "arguments", { { "assets", json::array({ "models/box/box.mesh.json", 7 }) } } } });
+        Check(thumbs.asked == std::vector<std::string>{ "models/box/box.mesh.json" } &&
+              text(queued).find("\"queued\"") != std::string::npos,
+            "thumbnails hands the host its asset paths (a non-string dropped) and answers with its states: " + text(queued));
+        editormcp::SetThumbnailHost(nullptr);
+    }
+
     // The runtime door (set_settings / reset_settings / get_readouts): listed; refused without an app
     // behind it; with one, --set's own syntax reaches it name by name, an unknown name is reported
     // rather than swallowed, and the exposure is re-metered after a change.

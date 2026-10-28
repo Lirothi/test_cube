@@ -206,7 +206,7 @@ float FogSunShadow(float3 P)
         ray.Direction = dirToLight;
         ray.TMin = 0.0f;
         ray.TMax = 1000.0f;
-        lit = RtVisibilityTransmittance(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f); // rt::kInstanceMaskShadow
+        lit = RtVisibilityTransmittance(FogTlas, ray, kRtMaskShadow, (uint)(fogDepthParams.z + 0.5f)); // rt::kInstanceMaskShadow
     }
 #endif
     return cloud * lit;
@@ -355,7 +355,7 @@ float FogSkyVisibility(float3 P, uint3 coord, uint sampleIndex)
         const float sinTheta = sqrt(saturate(1.0f - cosTheta * cosTheta));
         const float phi = 2.0f * kPi * u2;
         ray.Direction = float3(sinTheta * cos(phi), cosTheta, sinTheta * sin(phi)); // +Y is up
-        open += RtVisibilityTransmittance(FogTlas, ray, 0x02u, fogDepthParams.z > 0.5f); // rt::kInstanceMaskShadow
+        open += RtVisibilityTransmittance(FogTlas, ray, kRtMaskShadow, (uint)(fogDepthParams.z + 0.5f)); // rt::kInstanceMaskShadow
     }
     return open / float(rays);
 #else

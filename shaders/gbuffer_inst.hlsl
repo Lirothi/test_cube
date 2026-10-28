@@ -72,9 +72,10 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
                   baseColor.a, alphaCutoff);
 
-    // Two-sided foliage: flip a backface normal to face out of the visible side (see gbuffer.hlsl).
-    float3 NNorm = normalize(i.NWS);
-    if (!isFrontFace) { NNorm = -NNorm; }
+    // Two-sided foliage: flip a backface normal to face out of the visible side -- the normal map in the
+    // front face's frame, THEN the flip (see gbuffer.hlsl).
+    const float3 NNorm = normalize(i.NWS);
+    const float faceSign = isFrontFace ? 1.0f : -1.0f;
 
     float3 albedo;
     float2 mr;
@@ -94,6 +95,7 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     {
         N = NNorm;
     }
+    N *= faceSign;
 
     float2 currUv = ClipToUV(i.clipH);
     float2 prevUv = ClipToUV(i.prevH);

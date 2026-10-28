@@ -106,6 +106,13 @@ bool RtAlphaCandidatePasses(StructuredBuffer<GeometryInfo> geomBuf, SamplerState
     return (float(h & 0xFFFFu) * (1.0f / 65535.0f)) < missKeep;
 }
 
+// TLAS instance mask bits (AccelerationStructure.h): a shadow caster carries ONE of the two shadow bits -- the
+// transmissive one when its cutouts let light through (mesh.json "rtCutoutOpacity" < 1, the palms), else the solid one;
+// Cast Shadow off carries neither. A visibility ray is traced with kRtMaskShadow (both).
+static const uint kRtMaskShadowSolid = 0x02u;
+static const uint kRtMaskShadowTransmissive = 0x04u;
+static const uint kRtMaskShadow = kRtMaskShadowSolid | kRtMaskShadowTransmissive;
+
 // A VISIBILITY ray ("is anything in the way") -- every RT ray that is not a reflection's: the sky visibility, the GI's
 // shadow and sky rays, a reflection hit's shadow rays. It sees the GEOMETRY, a leaf card as a solid card, no alpha test
 // (owner, 2026-10-26): the alpha modes (rt_reflect_common.hlsli alphaMode) are the reflection rays' alone. Any triangle
@@ -149,12 +156,44 @@ float RtCutoutTransmittance(uint packed, uint geometryIndex)
 // away): the sand under the crowns lay in full GI shade, a leaf's underside saw no sky through the leaves above.
 // The first version took a fixed share of a cutout's TRIANGLES as blocking (a hash of their ids) and traced on through
 // the rest: without FORCE_OPAQUE every alpha-tested triangle in the scene was a candidate the RT core handed back to a
-// Proceed() loop, ~1.2 ms of the grove's 5 ms frame. `meshOpacity` false (`rt.meshOpacity:0`, the A/B) = every card solid.
-float RtVisibilityTransmittance(RaytracingAccelerationStructure tlas, RayDesc ray, uint instanceMask, bool meshOpacity)
+// Proceed() loop, ~1.2 ms of the grove's 5 ms frame. `meshOpacity` 0 (`rt.meshOpacity:0`, the A/B) = every card solid.
+//   TWO ANY-HIT QUERIES (2026-10-28, owner: "do the two queries"): the nearest hit over the WHOLE scene cost the grove's
+// sky visibility 0.63-0.67 ms against 0.49-0.51 for the any-hit query of solid cards -- the traversal had to rule out
+// every nearer surface. Now (1) anything SOLID in the way blocks wherever it lies -- `instanceMask`'s solid bit, any
+// hit ends it -- which is what keeps a ceiling between the bathroom and the crowns above it; (2) only a ray that met
+// nothing solid asks the transmissive meshes, and takes whichever of their surfaces the traversal meets first: a
+// cutout passes 1 - opacity, a trunk nothing. Measured (the live editor, wind frozen, alternated twice, sky visibility
+// / against the one nearest-hit query): grove 0.50 / 0.63-0.66 ms (solid cards 0.49), bathroom 0.33-0.34 / 0.41-0.44,
+// tunnel 0.34 / 0.32-0.34. What moves: a leaf in front of something solid passes nothing (the ray stopped on the leaf
+// and passed 1 - opacity), and a ray through one palm's frond AND a trunk takes either answer -- the BVH's order, which
+// the wind BLAS rebuild changes: one of 8 rays, 0 or 0.2, under the 9x9 filter and a 0.995 history; the grove's
+// visibility moved frame to frame alike in every mode (48 frames, wind on). `instanceMask` carries the shadow bits.
+// `meshOpacity` is rt.meshOpacity: 0 every card solid, 1 the two queries, 2 the one nearest-hit query (the A/B of 1).
+float RtVisibilityTransmittance(RaytracingAccelerationStructure tlas, RayDesc ray, uint instanceMask, uint meshOpacity)
 {
-    if (!meshOpacity)
+    if (meshOpacity == 0u)
     {
         return RtVisibilityBlocked(tlas, ray, instanceMask) ? 0.0f : 1.0f;
+    }
+    if (meshOpacity == 1u)
+    {
+        if (RtVisibilityBlocked(tlas, ray, instanceMask & kRtMaskShadowSolid))
+        {
+            return 0.0f;
+        }
+        const uint transmissive = instanceMask & kRtMaskShadowTransmissive;
+        if (transmissive == 0u)
+        {
+            return 1.0f;
+        }
+        RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> f;
+        f.TraceRayInline(tlas, RAY_FLAG_NONE, transmissive, ray);
+        f.Proceed();
+        if (f.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
+        {
+            return 1.0f;
+        }
+        return RtCutoutTransmittance(f.CommittedInstanceContributionToHitGroupIndex(), f.CommittedGeometryIndex());
     }
     RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(tlas, RAY_FLAG_NONE, instanceMask, ray);

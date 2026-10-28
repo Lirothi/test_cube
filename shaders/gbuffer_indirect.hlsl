@@ -138,8 +138,9 @@ PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
     AlphaTestClip(gAlbedo, gSmp, i.UV, texOffsScale, terrainTiling, terrainEdgeParams,
                   baseColor.a, alphaCutoff);
 
-    float3 NNorm = normalize(i.NWS);
-    if (!isFrontFace) { NNorm = -NNorm; }
+    // A back face: the normal map in the front face's frame, THEN the flip (gbuffer.hlsl says why).
+    const float3 NNorm = normalize(i.NWS);
+    const float faceSign = isFrontFace ? 1.0f : -1.0f;
 
     float3 albedo;
     float2 mr;
@@ -159,6 +160,7 @@ PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
     {
         N = NNorm;
     }
+    N *= faceSign;
     float2 currUv = ClipToUV(i.clipH);
     float2 prevUv = ClipToUV(i.prevH);
     float2 motion = currUv - prevUv;

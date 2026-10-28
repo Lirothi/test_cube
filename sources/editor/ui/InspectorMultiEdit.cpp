@@ -295,30 +295,28 @@ void InspectorMultiEdit::ApplySnapshot(EditorContext& ctx, const Snapshot& snaps
         };
         if (auto* gb = runtime->AsGBufferRenderable())
         {
-            if (changed("texOffsScale")) { gb->MaterialParamsRef().texOffsScale = Float4(values["texOffsScale"]); }
-            if (changed("normalStrength")) { gb->MaterialParamsRef().SetNormalStrength(values["normalStrength"].get<float>()); }
+            // Every surface key reaches all of the object's material slots (GBufferRenderable::SetObject*).
+            if (changed("texOffsScale")) { gb->SetObjectTexOffsScale(Float4(values["texOffsScale"])); }
+            if (changed("normalStrength")) { gb->SetObjectNormalStrength(values["normalStrength"].get<float>()); }
             if (changed("windStrength")) { gb->SetWindStrength(values["windStrength"].get<float>()); }
-            if (changed("useMR")) { gb->MaterialParamsRef().SetUseMR(values["useMR"].get<bool>()); }
+            if (changed("useMR")) { gb->SetObjectUseMR(values["useMR"].get<bool>()); }
             // The albedo texture off (a flat colour) -- or back on, but only where the material has one.
             if (changed("useAlbedo"))
             {
-                const MaterialData* md = gb->GetMaterialData();
-                gb->MaterialParamsRef().SetUseAlbedo(values["useAlbedo"].get<bool>() && md && md->hasAlbedo);
+                gb->SetObjectUseAlbedo(values["useAlbedo"].get<bool>());
                 gb->MarkMaterialParamOverride(GBufferRenderable::MaterialParamField::UseAlbedo);
             }
             if (changed("metalRough"))
             {
-                gb->MaterialParamsRef().metalRough = Math::float2(
-                    values["metalRough"][0].get<float>(), values["metalRough"][1].get<float>());
+                gb->SetObjectMetalRough(Math::float2(
+                    values["metalRough"][0].get<float>(), values["metalRough"][1].get<float>()));
             }
             // The tint. Alpha is left as the material set it: painting something red is
             // about its colour, and quietly making it transparent would be a surprise.
             if (changed("baseColor"))
             {
-                Math::float4& c = gb->MaterialParamsRef().baseColor;
-                c = Math::float4(values["baseColor"][0].get<float>(),
-                    values["baseColor"][1].get<float>(),
-                    values["baseColor"][2].get<float>(), c.w);
+                gb->SetObjectBaseColorRgb(Math::float3(values["baseColor"][0].get<float>(),
+                    values["baseColor"][1].get<float>(), values["baseColor"][2].get<float>()));
                 gb->MarkMaterialParamOverride(
                     GBufferRenderable::MaterialParamField::BaseColor);
             }

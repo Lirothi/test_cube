@@ -242,7 +242,7 @@ void SceneRenderer::Pass_GiTrace(Renderer* renderer, RenderGraphPassContext ctx,
             // Each cascade feeds back into its own hits once a generation of it exists to read.
             c.bounceOn = (s.giInfiniteBounce && ddgi_[k].AppliedGeneration() == chain.frame[k].generation) ? 1u : 0u;
             c.twoSidedSheets = s.giTwoSidedSheets ? 1u : 0u;
-            c.meshOpacity = s.rtMeshOpacity ? 1u : 0u;
+            c.meshOpacity = s.rtMeshOpacity;
             c.skyRayDistance = std::max(s.skyVisMaxDistance, 0.5f); // plan S's reach for the sky at a hit
 
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(DdgiConstants), render::kConstantBufferAlignment);

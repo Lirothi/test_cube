@@ -132,6 +132,18 @@ public:
 
     MaterialData* GetMaterialData() const { return matDatas_.empty() ? nullptr : matDatas_[0].get(); }
 
+    // OBJECT-LEVEL SURFACE EDITS REACH EVERY SLOT (2026-10-28). They wrote MaterialParamsRef(), slot 0, and nothing
+    // else: on a multi-material mesh (the tent: sticks, ropes, cloth) the Inspector's Normal Strength / Metallic /
+    // Roughness and MCP setSurface changed the sticks and reported success. Each setter writes all slots (as the
+    // level's object keys now merge into all of them, MergeMaterialDefaults); a texture switch is honoured only where
+    // that slot's material has the texture. Reading stays MaterialParamsRef() -- slot 0 carries the same values.
+    void SetObjectTexOffsScale(const Math::float4& v);
+    void SetObjectNormalStrength(float strength);
+    void SetObjectUseMR(bool on);
+    void SetObjectUseAlbedo(bool on);
+    void SetObjectMetalRough(const Math::float2& metalRough);
+    void SetObjectBaseColorRgb(const Math::float3& rgb); // alpha stays each slot's own
+
     // B2: material slots (submesh i draws with slot subs[i].materialSlot). Single-slot objects
     // behave exactly as before.
     size_t SlotCount() const { return matDatas_.size(); }
@@ -334,7 +346,14 @@ private:
     void ResolveMaterialSlots(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive);
-    void MergeMaterialDefaults(size_t slot, const MaterialParams& defaults);
+    // `objectValues`: the object's own params as the factory wrote them, before any slot was resolved.
+    void MergeMaterialDefaults(size_t slot, const MaterialParams& defaults, const MaterialParams& objectValues);
+    // Every live surface edit: the instanced draw's slot compatibility and the GPU mirror must refresh.
+    void ObjectMaterialEdited()
+    {
+        instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
+        materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
+    }
     // C1b/F2: patch a graphics desc with slot i's pipeline identity: sampling defines,
     // SHADING_MODEL_ID, ALPHA_TEST, and cull mode (two-sided).
     void ApplySlotPipelineOverrides(Material::GraphicsDesc& desc, size_t slot) const;

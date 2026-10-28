@@ -98,6 +98,10 @@ public:
     // renderer down and ImGuiLayer::Shutdown drops the preview descriptors.
     void ReleaseAll(Renderer& renderer);
 
+    // The cached PNG behind an asset's thumbnail (its registry key), empty when there is none (a texture's
+    // preview is its source image, nothing is written): MCP `thumbnails` answers with it.
+    std::string CachePath(const std::string& assetKey) const;
+
 private:
     struct PendingLoad
     {

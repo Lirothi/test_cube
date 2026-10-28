@@ -94,7 +94,10 @@ namespace editor_thumbnail_detail
 namespace
 {
     // Bump this whenever preview rendering or PNG encoding semantics change.
-    constexpr std::uint32_t kThumbnailSchemaVersion = 9;
+    // 12 (2026-10-28): the sky's reflection in the fill's units, metered by its log-average, the
+    // cube's own sun capped out of it (editor_preview.hlsl), the two-sided normal map flipped after
+    // the tangent-space transform.
+    constexpr std::uint32_t kThumbnailSchemaVersion = 12;
 
     // The render graph already occupies the worker pool. Keep filesystem and JSON
     // preflight work bounded so opening a large folder does not compete with it.
@@ -821,6 +824,12 @@ void AssetThumbnailCache::StartPreviewInitialization(Renderer& renderer)
 #else
     initialize();
 #endif
+}
+
+std::string AssetThumbnailCache::CachePath(const std::string& assetKey) const
+{
+    const auto it = entries_.find(assetKey);
+    return it != entries_.end() ? it->second.cachePath : std::string();
 }
 
 void AssetThumbnailCache::BeginFrame(Renderer& renderer)

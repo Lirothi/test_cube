@@ -61,7 +61,7 @@ cbuffer SkyVisibility : register(b0)
 SamplerState gSmp      : register(s0); // linear clamp
 SamplerState gSmpPoint : register(s1); // point clamp
 
-static const uint kSkyVisMaskShadow = 0x02u; // rt::kInstanceMaskShadow (rt_reflect_common.hlsli RT_MASK_SHADOW)
+static const uint kSkyVisMaskShadow = kRtMaskShadow; // rt::kInstanceMaskShadow (rt_reflect_common.hlsli RT_MASK_SHADOW)
 
 // How much of the sky along `dir` gets through to `origin` within `maxDistance`: 0 behind the geometry, 1 - opacity
 // through a tree's leaf card (rt_geometry.hlsli RtVisibilityTransmittance), 1 open.
@@ -72,7 +72,7 @@ float SkyRayTransmittance(RaytracingAccelerationStructure tlas, float3 origin, f
     ray.Direction = dir;
     ray.TMin = 1.0e-3f;
     ray.TMax = maxDistance;
-    return RtVisibilityTransmittance(tlas, ray, kSkyVisMaskShadow, meshOpacity != 0u);
+    return RtVisibilityTransmittance(tlas, ray, kSkyVisMaskShadow, meshOpacity);
 }
 
 // UE r.AOHistoryDistanceThreshold 30 over its 1000 (ComputeHistoryWeightBasedOnPosition): a history corner whose

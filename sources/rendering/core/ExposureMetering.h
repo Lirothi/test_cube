@@ -123,8 +123,9 @@ public:
 
     // One row per metered frame (MCP get_readouts {history}): the adapted and metered EV100 the
     // record held, the pre-exposure that frame rendered with, the pixel probe's window mean (rgb)
-    // and brightest luminance, the sun probe's luminance. A flicker is a frame-to-frame thing, and
-    // one LatestReadback per MCP call lands ~10 frames apart -- it sees a drift, never a flicker.
+    // and brightest luminance, the sun probe's luminance and visible share (the corona takes both).
+    // A flicker is a frame-to-frame thing, and one LatestReadback per MCP call lands ~10 frames
+    // apart -- it sees a drift, never a flicker.
     struct HistoryRow
     {
         std::uint64_t frame = 0;     // the metering's own frame count
@@ -134,6 +135,7 @@ public:
         float probeMean[3] = {};
         float probeMaxLuma = 0.0f;
         float sunProbeLuma = 0.0f;
+        float sunProbeShare = 0.0f;
     };
     // The newest `maxRows` rows (at most kHistoryRows), oldest first; returns how many were written.
     std::size_t History(HistoryRow* out, std::size_t maxRows) const;

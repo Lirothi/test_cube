@@ -58,7 +58,9 @@ cbuffer PerFrame : register(b0)
     float sunAngularSize;
     // UE's SoftSourceRadius, sin(half of LightSourceSoftAngle): widens the glint's roughness (EvalBRDF).
     float sunSoftRadius;
-    float _padSun;
+    // 1 = the sun's direct light is gated by the visible side's GEOMETRIC normal (lighting_cs.hlsl
+    // SunGeometricTerminator); 0 = by the shading normal alone, the frame before 2026-10-28.
+    float sunTerminator;
     // Rung 2 / Step 24f: sample directional shadows from the VSM clipmap (VSM mode) instead of the
     // CSM cascades. clipmapViewProj[i] = clipmap level i's camera-centered ortho viewProj.
     uint useVsm;

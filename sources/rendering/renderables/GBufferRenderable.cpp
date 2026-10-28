@@ -485,24 +485,25 @@ void GBufferRenderable::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLi
     }
 }
 
-void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams& defaults)
+void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams& defaults,
+                                              const MaterialParams& objectValues)
 {
     if (slot >= matParamses_.size())
     {
         return;
     }
 
-    // Effective object JSON only exposes slot-0 overrides. Other slots inherit their material
-    // defaults wholesale. Keep the explicit values before replacing the destination, then restore
-    // only fields whose JSON keys were actually present. An explicit value may equal the engine
-    // default, so comparing values cannot represent override intent.
-    if (slot != 0 || materialParamOverrideMask_ == 0)
+    // The effective object JSON's surface keys override EVERY slot's material defaults (2026-10-28; they used to
+    // reach slot 0 alone, so a multi-material mesh took them on one submesh -- no level carried such a key on one,
+    // checked over data/levels). Only fields whose JSON keys were actually present are restored: an explicit value
+    // may equal the engine default, so comparing values cannot represent override intent.
+    if (materialParamOverrideMask_ == 0)
     {
         matParamses_[slot] = defaults;
         return;
     }
 
-    const MaterialParams explicitValues = matParamses_[slot];
+    const MaterialParams& explicitValues = objectValues;
     matParamses_[slot] = defaults;
     const auto overridden = [this](MaterialParamField field)
     {
@@ -521,13 +522,15 @@ void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams&
     {
         matParamses_[slot].texFlags.w = explicitValues.texFlags.w;
     }
+    // A texture switched on by the object only where this slot's material has that texture.
+    const MaterialData* slotMaterial = matDatas_[slot].get();
     if (overridden(MaterialParamField::UseMR))
     {
-        matParamses_[slot].texFlags.y = explicitValues.texFlags.y;
+        matParamses_[slot].SetUseMR(explicitValues.texFlags.y > 0.5f && (!slotMaterial || slotMaterial->hasMR));
     }
     if (overridden(MaterialParamField::UseAlbedo))
     {
-        matParamses_[slot].texFlags.x = explicitValues.texFlags.x;
+        matParamses_[slot].SetUseAlbedo(explicitValues.texFlags.x > 0.5f && (!slotMaterial || slotMaterial->hasAlbedo));
     }
     if (overridden(MaterialParamField::EmissiveColor))
     {
@@ -541,6 +544,50 @@ void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams&
     {
         matParamses_[slot].metalRough = explicitValues.metalRough;
     }
+}
+
+void GBufferRenderable::SetObjectTexOffsScale(const Math::float4& v)
+{
+    for (MaterialParams& mp : matParamses_) { mp.texOffsScale = v; }
+    ObjectMaterialEdited();
+}
+
+void GBufferRenderable::SetObjectNormalStrength(float strength)
+{
+    for (MaterialParams& mp : matParamses_) { mp.SetNormalStrength(strength); }
+    ObjectMaterialEdited();
+}
+
+void GBufferRenderable::SetObjectUseMR(bool on)
+{
+    for (size_t i = 0; i < matParamses_.size(); ++i)
+    {
+        const MaterialData* md = i < matDatas_.size() ? matDatas_[i].get() : nullptr;
+        matParamses_[i].SetUseMR(on && md && md->hasMR);
+    }
+    ObjectMaterialEdited();
+}
+
+void GBufferRenderable::SetObjectUseAlbedo(bool on)
+{
+    for (size_t i = 0; i < matParamses_.size(); ++i)
+    {
+        const MaterialData* md = i < matDatas_.size() ? matDatas_[i].get() : nullptr;
+        matParamses_[i].SetUseAlbedo(on && md && md->hasAlbedo);
+    }
+    ObjectMaterialEdited();
+}
+
+void GBufferRenderable::SetObjectMetalRough(const Math::float2& metalRough)
+{
+    for (MaterialParams& mp : matParamses_) { mp.metalRough = metalRough; }
+    ObjectMaterialEdited();
+}
+
+void GBufferRenderable::SetObjectBaseColorRgb(const Math::float3& rgb)
+{
+    for (MaterialParams& mp : matParamses_) { mp.baseColor = Math::float4(rgb.x, rgb.y, rgb.z, mp.baseColor.w); }
+    ObjectMaterialEdited();
 }
 
 void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
@@ -560,6 +607,8 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
 
     matDatas_.assign(slotCount, nullptr);
     matParamses_.resize(slotCount); // slot 0 keeps factory-applied values; new slots default
+    // The object's own values, taken before slot 0 is resolved over them: every slot merges its overrides from here.
+    const MaterialParams objectValues = matParamses_[0];
 
     for (size_t i = 0; i < slotCount; ++i)
     {
@@ -573,7 +622,7 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
             matDatas_[i] = mgr->GetOrCreateFromGltf(renderer, uploadCmdList, uploadKeepAlive, gltfSrc, ordinal);
             if (matDatas_[i] && matDatas_[i]->fromGltf)
             {
-                MergeMaterialDefaults(i, matDatas_[i]->gltfDefaultParams);
+                MergeMaterialDefaults(i, matDatas_[i]->gltfDefaultParams, objectValues);
             }
             else if (!matDatas_[i])
             {
@@ -591,7 +640,7 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
             // Param-less materials leave the pre-Init values untouched.
             if (matDatas_[i] && matDatas_[i]->hasPresetParams)
             {
-                MergeMaterialDefaults(i, matDatas_[i]->presetParams);
+                MergeMaterialDefaults(i, matDatas_[i]->presetParams, objectValues);
             }
             // A missing preset (including a material that was just created but not registered
             // yet) must render as a flat fallback. Leaving the default texture flags enabled

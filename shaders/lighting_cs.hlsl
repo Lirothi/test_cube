@@ -271,6 +271,59 @@ float CloudSunVisibility(float3 P)
                 saturate(cloudShadowParams.z));
 }
 
+// THE SUN BEHIND THE TRIANGLE (owner, 2026-10-28: "light leaking" -- the inside of a tent's cloth lit through itself).
+// The G-buffer holds the SHADING normal, and a normal map can tilt it toward a sun that lies behind the triangle the
+// pixel belongs to: the light then falls on an opaque sheet from its other side. No shadow map catches that -- the
+// receiver is its own caster, and every bias exists to call such a point lit (Legacy, SDSM and VSM leaked alike, with
+// the biases at zero, the LODs off). Traced on the staged glTF from the owner's camera (scratchpad tent_rays.py): 99.5 %
+// of the leaking pixels sat on triangles whose visible side faces away from the sun (geometric N.L median -0.23), the
+// interpolated vertex normals the same; only the map turned them. So the direct sun needs the visible side's GEOMETRIC
+// normal to face it: rebuilt here from the depth buffer -- on each axis the neighbour nearer in space, so a depth edge
+// is not crossed -- and the light ramps in over N.L 0 -> 0.05 (3 degrees), so nothing that faces the sun by more
+// changes. Chiang, Li & Burley's terminator term (SIGGRAPH 2019) was the alternative and was not taken: it also dims a
+// bump's lit side under an ordinary sun (~20 % at Ng.L 0.5 with a 10-degree tilt), a look change everywhere for a leak
+// that lives behind the terminator.
+//   A pixel whose nearer neighbour on an axis is still farther than 3 % of its distance from the camera sits on an edge,
+// not on a plane -- a frond one or two pixels wide, a trunk's silhouette: no geometric normal, and no gate (a pixel's
+// footprint is 0.14 % of the distance at 1485 px over 90 degrees, 0.8 % at 80 degrees of grazing).
+bool SunGeometricNormal(uint2 px, float3 P, float3 V, out float3 Ng)
+{
+    Ng = 0.0f.xxx;
+    const int2 maxPx = int2(screenSize) - 1;
+    const float3 toCam = camPosWS - P;
+    const float maxStep2 = 0.0009f * dot(toCam, toCam); // (3 % of the distance)^2
+    float3 axis[2];
+    [unroll]
+    for (int a = 0; a < 2; ++a)
+    {
+        const int2 step = (a == 0) ? int2(1, 0) : int2(0, 1);
+        const int2 pPos = clamp(int2(px) + step, int2(0, 0), maxPx);
+        const int2 pNeg = clamp(int2(px) - step, int2(0, 0), maxPx);
+        const float zPos = DepthT.Load(int3(pPos, 0)).r;
+        const float zNeg = DepthT.Load(int3(pNeg, 0)).r;
+        const bool posOk = zPos > kEpsilon && any(pPos != int2(px));
+        const bool negOk = zNeg > kEpsilon && any(pNeg != int2(px));
+        if (!posOk && !negOk) { return false; }
+        const float3 dPos = ReconstructPosWS((float2(pPos) + 0.5f) * invScreenSize, zPos, invProj, invView) - P;
+        const float3 dNeg = P - ReconstructPosWS((float2(pNeg) + 0.5f) * invScreenSize, zNeg, invProj, invView);
+        axis[a] = (posOk && (!negOk || dot(dPos, dPos) <= dot(dNeg, dNeg))) ? dPos : dNeg;
+        if (dot(axis[a], axis[a]) > maxStep2) { return false; }
+    }
+    const float3 n = cross(axis[1], axis[0]);
+    const float len2 = dot(n, n);
+    if (len2 < 1e-24f) { return false; }
+    Ng = n * rsqrt(len2);
+    Ng = dot(Ng, V) < 0.0f ? -Ng : Ng; // the side the camera sees
+    return true;
+}
+
+float SunGeometricTerminator(uint2 px, float3 P, float3 V, float3 L)
+{
+    float3 Ng;
+    if (sunTerminator < 0.5f || !SunGeometricNormal(px, P, V, Ng)) { return 1.0f; }
+    return saturate(dot(Ng, L) * 20.0f);
+}
+
 #define LIGHTING_RS \
     "CBV(b0)," \
     "DescriptorTable(SRV(t0, numDescriptors=24, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
@@ -464,6 +517,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (sunLit && fr.NdotL > 0.0)
         {
             float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
+            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L); // the transmission below is not gated
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
@@ -490,6 +544,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
             float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
+            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L);
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);

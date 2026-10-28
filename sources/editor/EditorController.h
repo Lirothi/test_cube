@@ -243,6 +243,31 @@ private:
         EditorController& owner_;
     };
     McpLevelHost mcpLevelHost_{ *this };
+
+    // thumbnails: the MCP door's view of the thumbnail cache. The Content Browser drives the cache only while it
+    // draws -- and it usually sits behind the Command Bar's tab -- so a queued asset is driven here, every frame,
+    // until the cache calls it ready or failed. Registered next to the import host.
+    class McpThumbnailHost final : public editormcp::ThumbnailHost
+    {
+    public:
+        explicit McpThumbnailHost(EditorController& owner) : owner_(owner) {}
+        ~McpThumbnailHost() override { editormcp::SetThumbnailHost(nullptr); }
+        std::string Request(const std::vector<std::string>& assets) override;
+        void Tick(Renderer& renderer, Scene& scene); // once a frame
+
+    private:
+        struct Status
+        {
+            std::string state = "queued";
+            std::string png;
+        };
+        EditorController& owner_;
+        std::unordered_map<std::string, Status> status_; // asset path -> last known
+        std::vector<std::string> pending_;
+    };
+    McpThumbnailHost mcpThumbnailHost_{ *this };
+    // The thumbnails' environment: the level's skybox, as the Content Browser hands it (both callers).
+    void UpdateThumbnailEnvironment(Scene& scene);
     ViewportGizmo viewportGizmo_;
     EditorHotkeys hotkeys_;
     EditorExtensionRegistry extensions_;

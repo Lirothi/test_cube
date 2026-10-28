@@ -89,8 +89,9 @@ float RtPayloadAlpha(float hitT, bool reuseScreen)
     return reuseScreen ? -t : t;
 }
 
-// TLAS instance mask bit of the shadow casters (rt::kInstanceMaskShadow): an object with Cast Shadow off lacks it.
-static const uint RT_MASK_SHADOW = 0x02u;
+// TLAS instance mask bits of the shadow casters (rt::kInstanceMaskShadow, solid and transmissive): an object with Cast
+// Shadow off lacks both.
+static const uint RT_MASK_SHADOW = kRtMaskShadow;
 
 // Shadow ray toward a local light: 0 if an opaque TLAS triangle occludes the path
 // to the light, else 1. Used for off-screen hit shading (sun + spot lights).

@@ -241,11 +241,9 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
     float metallic = saturate(mr.x);
     float roughness = clamp(mr.y, 0.04, 1.0);
 
+    // A two-sided back face: the normal map in the front face's frame, THEN the flip (gbuffer.hlsl says why).
     float3 N = normalize(input.normalW);
-    if (gMaterialFlags.z > 0.5 && !isFrontFace)
-    {
-        N = -N;
-    }
+    const float faceSign = (gMaterialFlags.z > 0.5 && !isFrontFace) ? -1.0 : 1.0;
     if (gTexFlags.z > 0.5)
     {
         float3 normalTS;
@@ -272,6 +270,7 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         float3 B = normalize(cross(N, T) * input.tangentW.w);
         N = normalize(T * normalTS.x + B * normalTS.y + N * normalTS.z);
     }
+    N *= faceSign;
 
     float3 L = normalize(-gLightDir.xyz);
     float3 V = normalize(gEyePosition.xyz - input.worldPos);
@@ -379,14 +378,50 @@ float4 PSMain(VSOutput input, bool isFrontFace : SV_IsFrontFace) : SV_TARGET
         //    ignores roughness and goes to 1 at grazing angles, which put a bright rim on every
         //    silhouette: at roughness 0.8 a dielectric reflected 20 % of the sky edge-on where the
         //    split-sum integral says about 3 %. `saturate(1 - roughness)` was trying to undo that.
+        //  * THE SCALE (owner, 2026-10-28: "the thumbnails' specular is fucked"). The cube is the level's
+        //    HDRI in its own units -- a Poly Haven sky with its sun in it averages tens to hundreds where
+        //    this path's sun is a radiance of 1 and its fill 0.3 of it -- so every reflection outshone the
+        //    lighting: wallpaper like wet lacquer, a cornice like chrome, and the sun smeared through the
+        //    rough mips into hot spots. The sky is now brought to the FILL's units: its level is set to the
+        //    fill's radiance, ambient x the light -- the radiance a white
+        //    Lambertian surface returns from that fill, so the diffuse and the reflection describe the same
+        //    sky. Its colour and pattern stay the cube's. The sky's level is its LOG-AVERAGE luminance over
+        //    26 directions at the mip of 8x8 faces, as an exposure meter reads a frame: the plain mean is
+        //    the sun's (it carries most of a clear HDRI's energy), and normalised by it the rest of the sky
+        //    went dark -- a metal cube, which shows nothing else, came out black.
         if (hasSky)
         {
             const float3 reflectionDir = reflect(-V, N);
             const float maxMip = max(gEnvironmentParams.z, 0.0);
             const float levelFrom1x1 = 1.0 - 1.2 * log2(max(roughness, 0.001));
             const float environmentMip = clamp(maxMip - 1.0 - levelFrom1x1, 0.0, maxMip);
-            const float3 environmentRadiance = gEnvironment.SampleLevel(
-                gSampler, reflectionDir, environmentMip).rgb * gEnvironmentParams.y;
+            const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
+            const float meterMip = max(maxMip - 3.0, 0.0);
+            float logSum = 0.0;
+            [unroll]
+            for (int x = -1; x <= 1; ++x)
+            {
+                [unroll]
+                for (int y = -1; y <= 1; ++y)
+                {
+                    [unroll]
+                    for (int z = -1; z <= 1; ++z)
+                    {
+                        if (x == 0 && y == 0 && z == 0) { continue; }
+                        const float3 dir = normalize(float3(x, y, z));
+                        logSum += log2(max(dot(gEnvironment.SampleLevel(gSampler, dir, meterMip).rgb, kLuma), 1.0e-6));
+                    }
+                }
+            }
+            const float skyLevel = exp2(logSum / 26.0);
+            const float skyScale = gAmbient.w * dot(gAmbient.rgb * gLightDir.w, kLuma) / max(skyLevel, 1.0e-6);
+            // The cube's own SUN is not reflected: this path has its key light for that, and the HDRI's disc,
+            // thousands of times the sky's level, put a white pixel on every glossy frond that mirrored it
+            // (owner: "white spots on the palm"). Capped at 16x the sky's level, hue kept -- clouds and a
+            // bright horizon stay well under it.
+            float3 environmentSample = gEnvironment.SampleLevel(gSampler, reflectionDir, environmentMip).rgb;
+            environmentSample *= min(1.0, 16.0 * skyLevel / max(dot(environmentSample, kLuma), 1.0e-6));
+            const float3 environmentRadiance = environmentSample * skyScale;
             const float3 f0 = lerp(float3(0.04, 0.04, 0.04), albedo, metallic);
             const float NoV = saturate(dot(N, V));
             const float4 c0 = float4(-1.0, -0.0275, -0.572, 0.022);

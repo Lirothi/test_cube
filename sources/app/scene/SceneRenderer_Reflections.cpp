@@ -465,7 +465,7 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.debugView = std::min(s.skyVisDebug, 1u);
             c.filterFirst = s.skyVisFilterFirst ? 1u : 0u;
             c.samplingMode = s.skyVisSampling;
-            c.meshOpacity = s.rtMeshOpacity ? 1u : 0u;
+            c.meshOpacity = s.rtMeshOpacity;
 
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(SkyVisConstants), render::kConstantBufferAlignment);
             std::memcpy(cb.cpu, &c, sizeof(c));

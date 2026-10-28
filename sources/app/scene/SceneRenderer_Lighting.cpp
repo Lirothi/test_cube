@@ -348,6 +348,7 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
     constants.sunAngularSize = frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f;
     constants.sunSoftRadius = frame_->dirLight ? frame_->dirLight->GetSoftSourceRadius() : 0.0f;
+    constants.sunTerminator = frame_->settings.sunGeometricTerminator ? 1.0f : 0.0f;
     // The light target is pre-exposed (lighting_cb.hlsli lightPreExposure); 1 when pre-exposure is off.
     constants.lightPreExposure = render::g_preExposure;
 
@@ -576,7 +577,7 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         fc.localParams2 = float4(std::max(a.localSoftFading, 0.0f), std::max(a.localDistanceBias, 0.0f),
                                  std::max(frame_->settings.skyVisMaxDistance, 0.5f), 0.0f);
         fc.depthParams = float4(std::max(frame_->settings.fogDepthOffset, 0.0f), std::max(frame_->settings.fogDepthThreshold, 0.0f),
-                                frame_->settings.rtMeshOpacity ? 1.0f : 0.0f, 0.0f);
+                                static_cast<float>(frame_->settings.rtMeshOpacity), 0.0f);
         // SDSM's boxes hold the surfaces, not the air before them: a cell outside every partition traces the sun on the
         // TLAS the sky visibility already binds (fog_scatter_cs.hlsl FogSunShadow).
         if (decisions_.sdsmActive && fogTracesSky && frame_->settings.fogSunRtFallback) { fc.flags |= 64u; }

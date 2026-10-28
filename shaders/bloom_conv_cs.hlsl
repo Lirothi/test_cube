@@ -28,8 +28,7 @@
 Texture2D HDRColor : register(t0);
 // P8C-2: the scattered-bokeh flare image (lens_flare.hlsl writes it), read by the resolve's ghost
 // composite. UE's LensFlareBlur output -- the actual defocused image of the actual bright
-// sources, with a x2 guard band folded in by the scatter. The sun probe (stage 10) binds the scene
-// before the upscaler here instead.
+// sources, with a x2 guard band folded in by the scatter.
 Texture2D FlareBlur : register(t1);
 // The photographed convolution kernel (UE's DefaultBloomKernel), FP16 with a mip chain. The mips
 // stand in for UE's successive-downsample prefilter when the kernel is drawn small.
@@ -663,7 +662,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (sunDir.z > 0.02f)
         {
             const float2 sunTan = sunDir.xy / sunDir.z;
-            const float2 sunNdc = sunTan * sunGlareProj.xy;
+            // The taps read t0, here the scene as rendered -- JITTERED when DLSS runs: historyParams.xy is this
+            // frame's jitter in NDC, so the zone sits on the disc where it was drawn, not half a pixel off.
+            const float2 jitterNdc = historyParams.xy;
+            const float2 sunNdc = sunTan * sunGlareProj.xy + jitterNdc;
             const float2 sunUV = float2(0.5f + 0.5f * sunNdc.x, 0.5f - 0.5f * sunNdc.y);
             const float2 discUV = max(sunGlareProj.zw, 1.0e-5f.xx);
             const float discTan = 2.0f * discUV.x / max(sunGlareProj.x, 1.0e-6f);
@@ -678,10 +680,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // 0.75 over the unit disc -- so a clear sun reads as before and a covered one by the share of its
             // ENERGY that shows anywhere in the zone. (The sky inside the zone adds (kZone^2 - 1) / 0.75 of its
             // own radiance: thousands of times under the disc.)
-            //   WHERE it shows -- the share and the centroid -- is read from t1, the scene BEFORE the upscaler
-            // (the same image without DLSS): DLSS rings on the disc, and its brightest tap, the share's
-            // denominator, read a clear disc as half covered. The colour stays the upscaled image's (t0),
-            // which the corona's and the glare's strength were calibrated on.
+            //   EVERYTHING is read from the scene BEFORE the upscaler (the same image without DLSS). DLSS
+            // rings on the disc: its brightest tap, the share's denominator, read a clear disc as half
+            // covered, and its energy over the disc jumped 2-6 % frame to frame with nothing moving (owner,
+            // 2026-10-28: "the glare and the corona tremble") -- the colour, read from the upscaled image
+            // while the share came from this one, did not cancel against it. One image, one answer: with
+            // the wind on and DLSS off the corona at Partial Sun 0 moved 0.01 % a frame; with DLSS on, read here,
+            // a clear sun moves 0.15 % a frame (was 1.8 %), that corona under swaying fronds 0.06 % (was 6.3 %).
+            // The upscaled image read a CLEAR disc at 1.23-1.32x this one's energy (A/B in one process), and the glare's and the
+            // corona's strengths took x1.3. Under leaves it read HALF (0.48-0.51x): DLSS averages a sub-pixel
+            // HDR detail in a tonemapped space, so a disc behind fronds lost most of its light there.
+            // `debug.sunProbeAfterDlss:1` = the upscaled frame, the A/B.
             static const uint kZoneTaps = 64u;
             static const float kZone = 1.25f;
             static const float kProfileMean = 0.75f;
@@ -698,7 +707,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 const float rho = kZone * sqrt(((float)k + 0.5f) / (float)kZoneTaps);
                 const float a = (float)k * 2.39996323f;
                 const float2 t = float2(cos(a), sin(a)) * (rho * discTan);
-                const float2 tapNdc = (sunTan + t) * sunGlareProj.xy;
+                const float2 tapNdc = (sunTan + t) * sunGlareProj.xy + jitterNdc;
                 const float2 tapUV = float2(0.5f + 0.5f * tapNdc.x, 0.5f - 0.5f * tapNdc.y);
                 if (all(tapUV >= 0.0f) && all(tapUV <= 1.0f))
                 {
@@ -707,7 +716,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                     const float above =
                         saturate(dot(normalize(float3(sunTan + t, 1.0f)), upView) / (0.2f * discTan) + 0.5f);
                     const float3 col = max(HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb, 0.0f.xxx) * above;
-                    const float lum = dot(max(FlareBlur.SampleLevel(gSmp, tapUV, 0.0f).rgb, 0.0f.xxx), lumaW) * above;
+                    const float lum = dot(col, lumaW);
                     disc += col;
                     discTaps += 1.0f;
                     weight += lum;

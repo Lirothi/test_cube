@@ -395,8 +395,10 @@ struct BloomSettings
     // hides or tints the glare. Runs with either bloom method, into the same target.
     // The SHARE OF THE DISC'S LIGHT in the glare (BloomRenderer::SunGlareScale): the disc's radiance
     // times its solid angle, spread over the profile's integral. 0 = off. 0.005 matched the pre-
-    // physical-disc look on wind_test (three views against the d1b6183 build, within 2/255).
-    float sunGlareIntensity = 0.005f;
+    // physical-disc look on wind_test (three views against the d1b6183 build, within 2/255), read off the
+    // upscaled disc; x1.3 since the sun probe reads the disc before the upscaler (2026-10-28: DLSS gave a
+    // clear disc 1.23-1.32x its energy), so a clear sun under DLSS keeps that look.
+    float sunGlareIntensity = 0.0065f;
     float sunGlareRadiusDeg = 2.0f;      // the core's e-folding angle
     float sunGlareVeil = 0.15f;          // the wide veil's weight, relative to the core's peak
     float sunGlareVeilRadiusDeg = 12.0f; // the veil's half-strength angle
@@ -421,8 +423,8 @@ struct BloomSettings
     // optional regular star. Same colour source as the glare: the frame's pixels over the sun disc.
     // Scaled by the disc's ENERGY (its solid angle over the corona's nominal area, 2 pi length^2 --
     // BloomRenderer::SunRays), so it follows the disc's light rather than its radiance. 0 = off.
-    // 0.008 matched the pre-physical-disc look, as sunGlareIntensity's 0.005.
-    float sunRaysIntensity = 0.008f;
+    // 0.008 matched the pre-physical-disc look, as sunGlareIntensity's 0.005, and took the same x1.3.
+    float sunRaysIntensity = 0.0104f;
     uint32_t sunRaysCount = 100u;        // needles around the full circle
     uint32_t sunRaysBundles = 12u;       // bright bundles around the full circle
     float sunRaysBundleWidthDeg = 5.0f;  // a bundle's FWHM as an ANGLE around the sun (at most ~its spacing)
@@ -678,9 +680,11 @@ struct SceneRenderSettings
     // The visibility rays -- the sky visibility, the GI's probe, shadow and sky rays, the fog's sky and sun -- take a
     // cutout card (an alpha-tested slot: a leaf, a frond) at its MESH's opacity (mesh.json "rtCutoutOpacity", the palms
     // 0.8; absent = solid): a ray that hits one carries 1 - opacity on and goes no further (rt_geometry.hlsli
-    // RtVisibilityTransmittance). false = every card solid, the frame before 2026-10-27 (`--set rt.meshOpacity:0`, the A/B).
-    // The reflections' alpha modes (rtAlphaMode) are theirs alone.
-    bool rtMeshOpacity = true;
+    // RtVisibilityTransmittance). 0 = every card solid, the frame before 2026-10-27 (`--set rt.meshOpacity:0`, the A/B);
+    // 1 = anything solid in the way blocks, then the transmissive meshes' first surface found (two any-hit queries, 2026-10-28);
+    // 2 = the nearest surface of the whole scene in one query (2026-10-27, the A/B of 1). The reflections' alpha modes
+    // (rtAlphaMode) are theirs alone.
+    uint32_t rtMeshOpacity = 1u;
     // `rt.cutoutOpacity` (--set / MCP only, transient; < 0 = off): every mesh whose asset says rtCutoutOpacity < 1 takes
     // this one instead -- a live A/B of the trees without editing their mesh.json. A mesh that says nothing stays solid.
     float rtCutoutOpacityOverride = -1.0f;
@@ -805,6 +809,14 @@ struct SceneRenderSettings
     // when DLSS runs), 1 the scene BEFORE the upscaler (render resolution; the same image without DLSS),
     // 2 the bloom target the tone curve adds (pre-exposed, its own resolution).
     std::uint32_t debugProbeSource = 0u;
+    // The SUN probe (bloom_conv_cs.hlsl stage 10) reads the scene before the upscaler; true = the upscaler's output, the
+    // frame before 2026-10-28 (`--set debug.sunProbeAfterDlss:1`, the A/B; DLSS rings on the disc).
+    bool sunProbeAfterDlss = false;
+    // The sun's direct light gated by the visible side's GEOMETRIC normal (lighting_cs.hlsl SunGeometricTerminator):
+    // a normal map may tilt a pixel toward a sun that lies behind its triangle -- the back of a tent's cloth lit through
+    // itself, where no shadow map helps (the receiver is the caster). false = the frame before 2026-10-28
+    // (`--set light.geometricTerminator:0`, the A/B).
+    bool sunGeometricTerminator = true;
     bool showProfiler = false;
     // S8: the reflection source. Default RT (today's behavior). RT runs the
     // Tier-1 ray-traced pass instead of SSR; SkyOnly clears the reflection buffer

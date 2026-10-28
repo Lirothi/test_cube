@@ -38901,7 +38901,7 @@
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,
-      "sunGlareIntensity": 0.00800000037997961,
+      "sunGlareIntensity": 0.0104,
       "sunGlareRadiusDeg": 2.0,
       "sunGlareSmoothingSec": 0.0,
       "sunGlareVeil": 0.25,
@@ -38912,7 +38912,7 @@
       "sunRaysCount": 53,
       "sunRaysHalo": 0.10000000149011612,
       "sunRaysHaloRadiusDeg": 4.150000095367432,
-      "sunRaysIntensity": 0.001993680838495493,
+      "sunRaysIntensity": 0.00259178,
       "sunRaysLengthDeg": 2.0,
       "sunRaysRotationDeg": 13.0,
       "sunRaysSharpness": 2.0,
@@ -38922,6 +38922,7 @@
       "sunRaysSpikes": 0.10000000149011612,
       "sunRaysTexture": "",
       "sunRaysTextureSizeDeg": 12.899999618530273,
+      "sunRaysVisibleExponent": 0.0,
       "sunRaysWidthDeg": 0.5,
       "threshold": 4.0
     },
@@ -40007,7 +40008,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 17.989999771118164,
+    "time": 16.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

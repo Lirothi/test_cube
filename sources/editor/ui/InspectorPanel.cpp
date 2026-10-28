@@ -1866,7 +1866,7 @@ namespace
                           "a low sun) keeps the common share.");
 
             ImGui::SeparatorText("Sun glare");
-            dragF("Sun Glare", "sunGlareIntensity", 0.005f, 0.0002f, 0.0f, 1.0f, "%.4f",
+            dragF("Sun Glare", "sunGlareIntensity", 0.0065f, 0.0002f, 0.0f, 1.0f, "%.4f",
                   ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
             InspectorHelp("A corona around the sun that the convolution cannot give: an analytic "
                           "halo about the sun's direction, added to the bloom. 0 = off.\n\n"
@@ -1898,7 +1898,7 @@ namespace
                           "made both dance; 0 = every frame as it is.");
 
             ImGui::SeparatorText("Sun corona");
-            dragF("Corona", "sunRaysIntensity", 0.008f, 0.0002f, 0.0f, 2.0f, "%.4f",
+            dragF("Corona", "sunRaysIntensity", 0.0104f, 0.0002f, 0.0f, 2.0f, "%.4f",
                   ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_NoRoundToFormat);
             InspectorHelp("The glare structure around the sun, drawn at full resolution in the tone "
                           "curve pass after Ritschel's \"Temporal Glare\": dense bright bundles with "

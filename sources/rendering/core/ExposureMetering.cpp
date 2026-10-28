@@ -284,6 +284,7 @@ void ExposureMetering::RecordReadbackCopy(ID3D12GraphicsCommandList* cl)
         for (int i = 0; i < 3; ++i) { row.probeMean[i] = rb.pixelProbeMean[i]; }
         row.probeMaxLuma = 0.2126f * rb.pixelProbeMax[0] + 0.7152f * rb.pixelProbeMax[1] + 0.0722f * rb.pixelProbeMax[2];
         row.sunProbeLuma = 0.2126f * rb.sunProbe[0] + 0.7152f * rb.sunProbe[1] + 0.0722f * rb.sunProbe[2];
+        row.sunProbeShare = rb.sunProbeShare;
         std::lock_guard<std::mutex> lock(historyMutex_);
         history_[historyWritten_ % kHistoryRows] = row;
         ++historyWritten_;

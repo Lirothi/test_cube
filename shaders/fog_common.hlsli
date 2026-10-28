@@ -33,7 +33,7 @@ cbuffer FogCB : register(reg) \
     uint4  fogLocal;            /* x: spot count, y: point count, z: local shadows from the VSM pages (else the Legacy atlases), w: sky visibility rays (0 = the open sky) */ \
     float4 fogLocalParams;      /* x: local light scatter intensity, y: 1/spot atlas size, z: 1/point cube face size, w: VSM refDist */ \
     float4 fogLocalParams2;     /* x: cone soft fading (froxels), y: inverse-square distance bias scale (cell radii), z: sky visibility reach (m), w: 0 */ \
-    float4 fogDepthParams;      /* the samples' depth constraint, in slices: x the offset in front of the depth (UE GridCenterOffsetFromDepthBuffer), y how far behind it a sample is still moved (UE OffsetThresholdToAcceptDepthBufferOffset), z 1 = the RT rays take a cutout at its mesh's opacity (rt.meshOpacity; 0 = solid cards), w 0 */ \
+    float4 fogDepthParams;      /* the samples' depth constraint, in slices: x the offset in front of the depth (UE GridCenterOffsetFromDepthBuffer), y how far behind it a sample is still moved (UE OffsetThresholdToAcceptDepthBufferOffset), z rt.meshOpacity: 0 solid cards, 1 = the RT rays take a cutout at its mesh's opacity (two any-hit queries), 2 (one nearest-hit query), w 0 */ \
 };
 
 // UE ComputeZSliceFromDepth / ComputeDepthFromZSlice.

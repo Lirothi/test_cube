@@ -2736,6 +2736,100 @@ bool EditorController::McpLevelHost::Save(std::string& outText)
     return true;
 }
 
+void EditorController::UpdateThumbnailEnvironment(Scene& scene)
+{
+    const Skybox* skybox = scene.GetSkybox();
+    std::string skyboxPath;
+    std::uint64_t skyboxWriteTime = 0;
+    if (skybox)
+    {
+        skyboxPath = std::filesystem::path(skybox->GetPath()).generic_string();
+        if (const EditorAssetRecord* skyboxAsset = assetRegistry_.FindByPath(skyboxPath))
+        {
+            skyboxWriteTime = skyboxAsset->fileWriteTime;
+        }
+    }
+    thumbnailCache_.SetEnvironment(
+        skybox ? skybox->GetTex() : nullptr,
+        skyboxPath,
+        skyboxWriteTime,
+        // Trim, not GetExposure(): the preview has no tonemapper. See Skybox.h.
+        skybox ? skybox->GetIntensity() : 1.0f);
+}
+
+std::string EditorController::McpThumbnailHost::Request(const std::vector<std::string>& assets)
+{
+    nlohmann::json out = nlohmann::json::array();
+    for (const std::string& asset : assets)
+    {
+        auto it = status_.find(asset);
+        if (it == status_.end())
+        {
+            if (!owner_.assetRegistry_.FindByPath(asset))
+            {
+                out.push_back({ { "asset", asset }, { "state", "not found" },
+                    { "png", "" } });
+                continue;
+            }
+            it = status_.emplace(asset, Status{}).first;
+        }
+        if (it->second.state == "queued" &&
+            std::find(pending_.begin(), pending_.end(), asset) == pending_.end())
+        {
+            pending_.push_back(asset);
+        }
+        out.push_back({ { "asset", asset }, { "state", it->second.state }, { "png", it->second.png } });
+        // A finished answer is handed out once; the next call bakes afresh (a changed source re-signs).
+        if (it->second.state != "queued")
+        {
+            status_.erase(it);
+        }
+    }
+    return out.dump();
+}
+
+void EditorController::McpThumbnailHost::Tick(Renderer& renderer, Scene& scene)
+{
+    if (pending_.empty())
+    {
+        return;
+    }
+    owner_.UpdateThumbnailEnvironment(scene);
+    owner_.thumbnailCache_.BeginFrame(renderer);
+    for (auto it = pending_.begin(); it != pending_.end();)
+    {
+        Status& status = status_[*it];
+        const EditorAssetRecord* record = owner_.assetRegistry_.FindByPath(*it);
+        if (!record)
+        {
+            status.state = "not found";
+            it = pending_.erase(it);
+            continue;
+        }
+        const AssetThumbnailCache::View view =
+            owner_.thumbnailCache_.Request(renderer, *record, owner_.assetRegistry_.Revision());
+        if (view.state == AssetThumbnailCache::State::Ready)
+        {
+            status.state = "ready";
+            status.png = owner_.thumbnailCache_.CachePath(record->id.key);
+            LOG_INFO(logging::LogCategory::Editor, "MCP: thumbnail of {} ready ({})", *it, status.png);
+            it = pending_.erase(it);
+        }
+        else if (view.state == AssetThumbnailCache::State::Failed || view.state == AssetThumbnailCache::State::Missing)
+        {
+            status.state = view.state == AssetThumbnailCache::State::Failed
+                ? std::string("failed: ") + (view.failureReason ? view.failureReason : "?")
+                : std::string("no preview for this asset type");
+            it = pending_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+    owner_.thumbnailCache_.ProcessPending(renderer);
+}
+
 void EditorController::RefreshAssetErrors()
 {
     const bool wasClean = assetErrors_.empty();
@@ -3001,7 +3095,9 @@ void EditorController::Draw(
             const EditorActionContext closedActionCtx{ closedCtx, assetRegistry_, extensions_ };
             editormcp::SetImportHost(&mcpImportHost_);
             editormcp::SetLevelHost(&mcpLevelHost_);
+            editormcp::SetThumbnailHost(&mcpThumbnailHost_);
             mcpImportHost_.Tick();
+            mcpThumbnailHost_.Tick(renderer, scene);
             commandBar_.ServiceMcp(closedActionCtx, commandStack_);
         }
         return;
@@ -3076,24 +3172,7 @@ void EditorController::Draw(
             true,
             [this](EditorContext& panelCtx)
             {
-                const Skybox* skybox = panelCtx.scene.GetSkybox();
-                std::string skyboxPath;
-                std::uint64_t skyboxWriteTime = 0;
-                if (skybox)
-                {
-                    skyboxPath = std::filesystem::path(skybox->GetPath()).generic_string();
-                    if (const EditorAssetRecord* skyboxAsset =
-                            assetRegistry_.FindByPath(skyboxPath))
-                    {
-                        skyboxWriteTime = skyboxAsset->fileWriteTime;
-                    }
-                }
-                thumbnailCache_.SetEnvironment(
-                    skybox ? skybox->GetTex() : nullptr,
-                    skyboxPath,
-                    skyboxWriteTime,
-                    // Trim, not GetExposure(): the preview has no tonemapper. See Skybox.h.
-                    skybox ? skybox->GetIntensity() : 1.0f);
+                UpdateThumbnailEnvironment(panelCtx.scene);
 
                 const ContentBrowserAction action =
                     contentBrowser_.Draw(assetRegistry_, selectedAsset_, extensions_,
@@ -4252,7 +4331,9 @@ void EditorController::Draw(
     // closed panel cannot leave a caller waiting out its timeout for a frame that never comes.
     editormcp::SetImportHost(&mcpImportHost_);
     editormcp::SetLevelHost(&mcpLevelHost_);
+    editormcp::SetThumbnailHost(&mcpThumbnailHost_);
     mcpImportHost_.Tick();
+    mcpThumbnailHost_.Tick(ctx.renderer, ctx.scene);
     commandBar_.ServiceMcp(actionCtx, commandStack_);
 
     // Warm the model while the user is still looking at the level they just opened. The
