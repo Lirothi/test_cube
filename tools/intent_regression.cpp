@@ -59,6 +59,10 @@
 #include "rendering/lighting/NightLamps.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
+#include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
+#include <algorithm>
+#include <array>
+#include <cstring>
 #include "rendering/renderables/GBufferRenderable.h"
 
 using Json = nlohmann::json;
@@ -3422,6 +3426,244 @@ void TestGltfHandedness()
     std::filesystem::remove_all(dir, ec);
 }
 
+// Tessy N1 (docs/tessy_plan.md): a v4 .mesh.bin keeps a v3 bake's vertices and, per (LOD x submesh),
+// its triangle SET -- only the order changes, into clusters of at most 128 triangles / 256 vertices
+// that never cross a submesh. Read here with a reader of the file format itself, so the check does not
+// lean on the code it checks.
+namespace tessytest
+{
+struct BinLod
+{
+    std::vector<std::uint32_t> idx;
+    std::vector<Mesh::Submesh> subs;
+    float err = 0.0f;
+    std::vector<Mesh::Cluster> clusters;
+};
+struct Bin
+{
+    std::uint32_t version = 0;
+    std::uint64_t srcHash = 0, optHash = 0;
+    std::vector<VertexPNTUV> verts;
+    std::vector<BinLod> lods;
+};
+struct Header { std::uint32_t magic, version; std::uint64_t src, opt; std::uint32_t vertexCount, lodCount; };
+static_assert(sizeof(Header) == 32, "MeshBinHeader");
+
+bool Read(const std::string& path, Bin& out)
+{
+    std::ifstream f(path, std::ios::binary);
+    Header h{};
+    f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    if (!f || h.magic != 0x4253484Du || h.vertexCount == 0 || h.lodCount == 0) { return false; }
+    out = Bin{};
+    out.version = h.version;
+    out.srcHash = h.src;
+    out.optHash = h.opt;
+    out.verts.resize(h.vertexCount);
+    f.read(reinterpret_cast<char*>(out.verts.data()), static_cast<std::streamsize>(h.vertexCount * sizeof(VertexPNTUV)));
+    out.lods.resize(h.lodCount);
+    for (BinLod& l : out.lods)
+    {
+        std::uint32_t ic = 0, sc = 0;
+        f.read(reinterpret_cast<char*>(&ic), 4);
+        f.read(reinterpret_cast<char*>(&sc), 4);
+        f.read(reinterpret_cast<char*>(&l.err), 4);
+        l.idx.resize(ic);
+        l.subs.resize(sc);
+        f.read(reinterpret_cast<char*>(l.idx.data()), static_cast<std::streamsize>(ic * 4u));
+        f.read(reinterpret_cast<char*>(l.subs.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+        if (h.version >= 4u)
+        {
+            std::uint32_t cc = 0;
+            f.read(reinterpret_cast<char*>(&cc), 4);
+            if (!f || cc > ic) { return false; }
+            l.clusters.resize(cc);
+            f.read(reinterpret_cast<char*>(l.clusters.data()), static_cast<std::streamsize>(cc * sizeof(Mesh::Cluster)));
+        }
+    }
+    return static_cast<bool>(f);
+}
+
+// The same mesh as a v3 file: no cluster blocks.
+bool WriteV3(const std::string& path, const Bin& b)
+{
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    const Header h{ 0x4253484Du, 3u, b.srcHash, b.optHash, static_cast<std::uint32_t>(b.verts.size()),
+                    static_cast<std::uint32_t>(b.lods.size()) };
+    f.write(reinterpret_cast<const char*>(&h), sizeof(h));
+    f.write(reinterpret_cast<const char*>(b.verts.data()), static_cast<std::streamsize>(b.verts.size() * sizeof(VertexPNTUV)));
+    for (const BinLod& l : b.lods)
+    {
+        const std::uint32_t ic = static_cast<std::uint32_t>(l.idx.size()), sc = static_cast<std::uint32_t>(l.subs.size());
+        f.write(reinterpret_cast<const char*>(&ic), 4);
+        f.write(reinterpret_cast<const char*>(&sc), 4);
+        f.write(reinterpret_cast<const char*>(&l.err), 4);
+        f.write(reinterpret_cast<const char*>(l.idx.data()), static_cast<std::streamsize>(ic * 4u));
+        f.write(reinterpret_cast<const char*>(l.subs.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+    }
+    return static_cast<bool>(f);
+}
+
+// A range's triangles, each turned to start at its smallest index (the winding kept), sorted.
+std::vector<std::array<std::uint32_t, 3>> Triangles(const std::vector<std::uint32_t>& idx, std::size_t first, std::size_t count)
+{
+    std::vector<std::array<std::uint32_t, 3>> t;
+    for (std::size_t i = first; i + 2 < first + count && i + 2 < idx.size(); i += 3)
+    {
+        std::array<std::uint32_t, 3> a{ idx[i], idx[i + 1], idx[i + 2] };
+        while (a[0] > a[1] || a[0] > a[2]) { std::rotate(a.begin(), a.begin() + 1, a.end()); }
+        t.push_back(a);
+    }
+    std::sort(t.begin(), t.end());
+    return t;
+}
+
+// Every cluster rule that holds whatever the builder: inside one submesh, covering every triangle once,
+// within UE's limits, its box and wind maxima those of its own vertices. Returns the failures' count.
+int CheckClusters(const Bin& b, const std::string& what)
+{
+    int bad = 0;
+    for (std::size_t li = 0; li < b.lods.size(); ++li)
+    {
+        const BinLod& l = b.lods[li];
+        const std::string at = what + " LOD" + std::to_string(li);
+        std::size_t tris = 0;
+        std::uint32_t prevEnd = 0;
+        bool ordered = true, inside = true, limits = true, boxes = true, wind = true;
+        for (const Mesh::Cluster& c : l.clusters)
+        {
+            tris += c.triCount;
+            ordered = ordered && c.firstIndex >= prevEnd;
+            prevEnd = c.firstIndex + c.triCount * 3u;
+            bool in = false;
+            for (const Mesh::Submesh& s : l.subs)
+            {
+                in = in || (c.firstIndex >= s.indexOffset && prevEnd <= s.indexOffset + s.indexCount);
+            }
+            inside = inside && in && prevEnd <= l.idx.size();
+            std::vector<std::uint32_t> uniq(l.idx.begin() + c.firstIndex, l.idx.begin() + std::min<std::size_t>(prevEnd, l.idx.size()));
+            std::sort(uniq.begin(), uniq.end());
+            uniq.erase(std::unique(uniq.begin(), uniq.end()), uniq.end());
+            limits = limits && c.triCount >= 1u && c.triCount <= Mesh::kClusterMaxTris && uniq.size() <= Mesh::kClusterMaxVerts;
+            float along = 0.0f, leaf = 0.0f;
+            for (const std::uint32_t v : uniq)
+            {
+                const VertexPNTUV& x = b.verts[v];
+                const float eps = 1e-4f;
+                boxes = boxes && std::fabs(x.position.x - c.boxCenter.x) <= c.boxExtent.x + eps &&
+                        std::fabs(x.position.y - c.boxCenter.y) <= c.boxExtent.y + eps &&
+                        std::fabs(x.position.z - c.boxCenter.z) <= c.boxExtent.z + eps;
+                along = std::max(along, static_cast<float>(x.color & 0xFFu) / 255.0f);
+                leaf = std::max(leaf, static_cast<float>((x.color >> 16) & 0xFFu) / 255.0f);
+            }
+            wind = wind && along == c.windAlongMax && leaf == c.windLeafMax;
+        }
+        Check(tris * 3u == l.idx.size(), at + ": the clusters hold every triangle once (" + std::to_string(tris) + " of " +
+                                             std::to_string(l.idx.size() / 3u) + ")");
+        Check(ordered && inside, at + ": clusters in index order, each inside one submesh");
+        Check(limits, at + ": every cluster within 1..128 triangles and 256 vertices");
+        Check(boxes, at + ": every box holds its vertices");
+        Check(wind, at + ": the wind maxima are the vertices' own");
+        bad += (tris * 3u == l.idx.size() && ordered && inside && limits && boxes && wind) ? 0 : 1;
+    }
+    return bad;
+}
+
+// Mean box half-diagonal of a builder's clusters over one LOD (the culling's currency: the space a
+// cluster spans is what decides how many 1 m pages it is drawn into).
+template <class Build>
+double MeanHalfDiagonal(const Bin& b, std::size_t lod, Build build, std::size_t* clusterCount)
+{
+    const BinLod& l = b.lods[lod];
+    std::vector<meshopt_Meshlet> ml(meshopt_buildMeshletsBound(l.idx.size(), 256, 32));
+    std::vector<unsigned int> mv(l.idx.size());
+    std::vector<unsigned char> mt(l.idx.size());
+    const std::size_t n = build(ml.data(), mv.data(), mt.data(), l.idx.data(), l.idx.size());
+    double sum = 0.0;
+    for (std::size_t m = 0; m < n; ++m)
+    {
+        float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+        for (unsigned int v = 0; v < ml[m].vertex_count; ++v)
+        {
+            const DirectX::XMFLOAT3& p = b.verts[mv[ml[m].vertex_offset + v]].position;
+            const float q[3] = { p.x, p.y, p.z };
+            for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], q[k]); hi[k] = std::max(hi[k], q[k]); }
+        }
+        sum += 0.5 * std::sqrt(double(hi[0] - lo[0]) * (hi[0] - lo[0]) + double(hi[1] - lo[1]) * (hi[1] - lo[1]) +
+                               double(hi[2] - lo[2]) * (hi[2] - lo[2]));
+    }
+    *clusterCount = n;
+    return n ? sum / double(n) : 0.0;
+}
+} // namespace tessytest
+
+void TestTessyClusters()
+{
+    using namespace tessytest;
+    const std::string palmPath = "models/coconut_palm/coconut_palm.mesh.bin";
+    Bin palm;
+    Check(Read(palmPath, palm), "reads " + palmPath);
+    if (palm.lods.empty()) { return; }
+
+    // 1. The upgrade of a v3 file: the same vertices and hashes, every (LOD x submesh) the same
+    // triangles, the clusters valid.
+    const std::string v3 = (std::filesystem::temp_directory_path() / "intent_regression_tessy_v3.mesh.bin").string();
+    Check(WriteV3(v3, palm), "writes the palm as a v3 file");
+    std::string report;
+    Check(MeshManager::UpgradeBinaryToClusters(v3, &report), "upgrades it: " + report);
+    Bin up;
+    Check(Read(v3, up) && up.version == 4u, "and it reads back as v4");
+    Check(up.verts.size() == palm.verts.size() &&
+          std::memcmp(up.verts.data(), palm.verts.data(), palm.verts.size() * sizeof(VertexPNTUV)) == 0,
+          "the vertices are byte for byte the same");
+    Check(up.srcHash == palm.srcHash && up.optHash == palm.optHash, "the freshness hashes are kept");
+    bool sameSets = up.lods.size() == palm.lods.size();
+    for (std::size_t li = 0; sameSets && li < palm.lods.size(); ++li)
+    {
+        const BinLod& a = palm.lods[li];
+        const BinLod& b = up.lods[li];
+        sameSets = a.idx.size() == b.idx.size() && a.subs.size() == b.subs.size() && a.err == b.err;
+        for (std::size_t s = 0; sameSets && s < a.subs.size(); ++s)
+        {
+            sameSets = a.subs[s].indexOffset == b.subs[s].indexOffset && a.subs[s].indexCount == b.subs[s].indexCount &&
+                       Triangles(a.idx, a.subs[s].indexOffset, a.subs[s].indexCount) ==
+                       Triangles(b.idx, b.subs[s].indexOffset, b.subs[s].indexCount);
+        }
+    }
+    Check(sameSets, "every LOD's submeshes hold the same triangles, windings included");
+    CheckClusters(up, "palm");
+    Check(MeshManager::UpgradeBinaryToClusters(v3, &report) && report.find("already") != std::string::npos,
+          "a v4 file is left as it is: " + report);
+    std::filesystem::remove(v3);
+
+    // 2. A fresh bake writes v4 with clusters.
+    MeshLoadOptions fern;
+    fern.wantCW = false;
+    fern.slotFoliage = { 1.0f };
+    const std::string baked = (std::filesystem::temp_directory_path() / "intent_regression_tessy_bake.mesh.bin").string();
+    MeshManager manager;
+    Check(manager.BakeToBinary("import_staging/fern_02/fern_02_2k.gltf#node:fern_02_d", baked, fern), "bakes fern_02_d");
+    Bin fernBin;
+    Check(Read(baked, fernBin) && fernBin.version == 4u, "the bake is v4");
+    CheckClusters(fernBin, "fern bake");
+    Check(!MeshManager::BinaryNeedsRebake(baked, fern), "and current");
+    std::filesystem::remove(baked);
+
+    // 3. Why the SAH builder (informational): the space its clusters span on the palm's LOD0, against
+    // meshopt_buildMeshlets at the same limits.
+    std::size_t nSpatial = 0, nPlain = 0;
+    const double spatial = MeanHalfDiagonal(palm, 0, [&](meshopt_Meshlet* m, unsigned int* v, unsigned char* t,
+        const std::uint32_t* idx, std::size_t n) {
+            return meshopt_buildMeshletsSpatial(m, v, t, idx, n, &palm.verts[0].position.x, palm.verts.size(),
+                                                sizeof(VertexPNTUV), 256, 32, 128, 0.5f); }, &nSpatial);
+    const double plain = MeanHalfDiagonal(palm, 0, [&](meshopt_Meshlet* m, unsigned int* v, unsigned char* t,
+        const std::uint32_t* idx, std::size_t n) {
+            return meshopt_buildMeshlets(m, v, t, idx, n, &palm.verts[0].position.x, palm.verts.size(),
+                                         sizeof(VertexPNTUV), 256, 128, 0.0f); }, &nPlain);
+    std::printf("  tessy: palm LOD0 %zu tris -- spatial %zu clusters, mean half-diagonal %.3f m; plain %zu clusters, %.3f m\n",
+                palm.lods[0].idx.size() / 3u, nSpatial, spatial, nPlain, plain);
+}
+
 // A leaf card is a two-sided alpha cutout whose cutout removes materialgen::kLeafCutShare of its
 // surface or more. The flags alone made the_bathroom_free's curtains, doors and towels leaf cards
 // that swayed indoors; the old rule would fail section 3.
@@ -4070,6 +4312,7 @@ int main(int argc, char** argv)
         TestRestPose();
         TestPivotToBase();
         TestGltfHandedness();
+        TestTessyClusters();
         TestLeafCards();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);

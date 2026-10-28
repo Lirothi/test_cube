@@ -1341,6 +1341,11 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
     return drew;
 }
 
+Material* ShadowGpuData::IndirectShadowTessyMaterial() const
+{
+    return MaskedShadowsActive() ? indirectShadowTessyMaskedMat_.get() : indirectShadowTessyMat_.get();
+}
+
 Material* ShadowGpuData::IndirectShadowPageMaterial() const
 {
     return MaskedShadowsActive() ? indirectShadowPageMaskedMat_.get() : indirectShadowPageMat_.get();
@@ -1617,6 +1622,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // contiguously first-seen, so group(mesh, s) = meshToGroup[mesh] + s. All of an object's slots
     // share its instance data/bounds (per-submesh bounds are a future refinement).
     std::unordered_map<const Mesh*, std::uint32_t> meshToGroup; // mesh -> FIRST group id
+    std::unordered_map<const Mesh*, std::string> meshPath;      // Tessy N2: mesh -> its geometry path
     std::vector<const Mesh*> casterMesh(casterCount, nullptr);
     std::vector<std::uint32_t> casterSub(casterCount, 0u);      // submesh ordinal within casterMesh
     std::vector<std::uint32_t> staticDynamic(casterCount, 0u); // per static caster: IsDynamicCaster (VSM page-cache invalidation)
@@ -1647,6 +1653,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         if (mesh && meshToGroup.find(mesh) == meshToGroup.end())
         {
             meshToGroup.emplace(mesh, nextGroup);
+            meshPath.emplace(mesh, ro ? ro->GetGeometryPath() : std::string()); // Tessy N2: named when it has no clusters
             if (mesh->IsChunkedSubmeshes()) { ++chunkedMeshes; }
             GBufferRenderable* gb = obj->AsGBufferRenderable();
             for (size_t s = 0; s < slots; ++s)
@@ -2071,6 +2078,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     // RecordPageRender fall back to per-group binding; EnsureMegaBuffer (GPU-idle level load only)
     // frees + reallocates. So a mid-game caster change just drops the mega opt until the next load.
     megaWanted_ = megaBuilt_ = megaReady_ = false;
+    tessyReady_ = false; // Tessy N2: the tables follow the mega buffers (EnsureMegaBuffer uploads both)
     megaVBBytes_ = megaIBBytes_ = megaStride_ = 0;
     megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     baseVertex_.assign(numMeshGroups_, 0u);
@@ -2164,6 +2172,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             megaCopy_.clear();
         }
     }
+    BuildTessyTables_(meshPath); // Tessy N2: needs the mega-absolute starts the block above wrote
 
     // Per-(group,lod) mega ranges -> their SRV. Written LAST because the mega block above patches
     // groupLodMega_ in place (absolute starts + base vertex). Static region 0: it only changes when
@@ -2752,6 +2761,26 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             indirectShadowPageMaskedMat_.reset();
         }
 
+        // Tessy N3: the cluster twins -- the page PSOs' state, no input layout (the VS reads the mega buffers by
+        // SV_VertexID / SV_InstanceID). Optional: without them every caster stays on the classic page draw.
+        gd.defines.clear();
+        gd.defines.emplace_back("VSM_TESSY", "1");
+        gd.inputLayoutKey = "";
+        gd.raster.CullMode = D3D12_CULL_MODE_BACK;
+        indirectShadowTessyMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowTessyMat_ || !indirectShadowTessyMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_TESSY indirect shadow PSO FAILED (tessy.vsm off)");
+            indirectShadowTessyMat_.reset();
+        }
+        gd.defines.emplace_back("SHADOW_MASKED", "1");
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE; // double-sided foliage, as above
+        indirectShadowTessyMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
+        if (!indirectShadowTessyMaskedMat_ || !indirectShadowTessyMaskedMat_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_TESSY masked indirect shadow PSO FAILED (tessy.vsm off)");
+            indirectShadowTessyMaskedMat_.reset();
+        }
     }
 
     const bool cullOk = cullClearMat_ && cullClearMat_->GetPipelineState() &&
@@ -4029,6 +4058,182 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
         }
     }
     megaReady_ = true;
+    UploadTessyTables_(renderer, cl);
+}
+
+// Tessy N2: per virtual group (group x shadow LOD) the clusters of exactly the index range the classic
+// args draw -- the group's submesh in that LOD, mega-absolute (the mega block's lodBase + the cluster's
+// LOD-relative start). The submesh range comes from the EXPLICIT LOD's table (GetLodDrawInfo), as the
+// clusters do: SubmeshesForLod applies the runtime LOD overrides, which the clusters know nothing of.
+// GI groups draw their whole LOD0. Duplicated LODs (a mesh with fewer than kMaxShadowLods) share a range.
+void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std::string>& meshPath)
+{
+    tessyClusterCpu_.clear();
+    tessyVgCpu_.assign(static_cast<size_t>(numMeshGroups_) * render::kMaxShadowLods, DirectX::XMUINT2{ 0u, 0u });
+    tessyGroupsWith_ = tessyGroupsTotal_ = 0;
+    if (!megaWanted_ || numMeshGroups_ == 0) { return; }
+    std::vector<std::string> without; // asset paths whose groups stay classic
+    for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
+    {
+        const Mesh* m = (g < groupMesh_.size()) ? groupMesh_[g] : nullptr;
+        if (!m) { continue; }
+        const bool isStatic = g < numStaticGroups_;
+        if (isStatic && g < groupGbuf_.size() && groupGbuf_[g].glassOnly) { continue; } // draws nothing anyway
+        if (isStatic) { ++tessyGroupsTotal_; }
+        if (!m->HasClusters())
+        {
+            if (isStatic)
+            {
+                const auto it = meshPath.find(m);
+                const std::string name = (it != meshPath.end() && !it->second.empty()) ? it->second : std::string("(unnamed mesh)");
+                if (std::find(without.begin(), without.end(), name) == without.end()) { without.push_back(name); }
+            }
+            continue;
+        }
+        // The submesh ordinal of a static group: a mesh's groups are consecutive from its first one.
+        std::uint32_t sOrd = 0;
+        if (isStatic) { while (sOrd < g && groupMesh_[g - sOrd - 1u] == m) { ++sOrd; } }
+        UINT prevLod = ~0u;
+        DirectX::XMUINT2 prevRange{ 0u, 0u };
+        for (std::uint32_t L = 0; L < render::kMaxShadowLods; ++L)
+        {
+            const UINT lod = isStatic ? m->ClampExplicitLod(L) : 0u;
+            const size_t vg = static_cast<size_t>(g) * render::kMaxShadowLods + L;
+            if (lod == prevLod) { tessyVgCpu_[vg] = prevRange; continue; }
+            const size_t o = vg * 4u;
+            const std::uint32_t lodBase = groupLodMega_[o + 0] - groupLodMega_[o + 1]; // this LOD's IB in the mega IB
+            const Mesh::LodDrawInfo info = m->GetLodDrawInfo(lod);
+            std::uint32_t lo = 0u, hi = info.indexCount;
+            if (isStatic && info.submeshes && sOrd < info.submeshes->size())
+            {
+                lo = (*info.submeshes)[sOrd].indexOffset;
+                hi = lo + (*info.submeshes)[sOrd].indexCount;
+            }
+            const std::uint32_t first = static_cast<std::uint32_t>(tessyClusterCpu_.size());
+            for (const Mesh::Cluster& c : m->GetClusters(lod))
+            {
+                if (c.firstIndex < lo || c.firstIndex >= hi) { continue; }
+                TessyCluster t{};
+                t.firstIndex = lodBase + c.firstIndex;
+                t.triCount = c.triCount;
+                t.windAlongMax = c.windAlongMax;
+                t.windLeafMax = c.windLeafMax;
+                t.center = c.boxCenter;
+                t.extent = c.boxExtent;
+                t.radius = c.sphere.w;
+                tessyClusterCpu_.push_back(t);
+            }
+            prevLod = lod;
+            prevRange = DirectX::XMUINT2{ first, static_cast<std::uint32_t>(tessyClusterCpu_.size()) - first };
+            tessyVgCpu_[vg] = prevRange;
+        }
+        if (isStatic) { ++tessyGroupsWith_; }
+    }
+    tessyBytes_ = tessyClusterCpu_.size() * sizeof(TessyCluster) + tessyVgCpu_.size() * sizeof(DirectX::XMUINT2);
+    std::string list;
+    for (size_t i = 0; i < without.size() && i < 24; ++i) { list += (i ? ", " : "") + without[i]; }
+    if (without.size() > 24) { list += ", ... (" + std::to_string(without.size() - 24) + " more)"; }
+    LOG_INFO(logging::LogCategory::RenderShadow,
+             "tessy: clusters for {} of {} caster groups ({} clusters, {} KB); classic path: {}",
+             tessyGroupsWith_, tessyGroupsTotal_, tessyClusterCpu_.size(), (tessyBytes_ + 1023u) / 1024u,
+             without.empty() ? std::string("none") : list);
+}
+
+// Tessy N2: the tables into DEFAULT-heap buffers on the GPU-idle load list, beside the mega copy. They
+// rest in COMMON like the mega buffers, so a shader read promotes them implicitly (buffers do) and the
+// frame never transitions them.
+void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommandList* cl)
+{
+    tessyReady_ = false;
+    if (!renderer || !cl || !megaReady_ || tessyClusterCpu_.empty() || tessyVgCpu_.empty()) { return; }
+    ID3D12Device* dev = renderer->GetDevice();
+    const UINT64 clusterBytes = tessyClusterCpu_.size() * sizeof(TessyCluster);
+    const UINT64 vgBytes = tessyVgCpu_.size() * sizeof(DirectX::XMUINT2);
+    auto makeBuf = [&](UINT64 bytes, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state, const wchar_t* name,
+                       Microsoft::WRL::ComPtr<ID3D12Resource>& out) -> bool
+    {
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = type;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = bytes;
+        desc.Height = 1; desc.DepthOrArraySize = 1; desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        return SUCCEEDED(gpu::CreateCommittedResource(dev, &heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr,
+                                                      MemTag::ShadowTessy, name, IID_PPV_ARGS(out.GetAddressOf()))) && out;
+    };
+    tessyClusters_.Reset(); // GPU-idle here (EnsureMegaBuffer's contract)
+    tessyVg_.Reset();
+    tessyUpload_.Reset();
+    Microsoft::WRL::ComPtr<ID3D12Resource> clusters, vg;
+    if (!makeBuf(clusterBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, L"Tessy.Clusters", clusters) ||
+        !makeBuf(vgBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, L"Tessy.VirtualGroups", vg) ||
+        !makeBuf(clusterBytes + vgBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, L"Tessy.Upload", tessyUpload_))
+    {
+        LOG_ERROR(logging::LogCategory::RenderShadow, "tessy: the cluster tables could not be allocated; every group stays classic");
+        tessyUpload_.Reset();
+        return;
+    }
+    std::uint8_t* dst = nullptr;
+    D3D12_RANGE none{ 0, 0 };
+    if (FAILED(tessyUpload_->Map(0, &none, reinterpret_cast<void**>(&dst))) || !dst) { tessyUpload_.Reset(); return; }
+    std::memcpy(dst, tessyClusterCpu_.data(), static_cast<size_t>(clusterBytes));
+    std::memcpy(dst + clusterBytes, tessyVgCpu_.data(), static_cast<size_t>(vgBytes));
+    tessyUpload_->Unmap(0, nullptr);
+    // COMMON -> COPY_DEST by implicit promotion, as the mega copy does.
+    cl->CopyBufferRegion(clusters.Get(), 0, tessyUpload_.Get(), 0, clusterBytes);
+    cl->CopyBufferRegion(vg.Get(), 0, tessyUpload_.Get(), clusterBytes, vgBytes);
+    tessyClusters_.Attach(renderer->Declarations(), std::move(clusters), D3D12_RESOURCE_STATE_COMMON, L"Tessy.Clusters");
+    tessyVg_.Attach(renderer->Declarations(), std::move(vg), D3D12_RESOURCE_STATE_COMMON, L"Tessy.VirtualGroups");
+
+    if (!tessyHeap_)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.NumDescriptors = 4;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowTessy, L"Tessy.SrvHeap", IID_PPV_ARGS(tessyHeap_.GetAddressOf()))))
+        {
+            tessyHeap_.Reset();
+            return;
+        }
+    }
+    const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    tessyHeapIncr_ = incr;
+    const D3D12_CPU_DESCRIPTOR_HANDLE base = tessyHeap_->GetCPUDescriptorHandleForHeapStart();
+    const auto structured = [&](UINT slot, ID3D12Resource* res, UINT elems, UINT stride)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_UNKNOWN;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Buffer.NumElements = elems;
+        sd.Buffer.StructureByteStride = stride;
+        dev->CreateShaderResourceView(res, &sd, D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + slot * incr });
+    };
+    structured(0, tessyClusters_.Get(), static_cast<UINT>(tessyClusterCpu_.size()), sizeof(TessyCluster));
+    structured(1, tessyVg_.Get(), static_cast<UINT>(tessyVgCpu_.size()), sizeof(DirectX::XMUINT2));
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_R32_TYPELESS;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Buffer.NumElements = megaVBBytes_ / 4u;
+        sd.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_RAW;
+        dev->CreateShaderResourceView(megaVB_.Get(), &sd, D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + 2u * incr });
+    }
+    structured(3, megaIB_.Get(), megaIBBytes_ / 4u, sizeof(std::uint32_t));
+    tessyReady_ = true;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::TessySrv(UINT slot) const
+{
+    if (!tessyReady_ || !tessyHeap_ || !megaReady_) { return {}; }
+    D3D12_CPU_DESCRIPTOR_HANDLE h = tessyHeap_->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += static_cast<SIZE_T>(slot) * tessyHeapIncr_;
+    return h;
 }
 
 namespace
@@ -4280,6 +4485,10 @@ void ShadowGpuData::Reset()
     hasMaskedGroups_ = false;
     forceContentRefresh_ = false;
     megaWanted_ = megaReady_ = false; // groupMesh_ gone; next Rebuild frees + rebuilds the mega buffers
+    tessyReady_ = false;              // Tessy N2: the tables go with them (the GPU copies stay until replaced)
+    tessyClusterCpu_.clear();
+    tessyVgCpu_.clear();
+    tessyGroupsWith_ = tessyGroupsTotal_ = 0;
     valState_ = 0;
     logFramesRemaining_ = 5;
     // S5b: the pyramids hold the OLD level's tiles; the next frames' culls treat every caster as

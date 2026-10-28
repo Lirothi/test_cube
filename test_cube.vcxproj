@@ -712,6 +712,7 @@
     <ClInclude Include="sources/rendering/shadows/ShadowGpuData.h" />
     <ClInclude Include="sources/rendering/shadows/CascadeHzb.h" />
     <ClInclude Include="sources/rendering/shadows/ShadowSettings.h" />
+    <ClInclude Include="sources/rendering/shadows/TessySettings.h" />
     <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h" />
     <ClInclude Include="sources/rendering/shadows/VirtualShadowMap.h" />
     <ClInclude Include="sources/rendering/shadows/SdsmShadows.h" />
@@ -885,6 +886,7 @@
     <None Include="shaders\vsm_page_scatter_clear_cs.hlsl" />
     <None Include="shaders\vsm_page_scatter_cs.hlsl" />
     <None Include="shaders\vsm_page_setup_cs.hlsl" />
+    <None Include="shaders\tessy_vsm_cull_cs.hlsl" />
     <None Include="shaders\vsm_sample.hlsli" />
     <None Include="shaders\local_shadow_bias.hlsli" />
     <None Include="shaders\local_shadow_filter.hlsli" />

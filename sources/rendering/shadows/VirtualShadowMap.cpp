@@ -17,7 +17,9 @@
 #include "rendering/meshes/Mesh.h"
 #include "rendering/meshes/LodSelect.h" // render::kMaxShadowLods (per-view shadow LOD table)
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/shadows/TessySettings.h" // Tessy N3: tessy::g_vsm
 #include "core/diagnostics/ArtifactWriter.h" // logs/vsm_pages.log (g_logPageStats file mirror)
+#include <chrono>
 #include "vfx/WindState.h" // W5: wind params copied into each page's shadow view CB
 
 void VirtualShadowMap::EnsureResources(Renderer* renderer)
@@ -360,6 +362,17 @@ void VirtualShadowMap::ReleaseResources()
     pageGroupCountB_.Reset();
     pageDrawArgsB_.Reset();
     pageArgCountB_.Reset();
+    tessyRuns_.Reset(); // Tessy N3: the cull's buffers go with the pool
+    tessyVisible_.Reset();
+    tessyStats_.Reset();
+    tessyHeap_.Reset();
+    tessyRunsUav_ = tessyVisibleUav_ = tessyVisibleSrv_ = tessyStatsUav_ = {};
+    for (UINT i = 0; i < render::kFrameCount; ++i)
+    {
+        tessyReadback_[i].Reset();
+        tessyReadbackPtr_[i] = nullptr;
+        tessyReadbackFrame_[i] = 0;
+    }
     hzbHeap_.Reset();
     hzbSrv_ = prevPageTableSrv_ = deferredPairsUav_ = deferredPairsSrv_ = hzbCountersUav_ = {};
     pageGroupCountBUav_ = pageGroupCountBSrv_ = pageDrawArgsBUav_ = pageArgCountBUav_ = {};
@@ -545,6 +558,8 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     // them the scatter defers nothing and every page draws single-pass as before.
     hzbBuildMat_ = makeCompute(L"shaders/vsm_hzb_build_cs.hlsl");
     hzbPostMat_  = makeCompute(L"shaders/vsm_hzb_post_cs.hlsl");
+    // Tessy N3: the cluster cull. Optional -- without it every caster stays on the classic page draw.
+    tessyCullMat_ = makeCompute(L"shaders/tessy_vsm_cull_cs.hlsl");
 
     // Page cache: the gated depth-clear graphics PSO (depth-only, ALWAYS-write z=1.0, no vertex input;
     // VS drives from SV_VertexID/SV_InstanceID). Optional — a failure just falls back to whole-pool clear.
@@ -732,6 +747,21 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
                      hzbLastBuildFrame_ == lastRenderFrame_;
     d.hzbFull = d.hzb && (hzbInvalidate_ || hzbLastBuildFrame_ == 0);
 
+    // Tessy N3. The counters run every frame they exist (N0's pair counter); the cluster path needs the scatter
+    // (runs are made from its buckets), the single draw (the packed page id the VS reads), the tables and the mega
+    // buffers they index (a 52-byte vertex: the VS fetches it by hand), the cull and both draw PSOs, the buffers.
+    d.tessyStats = tessyStats_ && tessyStatsUav_.ptr != 0;
+    Material* tessyMat = shadowGpu->IndirectShadowTessyMaterial();
+    d.tessyOffReason = !tessy::g_vsm ? ""
+        : !d.scatterActive ? "the page scatter is off"
+        : !d.singleDraw ? "the single-draw page render is off"
+        : !shadowGpu->TessyReady() ? "no caster mesh has clusters (or the mega buffer is off)"
+        : shadowGpu->MegaStride() != sizeof(VertexPNTUV) ? "the mega vertex buffer is not VertexPNTUV"
+        : (!tessyCullMat_ || !tessyCullMat_->GetPipelineState()) ? "the cluster cull PSO failed"
+        : (!tessyMat || !tessyMat->GetPipelineState()) ? "the VSM_TESSY PSO failed"
+        : (!d.tessyStats || !tessyRuns_ || !tessyVisible_ || tessyRunsUav_.ptr == 0) ? "the cluster buffers are missing"
+        : "";
+    d.tessy = tessy::g_vsm && d.tessyOffReason[0] == '\0';
     return d;
 }
 
@@ -749,11 +779,35 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     // record lambda, so the record reads the same values by construction.
     if (!IsAllocated() || !shadowGpu) { return PageRenderDecisions{}; }
     PageRenderDecisions d = ComputePageRenderDecisions(shadowGpu, wind);
+    // Tessy N3: the cluster draw's command signature, made here on the builder's thread (the record may be a worker's).
+    if (d.tessy && (!ctx.renderer || !ctx.renderer->GetDrawCommandSignature()))
+    {
+        d.tessy = false;
+        d.tessyOffReason = "the DRAW command signature failed";
+    }
+    tessyOffReason_ = d.tessyOffReason; // the readout's (the builder's cross-frame state)
     d.distantMask = distantMask_;     // plan S10d (PlanDistantLights, this frame)
     d.distantUpdate = distantUpdate_;
     // S5b.2 cross-frame state, committed in the (serial) builder: this frame renders; if it also
     // builds the pyramid, next frame may test against it.
     hzbThisFrame_ = d.hzb;
+    // Tessy N3 (plan 4.7): a switch of the path re-renders every page once. The depth must come out the same either
+    // way, but a measurement right after a switch would otherwise read a pool half drawn by the other path.
+    if (d.tessy != tessyLast_)
+    {
+        d.forceAll = 1u;
+        tessyLast_ = d.tessy;
+    }
+    // An event per change of the verdict: whether tessy.vsm draws clusters, and if not, why.
+    {
+        const char* verdict = d.tessy ? "on" : (tessy::g_vsm ? tessyOffReason_ : "off (tessy.vsm 0)");
+        if (verdict != tessyLoggedReason_ && ctx.renderer)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.vsm: {}{} (frame {})", d.tessy ? "" : "classic path -- ",
+                     verdict, ctx.renderer->GetTotalFrameNumber());
+            tessyLoggedReason_ = verdict;
+        }
+    }
     // Plan S10c: nothing re-renders a parked view (its light has no cull view to draw from), so this render clears
     // whatever of it it calls dirty -- every page on forceAll, every local one under wind -- and a caster that moves
     // can leave its pages stale with no test noticing. Such a frame frees them all at the next plan.
@@ -783,6 +837,13 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     if (ctx.renderer)
     {
         lastRenderFrame_ = ctx.renderer->GetTotalFrameNumber();
+        // Tessy: the counters' readback stamp, as the HZB counters' below.
+        const UINT tf = ctx.renderer->GetCurrentFrameIndex();
+        if (d.tessyStats && tf < render::kFrameCount && tessyReadback_[tf])
+        {
+            tessyReadbackFrame_[tf] = lastRenderFrame_;
+            tessyReadbackOn_[tf] = d.tessy;
+        }
         if (d.hzb)
         {
             hzbLastBuildFrame_ = lastRenderFrame_;
@@ -813,6 +874,14 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (pageArgCount_) { ctx.Use(pageArgCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    // Tessy N3: the counters (cleared + counted by the setup, the cull) and the cull's runs and survivors -- all
+    // written as UAVs between this point and the consume point; the cull reads the page outputs through theirs.
+    if (d.tessyStats) { ctx.Use(tessyStats_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
+    if (d.tessy)
+    {
+        ctx.Use(tessyRuns_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(tessyVisible_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
 
     // Spatial scatter cull (directional clipmap views only).
     if (d.scatterActive)
@@ -864,6 +933,9 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
                              D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     ctx.Use(pagePool_.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    // Tessy N3: the counters are the cluster draw's args and the readback's source; the survivors its VS input.
+    if (d.tessyStats) { ctx.Use(tessyStats_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT | D3D12_RESOURCE_STATE_COPY_SOURCE); }
+    if (d.tessy) { ctx.Use(tessyVisible_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
     if (!d.hzb) { return d; }
 
     // ---- S5b.2, after pass A's draw: the pyramid of the pages pass A rendered ----
@@ -1591,6 +1663,7 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
         !pageGroupCount_ || !pageScatterDyn_) { return; }
     // S5b.2: the pool pyramid + the pass-B set (its own heap; failure just keeps the feature off).
     EnsureHzbResources(renderer, groups, casters);
+    EnsureTessyResources(renderer); // Tessy N3: fixed sizes, its own heap; failure keeps tessy.vsm off
 
     // Resident-set readback ring (physOwner snapshots), persistently mapped.
     if (!residentReadback_[0])
@@ -1931,6 +2004,90 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
     rawUav(pageArgCountB_.Get(), pageArgCountBUav_);
 }
 
+// Tessy N3: fixed-size buffers (kTessyRunCap / kTessyVisibleCap), created once with the render resources. The
+// counters rest UAV like pageArgCount_; the survivors rest NPS (the draw's read) -- the pass declares both.
+void VirtualShadowMap::EnsureTessyResources(Renderer* renderer)
+{
+    if (!renderer || !renderer->GetDevice()) { return; }
+    if (tessyRuns_ && tessyVisible_ && tessyStats_ && tessyHeap_ && tessyReadback_[0]) { return; }
+    ID3D12Device* dev = renderer->GetDevice();
+    if (!tessyRuns_)
+    {
+        tessyRuns_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, kTessyRunCap * 4u, L"Tessy.Runs"),
+                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    }
+    if (!tessyVisible_)
+    {
+        tessyVisible_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, kTessyVisibleCap * 4u, L"Tessy.Visible"),
+                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
+    }
+    if (!tessyStats_)
+    {
+        tessyStats_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, kTessyStatsUints, L"Tessy.Stats"),
+                           D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    }
+    if (!tessyRuns_ || !tessyVisible_ || !tessyStats_) { return; }
+    if (!tessyReadback_[0])
+    {
+        D3D12_HEAP_PROPERTIES rb{}; rb.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = kTessyStatsUints * sizeof(std::uint32_t);
+        rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
+        rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
+        for (UINT i = 0; i < render::kFrameCount; ++i)
+        {
+            if (SUCCEEDED(gpu::CreateCommittedResource(dev, &rb, D3D12_HEAP_FLAG_NONE, &rd,
+                    D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::ShadowTessy, L"Tessy.StatsReadback", IID_PPV_ARGS(tessyReadback_[i].GetAddressOf()))))
+            {
+                void* p = nullptr;
+                if (SUCCEEDED(tessyReadback_[i]->Map(0, nullptr, &p))) { tessyReadbackPtr_[i] = static_cast<const std::uint32_t*>(p); }
+            }
+            tessyReadbackFrame_[i] = 0;
+        }
+    }
+    if (!tessyHeap_)
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd{};
+        hd.NumDescriptors = 4;
+        hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowTessy, L"Tessy.VsmHeap", IID_PPV_ARGS(tessyHeap_.GetAddressOf()))) || !tessyHeap_)
+        {
+            tessyHeap_.Reset();
+            return;
+        }
+        const UINT incr = dev->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        const D3D12_CPU_DESCRIPTOR_HANDLE base = tessyHeap_->GetCPUDescriptorHandleForHeapStart();
+        tessyRunsUav_ = { base.ptr };
+        tessyVisibleUav_ = { base.ptr + incr };
+        tessyVisibleSrv_ = { base.ptr + 2u * incr };
+        tessyStatsUav_ = { base.ptr + 3u * incr };
+        D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+        ud.Format = DXGI_FORMAT_UNKNOWN;
+        ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        ud.Buffer.NumElements = kTessyRunCap;
+        ud.Buffer.StructureByteStride = 4u * sizeof(std::uint32_t);
+        dev->CreateUnorderedAccessView(tessyRuns_.Get(), nullptr, &ud, tessyRunsUav_);
+        ud.Buffer.NumElements = kTessyVisibleCap;
+        dev->CreateUnorderedAccessView(tessyVisible_.Get(), nullptr, &ud, tessyVisibleUav_);
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_UNKNOWN;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Buffer.NumElements = kTessyVisibleCap;
+        sd.Buffer.StructureByteStride = 4u * sizeof(std::uint32_t);
+        dev->CreateShaderResourceView(tessyVisible_.Get(), &sd, tessyVisibleSrv_);
+        D3D12_UNORDERED_ACCESS_VIEW_DESC rd{};
+        rd.Format = DXGI_FORMAT_R32_TYPELESS;
+        rd.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+        rd.Buffer.NumElements = kTessyStatsUints;
+        rd.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+        dev->CreateUnorderedAccessView(tessyStats_.Get(), nullptr, &rd, tessyStatsUav_);
+    }
+}
+
 void VirtualShadowMap::PollHzbStats(Renderer* renderer)
 {
     // The slot of frame N - kFrameCount: its fence passed in this frame's BeginFrame.
@@ -1943,7 +2100,42 @@ void VirtualShadowMap::PollHzbStats(Renderer* renderer)
         if (hzbReadbackFrame_[s] != want || want == 0 || !hzbReadbackPtr_[s]) { continue; }
         std::memcpy(hzbStats_.data(), hzbReadbackPtr_[s], 4u * sizeof(std::uint32_t));
         hzbReadbackFrame_[s] = 0;
-        return;
+        break;
+    }
+    // Tessy N0/N3: the same slot rule for the cluster counters (byte layout: tessy_vsm_cull_cs.hlsl).
+    for (UINT s = 0; s < render::kFrameCount; ++s)
+    {
+        if (tessyReadbackFrame_[s] != want || want == 0 || !tessyReadbackPtr_[s]) { continue; }
+        const std::uint32_t* c = tessyReadbackPtr_[s];
+        TessyStats t{};
+        t.clusters = c[1];
+        t.runs = c[4];
+        t.wholePairs = c[5];
+        t.wholeTris = c[6];
+        t.tessyPairs = c[7];
+        t.tessyWholeTris = c[8];
+        t.clustersTested = c[9];
+        t.clusterTris = c[10];
+        t.clustersLost = c[11];
+        t.runsLost = c[12];
+        t.padMisses = c[13];
+        t.padMissMaxUm = c[14];
+        t.padNeedCm = c[15];
+        t.padGotCm = c[16];
+        t.padMaxOffCm = c[17];
+        t.padDCm = c[18];
+        t.padFCm = c[19];
+        t.tessyOn = tessyReadbackOn_[s];
+        t.valid = true;
+        tessyStatsLast_ = t;
+        tessyReadbackFrame_[s] = 0;
+        if (t.clustersLost > 0u)
+        {
+            LOG_WARNING_THROTTLED(std::chrono::seconds(5), logging::LogCategory::RenderShadow,
+                "tessy: {} surviving clusters did not fit the {}-cluster list this frame -- their shadow is missing",
+                t.clustersLost, kTessyVisibleCap);
+        }
+        break;
     }
 }
 
@@ -2125,6 +2317,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                                          pageArgCountUav_, pageArgCount_.Get(), zero, 0, nullptr);
         renderer->UAVBarrier(cl, pageArgCount_.Get());
     }
+    // Tessy N3: the counters (and the cluster draw's args) start every frame at zero, the same way.
+    if (dec.tessyStats)
+    {
+        const UINT zero[4] = { 0u, 0u, 0u, 0u };
+        cl->ClearUnorderedAccessViewUint(renderer->StageSrvUavTable({ tessyStatsUav_ }).gpu,
+                                         tessyStatsUav_, tessyStats_.Get(), zero, 0, nullptr);
+        renderer->UAVBarrier(cl, tessyStats_.Get());
+    }
 
     // --- Spatial scatter cull (directional clipmap): clear the per (page, group) counters, then let
     // every caster append itself into the few pages its AABB covers. This replaces the O(pages x
@@ -2225,7 +2425,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         std::uint32_t scatterLocals; // S5: 1 = LOCAL views were scattered too (was _pad5)
         std::uint32_t windDirtyMaxLevel = 0; // mirrors gWindDirtyMaxLevel (wind page-cache range)
         std::uint32_t passB{};               // S5b.2: mirrors gPassB
-        std::uint32_t setupPad[2]{};         // keeps the wind on its own row (HLSL packing)
+        std::uint32_t tessy{};               // Tessy N3: mirrors gTessy (bit 0 divert, bit 1 count); was padding
+        std::uint32_t tessyRunCap{};         // mirrors gTessyRunCap
         // W5: the wind tail of the shadow PerView CB, verbatim. The setup shader stores these two
         // float4s at byte 192 of each page's 256-byte PageProj slot, which the page draw binds as
         // b1 — so the per-page shadow VS reads the same wind the gbuffer does. Field order matches
@@ -2274,6 +2475,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.scatterLocals = scatterLocals ? 1u : 0u;
             cb.pageIdShift = singleDraw ? vsm::kPageIdShift : 0u; // must match the scatter CB's value
             cb.compactArgs = compactArgs ? 1u : 0u;
+            // Tessy N3, pass A only: divert the buckets of groups with clusters (bit 0), count (bit 1).
+            if (passB == 0u)
+            {
+                cb.tessy = (dec.tessy ? 1u : 0u) | (dec.tessyStats ? 2u : 0u);
+                cb.tessyRunCap = kTessyRunCap;
+            }
             // Fallback flat LOD (mega off): the per-page bind can't know each page's view, so all pages
             // use one LOD = the near directional (clipmap level 0) view's LOD.
             cb.flatLod = shadowGpu->ViewLodAt(render::ShadowViewClipmapSlot(0u));
@@ -2292,21 +2499,50 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         // POSITIONAL: this list IS t0..t12 in order. groupLodMega (t9) is static region 0;
         // groupLodOverride (t10) is per-frame -- it is rewritten every frame by RefreshChunkGroupLods.
         // t11 (S5b.2, pass B's counts) is a placeholder in pass A: the shader reads it only under gPassB.
-        // t12 (plan S9e) = the render slot's per-view records.
+        // t12 (plan S9e) = the render slot's per-view records. t13 (Tessy N3) = the clusters per virtual group,
+        // a placeholder unless the buckets are diverted this frame (the shader reads it only then).
         { physOwnerSrv_, rung0ArgsSrv_, boundsSrv, casterGroupSrv, physOwnerPrevSrv_, casterMetaSrv,
           pageGroupCountSrv_, perGroupSrv, pageScatterDynSrv_,
-          shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountSrv_, viewsSrv },
+          shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountSrv_, viewsSrv,
+          dec.tessy ? shadowGpu->TessyVgSrv() : physOwnerSrv_ },
         // u4 = the compacted-args counter. Its descriptor must be valid even when compaction is off
         // (the root signature declares the range); the shader only touches it when gCompactArgs != 0,
-        // so a stand-in on the OOM path is never read.
+        // so a stand-in on the OOM path is never read. u5/u6 (Tessy N3): the runs and the counters, stand-ins
+        // under the same rule (gTessy's bits say which the shader touches).
         { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_,
-          pageArgCountUav_.ptr != 0 ? pageArgCountUav_ : perPageDirtyUav_ },
+          pageArgCountUav_.ptr != 0 ? pageArgCountUav_ : perPageDirtyUav_,
+          dec.tessy ? tessyRunsUav_ : perPageDirtyUav_, dec.tessyStats ? tessyStatsUav_ : perPageDirtyUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,
         pageDrawArgs_.Get());
     renderer->UAVBarrier(cl, pageProj_.Get());
     renderer->UAVBarrier(cl, pageVisibleList_.Get());
     } // end VsmPageRender.Setup scope
+
+    // Tessy N3: the cluster cull of the runs the setup just appended -- before the consume point, so it reads the
+    // runs, the list and the projections through the UAVs they were written with (tessy_vsm_cull_cs.hlsl).
+    if (dec.tessy)
+    {
+        GPU_SCOPE(cl, ProfilerScopes::kVsmTessyCull);
+        renderer->UAVBarrier(cl, tessyRuns_.Get());
+        renderer->UAVBarrier(cl, tessyStats_.Get());
+        struct CullCB { std::uint32_t runCap, groups, windPad, validate; };
+        RecordComputeDispatch(renderer, cl, tessyCullMat_.get(), static_cast<UINT>(sizeof(CullCB)),
+            [&](std::uint8_t* dst)
+            {
+                const CullCB c{ kTessyRunCap, kTessyCullGroups, std::min(tessy::g_vsmWindPad, 2u),
+                                tessy::g_vsmValidate ? 1u : 0u };
+                std::memcpy(dst, &c, sizeof(c));
+            },
+            // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate).
+            { shadowGpu->InstanceReadSrv(f), shadowGpu->TessyClusterSrv(), shadowGpu->TessyVgSrv(),
+              shadowGpu->GroupLodMegaSrv(), shadowGpu->MegaVertexRawSrv(), shadowGpu->MegaIndexSrv() },
+            { tessyRunsUav_, pageVisibleListUav_, pageProjUav_, tessyVisibleUav_, tessyStatsUav_ },
+            D3D12_GPU_DESCRIPTOR_HANDLE{},
+            kTessyCullGroups * kComputeDispatchGroupSize, kComputeDispatchGroupSize, // numthreads(8, 8): one group per slot
+            tessyVisible_.Get());
+        renderer->UAVBarrier(cl, tessyStats_.Get());
+    }
 
     // Page cache: after the setup has READ physOwnerPrev, snapshot this frame's physOwner into it for
     // next frame's new-page detection, and make the dirty bits readable by the gated clear (VS SRV).
@@ -2349,6 +2585,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // it in SRV). With the page cache the later clear is GATED to dirty pages; without it the
     // whole pool is cleared.
     renderer->EmitPoint(cl, dec.pointConsume);
+    // Tessy N0/N3: the counters are final here (setup and cull are behind the point) -- out to this slot's readback.
+    if (dec.tessyStats && tessyReadback_[f])
+    {
+        cl->CopyBufferRegion(tessyReadback_[f].Get(), 0, tessyStats_.Get(), 0, kTessyStatsUints * sizeof(std::uint32_t));
+    }
     cl->OMSetRenderTargets(0, nullptr, FALSE, &poolDsv_);
     if (caching)
     {
@@ -2488,6 +2729,38 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         renderer->ExecuteIndirect(cl, sig, vsm::kPoolPageCount * groups * render::kMaxShadowLods,
                                   pageDrawArgs_.Get(), 0,
                                   compactArgs ? pageArgCount_.Get() : nullptr, 0);
+        // Tessy N3: the surviving clusters into the same pages -- one DrawInstanced(128 * 3, N) whose args the cull
+        // counted (TessyStats bytes 0..15). Same viewport and target; its own PSO and table (VSM_PAGE's with the
+        // cluster inputs after PageProj), its own context, so pass B below re-binds the page PSO from `ctx` unchanged.
+        if (dec.tessy)
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kVsmTessyDraw);
+            Material* tessyMat = shadowGpu->IndirectShadowTessyMaterial();
+            auto tessyHandle = renderer->GetRenderContextPool()->Acquire();
+            RenderContext& tctx = tessyHandle.ref();
+            std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 23> tbl{};
+            size_t n = 0;
+            tbl[n++] = shadowGpu->InstanceReadSrv(f);   // t0
+            if (maskedActive)
+            {
+                tbl[n++] = shadowGpu->CasterGroupSrv(); // t1
+                tbl[n++] = shadowGpu->GroupMaskSrv();   // t2
+            }
+            tbl[n++] = pageProjSrv_;                    // t3 masked / t1
+            tbl[n++] = tessyVisibleSrv_;
+            tbl[n++] = shadowGpu->MegaVertexRawSrv();
+            tbl[n++] = shadowGpu->MegaIndexSrv();
+            if (maskedActive && !shadowGpu->MaskedShadowsBindless())
+            {
+                const std::uint32_t albedos = shadowGpu->MaskedAlbedoCount();
+                const auto& src = shadowGpu->MaskedAlbedoSrvs();
+                for (std::uint32_t a = 0; a < albedos && n < tbl.size(); ++a) { tbl[n++] = src[a]; } // t7..
+            }
+            tctx.srvTable[0] = renderer->StageSrvUavTable(tbl, n).gpu;
+            tessyMat->Bind(cl, tctx, false);
+            cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            renderer->ExecuteIndirect(cl, renderer->GetDrawCommandSignature(), 1, tessyStats_.Get(), 0, nullptr, 0);
+        }
         if (dec.hzb)
         {
             RecordHzbPassB(renderer, cl, shadowGpu, viewsSrv, dec, sig, pageMat, ctx,
@@ -2640,14 +2913,15 @@ void VirtualShadowMap::RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandL
         // The setup in pass-B mode: the same constants but `passB`, t11 = pass B's counts, u0/u4 =
         // pass B's args + counter. t1 (Rung 0 args, never read by this shader) and u1/u2 (the
         // projections and the list, written by pass A only) get placeholders: those resources are
-        // in their draw states now, and a table may not hold a hole.
+        // in their draw states now, and a table may not hold a hole. Tessy's t13 / u5 / u6 likewise: pass B neither
+        // diverts nor counts (writeSetupCB leaves gTessy 0 for it).
         RecordComputeDispatch(renderer, cl, pageSetupMat_.get(), setupCbSize,
             [&](std::uint8_t* dst) { writeSetupCB(dst, 1u); },
             { physOwnerSrv_, physOwnerSrv_, boundsSrv, shadowGpu->CasterGroupSrv(), physOwnerPrevSrv_, shadowGpu->CasterMetaSrv(f),
               pageGroupCountSrv_, shadowGpu->PerGroupSrv(), pageScatterDynSrv_,
-              shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountBSrv_, viewsSrv },
+              shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountBSrv_, viewsSrv, physOwnerSrv_ },
             { pageDrawArgsBUav_, perPageDirtyUav_, perPageDirtyUav_, perPageDirtyUav_,
-              dec.compactArgs ? pageArgCountBUav_ : perPageDirtyUav_ },
+              dec.compactArgs ? pageArgCountBUav_ : perPageDirtyUav_, perPageDirtyUav_, perPageDirtyUav_ },
             noSampler,
             vsm::kPoolPageCount, 1,
             pageDrawArgsB_.Get());
@@ -2790,6 +3064,16 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
             perSpot[0], perSpot[1], perSpot[2], perSpot[3], perSpot[4], perSpot[5], perSpot[6], perSpot[7],
             vsm::kPoolPageCount);
         logging::WriteRaw(logging::LogLevel::Debug, logging::LogCategory::RenderShadow, buf);
+        // Tessy N0/N3 on the same throttle: the (page, caster) pairs and where they went (frame N - 3).
+        const TessyStats& t = tessyStatsLast_;
+        if (t.valid)
+        {
+            std::snprintf(buf, sizeof(buf),
+                "[VSM] tessy %s | pairs whole %u (%u tris) | to clusters %u (%u tris whole) -> %u of %u clusters (%u tris) | lost %u clusters, %u runs.\n",
+                t.tessyOn ? "on" : "off", t.wholePairs, t.wholeTris, t.tessyPairs, t.tessyWholeTris, t.clusters,
+                t.clustersTested, t.clusterTris, t.clustersLost, t.runsLost);
+            logging::WriteRaw(logging::LogLevel::Debug, logging::LogCategory::RenderShadow, buf);
+        }
         debugLoggedFrame_ = renderer->GetTotalFrameNumber();
     }
     debugReadbackState_ = 2;

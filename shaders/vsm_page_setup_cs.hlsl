@@ -20,8 +20,8 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 // page projections, the dirty bits and the brute-force lists are pass A's.
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 // Plan S10a: from C++ (Material.cpp EngineShaderDefines) -- render::kMaxShadowLods.
@@ -63,7 +63,12 @@ cbuffer SetupCB : register(b0)
     // this frame (nothing wind-dirties); >= clipmap level count = the old animate-everywhere.
     uint gWindDirtyMaxLevel;
     uint gPassB; // S5b.2: 1 = pass-B args from PageGroupCountB (see the header comment)
-    uint2 gSetupPad;
+    // Tessy N3 (was gSetupPad, so the layout did not move). Bit 0 (kTessyDivert): a scattered bucket whose virtual
+    // group has clusters (TessyVg, t13) is appended to TessyRuns for tessy_vsm_cull_cs instead of drawn whole -- pass
+    // A only. Bit 1 (kTessyCount): u6 is the counters buffer, count into it (pass A; without it u6 is a placeholder).
+    // gTessyRunCap = TessyRuns' capacity (a bucket past it is drawn whole, as before: never lost).
+    uint gTessy;
+    uint gTessyRunCap;
     // W5: the global wind, copied verbatim into every page's PerView slot at byte 192 so the shadow
     // VS (shadow_indirect_csm.hlsl) sways casters exactly like the gbuffer does. Packed as the two
     // float4s that make up that cbuffer tail.
@@ -108,6 +113,8 @@ StructuredBuffer<uint>         PageGroupCountB  : register(t11); // S5b.2: pass 
 // and draw their casters rigid; they redraw when the round robin names them (VSM_VIEW_DISTANT_UPDATE, one light a
 // frame), when new, when their matrix moved, or on gForceAll.
 StructuredBuffer<VsmViewData>  Views            : register(t12);
+// Tessy N3: per virtual group {first cluster, cluster count} (ShadowGpuData::TessyVgSrv); a placeholder when gTessy is 0.
+StructuredBuffer<uint2>        TessyVg          : register(t13);
 
 // Per-INSTANCE LOD note: the SCATTERED path no longer resolves a LOD here at all. The scatter pass
 // buckets every caster instance into a VIRTUAL group (group * gNumLods + lod) chosen from that
@@ -128,6 +135,23 @@ RWStructuredBuffer<uint> PerPageDirty    : register(u3); // per page: 1 = re-ren
 // RAW, not structured: ClearUnorderedAccessViewUint (how the CPU zeroes this each frame) rejects
 // structured buffers outright — GBV id=1156. Same shape as PageDrawArgs above.
 RWByteAddressBuffer      PageArgCount    : register(u4); // byte 0 = appended arg-record count
+// Tessy N3: the cull's runs {page, first list entry, casters, virtual group}, and the counters (tessy_vsm_cull_cs.hlsl
+// names the bytes): [16] runs appended, [20] pairs drawn whole, [24] their triangles, [28] pairs handed to the cull,
+// [32] the triangles those would have drawn whole, [48] runs past the capacity. Counted in pass A whenever the buffer
+// exists, whether or not buckets are diverted -- the pair counts are the plan's N0 counter. u5 is a placeholder unless
+// kTessyDivert, u6 unless kTessyCount (both always in pass B).
+RWStructuredBuffer<uint4> TessyRuns      : register(u5);
+RWByteAddressBuffer       TessyStats     : register(u6);
+
+static const uint kTessyDivert = 1u;
+static const uint kTessyCount = 2u;
+
+// Tessy: one atomic per wave and counter.
+void TessyCount(uint offset, uint value)
+{
+    const uint sum = WaveActiveSum(value);
+    if (WaveIsFirstLane() && sum != 0u) { TessyStats.InterlockedAdd(offset, sum); }
+}
 
 // Positive-vertex AABB-vs-frustum test (mirrors shadow_cull_cs::Intersects). The planes are
 // unnormalized (extracted straight from the matrix) — the test is scale-invariant per plane.
@@ -392,6 +416,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         // lod, chosen per INSTANCE by the scatter pass from CasterLod), so there is nothing to
         // resolve here — and conveniently vg IS the GroupLodMega index, because that table was
         // always laid out (group, lod)-major with the same stride.
+        uint classicPairs = 0u, classicTris = 0u, tessyPairs = 0u, tessyTris = 0u, runsLost = 0u;
         for (uint vg = gStart; vg < numVg; vg += gStep)
         {
             // S5b.2: pass B's entries sit right after pass A's in the same bucket run, so its
@@ -399,10 +424,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             const uint countA = PageGroupCount[p * numVg + vg];
             const uint groupCount = (gPassB != 0u) ? PageGroupCountB[p * numVg + vg] : countA;
             const uint startOffset = (gPassB != 0u) ? countA : 0u;
-            // Compacted args: an empty bucket would only ever be a zero-instance no-op, so don't
-            // append it. This is where the bulk of the worst case disappears — even a RESIDENT
-            // page usually touches one or two buckets out of all of them.
-            if (gCompactArgs != 0u && groupCount == 0u) { continue; }
+            if (groupCount == 0u && gCompactArgs != 0u) { continue; }
             const uint g = vg / gNumLods;
             const uint lod = vg - g * gNumLods;
             uint4 a0;
@@ -410,10 +432,40 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             a0.x = e.z;                          // IndexCountPerInstance = LOD's index count
             a0.z = gMegaActive ? e.x : e.y;      // StartIndexLocation: mega-absolute / lod-relative
             a0.w = gMegaActive ? e.w : 0u;       // BaseVertexLocation: mega base / mesh-own VB (0)
-            a0.y = groupCount;                   // this page's instance count for the bucket
             // Bucket base in the page slice: group base scaled by the bucket count plus this LOD's
             // sub-run — MUST mirror vsm_page_scatter_cs's append arithmetic exactly.
             const uint bucketBase = PerGroup[g].x * gNumLods + lod * PerGroup[g].w;
+            // Tessy N3: a bucket of a group with clusters goes to the cluster cull as one run; its whole-mesh
+            // record draws nothing. Pass A only -- pass B's few post-cull pairs are drawn whole. A run past the
+            // list's capacity is drawn whole too, so no caster is ever dropped.
+            uint drawn = groupCount;
+            // Nested, not one &&: t13 is only a real table under kTessyDivert, and it must not even be read otherwise.
+            if ((gTessy & kTessyDivert) != 0u && gPassB == 0u && groupCount != 0u)
+            {
+                if (TessyVg[vg].y != 0u)
+                {
+                    uint run;
+                    TessyStats.InterlockedAdd(16u, 1u, run);
+                    if (run < gTessyRunCap)
+                    {
+                        TessyRuns[run] = uint4(p, pageBase + bucketBase + startOffset, groupCount, vg);
+                        tessyPairs += groupCount;
+                        tessyTris += groupCount * (e.z / 3u);
+                        drawn = 0u;
+                    }
+                    else
+                    {
+                        ++runsLost;
+                    }
+                }
+            }
+            classicPairs += drawn;
+            classicTris += drawn * (e.z / 3u);
+            a0.y = drawn;                        // this page's instance count for the bucket
+            // Compacted args: an empty bucket would only ever be a zero-instance no-op, so don't
+            // append it. This is where the bulk of the worst case disappears — even a RESIDENT
+            // page usually touches one or two buckets out of all of them.
+            if (gCompactArgs != 0u && drawn == 0u) { continue; }
             uint dst;
             if (gCompactArgs != 0u)
             {
@@ -428,6 +480,14 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             }
             PageDrawArgs.Store4(dst, a0);
             PageDrawArgs.Store(dst + 16u, pageBase + bucketBase + startOffset);
+        }
+        if ((gTessy & kTessyCount) != 0u && gPassB == 0u) // pass B: a placeholder at u6 (the counters are draw args by then)
+        {
+            TessyCount(20u, classicPairs);
+            TessyCount(24u, classicTris);
+            TessyCount(28u, tessyPairs);
+            TessyCount(32u, tessyTris);
+            TessyCount(48u, runsLost);
         }
     }
     else
@@ -454,6 +514,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
             const int ovr = GroupLodOverride[g2];
             const uint groupLod = ResolveGroupLod(ovr, viewLod, gNumLods);
             const uint4 e = GroupLodMega[g2 * gNumLods + groupLod];
+            if (groupCount != 0u && (gTessy & kTessyCount) != 0u) // N0's pair counter counts this path too (lane 0 only)
+            {
+                TessyStats.InterlockedAdd(20u, groupCount);
+                TessyStats.InterlockedAdd(24u, groupCount * (e.z / 3u));
+            }
             a0.x = e.z;
             a0.z = gMegaActive ? e.x : e.y;
             a0.w = gMegaActive ? e.w : 0u;

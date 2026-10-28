@@ -318,6 +318,13 @@ public:
     // Cheap: reads the 32-byte header only.
     static bool BinaryNeedsRebake(const std::string& binPath, const MeshLoadOptions& opt);
 
+    // Tessy N1 (--tessy-upgrade): rewrite an older .mesh.bin as the current version IN PLACE -- the same
+    // vertices, every LOD's triangles reordered into clusters and the cluster tables added; hashes kept,
+    // so the asset's freshness does not change. No source needed (a re-bake from the manifest gives the
+    // same clusters, but also re-runs everything else). A current file is left alone (true). `report`
+    // says what happened, in a line.
+    static bool UpgradeBinaryToClusters(const std::string& binPath, std::string* report);
+
 private:
     // W7.1b: geometry referenced directly as our committed .mesh.bin (the glTF source
     // lives in import_staging/, never loaded at runtime). Reads the binary at `binPath` (version

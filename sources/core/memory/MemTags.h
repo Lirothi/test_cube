@@ -33,6 +33,7 @@
     X(ShadowVsm,      "shadow.vsm",      Shadow)         \
     X(ShadowLocal,    "shadow.local",    Shadow)         \
     X(ShadowGpuData,  "shadow.gpudata",  Shadow)         \
+    X(ShadowTessy,    "shadow.tessy",    Shadow)         \
     X(Rt,             "rt",              Root)           \
     X(RtAs,           "rt.as",           Rt)             \
     X(RtBindless,     "rt.bindless",     Rt)             \

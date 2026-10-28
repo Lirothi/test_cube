@@ -721,6 +721,38 @@ public:
         std::uint32_t pointSetupB = 0;     // countsB -> NPS, argsB/argCountB/dirty -> UAV
         std::uint32_t pointDrawB = 0;      // pool -> DEPTH_WRITE, argsB -> INDIRECT, list -> vertex, counters -> COPY_SOURCE
         std::uint32_t pointHzbRestore = 0; // counters -> UAV
+        // Tessy N3: this frame the setup hands the buckets of groups with clusters to the cluster cull and the clusters
+        // are drawn (tessy::g_vsm, the scatter + single draw, the tables, both PSOs). `tessyStats` = the counters exist
+        // (cleared, counted and read back every frame, whatever `tessy` says: they are N0's pair counter too).
+        bool tessy = false;
+        bool tessyStats = false;
+        const char* tessyOffReason = ""; // why tessy.vsm is on and `tessy` is not ("" otherwise)
+    };
+
+    // Tessy N0/N3 counters of frame N - kFrameCount (tessy_vsm_cull_cs.hlsl names the bytes). Pairs = (page, caster)
+    // instances; "whole" = drawn as the whole mesh, "tessy" = handed to the cluster cull (`tessyWholeTris` = what they
+    // would have cost drawn whole).
+    struct TessyStats
+    {
+        std::uint32_t clusters = 0;        // drawn (the draw's instance count)
+        std::uint32_t runs = 0;            // (page x bucket) runs the setup appended
+        std::uint32_t wholePairs = 0;
+        std::uint32_t wholeTris = 0;
+        std::uint32_t tessyPairs = 0;
+        std::uint32_t tessyWholeTris = 0;
+        std::uint32_t clustersTested = 0;
+        std::uint32_t clusterTris = 0;     // the drawn clusters' triangles
+        std::uint32_t clustersLost = 0;    // past the visible-cluster buffer (a hole: must stay 0)
+        std::uint32_t runsLost = 0;        // past the run list (drawn whole instead: no hole)
+        std::uint32_t padMisses = 0;       // tessy.validate: clusters whose swayed vertices left the padded box
+        std::uint32_t padMissMaxUm = 0;    // ...and by how far at most, in micrometres
+        std::uint32_t padNeedCm = 0;       // tessy.validate: the boxes' growth the sway needed (six faces, summed, cm)
+        std::uint32_t padGotCm = 0;        // ...and the growth the pad gave them: the bound's slack is the ratio
+        std::uint32_t padMaxOffCm = 0;     // tessy.validate: sum of each cluster's largest true vertex displacement
+        std::uint32_t padDCm = 0;          // ...of its shear bound D
+        std::uint32_t padFCm = 0;          // ...and of its flutter bound F
+        bool tessyOn = false;              // that frame drew clusters
+        bool valid = false;
     };
 
     // Registers this frame's exact resource uses AND returns the decisions they were derived
@@ -746,8 +778,11 @@ public:
     // S5b.2: the counters of frame N - kFrameCount -- [0] (caster, page) pairs the scatter
     // deferred, [1] pairs pass B drew, [2] pairs past the deferred-list capacity (drawn in A).
     const std::array<std::uint32_t, 4>& HzbStats() const { return hzbStats_; }
-    void PollHzbStats(Renderer* renderer); // once per frame, main thread
+    void PollHzbStats(Renderer* renderer); // once per frame, main thread (the Tessy counters too)
     bool HzbCullThisFrame() const { return hzbThisFrame_; }
+    const TessyStats& GetTessyStats() const { return tessyStatsLast_; }
+    // Why tessy.vsm is not drawing clusters this frame (empty when it is, or when the knob is off).
+    const char* TessyOffReason() const { return tessyOffReason_; }
 
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolDsv() const { return poolDsv_; }     // render pages (Step 22)
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolSrv() const { return poolSrv_; }     // sample (Step 21)
@@ -984,6 +1019,32 @@ private:
     // aligned — only element 0 is used.
     GpuResource pageArgCount_;
     D3D12_CPU_DESCRIPTOR_HANDLE pageArgCountUav_{};
+    // ---- Tessy N3: the cluster cull's runs, its survivors and the counters (+ the draw's args) ----
+    // Fixed capacities, allocated with the render resources whatever tessy.vsm says (a switch allocates nothing). A
+    // run past kTessyRunCap is drawn whole by the setup (never lost); a cluster past kTessyVisibleCap is lost and
+    // counted (TessyStats::clustersLost -- a warning, it must stay 0).
+    static constexpr std::uint32_t kTessyRunCap = 65536u;      // 1 MB
+    static constexpr std::uint32_t kTessyVisibleCap = 524288u; // 8 MB
+    static constexpr std::uint32_t kTessyStatsUints = 32u;     // tessy_vsm_cull_cs.hlsl names the bytes
+    static constexpr std::uint32_t kTessyCullGroups = 1024u;   // thread groups of the cull; each walks runs g, g + 1024, ...
+    GpuResource tessyRuns_;      // uint4 {page, first list entry, casters, virtual group}
+    GpuResource tessyVisible_;   // uint4 {list entry, mega first index, triangles, base vertex}
+    GpuResource tessyStats_;     // [0..3] D3D12_DRAW_ARGUMENTS, then the counters (TessyStats)
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyHeap_; // runs UAV, visible UAV, visible SRV, stats raw UAV
+    D3D12_CPU_DESCRIPTOR_HANDLE tessyRunsUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE tessyVisibleUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE tessyVisibleSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE tessyStatsUav_{};
+    Microsoft::WRL::ComPtr<ID3D12Resource> tessyReadback_[render::kFrameCount];
+    const std::uint32_t* tessyReadbackPtr_[render::kFrameCount] = {};
+    std::uint64_t tessyReadbackFrame_[render::kFrameCount] = {};
+    bool tessyReadbackOn_[render::kFrameCount] = {}; // that frame drew clusters
+    TessyStats tessyStatsLast_{};
+    std::shared_ptr<Material> tessyCullMat_;          // tessy_vsm_cull_cs.hlsl
+    bool tessyLast_ = false;                          // last frame's decision: a switch re-renders every page once
+    const char* tessyOffReason_ = "";
+    const char* tessyLoggedReason_ = nullptr;         // the reason last logged (an event per change)
+    void EnsureTessyResources(Renderer* renderer);
     // ---- Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages ----
     // The pool pyramid: R32_FLOAT at half the pool, 7 mips (2048 -> 32), i.e. a self-contained
     // 64 -> 1 chain per 128-texel page, storing 1 - z with a min reduction (vsm_hzb_build_cs.hlsl).

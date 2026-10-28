@@ -20,6 +20,7 @@
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/core/RasterSettings.h" // A6: rasterBindless
 #include "rendering/shadows/VirtualShadowMap.h"
+#include "rendering/shadows/TessySettings.h" // Tessy N3: tessy::g_vsm
 #include "rendering/visibility/OcclusionHistory.h"
 #include "third_party/json/json.hpp"
 
@@ -177,6 +178,7 @@ namespace
         bool vsmSingleDraw = true;
         bool vsmHzbCull = false;
         bool vsmPageCaching = true;
+        bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -585,6 +587,7 @@ namespace
         s.vsmHzbCull = vsm::g_hzbCull;
         s.vsmPageCaching = vsm::g_pageCaching;
         s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel;
+        s.tessyVsm = tessy::g_vsm;
         Sanitize(s);
         return s;
     }
@@ -772,6 +775,7 @@ namespace
         vsm::g_pageDrawSingle = s.vsmSingleDraw;
         vsm::g_hzbCull = s.vsmHzbCull;
         vsm::g_pageCaching = s.vsmPageCaching;
+        tessy::g_vsm = s.tessyVsm;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
 
@@ -991,7 +995,8 @@ namespace
                     { "singleDraw", s.vsmSingleDraw },
                     { "hzbCull", s.vsmHzbCull },
                     { "pageCaching", s.vsmPageCaching },
-                    { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel }
+                    { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel },
+                    { "tessy", s.tessyVsm }
                 } }
             } }
         };
@@ -1217,6 +1222,7 @@ namespace
         Read(vsmSettings, "hzbCull", s.vsmHzbCull);
         Read(vsmSettings, "pageCaching", s.vsmPageCaching);
         Read(vsmSettings, "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel);
+        Read(vsmSettings, "tessy", s.tessyVsm);
 
         Sanitize(s);
         return s;
@@ -1558,6 +1564,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmHzbCull:                     current.vsmHzbCull = defaults.vsmHzbCull; break;
     case GraphicsControl::VsmPageCaching:                 current.vsmPageCaching = defaults.vsmPageCaching; break;
     case GraphicsControl::VsmWindAnimateMaxLevel:         current.vsmWindAnimateMaxLevel = defaults.vsmWindAnimateMaxLevel; break;
+    case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
     }
 
     Sanitize(current);

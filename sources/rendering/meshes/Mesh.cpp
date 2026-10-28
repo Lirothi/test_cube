@@ -309,6 +309,30 @@ const std::vector<Mesh::Submesh>& Mesh::SubmeshesForLod(UINT lod) const {
     return *GetLodDrawInfo(ResolveRuntimeLod(lod)).submeshes;
 }
 
+const std::vector<Mesh::Cluster>& Mesh::GetClusters(UINT lod) const {
+    static const std::vector<Cluster> kNone;
+    if (clusters_.empty()) { return kNone; }
+    const UINT l = std::min(ClampExplicitLod(lod), static_cast<UINT>(clusters_.size()) - 1u);
+    return clusters_[l];
+}
+
+size_t Mesh::GetClusterCount() const {
+    size_t n = 0;
+    for (const std::vector<Cluster>& c : clusters_) { n += c.size(); }
+    return n;
+}
+
+void Mesh::SetClusters(std::vector<std::vector<Cluster>> perLod) {
+    clusters_.clear();
+    if (perLod.size() != GetLodCount()) { return; }
+    for (UINT l = 0; l < perLod.size(); ++l) {
+        uint64_t tris = 0;
+        for (const Cluster& c : perLod[l]) { tris += c.triCount; }
+        if (tris * 3u != GetLodIndexCount(l)) { return; }
+    }
+    clusters_ = std::move(perLod);
+}
+
 // Step 3: skip redundant IA binds when this mesh's buffers/topology already match the
 // per-command-list bind cache (e.g. a sorted run of the same mesh). IA state persists on
 // the command list and is unaffected by root-signature changes.

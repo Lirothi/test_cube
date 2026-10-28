@@ -42,6 +42,26 @@ public:
         uint32_t materialSlot = 0; // index into the owner object's material-slot array
     };
 
+    // Tessy (docs/tessy_plan.md N1): a CLUSTER is a contiguous run of at most kClusterMaxTris triangles
+    // of ONE LOD's index buffer, inside one submesh -- the unit the VSM page cull hands the rasterizer
+    // instead of the whole mesh (UE Nanite's cluster limits, NaniteDefinitions.h:21-25). The bake
+    // reorders every (LOD x submesh) range into cluster order, so the classic paths draw the very same
+    // triangles in another order and need nothing of this. Bounds are object space; the two wind maxima
+    // (the vertices' COLOR_0.r and .b, 0..1) bound how far the sway can carry the cluster
+    // (tessy_vsm_cull_cs.hlsl). Written to the .mesh.bin as is: the layout is the file format (v4).
+    struct Cluster {
+        uint32_t firstIndex = 0;           // into this LOD's index buffer
+        uint32_t triCount = 0;             // 1..kClusterMaxTris
+        DirectX::XMFLOAT3 boxCenter{};
+        DirectX::XMFLOAT3 boxExtent{};
+        DirectX::XMFLOAT4 sphere{};        // meshopt_computeSphereBounds: centre, radius
+        float windAlongMax = 0.0f;         // max COLOR_0.r over the cluster's vertices
+        float windLeafMax = 0.0f;          // max COLOR_0.b
+    };
+    static_assert(sizeof(Cluster) == 56, "Mesh::Cluster is the .mesh.bin v4 record");
+    static constexpr uint32_t kClusterMaxTris = 128;  // UE NANITE_MAX_CLUSTER_TRIANGLES
+    static constexpr uint32_t kClusterMaxVerts = 256; // UE NANITE_MAX_CLUSTER_VERTICES
+
     struct LodDrawInfo {
         D3D12_VERTEX_BUFFER_VIEW vertexBufferView{};
         D3D12_INDEX_BUFFER_VIEW indexBufferView{};
@@ -120,6 +140,16 @@ public:
 
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
+
+    // Tessy: the clusters of `lod` (clamped like ClampExplicitLod), sorted by firstIndex; every
+    // submesh's run is contiguous. Empty for a mesh without clusters (a v3 .mesh.bin): it stays on the
+    // classic path for every consumer (plan section 4.8).
+    const std::vector<Cluster>& GetClusters(UINT lod) const;
+    bool HasClusters() const { return !clusters_.empty(); }
+    size_t GetClusterCount() const;
+    // One table per LOD, in LOD order, after the LODs exist (AddLod). A table whose triangle total does
+    // not match its LOD's index count is refused -- the clusters would describe another buffer.
+    void SetClusters(std::vector<std::vector<Cluster>> perLod);
 
     // Mesh chunking (mesh.json "chunkGrid", baked by MeshManager's ChunkifyLod0). The LOD0
     // submeshes of a chunked mesh are SPATIAL tiles of one continuous surface, not material groups
@@ -222,6 +252,8 @@ private:
 
     bool chunkedSubmeshes_ = false;   // submeshes are spatial chunks -> independent shadow casters
     std::vector<AABB> submeshBounds_; // mesh-local LOD0 AABB per submesh; empty unless chunked
+
+    std::vector<std::vector<Cluster>> clusters_; // Tessy: per LOD; empty = no clusters
 
 #if WITH_EDITOR
     // Position-only CPU copy of base LOD geometry. This avoids GPU readback and retains

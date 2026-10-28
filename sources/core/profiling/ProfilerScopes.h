@@ -86,6 +86,8 @@ extern const Profiler::ScopeNameKey kVsmPageScatter;
 extern const Profiler::ScopeNameKey kVsmHzbBuild;   // occlusion plan S5b.2: the pool pyramid after pass A
 extern const Profiler::ScopeNameKey kVsmHzbPost;    // occlusion plan S5b.2: the deferred-pair retest + setup B
 extern const Profiler::ScopeNameKey kVsmPageDrawB;  // occlusion plan S5b.2: pass B into the pages
+extern const Profiler::ScopeNameKey kVsmTessyCull;  // Tessy N3: the cluster cull of the setup's runs
+extern const Profiler::ScopeNameKey kVsmTessyDraw;  // Tessy N3: the surviving clusters into the pages
 extern const Profiler::ScopeNameKey kPassCSM;
 // S15 (SDSM): the depth reduction that produces this frame's partitions, and the depth pass that
 // draws them. Separate scopes rather than one, because the acceptance criterion is a SUM against

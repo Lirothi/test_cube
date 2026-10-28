@@ -668,6 +668,33 @@ grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / 
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
 
+## Tessy -- Cluster Geometry (the VSM Pages, Plan N0-N3)
+
+Tessy is our UE Nanite analog (`docs/tessy_plan.md`, journal in its section 9). A CLUSTER is a run of <= 128 triangles
+/ 256 vertices of one LOD's index buffer inside one submesh (`Mesh::Cluster`); the classic paths draw the same index
+buffer and never notice. `.mesh.bin` v4 carries them after each LOD; v3 still loads, without clusters, and such a
+mesh stays on the classic path in the same frame (the log line `tessy: clusters for N of M caster groups (...);
+classic path: <assets>` says who is where). `--tessy-upgrade=<a.mesh.bin>,...` rewrites a v3 file as v4 in place --
+the same vertices byte for byte, the same triangles per (LOD x submesh), hashes kept; it writes into `models/`, so it
+is the owner's call (plan Q4) -- back the files up first.
+
+- The VSM page setup hands each (page x caster bucket) of a group with clusters to `tessy_vsm_cull_cs.hlsl`, which
+  tests every (caster, cluster) box against the page and appends survivors; `VSM_TESSY` of `shadow_indirect_csm.hlsl`
+  draws them as ONE `DrawInstanced(384, N)` (UE's VS raster path, vertices fetched by hand from the mega VB/IB).
+- `tessy.vsm` (default 1; Developer Controls > VSM, `graphics_settings.json` vsm.tessy, `--set`, MCP) switches live;
+  the event `tessy.vsm: on` / `classic path -- <why>` is logged on every change of the verdict. VSM only: the level
+  default may be SDSM -- pass `--shadow-mode=vsm` (or `shadow.mode:1`) or the cluster path never runs.
+- The wind pad: a cluster's box grows by an exact-per-frame, per-axis interval bound of `WindOffset`'s bend (a
+  rotation about the pivot) -- `tessy.windPad` 1; 2 = the isotropic 2D + F A/B; 0 = none (only to see the holes).
+  `tessy.validate:1` sways every vertex of every tested cluster with the shader's own function and counts those
+  outside their padded box -- `get_readouts` tessy.padMisses must stay 0 (proven to catch: 98 % with no pad).
+- Counters: `get_readouts` block `tessy` (pairs drawn whole / handed to clusters, clusters tested / drawn and their
+  triangles, lost runs / clusters); `tools/tessy_baseline.py --port <p>` measures the plan's three views.
+- Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms
+  (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters), the bathroom 0.91 -> 0.63, the tunnel 0.67 -> 0.38.
+  A picture A/B of it needs the bathroom candles' flicker off and the clouds off (`cloud.enabled:0`): both move with
+  time and read as a difference between two shots of the same arm.
+
 ## SDSM Partition Cache -- a Kept Tile Is Handed Only What It Was Rendered For
 
 SDSM (`--shadow-mode=sdsm`, `shaders/sdsm_analyze_cs.hlsl`) re-renders partition 0 every frame and partition p >= 1

@@ -715,6 +715,8 @@ public:
     // Independent of any root signature (pRootSignature = nullptr at creation). Null on
     // failure. Owned by the Renderer for the lifetime of the device.
     ID3D12CommandSignature* GetDrawIndexedCommandSignature();
+    // Tessy N3: the same for one non-indexed DRAW (the VSM page render's cluster draw, DrawInstanced(128 * 3, N)).
+    ID3D12CommandSignature* GetDrawCommandSignature();
     // Texture streaming plan A6: the command signature of the bindless G-buffer indirect draw --
     // {CONSTANT(b0, two dwords), VBV(slot 0), IBV, CBV(b2), DRAW_INDEXED}, kBindlessIndirectCommandBytes
     // per command (root arguments have to come in increasing root-parameter order, which is why the
@@ -1019,6 +1021,7 @@ private:
 
     // Rung 0 (Step 3): shared DRAW_INDEXED indirect command signature (lazy). See getter.
     ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;
+    ComPtr<ID3D12CommandSignature> drawCmdSig_; // Tessy N3 (lazy), see GetDrawCommandSignature
     // A6: bindless G-buffer command signatures per root signature (see getter).
     struct BindlessCmdSig { ComPtr<ID3D12RootSignature> rs; ComPtr<ID3D12CommandSignature> sig; };
     std::unordered_map<ID3D12RootSignature*, BindlessCmdSig> bindlessCmdSigs_;

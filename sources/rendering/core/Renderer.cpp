@@ -202,6 +202,7 @@ void Renderer::Shutdown()
     vsmDummyReady_.store(false, std::memory_order_release);
     vsmDummyHeap_.Reset();
     drawIndexedCmdSig_.Reset();
+    drawCmdSig_.Reset();
     // ...and the bindless G-buffer command signatures (A6), for the same reason: each holds its root signature, so a
     // debug run ended with id=582 (Renderer.BindlessGBufferIndirectSig) + id=577 (its root signature) and the device's
     // refcount two higher (2026-10-20).
@@ -2453,6 +2454,29 @@ ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
     }
     drawIndexedCmdSig_->SetName(L"Renderer.DrawIndexedIndirectSig");
     return drawIndexedCmdSig_.Get();
+}
+
+ID3D12CommandSignature* Renderer::GetDrawCommandSignature() {
+    if (drawCmdSig_) {
+        return drawCmdSig_.Get();
+    }
+    ID3D12Device* device = GetDevice();
+    if (!device) {
+        return nullptr;
+    }
+    D3D12_INDIRECT_ARGUMENT_DESC arg{};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DRAW;
+    D3D12_COMMAND_SIGNATURE_DESC desc{};
+    desc.ByteStride = sizeof(D3D12_DRAW_ARGUMENTS);
+    desc.NumArgumentDescs = 1;
+    desc.pArgumentDescs = &arg;
+    desc.NodeMask = 0;
+    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(drawCmdSig_.GetAddressOf())))) {
+        drawCmdSig_.Reset();
+        return nullptr;
+    }
+    drawCmdSig_->SetName(L"Renderer.DrawIndirectSig");
+    return drawCmdSig_.Get();
 }
 
 ID3D12CommandSignature* Renderer::GetBindlessIndirectCommandSignature(const Material* mat) {

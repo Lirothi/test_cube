@@ -44,7 +44,91 @@ struct MeshLodCpu {
     // projects to a pixel count and a pixel count has an obviously right threshold.
     // 0 = unknown (a level that copied through without simplifying).
     float error = 0.0f;
+    // Tessy: this level's clusters over `indices` (BuildClustersCpu reorders the indices to match).
+    // Empty for a level read from a v3 .bin.
+    std::vector<Mesh::Cluster> clusters;
 };
+
+// Tessy N1 (docs/tessy_plan.md): reorder every submesh range of one LOD's index buffer into CLUSTER
+// order and return the clusters, sorted by firstIndex -- each submesh's clusters are contiguous and
+// never cross into the next range (UE keeps a cluster to one material range too, Cluster.cpp:2245-2283;
+// our submesh IS the material slot). The triangle SET of every range is unchanged, only its order, so
+// a path that draws the range whole draws exactly what it drew before.
+//
+// meshopt_buildMeshletsSpatial, not the plan's meshopt_buildMeshlets: a VSM page is ~1 m of the world
+// and the cull tests the cluster's BOX against it, so what matters is how little space a cluster spans --
+// the SAH split is built for exactly that (measured on coconut_palm in intent_regression's
+// TestTessyClusters). 256 vertices / 128 triangles are UE's limits (NaniteDefinitions.h:21-25); the
+// minimum keeps a cluster from being a handful of triangles, which the VS path would pay 384 vertex
+// invocations for whatever it holds.
+std::vector<Mesh::Cluster> BuildClustersCpu(const std::vector<VertexPNTUV>& verts,
+    std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& subsIn)
+{
+    std::vector<Mesh::Cluster> out;
+    if (verts.empty() || indices.size() < 3) { return out; }
+    std::vector<Mesh::Submesh> subs = subsIn;
+    if (subs.empty()) { subs.push_back(Mesh::Submesh{ 0u, static_cast<uint32_t>(indices.size()), 0u }); }
+    std::sort(subs.begin(), subs.end(),
+              [](const Mesh::Submesh& a, const Mesh::Submesh& b) { return a.indexOffset < b.indexOffset; });
+
+    constexpr size_t kMinTris = 32;
+    std::vector<meshopt_Meshlet> meshlets;
+    std::vector<unsigned int> mlVerts;
+    std::vector<unsigned char> mlTris;
+    std::vector<uint32_t> reordered;
+    for (const Mesh::Submesh& s : subs)
+    {
+        const size_t first = s.indexOffset;
+        const size_t count = s.indexCount - s.indexCount % 3u;
+        if (count < 3 || first + count > indices.size()) { continue; }
+        const uint32_t* src = indices.data() + first;
+        meshlets.resize(meshopt_buildMeshletsBound(count, Mesh::kClusterMaxVerts, kMinTris));
+        mlVerts.resize(count);
+        mlTris.resize(count);
+        const size_t n = meshopt_buildMeshletsSpatial(meshlets.data(), mlVerts.data(), mlTris.data(), src, count,
+            &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
+            Mesh::kClusterMaxVerts, kMinTris, Mesh::kClusterMaxTris, 0.5f);
+        reordered.clear();
+        reordered.reserve(count);
+        for (size_t m = 0; m < n; ++m)
+        {
+            const meshopt_Meshlet& ml = meshlets[m];
+            // Vertex-cache order inside the cluster: the classic paths draw it as a plain index range.
+            meshopt_optimizeMeshlet(&mlVerts[ml.vertex_offset], &mlTris[ml.triangle_offset],
+                                    ml.triangle_count, ml.vertex_count);
+            Mesh::Cluster c;
+            c.firstIndex = static_cast<uint32_t>(first + reordered.size());
+            c.triCount = ml.triangle_count;
+            float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+            for (unsigned int v = 0; v < ml.vertex_count; ++v)
+            {
+                const VertexPNTUV& vx = verts[mlVerts[ml.vertex_offset + v]];
+                const float p[3] = { vx.position.x, vx.position.y, vx.position.z };
+                for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], p[k]); hi[k] = std::max(hi[k], p[k]); }
+                c.windAlongMax = std::max(c.windAlongMax, static_cast<float>(vx.color & 0xFFu) / 255.0f);
+                c.windLeafMax = std::max(c.windLeafMax, static_cast<float>((vx.color >> 16) & 0xFFu) / 255.0f);
+            }
+            c.boxCenter = XMFLOAT3(0.5f * (lo[0] + hi[0]), 0.5f * (lo[1] + hi[1]), 0.5f * (lo[2] + hi[2]));
+            c.boxExtent = XMFLOAT3(0.5f * (hi[0] - lo[0]), 0.5f * (hi[1] - lo[1]), 0.5f * (hi[2] - lo[2]));
+            for (unsigned int t = 0; t < ml.triangle_count * 3u; ++t)
+            {
+                reordered.push_back(mlVerts[ml.vertex_offset + mlTris[ml.triangle_offset + t]]);
+            }
+            const meshopt_Bounds b = meshopt_computeClusterBounds(&reordered[reordered.size() - ml.triangle_count * 3u],
+                ml.triangle_count * 3u, &verts[0].position.x, verts.size(), sizeof(VertexPNTUV));
+            c.sphere = XMFLOAT4(b.center[0], b.center[1], b.center[2], b.radius);
+            out.push_back(c);
+        }
+        if (reordered.size() != count) // never expected: the builder covers every triangle once
+        {
+            LOG_ERROR(logging::LogCategory::Asset, "tessy: the cluster builder returned {} of {} indices; the mesh keeps no clusters",
+                      reordered.size(), count);
+            return {};
+        }
+        std::copy(reordered.begin(), reordered.end(), indices.begin() + static_cast<std::ptrdiff_t>(first));
+    }
+    return out;
+}
 
 // Mesh chunking (MeshLoadOptions::chunkGrid): partition a SINGLE-submesh LOD0 into an N x N grid
 // of submeshes over the mesh's XZ extent, by triangle centroid. Pure reordering — every triangle
@@ -565,21 +649,51 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
     return out;
 }
 
+void AttachClusters(Mesh& mesh, std::vector<MeshLodCpu>& lods); // defined with the .bin reader below
+
 // Called once at load on the upload command list (runtime fallback path).
+// Tessy: `lod0Clusters` = the clusters LOD0 was uploaded with (UploadClusteredLod0); each extra level is
+// built from the ORIGINAL `indices` order -- what it was built from before clusters existed, so the
+// levels do not change -- and clustered before its upload. The mesh gets every table at the end.
 void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive,
     std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices,
-    const MeshLoadOptions& opt)
+    const MeshLoadOptions& opt, std::vector<Mesh::Cluster> lod0Clusters = {})
 {
     if (!mesh) { return; }
     // allowVertexAppend = false: the VB is already on the GPU here, so the foliage prune (which
     // appends vertices) is bake-only; this path's foliage LOD3 stays plain meshopt.
-    for (const MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes(), opt,
-                                              /*chunkedSubsets=*/false, /*allowVertexAppend=*/false))
+    std::vector<MeshLodCpu> lods(1);
+    lods[0].clusters = std::move(lod0Clusters);
+    for (MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes(), opt,
+                                        /*chunkedSubsets=*/false, /*allowVertexAppend=*/false))
     {
+        lod.clusters = BuildClustersCpu(verts, lod.indices, lod.submeshes);
         mesh->AddLod(device, uploadCmdList, keepAlive,
             lod.indices.data(), static_cast<UINT>(lod.indices.size()), lod.submeshes, lod.error);
+        lods.push_back(std::move(lod));
     }
+    AttachClusters(*mesh, lods);
+}
+
+// Tessy: the runtime parse's LOD0 upload in cluster order. The tangent space is generated from the
+// ORIGINAL order first (CreateGPU_PNTUV would accumulate the normals in the clustered one -- the same
+// sums in another order), then a clustered COPY goes up; `indices` keeps the original order for
+// GenerateLods. Returns LOD0's clusters.
+std::vector<Mesh::Cluster> UploadClusteredLod0(Mesh& mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+    std::vector<ComPtr<ID3D12Resource>>* keepAlive, std::vector<VertexPNTUV>& verts,
+    const std::vector<uint32_t>& indices, bool generateTangentSpace, const std::vector<Mesh::Submesh>* submeshes)
+{
+    if (generateTangentSpace && !indices.empty())
+    {
+        Mesh::GenerateNormalsTangents(verts, indices.data(), static_cast<UINT>(indices.size()));
+    }
+    std::vector<uint32_t> clustered = indices;
+    std::vector<Mesh::Cluster> clusters =
+        BuildClustersCpu(verts, clustered, submeshes ? *submeshes : std::vector<Mesh::Submesh>{});
+    mesh.CreateGPU_PNTUV(device, uploadCmdList, keepAlive, verts, clustered.data(),
+        static_cast<UINT>(clustered.size()), /*generateTangentSpace=*/false, submeshes);
+    return clusters;
 }
 
 // ---------- W7.1b: baked binary mesh cache (cache/meshes/<hash>.mesh.bin) ----------
@@ -591,10 +705,17 @@ constexpr uint32_t kMeshBinMagic   = 0x4253484Du; // 'MSHB'
 // bump -- a manifest without a source would have been bricked by it).
 // v3 (2026-10-24): glTF geometry is converted to the engine's left-handed frame (X negated, winding turned)
 // instead of being read as its mirror image. Every .bin re-baked from its manifest (all 148 have a source).
-constexpr uint32_t kMeshBinVersion = 3u;          // bump on any bake-algo / format change -> stale
+// v4 (2026-10-28, Tessy N1): each LOD block is followed by its clusters (Mesh::Cluster), and the LOD's
+// index ranges are in cluster order. v3 still LOADS (kMeshBinMinVersion), without clusters -- that mesh
+// stays on the classic path -- so assets move to v4 one at a time (plan section 4.8), by a re-bake or by
+// --tessy-upgrade (UpgradeBinaryToClusters: the same vertices and triangle sets, clusters added).
+constexpr uint32_t kMeshBinVersion = 4u;          // what the bake writes
+constexpr uint32_t kMeshBinMinVersion = 3u;       // the oldest the loader still reads
 // NOTE when bumping: a directly-referenced models/*.mesh.bin has no runtime source to rebuild from,
-// so a bump makes every one of them stale -> they must ALL be re-baked (--reimport-src/--reimport-out)
-// or their meshes silently fail to load. LOD *settings* do not need a bump: they ride in optionsHash.
+// so a bump that does not keep the old version readable makes every one of them stale -> they must ALL
+// be re-baked (--reimport-src/--reimport-out) or their meshes silently fail to load. LOD *settings* do
+// not need a bump: they ride in optionsHash.
+bool MeshBinVersionReadable(uint32_t v) { return v >= kMeshBinMinVersion && v <= kMeshBinVersion; }
 
 struct MeshBinHeader {
     uint32_t magic;
@@ -693,7 +814,7 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
 bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t optionsHash,
     const std::vector<VertexPNTUV>& verts,
     const std::vector<uint32_t>& lod0Indices, const std::vector<Mesh::Submesh>& lod0Subs,
-    const std::vector<MeshLodCpu>& extraLods)
+    const std::vector<Mesh::Cluster>& lod0Clusters, const std::vector<MeshLodCpu>& extraLods)
 {
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(binPath).parent_path(), ec);
@@ -707,7 +828,7 @@ bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t o
         static_cast<std::streamsize>(verts.size() * sizeof(VertexPNTUV)));
 
     const auto writeLod = [&](const std::vector<uint32_t>& idx, const std::vector<Mesh::Submesh>& subs,
-                              float error)
+                              float error, const std::vector<Mesh::Cluster>& clusters)
     {
         const uint32_t ic = static_cast<uint32_t>(idx.size());
         const uint32_t sc = static_cast<uint32_t>(subs.size());
@@ -716,23 +837,28 @@ bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t o
         f.write(reinterpret_cast<const char*>(&error), sizeof(error)); // v2
         f.write(reinterpret_cast<const char*>(idx.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
         f.write(reinterpret_cast<const char*>(subs.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+        const uint32_t cc = static_cast<uint32_t>(clusters.size()); // v4
+        f.write(reinterpret_cast<const char*>(&cc), sizeof(cc));
+        f.write(reinterpret_cast<const char*>(clusters.data()), static_cast<std::streamsize>(cc * sizeof(Mesh::Cluster)));
     };
-    writeLod(lod0Indices, lod0Subs, 0.0f); // LOD0 IS the reference; its deviation is zero
-    for (const MeshLodCpu& l : extraLods) { writeLod(l.indices, l.submeshes, l.error); }
+    writeLod(lod0Indices, lod0Subs, 0.0f, lod0Clusters); // LOD0 IS the reference; its deviation is zero
+    for (const MeshLodCpu& l : extraLods) { writeLod(l.indices, l.submeshes, l.error, l.clusters); }
     return f.good();
 }
 
 // Reads + validates a .bin. `expectSourceHash`/`expectOptionsHash` null => skip that freshness
 // check (a directly-referenced committed .bin has no runtime source to compare against; only the
-// magic + format version matter). `lods[0]` = LOD 0.
+// magic + format version matter). `lods[0]` = LOD 0. A v3 file reads without clusters.
 bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash,
-    const uint64_t* expectOptionsHash, std::vector<VertexPNTUV>& verts, std::vector<MeshLodCpu>& lods)
+    const uint64_t* expectOptionsHash, std::vector<VertexPNTUV>& verts, std::vector<MeshLodCpu>& lods,
+    MeshBinHeader* outHeader = nullptr)
 {
     std::ifstream f(binPath, std::ios::binary);
     if (!f) { return false; }
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
-    if (!f || h.magic != kMeshBinMagic || h.version != kMeshBinVersion ||
+    if (outHeader) { *outHeader = h; }
+    if (!f || h.magic != kMeshBinMagic || !MeshBinVersionReadable(h.version) ||
         (expectSourceHash && h.sourceHash != *expectSourceHash) ||
         (expectOptionsHash && h.optionsHash != *expectOptionsHash) ||
         h.vertexCount == 0 || h.lodCount == 0)
@@ -756,8 +882,30 @@ bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash
         lods[i].submeshes.resize(sc);
         f.read(reinterpret_cast<char*>(lods[i].indices.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
         f.read(reinterpret_cast<char*>(lods[i].submeshes.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+        if (h.version >= 4u) // Tessy N1
+        {
+            uint32_t cc = 0;
+            f.read(reinterpret_cast<char*>(&cc), sizeof(cc));
+            if (!f || cc > ic / 3u) { return false; } // more clusters than triangles: not this format
+            lods[i].clusters.resize(cc);
+            f.read(reinterpret_cast<char*>(lods[i].clusters.data()), static_cast<std::streamsize>(cc * sizeof(Mesh::Cluster)));
+        }
     }
     return static_cast<bool>(f);
+}
+
+// Tessy: hand a mesh its clusters when every LOD has a table (a v4 bin, or a runtime parse that built
+// them). Mesh::SetClusters refuses a table that does not cover its LOD.
+void AttachClusters(Mesh& mesh, std::vector<MeshLodCpu>& lods)
+{
+    std::vector<std::vector<Mesh::Cluster>> perLod;
+    perLod.reserve(lods.size());
+    for (MeshLodCpu& l : lods)
+    {
+        if (l.clusters.empty()) { return; }
+        perLod.push_back(std::move(l.clusters));
+    }
+    mesh.SetClusters(std::move(perLod));
 }
 
 std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots)
@@ -1362,8 +1510,64 @@ bool MeshManager::BinaryNeedsRebake(const std::string& binPath, const MeshLoadOp
     if (!f) { return true; }
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
-    if (!f || h.magic != kMeshBinMagic || h.version != kMeshBinVersion) { return true; }
+    // A v3 file is current: it loads (without clusters), and the move to v4 is per asset (Tessy).
+    if (!f || h.magic != kMeshBinMagic || !MeshBinVersionReadable(h.version)) { return true; }
     return h.optionsHash != HashOptions(opt);
+}
+
+bool MeshManager::UpgradeBinaryToClusters(const std::string& binPath, std::string* report)
+{
+    std::vector<VertexPNTUV> verts;
+    std::vector<MeshLodCpu> lods;
+    MeshBinHeader h{};
+    if (!ReadMeshBinary(binPath, nullptr, nullptr, verts, lods, &h) || verts.empty() || lods.empty())
+    {
+        if (report) { *report = "not a readable .mesh.bin"; }
+        return false;
+    }
+    if (h.version == kMeshBinVersion)
+    {
+        if (report) { *report = "already v" + std::to_string(kMeshBinVersion) + ", left as it is"; }
+        return true;
+    }
+    size_t clusters = 0, tris = 0;
+    for (MeshLodCpu& l : lods)
+    {
+        l.clusters = BuildClustersCpu(verts, l.indices, l.submeshes);
+        clusters += l.clusters.size();
+        tris += l.indices.size() / 3u;
+        if (l.clusters.empty())
+        {
+            if (report) { *report = "a LOD built no clusters; the file is left as it is"; }
+            return false;
+        }
+    }
+    // Written beside it first and swapped in, so a failed write never leaves half a file.
+    const std::string tmp = binPath + ".tessy.tmp";
+    std::vector<MeshLodCpu> extra(std::make_move_iterator(lods.begin() + 1), std::make_move_iterator(lods.end()));
+    if (!WriteMeshBinary(tmp, h.sourceHash, h.optionsHash, verts, lods[0].indices, lods[0].submeshes,
+                         lods[0].clusters, extra))
+    {
+        std::error_code ec;
+        std::filesystem::remove(tmp, ec);
+        if (report) { *report = "the write failed"; }
+        return false;
+    }
+    std::error_code ec;
+    std::filesystem::rename(tmp, binPath, ec);
+    if (ec)
+    {
+        std::filesystem::remove(tmp, ec);
+        if (report) { *report = "could not replace the file"; }
+        return false;
+    }
+    if (report)
+    {
+        *report = "v" + std::to_string(h.version) + " -> v" + std::to_string(kMeshBinVersion) + ": " +
+                  std::to_string(lods.size()) + " LODs, " + std::to_string(tris) + " triangles, " +
+                  std::to_string(clusters) + " clusters";
+    }
+    return true;
 }
 
 bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& outBinPath,
@@ -1484,10 +1688,19 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
 
     // allowVertexAppend = true: the prune's scaled leaf copies grow cpu.vertices BEFORE
     // WriteMeshBinary serialises the VB, so the bin carries them with no format change.
-    const std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt,
-                                                       chunked, /*allowVertexAppend=*/true);
+    std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt,
+                                                 chunked, /*allowVertexAppend=*/true);
+    // Tessy N1: every level into cluster order AFTER all of them are built -- the LODs simplify the
+    // order they always did, so a v4 bake holds a v3 bake's triangles, reordered.
+    const std::vector<Mesh::Cluster> lod0Clusters = BuildClustersCpu(cpu.vertices, cpu.indices, lod0Subs);
+    size_t clusterCount = lod0Clusters.size();
+    for (MeshLodCpu& l : extra)
+    {
+        l.clusters = BuildClustersCpu(cpu.vertices, l.indices, l.submeshes);
+        clusterCount += l.clusters.size();
+    }
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
-        cpu.vertices, cpu.indices, lod0Subs, extra);
+        cpu.vertices, cpu.indices, lod0Subs, lod0Clusters, extra);
     char msg[512];
     int len = std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs, %zu submeshes; tris",
         ok ? "ok" : "FAILED", srcPath.c_str(), outBinPath.c_str(), cpu.vertices.size(),
@@ -1497,7 +1710,7 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     {
         if (len < (int)sizeof(msg) - 24) { len += std::snprintf(msg + len, sizeof(msg) - len, "/%zu", l.indices.size() / 3); }
     }
-    std::snprintf(msg + len, sizeof(msg) - len, ")\n");
+    std::snprintf(msg + len, sizeof(msg) - len, "; %zu clusters)\n", clusterCount);
     logging::WriteRaw(ok ? logging::LogLevel::Info : logging::LogLevel::Error, logging::LogCategory::Asset, msg);
     return ok;
 }
@@ -1527,6 +1740,7 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
             lods[i].indices.data(), static_cast<UINT>(lods[i].indices.size()), lods[i].submeshes,
             lods[i].error);
     }
+    AttachClusters(*mesh, lods); // Tessy: a v4 bin's clusters; a v3 bin has none (the classic path)
     // What UE's automatic screen size makes of this bake (render::AutoLodScreenSizes), at the global
     // PixelError: the number to read before authoring a "lodScreenSize" or a "lodPixelError".
     if (lods.size() > 1u)
@@ -1708,10 +1922,10 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
 
     DiscardNormalsForSlots(verts, inds, {}, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(),
-        opt.generateTangentSpace || !opt.recomputeNormalSlots.empty());
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt);
+    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+        uploadKeepAlive, verts, inds, opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(), nullptr);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt,
+                 std::move(lod0Clusters));
     cache_[cacheKey] = m;
     return m;
 }
@@ -1736,10 +1950,10 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
 
     DiscardNormalsForSlots(verts, inds, {}, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(),
-        opt.generateTangentSpace || !opt.recomputeNormalSlots.empty());
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt);
+    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+        uploadKeepAlive, verts, inds, opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(), nullptr);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt,
+                 std::move(lod0Clusters));
     cache_[cacheKey] = m;
     return m;
 }
@@ -1766,11 +1980,11 @@ std::shared_ptr<Mesh> MeshManager::LoadGltf(const std::string& path,
 
     DiscardNormalsForSlots(verts, inds, submeshes, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, inds.data(), (UINT)inds.size(),
-        opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(),
+    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+        uploadKeepAlive, verts, inds, opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(),
         submeshes.size() > 1 ? &submeshes : nullptr);
-    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt);
+    GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt,
+                 std::move(lod0Clusters));
     cache_[cacheKey] = m;
     return m;
 }
@@ -1791,11 +2005,11 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
 
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     std::vector<VertexPNTUV> verts = vertsIn; // CreateGPU_PNTUV may modify the data
-    m->CreateGPU_PNTUV(renderer->GetDevice(), uploadCmdList, uploadKeepAlive,
-        verts, indices.data(), (UINT)indices.size(), generateTangentSpace);
+    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+        uploadKeepAlive, verts, indices, generateTangentSpace, nullptr);
     // This overload builds from raw vertex data (no import options in scope) — default LOD settings.
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, indices,
-                 MeshLoadOptions{});
+                 MeshLoadOptions{}, std::move(lod0Clusters));
     cache_[key] = m;
     return m;
 }

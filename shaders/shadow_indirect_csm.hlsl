@@ -29,6 +29,19 @@
 #define VSM_PAGE 0
 #endif
 
+// Tessy N3 (docs/tessy_plan.md): VSM_TESSY=1 is VSM_PAGE drawing CLUSTERS -- UE's VS raster path
+// (NaniteRasterizer.usf:3161-3222): DrawInstanced(128 * 3, clusters), the cluster from SV_InstanceID (a record of
+// TessyVisible, written by tessy_vsm_cull_cs.hlsl), the vertex from MegaIB[first + SV_VertexID] and the mega VB
+// read by hand, no input assembler at all; a vertex past the cluster's triangles is a clipped degenerate. Page
+// placement, wind, the masked clip and the borders are VSM_PAGE's own code.
+#ifndef VSM_TESSY
+#define VSM_TESSY 0
+#endif
+#if VSM_TESSY
+#undef VSM_PAGE
+#define VSM_PAGE 1
+#endif
+
 // Texture streaming plan A6: GBUFFER_BINDLESS=1 (with SHADOW_MASKED) reads the masked albedo through
 // SM6.6 ResourceDescriptorHeap[] -- GroupMask.x is then the texture's slot in the shared heap, the
 // gMaskAlbedo[16] table is gone and so is the 16-group cap.
@@ -36,7 +49,23 @@
 #define GBUFFER_BINDLESS 0
 #endif
 
-#if VSM_PAGE
+#if VSM_TESSY
+  // VSM_PAGE's tables with the cluster inputs after PageProj: TessyVisible, MegaVB, MegaIB (and the masked table
+  // path's albedos after those). No input assembler.
+  #if SHADOW_MASKED && GBUFFER_BINDLESS
+    #define SHADOW_INDIRECT_CSM_RS \
+        "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
+        "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
+  #elif SHADOW_MASKED
+    #define SHADOW_INDIRECT_CSM_RS \
+        "DescriptorTable(SRV(t0, numDescriptors=23, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
+  #else
+    #define SHADOW_INDIRECT_CSM_RS \
+        "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+  #endif
+#elif VSM_PAGE
   #if SHADOW_MASKED && GBUFFER_BINDLESS
     // t0 Instances, t1 CasterGroup, t2 GroupMask, t3 PageProj; the albedos by heap index.
     #define SHADOW_INDIRECT_CSM_RS \
@@ -177,6 +206,49 @@ StructuredBuffer<float4> PageProjRows : register(t3); // after CasterGroup/Group
 StructuredBuffer<float4> PageProjRows : register(t1);
 #endif
 
+#if VSM_TESSY
+#if SHADOW_MASKED
+StructuredBuffer<uint4> TessyVisible : register(t4);
+ByteAddressBuffer       MegaVB       : register(t5);
+StructuredBuffer<uint>  MegaIB       : register(t6);
+#else
+StructuredBuffer<uint4> TessyVisible : register(t2);
+ByteAddressBuffer       MegaVB       : register(t3);
+StructuredBuffer<uint>  MegaIB       : register(t4);
+#endif
+static const uint kTessyVertexStride = 52u; // sizeof(VertexPNTUV): position at 0, uv at 40, COLOR_0 at 48
+
+struct TessyVertex
+{
+    float3 P;
+    float2 UV;
+    float4 WIND;
+    uint   casterId; // the visible-list entry: caster id | page << kPageIdShift
+    bool   live;
+};
+
+// Instance `iid` = one surviving cluster {entry, mega first index, triangles, base vertex}; vertex `vid` of its
+// 128 * 3. Past the record count (the cull's counter can overrun the buffer) or past the cluster's triangles the
+// vertex is not live.
+TessyVertex TessyFetch(uint vid, uint iid)
+{
+    TessyVertex v = (TessyVertex)0;
+    uint count, stride;
+    TessyVisible.GetDimensions(count, stride);
+    if (iid >= count) { return v; }
+    const uint4 rec = TessyVisible[iid];
+    if (vid / 3u >= rec.z) { return v; }
+    const uint b = (MegaIB[rec.y + vid] + rec.w) * kTessyVertexStride;
+    v.P = asfloat(MegaVB.Load3(b));
+    v.UV = asfloat(MegaVB.Load2(b + 40u));
+    const uint c = MegaVB.Load(b + 48u); // R8G8B8A8_UNORM, as the input assembler reads it
+    v.WIND = float4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) * (1.0f / 255.0f);
+    v.casterId = rec.x;
+    v.live = true;
+    return v;
+}
+#endif
+
 // MUST match vsm::kPageIdShift in VirtualShadowMap.h (the CPU side asserts the page fits above it).
 static const uint  kPageIdShift = 22u;
 static const uint  kCasterMask  = (1u << kPageIdShift) - 1u;
@@ -284,6 +356,8 @@ StructuredBuffer<uint>  CasterGroup : register(t1); // per-caster mesh-group id 
 StructuredBuffer<uint2> GroupMask   : register(t2); // per group: x = albedo slot in gMaskAlbedo, or its bindless heap index (~0 = opaque), y = asuint(alphaCutoff)
 #if GBUFFER_BINDLESS
 // A6: the albedo is ResourceDescriptorHeap[GroupMask.x]; no table.
+#elif VSM_TESSY
+Texture2D    gMaskAlbedo[16] : register(t7);        // after PageProj and the three cluster inputs
 #elif VSM_PAGE
 Texture2D    gMaskAlbedo[16] : register(t4);        // t3 is PageProj in this permutation
 #else
@@ -323,8 +397,7 @@ struct PSInMasked
     SHADOW_LINEAR_OUT
 };
 
-[RootSignature(SHADOW_INDIRECT_CSM_RS)]
-VSOutMasked VSMain(VSInMasked i)
+VSOutMasked MaskedVS(VSInMasked i)
 {
     VSOutMasked o;
 #if VSM_PAGE
@@ -357,6 +430,34 @@ VSOutMasked VSMain(VSInMasked i)
     o.cutoff = asfloat(gm.y);
     return o;
 }
+
+#if VSM_TESSY
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+VSOutMasked VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
+{
+    const TessyVertex tv = TessyFetch(vid, iid);
+    if (!tv.live)
+    {
+        VSOutMasked dead = (VSOutMasked)0;
+        dead.H = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        dead.CD = float4(-1.0f, -1.0f, -1.0f, -1.0f); // clipped whole: a degenerate that never reaches the PS
+        dead.texSlot = 0xFFFFFFFFu;
+        return dead;
+    }
+    VSInMasked i;
+    i.P = tv.P;
+    i.UV = tv.UV;
+    i.WIND = tv.WIND;
+    i.casterId = tv.casterId;
+    return MaskedVS(i);
+}
+#else
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+VSOutMasked VSMain(VSInMasked i)
+{
+    return MaskedVS(i);
+}
+#endif
 
 void MaskedClip(PSInMasked i)
 {
@@ -404,8 +505,7 @@ struct VSOutD
 };
 struct PSInD { float4 H : SV_POSITION; SHADOW_LINEAR_OUT }; // the PS never reads CD (see the masked variant)
 
-[RootSignature(SHADOW_INDIRECT_CSM_RS)]
-VSOutD VSMain(VSInIndirect i)
+VSOutD OpaqueVS(VSInIndirect i)
 {
     VSOutD o;
 #if VSM_PAGE
@@ -428,6 +528,32 @@ VSOutD VSMain(VSInIndirect i)
 #endif
     return o;
 }
+
+#if VSM_TESSY
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+VSOutD VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
+{
+    const TessyVertex tv = TessyFetch(vid, iid);
+    if (!tv.live)
+    {
+        VSOutD dead = (VSOutD)0;
+        dead.H = float4(0.0f, 0.0f, 0.0f, 1.0f);
+        dead.CD = float4(-1.0f, -1.0f, -1.0f, -1.0f);
+        return dead;
+    }
+    VSInIndirect i;
+    i.P = tv.P;
+    i.WIND = tv.WIND;
+    i.casterId = tv.casterId;
+    return OpaqueVS(i);
+}
+#else
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+VSOutD VSMain(VSInIndirect i)
+{
+    return OpaqueVS(i);
+}
+#endif
 
 #if SHADOW_LINEAR_DEPTH
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]

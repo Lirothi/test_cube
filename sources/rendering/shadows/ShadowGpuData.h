@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
 #include <d3d12.h>
@@ -456,6 +457,11 @@ public:
     // instead of the per-page CPU loop. Null when those PSOs failed to build, which is the signal
     // for VirtualShadowMap::RecordPageRender to stay on the loop. Never used by the Legacy path.
     Material* IndirectShadowPageMaterial() const;
+    // Tessy N3: the VSM_TESSY twin of the page PSO above (the same masked/opaque choice) -- the surviving clusters of
+    // tessy_vsm_cull_cs, DrawInstanced(128 * 3, N) with no input assembler. Built at Init with the others whatever
+    // tessy.vsm says, so switching it on never waits for a compile (plan 4.7). Null when it failed: the page render
+    // then stays classic.
+    Material* IndirectShadowTessyMaterial() const;
 
     // Same shader as IndirectShadowMaterial but with the VSM POOL's DSV format (D32_FLOAT — the
     // pool is 32-bit so the receiver-plane bias can run with a ~zero constant; the Legacy atlases
@@ -515,6 +521,35 @@ public:
     // S3.6: per VIRTUAL group (group * kMaxShadowLods + receiverLod). Per-frame: the .x base moves
     // as instances migrate between LODs. {base, indexCount, lodRelStartIndex, casterCount}.
     D3D12_CPU_DESCRIPTOR_HANDLE PerGroupVgSrv(UINT frameIndex) const;
+
+    // ---- Tessy N2 (docs/tessy_plan.md): the cluster tables ---------------------------------------
+    // Built by every Rebuild beside the mega layout (a cluster's index range is mega-absolute) and put on
+    // the GPU by EnsureMegaBuffer, WHATEVER the tessy.* knobs say: a switch allocates nothing and waits
+    // for nothing (plan 4.7). A group whose mesh has no clusters (a v3 .mesh.bin) gets an empty range
+    // and stays on the classic path in the same frame (plan 4.8). Mirrors tessy_common.hlsli.
+    struct TessyCluster
+    {
+        std::uint32_t firstIndex;  // mega-absolute, into MegaIndexBuffer()
+        std::uint32_t triCount;
+        float windAlongMax;        // Mesh::Cluster's wind maxima (the cull's sway bound)
+        float windLeafMax;
+        DirectX::XMFLOAT3 center;  // object-space box
+        float radius;              // meshopt sphere radius (N7's LOD)
+        DirectX::XMFLOAT3 extent;
+        float pad;
+    };
+    static_assert(sizeof(TessyCluster) == 48, "TessyCluster layout");
+    // The tables, the mega buffers they index and their SRVs exist (a level with clusters, mega ready).
+    bool TessyReady() const { return tessyReady_ && megaReady_; }
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterSrv() const { return TessySrv(0); }      // StructuredBuffer<TessyCluster>
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyVgSrv() const { return TessySrv(1); }           // StructuredBuffer<uint2> per virtual group
+    D3D12_CPU_DESCRIPTOR_HANDLE MegaVertexRawSrv() const { return TessySrv(2); }     // ByteAddressBuffer
+    D3D12_CPU_DESCRIPTOR_HANDLE MegaIndexSrv() const { return TessySrv(3); }         // StructuredBuffer<uint>
+    std::uint32_t TessyClusterCount() const { return static_cast<std::uint32_t>(tessyClusterCpu_.size()); }
+    // Static caster groups drawn through clusters / all static caster groups (the "who is on which path" counter).
+    std::uint32_t TessyGroupsWithClusters() const { return tessyGroupsWith_; }
+    std::uint32_t TessyGroupsTotal() const { return tessyGroupsTotal_; }
+    std::uint64_t TessyBytes() const { return tessyBytes_; }
 
 private:
     // One upload-heap structured buffer of kFrameCount regions x `capacity` elements of
@@ -784,6 +819,8 @@ private:
     // per-page loop. Used ONLY by VirtualShadowMap::RecordPageRender, never by the Legacy path.
     std::shared_ptr<Material> indirectShadowPageMat_;
     std::shared_ptr<Material> indirectShadowPageMaskedMat_;
+    std::shared_ptr<Material> indirectShadowTessyMat_;       // Tessy N3: VSM_TESSY
+    std::shared_ptr<Material> indirectShadowTessyMaskedMat_;
 
     // Pool-format (D32) twins of the plain/masked pair, for the VSM per-page LOOP fallback only.
     std::shared_ptr<Material> indirectShadowPoolMat_;
@@ -889,6 +926,20 @@ private:
     // LODs) is copied once; `lodCount` = mesh LOD count for static casters, 1 for GI-only (LOD0) meshes.
     struct MegaCopy { const Mesh* mesh = nullptr; UINT vbBytes = 0; UINT lodCount = 1; };
     std::vector<MegaCopy> megaCopy_;
+    // Tessy N2: the CPU tables (BuildTessyTables_, after the mega layout) and their GPU homes (EnsureMegaBuffer).
+    void BuildTessyTables_(const std::unordered_map<const Mesh*, std::string>& meshPath);
+    void UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommandList* cl);
+    D3D12_CPU_DESCRIPTOR_HANDLE TessySrv(UINT slot) const;
+    std::vector<TessyCluster> tessyClusterCpu_;
+    std::vector<DirectX::XMUINT2> tessyVgCpu_;    // per virtual group {first cluster, count}
+    GpuResource tessyClusters_;
+    GpuResource tessyVg_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> tessyUpload_;      // the copy's source; lives until the next upload
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyHeap_;  // CPU heap: clusters, vg, mega VB raw, mega IB
+    UINT tessyHeapIncr_ = 0;
+    bool tessyReady_ = false;
+    std::uint32_t tessyGroupsWith_ = 0, tessyGroupsTotal_ = 0;
+    std::uint64_t tessyBytes_ = 0;
     UINT megaVBBytes_ = 0, megaIBBytes_ = 0, megaStride_ = 0;
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;

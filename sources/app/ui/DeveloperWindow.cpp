@@ -36,6 +36,8 @@
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/VirtualShadowMap.h"
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/shadows/ShadowGpuData.h" // Tessy N3: the cluster counter
+#include "rendering/shadows/TessySettings.h"
 #include "rendering/core/RasterSettings.h" // A6: the bindless checkbox
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
@@ -165,6 +167,7 @@ namespace
         case GraphicsControl::VsmSingleDraw:
         case GraphicsControl::VsmHzbCull:
         case GraphicsControl::VsmPageCaching:
+        case GraphicsControl::TessyVsm:
             return true;
         default:
             return false;
@@ -3217,6 +3220,39 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     const auto& hs = scene.Vsm().HzbStats();
                     ImGui::Text("light hzb cull: %s; pairs deferred %u, drawn in pass B %u, past the list %u (frame N-3)",
                                 scene.Vsm().HzbCullThisFrame() ? "ON this frame" : "off", hs[0], hs[1], hs[2]);
+                }
+                // Tessy N3 (docs/tessy_plan.md): clusters instead of whole meshes into the pages.
+                GRAPHICS_CONTROL(TessyVsm, "tessyVsm",
+                    ImGui::Checkbox("Tessy: draw casters cluster by cluster", &tessy::g_vsm));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: a (page, caster) pair whose mesh has clusters (a .mesh.bin v4) is culled\n"
+                                      "cluster by cluster against the page (each cluster's box padded by how far this\n"
+                                      "frame's wind can move it) and only the clusters that touch the page are drawn;\n"
+                                      "a mesh without clusters stays on the whole-mesh draw in the same frame.\n"
+                                      "OFF: every caster drawn whole into every page its box touches.\n"
+                                      "The depth is the same either way. --set=tessy.vsm:0|1");
+                {
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    const auto& ts = scene.Vsm().GetTessyStats();
+                    ImGui::Text("tessy: clusters for %u of %u caster groups (%u clusters, %llu KB)",
+                                sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(), sg.TessyClusterCount(),
+                                static_cast<unsigned long long>((sg.TessyBytes() + 1023u) / 1024u));
+                    if (tessy::g_vsm && scene.Vsm().TessyOffReason()[0] != '\0')
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "tessy: classic path -- %s", scene.Vsm().TessyOffReason());
+                    }
+                    if (ts.valid)
+                    {
+                        ImGui::Text("pairs drawn whole %u (%.2f M tris); to clusters %u (%.2f M tris whole)",
+                                    ts.wholePairs, ts.wholeTris * 1e-6, ts.tessyPairs, ts.tessyWholeTris * 1e-6);
+                        ImGui::Text("clusters: %u tested, %u drawn (%.2f M tris); runs %u (frame N-3)",
+                                    ts.clustersTested, ts.clusters, ts.clusterTris * 1e-6, ts.runs);
+                        if (ts.clustersLost > 0u || ts.runsLost > 0u)
+                        {
+                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "lost: %u clusters (shadow holes), %u runs drawn whole",
+                                               ts.clustersLost, ts.runsLost);
+                        }
+                    }
                 }
                 GRAPHICS_CONTROL(VsmPageCaching, "vsmPageCaching",
                     ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching));

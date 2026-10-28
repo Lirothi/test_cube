@@ -59,6 +59,8 @@ COMPUTE_ENTRIES = [
     ("vsm_page_setup_cs.hlsl", "CSMain"),
     ("vsm_page_scatter_cs.hlsl", "CSMain"),
     ("vsm_page_scatter_clear_cs.hlsl", "CSMain"),
+    # Tessy N3: the cluster cull between the page setup and the draws.
+    ("tessy_vsm_cull_cs.hlsl", "CSMain"),
     # Occlusion plan S5b.2: the VSM pool pyramid + the deferred-pair post cull (hzb_cull.hlsli).
     ("vsm_hzb_build_cs.hlsl", "CSMain"),
     ("vsm_hzb_post_cs.hlsl", "CSMain"),
@@ -182,6 +184,13 @@ GRAPHICS_ENTRIES = [
     ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "atlas-masked-bindless"),
     ("shadow_indirect_csm.hlsl", "vs_6_6", "VSMain", ["VSM_PAGE=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "page-masked-bindless"),
     ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["VSM_PAGE=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "page-masked-bindless"),
+    # Tessy N3: VSM_TESSY, the page permutation drawing clusters (no input assembler) -- all three of its tables.
+    ("shadow_indirect_csm.hlsl", "vs_6_0", "VSMain", ["VSM_TESSY=1"], "tessy"),
+    ("shadow_indirect_csm.hlsl", "ps_6_0", "PSMain", ["VSM_TESSY=1"], "tessy"),
+    ("shadow_indirect_csm.hlsl", "vs_6_0", "VSMain", ["VSM_TESSY=1", "SHADOW_MASKED=1"], "tessy-masked"),
+    ("shadow_indirect_csm.hlsl", "ps_6_0", "PSMain", ["VSM_TESSY=1", "SHADOW_MASKED=1"], "tessy-masked"),
+    ("shadow_indirect_csm.hlsl", "vs_6_6", "VSMain", ["VSM_TESSY=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-masked-bindless"),
+    ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["VSM_TESSY=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-masked-bindless"),
     # Occlusion plan S5b: the cascade-tile permutation of the depth pyramid build (one define
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.
@@ -195,6 +204,36 @@ GRAPHICS_ENTRIES = [
     ("shadow_indirect_csm.hlsl", "vs_6_0", "VSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1"], "atlas-masked"),
     ("shadow_indirect_csm.hlsl", "ps_6_0", "PSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1"], "atlas-masked"),
 ]
+
+
+def engine_defines() -> list[str]:
+    """Material::EngineShaderDefines -- the layout counts every runtime compile takes first (vsm_addressing.hlsli
+    stops with an #error without them). Read from the C++ constants they come from, so the two cannot drift; every
+    VSM shader failed here on that #error from plan S10a until this existed."""
+    import re
+
+    def const(header: str, name: str) -> int:
+        text = (PROJECT_ROOT / header).read_text(encoding="utf-8", errors="ignore")
+        m = re.search(rf"\b{name}\s*=\s*(\d+)u?\s*;", text)
+        if not m:
+            raise SystemExit(f"check_shaders: {name} not found in {header}")
+        return int(m.group(1))
+
+    rc = "sources/rendering/core/RenderConstants.h"
+    cascades = const(rc, "kShadowViewCascades")
+    spots = const(rc, "kShadowViewVsmSpots")
+    points = const(rc, "kShadowViewVsmPoints")
+    levels = const(rc, "kShadowViewClipmapLevels")
+    prefix = cascades + spots + 6 * points + levels
+    ceiling = prefix + (const(rc, "kShadowSpotsCeiling") - spots) + 6 * (const(rc, "kShadowPointsCeiling") - points)
+    return [
+        f"TC_SHADOW_CASCADE_VIEWS={cascades}",
+        f"TC_SHADOW_VIEW_CEILING={ceiling}",
+        f"TC_VSM_PREFIX_SPOTS={spots}",
+        f"TC_VSM_CLIPMAP_FIRST={spots + 6 * points}",
+        f"TC_VSM_CLIPMAP_LEVELS={levels}",
+        f"TC_MAX_SHADOW_LODS={const('sources/rendering/meshes/LodSelect.h', 'kMaxShadowLods')}",
+    ]
 
 
 def find_dxc() -> Path | None:
@@ -219,6 +258,7 @@ def main() -> int:
     needle = sys.argv[1].lower() if len(sys.argv) > 1 else ""
     failures = 0
     checked = 0
+    edefs = [arg for d in engine_defines() for arg in ("-D", d)]
     for name, entry in COMPUTE_ENTRIES:
         if needle and needle not in name.lower():
             continue
@@ -228,7 +268,7 @@ def main() -> int:
             continue
         checked += 1
         result = subprocess.run(
-            [str(dxc), "-T", "cs_6_0", "-E", entry, str(path), "-Fo", "NUL"],
+            [str(dxc), "-T", "cs_6_0", "-E", entry, *edefs, str(path), "-Fo", "NUL"],
             capture_output=True, text=True, cwd=SHADERS,
         )
         if result.returncode == 0:
@@ -259,7 +299,7 @@ def main() -> int:
             continue
         checked += 1
         result = subprocess.run(
-            [str(dxc), "-T", "cs_6_6", "-E", entry, str(path), "-Fo", "NUL"],
+            [str(dxc), "-T", "cs_6_6", "-E", entry, *edefs, str(path), "-Fo", "NUL"],
             capture_output=True, text=True, cwd=SHADERS,
         )
         if result.returncode == 0:
@@ -284,7 +324,7 @@ def main() -> int:
             print(f"SKIP  {name} (missing)")
             continue
         checked += 1
-        cmd = [str(dxc), "-T", target, "-E", entry]
+        cmd = [str(dxc), "-T", target, "-E", entry, *edefs]
         for d in defines:
             cmd += ["-D", d]
         cmd += [str(path), "-Fo", "NUL"]

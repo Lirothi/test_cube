@@ -1262,6 +1262,29 @@ int WINAPI WinMain(
             return failed;
         }
 #endif
+        // Tessy N1 (docs/tessy_plan.md): "--tessy-upgrade=<a.mesh.bin>,<b.mesh.bin>" rewrites each older
+        // .mesh.bin IN PLACE as the current version -- the same vertices, the triangles of every LOD in
+        // cluster order, the cluster tables added (MeshManager::UpgradeBinaryToClusters). Headless, CPU only.
+        // Exit code = the files that failed. Writing into models/ is the owner's call: back the files up first.
+        if (const char* up = std::strstr(lpCmdLine, "--tessy-upgrade=")) {
+            std::string list;
+            for (const char* p = up + std::strlen("--tessy-upgrade="); *p && !std::isspace(static_cast<unsigned char>(*p)); ++p) {
+                list.push_back(*p);
+            }
+            int failed = 0;
+            for (size_t i = 0; i < list.size();) {
+                size_t j = list.find(',', i);
+                if (j == std::string::npos) { j = list.size(); }
+                const std::string path = list.substr(i, j - i);
+                i = j + 1;
+                if (path.empty()) { continue; }
+                std::string report;
+                const bool ok = MeshManager::UpgradeBinaryToClusters(path, &report);
+                if (ok) { LOG_INFO(logging::LogCategory::Asset, "--tessy-upgrade: {}: {}", path, report); }
+                else { LOG_ERROR(logging::LogCategory::Asset, "--tessy-upgrade: {}: {}", path, report); ++failed; }
+            }
+            return failed;
+        }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our
         // binary geometry that mesh.json's "geometry" references. The explicit content reimport step.

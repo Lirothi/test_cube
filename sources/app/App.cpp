@@ -104,6 +104,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include <fstream>
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/shadows/TessySettings.h" // --set=tessy.*
 #include "rendering/core/RasterSettings.h" // A6: --set=raster.bindless
 #if WITH_EDITOR
 #include "editor/EditorController.h"
@@ -522,6 +523,11 @@ namespace
         if (setting == "vsm.shadowLodBias") { render::g_shadowLodBias = (int)value; return true; }
         // Caster-vs-receiver LOD floor (LodSelect.h). Off = the old per-view-only caster LOD.
         if (setting == "vsm.pageCaching")  { vsm::g_pageCaching = value != 0.0f; return true; }
+        // Tessy N3 (docs/tessy_plan.md): the VSM page render draws the casters with clusters cluster by cluster; the
+        // cull's sway pad (0 only to see what it prevents). Live: the next frame's builder reads them.
+        if (setting == "tessy.vsm") { tessy::g_vsm = value != 0.0f; return true; }
+        if (setting == "tessy.windPad") { tessy::g_vsmWindPad = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
+        if (setting == "tessy.validate") { tessy::g_vsmValidate = value != 0.0f; return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }
         if (setting == "vsm.hzbCull")      { vsm::g_hzbCull = value != 0.0f; return true; } // occlusion plan S5b.2
@@ -2019,6 +2025,24 @@ namespace
                               ds.lights, static_cast<unsigned long long>(ds.updates),
                               static_cast<unsigned long long>(ds.turned), scene_.GetLightManager().GetMobileLightCount());
                 out += vsmItem;
+            }
+            // Tessy N0/N3: the VSM page render's (page, caster) pairs and their clusters, frame N - 3.
+            {
+                const VirtualShadowMap::TessyStats& t = scene_.Vsm().GetTessyStats();
+                const ShadowGpuData& sg = scene_.ShadowGpu();
+                char tessyItem[1024];
+                std::snprintf(tessyItem, sizeof(tessyItem),
+                              ",\"tessy\":{\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"groupsWithClusters\":%u,"
+                              "\"groups\":%u,\"clusterTable\":%u,\"wholePairs\":%u,\"wholeTris\":%u,\"tessyPairs\":%u,"
+                              "\"tessyWholeTris\":%u,\"runs\":%u,\"clustersTested\":%u,\"clusters\":%u,\"clusterTris\":%u,"
+                              "\"clustersLost\":%u,\"runsLost\":%u,\"padMisses\":%u,\"padMissMaxUm\":%u,"
+                              "\"padNeedCm\":%u,\"padGotCm\":%u,\"padMaxOffCm\":%u,\"padDCm\":%u,\"padFCm\":%u}",
+                              t.valid ? "true" : "false", t.tessyOn ? "true" : "false", tessy::g_vsm ? "true" : "false",
+                              scene_.Vsm().TessyOffReason(), sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(),
+                              sg.TessyClusterCount(), t.wholePairs, t.wholeTris, t.tessyPairs, t.tessyWholeTris, t.runs,
+                              t.clustersTested, t.clusters, t.clusterTris, t.clustersLost, t.runsLost,
+                              t.padMisses, t.padMissMaxUm, t.padNeedCm, t.padGotCm, t.padMaxOffCm, t.padDCm, t.padFCm);
+                out += tessyItem;
             }
             // The sky's diffuse fill as lighting_cs takes it: the procedural sky's environment capture, or the
             // HDRI skybox with its lux calibration, times the light's skyFillIntensity (FillLightingConstants).

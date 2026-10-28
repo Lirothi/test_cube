@@ -1493,6 +1493,9 @@
     <ClInclude Include="sources/rendering/shadows/ShadowSettings.h">
       <Filter>sources\rendering\shadows</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/shadows/TessySettings.h">
+      <Filter>sources\rendering\shadows</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/core/GBufferBindingGuard.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
@@ -1996,6 +1999,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\vsm_page_setup_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\tessy_vsm_cull_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\vsm_sample.hlsli">
