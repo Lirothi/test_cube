@@ -280,7 +280,7 @@ non-`std::` frame; for exact names use Debug.
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:
 
 ```
-Cam: -4.11 0.87 0.83, rot: 0.0273 0.9078 -0.0599 0.4143, speed: 1.00, DLSS: 2, SSR: 1, FXAA: 0
+Cam: -4.11 0.87 0.83, rot: 0.0273 0.9078 -0.0599 0.4143, speed: 1.00, DLSS: 2, SSR: 1, Shadows: VSM
 ```
 
 **Use those two values instead of guessing camera angles.** When a user reports a visual bug with a
@@ -1110,6 +1110,20 @@ over 8 clean shots 3 frames apart). The divisor does not change that noise, only
   at 40. The confirmation is what keeps 0.98's calm: taken at once, the 4x test pulsed a probe under the
   bathroom's countertop that sees the lit room through a few rays (+50..+89 % for 4-24 frames, 12 % frame to frame
   on the cabinet); confirmed, 0.05 % -- as before it.
+
+## Local-Light Shadow Near -- 1 cm in Every Mode
+
+A spot's and a point's shadow projection start `render::kVsmLocalShadowNear` / `kPointShadowUeNear` = 1 cm from the light
+(`ShadowSettings.h PointShadowNear` / `SpotShadowNear`; UE's MinZ 1 cm, ShadowSetup.cpp:1169) under VSM as on the atlases.
+VSM kept the old near -- max(0.2 m, 2 % of the radius) for a point, 0.1 m for a spot -- and every caster nearer than that
+was cut out of the light's pages (owner, 2026-10-28: "VSM shadows leak through the walls"): wind_test's bathroom sconces
+(radius 12 m: a 24 cm near) sit 10 cm in front of the mirror wall and lit the hall behind it through the wall, and the
+torn wallpaper beside them cast nothing; Legacy and SDSM were dark there. The owner's view (cam -22.19 1.53 86.70, rot
+0.0647 -0.1394 0.0091 0.9881, 23:00), the hall wall's mean: VSM 33 -> 26.7, SDSM 26.7; zero local biases did not move
+it (30.4) -- not a bias. The VSM pool is D32 float with direct perspective Z, so 1 cm costs ~2^-24 x w^2 / n of depth
+step at the far end (0.9 mm at 12 m, 5 mm at 30 m), under the texel bias: local_shadow_test changed 0.7 % of its pixels,
+a dune's self-shadow by a low lamp that the old near had clipped and the atlases draw. `--set shadow.pointNearUe:0` =
+the old nears in both modes (the A/B; it switches live).
 
 ## Local-Light Falloff -- Metres, Not UE's Centimetres
 

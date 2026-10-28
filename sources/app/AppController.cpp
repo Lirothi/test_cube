@@ -271,9 +271,10 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
         return q;
     }();
     tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true,
-        L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, FXAA: %i",
+        L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, Shadows: %hs",
         camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, camera.GetMoveSpeedMult(),
-        renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique, (int)settings_.doFxaa);
+        renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique,
+        render::ShadowModeLabel(render::g_shadowMode));
     // The level's clock, so a screenshot also carries its hour (`--time=HH:MM` reproduces it).
     if (hudTimeOfDayHours_ >= 0.0f)
     {

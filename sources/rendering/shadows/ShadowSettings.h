@@ -234,28 +234,39 @@ inline bool g_spotShadowLinearDepth = true;
 inline bool SpotShadowLinearDepth() { return g_spotShadowLinearDepth && !VsmActive(); }
 // UE MinLightW 0.1 (cm: SpotLightSceneProxy.cpp:101) -- the floor of any spot's near, authored or not.
 constexpr float kSpotShadowMinNear = 0.001f;
+// VSM's local lights, spot and point (the pool is D32 float, direct perspective Z): UE's own 1 cm near for both. The old
+// near -- max(0.2 m, 2 % of the radius) for a point, 0.1 m for a spot -- cut every caster nearer than that out of the
+// light's pages: a candle 10 cm in front of its wall lit what lies behind the wall, wind_test's bathroom sconces (radius
+// 12 m: a 24 cm near) lit the hall through the mirror wall, and the torn wallpaper beside them cast nothing (owner,
+// 2026-10-28: "VSM shadows leak through the walls"; Legacy and SDSM, on the atlases' 1 cm, were dark there). At 1 cm the
+// D32 step at the far end of a light is ~2^-24 x w^2 / n -- 0.9 mm at 12 m, 5 mm at 30 m -- under the texel bias.
+// `--set shadow.pointNearUe:0` puts the old nears back (both modes), the A/B.
+constexpr float kVsmLocalShadowNear = 0.01f;
 // A spot's shadow near plane, metres. `authored` > 0 is the level's "shadowNear" (SpotLightDesc::nearPlane) and wins;
-// otherwise UE's 1 mm on the linear depth, the old 0.1 m on a perspective one (1 mm there would leave steps of
-// centimetres at the far end -- of the D16 atlas, and of the VSM pool's direct-Z D32 as well).
+// otherwise UE's 1 mm on the linear depth, VSM's 1 cm, the old 0.1 m on a perspective atlas (1 mm there would leave
+// steps of centimetres at the far end of the D16 atlas).
+inline bool g_pointShadowNearUe = true;
 inline float SpotShadowNear(float authored)
 {
     if (authored > 0.0f) { return authored > kSpotShadowMinNear ? authored : kSpotShadowMinNear; }
-    return SpotShadowLinearDepth() ? kSpotShadowMinNear : 0.1f;
+    if (SpotShadowLinearDepth()) { return kSpotShadowMinNear; }
+    return (VsmActive() && g_pointShadowNearUe) ? kVsmLocalShadowNear : 0.1f;
 }
 // The same for a POINT light's cube faces. UE's near is 1 cm (ShadowSetup.cpp:1169, FReversedZPerspectiveMatrix(PI / 4,
 // 1, 1, MinZ 1, Radius)) on a PERSPECTIVE depth, and UE's projection bias is a share of the distance (2 % x 512 / Res),
 // which grows with the perspective step. Ours is the texel bias (a few texels, the peter-panning fix), which does not:
 // at 1 cm a D16 step is ~w^2 / n x 1.5e-5 -- 12 cm at 9 m, 38 cm at the end of a 16 m light -- far past it. So the
 // faces take the spot's LINEAR depth with UE's near (a deviation from UE's point, for the same reason UE's spot has it).
-// Atlas modes only; VSM keeps the old near max(0.2, 2 % of the radius). `--set shadow.pointLinearDepth:0|1` (0 = the
-// perspective depth), `shadow.pointNearUe:0|1` (0 = the old near; perspective + 1 cm is the A/B that shows the steps).
+// The linear depth is the atlas modes' only; VSM keeps the perspective depth of its D32 pool, with the same 1 cm near
+// (kVsmLocalShadowNear above). `--set shadow.pointLinearDepth:0|1` (0 = the perspective depth), `shadow.pointNearUe:0|1`
+// (0 = the old near max(0.2 m, 2 % of the radius); perspective + 1 cm on the D16 atlas is the A/B that shows the steps).
 inline bool g_pointShadowLinearDepth = true;
-inline bool g_pointShadowNearUe = true;
 constexpr float kPointShadowUeNear = 0.01f;
+static_assert(kPointShadowUeNear == kVsmLocalShadowNear, "the atlases and VSM take UE's point near alike");
 inline bool PointShadowLinearDepth() { return g_pointShadowLinearDepth && !VsmActive(); }
 inline float PointShadowNear(float radius)
 {
-    if (g_pointShadowNearUe && !VsmActive()) { return kPointShadowUeNear; }
+    if (g_pointShadowNearUe) { return kPointShadowUeNear; }
     const float old = radius * 0.02f;
     return old > 0.2f ? old : 0.2f;
 }
