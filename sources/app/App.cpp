@@ -786,6 +786,7 @@ namespace
         // The RT reflection's GGX-lobe glossy filter; 0 = the separable blur above, the A/B.
         if (setting == "reflections.lobe") { renderSettings.reflectionLobeBlur = value != 0.0f; return true; }
         if (setting == "reflections.hitReprojection") { renderSettings.reflectionHitReprojection = value != 0.0f; return true; }
+        if (setting == "reflections.geometricNormal") { renderSettings.reflectionGeometricNormal = value != 0.0f; return true; }
         // P6C/P13: which screen-space search the reflection ray uses. 0 = log march (fixed growing
         // steps against full depth), 1 = UE SSRT fixed-step Batch4 march against the furthest HZB.
         // The A/B switch for the SSR retrofit, and the only way to compare both inside one binary.

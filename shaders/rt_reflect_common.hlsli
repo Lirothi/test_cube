@@ -72,7 +72,9 @@ cbuffer Probe : register(b0)
     // lighting, apart (RtTraceResult.skyPart). skyVisIndex (resolve only, 0 = none this frame):
     // the RT sky visibility the resolve scales that part by, at skyVisStrength (skyVis.diffuse).
     uint payloadRadianceIndex; uint payloadUvIndex; uint payloadSkyIndex; uint skyVisIndex;
-    float skyVisStrength; uint _rtPad5; uint _rtPad6; uint _rtPad7;
+    // rayGeometricNormal: the mirror ray is kept above, and clears, the reflector's GEOMETRIC plane rebuilt from the
+    // depth (RtSetupReflectionRay); 0 = the shading normal alone, the A/B.
+    float skyVisStrength; uint rayGeometricNormal; uint _rtPad6; uint _rtPad7;
 }
 
 SamplerState gSmp      : register(s0);
@@ -375,6 +377,40 @@ float RtReflectorSkyVisibility(uint2 pixel)
     return bent.w > 0.0f ? lerp(1.0f, saturate(length(bent.xyz)), saturate(skyVisStrength)) : 1.0f;
 }
 
+// The reflector's GEOMETRIC normal, rebuilt from the depth buffer one reflection texel either side -- on each axis the
+// neighbour nearer in space, so a depth edge is not crossed (lighting_cs SunGeometricNormal's rule). False on an edge
+// (the nearer neighbour farther than 3 % of the distance from the camera) or at the screen's border.
+bool RtReflectorGeometricNormal(Texture2D depthT, float2 uv, float3 P, float3 camPos, out float3 Ng)
+{
+    Ng = float3(0.0f, 0.0f, 0.0f);
+    const float2 texel = 1.0f / float2(outWidth, outHeight);
+    const float3 toCam = camPos - P;
+    const float maxStep2 = 0.0009f * dot(toCam, toCam); // (3 % of the distance)^2
+    float3 axis[2];
+    [unroll]
+    for (int a = 0; a < 2; ++a)
+    {
+        const float2 step = (a == 0) ? float2(texel.x, 0.0f) : float2(0.0f, texel.y);
+        const float2 uvPos = uv + step;
+        const float2 uvNeg = uv - step;
+        const float zPos = depthT.SampleLevel(gSmpPoint, uvPos, 0).r;
+        const float zNeg = depthT.SampleLevel(gSmpPoint, uvNeg, 0).r;
+        const bool posOk = zPos > 1e-6f && all(uvPos < 1.0f);
+        const bool negOk = zNeg > 1e-6f && all(uvNeg > 0.0f);
+        if (!posOk && !negOk) { return false; }
+        const float3 dPos = ReconstructPosWS(uvPos, zPos, invProj, invView) - P;
+        const float3 dNeg = P - ReconstructPosWS(uvNeg, zNeg, invProj, invView);
+        axis[a] = (posOk && (!negOk || dot(dPos, dPos) <= dot(dNeg, dNeg))) ? dPos : dNeg;
+        if (dot(axis[a], axis[a]) > maxStep2) { return false; }
+    }
+    const float3 n = cross(axis[1], axis[0]);
+    const float len2 = dot(n, n);
+    if (len2 < 1e-24f) { return false; }
+    Ng = n * rsqrt(len2);
+    Ng = dot(Ng, toCam) < 0.0f ? -Ng : Ng; // the side the camera sees
+    return true;
+}
+
 // The primary-surface half of the dispatch: reconstruct the reflector at this pixel and set up
 // the mirror ray. Shared verbatim by the monolithic and the trace CS so the two can never
 // disagree about the ray they cast. Returns false when there is no surface (sky pixel).
@@ -412,11 +448,39 @@ bool RtSetupReflectionRay(uint2 pixel, out float3 origin, out float3 dir, out fl
     // to actually clear that offset at ITS angle, which is the part a normal offset alone
     // cannot do. The cosine is floored so a ray exactly along the surface still gets a finite,
     // large clearance instead of an infinite one.
+    //
+    // Both are the SHADING normal's answer, and the GEOMETRIC plane replaces them when the depth gives one
+    // (rayGeometricNormal, 2026-10-28, owner: "the bathroom has thick walls, so what leaks here?" -- the wainscot under
+    // its window glowed with sunlit sand). GB1 holds the shading normal, and a normal map turns the mirror ray of a
+    // grazing view below the surface it leaves -- the boards' grooves and the sill's grain did it for most pixels there;
+    // with the clearance measured along that normal the ray then skipped its own panel (TMin up to 20 x the offset) and
+    // left the room through the wall behind it onto the beach. Now a ray below the geometric plane is folded back above
+    // it (its mirror image in the plane: the lobe's share that would enter the surface reflects off it), the origin is
+    // offset along the geometric normal, and TMin is that offset alone: a ray that never descends toward the plane cannot
+    // re-hit it, so the grazing clearance has nothing left to do -- and kept (the first version did), it skipped what
+    // lies NEXT to the reflector: a folded ray grazing up the boards jumped the sill above them and out of the window into
+    // the swaying palms, a patch that came and went with the wind (owner: "the spot appears and disappears"). UE puts its
+    // bias on the origin along the normal too (RayTracingCommon.ush:393-407 ApplyPositionBias) and keeps TMin to a small
+    // ray bias (LumenReflectionHardwareRayTracing.usf:153-170). The owner's view (cam
+    // -24.69 1.50 89.12, 16:00), exposure pinned: the boards under the window 17.0 -> 8.8 (the sky-only reflection gives
+    // 8.3), the sill 56 -> 18.5, the wind's patch by the faucet 11-50 -> 4-7 (no reflection: 5.9); the tent's cloth lost
+    // the sand it showed through itself. P16.11's bronze floor (ssr_bronze_palms, its camera and two grazing ones): no
+    // band, |d| > 8 on 0.2-0.3 % of the frame. Pass_RTTrace 0.141 -> 0.126 ms at the window, 0.149 -> 0.092 in the tent.
     const float viewDist = length(P - camPos);
     const float nOffset  = max(0.02f, viewDist * 0.002f);
-    const float cosGraze = max(dot(N, R), 0.05f);
+    float3 Nclear = N;
+    float3 Ng;
+    bool geometric = false;
+    if (rayGeometricNormal != 0u && RtReflectorGeometricNormal(depthT, uv, P, camPos, Ng))
+    {
+        const float below = dot(R, Ng);
+        if (below < 0.0f) { R -= 2.0f * below * Ng; }
+        Nclear = Ng;
+        geometric = true;
+    }
+    const float cosGraze = geometric ? 1.0f : max(dot(N, R), 0.05f);
     raySeed = (pixel.x * 1973u) ^ (pixel.y * 9277u) ^ (frameSeed * 26699u);
-    origin = P + N * nOffset;
+    origin = P + Nclear * nOffset;
     dir = R;
     tMin = nOffset / cosGraze;
     return true;

@@ -970,6 +970,26 @@ panelling's roughness 0.40 got 0.4 px where its lobe is ~35 -- a mirror image of
   environment term at all -- its lit colour already holds the occluded sky specular, which was the double count. The
   glass dispatch does the same with the visibility the opaque surface behind it lends. Bindless scene slots 46-49
   (`kScenePerFrame` 54): the trace's sky payload UAV, the resolve's SRV of it and of the sky visibility, the glass's.
+- **The mirror ray stays above the reflector's GEOMETRIC plane** (`rt_reflect_common.hlsli RtSetupReflectionRay`,
+  2026-10-28, owner at the bathroom window, cam -24.69 1.50 89.12 at 16:00: "the walls are thick, so what leaks here?").
+  GB1 holds the SHADING normal; on a grazing view the normal map turned the mirror ray below the surface it left (the
+  wainscot's grooves, the sill's grain), the clearance measured along that normal (TMin up to 20x the offset) skipped
+  the panel itself, and the ray left the room through the wall behind it onto the sunlit beach: the boards under
+  the window glowed with sand. Now the plane is rebuilt from the depth one reflection texel either side (lighting_cs
+  SunGeometricNormal's rule: the nearer neighbour per axis, no plane across a 3 % depth step), a ray below it is folded
+  back (its mirror image in the plane), the origin is offset along THAT normal and TMin is the offset alone; an edge
+  pixel keeps the shading normal and P16.11's grazing TMin. Not the grazing TMin with the plane: the first version kept
+  it, and a folded ray grazing up the boards jumped the sill above them and left by the window into the swaying palms
+  -- a patch by the faucet that came and went with the wind, 11-50 of 255 (owner: "the spot appears and disappears");
+  now 4-7 (the code before all this: 9.5-14; no reflection: 5.9). UE biases the origin along the normal too
+  (RayTracingCommon.ush:393-407) with a small TMin (LumenReflectionHardwareRayTracing.usf:153-170). Exposure pinned:
+  the boards 17.0 -> 8.7 (the sky-only reflection is 8.3), the sill 56 -> 18, the tent's cloth lost the sand glow on
+  its folds (part of the leak earlier put on the GI). Other views (|d| > 8 vs the same arm shot twice): bathroom 1.0 %
+  (0.14), mirror wall 0.45 % (0.04), grove 0.92 % (0.68), tunnel 0.32 % (0.37), means within 1.7 %; P16.11's bronze
+  floor (ssr_bronze_palms, its camera and two grazing ones) 0.2-0.3 %, no band. Pass_RTTrace: the same within the noise
+  of a contended GPU (0.16-0.24 ms both arms; the first version measured clean was 0.141 -> 0.126 at the window, 0.149
+  -> 0.092 in the tent -- the escaped rays crossed the world). `--set reflections.geometricNormal:0` = before (the A/B).
+  GBV (`RTTrace,GlassReflections,Skybox` + the Skybox self-test): clean.
 - **The temporal resolve also follows the reflection HIT** (`ssr_temporal_cs.hlsl`, 2026-10-26, owner: "the reflections'
   temporal lags in motion -- the metal walls in the tunnel"). Its history followed the REFLECTOR's velocity; a mirror's
   image is a virtual scene `hitT` behind the surface along the view ray and slides across it with THAT depth's parallax,

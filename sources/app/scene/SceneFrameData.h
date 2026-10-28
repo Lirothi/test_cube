@@ -841,6 +841,10 @@ struct SceneRenderSettings
     // LightingHistoryFromHit, ssr_temporal_cs.hlsl), for narrow lobes: a mirror's image moves with the reflected scene,
     // not with the mirror. Off = the reflector's motion alone, as before 2026-10-26 (`--set reflections.hitReprojection:0`).
     bool reflectionHitReprojection = true;
+    // The RT mirror ray is kept above, and clears, the reflector's GEOMETRIC plane rebuilt from the depth
+    // (rt_reflect_common.hlsli RtSetupReflectionRay): a normal map turned grazing rays into the surface, and they left
+    // the room through its wall. Off = the shading normal alone, as before 2026-10-28 (`--set reflections.geometricNormal:0`).
+    bool reflectionGeometricNormal = true;
     // Analytic sun specular boost on metals. The sun's specular lobe is scaled by
     // (1 + metal*sunMetalSpecInfluence) in the lighting pass so a smooth metal shows a
     // distinct sun highlight (which otherwise merges into the environment reflection,

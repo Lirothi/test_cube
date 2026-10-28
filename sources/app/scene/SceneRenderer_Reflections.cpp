@@ -204,7 +204,9 @@ struct RtReflectConstants
     // off-screen hit's sky lighting, apart; skyVisIndex (0 = none this frame): the RT sky visibility
     // the resolve and the glass dispatch occlude it by, at skyVisStrength (skyVis.diffuse).
     uint32_t payloadRadianceIndex = 0; uint32_t payloadUvIndex = 0; uint32_t payloadSkyIndex = 0; uint32_t skyVisIndex = 0;
-    float skyVisStrength = 1.0f; uint32_t rtPad5 = 0; uint32_t rtPad6 = 0; uint32_t rtPad7 = 0;
+    // rayGeometricNormal: the mirror ray kept above the reflector's geometric plane (RtSetupReflectionRay); the trace and
+    // the glass dispatch set it, the resolve casts no ray.
+    float skyVisStrength = 1.0f; uint32_t rayGeometricNormal = 0; uint32_t rtPad6 = 0; uint32_t rtPad7 = 0;
 };
 
 // The reflections' scene slots past the trace's 0-12 (BindlessTable kScenePerFrame): the sky payload the trace
@@ -299,6 +301,7 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
         c.screenDepthIndex = c.depthIndex; // opaque: primary == on-screen depth
         c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
         c.alphaMode = std::min(frame_->settings.rtAlphaMode, 2u);
+        c.rayGeometricNormal = frame_->settings.reflectionGeometricNormal ? 1u : 0u;
         // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
         // mirror band): fill 0 = 0.41; fill 0.15 re-rolled per frame = 0.74; re-rolled once per
         // EMA time constant = 1.25 (coherent drift is the WORST case for the resolve); frozen =
@@ -722,6 +725,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.screenDepthIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 8);  // visibility match = opaque depth
         c.alphaMissKeep = std::clamp(frame_->settings.rtAlphaMissKeep, 0.0f, 1.0f);
         c.alphaMode = std::min(frame_->settings.rtAlphaMode, 2u);
+        c.rayGeometricNormal = frame_->settings.reflectionGeometricNormal ? 1u : 0u;
         // FROZEN dither, by measurement (ssr_bronze_palms, resolved frame-to-frame boil in the
         // mirror band): fill 0 = 0.41; fill 0.15 re-rolled per frame = 0.74; re-rolled once per
         // EMA time constant = 1.25 (coherent drift is the WORST case for the resolve); frozen =
