@@ -156,6 +156,7 @@ enum class GraphicsControl
     VsmHzbCull,
     VsmPageCaching,
     TessyVsm,                     // Tessy N3: the VSM page render draws clusters
+    TessyRaster,                  // Tessy N6: ...through the mesh shader (1) or the VS (0)
     VsmWindAnimateMaxLevel,
     StreamingEnabled,             // Streaming (texture streaming A3)
     StreamingPoolSizeMB,

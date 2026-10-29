@@ -462,6 +462,9 @@ public:
     // tessy.vsm says, so switching it on never waits for a compile (plan 4.7). Null when it failed: the page render
     // then stays classic.
     Material* IndirectShadowTessyMaterial() const;
+    // Tessy N6: its MESH SHADER twin (MSMain of the same permutation: each cluster's vertices once, DispatchMesh).
+    // Null without a mesh shader tier or when it failed: `tessy.raster` 1 then draws through the VS path above.
+    Material* IndirectShadowTessyMeshMaterial() const;
 
     // Same shader as IndirectShadowMaterial but with the VSM POOL's DSV format (D32_FLOAT — the
     // pool is 32-bit so the receiver-plane bias can run with a ~zero constant; the Legacy atlases
@@ -536,15 +539,23 @@ public:
         DirectX::XMFLOAT3 center;  // object-space box
         float radius;              // meshopt sphere radius (N7's LOD)
         DirectX::XMFLOAT3 extent;
-        float pad;
+        std::uint32_t firstMeshlet; // N6: its meshlets in TessyMeshlets (Mesh::ClusterLocalTables, the mesh shader's)
+        std::uint32_t meshletCount;
+        std::uint32_t pad[3];
     };
-    static_assert(sizeof(TessyCluster) == 48, "TessyCluster layout");
+    static_assert(sizeof(TessyCluster) == 64, "TessyCluster layout");
+    // N6: one meshlet -- {its unique vertices in TessyClusterVerts (mesh-local), how many (<= Mesh::kMeshletMaxVerts, 64),
+    // its triangles in TessyClusterTris (one uint each: three 8-bit places in that vertex list), how many}.
+    struct TessyMeshlet { std::uint32_t vertOffset, vertCount, triOffset, triCount; };
     // The tables, the mega buffers they index and their SRVs exist (a level with clusters, mega ready).
     bool TessyReady() const { return tessyReady_ && megaReady_; }
     D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterSrv() const { return TessySrv(0); }      // StructuredBuffer<TessyCluster>
     D3D12_CPU_DESCRIPTOR_HANDLE TessyVgSrv() const { return TessySrv(1); }           // StructuredBuffer<uint2> per virtual group
     D3D12_CPU_DESCRIPTOR_HANDLE MegaVertexRawSrv() const { return TessySrv(2); }     // ByteAddressBuffer
     D3D12_CPU_DESCRIPTOR_HANDLE MegaIndexSrv() const { return TessySrv(3); }         // StructuredBuffer<uint>
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterVertsSrv() const { return TessySrv(4); } // StructuredBuffer<uint> (N6)
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterTrisSrv() const { return TessySrv(5); }  // StructuredBuffer<uint> (N6)
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyMeshletSrv() const { return TessySrv(6); }      // StructuredBuffer<uint4> (N6)
     std::uint32_t TessyClusterCount() const { return static_cast<std::uint32_t>(tessyClusterCpu_.size()); }
     // Static caster groups drawn through clusters / all static caster groups (the "who is on which path" counter).
     std::uint32_t TessyGroupsWithClusters() const { return tessyGroupsWith_; }
@@ -821,6 +832,8 @@ private:
     std::shared_ptr<Material> indirectShadowPageMaskedMat_;
     std::shared_ptr<Material> indirectShadowTessyMat_;       // Tessy N3: VSM_TESSY
     std::shared_ptr<Material> indirectShadowTessyMaskedMat_;
+    std::shared_ptr<Material> indirectShadowTessyMeshMat_;       // Tessy N6: VSM_TESSY_MS, MSMain
+    std::shared_ptr<Material> indirectShadowTessyMeshMaskedMat_;
 
     // Pool-format (D32) twins of the plain/masked pair, for the VSM per-page LOOP fallback only.
     std::shared_ptr<Material> indirectShadowPoolMat_;
@@ -932,8 +945,14 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE TessySrv(UINT slot) const;
     std::vector<TessyCluster> tessyClusterCpu_;
     std::vector<DirectX::XMUINT2> tessyVgCpu_;    // per virtual group {first cluster, count}
+    std::vector<TessyMeshlet> tessyMeshletsCpu_;  // N6: the clusters' meshlets (Mesh::ClusterLocalTables)
+    std::vector<std::uint32_t> tessyVertsCpu_;    // N6: their vertex lists
+    std::vector<std::uint32_t> tessyTrisCpu_;     // N6: their packed triangles
     GpuResource tessyClusters_;
     GpuResource tessyVg_;
+    GpuResource tessyVerts_;
+    GpuResource tessyTris_;
+    GpuResource tessyMeshlets_;
     Microsoft::WRL::ComPtr<ID3D12Resource> tessyUpload_;      // the copy's source; lives until the next upload
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyHeap_;  // CPU heap: clusters, vg, mega VB raw, mega IB
     UINT tessyHeapIncr_ = 0;

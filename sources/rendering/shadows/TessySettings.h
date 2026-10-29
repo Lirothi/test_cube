@@ -19,4 +19,12 @@ inline unsigned g_vsmWindPad = 1u;
 // VS sways them and checked against the padded box; get_readouts tessy.padMisses / padMissMaxUm. A debug mode -- a
 // frame's worth of vertex work per page. `--set tessy.validate:0|1`, transient.
 inline bool g_vsmValidate = false;
+// N6: how the surviving clusters are rasterized -- true = the mesh shader (shadow_indirect_csm.hlsl MSMain: each meshlet
+// vertex once, triangles outside the page culled before setup), false = the VS path (DrawInstanced(384, N), every corner
+// of every triangle). Without a mesh shader tier (or its PSO) true draws through the VS, logged as the verdict.
+// `--set tessy.raster:0|1`, MCP, Developer Controls > VSM, graphics_settings.json vsm.tessyRaster.
+inline bool g_vsmMeshShader = true;
+// The mesh shader's own triangle culls (tessy_common.hlsli kTessyMsCull*): bit 0 = a triangle whose screen box holds no
+// pixel centre (it would raster nothing -- exact). 0 = only the page-border cull. `--set tessy.msCull:0|1`, transient.
+inline unsigned g_vsmMsCull = 1u;
 } // namespace tessy

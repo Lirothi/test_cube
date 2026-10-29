@@ -1041,6 +1041,125 @@ HRESULT CreateComputePipelineStateCached(ID3D12Device* device,
                     ElapsedMicroseconds(psoBegin) / 1000.0, label);
     return hr;
 }
+
+// Tessy N6: a mesh-shader pipeline. D3D12_GRAPHICS_PIPELINE_STATE_DESC has no MS field, so it is built as a state
+// stream (ID3D12Device2::CreatePipelineState) -- each subobject a {type, value} pair aligned to a pointer, the
+// layout d3dx12.h's CD3DX12_PIPELINE_STATE_STREAM_* use. The rest is the graphics path: the same disk cache
+// (CACHED_PSO subobject), the same buckets. `desc` carries the mesh shader in its VS field; its input layout and
+// topology are ignored (a mesh shader has neither).
+template <D3D12_PIPELINE_STATE_SUBOBJECT_TYPE Type, typename T>
+struct alignas(void*) PsoStreamItem
+{
+    D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = Type;
+    T value{};
+};
+struct MeshPsoStream
+{
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE, ID3D12RootSignature*> rs;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, D3D12_SHADER_BYTECODE> ms;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, D3D12_SHADER_BYTECODE> ps;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND, D3D12_BLEND_DESC> blend;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK, UINT> sampleMask;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER, D3D12_RASTERIZER_DESC> raster;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL, D3D12_DEPTH_STENCIL_DESC> depth;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS, D3D12_RT_FORMAT_ARRAY> rtv;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT, DXGI_FORMAT> dsv;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC, DXGI_SAMPLE_DESC> sample;
+    PsoStreamItem<D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO, D3D12_CACHED_PIPELINE_STATE> cached;
+};
+
+std::wstring BuildMeshPipelineName(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
+{
+    PipelineKeyBuilder hash;
+    hash.AddString("mesh");
+    hash.AddShader(desc.VS); // the mesh shader
+    hash.AddShader(desc.PS);
+    HashBlendState(hash, desc.BlendState);
+    hash.Add(desc.SampleMask);
+    HashRasterizerState(hash, desc.RasterizerState);
+    HashDepthStencilState(hash, desc.DepthStencilState);
+    hash.Add(desc.NumRenderTargets);
+    for (DXGI_FORMAT format : desc.RTVFormats)
+    {
+        hash.Add(format);
+    }
+    hash.Add(desc.DSVFormat);
+    hash.Add(desc.SampleDesc.Count);
+    hash.Add(desc.SampleDesc.Quality);
+    return hash.Finish(L'm');
+}
+
+HRESULT CreateMeshPipelineStateCached(ID3D12Device* device,
+    const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc,
+    ComPtr<ID3D12PipelineState>& out,
+    const std::wstring& debugLabel)
+{
+    ComPtr<ID3D12Device2> device2;
+    if (!device || FAILED(device->QueryInterface(IID_PPV_ARGS(device2.GetAddressOf())))) { return E_NOINTERFACE; }
+    MeshPsoStream stream;
+    stream.rs.value = desc.pRootSignature;
+    stream.ms.value = desc.VS;
+    stream.ps.value = desc.PS;
+    stream.blend.value = desc.BlendState;
+    stream.sampleMask.value = desc.SampleMask;
+    stream.raster.value = desc.RasterizerState;
+    stream.depth.value = desc.DepthStencilState;
+    stream.rtv.value.NumRenderTargets = desc.NumRenderTargets;
+    for (UINT i = 0; i < 8; ++i) { stream.rtv.value.RTFormats[i] = desc.RTVFormats[i]; }
+    stream.dsv.value = desc.DSVFormat;
+    stream.sample.value = desc.SampleDesc;
+    const auto create = [&](const D3D12_CACHED_PIPELINE_STATE& cachedPso) -> HRESULT
+    {
+        stream.cached.value = cachedPso;
+        D3D12_PIPELINE_STATE_STREAM_DESC sd{ sizeof(stream), &stream };
+        out.Reset();
+        return device2->CreatePipelineState(&sd, IID_PPV_ARGS(out.ReleaseAndGetAddressOf()));
+    };
+
+    const std::wstring name = BuildMeshPipelineName(desc);
+    const auto psoBegin = std::chrono::steady_clock::now();
+    const std::string label = NarrowForLog(debugLabel.empty() ? name : debugLabel);
+    bool fromCache = false;
+    if (PipelineCacheEnabled())
+    {
+        g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
+        const auto begin = std::chrono::steady_clock::now();
+        std::vector<uint8_t> cachedBytes;
+        if (TryLoadPipelineBlob(device, name, cachedBytes))
+        {
+            const HRESULT cachedHr = create(D3D12_CACHED_PIPELINE_STATE{ cachedBytes.data(), cachedBytes.size() });
+            g_psoCacheLoadUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+            if (SUCCEEDED(cachedHr))
+            {
+                g_psoCacheHits.fetch_add(1, std::memory_order_relaxed);
+                g_psoCacheSerializedBytes.fetch_add(
+                    static_cast<uint64_t>(cachedBytes.size()), std::memory_order_relaxed);
+                boot::AddBucket("PSO from cache blob", ElapsedMicroseconds(psoBegin) / 1000.0, label);
+                return cachedHr;
+            }
+            g_psoCacheRejects.fetch_add(1, std::memory_order_relaxed);
+            LOG_INFO_ONCE(logging::LogCategory::Render, "PSO cache: the driver refused a stored blob (hr=0x{:08X}, '{}') -- "
+                          "compiled again and replaced", static_cast<unsigned>(cachedHr), label);
+            fromCache = true;
+            out.Reset();
+        }
+        else
+        {
+            g_psoCacheLoadUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+        }
+    }
+
+    const auto begin = std::chrono::steady_clock::now();
+    const HRESULT hr = create(D3D12_CACHED_PIPELINE_STATE{});
+    g_psoCacheCreateUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
+    if (SUCCEEDED(hr))
+    {
+        StorePipelineBlob(device, name, out.Get());
+    }
+    boot::AddBucket(fromCache ? "PSO create (cache REJECTED)" : "PSO create (compile)",
+                    ElapsedMicroseconds(psoBegin) / 1000.0, label);
+    return hr;
+}
 } // namespace
 
 // Include handler for DXC that captures the list of files
@@ -1816,8 +1935,14 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
     ComPtr<ID3DBlob> vs, ps;
     std::vector<std::wstring> incVS, incPS;
 
-    // SM6+ via DXC
-    if (FAILED(CompileDXC(gd.shaderFile, gd.vsEntry, "vs", r->GetDevice(), gd.defines, vs, incVS))) {
+    // SM6+ via DXC. Tessy N6: a mesh shader takes the VS's place (`vs` holds it below); there is no SM5 fallback.
+    if (gd.msEntry) {
+        if (FAILED(CompileDXC(gd.shaderFile, gd.msEntry, "ms", r->GetDevice(), gd.defines, vs, incVS))) {
+            LOG_WARNING(logging::LogCategory::Render, "DXC MS compile failed for {} ({})", gd.shaderFile, gd.msEntry);
+            return false;
+        }
+    }
+    else if (FAILED(CompileDXC(gd.shaderFile, gd.vsEntry, "vs", r->GetDevice(), gd.defines, vs, incVS))) {
         LOG_WARNING(logging::LogCategory::Render, "DXC VS compile failed for {} ({}); falling back to D3DCompile SM5",
                     gd.shaderFile, gd.vsEntry);
         UINT cf =
@@ -1856,14 +1981,15 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
     // only PS (or has no embedded RS) therefore fails the build below.
     ComPtr<ID3DBlob> embeddedRS = ExtractEmbeddedRootSig(vs.Get());
     if (!embeddedRS || !BuildRootFromEmbedded(r->GetDevice(), embeddedRS.Get(), outRS, outParams)) {
-        LOG_ERROR(logging::LogCategory::Render, "missing/invalid [RootSignature] in {} (vs={})", gd.shaderFile, gd.vsEntry);
+        LOG_ERROR(logging::LogCategory::Render, "missing/invalid [RootSignature] in {} (vs={})", gd.shaderFile,
+                  gd.msEntry ? gd.msEntry : gd.vsEntry);
         return false;
     }
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC pso{};
     pso.pRootSignature = outRS.Get();
 
-    if (gd.inputLayoutKey.empty()) {
+    if (gd.inputLayoutKey.empty() || gd.msEntry) {
         pso.InputLayout = { nullptr, 0 };
     }
     else {
@@ -1885,7 +2011,9 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
     pso.DSVFormat = gd.dsvFormat;
     pso.SampleDesc.Count = gd.sampleCount;
 
-    if (FAILED(CreateGraphicsPipelineStateCached(r->GetDevice(), pso, outPSO, gd.shaderFile))) {
+    const HRESULT psoHr = gd.msEntry ? CreateMeshPipelineStateCached(r->GetDevice(), pso, outPSO, gd.shaderFile)
+                                     : CreateGraphicsPipelineStateCached(r->GetDevice(), pso, outPSO, gd.shaderFile);
+    if (FAILED(psoHr)) {
         return false;
     }
     outPSO->SetName(gd.shaderFile.c_str()); // so GBV/PIX name the shader, not 'Unnamed'
@@ -1905,9 +2033,9 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
 
 bool Material::EnsureWireframePipeline_() const
 {
-    if (isCompute_ || cachedGfxDesc_.topologyType != D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
+    if (isCompute_ || cachedGfxDesc_.msEntry || cachedGfxDesc_.topologyType != D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE)
     {
-        return false;
+        return false; // Tessy N6: a mesh-shader material has no wireframe twin
     }
 
     std::lock_guard<std::mutex> lock(wireframeMtx_);
@@ -2064,6 +2192,7 @@ std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
     HashStrW(H, gd.shaderFile);
     HashStrA(H, gd.vsEntry);
     HashStrA(H, gd.psEntry);
+    if (gd.msEntry) { HashStrA(H, "ms:"); HashStrA(H, gd.msEntry); } // Tessy N6
 
     // Defines (sorted for determinism)
     auto defs = gd.defines;
@@ -2101,7 +2230,8 @@ std::wstring MaterialManager::BuildKey(const Material::GraphicsDesc& gd)
     std::wstring key = L"GFX3|";
     key += gd.shaderFile;
     key += L"|";
-    key += std::wstring(gd.vsEntry, gd.vsEntry + std::strlen(gd.vsEntry));
+    const char* firstStage = gd.msEntry ? gd.msEntry : gd.vsEntry;
+    key += std::wstring(firstStage, firstStage + std::strlen(firstStage));
     key += L"/";
     key += std::wstring(gd.psEntry, gd.psEntry + std::strlen(gd.psEntry));
     key += L"|";

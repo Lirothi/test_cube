@@ -668,7 +668,7 @@ grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / 
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
 
-## Tessy -- Cluster Geometry (the VSM Pages, Plan N0-N3)
+## Tessy -- Cluster Geometry (the VSM Pages, Plan N0-N3, N6)
 
 Tessy is our UE Nanite analog (`docs/tessy_plan.md`, journal in its section 9). A CLUSTER is a run of <= 128 triangles
 / 256 vertices of one LOD's index buffer inside one submesh (`Mesh::Cluster`); the classic paths draw the same index
@@ -681,6 +681,14 @@ is the owner's call (plan Q4) -- back the files up first.
 - The VSM page setup hands each (page x caster bucket) of a group with clusters to `tessy_vsm_cull_cs.hlsl`, which
   tests every (caster, cluster) box against the page and appends survivors; `VSM_TESSY` of `shadow_indirect_csm.hlsl`
   draws them as ONE `DrawInstanced(384, N)` (UE's VS raster path, vertices fetched by hand from the mega VB/IB).
+- N6, the default: `tessy.raster` 1 draws them through a MESH SHADER instead (`VSM_TESSY_MS` `MSMain`, one
+  `DispatchMesh` whose args `tessy_ms_args_cs.hlsl` writes): one group per MESHLET -- a cluster cut at load into runs of
+  <= 64 unique vertices (`Mesh::BuildClusterLocal`; a leaf card's cluster has ~2 vertices a triangle) -- each vertex
+  transformed once, triangles outside the page or covering no pixel centre culled (`tessy.msCull`, exact). 64 because
+  the DECLARED output sets how many groups an SM holds: a 256-vertex group was slower than the VS path. Without a mesh
+  shader tier (log `mesh shader tier: N`) or its PSO it falls back to the VS path, logged `tessy.raster: vertex shader
+  -- <why>`. Near `SetMeshOutputCounts` no branch and no early return: DXC's `ms_6_6` tail-duplicates the call and the
+  validator refuses the shader.
 - `tessy.vsm` (default 1; Developer Controls > VSM, `graphics_settings.json` vsm.tessy, `--set`, MCP) switches live;
   the event `tessy.vsm: on` / `classic path -- <why>` is logged on every change of the verdict. VSM only: the level
   default may be SDSM -- pass `--shadow-mode=vsm` (or `shadow.mode:1`) or the cluster path never runs.
@@ -689,9 +697,14 @@ is the owner's call (plan Q4) -- back the files up first.
   `tessy.validate:1` sways every vertex of every tested cluster with the shader's own function and counts those
   outside their padded box -- `get_readouts` tessy.padMisses must stay 0 (proven to catch: 98 % with no pad).
 - Counters: `get_readouts` block `tessy` (pairs drawn whole / handed to clusters, clusters tested / drawn and their
-  triangles, lost runs / clusters); `tools/tessy_baseline.py --port <p>` measures the plan's three views.
-- Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms
-  (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters), the bathroom 0.91 -> 0.63, the tunnel 0.67 -> 0.38.
+  triangles, `records` = the draw's instances or mesh shader groups, lost runs / clusters, `meshShader`);
+  `tools/tessy_baseline.py --port <p>` measures the plan's three views.
+- Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms on
+  the VS path (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters) -> 0.51 with the mesh shader (its draw
+  0.41 -> 0.23); the bathroom 0.91 -> 0.59 -> 0.48, the tunnel 0.67 -> 0.33 -> 0.27. Time an A/B of the raster with the
+  wind FROZEN (`wind.freeze:1`: the pages still redraw, the cluster counts stay put) -- with the wind running the two
+  arms draw different counts and the EMA mixes them (a first reading put the 256-vertex mesh shader ahead; frozen, it
+  was behind).
   A picture A/B of it needs the bathroom candles' flicker off and the clouds off (`cloud.enabled:0`): both move with
   time and read as a difference between two shots of the same arm.
 

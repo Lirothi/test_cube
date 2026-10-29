@@ -3564,7 +3564,40 @@ int CheckClusters(const Bin& b, const std::string& what)
         Check(limits, at + ": every cluster within 1..128 triangles and 256 vertices");
         Check(boxes, at + ": every box holds its vertices");
         Check(wind, at + ": the wind maxima are the vertices' own");
-        bad += (tris * 3u == l.idx.size() && ordered && inside && limits && boxes && wind) ? 0 : 1;
+        // N6: the meshlets the mesh shader emits give back exactly each cluster's triangles, in order, windings kept,
+        // each within kMeshletMaxVerts unique vertices.
+        Mesh::ClusterLocalTables local;
+        bool meshlets = Mesh::BuildClusterLocal(l.clusters, l.idx, local) && local.clusters.size() == l.clusters.size();
+        std::size_t meshletCount = 0, split = 0;
+        for (std::size_t ci = 0; meshlets && ci < l.clusters.size(); ++ci)
+        {
+            const Mesh::Cluster& c = l.clusters[ci];
+            const Mesh::ClusterLocal& cl = local.clusters[ci];
+            meshlets = cl.meshletCount >= 1u && cl.firstMeshlet + cl.meshletCount <= local.meshlets.size();
+            meshletCount += cl.meshletCount;
+            split += cl.meshletCount > 1u ? 1u : 0u;
+            std::uint32_t k = 0; // the cluster's triangle the next meshlet starts at
+            for (std::uint32_t s = 0; meshlets && s < cl.meshletCount; ++s)
+            {
+                const Mesh::ClusterMeshlet& m = local.meshlets[cl.firstMeshlet + s];
+                meshlets = m.vertCount >= 3u && m.vertCount <= Mesh::kMeshletMaxVerts && m.triCount >= 1u;
+                for (std::uint32_t j = 0; meshlets && j < m.triCount; ++j, ++k)
+                {
+                    const std::uint32_t t = local.tris[m.triOffset + j];
+                    for (std::uint32_t corner = 0; meshlets && corner < 3u; ++corner)
+                    {
+                        const std::uint32_t lv = (t >> (corner * 8u)) & 0xFFu;
+                        meshlets = k < c.triCount && lv < m.vertCount &&
+                                   local.verts[m.vertOffset + lv] == l.idx[c.firstIndex + k * 3u + corner];
+                    }
+                }
+            }
+            meshlets = meshlets && k == c.triCount;
+        }
+        Check(meshlets, at + ": the meshlets rebuild every cluster's triangles exactly, each within " +
+                            std::to_string(Mesh::kMeshletMaxVerts) + " vertices (" +
+                            std::to_string(meshletCount) + " meshlets, " + std::to_string(split) + " clusters split)");
+        bad += (tris * 3u == l.idx.size() && ordered && inside && limits && boxes && wind && meshlets) ? 0 : 1;
     }
     return bad;
 }

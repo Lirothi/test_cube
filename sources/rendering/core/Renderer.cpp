@@ -203,6 +203,7 @@ void Renderer::Shutdown()
     vsmDummyHeap_.Reset();
     drawIndexedCmdSig_.Reset();
     drawCmdSig_.Reset();
+    dispatchMeshCmdSig_.Reset();
     // ...and the bindless G-buffer command signatures (A6), for the same reason: each holds its root signature, so a
     // debug run ended with id=582 (Renderer.BindlessGBufferIndirectSig) + id=577 (its root signature) and the device's
     // refcount two higher (2026-10-20).
@@ -2477,6 +2478,40 @@ ID3D12CommandSignature* Renderer::GetDrawCommandSignature() {
     }
     drawCmdSig_->SetName(L"Renderer.DrawIndirectSig");
     return drawCmdSig_.Get();
+}
+
+bool Renderer::SupportsMeshShaders() {
+    if (meshShaderTier_ < 0) {
+        D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
+        ID3D12Device* device = GetDevice();
+        meshShaderTier_ = (device && SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7))))
+            ? static_cast<int>(o7.MeshShaderTier) : 0;
+        LOG_INFO(logging::LogCategory::RenderRhi, "mesh shader tier: {}", meshShaderTier_);
+    }
+    return meshShaderTier_ > 0;
+}
+
+ID3D12CommandSignature* Renderer::GetDispatchMeshCommandSignature() {
+    if (dispatchMeshCmdSig_) {
+        return dispatchMeshCmdSig_.Get();
+    }
+    ID3D12Device* device = GetDevice();
+    if (!device || !SupportsMeshShaders()) {
+        return nullptr;
+    }
+    D3D12_INDIRECT_ARGUMENT_DESC arg{};
+    arg.Type = D3D12_INDIRECT_ARGUMENT_TYPE_DISPATCH_MESH;
+    D3D12_COMMAND_SIGNATURE_DESC desc{};
+    desc.ByteStride = sizeof(D3D12_DISPATCH_MESH_ARGUMENTS);
+    desc.NumArgumentDescs = 1;
+    desc.pArgumentDescs = &arg;
+    desc.NodeMask = 0;
+    if (FAILED(device->CreateCommandSignature(&desc, nullptr, IID_PPV_ARGS(dispatchMeshCmdSig_.GetAddressOf())))) {
+        dispatchMeshCmdSig_.Reset();
+        return nullptr;
+    }
+    dispatchMeshCmdSig_->SetName(L"Renderer.DispatchMeshIndirectSig");
+    return dispatchMeshCmdSig_.Get();
 }
 
 ID3D12CommandSignature* Renderer::GetBindlessIndirectCommandSignature(const Material* mat) {

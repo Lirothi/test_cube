@@ -33,6 +33,9 @@ public:
         std::wstring shaderFile;
         const char* vsEntry = "VSMain";
         const char* psEntry = "PSMain";
+        // Tessy N6: non-null = a MESH shader in place of the VS (vsEntry and the input layout are then ignored; the
+        // root signature is the MS's [RootSignature]). Needs ms_6_5 and a device with a mesh shader tier.
+        const char* msEntry = nullptr;
         DefineList   defines;              // << new: Shader Defines
 
         // IA

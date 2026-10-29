@@ -34,8 +34,18 @@
 // TessyVisible, written by tessy_vsm_cull_cs.hlsl), the vertex from MegaIB[first + SV_VertexID] and the mega VB
 // read by hand, no input assembler at all; a vertex past the cluster's triangles is a clipped degenerate. Page
 // placement, wind, the masked clip and the borders are VSM_PAGE's own code.
+// N6: VSM_TESSY_MS=1 adds MSMain, the same draw as a MESH shader (UE's hardware path, NaniteRasterizer.usf
+// HWRasterizeMS): one group per cluster, each of its unique vertices transformed ONCE (the VS path does every corner
+// of every triangle), a triangle wholly outside one page border culled before the rasterizer.
 #ifndef VSM_TESSY
 #define VSM_TESSY 0
+#endif
+#ifndef VSM_TESSY_MS
+#define VSM_TESSY_MS 0
+#endif
+#if VSM_TESSY_MS
+#undef VSM_TESSY
+#define VSM_TESSY 1
 #endif
 #if VSM_TESSY
 #undef VSM_PAGE
@@ -50,20 +60,21 @@
 #endif
 
 #if VSM_TESSY
-  // VSM_PAGE's tables with the cluster inputs after PageProj: TessyVisible, MegaVB, MegaIB (and the masked table
-  // path's albedos after those). No input assembler.
+  // VSM_PAGE's tables with the cluster inputs after PageProj: TessyVisible, MegaVB, MegaIB, Clusters, Meshlets,
+  // ClusterVerts, ClusterTris (and the masked table path's albedos after those). No input assembler; the VS and the MS (N6) take
+  // the same table.
   #if SHADOW_MASKED && GBUFFER_BINDLESS
     #define SHADOW_INDIRECT_CSM_RS \
         "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
-        "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "DescriptorTable(SRV(t0, numDescriptors=11, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
         "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
   #elif SHADOW_MASKED
     #define SHADOW_INDIRECT_CSM_RS \
-        "DescriptorTable(SRV(t0, numDescriptors=23, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "DescriptorTable(SRV(t0, numDescriptors=27, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
         "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
   #else
     #define SHADOW_INDIRECT_CSM_RS \
-        "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+        "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
   #endif
 #elif VSM_PAGE
   #if SHADOW_MASKED && GBUFFER_BINDLESS
@@ -207,14 +218,23 @@ StructuredBuffer<float4> PageProjRows : register(t1);
 #endif
 
 #if VSM_TESSY
+#include "tessy_common.hlsli"
 #if SHADOW_MASKED
-StructuredBuffer<uint4> TessyVisible : register(t4);
-ByteAddressBuffer       MegaVB       : register(t5);
-StructuredBuffer<uint>  MegaIB       : register(t6);
+StructuredBuffer<uint4>        TessyVisible : register(t4);
+ByteAddressBuffer              MegaVB       : register(t5);
+StructuredBuffer<uint>         MegaIB       : register(t6);
+StructuredBuffer<TessyCluster> Clusters     : register(t7);
+StructuredBuffer<uint4>        Meshlets     : register(t8); // N6
+StructuredBuffer<uint>         ClusterVerts : register(t9);
+StructuredBuffer<uint>         ClusterTris  : register(t10);
 #else
-StructuredBuffer<uint4> TessyVisible : register(t2);
-ByteAddressBuffer       MegaVB       : register(t3);
-StructuredBuffer<uint>  MegaIB       : register(t4);
+StructuredBuffer<uint4>        TessyVisible : register(t2);
+ByteAddressBuffer              MegaVB       : register(t3);
+StructuredBuffer<uint>         MegaIB       : register(t4);
+StructuredBuffer<TessyCluster> Clusters     : register(t5);
+StructuredBuffer<uint4>        Meshlets     : register(t6); // N6
+StructuredBuffer<uint>         ClusterVerts : register(t7);
+StructuredBuffer<uint>         ClusterTris  : register(t8);
 #endif
 static const uint kTessyVertexStride = 52u; // sizeof(VertexPNTUV): position at 0, uv at 40, COLOR_0 at 48
 
@@ -227,9 +247,19 @@ struct TessyVertex
     bool   live;
 };
 
-// Instance `iid` = one surviving cluster {entry, mega first index, triangles, base vertex}; vertex `vid` of its
-// 128 * 3. Past the record count (the cull's counter can overrun the buffer) or past the cluster's triangles the
-// vertex is not live.
+// The mega VB's vertex `index` (mesh-local + the mesh's base vertex) as the input assembler would deliver it.
+void TessyLoadVertex(uint index, inout TessyVertex v)
+{
+    const uint b = index * kTessyVertexStride;
+    v.P = asfloat(MegaVB.Load3(b));
+    v.UV = asfloat(MegaVB.Load2(b + 40u));
+    const uint c = MegaVB.Load(b + 48u); // R8G8B8A8_UNORM, as the input assembler reads it
+    v.WIND = float4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) * (1.0f / 255.0f);
+}
+
+// Instance `iid` = one surviving cluster (a TessyVisible record, tessy_common.hlsli); vertex `vid` of its 128 * 3.
+// Past the record count (the cull's counter can overrun the buffer) or past the cluster's triangles the vertex is not
+// live.
 TessyVertex TessyFetch(uint vid, uint iid)
 {
     TessyVertex v = (TessyVertex)0;
@@ -237,12 +267,10 @@ TessyVertex TessyFetch(uint vid, uint iid)
     TessyVisible.GetDimensions(count, stride);
     if (iid >= count) { return v; }
     const uint4 rec = TessyVisible[iid];
-    if (vid / 3u >= rec.z) { return v; }
-    const uint b = (MegaIB[rec.y + vid] + rec.w) * kTessyVertexStride;
-    v.P = asfloat(MegaVB.Load3(b));
-    v.UV = asfloat(MegaVB.Load2(b + 40u));
-    const uint c = MegaVB.Load(b + 48u); // R8G8B8A8_UNORM, as the input assembler reads it
-    v.WIND = float4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) * (1.0f / 255.0f);
+    if (rec.x == kTessyDeadRecord) { return v; }
+    const TessyCluster c = Clusters[rec.y];
+    if (vid / 3u >= c.triCount) { return v; }
+    TessyLoadVertex(MegaIB[c.firstIndex + vid] + rec.z, v);
     v.casterId = rec.x;
     v.live = true;
     return v;
@@ -357,7 +385,7 @@ StructuredBuffer<uint2> GroupMask   : register(t2); // per group: x = albedo slo
 #if GBUFFER_BINDLESS
 // A6: the albedo is ResourceDescriptorHeap[GroupMask.x]; no table.
 #elif VSM_TESSY
-Texture2D    gMaskAlbedo[16] : register(t7);        // after PageProj and the three cluster inputs
+Texture2D    gMaskAlbedo[16] : register(t11);       // after PageProj and the seven cluster inputs
 #elif VSM_PAGE
 Texture2D    gMaskAlbedo[16] : register(t4);        // t3 is PageProj in this permutation
 #else
@@ -565,3 +593,109 @@ void PSMain(PSInD i) { }
 #endif
 
 #endif // SHADOW_MASKED
+
+#if VSM_TESSY_MS
+// Tessy N6: the cluster draw as a mesh shader. Group (x, y) is TessyVisible record y * kTessyMsRow + x (the dispatch
+// tessy_ms_args_cs.hlsl wrote), one MESHLET of a surviving cluster (the cull appends a record per meshlet): its unique
+// vertices, each swayed and placed in the page ONCE -- one a thread, <= 64 -- and its triangles as three 8-bit places
+// (two passes of the group), with the VS path's vertex math (WindTransformCore, PagePlace, the masked attributes as
+// MaskedVS writes them). The caster's instance, its page and its mask are the group's. A triangle whose three corners
+// lie outside the same page border is culled here (SV_CullPrimitive): the clipper would have thrown it away whole (clip
+// distances interpolate linearly), after setting it up.
+// 64 vertices, not the cluster's 256 (Mesh::kMeshletMaxVerts): what an SM holds of this shader at once is set by the
+// DECLARED output (256 x 52 bytes masked), and at 256 it was slower than the VS path -- 0.34 of its 0.39 ms on the
+// grove with every triangle culled, i.e. the shader, not the raster. 128 vertices: 0.078 ms per million triangles,
+// 64: 0.072, 64 on 64 threads: 0.063 (the VS path 0.12; 2026-10-29).
+#if SHADOW_MASKED
+typedef VSOutMasked TessyMsVertex;
+#else
+typedef VSOutD TessyMsVertex;
+#endif
+struct TessyMsPrimitive
+{
+    bool cull : SV_CullPrimitive;
+};
+
+groupshared uint gsTessyOutside[64]; // per meshlet vertex: bit i = outside page border i (CD[i] < 0), bit 4 = w <= 0
+groupshared float2 gsTessyPx[64];    // per meshlet vertex: its page-local pixel position (x right, y down)
+static const float kTessyPageTexels = VSM_VIRTUAL_RES / (float)VSM_L0_AXIS; // a page's edge in texels (128)
+// The small-triangle cull's margin: the rasterizer snaps to 1/256 px and computes the pool position in its own float
+// math (~0.002 px at a 16k pool); 1/64 px keeps the cull conservative.
+static const float kTessyPxMargin = 1.0f / 64.0f;
+
+static const uint kTessyMsThreads = 64u; // = kTessyMeshletMaxVerts: one a vertex
+
+[NumThreads(64, 1, 1)]
+[OutputTopology("triangle")]
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
+            out vertices TessyMsVertex verts[64],
+            out indices uint3 tris[128],
+            out primitives TessyMsPrimitive prims[128])
+{
+    uint cap, stride;
+    TessyVisible.GetDimensions(cap, stride);
+    const uint iid = gid.y * kTessyMsRow + gid.x;
+    // No branch and no early return anywhere around SetMeshOutputCounts: DXC's ms_6_6 tail-duplicated the call into
+    // both arms of one and failed validation ("cannot be called multiple times"). A dead group (past the count, or a
+    // dead record) emits 0 and 0, and every `lane <` test below is then false.
+    const uint4 rec = TessyVisible[min(iid, cap - 1u)];
+    const bool live = and(iid < cap, rec.x != kTessyDeadRecord);
+    const uint4 m = Meshlets[select(live, rec.y, 0u)]; // {vertex offset, vertices, triangle offset, triangles}
+    const uint vertCount = select(live, min(m.y, kTessyMeshletMaxVerts), 0u);
+    const uint triCount = select(live, min(m.w, kTessyMeshletMaxTris), 0u);
+    SetMeshOutputCounts(vertCount, triCount); // uniform: one record per group
+
+    const uint page = select(live, rec.x >> kPageIdShift, 0u);
+    const uint cid  = select(live, rec.x & kCasterMask, 0u);
+    const InstancePerObject ip = Instances[cid];
+    float4 w0, w1, w2;
+    const float4x4 vp = LoadPageVP(page, w0, w1, w2);
+#if SHADOW_MASKED
+    const uint2 gm = GroupMask[CasterGroup[cid]];
+#endif
+    if (lane < vertCount)
+    {
+        TessyVertex tv = (TessyVertex)0;
+        TessyLoadVertex(ClusterVerts[m.x + lane] + rec.z, tv);
+        const float4 hLocal = WindTransformCore(tv.P, ip.world, tv.WIND, ip.windStrength, ip.windFoliage,
+                                                ip.windTrunkStiff, ip.windLeafScale, vp, w0, w1, w2);
+        TessyMsVertex o = (TessyMsVertex)0;
+        PagePlace(page, hLocal, o.H, o.CD);
+#if SHADOW_MASKED
+        o.UV = tv.UV * ip.texOffsScale.zw + ip.texOffsScale.xy;
+        o.baseAlpha = ip.baseColor.a;
+        o.texSlot = gm.x;
+        o.cutoff = asfloat(gm.y);
+#endif
+        verts[lane] = o;
+        gsTessyOutside[lane] = (o.CD.x < 0.0f ? 1u : 0u) | (o.CD.y < 0.0f ? 2u : 0u) |
+                               (o.CD.z < 0.0f ? 4u : 0u) | (o.CD.w < 0.0f ? 8u : 0u) | (hLocal.w <= 0.0f ? 16u : 0u);
+        // The page's own [-1, 1] mapped to its 128 texels: the same pixel grid as the pool's (a page starts on a whole
+        // texel), with the precision of a 128-texel range.
+        const float2 ndc = hLocal.xy / max(hLocal.w, 1.0e-20f);
+        gsTessyPx[lane] = float2(ndc.x + 1.0f, 1.0f - ndc.y) * (0.5f * kTessyPageTexels);
+    }
+    GroupMemoryBarrierWithGroupSync();
+    for (uint k = lane; k < triCount; k += kTessyMsThreads)
+    {
+        const uint t = ClusterTris[m.z + k];
+        const uint3 tri = min(uint3(t & 0xFFu, (t >> 8) & 0xFFu, (t >> 16) & 0xFFu), vertCount - 1u);
+        tris[k] = tri;
+        const uint o0 = gsTessyOutside[tri.x], o1 = gsTessyOutside[tri.y], o2 = gsTessyOutside[tri.z];
+        bool cull = (o0 & o1 & o2 & 15u) != 0u;
+        // A triangle that holds no pixel centre (k + 0.5) in its box rasterizes no sample: tiny and thin triangles.
+        // Not across the light's plane (w <= 0: no screen box).
+        if (!cull && (rec.w & kTessyMsCullSmall) != 0u && ((o0 | o1 | o2) & 16u) == 0u)
+        {
+            const float2 p0 = gsTessyPx[tri.x], p1 = gsTessyPx[tri.y], p2 = gsTessyPx[tri.z];
+            const float2 lo = min(p0, min(p1, p2)) - kTessyPxMargin;
+            const float2 hi = max(p0, max(p1, p2)) + kTessyPxMargin;
+            cull = any(ceil(lo - 0.5f) > floor(hi - 0.5f));
+        }
+        TessyMsPrimitive p;
+        p.cull = cull;
+        prims[k] = p;
+    }
+}
+#endif // VSM_TESSY_MS

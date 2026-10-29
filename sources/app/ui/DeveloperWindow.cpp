@@ -168,6 +168,7 @@ namespace
         case GraphicsControl::VsmHzbCull:
         case GraphicsControl::VsmPageCaching:
         case GraphicsControl::TessyVsm:
+        case GraphicsControl::TessyRaster:
             return true;
         default:
             return false;
@@ -3231,6 +3232,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "a mesh without clusters stays on the whole-mesh draw in the same frame.\n"
                                       "OFF: every caster drawn whole into every page its box touches.\n"
                                       "The depth is the same either way. --set=tessy.vsm:0|1");
+                GRAPHICS_CONTROL(TessyRaster, "tessyRaster",
+                    ImGui::Checkbox("Tessy: mesh shader raster", &tessy::g_vsmMeshShader));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: the surviving clusters go through a mesh shader -- each meshlet vertex\n"
+                                      "transformed once, a triangle wholly outside its page culled before setup.\n"
+                                      "OFF: the VS path, DrawInstanced(384, clusters) -- every corner of every\n"
+                                      "triangle. Without a mesh shader tier ON draws through the VS.\n"
+                                      "The depth is the same either way. --set=tessy.raster:0|1");
                 {
                     const ShadowGpuData& sg = scene.ShadowGpu();
                     const auto& ts = scene.Vsm().GetTessyStats();
@@ -3245,8 +3254,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     {
                         ImGui::Text("pairs drawn whole %u (%.2f M tris); to clusters %u (%.2f M tris whole)",
                                     ts.wholePairs, ts.wholeTris * 1e-6, ts.tessyPairs, ts.tessyWholeTris * 1e-6);
-                        ImGui::Text("clusters: %u tested, %u drawn (%.2f M tris); runs %u (frame N-3)",
-                                    ts.clustersTested, ts.clusters, ts.clusterTris * 1e-6, ts.runs);
+                        ImGui::Text("clusters: %u tested, %u drawn (%.2f M tris) as %u %s; runs %u (frame N-3)",
+                                    ts.clustersTested, ts.clusters, ts.clusterTris * 1e-6, ts.records,
+                                    ts.tessyMs ? "meshlets (mesh shader)" : "instances (VS)", ts.runs);
                         if (ts.clustersLost > 0u || ts.runsLost > 0u)
                         {
                             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "lost: %u clusters (shadow holes), %u runs drawn whole",

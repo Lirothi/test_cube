@@ -560,6 +560,8 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     hzbPostMat_  = makeCompute(L"shaders/vsm_hzb_post_cs.hlsl");
     // Tessy N3: the cluster cull. Optional -- without it every caster stays on the classic page draw.
     tessyCullMat_ = makeCompute(L"shaders/tessy_vsm_cull_cs.hlsl");
+    // N6: the mesh shader draw's DispatchMesh arguments. Optional -- without it tessy.raster 1 draws through the VS.
+    tessyMsArgsMat_ = makeCompute(L"shaders/tessy_ms_args_cs.hlsl");
 
     // Page cache: the gated depth-clear graphics PSO (depth-only, ALWAYS-write z=1.0, no vertex input;
     // VS drives from SV_VertexID/SV_InstanceID). Optional — a failure just falls back to whole-pool clear.
@@ -762,6 +764,15 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
         : (!d.tessyStats || !tessyRuns_ || !tessyVisible_ || tessyRunsUav_.ptr == 0) ? "the cluster buffers are missing"
         : "";
     d.tessy = tessy::g_vsm && d.tessyOffReason[0] == '\0';
+    // N6: the mesh shader rasterizer, when asked for and everything it needs exists (the signature is PrepareRenderPass's).
+    Material* tessyMeshMat = shadowGpu->IndirectShadowTessyMeshMaterial();
+    d.tessyMsOffReason = (!d.tessy || !tessy::g_vsmMeshShader) ? ""
+        : !tessyMeshMat ? "no mesh shader PSO (no mesh shader tier, or it failed)"
+        : !tessyMeshMat->GetPipelineState() ? "the mesh shader PSO failed"
+        : (!tessyMsArgsMat_ || !tessyMsArgsMat_->GetPipelineState()) ? "the DispatchMesh args PSO failed"
+        : "";
+    d.tessyMs = d.tessy && tessy::g_vsmMeshShader && d.tessyMsOffReason[0] == '\0';
+    d.tessyMsCull = d.tessyMs ? (tessy::g_vsmMsCull & 1u) : 0u;
     return d;
 }
 
@@ -783,9 +794,16 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     if (d.tessy && (!ctx.renderer || !ctx.renderer->GetDrawCommandSignature()))
     {
         d.tessy = false;
+        d.tessyMs = false;
         d.tessyOffReason = "the DRAW command signature failed";
     }
+    if (d.tessyMs && !ctx.renderer->GetDispatchMeshCommandSignature())
+    {
+        d.tessyMs = false;
+        d.tessyMsOffReason = "the DISPATCH_MESH command signature failed";
+    }
     tessyOffReason_ = d.tessyOffReason; // the readout's (the builder's cross-frame state)
+    tessyMsOffReason_ = d.tessyMsOffReason;
     d.distantMask = distantMask_;     // plan S10d (PlanDistantLights, this frame)
     d.distantUpdate = distantUpdate_;
     // S5b.2 cross-frame state, committed in the (serial) builder: this frame renders; if it also
@@ -793,10 +811,11 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     hzbThisFrame_ = d.hzb;
     // Tessy N3 (plan 4.7): a switch of the path re-renders every page once. The depth must come out the same either
     // way, but a measurement right after a switch would otherwise read a pool half drawn by the other path.
-    if (d.tessy != tessyLast_)
+    if (d.tessy != tessyLast_ || d.tessyMs != tessyMsLast_)
     {
         d.forceAll = 1u;
         tessyLast_ = d.tessy;
+        tessyMsLast_ = d.tessyMs;
     }
     // An event per change of the verdict: whether tessy.vsm draws clusters, and if not, why.
     {
@@ -806,6 +825,16 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
             LOG_INFO(logging::LogCategory::RenderShadow, "tessy.vsm: {}{} (frame {})", d.tessy ? "" : "classic path -- ",
                      verdict, ctx.renderer->GetTotalFrameNumber());
             tessyLoggedReason_ = verdict;
+        }
+        // N6: and how they are rasterized.
+        const char* raster = !d.tessy ? nullptr : d.tessyMs ? "mesh shader"
+                           : (tessy::g_vsmMeshShader ? tessyMsOffReason_ : "vertex shader (tessy.raster 0)");
+        if (raster && raster != tessyMsLoggedReason_ && ctx.renderer)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.raster: {}{} (frame {})",
+                     (d.tessyMs || !tessy::g_vsmMeshShader) ? "" : "vertex shader -- ", raster,
+                     ctx.renderer->GetTotalFrameNumber());
+            tessyMsLoggedReason_ = raster;
         }
     }
     // Plan S10c: nothing re-renders a parked view (its light has no cull view to draw from), so this render clears
@@ -843,6 +872,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
         {
             tessyReadbackFrame_[tf] = lastRenderFrame_;
             tessyReadbackOn_[tf] = d.tessy;
+            tessyReadbackMs_[tf] = d.tessyMs;
         }
         if (d.hzb)
         {
@@ -2108,7 +2138,8 @@ void VirtualShadowMap::PollHzbStats(Renderer* renderer)
         if (tessyReadbackFrame_[s] != want || want == 0 || !tessyReadbackPtr_[s]) { continue; }
         const std::uint32_t* c = tessyReadbackPtr_[s];
         TessyStats t{};
-        t.clusters = c[1];
+        t.records = c[1];
+        t.clusters = c[24];
         t.runs = c[4];
         t.wholePairs = c[5];
         t.wholeTris = c[6];
@@ -2126,6 +2157,7 @@ void VirtualShadowMap::PollHzbStats(Renderer* renderer)
         t.padDCm = c[18];
         t.padFCm = c[19];
         t.tessyOn = tessyReadbackOn_[s];
+        t.tessyMs = tessyReadbackMs_[s];
         t.valid = true;
         tessyStatsLast_ = t;
         tessyReadbackFrame_[s] = 0;
@@ -2526,12 +2558,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         GPU_SCOPE(cl, ProfilerScopes::kVsmTessyCull);
         renderer->UAVBarrier(cl, tessyRuns_.Get());
         renderer->UAVBarrier(cl, tessyStats_.Get());
-        struct CullCB { std::uint32_t runCap, groups, windPad, validate; };
+        struct CullCB { std::uint32_t runCap, groups, windPad, validate, msCull, msMeshlets, pad[2]; };
         RecordComputeDispatch(renderer, cl, tessyCullMat_.get(), static_cast<UINT>(sizeof(CullCB)),
             [&](std::uint8_t* dst)
             {
                 const CullCB c{ kTessyRunCap, kTessyCullGroups, std::min(tessy::g_vsmWindPad, 2u),
-                                tessy::g_vsmValidate ? 1u : 0u };
+                                tessy::g_vsmValidate ? 1u : 0u, dec.tessyMsCull, dec.tessyMs ? 1u : 0u, { 0u, 0u } };
                 std::memcpy(dst, &c, sizeof(c));
             },
             // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate).
@@ -2542,6 +2574,13 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             kTessyCullGroups * kComputeDispatchGroupSize, kComputeDispatchGroupSize, // numthreads(8, 8): one group per slot
             tessyVisible_.Get());
         renderer->UAVBarrier(cl, tessyStats_.Get());
+        // N6: the count -> DispatchMesh's (x, y, 1) at TessyStats bytes 80..91, and the last row's tail marked dead.
+        if (dec.tessyMs)
+        {
+            RecordComputeDispatch(renderer, cl, tessyMsArgsMat_.get(), {}, { tessyStatsUav_, tessyVisibleUav_ },
+                                  D3D12_GPU_DESCRIPTOR_HANDLE{}, 1u, 1u, tessyStats_.Get());
+            renderer->UAVBarrier(cl, tessyVisible_.Get());
+        }
     }
 
     // Page cache: after the setup has READ physOwnerPrev, snapshot this frame's physOwner into it for
@@ -2735,10 +2774,12 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         if (dec.tessy)
         {
             GPU_SCOPE(cl, ProfilerScopes::kVsmTessyDraw);
-            Material* tessyMat = shadowGpu->IndirectShadowTessyMaterial();
+            // N6: the mesh shader twin takes the same table; its args are TessyStats bytes 80..91 (tessy_ms_args_cs).
+            Material* tessyMat = dec.tessyMs ? shadowGpu->IndirectShadowTessyMeshMaterial()
+                                             : shadowGpu->IndirectShadowTessyMaterial();
             auto tessyHandle = renderer->GetRenderContextPool()->Acquire();
             RenderContext& tctx = tessyHandle.ref();
-            std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 23> tbl{};
+            std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 27> tbl{};
             size_t n = 0;
             tbl[n++] = shadowGpu->InstanceReadSrv(f);   // t0
             if (maskedActive)
@@ -2750,16 +2791,27 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             tbl[n++] = tessyVisibleSrv_;
             tbl[n++] = shadowGpu->MegaVertexRawSrv();
             tbl[n++] = shadowGpu->MegaIndexSrv();
+            tbl[n++] = shadowGpu->TessyClusterSrv();
+            tbl[n++] = shadowGpu->TessyMeshletSrv();
+            tbl[n++] = shadowGpu->TessyClusterVertsSrv();
+            tbl[n++] = shadowGpu->TessyClusterTrisSrv();
             if (maskedActive && !shadowGpu->MaskedShadowsBindless())
             {
                 const std::uint32_t albedos = shadowGpu->MaskedAlbedoCount();
                 const auto& src = shadowGpu->MaskedAlbedoSrvs();
-                for (std::uint32_t a = 0; a < albedos && n < tbl.size(); ++a) { tbl[n++] = src[a]; } // t7..
+                for (std::uint32_t a = 0; a < albedos && n < tbl.size(); ++a) { tbl[n++] = src[a]; } // t11..
             }
             tctx.srvTable[0] = renderer->StageSrvUavTable(tbl, n).gpu;
             tessyMat->Bind(cl, tctx, false);
-            cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-            renderer->ExecuteIndirect(cl, renderer->GetDrawCommandSignature(), 1, tessyStats_.Get(), 0, nullptr, 0);
+            if (dec.tessyMs)
+            {
+                renderer->ExecuteIndirect(cl, renderer->GetDispatchMeshCommandSignature(), 1, tessyStats_.Get(), 80, nullptr, 0);
+            }
+            else
+            {
+                cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                renderer->ExecuteIndirect(cl, renderer->GetDrawCommandSignature(), 1, tessyStats_.Get(), 0, nullptr, 0);
+            }
         }
         if (dec.hzb)
         {

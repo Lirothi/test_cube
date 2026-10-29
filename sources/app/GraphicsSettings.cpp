@@ -179,6 +179,7 @@ namespace
         bool vsmHzbCull = false;
         bool vsmPageCaching = true;
         bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
+        bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader)
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -588,6 +589,7 @@ namespace
         s.vsmPageCaching = vsm::g_pageCaching;
         s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel;
         s.tessyVsm = tessy::g_vsm;
+        s.tessyRaster = tessy::g_vsmMeshShader;
         Sanitize(s);
         return s;
     }
@@ -776,6 +778,7 @@ namespace
         vsm::g_hzbCull = s.vsmHzbCull;
         vsm::g_pageCaching = s.vsmPageCaching;
         tessy::g_vsm = s.tessyVsm;
+        tessy::g_vsmMeshShader = s.tessyRaster;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
 
@@ -996,7 +999,8 @@ namespace
                     { "hzbCull", s.vsmHzbCull },
                     { "pageCaching", s.vsmPageCaching },
                     { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel },
-                    { "tessy", s.tessyVsm }
+                    { "tessy", s.tessyVsm },
+                    { "tessyRaster", s.tessyRaster }
                 } }
             } }
         };
@@ -1223,6 +1227,7 @@ namespace
         Read(vsmSettings, "pageCaching", s.vsmPageCaching);
         Read(vsmSettings, "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel);
         Read(vsmSettings, "tessy", s.tessyVsm);
+        Read(vsmSettings, "tessyRaster", s.tessyRaster);
 
         Sanitize(s);
         return s;
@@ -1565,6 +1570,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmPageCaching:                 current.vsmPageCaching = defaults.vsmPageCaching; break;
     case GraphicsControl::VsmWindAnimateMaxLevel:         current.vsmWindAnimateMaxLevel = defaults.vsmWindAnimateMaxLevel; break;
     case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
+    case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;
     }
 
     Sanitize(current);

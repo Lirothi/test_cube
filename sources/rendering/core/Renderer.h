@@ -717,6 +717,9 @@ public:
     ID3D12CommandSignature* GetDrawIndexedCommandSignature();
     // Tessy N3: the same for one non-indexed DRAW (the VSM page render's cluster draw, DrawInstanced(128 * 3, N)).
     ID3D12CommandSignature* GetDrawCommandSignature();
+    // Tessy N6: one DISPATCH_MESH (the cluster draw's mesh shader path); null without a mesh shader tier.
+    ID3D12CommandSignature* GetDispatchMeshCommandSignature();
+    bool SupportsMeshShaders(); // D3D12_OPTIONS7 MeshShaderTier, asked once
     // Texture streaming plan A6: the command signature of the bindless G-buffer indirect draw --
     // {CONSTANT(b0, two dwords), VBV(slot 0), IBV, CBV(b2), DRAW_INDEXED}, kBindlessIndirectCommandBytes
     // per command (root arguments have to come in increasing root-parameter order, which is why the
@@ -1022,6 +1025,8 @@ private:
     // Rung 0 (Step 3): shared DRAW_INDEXED indirect command signature (lazy). See getter.
     ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;
     ComPtr<ID3D12CommandSignature> drawCmdSig_; // Tessy N3 (lazy), see GetDrawCommandSignature
+    ComPtr<ID3D12CommandSignature> dispatchMeshCmdSig_; // Tessy N6 (lazy)
+    int meshShaderTier_ = -1; // -1 = not asked yet
     // A6: bindless G-buffer command signatures per root signature (see getter).
     struct BindlessCmdSig { ComPtr<ID3D12RootSignature> rs; ComPtr<ID3D12CommandSignature> sig; };
     std::unordered_map<ID3D12RootSignature*, BindlessCmdSig> bindlessCmdSigs_;

@@ -652,19 +652,19 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
 void AttachClusters(Mesh& mesh, std::vector<MeshLodCpu>& lods); // defined with the .bin reader below
 
 // Called once at load on the upload command list (runtime fallback path).
-// Tessy: `lod0Clusters` = the clusters LOD0 was uploaded with (UploadClusteredLod0); each extra level is
+// Tessy: `lod0` = LOD0 as it was uploaded (UploadClusteredLod0: clusters + indices); each extra level is
 // built from the ORIGINAL `indices` order -- what it was built from before clusters existed, so the
 // levels do not change -- and clustered before its upload. The mesh gets every table at the end.
 void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive,
     std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& indices,
-    const MeshLoadOptions& opt, std::vector<Mesh::Cluster> lod0Clusters = {})
+    const MeshLoadOptions& opt, MeshLodCpu lod0 = {})
 {
     if (!mesh) { return; }
     // allowVertexAppend = false: the VB is already on the GPU here, so the foliage prune (which
     // appends vertices) is bake-only; this path's foliage LOD3 stays plain meshopt.
-    std::vector<MeshLodCpu> lods(1);
-    lods[0].clusters = std::move(lod0Clusters);
+    std::vector<MeshLodCpu> lods;
+    lods.push_back(std::move(lod0)); // the clustered LOD0 as uploaded: its clusters and their index buffer
     for (MeshLodCpu& lod : BuildLodsCpu(verts, indices, mesh->GetSubmeshes(), opt,
                                         /*chunkedSubsets=*/false, /*allowVertexAppend=*/false))
     {
@@ -679,8 +679,8 @@ void GenerateLods(Mesh* mesh, ID3D12Device* device, ID3D12GraphicsCommandList* u
 // Tessy: the runtime parse's LOD0 upload in cluster order. The tangent space is generated from the
 // ORIGINAL order first (CreateGPU_PNTUV would accumulate the normals in the clustered one -- the same
 // sums in another order), then a clustered COPY goes up; `indices` keeps the original order for
-// GenerateLods. Returns LOD0's clusters.
-std::vector<Mesh::Cluster> UploadClusteredLod0(Mesh& mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+// GenerateLods. Returns LOD0 as uploaded: its clusters and the clustered indices (the meshlet tables' source).
+MeshLodCpu UploadClusteredLod0(Mesh& mesh, ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<ComPtr<ID3D12Resource>>* keepAlive, std::vector<VertexPNTUV>& verts,
     const std::vector<uint32_t>& indices, bool generateTangentSpace, const std::vector<Mesh::Submesh>* submeshes)
 {
@@ -688,12 +688,12 @@ std::vector<Mesh::Cluster> UploadClusteredLod0(Mesh& mesh, ID3D12Device* device,
     {
         Mesh::GenerateNormalsTangents(verts, indices.data(), static_cast<UINT>(indices.size()));
     }
-    std::vector<uint32_t> clustered = indices;
-    std::vector<Mesh::Cluster> clusters =
-        BuildClustersCpu(verts, clustered, submeshes ? *submeshes : std::vector<Mesh::Submesh>{});
-    mesh.CreateGPU_PNTUV(device, uploadCmdList, keepAlive, verts, clustered.data(),
-        static_cast<UINT>(clustered.size()), /*generateTangentSpace=*/false, submeshes);
-    return clusters;
+    MeshLodCpu lod0;
+    lod0.indices = indices;
+    lod0.clusters = BuildClustersCpu(verts, lod0.indices, submeshes ? *submeshes : std::vector<Mesh::Submesh>{});
+    mesh.CreateGPU_PNTUV(device, uploadCmdList, keepAlive, verts, lod0.indices.data(),
+        static_cast<UINT>(lod0.indices.size()), /*generateTangentSpace=*/false, submeshes);
+    return lod0;
 }
 
 // ---------- W7.1b: baked binary mesh cache (cache/meshes/<hash>.mesh.bin) ----------
@@ -899,13 +899,15 @@ bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash
 void AttachClusters(Mesh& mesh, std::vector<MeshLodCpu>& lods)
 {
     std::vector<std::vector<Mesh::Cluster>> perLod;
+    std::vector<const std::vector<uint32_t>*> indices;
     perLod.reserve(lods.size());
     for (MeshLodCpu& l : lods)
     {
         if (l.clusters.empty()) { return; }
         perLod.push_back(std::move(l.clusters));
+        indices.push_back(&l.indices);
     }
-    mesh.SetClusters(std::move(perLod));
+    mesh.SetClusters(std::move(perLod), indices);
 }
 
 std::vector<uint32_t> CanonicalNormalSlots(const std::vector<uint32_t>& slots)
@@ -1922,10 +1924,10 @@ std::shared_ptr<Mesh> MeshManager::LoadText(const std::string& path,
 
     DiscardNormalsForSlots(verts, inds, {}, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+    MeshLodCpu lod0 = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
         uploadKeepAlive, verts, inds, opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(), nullptr);
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt,
-                 std::move(lod0Clusters));
+                 std::move(lod0));
     cache_[cacheKey] = m;
     return m;
 }
@@ -1950,10 +1952,10 @@ std::shared_ptr<Mesh> MeshManager::LoadOBJ(const std::string& path,
 
     DiscardNormalsForSlots(verts, inds, {}, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+    MeshLodCpu lod0 = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
         uploadKeepAlive, verts, inds, opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(), nullptr);
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt,
-                 std::move(lod0Clusters));
+                 std::move(lod0));
     cache_[cacheKey] = m;
     return m;
 }
@@ -1980,11 +1982,11 @@ std::shared_ptr<Mesh> MeshManager::LoadGltf(const std::string& path,
 
     DiscardNormalsForSlots(verts, inds, submeshes, opt.recomputeNormalSlots);
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
-    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+    MeshLodCpu lod0 = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
         uploadKeepAlive, verts, inds, opt.generateTangentSpace || !opt.recomputeNormalSlots.empty(),
         submeshes.size() > 1 ? &submeshes : nullptr);
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, inds, opt,
-                 std::move(lod0Clusters));
+                 std::move(lod0));
     cache_[cacheKey] = m;
     return m;
 }
@@ -2005,11 +2007,11 @@ std::shared_ptr<Mesh> MeshManager::CreateFromMemory(const std::string& key,
 
     std::shared_ptr<Mesh> m = std::make_shared<Mesh>();
     std::vector<VertexPNTUV> verts = vertsIn; // CreateGPU_PNTUV may modify the data
-    std::vector<Mesh::Cluster> lod0Clusters = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
+    MeshLodCpu lod0 = UploadClusteredLod0(*m, renderer->GetDevice(), uploadCmdList,
         uploadKeepAlive, verts, indices, generateTangentSpace, nullptr);
     // This overload builds from raw vertex data (no import options in scope) — default LOD settings.
     GenerateLods(m.get(), renderer->GetDevice(), uploadCmdList, uploadKeepAlive, verts, indices,
-                 MeshLoadOptions{}, std::move(lod0Clusters));
+                 MeshLoadOptions{}, std::move(lod0));
     cache_[key] = m;
     return m;
 }

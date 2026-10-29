@@ -1346,6 +1346,11 @@ Material* ShadowGpuData::IndirectShadowTessyMaterial() const
     return MaskedShadowsActive() ? indirectShadowTessyMaskedMat_.get() : indirectShadowTessyMat_.get();
 }
 
+Material* ShadowGpuData::IndirectShadowTessyMeshMaterial() const
+{
+    return MaskedShadowsActive() ? indirectShadowTessyMeshMaskedMat_.get() : indirectShadowTessyMeshMat_.get();
+}
+
 Material* ShadowGpuData::IndirectShadowPageMaterial() const
 {
     return MaskedShadowsActive() ? indirectShadowPageMaskedMat_.get() : indirectShadowPageMat_.get();
@@ -2781,6 +2786,32 @@ void ShadowGpuData::EnsureShaderResources(Renderer* renderer)
             LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_TESSY masked indirect shadow PSO FAILED (tessy.vsm off)");
             indirectShadowTessyMaskedMat_.reset();
         }
+
+        // Tessy N6: the mesh shader twins of the two above (MSMain, the same state, the same table). Only with a
+        // mesh shader tier; without them `tessy.raster` 1 draws through the VS path.
+        if (renderer->SupportsMeshShaders())
+        {
+            gd.defines.clear();
+            gd.defines.emplace_back("VSM_TESSY", "1");
+            gd.defines.emplace_back("VSM_TESSY_MS", "1");
+            gd.msEntry = "MSMain";
+            gd.raster.CullMode = D3D12_CULL_MODE_BACK;
+            indirectShadowTessyMeshMat_ = mm->GetOrCreateGraphics(renderer, gd);
+            if (!indirectShadowTessyMeshMat_ || !indirectShadowTessyMeshMat_->GetPipelineState())
+            {
+                LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_TESSY_MS mesh shader PSO FAILED (tessy.raster draws through the VS)");
+                indirectShadowTessyMeshMat_.reset();
+            }
+            gd.defines.emplace_back("SHADOW_MASKED", "1");
+            gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+            indirectShadowTessyMeshMaskedMat_ = mm->GetOrCreateGraphics(renderer, gd);
+            if (!indirectShadowTessyMeshMaskedMat_ || !indirectShadowTessyMeshMaskedMat_->GetPipelineState())
+            {
+                LOG_ERROR(logging::LogCategory::RenderShadow, "VSM_TESSY_MS masked mesh shader PSO FAILED (tessy.raster draws through the VS)");
+                indirectShadowTessyMeshMaskedMat_.reset();
+            }
+            gd.msEntry = nullptr;
+        }
     }
 
     const bool cullOk = cullClearMat_ && cullClearMat_->GetPipelineState() &&
@@ -4069,6 +4100,9 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
 void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std::string>& meshPath)
 {
     tessyClusterCpu_.clear();
+    tessyMeshletsCpu_.clear();
+    tessyVertsCpu_.clear();
+    tessyTrisCpu_.clear();
     tessyVgCpu_.assign(static_cast<size_t>(numMeshGroups_) * render::kMaxShadowLods, DirectX::XMUINT2{ 0u, 0u });
     tessyGroupsWith_ = tessyGroupsTotal_ = 0;
     if (!megaWanted_ || numMeshGroups_ == 0) { return; }
@@ -4110,8 +4144,12 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                 hi = lo + (*info.submeshes)[sOrd].indexCount;
             }
             const std::uint32_t first = static_cast<std::uint32_t>(tessyClusterCpu_.size());
-            for (const Mesh::Cluster& c : m->GetClusters(lod))
+            const std::vector<Mesh::Cluster>& clusters = m->GetClusters(lod);
+            const Mesh::ClusterLocalTables& local = m->GetClusterLocal(lod); // N6: parallel to `clusters`
+            const bool hasLocal = local.clusters.size() == clusters.size();
+            for (size_t ci = 0; ci < clusters.size(); ++ci)
             {
+                const Mesh::Cluster& c = clusters[ci];
                 if (c.firstIndex < lo || c.firstIndex >= hi) { continue; }
                 TessyCluster t{};
                 t.firstIndex = lodBase + c.firstIndex;
@@ -4121,6 +4159,22 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                 t.center = c.boxCenter;
                 t.extent = c.boxExtent;
                 t.radius = c.sphere.w;
+                if (hasLocal) // N6: its meshlets, their vertex lists and triangles copied per range (shared LODs share them)
+                {
+                    const Mesh::ClusterLocal& cl = local.clusters[ci];
+                    t.firstMeshlet = static_cast<std::uint32_t>(tessyMeshletsCpu_.size());
+                    t.meshletCount = cl.meshletCount;
+                    for (std::uint32_t s = 0; s < cl.meshletCount; ++s)
+                    {
+                        const Mesh::ClusterMeshlet& m = local.meshlets[cl.firstMeshlet + s];
+                        tessyMeshletsCpu_.push_back(TessyMeshlet{ static_cast<std::uint32_t>(tessyVertsCpu_.size()), m.vertCount,
+                                                                  static_cast<std::uint32_t>(tessyTrisCpu_.size()), m.triCount });
+                        tessyVertsCpu_.insert(tessyVertsCpu_.end(), local.verts.begin() + m.vertOffset,
+                                              local.verts.begin() + m.vertOffset + m.vertCount);
+                        tessyTrisCpu_.insert(tessyTrisCpu_.end(), local.tris.begin() + m.triOffset,
+                                             local.tris.begin() + m.triOffset + m.triCount);
+                    }
+                }
                 tessyClusterCpu_.push_back(t);
             }
             prevLod = lod;
@@ -4129,7 +4183,9 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
         }
         if (isStatic) { ++tessyGroupsWith_; }
     }
-    tessyBytes_ = tessyClusterCpu_.size() * sizeof(TessyCluster) + tessyVgCpu_.size() * sizeof(DirectX::XMUINT2);
+    tessyBytes_ = tessyClusterCpu_.size() * sizeof(TessyCluster) + tessyVgCpu_.size() * sizeof(DirectX::XMUINT2) +
+                  tessyMeshletsCpu_.size() * sizeof(TessyMeshlet) +
+                  (tessyVertsCpu_.size() + tessyTrisCpu_.size()) * sizeof(std::uint32_t);
     std::string list;
     for (size_t i = 0; i < without.size() && i < 24; ++i) { list += (i ? ", " : "") + without[i]; }
     if (without.size() > 24) { list += ", ... (" + std::to_string(without.size() - 24) + " more)"; }
@@ -4147,8 +4203,17 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     tessyReady_ = false;
     if (!renderer || !cl || !megaReady_ || tessyClusterCpu_.empty() || tessyVgCpu_.empty()) { return; }
     ID3D12Device* dev = renderer->GetDevice();
-    const UINT64 clusterBytes = tessyClusterCpu_.size() * sizeof(TessyCluster);
-    const UINT64 vgBytes = tessyVgCpu_.size() * sizeof(DirectX::XMUINT2);
+    if (tessyVertsCpu_.empty()) { tessyVertsCpu_.push_back(0u); } // N6: never a zero-sized buffer / view
+    if (tessyTrisCpu_.empty()) { tessyTrisCpu_.push_back(0u); }
+    if (tessyMeshletsCpu_.empty()) { tessyMeshletsCpu_.push_back(TessyMeshlet{}); }
+    struct Table { const void* src; UINT64 bytes; GpuResource* dst; const wchar_t* name; };
+    const Table tables[] = {
+        { tessyClusterCpu_.data(), tessyClusterCpu_.size() * sizeof(TessyCluster), &tessyClusters_, L"Tessy.Clusters" },
+        { tessyVgCpu_.data(), tessyVgCpu_.size() * sizeof(DirectX::XMUINT2), &tessyVg_, L"Tessy.VirtualGroups" },
+        { tessyVertsCpu_.data(), tessyVertsCpu_.size() * sizeof(std::uint32_t), &tessyVerts_, L"Tessy.ClusterVerts" },
+        { tessyTrisCpu_.data(), tessyTrisCpu_.size() * sizeof(std::uint32_t), &tessyTris_, L"Tessy.ClusterTris" },
+        { tessyMeshletsCpu_.data(), tessyMeshletsCpu_.size() * sizeof(TessyMeshlet), &tessyMeshlets_, L"Tessy.Meshlets" },
+    };
     auto makeBuf = [&](UINT64 bytes, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state, const wchar_t* name,
                        Microsoft::WRL::ComPtr<ID3D12Resource>& out) -> bool
     {
@@ -4164,13 +4229,17 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
         return SUCCEEDED(gpu::CreateCommittedResource(dev, &heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr,
                                                       MemTag::ShadowTessy, name, IID_PPV_ARGS(out.GetAddressOf()))) && out;
     };
-    tessyClusters_.Reset(); // GPU-idle here (EnsureMegaBuffer's contract)
-    tessyVg_.Reset();
+    for (const Table& t : tables) { t.dst->Reset(); } // GPU-idle here (EnsureMegaBuffer's contract)
     tessyUpload_.Reset();
-    Microsoft::WRL::ComPtr<ID3D12Resource> clusters, vg;
-    if (!makeBuf(clusterBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, L"Tessy.Clusters", clusters) ||
-        !makeBuf(vgBytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, L"Tessy.VirtualGroups", vg) ||
-        !makeBuf(clusterBytes + vgBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, L"Tessy.Upload", tessyUpload_))
+    UINT64 totalBytes = 0;
+    for (const Table& t : tables) { totalBytes += t.bytes; }
+    Microsoft::WRL::ComPtr<ID3D12Resource> made[std::size(tables)];
+    bool ok = makeBuf(totalBytes, D3D12_HEAP_TYPE_UPLOAD, D3D12_RESOURCE_STATE_GENERIC_READ, L"Tessy.Upload", tessyUpload_);
+    for (size_t i = 0; ok && i < std::size(tables); ++i)
+    {
+        ok = makeBuf(tables[i].bytes, D3D12_HEAP_TYPE_DEFAULT, D3D12_RESOURCE_STATE_COMMON, tables[i].name, made[i]);
+    }
+    if (!ok)
     {
         LOG_ERROR(logging::LogCategory::RenderShadow, "tessy: the cluster tables could not be allocated; every group stays classic");
         tessyUpload_.Reset();
@@ -4179,19 +4248,21 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     std::uint8_t* dst = nullptr;
     D3D12_RANGE none{ 0, 0 };
     if (FAILED(tessyUpload_->Map(0, &none, reinterpret_cast<void**>(&dst))) || !dst) { tessyUpload_.Reset(); return; }
-    std::memcpy(dst, tessyClusterCpu_.data(), static_cast<size_t>(clusterBytes));
-    std::memcpy(dst + clusterBytes, tessyVgCpu_.data(), static_cast<size_t>(vgBytes));
+    UINT64 at = 0;
+    for (size_t i = 0; i < std::size(tables); ++i)
+    {
+        std::memcpy(dst + at, tables[i].src, static_cast<size_t>(tables[i].bytes));
+        // COMMON -> COPY_DEST by implicit promotion, as the mega copy does.
+        cl->CopyBufferRegion(made[i].Get(), 0, tessyUpload_.Get(), at, tables[i].bytes);
+        tables[i].dst->Attach(renderer->Declarations(), std::move(made[i]), D3D12_RESOURCE_STATE_COMMON, tables[i].name);
+        at += tables[i].bytes;
+    }
     tessyUpload_->Unmap(0, nullptr);
-    // COMMON -> COPY_DEST by implicit promotion, as the mega copy does.
-    cl->CopyBufferRegion(clusters.Get(), 0, tessyUpload_.Get(), 0, clusterBytes);
-    cl->CopyBufferRegion(vg.Get(), 0, tessyUpload_.Get(), clusterBytes, vgBytes);
-    tessyClusters_.Attach(renderer->Declarations(), std::move(clusters), D3D12_RESOURCE_STATE_COMMON, L"Tessy.Clusters");
-    tessyVg_.Attach(renderer->Declarations(), std::move(vg), D3D12_RESOURCE_STATE_COMMON, L"Tessy.VirtualGroups");
 
     if (!tessyHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 4;
+        hd.NumDescriptors = 7;
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowTessy, L"Tessy.SrvHeap", IID_PPV_ARGS(tessyHeap_.GetAddressOf()))))
@@ -4225,6 +4296,9 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
         dev->CreateShaderResourceView(megaVB_.Get(), &sd, D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + 2u * incr });
     }
     structured(3, megaIB_.Get(), megaIBBytes_ / 4u, sizeof(std::uint32_t));
+    structured(4, tessyVerts_.Get(), static_cast<UINT>(tessyVertsCpu_.size()), sizeof(std::uint32_t));
+    structured(5, tessyTris_.Get(), static_cast<UINT>(tessyTrisCpu_.size()), sizeof(std::uint32_t));
+    structured(6, tessyMeshlets_.Get(), static_cast<UINT>(tessyMeshletsCpu_.size()), sizeof(TessyMeshlet));
     tessyReady_ = true;
 }
 
@@ -4488,6 +4562,9 @@ void ShadowGpuData::Reset()
     tessyReady_ = false;              // Tessy N2: the tables go with them (the GPU copies stay until replaced)
     tessyClusterCpu_.clear();
     tessyVgCpu_.clear();
+    tessyMeshletsCpu_.clear();
+    tessyVertsCpu_.clear();
+    tessyTrisCpu_.clear();
     tessyGroupsWith_ = tessyGroupsTotal_ = 0;
     valState_ = 0;
     logFramesRemaining_ = 5;

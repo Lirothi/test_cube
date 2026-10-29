@@ -147,9 +147,32 @@ public:
     const std::vector<Cluster>& GetClusters(UINT lod) const;
     bool HasClusters() const { return !clusters_.empty(); }
     size_t GetClusterCount() const;
-    // One table per LOD, in LOD order, after the LODs exist (AddLod). A table whose triangle total does
-    // not match its LOD's index count is refused -- the clusters would describe another buffer.
-    void SetClusters(std::vector<std::vector<Cluster>> perLod);
+    // Tessy N6: a cluster as MESHLETS -- runs of its triangles (in order) whose unique vertices (mesh-VB indices,
+    // first-use order) stay within kMeshletMaxVerts, each triangle as its corners' places in that list (three bytes
+    // packed in a uint). Built at load from the index buffer, not stored in the .mesh.bin: the mesh shader computes
+    // each vertex once from these, one group per meshlet. 64 and not the cluster's 256: the DECLARED output decides
+    // how many groups an SM holds -- at 256 x 52 bytes the mesh shader was slower than the VS path (a leaf card's
+    // cluster has ~2 vertices a triangle, so its 128 triangles reach 256), at 128 it drew the grove's shadows in
+    // 0.078 ms per million triangles, at 64 in 0.063-0.072 (the VS path 0.12; 2026-10-29). Parallel to GetClusters(lod).
+    static constexpr uint32_t kMeshletMaxVerts = 64;
+    struct ClusterMeshlet { uint32_t vertOffset = 0, vertCount = 0, triOffset = 0, triCount = 0; };
+    struct ClusterLocal { uint32_t firstMeshlet = 0, meshletCount = 0; };
+    struct ClusterLocalTables
+    {
+        std::vector<ClusterLocal> clusters;
+        std::vector<ClusterMeshlet> meshlets;
+        std::vector<uint32_t> verts; // mesh-VB vertex indices
+        std::vector<uint32_t> tris;  // local indices a | b << 8 | c << 16
+    };
+    const ClusterLocalTables& GetClusterLocal(UINT lod) const;
+    // The meshlet tables of one LOD's clusters over its index buffer; false (and `out` empty) unless the clusters
+    // cover `idx` exactly. SetClusters' builder, public for the gate.
+    static bool BuildClusterLocal(const std::vector<Cluster>& clusters, const std::vector<uint32_t>& idx,
+                                  ClusterLocalTables& out);
+    // One table per LOD, in LOD order, after the LODs exist (AddLod), with each LOD's index buffer as it was
+    // uploaded (the meshlet tables are made from it). A table whose triangle total does not match its LOD's
+    // index count is refused -- the clusters would describe another buffer.
+    void SetClusters(std::vector<std::vector<Cluster>> perLod, const std::vector<const std::vector<uint32_t>*>& lodIndices);
 
     // Mesh chunking (mesh.json "chunkGrid", baked by MeshManager's ChunkifyLod0). The LOD0
     // submeshes of a chunked mesh are SPATIAL tiles of one continuous surface, not material groups
@@ -254,6 +277,7 @@ private:
     std::vector<AABB> submeshBounds_; // mesh-local LOD0 AABB per submesh; empty unless chunked
 
     std::vector<std::vector<Cluster>> clusters_; // Tessy: per LOD; empty = no clusters
+    std::vector<ClusterLocalTables> clusterLocal_; // Tessy N6: per LOD, parallel to clusters_
 
 #if WITH_EDITOR
     // Position-only CPU copy of base LOD geometry. This avoids GPU readback and retains

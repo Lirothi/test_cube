@@ -5,7 +5,8 @@
 // cluster) pair of the run is one test -- the cluster's world box, padded by how far this frame's wind can carry its
 // vertices, against the page's six planes (the setup's own PageIntersects). A survivor is one record of
 // TessyVisible, which the VSM_TESSY permutation of shadow_indirect_csm.hlsl draws as DrawInstanced(128 * 3, N):
-// UE's VS raster path (NaniteRasterizer.usf:3161-3222), one instance per cluster, no index buffer built.
+// UE's VS raster path (NaniteRasterizer.usf:3161-3222), one instance per cluster, no index buffer built -- or, N6,
+// its mesh shader (MSMain, one group per cluster, tessy_ms_args_cs.hlsl turning the count into DispatchMesh).
 //
 // UE gives each surviving cluster to the pages it overlaps in 4x4 windows (NaniteClusterCulling.usf:877-936); ours
 // arrive already split by page -- the scatter made the (page, caster) pairs -- so the test is per page.
@@ -33,6 +34,7 @@
 // flutter: +-F up, +-F/2 across.
 #pragma pack_matrix(row_major)
 #include "wind.hlsli"
+#include "tessy_common.hlsli" // TessyCluster, the TessyVisible record
 
 // The page outputs it reads (the runs, the list, the projections) are read through the UAVs the setup wrote them
 // with: this pass runs right after it, before the render's consume point turns them into draw inputs.
@@ -50,6 +52,12 @@ cbuffer CullCB : register(b0)
     // sways them and their box checked against the padded one -- [52] how many left it, [56] by how far at most (um).
     // Costs a frame's worth of vertex work per page; a debug mode.
     uint gValidate;
+    // N6: the mesh shader's triangle culls, handed on in each record's .w (tessy_common.hlsli kTessyMsCull*).
+    uint gMsCull;
+    // N6: 1 = the mesh shader draws: a surviving cluster appends one record per MESHLET (its index in .y); 0 = the VS
+    // path: one record per cluster.
+    uint gMsMeshlets;
+    uint2 gCullPad;
 };
 
 // Matches render::InstancePerObject (224 bytes), as shadow_indirect_csm.hlsl reads it.
@@ -71,19 +79,6 @@ struct InstancePerObject
     float    windTrunkStiff;
 };
 
-// Matches ShadowGpuData::TessyCluster (48 bytes).
-struct TessyCluster
-{
-    uint   firstIndex;   // mega-absolute
-    uint   triCount;
-    float  windAlongMax;
-    float  windLeafMax;
-    float3 center;       // object space
-    float  radius;
-    float3 extent;
-    float  pad;
-};
-
 StructuredBuffer<InstancePerObject> Instances       : register(t0);
 StructuredBuffer<TessyCluster>      Clusters        : register(t1);
 StructuredBuffer<uint2>             TessyVg         : register(t2); // per virtual group {first cluster, count}
@@ -94,10 +89,12 @@ StructuredBuffer<uint>              MegaIB          : register(t5);
 RWStructuredBuffer<uint4> TessyRuns       : register(u0); // {page, first list entry, casters, virtual group}
 RWStructuredBuffer<uint>  PageVisibleList : register(u1); // caster id | page << 22
 RWByteAddressBuffer       PageProj        : register(u2); // 256 bytes per page (the setup's off-center projection + wind)
-RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page << 22, mega first index, triangles, base vertex}
+RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page << 22, cluster / meshlet, base vertex, MS culls}
 // Byte layout (VirtualShadowMap::TessyStats): [0..15] the draw's D3D12_DRAW_ARGUMENTS {384, clusters, 0, 0},
 // [16] runs the setup appended, [20..32] the setup's pair counts, [36] clusters tested, [40] their triangles drawn,
-// [44] clusters past TessyVisible's capacity, [48] runs past TessyRuns', [52]/[56] the validator's misses / worst (um), [60]/[64] the growth needed / given (cm).
+// [44] clusters past TessyVisible's capacity, [48] runs past TessyRuns', [52]/[56] the validator's misses / worst (um), [60]/[64] the growth needed / given (cm),
+// [68..76] the validator's breakdown, [80..91] the mesh shader's D3D12_DISPATCH_MESH_ARGUMENTS (tessy_ms_args_cs.hlsl),
+// [96] clusters drawn ([4] counts records: one a cluster on the VS path, one a meshlet on the mesh shader's).
 RWByteAddressBuffer       TessyStats      : register(u4);
 
 static const uint kCasterMask = (1u << 22) - 1u; // vsm::kPageIdShift
@@ -196,7 +193,7 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
 {
     if (gid.x == 0u && lane == 0u) { TessyStats.Store(0u, 384u); } // VertexCountPerInstance: 128 triangles x 3
     const uint runs = min(TessyStats.Load(16u), gRunCap);
-    uint tested = 0u, drawnTris = 0u, lost = 0u;
+    uint tested = 0u, drawnTris = 0u, lost = 0u, drawnClusters = 0u;
     for (uint r = gid.x; r < runs; r += gGroups)
     {
         const uint4 run = TessyRuns[r];
@@ -211,7 +208,8 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
         for (uint i = lane; i < total; i += 64u)
         {
             const uint k = i / range.y;
-            const TessyCluster c = Clusters[range.x + (i - k * range.y)];
+            const uint clusterIndex = range.x + (i - k * range.y);
+            const TessyCluster c = Clusters[clusterIndex];
             const uint entry = PageVisibleList[run.y + k];
             const InstancePerObject ip = Instances[entry & kCasterMask];
             float3 ctr = mul(float4(c.center, 1.0f), ip.world).xyz;
@@ -266,17 +264,26 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
                 if (dot(planes[p].xyz, ctr) + planes[p].w + dot(abs(planes[p].xyz), ext) < 0.0f) { inside = false; }
             }
             if (!inside) { continue; }
+            // The VS path draws the cluster as one instance; the mesh shader one group per meshlet (N6).
+            const uint records = gMsMeshlets != 0u ? c.meshletCount : 1u;
             uint slot;
-            TessyStats.InterlockedAdd(4u, 1u, slot); // the draw's InstanceCount
+            TessyStats.InterlockedAdd(4u, records, slot); // the draw's InstanceCount / the dispatch's group count
             uint cap, stride;
             TessyVisible.GetDimensions(cap, stride);
-            if (slot < cap)
+            if (slot + records <= cap)
             {
-                TessyVisible[slot] = uint4(entry, c.firstIndex, c.triCount, baseVertex);
+                for (uint s = 0u; s < records; ++s)
+                {
+                    TessyVisible[slot + s] = uint4(entry, gMsMeshlets != 0u ? c.firstMeshlet + s : clusterIndex, baseVertex, gMsCull);
+                }
                 drawnTris += c.triCount;
+                ++drawnClusters;
             }
             else
             {
+                // The cluster is lost whole; its records that still fit are marked dead (they would read last frame's),
+                // the ones past the end the draw rejects by GetDimensions.
+                for (uint s = slot; s < cap; ++s) { TessyVisible[s] = uint4(kTessyDeadRecord, 0u, 0u, 0u); }
                 ++lost;
             }
         }
@@ -285,10 +292,12 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
     const uint wTested = WaveActiveSum(tested);
     const uint wTris = WaveActiveSum(drawnTris);
     const uint wLost = WaveActiveSum(lost);
+    const uint wClusters = WaveActiveSum(drawnClusters);
     if (WaveIsFirstLane())
     {
         if (wTested != 0u) { TessyStats.InterlockedAdd(36u, wTested); }
         if (wTris != 0u) { TessyStats.InterlockedAdd(40u, wTris); }
         if (wLost != 0u) { TessyStats.InterlockedAdd(44u, wLost); }
+        if (wClusters != 0u) { TessyStats.InterlockedAdd(96u, wClusters); }
     }
 }

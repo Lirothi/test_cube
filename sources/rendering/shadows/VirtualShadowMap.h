@@ -727,6 +727,11 @@ public:
         bool tessy = false;
         bool tessyStats = false;
         const char* tessyOffReason = ""; // why tessy.vsm is on and `tessy` is not ("" otherwise)
+        // Tessy N6: the clusters go through the mesh shader (tessy::g_vsmMeshShader, a mesh shader tier, its PSO, the
+        // args pass, the DispatchMesh signature); false with `tessy` = the VS path. `tessyMsOffReason` says why not.
+        bool tessyMs = false;
+        const char* tessyMsOffReason = "";
+        std::uint32_t tessyMsCull = 0; // tessy::g_vsmMsCull's bits (tessy_common.hlsli kTessyMsCull*), 0 off the MS path
     };
 
     // Tessy N0/N3 counters of frame N - kFrameCount (tessy_vsm_cull_cs.hlsl names the bytes). Pairs = (page, caster)
@@ -734,7 +739,8 @@ public:
     // would have cost drawn whole).
     struct TessyStats
     {
-        std::uint32_t clusters = 0;        // drawn (the draw's instance count)
+        std::uint32_t clusters = 0;        // drawn
+        std::uint32_t records = 0;         // the draw's instances / mesh shader groups: clusters on the VS path, meshlets on the MS's
         std::uint32_t runs = 0;            // (page x bucket) runs the setup appended
         std::uint32_t wholePairs = 0;
         std::uint32_t wholeTris = 0;
@@ -752,6 +758,7 @@ public:
         std::uint32_t padDCm = 0;          // ...of its shear bound D
         std::uint32_t padFCm = 0;          // ...and of its flutter bound F
         bool tessyOn = false;              // that frame drew clusters
+        bool tessyMs = false;              // ...through the mesh shader (N6)
         bool valid = false;
     };
 
@@ -783,6 +790,8 @@ public:
     const TessyStats& GetTessyStats() const { return tessyStatsLast_; }
     // Why tessy.vsm is not drawing clusters this frame (empty when it is, or when the knob is off).
     const char* TessyOffReason() const { return tessyOffReason_; }
+    // N6: why tessy.raster 1 draws through the VS this frame (empty when the mesh shader draws, or the knob is 0).
+    const char* TessyMsOffReason() const { return tessyMsOffReason_; }
 
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolDsv() const { return poolDsv_; }     // render pages (Step 22)
     D3D12_CPU_DESCRIPTOR_HANDLE PagePoolSrv() const { return poolSrv_; }     // sample (Step 21)
@@ -1028,8 +1037,8 @@ private:
     static constexpr std::uint32_t kTessyStatsUints = 32u;     // tessy_vsm_cull_cs.hlsl names the bytes
     static constexpr std::uint32_t kTessyCullGroups = 1024u;   // thread groups of the cull; each walks runs g, g + 1024, ...
     GpuResource tessyRuns_;      // uint4 {page, first list entry, casters, virtual group}
-    GpuResource tessyVisible_;   // uint4 {list entry, mega first index, triangles, base vertex}
-    GpuResource tessyStats_;     // [0..3] D3D12_DRAW_ARGUMENTS, then the counters (TessyStats)
+    GpuResource tessyVisible_;   // uint4 {list entry, cluster index, base vertex, 0} (tessy_common.hlsli)
+    GpuResource tessyStats_;     // [0..3] D3D12_DRAW_ARGUMENTS, the counters (TessyStats), [20..22] DISPATCH_MESH args
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyHeap_; // runs UAV, visible UAV, visible SRV, stats raw UAV
     D3D12_CPU_DESCRIPTOR_HANDLE tessyRunsUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE tessyVisibleUav_{};
@@ -1039,11 +1048,16 @@ private:
     const std::uint32_t* tessyReadbackPtr_[render::kFrameCount] = {};
     std::uint64_t tessyReadbackFrame_[render::kFrameCount] = {};
     bool tessyReadbackOn_[render::kFrameCount] = {}; // that frame drew clusters
+    bool tessyReadbackMs_[render::kFrameCount] = {}; // ...through the mesh shader
     TessyStats tessyStatsLast_{};
     std::shared_ptr<Material> tessyCullMat_;          // tessy_vsm_cull_cs.hlsl
+    std::shared_ptr<Material> tessyMsArgsMat_;        // tessy_ms_args_cs.hlsl (N6)
     bool tessyLast_ = false;                          // last frame's decision: a switch re-renders every page once
+    bool tessyMsLast_ = false;                        // ...and the rasterizer's (N6), the same rule
     const char* tessyOffReason_ = "";
+    const char* tessyMsOffReason_ = "";
     const char* tessyLoggedReason_ = nullptr;         // the reason last logged (an event per change)
+    const char* tessyMsLoggedReason_ = nullptr;
     void EnsureTessyResources(Renderer* renderer);
     // ---- Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages ----
     // The pool pyramid: R32_FLOAT at half the pool, 7 mips (2048 -> 32), i.e. a self-contained

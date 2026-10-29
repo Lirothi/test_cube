@@ -528,6 +528,8 @@ namespace
         if (setting == "tessy.vsm") { tessy::g_vsm = value != 0.0f; return true; }
         if (setting == "tessy.windPad") { tessy::g_vsmWindPad = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
         if (setting == "tessy.validate") { tessy::g_vsmValidate = value != 0.0f; return true; }
+        if (setting == "tessy.raster") { tessy::g_vsmMeshShader = value != 0.0f; return true; } // N6: 1 mesh shader, 0 VS
+        if (setting == "tessy.msCull") { tessy::g_vsmMsCull = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }
         if (setting == "vsm.hzbCull")      { vsm::g_hzbCull = value != 0.0f; return true; } // occlusion plan S5b.2
@@ -2032,15 +2034,17 @@ namespace
                 const ShadowGpuData& sg = scene_.ShadowGpu();
                 char tessyItem[1024];
                 std::snprintf(tessyItem, sizeof(tessyItem),
-                              ",\"tessy\":{\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"groupsWithClusters\":%u,"
+                              ",\"tessy\":{\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"meshShader\":%s,"
+                              "\"rasterKnob\":%u,\"meshShaderOffReason\":\"%s\",\"groupsWithClusters\":%u,"
                               "\"groups\":%u,\"clusterTable\":%u,\"wholePairs\":%u,\"wholeTris\":%u,\"tessyPairs\":%u,"
-                              "\"tessyWholeTris\":%u,\"runs\":%u,\"clustersTested\":%u,\"clusters\":%u,\"clusterTris\":%u,"
+                              "\"tessyWholeTris\":%u,\"runs\":%u,\"clustersTested\":%u,\"clusters\":%u,\"records\":%u,\"clusterTris\":%u,"
                               "\"clustersLost\":%u,\"runsLost\":%u,\"padMisses\":%u,\"padMissMaxUm\":%u,"
                               "\"padNeedCm\":%u,\"padGotCm\":%u,\"padMaxOffCm\":%u,\"padDCm\":%u,\"padFCm\":%u}",
                               t.valid ? "true" : "false", t.tessyOn ? "true" : "false", tessy::g_vsm ? "true" : "false",
-                              scene_.Vsm().TessyOffReason(), sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(),
+                              scene_.Vsm().TessyOffReason(), t.tessyMs ? "true" : "false", tessy::g_vsmMeshShader ? 1u : 0u,
+                              scene_.Vsm().TessyMsOffReason(), sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(),
                               sg.TessyClusterCount(), t.wholePairs, t.wholeTris, t.tessyPairs, t.tessyWholeTris, t.runs,
-                              t.clustersTested, t.clusters, t.clusterTris, t.clustersLost, t.runsLost,
+                              t.clustersTested, t.clusters, t.records, t.clusterTris, t.clustersLost, t.runsLost,
                               t.padMisses, t.padMissMaxUm, t.padNeedCm, t.padGotCm, t.padMaxOffCm, t.padDCm, t.padFCm);
                 out += tessyItem;
             }

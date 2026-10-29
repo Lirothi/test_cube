@@ -322,15 +322,83 @@ size_t Mesh::GetClusterCount() const {
     return n;
 }
 
-void Mesh::SetClusters(std::vector<std::vector<Cluster>> perLod) {
+const Mesh::ClusterLocalTables& Mesh::GetClusterLocal(UINT lod) const {
+    static const ClusterLocalTables kNone;
+    if (clusterLocal_.empty()) { return kNone; }
+    const UINT l = std::min(ClampExplicitLod(lod), static_cast<UINT>(clusterLocal_.size()) - 1u);
+    return clusterLocal_[l];
+}
+
+void Mesh::SetClusters(std::vector<std::vector<Cluster>> perLod, const std::vector<const std::vector<uint32_t>*>& lodIndices) {
     clusters_.clear();
-    if (perLod.size() != GetLodCount()) { return; }
+    clusterLocal_.clear();
+    if (perLod.size() != GetLodCount() || lodIndices.size() != perLod.size()) { return; }
+    std::vector<ClusterLocalTables> local(perLod.size());
     for (UINT l = 0; l < perLod.size(); ++l) {
-        uint64_t tris = 0;
-        for (const Cluster& c : perLod[l]) { tris += c.triCount; }
-        if (tris * 3u != GetLodIndexCount(l)) { return; }
+        const std::vector<uint32_t>* idx = lodIndices[l];
+        if (!idx || idx->size() != GetLodIndexCount(l) || !BuildClusterLocal(perLod[l], *idx, local[l])) { return; }
     }
     clusters_ = std::move(perLod);
+    clusterLocal_ = std::move(local);
+}
+
+// Each cluster cut into meshlets: its triangles in order, a new meshlet whenever the next triangle would take the
+// current one past kMeshletMaxVerts unique vertices (the builder's spatial order keeps neighbours together: a regular
+// mesh's cluster makes about two meshlets, a leaf card's about four). Fails (the mesh then stays classic) unless the
+// clusters cover the index buffer exactly.
+bool Mesh::BuildClusterLocal(const std::vector<Cluster>& clusters, const std::vector<uint32_t>& idx, ClusterLocalTables& t) {
+    t = {};
+    uint64_t tris = 0;
+    for (const Cluster& c : clusters) {
+        if (static_cast<uint64_t>(c.firstIndex) + c.triCount * 3ull > idx.size()) { return false; }
+        tris += c.triCount;
+    }
+    if (tris * 3u != idx.size()) { return false; }
+    t.clusters.reserve(clusters.size());
+    t.tris.reserve(static_cast<size_t>(tris));
+    std::vector<uint32_t> seen;
+    std::unordered_map<uint32_t, uint32_t> localOf;
+    localOf.reserve(kMeshletMaxVerts * 2u);
+    ClusterMeshlet m;
+    const auto close = [&]() {
+        m.vertOffset = static_cast<uint32_t>(t.verts.size());
+        m.vertCount = static_cast<uint32_t>(seen.size());
+        t.verts.insert(t.verts.end(), seen.begin(), seen.end());
+        t.meshlets.push_back(m);
+        seen.clear();
+        localOf.clear();
+    };
+    for (const Cluster& c : clusters) {
+        ClusterLocal cl;
+        cl.firstMeshlet = static_cast<uint32_t>(t.meshlets.size());
+        m = {};
+        m.triOffset = static_cast<uint32_t>(t.tris.size());
+        for (uint32_t k = 0; k < c.triCount; ++k) {
+            const uint32_t* corners = &idx[c.firstIndex + k * 3u];
+            uint32_t fresh = 0;
+            for (uint32_t corner = 0; corner < 3; ++corner) {
+                const bool repeat = (corner > 0 && corners[corner] == corners[0]) || (corner > 1 && corners[corner] == corners[1]);
+                fresh += (!repeat && localOf.find(corners[corner]) == localOf.end()) ? 1u : 0u;
+            }
+            if (m.triCount > 0 && seen.size() + fresh > kMeshletMaxVerts) {
+                close();
+                m = {};
+                m.triOffset = static_cast<uint32_t>(t.tris.size());
+            }
+            uint32_t packed = 0;
+            for (uint32_t corner = 0; corner < 3; ++corner) {
+                const auto ins = localOf.emplace(corners[corner], static_cast<uint32_t>(seen.size()));
+                if (ins.second) { seen.push_back(corners[corner]); }
+                packed |= (ins.first->second & 0xFFu) << (corner * 8u);
+            }
+            t.tris.push_back(packed);
+            ++m.triCount;
+        }
+        if (m.triCount > 0) { close(); }
+        cl.meshletCount = static_cast<uint32_t>(t.meshlets.size()) - cl.firstMeshlet;
+        t.clusters.push_back(cl);
+    }
+    return true;
 }
 
 // Step 3: skip redundant IA binds when this mesh's buffers/topology already match the
