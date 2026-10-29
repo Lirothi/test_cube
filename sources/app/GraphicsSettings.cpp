@@ -180,6 +180,7 @@ namespace
         bool vsmPageCaching = true;
         bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
         bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader)
+        bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas)
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -590,6 +591,7 @@ namespace
         s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel;
         s.tessyVsm = tessy::g_vsm;
         s.tessyRaster = tessy::g_vsmMeshShader;
+        s.tessyAtlas = tessy::g_atlas;
         Sanitize(s);
         return s;
     }
@@ -779,6 +781,7 @@ namespace
         vsm::g_pageCaching = s.vsmPageCaching;
         tessy::g_vsm = s.tessyVsm;
         tessy::g_vsmMeshShader = s.tessyRaster;
+        tessy::g_atlas = s.tessyAtlas;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
 
@@ -1000,7 +1003,8 @@ namespace
                     { "pageCaching", s.vsmPageCaching },
                     { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel },
                     { "tessy", s.tessyVsm },
-                    { "tessyRaster", s.tessyRaster }
+                    { "tessyRaster", s.tessyRaster },
+                    { "tessyAtlas", s.tessyAtlas }
                 } }
             } }
         };
@@ -1228,6 +1232,7 @@ namespace
         Read(vsmSettings, "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel);
         Read(vsmSettings, "tessy", s.tessyVsm);
         Read(vsmSettings, "tessyRaster", s.tessyRaster);
+        Read(vsmSettings, "tessyAtlas", s.tessyAtlas);
 
         Sanitize(s);
         return s;
@@ -1571,6 +1576,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmWindAnimateMaxLevel:         current.vsmWindAnimateMaxLevel = defaults.vsmWindAnimateMaxLevel; break;
     case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
     case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;
+    case GraphicsControl::TessyAtlas:                     current.tessyAtlas = defaults.tessyAtlas; break;
     }
 
     Sanitize(current);

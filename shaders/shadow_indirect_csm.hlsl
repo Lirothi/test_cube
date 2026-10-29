@@ -51,6 +51,12 @@
 #undef VSM_PAGE
 #define VSM_PAGE 1
 #endif
+// Tessy N4: TESSY_ATLAS_MS=1 is the same mesh shader drawing the surviving clusters of a LOCAL light's atlas view (a
+// point light's cube face, a spot) -- the atlas PSOs' own path (the view's PerView CB at b1, SHADOW_DEPTH_BIAS's
+// normal, SHADOW_LINEAR_DEPTH's twin), its records written by tessy_atlas_cull_cs.hlsl per view. Never with VSM_PAGE.
+#ifndef TESSY_ATLAS_MS
+#define TESSY_ATLAS_MS 0
+#endif
 
 // Texture streaming plan A6: GBUFFER_BINDLESS=1 (with SHADOW_MASKED) reads the masked albedo through
 // SM6.6 ResourceDescriptorHeap[] -- GroupMask.x is then the texture's slot in the shared heap, the
@@ -59,7 +65,27 @@
 #define GBUFFER_BINDLESS 0
 #endif
 
-#if VSM_TESSY
+#if TESSY_ATLAS_MS
+  // b0 = the view's row of TessyAtlasViewInfo (a root constant, set per view), b1 = the view's PerView; one table:
+  // Instances (+ CasterGroup, GroupMask), TessyVisible, MegaVB, Meshlets, ClusterVerts, ClusterTris, TessyAtlasViewInfo
+  // (+ the masked albedos).
+  #if SHADOW_MASKED && GBUFFER_BINDLESS
+    #define SHADOW_INDIRECT_CSM_RS \
+        "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
+        "RootConstants(num32BitConstants=1, b0), CBV(b1), " \
+        "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
+  #elif SHADOW_MASKED
+    #define SHADOW_INDIRECT_CSM_RS \
+        "RootConstants(num32BitConstants=1, b0), CBV(b1), " \
+        "DescriptorTable(SRV(t0, numDescriptors=25, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+        "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
+  #else
+    #define SHADOW_INDIRECT_CSM_RS \
+        "RootConstants(num32BitConstants=1, b0), CBV(b1), " \
+        "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+  #endif
+#elif VSM_TESSY
   // VSM_PAGE's tables with the cluster inputs after PageProj: TessyVisible, MegaVB, MegaIB, Clusters, Meshlets,
   // ClusterVerts, ClusterTris (and the masked table path's albedos after those). No input assembler; the VS and the MS (N6) take
   // the same table.
@@ -376,6 +402,31 @@ inline float4 WindTransformH(float3 objPos, float3 objNormal, float4x4 world, fl
 #endif
 }
 
+#if TESSY_ATLAS_MS
+#include "tessy_common.hlsli"
+// Tessy N4: the atlas view's surviving meshlets (tessy_atlas_cull_cs.hlsl). The records of every view lie in one buffer,
+// each view's run at TessyAtlasViewInfo[its row] = {first record, records}.
+#if SHADOW_MASKED
+StructuredBuffer<uint4> TessyVisible       : register(t3);
+ByteAddressBuffer       MegaVB             : register(t4);
+StructuredBuffer<uint4> Meshlets           : register(t5);
+StructuredBuffer<uint>  ClusterVerts       : register(t6);
+StructuredBuffer<uint>  ClusterTris        : register(t7);
+StructuredBuffer<uint2> TessyAtlasViewInfo : register(t8);
+#else
+StructuredBuffer<uint4> TessyVisible       : register(t1);
+ByteAddressBuffer       MegaVB             : register(t2);
+StructuredBuffer<uint4> Meshlets           : register(t3);
+StructuredBuffer<uint>  ClusterVerts       : register(t4);
+StructuredBuffer<uint>  ClusterTris        : register(t5);
+StructuredBuffer<uint2> TessyAtlasViewInfo : register(t6);
+#endif
+cbuffer TessyAtlasRoot : register(b0)
+{
+    uint gTessyAtlasView; // this view's row of TessyAtlasViewInfo (ShadowGpuData::RecordIndirectShadowDraws)
+};
+#endif
+
 #endif // VSM_PAGE
 
 #if SHADOW_MASKED
@@ -384,6 +435,8 @@ StructuredBuffer<uint>  CasterGroup : register(t1); // per-caster mesh-group id 
 StructuredBuffer<uint2> GroupMask   : register(t2); // per group: x = albedo slot in gMaskAlbedo, or its bindless heap index (~0 = opaque), y = asuint(alphaCutoff)
 #if GBUFFER_BINDLESS
 // A6: the albedo is ResourceDescriptorHeap[GroupMask.x]; no table.
+#elif TESSY_ATLAS_MS
+Texture2D    gMaskAlbedo[16] : register(t9);        // after the atlas view's six cluster inputs
 #elif VSM_TESSY
 Texture2D    gMaskAlbedo[16] : register(t11);       // after PageProj and the seven cluster inputs
 #elif VSM_PAGE
@@ -699,3 +752,68 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
     }
 }
 #endif // VSM_TESSY_MS
+
+#if TESSY_ATLAS_MS
+// Tessy N4: an atlas view's surviving meshlets as a mesh shader -- VSM_TESSY_MS's group (one meshlet, a vertex a thread)
+// with the atlas VS's own vertex math: WindTransformH (the view's PerView: its matrix, the wind or none for a rigid
+// light, S6's slope bias from the vertex normal, S4's linear depth) and MaskedVS's attributes. The face's viewport and
+// scissor clip it, as they clip the classic draw. Group (x, y) is record y * kTessyMsRow + x of the view's run.
+#if SHADOW_MASKED
+typedef VSOutMasked TessyAtlasVertex;
+#else
+typedef VSOutD TessyAtlasVertex;
+#endif
+
+[NumThreads(64, 1, 1)]
+[OutputTopology("triangle")]
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
+            out vertices TessyAtlasVertex verts[64],
+            out indices uint3 tris[128])
+{
+    const uint2 run = TessyAtlasViewInfo[gTessyAtlasView]; // {first record, records}
+    uint cap, stride;
+    TessyVisible.GetDimensions(cap, stride);
+    const uint i = gid.y * kTessyMsRow + gid.x;
+    // Selects up to SetMeshOutputCounts, never a branch (see VSM_TESSY_MS's MSMain: DXC's ms_6_6 duplicates the call).
+    const bool live = and(i < run.y, run.x + i < cap);
+    const uint4 rec = TessyVisible[select(live, run.x + i, 0u)]; // {caster id, meshlet, base vertex, 0}
+    const uint4 m = Meshlets[select(live, rec.y, 0u)];
+    const uint vertCount = select(live, min(m.y, kTessyMeshletMaxVerts), 0u);
+    const uint triCount = select(live, min(m.w, kTessyMeshletMaxTris), 0u);
+    SetMeshOutputCounts(vertCount, triCount);
+
+    const uint cid = select(live, rec.x, 0u);
+    const InstancePerObject ip = Instances[cid];
+#if SHADOW_MASKED
+    const uint2 gm = GroupMask[CasterGroup[cid]];
+#endif
+    if (lane < vertCount)
+    {
+        const uint b = (ClusterVerts[m.x + lane] + rec.z) * 52u; // sizeof(VertexPNTUV): normal at 12, uv 40, COLOR_0 48
+        const float3 P = asfloat(MegaVB.Load3(b));
+        const float3 N = asfloat(MegaVB.Load3(b + 12u));
+        const uint c = MegaVB.Load(b + 48u);
+        const float4 wind = float4(c & 0xFFu, (c >> 8) & 0xFFu, (c >> 16) & 0xFFu, c >> 24) * (1.0f / 255.0f);
+        TessyAtlasVertex o = (TessyAtlasVertex)0;
+        float linearDepth;
+        o.H = WindTransformH(P, N, ip.world, wind, ip.windStrength, ip.windFoliage, ip.windTrunkStiff,
+                             ip.windLeafScale, linearDepth);
+#if SHADOW_LINEAR_DEPTH
+        o.linearDepth = linearDepth;
+#endif
+#if SHADOW_MASKED
+        o.UV = asfloat(MegaVB.Load2(b + 40u)) * ip.texOffsScale.zw + ip.texOffsScale.xy;
+        o.baseAlpha = ip.baseColor.a;
+        o.texSlot = gm.x;
+        o.cutoff = asfloat(gm.y);
+#endif
+        verts[lane] = o;
+    }
+    for (uint k = lane; k < triCount; k += 64u)
+    {
+        const uint t = ClusterTris[m.z + k];
+        tris[k] = min(uint3(t & 0xFFu, (t >> 8) & 0xFFu, (t >> 16) & 0xFFu), vertCount - 1u);
+    }
+}
+#endif // TESSY_ATLAS_MS

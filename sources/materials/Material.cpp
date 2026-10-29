@@ -1120,7 +1120,12 @@ HRESULT CreateMeshPipelineStateCached(ID3D12Device* device,
     const auto psoBegin = std::chrono::steady_clock::now();
     const std::string label = NarrowForLog(debugLabel.empty() ? name : debugLabel);
     bool fromCache = false;
-    if (PipelineCacheEnabled())
+    // Not through the disk cache (yet): the driver refused every stored mesh-shader blob on the next launch -- 6 of 6
+    // each boot, E_INVALIDARG and the debug layer's id=887 "does not match the rest of the description", the same with
+    // the CACHED_PSO subobject left out of the compile (2026-10-29) -- so they compiled twice and logged an error. They
+    // compile once now (~18 ms of a Release boot for the six).
+    constexpr bool kMeshPsoDiskCache = false;
+    if (kMeshPsoDiskCache && PipelineCacheEnabled())
     {
         g_psoCacheAttempts.fetch_add(1, std::memory_order_relaxed);
         const auto begin = std::chrono::steady_clock::now();
@@ -1152,7 +1157,7 @@ HRESULT CreateMeshPipelineStateCached(ID3D12Device* device,
     const auto begin = std::chrono::steady_clock::now();
     const HRESULT hr = create(D3D12_CACHED_PIPELINE_STATE{});
     g_psoCacheCreateUs.fetch_add(ElapsedMicroseconds(begin), std::memory_order_relaxed);
-    if (SUCCEEDED(hr))
+    if (kMeshPsoDiskCache && SUCCEEDED(hr))
     {
         StorePipelineBlob(device, name, out.Get());
     }

@@ -27,4 +27,8 @@ inline bool g_vsmMeshShader = true;
 // The mesh shader's own triangle culls (tessy_common.hlsli kTessyMsCull*): bit 0 = a triangle whose screen box holds no
 // pixel centre (it would raster nothing -- exact). 0 = only the page-border cull. `--set tessy.msCull:0|1`, transient.
 inline unsigned g_vsmMsCull = 1u;
+// N4: the LOCAL lights' atlas views (point faces, spots) draw the casters whose meshes have clusters cluster by cluster
+// (tessy_atlas_cull_cs.hlsl + shadow_indirect_csm.hlsl TESSY_ATLAS_MS). Atlas modes (Legacy / SDSM) only; needs a mesh
+// shader tier. `--set tessy.atlas:0|1`, MCP, Developer Controls > VSM, graphics_settings.json vsm.tessyAtlas.
+inline bool g_atlas = true;
 } // namespace tessy

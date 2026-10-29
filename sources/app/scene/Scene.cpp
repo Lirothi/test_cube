@@ -3271,6 +3271,7 @@ void Scene::Render(Renderer* renderer) {
     shadowGpu_.UpdateForFrame(renderer, objects_);
     shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
     shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
+    shadowGpu_.PollTessyAtlasStats(renderer); // Tessy N4: the atlas cluster cull's counters of frame N - 3
     vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
     vsm_.UpdateDynamicResolution(renderer); // S10e: the page pool's load of frame N - kFrameCount -> the local mip bias
     vsm_.PollHzbStats(renderer);          // S5b.2: the light-space two-pass counters of frame N - 3
@@ -3429,22 +3430,33 @@ void Scene::Render(Renderer* renderer) {
             const float share = std::max(render::g_localShadowRadiusThreshold, 0.0f) * (hfovDeg / 90.0f);
             shadowGpu_.SetLocalRadiusThreshold(camView.position, share * share);
         }
-        // render::g_localShadowWindRange: the slots of the lights past it (Scene::PrepareViews' verdicts).
+        // render::g_localShadowWindRange: the slots of the lights past it (Scene::PrepareViews' verdicts). Tessy N4: and
+        // the slots that draw their static rows this frame -- every view but a cache hit (PrepareViews' cacheMode).
         {
             ShadowGpuData::ViewMask rigid{};
-            const auto mark = [&rigid](unsigned slot)
+            ShadowGpuData::ViewMask staticDrawn{};
+            const auto mark = [](ShadowGpuData::ViewMask& mask, unsigned slot)
             {
-                if (slot / 32u < rigid.size()) { rigid[slot / 32u] |= 1u << (slot % 32u); }
+                if (slot / 32u < mask.size()) { mask[slot / 32u] |= 1u << (slot % 32u); }
+            };
+            const auto drawsStatics = [](const SceneView& view)
+            {
+                return view.cacheMode != static_cast<std::uint8_t>(render::LocalShadowCache::Mode::Hit);
             };
             for (size_t i = 0; i < kSpotSlots && i < spotCount; ++i)
             {
-                if (spotShadowViews_[i].windRigid) { mark(render::ShadowViewSpotSlot(static_cast<unsigned>(i))); }
+                const unsigned slot = render::ShadowViewSpotSlot(static_cast<unsigned>(i));
+                if (spotShadowViews_[i].windRigid) { mark(rigid, slot); }
+                if (drawsStatics(spotShadowViews_[i])) { mark(staticDrawn, slot); }
             }
             for (size_t i = 0; i < kPointFaceSlots && i < pointFaceCount; ++i)
             {
-                if (pointShadowViews_[i].windRigid) { mark(render::ShadowViewPointFaceSlot(static_cast<unsigned>(i))); }
+                const unsigned slot = render::ShadowViewPointFaceSlot(static_cast<unsigned>(i));
+                if (pointShadowViews_[i].windRigid) { mark(rigid, slot); }
+                if (drawsStatics(pointShadowViews_[i])) { mark(staticDrawn, slot); }
             }
             shadowGpu_.SetLocalWindRigid(rigid);
+            shadowGpu_.SetLocalStaticDrawn(staticDrawn);
         }
         shadowGpu_.UpdateViewFrustums(renderer, frustums.data(), frustums.size(), localViewCullPtr_.data());
         // Plan S9: the cull walks VSM's prefix and, past it, only up to the last occupied extra slot.

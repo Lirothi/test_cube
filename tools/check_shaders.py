@@ -62,6 +62,7 @@ COMPUTE_ENTRIES = [
     # Tessy N3: the cluster cull between the page setup and the draws.
     ("tessy_vsm_cull_cs.hlsl", "CSMain"),
     ("tessy_ms_args_cs.hlsl", "CSMain"), # N6: the mesh shader's DispatchMesh arguments
+    ("tessy_atlas_cull_cs.hlsl", "CSMain"), # N4: the local lights' atlas views' cluster cull
     # Occlusion plan S5b.2: the VSM pool pyramid + the deferred-pair post cull (hzb_cull.hlsli).
     ("vsm_hzb_build_cs.hlsl", "CSMain"),
     ("vsm_hzb_post_cs.hlsl", "CSMain"),
@@ -199,6 +200,17 @@ GRAPHICS_ENTRIES = [
     ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["VSM_TESSY_MS=1", "SHADOW_MASKED=1"], "tessy-ms-masked"),
     ("shadow_indirect_csm.hlsl", "ms_6_6", "MSMain", ["VSM_TESSY_MS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-ms-masked-bindless"),
     ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["VSM_TESSY_MS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-ms-masked-bindless"),
+    # Tessy N4: the atlas twin (the PerView path, S6 bias, S4 linear depth).
+    ("shadow_indirect_csm.hlsl", "ms_6_5", "MSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1"], "tessy-atlas"),
+    ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1"], "tessy-atlas"),
+    ("shadow_indirect_csm.hlsl", "ms_6_5", "MSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1"], "tessy-atlas-masked"),
+    ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1"], "tessy-atlas-masked"),
+    ("shadow_indirect_csm.hlsl", "ms_6_5", "MSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_LINEAR_DEPTH=1"], "tessy-atlas-linear"),
+    ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_LINEAR_DEPTH=1"], "tessy-atlas-linear"),
+    ("shadow_indirect_csm.hlsl", "ms_6_5", "MSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "SHADOW_LINEAR_DEPTH=1"], "tessy-atlas-masked-linear"),
+    ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "SHADOW_LINEAR_DEPTH=1"], "tessy-atlas-masked-linear"),
+    ("shadow_indirect_csm.hlsl", "ms_6_6", "MSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-atlas-masked-bindless"),
+    ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-atlas-masked-bindless"),
     # Occlusion plan S5b: the cascade-tile permutation of the depth pyramid build (one define
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.

@@ -169,6 +169,7 @@ namespace
         case GraphicsControl::VsmPageCaching:
         case GraphicsControl::TessyVsm:
         case GraphicsControl::TessyRaster:
+        case GraphicsControl::TessyAtlas:
             return true;
         default:
             return false;
@@ -3240,6 +3241,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "OFF: the VS path, DrawInstanced(384, clusters) -- every corner of every\n"
                                       "triangle. Without a mesh shader tier ON draws through the VS.\n"
                                       "The depth is the same either way. --set=tessy.raster:0|1");
+                GRAPHICS_CONTROL(TessyAtlas, "tessyAtlas",
+                    ImGui::Checkbox("Tessy: lamp atlases cluster by cluster", &tessy::g_atlas));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON (Legacy / SDSM): a point light's cube face or a spot draws the casters whose\n"
+                                      "meshes have clusters cluster by cluster -- each cluster's box (padded for the\n"
+                                      "wind) against the view's frustum, the survivors through a mesh shader.\n"
+                                      "OFF: every such caster drawn whole into every view it touches.\n"
+                                      "Needs a mesh shader tier. The depth is the same either way. --set=tessy.atlas:0|1");
                 {
                     const ShadowGpuData& sg = scene.ShadowGpu();
                     const auto& ts = scene.Vsm().GetTessyStats();

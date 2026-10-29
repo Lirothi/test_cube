@@ -523,6 +523,13 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             ShadowGpuData::CullDecisions& dec = graphPass_.shadowCull; // read by the body (too big for its closure)
             dec = frame_->shadowGpu->PrepareCullPass(ctx);
             if (!dec.active) { return {}; }
+            if (dec.tessyAtlas && frame_->wind) // Tessy N4: the clusters' sway pad takes the wind the views' PerView carry
+            {
+                const vfx::WindState& w = *frame_->wind;
+                const float w0[4] = { w.time, w.prevTime, w.windDirXZ.x, w.windDirXZ.y };
+                const float w1[4] = { w.swayAmplitude, w.swayFrequency, w.gustMul, w.prevGustMul };
+                for (int i = 0; i < 4; ++i) { dec.tessyWind0[i] = w0[i]; dec.tessyWind1[i] = w1[i]; }
+            }
             return [this, renderer](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassShadowCull);
                 Pass_ShadowCull(renderer, c, graphPass_.shadowCull);

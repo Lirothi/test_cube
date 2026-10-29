@@ -532,6 +532,7 @@ namespace
         if (setting == "tessy.windPad") { tessy::g_vsmWindPad = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
         if (setting == "tessy.validate") { tessy::g_vsmValidate = value != 0.0f; return true; }
         if (setting == "tessy.raster") { tessy::g_vsmMeshShader = value != 0.0f; return true; } // N6: 1 mesh shader, 0 VS
+        if (setting == "tessy.atlas") { tessy::g_atlas = value != 0.0f; return true; } // N4: the lamps' atlas views
         if (setting == "tessy.msCull") { tessy::g_vsmMsCull = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }

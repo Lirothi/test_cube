@@ -669,7 +669,7 @@ grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / 
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
 
-## Tessy -- Cluster Geometry (the VSM Pages, Plan N0-N3, N6)
+## Tessy -- Cluster Geometry (the VSM Pages and the Lamps' Atlases, Plan N0-N4, N6)
 
 Tessy is our UE Nanite analog (`docs/tessy_plan.md`, journal in its section 9). A CLUSTER is a run of <= 128 triangles
 / 256 vertices of one LOD's index buffer inside one submesh (`Mesh::Cluster`); the classic paths draw the same index
@@ -697,13 +697,35 @@ is the owner's call (plan Q4) -- back the files up first.
   rotation about the pivot) -- `tessy.windPad` 1; 2 = the isotropic 2D + F A/B; 0 = none (only to see the holes).
   `tessy.validate:1` sways every vertex of every tested cluster with the shader's own function and counts those
   outside their padded box -- `get_readouts` tessy.padMisses must stay 0 (proven to catch: 98 % with no pad).
+- N4, the lamps' ATLASES (SDSM / Legacy): `tessy_atlas_cull_cs.hlsl` runs in `Pass_ShadowCull` between the cull and
+  the S6a compaction -- one 256-thread group per local view (a point face, a spot) tests every (caster, cluster) of the
+  view's records against the view's six planes (the wind pad as above), claims the view's run of meshlets with one
+  atomic, writes it and zeroes the taken records' `InstanceCount` (the compaction skips them); `TESSY_ATLAS_MS` draws
+  the run with one `DispatchMesh` per view right after the view's classic ExecuteIndirect. S7's static rows go through it
+  only for the views that draw them this frame (`SetLocalStaticDrawn`: a cache miss or an uncached view; a hit copies
+  them). `tessy.atlas` (default 1; Developer Controls > VSM, `graphics_settings.json` vsm.tessyAtlas, `--set`, MCP);
+  event `tessy.atlas: on` / `classic -- <why>`; every 5 s `tessy.atlas: <main> + <static> meshlet records (cap ...), <n>
+  views did not fit, <m> clusters tested` (counters of frame N - 3). A view that does not fit stays classic. Measured
+  (SDSM 23:00, "Lamps" on): the grove's point atlases 0.415 -> 0.287 ms for +0.034 of cull, frame -0.10 ms; the bathroom
+  (five candles) +0.025 -- nothing there to save. SDSM itself is NOT clustered: it does not follow its triangle count.
+- **A wave's prefix sum runs in LANE order, not in `SV_GroupIndex` order** (2026-10-29): in an 8x8 group NVIDIA does not
+  lay the threads into lanes by `SV_GroupIndex`, and `gsPrefix[SV_GroupIndex] = WavePrefixSum(x)` handed the prefixes to
+  other threads' entries -- the atlas kernel tested the wrong (caster, cluster), different lamps lost their shadows every
+  frame (the entries' order is the atomics'). Give each thread its place in wave order (the wave's index from an LDS
+  atomic by its first lane, plus `WaveGetLaneIndex()`) and distribute by that; `WaveActiveSum` alone is safe.
+- A classic shadow range must come from the EXPLICIT LOD's tables: `groupLodMega_` read `SubmeshesForLod` (the runtime
+  `lod.forced` / `lod.enabled` override) until 2026-10-29, and a Rebuild under the knob drew another part of every mesh
+  in the local views until the next Rebuild. A/B a shadow path with those knobs at their defaults and relaunch after.
+- Mesh-shader PSOs stay out of the disk PSO cache (`kMeshPsoDiskCache`, Material.cpp): the driver refused all six stored
+  blobs on every launch (debug layer `id=887`), so they were compiled twice; now once (~18 ms of a Release boot).
 - Counters: `get_readouts` block `tessy` (pairs drawn whole / handed to clusters, clusters tested / drawn and their
   triangles, `records` = the draw's instances or mesh shader groups, lost runs / clusters, `meshShader`);
   `tools/tessy_baseline.py --port <p>` measures the plan's three views.
 - Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms on
   the VS path (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters) -> 0.51 with the mesh shader (its draw
   0.41 -> 0.23) -> 0.40 with the scatter's pages shared by the group (below); the bathroom 0.91 -> 0.59 -> 0.48 ->
-  0.46, the tunnel 0.67 -> 0.33 -> 0.27 -> 0.30 (that last row another day's run). Time an A/B of the raster with the
+  0.46, the tunnel view 0.67 -> 0.33 with the `tunnel` group on (N3), then 0.27 -> 0.30 at the same camera with the
+  group off as the level saves it -- the boxes are not in those two. Time an A/B of the raster with the
   wind FROZEN (`wind.freeze:1`: the pages still redraw, the cluster counts stay put) -- with the wind running the two
   arms draw different counts and the EMA mixes them (a first reading put the 256-vertex mesh shader ahead; frozen, it
   was behind).

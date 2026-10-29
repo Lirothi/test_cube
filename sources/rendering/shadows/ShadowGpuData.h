@@ -83,6 +83,10 @@ public:
     // render::g_localShadowWindRange: the local views whose light is past the range this frame -- their wind-only
     // casters are static for them (cached, drawn rigid). Once per frame from Scene, before the cull records.
     void SetLocalWindRigid(const ViewMask& mask) { localWindRigid_ = mask; }
+    // Local-light plan S7 x Tessy N4: the local views that DRAW their static rows this frame (a cache miss fills the
+    // pool, an uncached view draws them itself; a hit copies them in). The atlas cluster cull skips the rest's static
+    // rows -- on a still frame nearly every view hits, and those rows held three quarters of its records.
+    void SetLocalStaticDrawn(const ViewMask& mask) { localStaticDrawn_ = mask; }
     // Local-light shadow plan S9: how many cull views this frame actually uses -- VSM's whole prefix
     // (render::kVsmShadowViews) and, past it, up to the last occupied extra spot / point-face slot. The
     // clear and the cull walk only these (each view costs its row of args plus one frustum test per
@@ -125,10 +129,18 @@ public:
         std::uint32_t localViews = 0;
         // Local-light plan S7: the cull splits the local views' static casters into their own rows this frame.
         bool localSplit = false;
+        // Tessy N4: the atlas views' records of groups with clusters go cluster by cluster (tessy_atlas_cull_cs, before
+        // the compaction; the draw is RecordIndirectShadowDraws'). Needs localCompact, a mesh shader, never the
+        // validation-readback frame (the cull's args are compared with a CPU count there).
+        bool tessyAtlas = false;
+        bool tessyAtlasStats = false; // its counters go to the readback at the consume point
+        float tessyWind0[4] = {}; // the frame's wind, as the views' PerView carry it (the clusters' sway pad)
+        float tessyWind1[4] = {};
         // Plan S9e: SetLocalRadiusThreshold's values, taken by the builder (the record may run on a worker).
         Math::float3 localCamPos = Math::float3(0.0f, 0.0f, 0.0f);
         float localRadiusSq = 0.0f;
         ViewMask localWindRigid{};      // SetLocalWindRigid's, likewise
+        ViewMask tessyStaticViews{};    // SetLocalStaticDrawn's (Tessy N4: the static rows' cluster cull)
         std::uint32_t base = 0;         // cull outputs -> UAV
         std::uint32_t unifiedCopy = 0;  // unified instance/bounds -> COPY_DEST
         std::uint32_t giWrite = 0;      // ...-> UAV for the scatter
@@ -303,6 +315,7 @@ public:
     // The counters of frame N - kFrameCount, mapped when its fence has passed: per cascade,
     // casters the main cull deferred and casters pass B drew (the cut = the difference).
     void PollHzbStats(Renderer* renderer);
+    void PollTessyAtlasStats(Renderer* renderer); // Tessy N4: the atlas cull's counters, the same way
     std::uint32_t HzbDeferred(unsigned c) const { return c < render::CascadeHzb::kCascades ? hzbStats_[c] : 0u; }
     std::uint32_t HzbDrawnB(unsigned c) const { return c < render::CascadeHzb::kCascades ? hzbStats_[render::CascadeHzb::kCascades + c] : 0u; }
 
@@ -700,6 +713,33 @@ private:
     UavRing localStaticArgs_;
     UavRing localStaticCounts_;
     bool localSplitFrame_ = false;
+    // ---- Tessy N4 (docs/tessy_plan.md): the atlas views' clusters ----
+    // Fixed sizes, one region a frame (the ring's rule), created with the cluster tables (UploadTessyTables_): the
+    // survivors' meshlet records, per (row set x view) {first record, records} and its DispatchMesh args, the counters.
+    static constexpr std::uint32_t kTessyAtlasRecordCap = 262144u;      // records a frame (4 MB), half a row set
+    static constexpr std::uint32_t kTessyAtlasRows = 2u * render::kShadowViewCeiling; // main rows, then S7's static rows
+    GpuResource tessyAtlasVisible_;
+    GpuResource tessyAtlasInfo_;
+    GpuResource tessyAtlasArgs_;
+    GpuResource tessyAtlasCounter_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyAtlasHeap_; // per frame: 4 UAVs, 2 SRVs (TessyAtlasDescriptor)
+    UINT tessyAtlasIncr_ = 0;
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyAtlasDescriptor(UINT frame, UINT slot) const;
+    std::shared_ptr<Material> tessyAtlasCullMat_;       // tessy_atlas_cull_cs.hlsl
+    std::shared_ptr<Material> tessyAtlasMeshMat_;       // shadow_indirect_csm.hlsl TESSY_ATLAS_MS (+ linear twins)
+    std::shared_ptr<Material> tessyAtlasMeshMaskedMat_;
+    bool tessyAtlasFrame_ = false;                      // PrepareCullPass's decision, read by the draws (workers)
+    const char* tessyAtlasLogged_ = nullptr;            // the verdict last logged (an event per change)
+    std::uint64_t tessyAtlasTableFrame_ = ~0ull;        // the draw table, staged once a frame (drawTablesMutex_)
+    D3D12_GPU_DESCRIPTOR_HANDLE tessyAtlasTable_{};
+    void EnsureTessyAtlasResources(Renderer* renderer);
+    void RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec, bool staticRows);
+    // The counters of frame N - kFrameCount: [0] / [1] the row sets' claimed records, [2] views that did not fit, [3]
+    // clusters tested (logged every 5 s while the atlas path runs).
+    Microsoft::WRL::ComPtr<ID3D12Resource> tessyAtlasStatsReadback_;
+    std::array<std::uint64_t, render::kFrameCount> tessyAtlasStatsFrame_{};
+    std::array<std::uint32_t, 4> tessyAtlasStats_{};
+    void EnsureTessyAtlasStatsReadback(Renderer* renderer);
     std::vector<std::uint8_t> casterWindy_;      // per caster: its object sways in the wind (base strength)
     std::vector<std::uint8_t> localDynamicPrev_; // per caster: last frame's movable bit (a change = a new static set)
     std::vector<std::uint32_t> casterLodUpload_; // the uploaded CasterLod (+ S7 movable bit), built in CPU memory
@@ -969,6 +1009,7 @@ private:
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
     ViewMask localWindRigid_{}; // SetLocalWindRigid
+    ViewMask localStaticDrawn_{}; // SetLocalStaticDrawn
     std::vector<std::uint32_t> localMovables_; // CollectLocalMovables: static-region casters movable this frame
     bool localMovableGi_ = false;              // ...and whether GI casters exist (no CPU bounds: always "touches")
     Math::float3 localCamPos_ = Math::float3(0.0f, 0.0f, 0.0f); // S9e: SetLocalRadiusThreshold

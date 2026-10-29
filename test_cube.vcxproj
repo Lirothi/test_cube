@@ -889,6 +889,8 @@
     <None Include="shaders\tessy_vsm_cull_cs.hlsl" />
     <None Include="shaders\tessy_common.hlsli" />
     <None Include="shaders\tessy_ms_args_cs.hlsl" />
+    <None Include="shaders\tessy_atlas_cull_cs.hlsl" />
+    <None Include="shaders\tessy_cull_common.hlsli" />
     <None Include="shaders\vsm_sample.hlsli" />
     <None Include="shaders\local_shadow_bias.hlsli" />
     <None Include="shaders\local_shadow_filter.hlsli" />
