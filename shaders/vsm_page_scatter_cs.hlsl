@@ -195,20 +195,48 @@ bool ProjectAabbNdc(float4x4 vp, float3 ctr, float3 ext, bool perspective,
 
 // numthreads(8,8,1) matches RecordComputeDispatch's group size. y indexes a SCATTER TARGET:
 // [0, gNumLevels) = clipmap level, [gNumLevels, gNumLevels+gNumLocalViews) = local view.
-[numthreads(8, 8, 1)]
-[RootSignature(VSM_SCATTER_RS)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
+//
+// THE GROUP SHARES ITS PAGES (Tessy, 2026-10-29). A thread used to walk its (object, target)'s page rect itself, and for
+// each resident page append each slot: an atomic whose RETURN the next write needs, one after another. ~12k pairs a
+// frame cost 0.14 ms of the grove's 0.21 -- latency, not work: the same atomic without its return and write took 0.01
+// (with every append gone the pass was 0.067). A local view's caster that straddles the light's plane walked the whole
+// 5-mip pyramid (341 pages) the same way, a page-table read waiting on each: the bathroom's candles ended the dispatch.
+// Now each thread only finds its rects (one a mip) and how many pages they hold; the group lays those end to end (a
+// prefix sum in groupshared) and all 64 threads take the pages in turn, so 64 chains are in flight where one was. A
+// page's own slots still append in order (1-3 for nearly every object). The per-page bookkeeping must stay small: a
+// binary search per page and the page-table read waiting on groupshared made the candles' share 0.11 ms, not 0.03.
+// Measured (wind frozen, DLSS Balanced): grove 0.21 -> 0.08 ms, bathroom 0.22 -> 0.14, tunnel 0.17 -> 0.09; the pairs
+// (page x caster) are the same, count for count.
+static const uint kScatterThreads = 64u;
+static const uint kScatterMips = VSM_MAX_LEVEL + 1u; // a local view's pyramid; a clipmap target uses one rect
+
+groupshared uint   gsBase[kScatterThreads];               // per thread: its first page in the group's queue
+groupshared uint   gsTotal;
+groupshared uint4  gsWho[kScatterThreads];                // caster slot, view, slots | flags << 16, the view's LOD
+groupshared uint2  gsRect[kScatterThreads * kScatterMips]; // per mip: (x0 | y0 << 16, width | height << 16)
+groupshared float3 gsCtr[kScatterThreads];                // the AABB, for a local page's exact test
+groupshared float3 gsExt[kScatterThreads];
+groupshared float3 gsPrevMin[kScatterThreads];            // S5b.2: last frame's clip rect of the caster in the level
+groupshared float3 gsPrevMax[kScatterThreads];
+
+static const uint kWhoLocal   = 1u << 16;
+static const uint kWhoDynamic = 1u << 17;
+static const uint kWhoPrev    = 1u << 18; // S5b.2's test applies
+static const uint kWhoMipShift = 20u;     // mip count in bits 20-23
+
+// This thread's (object, target): its rects into groupshared; returns how many pages they hold (0 = nothing to do).
+uint ScatterSetup(uint3 dtid, uint gi)
 {
     const uint c = dtid.x;              // caster slot id (only object-leading slots do work)
     const uint target = dtid.y;
-    if (c >= gNumCasters || target >= gNumLevels + gNumLocalViews) { return; }
+    if (c >= gNumCasters || target >= gNumLevels + gNumLocalViews) { return 0u; }
 
     const uint meta = CasterMeta[c];
     const uint slots = meta >> 1;
-    if (slots == 0u) { return; }        // continuation slot: its object was handled by its first slot
+    if (slots == 0u) { return 0u; }     // continuation slot: its object was handled by its first slot
 
     const CasterBounds b = Bounds[c];
-    if (b.halfExtents.w != 0.0f) { return; } // UE Cast Shadow off (ShadowGpuData::FillBounds): no page takes it
+    if (b.halfExtents.w != 0.0f) { return 0u; } // UE Cast Shadow off (ShadowGpuData::FillBounds): no page takes it
     const float3 ctr = b.center.xyz;
     const float3 ext = b.halfExtents.xyz;
 
@@ -218,105 +246,164 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const uint view = isLocal ? VsmLocalView(target - gNumLevels) : (VSM_CLIPMAP_FIRST + target);
     // A clipmap view is one page grid (the level IS the LOD). A local view is a mip pyramid, and a
     // receiver pixel marks whichever level matches its density, so every level can be resident.
-    const uint mipCount = isLocal ? (VSM_MAX_LEVEL + 1u) : 1u;
+    const uint mipCount = isLocal ? kScatterMips : 1u;
 
-    const float4x4 viewProj = Views[view].viewProj;
     float2 lo, hi;
     bool straddles;
-    if (!ProjectAabbNdc(viewProj, ctr, ext, isLocal, lo, hi, straddles)) { return; }
-    if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) { return; } // outside this view
+    if (!ProjectAabbNdc(Views[view].viewProj, ctr, ext, isLocal, lo, hi, straddles)) { return 0u; }
+    if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) { return 0u; } // outside this view
 
-    const bool isDynamic = (meta & 1u) != 0u;
-    const uint targetLod = Views[view].bits.y; // this view's own tier-curve LOD
-
-    // S5b.2: last frame's clip rect of this caster in the level, once; the page loop remaps it.
+    // S5b.2: last frame's clip rect of this caster in the level, once; each page remaps it.
     // Not for local views (perspective pages; the post pass would need their view/proj split).
     bool prevTest = false;
-    HzbFrustumCull prevCull = (HzbFrustumCull)0;
     if (!isLocal && gHzbParams.x != 0u && gHzbParams.y != 0u)
     {
-        prevCull = HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, mul(Views[view].prevViewProj, kFlipZ), false, true);
+        const HzbFrustumCull prevCull =
+            HzbBoxCullFrustumOrtho(ctr, ext, kIdentity, mul(Views[view].prevViewProj, kFlipZ), false, true);
         prevTest = prevCull.isVisible && !prevCull.crossesNearPlane;
+        gsPrevMin[gi] = prevCull.rectMin;
+        gsPrevMax[gi] = prevCull.rectMax;
     }
 
+    uint pages = 0u;
     for (uint L = 0u; L < mipCount; ++L)
     {
         // NDC -> this level's page grid. y flips (NDC +y is up, page rows run down).
         const uint axisI = VSM_L0_AXIS >> L;
         const float axis = (float)axisI;
-        const int x0 = (int)floor((lo.x * 0.5f + 0.5f) * axis);
-        const int x1 = (int)floor((hi.x * 0.5f + 0.5f) * axis);
-        const int y0 = (int)floor((0.5f - hi.y * 0.5f) * axis);
-        const int y1 = (int)floor((0.5f - lo.y * 0.5f) * axis);
-        const uint px0 = (uint)clamp(x0, 0, (int)axisI - 1);
-        const uint px1 = (uint)clamp(x1, 0, (int)axisI - 1);
-        const uint py0 = (uint)clamp(y0, 0, (int)axisI - 1);
-        const uint py1 = (uint)clamp(y1, 0, (int)axisI - 1);
+        const uint px0 = (uint)clamp((int)floor((lo.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
+        const uint px1 = (uint)clamp((int)floor((hi.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
+        const uint py0 = (uint)clamp((int)floor((0.5f - hi.y * 0.5f) * axis), 0, (int)axisI - 1);
+        const uint py1 = (uint)clamp((int)floor((0.5f - lo.y * 0.5f) * axis), 0, (int)axisI - 1);
+        const uint w = px1 - px0 + 1u, h = py1 - py0 + 1u;
+        gsRect[gi * kScatterMips + L] = uint2(px0 | (py0 << 16), w | (h << 16));
+        pages += w * h;
+    }
+    gsWho[gi] = uint4(c, view,
+                      slots | (isLocal ? kWhoLocal : 0u) | ((meta & 1u) != 0u ? kWhoDynamic : 0u) |
+                          (prevTest ? kWhoPrev : 0u) | (mipCount << kWhoMipShift),
+                      Views[view].bits.y); // this view's own tier-curve LOD
+    gsCtr[gi] = ctr;
+    gsExt[gi] = ext;
+    return pages;
+}
 
-        for (uint py = py0; py <= py1; ++py)
+// One page of thread t's rects -- the old per-page body, unchanged.
+// The caller has read the page's entry and found it resident, in its own loop: the version that read the thread's
+// record from groupshared first, inside this call, put that wait in front of every page-table read.
+void ScatterResidentPage(uint t, uint4 who, uint L, uint pxi, uint py, uint pageId, uint entry)
+{
+    const uint c = who.x;
+    const uint view = who.y;
+    const uint slots = who.z & 0xFFFFu;
+    const bool isLocal = (who.z & kWhoLocal) != 0u;
+    const bool isDynamic = (who.z & kWhoDynamic) != 0u;
+    const uint targetLod = who.w;
+
+    // Residency first: the exact test is only worth building for a page that exists.
+    if (isLocal && !BoxInPagePlanes(Views[view].viewProj, L, pxi, py, gsCtr[t], gsExt[t])) { return; }
+    const uint p = entry & 0x0000FFFFu;            // physical page index
+
+    // S5b.2: clipmap pairs last frame's pyramid hid go to the deferred list instead
+    // (once per object -- the post pass re-expands the slots). A dynamic caster still
+    // dirties the page: whether its shadow moved is exactly what pass B decides.
+    if ((who.z & kWhoPrev) != 0u)
+    {
+        const uint prevEntry = PrevPageTable[pageId];
+        HzbFrustumCull prevCull = (HzbFrustumCull)0;
+        prevCull.rectMin = gsPrevMin[t];
+        prevCull.rectMax = gsPrevMax[t];
+        if ((prevEntry & 0x80000000u) != 0u &&
+            HiddenInPageLastFrame(prevEntry & 0x0000FFFFu, L, pxi, py, prevCull))
         {
-            for (uint pxi = px0; pxi <= px1; ++pxi)
+            uint idx;
+            InterlockedAdd(HzbCounters[0], 1u, idx);
+            if (idx < gHzbParams.z)
             {
-                const uint pageId = VsmPageId(view, L, pxi, py);
-                const uint entry = PageTable[pageId];
-                if ((entry & 0x80000000u) == 0u) { continue; }   // not resident -> nothing to draw into
-                // Residency first: the exact test is only worth building for a page that exists.
-                if (isLocal && !BoxInPagePlanes(viewProj, L, pxi, py, ctr, ext)) { continue; }
-                const uint p = entry & 0x0000FFFFu;              // physical page index
-
-                // S5b.2: clipmap pairs last frame's pyramid hid go to the deferred list instead
-                // (once per object -- the post pass re-expands the slots). A dynamic caster still
-                // dirties the page: whether its shadow moved is exactly what pass B decides.
-                if (prevTest)
-                {
-                    const uint prevEntry = PrevPageTable[pageId];
-                    if ((prevEntry & 0x80000000u) != 0u &&
-                        HiddenInPageLastFrame(prevEntry & 0x0000FFFFu, L, pxi, py, prevCull))
-                    {
-                        uint idx;
-                        InterlockedAdd(HzbCounters[0], 1u, idx);
-                        if (idx < gHzbParams.z)
-                        {
-                            DeferredPairs[idx] = uint2(c, pageId);
-                            if (isDynamic) { PageScatterDyn[p] = 1u; }
-                            continue;
-                        }
-                        // Past the capacity: drawn in pass A as if visible (conservative).
-                        uint over;
-                        InterlockedAdd(HzbCounters[2], 1u, over);
-                    }
-                }
-
-                for (uint s = 0u; s < slots; ++s)
-                {
-                    const uint g = CasterGroup[c + s];
-                    if (g >= gNumGroups) { continue; }
-                    // Per-INSTANCE caster LOD (see CasterLod above). The bucket is a VIRTUAL group
-                    // g*KMAX_SHADOW_LODS + lod, so instances of one mesh at different receiver LODs
-                    // land in different draw args — the per-group single LOD could not represent
-                    // that, and whichever value it picked self-shadowed the instances it mismatched.
-                    const uint enc = CasterLod[c + s];
-                    const uint recvLod = enc & 0xFu;
-                    // gPerInstanceLod == 0 is the A/B lever (--set=vsm.perInstanceCasterLod:0):
-                    // every FLOOR caster falls back to the view LOD, reproducing the old
-                    // per-view record layout inside THIS binary for cost attribution. Chunk
-                    // EXACT stays exact in both modes (one instance per group; no splitting).
-                    const uint matched = (enc & 0x80u) ? recvLod
-                        : ((gPerInstanceLod != 0u) ? max(recvLod, targetLod) : targetLod);
-                    const uint lod = min(matched, (uint)(KMAX_SHADOW_LODS - 1));
-                    const uint vg = g * KMAX_SHADOW_LODS + lod;
-                    uint rank;
-                    InterlockedAdd(PageGroupCount[p * gNumGroups * KMAX_SHADOW_LODS + vg], 1u, rank);
-                    // Bucket base inside this page's slice: the group's global base scaled by the
-                    // bucket count, plus this LOD's sub-run (each bucket is sized for the group's
-                    // WHOLE caster count — an instance can land in any one of them).
-                    const uint bucketBase = PerGroup[g].x * KMAX_SHADOW_LODS + lod * PerGroup[g].w;
-                    const uint vid = c + s;
-                    PageVisibleList[p * gNumCasters * KMAX_SHADOW_LODS + bucketBase + rank] =
-                        (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
-                }
+                DeferredPairs[idx] = uint2(c, pageId);
                 if (isDynamic) { PageScatterDyn[p] = 1u; }
+                return;
             }
+            // Past the capacity: drawn in pass A as if visible (conservative).
+            uint over;
+            InterlockedAdd(HzbCounters[2], 1u, over);
         }
+    }
+
+    for (uint s = 0u; s < slots; ++s)
+    {
+        const uint g = CasterGroup[c + s];
+        if (g >= gNumGroups) { continue; }
+        // Per-INSTANCE caster LOD (see CasterLod above). The bucket is a VIRTUAL group
+        // g*KMAX_SHADOW_LODS + lod, so instances of one mesh at different receiver LODs
+        // land in different draw args — the per-group single LOD could not represent
+        // that, and whichever value it picked self-shadowed the instances it mismatched.
+        const uint enc = CasterLod[c + s];
+        const uint recvLod = enc & 0xFu;
+        // gPerInstanceLod == 0 is the A/B lever (--set=vsm.perInstanceCasterLod:0):
+        // every FLOOR caster falls back to the view LOD, reproducing the old
+        // per-view record layout inside THIS binary for cost attribution. Chunk
+        // EXACT stays exact in both modes (one instance per group; no splitting).
+        const uint matched = (enc & 0x80u) ? recvLod
+            : ((gPerInstanceLod != 0u) ? max(recvLod, targetLod) : targetLod);
+        const uint lod = min(matched, (uint)(KMAX_SHADOW_LODS - 1));
+        const uint vg = g * KMAX_SHADOW_LODS + lod;
+        uint rank;
+        InterlockedAdd(PageGroupCount[p * gNumGroups * KMAX_SHADOW_LODS + vg], 1u, rank);
+        // Bucket base inside this page's slice: the group's global base scaled by the
+        // bucket count, plus this LOD's sub-run (each bucket is sized for the group's
+        // WHOLE caster count — an instance can land in any one of them).
+        const uint bucketBase = PerGroup[g].x * KMAX_SHADOW_LODS + lod * PerGroup[g].w;
+        const uint vid = c + s;
+        PageVisibleList[p * gNumCasters * KMAX_SHADOW_LODS + bucketBase + rank] =
+            (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
+    }
+    if (isDynamic) { PageScatterDyn[p] = 1u; }
+}
+
+[numthreads(8, 8, 1)]
+[RootSignature(VSM_SCATTER_RS)]
+void CSMain(uint3 dtid : SV_DispatchThreadID, uint gi : SV_GroupIndex)
+{
+    gsBase[gi] = ScatterSetup(dtid, gi); // the page count, until the scan below
+    GroupMemoryBarrierWithGroupSync();
+    if (gi == 0u)
+    {
+        uint run = 0u;
+        for (uint t = 0u; t < kScatterThreads; ++t) { const uint n = gsBase[t]; gsBase[t] = run; run += n; }
+        gsTotal = run;
+    }
+    GroupMemoryBarrierWithGroupSync();
+    const uint total = gsTotal;
+    // The owner of q: the last thread whose first page is at or before it (a thread with no pages shares its base with
+    // the next one, so the last such thread always has q inside its run). Searched once, then followed: q only grows.
+    uint t = 0u;
+    [unroll] for (uint step = kScatterThreads / 2u; step > 0u; step >>= 1u)
+    {
+        if (gsBase[t + step] <= gi) { t += step; }
+    }
+    for (uint q = gi; q < total; q += kScatterThreads)
+    {
+        while (t + 1u < kScatterThreads && gsBase[t + 1u] <= q) { ++t; }
+        // Which mip (a local view's pyramid; a clipmap target has one), then which page of its rect (row-major).
+        const uint4 who = gsWho[t];
+        const uint mipCount = (who.z >> kWhoMipShift) & 0xFu;
+        uint local = q - gsBase[t];
+        uint L = 0u;
+        uint2 r = gsRect[t * kScatterMips];
+        uint area = (r.y & 0xFFFFu) * (r.y >> 16);
+        while (local >= area && L + 1u < mipCount)
+        {
+            local -= area;
+            ++L;
+            r = gsRect[t * kScatterMips + L];
+            area = (r.y & 0xFFFFu) * (r.y >> 16);
+        }
+        const uint w = r.y & 0xFFFFu;
+        const uint px = (r.x & 0xFFFFu) + local % w, py = (r.x >> 16) + local / w;
+        const uint pageId = VsmPageId(who.y, L, px, py);
+        const uint entry = PageTable[pageId];
+        if ((entry & 0x80000000u) == 0u) { continue; } // not resident -> nothing to draw into
+        ScatterResidentPage(t, who, L, px, py, pageId, entry);
     }
 }

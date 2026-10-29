@@ -397,6 +397,9 @@ namespace
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze = value != 0.0f; return true; }
+        // ...and frozen at THIS clock (seconds), --wind-freeze=<s> for a running process: two arms frozen with
+        // wind.freeze:1 at different moments hold different poses, and the VSM pages the receivers request with them.
+        if (setting == "wind.freezeAt") { vfx::g_windFreeze = true; vfx::g_windFrozenTime = std::max(0.0f, value); return true; }
         // Fly along the view at this many m/s (negative = backwards, 0 stops) -- motion through a running editor.
         if (setting == "camera.fly") { g_camFlyForward = std::clamp(value, -100.0f, 100.0f); return true; }
         // ...and turn at this many degrees a second (positive = to the right, 0 stops): --cam-fly-yaw for a running

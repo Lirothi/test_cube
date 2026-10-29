@@ -462,7 +462,8 @@ the night with the daytime HDRI's 12,000 lux fill (x skyFillIntensity 2) and rea
 `hdriLux`, `irradianceScale`) to tell which fill is lighting the frame.
 `set_settings {set: "wind.freeze:1"}` holds the wind + ocean pose (`--wind-freeze` for a running
 editor; `0` releases it, `reset_settings` does not): without it two looks of the sea are two different
-seas. `set_settings {set: "camera.fly:-3.8"}` flies the camera along its own view at that many m/s (negative =
+seas. It holds the moment it is set; `wind.freezeAt:<seconds>` (`--wind-freeze=<s>`) holds THAT clock, so arms set
+up minutes apart see the same pose (the surf simulation still differs: it carries state). `set_settings {set: "camera.fly:-3.8"}` flies the camera along its own view at that many m/s (negative =
 backwards, `0` stops it, `reset_settings` does not): a temporal history's artefact that only shows in MOTION is
 looked at in the running editor, `screenshot` with `settleFrames` taking it mid-flight (`--set=camera.fly:` headless;
 `--cam-fly` drifts along the WORLD's x/z instead). Stop it in a `finally` -- a script that dies leaves it flying.
@@ -701,10 +702,17 @@ is the owner's call (plan Q4) -- back the files up first.
   `tools/tessy_baseline.py --port <p>` measures the plan's three views.
 - Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms on
   the VS path (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters) -> 0.51 with the mesh shader (its draw
-  0.41 -> 0.23); the bathroom 0.91 -> 0.59 -> 0.48, the tunnel 0.67 -> 0.33 -> 0.27. Time an A/B of the raster with the
+  0.41 -> 0.23) -> 0.40 with the scatter's pages shared by the group (below); the bathroom 0.91 -> 0.59 -> 0.48 ->
+  0.46, the tunnel 0.67 -> 0.33 -> 0.27 -> 0.30 (that last row another day's run). Time an A/B of the raster with the
   wind FROZEN (`wind.freeze:1`: the pages still redraw, the cluster counts stay put) -- with the wind running the two
   arms draw different counts and the EMA mixes them (a first reading put the 256-vertex mesh shader ahead; frozen, it
   was behind).
+- The page scatter (`vsm_page_scatter_cs.hlsl`, every VSM page render pays it): a thread finds its (object, target)'s
+  page rects and counts them, the GROUP queues those pages (a prefix sum in groupshared) and all 64 threads take them in
+  turn. Walked by its own thread, each pair waited on its atomic's return before its write and a straddling local caster
+  on 341 page-table reads: grove 0.21 -> 0.08 ms, bathroom 0.22 -> 0.14, the same pairs count for count. Comparing two
+  runs of the scatter needs `wind.freezeAt:<s>` (and `tod.animate:0`): `wind.freeze:1` holds whatever moment it is, and
+  the pages the receivers request move with the pose.
   A picture A/B of it needs the bathroom candles' flicker off and the clouds off (`cloud.enabled:0`): both move with
   time and read as a difference between two shots of the same arm.
 
