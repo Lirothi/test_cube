@@ -1510,6 +1510,16 @@ void Scene::RebuildShadowCasters(Renderer& renderer)
     shadowGpu_.ForceContentRefreshNextFrame();
 }
 
+void Scene::RebuildShadowMegaBuffer(Renderer& renderer)
+{
+    // UpdateForFrame already waited for the GPU and rebuilt the casters; the mesh buffers have decayed to COMMON, so the
+    // batch's implicit-promotion copies are valid, as in RebuildShadowCasters.
+    UploadBatch uploads;
+    if (!uploads.Begin(&renderer)) { return; }
+    shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
+    uploads.SubmitAndWait(&renderer);
+}
+
 void Scene::ReconcileShadowLodCurve(Renderer* renderer)
 {
     // The shadow LOD bias and tier stride pick the caster LOD rasterized into each shadow view.
@@ -3269,6 +3279,9 @@ void Scene::Render(Renderer* renderer) {
     // re-uploading only the movers' entries into this frame's ring region. Pure CPU write into
     // mapped upload memory; no consumer yet.
     shadowGpu_.UpdateForFrame(renderer, objects_);
+    // A caster-set change mid-session (the editor's setEnabled / spawn) was just rebuilt, and that drops the mega VB/IB:
+    // without it the local views lose their compaction and the Tessy atlas path, VSM its single-draw page render.
+    if (shadowGpu_.TakeMegaRebuildRequest()) { RebuildShadowMegaBuffer(*renderer); }
     shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
     shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
     shadowGpu_.PollTessyAtlasStats(renderer); // Tessy N4: the atlas cluster cull's counters of frame N - 3

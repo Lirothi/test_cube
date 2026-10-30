@@ -517,6 +517,14 @@ public:
     // per-group offsets are in vertices / indices (added into the draw args by the setup shader).
     void EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandList* cl); // one-time build on `cl`
     bool MegaReady() const { return megaReady_; }
+    // True once after UpdateForFrame rebuilt a changed caster set mid-session (an editor setEnabled / spawn): that
+    // Rebuild drops the mega buffers, and only an upload batch on the idle GPU (Scene) can make them again.
+    bool TakeMegaRebuildRequest()
+    {
+        const bool wanted = megaRebuildRequest_ && megaWanted_ && !megaBuilt_;
+        megaRebuildRequest_ = false;
+        return wanted;
+    }
     ID3D12Resource* MegaVertexBuffer() const { return megaVB_.Get(); }
     ID3D12Resource* MegaIndexBuffer() const { return megaIB_.Get(); }
     UINT MegaVertexBytes() const { return megaVBBytes_; }
@@ -1002,6 +1010,7 @@ private:
     UINT megaVBBytes_ = 0, megaIBBytes_ = 0, megaStride_ = 0;
     DXGI_FORMAT megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     bool megaWanted_ = false, megaBuilt_ = false, megaReady_ = false;
+    bool megaRebuildRequest_ = false; // UpdateForFrame's mid-session Rebuild (TakeMegaRebuildRequest)
     int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
     bool builtShadowLodBiasNearTier_ = false; // render::g_shadowLodBiasNearTier snapshot
     int builtShadowLodTierStride_ = 1; // normalized render::g_shadowLodTierStride snapshot

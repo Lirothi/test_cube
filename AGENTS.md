@@ -588,6 +588,10 @@ those on a separate `bCastContactShadow`).
   hang like it: every RT build failure logs `RT off: ...` with its HRESULT, and the RT-off path and a failed capture
   call `ReportDeviceRemovalOnce` (DRED into `device_removed.log`), so a removal nobody noticed still leaves its
   record; an intermittent hang needs 12+ launches an arm before an arm counts as clean (6 clean of one arm was luck).
+  The same `Rebuild` drops the consolidated mega VB/IB, which only an upload batch on the idle GPU can make: Scene
+  rebuilds it right after (`ShadowGpuData::TakeMegaRebuildRequest` -> `Scene::RebuildShadowMegaBuffer`). Until
+  2026-10-30 nothing did, and after the "Lamps" switch-on the local views lost their compaction and the Tessy atlas
+  path (VSM its single-draw page render) until some full rebuild came along -- 13 s in one Release session.
 
 ## Rest Pose — How a New Copy Lies
 

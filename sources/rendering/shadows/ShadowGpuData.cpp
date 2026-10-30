@@ -2382,8 +2382,13 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         // wind_test's "Lamps" group on mid-session freed ShadowGpuData.Bounds under the GPU: a DRED page fault on
         // the freed buffer, DEVICE_HUNG about 1 time in 3 early in a session with async compute (2026-10-27).
         // Mid-session caster-set changes are editor edits; the first build has nothing in flight to wait for.
-        if (instances_.Valid() || bounds_.Valid()) { renderer->WaitForPreviousFrame(); }
+        // The Rebuild drops the mega buffers too, and only an upload batch makes them: Scene takes the request right
+        // after this call (TakeMegaRebuildRequest). Until 2026-10-30 nothing did -- after the owner's "Lamps" switch-on
+        // the local views lost their compaction and Tessy's atlas path for 13 s, until some full rebuild came along.
+        const bool midSession = instances_.Valid() || bounds_.Valid();
+        if (midSession) { renderer->WaitForPreviousFrame(); }
         Rebuild(renderer, objects);
+        megaRebuildRequest_ = midSession;
         forceContentRefresh_ = false; // this frame's mover signal already covers the rebuild
         lastMoverCount_ = count_; // full rebuild -> treat everything as changed (don't skip VSM)
         return count_;

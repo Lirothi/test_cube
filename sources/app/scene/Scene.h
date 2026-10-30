@@ -276,6 +276,8 @@ private:
     // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
     // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
     void RebuildShadowCasters(Renderer& renderer);
+    // The mega VB/IB alone, after ShadowGpuData::UpdateForFrame rebuilt a changed caster set (it waited for the GPU).
+    void RebuildShadowMegaBuffer(Renderer& renderer);
     // Poll the live shadow-LOD bias/stride against the caster tables; rebuild on a change.
     void ReconcileShadowLodCurve(Renderer* renderer);
     void UpdateCascades(const Camera& camera, Renderer* renderer);
