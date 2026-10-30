@@ -681,7 +681,9 @@ buffer and never notice. `.mesh.bin` v4 carries them after each LOD; v3 still lo
 mesh stays on the classic path in the same frame (the log line `tessy: clusters for N of M caster groups (...);
 classic path: <assets>` says who is where). `--tessy-upgrade=<a.mesh.bin>,...` rewrites a v3 file as v4 in place --
 the same vertices byte for byte, the same triangles per (LOD x submesh), hashes kept; it writes into `models/`, so it
-is the owner's call (plan Q4) -- back the files up first.
+is the owner's call (plan Q4) -- back the files up first. Done for all 148 on 2026-10-30 (owner): the shared `models/`
+is v4 (log `classic path: none`), the v3 originals are in `D:\Programming\test_cube_backups\mesh_bin_v3_2026-10-30`. A
+checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every one of them.
 
 - The VSM page setup hands each (page x caster bucket) of a group with clusters to `tessy_vsm_cull_cs.hlsl`, which
   tests every (caster, cluster) box against the page and appends survivors; `VSM_TESSY` of `shadow_indirect_csm.hlsl`
