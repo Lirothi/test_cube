@@ -275,7 +275,8 @@ private:
     void UpdateSdsmFrameParams(Renderer* renderer); // S15: the analysis CB + this frame's SDSM gate
     // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
     // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
-    void RebuildShadowCasters(Renderer& renderer);
+    // `sameGeometry`: only the shadow view capacity changed (ShadowGpuData::Rebuild keeps the local shadow cache).
+    void RebuildShadowCasters(Renderer& renderer, bool sameGeometry = false);
     // The mega VB/IB alone, after ShadowGpuData::UpdateForFrame rebuilt a changed caster set (it waited for the GPU).
     void RebuildShadowMegaBuffer(Renderer& renderer);
     // Poll the live shadow-LOD bias/stride against the caster tables; rebuild on a change.

@@ -1905,7 +1905,8 @@ namespace
     // faded, as [lightIndex, slot (-1 = none), fade, resolution, page, x, y] (plan S9: its place in the atlas -- a
     // spot's square, a point's 3f x 2f block; page -1 = none) -- what UE's CalculateShadowFadeAlpha and its
     // whole-scene sizing (plan S4: a spot's square, a point's cube face) made of it.
-    // Plan S7: + "cache": this frame's {hits, misses, uncached, evicted, entries, pages} of the static-caster cache.
+    // Plan S7: + "cache": this frame's {hits, misses, uncached, evicted, entries, pages} of the static-caster cache, and
+    // "totals" since the process started (misses by reason, pool flushes, static-set changes, texels filled).
     std::string LocalShadowsJson(const LightManager& lm, const render::LocalShadowCache& cache)
     {
         std::string out = ",\"localShadows\":{\"spots\":[";
@@ -1936,11 +1937,21 @@ namespace
             separator = ",";
         }
         const render::LocalShadowCache::Stats& cs = cache.FrameStats();
-        char cacheItem[192];
+        const render::LocalShadowCache::Totals& ct = cache.RunTotals();
+        char cacheItem[896];
         std::snprintf(cacheItem, sizeof(cacheItem),
                       "],\"cache\":{\"hits\":%u,\"misses\":%u,\"uncached\":%u,\"evicted\":%u,\"entries\":%u,\"pages\":%u,"
-                      "\"directLights\":%u}}",
-                      cs.hits, cs.misses, cs.uncached, cs.evicted, cs.entries, cache.ResidentPages(), cs.direct);
+                      "\"directLights\":%u,\"totals\":{\"frames\":%llu,\"hits\":%llu,\"missNew\":%llu,\"missRes\":%llu,"
+                      "\"missMoved\":%llu,\"missStale\":%llu,\"uncached\":%llu,\"uncachedNoRoom\":%llu,\"evicted\":%llu,\"flushes\":%llu,"
+                      "\"staticBumps\":%llu,\"fillTexels\":%llu,\"blockNoRoom\":%llu}}}",
+                      cs.hits, cs.misses, cs.uncached, cs.evicted, cs.entries, cache.ResidentPages(), cs.direct,
+                      static_cast<unsigned long long>(ct.frames), static_cast<unsigned long long>(ct.hits),
+                      static_cast<unsigned long long>(ct.missNew), static_cast<unsigned long long>(ct.missRes),
+                      static_cast<unsigned long long>(ct.missMoved), static_cast<unsigned long long>(ct.missStale),
+                      static_cast<unsigned long long>(ct.uncached), static_cast<unsigned long long>(ct.uncachedNoRoom),
+                      static_cast<unsigned long long>(ct.evicted),
+                      static_cast<unsigned long long>(ct.flushes), static_cast<unsigned long long>(ct.staticBumps),
+                      static_cast<unsigned long long>(ct.fillTexels), static_cast<unsigned long long>(ct.blockNoRoom));
         out += cacheItem;
         return out;
     }

@@ -1492,7 +1492,7 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
 }
 #endif // WITH_EDITOR
 
-void Scene::RebuildShadowCasters(Renderer& renderer)
+void Scene::RebuildShadowCasters(Renderer& renderer, bool sameGeometry)
 {
     // Rebuild the caster data + consolidated mega VB/IB on a fresh GPU-idle upload batch (the meshes'
     // buffers have decayed to COMMON, so EnsureMegaBuffer's implicit-promotion copies are valid).
@@ -1502,7 +1502,7 @@ void Scene::RebuildShadowCasters(Renderer& renderer)
     renderer.WaitForPreviousFrame(); // no in-flight frame references the old mega buffers before we free them
     UploadBatch uploads;
     if (!uploads.Begin(&renderer)) { return; }
-    shadowGpu_.Rebuild(&renderer, objects_);
+    shadowGpu_.Rebuild(&renderer, objects_, sameGeometry);
     shadowGpu_.EnsureMegaBuffer(&renderer, uploads.CommandList());
     uploads.SubmitAndWait(&renderer);
     // Content (materials/geometry) may have changed without a transform change. Keep the next VSM
@@ -2585,19 +2585,24 @@ void Scene::PrepareViews(Renderer* renderer)
                 render::LocalShadowCache::Rect block{};
                 const std::uint8_t mode = request(faces[0], render::LocalShadowCache::PointBlockId(
                     static_cast<std::uint32_t>(lightIndex)), render::PointShadowLinearDepth(), true, block);
-                for (std::uint32_t face = 0; face < 6u; ++face)
+                if (mode != static_cast<std::uint8_t>(render::LocalShadowCache::Mode::Uncached))
                 {
-                    place(faces[face], mode, block, (face % 3u) * faceRes, (face / 3u) * faceRes);
+                    for (std::uint32_t face = 0; face < 6u; ++face)
+                    {
+                        place(faces[face], mode, block, (face % 3u) * faceRes, (face / 3u) * faceRes);
+                    }
+                    if (readsDirect(faces[0]))
+                    {
+                        for (std::uint32_t face = 0; face < 6u; ++face) { faces[face].directRead = true; }
+                        lightManager_.SetPointShadowDirect(lightIndex, { block.page, block.x, block.y });
+                        localShadowCache_.CountDirect();
+                    }
+                    continue;
                 }
-                if (readsDirect(faces[0]))
-                {
-                    for (std::uint32_t face = 0; face < 6u; ++face) { faces[face].directRead = true; }
-                    lightManager_.SetPointShadowDirect(lightIndex, { block.page, block.x, block.y });
-                    localShadowCache_.CountDirect();
-                }
-                continue;
+                // No free 4f square for the block (a pool full of smaller pieces, half of it free): the six faces as
+                // squares of their own, copied in -- cached all the same, only not read directly.
             }
-            // A face too big for a block in a page (4f > a page): six squares of their own, copied in as before.
+            // A face too big for a block in a page (4f > a page), or no room for one: six squares of their own, copied in.
             for (std::uint32_t face = 0; face < 6u; ++face)
             {
                 render::LocalShadowCache::Rect rect{};
@@ -3017,7 +3022,7 @@ bool Scene::ReconcileShadowCapacity(Renderer* renderer)
 
     renderer->WaitForPreviousFrame(); // nothing in flight reads a buffer re-made below
     ApplyShadowCapacity(renderer, spots, points);
-    RebuildShadowCasters(*renderer);
+    RebuildShadowCasters(*renderer, /*sameGeometry=*/true);
     return true;
 }
 
@@ -3124,11 +3129,16 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     const bool momentsOk = (wantMoments == sdsm_.MomentsReady()) &&
                            (!wantMoments || sdsm_.MomentsRes() == wantAtlasRes);
     // Plan S7: the local shadow cache's pool -- grown to what the cache asked for (LocalShadowCache::WantedPages), up to
-    // its knob, in pages of the spot page's size; freed with the cache off and in VSM (no atlas lights to cache).
+    // its knob, in pages of the spot page's size; freed with the cache off and in VSM (no atlas lights to cache). It grows
+    // by DOUBLING: every growth is a GPU-idle point, and wind_test's "Lamps" grew it a page at a time, 1 -> 8 in eight
+    // stalls (2026-10-30).
     const bool wantCache = !wantVsm && render::g_localShadowCache && render::g_localShadowCompact;
     const unsigned cacheCap = std::clamp(render::g_localShadowCacheMaxPages, 1u, render::kLocalShadowCacheMaxPagesLimit);
     const unsigned haveCachePages = localShadowCache_.ResidentPages();
-    const unsigned wantCachePages = wantCache ? std::min(std::max(haveCachePages, localShadowCache_.WantedPages()), cacheCap) : 0u;
+    const unsigned askedCachePages = localShadowCache_.WantedPages();
+    const unsigned wantCachePages = wantCache ? std::min(askedCachePages > haveCachePages ? std::max(askedCachePages, 2u * haveCachePages)
+                                                                                         : haveCachePages, cacheCap)
+                                              : 0u;
     const bool cacheOk = wantCachePages == haveCachePages &&
                          (wantCachePages == 0u || localShadowCache_.PageSize() == wantLocalRes);
     if (vsmOk && atlasOk && sdsmOk && atlasResOk && momentsOk && localResOk && pagesOk && cacheOk) { return; } // all in sync — the common per-frame path
@@ -3152,7 +3162,20 @@ void Scene::ReconcileShadowMode(Renderer* renderer)
     }
     if (!cacheOk) // S7 (the GPU is idle here, the rule for freeing anything a frame in flight may still read)
     {
-        localShadowCache_.EnsurePool(renderer->GetDevice(), renderer->Declarations(), wantLocalRes, wantCachePages);
+        // More pages of the same size keep what is cached (the old pages copied over): re-creating the pool threw every
+        // light's statics away -- the Lamps' 61 views refilled at once, 0.25-0.5 ms in one frame. Anything else re-creates.
+        bool grown = false;
+        if (wantCachePages > haveCachePages && haveCachePages != 0u && localShadowCache_.PageSize() == wantLocalRes)
+        {
+            UploadBatch copy;
+            if (copy.Begin(renderer))
+            {
+                grown = localShadowCache_.GrowPool(renderer->GetDevice(), renderer->Declarations(), wantCachePages,
+                                                   copy.CommandList(), copy.KeepAlive());
+                copy.SubmitAndWait(renderer);
+            }
+        }
+        if (!grown) { localShadowCache_.EnsurePool(renderer->GetDevice(), renderer->Declarations(), wantLocalRes, wantCachePages); }
     }
     if (!pagesOk)
     {

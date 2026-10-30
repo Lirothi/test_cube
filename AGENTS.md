@@ -1362,6 +1362,32 @@ step at the far end (0.9 mm at 12 m, 5 mm at 30 m), under the texel bias: local_
 a dune's self-shadow by a low lamp that the old near had clipped and the atlases draw. `--set shadow.pointNearUe:0` =
 the old nears in both modes (the A/B; it switches live).
 
+## Local-Light Shadow Cache (Atlas Modes) and VSM Page Requests -- What Made Them Jump
+
+`get_readouts` `localShadows.cache.totals` counts the static-caster cache (plan S7, `render::LocalShadowCache`) since
+the process started -- misses by reason (`missNew` / `missRes` / `missMoved` / `missStale`), `uncached` / `uncachedNoRoom`,
+`evicted`, `flushes` (the pool re-created with entries in it), `staticBumps`, `fillTexels`, `blockNoRoom` -- because one
+frame's stats, sampled ~every 10 frames, never see a miss (~0.02 a frame in flight). wind_test with "Lamps" at night: a
+still camera has no misses and the cache pass does not run; ONE full refill (every view stale) is 0.23-0.47 ms -- the
+"0.25-0.5 ms that jumps" was refills, all of them warm-up (2026-10-30, details in docs/local_light_shadows_plan.md S7):
+
+- **The pool grows by doubling and keeps its entries** (`LocalShadowCache::GrowPool`: the old pages copied whole into the
+  new array on an `UploadBatch` at the GPU-idle reconcile). It grew a page at a time, each `EnsurePool` throwing every
+  cached light away (eight stalls, 61 views refilled at once).
+- **A capacity-only rebuild keeps the cache** (`RebuildShadowCasters(renderer, sameGeometry = true)` from
+  `ReconcileShadowCapacity`): the view slots doubling does not change what the casters draw.
+- **The working set is never evicted**: a request evicts only entries unused this frame AND the last one -- a failing
+  request used to throw out the lights asked later in the same frame, which refilled next frame (0.23 evictions, 0.22
+  refills, 0.31 uncached a frame in flight). A point light's 3f x 2f block with no free 4f square (512^2 faces need a whole
+  2048^2 page) is cached as six face squares instead; the buddy allocator takes a free block on the FULLEST page, so empty
+  pages stay whole. Event `local shadow cache: no room for ...` (throttled) names the free space and the largest square.
+
+`vsm_page_request_cs.hlsl` marks a page with `MarkPage`: read the word, `InterlockedOr` only while the bit is clear. Every
+pixel of every local light marks its page's whole coarser mip chain, and the coarse levels are a few words a view -- one
+atomic from nearly every thread on the same address. `Pass_VsmPageRequest` 0.42 -> 0.10 ms in the bathroom at night,
+0.28-0.33 -> 0.10-0.12 on the grove (day and night), the frame -0.2 to -0.4 ms; VSM now matches SDSM in the bathroom at
+night (the grove's remaining +0.5 ms is the lamps' page RENDER). Any new bit-packed request / mark buffer: the same rule.
+
 ## Local-Light Falloff -- Metres, Not UE's Centimetres
 
 `LightDistanceAttenuation` (`shaders/utils.hlsli`, every point/spot path: the light passes, glass, the RT

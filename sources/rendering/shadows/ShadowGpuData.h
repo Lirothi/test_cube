@@ -54,8 +54,10 @@ class ShadowGpuData
 public:
     // Full (re)build of the per-caster buffers for a caster set — call at level load, under
     // GPU idle. Assigns caster ids = enumeration order over `objects` (shadow casters only).
+    // `sameGeometry`: only the view capacity changed (Scene::ReconcileShadowCapacity) -- the casters and what they draw
+    // are as they were, so the local shadow cache's pictures stay valid (LocalStaticVersion is kept).
     void Rebuild(Renderer* renderer,
-                 const std::vector<std::unique_ptr<RenderableObjectBase>>& objects);
+                 const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, bool sameGeometry = false);
 
     // Per-frame per-caster CPU update. Recomputes instance + bounds, writes only changed
     // entries into this frame's ring region, returns the number re-uploaded (0 on a static

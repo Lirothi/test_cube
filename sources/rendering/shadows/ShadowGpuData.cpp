@@ -1887,7 +1887,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsReadSrv(UINT f) const
 }
 
 void ShadowGpuData::Rebuild(Renderer* renderer,
-    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
+    const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, bool sameGeometry)
 {
     if (!renderer) { return; }
     ++drawTablesGeneration_; // the shadow views' staged tables name what this replaces
@@ -2603,7 +2603,9 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     RebuildCullDescriptors(renderer);
     RebuildUnifiedDescriptors(renderer); // Step 2: per-region SRVs onto the unified buffers
     valState_ = 0; // re-validate after a caster-set change
-    ++localStaticVersion_; // S7: a new caster set -- every cached local-light picture is stale
+    // S7: a new caster set -- every cached local-light picture is stale. Not after a capacity-only rebuild: the casters
+    // draw what they drew, and the Lamps' capacity growth (two doublings while the camera turned) refilled every light.
+    if (!sameGeometry) { ++localStaticVersion_; }
     // ...and every cached VSM page (ComputePageRenderDecisions: forceAll once). It used to follow from the caster-LOD
     // table changing size, but a Cast Shadow switch keeps the mesh in the table (IsCaster) and only flips its bounds'
     // verdict: the pages it should now darken -- or stop darkening -- would stay as cached.

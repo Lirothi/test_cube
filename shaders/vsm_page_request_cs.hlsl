@@ -46,6 +46,19 @@ Texture2D                       DepthT  : register(t0);
 StructuredBuffer<VsmViewData>   Views   : register(t1); // plan S9e: numViews records (the request slot)
 RWStructuredBuffer<uint>        Request : register(u0);
 
+// Sets a page's request bit -- read first, the atomic only while the bit is still clear. Every pixel of every light marks
+// its page's whole coarser mip chain, so the coarse levels' few words took one InterlockedOr from nearly every thread:
+// the same address, serialised (the bathroom at night, five candles: 0.55 ms). A read that races the first setter only
+// costs a redundant atomic; nothing is lost.
+void MarkPage(uint page)
+{
+    const uint word = page >> 5u;
+    const uint bit = 1u << (page & 31u);
+    if ((Request[word] & bit) != 0u) { return; }
+    uint prev;
+    InterlockedOr(Request[word], bit, prev);
+}
+
 // One local view's pages for receiver P: its projection, the mip (the pixel's footprint in ITS texels, plan S10e, or the
 // camera-distance level), and that mip with every coarser one marked.
 void MarkLocalView(uint v, float3 P, bool pixelMip, float pixelRadiusWorld, uint levelByDistance, uint maxLevel)
@@ -70,9 +83,7 @@ void MarkLocalView(uint v, float3 P, bool pixelMip, float pixelRadiusWorld, uint
         uint axisL = kL0Axis >> L;
         uint pageX = min((uint)(suv.x * axisL), axisL - 1u);
         uint pageY = min((uint)(suv.y * axisL), axisL - 1u);
-        uint page = v * kPagesPerView + kLevelOffset[L] + pageY * axisL + pageX;
-        uint prev;
-        InterlockedOr(Request[page >> 5u], 1u << (page & 31u), prev);
+        MarkPage(v * kPagesPerView + kLevelOffset[L] + pageY * axisL + pageX);
     }
 }
 
@@ -163,9 +174,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint axis0 = kL0Axis; // clipmap levels use only level 0 (the level IS the LOD)
         uint cpx = min((uint)(csuv.x * axis0), axis0 - 1u);
         uint cpy = min((uint)(csuv.y * axis0), axis0 - 1u);
-        uint cpage = cv * kPagesPerView + kLevelOffset[0] + cpy * axis0 + cpx;
-        uint cprev;
-        InterlockedOr(Request[cpage >> 5u], 1u << (cpage & 31u), cprev);
+        MarkPage(cv * kPagesPerView + kLevelOffset[0] + cpy * axis0 + cpx);
 
         // The sampler blends by the fine level's square-edge coordinate. Request the parent page
         // only in that same band, so width 0 has zero residency/raster cost and a narrow band adds
@@ -184,9 +193,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                         float2 puv = float2(0.5f * pndc.x + 0.5f, 0.5f - 0.5f * pndc.y);
                         uint ppx = min((uint)(puv.x * (float)kL0Axis), kL0Axis - 1u);
                         uint ppy = min((uint)(puv.y * (float)kL0Axis), kL0Axis - 1u);
-                        uint ppage = (cv + 1u) * kPagesPerView + kLevelOffset[0] + ppy * kL0Axis + ppx;
-                        uint pprev;
-                        InterlockedOr(Request[ppage >> 5u], 1u << (ppage & 31u), pprev);
+                        MarkPage((cv + 1u) * kPagesPerView + kLevelOffset[0] + ppy * kL0Axis + ppx);
                     }
                 }
             }

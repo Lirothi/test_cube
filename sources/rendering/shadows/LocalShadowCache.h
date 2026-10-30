@@ -65,6 +65,11 @@ public:
     // ---- GPU side: the pool (recreated only where the GPU is idle -- Scene::ReconcileShadowMode) -------------------
     // Recreation empties the cache. `pages` 0 frees it.
     void EnsurePool(ID3D12Device* dev, ResourceDeclarations decls, std::uint32_t pageSize, std::uint32_t pages);
+    // More pages of the same size, KEEPING what is cached: the old pages are copied into the new array on `cl` (an upload
+    // batch the caller submits and waits for; the old pool rides `keepAlive` until then) and the entries stay valid.
+    // False (nothing changed) when there is no pool to grow or the new one cannot be made -- EnsurePool then.
+    bool GrowPool(ID3D12Device* dev, ResourceDeclarations decls, std::uint32_t pages, ID3D12GraphicsCommandList* cl,
+                  std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* keepAlive);
     ID3D12Resource* Pool() const { return pool_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE PoolSrv() const;
     std::uint32_t ResidentPages() const { return pages_; }
@@ -80,7 +85,7 @@ public:
     void BeginFrame(std::uint64_t frame, std::uint32_t staticVersion);
     // `pointBlock`: key.res is a FACE's size and the entry a point light's 3f x 2f block (PointBlockId; its corner and
     // the face size come back in `out`), placed in one buddy square of 4f with the unused quarter-squares handed back --
-    // only while 4f fits a page (PointBlockFits).
+    // only while 4f fits a page (PointBlockFits). Uncached for a block = no 4f square: ask the six faces (PointId) instead.
     Mode Request(const Key& key, Rect& out, bool pointBlock = false);
     bool PointBlockFits(std::uint32_t faceRes) const { return faceRes >= kMinBlock && 4u * faceRes <= pageSize_; }
     // The misses requested this frame got their fill recorded (`ran`), or did not and stay invalid.
@@ -98,6 +103,17 @@ public:
     };
     const Stats& FrameStats() const { return stats_; }
     void CountDirect() { ++stats_.direct; }
+    // Since the process started (the readouts: a frame's stats sampled every ~10 frames never see a miss). A miss by
+    // why it missed: no entry (new light, or one evicted / flushed), a new resolution, the light's view or depth
+    // encoding moved, or the picture went stale (a static caster changed, a fill that did not run). `flushes` = the
+    // pool re-created with entries in it (every light misses after), `staticBumps` = the static set changed.
+    struct Totals
+    {
+        std::uint64_t frames = 0, hits = 0, missNew = 0, missRes = 0, missMoved = 0, missStale = 0;
+        std::uint64_t uncached = 0, uncachedNoRoom = 0, evicted = 0, flushes = 0, staticBumps = 0, fillTexels = 0;
+        std::uint64_t blockNoRoom = 0; // a point block found no 4f square: its faces were asked on their own (Scene)
+    };
+    const Totals& RunTotals() const { return totals_; }
 
 private:
     struct Block
@@ -116,6 +132,11 @@ private:
     };
 
     void ResetAllocator();
+    // The pool texture (pages x pageSize_^2, D16 typeless) in `state`, and its views: a DSV per page, the array's SRV.
+    bool CreatePoolTexture(ID3D12Device* dev, std::uint32_t pages, D3D12_RESOURCE_STATES state,
+                           Microsoft::WRL::ComPtr<ID3D12Resource>& out) const;
+    bool CreatePoolViews(ID3D12Device* dev, ID3D12Resource* pool, std::uint32_t pages,
+                         Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>& dsv, Microsoft::WRL::ComPtr<ID3D12DescriptorHeap>& srv);
     bool Allocate(std::uint32_t size, Rect& out);
     bool AllocatePointBlock(std::uint32_t faceRes, Rect& out);
     void Free(const Rect& r);
@@ -141,6 +162,7 @@ private:
     std::uint32_t wantedPages_ = 0;
     bool fillsRan_ = false;
     Stats stats_{};
+    Totals totals_{};
 };
 
 } // namespace render
