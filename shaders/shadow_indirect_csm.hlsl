@@ -57,6 +57,13 @@
 #ifndef TESSY_ATLAS_MS
 #define TESSY_ATLAS_MS 0
 #endif
+// The cluster view (tessy::g_debugView): TESSY_ATLAS_MS with TESSY_VIEW draws the CAMERA row's records in colour over
+// the lit frame -- b1 the camera's G-buffer PerView (BuildGBufferViewCB: the jittered matrix and the same wind), no
+// depth bias, no linear depth; the pixel shader returns the cluster's (or, with bit 31 of the root constant, the
+// meshlet's) colour, shaded a little by the normal, after the masked clip.
+#ifndef TESSY_VIEW
+#define TESSY_VIEW 0
+#endif
 
 // Texture streaming plan A6: GBUFFER_BINDLESS=1 (with SHADOW_MASKED) reads the masked albedo through
 // SM6.6 ResourceDescriptorHeap[] -- GroupMask.x is then the texture's slot in the shared heap, the
@@ -176,6 +183,25 @@
 #else
 #define SHADOW_LINEAR_OUT
 #endif
+#if TESSY_VIEW
+#define TESSY_VIEW_OUT nointerpolation uint viewId : TEXCOORD5; float3 viewN : TEXCOORD6;
+#else
+#define TESSY_VIEW_OUT
+#endif
+#if TESSY_VIEW
+// One colour per cluster (or meshlet): a hash of its index, kept off black and white, a little shading so the shapes read.
+float4 TessyViewShade(uint id, float3 n)
+{
+    uint h = id * 0x9E3779B1u;
+    h ^= h >> 16;
+    h *= 0x85EBCA6Bu;
+    h ^= h >> 13;
+    const float3 c = 0.12f + 0.75f * float3(h & 0xFFu, (h >> 8) & 0xFFu, (h >> 16) & 0xFFu) * (1.0f / 255.0f);
+    const float lit = 0.55f + 0.45f * abs(dot(normalize(n), float3(0.36f, 0.86f, 0.36f)));
+    return float4(c * lit, 1.0f);
+}
+#endif
+
 
 // Matches render::InstancePerObject (224 bytes) / the InstanceArray element in gbuffer_common.
 // W3 grew it 208 -> 224 to add windStrength; the tail (emissive + pad) is unused by the shadow
@@ -462,6 +488,7 @@ struct VSOutMasked
     nointerpolation float cutoff  : TEXCOORD2;
     nointerpolation float baseAlpha : TEXCOORD4; // local-light plan S8: the slot's baseColor.a, as the G-buffer's clip
     SHADOW_LINEAR_OUT                          // plan S4
+    TESSY_VIEW_OUT
 #if VSM_PAGE
     float4 CD : SV_ClipDistance0; // the page's four borders (replaces the per-page scissor)
 #endif
@@ -476,6 +503,7 @@ struct PSInMasked
     nointerpolation float cutoff  : TEXCOORD2;
     nointerpolation float baseAlpha : TEXCOORD4;
     SHADOW_LINEAR_OUT
+    TESSY_VIEW_OUT
 };
 
 VSOutMasked MaskedVS(VSInMasked i)
@@ -552,7 +580,14 @@ void MaskedClip(PSInMasked i)
     ShadowAlphaClip(a * i.baseAlpha, i.cutoff, i.H.xy); // glass: a dithered share (shadow_depth_common.hlsli)
 }
 
-#if SHADOW_LINEAR_DEPTH
+#if TESSY_VIEW
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+float4 PSMain(PSInMasked i) : SV_Target
+{
+    MaskedClip(i);
+    return TessyViewShade(i.viewId, i.viewN);
+}
+#elif SHADOW_LINEAR_DEPTH
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]
 float PSMain(PSInMasked i) : SV_Depth
 {
@@ -580,11 +615,12 @@ struct VSOutD
 {
     float4 H : SV_POSITION;
     SHADOW_LINEAR_OUT // plan S4
+    TESSY_VIEW_OUT
 #if VSM_PAGE
     float4 CD : SV_ClipDistance0; // the page's four borders (replaces the per-page scissor)
 #endif
 };
-struct PSInD { float4 H : SV_POSITION; SHADOW_LINEAR_OUT }; // the PS never reads CD (see the masked variant)
+struct PSInD { float4 H : SV_POSITION; SHADOW_LINEAR_OUT TESSY_VIEW_OUT }; // the PS never reads CD (see the masked variant)
 
 VSOutD OpaqueVS(VSInIndirect i)
 {
@@ -636,7 +672,10 @@ VSOutD VSMain(VSInIndirect i)
 }
 #endif
 
-#if SHADOW_LINEAR_DEPTH
+#if TESSY_VIEW
+[RootSignature(SHADOW_INDIRECT_CSM_RS)]
+float4 PSMain(PSInD i) : SV_Target { return TessyViewShade(i.viewId, i.viewN); }
+#elif SHADOW_LINEAR_DEPTH
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]
 float PSMain(PSInD i) : SV_Depth { return saturate(i.linearDepth); }
 #else
@@ -771,7 +810,7 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
             out vertices TessyAtlasVertex verts[64],
             out indices uint3 tris[128])
 {
-    const uint2 run = TessyAtlasViewInfo[gTessyAtlasView]; // {first record, records}
+    const uint2 run = TessyAtlasViewInfo[gTessyAtlasView & 0x7FFFFFFFu]; // {first record, records}; bit 31: TESSY_VIEW's
     uint cap, stride;
     TessyVisible.GetDimensions(cap, stride);
     const uint i = gid.y * kTessyMsRow + gid.x;
@@ -807,6 +846,10 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
         o.baseAlpha = ip.baseColor.a;
         o.texSlot = gm.x;
         o.cutoff = asfloat(gm.y);
+#endif
+#if TESSY_VIEW
+        o.viewId = (gTessyAtlasView & 0x80000000u) != 0u ? rec.y : rec.w; // the meshlet, or the cluster
+        o.viewN = mul(N, (float3x3)ip.world);
 #endif
         verts[lane] = o;
     }

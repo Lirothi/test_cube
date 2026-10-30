@@ -134,6 +134,9 @@ public:
         // validation-readback frame (the cull's args are compared with a CPU count there).
         bool tessyAtlas = false;
         bool tessyAtlasStats = false; // its counters go to the readback at the consume point
+        // The cluster view (tessy::g_debugView): the camera row's clusters as records (the same kernel, row set 2),
+        // drawn in colour by Main_DebugDraw (RecordTessyView). While it is on the camera's two-pass HZB stays off.
+        bool tessyView = false;
         float tessyWind0[4] = {}; // the frame's wind, as the views' PerView carry it (the clusters' sway pad)
         float tessyWind1[4] = {};
         // Plan S9e: SetLocalRadiusThreshold's values, taken by the builder (the record may run on a worker).
@@ -316,6 +319,16 @@ public:
     // casters the main cull deferred and casters pass B drew (the cut = the difference).
     void PollHzbStats(Renderer* renderer);
     void PollTessyAtlasStats(Renderer* renderer); // Tessy N4: the atlas cull's counters, the same way
+    // Those counters as last polled: [0] main rows', [1] S7 static rows', [2] the camera's (cluster view) meshlet
+    // records, [3] views that did not fit, [4] clusters tested; and the per-row-set capacity.
+    const std::array<std::uint32_t, 8>& TessyAtlasStats() const { return tessyAtlasStats_; }
+    static constexpr std::uint32_t TessyAtlasRowSetCap() { return kTessyAtlasRowSetCap; }
+    // The cluster view: on this frame (PrepareCullPass decided it), and its verdict ("on (clusters)", or why not).
+    bool TessyViewThisFrame() const { return tessyViewFrame_; }
+    const char* TessyViewVerdict() const { return tessyViewVerdict_; }
+    // Draws the camera row's records in colour into the bound scene colour + depth (Main_DebugDraw). `viewCB` = the
+    // camera's G-buffer PerView (BuildGBufferViewCB). False when the view is off this frame.
+    bool RecordTessyView(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_GPU_VIRTUAL_ADDRESS viewCB);
     std::uint32_t HzbDeferred(unsigned c) const { return c < render::CascadeHzb::kCascades ? hzbStats_[c] : 0u; }
     std::uint32_t HzbDrawnB(unsigned c) const { return c < render::CascadeHzb::kCascades ? hzbStats_[render::CascadeHzb::kCascades + c] : 0u; }
 
@@ -724,8 +737,16 @@ private:
     // ---- Tessy N4 (docs/tessy_plan.md): the atlas views' clusters ----
     // Fixed sizes, one region a frame (the ring's rule), created with the cluster tables (UploadTessyTables_): the
     // survivors' meshlet records, per (row set x view) {first record, records} and its DispatchMesh args, the counters.
-    static constexpr std::uint32_t kTessyAtlasRecordCap = 262144u;      // records a frame (4 MB), half a row set
-    static constexpr std::uint32_t kTessyAtlasRows = 2u * render::kShadowViewCeiling; // main rows, then S7's static rows
+    // Three row sets: the main rows, S7's static rows, the camera's row (the cluster view, tessy::g_debugView).
+    static constexpr std::uint32_t kTessyAtlasRowSets = 3u;
+    static constexpr std::uint32_t kTessyAtlasRowSetCap = 131072u;      // records a row set
+    static constexpr std::uint32_t kTessyAtlasRecordCap = kTessyAtlasRowSets * kTessyAtlasRowSetCap; // a frame (6 MB)
+    static constexpr std::uint32_t kTessyAtlasRows = kTessyAtlasRowSets * render::kShadowViewCeiling;
+    // A frame's DispatchMesh args (12 bytes a row), rounded up to 16: a RAW view starts on 16 bytes, and three row sets
+    // of the ceiling's rows are not (the second frame's view removed the device at its creation).
+    static constexpr UINT64 kTessyAtlasArgsRegionBytes = (static_cast<UINT64>(kTessyAtlasRows) * 12u + 15u) & ~UINT64{ 15u };
+    static constexpr std::uint32_t kTessyCameraRowSet = 2u;
+    static constexpr UINT kTessyAtlasCounterBytes = 32u; // [0] [4] [8] claims per row set, [12] not fit, [16] tested
     GpuResource tessyAtlasVisible_;
     GpuResource tessyAtlasInfo_;
     GpuResource tessyAtlasArgs_;
@@ -736,17 +757,25 @@ private:
     std::shared_ptr<Material> tessyAtlasCullMat_;       // tessy_atlas_cull_cs.hlsl
     std::shared_ptr<Material> tessyAtlasMeshMat_;       // shadow_indirect_csm.hlsl TESSY_ATLAS_MS (+ linear twins)
     std::shared_ptr<Material> tessyAtlasMeshMaskedMat_;
+    std::shared_ptr<Material> tessyViewMat_;            // ...TESSY_VIEW: the cluster view's colour draw (Main_DebugDraw)
+    std::shared_ptr<Material> tessyViewMaskedMat_;
     bool tessyAtlasFrame_ = false;                      // PrepareCullPass's decision, read by the draws (workers)
+    bool tessyViewFrame_ = false;                       // ...and the cluster view's, read by Main_DebugDraw
+    std::uint32_t tessyViewMode_ = 0;                   // tessy::g_debugView as this frame took it (1 clusters, 2 meshlets)
     const char* tessyAtlasLogged_ = nullptr;            // the verdict last logged (an event per change)
+    const char* tessyViewLogged_ = nullptr;
+    const char* tessyViewVerdict_ = "off";              // the cluster view's verdict, for Developer Controls
     std::uint64_t tessyAtlasTableFrame_ = ~0ull;        // the draw table, staged once a frame (drawTablesMutex_)
     D3D12_GPU_DESCRIPTOR_HANDLE tessyAtlasTable_{};
+    D3D12_GPU_DESCRIPTOR_HANDLE TessyAtlasDrawTable(Renderer* renderer, UINT f); // stages tessyAtlasTable_ once a frame
     void EnsureTessyAtlasResources(Renderer* renderer);
-    void RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec, bool staticRows);
-    // The counters of frame N - kFrameCount: [0] / [1] the row sets' claimed records, [2] views that did not fit, [3]
-    // clusters tested (logged every 5 s while the atlas path runs).
+    void RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec, std::uint32_t rowSet);
+    // The counters of frame N - kFrameCount: [0] [1] [2] the row sets' claimed records, [3] views that did not fit, [4]
+    // clusters tested (logged every 5 s while a cluster row set runs).
     Microsoft::WRL::ComPtr<ID3D12Resource> tessyAtlasStatsReadback_;
     std::array<std::uint64_t, render::kFrameCount> tessyAtlasStatsFrame_{};
-    std::array<std::uint32_t, 4> tessyAtlasStats_{};
+    std::array<std::uint32_t, 8> tessyAtlasStats_{};
+    static_assert(kTessyAtlasCounterBytes / 4u == 8u, "tessyAtlasStats_ mirrors the counter buffer");
     void EnsureTessyAtlasStatsReadback(Renderer* renderer);
     std::vector<std::uint8_t> casterWindy_;      // per caster: its object sways in the wind (base strength)
     std::vector<std::uint8_t> localDynamicPrev_; // per caster: last frame's movable bit (a change = a new static set)

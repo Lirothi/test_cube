@@ -715,7 +715,16 @@ void SceneRenderer::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ct
         renderer->EmitPoint(t.cl, point);
         renderer->BindSceneColor(t.cl, Renderer::ClearMode::None, true);
 
-        debugDraw->Render(renderer, t.cl, camera.GetViewMatrix(), camera.GetProjMatrix());
+        // Tessy's cluster view: the camera row's clusters in colour, under the debug lines. The camera's own PerView
+        // (the jittered matrix and the wind the G-buffer drew with), so the very same triangles land on the depth.
+        if (frame_->shadowGpu && frame_->shadowGpu->TessyViewThisFrame())
+        {
+            frame_->shadowGpu->RecordTessyView(renderer, t.cl, BuildGBufferViewCB(renderer, camera, frame_->wind));
+        }
+        if (debugDraw && debugDraw->HasCommands())
+        {
+            debugDraw->Render(renderer, t.cl, camera.GetViewMatrix(), camera.GetProjMatrix());
+        }
     }
 
     renderer->EndThreadCommandList(t, ctx.batchIndex);

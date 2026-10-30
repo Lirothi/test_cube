@@ -178,6 +178,7 @@ namespace
         bool vsmSingleDraw = true;
         bool vsmHzbCull = false;
         bool vsmPageCaching = true;
+        bool tessyEnabled = true; // Tessy: the master switch (tessy::g_enabled)
         bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
         bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader)
         bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas)
@@ -589,6 +590,7 @@ namespace
         s.vsmHzbCull = vsm::g_hzbCull;
         s.vsmPageCaching = vsm::g_pageCaching;
         s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel;
+        s.tessyEnabled = tessy::g_enabled;
         s.tessyVsm = tessy::g_vsm;
         s.tessyRaster = tessy::g_vsmMeshShader;
         s.tessyAtlas = tessy::g_atlas;
@@ -779,6 +781,7 @@ namespace
         vsm::g_pageDrawSingle = s.vsmSingleDraw;
         vsm::g_hzbCull = s.vsmHzbCull;
         vsm::g_pageCaching = s.vsmPageCaching;
+        tessy::g_enabled = s.tessyEnabled;
         tessy::g_vsm = s.tessyVsm;
         tessy::g_vsmMeshShader = s.tessyRaster;
         tessy::g_atlas = s.tessyAtlas;
@@ -1002,6 +1005,7 @@ namespace
                     { "hzbCull", s.vsmHzbCull },
                     { "pageCaching", s.vsmPageCaching },
                     { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel },
+                    { "tessyEnabled", s.tessyEnabled },
                     { "tessy", s.tessyVsm },
                     { "tessyRaster", s.tessyRaster },
                     { "tessyAtlas", s.tessyAtlas }
@@ -1230,6 +1234,7 @@ namespace
         Read(vsmSettings, "hzbCull", s.vsmHzbCull);
         Read(vsmSettings, "pageCaching", s.vsmPageCaching);
         Read(vsmSettings, "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel);
+        Read(vsmSettings, "tessyEnabled", s.tessyEnabled);
         Read(vsmSettings, "tessy", s.tessyVsm);
         Read(vsmSettings, "tessyRaster", s.tessyRaster);
         Read(vsmSettings, "tessyAtlas", s.tessyAtlas);
@@ -1574,6 +1579,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmHzbCull:                     current.vsmHzbCull = defaults.vsmHzbCull; break;
     case GraphicsControl::VsmPageCaching:                 current.vsmPageCaching = defaults.vsmPageCaching; break;
     case GraphicsControl::VsmWindAnimateMaxLevel:         current.vsmWindAnimateMaxLevel = defaults.vsmWindAnimateMaxLevel; break;
+    case GraphicsControl::TessyEnabled:                   current.tessyEnabled = defaults.tessyEnabled; break;
     case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
     case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;
     case GraphicsControl::TessyAtlas:                     current.tessyAtlas = defaults.tessyAtlas; break;

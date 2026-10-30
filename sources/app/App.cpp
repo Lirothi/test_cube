@@ -528,6 +528,8 @@ namespace
         if (setting == "vsm.pageCaching")  { vsm::g_pageCaching = value != 0.0f; return true; }
         // Tessy N3 (docs/tessy_plan.md): the VSM page render draws the casters with clusters cluster by cluster; the
         // cull's sway pad (0 only to see what it prevents). Live: the next frame's builder reads them.
+        if (setting == "tessy.enabled") { tessy::g_enabled = value != 0.0f; return true; } // the master switch
+        if (setting == "tessy.debug") { tessy::g_debugView = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; } // the cluster view
         if (setting == "tessy.vsm") { tessy::g_vsm = value != 0.0f; return true; }
         if (setting == "tessy.windPad") { tessy::g_vsmWindPad = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
         if (setting == "tessy.validate") { tessy::g_vsmValidate = value != 0.0f; return true; }
@@ -2032,18 +2034,24 @@ namespace
                               static_cast<unsigned long long>(ds.turned), scene_.GetLightManager().GetMobileLightCount());
                 out += vsmItem;
             }
-            // Tessy N0/N3: the VSM page render's (page, caster) pairs and their clusters, frame N - 3.
+            // Tessy N0/N3: the VSM page render's (page, caster) pairs and their clusters, frame N - 3; the master switch,
+            // the cluster view's verdict and the meshlet records of the cluster rows (atlases, S7's static, the view).
             {
                 const VirtualShadowMap::TessyStats& t = scene_.Vsm().GetTessyStats();
                 const ShadowGpuData& sg = scene_.ShadowGpu();
-                char tessyItem[1024];
+                const auto& as = sg.TessyAtlasStats();
+                char tessyItem[1536];
                 std::snprintf(tessyItem, sizeof(tessyItem),
-                              ",\"tessy\":{\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"meshShader\":%s,"
+                              ",\"tessy\":{\"enabled\":%s,\"debugView\":%u,\"view\":\"%s\",\"atlasRecords\":%u,"
+                              "\"staticRecords\":%u,\"viewRecords\":%u,\"viewsNotFit\":%u,\"rowClustersTested\":%u,"
+                              "\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"meshShader\":%s,"
                               "\"rasterKnob\":%u,\"meshShaderOffReason\":\"%s\",\"groupsWithClusters\":%u,"
                               "\"groups\":%u,\"clusterTable\":%u,\"wholePairs\":%u,\"wholeTris\":%u,\"tessyPairs\":%u,"
                               "\"tessyWholeTris\":%u,\"runs\":%u,\"clustersTested\":%u,\"clusters\":%u,\"records\":%u,\"clusterTris\":%u,"
                               "\"clustersLost\":%u,\"runsLost\":%u,\"padMisses\":%u,\"padMissMaxUm\":%u,"
                               "\"padNeedCm\":%u,\"padGotCm\":%u,\"padMaxOffCm\":%u,\"padDCm\":%u,\"padFCm\":%u}",
+                              tessy::g_enabled ? "true" : "false", tessy::g_debugView, sg.TessyViewVerdict(),
+                              as[0], as[1], as[2], as[3], as[4],
                               t.valid ? "true" : "false", t.tessyOn ? "true" : "false", tessy::g_vsm ? "true" : "false",
                               scene_.Vsm().TessyOffReason(), t.tessyMs ? "true" : "false", tessy::g_vsmMeshShader ? 1u : 0u,
                               scene_.Vsm().TessyMsOffReason(), sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(),

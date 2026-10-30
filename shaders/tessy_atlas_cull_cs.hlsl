@@ -26,9 +26,11 @@
 cbuffer AtlasCullCB : register(b0)
 {
     uint gNumGroups;   // virtual groups (a row's width)
-    uint gFirstView;   // the row of local view 0 in the args (the main rows: kShadowViewCascades; S7's static rows: 0)
-    uint gNumViews;    // local views
-    uint gRowSet;      // 0 = the main rows, 1 = S7's static rows: TessyAtlasViewInfo / Args row gRowSet * gViewStride + view
+    uint gFirstView;   // the row of local view 0 in the args (the main rows: kShadowViewCascades; S7's static rows and
+                       // the camera: 0)
+    uint gNumViews;    // local views (the camera: 1)
+    uint gRowSet;      // 0 = the main rows, 1 = S7's static rows, 2 = the camera's row (the cluster view): its
+                       // TessyAtlasViewInfo / args slot is gRowSet * gViewStride + view, its claim cursor gRowSet * 4
     uint gViewStride;  // render::kShadowViewCeiling
     uint gFrustumFirst;// the frustum slot of local view 0 (render::kShadowViewCascades)
     uint gRecordBase;  // this row set's part of TessyAtlasVisible: [gRecordBase, gRecordBase + gRecordCap)
@@ -36,7 +38,8 @@ cbuffer AtlasCullCB : register(b0)
     float4 gWind0;     // the frame's wind, as the views' PerView carries it: (time, prevTime, dir.x, dir.z)
     float4 gWind1;     // (sway amplitude, frequency, gust, previous gust); a rigid light's view is padded anyway
     uint gWindPad;     // tessy.windPad
-    uint3 gPad;
+    uint gFlags;       // kFlag* below (the camera row: all three)
+    uint2 gPad;
     // S7's rows (gRowSet 1): one bit per view slot, the views that draw their static rows this frame (a cache miss, an
     // uncached view). A hit copies them from the pool, so its rows are left as they are (nothing draws them).
     uint4 gStaticViews[(TC_SHADOW_VIEW_CEILING + 127u) / 128u];
@@ -55,8 +58,15 @@ RWStructuredBuffer<uint>  VisibleList        : register(u1); // the rows' caster
 RWStructuredBuffer<uint4> TessyVisible       : register(u2); // {caster id, meshlet, base vertex, 0}
 RWStructuredBuffer<uint2> TessyAtlasViewInfo : register(u3); // per (row set, view): {first record, records}
 RWByteAddressBuffer       TessyAtlasArgs     : register(u4); // per (row set, view): D3D12_DISPATCH_MESH_ARGUMENTS
-RWByteAddressBuffer       TessyAtlasCounter  : register(u5); // [0] / [4]: the row sets' claimed records, [8]: views that
-                                                              // did not fit, [12]: clusters tested (cleared per frame)
+RWByteAddressBuffer       TessyAtlasCounter  : register(u5); // [0] / [4] / [8]: the row sets' claimed records, [12]:
+                                                              // views that did not fit, [16]: clusters tested (cleared
+                                                              // per frame)
+
+// The camera row (the cluster view, tessy::g_debugView) is not a shadow view: its records are drawn AS WELL as its
+// rows (the G-buffer reads them), every cluster of every caster the camera kept, and each record carries its cluster.
+static const uint kFlagKeepRows = 1u;  // leave the rows' InstanceCount alone
+static const uint kFlagNoCull = 2u;    // no frustum test: the camera's cull already kept the caster
+static const uint kFlagClusterId = 4u; // record .w = the cluster's index in the cluster table
 
 static const uint kArgStride = 20u;
 static const uint kThreads = 256u;
@@ -110,7 +120,7 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
         if (e < entries)
         {
             tests = gsEntryInst[e] * TessyVg[gsEntryVg[e]].y;
-            if (write) { Args.Store((row + gsEntryVg[e]) * kArgStride + 4u, 0u); }
+            if (write && (gFlags & kFlagKeepRows) == 0u) { Args.Store((row + gsEntryVg[e]) * kArgStride + 4u, 0u); }
         }
         const uint pre = WavePrefixSum(tests);
         const uint sum = WaveActiveSum(tests);
@@ -139,9 +149,10 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
             const uint local = q - gsPrefix[t];
             const uint k = local / range.y;                     // the caster
             const uint cid = VisibleList[gsEntryStart[first + t] + k];
-            const TessyCluster c = Clusters[range.x + (local - k * range.y)];
+            const uint clusterIndex = range.x + (local - k * range.y);
+            const TessyCluster c = Clusters[clusterIndex];
             if (!write) { ++tested; }
-            if (!ClusterInView(cid, c, vf)) { continue; }
+            if ((gFlags & kFlagNoCull) == 0u && !ClusterInView(cid, c, vf)) { continue; }
             uint at;
             InterlockedAdd(gsRecords, c.meshletCount, at);
             if (write)
@@ -149,7 +160,8 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
                 const uint baseVertex = GroupLodMega[vg].w;
                 for (uint s = 0u; s < c.meshletCount && at + s < gsClaimed; ++s)
                 {
-                    TessyVisible[gRecordBase + gsRunBase + at + s] = uint4(cid, c.firstMeshlet + s, baseVertex, 0u);
+                    TessyVisible[gRecordBase + gsRunBase + at + s] =
+                        uint4(cid, c.firstMeshlet + s, baseVertex, (gFlags & kFlagClusterId) != 0u ? clusterIndex : 0u);
                 }
             }
         }
@@ -209,7 +221,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         uint base = 0u;
         if (records != 0u) { TessyAtlasCounter.InterlockedAdd(gRowSet * 4u, records, base); }
         gsFits = records == 0u || base + records <= gRecordCap;
-        if (!gsFits) { TessyAtlasCounter.InterlockedAdd(8u, 1u); }
+        if (!gsFits) { TessyAtlasCounter.InterlockedAdd(12u, 1u); }
         gsRunBase = base;
         gsClaimed = records;
         gsRecords = 0u;
@@ -228,5 +240,5 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
                                                       : uint3(min(fitted, kTessyMsRow), (fitted + kTessyMsRow - 1u) / kTessyMsRow, 1u));
     }
     const uint wTested = WaveActiveSum(tested);
-    if (WaveIsFirstLane() && wTested != 0u) { TessyAtlasCounter.InterlockedAdd(12u, wTested); }
+    if (WaveIsFirstLane() && wTested != 0u) { TessyAtlasCounter.InterlockedAdd(16u, wTested); }
 }

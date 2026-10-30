@@ -155,6 +155,7 @@ enum class GraphicsControl
     VsmSingleDraw,
     VsmHzbCull,
     VsmPageCaching,
+    TessyEnabled,                 // Tessy: the master switch (every Tessy path)
     TessyVsm,                     // Tessy N3: the VSM page render draws clusters
     TessyRaster,                  // Tessy N6: ...through the mesh shader (1) or the VS (0)
     TessyAtlas,                   // Tessy N4: the local lights' atlas views draw clusters

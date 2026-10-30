@@ -211,6 +211,13 @@ GRAPHICS_ENTRIES = [
     ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "SHADOW_LINEAR_DEPTH=1"], "tessy-atlas-masked-linear"),
     ("shadow_indirect_csm.hlsl", "ms_6_6", "MSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-atlas-masked-bindless"),
     ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["TESSY_ATLAS_MS=1", "SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-atlas-masked-bindless"),
+    # The cluster view (tessy::g_debugView): the atlas mesh shader drawing the camera row in colour.
+    ("shadow_indirect_csm.hlsl", "ms_6_5", "MSMain", ["TESSY_ATLAS_MS=1", "TESSY_VIEW=1"], "tessy-view"),
+    ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "TESSY_VIEW=1"], "tessy-view"),
+    ("shadow_indirect_csm.hlsl", "ms_6_5", "MSMain", ["TESSY_ATLAS_MS=1", "TESSY_VIEW=1", "SHADOW_MASKED=1"], "tessy-view-masked"),
+    ("shadow_indirect_csm.hlsl", "ps_6_5", "PSMain", ["TESSY_ATLAS_MS=1", "TESSY_VIEW=1", "SHADOW_MASKED=1"], "tessy-view-masked"),
+    ("shadow_indirect_csm.hlsl", "ms_6_6", "MSMain", ["TESSY_ATLAS_MS=1", "TESSY_VIEW=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-view-masked-bindless"),
+    ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["TESSY_ATLAS_MS=1", "TESSY_VIEW=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "tessy-view-masked-bindless"),
     # Occlusion plan S5b: the cascade-tile permutation of the depth pyramid build (one define
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.

@@ -2584,7 +2584,9 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
           { D.depth.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE } },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             DebugDrawSystem* const dd = renderer->GetDebugDrawSystem();
-            if (!dd || !dd->HasCommands()) { return {}; } // nothing submitted this frame
+            // Tessy's cluster view draws here too; Main_ShadowCull's builder (earlier in this build) decided it.
+            const bool tessyView = frame_->shadowGpu && frame_->shadowGpu->TessyViewThisFrame();
+            if ((!dd || !dd->HasCommands()) && !tessyView) { return {}; } // nothing submitted this frame
             ctx.UseDeclared();
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {

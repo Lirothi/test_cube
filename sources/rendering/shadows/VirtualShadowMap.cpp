@@ -754,7 +754,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
     // buffers they index (a 52-byte vertex: the VS fetches it by hand), the cull and both draw PSOs, the buffers.
     d.tessyStats = tessyStats_ && tessyStatsUav_.ptr != 0;
     Material* tessyMat = shadowGpu->IndirectShadowTessyMaterial();
-    d.tessyOffReason = !tessy::g_vsm ? ""
+    d.tessyOffReason = !(tessy::g_enabled && tessy::g_vsm) ? ""
         : !d.scatterActive ? "the page scatter is off"
         : !d.singleDraw ? "the single-draw page render is off"
         : !shadowGpu->TessyReady() ? "no caster mesh has clusters (or the mega buffer is off)"
@@ -763,7 +763,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
         : (!tessyMat || !tessyMat->GetPipelineState()) ? "the VSM_TESSY PSO failed"
         : (!d.tessyStats || !tessyRuns_ || !tessyVisible_ || tessyRunsUav_.ptr == 0) ? "the cluster buffers are missing"
         : "";
-    d.tessy = tessy::g_vsm && d.tessyOffReason[0] == '\0';
+    d.tessy = tessy::g_enabled && tessy::g_vsm && d.tessyOffReason[0] == '\0';
     // N6: the mesh shader rasterizer, when asked for and everything it needs exists (the signature is PrepareRenderPass's).
     Material* tessyMeshMat = shadowGpu->IndirectShadowTessyMeshMaterial();
     d.tessyMsOffReason = (!d.tessy || !tessy::g_vsmMeshShader) ? ""
@@ -819,7 +819,8 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     }
     // An event per change of the verdict: whether tessy.vsm draws clusters, and if not, why.
     {
-        const char* verdict = d.tessy ? "on" : (tessy::g_vsm ? tessyOffReason_ : "off (tessy.vsm 0)");
+        const char* verdict = d.tessy ? "on" : !tessy::g_enabled ? "off (tessy.enabled 0)"
+                            : (tessy::g_vsm ? tessyOffReason_ : "off (tessy.vsm 0)");
         if (verdict != tessyLoggedReason_ && ctx.renderer)
         {
             LOG_INFO(logging::LogCategory::RenderShadow, "tessy.vsm: {}{} (frame {})", d.tessy ? "" : "classic path -- ",

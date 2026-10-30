@@ -49,11 +49,11 @@ private:
     enum class Tab
     {
         Frame, AntiAliasing, Visibility, Reflections, Gi, Fog, Sky,
-        Debug, Lod, Csm, Contact, Vsm, Streaming, Memory, Bindings
+        Debug, Lod, Csm, Contact, Vsm, Tessy, Streaming, Memory, Bindings
     };
     struct TabEntry { Tab tab; const char* label; };
     // The navigation list, in its order: Draw's and OpenTab's one table.
-    static const TabEntry kTabs[15];
+    static const TabEntry kTabs[16];
     Tab activeTab_ = Tab::Frame;
 
     void RefreshLevelList();

@@ -167,6 +167,7 @@ namespace
         case GraphicsControl::VsmSingleDraw:
         case GraphicsControl::VsmHzbCull:
         case GraphicsControl::VsmPageCaching:
+        case GraphicsControl::TessyEnabled:
         case GraphicsControl::TessyVsm:
         case GraphicsControl::TessyRaster:
         case GraphicsControl::TessyAtlas:
@@ -261,12 +262,12 @@ void DeveloperWindow::RefreshLevelList()
     }
 }
 
-const DeveloperWindow::TabEntry DeveloperWindow::kTabs[15] = {
+const DeveloperWindow::TabEntry DeveloperWindow::kTabs[16] = {
     { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
     { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" }, { Tab::Gi, "GI" },
     { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
     { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
-    { Tab::Vsm, "VSM" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
+    { Tab::Vsm, "VSM" }, { Tab::Tessy, "Tessy" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
     { Tab::Bindings, "Bindings" }
 };
 
@@ -3223,56 +3224,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::Text("light hzb cull: %s; pairs deferred %u, drawn in pass B %u, past the list %u (frame N-3)",
                                 scene.Vsm().HzbCullThisFrame() ? "ON this frame" : "off", hs[0], hs[1], hs[2]);
                 }
-                // Tessy N3 (docs/tessy_plan.md): clusters instead of whole meshes into the pages.
-                GRAPHICS_CONTROL(TessyVsm, "tessyVsm",
-                    ImGui::Checkbox("Tessy: draw casters cluster by cluster", &tessy::g_vsm));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ON: a (page, caster) pair whose mesh has clusters (a .mesh.bin v4) is culled\n"
-                                      "cluster by cluster against the page (each cluster's box padded by how far this\n"
-                                      "frame's wind can move it) and only the clusters that touch the page are drawn;\n"
-                                      "a mesh without clusters stays on the whole-mesh draw in the same frame.\n"
-                                      "OFF: every caster drawn whole into every page its box touches.\n"
-                                      "The depth is the same either way. --set=tessy.vsm:0|1");
-                GRAPHICS_CONTROL(TessyRaster, "tessyRaster",
-                    ImGui::Checkbox("Tessy: mesh shader raster", &tessy::g_vsmMeshShader));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ON: the surviving clusters go through a mesh shader -- each meshlet vertex\n"
-                                      "transformed once, a triangle wholly outside its page culled before setup.\n"
-                                      "OFF: the VS path, DrawInstanced(384, clusters) -- every corner of every\n"
-                                      "triangle. Without a mesh shader tier ON draws through the VS.\n"
-                                      "The depth is the same either way. --set=tessy.raster:0|1");
-                GRAPHICS_CONTROL(TessyAtlas, "tessyAtlas",
-                    ImGui::Checkbox("Tessy: lamp atlases cluster by cluster", &tessy::g_atlas));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ON (Legacy / SDSM): a point light's cube face or a spot draws the casters whose\n"
-                                      "meshes have clusters cluster by cluster -- each cluster's box (padded for the\n"
-                                      "wind) against the view's frustum, the survivors through a mesh shader.\n"
-                                      "OFF: every such caster drawn whole into every view it touches.\n"
-                                      "Needs a mesh shader tier. The depth is the same either way. --set=tessy.atlas:0|1");
-                {
-                    const ShadowGpuData& sg = scene.ShadowGpu();
-                    const auto& ts = scene.Vsm().GetTessyStats();
-                    ImGui::Text("tessy: clusters for %u of %u caster groups (%u clusters, %llu KB)",
-                                sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(), sg.TessyClusterCount(),
-                                static_cast<unsigned long long>((sg.TessyBytes() + 1023u) / 1024u));
-                    if (tessy::g_vsm && scene.Vsm().TessyOffReason()[0] != '\0')
-                    {
-                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "tessy: classic path -- %s", scene.Vsm().TessyOffReason());
-                    }
-                    if (ts.valid)
-                    {
-                        ImGui::Text("pairs drawn whole %u (%.2f M tris); to clusters %u (%.2f M tris whole)",
-                                    ts.wholePairs, ts.wholeTris * 1e-6, ts.tessyPairs, ts.tessyWholeTris * 1e-6);
-                        ImGui::Text("clusters: %u tested, %u drawn (%.2f M tris) as %u %s; runs %u (frame N-3)",
-                                    ts.clustersTested, ts.clusters, ts.clusterTris * 1e-6, ts.records,
-                                    ts.tessyMs ? "meshlets (mesh shader)" : "instances (VS)", ts.runs);
-                        if (ts.clustersLost > 0u || ts.runsLost > 0u)
-                        {
-                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "lost: %u clusters (shadow holes), %u runs drawn whole",
-                                               ts.clustersLost, ts.runsLost);
-                        }
-                    }
-                }
+                ImGui::TextDisabled("Tessy (cluster geometry): its switches and counters are in the Tessy tab.");
                 GRAPHICS_CONTROL(VsmPageCaching, "vsmPageCaching",
                     ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching));
                 {
@@ -3404,6 +3356,92 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                         cy * axis + cx, cx, cy, view, kind);
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            if (activeTab_ == Tab::Tessy)
+            {
+                // Tessy (docs/tessy_plan.md): the master switch, the paths, the cluster view, the counters.
+                ImGui::TextWrapped("Tessy -- our cluster geometry (UE Nanite's analog): meshes cut into clusters of <= 128 "
+                    "triangles, culled and drawn cluster by cluster. Today in the SHADOWS: the VSM pages and the lamps' atlas "
+                    "views. The camera's G-buffer still draws whole meshes (plan step N5).");
+                GRAPHICS_CONTROL(TessyEnabled, "tessyEnabled",
+                    ImGui::Checkbox("Tessy (master switch)", &tessy::g_enabled));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("OFF: no Tessy path runs anywhere -- the VSM pages and the lamps' atlases draw\n"
+                                      "whole meshes, the cluster view is off -- whatever the switches below say (they\n"
+                                      "keep their values). The cluster tables stay loaded, so it switches instantly\n"
+                                      "both ways. --set=tessy.enabled:0|1");
+                ImGui::BeginDisabled(!tessy::g_enabled);
+                GRAPHICS_CONTROL(TessyVsm, "tessyVsm",
+                    ImGui::Checkbox("Tessy: draw casters cluster by cluster", &tessy::g_vsm));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: a (page, caster) pair whose mesh has clusters (a .mesh.bin v4) is culled\n"
+                                      "cluster by cluster against the page (each cluster's box padded by how far this\n"
+                                      "frame's wind can move it) and only the clusters that touch the page are drawn;\n"
+                                      "a mesh without clusters stays on the whole-mesh draw in the same frame.\n"
+                                      "OFF: every caster drawn whole into every page its box touches.\n"
+                                      "The depth is the same either way. --set=tessy.vsm:0|1");
+                GRAPHICS_CONTROL(TessyRaster, "tessyRaster",
+                    ImGui::Checkbox("Tessy: mesh shader raster", &tessy::g_vsmMeshShader));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: the surviving clusters go through a mesh shader -- each meshlet vertex\n"
+                                      "transformed once, a triangle wholly outside its page culled before setup.\n"
+                                      "OFF: the VS path, DrawInstanced(384, clusters) -- every corner of every\n"
+                                      "triangle. Without a mesh shader tier ON draws through the VS.\n"
+                                      "The depth is the same either way. --set=tessy.raster:0|1");
+                GRAPHICS_CONTROL(TessyAtlas, "tessyAtlas",
+                    ImGui::Checkbox("Tessy: lamp atlases cluster by cluster", &tessy::g_atlas));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON (Legacy / SDSM): a point light's cube face or a spot draws the casters whose\n"
+                                      "meshes have clusters cluster by cluster -- each cluster's box (padded for the\n"
+                                      "wind) against the view's frustum, the survivors through a mesh shader.\n"
+                                      "OFF: every such caster drawn whole into every view it touches.\n"
+                                      "Needs a mesh shader tier. The depth is the same either way. --set=tessy.atlas:0|1");
+                {
+                    int view = static_cast<int>(tessy::g_debugView);
+                    const char* const views[] = { "Off", "Clusters", "Meshlets" };
+                    ImGui::SetNextItemWidth(160.0f);
+                    if (ImGui::Combo("Cluster view", &view, views, 3)) { tessy::g_debugView = static_cast<unsigned>(view); }
+                    if (ImGui::IsItemHovered())
+                        ImGui::SetTooltip("Every caster the camera draws, over the lit frame, one colour per cluster (or per\n"
+                                          "meshlet: a cluster cut into runs of <= 64 vertices for the mesh shader). From the\n"
+                                          "camera's own cull row: the geometry and the LODs the G-buffer drew. While it is\n"
+                                          "on the camera's two-pass HZB cull stays off. Needs the indirect G-buffer and a\n"
+                                          "mesh shader tier. Not saved. --set=tessy.debug:0|1|2");
+                    ImGui::Text("cluster view: %s", scene.ShadowGpu().TessyViewVerdict());
+                }
+                ImGui::EndDisabled();
+                ImGui::Separator();
+                {
+                    const ShadowGpuData& sg = scene.ShadowGpu();
+                    const auto& ts = scene.Vsm().GetTessyStats();
+                    ImGui::Text("tessy: clusters for %u of %u caster groups (%u clusters, %llu KB)",
+                                sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(), sg.TessyClusterCount(),
+                                static_cast<unsigned long long>((sg.TessyBytes() + 1023u) / 1024u));
+                    if (tessy::g_vsm && scene.Vsm().TessyOffReason()[0] != '\0')
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "tessy: classic path -- %s", scene.Vsm().TessyOffReason());
+                    }
+                    const auto& as = sg.TessyAtlasStats();
+                    ImGui::Text("meshlet records: atlases %u + static %u, cluster view %u (cap %u a row set)",
+                                as[0], as[1], as[2], ShadowGpuData::TessyAtlasRowSetCap());
+                    ImGui::Text("%u views did not fit; %u clusters tested (frame N-3, the last frame a cluster row ran)",
+                                as[3], as[4]);
+                    ImGui::TextDisabled("VSM pages (when the VSM is the shadow mode):");
+                    if (ts.valid)
+                    {
+                        ImGui::Text("pairs drawn whole %u (%.2f M tris); to clusters %u (%.2f M tris whole)",
+                                    ts.wholePairs, ts.wholeTris * 1e-6, ts.tessyPairs, ts.tessyWholeTris * 1e-6);
+                        ImGui::Text("clusters: %u tested, %u drawn (%.2f M tris) as %u %s; runs %u (frame N-3)",
+                                    ts.clustersTested, ts.clusters, ts.clusterTris * 1e-6, ts.records,
+                                    ts.tessyMs ? "meshlets (mesh shader)" : "instances (VS)", ts.runs);
+                        if (ts.clustersLost > 0u || ts.runsLost > 0u)
+                        {
+                            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "lost: %u clusters (shadow holes), %u runs drawn whole",
+                                               ts.clustersLost, ts.runsLost);
                         }
                     }
                 }

@@ -685,6 +685,26 @@ is the owner's call (plan Q4) -- back the files up first. Done for all 148 on 20
 is v4 (log `classic path: none`), the v3 originals are in `D:\Programming\test_cube_backups\mesh_bin_v3_2026-10-30`. A
 checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every one of them.
 
+- **Developer Controls > Tessy** (2026-10-30, owner: "its own tab, a master switch to turn it all off, and a cluster
+  debug view"): the master switch `tessy.enabled` (default 1; `graphics_settings.json` vsm.tessyEnabled, `--set`, MCP)
+  turns EVERY Tessy path off -- the VSM pages and the lamps' atlases draw whole meshes, the cluster view is off -- while
+  `tessy.vsm` / `tessy.raster` / `tessy.atlas` keep their values (greyed out); the cluster tables stay loaded, so it
+  switches both ways at once. The verdicts say `off (tessy.enabled 0)` (`tessy.vsm: classic path -- ...`).
+- **The cluster view** `tessy.debug:1|2` (the tab's "Cluster view" Clusters / Meshlets; not persisted) draws every caster
+  the camera drew this frame over the lit scene colour in `Main_DebugDraw`, one hashed colour per cluster or meshlet,
+  cutouts clipped: the atlas kernel runs a third row set (2, the camera's row: `camArgs_` / `camVisibleList_`) with keep
+  rows / no cull / cluster id in the record's `.w`, and `TESSY_ATLAS_MS` + `TESSY_VIEW` draws it with the G-buffer's
+  jittered view (`BuildGBufferViewCB`), depth `GREATER_EQUAL` + a slope bias against the frame's own depth. So it shows
+  the camera's geometry and LODs, not the shadows' -- the shadow paths cull their own. While it is on, the camera's
+  two-pass HZB cull is off (pass B's rows would be missing from the row it reads); it needs the indirect G-buffer and a
+  mesh shader tier, and says why not (`tessy.view: off -- ...`, the tab's `cluster view:` line, `get_readouts`
+  tessy.view). The auto exposure meters the colours too: the sky darkens behind them. Cost: `Pass_DebugDraw`
+  0.03-0.04 ms on the grove (9.2 k meshlets).
+- **A RAW view starts on 16 bytes**: a frame's DispatchMesh args are `kTessyAtlasRows` x 12 bytes, and with the third
+  row set that stopped being a multiple of 16 -- the second frame's RAW UAV removed the device at its creation (debug
+  layer `id=345`, Release: `0x887A0005` at the next create, then abort). The region is `kTessyAtlasArgsRegionBytes`,
+  rounded up; anything that sizes a per-frame RAW region by a row count rounds it the same way.
+
 - The VSM page setup hands each (page x caster bucket) of a group with clusters to `tessy_vsm_cull_cs.hlsl`, which
   tests every (caster, cluster) box against the page and appends survivors; `VSM_TESSY` of `shadow_indirect_csm.hlsl`
   draws them as ONE `DrawInstanced(384, N)` (UE's VS raster path, vertices fetched by hand from the mega VB/IB).
@@ -696,7 +716,7 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   shader tier (log `mesh shader tier: N`) or its PSO it falls back to the VS path, logged `tessy.raster: vertex shader
   -- <why>`. Near `SetMeshOutputCounts` no branch and no early return: DXC's `ms_6_6` tail-duplicates the call and the
   validator refuses the shader.
-- `tessy.vsm` (default 1; Developer Controls > VSM, `graphics_settings.json` vsm.tessy, `--set`, MCP) switches live;
+- `tessy.vsm` (default 1; Developer Controls > Tessy, `graphics_settings.json` vsm.tessy, `--set`, MCP) switches live;
   the event `tessy.vsm: on` / `classic path -- <why>` is logged on every change of the verdict. VSM only: the level
   default may be SDSM -- pass `--shadow-mode=vsm` (or `shadow.mode:1`) or the cluster path never runs.
 - The wind pad: a cluster's box grows by an exact-per-frame, per-axis interval bound of `WindOffset`'s bend (a
@@ -709,7 +729,7 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   atomic, writes it and zeroes the taken records' `InstanceCount` (the compaction skips them); `TESSY_ATLAS_MS` draws
   the run with one `DispatchMesh` per view right after the view's classic ExecuteIndirect. S7's static rows go through it
   only for the views that draw them this frame (`SetLocalStaticDrawn`: a cache miss or an uncached view; a hit copies
-  them). `tessy.atlas` (default 1; Developer Controls > VSM, `graphics_settings.json` vsm.tessyAtlas, `--set`, MCP);
+  them). `tessy.atlas` (default 1; Developer Controls > Tessy, `graphics_settings.json` vsm.tessyAtlas, `--set`, MCP);
   event `tessy.atlas: on` / `classic -- <why>`; every 5 s `tessy.atlas: <main> + <static> meshlet records (cap ...), <n>
   views did not fit, <m> clusters tested` (counters of frame N - 3). A view that does not fit stays classic. Measured
   (SDSM 23:00, "Lamps" on): the grove's point atlases 0.415 -> 0.287 ms for +0.034 of cull, frame -0.10 ms; the bathroom
@@ -730,7 +750,9 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   through the same stream took its blob back. So they compile once a boot (~18 ms of Release); probe again with
   another driver or an Agility SDK runtime before turning the flag on.
 - Counters: `get_readouts` block `tessy` (pairs drawn whole / handed to clusters, clusters tested / drawn and their
-  triangles, `records` = the draw's instances or mesh shader groups, lost runs / clusters, `meshShader`);
+  triangles, `records` = the draw's instances or mesh shader groups, lost runs / clusters, `meshShader`; `enabled`,
+  `debugView`, `view` = the cluster view's verdict, and the cluster rows' meshlet records `atlasRecords` /
+  `staticRecords` / `viewRecords`, `viewsNotFit`, `rowClustersTested` -- frame N - 3 of the last frame a row ran);
   `tools/tessy_baseline.py --port <p>` measures the plan's three views.
 - Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms on
   the VS path (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters) -> 0.51 with the mesh shader (its draw
