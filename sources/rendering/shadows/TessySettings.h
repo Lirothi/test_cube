@@ -14,10 +14,11 @@ namespace tessy
 // Developer Controls > Tessy, graphics_settings.json vsm.tessyEnabled.
 inline bool g_enabled = true;
 // The cluster view (a debug view): every caster the camera draws, over the lit frame in Main_DebugDraw, one colour per
-// CLUSTER (1) or per MESHLET (2); 0 = off. Its records come from the camera's own cull row, so it shows exactly the
-// geometry and the LODs the G-buffer drew -- and while it is on the camera's two-pass HZB cull stays off (pass B's
-// casters would be missing from that row). Needs the indirect G-buffer and a mesh shader tier. Not persisted.
-// `--set tessy.debug:0|1|2`, MCP, Developer Controls > Tessy.
+// CLUSTER (1) or per MESHLET (2), or by LEVEL (3, N7e: a DAG cluster by its DAG level, green = the leaves to magenta =
+// the coarsest; a discrete LOD's by its tier, light to dark blue); 0 = off. Its records come from the camera's own cull
+// row, so it shows exactly the geometry and the LODs the G-buffer drew -- and while it is on the camera's two-pass HZB
+// cull stays off (pass B's casters would be missing from that row). Needs the indirect G-buffer and a mesh shader tier.
+// Not persisted. `--set tessy.debug:0|1|2|3`, MCP, Developer Controls > Tessy.
 inline unsigned g_debugView = 0u;
 // N3: the VSM page render draws every caster bucket whose mesh has clusters cluster by cluster
 // (tessy_vsm_cull_cs.hlsl + shadow_indirect_csm.hlsl VSM_TESSY) instead of the whole mesh into each page.
@@ -44,12 +45,18 @@ inline unsigned g_vsmMsCull = 1u;
 // (tessy_atlas_cull_cs.hlsl + shadow_indirect_csm.hlsl TESSY_ATLAS_MS). Atlas modes (Legacy / SDSM) only; needs a mesh
 // shader tier. `--set tessy.atlas:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyAtlas.
 inline bool g_atlas = true;
+// The SDSM sun partitions draw the casters whose meshes have clusters cluster by cluster: Main_SdsmCull's rows through
+// tessy_atlas_cull_cs.hlsl (row set 3, the analyze's 16 planes a partition) and the atlas mesh shader into each tile.
+// Pass B of the light-space HZB cull stays classic. SDSM only; needs a mesh shader tier. `--set tessy.sdsm:0|1`, MCP,
+// Developer Controls > Tessy, graphics_settings.json vsm.tessySdsm. On by default (owner, 2026-10-30).
+inline bool g_sdsm = true;
 // N5: the CAMERA's G-buffer draws the casters whose meshes have clusters cluster by cluster -- the camera row through
 // tessy_atlas_cull_cs.hlsl (the clusters culled by the camera frustum, sorted by the merged G-buffer's PSO runs) and
 // each run's mesh shader twin (gbuffer_indirect.hlsl TESSY_GBUFFER_MS). Groups of a table PSO, pass B (the casters
 // last frame's pyramid hid) and the validation frame stay classic. Needs the indirect G-buffer and a mesh shader tier.
-// `--set tessy.gbuffer:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyGBuffer.
-inline bool g_gbuffer = false;
+// `--set tessy.gbuffer:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyGBuffer. On by default
+// since 2026-10-30 (owner: "switch Tessy on by default in the G-buffer"; it measured +0.01-0.02 ms of frame on wind_test).
+inline bool g_gbuffer = true;
 // N5's heavy variant: the camera's clusters are also tested against LAST frame's camera pyramid (UE Nanite's two-pass
 // occlusion) -- the hidden ones deferred to Main_CamCullPost, retested against this frame's pyramid
 // (tessy_camera_post_cs.hlsl) and the visible ones drawn by Main_GBufferB. Off by default: on wind_test's low-poly
@@ -60,10 +67,17 @@ inline bool g_gbufferHzb = false;
 // N7: `--tessy-lod-build=all|<part>,<part>` builds the cluster DAG at load for every clustered asset, or for those whose
 // .mesh.bin path holds one of the parts -- what mesh.json "tessyLod": true does per asset, without touching manifests.
 inline std::string g_lodBuild;
+// N7e: the DAG's leaf-card submeshes simplify with meshopt_SimplifyPrune (whole cards leave once their size fits the
+// error) -- `--tessy-lod-prune=0` builds them with edge collapses alone, the A/B (read at load, like the build itself).
+inline bool g_lodPrune = true;
 // N7: the cluster DAG's cut where a consumer can take it (N7c: the VSM clipmap pages) for the assets that have a DAG --
 // else their discrete LOD's clusters, as before. A switch flushes the VSM page cache (a cached page holds the other
 // geometry). `--set tessy.lod:0|1`, MCP, Developer Controls > Tessy; not persisted while the DAG is built at load.
 inline bool g_lod = false;
+// N7e: the camera's DAG cut tests, per caster, only the band of levels its distance can cut (tessy_atlas_cull_cs DagBand)
+// -- 0 tests every level of every caster (N7d's flat test), the A/B: the cut is the same, only the tests' count differs.
+// `--set tessy.lodBand:0|1`, transient.
+inline bool g_lodBand = true;
 // The DAG cut's threshold: shadow texels a cluster's error may span -- UE's MaxPixelsPerEdge (1) x r.Shadow.NaniteLODBias
 // (shadows one level coarser: x2). `--set tessy.lodShadowTexels:<x>`, transient.
 inline float g_lodShadowTexels = 2.0f;

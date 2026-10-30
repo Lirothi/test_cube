@@ -1058,7 +1058,7 @@ private:
     bool tessyMsLast_ = false;                        // ...and the rasterizer's (N6), the same rule
     const char* tessyOffReason_ = "";
     const char* tessyMsOffReason_ = "";
-    bool tessyLodLast_ = false; // N7c: the DAG cut's switch as last frame took it (a change flushes the page cache)
+    float tessyLodKeyLast_ = 0.0f; // N7c: the DAG cut as last frame took it (its texels, 0 = off; a change flushes the cache)
     const char* tessyLoggedReason_ = nullptr;         // the reason last logged (an event per change)
     const char* tessyMsLoggedReason_ = nullptr;
     void EnsureTessyResources(Renderer* renderer);

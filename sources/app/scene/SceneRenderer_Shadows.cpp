@@ -653,6 +653,9 @@ void SceneRenderer::Pass_SdsmShadow(Renderer* renderer, RenderGraphPassContext c
             // as an ordinary root CBV. Pass B uses the same block: a different bias between the two
             // halves of one tile would seam the shadow down the middle.
             shadowGpu->RecordIndirectShadowDraws(renderer, t.cl, p, sdsm->ViewCbAddress(p), passB);
+            // tessy.sdsm: the records Main_SdsmCull's cluster cull took out of row p, as the partition's meshlets (pass A
+            // only: pass B's rows are the post cull's, classic).
+            if (!passB) { shadowGpu->RecordTessySunDraw(renderer, t.cl, p, sdsm->ViewCbAddress(p)); }
         }
     }
     ctx.EndCL(t);

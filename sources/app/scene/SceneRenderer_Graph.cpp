@@ -968,6 +968,13 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                                                                     frame_->sdsm->CullCbAddress(),
                                                                     decisions_.sdsmHzb);
                 if (!dec.active) { return {}; }
+                if (dec.tessySun && frame_->wind) // tessy.sdsm: the clusters' sway pad, as the main cull's
+                {
+                    const vfx::WindState& w = *frame_->wind;
+                    const float w0[4] = { w.time, w.prevTime, w.windDirXZ.x, w.windDirXZ.y };
+                    const float w1[4] = { w.swayAmplitude, w.swayFrequency, w.gustMul, w.prevGustMul };
+                    for (int i = 0; i < 4; ++i) { dec.tessyWind0[i] = w0[i]; dec.tessyWind1[i] = w1[i]; }
+                }
                 return [this, renderer](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassShadowCull);
                     Pass_SdsmCull(renderer, c, graphPass_.sdsmCull);

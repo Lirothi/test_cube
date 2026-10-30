@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <optional>
@@ -746,6 +748,15 @@ void ShadowGpuData::UploadCasterLods(Renderer* renderer)
                 "local shadow cache: {} of {} casters movable (GI {}, IsDynamicCaster {}, moved {}, wind {})",
                 movable, n, gi, flagged, moved, windy);
         }
+        // Tessy N7e: the lamps' atlases cut the cluster DAG (tessy.lod) at tessy.lodShadowTexels -- a change of either
+        // draws other geometry into every cached static picture.
+        const float atlasDagKey = (tessy::g_enabled && tessy::g_atlas && tessy::g_lod && tessyDagGroups_ > 0u)
+                                      ? std::max(tessy::g_lodShadowTexels, 0.01f) : 0.0f;
+        if (atlasDagKey != atlasDagKey_)
+        {
+            atlasDagKey_ = atlasDagKey;
+            ++localStaticVersion_;
+        }
     }
     // S4: the camera flags + crossfade tables, same ring discipline (rewritten every frame).
     if (!casterCamCpu_.empty() &&
@@ -785,6 +796,8 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
     cmdFrameReady_ = false; // A6: decided below for this frame; a frame the cull skips has no merged draws
     cmdMerge_ = { false, false };
     localCompactFrame_ = false; // S6a: likewise -- a frame the cull skips has no compacted rows
+    tessySunFrame_ = false;     // tessy.sdsm: decided by Main_SdsmCull's builder, after this one
+    tessyCountersCleared_ = false;
     localCompactViews_ = 0;
     localSplitFrame_ = false;   // S7: and no static rows
     tessyViewFrame_ = false;    // Tessy: and no cluster view for Main_DebugDraw
@@ -892,6 +905,14 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                          dec.localViews <= render::kShadowViewCeiling && ctx.renderer &&
                          ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
         tessyAtlasFrame_ = dec.tessyAtlas;
+        // Tessy N7e: the atlas views cut the cluster DAG (tessy.lod) by each view's light and texels (viewDag_).
+        dec.tessyAtlasDag = dec.tessyAtlas && tessy::g_lod && tessyDagGroups_ > 0u && viewDag_.Valid();
+        if (!readbackWanted && dec.tessyAtlasDag != tessyAtlasDagLogged_)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.lod: the lamps' atlases draw {} (frame {})",
+                     dec.tessyAtlasDag ? "the cluster DAG's cut" : "the discrete LODs", ctx.renderer->GetTotalFrameNumber());
+            tessyAtlasDagLogged_ = dec.tessyAtlasDag;
+        }
         {
             const char* verdict = dec.tessyAtlas ? "on" : !tessy::g_enabled ? "off (tessy.enabled 0)"
                 : !tessy::g_atlas ? "off (tessy.atlas 0)"
@@ -916,7 +937,7 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                         ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
         tessyViewFrame_ = dec.tessyView;
         tessyViewMode_ = tessy::g_debugView;
-        tessyViewVerdict_ = dec.tessyView ? (tessyViewMode_ == 2u ? "on (meshlets)" : "on (clusters)")
+        tessyViewVerdict_ = dec.tessyView ? (tessyViewMode_ == 2u ? "on (meshlets)" : tessyViewMode_ == 3u ? "on (levels)" : "on (clusters)")
             : !tessy::g_enabled ? "off (tessy.enabled 0)"
             : tessy::g_debugView == 0u ? "off"
             : !dec.gbuffer ? "off -- the camera's indirect G-buffer is off this frame (the view reads its cull row)"
@@ -1008,6 +1029,8 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         ctx.Use(localStaticArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(localStaticCounts_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    // RecordCull zeroes the whole counter region on these frames (the SDSM part too: Main_SdsmCull then skips its clear).
+    tessyCountersCleared_ = dec.tessyAtlas || dec.tessyView || dec.tessyGBuffer;
     if (dec.tessyAtlas || dec.tessyView || dec.tessyGBuffer) // Tessy: written by tessy_atlas_cull_cs here, read by the draws after the consume
     {
         ctx.Use(tessyCamDeferred_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); // N5 (in the kernel's table on every row set)
@@ -2912,6 +2935,24 @@ void ShadowGpuData::UpdateViewFrustums(Renderer* renderer, const Frustum* const*
         auto* base = reinterpret_cast<render::ShadowViewFrustum*>(viewFrustums_.Region(region));
         std::memcpy(base, cpuViewFrustums_.data(), count * sizeof(render::ShadowViewFrustum));
     }
+    // Tessy N7e: per view, the eye (the light) and its texels per unit at distance 1 over tessy.lodShadowTexels -- the
+    // lamps' atlases cut the cluster DAG by it (tessy_atlas_cull_cs ViewDag); w 0 = no cut (not a local view, VSM).
+    if (EnsureRing(renderer, viewDag_, count, sizeof(DirectX::XMFLOAT4), L"ShadowGpuData.ViewDag"))
+    {
+        cpuViewDag_.assign(count, DirectX::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 0.0f });
+        const float texels = std::max(tessy::g_lodShadowTexels, 0.01f);
+        for (size_t i = 0; i < count; ++i)
+        {
+            if (!local || !local[i] || !render::IsLocalShadowView(static_cast<unsigned>(i))) { continue; }
+            DirectX::XMFLOAT4 d = local[i]->dag;
+            d.w /= texels;
+            cpuViewDag_[i] = d;
+        }
+        if (region < render::kFrameCount)
+        {
+            std::memcpy(viewDag_.Region(region), cpuViewDag_.data(), count * sizeof(DirectX::XMFLOAT4));
+        }
+    }
 }
 
 // ---- Step 4: GPU cull dispatch + validation --------------------------------
@@ -3917,6 +3958,7 @@ ShadowGpuData::DirectionalCullDecisions ShadowGpuData::PrepareDirectionalCullPas
     D3D12_GPU_VIRTUAL_ADDRESS hzbCB, bool hzb)
 {
     DirectionalCullDecisions dec{};
+    tessySunFrame_ = false; // Main_SdsmShadow reads it whatever this pass decides
     if (!ctx.renderer || planeSrv.ptr == 0 || views == 0) { return dec; }
     if (ctx.renderer->GetCurrentFrameIndex() >= render::kFrameCount) { return dec; }
     if (!cullClearMat_ || !cullMat_ || numVirtualGroups_ == 0 || !IndirectDrawReady()) { return dec; }
@@ -3944,6 +3986,29 @@ ShadowGpuData::DirectionalCullDecisions ShadowGpuData::PrepareDirectionalCullPas
     // re-seed and the re-cull, then forward again for the draws. Declared here rather than assumed
     // because this pass is the SECOND writer of the same rows in one frame, and a compiled barrier
     // set that does not know that would hand the draws a stale before-state.
+    // Tessy (tessy.sdsm): the partitions' records of groups with clusters through the atlas kernel's row set 3, drawn by
+    // the atlas mesh shader -- the cascade atlas has the local atlases' PSO state (D16, LESS_EQUAL, S6's bias). No
+    // validation-frame gate: the readback compares the MAIN cull's rows, before this pass rewrites them.
+    {
+        Material* const sunMat = MaskedShadowsActive() ? tessyAtlasMeshMaskedMat_.get() : tessyAtlasMeshMat_.get();
+        const bool pso = (tessyCameraCullMat_ || tessyAtlasCullMat_) && sunMat && sunMat->GetPipelineState();
+        dec.tessySun = tessy::g_enabled && tessy::g_sdsm && TessyReady() && pso && tessyAtlasHeap_ &&
+                       views <= render::kShadowViewCeiling && ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
+        tessySunFrame_ = dec.tessySun;
+        dec.tessySunClear = dec.tessySun && !tessyCountersCleared_;
+        tessySunVerdict_ = dec.tessySun ? "on" : !tessy::g_enabled ? "off (tessy.enabled 0)"
+            : !tessy::g_sdsm ? "off (tessy.sdsm 0)"
+            : !TessyReady() ? "classic -- no caster mesh has clusters"
+            : !pso ? "classic -- no atlas mesh shader PSO (no mesh shader tier, or it failed)"
+            : "classic -- the buffers or the DispatchMesh signature are missing";
+        if (tessySunVerdict_ != tessySunLogged_)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.sdsm: {} (frame {})", tessySunVerdict_,
+                     ctx.renderer->GetTotalFrameNumber());
+            tessySunLogged_ = tessySunVerdict_;
+        }
+    }
+
     dec.base = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -3953,11 +4018,34 @@ ShadowGpuData::DirectionalCullDecisions ShadowGpuData::PrepareDirectionalCullPas
         ctx.Use(deferredList_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(deferredCount_.buffer.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
+    if (dec.tessySun) // written by the kernel here, read by Main_SdsmShadow after the consume (as the main cull leaves them)
+    {
+        ctx.Use(tessyCamDeferred_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); // in the kernel's table, never written here
+        ctx.Use(tessyAtlasVisible_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(tessyAtlasInfo_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(tessyAtlasArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        ctx.Use(tessyAtlasCounter_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
 
     ctx.NextPoint();
     dec.consume = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(indirectArgs_.buffer.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
     ctx.Use(visibleList_.buffer.Get(), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    if (dec.tessySun)
+    {
+        ctx.Use(tessyCamDeferred_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(tessyAtlasVisible_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(tessyAtlasInfo_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        ctx.Use(tessyAtlasArgs_.Get(), D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT);
+        EnsureTessyAtlasStatsReadback(ctx.renderer);
+        const UINT f = ctx.renderer->GetCurrentFrameIndex();
+        dec.tessySunStats = tessyAtlasStatsReadback_ != nullptr;
+        if (dec.tessySunStats)
+        {
+            ctx.Use(tessyAtlasCounter_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            tessyAtlasStatsFrame_[f] = ctx.renderer->GetTotalFrameNumber(); // the frame's slot holds the SDSM part too
+        }
+    }
     return dec;
 }
 
@@ -4064,9 +4152,22 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
     // nothing - registration unverified)") on the frames before the caster set exists. Same shape
     // as RecordCullPost: emit, guard only the work between.
     renderer->EmitPoint(cl, dec.base);
+    // Every exit: tessy.sdsm's cull (the rows as re-culled, or none -- empty runs, so Main_SdsmShadow never draws a stale
+    // frame's args), the consume, and the SDSM counters' copy behind the main cull's in the frame's readback slot.
+    const auto finish = [&](bool recull)
+    {
+        if (dec.tessySun) { RecordTessySunCull_(renderer, cl, dec, /*empty=*/!recull); }
+        renderer->EmitPoint(cl, dec.consume);
+        if (dec.tessySun && dec.tessySunStats)
+        {
+            const UINT64 at = static_cast<UINT64>(f) * kTessyAtlasCounterBytes + kTessySunCounterOffset;
+            cl->CopyBufferRegion(tessyAtlasStatsReadback_.Get(), at, tessyAtlasCounter_.Get(), at,
+                                 kTessyAtlasCounterBytes - kTessySunCounterOffset);
+        }
+    };
     if (numCasters == 0 || numGroups == 0)
     {
-        renderer->EmitPoint(cl, dec.consume);
+        finish(false);
         return;
     }
 
@@ -4103,7 +4204,7 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
         auto cb2 = renderer->GetFrameResource()->AllocDynamic(
             static_cast<UINT>(sizeof(CameraHzbParams)), render::kConstantBufferAlignment);
         // Same rule as above: an allocation failure skips the WORK, never the point.
-        if (!cb0.cpu || !cb2.cpu) { renderer->EmitPoint(cl, dec.consume); return; }
+        if (!cb0.cpu || !cb2.cpu) { finish(false); return; }
         writeCB(static_cast<std::uint8_t*>(cb0.cpu));
         CameraHzbParams camOff{};
         camOff.on = 0u;
@@ -4117,7 +4218,7 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
             // the GPU one, because that one's `on` says otherwise.
             auto cb1 = renderer->GetFrameResource()->AllocDynamic(
                 static_cast<UINT>(sizeof(render::CascadeHzb::GpuParams)), render::kConstantBufferAlignment);
-            if (!cb1.cpu) { renderer->EmitPoint(cl, dec.consume); return; }
+            if (!cb1.cpu) { finish(false); return; }
             render::CascadeHzb::GpuParams hzbOff{};
             hzbOff.on = 0u;
             std::memcpy(cb1.cpu, &hzbOff, sizeof(hzbOff));
@@ -4158,7 +4259,58 @@ void ShadowGpuData::RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsComm
         renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
     }
 
-    renderer->EmitPoint(cl, dec.consume);
+    finish(true);
+}
+
+// tessy.sdsm: the partitions' records of groups with clusters, cluster by cluster -- the atlas kernel's row set 3 over
+// rows 0..views against the analyze's 16 planes, kTessySunSplit 256-thread groups a partition (each a slice of its
+// virtual groups and its own run). The SDSM counters are cleared first (the main cull and the camera's post pass used the
+// rest of the region). `empty`: the re-cull did not run -- every run is written empty, so the draw reads nothing stale.
+void ShadowGpuData::RecordTessySunCull_(Renderer* renderer, ID3D12GraphicsCommandList* cl, const DirectionalCullDecisions& dec,
+                                        bool empty)
+{
+    const UINT f = renderer->GetCurrentFrameIndex();
+    GPU_SCOPE(cl, ProfilerScopes::kTessySunCull);
+    if (dec.tessySunClear) // the main cull zeroed nothing this frame (no Tessy row set there): its own range
+    {
+        const UINT zero[4] = { 0u, 0u, 0u, 0u };
+        const D3D12_CPU_DESCRIPTOR_HANDLE counterUav = TessyAtlasDescriptor(f, 8u);
+        cl->ClearUnorderedAccessViewUint(renderer->StageSrvUavTable({ counterUav }).gpu, counterUav, tessyAtlasCounter_.Get(), zero,
+                                         0, nullptr);
+        renderer->UAVBarrier(cl, tessyAtlasCounter_.Get());
+    }
+    renderer->UAVBarrier(cl, visibleList_.buffer.Get()); // the re-cull's appends, read by the kernel
+    CullDecisions sun{};
+    sun.localViews = dec.views;
+    for (int i = 0; i < 4; ++i) { sun.tessyWind0[i] = dec.tessyWind0[i]; sun.tessyWind1[i] = dec.tessyWind1[i]; }
+    RecordTessyAtlasCull(renderer, cl, sun, kTessySunRowSet, dec.planeSrv, empty);
+    renderer->UAVBarrier(cl, indirectArgs_.buffer.Get());
+    renderer->UAVBarrier(cl, tessyAtlasVisible_.Get());
+    renderer->UAVBarrier(cl, tessyAtlasArgs_.Get());
+}
+
+void ShadowGpuData::RecordTessySunDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t partition,
+                                       D3D12_GPU_VIRTUAL_ADDRESS viewCB)
+{
+    if (!tessySunFrame_ || !renderer || !cl || viewCB == 0 || partition >= render::kShadowViewCeiling) { return; }
+    const UINT f = renderer->GetCurrentFrameIndex();
+    Material* const tm = MaskedShadowsActive() ? tessyAtlasMeshMaskedMat_.get() : tessyAtlasMeshMat_.get();
+    ID3D12CommandSignature* const meshSig = renderer->GetDispatchMeshCommandSignature();
+    if (f >= render::kFrameCount || !tm || !meshSig) { return; }
+    GPU_SCOPE(cl, ProfilerScopes::kTessySunDraw);
+    auto ctxHandle = renderer->GetRenderContextPool()->Acquire();
+    RenderContext& ctx = ctxHandle.ref();
+    ctx.cbv[1] = viewCB;
+    ctx.srvTable[0] = TessyAtlasDrawTable(renderer, f);
+    // The partition's kTessySunSplit runs (one per cull group), one DispatchMesh each: b0 names the run.
+    for (std::uint32_t s = 0; s < kTessySunSplit; ++s)
+    {
+        const std::uint32_t row = kTessySunRowSet * render::kShadowViewCeiling + partition * kTessySunSplit + s;
+        ctx.constants[0] = { row };
+        tm->Bind(cl, ctx, false);
+        renderer->ExecuteIndirect(cl, meshSig, 1, tessyAtlasArgs_.Get(),
+            static_cast<UINT64>(f) * kTessyAtlasArgsRegionBytes + static_cast<UINT64>(row) * 12u, nullptr, 0);
+    }
 }
 
 std::uint32_t ShadowGpuData::CountCpuTailCasters(
@@ -4330,9 +4482,11 @@ void ShadowGpuData::PollTessyAtlasStats(Renderer* renderer)
         tessyAtlasStatsFrame_[s] = 0;
         LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::RenderShadow,
                            "tessy.atlas: {} + {} meshlet records, camera {} (cap {} a row set), {} views did not fit, "
-                           "{} clusters tested, {} camera clusters deferred to pass B, camera pass A {} triangles ({} DAG clusters)",
+                           "{} clusters tested, {} camera clusters deferred to pass B, camera pass A {} triangles ({} DAG clusters); "
+                           "sdsm {} meshlet records, {} runs did not fit, {} clusters tested, {} triangles",
                            tessyAtlasStats_[0], tessyAtlasStats_[1], tessyAtlasStats_[2], kTessyAtlasRowSetCap, tessyAtlasStats_[3],
-                           tessyAtlasStats_[4], tessyAtlasStats_[5], tessyAtlasStats_[6], tessyAtlasStats_[7]);
+                           tessyAtlasStats_[4], tessyAtlasStats_[5], tessyAtlasStats_[6], tessyAtlasStats_[7],
+                           tessyAtlasStats_[8], tessyAtlasStats_[9], tessyAtlasStats_[10], tessyAtlasStats_[11]);
         return;
     }
 }
@@ -4643,6 +4797,7 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
     tessyGroupsWith_ = tessyGroupsTotal_ = 0;
     tessyClusterLodCpu_.clear();
     tessyDagGroupCpu_.assign(numMeshGroups_, DirectX::XMUINT4{ 0u, 0u, 0u, 0u });
+    tessyDagSphereCpu_.assign(numMeshGroups_, DirectX::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 0.0f });
     tessyDagLevelCpu_.clear();
     tessyDagGroups_ = tessyDagClusters_ = 0;
     if (!megaWanted_ || numMeshGroups_ == 0) { return; }
@@ -4775,6 +4930,34 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                 tessyClusterLodCpu_.push_back(lod);
             }
             tessyDagGroupCpu_[g] = DirectX::XMUINT4{ first, ds.clusterCount, firstLevel, ds.levelCount };
+            // N7e: a sphere around every lod and parent sphere of the submesh's DAG (the camera's level band reads the
+            // distance range to it); a little over, so the band's test never cuts a cluster its own test would draw.
+            {
+                float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+                const auto grow = [&](const DirectX::XMFLOAT4& s)
+                {
+                    const float c[3] = { s.x, s.y, s.z };
+                    for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], c[k] - s.w); hi[k] = std::max(hi[k], c[k] + s.w); }
+                };
+                for (std::uint32_t ci = ds.firstCluster; ci < ds.firstCluster + ds.clusterCount; ++ci)
+                {
+                    grow(dag.lod[ci].lodSphere);
+                    grow(dag.lod[ci].parentSphere);
+                }
+                const float cx = 0.5f * (lo[0] + hi[0]), cy = 0.5f * (lo[1] + hi[1]), cz = 0.5f * (lo[2] + hi[2]);
+                float r = 0.0f;
+                const auto reach = [&](const DirectX::XMFLOAT4& s)
+                {
+                    const float dx = s.x - cx, dy = s.y - cy, dz = s.z - cz;
+                    r = std::max(r, std::sqrt(dx * dx + dy * dy + dz * dz) + s.w);
+                };
+                for (std::uint32_t ci = ds.firstCluster; ci < ds.firstCluster + ds.clusterCount; ++ci)
+                {
+                    reach(dag.lod[ci].lodSphere);
+                    reach(dag.lod[ci].parentSphere);
+                }
+                tessyDagSphereCpu_[g] = DirectX::XMFLOAT4{ cx, cy, cz, r * 1.001f + 1e-4f };
+            }
             ++tessyDagGroups_;
             tessyDagClusters_ += ds.clusterCount;
         }
@@ -4784,7 +4967,7 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                   tessyMeshletsCpu_.size() * sizeof(TessyMeshlet) +
                   (tessyVertsCpu_.size() + tessyTrisCpu_.size()) * sizeof(std::uint32_t) +
                   tessyClusterLodCpu_.size() * sizeof(TessyClusterLod) +
-                  (tessyDagGroupCpu_.size() + tessyDagLevelCpu_.size()) * sizeof(DirectX::XMUINT4);
+                  (tessyDagGroupCpu_.size() + tessyDagLevelCpu_.size() + tessyDagSphereCpu_.size()) * sizeof(DirectX::XMUINT4);
     std::string list;
     for (size_t i = 0; i < without.size() && i < 24; ++i) { list += (i ? ", " : "") + without[i]; }
     if (without.size() > 24) { list += ", ... (" + std::to_string(without.size() - 24) + " more)"; }
@@ -4807,6 +4990,7 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     if (tessyMeshletsCpu_.empty()) { tessyMeshletsCpu_.push_back(TessyMeshlet{}); }
     if (tessyDagLevelCpu_.empty()) { tessyDagLevelCpu_.push_back(DirectX::XMUINT4{ 0u, 0u, 0u, 0u }); } // N7: never zero-sized
     if (tessyDagGroupCpu_.empty()) { tessyDagGroupCpu_.push_back(DirectX::XMUINT4{ 0u, 0u, 0u, 0u }); }
+    if (tessyDagSphereCpu_.empty()) { tessyDagSphereCpu_.push_back(DirectX::XMFLOAT4{ 0.0f, 0.0f, 0.0f, 0.0f }); }
     struct Table { const void* src; UINT64 bytes; GpuResource* dst; const wchar_t* name; };
     const Table tables[] = {
         { tessyClusterCpu_.data(), tessyClusterCpu_.size() * sizeof(TessyCluster), &tessyClusters_, L"Tessy.Clusters" },
@@ -4817,6 +5001,7 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
         { tessyClusterLodCpu_.data(), tessyClusterLodCpu_.size() * sizeof(TessyClusterLod), &tessyClusterLod_, L"Tessy.ClusterLod" },
         { tessyDagGroupCpu_.data(), tessyDagGroupCpu_.size() * sizeof(DirectX::XMUINT4), &tessyDagGroup_, L"Tessy.DagGroups" },
         { tessyDagLevelCpu_.data(), tessyDagLevelCpu_.size() * sizeof(DirectX::XMUINT4), &tessyDagLevel_, L"Tessy.DagLevels" },
+        { tessyDagSphereCpu_.data(), tessyDagSphereCpu_.size() * sizeof(DirectX::XMFLOAT4), &tessyDagSphere_, L"Tessy.DagSpheres" },
     };
     auto makeBuf = [&](UINT64 bytes, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state, const wchar_t* name,
                        Microsoft::WRL::ComPtr<ID3D12Resource>& out) -> bool
@@ -4866,7 +5051,7 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     if (!tessyHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 10; // N7: + ClusterLod, DAG groups, DAG levels
+        hd.NumDescriptors = 11; // N7: + ClusterLod, DAG groups, DAG levels; N7e: + DAG spheres
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowTessy, L"Tessy.SrvHeap", IID_PPV_ARGS(tessyHeap_.GetAddressOf()))))
@@ -4906,6 +5091,7 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     structured(7, tessyClusterLod_.Get(), static_cast<UINT>(tessyClusterLodCpu_.size()), sizeof(TessyClusterLod));
     structured(8, tessyDagGroup_.Get(), static_cast<UINT>(tessyDagGroupCpu_.size()), sizeof(DirectX::XMUINT4));
     structured(9, tessyDagLevel_.Get(), static_cast<UINT>(tessyDagLevelCpu_.size()), sizeof(DirectX::XMUINT4));
+    structured(10, tessyDagSphere_.Get(), static_cast<UINT>(tessyDagSphereCpu_.size()), sizeof(DirectX::XMFLOAT4));
     tessyReady_ = true;
     EnsureTessyAtlasResources(renderer); // N4: once, fixed sizes
 }
@@ -5001,6 +5187,17 @@ void ShadowGpuData::EnsureTessyAtlasResources(Renderer* renderer)
         srv(5u, tessyAtlasInfo_.Get(), infoBytes, 8u);
         uav(6u, tessyCamDeferred_.Get(), deferBytes, 16u);
         srv(7u, tessyCamDeferred_.Get(), deferBytes, 16u);
+        {
+            // tessy.sdsm: the SDSM rows' counters alone (Main_SdsmCull clears them; a RAW view starts on 16 bytes).
+            static_assert(kTessySunCounterOffset % 16u == 0u && kTessyAtlasCounterBytes % 16u == 0u, "RAW views start on 16 bytes");
+            D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
+            ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+            ud.Format = DXGI_FORMAT_R32_TYPELESS;
+            ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
+            ud.Buffer.FirstElement = (f * counterBytes + kTessySunCounterOffset) / 4u;
+            ud.Buffer.NumElements = static_cast<UINT>((counterBytes - kTessySunCounterOffset) / 4u);
+            dev->CreateUnorderedAccessView(tessyAtlasCounter_.Get(), nullptr, &ud, TessyAtlasDescriptor(f, 8u));
+        }
     }
 }
 
@@ -5059,7 +5256,7 @@ bool ShadowGpuData::RecordTessyView(Renderer* renderer, ID3D12GraphicsCommandLis
     for (std::uint32_t r = 0; r < rows; ++r)
     {
         const std::uint32_t row = kTessyCameraRowSet * render::kShadowViewCeiling + r;
-        ctx.constants[0] = { row | (tessyViewMode_ == 2u ? 0x80000000u : 0u) };
+        ctx.constants[0] = { row | (tessyViewMode_ == 2u ? 0x80000000u : tessyViewMode_ == 3u ? 0x40000000u : 0u) };
         m->Bind(cl, ctx, false);
         renderer->ExecuteIndirect(cl, meshSig, 1, tessyAtlasArgs_.Get(),
             static_cast<UINT64>(f) * kTessyAtlasArgsRegionBytes + static_cast<UINT64>(row) * 12u, nullptr, 0);
@@ -5072,13 +5269,14 @@ bool ShadowGpuData::RecordTessyView(Renderer* renderer, ID3D12GraphicsCommandLis
 // culled by the camera frustum and taken from the classic draw, one group per PSO run (kFlagByRun); for the cluster
 // view alone no cull and nothing zeroed (the G-buffer still draws those rows). The camera's records carry their group.
 void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec,
-                                         std::uint32_t rowSet)
+                                         std::uint32_t rowSet, D3D12_CPU_DESCRIPTOR_HANDLE frustumSrv, bool empty)
 {
     const UINT f = renderer->GetCurrentFrameIndex();
     const bool camera = rowSet == kTessyCameraRowSet;
+    const bool sun = rowSet == kTessySunRowSet; // tessy.sdsm: the SDSM partitions, rows 0.. of the main pair
     const bool byRun = camera && dec.tessyGBuffer;
     const std::uint32_t views = camera ? (byRun ? dec.tessyCamRows : 1u) : dec.localViews;
-    if (f >= render::kFrameCount || views == 0u || rowSet >= kTessyAtlasRowSets) { return; }
+    if (f >= render::kFrameCount || views == 0u || rowSet >= kTessyAtlasRowSets || (sun && frustumSrv.ptr == 0)) { return; }
     struct AtlasCullCB
     {
         std::uint32_t numGroups, firstView, numViews, rowSet, viewStride, frustumFirst, recordBase, recordCap;
@@ -5087,36 +5285,58 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
         float dagCam[4];      // N7d: the camera, pixels per unit / lod.pixelError (the camera's runs)
         std::uint32_t dagOn;
         float dagNear;
-        std::uint32_t dagPad[2];
+        std::uint32_t dagBand; // N7e: tessy.lodBand
+        std::uint32_t planes;  // a local view's frustum planes (6), an SDSM partition's (16)
+        std::uint32_t counterAt[4]; // the row set's counters in TessyAtlasCounter: claim, not fit, tested, triangles (~0 none)
+        std::uint32_t split;   // groups a view (the SDSM partitions: kTessySunSplit, each its own run), else 1
+        std::uint32_t splitPad[3];
         ViewMask staticViews; // S7's rows: the views that draw them (SetLocalStaticDrawn); the other row sets ignore it
     };
-    static_assert(offsetof(AtlasCullCB, staticViews) == 112u, "tessy_atlas_cull_cs.hlsl AtlasCullCB: gStaticViews at 112");
-    static constexpr std::uint32_t kFlagKeepRows = 1u, kFlagNoCull = 2u, kFlagClusterId = 4u, kFlagByRun = 8u; // the kernel's
+    static_assert(offsetof(AtlasCullCB, staticViews) == 144u, "tessy_atlas_cull_cs.hlsl AtlasCullCB: gStaticViews at 144");
+    static constexpr std::uint32_t kFlagKeepRows = 1u, kFlagNoCull = 2u, kFlagClusterId = 4u, kFlagByRun = 8u, // the kernel's
+                                   kFlagLevelId = 16u;
     AtlasCullCB c{};
-    c.numGroups = numVirtualGroups_;
+    c.numGroups = empty ? 0u : numVirtualGroups_;
     c.firstView = rowSet == 0u ? render::kShadowViewCascades : 0u; // the main rows by view slot, S7's by slot - cascades
     c.numViews = views;
     c.rowSet = rowSet;
     c.viewStride = render::kShadowViewCeiling;
-    // The camera's frustum sits past the capacity's views (shadow_cull_cs gCamView); the cluster view alone reads none.
-    c.frustumFirst = camera ? (byRun ? render::MaxShadowViews() : 0u) : render::kShadowViewCascades;
+    // The camera's frustum sits past the capacity's views (shadow_cull_cs gCamView); the cluster view alone reads none;
+    // the SDSM partitions' planes are their own buffer's 0..
+    c.frustumFirst = camera ? (byRun ? render::MaxShadowViews() : 0u) : sun ? 0u : render::kShadowViewCascades;
+    c.planes = sun ? 16u : 6u;
+    c.split = sun ? kTessySunSplit : 1u;
+    if (sun)
+    {
+        c.counterAt[0] = kTessySunCounterOffset; c.counterAt[1] = kTessySunCounterOffset + 4u;
+        c.counterAt[2] = kTessySunCounterOffset + 8u; c.counterAt[3] = kTessySunCounterOffset + 12u;
+    }
+    else
+    {
+        c.counterAt[0] = rowSet * 4u; c.counterAt[1] = 12u; c.counterAt[2] = 16u; c.counterAt[3] = byRun ? 24u : 0xFFFFFFFFu;
+    }
     c.recordBase = rowSet * kTessyAtlasRowSetCap;
     c.recordCap = kTessyAtlasRowSetCap;
     for (int i = 0; i < 4; ++i) { c.wind0[i] = dec.tessyWind0[i]; c.wind1[i] = dec.tessyWind1[i]; }
     c.windPad = std::min(tessy::g_vsmWindPad, 2u);
     c.classicCountOffset = static_cast<std::uint32_t>(kTessyCamClassicCountOffset); // by run: the classic runs' counts
     c.flags = !camera ? 0u : byRun ? (kFlagClusterId | kFlagByRun) : (kFlagKeepRows | kFlagNoCull | kFlagClusterId);
+    if (camera && tessyViewFrame_ && tessyViewMode_ == 3u) { c.flags |= kFlagLevelId; } // the cluster view's "Levels"
     c.staticViews = dec.tessyStaticViews;
-    c.dagOn = (byRun && dec.tessyCamDag) ? 1u : 0u;
+    c.dagOn = byRun ? (dec.tessyCamDag ? 1u : 0u) : (!camera && dec.tessyAtlasDag ? 1u : 0u);
     for (int i = 0; i < 4; ++i) { c.dagCam[i] = dec.tessyDagCam[i]; }
     c.dagNear = 0.01f; // 1 cm: a sphere around the camera takes its leaves
-    static constexpr std::size_t kArgsSet[kTessyAtlasRowSets] = { 0u, 16u, 7u }; // the rows (RAW): main, static, camera
-    static constexpr std::size_t kListSet[kTessyAtlasRowSets] = { 1u, 17u, 8u }; // their caster ids
+    c.dagBand = tessy::g_lodBand ? 1u : 0u;
+    // The rows (RAW) and their caster ids: main, static, camera, the SDSM partitions (the main pair's rows 0..3).
+    static constexpr std::size_t kArgsSet[kTessyAtlasRowSets] = { 0u, 16u, 7u, 0u };
+    static constexpr std::size_t kListSet[kTessyAtlasRowSets] = { 1u, 17u, 8u, 1u };
     // N5: the camera's runs test their clusters against last frame's pyramid too, when the two-pass HZB is on.
     const bool camHzb = byRun && dec.tessyCamHzb;
     c.camDeferCap = camHzb ? kTessyCamDeferCap : 0u;
     CameraHzbParams hzb = camHzbParams_;
     hzb.on = camHzb ? 1u : 0u;
+    // The camera's runs are a handful of groups with thousands of tests each: the 1024-thread twin. (The SDSM partitions
+    // are split instead -- 16 groups a partition, each a slice of its virtual groups.)
     Material* const kernel = (camera && tessyCameraCullMat_) ? tessyCameraCullMat_.get() : tessyAtlasCullMat_.get();
     auto cb0 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(AtlasCullCB)), render::kConstantBufferAlignment);
     auto cb1 = renderer->GetFrameResource()->AllocDynamic(static_cast<UINT>(sizeof(CameraHzbParams)), render::kConstantBufferAlignment);
@@ -5129,15 +5349,17 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     rc.cbv[1] = cb1.gpu;
     // A volatile table has no holes: the placeholders the cull uses where a frame has no pyramid / no run table.
     const D3D12_CPU_DESCRIPTOR_HANDLE prevHzb = (camHzb && camHzbPrevSrv_.ptr != 0) ? camHzbPrevSrv_ : renderer->GetDeferredForFrame().shadowSRV;
-    rc.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f), viewFrustums_.Srv(f), TessyClusterSrv(), TessyVgSrv(), GroupLodMegaSrv(),
+    rc.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f), sun ? frustumSrv : viewFrustums_.Srv(f), TessyClusterSrv(), TessyVgSrv(), GroupLodMegaSrv(),
                                                   tessyVgRun_.Valid() ? tessyVgRun_.Srv(f) : TessyVgSrv(), // read by the camera's runs alone
-                                                  prevHzb, TessyClusterLodSrv(), TessyDagGroupSrv(), CasterLodSrv(f) }).gpu;
+                                                  prevHzb, TessyClusterLodSrv(), TessyDagGroupSrv(), CasterLodSrv(f),
+                                                  TessyDagLevelSrv(), TessyDagSphereSrv(),
+                                                  viewDag_.Valid() ? viewDag_.Srv(f) : TessyDagSphereSrv() }).gpu; // N7e: t12
     rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[kArgsSet[rowSet] * render::kFrameCount + f], cullUav_[kListSet[rowSet] * render::kFrameCount + f],
                                                   TessyAtlasDescriptor(f, 0u), TessyAtlasDescriptor(f, 1u), TessyAtlasDescriptor(f, 2u),
                                                   TessyAtlasDescriptor(f, 3u), TessyAtlasDescriptor(f, 6u) }).gpu;
     rc.samplerTable[0] = D3D12_GPU_DESCRIPTOR_HANDLE{};
     kernel->Bind(cl, rc);
-    cl->Dispatch(views, 1, 1); // one group per view (the camera: per run)
+    cl->Dispatch(views * c.split, 1, 1); // one group per view (the camera: per run; the sun: kTessySunSplit per partition)
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::TessySrv(UINT slot) const

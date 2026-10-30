@@ -3431,6 +3431,9 @@ void Scene::Render(Renderer* renderer) {
                     lc.sphere = view.lightSphere.xf();
                     lc.cone = view.lightCone.xf();
                 }
+                // Tessy N7e: the light and the view's texels per unit at distance 1 (the atlases' DAG cut).
+                lc.dag = DirectX::XMFLOAT4(view.position.x, view.position.y, view.position.z,
+                                           0.5f * static_cast<float>(view.shadowRes) * std::abs(view.proj.m.m[0][0]));
                 localViewCullPtr_[slot] = &lc;
             };
             const auto buildHull = [&](const float3& light)

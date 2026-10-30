@@ -529,16 +529,18 @@ namespace
         // Tessy N3 (docs/tessy_plan.md): the VSM page render draws the casters with clusters cluster by cluster; the
         // cull's sway pad (0 only to see what it prevents). Live: the next frame's builder reads them.
         if (setting == "tessy.enabled") { tessy::g_enabled = value != 0.0f; return true; } // the master switch
-        if (setting == "tessy.debug") { tessy::g_debugView = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; } // the cluster view
+        if (setting == "tessy.debug") { tessy::g_debugView = static_cast<unsigned>(std::clamp(value, 0.0f, 3.0f)); return true; } // the cluster view
         if (setting == "tessy.vsm") { tessy::g_vsm = value != 0.0f; return true; }
         if (setting == "tessy.windPad") { tessy::g_vsmWindPad = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
         if (setting == "tessy.validate") { tessy::g_vsmValidate = value != 0.0f; return true; }
         if (setting == "tessy.raster") { tessy::g_vsmMeshShader = value != 0.0f; return true; } // N6: 1 mesh shader, 0 VS
         if (setting == "tessy.atlas") { tessy::g_atlas = value != 0.0f; return true; } // N4: the lamps' atlas views
         if (setting == "tessy.gbuffer") { tessy::g_gbuffer = value != 0.0f; return true; } // N5: the camera's G-buffer
+        if (setting == "tessy.sdsm") { tessy::g_sdsm = value != 0.0f; return true; } // the SDSM sun partitions
         if (setting == "tessy.gbufferHzb") { tessy::g_gbufferHzb = value != 0.0f; return true; } // N5: its clusters' HZB test
         if (setting == "tessy.lod") { tessy::g_lod = value != 0.0f; return true; } // N7: the cluster DAG's cut
         if (setting == "tessy.lodShadowTexels") { tessy::g_lodShadowTexels = std::max(value, 0.01f); return true; }
+        if (setting == "tessy.lodBand") { tessy::g_lodBand = value != 0.0f; return true; } // N7e: the camera DAG's level band
         if (setting == "tessy.msCull") { tessy::g_vsmMsCull = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }
@@ -2060,6 +2062,7 @@ namespace
                               ",\"tessy\":{\"enabled\":%s,\"debugView\":%u,\"view\":\"%s\",\"gbuffer\":\"%s\",\"gbufferTwins\":%u,\"lod\":%s,\"dagGroups\":%u,\"dagClusters\":%u,\"camDag\":%s,\"atlasRecords\":%u,"
                               "\"staticRecords\":%u,\"viewRecords\":%u,\"viewsNotFit\":%u,\"rowClustersTested\":%u,\"camDeferred\":%u,"
                               "\"camTris\":%u,\"camDagClusters\":%u,"
+                              "\"sdsm\":\"%s\",\"sdsmRecords\":%u,\"sdsmNotFit\":%u,\"sdsmClustersTested\":%u,\"sdsmTris\":%u,"
                               "\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"meshShader\":%s,"
                               "\"rasterKnob\":%u,\"meshShaderOffReason\":\"%s\",\"groupsWithClusters\":%u,"
                               "\"groups\":%u,\"clusterTable\":%u,\"wholePairs\":%u,\"wholeTris\":%u,\"tessyPairs\":%u,"
@@ -2070,6 +2073,7 @@ namespace
                               sg.TessyGBufferVerdict(), sg.TessyGBufferRuns(), tessy::g_lod ? "true" : "false",
                               sg.TessyDagGroups(), sg.TessyDagClusters(), sg.TessyCameraDagThisFrame() ? "true" : "false",
                               as[0], as[1], as[2], as[3], as[4], as[5], as[6], as[7],
+                              sg.TessySunVerdict(), as[8], as[9], as[10], as[11],
                               t.valid ? "true" : "false", t.tessyOn ? "true" : "false", tessy::g_vsm ? "true" : "false",
                               scene_.Vsm().TessyOffReason(), t.tessyMs ? "true" : "false", tessy::g_vsmMeshShader ? 1u : 0u,
                               scene_.Vsm().TessyMsOffReason(), sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(),

@@ -3401,6 +3401,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "wind) against the view's frustum, the survivors through a mesh shader.\n"
                                       "OFF: every such caster drawn whole into every view it touches.\n"
                                       "Needs a mesh shader tier. The depth is the same either way. --set=tessy.atlas:0|1");
+                GRAPHICS_CONTROL(TessySdsm, "tessySdsm",
+                    ImGui::Checkbox("Tessy: SDSM sun partitions cluster by cluster", &tessy::g_sdsm));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON (SDSM): each sun partition draws the casters whose meshes have clusters cluster\n"
+                                      "by cluster -- each cluster's box (padded for the wind) against the partition's cull\n"
+                                      "volume and box (the analyze's 16 planes), the survivors through the lamp atlases'\n"
+                                      "mesh shader. Pass B of the light-space HZB cull stays classic.\n"
+                                      "OFF: every such caster drawn whole into every partition it touches.\n"
+                                      "Needs a mesh shader tier. The depth is the same either way. --set=tessy.sdsm:0|1");
+                ImGui::Text("SDSM partitions: %s", scene.ShadowGpu().TessySunVerdict());
                 GRAPHICS_CONTROL(TessyGBuffer, "tessyGBuffer",
                     ImGui::Checkbox("Tessy: camera G-buffer cluster by cluster", &tessy::g_gbuffer));
                 if (ImGui::IsItemHovered())
@@ -3423,28 +3433,33 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Needs the camera's two-pass HZB. Not saved. --set=tessy.gbufferHzb:0|1");
                 ImGui::EndDisabled();
                 ImGui::Unindent();
-                ImGui::Checkbox("Tessy: cluster DAG LOD (camera + VSM clipmap pages)", &tessy::g_lod);
+                ImGui::Checkbox("Tessy: cluster DAG LOD (camera, lamp atlases, VSM pages)", &tessy::g_lod);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("N7: the assets with a cluster DAG (mesh.json \"tessyLod\", or --tessy-lod-build) draw\n"
-                                      "the DAG's cut -- continuous LOD instead of the discrete tiers, each caster its own.\n"
+                    ImGui::SetTooltip("N7: the assets with a cluster DAG (baked into every .mesh.bin v5; a v4 file builds one\n"
+                                      "at load for mesh.json \"tessyLod\" or --tessy-lod-build) draw the DAG's cut --\n"
+                                      "continuous LOD instead of the discrete tiers, each caster its own.\n"
                                       "Camera: a cluster whose error spans at most lod.pixelError pixels at the nearest\n"
                                       "point of its sphere while its parent's spans more (where a discrete LOD of that\n"
                                       "deviation switches); it turns the camera G-buffer's clusters on for itself.\n"
-                                      "VSM clipmap pages: the same against the page's texels x tessy.lodShadowTexels\n"
-                                      "(a switch flushes the page cache). --set=tessy.lod:0|1, tessy.lodShadowTexels:<x>");
+                                      "Shadows (the lamps' atlases, every VSM page): the same against the view's texels x\n"
+                                      "tessy.lodShadowTexels (a switch flushes the page cache and the lamps' static cache).\n"
+                                      "--set=tessy.lod:0|1, tessy.lodShadowTexels:<x>, tessy.lodBand:0|1 (the camera's level band)");
                 ImGui::SameLine();
                 ImGui::TextDisabled("(%u groups, %u clusters)", scene.ShadowGpu().TessyDagGroups(), scene.ShadowGpu().TessyDagClusters());
                 {
                     int view = static_cast<int>(tessy::g_debugView);
-                    const char* const views[] = { "Off", "Clusters", "Meshlets" };
+                    const char* const views[] = { "Off", "Clusters", "Meshlets", "Levels" };
                     ImGui::SetNextItemWidth(160.0f);
-                    if (ImGui::Combo("Cluster view", &view, views, 3)) { tessy::g_debugView = static_cast<unsigned>(view); }
+                    if (ImGui::Combo("Cluster view", &view, views, 4)) { tessy::g_debugView = static_cast<unsigned>(view); }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Every caster the camera draws, over the lit frame, one colour per cluster (or per\n"
                                           "meshlet: a cluster cut into runs of <= 64 vertices for the mesh shader). From the\n"
                                           "camera's own cull row: the geometry and the LODs the G-buffer drew. While it is\n"
                                           "on the camera's two-pass HZB cull stays off. Needs the indirect G-buffer and a\n"
-                                          "mesh shader tier. Not saved. --set=tessy.debug:0|1|2");
+                                          "mesh shader tier. Not saved. --set=tessy.debug:0|1|2|3\n"
+                                          "Levels: a cluster of the DAG's cut by its DAG level -- green = the leaves (LOD0's\n"
+                                          "detail), yellow, red, magenta = the coarsest -- and a discrete LOD's cluster by its\n"
+                                          "tier, light (LOD0) to dark blue (LOD3). With tessy.lod on, the cut moves as you fly.");
                     ImGui::Text("cluster view: %s", scene.ShadowGpu().TessyViewVerdict());
                 }
                 ImGui::EndDisabled();
@@ -3466,6 +3481,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 "(frame N-3, the last frame a cluster row ran)", as[3], as[4], as[5]);
                     ImGui::Text("camera pass A: %.3f M triangles, %u DAG clusters (the DAG's cut %s)", as[6] * 1e-6, as[7],
                                 sg.TessyCameraDagThisFrame() ? "on" : "off");
+                    ImGui::Text("SDSM partitions: %u meshlet records, %.3f M triangles, %u clusters tested, %u runs did not fit",
+                                as[8], as[11] * 1e-6, as[10], as[9]);
                     ImGui::TextDisabled("VSM pages (when the VSM is the shadow mode):");
                     if (ts.valid)
                     {

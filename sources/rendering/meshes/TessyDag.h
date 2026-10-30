@@ -21,6 +21,9 @@ struct DagBuildParams
 {
     float normalWeight = 0.0f;       // MeshLoadOptions::lodNormalWeight (the discrete LODs' normal-weighted metric)
     std::vector<float> slotUvWeight; // per material slot: MeshLoadOptions::foliageUvWeight on foliage slots, else 0
+    // Per material slot: 1 = leaf cards, simplified with meshopt_SimplifyPrune -- a whole card leaves once its size fits
+    // the group's error (the discrete foliage chain drops whole leaves; edge collapses alone stall a crown at ~45 %).
+    std::vector<unsigned char> slotPrune;
     uint32_t groupSize = 16;         // meshopt_partitionClusters' target (clusters a group)
 };
 

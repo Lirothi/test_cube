@@ -685,13 +685,24 @@ is the owner's call (plan Q4) -- back the files up first. Done for all 148 on 20
 is v4 (log `classic path: none`), the v3 originals are in `D:\Programming\test_cube_backups\mesh_bin_v3_2026-10-30`. A
 checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every one of them.
 
+**`.mesh.bin` v5 carries the cluster DAG** (N7, below) after the LOD blocks: a bake (`--bake`, `--reimport`, the import)
+builds it with the asset's own simplification weights (`MeshManager.cpp BuildDagForMesh`, the same function a load uses
+for a v4 file), `--tessy-upgrade=<bin>,...|all` adds it to a v3/v4 file in place (clusters kept, `all` = every
+`models/**/*.mesh.bin`; a v5 file is left alone), and a load takes the stored DAG after `ValidateDag` -- no build at boot.
+Done for all 148 on 2026-10-30 (owner: "bake the DAG at import and bake every mesh"): 4624 DAG clusters, 511 k triangles
+over all levels; the v4 files are in `D:\Programming\test_cube_backups\mesh_bin_v4_2026-10-30`. A checkout before this
+reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (the A/B of a builder change).
+
 - **Developer Controls > Tessy** (2026-10-30, owner: "its own tab, a master switch to turn it all off, and a cluster
   debug view"): the master switch `tessy.enabled` (default 1; `graphics_settings.json` vsm.tessyEnabled, `--set`, MCP)
   turns EVERY Tessy path off -- the VSM pages and the lamps' atlases draw whole meshes, the cluster view is off -- while
   `tessy.vsm` / `tessy.raster` / `tessy.atlas` keep their values (greyed out); the cluster tables stay loaded, so it
   switches both ways at once. The verdicts say `off (tessy.enabled 0)` (`tessy.vsm: classic path -- ...`).
-- **The cluster view** `tessy.debug:1|2` (the tab's "Cluster view" Clusters / Meshlets; not persisted) draws every caster
-  the camera drew this frame over the lit scene colour in `Main_DebugDraw`, one hashed colour per cluster or meshlet,
+- **The cluster view** `tessy.debug:1|2|3` (the tab's "Cluster view" Clusters / Meshlets / Levels; not persisted) draws
+  every caster the camera drew this frame over the lit scene colour in `Main_DebugDraw`, one hashed colour per cluster or
+  meshlet -- or, Levels (N7e), a DAG cluster by its DAG level (green = the leaves, yellow, red, magenta = the coarsest; the
+  kernel's `kFlagLevelId` puts the level in the record's .w high half) and a discrete LOD's cluster by its tier (light to
+  dark blue), so `tessy.lod` is SEEN cutting the DAG as the camera moves,
   cutouts clipped: the atlas kernel runs a third row set (2, the camera's row: `camArgs_` / `camVisibleList_`) with keep
   rows / no cull / cluster id in the record's `.w`, and `TESSY_ATLAS_MS` + `TESSY_VIEW` draws it with the G-buffer's
   jittered view (`BuildGBufferViewCB`), depth `GREATER_EQUAL` + a slope bias against the frame's own depth. So it shows
@@ -700,7 +711,8 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   mesh shader tier, and says why not (`tessy.view: off -- ...`, the tab's `cluster view:` line, `get_readouts`
   tessy.view). The auto exposure meters the colours too: the sky darkens behind them. Cost: `Pass_DebugDraw`
   0.03-0.04 ms on the grove (9.2 k meshlets).
-- **N5, the camera's G-buffer by clusters** (`tessy.gbuffer`, default 0; Developer Controls > Tessy "camera G-buffer",
+- **N5, the camera's G-buffer by clusters** (`tessy.gbuffer`, default 1 since 2026-10-30 -- owner: "switch Tessy on by
+  default in the G-buffer" -- at the cost measured below; Developer Controls > Tessy "camera G-buffer",
   `graphics_settings.json` vsm.tessyGBuffer, `--set`, MCP; verdict `tessy.gbuffer: on` / `classic -- <why>`): the camera
   row goes through `tessy_atlas_cull_cs.hlsl` too, BY PSO RUN (`kFlagByRun`: one 1024-thread group per run of the merged
   G-buffer commands, `VgRun` maps a virtual group to its run) -- every (caster, cluster) box, wind padded, against the
@@ -714,7 +726,8 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   in wireframe. Measured 2026-10-30 (DLSS Balanced, panels closed, alternated x2): the G-buffer 0.155 vs 0.171-0.174 ms
   on the grove, 0.169 vs 0.187-0.189 in the tunnel, 0.181 vs 0.173-0.174 in the bathroom, but the kernel adds
   0.013-0.035 -- the frame +0.01-0.02 ms. Picture: on/off at the noise floor (grove 0.23 vs 0.21-0.22 %, the cabinet
-  0.03-0.16 vs 0.44-0.64 %). Hence off by default: on wind_test's low-poly assets clusters do not pay in the main pass.
+  0.03-0.16 vs 0.44-0.64 %): on wind_test's low-poly assets clusters do not pay in the main pass (off by default until
+  the owner switched it on).
   The mesh shader's 25 output values a vertex are not its limit (a 19-value version measured the same).
 - **`tessy.gbufferHzb`** (default 0, not persisted): N5's two-pass HZB per CLUSTER (UE's main/post): a cluster last
   frame's pyramid hid goes to `TessyCamDeferred` (claimed with the run's records -- both fit or the run stays classic;
@@ -722,13 +735,13 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   run's pass-B row (after pass A's), Main_GBufferB draws it with the twins. wind_test defers 1.5-5 % of the clusters
   (grove 66-76 of 4325, tunnel 330-338), and the test + pass B cost more than they cull (+0.03-0.04 ms) -- for dense
   assets. Needs the camera's two-pass HZB that frame (the cluster view switches it off).
-- **N7, the cluster DAG (continuous LOD), in progress** (plan section N7 "Этапы"): `rendering/meshes/TessyDag.*` builds
-  UE's DAG over LOD0's clusters per submesh AT LOAD -- groups of ~16 (`meshopt_partitionClusters`), each simplified to
+- **N7, the cluster DAG (continuous LOD)** (plan section N7 "Этапы"): `rendering/meshes/TessyDag.*` builds
+  UE's DAG over LOD0's clusters per submesh (baked into v5 since N7e; at load for a v4 file) -- groups of ~16 (`meshopt_partitionClusters`), each simplified to
   half (the discrete LODs' normal / foliage-UV weights, `ErrorAbsolute | Sparse`) with the vertices it shares with other
   groups or other submeshes locked BY POSITION, recut into clusters, to the root; every cluster carries the error and
-  sphere of the simplification that made it (lod*) and of the one that consumes it (parent*). Only for assets whose
-  mesh.json says `"tessyLod": true` or `--tessy-lod-build=all|<path part>,...` names (no manifest carries it yet: none
-  has a DAG by default). `Mesh::Dag` + its own IB, appended to the mega IB after the mesh's LODs; the DAG clusters join
+  sphere of the simplification that made it (lod*) and of the one that consumes it (parent*). Every v5 asset has one; a
+  v4 file builds one at load only when its mesh.json says `"tessyLod": true` or `--tessy-lod-build=all|<path part>,...`
+  names it. `Mesh::Dag` + its own IB, appended to the mega IB after the mesh's LODs; the DAG clusters join
   the cluster table with a parallel `ClusterLod` table, per mesh group a DAG range and per level its error interval
   (`TessyClusterLodSrv` / `TessyDagGroupSrv` / `TessyDagLevelSrv`). `tessy.lod` (default 0, Tessy tab) lets the VSM
   CLIPMAP pages draw the DAG's cut (`tessy_vsm_cull_cs.hlsl`: an orthographic page has a distance-free threshold,
@@ -756,8 +769,34 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   palms' foliage LODs are not error-driven (they drop whole leaves by distance) and the DAG's roots stop at ~45 % of
   LOD0. No crack looking up into the crowns (DLSS off) nor in the cluster view; the picture moves where the shadows do
   (8.5 % of pixels, floor 2.2 %). GBV (`ShadowCull,GBuffer,CamCullPost,GBufferB,VsmPageRender,Skybox` + the Skybox
-  self-test): clean. Not done: pops in motion (a flight burst), the flat test's cost on dense DAGs (a level band or a
-  hierarchy), a DAG baked into .mesh.bin.
+  self-test): clean.
+- **N7e: the DAG's cut in every shadow and a level band for the camera** (2026-10-30). `tessy.lod` now also cuts the
+  DAG in the lamps' ATLASES (SDSM / Legacy; the atlas kernel's row sets 0 and 1 take each view's light and its texels per
+  unit at distance 1 / `tessy.lodShadowTexels` from `ShadowGpuData::viewDag_`, filled from `LocalViewCull::dag`; a switch
+  bumps the lamps' static cache version) and in EVERY VSM page (`tessy_vsm_cull_cs.hlsl PageDagTooCoarse`: an error spans
+  e s K / w texels, K = |column x| x 64 / texels, w = the clip w of the sphere's nearest point -- 1 on a clipmap page, the
+  light's depth on a local one; the run's levels a band from its casters' threshold spread over `DagSpheres`; a change of
+  the cut or its texels flushes the page cache). The crossfade dedupe is the camera row's only (a shadow row holds a
+  caster once). The camera's DAG groups test each caster's BAND of levels (`DagBand`: the levels whose error interval can
+  meet its threshold anywhere on the DAG's sphere -- `Tessy.DagSpheres`, around every lod and parent sphere): tests on the
+  grove 8.3 k -> 4.5 k, the far view 21 k -> 6.0 k, the same clusters; `tessy.lodBand:0` = the flat test (the A/B). Leaf
+  cards simplify with `meshopt_SimplifyPrune` (whole cards leave once their radius fits the error, which the error then
+  carries; `--tessy-lod-prune=0` = edge collapses alone): date_palm's roots 4275 -> 829 triangles at 0.37 -> 1.17 m, the
+  camera's distances unchanged (a leaf is a pixel only at hundreds of metres -- the honest metric does not drop visible
+  leaves; the palms' discrete foliage LODs do, by hand, `lodDropSlots` / `foliagePruneKeep`). Measured, wind_test with
+  "Lamps" at 23:00 on the grove, alternated twice: SDSM `Pass_PointShadows` 0.280-0.282 -> 0.260-0.261 ms (atlas meshlet
+  records 34.3 k -> 27.5 k), VSM `Pass_VsmPageRender` 1.082-1.089 -> 1.050-1.060 (9.5 -> 8.9 M triangles); the picture moves
+  where the lamps' shadows fall on far palms (SDSM 1.7 %, VSM 2.3 % of pixels over 8 levels, floor 0.2-0.3 %), "0" repeats
+  "0" and "1" repeats "1" at the floor. A flight burst (60 fps, DLSS off, the temporal second difference per frame) tells
+  the arms apart nowhere -- the motion swamps the metric, so it shows no pop stands out, not that none exists. GBV (SDSM:
+  `ShadowCull,PointShadows,SpotShadows,LocalShadowCache,GBuffer,Skybox`; VSM: `VsmPageRender,ShadowCull,GBuffer,Skybox`; the
+  bathroom at 23:00 with the Skybox self-test): clean. The DAG is baked into .mesh.bin v5 since (above). The SDSM / CSM
+  sun partitions draw discrete LODs, by clusters under `tessy.sdsm` (below) -- an orthographic DAG cut there is not done.
+  With every asset's DAG (2026-10-30, SDSM, panels closed, alternated twice) `tessy.lod` 1 in the G-buffer: grove
+  0.157 vs 0.160 ms, cull +0.009-0.012 (262 k vs 263 k triangles); bathroom 0.167-0.168 vs 0.170, cull +0.001-0.004;
+  tunnel 0.174 vs 0.170, cull +0.014 (482 k vs 419 k triangles); the far view [-20,30,20] 550 k vs 382 k -- the palms'
+  foliage LODs drop whole leaves by hand, the DAG's honest metric does not. The picture moves where LODs differ (grove
+  2.6 %, tunnel 1.8-2.0 %, floor 0.8-1.7 %). Hence `tessy.lod` stays 0 by default.
 - **A RAW view starts on 16 bytes**: a frame's DispatchMesh args are `kTessyAtlasRows` x 12 bytes, and with the third
   row set that stopped being a multiple of 16 -- the second frame's RAW UAV removed the device at its creation (debug
   layer `id=345`, Release: `0x887A0005` at the next create, then abort). The region is `kTessyAtlasArgsRegionBytes`,
@@ -791,7 +830,24 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   event `tessy.atlas: on` / `classic -- <why>`; every 5 s `tessy.atlas: <main> + <static> meshlet records (cap ...), <n>
   views did not fit, <m> clusters tested` (counters of frame N - 3). A view that does not fit stays classic. Measured
   (SDSM 23:00, "Lamps" on): the grove's point atlases 0.415 -> 0.287 ms for +0.034 of cull, frame -0.10 ms; the bathroom
-  (five candles) +0.025 -- nothing there to save. SDSM itself is NOT clustered: it does not follow its triangle count.
+  (five candles) +0.025 -- nothing there to save.
+- **The SDSM sun partitions by clusters** (`tessy.sdsm`, default 1 -- owner, 2026-10-30: "switch Tessy on by default in
+  SDSM"; Developer Controls > Tessy, `graphics_settings.json` vsm.tessySdsm, `--set`, MCP; verdict `tessy.sdsm: on` /
+  `classic -- <why>`, `get_readouts` tessy.sdsm*): Main_SdsmCull, after its re-cull of rows 0..3, runs the atlas kernel's
+  ROW SET 3 against the analyze's 16 planes a partition (`gPlanes`: its cull volume and its box; a local view tests 6),
+  `kTessySunSplit` (16) 256-thread groups a partition, each a slice of the virtual groups (vg % 16) and its own run (one
+  1024-thread group a partition cost 0.05 ms of latency for 6 k tests); Main_SdsmShadow draws each partition's 16 runs
+  after its classic draw with the lamps' atlas mesh shader (`RecordTessySunDraw`: the cascade atlas has the atlas PSO
+  state, the partition's GPU-written view CB). Pass B of the light-space HZB stays classic; the cut is the discrete
+  tiers'. The SDSM counters are [32..48) of the counter region (`gCounterAt`), cleared by Main_SdsmCull only when the
+  main cull cleared none; a re-cull that did not run writes every run empty (no stale args). Measured (2026-10-30, the
+  live editor, panels closed, 15:00, wind held, alternated twice): `Pass_SdsmShadow` grove 0.203-0.211 -> 0.170-0.173 ms,
+  bathroom 0.106-0.112 -> 0.088-0.092, tunnel 0.121-0.131 -> 0.097-0.098, but the cull `SdsmCull.TessySun` costs
+  0.034-0.041 / 0.020-0.023 / 0.032-0.040 and the `Pass_ShadowCull` row (the main and the SDSM cull share it) grows by
+  0.02-0.05 -- the frame +0.01-0.02 ms by the passes, within the frame total's +-0.1 noise. SDSM does not follow its
+  triangle count (N4): 0.18-0.56 M triangles into the partitions. Picture at the floor (grove 1.3-1.6 vs 1.4-1.6 %,
+  bathroom 0.19-0.27 vs 0.18-0.26, tunnel 0.75-0.83 vs 0.75-0.83). GBV (`ShadowCull,SdsmCull,SdsmShadow,Skybox` + the
+  Skybox self-test, wind_test SDSM): clean.
 - **A wave's prefix sum runs in LANE order, not in `SV_GroupIndex` order** (2026-10-29): in an 8x8 group NVIDIA does not
   lay the threads into lanes by `SV_GroupIndex`, and `gsPrefix[SV_GroupIndex] = WavePrefixSum(x)` handed the prefixes to
   other threads' entries -- the atlas kernel tested the wrong (caster, cluster), different lamps lost their shadows every

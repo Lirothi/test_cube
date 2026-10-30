@@ -140,6 +140,11 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
         if (nodes.empty()) { out.submeshes.push_back(ds); continue; }
         const float uvWeight = s.materialSlot < params.slotUvWeight.size() ? params.slotUvWeight[s.materialSlot] : 0.0f;
         const float weights[kAttr] = { params.normalWeight, params.normalWeight, params.normalWeight, uvWeight, uvWeight };
+        // Leaf cards: whole cards may go (meshopt prunes a disconnected piece once its radius fits the error, and the error
+        // it reports includes them, so the DAG's errors stay what the cut reads).
+        const bool prune = s.materialSlot < params.slotPrune.size() && params.slotPrune[s.materialSlot] != 0u;
+        const unsigned int simplifyOptions = meshopt_SimplifyErrorAbsolute | meshopt_SimplifySparse |
+                                             (prune ? static_cast<unsigned int>(meshopt_SimplifyPrune) : 0u);
 
         std::vector<uint32_t> work(nodes.size()); // the current level: indices into `nodes`
         for (uint32_t i = 0; i < work.size(); ++i) { work[i] = i; }
@@ -189,7 +194,7 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
                 float error = 0.0f;
                 const size_t n = meshopt_simplifyWithAttributes(simplified.data(), merged.data(), merged.size(),
                     &verts[0].position.x, verts.size(), sizeof(VertexPNTUV), attribs.data(), kAttr * sizeof(float),
-                    weights, kAttr, lock.data(), target, FLT_MAX, meshopt_SimplifyErrorAbsolute | meshopt_SimplifySparse, &error);
+                    weights, kAttr, lock.data(), target, FLT_MAX, simplifyOptions, &error);
                 if (n == 0 || static_cast<float>(n) > kStuckShare * static_cast<float>(merged.size()))
                 {
                     next.insert(next.end(), members[g].begin(), members[g].end()); // up a level as they are

@@ -135,6 +135,7 @@ public:
         // the compaction; the draw is RecordIndirectShadowDraws'). Needs localCompact, a mesh shader, never the
         // validation-readback frame (the cull's args are compared with a CPU count there).
         bool tessyAtlas = false;
+        bool tessyAtlasDag = false;   // N7e: ...and a group with a cluster DAG takes its cut (tessy.lod) by each view's light
         bool tessyAtlasStats = false; // its counters go to the readback at the consume point
         // The cluster view (tessy::g_debugView): the camera row's clusters as records (the same kernel, row set 2),
         // drawn in colour by Main_DebugDraw (RecordTessyView). While it is on the camera's two-pass HZB stays off.
@@ -211,6 +212,14 @@ public:
         // frame's tile pyramid hid, and the post pair below cleans up the bad guesses.
         D3D12_GPU_VIRTUAL_ADDRESS hzbCB = 0;
         bool hzb = false;
+        // Tessy (tessy.sdsm): the partitions' records of groups with clusters go cluster by cluster -- the atlas kernel's
+        // row set 3 against the same planes, after the re-cull; Main_SdsmShadow draws them (RecordTessySunDraw). Pass B
+        // (the casters last frame's tile pyramid hid) stays classic.
+        bool tessySun = false;
+        bool tessySunStats = false;                // its counters go to the readback at the consume point
+        bool tessySunClear = false;                // its counters need their own clear (the main cull's cleared none)
+        float tessyWind0[4] = {};                  // the frame's wind (the clusters' sway pad), filled by the pass builder
+        float tessyWind1[4] = {};
         std::uint32_t base = 0;                    // args/visible list -> UAV
         std::uint32_t consume = 0;                 // args -> INDIRECT_ARGUMENT, list -> vertex stream
     };
@@ -221,6 +230,12 @@ public:
                                                         bool hzb);
     void RecordDirectionalCull(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                const DirectionalCullDecisions& dec);
+    // Tessy (tessy.sdsm): partition p's surviving meshlets as one DispatchMesh into the bound tile, with the partition's
+    // GPU-written view CB -- after RecordIndirectShadowDraws drew the rest of pass A. Nothing when the SDSM cull did not
+    // take its clusters this frame.
+    void RecordTessySunDraw(Renderer* renderer, ID3D12GraphicsCommandList* cl, std::uint32_t partition,
+                            D3D12_GPU_VIRTUAL_ADDRESS viewCB);
+    const char* TessySunVerdict() const { return tessySunVerdict_; }
     // The SDSM twin of PrepareCullPostPass: the deferred casters retested against THIS frame's
     // pyramids. Identical machinery; the only difference is that the matrices come from the
     // GPU-written CB rather than from CascadeHzb's CPU history.
@@ -341,8 +356,9 @@ public:
     // Those counters as last polled: [0] main rows', [1] S7 static rows', [2] the camera's (the cluster view, N5's
     // G-buffer pass A) meshlet records, [3] views (or camera runs) that did not fit, [4] clusters tested, [5] the camera
     // clusters last frame's pyramid hid (N5: deferred to pass B), [6] / [7] the camera runs' triangles / DAG clusters
-    // written in pass A (N7d); the row set's cap.
-    const std::array<std::uint32_t, 8>& TessyAtlasStats() const { return tessyAtlasStats_; }
+    // written in pass A (N7d); [8] the SDSM partitions' meshlet records, [9] their runs that did not fit, [10] their
+    // clusters tested, [11] their triangles (tessy.sdsm); the row set's cap.
+    const std::array<std::uint32_t, 12>& TessyAtlasStats() const { return tessyAtlasStats_; }
     static constexpr std::uint32_t TessyAtlasRowSetCap() { return kTessyAtlasRowSetCap; }
     // The cluster view: on this frame (PrepareCullPass decided it), and its verdict ("on (clusters)", or why not).
     bool TessyViewThisFrame() const { return tessyViewFrame_; }
@@ -635,6 +651,7 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterLodSrv() const { return TessySrv(7); }   // StructuredBuffer<ClusterLod>
     D3D12_CPU_DESCRIPTOR_HANDLE TessyDagGroupSrv() const { return TessySrv(8); }     // StructuredBuffer<uint4> per mesh group
     D3D12_CPU_DESCRIPTOR_HANDLE TessyDagLevelSrv() const { return TessySrv(9); }     // StructuredBuffer<uint4>
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyDagSphereSrv() const { return TessySrv(10); }   // StructuredBuffer<float4> per mesh group
     std::uint32_t TessyDagGroups() const { return tessyDagGroups_; }
     std::uint32_t TessyDagClusters() const { return tessyDagClusters_; }
     std::uint32_t TessyClusterCount() const { return static_cast<std::uint32_t>(tessyClusterCpu_.size()); }
@@ -750,6 +767,7 @@ private:
     Ring instances_;     // per-caster InstancePerObject
     Ring bounds_;        // per-caster CasterBounds
     Ring viewFrustums_;  // per-view ShadowViewFrustum
+    Ring viewDag_;       // Tessy N7e: per view {eye, texels per unit at distance 1 / tessy.lodShadowTexels} (0 = no DAG cut)
     Ring casterGroup_;   // per-caster mesh-group id (uint); static, region 0 only
     Ring casterMeta_;    // per-caster meta (uint: bit0=dynamic, bits1+=object slot count on its FIRST slot); static, region 0 only
     Ring perGroup_;      // per-group {base, indexCount, startIndex, 0} (uint4); static, region 0 only
@@ -784,10 +802,11 @@ private:
     // ---- Tessy N4 (docs/tessy_plan.md): the atlas views' clusters ----
     // Fixed sizes, one region a frame (the ring's rule), created with the cluster tables (UploadTessyTables_): the
     // survivors' meshlet records, per (row set x view) {first record, records} and its DispatchMesh args, the counters.
-    // Three row sets: the main rows, S7's static rows, the camera's row (the cluster view, tessy::g_debugView).
-    static constexpr std::uint32_t kTessyAtlasRowSets = 3u;
+    // Four row sets: the main rows, S7's static rows, the camera's row (the cluster view, N5's G-buffer), the SDSM
+    // partitions' rows (tessy.sdsm).
+    static constexpr std::uint32_t kTessyAtlasRowSets = 4u;
     static constexpr std::uint32_t kTessyAtlasRowSetCap = 131072u;      // records a row set
-    static constexpr std::uint32_t kTessyAtlasRecordCap = kTessyAtlasRowSets * kTessyAtlasRowSetCap; // a frame (6 MB)
+    static constexpr std::uint32_t kTessyAtlasRecordCap = kTessyAtlasRowSets * kTessyAtlasRowSetCap; // a frame (8 MB)
     static constexpr std::uint32_t kTessyAtlasRows = kTessyAtlasRowSets * render::kShadowViewCeiling;
     // A frame's DispatchMesh args (12 bytes a row), rounded up to 16: a RAW view starts on 16 bytes, and three row sets
     // of the ceiling's rows are not (the second frame's view removed the device at its creation). After them, N5's
@@ -796,13 +815,25 @@ private:
     static constexpr UINT64 kTessyAtlasArgsRegionBytes =
         kTessyCamClassicCountOffset + ((static_cast<UINT64>(render::kShadowViewCeiling) * 4u + 15u) & ~UINT64{ 15u });
     static constexpr std::uint32_t kTessyCameraRowSet = 2u;
-    static constexpr UINT kTessyAtlasCounterBytes = 32u; // [0] [4] [8] claims per row set, [12] not fit, [16] tested
+    static constexpr std::uint32_t kTessySunRowSet = 3u;
+    // A partition's virtual groups are shared out over this many 256-thread groups (vg % split), each with its own run and
+    // its own DispatchMesh: one 1024-thread group a partition left the GPU nearly idle -- 0.05 ms of cull on the grove for
+    // 6 k tests, as much as the clusters saved the draw.
+    static constexpr std::uint32_t kTessySunSplit = 16u;
+    // (a partition is a cascade tile: render::sdsm::kMaxPartitions == CascadeHzb::kCascades)
+    static_assert(render::CascadeHzb::kCascades * kTessySunSplit <= render::kShadowViewCeiling, "the SDSM runs fit the row set");
+    // [0] [4] [8] claims of row sets 0-2, [12] not fit, [16] tested, [20] camera deferred, [24] [28] camera triangles / DAG
+    // clusters; [32] [36] [40] [44] the SDSM rows' claim, not fit, tested, triangles -- a range of its own (descriptor 8
+    // clears it in Main_SdsmCull, after the main cull and the camera's post pass used theirs).
+    static constexpr UINT kTessyAtlasCounterBytes = 48u;
+    static constexpr UINT kTessySunCounterOffset = 32u;
     GpuResource tessyAtlasVisible_;
     GpuResource tessyAtlasInfo_;
     GpuResource tessyAtlasArgs_;
     GpuResource tessyAtlasCounter_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyAtlasHeap_; // per frame: 4 UAVs, 2 SRVs, N5's deferred UAV + SRV
-    static constexpr UINT kTessyAtlasDescriptorsPerFrame = 8u;
+    // per frame: 4 UAVs, 2 SRVs, N5's deferred UAV + SRV, the SDSM counters' UAV (the clear's range)
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyAtlasHeap_;
+    static constexpr UINT kTessyAtlasDescriptorsPerFrame = 9u;
     UINT tessyAtlasIncr_ = 0;
     D3D12_CPU_DESCRIPTOR_HANDLE TessyAtlasDescriptor(UINT frame, UINT slot) const;
     std::shared_ptr<Material> tessyAtlasCullMat_;       // tessy_atlas_cull_cs.hlsl
@@ -815,6 +846,7 @@ private:
     bool tessyCamHzbFrame_ = false;                     // PrepareCullPass's decision: Main_CamCullPost / GBufferB read it
     bool tessyCamDagFrame_ = false;                     // N7d: PrepareCullPass's decision (the readouts)
     bool tessyCamDagLogged_ = false;                    // ...as last logged (an event on each change)
+    bool tessyAtlasDagLogged_ = false;                  // N7e: the atlases' DAG cut as last logged
     std::shared_ptr<Material> tessyAtlasMeshMat_;       // shadow_indirect_csm.hlsl TESSY_ATLAS_MS (+ linear twins)
     std::shared_ptr<Material> tessyAtlasMeshMaskedMat_;
     std::shared_ptr<Material> tessyViewMat_;            // ...TESSY_VIEW: the cluster view's colour draw (Main_DebugDraw)
@@ -823,6 +855,10 @@ private:
     bool tessyViewFrame_ = false;                       // ...and the cluster view's, read by Main_DebugDraw
     std::uint32_t tessyViewMode_ = 0;                   // tessy::g_debugView as this frame took it (1 clusters, 2 meshlets)
     const char* tessyAtlasLogged_ = nullptr;            // the verdict last logged (an event per change)
+    bool tessySunFrame_ = false;                        // PrepareDirectionalCullPass's decision, read by Main_SdsmShadow
+    bool tessyCountersCleared_ = false;                 // PrepareCullPass's: the main cull zeroes the whole counter region
+    const char* tessySunVerdict_ = "off";               // tessy.sdsm's verdict (Developer Controls, get_readouts)
+    const char* tessySunLogged_ = nullptr;
     const char* tessyViewLogged_ = nullptr;
     const char* tessyViewVerdict_ = "off";              // the cluster view's verdict, for Developer Controls
     std::uint64_t tessyAtlasTableFrame_ = ~0ull;        // the draw table, staged once a frame (drawTablesMutex_)
@@ -847,18 +883,23 @@ private:
     void RecordTessyGBufferDraws_(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
                                   bool wireframe, std::uint32_t rowFirst);
     void EnsureTessyAtlasResources(Renderer* renderer);
-    void RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec, std::uint32_t rowSet);
+    // `frustumSrv`: the SDSM row set's planes (SdsmShadows::FrustumSrv); the others read the frustum ring. `empty`: no
+    // virtual group is read -- every view's run is written empty.
+    void RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec, std::uint32_t rowSet,
+                              D3D12_CPU_DESCRIPTOR_HANDLE frustumSrv = {}, bool empty = false);
+    void RecordTessySunCull_(Renderer* renderer, ID3D12GraphicsCommandList* cl, const DirectionalCullDecisions& dec, bool empty);
     // The counters of frame N - kFrameCount: [0] [1] [2] the row sets' claimed records, [3] views that did not fit, [4]
-    // clusters tested (logged every 5 s while a cluster row set runs).
+    // clusters tested, ... [8..11] the SDSM rows' (logged every 5 s while a cluster row set runs).
     Microsoft::WRL::ComPtr<ID3D12Resource> tessyAtlasStatsReadback_;
     std::array<std::uint64_t, render::kFrameCount> tessyAtlasStatsFrame_{};
-    std::array<std::uint32_t, 8> tessyAtlasStats_{};
-    static_assert(kTessyAtlasCounterBytes / 4u == 8u, "tessyAtlasStats_ mirrors the counter buffer");
+    std::array<std::uint32_t, 12> tessyAtlasStats_{};
+    static_assert(kTessyAtlasCounterBytes / 4u == 12u, "tessyAtlasStats_ mirrors the counter buffer");
     void EnsureTessyAtlasStatsReadback(Renderer* renderer);
     std::vector<std::uint8_t> casterWindy_;      // per caster: its object sways in the wind (base strength)
     std::vector<std::uint8_t> localDynamicPrev_; // per caster: last frame's movable bit (a change = a new static set)
     std::vector<std::uint32_t> casterLodUpload_; // the uploaded CasterLod (+ S7 movable bit), built in CPU memory
     std::uint32_t localStaticVersion_ = 0;
+    float atlasDagKey_ = 0.0f; // Tessy N7e: the atlases' DAG cut as last cached (texels; 0 = off) -- a change bumps the version
 
     // Occlusion plan S5b (cascade light-space HZB cull). Per cascade: the casters the main cull
     // deferred (last frame's pyramid hid them), the 8 counters ([c] deferred, [4 + c] drawn by
@@ -1107,11 +1148,13 @@ private:
     std::vector<TessyClusterLod> tessyClusterLodCpu_; // N7: parallel to tessyClusterCpu_
     std::vector<DirectX::XMUINT4> tessyDagGroupCpu_;   // N7: per mesh group
     std::vector<DirectX::XMUINT4> tessyDagLevelCpu_;   // N7
+    std::vector<DirectX::XMFLOAT4> tessyDagSphereCpu_; // N7e: per mesh group, around its DAG's spheres (object space)
     std::unordered_map<const Mesh*, std::uint32_t> tessyDagBase_; // N7: a mesh's DAG IB in the mega IB (indices)
     std::uint32_t tessyDagGroups_ = 0, tessyDagClusters_ = 0;
     GpuResource tessyClusterLod_;
     GpuResource tessyDagGroup_;
     GpuResource tessyDagLevel_;
+    GpuResource tessyDagSphere_;
     GpuResource tessyClusters_;
     GpuResource tessyVg_;
     GpuResource tessyVerts_;
@@ -1133,6 +1176,7 @@ private:
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)
+    std::vector<DirectX::XMFLOAT4> cpuViewDag_;              // Tessy N7e: viewDag_'s, built here and copied once
     ViewMask localWindRigid_{}; // SetLocalWindRigid
     ViewMask localStaticDrawn_{}; // SetLocalStaticDrawn
     std::vector<std::uint32_t> localMovables_; // CollectLocalMovables: static-region casters movable this frame

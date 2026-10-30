@@ -38,7 +38,8 @@ struct MeshLoadOptions {
     // banding and a 0.25 error deforms dune silhouettes. mesh.json "lod3Aggressive".
     bool lod3Aggressive = true;
     // Tessy N7: build this asset's cluster DAG (continuous LOD, rendering/meshes/TessyDag.h) at load -- mesh.json
-    // "tessyLod": true. Per asset (docs/tessy_plan.md Q3); --tessy-lod-build names assets without touching their manifests.
+    // "tessyLod": true -- when its .mesh.bin carries none (N7e: a v5 bake stores it for every asset; older bins do not).
+    // --tessy-lod-build rebuilds it at load whatever the bin holds, without touching the manifests.
     bool tessyLod = false;
     // LOD3's OWN budget multipliers over the harsh base (0.05 target / 0.25 error) — separate
     // from the whole-chain lodRatioScale/lodErrorScale so the last level can be pushed without
@@ -322,7 +323,8 @@ public:
     static bool BinaryNeedsRebake(const std::string& binPath, const MeshLoadOptions& opt);
 
     // Tessy N1 (--tessy-upgrade): rewrite an older .mesh.bin as the current version IN PLACE -- the same
-    // vertices, every LOD's triangles reordered into clusters and the cluster tables added; hashes kept,
+    // vertices, every LOD's triangles reordered into clusters and the cluster tables added (a v4 keeps its own),
+    // and (v5, N7e) the cluster DAG over LOD0 built with the manifest's weights beside the bin; hashes kept,
     // so the asset's freshness does not change. No source needed (a re-bake from the manifest gives the
     // same clusters, but also re-runs everything else). A current file is left alone (true). `report`
     // says what happened, in a line.

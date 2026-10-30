@@ -46,6 +46,8 @@
 #include "rendering/lighting/VolumetricCloud.h"  // render::g_cloudProfilePath (--cloud-profile)
 
 #include <algorithm>
+#include <filesystem> // --tessy-upgrade=all walks models/
+#include <vector>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -604,6 +606,10 @@ int WINAPI WinMain(
         for (const char* p = lb + std::strlen("--tessy-lod-build="); *p && !std::isspace(static_cast<unsigned char>(*p)); ++p) {
             tessy::g_lodBuild.push_back(*p);
         }
+    }
+    // N7e: "--tessy-lod-prune=0" -- the DAG's leaf cards simplified by edge collapses alone (the A/B of the whole-card prune).
+    if (lpCmdLine && std::strstr(lpCmdLine, "--tessy-lod-prune=0")) {
+        tessy::g_lodPrune = false;
     }
 
     // "--no-streamline": take the Streamline SDK out entirely (no slInit, no device proxy).
@@ -1272,25 +1278,40 @@ int WINAPI WinMain(
 #endif
         // Tessy N1 (docs/tessy_plan.md): "--tessy-upgrade=<a.mesh.bin>,<b.mesh.bin>" rewrites each older
         // .mesh.bin IN PLACE as the current version -- the same vertices, the triangles of every LOD in
-        // cluster order, the cluster tables added (MeshManager::UpgradeBinaryToClusters). Headless, CPU only.
-        // Exit code = the files that failed. Writing into models/ is the owner's call: back the files up first.
+        // cluster order, the cluster tables added, and (v5, N7e) the cluster DAG with the manifest's weights
+        // (MeshManager::UpgradeBinaryToClusters). "--tessy-upgrade=all" takes every models/**/*.mesh.bin.
+        // Headless, CPU only. Exit code = the files that failed. Writing into models/ is the owner's call: back
+        // the files up first.
         if (const char* up = std::strstr(lpCmdLine, "--tessy-upgrade=")) {
             std::string list;
             for (const char* p = up + std::strlen("--tessy-upgrade="); *p && !std::isspace(static_cast<unsigned char>(*p)); ++p) {
                 list.push_back(*p);
             }
+            std::vector<std::string> paths;
+            if (list == "all") {
+                std::error_code ec;
+                for (auto it = std::filesystem::recursive_directory_iterator("models", ec);
+                     !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+                    const std::string p = it->path().generic_string();
+                    if (it->is_regular_file(ec) && p.size() > 9 && p.compare(p.size() - 9, 9, ".mesh.bin") == 0) { paths.push_back(p); }
+                }
+                std::sort(paths.begin(), paths.end());
+            } else {
+                for (size_t i = 0; i < list.size();) {
+                    size_t j = list.find(',', i);
+                    if (j == std::string::npos) { j = list.size(); }
+                    if (j > i) { paths.push_back(list.substr(i, j - i)); }
+                    i = j + 1;
+                }
+            }
             int failed = 0;
-            for (size_t i = 0; i < list.size();) {
-                size_t j = list.find(',', i);
-                if (j == std::string::npos) { j = list.size(); }
-                const std::string path = list.substr(i, j - i);
-                i = j + 1;
-                if (path.empty()) { continue; }
+            for (const std::string& path : paths) {
                 std::string report;
                 const bool ok = MeshManager::UpgradeBinaryToClusters(path, &report);
                 if (ok) { LOG_INFO(logging::LogCategory::Asset, "--tessy-upgrade: {}: {}", path, report); }
                 else { LOG_ERROR(logging::LogCategory::Asset, "--tessy-upgrade: {}: {}", path, report); ++failed; }
             }
+            LOG_INFO(logging::LogCategory::Asset, "--tessy-upgrade: {} file(s), {} failed", paths.size(), failed);
             return failed;
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake

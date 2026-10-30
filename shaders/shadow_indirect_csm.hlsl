@@ -190,14 +190,33 @@
 #endif
 #if TESSY_VIEW
 // One colour per cluster (or meshlet): a hash of its index, kept off black and white, a little shading so the shapes read.
+// Tessy N7e, "Levels" (bit 30 of the id): a DAG cluster by its level -- green (the leaves, LOD0's detail) through yellow
+// and red to magenta (the coarsest) -- and a discrete LOD's cluster by its tier, light to dark blue.
 float4 TessyViewShade(uint id, float3 n)
 {
+    const float lit = 0.55f + 0.45f * abs(dot(normalize(n), float3(0.36f, 0.86f, 0.36f)));
+    if ((id & 0x40000000u) != 0u)
+    {
+        const uint code = id & 0xFFFFu;
+        float3 c;
+        if ((code & 0x100u) != 0u)
+        {
+            const float t = saturate(float(code & 0xFFu) / 6.0f); // level 0 .. 6+
+            c = t < 0.5f ? lerp(float3(0.10f, 0.85f, 0.15f), float3(0.95f, 0.85f, 0.10f), t * 2.0f)
+                         : lerp(float3(0.95f, 0.85f, 0.10f), float3(0.90f, 0.10f, 0.75f), t * 2.0f - 1.0f);
+        }
+        else
+        {
+            const float t = float(code & 3u) / 3.0f; // tier 0 .. 3
+            c = lerp(float3(0.55f, 0.75f, 1.0f), float3(0.08f, 0.15f, 0.55f), t);
+        }
+        return float4(c * lit, 1.0f);
+    }
     uint h = id * 0x9E3779B1u;
     h ^= h >> 16;
     h *= 0x85EBCA6Bu;
     h ^= h >> 13;
     const float3 c = 0.12f + 0.75f * float3(h & 0xFFu, (h >> 8) & 0xFFu, (h >> 16) & 0xFFu) * (1.0f / 255.0f);
-    const float lit = 0.55f + 0.45f * abs(dot(normalize(n), float3(0.36f, 0.86f, 0.36f)));
     return float4(c * lit, 1.0f);
 }
 #endif
@@ -810,7 +829,7 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
             out vertices TessyAtlasVertex verts[64],
             out indices uint3 tris[128])
 {
-    const uint2 run = TessyAtlasViewInfo[gTessyAtlasView & 0x7FFFFFFFu]; // {first record, records}; bit 31: TESSY_VIEW's
+    const uint2 run = TessyAtlasViewInfo[gTessyAtlasView & 0x3FFFFFFFu]; // {first record, records}; bits 30-31: TESSY_VIEW's
     uint cap, stride;
     TessyVisible.GetDimensions(cap, stride);
     const uint i = gid.y * kTessyMsRow + gid.x;
@@ -848,7 +867,10 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
         o.cutoff = asfloat(gm.y);
 #endif
 #if TESSY_VIEW
-        o.viewId = (gTessyAtlasView & 0x80000000u) != 0u ? rec.y : rec.w; // the meshlet, or the cluster (its vg | index)
+        // The meshlet (bit 31), the cluster's level (bit 30, tessy.debug:3: the cull wrote it in .w's high half), or the
+        // cluster (its vg | index).
+        o.viewId = (gTessyAtlasView & 0x80000000u) != 0u ? rec.y
+                 : (gTessyAtlasView & 0x40000000u) != 0u ? (0x40000000u | (rec.w >> 16)) : rec.w;
         o.viewN = mul(N, (float3x3)ip.world);
 #endif
         verts[lane] = o;

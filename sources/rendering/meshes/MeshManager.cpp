@@ -711,7 +711,10 @@ constexpr uint32_t kMeshBinMagic   = 0x4253484Du; // 'MSHB'
 // index ranges are in cluster order. v3 still LOADS (kMeshBinMinVersion), without clusters -- that mesh
 // stays on the classic path -- so assets move to v4 one at a time (plan section 4.8), by a re-bake or by
 // --tessy-upgrade (UpgradeBinaryToClusters: the same vertices and triangle sets, clusters added).
-constexpr uint32_t kMeshBinVersion = 4u;          // what the bake writes
+// v5 (2026-10-30, Tessy N7e): after the LOD blocks, the cluster DAG over LOD0 (tessy::BuildDag, with the manifest's
+// simplification weights) -- {indices, clusters, ClusterLod records, levels, DAG submeshes}, or a zero when the mesh has
+// none -- so a load reads it instead of building it. v3 and v4 still load; --tessy-upgrade adds the DAG in place.
+constexpr uint32_t kMeshBinVersion = 5u;          // what the bake writes
 constexpr uint32_t kMeshBinMinVersion = 3u;       // the oldest the loader still reads
 // NOTE when bumping: a directly-referenced models/*.mesh.bin has no runtime source to rebuild from,
 // so a bump that does not keep the old version readable makes every one of them stale -> they must ALL
@@ -813,10 +816,28 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     return h;
 }
 
+// v5's DAG block: a POD vector as its count and its elements.
+template <typename T> void WriteBinVector(std::ofstream& f, const std::vector<T>& v)
+{
+    const uint32_t n = static_cast<uint32_t>(v.size());
+    f.write(reinterpret_cast<const char*>(&n), sizeof(n));
+    f.write(reinterpret_cast<const char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
+}
+template <typename T> bool ReadBinVector(std::ifstream& f, std::vector<T>& v, uint32_t cap)
+{
+    uint32_t n = 0;
+    f.read(reinterpret_cast<char*>(&n), sizeof(n));
+    if (!f || n > cap) { return false; }
+    v.resize(n);
+    f.read(reinterpret_cast<char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
+    return static_cast<bool>(f);
+}
+
 bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t optionsHash,
     const std::vector<VertexPNTUV>& verts,
     const std::vector<uint32_t>& lod0Indices, const std::vector<Mesh::Submesh>& lod0Subs,
-    const std::vector<Mesh::Cluster>& lod0Clusters, const std::vector<MeshLodCpu>& extraLods)
+    const std::vector<Mesh::Cluster>& lod0Clusters, const std::vector<MeshLodCpu>& extraLods,
+    const Mesh::Dag* dag)
 {
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(binPath).parent_path(), ec);
@@ -845,15 +866,27 @@ bool WriteMeshBinary(const std::string& binPath, uint64_t sourceHash, uint64_t o
     };
     writeLod(lod0Indices, lod0Subs, 0.0f, lod0Clusters); // LOD0 IS the reference; its deviation is zero
     for (const MeshLodCpu& l : extraLods) { writeLod(l.indices, l.submeshes, l.error, l.clusters); }
+    // v5: the cluster DAG (1 = one follows, 0 = none).
+    const uint32_t hasDag = (dag && !dag->clusters.empty()) ? 1u : 0u;
+    f.write(reinterpret_cast<const char*>(&hasDag), sizeof(hasDag));
+    if (hasDag != 0u)
+    {
+        WriteBinVector(f, dag->indices);
+        WriteBinVector(f, dag->clusters);
+        WriteBinVector(f, dag->lod);
+        WriteBinVector(f, dag->levels);
+        WriteBinVector(f, dag->submeshes);
+    }
     return f.good();
 }
 
 // Reads + validates a .bin. `expectSourceHash`/`expectOptionsHash` null => skip that freshness
 // check (a directly-referenced committed .bin has no runtime source to compare against; only the
-// magic + format version matter). `lods[0]` = LOD 0. A v3 file reads without clusters.
+// magic + format version matter). `lods[0]` = LOD 0. A v3 file reads without clusters; `outDag` (optional) takes a v5
+// file's cluster DAG (left empty for an older one, or a v5 one without).
 bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash,
     const uint64_t* expectOptionsHash, std::vector<VertexPNTUV>& verts, std::vector<MeshLodCpu>& lods,
-    MeshBinHeader* outHeader = nullptr)
+    MeshBinHeader* outHeader = nullptr, Mesh::Dag* outDag = nullptr)
 {
     std::ifstream f(binPath, std::ios::binary);
     if (!f) { return false; }
@@ -893,7 +926,27 @@ bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash
             f.read(reinterpret_cast<char*>(lods[i].clusters.data()), static_cast<std::streamsize>(cc * sizeof(Mesh::Cluster)));
         }
     }
-    return static_cast<bool>(f);
+    if (!f) { return false; }
+    if (outDag) { *outDag = Mesh::Dag{}; }
+    if (h.version >= 5u && outDag) // Tessy N7e: the DAG block (bounded by LOD0: a DAG holds ~2x its triangles)
+    {
+        uint32_t hasDag = 0;
+        f.read(reinterpret_cast<char*>(&hasDag), sizeof(hasDag));
+        if (!f) { return false; }
+        if (hasDag != 0u)
+        {
+            const uint32_t cap = std::max<uint32_t>(static_cast<uint32_t>(lods[0].indices.size()) * 8u, 1024u);
+            Mesh::Dag dag;
+            if (!ReadBinVector(f, dag.indices, cap) || !ReadBinVector(f, dag.clusters, cap) ||
+                !ReadBinVector(f, dag.lod, cap) || !ReadBinVector(f, dag.levels, cap) || !ReadBinVector(f, dag.submeshes, cap) ||
+                dag.lod.size() != dag.clusters.size())
+            {
+                return false;
+            }
+            *outDag = std::move(dag);
+        }
+    }
+    return true;
 }
 
 // Tessy: hand a mesh its clusters when every LOD has a table (a v4 bin, or a runtime parse that built
@@ -1519,6 +1572,47 @@ bool MeshManager::BinaryNeedsRebake(const std::string& binPath, const MeshLoadOp
     return h.optionsHash != HashOptions(opt);
 }
 
+namespace
+{
+// Tessy N7e: the cluster DAG of LOD0 with the asset's simplification weights (the discrete LODs' normal weight, the
+// foliage slots' UV weight, whole leaf cards pruned) -- what a bake stores in v5 and what a load builds for a bin
+// without one. One function, so the two are the same DAG. False (and `why`) when there is none to keep.
+bool BuildDagForMesh(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& lod0Indices,
+                     const std::vector<Mesh::Cluster>& lod0Clusters, const std::vector<Mesh::Submesh>& lod0Subs,
+                     const MeshLoadOptions& opt, Mesh::Dag& dag, tessy::DagStats& st, std::string& why)
+{
+    tessy::DagBuildParams p;
+    p.normalWeight = opt.lodNormalWeight;
+    for (size_t i = 0; i < opt.slotFoliage.size(); ++i)
+    {
+        p.slotUvWeight.push_back(opt.slotFoliage[i] > 0.0f ? opt.foliageUvWeight : 0.0f);
+        p.slotPrune.push_back(opt.slotFoliage[i] > 0.0f && tessy::g_lodPrune ? 1u : 0u);
+    }
+    if (!tessy::BuildDag(verts, lod0Indices, lod0Clusters, lod0Subs, p, dag, &st))
+    {
+        why = "no LOD0 clusters";
+        return false;
+    }
+    if (!tessy::ValidateDag(dag, &why))
+    {
+        dag = Mesh::Dag{};
+        why = "INVALID: " + why;
+        return false;
+    }
+    return true;
+}
+
+std::string DagSummary(const tessy::DagStats& st)
+{
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "DAG %u levels, %u clusters, %llu tris over all levels (%.2f x LOD0), roots %llu tris at "
+                  "%.4f m, %.1f ms", st.levels, st.clusters, static_cast<unsigned long long>(st.triangles),
+                  st.leafTriangles ? static_cast<double>(st.triangles) / static_cast<double>(st.leafTriangles) : 0.0,
+                  static_cast<unsigned long long>(st.rootTriangles), st.rootError, st.ms);
+    return buf;
+}
+} // namespace
+
 bool MeshManager::UpgradeBinaryToClusters(const std::string& binPath, std::string* report)
 {
     std::vector<VertexPNTUV> verts;
@@ -1537,7 +1631,7 @@ bool MeshManager::UpgradeBinaryToClusters(const std::string& binPath, std::strin
     size_t clusters = 0, tris = 0;
     for (MeshLodCpu& l : lods)
     {
-        l.clusters = BuildClustersCpu(verts, l.indices, l.submeshes);
+        if (l.clusters.empty()) { l.clusters = BuildClustersCpu(verts, l.indices, l.submeshes); } // a v3 bin; v4 keeps its own
         clusters += l.clusters.size();
         tris += l.indices.size() / 3u;
         if (l.clusters.empty())
@@ -1546,11 +1640,18 @@ bool MeshManager::UpgradeBinaryToClusters(const std::string& binPath, std::strin
             return false;
         }
     }
+    // v5: the cluster DAG, with the weights of the manifest beside the bin (x.mesh.bin -> x.mesh.json).
+    MeshLoadOptions opt;
+    if (binPath.size() > 9) { ApplyManifestOptions(binPath.substr(0, binPath.size() - 4) + ".json", opt); }
+    Mesh::Dag dag;
+    tessy::DagStats st;
+    std::string why;
+    const bool hasDag = BuildDagForMesh(verts, lods[0].indices, lods[0].clusters, lods[0].submeshes, opt, dag, st, why);
     // Written beside it first and swapped in, so a failed write never leaves half a file.
     const std::string tmp = binPath + ".tessy.tmp";
     std::vector<MeshLodCpu> extra(std::make_move_iterator(lods.begin() + 1), std::make_move_iterator(lods.end()));
     if (!WriteMeshBinary(tmp, h.sourceHash, h.optionsHash, verts, lods[0].indices, lods[0].submeshes,
-                         lods[0].clusters, extra))
+                         lods[0].clusters, extra, hasDag ? &dag : nullptr))
     {
         std::error_code ec;
         std::filesystem::remove(tmp, ec);
@@ -1569,7 +1670,7 @@ bool MeshManager::UpgradeBinaryToClusters(const std::string& binPath, std::strin
     {
         *report = "v" + std::to_string(h.version) + " -> v" + std::to_string(kMeshBinVersion) + ": " +
                   std::to_string(lods.size()) + " LODs, " + std::to_string(tris) + " triangles, " +
-                  std::to_string(clusters) + " clusters";
+                  std::to_string(clusters) + " clusters; " + (hasDag ? DagSummary(st) : "no DAG (" + why + ")");
     }
     return true;
 }
@@ -1703,8 +1804,15 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
         l.clusters = BuildClustersCpu(cpu.vertices, l.indices, l.submeshes);
         clusterCount += l.clusters.size();
     }
+    // Tessy N7e: the cluster DAG over LOD0, stored in the bin (v5).
+    Mesh::Dag dag;
+    tessy::DagStats dagStats;
+    std::string dagWhy;
+    const bool hasDag = BuildDagForMesh(cpu.vertices, cpu.indices, lod0Clusters, lod0Subs, opt, dag, dagStats, dagWhy);
+    if (hasDag) { LOG_INFO(logging::LogCategory::Asset, "[meshbake] '{}': {}", outBinPath, DagSummary(dagStats)); }
+    else { LOG_WARNING(logging::LogCategory::Asset, "[meshbake] '{}': no cluster DAG ({})", outBinPath, dagWhy); }
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
-        cpu.vertices, cpu.indices, lod0Subs, lod0Clusters, extra);
+        cpu.vertices, cpu.indices, lod0Subs, lod0Clusters, extra, hasDag ? &dag : nullptr);
     char msg[512];
     int len = std::snprintf(msg, sizeof(msg), "[meshbake] %s '%s' -> '%s' (%zu verts, %zu LODs, %zu submeshes; tris",
         ok ? "ok" : "FAILED", srcPath.c_str(), outBinPath.c_str(), cpu.vertices.size(),
@@ -1729,7 +1837,8 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
     if (!renderer || !uploadCmdList) { return nullptr; }
     std::vector<VertexPNTUV> verts;
     std::vector<MeshLodCpu> lods;
-    if (!ReadMeshBinary(binPath, nullptr, nullptr, verts, lods) || verts.empty() || lods.empty())
+    Mesh::Dag bakedDag; // Tessy N7e: a v5 bin's cluster DAG
+    if (!ReadMeshBinary(binPath, nullptr, nullptr, verts, lods, nullptr, &bakedDag) || verts.empty() || lods.empty())
     {
         LOG_ERROR(logging::LogCategory::Asset, "failed to read mesh binary '{}'", binPath);
         return nullptr;
@@ -1745,44 +1854,45 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
             lods[i].error);
     }
     AttachClusters(*mesh, lods); // Tessy: a v4 bin's clusters; a v3 bin has none (the classic path)
-    // Tessy N7: the cluster DAG over LOD0, when the asset's manifest asks for it ("tessyLod") or --tessy-lod-build names
-    // it. Built here from the bin's LOD0 (not stored in it yet), with the discrete LODs' simplification weights.
+    // Tessy N7: the cluster DAG over LOD0. A v5 bin carries it (N7e: baked at import, or by --tessy-upgrade); one without
+    // is built here when the manifest asks ("tessyLod") -- and --tessy-lod-build rebuilds it whatever the bin holds (to
+    // try the builder's weights without a re-bake).
     if (mesh->HasClusters() && binPath.size() > 9)
     {
         MeshLoadOptions bake;
         const std::string manifest = binPath.substr(0, binPath.size() - 4) + ".json"; // x.mesh.bin -> x.mesh.json
         ApplyManifestOptions(manifest, bake);
-        if (bake.tessyLod || tessy::DagBuildRequested(binPath))
+        const bool rebuild = tessy::DagBuildRequested(binPath);
+        if (!bakedDag.clusters.empty() && !rebuild)
         {
-            tessy::DagBuildParams p;
-            p.normalWeight = bake.lodNormalWeight;
-            for (size_t i = 0; i < bake.slotFoliage.size(); ++i)
+            std::string why;
+            if (!tessy::ValidateDag(bakedDag, &why))
             {
-                p.slotUvWeight.push_back(bake.slotFoliage[i] > 0.0f ? bake.foliageUvWeight : 0.0f);
+                LOG_ERROR(logging::LogCategory::Asset, "tessy.dag: '{}' baked DAG INVALID ({}); the asset keeps its discrete LODs",
+                          binPath, why);
             }
+            else if (!mesh->SetDag(renderer->GetDevice(), uploadCmdList, uploadKeepAlive, std::move(bakedDag)))
+            {
+                LOG_WARNING(logging::LogCategory::Asset, "tessy.dag: '{}' baked DAG did not upload; discrete LODs", binPath);
+            }
+        }
+        else if (bake.tessyLod || rebuild)
+        {
             Mesh::Dag dag;
             tessy::DagStats st;
             std::string why;
-            if (!tessy::BuildDag(verts, lods[0].indices, mesh->GetClusters(0), lods[0].submeshes, p, dag, &st))
+            if (!BuildDagForMesh(verts, lods[0].indices, mesh->GetClusters(0), lods[0].submeshes, bake, dag, st, why))
             {
-                LOG_WARNING(logging::LogCategory::Asset, "tessy.dag: '{}' built no DAG (no LOD0 clusters)", binPath);
-            }
-            else if (!tessy::ValidateDag(dag, &why))
-            {
-                LOG_ERROR(logging::LogCategory::Asset, "tessy.dag: '{}' INVALID ({}); the asset keeps its discrete LODs", binPath, why);
+                LOG_WARNING(logging::LogCategory::Asset, "tessy.dag: '{}' built no DAG ({}); the asset keeps its discrete LODs",
+                            binPath, why);
             }
             else
             {
-                const uint64_t lod0Tris = st.leafTriangles;
                 const uint64_t cutMid = tessy::DagCutTriangles(dag, 0.5f * st.rootError);
                 if (mesh->SetDag(renderer->GetDevice(), uploadCmdList, uploadKeepAlive, std::move(dag)))
                 {
-                    LOG_INFO(logging::LogCategory::Asset,
-                             "tessy.dag: '{}' {} levels, {} clusters ({} leaves, {} roots, {} groups stuck), {} tris over all "
-                             "levels = {:.2f} x LOD0's {}; roots {} tris at error {:.4f} m; cut at half that error {} tris; "
-                             "{:.1f} ms", binPath, st.levels, st.clusters, st.leaves, st.roots, st.stuckGroups, st.triangles,
-                             lod0Tris ? static_cast<double>(st.triangles) / static_cast<double>(lod0Tris) : 0.0, lod0Tris,
-                             st.rootTriangles, st.rootError, cutMid, st.ms);
+                    LOG_INFO(logging::LogCategory::Asset, "tessy.dag: '{}' built at load: {}; cut at half the roots' error {} tris",
+                             binPath, DagSummary(st), cutMid);
                 }
             }
         }

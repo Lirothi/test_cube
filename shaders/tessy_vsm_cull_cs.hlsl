@@ -40,7 +40,7 @@
 // with: this pass runs right after it, before the render's consume point turns them into draw inputs.
 #define TESSY_VSM_CULL_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullCB : register(b0)
@@ -57,8 +57,8 @@ cbuffer CullCB : register(b0)
     // N6: 1 = the mesh shader draws: a surviving cluster appends one record per MESHLET (its index in .y); 0 = the VS
     // path: one record per cluster.
     uint gMsMeshlets;
-    // N7c: 1 = a run of a group with a cluster DAG on a CLIPMAP page (orthographic) takes the DAG's cut instead of its
-    // discrete LOD's clusters; gDagTexels = the shadow texels a cluster's error may span.
+    // N7c: 1 = a run of a group with a cluster DAG takes the DAG's cut instead of its discrete LOD's clusters -- on a
+    // clipmap page (N7c) and, N7e, on a local light's (perspective) one; gDagTexels = the shadow texels its error may span.
     uint gDagOn;
     float gDagTexels;
 };
@@ -76,6 +76,7 @@ StructuredBuffer<uint>              MegaIB          : register(t5);
 StructuredBuffer<TessyClusterLod>   ClusterLods     : register(t6);
 StructuredBuffer<uint4>             DagGroups       : register(t7);
 StructuredBuffer<uint4>             DagLevels       : register(t8);
+StructuredBuffer<float4>            DagSpheres      : register(t9); // N7e: per mesh group, around its DAG's spheres
 static const uint kVgLods = 4u; // render::kMaxShadowLods: virtual group = mesh group * 4 + LOD
 
 RWStructuredBuffer<uint4> TessyRuns       : register(u0); // {page, first list entry, casters, virtual group}
@@ -92,10 +93,30 @@ RWByteAddressBuffer       TessyStats      : register(u4);
 static const uint kCasterMask = (1u << 22) - 1u; // vsm::kPageIdShift
 static const float kPageTexels = 128.0f;         // vsm::kPageSize
 
-// N7c: the run's casters' world scale (the largest axis of each world matrix): their spread decides the DAG levels the
-// run's threshold can cut, the same for every caster of it (the cull walks casters x one cluster range).
-groupshared uint gsScaleMin;
-groupshared uint gsScaleMax;
+// N7c: the run's casters' thresholds -- each caster's object-space error at which a DAG level becomes coarse enough,
+// smallest and largest over the run: they decide the DAG levels the run can cut (the cull walks casters x one range).
+groupshared uint gsTMin;
+groupshared uint gsTMax;
+
+// N7c/N7e: a page's DAG cut. A shadow texel of the page spans 2 / (kPageTexels |column x|) x w metres at its clip w (the
+// view depth for a light's perspective page, 1 for an orthographic clipmap page), so an error e x the caster's scale
+// spans e s K / w texels, K = |column x| kPageTexels / 2 / tessy.lodShadowTexels; w of a sphere's nearest point is
+// linear: w(centre) - radius s |column w|. One function for a cluster's own error and its parent's, `precise`: the two
+// must answer alike for siblings or the cut tears (tessy_atlas_cull_cs DagTooCoarse).
+struct PageDag
+{
+    float3 colW;   // the projection's w column (0 for an orthographic page)
+    float  tW;     // its translation (1 for an orthographic page)
+    float  colWLen;
+    float  k;
+};
+bool PageDagTooCoarse(float error, float4 sphere, float4x4 world, float scale, PageDag p)
+{
+    precise const float3 c = mul(float4(sphere.xyz, 1.0f), world).xyz;
+    precise const float w = max(dot(c, p.colW) + p.tW - sphere.w * scale * p.colWLen, 1.0e-4f);
+    precise const float projected = error * scale * p.k;
+    return projected > w;
+}
 
 // The page's six planes from its off-center projection (vsm_page_setup_cs.hlsl builds the same).
 void PagePlanes(uint page, out float4 planes[6], out float4 w0, out float4 w1)
@@ -130,52 +151,61 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
         float4 planes[6];
         float4 w0, w1;
         PagePlanes(run.x, planes, w0, w1);
-        // N7c: a group with a cluster DAG on a CLIPMAP page (an orthographic projection: column 4 is (0,0,0,1)) takes the
-        // DAG's cut. A shadow texel is 2 / (kPageTexels |column 1|) metres there whatever the distance, so the cut needs
-        // no sphere: a cluster is drawn when its error (x the caster's scale) fits the threshold and its parent's does not
-        // (UE NaniteClusterCulling.usf:287-299, the orthographic EdgeScale = 1). The levels that can hold such a cluster for
-        // the run's scale spread are a contiguous run of clusters (the DAG stores them level by level): that is the range.
+        // N7c: a group with a cluster DAG takes the DAG's cut (PageDagTooCoarse; UE NaniteClusterCulling.usf:287-299): a
+        // cluster is drawn when its error fits the page's texels and its parent's does not. On a clipmap page (orthographic:
+        // the w column is (0,0,0,1)) a texel is the same size at any distance; N7e: on a local light's page (perspective) it
+        // grows with the depth, and the caster's distance to the light decides. The levels that can hold such a cluster for
+        // the run's casters are a contiguous run of clusters (the DAG stores them level by level): that is the range.
         bool dag = false;
-        float tWorld = 0.0f;
+        PageDag pd;
         const uint4 dg = DagGroups[run.w / kVgLods];
         {
             const uint b = run.x * 256u;
             const float4 c0 = asfloat(PageProj.Load4(b + 0u)), c1 = asfloat(PageProj.Load4(b + 16u)),
                          c2 = asfloat(PageProj.Load4(b + 32u)), c3 = asfloat(PageProj.Load4(b + 48u));
-            const bool ortho = abs(c0.w) + abs(c1.w) + abs(c2.w) < 1.0e-6f && abs(c3.w - 1.0f) < 1.0e-6f;
-            dag = gDagOn != 0u && dg.y != 0u && ortho; // uniform over the group (one run at a time)
-            tWorld = gDagTexels * 2.0f / (kPageTexels * max(length(float3(c0.x, c1.x, c2.x)), 1.0e-12f));
+            pd.colW = float3(c0.w, c1.w, c2.w);
+            pd.tW = c3.w;
+            pd.colWLen = length(pd.colW);
+            pd.k = max(length(float3(c0.x, c1.x, c2.x)), 1.0e-12f) * kPageTexels * 0.5f / max(gDagTexels, 1.0e-3f);
+            dag = gDagOn != 0u && dg.y != 0u; // uniform over the group (one run at a time)
         }
         if (dag)
         {
-            if (lane == 0u) { gsScaleMin = asuint(3.0e38f); gsScaleMax = 0u; }
+            if (lane == 0u) { gsTMin = asuint(3.0e38f); gsTMax = 0u; }
             GroupMemoryBarrierWithGroupSync();
-            float sMin = 3.0e38f, sMax = 0.0f;
+            // Each caster's range of object-space thresholds over its DAG's sphere: w / (s k) at the sphere's nearest and
+            // farthest clip w (one value on an orthographic page).
+            const float4 sphere = DagSpheres[run.w / kVgLods];
+            float tMin = 3.0e38f, tMax = 0.0f;
             for (uint k = lane; k < run.z; k += 64u)
             {
-                const float s = TessyWorldScale(Instances[PageVisibleList[run.y + k] & kCasterMask].world);
-                sMin = min(sMin, s);
-                sMax = max(sMax, s);
+                const float4x4 world = Instances[PageVisibleList[run.y + k] & kCasterMask].world;
+                const float s = max(TessyWorldScale(world), 1.0e-6f);
+                const float3 c = mul(float4(sphere.xyz, 1.0f), world).xyz;
+                const float wc = dot(c, pd.colW) + pd.tW;
+                const float reach = sphere.w * s * pd.colWLen;
+                tMin = min(tMin, max(wc - reach, 1.0e-4f) / (s * pd.k));
+                tMax = max(tMax, max(wc + reach, 1.0e-4f) / (s * pd.k));
             }
-            sMin = WaveActiveMin(sMin);
-            sMax = WaveActiveMax(sMax);
-            if (WaveIsFirstLane()) { InterlockedMin(gsScaleMin, asuint(sMin)); InterlockedMax(gsScaleMax, asuint(sMax)); }
+            tMin = WaveActiveMin(tMin);
+            tMax = WaveActiveMax(tMax);
+            if (WaveIsFirstLane()) { InterlockedMin(gsTMin, asuint(tMin)); InterlockedMax(gsTMax, asuint(tMax)); }
             GroupMemoryBarrierWithGroupSync();
-            const float scaleMin = max(asfloat(gsScaleMin), 1.0e-6f), scaleMax = max(asfloat(gsScaleMax), scaleMin);
-            // Object-space threshold for the run: [t / scaleMax, t / scaleMin]. A level can hold a cut cluster when its
-            // smallest error fits the loosest threshold and its largest parent error passes the tightest.
+            // A level can hold a cut cluster when its smallest error fits the loosest threshold and its largest parent error
+            // passes the tightest (widened by a part in 1e4 for the rounding: the cut is still each cluster's own test).
+            const float tLoose = asfloat(gsTMax) * 1.0001f, tTight = asfloat(gsTMin) * 0.9999f;
             uint lo = 0xFFFFFFFFu, hi = 0u;
             for (uint k = 0u; k < dg.w; ++k)
             {
                 const uint4 l = DagLevels[dg.z + k];
-                if (asfloat(l.z) <= tWorld / scaleMin && asfloat(l.w) > tWorld / scaleMax)
+                if (asfloat(l.z) <= tLoose && asfloat(l.w) > tTight)
                 {
                     lo = min(lo, l.x);
                     hi = max(hi, l.x + l.y);
                 }
             }
             range = lo < hi ? uint2(lo, hi - lo) : uint2(dg.x, 0u);
-            GroupMemoryBarrierWithGroupSync(); // gsScale* are the next run's
+            GroupMemoryBarrierWithGroupSync(); // gsT* are the next run's
             if (range.y == 0u) { continue; }
         }
         const float4 w2 = asfloat(PageProj.Load4(run.x * 256u + 224u)); // (camPos, fade end): the validator's fade
@@ -192,7 +222,8 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
                 // The cut, this caster's: its error fits the page's texels, its parent's does not.
                 const TessyClusterLod cl = ClusterLods[clusterIndex];
                 const float s = TessyWorldScale(ip.world);
-                if (!(cl.lodError * s <= tWorld && tWorld < cl.parentError * s)) { continue; }
+                if (PageDagTooCoarse(cl.lodError, cl.lodSphere, ip.world, s, pd) ||
+                    !PageDagTooCoarse(cl.parentError, cl.parentSphere, ip.world, s, pd)) { continue; }
             }
             float3 ctr = mul(float4(c.center, 1.0f), ip.world).xyz;
             float3 ext = abs(ip.world[0].xyz) * c.extent.x + abs(ip.world[1].xyz) * c.extent.y +

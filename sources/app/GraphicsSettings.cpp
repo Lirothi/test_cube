@@ -182,7 +182,8 @@ namespace
         bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
         bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader)
         bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas)
-        bool tessyGBuffer = false; // Tessy N5 (tessy::g_gbuffer)
+        bool tessyGBuffer = true; // Tessy N5 (tessy::g_gbuffer); on by default since 2026-10-30 (owner)
+        bool tessySdsm = true;    // Tessy (tessy::g_sdsm): the SDSM sun partitions; on by default (owner, 2026-10-30)
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -596,6 +597,7 @@ namespace
         s.tessyRaster = tessy::g_vsmMeshShader;
         s.tessyAtlas = tessy::g_atlas;
         s.tessyGBuffer = tessy::g_gbuffer;
+        s.tessySdsm = tessy::g_sdsm;
         Sanitize(s);
         return s;
     }
@@ -788,6 +790,7 @@ namespace
         tessy::g_vsmMeshShader = s.tessyRaster;
         tessy::g_atlas = s.tessyAtlas;
         tessy::g_gbuffer = s.tessyGBuffer;
+        tessy::g_sdsm = s.tessySdsm;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
 
@@ -1012,7 +1015,8 @@ namespace
                     { "tessy", s.tessyVsm },
                     { "tessyRaster", s.tessyRaster },
                     { "tessyAtlas", s.tessyAtlas },
-                    { "tessyGBuffer", s.tessyGBuffer }
+                    { "tessyGBuffer", s.tessyGBuffer },
+                    { "tessySdsm", s.tessySdsm }
                 } }
             } }
         };
@@ -1243,6 +1247,7 @@ namespace
         Read(vsmSettings, "tessyRaster", s.tessyRaster);
         Read(vsmSettings, "tessyAtlas", s.tessyAtlas);
         Read(vsmSettings, "tessyGBuffer", s.tessyGBuffer);
+        Read(vsmSettings, "tessySdsm", s.tessySdsm);
 
         Sanitize(s);
         return s;
@@ -1589,6 +1594,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;
     case GraphicsControl::TessyAtlas:                     current.tessyAtlas = defaults.tessyAtlas; break;
     case GraphicsControl::TessyGBuffer:                   current.tessyGBuffer = defaults.tessyGBuffer; break;
+    case GraphicsControl::TessySdsm:                      current.tessySdsm = defaults.tessySdsm; break;
     }
 
     Sanitize(current);

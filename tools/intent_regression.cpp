@@ -3446,7 +3446,17 @@ struct Bin
     std::uint64_t srcHash = 0, optHash = 0;
     std::vector<VertexPNTUV> verts;
     std::vector<BinLod> lods;
+    Mesh::Dag dag; // v5 (Tessy N7e): the cluster DAG over LOD0, when the file carries one
 };
+template <typename T> bool ReadVec(std::ifstream& f, std::vector<T>& v)
+{
+    std::uint32_t n = 0;
+    f.read(reinterpret_cast<char*>(&n), 4);
+    if (!f || n > (1u << 26)) { return false; }
+    v.resize(n);
+    f.read(reinterpret_cast<char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
+    return static_cast<bool>(f);
+}
 struct Header { std::uint32_t magic, version; std::uint64_t src, opt; std::uint32_t vertexCount, lodCount; };
 static_assert(sizeof(Header) == 32, "MeshBinHeader");
 
@@ -3480,6 +3490,16 @@ bool Read(const std::string& path, Bin& out)
             if (!f || cc > ic) { return false; }
             l.clusters.resize(cc);
             f.read(reinterpret_cast<char*>(l.clusters.data()), static_cast<std::streamsize>(cc * sizeof(Mesh::Cluster)));
+        }
+    }
+    if (f && h.version >= 5u)
+    {
+        std::uint32_t hasDag = 0;
+        f.read(reinterpret_cast<char*>(&hasDag), 4);
+        if (f && hasDag != 0u)
+        {
+            return ReadVec(f, out.dag.indices) && ReadVec(f, out.dag.clusters) && ReadVec(f, out.dag.lod) &&
+                   ReadVec(f, out.dag.levels) && ReadVec(f, out.dag.submeshes);
         }
     }
     return static_cast<bool>(f);
@@ -3646,7 +3666,12 @@ void TestTessyClusters()
     std::string report;
     Check(MeshManager::UpgradeBinaryToClusters(v3, &report), "upgrades it: " + report);
     Bin up;
-    Check(Read(v3, up) && up.version == 4u, "and it reads back as v4");
+    Check(Read(v3, up) && up.version == 5u, "and it reads back as v5");
+    {
+        std::string why;
+        Check(!up.dag.clusters.empty() && tessy::ValidateDag(up.dag, &why),
+              "with a cluster DAG that holds its invariants" + (why.empty() ? std::string() : ": " + why));
+    }
     Check(up.verts.size() == palm.verts.size() &&
           std::memcmp(up.verts.data(), palm.verts.data(), palm.verts.size() * sizeof(VertexPNTUV)) == 0,
           "the vertices are byte for byte the same");
@@ -3667,10 +3692,10 @@ void TestTessyClusters()
     Check(sameSets, "every LOD's submeshes hold the same triangles, windings included");
     CheckClusters(up, "palm");
     Check(MeshManager::UpgradeBinaryToClusters(v3, &report) && report.find("already") != std::string::npos,
-          "a v4 file is left as it is: " + report);
+          "a v5 file is left as it is: " + report);
     std::filesystem::remove(v3);
 
-    // 2. A fresh bake writes v4 with clusters.
+    // 2. A fresh bake writes v5 with clusters and the cluster DAG.
     MeshLoadOptions fern;
     fern.wantCW = false;
     fern.slotFoliage = { 1.0f };
@@ -3678,8 +3703,13 @@ void TestTessyClusters()
     MeshManager manager;
     Check(manager.BakeToBinary("import_staging/fern_02/fern_02_2k.gltf#node:fern_02_d", baked, fern), "bakes fern_02_d");
     Bin fernBin;
-    Check(Read(baked, fernBin) && fernBin.version == 4u, "the bake is v4");
+    Check(Read(baked, fernBin) && fernBin.version == 5u, "the bake is v5");
     CheckClusters(fernBin, "fern bake");
+    {
+        std::string why;
+        Check(!fernBin.dag.clusters.empty() && tessy::ValidateDag(fernBin.dag, &why),
+              "the bake carries a cluster DAG that holds its invariants" + (why.empty() ? std::string() : ": " + why));
+    }
     Check(!MeshManager::BinaryNeedsRebake(baked, fern), "and current");
     std::filesystem::remove(baked);
 
@@ -3712,10 +3742,21 @@ void TestTessyDag()
         const bool read = Read(path, bin) && !bin.lods.empty() && !bin.lods[0].clusters.empty();
         Check(read, std::string("reads ") + path + " with its clusters");
         if (!read) { continue; }
+      // N7e: built twice -- edge collapses alone, and with meshopt_SimplifyPrune on every slot (whole leaf cards leave;
+      // the loader prunes the foliage slots only) -- the same invariants either way.
+      for (int prune = 0; prune < 2; ++prune)
+      {
+        tessy::DagBuildParams params;
+        if (prune != 0)
+        {
+            uint32_t slots = 1u;
+            for (const auto& s : bin.lods[0].subs) { slots = std::max(slots, s.materialSlot + 1u); }
+            params.slotPrune.assign(slots, 1u);
+        }
         Mesh::Dag dag;
         tessy::DagStats st;
-        Check(tessy::BuildDag(bin.verts, bin.lods[0].idx, bin.lods[0].clusters, bin.lods[0].subs, {}, dag, &st),
-              std::string("builds the DAG of ") + path);
+        Check(tessy::BuildDag(bin.verts, bin.lods[0].idx, bin.lods[0].clusters, bin.lods[0].subs, params, dag, &st),
+              std::string("builds the DAG of ") + path + (prune ? " (pruning)" : ""));
         std::string why;
         Check(tessy::ValidateDag(dag, &why), "it holds its invariants" + (why.empty() ? std::string() : ": " + why));
         Check(st.leafTriangles * 3u == bin.lods[0].idx.size(), "its leaves are LOD0, every triangle");
@@ -3773,14 +3814,16 @@ void TestTessyDag()
             std::snprintf(buf, sizeof(buf), " %llu (%.2f)", static_cast<unsigned long long>(tris), ratio);
             line += buf;
         }
-        std::printf("  tessy.dag %s: %u levels, %u clusters (%u roots, %u stuck groups), %.1f ms; cut tris (area / LOD0's) "
-                    "at 0..%.3f m:%s\n", path, st.levels, st.clusters, st.roots, st.stuckGroups, st.ms, st.rootError, line.c_str());
+        std::printf("  tessy.dag %s%s: %u levels, %u clusters (%u roots, %u stuck groups), %.1f ms; cut tris (area / LOD0's) "
+                    "at 0..%.3f m:%s\n", path, prune ? " (prune)" : "", st.levels, st.clusters, st.roots, st.stuckGroups, st.ms,
+                    st.rootError, line.c_str());
         std::fflush(stdout);
         Check(tessy::DagCutTriangles(dag, 0.0f) <= st.leafTriangles && tessy::DagCutTriangles(dag, 0.0f) > 0u,
               "the cut at 0 is LOD0 or what it simplifies without error");
         Check(tessy::DagCutTriangles(dag, 1e30f) == st.rootTriangles, "past every error the cut is the roots");
         Check(falling, "the cut's triangles never grow as the threshold rises");
         Check(areaKept, "the fine cuts' area stays within 20 % of LOD0's (no hole, no double cover)");
+      }
     }
 }
 

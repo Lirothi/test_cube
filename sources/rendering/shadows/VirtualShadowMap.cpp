@@ -805,13 +805,19 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     }
     tessyOffReason_ = d.tessyOffReason; // the readout's (the builder's cross-frame state)
     tessyMsOffReason_ = d.tessyMsOffReason;
-    // N7c: the DAG's cut and the discrete LOD draw different geometry -- a page cached under one is stale under the other.
-    if (d.tessyLod != tessyLodLast_)
+    // N7c: the DAG's cut and the discrete LOD draw different geometry -- a page cached under one is stale under the other,
+    // and so is one cached at another tessy.lodShadowTexels.
+    const float lodKey = d.tessyLod ? std::max(tessy::g_lodShadowTexels, 0.01f) : 0.0f;
+    if (lodKey != tessyLodKeyLast_)
     {
-        tessyLodLast_ = d.tessyLod;
+        const bool switched = (lodKey != 0.0f) != (tessyLodKeyLast_ != 0.0f);
+        tessyLodKeyLast_ = lodKey;
         InvalidateAllPages();
-        LOG_INFO(logging::LogCategory::RenderShadow, "tessy.lod: VSM clipmap pages draw {} ({} groups with a DAG); page cache flushed",
-                 d.tessyLod ? "the cluster DAG's cut" : "the discrete LODs' clusters", shadowGpu->TessyDagGroups());
+        if (switched)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.lod: VSM pages (clipmap and local) draw {} ({} groups with a DAG); "
+                     "page cache flushed", d.tessyLod ? "the cluster DAG's cut" : "the discrete LODs' clusters", shadowGpu->TessyDagGroups());
+        }
     }
     d.distantMask = distantMask_;     // plan S10d (PlanDistantLights, this frame)
     d.distantUpdate = distantUpdate_;
@@ -2585,7 +2591,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate); t6-t8 the DAG (N7c).
             { shadowGpu->InstanceReadSrv(f), shadowGpu->TessyClusterSrv(), shadowGpu->TessyVgSrv(),
               shadowGpu->GroupLodMegaSrv(), shadowGpu->MegaVertexRawSrv(), shadowGpu->MegaIndexSrv(),
-              shadowGpu->TessyClusterLodSrv(), shadowGpu->TessyDagGroupSrv(), shadowGpu->TessyDagLevelSrv() },
+              shadowGpu->TessyClusterLodSrv(), shadowGpu->TessyDagGroupSrv(), shadowGpu->TessyDagLevelSrv(),
+              shadowGpu->TessyDagSphereSrv() },
             { tessyRunsUav_, pageVisibleListUav_, pageProjUav_, tessyVisibleUav_, tessyStatsUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
             kTessyCullGroups * kComputeDispatchGroupSize, kComputeDispatchGroupSize, // numthreads(8, 8): one group per slot
