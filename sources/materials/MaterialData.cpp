@@ -263,31 +263,35 @@ void MaterialData::StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UI
     {
         auto cb = r->GetFrameResource()->AllocDynamic(
             sizeof(render::MaterialSurfaceParamsGpu), render::kConstantBufferAlignment);
-        auto* dst = static_cast<render::MaterialSurfaceParamsGpu*>(cb.cpu);
-        dst->subsurfaceColor = DirectX::XMFLOAT3(
-            surfaceParams.subsurfaceColor.x, surfaceParams.subsurfaceColor.y, surfaceParams.subsurfaceColor.z);
-        dst->transmissionStrength = surfaceParams.transmissionStrength;
-        dst->ambientOcclusion = surfaceParams.ambientOcclusion;
-        dst->indirectSpecularScale = surfaceParams.indirectSpecularScale;
-        dst->transmissionAlbedoPower = surfaceParams.transmissionAlbedoPower;
-        dst->transmissionNormalWeight = surfaceParams.transmissionNormalWeight;
-        dst->terrainTiling = DirectX::XMFLOAT4(
-            surfaceParams.terrainZoneSize,
-            surfaceParams.terrainRotationDegrees * (3.14159265358979323846f / 180.0f),
-            surfaceParams.terrainScaleVariation,
-            surfaceParams.terrainBlend);
-        dst->terrainEdgeParams = DirectX::XMFLOAT4(
-            surfaceParams.terrainEdgeBreakup,
-            surfaceParams.terrainEdgeDetail,
-            0.0f,
-            0.0f);
-        std::uint32_t idx[4];
-        GatherGBufferIndices(idx); // A6: fresh every frame (a swap or a fade renames a slot)
-        dst->texIndices = DirectX::XMUINT4(idx[0], idx[1], idx[2], idx[3]);
+        FillGBufferSurfaceParams(*static_cast<render::MaterialSurfaceParamsGpu*>(cb.cpu));
         surfaceCbCache_.frameNumber = frameNumber;
         surfaceCbCache_.gpu = cb.gpu;
     }
     ctx.cbv[cbvRegister] = surfaceCbCache_.gpu;
+}
+
+void MaterialData::FillGBufferSurfaceParams(render::MaterialSurfaceParamsGpu& out) const
+{
+    out.subsurfaceColor = DirectX::XMFLOAT3(
+        surfaceParams.subsurfaceColor.x, surfaceParams.subsurfaceColor.y, surfaceParams.subsurfaceColor.z);
+    out.transmissionStrength = surfaceParams.transmissionStrength;
+    out.ambientOcclusion = surfaceParams.ambientOcclusion;
+    out.indirectSpecularScale = surfaceParams.indirectSpecularScale;
+    out.transmissionAlbedoPower = surfaceParams.transmissionAlbedoPower;
+    out.transmissionNormalWeight = surfaceParams.transmissionNormalWeight;
+    out.terrainTiling = DirectX::XMFLOAT4(
+        surfaceParams.terrainZoneSize,
+        surfaceParams.terrainRotationDegrees * (3.14159265358979323846f / 180.0f),
+        surfaceParams.terrainScaleVariation,
+        surfaceParams.terrainBlend);
+    out.terrainEdgeParams = DirectX::XMFLOAT4(
+        surfaceParams.terrainEdgeBreakup,
+        surfaceParams.terrainEdgeDetail,
+        0.0f,
+        0.0f);
+    std::uint32_t idx[4];
+    GatherGBufferIndices(idx); // A6: fresh every frame (a swap or a fade renames a slot)
+    out.texIndices = DirectX::XMUINT4(idx[0], idx[1], idx[2], idx[3]);
 }
 
 void MaterialData::StageNeutralGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister)

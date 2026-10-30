@@ -15,6 +15,7 @@
 #include "core/math/Math.h"
 
 class Renderer;
+namespace render { struct MaterialSurfaceParamsGpu; }
 
 // Stored as a four-bit ID in GBAux.b (encoded as id/15 in an R8 UNORM channel). Keep these numeric
 // values in sync with kShadingModel* in shaders/utils.hlsli.
@@ -234,6 +235,9 @@ public:
 
     // Stage the material-static SurfaceParams root CBV. Cached once per material per frame.
     void StageGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);
+    // The same SurfaceParams into `out` (Tessy N5: a per-frame buffer by mesh group, where one draw spans many
+    // materials). The texture indices are this frame's, as the CBV's.
+    void FillGBufferSurfaceParams(render::MaterialSurfaceParamsGpu& out) const;
     static void StageNeutralGBufferSurfaceParams(Renderer* r, RenderContext& ctx, UINT cbvRegister = 2);
 
     // For the instanced path (t0 = instances), append t1..t4 starting at the provided offset.

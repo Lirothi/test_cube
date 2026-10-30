@@ -137,6 +137,14 @@ public:
         // The cluster view (tessy::g_debugView): the camera row's clusters as records (the same kernel, row set 2),
         // drawn in colour by Main_DebugDraw (RecordTessyView). While it is on the camera's two-pass HZB stays off.
         bool tessyView = false;
+        // Tessy N5 (tessy::g_gbuffer): the camera row through the same kernel BY PSO RUN -- culled by the camera
+        // frustum, its rows zeroed for the classic G-buffer, one row per merged run (`tessyCamRows` of them) -- and
+        // each run's mesh shader twin draws them in pass A (RecordIndirectGBufferDraws). Never on the validation frame.
+        bool tessyGBuffer = false;
+        std::uint32_t tessyCamRows = 0;
+        // ...and with the camera's two-pass HZB on this frame, its clusters last frame's pyramid hid go to the deferred
+        // list (TessyCamDeferred) for Main_CamCullPost's retest (tessy_camera_post_cs.hlsl) and Main_GBufferB's draw.
+        bool tessyCamHzb = false;
         float tessyWind0[4] = {}; // the frame's wind, as the views' PerView carry it (the clusters' sway pad)
         float tessyWind1[4] = {};
         // Plan S9e: SetLocalRadiusThreshold's values, taken by the builder (the record may run on a worker).
@@ -292,6 +300,10 @@ public:
         std::uint32_t base = 0;     // pyramid readable, the pair + deferred list UAV
         std::uint32_t consume = 0;  // args -> INDIRECT_ARGUMENT, list -> vertex stream, counters -> COPY_SOURCE
         std::uint32_t restore = 0;  // counters -> UAV
+        // Tessy N5: the camera clusters' post pass runs too (the cluster buffers UAV at base, back at consume).
+        bool tessy = false;
+        float tessyWind0[4] = {}; // the frame's wind, the clusters' sway pad (filled by the pass builder, as the cull's)
+        float tessyWind1[4] = {};
     };
     CamCullPostDecisions PrepareCamCullPostPass(RenderGraphPassContext& ctx);
     void RecordCamCullPost(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CamCullPostDecisions& dec);
@@ -319,13 +331,20 @@ public:
     // casters the main cull deferred and casters pass B drew (the cut = the difference).
     void PollHzbStats(Renderer* renderer);
     void PollTessyAtlasStats(Renderer* renderer); // Tessy N4: the atlas cull's counters, the same way
-    // Those counters as last polled: [0] main rows', [1] S7 static rows', [2] the camera's (cluster view) meshlet
-    // records, [3] views that did not fit, [4] clusters tested; and the per-row-set capacity.
+    // Those counters as last polled: [0] main rows', [1] S7 static rows', [2] the camera's (the cluster view, N5's
+    // G-buffer pass A) meshlet records, [3] views (or camera runs) that did not fit, [4] clusters tested, [5] the camera
+    // clusters last frame's pyramid hid (N5: deferred to pass B); the row set's cap.
     const std::array<std::uint32_t, 8>& TessyAtlasStats() const { return tessyAtlasStats_; }
     static constexpr std::uint32_t TessyAtlasRowSetCap() { return kTessyAtlasRowSetCap; }
     // The cluster view: on this frame (PrepareCullPass decided it), and its verdict ("on (clusters)", or why not).
     bool TessyViewThisFrame() const { return tessyViewFrame_; }
     const char* TessyViewVerdict() const { return tessyViewVerdict_; }
+    // Tessy N5: the camera's G-buffer by clusters this frame, its verdict, and of the merged runs how many have a mesh
+    // shader twin (the rest stay classic).
+    bool TessyGBufferThisFrame() const { return tessyGbufFrame_; }
+    const char* TessyGBufferVerdict() const { return tessyGbufVerdict_; }
+    std::uint32_t TessyGBufferRuns() const { return tessyGbufTwins_; }
+    std::uint32_t TessyGBufferRunsTotal() const { return static_cast<std::uint32_t>(cmdRuns_.size()); }
     // Draws the camera row's records in colour into the bound scene colour + depth (Main_DebugDraw). `viewCB` = the
     // camera's G-buffer PerView (BuildGBufferViewCB). False when the view is off this frame.
     bool RecordTessyView(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_GPU_VIRTUAL_ADDRESS viewCB);
@@ -743,18 +762,29 @@ private:
     static constexpr std::uint32_t kTessyAtlasRecordCap = kTessyAtlasRowSets * kTessyAtlasRowSetCap; // a frame (6 MB)
     static constexpr std::uint32_t kTessyAtlasRows = kTessyAtlasRowSets * render::kShadowViewCeiling;
     // A frame's DispatchMesh args (12 bytes a row), rounded up to 16: a RAW view starts on 16 bytes, and three row sets
-    // of the ceiling's rows are not (the second frame's view removed the device at its creation).
-    static constexpr UINT64 kTessyAtlasArgsRegionBytes = (static_cast<UINT64>(kTessyAtlasRows) * 12u + 15u) & ~UINT64{ 15u };
+    // of the ceiling's rows are not (the second frame's view removed the device at its creation). After them, N5's
+    // per-run counts for the classic merged commands (0 = the run was taken whole: skip its empty commands).
+    static constexpr UINT64 kTessyCamClassicCountOffset = (static_cast<UINT64>(kTessyAtlasRows) * 12u + 15u) & ~UINT64{ 15u };
+    static constexpr UINT64 kTessyAtlasArgsRegionBytes =
+        kTessyCamClassicCountOffset + ((static_cast<UINT64>(render::kShadowViewCeiling) * 4u + 15u) & ~UINT64{ 15u });
     static constexpr std::uint32_t kTessyCameraRowSet = 2u;
     static constexpr UINT kTessyAtlasCounterBytes = 32u; // [0] [4] [8] claims per row set, [12] not fit, [16] tested
     GpuResource tessyAtlasVisible_;
     GpuResource tessyAtlasInfo_;
     GpuResource tessyAtlasArgs_;
     GpuResource tessyAtlasCounter_;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyAtlasHeap_; // per frame: 4 UAVs, 2 SRVs (TessyAtlasDescriptor)
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> tessyAtlasHeap_; // per frame: 4 UAVs, 2 SRVs, N5's deferred UAV + SRV
+    static constexpr UINT kTessyAtlasDescriptorsPerFrame = 8u;
     UINT tessyAtlasIncr_ = 0;
     D3D12_CPU_DESCRIPTOR_HANDLE TessyAtlasDescriptor(UINT frame, UINT slot) const;
     std::shared_ptr<Material> tessyAtlasCullMat_;       // tessy_atlas_cull_cs.hlsl
+    std::shared_ptr<Material> tessyCameraCullMat_;      // ...TESSY_CULL_THREADS=1024: the camera row (N5, the cluster view)
+    std::shared_ptr<Material> tessyCameraPostMat_;      // tessy_camera_post_cs.hlsl: N5's pass B retest
+    // N5: the clusters the camera row's cull deferred (last frame's pyramid hid them), {caster, cluster, camId, base
+    // vertex} or dead; one region a frame. Main_ShadowCull writes it (UAV), Main_CamCullPost reads it (NON_PIXEL).
+    static constexpr std::uint32_t kTessyCamDeferCap = 65536u;
+    GpuResource tessyCamDeferred_;
+    bool tessyCamHzbFrame_ = false;                     // PrepareCullPass's decision: Main_CamCullPost / GBufferB read it
     std::shared_ptr<Material> tessyAtlasMeshMat_;       // shadow_indirect_csm.hlsl TESSY_ATLAS_MS (+ linear twins)
     std::shared_ptr<Material> tessyAtlasMeshMaskedMat_;
     std::shared_ptr<Material> tessyViewMat_;            // ...TESSY_VIEW: the cluster view's colour draw (Main_DebugDraw)
@@ -768,6 +798,24 @@ private:
     std::uint64_t tessyAtlasTableFrame_ = ~0ull;        // the draw table, staged once a frame (drawTablesMutex_)
     D3D12_GPU_DESCRIPTOR_HANDLE tessyAtlasTable_{};
     D3D12_GPU_DESCRIPTOR_HANDLE TessyAtlasDrawTable(Renderer* renderer, UINT f); // stages tessyAtlasTable_ once a frame
+    // ---- Tessy N5: the camera's G-buffer by clusters ----
+    // Per merged run (cmdRuns_): its mesh shader twin -- the run's own desc with TESSY_GBUFFER_MS (gbuffer_indirect.hlsl);
+    // null for a table PSO's run or a failed build (that run's groups stay classic). Built on the first frame after the
+    // command order changes (BuildGBufferCommandOrder_), whatever tessy::g_gbuffer says (plan 4.7: no hitch to switch).
+    std::vector<std::shared_ptr<Material>> tessyGbufMats_;
+    bool tessyGbufMatsDirty_ = true;
+    std::uint32_t tessyGbufTwins_ = 0;
+    std::vector<std::uint32_t> tessyVgRunCpu_;   // per virtual group: its run's camera row, or ~0 (classic)
+    Ring tessyVgRun_;                            // per frame: tessyVgRunCpu_ (the kernel's t5)
+    Ring tessyGroupSurface_;                     // per frame, per mesh group: MaterialSurfaceParamsGpu (the twins' t13)
+    bool tessyGbufFrame_ = false;                // PrepareCullPass's decision, read by the G-buffer pass (a worker)
+    std::uint32_t tessyGbufRows_ = 0;            // this frame's camera rows (the runs)
+    const char* tessyGbufVerdict_ = "off";
+    const char* tessyGbufLogged_ = nullptr;
+    void EnsureTessyGBufferMaterials_(Renderer* renderer);
+    bool FillTessyGBufferForFrame_(Renderer* renderer); // this frame's VgRun and the groups' SurfaceParams
+    void RecordTessyGBufferDraws_(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
+                                  bool wireframe, std::uint32_t rowFirst);
     void EnsureTessyAtlasResources(Renderer* renderer);
     void RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsCommandList* cl, const CullDecisions& dec, std::uint32_t rowSet);
     // The counters of frame N - kFrameCount: [0] [1] [2] the row sets' claimed records, [3] views that did not fit, [4]

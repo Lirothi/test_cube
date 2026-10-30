@@ -171,6 +171,7 @@ namespace
         case GraphicsControl::TessyVsm:
         case GraphicsControl::TessyRaster:
         case GraphicsControl::TessyAtlas:
+        case GraphicsControl::TessyGBuffer:
             return true;
         default:
             return false;
@@ -3365,8 +3366,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             {
                 // Tessy (docs/tessy_plan.md): the master switch, the paths, the cluster view, the counters.
                 ImGui::TextWrapped("Tessy -- our cluster geometry (UE Nanite's analog): meshes cut into clusters of <= 128 "
-                    "triangles, culled and drawn cluster by cluster. Today in the SHADOWS: the VSM pages and the lamps' atlas "
-                    "views. The camera's G-buffer still draws whole meshes (plan step N5).");
+                    "triangles, culled and drawn cluster by cluster: the VSM pages, the lamps' atlas views and, with "
+                    "\"Camera G-buffer\", the camera itself (plan step N5).");
                 GRAPHICS_CONTROL(TessyEnabled, "tessyEnabled",
                     ImGui::Checkbox("Tessy (master switch)", &tessy::g_enabled));
                 if (ImGui::IsItemHovered())
@@ -3400,6 +3401,28 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "wind) against the view's frustum, the survivors through a mesh shader.\n"
                                       "OFF: every such caster drawn whole into every view it touches.\n"
                                       "Needs a mesh shader tier. The depth is the same either way. --set=tessy.atlas:0|1");
+                GRAPHICS_CONTROL(TessyGBuffer, "tessyGBuffer",
+                    ImGui::Checkbox("Tessy: camera G-buffer cluster by cluster", &tessy::g_gbuffer));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("ON: the camera's indirect G-buffer draws every caster whose mesh has clusters cluster\n"
+                                      "by cluster -- each cluster's box (padded for the wind) against the camera frustum,\n"
+                                      "the survivors through a mesh shader twin of their material's PSO (a triangle that\n"
+                                      "holds no pixel centre culled before setup). Pass B of the HZB cull, the table PSOs\n"
+                                      "and the validation frame stay classic. Needs a mesh shader tier.\n"
+                                      "The picture is the same either way. --set=tessy.gbuffer:0|1");
+                ImGui::Text("camera G-buffer: %s (%u of %u PSO runs have a mesh shader twin)", scene.ShadowGpu().TessyGBufferVerdict(),
+                            scene.ShadowGpu().TessyGBufferRuns(), scene.ShadowGpu().TessyGBufferRunsTotal());
+                ImGui::Indent();
+                ImGui::BeginDisabled(!tessy::g_gbuffer);
+                ImGui::Checkbox("Clusters against the previous HZB (two-pass)", &tessy::g_gbufferHzb);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("UE Nanite's two-pass occlusion per CLUSTER: a cluster last frame's pyramid hid waits\n"
+                                      "for pass B, is retested against this frame's pyramid and drawn there if visible. Off\n"
+                                      "by default: on wind_test the instance HZB already culls what it could, and the 1.5-5 %%\n"
+                                      "of clusters it defers save less than the test and pass B cost. For dense assets.\n"
+                                      "Needs the camera's two-pass HZB. Not saved. --set=tessy.gbufferHzb:0|1");
+                ImGui::EndDisabled();
+                ImGui::Unindent();
                 {
                     int view = static_cast<int>(tessy::g_debugView);
                     const char* const views[] = { "Off", "Clusters", "Meshlets" };
@@ -3426,10 +3449,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "tessy: classic path -- %s", scene.Vsm().TessyOffReason());
                     }
                     const auto& as = sg.TessyAtlasStats();
-                    ImGui::Text("meshlet records: atlases %u + static %u, cluster view %u (cap %u a row set)",
+                    ImGui::Text("meshlet records: atlases %u + static %u, camera %u (cap %u a row set)",
                                 as[0], as[1], as[2], ShadowGpuData::TessyAtlasRowSetCap());
-                    ImGui::Text("%u views did not fit; %u clusters tested (frame N-3, the last frame a cluster row ran)",
-                                as[3], as[4]);
+                    ImGui::Text("%u views did not fit; %u clusters tested; %u camera clusters deferred to pass B (HZB) "
+                                "(frame N-3, the last frame a cluster row ran)", as[3], as[4], as[5]);
                     ImGui::TextDisabled("VSM pages (when the VSM is the shadow mode):");
                     if (ts.valid)
                     {

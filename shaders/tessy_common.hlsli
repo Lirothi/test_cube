@@ -31,6 +31,11 @@ static const uint kTessyDeadRecord = 0xFFFFFFFFu;
 // by 1/64 px against the rasterizer's snapping. The page-border cull (all three corners outside one border) is always on.
 static const uint kTessyMsCullSmall = 1u;
 
+// The CAMERA row's records (tessy_atlas_cull_cs kFlagClusterId: the cluster view, N5's G-buffer) carry in .w their
+// virtual group (bits 0-15: the G-buffer's material, its LOD = vg % 4) and the cluster's index in that group's range
+// (bits 16-31) -- together an id unique per cluster.
+static const uint kTessyCamVgMask = 0xFFFFu;
+
 // The mesh shader dispatch: DispatchMesh(min(N, row), ceil(N / row), 1) -- a dimension holds at most 65535 groups.
 static const uint kTessyMsRow = 65535u;
 

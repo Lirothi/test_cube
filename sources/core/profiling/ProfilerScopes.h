@@ -125,6 +125,9 @@ extern const Profiler::ScopeNameKey kPassHzb;
 extern const Profiler::ScopeNameKey kPassOcclusionQueries; // occlusion plan S3a
 extern const Profiler::ScopeNameKey kPassVisTest;          // occlusion plan S3b
 extern const Profiler::ScopeNameKey kGBufferIndirect;      // occlusion plan S4 (CPU record + GPU)
+extern const Profiler::ScopeNameKey kGBufferTessy;         // Tessy N5: the camera's clusters inside GBuffer_Indirect
+extern const Profiler::ScopeNameKey kTessyCameraCull;      // Tessy N5 / the cluster view: the camera row's cluster cull
+extern const Profiler::ScopeNameKey kTessyCameraPost;      // Tessy N5: the deferred camera clusters' retest (pass B)
 extern const Profiler::ScopeNameKey kPassBloom;
 extern const Profiler::ScopeNameKey kPassBloomConv;
 extern const Profiler::ScopeNameKey kPassLighting;

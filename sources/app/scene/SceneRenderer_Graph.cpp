@@ -523,7 +523,8 @@ void SceneRenderer::BuildShadows(Renderer* renderer, GraphBuild& gb)
             ShadowGpuData::CullDecisions& dec = graphPass_.shadowCull; // read by the body (too big for its closure)
             dec = frame_->shadowGpu->PrepareCullPass(ctx);
             if (!dec.active) { return {}; }
-            if (dec.tessyAtlas && frame_->wind) // Tessy N4: the clusters' sway pad takes the wind the views' PerView carry
+            // Tessy: the clusters' sway pad takes the wind the views' PerView carry -- the atlas views', the camera's (N5).
+            if ((dec.tessyAtlas || dec.tessyGBuffer || dec.tessyView) && frame_->wind)
             {
                 const vfx::WindState& w = *frame_->wind;
                 const float w0[4] = { w.time, w.prevTime, w.windDirXZ.x, w.windDirXZ.y };
@@ -806,8 +807,15 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
         gb.pCamCullPost = rg.AddPass2(RenderPass::Main_CamCullPost, { gb.pHzbA },
             [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
                 if (!frame_->shadowGpu) { return {}; }
-                const ShadowGpuData::CamCullPostDecisions dec = frame_->shadowGpu->PrepareCamCullPostPass(ctx);
+                ShadowGpuData::CamCullPostDecisions dec = frame_->shadowGpu->PrepareCamCullPostPass(ctx);
                 if (!dec.active) { return {}; }
+                if (dec.tessy && frame_->wind) // Tessy N5: the deferred clusters' sway pad, as pass A padded them
+                {
+                    const vfx::WindState& w = *frame_->wind;
+                    const float w0[4] = { w.time, w.prevTime, w.windDirXZ.x, w.windDirXZ.y };
+                    const float w1[4] = { w.swayAmplitude, w.swayFrequency, w.gustMul, w.prevGustMul };
+                    for (int i = 0; i < 4; ++i) { dec.tessyWind0[i] = w0[i]; dec.tessyWind1[i] = w1[i]; }
+                }
                 return [this, renderer, dec](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassCamCullPost);
                     Pass_CamCullPost(renderer, c, dec);

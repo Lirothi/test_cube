@@ -42,4 +42,17 @@ inline unsigned g_vsmMsCull = 1u;
 // (tessy_atlas_cull_cs.hlsl + shadow_indirect_csm.hlsl TESSY_ATLAS_MS). Atlas modes (Legacy / SDSM) only; needs a mesh
 // shader tier. `--set tessy.atlas:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyAtlas.
 inline bool g_atlas = true;
+// N5: the CAMERA's G-buffer draws the casters whose meshes have clusters cluster by cluster -- the camera row through
+// tessy_atlas_cull_cs.hlsl (the clusters culled by the camera frustum, sorted by the merged G-buffer's PSO runs) and
+// each run's mesh shader twin (gbuffer_indirect.hlsl TESSY_GBUFFER_MS). Groups of a table PSO, pass B (the casters
+// last frame's pyramid hid) and the validation frame stay classic. Needs the indirect G-buffer and a mesh shader tier.
+// `--set tessy.gbuffer:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyGBuffer.
+inline bool g_gbuffer = false;
+// N5's heavy variant: the camera's clusters are also tested against LAST frame's camera pyramid (UE Nanite's two-pass
+// occlusion) -- the hidden ones deferred to Main_CamCullPost, retested against this frame's pyramid
+// (tessy_camera_post_cs.hlsl) and the visible ones drawn by Main_GBufferB. Off by default: on wind_test's low-poly
+// assets the instance HZB already culls what it could, and the clusters it defers (1.5-5 %) save less than the test and
+// pass B cost (2026-10-30: grove +0.04 ms, tunnel +0.03). Needs the camera's two-pass HZB on that frame.
+// `--set tessy.gbufferHzb:0|1`, MCP, Developer Controls > Tessy; not persisted.
+inline bool g_gbufferHzb = false;
 } // namespace tessy

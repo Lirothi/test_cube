@@ -63,6 +63,7 @@ COMPUTE_ENTRIES = [
     ("tessy_vsm_cull_cs.hlsl", "CSMain"),
     ("tessy_ms_args_cs.hlsl", "CSMain"), # N6: the mesh shader's DispatchMesh arguments
     ("tessy_atlas_cull_cs.hlsl", "CSMain"), # N4: the local lights' atlas views' cluster cull
+    ("tessy_camera_post_cs.hlsl", "CSMain"), # N5: the camera clusters' HZB post pass
     # Occlusion plan S5b.2: the VSM pool pyramid + the deferred-pair post cull (hzb_cull.hlsli).
     ("vsm_hzb_build_cs.hlsl", "CSMain"),
     ("vsm_hzb_post_cs.hlsl", "CSMain"),
@@ -183,6 +184,13 @@ GRAPHICS_ENTRIES = [
     ("gbuffer_instcb.hlsl", "ps_6_0", "PSMain", ["INSTCB_SLOT_PARAMS=1"], "tables-slot"),
     ("gbuffer_indirect.hlsl", "vs_6_6", "VSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
     ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
+    # Tessy N5: the camera G-buffer's mesh shader twin of a merged run (the run's own defines on top).
+    ("gbuffer_indirect.hlsl", "ms_6_6", "MSMain", ["GBUFFER_BINDLESS=1", "TESSY_GBUFFER_MS=1"], "tessy-gbuffer"),
+    ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1", "TESSY_GBUFFER_MS=1"], "tessy-gbuffer"),
+    ("gbuffer_indirect.hlsl", "ms_6_6", "MSMain", ["GBUFFER_BINDLESS=1", "TESSY_GBUFFER_MS=1", "ALPHA_TEST=1", "SHADING_MODEL_ID=1", "NORMALMAP_IS_RG=1"], "tessy-gbuffer-foliage"),
+    ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1", "TESSY_GBUFFER_MS=1", "ALPHA_TEST=1", "SHADING_MODEL_ID=1", "NORMALMAP_IS_RG=1"], "tessy-gbuffer-foliage"),
+    ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1", "TESSY_GBUFFER_MS=1", "SHADING_MODEL_ID=2", "MR_LAYOUT_GLTF=1"], "tessy-gbuffer-terrain"),
+    ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1", "TESSY_GBUFFER_MS=1", "EDITOR_OBJECT_ID=1"], "tessy-gbuffer-editor-id"),
     ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["SHADOW_DEPTH_BIAS=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "atlas-masked-bindless"),
     ("shadow_indirect_csm.hlsl", "vs_6_6", "VSMain", ["VSM_PAGE=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "page-masked-bindless"),
     ("shadow_indirect_csm.hlsl", "ps_6_6", "PSMain", ["VSM_PAGE=1", "SHADOW_MASKED=1", "GBUFFER_BINDLESS=1"], "page-masked-bindless"),
@@ -222,6 +230,8 @@ GRAPHICS_ENTRIES = [
     # selects it -- the atlas rect source and the 1 - z store). A compute shader in this list
     # because only this list carries defines.
     ("hzb_build_cs.hlsl", "cs_6_0", "CSMain", ["HZB_LIGHT=1"], "light"),
+    # Tessy N5: the camera row's cluster cull, 1024 threads a group.
+    ("tessy_atlas_cull_cs.hlsl", "cs_6_0", "CSMain", ["TESSY_CULL_THREADS=1024"], "camera"),
     # The Legacy ATLAS pair of the shadow depth shader -- the pair SDSM also draws with (S15 needs
     # no permutation there: its projection arrives as an ordinary b1 root CBV, from a block the
     # analyze pass wrote). Listed because the PerView layout in it is a mirror of

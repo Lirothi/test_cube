@@ -848,7 +848,7 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
         o.cutoff = asfloat(gm.y);
 #endif
 #if TESSY_VIEW
-        o.viewId = (gTessyAtlasView & 0x80000000u) != 0u ? rec.y : rec.w; // the meshlet, or the cluster
+        o.viewId = (gTessyAtlasView & 0x80000000u) != 0u ? rec.y : rec.w; // the meshlet, or the cluster (its vg | index)
         o.viewN = mul(N, (float3x3)ip.world);
 #endif
         verts[lane] = o;

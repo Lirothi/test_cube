@@ -673,7 +673,7 @@ grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / 
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
 
-## Tessy -- Cluster Geometry (the VSM Pages and the Lamps' Atlases, Plan N0-N4, N6)
+## Tessy -- Cluster Geometry (the VSM Pages, the Lamps' Atlases, the Camera; Plan N0-N6)
 
 Tessy is our UE Nanite analog (`docs/tessy_plan.md`, journal in its section 9). A CLUSTER is a run of <= 128 triangles
 / 256 vertices of one LOD's index buffer inside one submesh (`Mesh::Cluster`); the classic paths draw the same index
@@ -700,6 +700,28 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   mesh shader tier, and says why not (`tessy.view: off -- ...`, the tab's `cluster view:` line, `get_readouts`
   tessy.view). The auto exposure meters the colours too: the sky darkens behind them. Cost: `Pass_DebugDraw`
   0.03-0.04 ms on the grove (9.2 k meshlets).
+- **N5, the camera's G-buffer by clusters** (`tessy.gbuffer`, default 0; Developer Controls > Tessy "camera G-buffer",
+  `graphics_settings.json` vsm.tessyGBuffer, `--set`, MCP; verdict `tessy.gbuffer: on` / `classic -- <why>`): the camera
+  row goes through `tessy_atlas_cull_cs.hlsl` too, BY PSO RUN (`kFlagByRun`: one 1024-thread group per run of the merged
+  G-buffer commands, `VgRun` maps a virtual group to its run) -- every (caster, cluster) box, wind padded, against the
+  camera frustum, the survivors' meshlets to the run's row, the rows zeroed -- and each run's MESH SHADER TWIN draws
+  them in pass A (`gbuffer_indirect.hlsl TESSY_GBUFFER_MS`: the run's own desc and defines; one DispatchMesh spans the
+  run's groups, so the record's `.w` carries the virtual group -> the LOD side of the crossfade and the group's
+  SurfaceParams from a per-frame buffer (`MaterialData::FillGBufferSurfaceParams`), the textures by
+  `NonUniformResourceIndex`). A run the kernel took whole writes 0 into its classic merged commands' COUNT buffer
+  (`kTessyCamClassicCountOffset` in the args region): 824 empty commands cost the grove 0.045 ms. Table PSOs, pass B,
+  GBV's per-group path keep their classic draws; never on the validation frame (the readback sums the camera row) nor
+  in wireframe. Measured 2026-10-30 (DLSS Balanced, panels closed, alternated x2): the G-buffer 0.155 vs 0.171-0.174 ms
+  on the grove, 0.169 vs 0.187-0.189 in the tunnel, 0.181 vs 0.173-0.174 in the bathroom, but the kernel adds
+  0.013-0.035 -- the frame +0.01-0.02 ms. Picture: on/off at the noise floor (grove 0.23 vs 0.21-0.22 %, the cabinet
+  0.03-0.16 vs 0.44-0.64 %). Hence off by default: on wind_test's low-poly assets clusters do not pay in the main pass.
+  The mesh shader's 25 output values a vertex are not its limit (a 19-value version measured the same).
+- **`tessy.gbufferHzb`** (default 0, not persisted): N5's two-pass HZB per CLUSTER (UE's main/post): a cluster last
+  frame's pyramid hid goes to `TessyCamDeferred` (claimed with the run's records -- both fit or the run stays classic;
+  unwritten slots dead), `tessy_camera_post_cs.hlsl` in Main_CamCullPost retests it against this frame's pyramid into the
+  run's pass-B row (after pass A's), Main_GBufferB draws it with the twins. wind_test defers 1.5-5 % of the clusters
+  (grove 66-76 of 4325, tunnel 330-338), and the test + pass B cost more than they cull (+0.03-0.04 ms) -- for dense
+  assets. Needs the camera's two-pass HZB that frame (the cluster view switches it off).
 - **A RAW view starts on 16 bytes**: a frame's DispatchMesh args are `kTessyAtlasRows` x 12 bytes, and with the third
   row set that stopped being a multiple of 16 -- the second frame's RAW UAV removed the device at its creation (debug
   layer `id=345`, Release: `0x887A0005` at the next create, then abort). The region is `kTessyAtlasArgsRegionBytes`,
@@ -751,8 +773,10 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   another driver or an Agility SDK runtime before turning the flag on.
 - Counters: `get_readouts` block `tessy` (pairs drawn whole / handed to clusters, clusters tested / drawn and their
   triangles, `records` = the draw's instances or mesh shader groups, lost runs / clusters, `meshShader`; `enabled`,
-  `debugView`, `view` = the cluster view's verdict, and the cluster rows' meshlet records `atlasRecords` /
-  `staticRecords` / `viewRecords`, `viewsNotFit`, `rowClustersTested` -- frame N - 3 of the last frame a row ran);
+  `debugView`, `view` = the cluster view's verdict, `gbuffer` = N5's, `gbufferTwins`, and the cluster rows' meshlet
+  records `atlasRecords` / `staticRecords` / `viewRecords` (the camera's pass A), `viewsNotFit`, `rowClustersTested`,
+  `camDeferred` -- frame N - 3 of the last frame a row ran); profiler rows `GBuffer_Indirect.Tessy`,
+  `ShadowCull.TessyCamera`, `CamCullPost.TessyCamera`;
   `tools/tessy_baseline.py --port <p>` measures the plan's three views.
 - Measured 2026-10-29 (all 148 assets v4 in a copy): the grove's `Pass_VsmPageRender` 1.34-1.39 -> 0.66-0.69 ms on
   the VS path (20.7 M triangles into the pages -> ~3 M in 25-29 k clusters) -> 0.51 with the mesh shader (its draw

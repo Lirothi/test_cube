@@ -110,6 +110,9 @@ const Profiler::ScopeNameKey kPassHzb = Profiler::RegisterTraceLiteral(L"Pass_Hz
 const Profiler::ScopeNameKey kPassOcclusionQueries = Profiler::RegisterTraceLiteral(L"Pass_OcclusionQueries");
 const Profiler::ScopeNameKey kPassVisTest = Profiler::RegisterTraceLiteral(L"Pass_VisTest");
 const Profiler::ScopeNameKey kGBufferIndirect = Profiler::RegisterTraceLiteral(L"GBuffer_Indirect");
+const Profiler::ScopeNameKey kGBufferTessy = Profiler::RegisterTraceLiteral(L"GBuffer_Indirect.Tessy");
+const Profiler::ScopeNameKey kTessyCameraCull = Profiler::RegisterTraceLiteral(L"ShadowCull.TessyCamera");
+const Profiler::ScopeNameKey kTessyCameraPost = Profiler::RegisterTraceLiteral(L"CamCullPost.TessyCamera");
 // P8: recorded inside Pass_Tonemap, so it needs its own scope to be readable at all --
 // Pass_Tonemap is already dominated by the DLSS evaluate (see the note in that pass).
 const Profiler::ScopeNameKey kPassBloom = Profiler::RegisterTraceLiteral(L"Pass_Bloom");

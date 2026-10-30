@@ -182,6 +182,7 @@ namespace
         bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
         bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader)
         bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas)
+        bool tessyGBuffer = false; // Tessy N5 (tessy::g_gbuffer)
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -594,6 +595,7 @@ namespace
         s.tessyVsm = tessy::g_vsm;
         s.tessyRaster = tessy::g_vsmMeshShader;
         s.tessyAtlas = tessy::g_atlas;
+        s.tessyGBuffer = tessy::g_gbuffer;
         Sanitize(s);
         return s;
     }
@@ -785,6 +787,7 @@ namespace
         tessy::g_vsm = s.tessyVsm;
         tessy::g_vsmMeshShader = s.tessyRaster;
         tessy::g_atlas = s.tessyAtlas;
+        tessy::g_gbuffer = s.tessyGBuffer;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
 
@@ -1008,7 +1011,8 @@ namespace
                     { "tessyEnabled", s.tessyEnabled },
                     { "tessy", s.tessyVsm },
                     { "tessyRaster", s.tessyRaster },
-                    { "tessyAtlas", s.tessyAtlas }
+                    { "tessyAtlas", s.tessyAtlas },
+                    { "tessyGBuffer", s.tessyGBuffer }
                 } }
             } }
         };
@@ -1238,6 +1242,7 @@ namespace
         Read(vsmSettings, "tessy", s.tessyVsm);
         Read(vsmSettings, "tessyRaster", s.tessyRaster);
         Read(vsmSettings, "tessyAtlas", s.tessyAtlas);
+        Read(vsmSettings, "tessyGBuffer", s.tessyGBuffer);
 
         Sanitize(s);
         return s;
@@ -1583,6 +1588,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
     case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;
     case GraphicsControl::TessyAtlas:                     current.tessyAtlas = defaults.tessyAtlas; break;
+    case GraphicsControl::TessyGBuffer:                   current.tessyGBuffer = defaults.tessyGBuffer; break;
     }
 
     Sanitize(current);
