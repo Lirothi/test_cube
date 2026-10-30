@@ -3288,7 +3288,7 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
     	// and scissor outside the resource.
     	const float border = float(render::kCascadeAtlasBorder);
     	const bool fits = tile > 2.0f * border;
-    	const float content = fits ? (tile - 2.0f * border) : tile;
+    	const float content = ShadowTileContentTexels();
     	if (fits) { topLeftX += border; topLeftY += border; }
 
     	D3D12_VIEWPORT vp{ topLeftX, topLeftY, content, content, 0.0f, 1.0f };
@@ -3312,6 +3312,14 @@ void Renderer::BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex,
     {
         cl->ClearDepthStencilView(D.shadowDSV, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
     }
+}
+
+float Renderer::ShadowTileContentTexels() const
+{
+    const auto& D = rtManager_.Deferred(currentFrameIndex_);
+    const float tile = float(D.shadowRes) * 0.5f;
+    const float border = float(render::kCascadeAtlasBorder);
+    return tile > 2.0f * border ? (tile - 2.0f * border) : tile;
 }
 
 void Renderer::ClearShadowTiles(ID3D12GraphicsCommandList* cl, std::uint32_t tileMask)

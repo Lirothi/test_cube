@@ -2172,6 +2172,7 @@ void VirtualShadowMap::PollHzbStats(Renderer* renderer)
         t.padMaxOffCm = c[17];
         t.padDCm = c[18];
         t.padFCm = c[19];
+        t.rectCulled = c[25];
         t.tessyOn = tessyReadbackOn_[s];
         t.tessyMs = tessyReadbackMs_[s];
         t.valid = true;
@@ -2579,13 +2580,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             std::uint32_t runCap, groups, windPad, validate, msCull, msMeshlets;
             std::uint32_t dagOn;  // N7c: the cluster DAG's cut on clipmap pages
             float dagTexels;      // ...the shadow texels a cluster's error may span (x the page's texel size in metres)
+            std::uint32_t rectCull; // tessy.clusterCull: a cluster that holds no texel centre of its page goes
         };
         RecordComputeDispatch(renderer, cl, tessyCullMat_.get(), static_cast<UINT>(sizeof(CullCB)),
             [&](std::uint8_t* dst)
             {
                 const CullCB c{ kTessyRunCap, kTessyCullGroups, std::min(tessy::g_vsmWindPad, 2u),
                                 tessy::g_vsmValidate ? 1u : 0u, dec.tessyMsCull, dec.tessyMs ? 1u : 0u,
-                                dec.tessyLod ? 1u : 0u, tessy::g_lodShadowTexels };
+                                dec.tessyLod ? 1u : 0u, tessy::g_lodShadowTexels, tessy::g_clusterCull ? 1u : 0u };
                 std::memcpy(dst, &c, sizeof(c));
             },
             // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate); t6-t8 the DAG (N7c).

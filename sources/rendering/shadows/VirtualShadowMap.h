@@ -759,6 +759,7 @@ public:
         std::uint32_t padMaxOffCm = 0;     // tessy.validate: sum of each cluster's largest true vertex displacement
         std::uint32_t padDCm = 0;          // ...of its shear bound D
         std::uint32_t padFCm = 0;          // ...and of its flutter bound F
+        std::uint32_t rectCulled = 0;      // tessy.clusterCull: clusters that held no texel centre of their page
         bool tessyOn = false;              // that frame drew clusters
         bool tessyMs = false;              // ...through the mesh shader (N6)
         bool valid = false;

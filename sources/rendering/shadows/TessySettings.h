@@ -38,8 +38,10 @@ inline bool g_vsmValidate = false;
 // of every triangle). Without a mesh shader tier (or its PSO) true draws through the VS, logged as the verdict.
 // `--set tessy.raster:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyRaster.
 inline bool g_vsmMeshShader = true;
-// The mesh shader's own triangle culls (tessy_common.hlsli kTessyMsCull*): bit 0 = a triangle whose screen box holds no
-// pixel centre (it would raster nothing -- exact). 0 = only the page-border cull. `--set tessy.msCull:0|1`, transient.
+// The mesh shaders' own triangle culls (tessy_common.hlsli kTessyMsCull*): bit 0 = a triangle whose screen box holds no
+// pixel centre (it would raster nothing -- exact) -- the VSM pages', the camera G-buffer's and, since 2026-10-30, the
+// lamps' atlases' and the SDSM partitions' (TESSY_ATLAS_MS). 0 = only the page-border cull. `--set tessy.msCull:0|1`,
+// transient.
 inline unsigned g_vsmMsCull = 1u;
 // N4: the LOCAL lights' atlas views (point faces, spots) draw the casters whose meshes have clusters cluster by cluster
 // (tessy_atlas_cull_cs.hlsl + shadow_indirect_csm.hlsl TESSY_ATLAS_MS). Atlas modes (Legacy / SDSM) only; needs a mesh
@@ -64,6 +66,10 @@ inline bool g_gbuffer = true;
 // pass B cost (2026-10-30: grove +0.04 ms, tunnel +0.03). Needs the camera's two-pass HZB on that frame.
 // `--set tessy.gbufferHzb:0|1`, MCP, Developer Controls > Tessy; not persisted.
 inline bool g_gbufferHzb = false;
+// The camera's cluster records laid out in the classic merged draw's order (tessy_atlas_cull_cs.hlsl Sweep) -- 0 = where
+// the atomics land, the A/B: two coplanar surfaces of two meshes (the_bathroom_free's ceiling) then swap every frame.
+// `--set tessy.ordered:0|1`, transient.
+inline bool g_ordered = true;
 // N7: `--tessy-lod-build=all|<part>,<part>` builds the cluster DAG at load for every clustered asset, or for those whose
 // .mesh.bin path holds one of the parts -- what mesh.json "tessyLod": true does per asset, without touching manifests.
 inline std::string g_lodBuild;
@@ -78,6 +84,18 @@ inline bool g_lod = false;
 // -- 0 tests every level of every caster (N7d's flat test), the A/B: the cut is the same, only the tests' count differs.
 // `--set tessy.lodBand:0|1`, transient.
 inline bool g_lodBand = true;
+// Under tessy.lod the SDSM sun partitions cut the DAG with the CAMERA's eye and threshold (kFlagCameraCut), so a caster
+// draws the clusters its receiver drew -- 0 = their discrete tier's clusters, the A/B. `--set tessy.sunCut:0|1`, transient.
+inline bool g_sunCameraCut = true;
+// Every cluster cull drops a cluster whose padded box holds no sample of the view it is drawn into -- its projected
+// rectangle falls between two pixel / texel centres (tessy_cull_common TessyBoxHoldsSample): the camera's runs, the
+// lamps' atlases, the SDSM partitions, the VSM pages. Exact: such a cluster rasterizes nothing (the mesh shaders' per-
+// triangle test, tessy.msCull, finds the same one triangle at a time, after its vertices). `--set tessy.clusterCull:0|1`,
+// transient; get_readouts tessy.rowRectCulled / sdsmRectCulled / rectCulled count the drops. OFF by default: on wind_test
+// (2026-10-30, DLSS Balanced) it drops 0-19 clusters of 5-35 k records a view (the lamps' grove atlases 0, from 140 m up
+// 103 of 57 k) -- LOD selection at one pixel of error and the DAG keep a far object's cluster several pixels wide -- and
+// costs each cull 0.005-0.009 ms. For assets whose far clusters do fall between pixels.
+inline bool g_clusterCull = false;
 // The DAG cut's threshold: shadow texels a cluster's error may span -- UE's MaxPixelsPerEdge (1) x r.Shadow.NaniteLODBias
 // (shadows one level coarser: x2). `--set tessy.lodShadowTexels:<x>`, transient.
 inline float g_lodShadowTexels = 2.0f;

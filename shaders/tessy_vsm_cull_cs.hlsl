@@ -61,6 +61,9 @@ cbuffer CullCB : register(b0)
     // clipmap page (N7c) and, N7e, on a local light's (perspective) one; gDagTexels = the shadow texels its error may span.
     uint gDagOn;
     float gDagTexels;
+    // 1 = drop a cluster whose padded box holds no texel centre of its page (tessy_cull_common TessyBoxHoldsSample;
+    // tessy.clusterCull): it would rasterize nothing.
+    uint gRectCull;
 };
 
 #include "tessy_cull_common.hlsli" // InstancePerObject, WindPadBox (shared with tessy_atlas_cull_cs.hlsl)
@@ -87,7 +90,8 @@ RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page <
 // [16] runs the setup appended, [20..32] the setup's pair counts, [36] clusters tested, [40] their triangles drawn,
 // [44] clusters past TessyVisible's capacity, [48] runs past TessyRuns', [52]/[56] the validator's misses / worst (um), [60]/[64] the growth needed / given (cm),
 // [68..76] the validator's breakdown, [80..91] the mesh shader's D3D12_DISPATCH_MESH_ARGUMENTS (tessy_ms_args_cs.hlsl),
-// [96] clusters drawn ([4] counts records: one a cluster on the VS path, one a meshlet on the mesh shader's).
+// [96] clusters drawn ([4] counts records: one a cluster on the VS path, one a meshlet on the mesh shader's), [100]
+// clusters that held no texel centre of their page (gRectCull).
 RWByteAddressBuffer       TessyStats      : register(u4);
 
 static const uint kCasterMask = (1u << 22) - 1u; // vsm::kPageIdShift
@@ -118,12 +122,13 @@ bool PageDagTooCoarse(float error, float4 sphere, float4x4 world, float scale, P
     return projected > w;
 }
 
-// The page's six planes from its off-center projection (vsm_page_setup_cs.hlsl builds the same).
-void PagePlanes(uint page, out float4 planes[6], out float4 w0, out float4 w1)
+// The page's six planes from its off-center projection (vsm_page_setup_cs.hlsl builds the same), and the projection
+// itself (the matrix VSM_TESSY's raster places the page's 128 texels with).
+void PagePlanes(uint page, out float4 planes[6], out float4 w0, out float4 w1, out float4x4 pm)
 {
     const uint b = page * 256u;
-    const float4x4 pm = float4x4(asfloat(PageProj.Load4(b + 0u)), asfloat(PageProj.Load4(b + 16u)),
-                                 asfloat(PageProj.Load4(b + 32u)), asfloat(PageProj.Load4(b + 48u)));
+    pm = float4x4(asfloat(PageProj.Load4(b + 0u)), asfloat(PageProj.Load4(b + 16u)),
+                  asfloat(PageProj.Load4(b + 32u)), asfloat(PageProj.Load4(b + 48u)));
     w0 = asfloat(PageProj.Load4(b + 192u)); // (time, prevTime, dirX, dirZ)
     w1 = asfloat(PageProj.Load4(b + 208u)); // (swayAmp -- 0 on a rigid page, freq, gust, prevGust)
     const float4x4 pt = transpose(pm);
@@ -141,7 +146,7 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
 {
     if (gid.x == 0u && lane == 0u) { TessyStats.Store(0u, 384u); } // VertexCountPerInstance: 128 triangles x 3
     const uint runs = min(TessyStats.Load(16u), gRunCap);
-    uint tested = 0u, drawnTris = 0u, lost = 0u, drawnClusters = 0u;
+    uint tested = 0u, drawnTris = 0u, lost = 0u, drawnClusters = 0u, rectDropped = 0u;
     for (uint r = gid.x; r < runs; r += gGroups)
     {
         const uint4 run = TessyRuns[r];
@@ -150,7 +155,8 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
         const uint baseVertex = GroupLodMega[run.w].w;
         float4 planes[6];
         float4 w0, w1;
-        PagePlanes(run.x, planes, w0, w1);
+        float4x4 pm;
+        PagePlanes(run.x, planes, w0, w1, pm);
         // N7c: a group with a cluster DAG takes the DAG's cut (PageDagTooCoarse; UE NaniteClusterCulling.usf:287-299): a
         // cluster is drawn when its error fits the page's texels and its parent's does not. On a clipmap page (orthographic:
         // the w column is (0,0,0,1)) a texel is the same size at any distance; N7e: on a local light's page (perspective) it
@@ -277,6 +283,11 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
                 if (dot(planes[p].xyz, ctr) + planes[p].w + dot(abs(planes[p].xyz), ext) < 0.0f) { inside = false; }
             }
             if (!inside) { continue; }
+            if (gRectCull != 0u && !TessyBoxHoldsSample(ctr, ext, pm, float2(kPageTexels, kPageTexels)))
+            {
+                ++rectDropped;
+                continue;
+            }
             // The VS path draws the cluster as one instance; the mesh shader one group per meshlet (N6).
             const uint records = gMsMeshlets != 0u ? c.meshletCount : 1u;
             uint slot;
@@ -306,11 +317,13 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
     const uint wTris = WaveActiveSum(drawnTris);
     const uint wLost = WaveActiveSum(lost);
     const uint wClusters = WaveActiveSum(drawnClusters);
+    const uint wRect = WaveActiveSum(rectDropped);
     if (WaveIsFirstLane())
     {
         if (wTested != 0u) { TessyStats.InterlockedAdd(36u, wTested); }
         if (wTris != 0u) { TessyStats.InterlockedAdd(40u, wTris); }
         if (wLost != 0u) { TessyStats.InterlockedAdd(44u, wLost); }
         if (wClusters != 0u) { TessyStats.InterlockedAdd(96u, wClusters); }
+        if (wRect != 0u) { TessyStats.InterlockedAdd(100u, wRect); }
     }
 }

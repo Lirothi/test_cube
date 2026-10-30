@@ -127,6 +127,10 @@ struct LocalViewCull
     // Tessy N7e: the view's eye (the light) and its texels per unit at distance 1 (0.5 x resolution x P[0][0]) -- the
     // lamps' atlases cut the cluster DAG by it (ShadowGpuData's per-view DAG table; w 0 = no cut).
     DirectX::XMFLOAT4 dag{ 0.0f, 0.0f, 0.0f, 0.0f };
+    // Tessy: the matrix the atlas draw projects with (view x proj, as BuildShadowViewCB) and its viewport's edge in texels
+    // -- the cluster cull drops a cluster that holds no texel centre of it (tessy.clusterCull; 0 = no test).
+    DirectX::XMFLOAT4X4 viewProj{};
+    float rectTexels = 0.0f;
 };
 
 // Must equal GBUFFER_MAX_INSTANCES in shaders/gbuffer_common.hlsli. Runs larger than this

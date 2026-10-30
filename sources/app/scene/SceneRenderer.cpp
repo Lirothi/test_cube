@@ -884,6 +884,14 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
             curSrv = D.hzbSRV;
             decisions_.camHzb = true;
         }
+        if (p.on == 0u && frame.camera)
+        {
+            // Without the pyramid the camera's matrix and target still go in: Tessy's cluster cull drops a cluster that
+            // holds no pixel centre of them (tessy.clusterCull) -- the G-buffer's jittered matrix, as above.
+            p.viewProj = frame.camera->GetViewProjMatrix();
+            p.viewRect[2] = static_cast<std::int32_t>(renderer->GetRenderWidth());
+            p.viewRect[3] = static_cast<std::int32_t>(renderer->GetRenderHeight());
+        }
         frame.shadowGpu->SetCameraHzb(p, prevHzb, prevSrv, curHzb, curSrv);
         const int state = decisions_.camHzb ? (1 + static_cast<int>(p.prevValid)) : 0;
         if (state != camHzbLogged_)

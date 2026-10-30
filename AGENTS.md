@@ -444,7 +444,10 @@ Steady Night; the curve's slope is the adaptation's strength -- the camera follo
 The Level Editor closed (F2) still serves every call -- MEASURE COSTS WITH IT CLOSED (its panels are a load of
 their own) and on a real view, not wherever the camera happened to be: `get_profile {filter, reset}` returns the
 profiler's rows (GPU/CPU per pass: EMA, max since `reset`, runs last frame), and `shadow.mode:0|1|2`
-(Legacy/VSM/SDSM) switches the sun's shadows live. Kill the editor afterwards (`Stop-Process`), as for any live MCP check.
+(Legacy/VSM/SDSM) switches the sun's shadows live. Kill the editor afterwards (`Stop-Process`), as for any live MCP check
+-- and BEFORE editing a shader's root signature, registers or cbuffer layout: the running exe hot-reloads the saved
+`.hlsl` at once and binds it the old way (2026-10-30: a 14th SRV under a 13-entry table -> device removed, the owner's
+monitors blinked). A body-only shader edit hot-reloads safely.
 
 MEASURE, DON'T READ A SCREENSHOT: the tone curve clips a glint to white, so "how bright is it" is
 unanswerable from a PNG. `set_settings {set: "debug.probeU:0.537;debug.probeV:0.469;debug.probeRadius:40"}`
@@ -797,6 +800,52 @@ reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (t
   tunnel 0.174 vs 0.170, cull +0.014 (482 k vs 419 k triangles); the far view [-20,30,20] 550 k vs 382 k -- the palms'
   foliage LODs drop whole leaves by hand, the DAG's honest metric does not. The picture moves where LODs differ (grove
   2.6 %, tunnel 1.8-2.0 %, floor 0.8-1.7 %). Hence `tessy.lod` stays 0 by default.
+- **The camera's cluster records are laid out in the classic draw's order** (`tessy_atlas_cull_cs.hlsl` `kFlagOrdered`,
+  2026-10-30, owner at cam -62.12 46.92 136.30: "with the DAG the meshes flicker, the bathroom roof most"). The mesh
+  shader draws a run in RECORD order, and the records went where the atomics landed -- new every frame. Two coplanar
+  surfaces of two meshes (the_bathroom_free's ceiling: `Selling_top` and `Selling_top_001`, one LOD each, the same
+  plane) then swapped the depth-test winner every frame: the roof flickered between the perforated sheet and the rusty
+  one, 19.5 % of the roof's pixels over 8 levels across 48 still frames with DLSS off (10.7 % with DLSS). The classic
+  draw had kept them in its command order, and before the DAG both drew classic (no clusters at their far tiers). Now
+  the camera rows (the G-buffer's runs, the cluster view) gather a run's virtual groups in the merged draw's command
+  order (`RunCmds`, t13: per run {first, count}, then `cmdOrder_`) and write the records in test order (entry, caster,
+  cluster) by a group prefix sum (`OrderedPrefix`); the shadow rows write depth alone and keep the atomics. After: the
+  roof 0.06 % (no DAG 0.06 %), and the same layer wins as classic (3 % of the roof differs, the DAG's geometry). Cost:
+  `ShadowCull.TessyCamera` +0.004-0.006 ms (grove, tunnel), +0.012-0.018 on that aerial view, +0.02-0.04 with the DAG
+  there; the G-buffer reads ordered records a little faster (bathroom 0.179 -> 0.172). `tessy.ordered:0` = the atomics,
+  the A/B (it brings the flicker back). Which of a run's entries overflow `kMaxEntries` (1024; thousands of palms from
+  the air) and stay classic is now the command order's too. GBV (`ShadowCull,GBuffer,SdsmCull,SdsmShadow,Skybox` + the
+  Skybox self-test, that view with `tessy.lod:1`, 833 frames): clean.
+- **A count buffer never holds 0xFFFFFFFF** (2026-10-30, owner at cam -44.92 11.56 97.73, 16:00: "with the DAG this
+  small rock dithers"). A camera run the kernel did not take whole wrote ~0 into its classic count, meaning "all the
+  run's commands" -- ExecuteIndirect is specified to take min(count, MaxCommandCount), but this driver (NVIDIA
+  32.0.16.2101) then drew NOTHING: every group a run left classic vanished. Proven by forcing such a run classic whole:
+  the island, the bathroom's walls and the trunks went with it; with the exact count back. The rock's group fell out of
+  the kernel's entries in some frames (DAG band blocks handed out first come, first served: 156 blocks left 18 DAG
+  groups no room on the grove's run) and then out of the frame. Now the count is the run's exact command count
+  (`RunCmds[2r + 1]`), and a band block is handed out only if every DAG group after it keeps room for a plain entry (no
+  DAG group falls to classic for want of entries; the band then still tests 25-40 k clusters on the rock and aerial
+  views against the flat test's 62-82 k: `ShadowCull.TessyCamera` 0.20 vs 0.24 ms, 0.24 vs 0.33). The rock's box over
+  48 still frames: 0.00 % of pixels move over 8 levels (DLSS off), DAG and discrete alike. Any count buffer: write the
+  number, never a sentinel.
+- **`tessy.sunCut`** (default 1, transient): under `tessy.lod` the SDSM partitions cut the DAG with the camera's eye and
+  threshold (`kFlagCameraCut`) -- a far palm's shadow then has the fronds the camera draws, not LOD3's thinned ones (the
+  aerial view: 2.4 % of the frame over 8 levels against a 0-0.7 % floor, the sand under the far crowns); +0.015-0.06 ms
+  of SDSM cull + draw. 0 = their discrete tier.
+- **A cluster or a triangle that holds no sample is not drawn** (2026-10-30, owner: "do we drop a cluster that is tiny on
+  the screen? the shadow passes need it too"). Per TRIANGLE: every mesh shader -- the camera's twins, the VSM pages and,
+  since then, `TESSY_ATLAS_MS` (the lamps' atlases, the SDSM partitions: root constants {row, flags, viewport} -- 4 now)
+  -- culls a triangle whose box holds no pixel / texel centre of its viewport (`tessy.msCull`, exact, default 1; the
+  atlases' cost and picture unchanged within noise). Per CLUSTER: `tessy.clusterCull` (default 0, transient; Tessy
+  setting `g_clusterCull`) has every cull drop a cluster whose padded box projects between two sample centres
+  (`tessy_cull_common.hlsli TessyBoxHoldsSample`: its 8 corners through the view's matrix; a corner at w <= 0 keeps it)
+  -- the camera's runs by `CameraHzbCB`'s jittered matrix (SceneRenderer fills it every frame now, HZB or not), the lamps'
+  views by `ViewRects` (t15, per view slot: the atlas matrix and the face's edge, from `LocalViewCull`), the SDSM rows by
+  their partition's `lightViewProj` (t14) on `Renderer::ShadowTileContentTexels`, the VSM pages by `PageProj` on 128.
+  Exact as well, but on wind_test (DLSS Balanced, SDSM cache off) it drops 0-19 clusters of 5-35 k records a view, VSM
+  0-17, the lamps' grove atlases 0, 103 of 57 k from 140 m up -- LOD selection at one pixel and the DAG keep a far
+  object's clusters pixels wide -- and costs each cull 0.005-0.009 ms; hence off. Counted: `get_readouts` tessy
+  `rowRectCulled` (camera + lamps), `sdsmRectCulled`, `rectCulled` (VSM).
 - **A RAW view starts on 16 bytes**: a frame's DispatchMesh args are `kTessyAtlasRows` x 12 bytes, and with the third
   row set that stopped being a multiple of 16 -- the second frame's RAW UAV removed the device at its creation (debug
   layer `id=345`, Release: `0x887A0005` at the next create, then abort). The region is `kTessyAtlasArgsRegionBytes`,

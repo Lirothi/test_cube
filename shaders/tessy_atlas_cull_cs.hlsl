@@ -31,10 +31,11 @@
 #include "tessy_common.hlsli"
 #include "tessy_cull_common.hlsli"
 #include "hzb_cull.hlsli"
+#include "sdsm_partitions.hlsli" // SdsmPartition: the sun rows' matrices (kFlagRectCull)
 
 #define TESSY_ATLAS_CULL_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=13, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=16, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer AtlasCullCB : register(b0)
@@ -70,7 +71,8 @@ cbuffer AtlasCullCB : register(b0)
     // Groups a view (the SDSM partitions: ShadowGpuData::kTessySunSplit): group g takes view g / gSplit and its virtual
     // groups vg % gSplit == g % gSplit, and writes its own run at slot g -- one group a partition left the GPU idle. 1 else.
     uint gSplit;
-    uint3 gSplitPad;
+    float2 gRectSize;  // kFlagRectCull on the SDSM partitions' rows: the partition's viewport (the tile's content rect)
+    uint gRectCountAt; // kFlagRectCull: where in TessyAtlasCounter the clusters it dropped are counted (bytes)
     // S7's rows (gRowSet 1): one bit per view slot, the views that draw their static rows this frame (a cache miss, an
     // uncached view). A hit copies them from the pool, so its rows are left as they are (nothing draws them).
     uint4 gStaticViews[(TC_SHADOW_VIEW_CEILING + 127u) / 128u];
@@ -109,6 +111,14 @@ StructuredBuffer<float4>            DagSpheres   : register(t11); // N7e: per me
                                                                    // sphere of its DAG (object space)
 StructuredBuffer<float4>            ViewDag      : register(t12); // N7e: per view slot {the light, texels per unit at distance
                                                                    // 1 / tessy.lodShadowTexels}; w 0 = no cut (the atlas views)
+StructuredBuffer<uint>              RunCmds      : register(t13); // kFlagByRun: per run {its first command, its commands} at
+                                                                   // [2r], [2r + 1], then the commands' virtual groups in the
+                                                                   // classic merged draw's order (ShadowGpuData cmdOrder_)
+StructuredBuffer<SdsmPartition>     SunPartitions : register(t14); // kFlagRectCull, row set 3: each partition's lightViewProj
+// kFlagRectCull, the lamps' rows: per view slot the matrix its atlas draw projects with and its viewport's size (0 = none)
+// -- ShadowGpuData::UpdateViewFrustums from Scene's LocalViewCull.
+struct TessyViewRect { float4x4 viewProj; float4 size; };
+StructuredBuffer<TessyViewRect>     ViewRects    : register(t15);
 
 RWByteAddressBuffer       Args               : register(u0); // the cull's rows (D3D12_DRAW_INDEXED_ARGUMENTS, 20 bytes)
 RWStructuredBuffer<uint>  VisibleList        : register(u1); // the rows' caster ids (this frame's region)
@@ -118,9 +128,10 @@ RWByteAddressBuffer       TessyAtlasArgs     : register(u4); // per (row set, vi
 RWByteAddressBuffer       TessyAtlasCounter  : register(u5); // [0] / [4] / [8]: the row sets' claimed records, [12]:
                                                               // views that did not fit, [16]: clusters tested, [20]: the
                                                               // camera's deferred clusters claimed, [24] / [28]: the
-                                                              // camera's runs' triangles / DAG clusters written; [32..48)
-                                                              // the SDSM rows' own claim, not fit, tested, triangles
-                                                              // (cleared per frame; the SDSM part again by Main_SdsmCull)
+                                                              // camera's runs' triangles / DAG clusters written; [32..64)
+                                                              // the SDSM rows' own claim, not fit, tested, triangles and
+                                                              // clusters holding no sample; [64] row sets 0-2's (cleared
+                                                              // per frame; the SDSM part again by Main_SdsmCull)
 RWStructuredBuffer<uint4> TessyCamDeferred   : register(u6); // N5: {caster id, cluster, camId, base vertex} the previous
                                                               // pyramid hid (tessy_camera_post_cs retests them), or dead
 
@@ -136,6 +147,18 @@ static const uint kFlagByRun = 8u;     // one row (gFirstView's), its groups spl
 // N7e, the cluster view's "Levels" (tessy.debug:3): a camera record's .w bits 16-31 carry the cluster's LEVEL instead of
 // its index -- 0x100 | its DAG level, or its discrete LOD tier (the G-buffer reads only bits 0-15).
 static const uint kFlagLevelId = 16u;
+// The camera's rows lay their entries and records out in order (Sweep says why); without it, where the atomics land
+// (tessy.ordered:0, the A/B).
+static const uint kFlagOrdered = 32u;
+// The view cuts the DAG with the CAMERA's eye and threshold (gDagCam), not its own (ViewDag): the SDSM sun partitions,
+// so a caster draws the very clusters its receiver drew (the caster/receiver LOD contract; their discrete tier under the
+// camera's cut is another surface than the one it shades).
+static const uint kFlagCameraCut = 64u;
+// Drop a cluster whose padded box holds no sample of the view (TessyBoxHoldsSample: its rectangle falls between pixel
+// / texel centres -- exact, it would rasterize nothing): the camera's runs by gCamViewProj (b1, the G-buffer's jittered
+// matrix) on the render target, the lamps' views by ViewRects, the SDSM partitions by their lightViewProj on gRectSize.
+// tessy.clusterCull.
+static const uint kFlagRectCull = 128u;
 static const uint kEntryDag = 0x80000000u; // gsEntryVg: the entry takes its mesh group's DAG, every caster all of it (N7d)
 // N7e: gsEntryVg: the entry is ONE caster (gsEntryStart) and the band of its DAG's levels it can cut at its distance
 // (gsEntryFirst, gsEntryInst = the band's clusters): the levels whose error interval cannot meet its threshold anywhere
@@ -175,6 +198,8 @@ groupshared uint gsDagCasters;
 // N7e: the group's eye and its pixels (texels) per unit at distance 1 over the error it allows -- the camera's for its
 // runs (gDagCam), the light's for an atlas view (ViewDag; w 0 = the view takes no DAG cut).
 groupshared float4 gsDagEye;
+groupshared float4x4 gsRectVP;  // kFlagRectCull: the view's matrix and its viewport (x 0 = no rectangle test)
+groupshared float2 gsRectSize;
 groupshared uint gsPrefix[kThreads]; // per entry of the batch: its first (caster, cluster) test
 groupshared uint gsWaveSum[kThreads / 4u]; // the batch's tests per wave (a wave holds 4 to 128 lanes)
 groupshared uint gsWaves;            // waves that took their index (CSMain)
@@ -262,6 +287,28 @@ uint2 DagBand(uint meshGroup, float4x4 world, float scale)
     return lo < hi ? uint2(lo, hi - lo) : uint2(dg.x, 0u);
 }
 
+// The group's exclusive prefix sum of `count` in `slot` order (wave order, CSMain), and its total. Every thread of the
+// group must call it (two group barriers); gsWaveSum is free on entry and on return.
+uint OrderedPrefix(uint count, uint slot, out uint total)
+{
+    const uint lanes = WaveGetLaneCount();
+    const uint wave = slot / lanes;
+    const uint waves = (kThreads + lanes - 1u) / lanes;
+    const uint pre = WavePrefixSum(count);
+    const uint sum = WaveActiveSum(count);
+    if (WaveIsFirstLane()) { gsWaveSum[wave] = sum; }
+    GroupMemoryBarrierWithGroupSync();
+    uint before = 0u;
+    total = 0u;
+    for (uint w = 0u; w < waves; ++w)
+    {
+        before += (w < wave) ? gsWaveSum[w] : 0u;
+        total += gsWaveSum[w];
+    }
+    GroupMemoryBarrierWithGroupSync();
+    return before + pre;
+}
+
 // One sweep over the gathered records, 64 at a time, the (caster, cluster) tests shared out by a prefix sum (wave
 // intrinsics, then the waves' totals). write = false: count the surviving meshlets into gsRecords; true: write them at
 // gsRunBase + the cursor, and zero each record's InstanceCount in the cull's row (the compaction then skips it).
@@ -269,11 +316,21 @@ uint2 DagBand(uint meshGroup, float4x4 world, float scale)
 // and an 8x8 group's lanes do not hold consecutive SV_GroupIndex on NVIDIA -- indexed by it, the prefixes belonged to
 // other records, tests went to the wrong (caster, cluster) and every frame lost a different handful of lamps' shadows
 // (the records' order is the atomics', new each frame).
-void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout uint tested, inout uint tris, inout uint dagDrawn)
+// The CAMERA's rows (kFlagOrdered: the G-buffer's runs and the cluster view) are written in TEST order -- entry (CSMain's gather: a
+// run's virtual groups in the classic merged draw's command order), caster, cluster -- by OrderedPrefix, never where an
+// atomic lands: the mesh shader draws the run in record order, and two coplanar surfaces of two meshes
+// (the_bathroom_free's ceiling, Selling_top and Selling_top_001) then draw in the classic draw's order every frame, so
+// the same one wins the depth test as without clusters. Laid out by atomics the winner changed every frame and the roof
+// flickered under the DAG (2026-10-30, owner). A shadow row writes depth alone, where the order does not matter: it
+// keeps the atomics.
+void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout uint tested, inout uint tris, inout uint dagDrawn,
+           inout uint rectDropped)
 {
     const uint lanes = WaveGetLaneCount();
     const uint wave = slot / lanes;
     const uint waves = (kThreads + lanes - 1u) / lanes;
+    const bool ordered = write && (gFlags & kFlagOrdered) != 0u; // uniform
+    uint cursor = 0u; // ordered: the records laid out so far (the same in every thread)
     for (uint first = 0u; first < entries; first += kThreads)
     {
         const uint e = first + slot;
@@ -303,93 +360,137 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
         {
             if (gsPrefix[t + step] <= slot) { t += step; }
         }
-        for (uint q = slot; q < total; q += kThreads)
+        // Every thread takes the same number of steps (OrderedPrefix's barriers sit inside); a step past `total` tests
+        // nothing.
+        for (uint qb = 0u; qb < total; qb += kThreads)
         {
-            while (t + 1u < kThreads && gsPrefix[t + 1u] <= q) { ++t; }
-            const uint entryVg = gsEntryVg[first + t];
-            const uint vg = entryVg & kEntryVgMask;
-            const bool inst = (entryVg & kEntryInst) != 0u; // N7e: one caster, its band (the tier was checked at the band)
-            const bool dag = inst || (entryVg & kEntryDag) != 0u;
-            const uint2 range = inst ? uint2(gsEntryFirst[first + t], gsEntryInst[first + t]) : EntryRange(entryVg);
-            const uint local = q - gsPrefix[t];
-            const uint k = inst ? 0u : local / range.y;         // the caster
-            const uint cid = inst ? gsEntryStart[first + t] : VisibleList[gsEntryStart[first + t] + k];
-            const uint clusterIndex = range.x + (local - k * range.y);
-            const TessyCluster c = Clusters[clusterIndex];
-            if (!write) { ++tested; }
-            if (dag)
+            const uint q = qb + slot;
+            uint m = 0u;                                  // write: the meshlets this thread lays out
+            uint cid = 0u, clusterIndex = 0u, camId = 0u, baseVertex = 0u, firstMeshlet = 0u, triCount = 0u;
+            bool dag = false;
+            if (q < total)
             {
-                // A crossfading caster sits in the camera row's tier entry and the next one's: the cut draws it once, from
-                // its own (a shadow view's row holds a caster once, at its shadow tier).
-                if (!inst && (gFlags & kFlagByRun) != 0u && min(CasterLods[cid] & kCasterLodMask, kVgLods - 1u) != vg % kVgLods)
+                while (t + 1u < kThreads && gsPrefix[t + 1u] <= q) { ++t; }
+                const uint entryVg = gsEntryVg[first + t];
+                const uint vg = entryVg & kEntryVgMask;
+                const bool inst = (entryVg & kEntryInst) != 0u; // N7e: one caster, its band (the tier was checked at the band)
+                dag = inst || (entryVg & kEntryDag) != 0u;
+                const uint2 range = inst ? uint2(gsEntryFirst[first + t], gsEntryInst[first + t]) : EntryRange(entryVg);
+                const uint local = q - gsPrefix[t];
+                const uint k = inst ? 0u : local / range.y;         // the caster
+                cid = inst ? gsEntryStart[first + t] : VisibleList[gsEntryStart[first + t] + k];
+                clusterIndex = range.x + (local - k * range.y);
+                const TessyCluster c = Clusters[clusterIndex];
+                if (!write) { ++tested; }
+                bool keep = true;
+                if (dag)
                 {
-                    continue;
+                    // A crossfading caster sits in the camera row's tier entry and the next one's: the cut draws it once,
+                    // from its own (a shadow view's row holds a caster once, at its shadow tier).
+                    if (!inst && (gFlags & kFlagByRun) != 0u && min(CasterLods[cid] & kCasterLodMask, kVgLods - 1u) != vg % kVgLods)
+                    {
+                        keep = false;
+                    }
+                    else
+                    {
+                        const float4x4 world = Instances[cid].world;
+                        const float scale = TessyWorldScale(world);
+                        const TessyClusterLod l = ClusterLods[clusterIndex];
+                        keep = !DagTooCoarse(l.lodError, l.lodSphere, world, scale) &&
+                               DagTooCoarse(l.parentError, l.parentSphere, world, scale);
+                    }
                 }
-                const float4x4 world = Instances[cid].world;
-                const float scale = TessyWorldScale(world);
-                const TessyClusterLod l = ClusterLods[clusterIndex];
-                if (DagTooCoarse(l.lodError, l.lodSphere, world, scale) ||
-                    !DagTooCoarse(l.parentError, l.parentSphere, world, scale)) { continue; }
-            }
-            float3 ctr = 0.0f, ext = 0.0f;
-            if ((gFlags & kFlagNoCull) == 0u)
-            {
-                ClusterBox(cid, c, ctr, ext);
-                if (!BoxInView(ctr, ext, vf)) { continue; }
-            }
-            // The camera's records carry their virtual group (the G-buffer's material and LOD), whether it is the DAG's
-            // and, with them, an id unique per cluster (the cluster view's colour). A range past 65535 clusters is 8 M
-            // triangles.
-            const uint idBase = inst ? DagGroups[vg / kVgLods].x : range.x; // a band's cluster keeps its DAG-wide index
-            const uint hiId = (gFlags & kFlagLevelId) == 0u ? min(clusterIndex - idBase, 0xFFFFu)
-                            : dag ? (0x100u | min(ClusterLods[clusterIndex].level, 0xFFu)) : vg % kVgLods;
-            const uint camId = vg | (dag ? kTessyCamDagBit : 0u) | (hiId << 16);
-            const uint baseVertex = GroupLodMega[vg].w;
-            // N5: hidden by last frame's pyramid -> deferred to pass B (tessy_camera_post_cs retests it against this
-            // frame's). Each sweep is compiled on its own and a box on an edge may not answer the same twice: a cluster
-            // sweep 2 defers past the claim is drawn here instead, and one it keeps past the records' claim is deferred.
-            const bool hidden = gCamDeferCap != 0u && BoxHiddenLastFrame(ctr, ext);
-            if (!write)
-            {
-                if (hidden) { InterlockedAdd(gsDeferred, 1u); }
-                else { InterlockedAdd(gsRecords, c.meshletCount); }
-                continue;
-            }
-            if (hidden)
-            {
-                uint d;
-                InterlockedAdd(gsDeferred, 1u, d);
-                if (d < gsDeferredClaimed)
+                float3 ctr = 0.0f, ext = 0.0f;
+                if (keep && (gFlags & kFlagNoCull) == 0u)
                 {
-                    TessyCamDeferred[gsDeferredBase + d] = uint4(cid, clusterIndex, camId, baseVertex);
-                    continue;
+                    ClusterBox(cid, c, ctr, ext);
+                    keep = BoxInView(ctr, ext, vf);
+                    if (keep && gsRectSize.x > 0.0f)
+                    {
+                        keep = TessyBoxHoldsSample(ctr, ext, gsRectVP, gsRectSize);
+                        if (!keep && !write) { ++rectDropped; }
+                    }
                 }
-            }
-            uint at;
-            InterlockedAdd(gsRecords, c.meshletCount, at);
-            if (at + c.meshletCount > gsClaimed && gCamDeferCap != 0u)
-            {
-                uint d;
-                InterlockedAdd(gsDeferred, 1u, d);
-                if (d < gsDeferredClaimed)
+                if (keep)
                 {
-                    TessyCamDeferred[gsDeferredBase + d] = uint4(cid, clusterIndex, camId, baseVertex);
-                    continue;
+                    // The camera's records carry their virtual group (the G-buffer's material and LOD), whether it is the
+                    // DAG's and, with them, an id unique per cluster (the cluster view's colour). A range past 65535
+                    // clusters is 8 M triangles.
+                    const uint idBase = inst ? DagGroups[vg / kVgLods].x : range.x; // a band's cluster keeps its DAG-wide index
+                    const uint hiId = (gFlags & kFlagLevelId) == 0u ? min(clusterIndex - idBase, 0xFFFFu)
+                                    : dag ? (0x100u | min(ClusterLods[clusterIndex].level, 0xFFu)) : vg % kVgLods;
+                    camId = vg | (dag ? kTessyCamDagBit : 0u) | (hiId << 16);
+                    baseVertex = GroupLodMega[vg].w;
+                    // N5: hidden by last frame's pyramid -> deferred to pass B (tessy_camera_post_cs retests it against
+                    // this frame's). Each sweep is compiled on its own and a box on an edge may not answer the same twice:
+                    // a cluster sweep 2 defers past the claim is drawn here instead, and one it keeps past the records'
+                    // claim is deferred.
+                    const bool hidden = gCamDeferCap != 0u && BoxHiddenLastFrame(ctr, ext);
+                    if (!write)
+                    {
+                        if (hidden) { InterlockedAdd(gsDeferred, 1u); }
+                        else { InterlockedAdd(gsRecords, c.meshletCount); }
+                    }
+                    else
+                    {
+                        bool deferredNow = false;
+                        if (hidden)
+                        {
+                            uint d;
+                            InterlockedAdd(gsDeferred, 1u, d);
+                            if (d < gsDeferredClaimed)
+                            {
+                                TessyCamDeferred[gsDeferredBase + d] = uint4(cid, clusterIndex, camId, baseVertex);
+                                deferredNow = true;
+                            }
+                        }
+                        if (!deferredNow)
+                        {
+                            m = c.meshletCount;
+                            firstMeshlet = c.firstMeshlet;
+                            triCount = c.triCount;
+                        }
+                    }
                 }
             }
-            for (uint s = 0u; s < c.meshletCount && at + s < gsClaimed; ++s)
+            if (write) // uniform
             {
-                TessyVisible[gRecordBase + gsRunBase + at + s] =
-                    uint4(cid, c.firstMeshlet + s, baseVertex, (gFlags & kFlagClusterId) != 0u ? camId : 0u);
-            }
-            if (at + c.meshletCount <= gsClaimed)
-            {
-                tris += c.triCount;
-                dagDrawn += dag ? 1u : 0u;
+                uint at = 0u;
+                if (ordered)
+                {
+                    uint placed;
+                    at = cursor + OrderedPrefix(m, slot, placed);
+                    cursor += placed;
+                }
+                else if (m != 0u)
+                {
+                    InterlockedAdd(gsRecords, m, at);
+                }
+                if (m != 0u && at + m > gsClaimed && gCamDeferCap != 0u)
+                {
+                    uint d;
+                    InterlockedAdd(gsDeferred, 1u, d);
+                    if (d < gsDeferredClaimed)
+                    {
+                        TessyCamDeferred[gsDeferredBase + d] = uint4(cid, clusterIndex, camId, baseVertex);
+                        m = 0u;
+                    }
+                }
+                for (uint s = 0u; s < m && at + s < gsClaimed; ++s)
+                {
+                    TessyVisible[gRecordBase + gsRunBase + at + s] =
+                        uint4(cid, firstMeshlet + s, baseVertex, (gFlags & kFlagClusterId) != 0u ? camId : 0u);
+                }
+                if (m != 0u && at + m <= gsClaimed)
+                {
+                    tris += triCount;
+                    dagDrawn += dag ? 1u : 0u;
+                }
             }
         }
         GroupMemoryBarrierWithGroupSync(); // gsPrefix / gsWaveSum are the next batch's
     }
+    if (ordered && slot == 0u) { gsRecords = cursor; } // CSMain reads it after its barrier
 }
 
 [numthreads(TESSY_CULL_THREADS, 1, 1)]
@@ -421,7 +522,19 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     if (gi == 0u)
     {
         gsEntries = 0u; gsRecords = 0u; gsWaves = 0u; gsLeftClassic = 0u; gsDeferred = 0u; gsDagVgs = 0u;
-        gsDagEye = byRun ? gDagCam : ViewDag[gFrustumFirst + view];
+        gsDagEye = (byRun || (gFlags & kFlagCameraCut) != 0u) ? gDagCam : ViewDag[gFrustumFirst + view];
+        gsRectSize = float2(0.0f, 0.0f);
+        if ((gFlags & kFlagRectCull) != 0u)
+        {
+            if (gRowSet == 3u) { gsRectVP = SunPartitions[view].lightViewProj; gsRectSize = gRectSize; }
+            else if (byRun) { gsRectVP = gCamViewProj; gsRectSize = float2(gCamViewRect.zw - gCamViewRect.xy); }
+            else
+            {
+                const TessyViewRect r = ViewRects[gFrustumFirst + view];
+                gsRectVP = r.viewProj;
+                gsRectSize = r.size.xy;
+            }
+        }
     }
     GroupMemoryBarrierWithGroupSync();
     // This thread's place in wave order (Sweep says why): its wave's index, taken once by the wave's first lane, and its lane.
@@ -429,36 +542,99 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     if (WaveIsFirstLane()) { InterlockedAdd(gsWaves, 1u, waveIndex); }
     const uint slot = WaveReadLaneFirst(waveIndex) * WaveGetLaneCount() + WaveGetLaneIndex();
     // Gather the row's records with casters AND clusters; a group with a DAG (N7d) apart, for its casters' bands (N7e).
-    for (uint vg = slice + gi * split; vg < gNumGroups; vg += kThreads * split) // this group's slice of the row
+    // The camera's rows gather in ascending virtual group (OrderedPrefix, Sweep says why); the shadow rows by atomics.
+    if ((gFlags & kFlagOrdered) == 0u) // uniform
     {
-        if (byRun && VgRun[vg] != view) { continue; }
-        const uint instances = Args.Load((row + vg) * kArgStride + 4u);
-        if (instances == 0u) { continue; }
-        const bool dag = gDagOn != 0u && gsDagEye.w > 0.0f && DagGroups[vg / kVgLods].y != 0u;
-        if (!dag && TessyVg[vg].y == 0u) { gsLeftClassic = 1u; continue; }
-        uint idx;
-        if (dag && gDagBand != 0u)
+        for (uint vg = slice + gi * split; vg < gNumGroups; vg += kThreads * split) // this group's slice of the row
         {
-            InterlockedAdd(gsDagVgs, 1u, idx);
-            if (idx < kMaxDagVgs)
+            if (byRun && VgRun[vg] != view) { continue; }
+            const uint instances = Args.Load((row + vg) * kArgStride + 4u);
+            if (instances == 0u) { continue; }
+            // kFlagCameraCut: only where the camera's runs draw the cut too (a group without a mesh shader twin draws its
+            // discrete tier there, and here then as well).
+            const bool dag = gDagOn != 0u && gsDagEye.w > 0.0f && DagGroups[vg / kVgLods].y != 0u &&
+                             ((gFlags & kFlagCameraCut) == 0u || VgRun[vg] != 0xFFFFFFFFu);
+            if (!dag && TessyVg[vg].y == 0u) { gsLeftClassic = 1u; continue; }
+            uint idx;
+            if (dag && gDagBand != 0u)
             {
-                gsDagVg[idx] = vg;
-                gsDagStart[idx] = Args.Load((row + vg) * kArgStride + 16u);
-                gsDagInst[idx] = instances;
-                continue;
+                InterlockedAdd(gsDagVgs, 1u, idx);
+                if (idx < kMaxDagVgs)
+                {
+                    gsDagVg[idx] = vg;
+                    gsDagStart[idx] = Args.Load((row + vg) * kArgStride + 16u);
+                    gsDagInst[idx] = instances;
+                    continue;
+                }
+            }
+            InterlockedAdd(gsEntries, 1u, idx);
+            if (idx < kMaxEntries)
+            {
+                gsEntryVg[idx] = vg | (dag ? kEntryDag : 0u);
+                gsEntryStart[idx] = Args.Load((row + vg) * kArgStride + 16u);
+                gsEntryInst[idx] = instances;
+            }
+            else { gsLeftClassic = 1u; }
+        }
+    }
+    else
+    {
+        // Thread `slot` takes the i-th virtual group of each step -- of the run's commands in the classic merged draw's
+        // order (a G-buffer run: the clusters then resolve a tie in depth as the classic draw did), else of the row in
+        // ascending order (the cluster view); the step's DAG groups, then its entries, are laid out in that order. The
+        // cursors are the same in every thread (OrderedPrefix's totals).
+        const uint2 cmds = byRun ? uint2(RunCmds[2u * view], RunCmds[2u * view + 1u]) : uint2(0u, 0u);
+        const uint n = byRun ? cmds.y : (gNumGroups > slice ? (gNumGroups - slice + split - 1u) / split : 0u);
+        uint dagCursor = 0u, entryCursor = 0u;
+        for (uint b = 0u; b < n; b += kThreads)
+        {
+            const uint i = b + slot;
+            const uint vg = byRun ? (i < n ? RunCmds[cmds.x + i] : 0u) : slice + i * split;
+            uint instances = 0u;
+            bool dag = false, want = false;
+            if (i < n && vg < gNumGroups && (!byRun || VgRun[vg] == view))
+            {
+                instances = Args.Load((row + vg) * kArgStride + 4u);
+                if (instances != 0u)
+                {
+                    dag = gDagOn != 0u && gsDagEye.w > 0.0f && DagGroups[vg / kVgLods].y != 0u &&
+                          ((gFlags & kFlagCameraCut) == 0u || VgRun[vg] != 0xFFFFFFFFu);
+                    if (!dag && TessyVg[vg].y == 0u) { gsLeftClassic = 1u; }
+                    else { want = true; }
+                }
+            }
+            const bool toDag = want && dag && gDagBand != 0u;
+            uint placed;
+            const uint dagIdx = dagCursor + OrderedPrefix(toDag ? 1u : 0u, slot, placed);
+            dagCursor += placed;
+            const bool dagKept = toDag && dagIdx < kMaxDagVgs;
+            if (dagKept)
+            {
+                gsDagVg[dagIdx] = vg;
+                gsDagStart[dagIdx] = Args.Load((row + vg) * kArgStride + 16u);
+                gsDagInst[dagIdx] = instances;
+            }
+            const bool toEntry = want && !dagKept;
+            const uint idx = entryCursor + OrderedPrefix(toEntry ? 1u : 0u, slot, placed);
+            entryCursor += placed;
+            if (toEntry)
+            {
+                if (idx < kMaxEntries)
+                {
+                    gsEntryVg[idx] = vg | (dag ? kEntryDag : 0u);
+                    gsEntryStart[idx] = Args.Load((row + vg) * kArgStride + 16u);
+                    gsEntryInst[idx] = instances;
+                }
+                else { gsLeftClassic = 1u; }
             }
         }
-        InterlockedAdd(gsEntries, 1u, idx);
-        if (idx < kMaxEntries)
-        {
-            gsEntryVg[idx] = vg | (dag ? kEntryDag : 0u);
-            gsEntryStart[idx] = Args.Load((row + vg) * kArgStride + 16u);
-            gsEntryInst[idx] = instances;
-        }
-        else { gsLeftClassic = 1u; }
+        if (slot == 0u) { gsDagVgs = dagCursor; gsEntries = entryCursor; }
     }
     GroupMemoryBarrierWithGroupSync();
     // N7e: a block of caster entries per DAG group while they fit, else one plain DAG entry (every caster, every level).
+    // A block is handed out only if every DAG group after it still has room for its plain entry: blocks given first come
+    // served left wind_test's grove run (156 blocks) without room for 18 groups -- in some frames a rock's -- which fell
+    // to the classic draw and its discrete tier, a pop from cut to tier and back from frame to frame.
     if (gi == 0u)
     {
         uint casters = 0u;
@@ -466,7 +642,8 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         for (uint j = 0u; j < dagVgs; ++j)
         {
             gsDagPrefix[j] = casters;
-            if (gsEntries + gsDagInst[j] <= kMaxEntries)
+            const uint later = dagVgs - 1u - j; // the plain entries kept for the groups after this one
+            if (gsEntries + gsDagInst[j] + later <= kMaxEntries)
             {
                 gsDagBlock[j] = gsEntries;
                 gsEntries += gsDagInst[j];
@@ -518,8 +695,8 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     }
     GroupMemoryBarrierWithGroupSync();
     const uint entries = min(gsEntries, kMaxEntries);
-    uint tested = 0u, tris = 0u, dagDrawn = 0u;
-    Sweep(row, entries, slot, false, vf, tested, tris, dagDrawn);
+    uint tested = 0u, tris = 0u, dagDrawn = 0u, rectDropped = 0u;
+    Sweep(row, entries, slot, false, vf, tested, tris, dagDrawn, rectDropped);
     if (gi == 0u)
     {
         const uint records = gsRecords;
@@ -542,7 +719,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         gsDeferred = 0u;
     }
     GroupMemoryBarrierWithGroupSync();
-    if (gsFits) { Sweep(row, entries, slot, true, vf, tested, tris, dagDrawn); }
+    if (gsFits) { Sweep(row, entries, slot, true, vf, tested, tris, dagDrawn, rectDropped); }
     GroupMemoryBarrierWithGroupSync();
     // N5: the deferred slots this group claimed and did not write (a run that did not fit, sweep 2 deferring fewer than
     // sweep 1): dead, so the post pass draws nothing stale out of them.
@@ -563,11 +740,16 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         TessyAtlasArgs.Store3(info * 12u, fitted == 0u ? uint3(0u, 0u, 1u)
                                                       : uint3(min(fitted, kTessyMsRow), (fitted + kTessyMsRow - 1u) / kTessyMsRow, 1u));
         // The camera G-buffer's run, taken whole: its classic merged commands are all empty now -- the count says skip
-        // them (0); otherwise all of them (ExecuteIndirect takes min(count, the run's commands)).
-        if (byRun) { TessyAtlasArgs.Store(gClassicCountOffset + view * 4u, (gsFits && gsLeftClassic == 0u) ? 0u : 0xFFFFFFFFu); }
+        // them (0); otherwise all of them, by their exact number. NOT ~0: ExecuteIndirect is specified to take
+        // min(count, MaxCommandCount), but with 0xFFFFFFFF in the count buffer this driver (NVIDIA 32.0.16.2101) drew
+        // NOTHING -- every group the run left classic vanished (2026-10-30, owner: a rock "dithering" under the DAG: its
+        // group fell out of the kernel's entries in some frames and then out of the frame).
+        if (byRun) { TessyAtlasArgs.Store(gClassicCountOffset + view * 4u, (gsFits && gsLeftClassic == 0u) ? 0u : RunCmds[2u * view + 1u]); }
     }
     const uint wTested = WaveActiveSum(tested);
     if (WaveIsFirstLane() && wTested != 0u) { TessyAtlasCounter.InterlockedAdd(gCounterAt.z, wTested); }
+    const uint wRect = WaveActiveSum(rectDropped); // sweep 1's: a box that holds no sample (kFlagRectCull)
+    if (WaveIsFirstLane() && wRect != 0u) { TessyAtlasCounter.InterlockedAdd(gRectCountAt, wRect); }
     if (gCounterAt.w != 0xFFFFFFFFu)
     {
         const uint wTris = WaveActiveSum(tris), wDag = WaveActiveSum(dagDrawn);

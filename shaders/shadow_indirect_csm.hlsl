@@ -73,23 +73,23 @@
 #endif
 
 #if TESSY_ATLAS_MS
-  // b0 = the view's row of TessyAtlasViewInfo (a root constant, set per view), b1 = the view's PerView; one table:
-  // Instances (+ CasterGroup, GroupMask), TessyVisible, MegaVB, Meshlets, ClusterVerts, ClusterTris, TessyAtlasViewInfo
-  // (+ the masked albedos).
+  // b0 = the view's row of TessyAtlasViewInfo, the triangle culls and the viewport's size (root constants, set per view),
+  // b1 = the view's PerView; one table: Instances (+ CasterGroup, GroupMask), TessyVisible, MegaVB, Meshlets,
+  // ClusterVerts, ClusterTris, TessyAtlasViewInfo (+ the masked albedos).
   #if SHADOW_MASKED && GBUFFER_BINDLESS
     #define SHADOW_INDIRECT_CSM_RS \
         "RootFlags(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED), " \
-        "RootConstants(num32BitConstants=1, b0), CBV(b1), " \
+        "RootConstants(num32BitConstants=4, b0), CBV(b1), " \
         "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
         "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
   #elif SHADOW_MASKED
     #define SHADOW_INDIRECT_CSM_RS \
-        "RootConstants(num32BitConstants=1, b0), CBV(b1), " \
+        "RootConstants(num32BitConstants=4, b0), CBV(b1), " \
         "DescriptorTable(SRV(t0, numDescriptors=25, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
         "StaticSampler(s0, filter=FILTER_MIN_MAG_MIP_LINEAR, addressU=TEXTURE_ADDRESS_WRAP, addressV=TEXTURE_ADDRESS_WRAP, addressW=TEXTURE_ADDRESS_WRAP)"
   #else
     #define SHADOW_INDIRECT_CSM_RS \
-        "RootConstants(num32BitConstants=1, b0), CBV(b1), " \
+        "RootConstants(num32BitConstants=4, b0), CBV(b1), " \
         "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
   #endif
 #elif VSM_TESSY
@@ -469,6 +469,8 @@ StructuredBuffer<uint2> TessyAtlasViewInfo : register(t6);
 cbuffer TessyAtlasRoot : register(b0)
 {
     uint gTessyAtlasView; // this view's row of TessyAtlasViewInfo (ShadowGpuData::RecordIndirectShadowDraws)
+    uint gTessyAtlasFlags; // kTessyMsCullSmall (tessy.msCull); 0 for the cluster view
+    float2 gTessyAtlasViewport; // the view's viewport in texels (a face, a spot, an SDSM partition's content rect)
 };
 #endif
 
@@ -815,19 +817,29 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
 // Tessy N4: an atlas view's surviving meshlets as a mesh shader -- VSM_TESSY_MS's group (one meshlet, a vertex a thread)
 // with the atlas VS's own vertex math: WindTransformH (the view's PerView: its matrix, the wind or none for a rigid
 // light, S6's slope bias from the vertex normal, S4's linear depth) and MaskedVS's attributes. The face's viewport and
-// scissor clip it, as they clip the classic draw. Group (x, y) is record y * kTessyMsRow + x of the view's run.
+// scissor clip it, as they clip the classic draw. Group (x, y) is record y * kTessyMsRow + x of the view's run. A
+// triangle whose box holds no texel centre of the view's viewport rasterizes no sample and is culled (VSM_TESSY_MS's
+// test; the viewport starts on a whole texel, so its own grid is the atlas's).
 #if SHADOW_MASKED
 typedef VSOutMasked TessyAtlasVertex;
 #else
 typedef VSOutD TessyAtlasVertex;
 #endif
+struct TessyAtlasPrimitive
+{
+    bool cull : SV_CullPrimitive;
+};
+groupshared float2 gsAtlasPx[64];   // per meshlet vertex: its viewport position in texels (x right, y down)
+groupshared bool gsAtlasBehind[64]; // w <= 0: no position
+static const float kTessyAtlasPxMargin = 1.0f / 64.0f; // the rasterizer snaps to 1/256 px: conservative
 
 [NumThreads(64, 1, 1)]
 [OutputTopology("triangle")]
 [RootSignature(SHADOW_INDIRECT_CSM_RS)]
 void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
             out vertices TessyAtlasVertex verts[64],
-            out indices uint3 tris[128])
+            out indices uint3 tris[128],
+            out primitives TessyAtlasPrimitive prims[128])
 {
     const uint2 run = TessyAtlasViewInfo[gTessyAtlasView & 0x3FFFFFFFu]; // {first record, records}; bits 30-31: TESSY_VIEW's
     uint cap, stride;
@@ -874,11 +886,28 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
         o.viewN = mul(N, (float3x3)ip.world);
 #endif
         verts[lane] = o;
+        gsAtlasBehind[lane] = o.H.w <= 0.0f;
+        const float2 ndc = o.H.xy / max(o.H.w, 1.0e-20f);
+        gsAtlasPx[lane] = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f) * gTessyAtlasViewport;
     }
+    GroupMemoryBarrierWithGroupSync();
     for (uint k = lane; k < triCount; k += 64u)
     {
         const uint t = ClusterTris[m.z + k];
-        tris[k] = min(uint3(t & 0xFFu, (t >> 8) & 0xFFu, (t >> 16) & 0xFFu), vertCount - 1u);
+        const uint3 tri = min(uint3(t & 0xFFu, (t >> 8) & 0xFFu, (t >> 16) & 0xFFu), vertCount - 1u);
+        tris[k] = tri;
+        bool cull = false;
+        if ((gTessyAtlasFlags & kTessyMsCullSmall) != 0u &&
+            !(gsAtlasBehind[tri.x] || gsAtlasBehind[tri.y] || gsAtlasBehind[tri.z]))
+        {
+            const float2 p0 = gsAtlasPx[tri.x], p1 = gsAtlasPx[tri.y], p2 = gsAtlasPx[tri.z];
+            const float2 lo = min(p0, min(p1, p2)) - kTessyAtlasPxMargin;
+            const float2 hi = max(p0, max(p1, p2)) + kTessyAtlasPxMargin;
+            cull = any(ceil(lo - 0.5f) > floor(hi - 0.5f));
+        }
+        TessyAtlasPrimitive p;
+        p.cull = cull;
+        prims[k] = p;
     }
 }
 #endif // TESSY_ATLAS_MS

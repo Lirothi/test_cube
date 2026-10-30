@@ -3434,6 +3434,10 @@ void Scene::Render(Renderer* renderer) {
                 // Tessy N7e: the light and the view's texels per unit at distance 1 (the atlases' DAG cut).
                 lc.dag = DirectX::XMFLOAT4(view.position.x, view.position.y, view.position.z,
                                            0.5f * static_cast<float>(view.shadowRes) * std::abs(view.proj.m.m[0][0]));
+                // Tessy: what the atlas draw projects with and its viewport (SceneRenderer_Shadows: BuildShadowViewCB,
+                // BindLocalShadowTarget at ShadowViewRes -- the slice's own edge when the view names none: no test then).
+                lc.viewProj = (view.view * view.proj).m;
+                lc.rectTexels = static_cast<float>(view.shadowRes);
                 localViewCullPtr_[slot] = &lc;
             };
             const auto buildHull = [&](const float3& light)

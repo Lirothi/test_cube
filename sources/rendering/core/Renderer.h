@@ -296,6 +296,8 @@ public:
     // cone; it is intersected with the tile's content rect, and the VIEWPORT stays the full rect.
     void BindShadowTarget(ID3D12GraphicsCommandList* cl, int cascadeIndex, bool clearDepth,
                           const D3D12_RECT* scissor = nullptr);
+    // The viewport's edge BindShadowTarget gives a tile: the tile less its S5 gutter (texels).
+    float ShadowTileContentTexels() const;
     // S20: clear only the atlas tiles in `tileMask` (bit i = tile i, whole tile with its gutter)
     // and leave the others as they are -- the SDSM partition cache keeps those. All four bits = the
     // whole-atlas clear BindShadowTarget(cl, 0, true) does.

@@ -93,4 +93,31 @@ void WindPadBox(InstancePerObject ip, TessyCluster c, float4 w0, float4 w1, uint
     ext = 0.5f * (hi - lo);
 }
 
+// Does the (padded) box hold a SAMPLE of the view it is drawn into? Its eight corners through `vp` (clip = mul(p, vp))
+// onto the viewport's grid of `size` pixels (x right, y down, samples at k + 0.5): when the rectangle of their projections
+// falls between two sample centres on either axis, no triangle inside the box can cover a sample and the rasterizer
+// would draw nothing of it -- exact, whatever its triangles (the mesh shaders' per-triangle test, kTessyMsCullSmall, one
+// level up). A box reaching w <= 0 has no rectangle: kept. The rectangle may leave the viewport: kept, conservative.
+static const float kTessyRectMargin = 1.0f / 64.0f; // the rasterizer snaps to 1/256 px and does its own float math
+bool TessyBoxHoldsSample(float3 ctr, float3 ext, float4x4 vp, float2 size)
+{
+    // clip(corner) = clip(centre) +- ext.x row 0 +- ext.y row 1 +- ext.z row 2 (row_major: mul(p, vp) = sum p_i row_i).
+    const float4 hc = mul(float4(ctr, 1.0f), vp);
+    const float4 ax = ext.x * vp[0], ay = ext.y * vp[1], az = ext.z * vp[2];
+    float2 lo = 3.0e38f, hi = -3.0e38f;
+    bool behind = false;
+    [unroll] for (uint i = 0u; i < 8u; ++i)
+    {
+        const float4 h = hc + ((i & 1u) != 0u ? ax : -ax) + ((i & 2u) != 0u ? ay : -ay) + ((i & 4u) != 0u ? az : -az);
+        behind = behind || h.w <= 1.0e-6f;
+        const float2 ndc = h.xy / max(h.w, 1.0e-6f);
+        const float2 px = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f) * size;
+        lo = min(lo, px);
+        hi = max(hi, px);
+    }
+    lo -= kTessyRectMargin;
+    hi += kTessyRectMargin;
+    return behind || all(ceil(lo - 0.5f) <= floor(hi - 0.5f));
+}
+
 #endif // TESSY_CULL_COMMON_HLSLI

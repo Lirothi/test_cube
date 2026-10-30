@@ -975,6 +975,11 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
                     const float w1[4] = { w.swayAmplitude, w.swayFrequency, w.gustMul, w.prevGustMul };
                     for (int i = 0; i < 4; ++i) { dec.tessyWind0[i] = w0[i]; dec.tessyWind1[i] = w1[i]; }
                 }
+                if (dec.tessySun) // tessy.clusterCull: the partitions' matrices and the viewport they are drawn into
+                {
+                    dec.partitionSrv = frame_->sdsm->PartitionSrv();
+                    dec.tileTexels = renderer->ShadowTileContentTexels();
+                }
                 return [this, renderer](RenderGraphPassContext c) {
                     CPU_SCOPE(ProfilerScopes::kPassShadowCull);
                     Pass_SdsmCull(renderer, c, graphPass_.sdsmCull);
