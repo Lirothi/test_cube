@@ -1120,10 +1120,14 @@ HRESULT CreateMeshPipelineStateCached(ID3D12Device* device,
     const auto psoBegin = std::chrono::steady_clock::now();
     const std::string label = NarrowForLog(debugLabel.empty() ? name : debugLabel);
     bool fromCache = false;
-    // Not through the disk cache (yet): the driver refused every stored mesh-shader blob on the next launch -- 6 of 6
-    // each boot, E_INVALIDARG and the debug layer's id=887 "does not match the rest of the description", the same with
-    // the CACHED_PSO subobject left out of the compile (2026-10-29) -- so they compiled twice and logged an error. They
-    // compile once now (~18 ms of a Release boot for the six).
+    // Not through the disk cache: the runtime takes no cached MESH pipeline back. Every stored blob was refused on the
+    // next launch (6 of 6 each boot, E_INVALIDARG, debug layer id=887 "does not match the rest of the description"), and
+    // probed in one process on 2026-10-30 (system D3D12 runtime, NVIDIA 32.0.16.2101) a mesh pipeline's OWN fresh blob
+    // was refused too -- whatever the stream held: zeroed padding, with or without the CACHED_PSO subobject at compile,
+    // DEPTH_STENCIL or DEPTH_STENCIL1, without the root signature, blend, rasterizer, sample mask, even without a pixel
+    // shader -- and so was ID3D12PipelineLibrary's LoadPipeline (id=972, "desc ... does not match"), while a VERTEX
+    // shader pipeline through the same stream took its blob back. They compile once a boot (~18 ms of a Release boot
+    // for the six). Worth the same probe again with another driver or an Agility SDK runtime before turning this on.
     constexpr bool kMeshPsoDiskCache = false;
     if (kMeshPsoDiskCache && PipelineCacheEnabled())
     {

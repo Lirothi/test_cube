@@ -720,8 +720,13 @@ is the owner's call (plan Q4) -- back the files up first.
 - A classic shadow range must come from the EXPLICIT LOD's tables: `groupLodMega_` read `SubmeshesForLod` (the runtime
   `lod.forced` / `lod.enabled` override) until 2026-10-29, and a Rebuild under the knob drew another part of every mesh
   in the local views until the next Rebuild. A/B a shadow path with those knobs at their defaults and relaunch after.
-- Mesh-shader PSOs stay out of the disk PSO cache (`kMeshPsoDiskCache`, Material.cpp): the driver refused all six stored
-  blobs on every launch (debug layer `id=887`), so they were compiled twice; now once (~18 ms of a Release boot).
+- Mesh-shader PSOs stay out of the disk PSO cache (`kMeshPsoDiskCache`, Material.cpp): the runtime takes no cached
+  MESH pipeline back. All six stored blobs were refused on every launch (debug layer `id=887`), and a probe in one
+  process (2026-10-30, system D3D12 runtime, NVIDIA 32.0.16.2101) had a mesh pipeline refuse its OWN fresh blob
+  whatever the stream held (zeroed padding, no root signature / blend / rasterizer / sample mask / pixel shader,
+  DEPTH_STENCIL1) and `ID3D12PipelineLibrary::LoadPipeline` refuse it too (`id=972`), while a vertex-shader pipeline
+  through the same stream took its blob back. So they compile once a boot (~18 ms of Release); probe again with
+  another driver or an Agility SDK runtime before turning the flag on.
 - Counters: `get_readouts` block `tessy` (pairs drawn whole / handed to clusters, clusters tested / drawn and their
   triangles, `records` = the draw's instances or mesh shader groups, lost runs / clusters, `meshShader`);
   `tools/tessy_baseline.py --port <p>` measures the plan's three views.
