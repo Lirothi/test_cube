@@ -537,6 +537,8 @@ namespace
         if (setting == "tessy.atlas") { tessy::g_atlas = value != 0.0f; return true; } // N4: the lamps' atlas views
         if (setting == "tessy.gbuffer") { tessy::g_gbuffer = value != 0.0f; return true; } // N5: the camera's G-buffer
         if (setting == "tessy.gbufferHzb") { tessy::g_gbufferHzb = value != 0.0f; return true; } // N5: its clusters' HZB test
+        if (setting == "tessy.lod") { tessy::g_lod = value != 0.0f; return true; } // N7: the cluster DAG's cut
+        if (setting == "tessy.lodShadowTexels") { tessy::g_lodShadowTexels = std::max(value, 0.01f); return true; }
         if (setting == "tessy.msCull") { tessy::g_vsmMsCull = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod = value != 0.0f; return true; }
@@ -2042,10 +2044,11 @@ namespace
                 const VirtualShadowMap::TessyStats& t = scene_.Vsm().GetTessyStats();
                 const ShadowGpuData& sg = scene_.ShadowGpu();
                 const auto& as = sg.TessyAtlasStats();
-                char tessyItem[1536];
+                char tessyItem[2048];
                 std::snprintf(tessyItem, sizeof(tessyItem),
-                              ",\"tessy\":{\"enabled\":%s,\"debugView\":%u,\"view\":\"%s\",\"gbuffer\":\"%s\",\"gbufferTwins\":%u,\"atlasRecords\":%u,"
+                              ",\"tessy\":{\"enabled\":%s,\"debugView\":%u,\"view\":\"%s\",\"gbuffer\":\"%s\",\"gbufferTwins\":%u,\"lod\":%s,\"dagGroups\":%u,\"dagClusters\":%u,\"camDag\":%s,\"atlasRecords\":%u,"
                               "\"staticRecords\":%u,\"viewRecords\":%u,\"viewsNotFit\":%u,\"rowClustersTested\":%u,\"camDeferred\":%u,"
+                              "\"camTris\":%u,\"camDagClusters\":%u,"
                               "\"valid\":%s,\"on\":%s,\"knob\":%s,\"offReason\":\"%s\",\"meshShader\":%s,"
                               "\"rasterKnob\":%u,\"meshShaderOffReason\":\"%s\",\"groupsWithClusters\":%u,"
                               "\"groups\":%u,\"clusterTable\":%u,\"wholePairs\":%u,\"wholeTris\":%u,\"tessyPairs\":%u,"
@@ -2053,8 +2056,9 @@ namespace
                               "\"clustersLost\":%u,\"runsLost\":%u,\"padMisses\":%u,\"padMissMaxUm\":%u,"
                               "\"padNeedCm\":%u,\"padGotCm\":%u,\"padMaxOffCm\":%u,\"padDCm\":%u,\"padFCm\":%u}",
                               tessy::g_enabled ? "true" : "false", tessy::g_debugView, sg.TessyViewVerdict(),
-                              sg.TessyGBufferVerdict(), sg.TessyGBufferRuns(),
-                              as[0], as[1], as[2], as[3], as[4], as[5],
+                              sg.TessyGBufferVerdict(), sg.TessyGBufferRuns(), tessy::g_lod ? "true" : "false",
+                              sg.TessyDagGroups(), sg.TessyDagClusters(), sg.TessyCameraDagThisFrame() ? "true" : "false",
+                              as[0], as[1], as[2], as[3], as[4], as[5], as[6], as[7],
                               t.valid ? "true" : "false", t.tessyOn ? "true" : "false", tessy::g_vsm ? "true" : "false",
                               scene_.Vsm().TessyOffReason(), t.tessyMs ? "true" : "false", tessy::g_vsmMeshShader ? 1u : 0u,
                               scene_.Vsm().TessyMsOffReason(), sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(),

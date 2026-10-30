@@ -342,6 +342,32 @@ void Mesh::SetClusters(std::vector<std::vector<Cluster>> perLod, const std::vect
     clusterLocal_ = std::move(local);
 }
 
+bool Mesh::SetDag(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+                  std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, Dag dag) {
+    dag_ = {};
+    dagLocal_ = {};
+    dagIndexBuffer_.Reset();
+    dagIndexCount_ = 0;
+    if (!device || !uploadCmdList || dag.clusters.empty() || dag.lod.size() != dag.clusters.size() || dag.indices.empty()) {
+        return false;
+    }
+    ClusterLocalTables local;
+    if (!BuildClusterLocal(dag.clusters, dag.indices, local)) { return false; } // N6's meshlets, the same builder
+    UploadManager up(device, uploadCmdList);
+    const UINT ibSize = static_cast<UINT>(sizeof(uint32_t) * dag.indices.size());
+    // COMMON, as AddLod's: the mega IB copy promotes it to COPY_SOURCE.
+    dagIndexBuffer_ = up.CreateBufferWithData(dag.indices.data(), ibSize, D3D12_RESOURCE_FLAG_NONE,
+        D3D12_RESOURCE_STATE_COMMON, MemTag::Mesh, L"Mesh.DagIB");
+    up.StealKeepAlive(uploadKeepAlive);
+    if (!dagIndexBuffer_) { return false; }
+    dagIndexCount_ = static_cast<UINT>(dag.indices.size());
+    dag.indices.clear();
+    dag.indices.shrink_to_fit(); // the GPU holds them; the meshlet tables hold what the mesh shader needs
+    dag_ = std::move(dag);
+    dagLocal_ = std::move(local);
+    return true;
+}
+
 // Each cluster cut into meshlets: its triangles in order, a new meshlet whenever the next triangle would take the
 // current one past kMeshletMaxVerts unique vertices (the builder's spatial order keeps neighbours together: a regular
 // mesh's cluster makes about two meshlets, a leaf card's about four). Fails (the mesh then stays classic) unless the

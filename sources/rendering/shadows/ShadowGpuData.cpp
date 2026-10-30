@@ -942,7 +942,9 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                                     ctx.renderer->GetTotalFrameNumber() > render::kFrameCount;
         const bool wireframe = ctx.renderer->GetWireframeMode();
         const std::uint32_t rows = static_cast<std::uint32_t>(cmdRuns_.size());
-        dec.tessyGBuffer = tessy::g_enabled && tessy::g_gbuffer && dec.gbuffer && !readbackWanted && !wireframe &&
+        // N7d: the DAG's cut reaches the camera only through the clusters, so tessy.lod turns them on for itself.
+        const bool dagWanted = tessy::g_lod && tessyDagGroups_ > 0u;
+        dec.tessyGBuffer = tessy::g_enabled && (tessy::g_gbuffer || dagWanted) && dec.gbuffer && !readbackWanted && !wireframe &&
                            filled && tessyGbufTwins_ > 0 && tessyAtlasCullMat_ && tessyAtlasHeap_ &&
                            rows <= render::kShadowViewCeiling && numVirtualGroups_ <= 0x10000u &&
                            ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
@@ -954,8 +956,28 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
         dec.tessyCamHzb = tessy::g_gbufferHzb && dec.tessyGBuffer && dec.camHzb && tessyCameraPostMat_ &&
                           tessyCamDeferred_.Get() && 2u * rows <= render::kShadowViewCeiling;
         tessyCamHzbFrame_ = dec.tessyCamHzb;
-        const char* verdict = dec.tessyGBuffer ? "on" : !tessy::g_enabled ? "off (tessy.enabled 0)"
-            : !tessy::g_gbuffer ? "off (tessy.gbuffer 0)"
+        // N7d: the camera position LodSelect selected the tiers from, and its projection of an error: pixels per unit at
+        // depth 1 over lod.pixelError and lod.distanceScale (a discrete LOD of the same deviation switches where this
+        // cut does -- ViewDistance + R).
+        dec.tessyCamDag = dec.tessyGBuffer && dagWanted;
+        tessyCamDagFrame_ = dec.tessyCamDag;
+        if (!readbackWanted && dec.tessyCamDag != tessyCamDagLogged_)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.lod: the camera draws {} (frame {})",
+                     dec.tessyCamDag ? "the cluster DAG's cut" : "the discrete LODs", ctx.renderer->GetTotalFrameNumber());
+            tessyCamDagLogged_ = dec.tessyCamDag;
+        }
+        if (dec.tessyCamDag)
+        {
+            dec.tessyDagCam[0] = lastCameraPos_.x;
+            dec.tessyDagCam[1] = lastCameraPos_.y;
+            dec.tessyDagCam[2] = lastCameraPos_.z;
+            dec.tessyDagCam[3] = render::g_lodPixelsPerUnit / std::max(render::g_lodPixelError, 1e-3f) /
+                                 std::max(render::g_lodDistanceScale, 1e-3f);
+        }
+        const char* verdict = dec.tessyGBuffer ? (tessy::g_gbuffer ? "on" : "on (tessy.lod: the DAG's cut is drawn by clusters)")
+            : !tessy::g_enabled ? "off (tessy.enabled 0)"
+            : !tessy::g_gbuffer && !dagWanted ? "off (tessy.gbuffer 0)"
             : !dec.gbuffer ? "classic -- the camera's indirect G-buffer is off this frame"
             : readbackWanted ? nullptr // the one validation frame: not an event
             : wireframe ? "classic -- wireframe"
@@ -2377,6 +2399,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     megaWanted_ = megaBuilt_ = megaReady_ = false;
     tessyReady_ = false; // Tessy N2: the tables follow the mega buffers (EnsureMegaBuffer uploads both)
     megaVBBytes_ = megaIBBytes_ = megaStride_ = 0;
+    tessyDagBase_.clear();
     megaIndexFormat_ = DXGI_FORMAT_R32_UINT;
     baseVertex_.assign(numMeshGroups_, 0u);
     startIndex_.assign(numMeshGroups_, 0u);
@@ -2410,7 +2433,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                 // Static groups precede GI groups, so first-see order classifies correctly.
                 const UINT lodCount = (g < staticGroups) ? m->GetLodCount() : 1u;
                 meshSlot.emplace(m, static_cast<std::uint32_t>(megaCopy_.size()));
-                megaCopy_.push_back(MegaCopy{ m, static_cast<UINT>(vb->GetDesc().Width), lodCount });
+                const bool dag = g < staticGroups && m->HasDag() && m->GetDagIndexBufferResource() != nullptr; // N7
+                megaCopy_.push_back(MegaCopy{ m, static_cast<UINT>(vb->GetDesc().Width), lodCount, dag });
             }
         }
         if (uniform && stride0 > 0 && fmt0 == DXGI_FORMAT_R32_UINT) // consolidated path is R32-only
@@ -2436,6 +2460,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
                         lodBase += mc.mesh->GetLodIndexCount(L); // advance past this LOD's IB
                     }
                     else { meshLodIBBase[mi][L] = lastBase; } // clamp: coarsest present LOD
+                }
+                if (mc.dag) // N7: the cluster DAG's index buffer after the LODs
+                {
+                    tessyDagBase_[mc.mesh] = lodBase;
+                    lodBase += mc.mesh->GetDagIndexCount();
                 }
                 voff += mc.vbBytes;
                 ioff += (lodBase - (ioff / idxBytes)) * idxBytes; // total indices of all this mesh's LODs
@@ -4299,8 +4328,9 @@ void ShadowGpuData::PollTessyAtlasStats(Renderer* renderer)
         tessyAtlasStatsFrame_[s] = 0;
         LOG_INFO_THROTTLED(std::chrono::seconds(5), logging::LogCategory::RenderShadow,
                            "tessy.atlas: {} + {} meshlet records, camera {} (cap {} a row set), {} views did not fit, "
-                           "{} clusters tested, {} camera clusters deferred to pass B", tessyAtlasStats_[0], tessyAtlasStats_[1],
-                           tessyAtlasStats_[2], kTessyAtlasRowSetCap, tessyAtlasStats_[3], tessyAtlasStats_[4], tessyAtlasStats_[5]);
+                           "{} clusters tested, {} camera clusters deferred to pass B, camera pass A {} triangles ({} DAG clusters)",
+                           tessyAtlasStats_[0], tessyAtlasStats_[1], tessyAtlasStats_[2], kTessyAtlasRowSetCap, tessyAtlasStats_[3],
+                           tessyAtlasStats_[4], tessyAtlasStats_[5], tessyAtlasStats_[6], tessyAtlasStats_[7]);
         return;
     }
 }
@@ -4585,6 +4615,12 @@ void ShadowGpuData::EnsureMegaBuffer(Renderer* renderer, ID3D12GraphicsCommandLi
             if (ib && bytes > 0) { cl->CopyBufferRegion(megaIB_.Get(), ioff, ib, 0, bytes); }
             ioff += bytes;
         }
+        if (mc.mesh && mc.dag) // N7: the cluster DAG's indices (COMMON, as the LOD IBs)
+        {
+            const UINT bytes = mc.mesh->GetDagIndexCount() * 4u;
+            if (bytes > 0) { cl->CopyBufferRegion(megaIB_.Get(), ioff, mc.mesh->GetDagIndexBufferResource(), 0, bytes); }
+            ioff += bytes;
+        }
     }
     megaReady_ = true;
     UploadTessyTables_(renderer, cl);
@@ -4603,6 +4639,10 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
     tessyTrisCpu_.clear();
     tessyVgCpu_.assign(static_cast<size_t>(numMeshGroups_) * render::kMaxShadowLods, DirectX::XMUINT2{ 0u, 0u });
     tessyGroupsWith_ = tessyGroupsTotal_ = 0;
+    tessyClusterLodCpu_.clear();
+    tessyDagGroupCpu_.assign(numMeshGroups_, DirectX::XMUINT4{ 0u, 0u, 0u, 0u });
+    tessyDagLevelCpu_.clear();
+    tessyDagGroups_ = tessyDagClusters_ = 0;
     if (!megaWanted_ || numMeshGroups_ == 0) { return; }
     std::vector<std::string> without; // asset paths whose groups stay classic
     for (std::uint32_t g = 0; g < numMeshGroups_; ++g)
@@ -4674,23 +4714,82 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                     }
                 }
                 tessyClusterCpu_.push_back(t);
+                tessyClusterLodCpu_.push_back(TessyClusterLod{}); // N7: a discrete LOD's cluster has no DAG record
             }
             prevLod = lod;
             prevRange = DirectX::XMUINT2{ first, static_cast<std::uint32_t>(tessyClusterCpu_.size()) - first };
             tessyVgCpu_[vg] = prevRange;
         }
+        // N7: the group's submesh in the mesh's cluster DAG -- its clusters (mega-absolute, after the mesh's LODs in the
+        // mega IB), their meshlets and LOD records, and its levels.
+        const auto dagBase = tessyDagBase_.find(m);
+        if (isStatic && m->HasDag() && dagBase != tessyDagBase_.end() && sOrd < m->GetDag().submeshes.size())
+        {
+            const Mesh::Dag& dag = m->GetDag();
+            const Mesh::ClusterLocalTables& local = m->GetDagLocal();
+            const bool hasLocal = local.clusters.size() == dag.clusters.size();
+            const Mesh::DagSubmesh& ds = dag.submeshes[sOrd];
+            const std::uint32_t first = static_cast<std::uint32_t>(tessyClusterCpu_.size());
+            const std::uint32_t firstLevel = static_cast<std::uint32_t>(tessyDagLevelCpu_.size());
+            for (std::uint32_t k = 0; k < ds.levelCount; ++k)
+            {
+                const Mesh::DagLevel& l = dag.levels[ds.firstLevel + k];
+                std::uint32_t lo, hi;
+                std::memcpy(&lo, &l.minLodError, 4);
+                std::memcpy(&hi, &l.maxParentError, 4);
+                tessyDagLevelCpu_.push_back(DirectX::XMUINT4{ first + (l.firstCluster - ds.firstCluster), l.clusterCount, lo, hi });
+            }
+            for (std::uint32_t ci = ds.firstCluster; ci < ds.firstCluster + ds.clusterCount; ++ci)
+            {
+                const Mesh::Cluster& c = dag.clusters[ci];
+                TessyCluster t{};
+                t.firstIndex = dagBase->second + c.firstIndex;
+                t.triCount = c.triCount;
+                t.windAlongMax = c.windAlongMax;
+                t.windLeafMax = c.windLeafMax;
+                t.center = c.boxCenter;
+                t.extent = c.boxExtent;
+                t.radius = c.sphere.w;
+                if (hasLocal)
+                {
+                    const Mesh::ClusterLocal& cl = local.clusters[ci];
+                    t.firstMeshlet = static_cast<std::uint32_t>(tessyMeshletsCpu_.size());
+                    t.meshletCount = cl.meshletCount;
+                    for (std::uint32_t s = 0; s < cl.meshletCount; ++s)
+                    {
+                        const Mesh::ClusterMeshlet& ml = local.meshlets[cl.firstMeshlet + s];
+                        tessyMeshletsCpu_.push_back(TessyMeshlet{ static_cast<std::uint32_t>(tessyVertsCpu_.size()), ml.vertCount,
+                                                                  static_cast<std::uint32_t>(tessyTrisCpu_.size()), ml.triCount });
+                        tessyVertsCpu_.insert(tessyVertsCpu_.end(), local.verts.begin() + ml.vertOffset,
+                                              local.verts.begin() + ml.vertOffset + ml.vertCount);
+                        tessyTrisCpu_.insert(tessyTrisCpu_.end(), local.tris.begin() + ml.triOffset,
+                                             local.tris.begin() + ml.triOffset + ml.triCount);
+                    }
+                }
+                tessyClusterCpu_.push_back(t);
+                static_assert(sizeof(TessyClusterLod) == sizeof(Mesh::ClusterLod), "the mirror of Mesh::ClusterLod");
+                TessyClusterLod lod{};
+                std::memcpy(&lod, &dag.lod[ci], sizeof(lod));
+                tessyClusterLodCpu_.push_back(lod);
+            }
+            tessyDagGroupCpu_[g] = DirectX::XMUINT4{ first, ds.clusterCount, firstLevel, ds.levelCount };
+            ++tessyDagGroups_;
+            tessyDagClusters_ += ds.clusterCount;
+        }
         if (isStatic) { ++tessyGroupsWith_; }
     }
     tessyBytes_ = tessyClusterCpu_.size() * sizeof(TessyCluster) + tessyVgCpu_.size() * sizeof(DirectX::XMUINT2) +
                   tessyMeshletsCpu_.size() * sizeof(TessyMeshlet) +
-                  (tessyVertsCpu_.size() + tessyTrisCpu_.size()) * sizeof(std::uint32_t);
+                  (tessyVertsCpu_.size() + tessyTrisCpu_.size()) * sizeof(std::uint32_t) +
+                  tessyClusterLodCpu_.size() * sizeof(TessyClusterLod) +
+                  (tessyDagGroupCpu_.size() + tessyDagLevelCpu_.size()) * sizeof(DirectX::XMUINT4);
     std::string list;
     for (size_t i = 0; i < without.size() && i < 24; ++i) { list += (i ? ", " : "") + without[i]; }
     if (without.size() > 24) { list += ", ... (" + std::to_string(without.size() - 24) + " more)"; }
     LOG_INFO(logging::LogCategory::RenderShadow,
-             "tessy: clusters for {} of {} caster groups ({} clusters, {} KB); classic path: {}",
-             tessyGroupsWith_, tessyGroupsTotal_, tessyClusterCpu_.size(), (tessyBytes_ + 1023u) / 1024u,
-             without.empty() ? std::string("none") : list);
+             "tessy: clusters for {} of {} caster groups ({} clusters, {} KB); classic path: {}; cluster DAG for {} groups "
+             "({} clusters)", tessyGroupsWith_, tessyGroupsTotal_, tessyClusterCpu_.size(), (tessyBytes_ + 1023u) / 1024u,
+             without.empty() ? std::string("none") : list, tessyDagGroups_, tessyDagClusters_);
 }
 
 // Tessy N2: the tables into DEFAULT-heap buffers on the GPU-idle load list, beside the mega copy. They
@@ -4704,6 +4803,8 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     if (tessyVertsCpu_.empty()) { tessyVertsCpu_.push_back(0u); } // N6: never a zero-sized buffer / view
     if (tessyTrisCpu_.empty()) { tessyTrisCpu_.push_back(0u); }
     if (tessyMeshletsCpu_.empty()) { tessyMeshletsCpu_.push_back(TessyMeshlet{}); }
+    if (tessyDagLevelCpu_.empty()) { tessyDagLevelCpu_.push_back(DirectX::XMUINT4{ 0u, 0u, 0u, 0u }); } // N7: never zero-sized
+    if (tessyDagGroupCpu_.empty()) { tessyDagGroupCpu_.push_back(DirectX::XMUINT4{ 0u, 0u, 0u, 0u }); }
     struct Table { const void* src; UINT64 bytes; GpuResource* dst; const wchar_t* name; };
     const Table tables[] = {
         { tessyClusterCpu_.data(), tessyClusterCpu_.size() * sizeof(TessyCluster), &tessyClusters_, L"Tessy.Clusters" },
@@ -4711,6 +4812,9 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
         { tessyVertsCpu_.data(), tessyVertsCpu_.size() * sizeof(std::uint32_t), &tessyVerts_, L"Tessy.ClusterVerts" },
         { tessyTrisCpu_.data(), tessyTrisCpu_.size() * sizeof(std::uint32_t), &tessyTris_, L"Tessy.ClusterTris" },
         { tessyMeshletsCpu_.data(), tessyMeshletsCpu_.size() * sizeof(TessyMeshlet), &tessyMeshlets_, L"Tessy.Meshlets" },
+        { tessyClusterLodCpu_.data(), tessyClusterLodCpu_.size() * sizeof(TessyClusterLod), &tessyClusterLod_, L"Tessy.ClusterLod" },
+        { tessyDagGroupCpu_.data(), tessyDagGroupCpu_.size() * sizeof(DirectX::XMUINT4), &tessyDagGroup_, L"Tessy.DagGroups" },
+        { tessyDagLevelCpu_.data(), tessyDagLevelCpu_.size() * sizeof(DirectX::XMUINT4), &tessyDagLevel_, L"Tessy.DagLevels" },
     };
     auto makeBuf = [&](UINT64 bytes, D3D12_HEAP_TYPE type, D3D12_RESOURCE_STATES state, const wchar_t* name,
                        Microsoft::WRL::ComPtr<ID3D12Resource>& out) -> bool
@@ -4760,7 +4864,7 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     if (!tessyHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 7;
+        hd.NumDescriptors = 10; // N7: + ClusterLod, DAG groups, DAG levels
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowTessy, L"Tessy.SrvHeap", IID_PPV_ARGS(tessyHeap_.GetAddressOf()))))
@@ -4797,6 +4901,9 @@ void ShadowGpuData::UploadTessyTables_(Renderer* renderer, ID3D12GraphicsCommand
     structured(4, tessyVerts_.Get(), static_cast<UINT>(tessyVertsCpu_.size()), sizeof(std::uint32_t));
     structured(5, tessyTris_.Get(), static_cast<UINT>(tessyTrisCpu_.size()), sizeof(std::uint32_t));
     structured(6, tessyMeshlets_.Get(), static_cast<UINT>(tessyMeshletsCpu_.size()), sizeof(TessyMeshlet));
+    structured(7, tessyClusterLod_.Get(), static_cast<UINT>(tessyClusterLodCpu_.size()), sizeof(TessyClusterLod));
+    structured(8, tessyDagGroup_.Get(), static_cast<UINT>(tessyDagGroupCpu_.size()), sizeof(DirectX::XMUINT4));
+    structured(9, tessyDagLevel_.Get(), static_cast<UINT>(tessyDagLevelCpu_.size()), sizeof(DirectX::XMUINT4));
     tessyReady_ = true;
     EnsureTessyAtlasResources(renderer); // N4: once, fixed sizes
 }
@@ -4975,8 +5082,13 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
         std::uint32_t numGroups, firstView, numViews, rowSet, viewStride, frustumFirst, recordBase, recordCap;
         float wind0[4], wind1[4];
         std::uint32_t windPad, flags, classicCountOffset, camDeferCap;
+        float dagCam[4];      // N7d: the camera, pixels per unit / lod.pixelError (the camera's runs)
+        std::uint32_t dagOn;
+        float dagNear;
+        std::uint32_t dagPad[2];
         ViewMask staticViews; // S7's rows: the views that draw them (SetLocalStaticDrawn); the other row sets ignore it
     };
+    static_assert(offsetof(AtlasCullCB, staticViews) == 112u, "tessy_atlas_cull_cs.hlsl AtlasCullCB: gStaticViews at 112");
     static constexpr std::uint32_t kFlagKeepRows = 1u, kFlagNoCull = 2u, kFlagClusterId = 4u, kFlagByRun = 8u; // the kernel's
     AtlasCullCB c{};
     c.numGroups = numVirtualGroups_;
@@ -4993,6 +5105,9 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     c.classicCountOffset = static_cast<std::uint32_t>(kTessyCamClassicCountOffset); // by run: the classic runs' counts
     c.flags = !camera ? 0u : byRun ? (kFlagClusterId | kFlagByRun) : (kFlagKeepRows | kFlagNoCull | kFlagClusterId);
     c.staticViews = dec.tessyStaticViews;
+    c.dagOn = (byRun && dec.tessyCamDag) ? 1u : 0u;
+    for (int i = 0; i < 4; ++i) { c.dagCam[i] = dec.tessyDagCam[i]; }
+    c.dagNear = 0.01f; // 1 cm: a sphere around the camera takes its leaves
     static constexpr std::size_t kArgsSet[kTessyAtlasRowSets] = { 0u, 16u, 7u }; // the rows (RAW): main, static, camera
     static constexpr std::size_t kListSet[kTessyAtlasRowSets] = { 1u, 17u, 8u }; // their caster ids
     // N5: the camera's runs test their clusters against last frame's pyramid too, when the two-pass HZB is on.
@@ -5014,7 +5129,7 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     const D3D12_CPU_DESCRIPTOR_HANDLE prevHzb = (camHzb && camHzbPrevSrv_.ptr != 0) ? camHzbPrevSrv_ : renderer->GetDeferredForFrame().shadowSRV;
     rc.srvTable[0] = renderer->StageSrvUavTable({ InstanceReadSrv(f), viewFrustums_.Srv(f), TessyClusterSrv(), TessyVgSrv(), GroupLodMegaSrv(),
                                                   tessyVgRun_.Valid() ? tessyVgRun_.Srv(f) : TessyVgSrv(), // read by the camera's runs alone
-                                                  prevHzb }).gpu;
+                                                  prevHzb, TessyClusterLodSrv(), TessyDagGroupSrv(), CasterLodSrv(f) }).gpu;
     rc.uavTable[0] = renderer->StageSrvUavTable({ cullUav_[kArgsSet[rowSet] * render::kFrameCount + f], cullUav_[kListSet[rowSet] * render::kFrameCount + f],
                                                   TessyAtlasDescriptor(f, 0u), TessyAtlasDescriptor(f, 1u), TessyAtlasDescriptor(f, 2u),
                                                   TessyAtlasDescriptor(f, 3u), TessyAtlasDescriptor(f, 6u) }).gpu;
@@ -5265,6 +5380,7 @@ void ShadowGpuData::Reset()
     giCasters_.clear();            // GI reservation dropped; next Rebuild re-enumerates + refreshes obj*
     giFoldableInstances_ = 0;
     megaCopy_.clear();             // mesh pointers dangle across a level unload
+    tessyDagBase_.clear();         // N7: so do these
     groupMaskCpu_.clear();         // A6: same contract as the SRV handles below (MaterialData-owned)
     groupMaskMd_.clear();
     maskedGroupCount_ = 0;

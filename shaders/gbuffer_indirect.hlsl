@@ -220,8 +220,9 @@ void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
     const uint cid = select(live, rec.x, 0u);
     const uint vg = rec.w & kTessyCamVgMask;
     const InstancePerObject o = gInstances[cid];
-    // The crossfade, as VSMain: a fading caster sits in its tier's group (-f) and the next one's (+f).
-    const float f = gCasterFade[cid];
+    // The crossfade, as VSMain: a fading caster sits in its tier's group (-f) and the next one's (+f). A cluster of the
+    // mesh's DAG (N7d) is drawn once, whole: its cut changes cluster by cluster, never by tiers.
+    const float f = (rec.w & kTessyCamDagBit) != 0u ? 0.0f : gCasterFade[cid];
     const uint lod = gCasterLod[cid] & kCasterLodMask;
     const float lodFade = (f > 0.0f) ? (((vg % kTessyVgLods) == lod) ? -f : f) : 0.0f;
     if (lane < vertCount)

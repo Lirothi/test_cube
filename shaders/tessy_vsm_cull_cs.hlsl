@@ -40,7 +40,7 @@
 // with: this pass runs right after it, before the render's consume point turns them into draw inputs.
 #define TESSY_VSM_CULL_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer CullCB : register(b0)
@@ -57,7 +57,10 @@ cbuffer CullCB : register(b0)
     // N6: 1 = the mesh shader draws: a surviving cluster appends one record per MESHLET (its index in .y); 0 = the VS
     // path: one record per cluster.
     uint gMsMeshlets;
-    uint2 gCullPad;
+    // N7c: 1 = a run of a group with a cluster DAG on a CLIPMAP page (orthographic) takes the DAG's cut instead of its
+    // discrete LOD's clusters; gDagTexels = the shadow texels a cluster's error may span.
+    uint gDagOn;
+    float gDagTexels;
 };
 
 #include "tessy_cull_common.hlsli" // InstancePerObject, WindPadBox (shared with tessy_atlas_cull_cs.hlsl)
@@ -68,6 +71,12 @@ StructuredBuffer<uint2>             TessyVg         : register(t2); // per virtu
 StructuredBuffer<uint4>             GroupLodMega    : register(t3); // per virtual group; .w = the mesh's base vertex
 ByteAddressBuffer                   MegaVB          : register(t4); // the validator's vertices (VertexPNTUV, 52 B)
 StructuredBuffer<uint>              MegaIB          : register(t5);
+// N7c: the cluster DAG (ShadowGpuData's N7 tables): per cluster its LOD record, per mesh group {first DAG cluster, count,
+// first level, levels}, per level {first cluster, count, min lodError, max parentError (float bits)}.
+StructuredBuffer<TessyClusterLod>   ClusterLods     : register(t6);
+StructuredBuffer<uint4>             DagGroups       : register(t7);
+StructuredBuffer<uint4>             DagLevels       : register(t8);
+static const uint kVgLods = 4u; // render::kMaxShadowLods: virtual group = mesh group * 4 + LOD
 
 RWStructuredBuffer<uint4> TessyRuns       : register(u0); // {page, first list entry, casters, virtual group}
 RWStructuredBuffer<uint>  PageVisibleList : register(u1); // caster id | page << 22
@@ -81,6 +90,12 @@ RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page <
 RWByteAddressBuffer       TessyStats      : register(u4);
 
 static const uint kCasterMask = (1u << 22) - 1u; // vsm::kPageIdShift
+static const float kPageTexels = 128.0f;         // vsm::kPageSize
+
+// N7c: the run's casters' world scale (the largest axis of each world matrix): their spread decides the DAG levels the
+// run's threshold can cut, the same for every caster of it (the cull walks casters x one cluster range).
+groupshared uint gsScaleMin;
+groupshared uint gsScaleMax;
 
 // The page's six planes from its off-center projection (vsm_page_setup_cs.hlsl builds the same).
 void PagePlanes(uint page, out float4 planes[6], out float4 w0, out float4 w1)
@@ -109,12 +124,60 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
     for (uint r = gid.x; r < runs; r += gGroups)
     {
         const uint4 run = TessyRuns[r];
-        const uint2 range = TessyVg[run.w];
+        uint2 range = TessyVg[run.w];
         if (range.y == 0u) { continue; } // the setup appends only groups with clusters; never divide by 0
         const uint baseVertex = GroupLodMega[run.w].w;
         float4 planes[6];
         float4 w0, w1;
         PagePlanes(run.x, planes, w0, w1);
+        // N7c: a group with a cluster DAG on a CLIPMAP page (an orthographic projection: column 4 is (0,0,0,1)) takes the
+        // DAG's cut. A shadow texel is 2 / (kPageTexels |column 1|) metres there whatever the distance, so the cut needs
+        // no sphere: a cluster is drawn when its error (x the caster's scale) fits the threshold and its parent's does not
+        // (UE NaniteClusterCulling.usf:287-299, the orthographic EdgeScale = 1). The levels that can hold such a cluster for
+        // the run's scale spread are a contiguous run of clusters (the DAG stores them level by level): that is the range.
+        bool dag = false;
+        float tWorld = 0.0f;
+        const uint4 dg = DagGroups[run.w / kVgLods];
+        {
+            const uint b = run.x * 256u;
+            const float4 c0 = asfloat(PageProj.Load4(b + 0u)), c1 = asfloat(PageProj.Load4(b + 16u)),
+                         c2 = asfloat(PageProj.Load4(b + 32u)), c3 = asfloat(PageProj.Load4(b + 48u));
+            const bool ortho = abs(c0.w) + abs(c1.w) + abs(c2.w) < 1.0e-6f && abs(c3.w - 1.0f) < 1.0e-6f;
+            dag = gDagOn != 0u && dg.y != 0u && ortho; // uniform over the group (one run at a time)
+            tWorld = gDagTexels * 2.0f / (kPageTexels * max(length(float3(c0.x, c1.x, c2.x)), 1.0e-12f));
+        }
+        if (dag)
+        {
+            if (lane == 0u) { gsScaleMin = asuint(3.0e38f); gsScaleMax = 0u; }
+            GroupMemoryBarrierWithGroupSync();
+            float sMin = 3.0e38f, sMax = 0.0f;
+            for (uint k = lane; k < run.z; k += 64u)
+            {
+                const float s = TessyWorldScale(Instances[PageVisibleList[run.y + k] & kCasterMask].world);
+                sMin = min(sMin, s);
+                sMax = max(sMax, s);
+            }
+            sMin = WaveActiveMin(sMin);
+            sMax = WaveActiveMax(sMax);
+            if (WaveIsFirstLane()) { InterlockedMin(gsScaleMin, asuint(sMin)); InterlockedMax(gsScaleMax, asuint(sMax)); }
+            GroupMemoryBarrierWithGroupSync();
+            const float scaleMin = max(asfloat(gsScaleMin), 1.0e-6f), scaleMax = max(asfloat(gsScaleMax), scaleMin);
+            // Object-space threshold for the run: [t / scaleMax, t / scaleMin]. A level can hold a cut cluster when its
+            // smallest error fits the loosest threshold and its largest parent error passes the tightest.
+            uint lo = 0xFFFFFFFFu, hi = 0u;
+            for (uint k = 0u; k < dg.w; ++k)
+            {
+                const uint4 l = DagLevels[dg.z + k];
+                if (asfloat(l.z) <= tWorld / scaleMin && asfloat(l.w) > tWorld / scaleMax)
+                {
+                    lo = min(lo, l.x);
+                    hi = max(hi, l.x + l.y);
+                }
+            }
+            range = lo < hi ? uint2(lo, hi - lo) : uint2(dg.x, 0u);
+            GroupMemoryBarrierWithGroupSync(); // gsScale* are the next run's
+            if (range.y == 0u) { continue; }
+        }
         const float4 w2 = asfloat(PageProj.Load4(run.x * 256u + 224u)); // (camPos, fade end): the validator's fade
         const uint total = run.z * range.y;
         for (uint i = lane; i < total; i += 64u)
@@ -124,6 +187,13 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
             const TessyCluster c = Clusters[clusterIndex];
             const uint entry = PageVisibleList[run.y + k];
             const InstancePerObject ip = Instances[entry & kCasterMask];
+            if (dag)
+            {
+                // The cut, this caster's: its error fits the page's texels, its parent's does not.
+                const TessyClusterLod cl = ClusterLods[clusterIndex];
+                const float s = TessyWorldScale(ip.world);
+                if (!(cl.lodError * s <= tWorld && tWorld < cl.parentError * s)) { continue; }
+            }
             float3 ctr = mul(float4(c.center, 1.0f), ip.world).xyz;
             float3 ext = abs(ip.world[0].xyz) * c.extent.x + abs(ip.world[1].xyz) * c.extent.y +
                          abs(ip.world[2].xyz) * c.extent.z;

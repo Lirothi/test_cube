@@ -38,6 +38,7 @@
 #include "rendering/meshes/LodSelect.h"          // shadow caster LOD curve (--vsm-lodbias/--vsm-lodstride)
 #include "rendering/renderables/InstanceTypes.h"  // S0: g_shadowMode / g_csmDebugMode (--shadow-mode, --csm-tint)
 #include "rendering/shadows/ShadowSettings.h"
+#include "rendering/shadows/TessySettings.h" // Tessy N7: --tessy-lod-build
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0: --vis-readout
 #include "rendering/core/CommandListBindState.h" // --no-bind-batching
 #include "text/TextManager.h"
@@ -596,6 +597,13 @@ int WINAPI WinMain(
     // away from being bisected, not a rebuild away.
     if (lpCmdLine && std::strstr(lpCmdLine, "--no-async-compute")) {
         render::g_noAsyncCompute = true;
+    }
+    // Tessy N7: "--tessy-lod-build=all|<part>,<part>" builds the cluster DAG at load for every clustered asset or the
+    // ones whose .mesh.bin path holds a part -- mesh.json "tessyLod" without touching the manifests.
+    if (const char* lb = lpCmdLine ? std::strstr(lpCmdLine, "--tessy-lod-build=") : nullptr) {
+        for (const char* p = lb + std::strlen("--tessy-lod-build="); *p && !std::isspace(static_cast<unsigned char>(*p)); ++p) {
+            tessy::g_lodBuild.push_back(*p);
+        }
     }
 
     // "--no-streamline": take the Streamline SDK out entirely (no slInit, no device proxy).

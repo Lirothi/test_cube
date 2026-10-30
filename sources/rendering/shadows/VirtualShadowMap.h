@@ -732,6 +732,8 @@ public:
         bool tessyMs = false;
         const char* tessyMsOffReason = "";
         std::uint32_t tessyMsCull = 0; // tessy::g_vsmMsCull's bits (tessy_common.hlsli kTessyMsCull*), 0 off the MS path
+        // Tessy N7c: the runs of groups with a cluster DAG on a clipmap page take the DAG's cut (tessy::g_lod).
+        bool tessyLod = false;
     };
 
     // Tessy N0/N3 counters of frame N - kFrameCount (tessy_vsm_cull_cs.hlsl names the bytes). Pairs = (page, caster)
@@ -1056,6 +1058,7 @@ private:
     bool tessyMsLast_ = false;                        // ...and the rasterizer's (N6), the same rule
     const char* tessyOffReason_ = "";
     const char* tessyMsOffReason_ = "";
+    bool tessyLodLast_ = false; // N7c: the DAG cut's switch as last frame took it (a change flushes the page cache)
     const char* tessyLoggedReason_ = nullptr;         // the reason last logged (an event per change)
     const char* tessyMsLoggedReason_ = nullptr;
     void EnsureTessyResources(Renderer* renderer);

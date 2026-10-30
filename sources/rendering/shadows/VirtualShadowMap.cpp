@@ -773,6 +773,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
         : "";
     d.tessyMs = d.tessy && tessy::g_vsmMeshShader && d.tessyMsOffReason[0] == '\0';
     d.tessyMsCull = d.tessyMs ? (tessy::g_vsmMsCull & 1u) : 0u;
+    d.tessyLod = d.tessy && tessy::g_lod && shadowGpu->TessyDagGroups() > 0u; // N7c
     return d;
 }
 
@@ -804,6 +805,14 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     }
     tessyOffReason_ = d.tessyOffReason; // the readout's (the builder's cross-frame state)
     tessyMsOffReason_ = d.tessyMsOffReason;
+    // N7c: the DAG's cut and the discrete LOD draw different geometry -- a page cached under one is stale under the other.
+    if (d.tessyLod != tessyLodLast_)
+    {
+        tessyLodLast_ = d.tessyLod;
+        InvalidateAllPages();
+        LOG_INFO(logging::LogCategory::RenderShadow, "tessy.lod: VSM clipmap pages draw {} ({} groups with a DAG); page cache flushed",
+                 d.tessyLod ? "the cluster DAG's cut" : "the discrete LODs' clusters", shadowGpu->TessyDagGroups());
+    }
     d.distantMask = distantMask_;     // plan S10d (PlanDistantLights, this frame)
     d.distantUpdate = distantUpdate_;
     // S5b.2 cross-frame state, committed in the (serial) builder: this frame renders; if it also
@@ -2559,17 +2568,24 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         GPU_SCOPE(cl, ProfilerScopes::kVsmTessyCull);
         renderer->UAVBarrier(cl, tessyRuns_.Get());
         renderer->UAVBarrier(cl, tessyStats_.Get());
-        struct CullCB { std::uint32_t runCap, groups, windPad, validate, msCull, msMeshlets, pad[2]; };
+        struct CullCB
+        {
+            std::uint32_t runCap, groups, windPad, validate, msCull, msMeshlets;
+            std::uint32_t dagOn;  // N7c: the cluster DAG's cut on clipmap pages
+            float dagTexels;      // ...the shadow texels a cluster's error may span (x the page's texel size in metres)
+        };
         RecordComputeDispatch(renderer, cl, tessyCullMat_.get(), static_cast<UINT>(sizeof(CullCB)),
             [&](std::uint8_t* dst)
             {
                 const CullCB c{ kTessyRunCap, kTessyCullGroups, std::min(tessy::g_vsmWindPad, 2u),
-                                tessy::g_vsmValidate ? 1u : 0u, dec.tessyMsCull, dec.tessyMs ? 1u : 0u, { 0u, 0u } };
+                                tessy::g_vsmValidate ? 1u : 0u, dec.tessyMsCull, dec.tessyMs ? 1u : 0u,
+                                dec.tessyLod ? 1u : 0u, tessy::g_lodShadowTexels };
                 std::memcpy(dst, &c, sizeof(c));
             },
-            // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate).
+            // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate); t6-t8 the DAG (N7c).
             { shadowGpu->InstanceReadSrv(f), shadowGpu->TessyClusterSrv(), shadowGpu->TessyVgSrv(),
-              shadowGpu->GroupLodMegaSrv(), shadowGpu->MegaVertexRawSrv(), shadowGpu->MegaIndexSrv() },
+              shadowGpu->GroupLodMegaSrv(), shadowGpu->MegaVertexRawSrv(), shadowGpu->MegaIndexSrv(),
+              shadowGpu->TessyClusterLodSrv(), shadowGpu->TessyDagGroupSrv(), shadowGpu->TessyDagLevelSrv() },
             { tessyRunsUav_, pageVisibleListUav_, pageProjUav_, tessyVisibleUav_, tessyStatsUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
             kTessyCullGroups * kComputeDispatchGroupSize, kComputeDispatchGroupSize, // numthreads(8, 8): one group per slot

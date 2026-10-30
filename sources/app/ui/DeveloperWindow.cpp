@@ -3423,6 +3423,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Needs the camera's two-pass HZB. Not saved. --set=tessy.gbufferHzb:0|1");
                 ImGui::EndDisabled();
                 ImGui::Unindent();
+                ImGui::Checkbox("Tessy: cluster DAG LOD (camera + VSM clipmap pages)", &tessy::g_lod);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("N7: the assets with a cluster DAG (mesh.json \"tessyLod\", or --tessy-lod-build) draw\n"
+                                      "the DAG's cut -- continuous LOD instead of the discrete tiers, each caster its own.\n"
+                                      "Camera: a cluster whose error spans at most lod.pixelError pixels at the nearest\n"
+                                      "point of its sphere while its parent's spans more (where a discrete LOD of that\n"
+                                      "deviation switches); it turns the camera G-buffer's clusters on for itself.\n"
+                                      "VSM clipmap pages: the same against the page's texels x tessy.lodShadowTexels\n"
+                                      "(a switch flushes the page cache). --set=tessy.lod:0|1, tessy.lodShadowTexels:<x>");
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%u groups, %u clusters)", scene.ShadowGpu().TessyDagGroups(), scene.ShadowGpu().TessyDagClusters());
                 {
                     int view = static_cast<int>(tessy::g_debugView);
                     const char* const views[] = { "Off", "Clusters", "Meshlets" };
@@ -3453,6 +3464,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 as[0], as[1], as[2], ShadowGpuData::TessyAtlasRowSetCap());
                     ImGui::Text("%u views did not fit; %u clusters tested; %u camera clusters deferred to pass B (HZB) "
                                 "(frame N-3, the last frame a cluster row ran)", as[3], as[4], as[5]);
+                    ImGui::Text("camera pass A: %.3f M triangles, %u DAG clusters (the DAG's cut %s)", as[6] * 1e-6, as[7],
+                                sg.TessyCameraDagThisFrame() ? "on" : "off");
                     ImGui::TextDisabled("VSM pages (when the VSM is the shadow mode):");
                     if (ts.valid)
                     {

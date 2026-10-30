@@ -37,6 +37,9 @@ struct MeshLoadOptions {
     // 0.12/0.12 — what TERRAIN wants: its far-clipmap shadow casters are tuned against low-sun
     // banding and a 0.25 error deforms dune silhouettes. mesh.json "lod3Aggressive".
     bool lod3Aggressive = true;
+    // Tessy N7: build this asset's cluster DAG (continuous LOD, rendering/meshes/TessyDag.h) at load -- mesh.json
+    // "tessyLod": true. Per asset (docs/tessy_plan.md Q3); --tessy-lod-build names assets without touching their manifests.
+    bool tessyLod = false;
     // LOD3's OWN budget multipliers over the harsh base (0.05 target / 0.25 error) — separate
     // from the whole-chain lodRatioScale/lodErrorScale so the last level can be pushed without
     // touching LODs 1-2. SOLID slots only; the kept-leaf interior decimation has its own pair

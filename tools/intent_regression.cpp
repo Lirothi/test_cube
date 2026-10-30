@@ -60,6 +60,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h"
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
+#include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -3697,6 +3698,92 @@ void TestTessyClusters()
                 palm.lods[0].idx.size() / 3u, nSpatial, spatial, nPlain, plain);
 }
 
+// Tessy N7: the cluster DAG on two staged palms (a regular crown, and date_palm's leaf cards that stop halving) --
+// tessy::ValidateDag's invariants (with each group's outputs sharing its error and sphere, which the builder writes,
+// they make the cut exact: a group is drawn instead of its inputs exactly when its error fits); the cut's triangles
+// falling as the threshold rises, from LOD0's at 0 to the roots' past every error; the fine cuts' AREA near LOD0's --
+// a hole (a group dropped) or a double cover (a group and its inputs both drawn) would move it by a group's share.
+void TestTessyDag()
+{
+    using namespace tessytest;
+    for (const char* path : { "models/coconut_palm/coconut_palm.mesh.bin", "models/date_palm/date_palm.mesh.bin" })
+    {
+        Bin bin;
+        const bool read = Read(path, bin) && !bin.lods.empty() && !bin.lods[0].clusters.empty();
+        Check(read, std::string("reads ") + path + " with its clusters");
+        if (!read) { continue; }
+        Mesh::Dag dag;
+        tessy::DagStats st;
+        Check(tessy::BuildDag(bin.verts, bin.lods[0].idx, bin.lods[0].clusters, bin.lods[0].subs, {}, dag, &st),
+              std::string("builds the DAG of ") + path);
+        std::string why;
+        Check(tessy::ValidateDag(dag, &why), "it holds its invariants" + (why.empty() ? std::string() : ": " + why));
+        Check(st.leafTriangles * 3u == bin.lods[0].idx.size(), "its leaves are LOD0, every triangle");
+        Check(st.levels >= 2u && st.rootTriangles < st.leafTriangles, "it has levels above LOD0, the roots smaller");
+        const auto area = [&](float t)
+        {
+            double a = 0.0;
+            for (size_t i = 0; i < dag.clusters.size(); ++i)
+            {
+                if (!(dag.lod[i].lodError <= t && t < dag.lod[i].parentError)) { continue; }
+                const Mesh::Cluster& c = dag.clusters[i];
+                for (uint32_t k = 0; k < c.triCount; ++k)
+                {
+                    const auto& p0 = bin.verts[dag.indices[c.firstIndex + k * 3u + 0u]].position;
+                    const auto& p1 = bin.verts[dag.indices[c.firstIndex + k * 3u + 1u]].position;
+                    const auto& p2 = bin.verts[dag.indices[c.firstIndex + k * 3u + 2u]].position;
+                    const double ux = p1.x - p0.x, uy = p1.y - p0.y, uz = p1.z - p0.z;
+                    const double vx = p2.x - p0.x, vy = p2.y - p0.y, vz = p2.z - p0.z;
+                    const double cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+                    a += 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+                }
+            }
+            return a;
+        };
+        double leafArea = 0.0;
+        {
+            // LOD0's own area, from its index buffer.
+            const std::vector<std::uint32_t>& idx = bin.lods[0].idx;
+            for (size_t k = 0; k + 2 < idx.size(); k += 3)
+            {
+                const auto& p0 = bin.verts[idx[k]].position;
+                const auto& p1 = bin.verts[idx[k + 1]].position;
+                const auto& p2 = bin.verts[idx[k + 2]].position;
+                const double ux = p1.x - p0.x, uy = p1.y - p0.y, uz = p1.z - p0.z;
+                const double vx = p2.x - p0.x, vy = p2.y - p0.y, vz = p2.z - p0.z;
+                const double cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+                leafArea += 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+            }
+        }
+        const float ts[] = { 0.0f, 0.003f * st.rootError, 0.01f * st.rootError, 0.03f * st.rootError, 0.1f * st.rootError,
+                             0.3f * st.rootError, st.rootError, 1e30f };
+        uint64_t prev = ~0ull;
+        bool falling = true, areaKept = true;
+        std::string line;
+        for (const float t : ts)
+        {
+            const uint64_t tris = tessy::DagCutTriangles(dag, t);
+            const double ratio = area(t) / std::max(leafArea, 1e-12);
+            falling = falling && tris <= prev;
+            // Up to a tenth of the roots' error the cut is still a fine surface; past it the simplifier takes leaf
+            // cards whole (the palm's roots keep a third of LOD0's area at 0.54 m), which is shrinking, not a hole.
+            if (t <= 0.1f * st.rootError) { areaKept = areaKept && ratio > 0.8 && ratio < 1.2; }
+            prev = tris;
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), " %llu (%.2f)", static_cast<unsigned long long>(tris), ratio);
+            line += buf;
+        }
+        std::printf("  tessy.dag %s: %u levels, %u clusters (%u roots, %u stuck groups), %.1f ms; cut tris (area / LOD0's) "
+                    "at 0..%.3f m:%s\n", path, st.levels, st.clusters, st.roots, st.stuckGroups, st.ms, st.rootError, line.c_str());
+        std::fflush(stdout);
+        Check(tessy::DagCutTriangles(dag, 0.0f) <= st.leafTriangles && tessy::DagCutTriangles(dag, 0.0f) > 0u,
+              "the cut at 0 is LOD0 or what it simplifies without error");
+        Check(tessy::DagCutTriangles(dag, 1e30f) == st.rootTriangles, "past every error the cut is the roots");
+        Check(falling, "the cut's triangles never grow as the threshold rises");
+        Check(areaKept, "the fine cuts' area stays within 20 % of LOD0's (no hole, no double cover)");
+    }
+}
+
 // A leaf card is a two-sided alpha cutout whose cutout removes materialgen::kLeafCutShare of its
 // surface or more. The flags alone made the_bathroom_free's curtains, doors and towels leaf cards
 // that swayed indoors; the old rule would fail section 3.
@@ -4346,6 +4433,7 @@ int main(int argc, char** argv)
         TestPivotToBase();
         TestGltfHandedness();
         TestTessyClusters();
+        TestTessyDag();
         TestLeafCards();
         TestSpawnJoinsTheGroupItsKindUses(actionCtx);
         TestTheWholeScatterPhrase(actionCtx);

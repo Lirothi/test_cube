@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 // Tessy (docs/tessy_plan.md) -- our cluster geometry, UE Nanite's analog. The live knobs, one per consumer so an A/B
 // splits (plan 0.2). Each is read ONCE a frame into its consumer's frame decisions (the pass builder), never in a
 // record body, so a frame's cull and draw cannot disagree about it (plan 4.7). Switching allocates nothing: the
@@ -55,4 +57,30 @@ inline bool g_gbuffer = false;
 // pass B cost (2026-10-30: grove +0.04 ms, tunnel +0.03). Needs the camera's two-pass HZB on that frame.
 // `--set tessy.gbufferHzb:0|1`, MCP, Developer Controls > Tessy; not persisted.
 inline bool g_gbufferHzb = false;
+// N7: `--tessy-lod-build=all|<part>,<part>` builds the cluster DAG at load for every clustered asset, or for those whose
+// .mesh.bin path holds one of the parts -- what mesh.json "tessyLod": true does per asset, without touching manifests.
+inline std::string g_lodBuild;
+// N7: the cluster DAG's cut where a consumer can take it (N7c: the VSM clipmap pages) for the assets that have a DAG --
+// else their discrete LOD's clusters, as before. A switch flushes the VSM page cache (a cached page holds the other
+// geometry). `--set tessy.lod:0|1`, MCP, Developer Controls > Tessy; not persisted while the DAG is built at load.
+inline bool g_lod = false;
+// The DAG cut's threshold: shadow texels a cluster's error may span -- UE's MaxPixelsPerEdge (1) x r.Shadow.NaniteLODBias
+// (shadows one level coarser: x2). `--set tessy.lodShadowTexels:<x>`, transient.
+inline float g_lodShadowTexels = 2.0f;
+// Does --tessy-lod-build name this asset?
+inline bool DagBuildRequested(const std::string& binPath)
+{
+    if (g_lodBuild.empty()) { return false; }
+    if (g_lodBuild == "all") { return true; }
+    size_t start = 0;
+    while (start <= g_lodBuild.size())
+    {
+        const size_t comma = g_lodBuild.find(',', start);
+        const std::string part = g_lodBuild.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+        if (!part.empty() && binPath.find(part) != std::string::npos) { return true; }
+        if (comma == std::string::npos) { break; }
+        start = comma + 1;
+    }
+    return false;
+}
 } // namespace tessy

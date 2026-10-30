@@ -673,7 +673,7 @@ grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / 
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
 
-## Tessy -- Cluster Geometry (the VSM Pages, the Lamps' Atlases, the Camera; Plan N0-N6)
+## Tessy -- Cluster Geometry (the VSM Pages, the Lamps' Atlases, the Camera; Plan N0-N7)
 
 Tessy is our UE Nanite analog (`docs/tessy_plan.md`, journal in its section 9). A CLUSTER is a run of <= 128 triangles
 / 256 vertices of one LOD's index buffer inside one submesh (`Mesh::Cluster`); the classic paths draw the same index
@@ -722,6 +722,42 @@ checkout older than the Tessy merge (0bd5c72f) reads v3 ONLY and refuses every o
   run's pass-B row (after pass A's), Main_GBufferB draws it with the twins. wind_test defers 1.5-5 % of the clusters
   (grove 66-76 of 4325, tunnel 330-338), and the test + pass B cost more than they cull (+0.03-0.04 ms) -- for dense
   assets. Needs the camera's two-pass HZB that frame (the cluster view switches it off).
+- **N7, the cluster DAG (continuous LOD), in progress** (plan section N7 "Этапы"): `rendering/meshes/TessyDag.*` builds
+  UE's DAG over LOD0's clusters per submesh AT LOAD -- groups of ~16 (`meshopt_partitionClusters`), each simplified to
+  half (the discrete LODs' normal / foliage-UV weights, `ErrorAbsolute | Sparse`) with the vertices it shares with other
+  groups or other submeshes locked BY POSITION, recut into clusters, to the root; every cluster carries the error and
+  sphere of the simplification that made it (lod*) and of the one that consumes it (parent*). Only for assets whose
+  mesh.json says `"tessyLod": true` or `--tessy-lod-build=all|<path part>,...` names (no manifest carries it yet: none
+  has a DAG by default). `Mesh::Dag` + its own IB, appended to the mega IB after the mesh's LODs; the DAG clusters join
+  the cluster table with a parallel `ClusterLod` table, per mesh group a DAG range and per level its error interval
+  (`TessyClusterLodSrv` / `TessyDagGroupSrv` / `TessyDagLevelSrv`). `tessy.lod` (default 0, Tessy tab) lets the VSM
+  CLIPMAP pages draw the DAG's cut (`tessy_vsm_cull_cs.hlsl`: an orthographic page has a distance-free threshold,
+  `tessy.lodShadowTexels` (2) x its texel size; the run's levels a contiguous band by its casters' scale spread); a
+  switch flushes the page cache. Gate: `intent_regression TestTessyDag` (invariants, the cut's triangles falling, the
+  fine cuts' area within 20 % of LOD0's). Measured on the grove (2026-10-30): the palms' DAG at 2 / 4 / 8 texels draws
+  3.19 / 3.00 / 2.84 M triangles into the pages against the shadow tier's 2.77 M, `VsmPageRender` the same within
+  noise -- the date and curly palms' fronds stop halving at ~45 % where the discrete LOD3 drops whole leaves -- and the
+  palms' self-shadowing changes (6-8 % of pixels): the camera still drew discrete LODs, and a shadow finer than its
+  receiver breaks the caster/receiver LOD contract.
+- **N7d: the camera draws the DAG's cut too** (`tessy.lod` turns the cluster G-buffer on for itself; the gbuffer verdict
+  then says `on (tessy.lod: ...)`, the event `tessy.lod: the camera draws the cluster DAG's cut`). On the camera's runs
+  `tessy_atlas_cull_cs.hlsl` takes a mesh group with a DAG from `DagGroups` instead of its tier's clusters and tests
+  every (caster, DAG cluster): drawn when its own error x the caster's scale x (`g_lodPixelsPerUnit` / lod.pixelError /
+  lod.distanceScale) is at most the distance to the NEAREST point of its lod sphere and its parent's is more -- where a
+  discrete LOD of that deviation switches (ViewDistance + R), so DAG and discrete meshes share one rule. ONE function
+  (`DagTooCoarse`, `precise`) answers both tests: a parent's must answer exactly as its children's own, or the cut
+  tears. A crossfading caster sits in two tiers' entries and is drawn once, from its own (`CasterLods`); the record's
+  `kTessyCamDagBit` (.w bit 15, `kTessyCamVgMask` is 0x7FFF now) gives the mesh shader no crossfade. Pass B (the casters
+  the instance HZB hid) stays classic, on the discrete LOD, for the frame it draws them. Readouts: `tessy.camDag`,
+  `camTris` / `camDagClusters` (pass A, counters [24] / [28]). Measured on wind_test (2026-10-30, the palms' DAG, panels
+  closed, VSM, alternated twice): the grove draws 259 k camera triangles either way, cull 0.029 -> 0.041 ms (the flat
+  test doubles: 4.3 k -> 9.0 k), G-buffer 0.163 / 0.162, VSM 0.42 -> 0.44 (its 2-texel cut is finer than the shadow
+  tier); the far view [-20,30,20] 428 k -> 657 k triangles, G-buffer 0.165 -> 0.18-0.19, cull 0.04 -> 0.07-0.09 -- the
+  palms' foliage LODs are not error-driven (they drop whole leaves by distance) and the DAG's roots stop at ~45 % of
+  LOD0. No crack looking up into the crowns (DLSS off) nor in the cluster view; the picture moves where the shadows do
+  (8.5 % of pixels, floor 2.2 %). GBV (`ShadowCull,GBuffer,CamCullPost,GBufferB,VsmPageRender,Skybox` + the Skybox
+  self-test): clean. Not done: pops in motion (a flight burst), the flat test's cost on dense DAGs (a level band or a
+  hierarchy), a DAG baked into .mesh.bin.
 - **A RAW view starts on 16 bytes**: a frame's DispatchMesh args are `kTessyAtlasRows` x 12 bytes, and with the third
   row set that stopped being a multiple of 16 -- the second frame's RAW UAV removed the device at its creation (debug
   layer `id=345`, Release: `0x887A0005` at the next create, then abort). The region is `kTessyAtlasArgsRegionBytes`,

@@ -145,6 +145,11 @@ public:
         // ...and with the camera's two-pass HZB on this frame, its clusters last frame's pyramid hid go to the deferred
         // list (TessyCamDeferred) for Main_CamCullPost's retest (tessy_camera_post_cs.hlsl) and Main_GBufferB's draw.
         bool tessyCamHzb = false;
+        // N7d (tessy::g_lod): the camera's runs draw a mesh group with a cluster DAG by the DAG's cut, each caster its own
+        // -- the camera (LastCameraPos) and LodSelect's pixels per unit / lod.pixelError, taken by the builder. tessy.lod
+        // turns the cluster G-buffer on for it.
+        bool tessyCamDag = false;
+        float tessyDagCam[4] = {};
         float tessyWind0[4] = {}; // the frame's wind, as the views' PerView carry it (the clusters' sway pad)
         float tessyWind1[4] = {};
         // Plan S9e: SetLocalRadiusThreshold's values, taken by the builder (the record may run on a worker).
@@ -333,7 +338,8 @@ public:
     void PollTessyAtlasStats(Renderer* renderer); // Tessy N4: the atlas cull's counters, the same way
     // Those counters as last polled: [0] main rows', [1] S7 static rows', [2] the camera's (the cluster view, N5's
     // G-buffer pass A) meshlet records, [3] views (or camera runs) that did not fit, [4] clusters tested, [5] the camera
-    // clusters last frame's pyramid hid (N5: deferred to pass B); the row set's cap.
+    // clusters last frame's pyramid hid (N5: deferred to pass B), [6] / [7] the camera runs' triangles / DAG clusters
+    // written in pass A (N7d); the row set's cap.
     const std::array<std::uint32_t, 8>& TessyAtlasStats() const { return tessyAtlasStats_; }
     static constexpr std::uint32_t TessyAtlasRowSetCap() { return kTessyAtlasRowSetCap; }
     // The cluster view: on this frame (PrepareCullPass decided it), and its verdict ("on (clusters)", or why not).
@@ -343,6 +349,7 @@ public:
     // shader twin (the rest stay classic).
     bool TessyGBufferThisFrame() const { return tessyGbufFrame_; }
     const char* TessyGBufferVerdict() const { return tessyGbufVerdict_; }
+    bool TessyCameraDagThisFrame() const { return tessyCamDagFrame_; } // N7d: the camera's runs took the DAG's cut
     std::uint32_t TessyGBufferRuns() const { return tessyGbufTwins_; }
     std::uint32_t TessyGBufferRunsTotal() const { return static_cast<std::uint32_t>(cmdRuns_.size()); }
     // Draws the camera row's records in colour into the bound scene colour + depth (Main_DebugDraw). `viewCB` = the
@@ -600,6 +607,17 @@ public:
     // N6: one meshlet -- {its unique vertices in TessyClusterVerts (mesh-local), how many (<= Mesh::kMeshletMaxVerts, 64),
     // its triangles in TessyClusterTris (one uint each: three 8-bit places in that vertex list), how many}.
     struct TessyMeshlet { std::uint32_t vertOffset, vertCount, triOffset, triCount; };
+    // N7: Mesh::ClusterLod's layout (this header only forward-declares Mesh) -- tessy_vsm_cull_cs.hlsl's ClusterLod.
+    struct TessyClusterLod
+    {
+        DirectX::XMFLOAT4 lodSphere;
+        DirectX::XMFLOAT4 parentSphere;
+        float lodError;
+        float parentError;
+        std::uint32_t level;
+        std::uint32_t pad;
+    };
+    static_assert(sizeof(TessyClusterLod) == 48, "TessyClusterLod layout");
     // The tables, the mega buffers they index and their SRVs exist (a level with clusters, mega ready).
     bool TessyReady() const { return tessyReady_ && megaReady_; }
     D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterSrv() const { return TessySrv(0); }      // StructuredBuffer<TessyCluster>
@@ -609,6 +627,14 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterVertsSrv() const { return TessySrv(4); } // StructuredBuffer<uint> (N6)
     D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterTrisSrv() const { return TessySrv(5); }  // StructuredBuffer<uint> (N6)
     D3D12_CPU_DESCRIPTOR_HANDLE TessyMeshletSrv() const { return TessySrv(6); }      // StructuredBuffer<uint4> (N6)
+    // N7: the cluster DAG. Per cluster of the table (zero for a discrete LOD's) its Mesh::ClusterLod; per mesh group
+    // {first DAG cluster, count, first level, levels} (count 0: no DAG); per level {first cluster, count, min lodError,
+    // max parentError} (the errors as float bits) -- the clusters of a level are contiguous and the levels in order.
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyClusterLodSrv() const { return TessySrv(7); }   // StructuredBuffer<ClusterLod>
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyDagGroupSrv() const { return TessySrv(8); }     // StructuredBuffer<uint4> per mesh group
+    D3D12_CPU_DESCRIPTOR_HANDLE TessyDagLevelSrv() const { return TessySrv(9); }     // StructuredBuffer<uint4>
+    std::uint32_t TessyDagGroups() const { return tessyDagGroups_; }
+    std::uint32_t TessyDagClusters() const { return tessyDagClusters_; }
     std::uint32_t TessyClusterCount() const { return static_cast<std::uint32_t>(tessyClusterCpu_.size()); }
     // Static caster groups drawn through clusters / all static caster groups (the "who is on which path" counter).
     std::uint32_t TessyGroupsWithClusters() const { return tessyGroupsWith_; }
@@ -785,6 +811,8 @@ private:
     static constexpr std::uint32_t kTessyCamDeferCap = 65536u;
     GpuResource tessyCamDeferred_;
     bool tessyCamHzbFrame_ = false;                     // PrepareCullPass's decision: Main_CamCullPost / GBufferB read it
+    bool tessyCamDagFrame_ = false;                     // N7d: PrepareCullPass's decision (the readouts)
+    bool tessyCamDagLogged_ = false;                    // ...as last logged (an event on each change)
     std::shared_ptr<Material> tessyAtlasMeshMat_;       // shadow_indirect_csm.hlsl TESSY_ATLAS_MS (+ linear twins)
     std::shared_ptr<Material> tessyAtlasMeshMaskedMat_;
     std::shared_ptr<Material> tessyViewMat_;            // ...TESSY_VIEW: the cluster view's colour draw (Main_DebugDraw)
@@ -1062,7 +1090,8 @@ private:
     // mesh's IB slot concatenates its first `lodCount` LOD index buffers ([LOD0|LOD1|...]), so different
     // shadow views can draw different LODs of the same mesh from one mega buffer. The VB (shared across
     // LODs) is copied once; `lodCount` = mesh LOD count for static casters, 1 for GI-only (LOD0) meshes.
-    struct MegaCopy { const Mesh* mesh = nullptr; UINT vbBytes = 0; UINT lodCount = 1; };
+    // N7: `dag` = the mesh's cluster DAG index buffer follows its LODs ([LOD0|LOD1|...|DAG]).
+    struct MegaCopy { const Mesh* mesh = nullptr; UINT vbBytes = 0; UINT lodCount = 1; bool dag = false; };
     std::vector<MegaCopy> megaCopy_;
     // Tessy N2: the CPU tables (BuildTessyTables_, after the mega layout) and their GPU homes (EnsureMegaBuffer).
     void BuildTessyTables_(const std::unordered_map<const Mesh*, std::string>& meshPath);
@@ -1073,6 +1102,14 @@ private:
     std::vector<TessyMeshlet> tessyMeshletsCpu_;  // N6: the clusters' meshlets (Mesh::ClusterLocalTables)
     std::vector<std::uint32_t> tessyVertsCpu_;    // N6: their vertex lists
     std::vector<std::uint32_t> tessyTrisCpu_;     // N6: their packed triangles
+    std::vector<TessyClusterLod> tessyClusterLodCpu_; // N7: parallel to tessyClusterCpu_
+    std::vector<DirectX::XMUINT4> tessyDagGroupCpu_;   // N7: per mesh group
+    std::vector<DirectX::XMUINT4> tessyDagLevelCpu_;   // N7
+    std::unordered_map<const Mesh*, std::uint32_t> tessyDagBase_; // N7: a mesh's DAG IB in the mega IB (indices)
+    std::uint32_t tessyDagGroups_ = 0, tessyDagClusters_ = 0;
+    GpuResource tessyClusterLod_;
+    GpuResource tessyDagGroup_;
+    GpuResource tessyDagLevel_;
     GpuResource tessyClusters_;
     GpuResource tessyVg_;
     GpuResource tessyVerts_;

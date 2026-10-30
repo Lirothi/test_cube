@@ -9,6 +9,14 @@
 // shadow_indirect_csm.hlsl TESSY_ATLAS_MS draws the run with one DispatchMesh per view. Tessy N5 runs it on the
 // CAMERA's row as well (kFlagByRun below): the camera's G-buffer by clusters.
 //
+// N7d: on the camera's runs a mesh group with a cluster DAG (gDagOn) takes the DAG's cut instead of its LOD tier's
+// clusters, each caster its own: UE Nanite's test (NaniteHierarchyTraversalCommon.ush / ClusterCulling: a cluster is
+// drawn when its own error projects to at most the threshold and its parent's to more), with LodSelect's projection --
+// error x scale x (pixels per unit at depth 1 / lod.pixelError) against the distance to the NEAREST point of the error's
+// sphere, which is where a discrete LOD of the same deviation switches (ViewDistance + R). The cut is exact by
+// construction: siblings share their parent's error and sphere, a parent's sphere holds its children's and its error is
+// no smaller, so every point of the surface is covered once whatever the camera.
+//
 // One 256-thread group per view, two sweeps over the view's records: the first counts the meshlets that survive, one
 // atomic then claims the view's run in the buffer, the second writes it. A view whose run does not fit keeps its
 // records classic (nothing zeroed): a full buffer costs speed, never a shadow. The records are taken 256 at a time, and
@@ -22,7 +30,7 @@
 
 #define TESSY_ATLAS_CULL_RS \
     "CBV(b0), CBV(b1), " \
-    "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 cbuffer AtlasCullCB : register(b0)
@@ -43,6 +51,12 @@ cbuffer AtlasCullCB : register(b0)
     uint gFlags;       // kFlag* below
     uint gClassicCountOffset; // kFlagByRun: where in TessyAtlasArgs each run's classic command count goes (bytes)
     uint gCamDeferCap; // N5's two-pass occlusion: TessyCamDeferred's capacity (entries); 0 = no pyramid test
+    // N7d: the camera's DAG cut (the camera's runs only). xyz = the camera, w = pixels per unit at depth 1 / lod.pixelError
+    // (/ lod.distanceScale); gDagNear floors the distance (a sphere around the camera takes its leaves).
+    float4 gDagCam;
+    uint gDagOn;
+    float gDagNear;
+    uint2 gDagPad;
     // S7's rows (gRowSet 1): one bit per view slot, the views that draw their static rows this frame (a cache miss, an
     // uncached view). A hit copies them from the pool, so its rows are left as they are (nothing draws them).
     uint4 gStaticViews[(TC_SHADOW_VIEW_CEILING + 127u) / 128u];
@@ -72,6 +86,9 @@ StructuredBuffer<uint4>             GroupLodMega : register(t4); // per virtual 
 StructuredBuffer<uint>              VgRun        : register(t5); // kFlagByRun: per virtual group, the camera G-buffer's
                                                                   // PSO run that draws it as clusters (else ~0: classic)
 Texture2D<float>                    CamHzbPrev   : register(t6); // N5: last frame's camera pyramid (placeholder when off)
+StructuredBuffer<TessyClusterLod>   ClusterLods  : register(t7); // N7d: per cluster (zeros on a discrete LOD's)
+StructuredBuffer<uint4>             DagGroups    : register(t8); // N7d: per mesh group {first DAG cluster, count, ...}
+StructuredBuffer<uint>              CasterLods   : register(t9); // N7d: the caster's camera tier (shadow_cull_cs CasterLod)
 
 RWByteAddressBuffer       Args               : register(u0); // the cull's rows (D3D12_DRAW_INDEXED_ARGUMENTS, 20 bytes)
 RWStructuredBuffer<uint>  VisibleList        : register(u1); // the rows' caster ids (this frame's region)
@@ -80,7 +97,9 @@ RWStructuredBuffer<uint2> TessyAtlasViewInfo : register(u3); // per (row set, vi
 RWByteAddressBuffer       TessyAtlasArgs     : register(u4); // per (row set, view): D3D12_DISPATCH_MESH_ARGUMENTS
 RWByteAddressBuffer       TessyAtlasCounter  : register(u5); // [0] / [4] / [8]: the row sets' claimed records, [12]:
                                                               // views that did not fit, [16]: clusters tested, [20]: the
-                                                              // camera's deferred clusters claimed (cleared per frame)
+                                                              // camera's deferred clusters claimed, [24] / [28]: the
+                                                              // camera's runs' triangles / DAG clusters written (cleared
+                                                              // per frame)
 RWStructuredBuffer<uint4> TessyCamDeferred   : register(u6); // N5: {caster id, cluster, camId, base vertex} the previous
                                                               // pyramid hid (tessy_camera_post_cs retests them), or dead
 
@@ -93,6 +112,9 @@ static const uint kFlagKeepRows = 1u;  // leave the rows' InstanceCount alone
 static const uint kFlagNoCull = 2u;    // no frustum test: the camera's cull already kept the caster
 static const uint kFlagClusterId = 4u; // record .w = the virtual group | the cluster's index in its range << 16
 static const uint kFlagByRun = 8u;     // one row (gFirstView's), its groups split by VgRun; view = the run
+static const uint kEntryDag = 0x80000000u; // gsEntryVg: the entry takes its mesh group's DAG (N7d)
+static const uint kVgLods = 4u;            // render::kMaxShadowLods: virtual group = mesh group * 4 + LOD
+static const uint kCasterLodMask = 0x0Fu;  // shadow_cull_cs's
 
 static const uint kArgStride = 20u;
 // The group's threads: 256 for the atlas views (many groups, a few hundred tests each); the camera's PSO runs are a
@@ -153,6 +175,24 @@ bool BoxHiddenLastFrame(float3 ctr, float3 ext)
     return !HzbIsVisible(CamHzbPrev, gCamHzbSize, rect);
 }
 
+// N7d: is the simplification behind this error too coarse for the camera here -- its error, grown by the caster's scale,
+// spans more than lod.pixelError pixels at the nearest point of its sphere? ONE function for a cluster's own error and
+// its parent's: a parent's test must answer exactly as its children's own tests do (they hold the same error and
+// sphere), or the cut tears (`precise`: no contraction may differ between the two calls).
+bool DagTooCoarse(float error, float4 sphere, float4x4 world, float scale)
+{
+    precise const float3 c = mul(float4(sphere.xyz, 1.0f), world).xyz;
+    precise const float d = max(length(c - gDagCam.xyz) - sphere.w * scale, gDagNear);
+    precise const float projected = error * scale * gDagCam.w;
+    return projected > d;
+}
+
+// N7d: the entry's cluster range -- its mesh group's DAG, or its LOD tier's clusters.
+uint2 EntryRange(uint entryVg)
+{
+    return (entryVg & kEntryDag) != 0u ? DagGroups[(entryVg & ~kEntryDag) / kVgLods].xy : TessyVg[entryVg];
+}
+
 // One sweep over the gathered records, 64 at a time, the (caster, cluster) tests shared out by a prefix sum (wave
 // intrinsics, then the waves' totals). write = false: count the surviving meshlets into gsRecords; true: write them at
 // gsRunBase + the cursor, and zero each record's InstanceCount in the cull's row (the compaction then skips it).
@@ -160,7 +200,7 @@ bool BoxHiddenLastFrame(float3 ctr, float3 ext)
 // and an 8x8 group's lanes do not hold consecutive SV_GroupIndex on NVIDIA -- indexed by it, the prefixes belonged to
 // other records, tests went to the wrong (caster, cluster) and every frame lost a different handful of lamps' shadows
 // (the records' order is the atomics', new each frame).
-void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout uint tested)
+void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout uint tested, inout uint tris, inout uint dagDrawn)
 {
     const uint lanes = WaveGetLaneCount();
     const uint wave = slot / lanes;
@@ -171,8 +211,8 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
         uint tests = 0u;
         if (e < entries)
         {
-            tests = gsEntryInst[e] * TessyVg[gsEntryVg[e]].y;
-            if (write && (gFlags & kFlagKeepRows) == 0u) { Args.Store((row + gsEntryVg[e]) * kArgStride + 4u, 0u); }
+            tests = gsEntryInst[e] * EntryRange(gsEntryVg[e]).y;
+            if (write && (gFlags & kFlagKeepRows) == 0u) { Args.Store((row + (gsEntryVg[e] & ~kEntryDag)) * kArgStride + 4u, 0u); }
         }
         const uint pre = WavePrefixSum(tests);
         const uint sum = WaveActiveSum(tests);
@@ -196,23 +236,36 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
         for (uint q = slot; q < total; q += kThreads)
         {
             while (t + 1u < kThreads && gsPrefix[t + 1u] <= q) { ++t; }
-            const uint vg = gsEntryVg[first + t];
-            const uint2 range = TessyVg[vg];
+            const uint entryVg = gsEntryVg[first + t];
+            const uint vg = entryVg & ~kEntryDag;
+            const bool dag = (entryVg & kEntryDag) != 0u;
+            const uint2 range = EntryRange(entryVg);
             const uint local = q - gsPrefix[t];
             const uint k = local / range.y;                     // the caster
             const uint cid = VisibleList[gsEntryStart[first + t] + k];
             const uint clusterIndex = range.x + (local - k * range.y);
             const TessyCluster c = Clusters[clusterIndex];
             if (!write) { ++tested; }
+            if (dag)
+            {
+                // A crossfading caster sits in its tier's entry and the next one's: the cut draws it once, from its own.
+                if (min(CasterLods[cid] & kCasterLodMask, kVgLods - 1u) != vg % kVgLods) { continue; }
+                const float4x4 world = Instances[cid].world;
+                const float scale = TessyWorldScale(world);
+                const TessyClusterLod l = ClusterLods[clusterIndex];
+                if (DagTooCoarse(l.lodError, l.lodSphere, world, scale) ||
+                    !DagTooCoarse(l.parentError, l.parentSphere, world, scale)) { continue; }
+            }
             float3 ctr = 0.0f, ext = 0.0f;
             if ((gFlags & kFlagNoCull) == 0u)
             {
                 ClusterBox(cid, c, ctr, ext);
                 if (!BoxInView(ctr, ext, vf)) { continue; }
             }
-            // The camera's records carry their virtual group (the G-buffer's material and LOD) and, with it, an id unique
-            // per cluster (the cluster view's colour). A range past 65535 clusters is 8 M triangles.
-            const uint camId = vg | (min(clusterIndex - range.x, 0xFFFFu) << 16);
+            // The camera's records carry their virtual group (the G-buffer's material and LOD), whether it is the DAG's
+            // and, with them, an id unique per cluster (the cluster view's colour). A range past 65535 clusters is 8 M
+            // triangles.
+            const uint camId = vg | (dag ? kTessyCamDagBit : 0u) | (min(clusterIndex - range.x, 0xFFFFu) << 16);
             const uint baseVertex = GroupLodMega[vg].w;
             // N5: hidden by last frame's pyramid -> deferred to pass B (tessy_camera_post_cs retests it against this
             // frame's). Each sweep is compiled on its own and a box on an edge may not answer the same twice: a cluster
@@ -250,6 +303,11 @@ void Sweep(uint row, uint entries, uint slot, bool write, ViewFrustum vf, inout 
             {
                 TessyVisible[gRecordBase + gsRunBase + at + s] =
                     uint4(cid, c.firstMeshlet + s, baseVertex, (gFlags & kFlagClusterId) != 0u ? camId : 0u);
+            }
+            if (at + c.meshletCount <= gsClaimed)
+            {
+                tris += c.triCount;
+                dagDrawn += dag ? 1u : 0u;
             }
         }
         GroupMemoryBarrierWithGroupSync(); // gsPrefix / gsWaveSum are the next batch's
@@ -291,12 +349,13 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         if (byRun && VgRun[vg] != view) { continue; }
         const uint instances = Args.Load((row + vg) * kArgStride + 4u);
         if (instances == 0u) { continue; }
-        if (TessyVg[vg].y == 0u) { gsLeftClassic = 1u; continue; }
+        const bool dag = byRun && gDagOn != 0u && DagGroups[vg / kVgLods].y != 0u;
+        if (!dag && TessyVg[vg].y == 0u) { gsLeftClassic = 1u; continue; }
         uint idx;
         InterlockedAdd(gsEntries, 1u, idx);
         if (idx < kMaxEntries)
         {
-            gsEntryVg[idx] = vg;
+            gsEntryVg[idx] = vg | (dag ? kEntryDag : 0u);
             gsEntryStart[idx] = Args.Load((row + vg) * kArgStride + 16u);
             gsEntryInst[idx] = instances;
         }
@@ -304,8 +363,8 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     }
     GroupMemoryBarrierWithGroupSync();
     const uint entries = min(gsEntries, kMaxEntries);
-    uint tested = 0u;
-    Sweep(row, entries, slot, false, vf, tested);
+    uint tested = 0u, tris = 0u, dagDrawn = 0u;
+    Sweep(row, entries, slot, false, vf, tested, tris, dagDrawn);
     if (gi == 0u)
     {
         const uint records = gsRecords;
@@ -328,7 +387,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         gsDeferred = 0u;
     }
     GroupMemoryBarrierWithGroupSync();
-    if (gsFits) { Sweep(row, entries, slot, true, vf, tested); }
+    if (gsFits) { Sweep(row, entries, slot, true, vf, tested, tris, dagDrawn); }
     GroupMemoryBarrierWithGroupSync();
     // N5: the deferred slots this group claimed and did not write (a run that did not fit, sweep 2 deferring fewer than
     // sweep 1): dead, so the post pass draws nothing stale out of them.
@@ -354,4 +413,10 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     }
     const uint wTested = WaveActiveSum(tested);
     if (WaveIsFirstLane() && wTested != 0u) { TessyAtlasCounter.InterlockedAdd(16u, wTested); }
+    if (byRun)
+    {
+        const uint wTris = WaveActiveSum(tris), wDag = WaveActiveSum(dagDrawn);
+        if (WaveIsFirstLane() && wTris != 0u) { TessyAtlasCounter.InterlockedAdd(24u, wTris); }
+        if (WaveIsFirstLane() && wDag != 0u) { TessyAtlasCounter.InterlockedAdd(28u, wDag); }
+    }
 }

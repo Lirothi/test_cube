@@ -726,6 +726,9 @@
     <ClCompile Include="sources/rendering/meshes/MeshManager.cpp">
       <Filter>sources\rendering\meshes</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/meshes/TessyDag.cpp">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp">
       <Filter>sources\rendering\meshes</Filter>
     </ClCompile>
@@ -1452,6 +1455,9 @@
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/meshes/LodSelect.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/TessyDag.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/meshes/Mesh.h">

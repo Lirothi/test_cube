@@ -25,6 +25,8 @@
 #include <utility>
 #include <functional> // LOD3 foliage prune: union-find's recursive-free find lambda
 #include "meshoptimizer.h"
+#include "rendering/meshes/TessyDag.h"         // Tessy N7: the cluster DAG at load
+#include "rendering/shadows/TessySettings.h"   // ...and --tessy-lod-build
 #include "third_party/cgltf/cgltf.h"
 #include <Windows.h> // Win32 file/time helpers (load diagnostics now go through core/logging)
 #include "core/logging/Log.h"
@@ -1743,6 +1745,48 @@ std::shared_ptr<Mesh> MeshManager::LoadBinaryDirect(const std::string& binPath,
             lods[i].error);
     }
     AttachClusters(*mesh, lods); // Tessy: a v4 bin's clusters; a v3 bin has none (the classic path)
+    // Tessy N7: the cluster DAG over LOD0, when the asset's manifest asks for it ("tessyLod") or --tessy-lod-build names
+    // it. Built here from the bin's LOD0 (not stored in it yet), with the discrete LODs' simplification weights.
+    if (mesh->HasClusters() && binPath.size() > 9)
+    {
+        MeshLoadOptions bake;
+        const std::string manifest = binPath.substr(0, binPath.size() - 4) + ".json"; // x.mesh.bin -> x.mesh.json
+        ApplyManifestOptions(manifest, bake);
+        if (bake.tessyLod || tessy::DagBuildRequested(binPath))
+        {
+            tessy::DagBuildParams p;
+            p.normalWeight = bake.lodNormalWeight;
+            for (size_t i = 0; i < bake.slotFoliage.size(); ++i)
+            {
+                p.slotUvWeight.push_back(bake.slotFoliage[i] > 0.0f ? bake.foliageUvWeight : 0.0f);
+            }
+            Mesh::Dag dag;
+            tessy::DagStats st;
+            std::string why;
+            if (!tessy::BuildDag(verts, lods[0].indices, mesh->GetClusters(0), lods[0].submeshes, p, dag, &st))
+            {
+                LOG_WARNING(logging::LogCategory::Asset, "tessy.dag: '{}' built no DAG (no LOD0 clusters)", binPath);
+            }
+            else if (!tessy::ValidateDag(dag, &why))
+            {
+                LOG_ERROR(logging::LogCategory::Asset, "tessy.dag: '{}' INVALID ({}); the asset keeps its discrete LODs", binPath, why);
+            }
+            else
+            {
+                const uint64_t lod0Tris = st.leafTriangles;
+                const uint64_t cutMid = tessy::DagCutTriangles(dag, 0.5f * st.rootError);
+                if (mesh->SetDag(renderer->GetDevice(), uploadCmdList, uploadKeepAlive, std::move(dag)))
+                {
+                    LOG_INFO(logging::LogCategory::Asset,
+                             "tessy.dag: '{}' {} levels, {} clusters ({} leaves, {} roots, {} groups stuck), {} tris over all "
+                             "levels = {:.2f} x LOD0's {}; roots {} tris at error {:.4f} m; cut at half that error {} tris; "
+                             "{:.1f} ms", binPath, st.levels, st.clusters, st.leaves, st.roots, st.stuckGroups, st.triangles,
+                             lod0Tris ? static_cast<double>(st.triangles) / static_cast<double>(lod0Tris) : 0.0, lod0Tris,
+                             st.rootTriangles, st.rootError, cutMid, st.ms);
+                }
+            }
+        }
+    }
     // What UE's automatic screen size makes of this bake (render::AutoLodScreenSizes), at the global
     // PixelError: the number to read before authoring a "lodScreenSize" or a "lodPixelError".
     if (lods.size() > 1u)
@@ -2904,6 +2948,7 @@ bool MeshManager::ApplyManifestOptions(const std::string& meshJsonPath, MeshLoad
         if (it != doc.end() && it->is_string()) { opt.pivotToBase = it->get<std::string>() == "base"; }
     }
     boolean("lod3Aggressive", opt.lod3Aggressive);
+    boolean("tessyLod", opt.tessyLod);
     uints("lod1DropSlots", opt.lod1DropSlots);
     uints("lod2DropSlots", opt.lod2DropSlots);
     uints("lod3DropSlots", opt.lod3DropSlots);

@@ -427,6 +427,7 @@
     <ClCompile Include="sources/rendering/meshes/InstanceBuffer.cpp" />
     <ClCompile Include="sources/rendering/meshes/Mesh.cpp" />
     <ClCompile Include="sources/rendering/meshes/MeshManager.cpp" />
+    <ClCompile Include="sources/rendering/meshes/TessyDag.cpp" />
     <ClCompile Include="sources/rendering/meshes/StaticMesh.cpp" />
     <ClCompile Include="sources/rendering/renderables/TransparentStaticMesh.cpp" />
     <ClCompile Include="sources/rendering/renderables/GlassPassSrvs.cpp" />
@@ -699,6 +700,7 @@
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
     <ClInclude Include="sources/rendering/meshes/LodSelect.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />
+    <ClInclude Include="sources/rendering/meshes/TessyDag.h" />
     <ClInclude Include="sources/rendering/meshes/MeshManager.h" />
     <ClInclude Include="sources/rendering/meshes/StaticMesh.h" />
     <ClInclude Include="sources/rendering/renderables/GBufferRenderable.h" />

@@ -174,6 +174,41 @@ public:
     // index count is refused -- the clusters would describe another buffer.
     void SetClusters(std::vector<std::vector<Cluster>> perLod, const std::vector<const std::vector<uint32_t>*>& lodIndices);
 
+    // Tessy N7: the CLUSTER DAG (rendering/meshes/TessyDag.h) -- continuous LOD over LOD0, one index buffer of its own
+    // over this mesh's VB holding every level of every submesh. Each cluster's ClusterLod says which simplification
+    // made it (lod*) and which consumes it (parent*); a view draws a cluster when its error projects within the
+    // threshold and its parent's does not. Empty unless the asset asked for it (mesh.json "tessyLod", or
+    // --tessy-lod-build); the discrete LODs stay beside it for every classic path.
+    struct ClusterLod
+    {
+        DirectX::XMFLOAT4 lodSphere{};    // the group simplification that made the cluster (a leaf: its own sphere)
+        DirectX::XMFLOAT4 parentSphere{}; // the one that consumes it (a root: its lodSphere)
+        float lodError = 0.0f;            // object space; 0 for a leaf
+        float parentError = 0.0f;         // object space; FLT_MAX for a root
+        uint32_t level = 0;               // 0 = the leaves (LOD0's clusters)
+        uint32_t pad = 0;
+    };
+    static_assert(sizeof(ClusterLod) == 48, "Mesh::ClusterLod");
+    struct DagLevel { uint32_t firstCluster = 0, clusterCount = 0; float minLodError = 0.0f, maxParentError = 0.0f; };
+    struct DagSubmesh { uint32_t firstCluster = 0, clusterCount = 0, firstLevel = 0, levelCount = 0; };
+    struct Dag
+    {
+        std::vector<uint32_t> indices;     // the DAG's index buffer (freed by SetDag once uploaded)
+        std::vector<Cluster> clusters;     // firstIndex into `indices`; per submesh contiguous, by level
+        std::vector<ClusterLod> lod;       // parallel to `clusters`
+        std::vector<DagLevel> levels;      // DagSubmesh::firstLevel..: one per level of each submesh
+        std::vector<DagSubmesh> submeshes; // per LOD0 submesh, in LOD0's order
+    };
+    bool HasDag() const { return !dag_.clusters.empty(); }
+    const Dag& GetDag() const { return dag_; }
+    const ClusterLocalTables& GetDagLocal() const { return dagLocal_; } // its meshlets (N6), parallel to the clusters
+    ID3D12Resource* GetDagIndexBufferResource() const { return dagIndexBuffer_.Get(); }
+    UINT GetDagIndexCount() const { return dagIndexCount_; }
+    // Uploads the DAG's index buffer (COMMON, R32, like AddLod's) and builds its meshlet tables; then frees the CPU
+    // indices. Refused (no DAG) when the clusters do not cover the indices.
+    bool SetDag(ID3D12Device* device, ID3D12GraphicsCommandList* uploadCmdList,
+                std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive, Dag dag);
+
     // Mesh chunking (mesh.json "chunkGrid", baked by MeshManager's ChunkifyLod0). The LOD0
     // submeshes of a chunked mesh are SPATIAL tiles of one continuous surface, not material groups
     // scattered through it — so each carries its own mesh-local AABB. Two consumers: the CAMERA
@@ -278,6 +313,10 @@ private:
 
     std::vector<std::vector<Cluster>> clusters_; // Tessy: per LOD; empty = no clusters
     std::vector<ClusterLocalTables> clusterLocal_; // Tessy N6: per LOD, parallel to clusters_
+    Dag dag_;                                      // Tessy N7: the cluster DAG (indices freed after upload)
+    ClusterLocalTables dagLocal_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> dagIndexBuffer_;
+    UINT dagIndexCount_ = 0;
 
 #if WITH_EDITOR
     // Position-only CPU copy of base LOD geometry. This avoids GPU readback and retains
