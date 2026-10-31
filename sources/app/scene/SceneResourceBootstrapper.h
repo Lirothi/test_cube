@@ -29,6 +29,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle gtaoEnabled;         // P6B
     Material::CBFieldHandle gtaoStrength;        // P6B
     Material::CBFieldHandle groundAlbedoRgb;     // P16.12 ground bounce
+    Material::CBFieldHandle foliageBackSky;      // a foliage leaf passes the sky behind it (lighting_cs)
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
@@ -688,6 +689,7 @@ struct LightingPassConstants
     float gtaoStrength = 1.0f;
     // P16.12: the ground's diffuse reflectance. 0 switches the bounce off; see DirectionalLight.
     float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f };
+    float foliageBackSky = 1.0f;                  // SceneRenderSettings::foliageBackSky
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};

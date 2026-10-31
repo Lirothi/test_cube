@@ -34,6 +34,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     gtaoEnabled = material->ComputeCB0FieldHandle("gtaoEnabled");
     gtaoStrength = material->ComputeCB0FieldHandle("gtaoStrength");
     groundAlbedoRgb = material->ComputeCB0FieldHandle("groundAlbedoRgb");
+    foliageBackSky = material->ComputeCB0FieldHandle("foliageBackSky");
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
@@ -1659,6 +1660,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.gtaoEnabled, data.gtaoEnabled, dest);
     matLighting_->UpdateCBField(handles.gtaoStrength, data.gtaoStrength, dest);
     matLighting_->UpdateCBField(handles.groundAlbedoRgb, data.groundAlbedoRgb, dest);
+    matLighting_->UpdateCBField(handles.foliageBackSky, data.foliageBackSky, dest);
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);

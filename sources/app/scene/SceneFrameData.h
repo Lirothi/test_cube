@@ -842,6 +842,9 @@ struct SceneRenderSettings
     // itself, where no shadow map helps (the receiver is the caster). false = the frame before 2026-10-28
     // (`--set light.geometricTerminator:0`, the A/B).
     bool sunGeometricTerminator = true;
+    // A two-sided foliage leaf passes the sky and the ground's bounce behind it (lighting_cs.hlsl, UE's backface sky
+    // lighting); false = only the sun through it, the frame before 2026-10-31 (`--set light.foliageBackSky:0`, the A/B).
+    bool foliageBackSky = true;
     bool showProfiler = false;
     // S8: the reflection source. Default RT (today's behavior). RT runs the
     // Tier-1 ray-traced pass instead of SSR; SkyOnly clears the reflection buffer

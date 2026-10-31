@@ -302,6 +302,7 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     // treats a zero here as "term off", so a level that wants none writes zero rather than
     // needing a second boolean.
     constants.groundAlbedoRgb = dirLight.GetGroundAlbedo();
+    constants.foliageBackSky = frame_->settings.foliageBackSky ? 1.0f : 0.0f;
     // The sky's indirect SPECULAR, moved out of compose so the screen-space reflection pass
     // (which samples this target) sees a metal with its environment on it. These three MUST
     // match compose's own values exactly -- one pass adds the term, the other subtracts the

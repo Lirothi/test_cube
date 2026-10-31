@@ -35,7 +35,9 @@ cbuffer PerFrame : register(b0)
     // albedo, not a light: it only ever scales illuminance the scene already has, so it cannot
     // brighten a night scene and it moves with the sun automatically. See GroundBounceOverPi.
     float3 groundAlbedoRgb;
-    float _padGround;
+    // 1 = a two-sided foliage leaf passes the sky (and the ground's bounce) behind it, UE's backface sky lighting
+    // (lighting_cs.hlsl); 0 = only the sun through the leaf, the frame before 2026-10-31.
+    float foliageBackSky;
 
     float4x4 invView;
     float4x4 invProj;

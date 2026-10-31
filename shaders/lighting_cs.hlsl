@@ -458,6 +458,20 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // of the SUN COLOUR authored against a different equation, and a physical bounce added to
         // it would be two units in one sum.
         color = albedo * (1.0 - metal) * (irradiance * skyIrradianceScale + GroundBounceOverPi(N) * (1.0f - giWeight));
+        // A thin leaf passes the sky BEHIND it too, not only the sun: UE's two-sided foliage looks the sky up along
+        // -N and adds it times the subsurface colour, under the front's occlusion (BasePassPixelShader.usf:530-536,
+        // `OutSubsurfaceLighting += GetEffectiveSkySHDiffuse(-WorldNormal) * SkyVisibility`, and :1377,
+        // `SubsurfaceIndirectLighting * SubsurfaceColor`). Our sky cube is black below the horizon and its lower
+        // half is GroundBounceOverPi, so the back's "sky" is the two summed, as the front's is; the GI probes are
+        // not asked for the back. Without it a crown seen against the sun had the leaves' own glow only where the
+        // sun itself got through them -- a few outer fronds -- and every other leaf took just the darker sky on
+        // the camera's side (owner, 2026-10-31, the island at 15:03 against the sun: "isn't it too black?").
+        if (isFoliage && foliageBackSky != 0.0f)
+        {
+            const float3 backIrradiance = SkyIrradiance.SampleLevel(gSmpLinearWrap, -N, 0).rgb * skyIrradianceScale +
+                                          GroundBounceOverPi(-N);
+            color += subsurface * backIrradiance * foliageBackSky;
+        }
     }
     else
     {

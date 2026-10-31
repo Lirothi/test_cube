@@ -1148,6 +1148,18 @@ normals the same; the tent's normal strength at 0 made the leak go. Measured wit
 the bathroom -1.1 % (0.07 % of pixels over 8 levels), the grove -0.13 % (1.4 %, under its 1.7 % frame-to-frame floor),
 Pass_Lighting +0.01-0.015 ms. `--set light.geometricTerminator:0` = before. Local lights are not gated (yet).
 
+**A leaf passes the sky behind it, not only the sun** (2026-10-31, owner on the island against the sun at 15:03, cam
+71.70 6.95 114.59: "isn't it too black now?"). A two-sided foliage pixel adds `subsurface payload x (sky irradiance(-N) +
+GroundBounceOverPi(-N))` to its fill, under the front's occlusion (`lighting_cs.hlsl`, after the sky fill) -- UE's
+`GetEffectiveSkySHDiffuse(-WorldNormal) * SkyVisibility` times the subsurface colour (BasePassPixelShader.usf:530-536,
+:1377). Before, the only light through a leaf was the direct sun, and inside a crown the sun is mostly blocked by other
+fronds, so a crown against the sun took just the darker sky on the camera's side while the brightest sky (the aureole) sat
+behind it. The GI probes are not asked for the back. Measured at that view (exposure the same, EV 15.99): the crowns' dark
+pixels x1.41 linear (median; p25 1.20, p75 1.75), display 7 -> 12, trunks and sand unchanged; the front-lit grove at
+15:00 x1.08 (9 % of the frame moved > 8 levels, all foliage); `Pass_Lighting` unchanged (0.231-0.234 / 0.109-0.112 ms,
+alternated twice). `--set light.foliageBackSky:0` = before (the A/B). The rest of that view's darkness is the grade
+(local exposure off, contrast 1.3 -- 9f88f5e7): the morning's grade puts its trunks at 42 of 255 instead of 24.
+
 Object-level surface keys (`normalStrength`, `metalRough`, `useMR`, `useAlbedo`, `baseColor`, `texOffsScale`, the
 emissive pair) reach EVERY material slot -- at load (`GBufferRenderable::MergeMaterialDefaults`) and live
 (`SetObject*`: the Inspector, MCP `setSurface`); they used to reach slot 0 alone, so on the tent (sticks, ropes, cloth)

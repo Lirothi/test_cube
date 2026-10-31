@@ -1377,6 +1377,7 @@ namespace
         if (setting == "debug.probeSource") { renderSettings.debugProbeSource = value >= 1.5f ? 2u : (value >= 0.5f ? 1u : 0u); return true; }
         if (setting == "debug.sunProbeAfterDlss") { renderSettings.sunProbeAfterDlss = value != 0.0f; return true; }
         if (setting == "light.geometricTerminator") { renderSettings.sunGeometricTerminator = value != 0.0f; return true; }
+        if (setting == "light.foliageBackSky") { renderSettings.foliageBackSky = value != 0.0f; return true; }
         // (1 + metal * this) on the analytic sun specular (graphics_settings reflections.sunMetalSpec).
         if (setting == "light.sunMetalSpec") { renderSettings.sunMetalSpecInfluence = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "light.sunTemperatureK")
