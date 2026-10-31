@@ -734,6 +734,11 @@ public:
         std::uint32_t tessyMsCull = 0; // tessy::g_vsmMsCull's bits (tessy_common.hlsli kTessyMsCull*), 0 off the MS path
         // Tessy N7c: the runs of groups with a cluster DAG on a clipmap page take the DAG's cut (tessy::g_lod).
         bool tessyLod = false;
+        // ...and on a CLIPMAP page that cut is the camera's (tessy::g_vsmCameraCut, while the camera draws the DAG): the
+        // caster draws the clusters its receiver drew, the same surface in every level. `tessyDagCam` = its eye and
+        // threshold (ShadowGpuData::CullDecisions::tessyDagCam). A local light's page keeps its own texels' cut.
+        bool tessyLodCamCut = false;
+        float tessyDagCam[4] = {};
     };
 
     // Tessy N0/N3 counters of frame N - kFrameCount (tessy_vsm_cull_cs.hlsl names the bytes). Pairs = (page, caster)
@@ -1060,6 +1065,7 @@ private:
     const char* tessyOffReason_ = "";
     const char* tessyMsOffReason_ = "";
     float tessyLodKeyLast_ = 0.0f; // N7c: the DAG cut as last frame took it (its texels, 0 = off; a change flushes the cache)
+    bool tessyLodCamCutLast_ = false; // ...and whether the clipmap pages took the camera's cut (a change flushes it too)
     const char* tessyLoggedReason_ = nullptr;         // the reason last logged (an event per change)
     const char* tessyMsLoggedReason_ = nullptr;
     void EnsureTessyResources(Renderer* renderer);

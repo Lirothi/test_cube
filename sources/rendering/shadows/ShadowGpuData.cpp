@@ -992,16 +992,17 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                      dec.tessyCamDag ? "the cluster DAG's cut" : "the discrete LODs", ctx.renderer->GetTotalFrameNumber());
             tessyCamDagLogged_ = dec.tessyCamDag;
         }
+        // The camera's eye and DAG threshold -- tessy.lodPixelError, the DAG's own pixel error (the discrete LODs keep
+        // lod.pixelError). Kept every frame, drawn or not: the SDSM partitions and the VSM clipmap pages cut it the same way.
+        tessyDagCamFrame_[0] = lastCameraPos_.x;
+        tessyDagCamFrame_[1] = lastCameraPos_.y;
+        tessyDagCamFrame_[2] = lastCameraPos_.z;
+        tessyDagCamFrame_[3] = render::g_lodPixelsPerUnit / std::max(tessy::g_lodPixelError, 1e-3f) /
+                               std::max(render::g_lodDistanceScale, 1e-3f);
         if (dec.tessyCamDag)
         {
-            dec.tessyDagCam[0] = lastCameraPos_.x;
-            dec.tessyDagCam[1] = lastCameraPos_.y;
-            dec.tessyDagCam[2] = lastCameraPos_.z;
-            // tessy.lodPixelError: the DAG's own pixel error (the discrete LODs keep lod.pixelError).
-            dec.tessyDagCam[3] = render::g_lodPixelsPerUnit / std::max(tessy::g_lodPixelError, 1e-3f) /
-                                 std::max(render::g_lodDistanceScale, 1e-3f);
+            for (int i = 0; i < 4; ++i) { dec.tessyDagCam[i] = tessyDagCamFrame_[i]; }
         }
-        for (int i = 0; i < 4; ++i) { tessyDagCamFrame_[i] = dec.tessyDagCam[i]; } // the SDSM partitions cut it the same way
         const char* verdict = dec.tessyGBuffer ? (tessy::g_gbuffer ? "on" : "on (tessy.lod: the DAG's cut is drawn by clusters)")
             : !tessy::g_enabled ? "off (tessy.enabled 0)"
             : !tessy::g_gbuffer && !dagWanted ? "off (tessy.gbuffer 0)"

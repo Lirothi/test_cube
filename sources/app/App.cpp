@@ -546,6 +546,7 @@ namespace
         if (setting == "tessy.lodPixelError") { tessy::g_lodPixelError = std::clamp(value, 0.25f, 64.0f); return true; } // the DAG's
         if (setting == "tessy.lodBand") { tessy::g_lodBand = value != 0.0f; return true; } // N7e: the camera DAG's level band
         if (setting == "tessy.sunCut") { tessy::g_sunCameraCut = value != 0.0f; return true; } // SDSM: the camera's DAG cut
+        if (setting == "tessy.vsmCameraCut") { tessy::g_vsmCameraCut = value != 0.0f; return true; } // VSM clipmap pages: the same
         if (setting == "tessy.clusterCull") { tessy::g_clusterCull = value != 0.0f; return true; } // clusters holding no sample
         if (setting == "tessy.msCull") { tessy::g_vsmMsCull = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
         if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel = (std::uint32_t)std::max(0.0f, value); return true; }

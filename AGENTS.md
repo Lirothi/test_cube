@@ -957,6 +957,19 @@ reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (t
   threshold (`kFlagCameraCut`) -- a far palm's shadow then has the fronds the camera draws, not LOD3's thinned ones (the
   aerial view: 2.4 % of the frame over 8 levels against a 0-0.7 % floor, the sand under the far crowns); +0.015-0.06 ms
   of SDSM cull + draw. 0 = their discrete tier.
+- **`tessy.vsmCameraCut`** (default 1, transient; 2026-10-31, owner at cam 45.20 4.51 42.03, 17:00, VSM: "shadow acne"):
+  under `tessy.lod` the VSM CLIPMAP pages cut the DAG with the camera's eye and threshold too (`tessy_vsm_cull_cs.hlsl
+  CamDagTooCoarse`, the camera row's `DagTooCoarse` term for term; `ShadowGpuData::TessyDagCamThisFrame`, kept every frame).
+  Cut by their own texels, a coarser level drew a coarser surface than the receiver's -- up to `tessy.lodShadowTexels` of
+  ITS texels above it -- and SMRT's rays, which walk out of the receiver's level into the coarser ones, met it: the sand
+  dark and hatched in a patch edged where the level changes. Neither half alone: `tessy.lod:0` or `vsm.smrtRayCount:0`
+  was clean, and caching off was not (it is geometry, not stale pages). Measured at that view: the patch's mean 149.5 ->
+  158.0 of 255, 9.0 % of the frame over 8 levels against a 0.4-0.6 % floor; `Pass_VsmPageRender` with every page redrawn
+  0.32 -> 0.345 ms there, 0.64 -> 0.70 on the grove (page triangles 1.20 -> 1.41 M, 6.37 -> 7.06 M: a coarse level draws
+  the receiver's clusters); cached the same. A local light's (perspective) pages keep their texels' cut. A cached page
+  holds the cut of the eye it was drawn from until its level re-renders (a level snaps every texel it moves). 0 = the
+  page's own cut, the A/B; a switch flushes the page cache. GBV (`VsmPageRender,Skybox` + the Skybox self-test, that
+  view): clean.
 - **A cluster or a triangle that holds no sample is not drawn** (2026-10-30, owner: "do we drop a cluster that is tiny on
   the screen? the shadow passes need it too"). Per TRIANGLE: every mesh shader -- the camera's twins, the VSM pages and,
   since then, `TESSY_ATLAS_MS` (the lamps' atlases, the SDSM partitions: root constants {row, flags, viewport} -- 4 now)

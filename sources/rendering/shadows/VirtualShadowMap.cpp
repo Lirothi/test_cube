@@ -774,6 +774,17 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
     d.tessyMs = d.tessy && tessy::g_vsmMeshShader && d.tessyMsOffReason[0] == '\0';
     d.tessyMsCull = d.tessyMs ? (tessy::g_vsmMsCull & 1u) : 0u;
     d.tessyLod = d.tessy && tessy::g_lod && shadowGpu->TessyDagGroups() > 0u; // N7c
+    // The clipmap pages cut the DAG with the CAMERA's eye and threshold while the camera draws that cut (the SDSM
+    // partitions' tessy.sunCut rule). Cut by its own texels, a coarser level drew a coarser surface than the receiver's
+    // -- up to tessy.lodShadowTexels of ITS texels above it -- and SMRT's rays, which walk out of the receiver's level into
+    // the coarser ones, met that surface: the sand at 17:00 dark and hatched, edged where the level changes (owner,
+    // 2026-10-31, cam 45.20 4.51 42.03). Both off -- tessy.lod 0 or vsm.smrtRayCount 0 -- it was clean.
+    // Decided by the settings alone, not by whether the camera's runs drew the cut this frame: a switch flushes the cache.
+    d.tessyLodCamCut = d.tessyLod && tessy::g_vsmCameraCut && shadowGpu->TessyDagCamThisFrame()[3] > 0.0f;
+    if (d.tessyLodCamCut)
+    {
+        for (int i = 0; i < 4; ++i) { d.tessyDagCam[i] = shadowGpu->TessyDagCamThisFrame()[i]; }
+    }
     return d;
 }
 
@@ -808,10 +819,16 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     // N7c: the DAG's cut and the discrete LOD draw different geometry -- a page cached under one is stale under the other,
     // and so is one cached at another tessy.lodShadowTexels.
     const float lodKey = d.tessyLod ? std::max(tessy::g_lodShadowTexels, 0.01f) : 0.0f;
-    if (lodKey != tessyLodKeyLast_)
+    if (lodKey != tessyLodKeyLast_ || d.tessyLodCamCut != tessyLodCamCutLast_)
     {
         const bool switched = (lodKey != 0.0f) != (tessyLodKeyLast_ != 0.0f);
+        if (d.tessyLodCamCut != tessyLodCamCutLast_)
+        {
+            LOG_INFO(logging::LogCategory::RenderShadow, "tessy.lod: the VSM clipmap pages cut the DAG {}; page cache flushed",
+                     d.tessyLodCamCut ? "with the camera's eye (the receiver's clusters)" : "by their own texels");
+        }
         tessyLodKeyLast_ = lodKey;
+        tessyLodCamCutLast_ = d.tessyLodCamCut;
         InvalidateAllPages();
         if (switched)
         {
@@ -2581,13 +2598,20 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             std::uint32_t dagOn;  // N7c: the cluster DAG's cut on clipmap pages
             float dagTexels;      // ...the shadow texels a cluster's error may span (x the page's texel size in metres)
             std::uint32_t rectCull; // tessy.clusterCull: a cluster that holds no texel centre of its page goes
+            std::uint32_t dagCamCut; // tessy.vsmCameraCut: a clipmap page cuts the DAG with the camera's eye ...
+            float dagNear;           // ... floored at this distance (the camera row's, ShadowGpuData)
+            std::uint32_t padDag;
+            float dagCam[4];         // ... and threshold (ShadowGpuData::TessyDagCamThisFrame), a 16-byte row of its own
         };
+        static_assert(offsetof(CullCB, dagCam) == 48, "tessy_vsm_cull_cs.hlsl CullCB: gDagCam starts a 16-byte row");
         RecordComputeDispatch(renderer, cl, tessyCullMat_.get(), static_cast<UINT>(sizeof(CullCB)),
             [&](std::uint8_t* dst)
             {
                 const CullCB c{ kTessyRunCap, kTessyCullGroups, std::min(tessy::g_vsmWindPad, 2u),
                                 tessy::g_vsmValidate ? 1u : 0u, dec.tessyMsCull, dec.tessyMs ? 1u : 0u,
-                                dec.tessyLod ? 1u : 0u, tessy::g_lodShadowTexels, tessy::g_clusterCull ? 1u : 0u };
+                                dec.tessyLod ? 1u : 0u, tessy::g_lodShadowTexels, tessy::g_clusterCull ? 1u : 0u,
+                                dec.tessyLodCamCut ? 1u : 0u, 0.01f, 0u,
+                                { dec.tessyDagCam[0], dec.tessyDagCam[1], dec.tessyDagCam[2], dec.tessyDagCam[3] } };
                 std::memcpy(dst, &c, sizeof(c));
             },
             // t4/t5: the mega buffers, read only by the pad's validator (tessy.validate); t6-t8 the DAG (N7c).

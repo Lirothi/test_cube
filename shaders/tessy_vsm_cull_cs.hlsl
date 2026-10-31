@@ -64,6 +64,13 @@ cbuffer CullCB : register(b0)
     // 1 = drop a cluster whose padded box holds no texel centre of its page (tessy_cull_common TessyBoxHoldsSample;
     // tessy.clusterCull): it would rasterize nothing.
     uint gRectCull;
+    // tessy.vsmCameraCut: a CLIPMAP page cuts the DAG with the camera's eye (gDagCam.xyz) and threshold (gDagCam.w, pixels
+    // per unit at distance 1 over tessy.lodPixelError; the distance floored at gDagNear) -- tessy_atlas_cull_cs.hlsl's
+    // DagTooCoarse for the camera, so a caster draws the clusters its receiver drew (CamDagTooCoarse says why).
+    uint gDagCamCut;
+    float gDagNear;
+    uint _padDag;
+    float4 gDagCam;
 };
 
 #include "tessy_cull_common.hlsli" // InstancePerObject, WindPadBox (shared with tessy_atlas_cull_cs.hlsl)
@@ -122,6 +129,20 @@ bool PageDagTooCoarse(float error, float4 sphere, float4x4 world, float scale, P
     return projected > w;
 }
 
+// The camera's cut on a clipmap page: tessy_atlas_cull_cs.hlsl DagTooCoarse with the camera's eye, term for term and
+// `precise` (a caster must draw exactly the clusters its receiver drew). Cut by the page's own texels, a coarser clipmap
+// level drew a coarser surface than the receiver's -- up to tessy.lodShadowTexels of ITS texels above it -- and SMRT's
+// rays, which walk out of the receiver's level into the coarser ones, met it: the sand at 17:00 dark and hatched, edged
+// where the level changes (owner, 2026-10-31). The same surface in every level is the caster/receiver LOD contract the
+// discrete LODs keep by drawing each caster at its receiver's LOD into every page.
+bool CamDagTooCoarse(float error, float4 sphere, float4x4 world, float scale)
+{
+    precise const float3 c = mul(float4(sphere.xyz, 1.0f), world).xyz;
+    precise const float d = max(length(c - gDagCam.xyz) - sphere.w * scale, gDagNear);
+    precise const float projected = error * scale * gDagCam.w;
+    return projected > d;
+}
+
 // The page's six planes from its off-center projection (vsm_page_setup_cs.hlsl builds the same), and the projection
 // itself (the matrix VSM_TESSY's raster places the page's 128 texels with).
 void PagePlanes(uint page, out float4 planes[6], out float4 w0, out float4 w1, out float4x4 pm)
@@ -175,12 +196,16 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
             pd.k = max(length(float3(c0.x, c1.x, c2.x)), 1.0e-12f) * kPageTexels * 0.5f / max(gDagTexels, 1.0e-3f);
             dag = gDagOn != 0u && dg.y != 0u; // uniform over the group (one run at a time)
         }
+        // A clipmap page (orthographic: no w column) takes the camera's cut under tessy.vsmCameraCut; a local light's keeps
+        // its own texels'.
+        const bool camCut = dag && gDagCamCut != 0u && pd.colWLen == 0.0f;
         if (dag)
         {
             if (lane == 0u) { gsTMin = asuint(3.0e38f); gsTMax = 0u; }
             GroupMemoryBarrierWithGroupSync();
             // Each caster's range of object-space thresholds over its DAG's sphere: w / (s k) at the sphere's nearest and
-            // farthest clip w (one value on an orthographic page).
+            // farthest clip w (one value on an orthographic page) -- or, the camera's cut, its distance from the eye over
+            // (s x the camera's threshold), tessy_atlas_cull_cs DagBand's.
             const float4 sphere = DagSpheres[run.w / kVgLods];
             float tMin = 3.0e38f, tMax = 0.0f;
             for (uint k = lane; k < run.z; k += 64u)
@@ -188,6 +213,14 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
                 const float4x4 world = Instances[PageVisibleList[run.y + k] & kCasterMask].world;
                 const float s = max(TessyWorldScale(world), 1.0e-6f);
                 const float3 c = mul(float4(sphere.xyz, 1.0f), world).xyz;
+                if (camCut)
+                {
+                    const float dist = length(c - gDagCam.xyz);
+                    const float kCam = s * max(gDagCam.w, 1.0e-12f);
+                    tMin = min(tMin, max(dist - sphere.w * s, gDagNear) / kCam);
+                    tMax = max(tMax, max(dist + sphere.w * s, gDagNear) / kCam);
+                    continue;
+                }
                 const float wc = dot(c, pd.colW) + pd.tW;
                 const float reach = sphere.w * s * pd.colWLen;
                 tMin = min(tMin, max(wc - reach, 1.0e-4f) / (s * pd.k));
@@ -228,8 +261,13 @@ void CSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex)
                 // The cut, this caster's: its error fits the page's texels, its parent's does not.
                 const TessyClusterLod cl = ClusterLods[clusterIndex];
                 const float s = TessyWorldScale(ip.world);
-                if (PageDagTooCoarse(cl.lodError, cl.lodSphere, ip.world, s, pd) ||
-                    !PageDagTooCoarse(cl.parentError, cl.parentSphere, ip.world, s, pd)) { continue; }
+                if (camCut)
+                {
+                    if (CamDagTooCoarse(cl.lodError, cl.lodSphere, ip.world, s) ||
+                        !CamDagTooCoarse(cl.parentError, cl.parentSphere, ip.world, s)) { continue; }
+                }
+                else if (PageDagTooCoarse(cl.lodError, cl.lodSphere, ip.world, s, pd) ||
+                         !PageDagTooCoarse(cl.parentError, cl.parentSphere, ip.world, s, pd)) { continue; }
             }
             float3 ctr = mul(float4(c.center, 1.0f), ip.world).xyz;
             float3 ext = abs(ip.world[0].xyz) * c.extent.x + abs(ip.world[1].xyz) * c.extent.y +

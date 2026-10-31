@@ -97,6 +97,11 @@ inline bool g_lodBand = true;
 // Under tessy.lod the SDSM sun partitions cut the DAG with the CAMERA's eye and threshold (kFlagCameraCut), so a caster
 // draws the clusters its receiver drew -- 0 = their discrete tier's clusters, the A/B. `--set tessy.sunCut:0|1`, transient.
 inline bool g_sunCameraCut = true;
+// ...and so do the VSM CLIPMAP pages (tessy_vsm_cull_cs.hlsl CamDagTooCoarse): the same surface in every level, the
+// receiver's. Cut by their own texels (0, the A/B) a coarser level drew a coarser surface than the receiver's, and SMRT's
+// rays, which walk into the coarser levels, met it -- the sand at 17:00 dark and hatched (2026-10-31). A local light's
+// pages keep their texels' cut. A switch flushes the page cache. `--set tessy.vsmCameraCut:0|1`, transient.
+inline bool g_vsmCameraCut = true;
 // Every cluster cull drops a cluster whose padded box holds no sample of the view it is drawn into -- its projected
 // rectangle falls between two pixel / texel centres (tessy_cull_common TessyBoxHoldsSample): the camera's runs, the
 // lamps' atlases, the SDSM partitions, the VSM pages. Exact: such a cluster rasterizes nothing (the mesh shaders' per-

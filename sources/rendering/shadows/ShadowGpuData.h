@@ -377,6 +377,9 @@ public:
     bool TessyGBufferThisFrame() const { return tessyGbufFrame_; }
     const char* TessyGBufferVerdict() const { return tessyGbufVerdict_; }
     bool TessyCameraDagThisFrame() const { return tessyCamDagFrame_; } // N7d: the camera's runs took the DAG's cut
+    // The camera's eye (xyz) and DAG threshold (w: pixels per unit at distance 1 over tessy.lodPixelError), every frame --
+    // the cut the VSM clipmap pages take under tessy.vsmCameraCut (the SDSM partitions' under tessy.sunCut).
+    const float* TessyDagCamThisFrame() const { return tessyDagCamFrame_; }
     std::uint32_t TessyGBufferRuns() const { return tessyGbufTwins_; }
     std::uint32_t TessyGBufferRunsTotal() const { return static_cast<std::uint32_t>(cmdRuns_.size()); }
     // Draws the camera row's records in colour into the bound scene colour + depth (Main_DebugDraw). `viewCB` = the
