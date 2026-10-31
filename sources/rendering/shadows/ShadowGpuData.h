@@ -145,6 +145,7 @@ public:
         // each run's mesh shader twin draws them in pass A (RecordIndirectGBufferDraws). Never on the validation frame.
         bool tessyGBuffer = false;
         std::uint32_t tessyCamRows = 0;
+        std::uint32_t tessyCamSplit = 1; // groups a run (tessy.camSplit): pass A's rows are tessyCamRows x this
         // ...and with the camera's two-pass HZB on this frame, its clusters last frame's pyramid hid go to the deferred
         // list (TessyCamDeferred) for Main_CamCullPost's retest (tessy_camera_post_cs.hlsl) and Main_GBufferB's draw.
         bool tessyCamHzb = false;
@@ -366,7 +367,7 @@ public:
     // clusters last frame's pyramid hid (N5: deferred to pass B), [6] / [7] the camera runs' triangles / DAG clusters
     // written in pass A (N7d); [8] the SDSM partitions' meshlet records, [9] their runs that did not fit, [10] their
     // clusters tested, [11] their triangles (tessy.sdsm); the row set's cap.
-    const std::array<std::uint32_t, 20>& TessyAtlasStats() const { return tessyAtlasStats_; }
+    const std::array<std::uint32_t, 84>& TessyAtlasStats() const { return tessyAtlasStats_; }
     static constexpr std::uint32_t TessyAtlasRowSetCap() { return kTessyAtlasRowSetCap; }
     // The cluster view: on this frame (PrepareCullPass decided it), and its verdict ("on (clusters)", or why not).
     bool TessyViewThisFrame() const { return tessyViewFrame_; }
@@ -834,8 +835,12 @@ private:
     // [0] [4] [8] claims of row sets 0-2, [12] not fit, [16] tested, [20] camera deferred, [24] [28] camera triangles / DAG
     // clusters; [32] [36] [40] [44] [48] the SDSM rows' claim, not fit, tested, triangles, clusters holding no sample
     // (tessy.clusterCull) -- a range of its own (descriptor 8 clears it in Main_SdsmCull, after the main cull and the
-    // camera's post pass used theirs); [64] row sets 0-2's clusters holding no sample.
-    static constexpr UINT kTessyAtlasCounterBytes = 80u;
+    // camera's post pass used theirs); [64] row sets 0-2's clusters holding no sample; [80 + 4 r] camera run r's finished
+    // slices (tessy.camSplit: the last one writes the run's classic count -- tessy_atlas_cull_cs kRunDoneOffset).
+    static constexpr UINT kTessyCamRunDoneOffset = 80u;
+    static constexpr std::uint32_t kTessyCamRunsMax = 64u;
+    static constexpr std::uint32_t kTessyCamSplitMax = 32u;
+    static constexpr UINT kTessyAtlasCounterBytes = kTessyCamRunDoneOffset + 4u * kTessyCamRunsMax;
     static constexpr UINT kTessySunCounterOffset = 32u;
     static constexpr UINT kTessySunCounterBytes = 32u;
     static constexpr UINT kTessyRectCulledOffset = 64u;
@@ -893,13 +898,14 @@ private:
     Ring tessyRunCmds_;
     Ring tessyGroupSurface_;                     // per frame, per mesh group: MaterialSurfaceParamsGpu (the twins' t13)
     bool tessyGbufFrame_ = false;                // PrepareCullPass's decision, read by the G-buffer pass (a worker)
-    std::uint32_t tessyGbufRows_ = 0;            // this frame's camera rows (the runs)
+    std::uint32_t tessyGbufRows_ = 0;            // this frame's camera runs
+    std::uint32_t tessyCamSplit_ = 1;            // ...each culled by this many groups, a row each (pass A: runs x split rows)
     const char* tessyGbufVerdict_ = "off";
     const char* tessyGbufLogged_ = nullptr;
     void EnsureTessyGBufferMaterials_(Renderer* renderer);
     bool FillTessyGBufferForFrame_(Renderer* renderer); // this frame's VgRun and the groups' SurfaceParams
     void RecordTessyGBufferDraws_(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
-                                  bool wireframe, std::uint32_t rowFirst);
+                                  bool wireframe, std::uint32_t rowFirst, std::uint32_t slices);
     void EnsureTessyAtlasResources(Renderer* renderer);
     // `frustumSrv`: the SDSM row set's planes (SdsmShadows::FrustumSrv); the others read the frustum ring. `empty`: no
     // virtual group is read -- every view's run is written empty. `partitionSrv` / `sunTexels`: the SDSM row set's
@@ -912,8 +918,9 @@ private:
     // clusters tested, ... [8..11] the SDSM rows' (logged every 5 s while a cluster row set runs).
     Microsoft::WRL::ComPtr<ID3D12Resource> tessyAtlasStatsReadback_;
     std::array<std::uint64_t, render::kFrameCount> tessyAtlasStatsFrame_{};
-    std::array<std::uint32_t, 20> tessyAtlasStats_{};
-    static_assert(kTessyAtlasCounterBytes / 4u == 20u, "tessyAtlasStats_ mirrors the counter buffer");
+    std::array<std::uint32_t, kTessyAtlasCounterBytes / 4u> tessyAtlasStats_{};
+    static_assert(kTessyAtlasCounterBytes % 16u == 0u, "the counter buffer's RAW views start on 16 bytes");
+    static_assert(kTessyAtlasCounterBytes / 4u == 84u, "TessyAtlasStats() returns the whole counter buffer");
     void EnsureTessyAtlasStatsReadback(Renderer* renderer);
     std::vector<std::uint8_t> casterWindy_;      // per caster: its object sways in the wind (base strength)
     std::vector<std::uint8_t> localDynamicPrev_; // per caster: last frame's movable bit (a change = a new static set)

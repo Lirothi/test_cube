@@ -1,10 +1,13 @@
 #include "rendering/meshes/TessyDag.h"
 
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <map>
+#include <unordered_map>
 
 #include "third_party/meshoptimizer/src/meshoptimizer.h"
 
@@ -28,16 +31,26 @@ constexpr size_t kMinTris = 32;
 constexpr float kStuckShare = 0.85f;
 constexpr uint32_t kMaxLevels = 32;
 
+// A cluster's limits while the DAG grows: Mesh's, or half of them on a folded submesh (Fold: every emitted cluster carries
+// the twins of its triangles too).
+struct CutLimits
+{
+    size_t maxVerts = Mesh::kClusterMaxVerts;
+    size_t maxTris = Mesh::kClusterMaxTris;
+    size_t minTris = kMinTris;
+};
+
 // The meshopt spatial clusterizer over `idx` (BuildClustersCpu's call): each cluster's triangles, in vertex-cache order.
-void Recut(const std::vector<VertexPNTUV>& verts, const uint32_t* idx, size_t count, std::vector<std::vector<uint32_t>>& out)
+void Recut(const std::vector<VertexPNTUV>& verts, const uint32_t* idx, size_t count, const CutLimits& lim,
+           std::vector<std::vector<uint32_t>>& out)
 {
     out.clear();
     if (count < 3) { return; }
-    std::vector<meshopt_Meshlet> meshlets(meshopt_buildMeshletsBound(count, Mesh::kClusterMaxVerts, kMinTris));
+    std::vector<meshopt_Meshlet> meshlets(meshopt_buildMeshletsBound(count, lim.maxVerts, lim.minTris));
     std::vector<unsigned int> mlVerts(count);
     std::vector<unsigned char> mlTris(count);
     const size_t n = meshopt_buildMeshletsSpatial(meshlets.data(), mlVerts.data(), mlTris.data(), idx, count,
-        &verts[0].position.x, verts.size(), sizeof(VertexPNTUV), Mesh::kClusterMaxVerts, kMinTris, Mesh::kClusterMaxTris, 0.5f);
+        &verts[0].position.x, verts.size(), sizeof(VertexPNTUV), lim.maxVerts, lim.minTris, lim.maxTris, 0.5f);
     out.reserve(n);
     for (size_t m = 0; m < n; ++m)
     {
@@ -69,6 +82,64 @@ Mesh::Cluster MakeCluster(const std::vector<VertexPNTUV>& verts, const std::vect
     const meshopt_Bounds b = meshopt_computeClusterBounds(idx.data(), idx.size(), &verts[0].position.x, verts.size(), sizeof(VertexPNTUV));
     c.sphere = DirectX::XMFLOAT4(b.center[0], b.center[1], b.center[2], b.radius);
     return c;
+}
+
+// Double-sided geometry built of DUPLICATES: every triangle has a back twin -- the same three positions, the opposite
+// winding (date_palm's and curly_palm's fronds, curly_palm's frond boots: Sketchfab's exporter doubles a two-sided
+// card). meshoptimizer sees every edge of such a sheet shared by four triangles, calls its vertices complex and never
+// collapses them, so the submesh simplified only by pruning whole pieces -- date_palm's 35 fronds of ~1.1 m went 90 % at
+// once at 1.05 m of error, and the camera drew all 5600 triangles out to ~1.3 km. Folded, the DAG grows over the front
+// triangles alone (a manifold sheet, collapsed like coconut_palm's single-sided fronds) and every emitted cluster carries
+// the twins of its triangles, rebuilt from each front vertex's back vertex at the same position.
+struct Fold
+{
+    bool on = false;
+    std::vector<uint32_t> fronts;                    // one triangle of each pair (mesh-VB indices)
+    std::unordered_map<uint32_t, uint32_t> backOf;   // a front vertex -> its twin's vertex at the same position
+};
+
+// Folds [first, first + count) of `idx` when EVERY triangle has a back twin (a sheet only partly doubled stays as it is:
+// a twin rebuilt for an unpaired triangle would be a face the asset does not have).
+Fold FoldTwins(const std::vector<uint32_t>& idx, size_t first, size_t count, const std::vector<unsigned int>& posOf)
+{
+    Fold f;
+    const size_t tris = count / 3u;
+    if (tris < 2u) { return f; }
+    // Per oriented triangle (its positions rotated to start at the smallest), the triangles still waiting for a twin.
+    std::map<std::array<uint32_t, 3>, std::vector<uint32_t>> open;
+    std::vector<std::pair<uint32_t, uint32_t>> pairs; // (front, back) triangle numbers
+    for (uint32_t t = 0; t < tris; ++t)
+    {
+        std::array<uint32_t, 3> p = { posOf[idx[first + 3u * t]], posOf[idx[first + 3u * t + 1u]], posOf[idx[first + 3u * t + 2u]] };
+        if (p[0] == p[1] || p[1] == p[2] || p[0] == p[2]) { return f; } // a degenerate triangle has no twin
+        const size_t m = p[0] < p[1] ? (p[0] < p[2] ? 0u : 2u) : (p[1] < p[2] ? 1u : 2u);
+        const std::array<uint32_t, 3> ori = { p[m], p[(m + 1u) % 3u], p[(m + 2u) % 3u] };
+        const std::array<uint32_t, 3> rev = { ori[0], ori[2], ori[1] };
+        auto it = open.find(rev);
+        if (it != open.end() && !it->second.empty())
+        {
+            pairs.emplace_back(it->second.back(), t);
+            it->second.pop_back();
+        }
+        else { open[ori].push_back(t); }
+    }
+    if (pairs.size() * 2u != tris) { return f; }
+    f.on = true;
+    f.fronts.reserve(pairs.size() * 3u);
+    for (const auto& [a, b] : pairs)
+    {
+        for (uint32_t k = 0; k < 3u; ++k)
+        {
+            const uint32_t fv = idx[first + 3u * a + k];
+            f.fronts.push_back(fv);
+            for (uint32_t j = 0; j < 3u; ++j)
+            {
+                const uint32_t bv = idx[first + 3u * b + j];
+                if (posOf[bv] == posOf[fv]) { f.backOf.emplace(fv, bv); break; }
+            }
+        }
+    }
+    return f;
 }
 } // namespace
 
@@ -124,18 +195,49 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
         Mesh::DagSubmesh ds;
         ds.firstCluster = static_cast<uint32_t>(out.clusters.size());
         ds.firstLevel = static_cast<uint32_t>(out.levels.size());
-        // The leaves: LOD0's clusters of this submesh, their triangles as they are.
-        std::vector<Node> nodes;
-        for (const Mesh::Cluster& c : lod0Clusters)
+        const size_t subFirst = std::min<size_t>(s.indexOffset, lod0Indices.size());
+        const size_t subCount = std::min<size_t>(s.indexCount, lod0Indices.size() - subFirst);
+        const Fold fold = params.foldTwins ? FoldTwins(lod0Indices, subFirst, subCount, posOf) : Fold{};
+        CutLimits lim;
+        if (fold.on)
         {
-            if (c.firstIndex < s.indexOffset || c.firstIndex >= s.indexOffset + s.indexCount) { continue; }
-            if (static_cast<size_t>(c.firstIndex) + c.triCount * 3ull > lod0Indices.size()) { return false; }
-            Node n;
-            n.indices.assign(lod0Indices.begin() + c.firstIndex, lod0Indices.begin() + c.firstIndex + c.triCount * 3u);
-            n.lod.lodSphere = c.sphere;
-            n.lod.lodError = 0.0f;
-            n.lod.level = 0;
-            nodes.push_back(std::move(n));
+            lim.maxVerts = Mesh::kClusterMaxVerts / 2u;
+            lim.maxTris = Mesh::kClusterMaxTris / 2u;
+            lim.minTris = kMinTris / 2u;
+            st.foldedTriangles += subCount / 3u;
+        }
+        // The leaves: LOD0's clusters of this submesh, their triangles as they are -- or, folded, the front triangles cut
+        // to half-size clusters (each is emitted with its twins).
+        std::vector<Node> nodes;
+        if (fold.on)
+        {
+            std::vector<std::vector<uint32_t>> cut;
+            Recut(verts, fold.fronts.data(), fold.fronts.size(), lim, cut);
+            for (std::vector<uint32_t>& tri : cut)
+            {
+                const meshopt_Bounds b = meshopt_computeClusterBounds(tri.data(), tri.size(), &verts[0].position.x, verts.size(),
+                                                                      sizeof(VertexPNTUV));
+                Node n;
+                n.indices = std::move(tri);
+                n.lod.lodSphere = DirectX::XMFLOAT4(b.center[0], b.center[1], b.center[2], b.radius);
+                n.lod.lodError = 0.0f;
+                n.lod.level = 0;
+                nodes.push_back(std::move(n));
+            }
+        }
+        else
+        {
+            for (const Mesh::Cluster& c : lod0Clusters)
+            {
+                if (c.firstIndex < s.indexOffset || c.firstIndex >= s.indexOffset + s.indexCount) { continue; }
+                if (static_cast<size_t>(c.firstIndex) + c.triCount * 3ull > lod0Indices.size()) { return false; }
+                Node n;
+                n.indices.assign(lod0Indices.begin() + c.firstIndex, lod0Indices.begin() + c.firstIndex + c.triCount * 3u);
+                n.lod.lodSphere = c.sphere;
+                n.lod.lodError = 0.0f;
+                n.lod.level = 0;
+                nodes.push_back(std::move(n));
+            }
         }
         if (nodes.empty()) { out.submeshes.push_back(ds); continue; }
         const float uvWeight = s.materialSlot < params.slotUvWeight.size() ? params.slotUvWeight[s.materialSlot] : 0.0f;
@@ -222,7 +324,7 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
                     nodes[m].hasParent = true;
                 }
                 std::vector<std::vector<uint32_t>> cut;
-                Recut(verts, simplified.data(), n, cut);
+                Recut(verts, simplified.data(), n, lim, cut);
                 for (std::vector<uint32_t>& tri : cut)
                 {
                     Node child;
@@ -245,7 +347,7 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
                 n.lod.parentError = FLT_MAX;
                 n.lod.parentSphere = n.lod.lodSphere;
                 ++st.roots;
-                st.rootTriangles += n.indices.size() / 3u;
+                st.rootTriangles += (fold.on ? 2u : 1u) * (n.indices.size() / 3u);
                 st.rootError = std::max(st.rootError, n.lod.lodError);
             }
         }
@@ -268,11 +370,24 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
             ++l.clusterCount;
             l.minLodError = std::min(l.minLodError, n.lod.lodError);
             l.maxParentError = std::max(l.maxParentError, n.lod.parentError);
-            out.clusters.push_back(MakeCluster(verts, n.indices, static_cast<uint32_t>(out.indices.size())));
+            // Folded: the front triangles, then their twins -- each front vertex's back vertex, the winding reversed (a
+            // simplified triangle keeps original front vertices, so every one has a twin).
+            std::vector<uint32_t> emitted = n.indices;
+            if (fold.on)
+            {
+                const auto back = [&fold](uint32_t v) { const auto it = fold.backOf.find(v); return it != fold.backOf.end() ? it->second : v; };
+                for (size_t t = 0; t + 2u < n.indices.size(); t += 3u)
+                {
+                    emitted.push_back(back(n.indices[t]));
+                    emitted.push_back(back(n.indices[t + 2u]));
+                    emitted.push_back(back(n.indices[t + 1u]));
+                }
+            }
+            out.clusters.push_back(MakeCluster(verts, emitted, static_cast<uint32_t>(out.indices.size())));
             out.lod.push_back(n.lod);
-            out.indices.insert(out.indices.end(), n.indices.begin(), n.indices.end());
-            st.triangles += n.indices.size() / 3u;
-            if (n.lod.level == 0) { ++st.leaves; st.leafTriangles += n.indices.size() / 3u; }
+            out.indices.insert(out.indices.end(), emitted.begin(), emitted.end());
+            st.triangles += emitted.size() / 3u;
+            if (n.lod.level == 0) { ++st.leaves; st.leafTriangles += emitted.size() / 3u; }
         }
         ds.clusterCount = static_cast<uint32_t>(out.clusters.size()) - ds.firstCluster;
         ds.levelCount = levelCount;

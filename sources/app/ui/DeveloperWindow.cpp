@@ -3433,19 +3433,32 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Needs the camera's two-pass HZB. Not saved. --set=tessy.gbufferHzb:0|1");
                 ImGui::EndDisabled();
                 ImGui::Unindent();
-                ImGui::Checkbox("Tessy: cluster DAG LOD (camera, lamp atlases, VSM pages)", &tessy::g_lod);
+                GRAPHICS_CONTROL(TessyLod, "tessyLod",
+                    ImGui::Checkbox("Tessy: cluster DAG LOD (camera, lamp atlases, VSM pages)", &tessy::g_lod));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("N7: the assets with a cluster DAG (baked into every .mesh.bin v5; a v4 file builds one\n"
                                       "at load for mesh.json \"tessyLod\" or --tessy-lod-build) draw the DAG's cut --\n"
                                       "continuous LOD instead of the discrete tiers, each caster its own.\n"
-                                      "Camera: a cluster whose error spans at most lod.pixelError pixels at the nearest\n"
-                                      "point of its sphere while its parent's spans more (where a discrete LOD of that\n"
+                                      "Camera: a cluster whose error spans at most \"DAG pixel error\" pixels at the nearest\n"
+                                      "point of its sphere while its parent's spans more (at 1, where a discrete LOD of that\n"
                                       "deviation switches); it turns the camera G-buffer's clusters on for itself.\n"
                                       "Shadows (the lamps' atlases, every VSM page): the same against the view's texels x\n"
                                       "tessy.lodShadowTexels (a switch flushes the page cache and the lamps' static cache).\n"
                                       "--set=tessy.lod:0|1, tessy.lodShadowTexels:<x>, tessy.lodBand:0|1 (the camera's level band)");
                 ImGui::SameLine();
                 ImGui::TextDisabled("(%u groups, %u clusters)", scene.ShadowGpu().TessyDagGroups(), scene.ShadowGpu().TessyDagClusters());
+                ImGui::Indent();
+                ImGui::SetNextItemWidth(220.0f);
+                GRAPHICS_CONTROL(TessyLodPixelError, "tessyLodPixelError",
+                    ImGui::SliderFloat("DAG pixel error", &tessy::g_lodPixelError, 0.25f, 16.0f, "%.2f px",
+                                       ImGuiSliderFlags_Logarithmic));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The camera's DAG cut: how many pixels of this screen a cluster's simplification error may\n"
+                                      "span before its parent takes over. Larger = the DAG's clusters coarsen sooner (fewer\n"
+                                      "triangles), smaller = later. 1 = the discrete LODs' rule (LOD tab \"Pixel error\", which\n"
+                                      "this does not touch). The SDSM partitions' camera cut follows it; the lamps' atlases and\n"
+                                      "the VSM pages keep tessy.lodShadowTexels. --set=tessy.lodPixelError:<px>");
+                ImGui::Unindent();
                 {
                     int view = static_cast<int>(tessy::g_debugView);
                     const char* const views[] = { "Off", "Clusters", "Meshlets", "Levels" };

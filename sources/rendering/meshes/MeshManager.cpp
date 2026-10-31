@@ -1588,6 +1588,7 @@ bool BuildDagForMesh(const std::vector<VertexPNTUV>& verts, const std::vector<ui
         p.slotUvWeight.push_back(opt.slotFoliage[i] > 0.0f ? opt.foliageUvWeight : 0.0f);
         p.slotPrune.push_back(opt.slotFoliage[i] > 0.0f && tessy::g_lodPrune ? 1u : 0u);
     }
+    p.foldTwins = tessy::g_lodFold;
     if (!tessy::BuildDag(verts, lod0Indices, lod0Clusters, lod0Subs, p, dag, &st))
     {
         why = "no LOD0 clusters";
@@ -1604,11 +1605,13 @@ bool BuildDagForMesh(const std::vector<VertexPNTUV>& verts, const std::vector<ui
 
 std::string DagSummary(const tessy::DagStats& st)
 {
-    char buf[200];
+    char buf[256];
     std::snprintf(buf, sizeof(buf), "DAG %u levels, %u clusters, %llu tris over all levels (%.2f x LOD0), roots %llu tris at "
-                  "%.4f m, %.1f ms", st.levels, st.clusters, static_cast<unsigned long long>(st.triangles),
+                  "%.4f m, %llu double-sided tris folded, %.1f ms", st.levels, st.clusters,
+                  static_cast<unsigned long long>(st.triangles),
                   st.leafTriangles ? static_cast<double>(st.triangles) / static_cast<double>(st.leafTriangles) : 0.0,
-                  static_cast<unsigned long long>(st.rootTriangles), st.rootError, st.ms);
+                  static_cast<unsigned long long>(st.rootTriangles), st.rootError,
+                  static_cast<unsigned long long>(st.foldedTriangles), st.ms);
     return buf;
 }
 } // namespace

@@ -963,19 +963,23 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
                                     ctx.renderer->GetTotalFrameNumber() > render::kFrameCount;
         const bool wireframe = ctx.renderer->GetWireframeMode();
         const std::uint32_t rows = static_cast<std::uint32_t>(cmdRuns_.size());
+        // Each run culled by `split` groups (tessy.camSplit), a row each: pass A's rows are rows x split.
+        const std::uint32_t split = std::clamp(tessy::g_camSplit, 1u, kTessyCamSplitMax);
         // N7d: the DAG's cut reaches the camera only through the clusters, so tessy.lod turns them on for itself.
         const bool dagWanted = tessy::g_lod && tessyDagGroups_ > 0u;
         dec.tessyGBuffer = tessy::g_enabled && (tessy::g_gbuffer || dagWanted) && dec.gbuffer && !readbackWanted && !wireframe &&
                            filled && tessyGbufTwins_ > 0 && tessyAtlasCullMat_ && tessyAtlasHeap_ &&
-                           rows <= render::kShadowViewCeiling && numVirtualGroups_ <= 0x10000u &&
+                           rows <= kTessyCamRunsMax && rows * split <= render::kShadowViewCeiling && numVirtualGroups_ <= 0x10000u &&
                            ctx.renderer->GetDispatchMeshCommandSignature() != nullptr;
         dec.tessyCamRows = dec.tessyGBuffer ? rows : 0u;
+        dec.tessyCamSplit = dec.tessyGBuffer ? split : 1u;
         tessyGbufFrame_ = dec.tessyGBuffer;
         tessyGbufRows_ = dec.tessyCamRows;
+        tessyCamSplit_ = dec.tessyCamSplit;
         // The camera's two-pass HZB on: the clusters the previous pyramid hid wait for pass B (pass A's rows end where
-        // pass B's begin: two rows a run must fit the row set).
+        // pass B's begin: a run's pass-A slices and its pass-B row must fit the row set).
         dec.tessyCamHzb = tessy::g_gbufferHzb && dec.tessyGBuffer && dec.camHzb && tessyCameraPostMat_ &&
-                          tessyCamDeferred_.Get() && 2u * rows <= render::kShadowViewCeiling;
+                          tessyCamDeferred_.Get() && rows * (split + 1u) <= render::kShadowViewCeiling;
         tessyCamHzbFrame_ = dec.tessyCamHzb;
         // N7d: the camera position LodSelect selected the tiers from, and its projection of an error: pixels per unit at
         // depth 1 over lod.pixelError and lod.distanceScale (a discrete LOD of the same deviation switches where this
@@ -993,7 +997,8 @@ ShadowGpuData::CullDecisions ShadowGpuData::PrepareCullPass(RenderGraphPassConte
             dec.tessyDagCam[0] = lastCameraPos_.x;
             dec.tessyDagCam[1] = lastCameraPos_.y;
             dec.tessyDagCam[2] = lastCameraPos_.z;
-            dec.tessyDagCam[3] = render::g_lodPixelsPerUnit / std::max(render::g_lodPixelError, 1e-3f) /
+            // tessy.lodPixelError: the DAG's own pixel error (the discrete LODs keep lod.pixelError).
+            dec.tessyDagCam[3] = render::g_lodPixelsPerUnit / std::max(tessy::g_lodPixelError, 1e-3f) /
                                  std::max(render::g_lodDistanceScale, 1e-3f);
         }
         for (int i = 0; i < 4; ++i) { tessyDagCamFrame_[i] = dec.tessyDagCam[i]; } // the SDSM partitions cut it the same way
@@ -1362,7 +1367,7 @@ void ShadowGpuData::RecordCamCullPost(Renderer* renderer, ID3D12GraphicsCommandL
         };
         CameraPostCB c{};
         c.numRuns = tessyGbufRows_;
-        c.rowFirst = kTessyCameraRowSet * render::kShadowViewCeiling + tessyGbufRows_;
+        c.rowFirst = kTessyCameraRowSet * render::kShadowViewCeiling + tessyGbufRows_ * tessyCamSplit_; // after pass A's slices
         c.recordBase = kTessyCameraRowSet * kTessyAtlasRowSetCap;
         c.recordCap = kTessyAtlasRowSetCap;
         for (int i = 0; i < 4; ++i) { c.wind0[i] = dec.tessyWind0[i]; c.wind1[i] = dec.tessyWind1[i]; }
@@ -1566,14 +1571,14 @@ bool ShadowGpuData::RecordIndirectGBufferDraws(Renderer* renderer, ID3D12Graphic
     if (!passB && tessyGbufFrame_ && vgBegin == 0u)
     {
         GPU_SCOPE(cl, ProfilerScopes::kGBufferTessy);
-        RecordTessyGBufferDraws_(renderer, cl, viewCB, wireframe, 0u);
+        RecordTessyGBufferDraws_(renderer, cl, viewCB, wireframe, 0u, tessyCamSplit_);
         drew = true;
     }
     // ...and pass B's: the clusters the post pass found visible after all, from the runs' pass-B rows.
     if (passB && tessyCamHzbFrame_ && vgBegin == 0u)
     {
         GPU_SCOPE(cl, ProfilerScopes::kGBufferTessy);
-        RecordTessyGBufferDraws_(renderer, cl, viewCB, wireframe, tessyGbufRows_);
+        RecordTessyGBufferDraws_(renderer, cl, viewCB, wireframe, tessyGbufRows_ * tessyCamSplit_, 1u);
         drew = true;
     }
     // A6 readout: how many ExecuteIndirect the pass cost (the plan's acceptance number).
@@ -1656,10 +1661,12 @@ bool ShadowGpuData::FillTessyGBufferForFrame_(Renderer* renderer)
     return true;
 }
 
-// Pass A's clusters: per run with a twin, one DispatchMesh of its camera row (the kernel wrote the args). The table is
-// the classic draws' t4..t6 followed by the cluster inputs, the run's row and the groups' SurfaceParams.
+// Pass A's clusters: per run with a twin, one DispatchMesh per row of the run -- its `slices` (tessy.camSplit: the
+// kernel's groups, contiguous parts of the run's commands), IN ORDER, so the records are drawn in the classic draw's
+// order (coplanar surfaces resolve their tie as it did); pass B's one row a run. The table is the classic draws' t4..t6
+// followed by the cluster inputs, the run's row and the groups' SurfaceParams.
 void ShadowGpuData::RecordTessyGBufferDraws_(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_GPU_VIRTUAL_ADDRESS viewCB,
-                                             bool wireframe, std::uint32_t rowFirst)
+                                             bool wireframe, std::uint32_t rowFirst, std::uint32_t slices)
 {
     const UINT f = renderer->GetCurrentFrameIndex();
     ID3D12CommandSignature* const meshSig = renderer->GetDispatchMeshCommandSignature();
@@ -1679,14 +1686,17 @@ void ShadowGpuData::RecordTessyGBufferDraws_(Renderer* renderer, ID3D12GraphicsC
         if (!m || !run.md) { continue; }
         auto h = renderer->GetRenderContextPool()->Acquire();
         RenderContext& ctx = h.ref();
-        const std::uint32_t row = kTessyCameraRowSet * render::kShadowViewCeiling + rowFirst + r;
-        ctx.constants[0] = { row, flags, viewportBits[0], viewportBits[1] };
         ctx.cbv[1] = viewCB;
         run.md->StageGBufferBindings(renderer, ctx, 0, 0, /*bindless=*/true); // the sampler; the textures by index
         ctx.srvTable[4] = table;
-        if (!m->Bind(cl, ctx, wireframe)) { continue; }
-        renderer->ExecuteIndirect(cl, meshSig, 1, tessyAtlasArgs_.Get(),
-            static_cast<UINT64>(f) * kTessyAtlasArgsRegionBytes + static_cast<UINT64>(row) * 12u, nullptr, 0);
+        for (std::uint32_t s = 0; s < std::max(slices, 1u); ++s)
+        {
+            const std::uint32_t row = kTessyCameraRowSet * render::kShadowViewCeiling + rowFirst + r * std::max(slices, 1u) + s;
+            ctx.constants[0] = { row, flags, viewportBits[0], viewportBits[1] }; // the row is the mesh shader's root constant
+            if (!m->Bind(cl, ctx, wireframe)) { break; }
+            renderer->ExecuteIndirect(cl, meshSig, 1, tessyAtlasArgs_.Get(),
+                static_cast<UINT64>(f) * kTessyAtlasArgsRegionBytes + static_cast<UINT64>(row) * 12u, nullptr, 0);
+        }
     }
 }
 
@@ -5304,8 +5314,8 @@ bool ShadowGpuData::RecordTessyView(Renderer* renderer, ID3D12GraphicsCommandLis
     RenderContext& ctx = ctxHandle.ref();
     ctx.cbv[1] = viewCB;
     ctx.srvTable[0] = table;
-    // Under N5 the camera row set holds a row per G-buffer PSO run (what the clusters drew); alone, the one row.
-    const std::uint32_t rows = tessyGbufFrame_ ? tessyGbufRows_ : 1u;
+    // Under N5 the camera row set holds tessy.camSplit rows per G-buffer PSO run (what the clusters drew); alone, the one row.
+    const std::uint32_t rows = tessyGbufFrame_ ? tessyGbufRows_ * tessyCamSplit_ : 1u;
     for (std::uint32_t r = 0; r < rows; ++r)
     {
         const std::uint32_t row = kTessyCameraRowSet * render::kShadowViewCeiling + r;
@@ -5360,7 +5370,7 @@ void ShadowGpuData::RecordTessyAtlasCull(Renderer* renderer, ID3D12GraphicsComma
     // the SDSM partitions' planes are their own buffer's 0..
     c.frustumFirst = camera ? (byRun ? render::MaxShadowViews() : 0u) : sun ? 0u : render::kShadowViewCascades;
     c.planes = sun ? 16u : 6u;
-    c.split = sun ? kTessySunSplit : 1u;
+    c.split = sun ? kTessySunSplit : byRun ? std::max(dec.tessyCamSplit, 1u) : 1u;
     if (sun)
     {
         c.counterAt[0] = kTessySunCounterOffset; c.counterAt[1] = kTessySunCounterOffset + 4u;

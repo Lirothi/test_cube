@@ -161,6 +161,8 @@ enum class GraphicsControl
     TessyAtlas,                   // Tessy N4: the local lights' atlas views draw clusters
     TessyGBuffer,                 // Tessy N5: the camera's G-buffer draws clusters
     TessySdsm,                    // Tessy: the SDSM sun partitions draw clusters
+    TessyLod,                     // Tessy N7: the cluster DAG's cut
+    TessyLodPixelError,           // Tessy N7: the camera's DAG cut threshold (pixels)
     VsmWindAnimateMaxLevel,
     StreamingEnabled,             // Streaming (texture streaming A3)
     StreamingPoolSizeMB,

@@ -14,7 +14,9 @@
 // Every cluster carries the error and bounding sphere of the simplification that MADE it (lod*) and of the one that
 // CONSUMES it (parent*); errors only grow up an edge and a parent's sphere holds its children's, so a view that draws
 // "my error is fine and my parent's is not" draws a crack-free cut at any distance (UE ClusterDAG.cpp:1438-1446, 1587).
-// Errors are meshopt's absolute ones -- object-space metres, as Mesh::GetLodError's.
+// Errors are meshopt's absolute ones -- object-space metres, as Mesh::GetLodError's. A submesh of double-sided
+// DUPLICATES (every triangle with a back twin -- meshopt cannot collapse such a non-manifold sheet) grows over one side
+// and emits the twins with each cluster (TessyDag.cpp FoldTwins).
 namespace tessy
 {
 struct DagBuildParams
@@ -25,6 +27,9 @@ struct DagBuildParams
     // the group's error (the discrete foliage chain drops whole leaves; edge collapses alone stall a crown at ~45 %).
     std::vector<unsigned char> slotPrune;
     uint32_t groupSize = 16;         // meshopt_partitionClusters' target (clusters a group)
+    // A submesh whose every triangle has a back twin (double-sided geometry built of duplicates) grows its DAG over one
+    // side and emits the twins with it (TessyDag.cpp FoldTwins). false = as it is, the A/B (`--tessy-lod-fold=0`).
+    bool foldTwins = true;
 };
 
 struct DagStats
@@ -37,6 +42,7 @@ struct DagStats
     uint64_t triangles = 0;     // every level
     uint64_t leafTriangles = 0;
     uint64_t rootTriangles = 0;
+    uint64_t foldedTriangles = 0; // LOD0 triangles of the folded submeshes (both sides)
     float rootError = 0.0f;     // the largest error a root carries (object space)
     double ms = 0.0;
 };

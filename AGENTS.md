@@ -816,6 +816,19 @@ reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (t
   the A/B (it brings the flicker back). Which of a run's entries overflow `kMaxEntries` (1024; thousands of palms from
   the air) and stay classic is now the command order's too. GBV (`ShadowCull,GBuffer,SdsmCull,SdsmShadow,Skybox` + the
   Skybox self-test, that view with `tessy.lod:1`, 833 frames): clean.
+- **A camera run is culled by 16 groups** (`tessy.camSplit`, transient, 1-32; 2026-10-31, owner on the aerial view
+  cam -70.98 34.67 144.04: "why are the discrete LODs faster even at 2 px?"). One 1024-thread group a PSO run left as
+  many SMs working as there were runs (six) -- ~8-10 ns a (caster, cluster) test, the rate the SDSM partitions had
+  before their split -- and the DAG's ~30 k tests cost 0.26 ms of `ShadowCull.TessyCamera` against the discrete LODs'
+  8 k at 0.08, more than the DAG saved the G-buffer. Now group g takes run g / split and the (g % split)-th CONTIGUOUS
+  part of its commands (the classic draw's order), writes its own row, and `RecordTessyGBufferDraws_` issues a run's
+  rows in slice order, so the records keep the order the roof flicker fix needs (the bathroom roof: 0.05 % at 1, 8 and
+  16 slices). The run's classic count is written by its LAST slice to finish: each adds 1 (+ 1 << 16 when it left records
+  classic) to the run's counter at `kTessyCamRunDoneOffset` + 4 r (the counter region is 336 bytes; at most 64 runs).
+  Pass B's rows start after pass A's slices. Measured (DLSS Balanced, panels closed, alternated twice), the camera cull
+  at 1 / 4 / 8 / 16 / 32: DAG 0.258 / 0.172 / 0.113 / 0.057 / 0.042 ms, discrete 0.082 / 0.066 / 0.060 / 0.058 / 0.056;
+  the G-buffer +0.005 at 16 (a DispatchMesh a slice). On that view the GPU frame with the DAG at 1 px is now the
+  discrete LODs' (3.34 vs 3.32 ms), at 2 px below it (3.29).
 - **A count buffer never holds 0xFFFFFFFF** (2026-10-30, owner at cam -44.92 11.56 97.73, 16:00: "with the DAG this
   small rock dithers"). A camera run the kernel did not take whole wrote ~0 into its classic count, meaning "all the
   run's commands" -- ExecuteIndirect is specified to take min(count, MaxCommandCount), but this driver (NVIDIA
@@ -828,6 +841,31 @@ reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (t
   views against the flat test's 62-82 k: `ShadowCull.TessyCamera` 0.20 vs 0.24 ms, 0.24 vs 0.33). The rock's box over
   48 still frames: 0.00 % of pixels move over 8 levels (DLSS off), DAG and discrete alike. Any count buffer: write the
   number, never a sentinel.
+- **Double-sided duplicates are folded in the DAG** (2026-10-31, owner: "so the current LODs are better for the palms? is
+  it the foliage, do the trunks simplify fine?"). The trunks did (one cluster, 70-120 triangles). date_palm's fronds,
+  curly_palm's fronds and curly_palm's frond boots are double-sided sheets built of DUPLICATES -- every triangle has a
+  back twin at the same positions with the opposite winding (`twin_scan`: exactly those three submeshes over all 148
+  assets, 100 % paired) -- so every edge is shared by four triangles, meshoptimizer calls the vertices complex and never
+  collapses them, and only `meshopt_SimplifyPrune` acted: date_palm's 35 fronds (~1.1 m each) went 5600 -> 560 at once at
+  1.05 m of error, i.e. the camera drew all 5600 out to ~1.3 km. `TessyDag.cpp FoldTwins`: a submesh whose every
+  triangle is paired grows its DAG over one side (half-size clusters) and every emitted cluster carries its triangles'
+  twins (each front vertex's back vertex, the winding reversed). date fronds now 5600 -> 2796 -> 1398 -> 698 -> 136 -> 20
+  (1.9 / 6.9 / 26 / 113 cm), curly fronds 1568 -> ... -> 72, boots 2400 -> ... -> 74; roots date 829 -> 283, curly 1515
+  -> 307. Live, `tessy.lod:1` with the two palms rebuilt at load (`--tessy-lod-build=date_palm,curly_palm`), DLSS
+  Balanced: grove 243 k triangles (discrete 263 k, old DAG 262 k), far view 320 k (378 k, 544 k), aerial 916 k (972 k,
+  2.21 M); G-buffer 0.156 / 0.153 / 0.245 ms against the discrete 0.166 / 0.178 / 0.26 -- the DAG now beats the
+  discrete LODs on all three, but its camera cull costs the aerial view 0.25 ms against ~0.1. date_palm and curly_palm
+  were rebaked with it the same day (owner: "rebake"; `--reimport` from their manifests -- every byte before the DAG
+  section identical to the old file, the loaded numbers equal to the at-load build); the unfolded files are in
+  `D:\Programming\test_cube_backups\mesh_bin_v5_unfolded_dag_2026-10-31`. `--tessy-lod-fold=0` = no folding (the A/B); `intent_regression TestTessyDag` holds it on date_palm (folded, the 10 cm cut under half,
+  every folded cluster's second half its first half's twins).
+- **`tessy.lod` is persisted** (`graphics_settings.json` shadows.vsm.tessyLod, since 2026-10-31 -- owner: "turning the
+  DAG on is not saved"): every v5 asset carries its baked DAG, so nothing is built at load any more.
+- **`tessy.lodPixelError`** (default 1 px; Developer Controls > Tessy "DAG pixel error", `graphics_settings.json`
+  vsm.tessyLodPixelError, `--set`, MCP): the camera's DAG cut threshold on its own -- the pixels a cluster's error may
+  span before its parent takes over (the discrete LODs keep `lod.pixelError`; the SDSM sun's camera cut follows it).
+  Measured with the folded palms: 0.5 / 1 / 2 / 4 / 8 px = grove 298 / 244 / 159 / 108 / 78 k triangles, far 481 / 320 /
+  205 / 176 / 126 k, aerial 1.42 M / 916 / 749 / 564 / 505 k (G-buffer 0.295 -> 0.175 ms); the discrete LODs unmoved.
 - **`tessy.sunCut`** (default 1, transient): under `tessy.lod` the SDSM partitions cut the DAG with the camera's eye and
   threshold (`kFlagCameraCut`) -- a far palm's shadow then has the fronds the camera draws, not LOD3's thinned ones (the
   aerial view: 2.4 % of the frame over 8 levels against a 0-0.7 % floor, the sand under the far crowns); +0.015-0.06 ms

@@ -3824,6 +3824,54 @@ void TestTessyDag()
         Check(falling, "the cut's triangles never grow as the threshold rises");
         Check(areaKept, "the fine cuts' area stays within 20 % of LOD0's (no hole, no double cover)");
       }
+        // FoldTwins: date_palm's fronds are double-sided DUPLICATES (every triangle has a back twin at the same positions).
+        // Kept as they are, meshopt sees a non-manifold sheet it never collapses; folded, the DAG simplifies one side and
+        // every cluster of the sheet carries the twins of its triangles.
+        if (std::strstr(path, "date_palm") != nullptr)
+        {
+            tessy::DagBuildParams on, off;
+            off.foldTwins = false;
+            Mesh::Dag dOn, dOff;
+            tessy::DagStats sOn, sOff;
+            tessy::BuildDag(bin.verts, bin.lods[0].idx, bin.lods[0].clusters, bin.lods[0].subs, on, dOn, &sOn);
+            tessy::BuildDag(bin.verts, bin.lods[0].idx, bin.lods[0].clusters, bin.lods[0].subs, off, dOff, &sOff);
+            Check(sOn.foldedTriangles > 0u && sOff.foldedTriangles == 0u, "date_palm's double-sided fronds are folded");
+            const uint64_t cutOn = tessy::DagCutTriangles(dOn, 0.1f), cutOff = tessy::DagCutTriangles(dOff, 0.1f);
+            std::printf("  tessy.dag date_palm folded: %llu double-sided tris; cut at 0.1 m %llu tris (%llu not folded)\n",
+                        static_cast<unsigned long long>(sOn.foldedTriangles), static_cast<unsigned long long>(cutOn),
+                        static_cast<unsigned long long>(cutOff));
+            Check(cutOn * 2u < cutOff, "folded, the cut at 10 cm keeps under half the triangles it kept unfolded");
+            // Every cluster of a folded submesh: its second half is its first half's twins -- the same positions, the
+            // winding reversed. Per submesh, all of its clusters or none.
+            const auto same = [&](uint32_t a, uint32_t b)
+            {
+                const auto& p = bin.verts[a].position;
+                const auto& q = bin.verts[b].position;
+                return p.x == q.x && p.y == q.y && p.z == q.z;
+            };
+            uint32_t foldedSubs = 0u;
+            bool consistent = true;
+            for (const Mesh::DagSubmesh& s : dOn.submeshes)
+            {
+                uint32_t mirrored = 0u;
+                for (uint32_t c = s.firstCluster; c < s.firstCluster + s.clusterCount; ++c)
+                {
+                    const Mesh::Cluster& cl = dOn.clusters[c];
+                    bool m = cl.triCount % 2u == 0u;
+                    const uint32_t half = cl.triCount / 2u;
+                    for (uint32_t k = 0; m && k < half; ++k)
+                    {
+                        const uint32_t* f = &dOn.indices[cl.firstIndex + 3u * k];
+                        const uint32_t* b = &dOn.indices[cl.firstIndex + 3u * (half + k)];
+                        m = same(f[0], b[0]) && same(f[2], b[1]) && same(f[1], b[2]);
+                    }
+                    mirrored += m ? 1u : 0u;
+                }
+                if (mirrored == s.clusterCount && s.clusterCount > 0u) { ++foldedSubs; }
+                else if (mirrored != 0u) { consistent = false; }
+            }
+            Check(foldedSubs >= 1u && consistent, "a folded submesh's every cluster carries its triangles' twins");
+        }
     }
 }
 

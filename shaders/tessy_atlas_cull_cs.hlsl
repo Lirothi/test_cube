@@ -20,7 +20,8 @@
 // construction: siblings share their parent's error and sphere, a parent's sphere holds its children's and its error is
 // no smaller, so every point of the surface is covered once whatever the camera.
 //
-// One 256-thread group per view (an SDSM partition: gSplit groups, each a slice of its records and a run of its own), two
+// One 256-thread group per view (an SDSM partition: gSplit groups, each a slice of its records and a run of its own; a
+// camera G-buffer run: gSplit 1024-thread groups, each a contiguous slice of the run's commands and a row of its own), two
 // sweeps over the view's records: the first counts the meshlets that survive, one
 // atomic then claims the view's run in the buffer, the second writes it. A view whose run does not fit keeps its
 // records classic (nothing zeroed): a full buffer costs speed, never a shadow. The records are taken 256 at a time, and
@@ -68,8 +69,10 @@ cbuffer AtlasCullCB : register(b0)
     // Where this row set counts in TessyAtlasCounter (bytes): x its claimed records, y its views that did not fit, z its
     // clusters tested, w its triangles written (+4: its DAG clusters), ~0 = not counted. Row sets 0-2 share y / z.
     uint4 gCounterAt;
-    // Groups a view (the SDSM partitions: ShadowGpuData::kTessySunSplit): group g takes view g / gSplit and its virtual
-    // groups vg % gSplit == g % gSplit, and writes its own run at slot g -- one group a partition left the GPU idle. 1 else.
+    // Groups a view (the SDSM partitions: ShadowGpuData::kTessySunSplit; the camera's G-buffer runs: tessy.camSplit):
+    // group g takes view g / gSplit and writes its own run at slot g -- a partition its virtual groups vg % gSplit ==
+    // g % gSplit, a camera run the (g % gSplit)-th contiguous part of its commands (the order the classic draw has). One
+    // group a view left the GPU idle: six camera runs kept six SMs busy for 0.25 ms of DAG tests. 1 else.
     uint gSplit;
     float2 gRectSize;  // kFlagRectCull on the SDSM partitions' rows: the partition's viewport (the tile's content rect)
     uint gRectCountAt; // kFlagRectCull: where in TessyAtlasCounter the clusters it dropped are counted (bytes)
@@ -130,8 +133,9 @@ RWByteAddressBuffer       TessyAtlasCounter  : register(u5); // [0] / [4] / [8]:
                                                               // camera's deferred clusters claimed, [24] / [28]: the
                                                               // camera's runs' triangles / DAG clusters written; [32..64)
                                                               // the SDSM rows' own claim, not fit, tested, triangles and
-                                                              // clusters holding no sample; [64] row sets 0-2's (cleared
-                                                              // per frame; the SDSM part again by Main_SdsmCull)
+                                                              // clusters holding no sample; [64] row sets 0-2's; [80 + 4 r]
+                                                              // camera run r's finished slices (cleared per frame; the
+                                                              // SDSM part again by Main_SdsmCull)
 RWStructuredBuffer<uint4> TessyCamDeferred   : register(u6); // N5: {caster id, cluster, camId, base vertex} the previous
                                                               // pyramid hid (tessy_camera_post_cs retests them), or dead
 
@@ -159,6 +163,9 @@ static const uint kFlagCameraCut = 64u;
 // matrix) on the render target, the lamps' views by ViewRects, the SDSM partitions by their lightViewProj on gRectSize.
 // tessy.clusterCull.
 static const uint kFlagRectCull = 128u;
+// kFlagByRun: a run split over gSplit groups (ShadowGpuData::kTessyCamRunDoneOffset): per run a counter its slices add
+// 1 to as they finish (+ 1 << 16 when one left records classic) -- the LAST slice writes the run's classic count.
+static const uint kRunDoneOffset = 80u;
 static const uint kEntryDag = 0x80000000u; // gsEntryVg: the entry takes its mesh group's DAG, every caster all of it (N7d)
 // N7e: gsEntryVg: the entry is ONE caster (gsEntryStart) and the band of its DAG's levels it can cut at its distance
 // (gsEntryFirst, gsEntryInst = the band's clusters): the levels whose error interval cannot meet its threshold anywhere
@@ -584,12 +591,16 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         // ascending order (the cluster view); the step's DAG groups, then its entries, are laid out in that order. The
         // cursors are the same in every thread (OrderedPrefix's totals).
         const uint2 cmds = byRun ? uint2(RunCmds[2u * view], RunCmds[2u * view + 1u]) : uint2(0u, 0u);
-        const uint n = byRun ? cmds.y : (gNumGroups > slice ? (gNumGroups - slice + split - 1u) / split : 0u);
+        // A run split over gSplit groups: slice s takes the s-th contiguous part of the run's commands, and the draw
+        // issues the slices' rows in order -- the records stay in the classic draw's order across the whole run.
+        const uint cmdLo = byRun ? (cmds.y * slice) / split : 0u;
+        const uint cmdHi = byRun ? (cmds.y * (slice + 1u)) / split : 0u;
+        const uint n = byRun ? cmdHi - cmdLo : (gNumGroups > slice ? (gNumGroups - slice + split - 1u) / split : 0u);
         uint dagCursor = 0u, entryCursor = 0u;
         for (uint b = 0u; b < n; b += kThreads)
         {
             const uint i = b + slot;
-            const uint vg = byRun ? (i < n ? RunCmds[cmds.x + i] : 0u) : slice + i * split;
+            const uint vg = byRun ? (i < n ? RunCmds[cmds.x + cmdLo + i] : 0u) : slice + i * split;
             uint instances = 0u;
             bool dag = false, want = false;
             if (i < n && vg < gNumGroups && (!byRun || VgRun[vg] == view))
@@ -743,8 +754,19 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         // them (0); otherwise all of them, by their exact number. NOT ~0: ExecuteIndirect is specified to take
         // min(count, MaxCommandCount), but with 0xFFFFFFFF in the count buffer this driver (NVIDIA 32.0.16.2101) drew
         // NOTHING -- every group the run left classic vanished (2026-10-30, owner: a rock "dithering" under the DAG: its
-        // group fell out of the kernel's entries in some frames and then out of the frame).
-        if (byRun) { TessyAtlasArgs.Store(gClassicCountOffset + view * 4u, (gsFits && gsLeftClassic == 0u) ? 0u : RunCmds[2u * view + 1u]); }
+        // group fell out of the kernel's entries in some frames and then out of the frame). A run split over gSplit
+        // groups: the LAST of its slices to finish writes it, from the run's counter (kRunDoneOffset).
+        if (byRun)
+        {
+            const bool left = !(gsFits && gsLeftClassic == 0u);
+            uint prev;
+            TessyAtlasCounter.InterlockedAdd(kRunDoneOffset + view * 4u, 1u | (left ? 0x10000u : 0u), prev);
+            if ((prev & 0xFFFFu) + 1u == split)
+            {
+                const bool anyLeft = left || (prev >> 16) != 0u;
+                TessyAtlasArgs.Store(gClassicCountOffset + view * 4u, anyLeft ? RunCmds[2u * view + 1u] : 0u);
+            }
+        }
     }
     const uint wTested = WaveActiveSum(tested);
     if (WaveIsFirstLane() && wTested != 0u) { TessyAtlasCounter.InterlockedAdd(gCounterAt.z, wTested); }

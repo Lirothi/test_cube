@@ -70,15 +70,25 @@ inline bool g_gbufferHzb = false;
 // the atomics land, the A/B: two coplanar surfaces of two meshes (the_bathroom_free's ceiling) then swap every frame.
 // `--set tessy.ordered:0|1`, transient.
 inline bool g_ordered = true;
+// The camera's G-buffer runs, each culled by this many groups (contiguous slices of its commands, drawn in order): with
+// one group a run only as many SMs worked as there were PSO runs (six), and the DAG's 30 k tests on the owner's aerial
+// view took 0.26 ms. 2026-10-31, DLSS Balanced, the camera cull at 1 / 4 / 8 / 16 / 32: DAG 0.258 / 0.172 / 0.113 / 0.057 /
+// 0.042 ms, discrete LODs 0.082 / 0.066 / 0.060 / 0.058 / 0.056; the G-buffer +0.005 at 16 (a DispatchMesh a slice). 16:
+// with the cull and the G-buffer added, 16 and 32 measure the same. `--set tessy.camSplit:<1..32>`, transient.
+inline unsigned g_camSplit = 16u;
 // N7: `--tessy-lod-build=all|<part>,<part>` builds the cluster DAG at load for every clustered asset, or for those whose
 // .mesh.bin path holds one of the parts -- what mesh.json "tessyLod": true does per asset, without touching manifests.
 inline std::string g_lodBuild;
 // N7e: the DAG's leaf-card submeshes simplify with meshopt_SimplifyPrune (whole cards leave once their size fits the
 // error) -- `--tessy-lod-prune=0` builds them with edge collapses alone, the A/B (read at load, like the build itself).
 inline bool g_lodPrune = true;
+// A submesh of double-sided duplicates (every triangle with a back twin) is simplified one side up and emits the twins
+// (TessyDag FoldTwins) -- `--tessy-lod-fold=0` keeps both sides, the A/B (read at load / bake, like the build itself).
+inline bool g_lodFold = true;
 // N7: the cluster DAG's cut where a consumer can take it (N7c: the VSM clipmap pages) for the assets that have a DAG --
 // else their discrete LOD's clusters, as before. A switch flushes the VSM page cache (a cached page holds the other
-// geometry). `--set tessy.lod:0|1`, MCP, Developer Controls > Tessy; not persisted while the DAG is built at load.
+// geometry). `--set tessy.lod:0|1`, MCP, Developer Controls > Tessy, graphics_settings.json vsm.tessyLod (persisted since
+// 2026-10-31, owner: "turning the DAG on is not saved" -- every .mesh.bin v5 carries its baked DAG).
 inline bool g_lod = false;
 // N7e: the camera's DAG cut tests, per caster, only the band of levels its distance can cut (tessy_atlas_cull_cs DagBand)
 // -- 0 tests every level of every caster (N7d's flat test), the A/B: the cut is the same, only the tests' count differs.
@@ -99,6 +109,12 @@ inline bool g_clusterCull = false;
 // The DAG cut's threshold: shadow texels a cluster's error may span -- UE's MaxPixelsPerEdge (1) x r.Shadow.NaniteLODBias
 // (shadows one level coarser: x2). `--set tessy.lodShadowTexels:<x>`, transient.
 inline float g_lodShadowTexels = 2.0f;
+// The camera's DAG cut threshold: pixels of THIS screen a cluster's error may span -- the DAG's own `lod.pixelError`
+// (which the discrete LODs keep): larger = the DAG's clusters coarsen sooner, smaller = later; 1 = the discrete LODs'
+// rule. The SDSM partitions' camera cut (tessy.sunCut) follows it; the lamps' atlases and the VSM pages keep
+// tessy.lodShadowTexels. `--set tessy.lodPixelError:<px>`, MCP, Developer Controls > Tessy "DAG pixel error",
+// graphics_settings.json vsm.tessyLodPixelError.
+inline float g_lodPixelError = 1.0f;
 // Does --tessy-lod-build name this asset?
 inline bool DagBuildRequested(const std::string& binPath)
 {

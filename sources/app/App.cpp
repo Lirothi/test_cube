@@ -390,7 +390,7 @@ namespace
                          const std::string& setting, float value)
     {
         // Occlusion plan S0: recorded, applied after the --set loop (needs the renderer + level path).
-        if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
+        if (setting == "scene.replicate") { g_sceneReplicateRequest = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync = value != 0.0f; return true; }
         if (setting == "frame.maxFps") { render::g_maxFps = render::ClampMaxFps(static_cast<int>(value)); return true; }
@@ -539,8 +539,10 @@ namespace
         if (setting == "tessy.sdsm") { tessy::g_sdsm = value != 0.0f; return true; } // the SDSM sun partitions
         if (setting == "tessy.gbufferHzb") { tessy::g_gbufferHzb = value != 0.0f; return true; } // N5: its clusters' HZB test
         if (setting == "tessy.ordered") { tessy::g_ordered = value != 0.0f; return true; } // the camera's records in draw order
+        if (setting == "tessy.camSplit") { tessy::g_camSplit = static_cast<unsigned>(std::clamp(value, 1.0f, 32.0f)); return true; }
         if (setting == "tessy.lod") { tessy::g_lod = value != 0.0f; return true; } // N7: the cluster DAG's cut
         if (setting == "tessy.lodShadowTexels") { tessy::g_lodShadowTexels = std::max(value, 0.01f); return true; }
+        if (setting == "tessy.lodPixelError") { tessy::g_lodPixelError = std::clamp(value, 0.25f, 64.0f); return true; } // the DAG's
         if (setting == "tessy.lodBand") { tessy::g_lodBand = value != 0.0f; return true; } // N7e: the camera DAG's level band
         if (setting == "tessy.sunCut") { tessy::g_sunCameraCut = value != 0.0f; return true; } // SDSM: the camera's DAG cut
         if (setting == "tessy.clusterCull") { tessy::g_clusterCull = value != 0.0f; return true; } // clusters holding no sample
@@ -622,7 +624,7 @@ namespace
         if (setting == "sdsm.minScaleOverSphere") { render::sdsm::g_minScaleOverSphere = std::clamp(value, 0.001f, 1.0f); return true; }
         if (setting == "sdsm.zMargin") { render::sdsm::g_zMargin = std::clamp(value, 0.0f, 1000.0f); return true; }
         if (setting == "sdsm.stabilityFrames") { render::sdsm::g_stabilityFrames = std::clamp(value, 0.0f, 240.0f); return true; }
-        if (setting == "sdsm.cacheFrames") { render::sdsm::g_cacheFrames = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
+        if (setting == "sdsm.cacheFrames") { render::sdsm::g_cacheFrames = static_cast<std::uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
         if (setting == "sdsm.cacheDilation") { render::sdsm::g_cacheDilation = std::clamp(value, 0.0f, 0.5f); return true; }
         if (setting == "sdsm.texelSnap") { render::sdsm::g_texelSnap = value != 0.0f; return true; }
         if (setting == "sdsm.sizeHysteresis") { render::sdsm::g_sizeHysteresis = std::clamp(value, 0.0f, 0.5f); return true; }
@@ -861,7 +863,7 @@ namespace
         if (setting == "rt.alphaTest") { renderSettings.rtAlphaMode = value != 0.0f ? 2u : 0u; return true; }
         // Interior lighting plan S: the RT sky visibility (SceneRenderSettings::skyVis*).
         if (setting == "skyVis.enabled") { renderSettings.skyVisEnabled = value != 0.0f; return true; }
-        if (setting == "skyVis.rays") { renderSettings.skyVisRays = static_cast<uint32_t>(std::clamp(value, 1.0f, 16.0f)); return true; }
+        if (setting == "skyVis.rays") { renderSettings.skyVisRays = static_cast<uint32_t>(std::clamp(value, 1.0f, 32.0f)); return true; }
         if (setting == "skyVis.maxDistance") { renderSettings.skyVisMaxDistance = std::clamp(value, 0.5f, 500.0f); return true; }
         if (setting == "skyVis.history") { renderSettings.skyVisHistory = std::clamp(value, 0.0f, 0.995f); return true; }
         if (setting == "skyVis.diffuse") { renderSettings.skyVisDiffuse = std::clamp(value, 0.0f, 1.0f); return true; }

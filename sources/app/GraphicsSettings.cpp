@@ -184,6 +184,8 @@ namespace
         bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas)
         bool tessyGBuffer = true; // Tessy N5 (tessy::g_gbuffer); on by default since 2026-10-30 (owner)
         bool tessySdsm = true;    // Tessy (tessy::g_sdsm): the SDSM sun partitions; on by default (owner, 2026-10-30)
+        bool tessyLod = false;    // Tessy N7 (tessy::g_lod): the cluster DAG's cut (camera, lamp atlases, VSM pages)
+        float tessyLodPixelError = 1.0f; // Tessy N7 (tessy::g_lodPixelError): the camera's DAG cut threshold, screen pixels
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -343,6 +345,7 @@ namespace
         s.rtWindBlasRadius = std::clamp(finite(s.rtWindBlasRadius, 40.0f), 0.0f, 100.0f);
 
         s.lodPixelError = std::clamp(finite(s.lodPixelError, 8.0f), 0.5f, 64.0f);
+        s.tessyLodPixelError = std::clamp(finite(s.tessyLodPixelError, 1.0f), 0.25f, 64.0f);
         s.lodDistanceScale = std::clamp(finite(s.lodDistanceScale, 1.0f), 0.1f, 8.0f);
         s.lodBound0 = std::clamp(finite(s.lodBound0, 8.0f), 2.0f, 60.0f);
         s.lodBound1 = std::clamp(finite(s.lodBound1, 16.0f), 4.0f, 120.0f);
@@ -598,6 +601,8 @@ namespace
         s.tessyAtlas = tessy::g_atlas;
         s.tessyGBuffer = tessy::g_gbuffer;
         s.tessySdsm = tessy::g_sdsm;
+        s.tessyLod = tessy::g_lod;
+        s.tessyLodPixelError = tessy::g_lodPixelError;
         Sanitize(s);
         return s;
     }
@@ -791,6 +796,8 @@ namespace
         tessy::g_atlas = s.tessyAtlas;
         tessy::g_gbuffer = s.tessyGBuffer;
         tessy::g_sdsm = s.tessySdsm;
+        tessy::g_lod = s.tessyLod;
+        tessy::g_lodPixelError = s.tessyLodPixelError;
         vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
     }
 
@@ -1016,7 +1023,9 @@ namespace
                     { "tessyRaster", s.tessyRaster },
                     { "tessyAtlas", s.tessyAtlas },
                     { "tessyGBuffer", s.tessyGBuffer },
-                    { "tessySdsm", s.tessySdsm }
+                    { "tessySdsm", s.tessySdsm },
+                    { "tessyLod", s.tessyLod },
+                    { "tessyLodPixelError", s.tessyLodPixelError }
                 } }
             } }
         };
@@ -1248,6 +1257,8 @@ namespace
         Read(vsmSettings, "tessyAtlas", s.tessyAtlas);
         Read(vsmSettings, "tessyGBuffer", s.tessyGBuffer);
         Read(vsmSettings, "tessySdsm", s.tessySdsm);
+        Read(vsmSettings, "tessyLod", s.tessyLod);
+        Read(vsmSettings, "tessyLodPixelError", s.tessyLodPixelError);
 
         Sanitize(s);
         return s;
@@ -1595,6 +1606,8 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::TessyAtlas:                     current.tessyAtlas = defaults.tessyAtlas; break;
     case GraphicsControl::TessyGBuffer:                   current.tessyGBuffer = defaults.tessyGBuffer; break;
     case GraphicsControl::TessySdsm:                      current.tessySdsm = defaults.tessySdsm; break;
+    case GraphicsControl::TessyLod:                       current.tessyLod = defaults.tessyLod; break;
+    case GraphicsControl::TessyLodPixelError:             current.tessyLodPixelError = defaults.tessyLodPixelError; break;
     }
 
     Sanitize(current);

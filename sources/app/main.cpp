@@ -611,6 +611,11 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "--tessy-lod-prune=0")) {
         tessy::g_lodPrune = false;
     }
+    // "--tessy-lod-fold=0" -- a double-sided sheet of duplicates keeps both sides in the DAG's simplification (the A/B of
+    // TessyDag's FoldTwins).
+    if (lpCmdLine && std::strstr(lpCmdLine, "--tessy-lod-fold=0")) {
+        tessy::g_lodFold = false;
+    }
 
     // "--no-streamline": take the Streamline SDK out entirely (no slInit, no device proxy).
     // PERMANENT, like "--no-async-compute": a hang that survives "--dlss=off" still has the SDK
