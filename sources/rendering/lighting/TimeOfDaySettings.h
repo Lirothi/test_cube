@@ -182,6 +182,22 @@ struct TimeOfDaySettings
     // as the night lamps do, through the night's share (TimeOfDay::NightShare) in between.
     float lampDayBrightness = 1.0f;
 
+    // --- The height fog by the sun's height (timeOfDay.fog) ---------------------------------------------
+    // Multipliers on the level's height-fog density (heightFog.density, the FRAME's copy -- the level keeps what it
+    // says), keyed on the sun's elevation like the twilight: `fogDayDensity` with the sun at `fogDayFullDeg` and
+    // over, `fogDuskDensity` at `fogDuskDeg`, `fogNightDensity` at `fogNightFullDeg` and under, smoothstep between;
+    // dawn is the dusk mirrored (one elevation curve). Ultra Dynamic Sky's Fog Density Daytime / Nighttime
+    // Multiplier with a dusk of its own (owner, 2026-10-31: "with the sun high the fog should be far, at sunset I want
+    // the sunset haze"): a clear afternoon at the sea sees 20-40 km, so 0.004 by day reads as mist (2.4 km), while
+    // the evening's damp air is what that haze is. The sunset GLOW is the sun lobe and the phase, not this. All 1 =
+    // the level's density at every hour.
+    float fogDayDensity = 1.0f;
+    float fogDuskDensity = 1.0f;
+    float fogNightDensity = 1.0f;
+    float fogDayFullDeg = 25.0f;
+    float fogDuskDeg = 5.0f;
+    float fogNightFullDeg = -8.0f;
+
     // --- Twilight, as Ultra Dynamic Sky draws it -----------------------------------------------------
     // THE SUN LEAVES THE ATMOSPHERE before the night falls: its light into the sky -- the sky's LUTs, the
     // aerial perspective, the distant light and the environment capture, the clouds -- is 0 at and below

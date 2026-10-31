@@ -2120,6 +2120,8 @@ void Scene::PrepareViews(Renderer* renderer)
         }
         // ...and the day sky's brightness (TimeOfDaySettings::daySkyBrightness), the same way.
         frameData_.settings.skyAtmosphere.luminanceScale *= timeOfDay_.SkyLuminanceScale();
+        // ...and the height fog's density by the sun's height (TimeOfDaySettings::fogDayDensity ..), the frame's copy.
+        frameData_.settings.heightFog.density *= timeOfDay_.FogDensityScale();
     }
     frameData_.settings.volumetricCloud = volumetricCloud_;
     // B6.2: THE SUN'S TRANSMITTANCE, here because this is where the frame's light is still mutable

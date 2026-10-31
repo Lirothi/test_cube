@@ -58,6 +58,7 @@ cbuffer FogApply : register(b0)
     float4   fogVolumeZParams;  // (B, O, S, the volume's start)
     float4   fogApplyMisc;      // x: sky intensity, y: debug view, z: preExposure, w: unused
     float4   aerialParams;      // enabled, start view depth (m), 1/preExposure, reserved -- compose's, byte for byte
+    float4   fogInscatter;      // PackHeightFog's: UE's fog colour (raw), w = 1 = use it instead of the sky along the view
 };
 
 struct VSOut
@@ -136,8 +137,9 @@ float4 PSMain(VSOut i) : SV_Target
     const float minT = HeightFogMinTransmittance(tau, fog.maxOpacity);
     const float transmittance = HeightFogTransmittance(tau, minT);
     const float headroom = HeightFogHeadroom(transmittance, minT);
-    const float3 skyAlongView = FogSkyAlongView(SkyboxTex, LinearClampSmp, viewRay, dist,
-        HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, fogApplyMisc.x);
+    const float3 skyAlongView = fogInscatter.w > 0.5f ? fogInscatter.rgb // UE's colour, as compose
+        : FogSkyAlongView(SkyboxTex, LinearClampSmp, viewRay, dist,
+                          HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, fogApplyMisc.x);
     const float3 toSun = normalize(fogSunDir.xyz);
     const float3 fogColor = HeightFogColor(skyAlongView, fogSunColor.rgb, dot(viewRay, toSun), fogShared, dist,
                                            transmittance, fog);

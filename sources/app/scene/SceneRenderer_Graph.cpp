@@ -249,6 +249,14 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
     const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
     if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
+    // The height fog's colour this frame (UE ComputeInscatteringColor): the distant sky light times UE's
+    // SkyLuminanceFactor, which UE bakes into that LUT and ours keeps out of the light. Every PackHeightFog reads it.
+    {
+        float distant[3]{};
+        const float f = std::max(frame_->settings.skyAtmosphere.skyLuminanceFactor, 0.0f);
+        g_fogDistantSkyLight = skyAtmosphere_.DistantSkyLight(distant)
+            ? float4(distant[0] * f, distant[1] * f, distant[2] * f, 1.0f) : float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
     // The cloud shadow map and the AS build are registered after the prologue clear, below.
     gb.pBuildAS = (size_t)-1;
 

@@ -208,7 +208,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle shoreWetnessFallback;
     Material::CBFieldHandle shoreWetnessBreakup;
     // P7 aerial perspective.
-    Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogDebugView;
+    Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogInscatter, fogDebugView;
     Material::CBFieldHandle fogVolumeParams, fogVolumeZParams;
     Material::CBFieldHandle preExposure;
     Material::CBFieldHandle skyViewPlanet; // B6.2: the sky's own LUT, for the fog's sky colour
@@ -922,6 +922,7 @@ struct ComposePassConstants
     float4 fogParams2{};   // sky blur, yzw reserved
     float4 fogSunDir{};
     float4 fogSunColor{};
+    float4 fogInscatter{}; // PackHeightFog's: UE's fog colour, w = 1 = in use
     uint32_t fogDebugView = 0u;
     float preExposure = 1.0f;
     // Volumetric fog: x = volume built this frame, y = its far plane (view depth, m),
@@ -964,6 +965,7 @@ struct FogApplyConstants
     float4 fogVolumeZParams{};
     float4 fogApplyMisc{}; // x: sky intensity, y: debug view, z: preExposure, w: unused
     float4 aerialParams{}; // enabled, start view depth (m), 1/preExposure, reserved -- the same values compose gets
+    float4 fogInscatter{}; // PackHeightFog's: UE's fog colour, w = 1 = in use
 };
 
 struct FxaaPassConstants

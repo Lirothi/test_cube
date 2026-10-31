@@ -25,7 +25,8 @@
 //     "twilight": { "sunSkyStartDeg": -9.03, "sunSkyFullDeg": -6.49, "rayleighNightTint": [1.426, 0.848, 0.609],
 //                   "rayleighDayStartDeg": -2.07, "rayleighDayFullDeg": 3.68, "ozoneNightTint": [6.154, 1.806, 1.428],
 //                   "ozoneSunriseTint": [4.615, 1.557, 4.031], "ozoneBlendDeg": 1.95 },
-//     "lamps": { "sunElevationDeg": 0, "randomDelaySec": 1, "turnOnSec": 1.5, "turnOnFlicker": 0.2, "turnOnExponent": 0.6 }
+//     "lamps": { "sunElevationDeg": 0, "randomDelaySec": 1, "turnOnSec": 1.5, "turnOnFlicker": 0.2, "turnOnExponent": 0.6 },
+//     "fog": { "dayDensity": 1, "duskDensity": 1, "nightDensity": 1, "dayFullDeg": 25, "duskDeg": 5, "nightFullDeg": -8 }
 //   }
 //
 // Every key is optional; an absent one keeps the struct default.
@@ -170,6 +171,17 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.lampTurnOnFlicker = std::clamp(Number(l, "turnOnFlicker", s.lampTurnOnFlicker), 0.0f, 1.0f);
         s.lampTurnOnExponent = std::clamp(Number(l, "turnOnExponent", s.lampTurnOnExponent), 0.01f, 10.0f);
         s.lampDayBrightness = std::clamp(Number(l, "dayBrightness", s.lampDayBrightness), 0.0f, 100000.0f);
+    }
+    // The height fog's density by the sun's height (multipliers on heightFog.density).
+    if (const auto it = j.find("fog"); it != j.end() && it->is_object())
+    {
+        const nlohmann::json& f = *it;
+        s.fogDayDensity = std::clamp(Number(f, "dayDensity", s.fogDayDensity), 0.0f, 100.0f);
+        s.fogDuskDensity = std::clamp(Number(f, "duskDensity", s.fogDuskDensity), 0.0f, 100.0f);
+        s.fogNightDensity = std::clamp(Number(f, "nightDensity", s.fogNightDensity), 0.0f, 100.0f);
+        s.fogDayFullDeg = std::clamp(Number(f, "dayFullDeg", s.fogDayFullDeg), -90.0f, 90.0f);
+        s.fogDuskDeg = std::clamp(Number(f, "duskDeg", s.fogDuskDeg), -90.0f, 90.0f);
+        s.fogNightFullDeg = std::clamp(Number(f, "nightFullDeg", s.fogNightFullDeg), -90.0f, 90.0f);
     }
     // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
     if (const auto it = j.find("twilight"); it != j.end() && it->is_object())
@@ -340,6 +352,14 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "turnOnFlicker", s.lampTurnOnFlicker },
         { "turnOnExponent", s.lampTurnOnExponent },
         { "dayBrightness", s.lampDayBrightness },
+    };
+    j["fog"] = {
+        { "dayDensity", s.fogDayDensity },
+        { "duskDensity", s.fogDuskDensity },
+        { "nightDensity", s.fogNightDensity },
+        { "dayFullDeg", s.fogDayFullDeg },
+        { "duskDeg", s.fogDuskDeg },
+        { "nightFullDeg", s.fogNightFullDeg },
     };
     return j;
 }

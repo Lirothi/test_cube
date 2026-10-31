@@ -982,8 +982,9 @@ PSOut PSMain(VSOut i)
             const float minT = HeightFogMinTransmittance(tau, fog.maxOpacity);
             fogT = HeightFogTransmittance(tau, minT);
             const float headroom = HeightFogHeadroom(fogT, minT);
-            const float3 skyAlongView = FogSkyAlongView(SkyboxTex, EnvSampler, viewDir, dist,
-                HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyIntensity);
+            const float3 skyAlongView = fogInscatter.w > 0.5f ? fogInscatter.rgb // UE's colour, as compose
+                : FogSkyAlongView(SkyboxTex, EnvSampler, viewDir, dist,
+                                  HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyIntensity);
             const float3 toSun = -normalize(sunDirAmbient.xyz);
             fogIn = HeightFogColor(skyAlongView, sunColorExposure.xyz * sunColorExposure.w,
                                    dot(viewDir, toSun), fogShared, dist, fogT, fog);

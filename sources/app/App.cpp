@@ -73,6 +73,7 @@ bool g_bootEditor = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
 std::string g_bootImportItem;
+std::string g_bootInspect;
 std::string g_intentPhrase;
 bool   g_intentRun = false;
 bool   g_intentFinished = false;
@@ -1075,6 +1076,11 @@ namespace
                 { "lampTurnOnFlicker", &t.lampTurnOnFlicker, 0.0f, 1.0f },
                 { "lampTurnOnExponent", &t.lampTurnOnExponent, 0.01f, 10.0f },
                 { "lampDayBrightness", &t.lampDayBrightness, 0.0f, 100000.0f }, // always-on lamps by day (UDS's 5-lux sun)
+                // The height fog's density by the sun's height (timeOfDay.fog.*), multipliers on heightFog.density.
+                { "fogDayDensity", &t.fogDayDensity, 0.0f, 100.0f }, { "fogDuskDensity", &t.fogDuskDensity, 0.0f, 100.0f },
+                { "fogNightDensity", &t.fogNightDensity, 0.0f, 100.0f },
+                { "fogDayFullDeg", &t.fogDayFullDeg, -90.0f, 90.0f }, { "fogDuskDeg", &t.fogDuskDeg, -90.0f, 90.0f },
+                { "fogNightFullDeg", &t.fogNightFullDeg, -90.0f, 90.0f },
                 { "lightUpdateThresholdDeg", &t.lightUpdateThresholdDeg, 0.0f, 5.0f },
                 // N2: the night sky's layers (timeOfDay.nightSky.*).
                 { "airglowZenith", &t.airglowZenith, 0.0f, 1.0f }, { "stars", &t.starsBrightness, 0.0f, 1000.0f },
@@ -1210,6 +1216,11 @@ namespace
             return true;
         }
         if (setting == "fog.skyBlur") { scene.HeightFogRef().skyBlur = value; return true; }
+        // UE's fog colour (procedural sky): SkyAtmosphereAmbientContributionColorScale and FogInscatteringLuminance as
+        // grays; fog.skyAlongView:1 = the colour before 2026-10-31 (the sky along the view), transient, the A/B.
+        if (setting == "fog.skyAmbient") { scene.HeightFogRef().skyAmbientContribution = float3(std::max(value, 0.0f)); return true; }
+        if (setting == "fog.inscatterLuminance") { scene.HeightFogRef().inscatteringLuminance = float3(std::max(value, 0.0f)); return true; }
+        if (setting == "fog.skyAlongView") { g_fogSkyAlongView = value != 0.0f; return true; }
         if (setting == "fog.nonDirectionalDistance") { scene.HeightFogRef().nonDirectionalDistance = value; return true; }
         if (setting == "fog.fullyDirectionalDistance") { scene.HeightFogRef().fullyDirectionalDistance = value; return true; }
         // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).

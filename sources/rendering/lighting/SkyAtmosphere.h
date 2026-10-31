@@ -82,6 +82,14 @@ public:
     unsigned DistantMajorRevision() const { return distantMajorBuilds_; }
     ID3D12Resource* DistantResource() const { return distant_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE DistantSrv() const { return distantSrv_; }
+    // The LUT's one texel on the CPU (raw cd/m2, read back a few frames after each rebuild), for the height fog's
+    // colour (UE ComputeInscatteringColor). False until the first readback lands, and in the HDRI mode.
+    bool DistantSkyLight(float rgb[3]) const
+    {
+        if (!distantActive_ || !distantValueValid_) return false;
+        rgb[0] = distantValue_[0]; rgb[1] = distantValue_[1]; rgb[2] = distantValue_[2];
+        return true;
+    }
     bool AerialBuilt() const { return aerialBuilt_; }
     ID3D12Resource* AerialResource() const { return aerial_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE AerialSrv() const { return aerialSrv_; }
@@ -130,13 +138,16 @@ private:
     bool nightWanted_ = false; // a frame asked for the map: the next Prepare allocates it (8 MB, so only then)
     NightSkyFrameData environmentNightKey_{}; // what the last capture drew of the night sky (its clock zeroed)
     void PrepareDistant(Renderer* renderer);
-    void ValidateDistant(UINT slot);
+    void ReadBackDistant(UINT slot);
     GpuResource distant_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> distantHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE distantSrv_{}, distantUav_{};
     std::shared_ptr<Material> distantMaterial_;
     std::array<Microsoft::WRL::ComPtr<ID3D12Resource>, render::kFrameCount> distantReadback_;
     std::array<bool, render::kFrameCount> distantPending_{};
+    std::array<bool, render::kFrameCount> distantValidate_{};
+    float distantValue_[3]{};
+    bool distantValueValid_ = false;
     SkyAtmosphereParameters distantParameters_{};
     SkyViewFrameData distantKey_{};
     bool distantActive_ = false, distantReady_ = false, distantFailed_ = false;

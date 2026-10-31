@@ -521,7 +521,8 @@ namespace editormcp
                   "Put the scene's settings back to what the open DOCUMENT says (the level as "
                   "edited, unsaved edits included): time of day, camera exposure, colour, GTAO, "
                   "height fog, bloom, sky atmosphere, clouds and the ocean's look -- every object "
-                  "set_settings can reach in the level. Project-wide switches (cloudTrace.*, "
+                  "set_settings can reach in the level, and fog.debugView / fog.skyAlongView back to 0. "
+                  "Project-wide switches (cloudTrace.*, "
                   "cloudShadow.*, frame.*, the cloud A/B globals) are NOT in the document and stay "
                   "as last set." },
                 { "inputSchema", ObjectSchema() },
@@ -1160,6 +1161,11 @@ namespace editormcp
                     ++count;
                 }
             }
+            // The height fog's debug view and colour A/B are not in the document but belong to the fog object, not to
+            // the project: a debug view left on read as "the fog" in every later arm (2026-10-31, a whole UE side-by-side
+            // sweep measured fog.debugView 4 after a reset).
+            g_fogDebugView = 0u;
+            g_fogSkyAlongView = false;
             if (g_runtimeHost)
             {
                 g_runtimeHost->ResetExposure();

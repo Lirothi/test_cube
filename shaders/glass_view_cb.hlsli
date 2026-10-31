@@ -66,6 +66,8 @@ cbuffer GlassView : register(b1)
     // Plan S on glass slots: lighting_cb.hlsli's skyVisParams (x 1 = SkyVisTex is real this frame, y diffuse,
     // z specular strength). Appended at the tail.
     float4 glassSkyVis;
+    // PackHeightFog's UE fog colour (raw), w = 1 = use it instead of the sky along the view. Appended at the tail.
+    float4 fogInscatter;
 };
 
 #endif // GLASS_VIEW_CB_HLSLI

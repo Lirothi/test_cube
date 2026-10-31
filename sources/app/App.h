@@ -130,6 +130,10 @@ extern std::string g_bootEditMesh;
 // itself behind a menu, and the pane is judged by LOOKING at it.
 extern bool g_bootShowImport;
 extern std::string g_bootImportItem;
+// "--inspect=<environment type>[#<group>]": select the level's environment object of that type at boot and scroll
+// the Inspector to the group (its JSON key: timeOfDay#fog, timeOfDay#lamps, postProcess#heightFog; implies --editor).
+// The same reason as --edit-mesh: a group far down an object is otherwise reachable only by the mouse wheel.
+extern std::string g_bootInspect;
 
 // "--intent=<phrase>": run ONE phrase through the editor's real command pipeline at boot,
 // log the verdict, and quit. This is the only harness that exercises the whole chain as the

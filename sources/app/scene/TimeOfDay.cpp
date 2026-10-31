@@ -350,6 +350,10 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         // The day sky's brightness comes in with UDS's day sky, on the same (stepped) blend.
         skyLuminanceScale_ = 1.0f + (std::max(s.daySkyBrightness, 0.0f) - 1.0f) * day;
     }
+    // The height fog by the sun's height (TimeOfDaySettings::fogDayDensity ..): day over fogDayFullDeg, dusk at
+    // fogDuskDeg, night under fogNightFullDeg, smoothstep between. Not stepped like the atmosphere's tints: the fog
+    // rebuilds no LUT, and its volume's history follows a medium that changes this slowly.
+    fogDensityScale_ = FogDensityScaleAt(s, sunElevation);
     // The owner's night exposure (TimeOfDaySettings::nightExposureEv): none above -6 degrees, all of it from -12.
     {
         const float x = std::clamp(static_cast<float>((-6.0 - sunElevation) / 6.0), 0.0f, 1.0f);
@@ -625,6 +629,41 @@ bool ParseClock(std::string text, bool allowUnits, double& outHours)
     outHours = static_cast<double>(hours) + static_cast<double>(minutes) / 60.0;
     return true;
 }
+}
+
+float FogDensityScaleAt(const TimeOfDaySettings& s, double sunElevationDeg)
+{
+    const auto smooth = [](float x) { x = std::clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); };
+    const float day = std::max(s.fogDayDensity, 0.0f), dusk = std::max(s.fogDuskDensity, 0.0f);
+    const float night = std::max(s.fogNightDensity, 0.0f);
+    if (sunElevationDeg >= s.fogDuskDeg)
+    {
+        return dusk + (day - dusk) * smooth(TwilightRamp(sunElevationDeg, s.fogDuskDeg, s.fogDayFullDeg));
+    }
+    return night + (dusk - night) * smooth(TwilightRamp(sunElevationDeg, s.fogNightFullDeg, s.fogDuskDeg));
+}
+
+float SunElevationAtHours(const TimeOfDaySettings& s, double hours)
+{
+    // The same two paths Tick takes for the sun (real positions on the date and place, or the simple path).
+    double local[3] = {0.0, 1.0, 0.0};
+    if (s.realPositions)
+    {
+        const double jd = astro::JulianDayUtc(s.year, s.month, s.day, hours - s.utcOffsetHours);
+        astro::HorizontalToLocal(astro::SunPosition(s.latitudeDeg, s.longitudeDeg, jd).position, local);
+    }
+    else
+    {
+        astro::SimplePath path;
+        path.riseHours = s.dawnHours;
+        path.setHours = s.duskHours;
+        path.yawDeg = s.pathYawDeg;
+        path.tiltDeg = s.pathTiltDeg;
+        path.heightOffset = s.heightOffset;
+        path.flatten = s.extendTwilight;
+        astro::SimpleDirection(path, hours, local);
+    }
+    return static_cast<float>(ElevationDeg(ToWorld(local, s.northYawDeg)));
 }
 
 bool ResolveTimeOfDaySpec(std::string_view spec, const TimeOfDaySettings& s, float& outHours, std::string& outError)

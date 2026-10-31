@@ -417,7 +417,8 @@ namespace
         EditorObject& env,
         bool showEnabled,
         EditorObjectId& activeEditObject,
-        nlohmann::json& propertiesBeforeEdit)
+        nlohmann::json& propertiesBeforeEdit,
+        std::string& scrollToGroup)
     {
         nlohmann::json& props = env.properties;
         // P8B: WHICH sub-object the widgets below write to. Empty = the object's own properties,
@@ -435,6 +436,14 @@ namespace
             return it != props.end() && it->is_object() ? *it : missingGroup;
         };
         // `after` for the commands that build one by copy-then-mutate.
+        // InspectorPanel::ScrollToGroup (--inspect=<type>#<group>): called where a group starts, scrolls there once.
+        const auto scrollAnchor = [&]() {
+            if (!scrollToGroup.empty() && scrollToGroup == groupKey)
+            {
+                ImGui::SetScrollHereY(0.0f);
+                scrollToGroup.clear();
+            }
+        };
         const auto withField = [&](const char* key, nlohmann::json value) {
             nlohmann::json after = props;
             if (groupKey.empty()) { after[key] = std::move(value); }
@@ -1438,6 +1447,34 @@ namespace
                           "moves 21% of the frame, and that difference sits in the FAR and middle "
                           "thirds, not on the horizon line.");
 
+            ImGui::SeparatorText("Fog colour (procedural sky)");
+            {
+                const Math::float3 scale = JsonFloat3(tgt(), "skyAmbientContribution", Math::float3(1.0f, 1.0f, 1.0f));
+                float sv[3] = { scale.x, scale.y, scale.z };
+                const bool changed = ImGui::ColorEdit3("Sky Atmosphere Ambient Contribution", sv,
+                                                       ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["skyAmbientContribution"] = { sv[0], sv[1], sv[2] }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("UE's SkyAtmosphereAmbientContributionColorScale (default white): the fog's colour is the "
+                          "atmosphere's distant sky light times this -- ONE colour for every direction, on the ground "
+                          "and on the sky, so the air veils the horizon as in UE (HeightFogCommon.ush:189-195). 0 leaves "
+                          "only the Inscattering Luminance below. Procedural sky only: the HDRI sky colours the fog with "
+                          "the sky along the view (UE's inscattering cubemap). --set=fog.skyAmbient (a gray), "
+                          "fog.skyAlongView:1 = the old colour, the A/B.");
+            {
+                const Math::float3 lum = JsonFloat3(tgt(), "inscatteringLuminance", Math::float3(0.0f, 0.0f, 0.0f));
+                float lv[3] = { lum.x, lum.y, lum.z };
+                const bool changed = ImGui::DragFloat3("Inscattering Luminance (cd/m2)", lv, 10.0f, 0.0f, 100000.0f, "%.0f");
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["inscatteringLuminance"] = { std::max(lv[0], 0.0f), std::max(lv[1], 0.0f), std::max(lv[2], 0.0f) }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("UE's FogInscatteringLuminance (default black): an authored fog colour added to the sky "
+                          "ambient above, in physical units -- a daylight sky is thousands of cd/m2. "
+                          "--set=fog.inscatterLuminance (a gray).");
+
             ImGui::SeparatorText("Sun in-scattering");
             dragF("Sun Scatter", "sunScatterStrength", 0.35f, 0.01f, 0.0f, 3.0f, "%.2f");
             InspectorHelp("Weight of the forward-scattered sun added on top of the sky colour, so "
@@ -1490,7 +1527,7 @@ namespace
                           "which is what removes the stepped, flickering edge. 0 = hard edge (UE default).");
             dragF("Local Distance Bias", "localDistanceBias", 1.0f, 0.05f, 0.0f, 4.0f, "%.2f");
 
-            ImGui::SeparatorText("Sky sampling");
+            ImGui::SeparatorText("Sky sampling (HDRI sky)");
             dragF("Sky Blur", "skyBlur", 0.5f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("How blurred the sky is where it is read as the fog's COLOUR, expressed as "
                           "a roughness. 0 samples it sharp, and then the fog is literally a picture "
@@ -2281,6 +2318,7 @@ namespace
             groupKey = "sun";
             ImGui::PushID("sun");
             ImGui::SeparatorText("Sun");
+            scrollAnchor();
             colorEdit();
             checkB("Use Colour Temperature", "useSunTemperature", false);
             if (tgt().value("useSunTemperature", false))
@@ -2380,6 +2418,7 @@ namespace
             groupKey = "moon";
             ImGui::PushID("moon");
             ImGui::SeparatorText("Moon");
+            scrollAnchor();
             checkB("Moon", "enabled", true);
             InspectorHelp("Off, nobody lights the night: the scene is lit by the sky alone.");
             dragF("Full Moon Illuminance (lux)", "illuminanceLux", 0.32f, 0.001f, 0.0f, 1000.0f, "%.3f",
@@ -2495,6 +2534,7 @@ namespace
             groupKey = "nightSky";
             ImGui::PushID("nightSky");
             ImGui::SeparatorText("Night sky");
+            scrollAnchor();
             {
                 const TimeOfDaySettings defaults{};
                 checkB("Night Sky", "enabled", defaults.nightSkyEnabled);
@@ -2545,6 +2585,7 @@ namespace
             groupKey = "twilight";
             ImGui::PushID("twilight");
             ImGui::SeparatorText("Twilight");
+            scrollAnchor();
             {
                 const TimeOfDaySettings defaults{};
                 dragF("Sun Leaves Sky From (deg)", "sunSkyStartDeg", defaults.sunSkyStartDeg, 0.05f, -90.0f, 90.0f, "%.2f");
@@ -2600,6 +2641,7 @@ namespace
             groupKey = "lamps";
             ImGui::PushID("lamps");
             ImGui::SeparatorText("Lamps");
+            scrollAnchor();
             {
                 const TimeOfDaySettings defaults{};
                 dragF("Switch At Sun (deg)", "sunElevationDeg", defaults.lampSunElevationDeg, 0.05f, -90.0f, 90.0f, "%.2f");
@@ -2625,6 +2667,272 @@ namespace
                               "is lost in daylight. Ultra Dynamic Sky's sun is 5 lux against our 120000, which is why a "
                               "lamp shows by day in UE; 24000 weighs it as UDS does.");
                 ImGui::TextDisabled("Now: %s", ctx.scene.GetNightLamps().Night() ? "night (lamps on)" : "day (lamps off)");
+            }
+            ImGui::PopID();
+
+            // The height fog's density by the sun's height (timeOfDay.fog), UDS's day / night fog multipliers.
+            groupKey = "fog";
+            ImGui::PushID("fog");
+            ImGui::SeparatorText("Fog By Sun Height");
+            scrollAnchor();
+            {
+                const TimeOfDaySettings defaults{};
+                // THE CURVE OVER THE LEVEL'S DAY (owner, 2026-10-31: "a handier UI for the fog curve"): x = the clock,
+                // 0-24 h on the level's date and place; y = the fog's density, log (the height fog's Density x the
+                // multiplier), visibility at sea level beside it; the day / twilight / night bands and the sun's arc
+                // behind. A handle dragged up / down sets its multiplier, left / right the sun elevation it sits at
+                // (drawn where the afternoon passes it; the dawn mirrors). Dragged anywhere else: the clock, and the
+                // frame follows. One undo entry a drag (the plot is one ImGui item).
+                {
+                    TimeOfDaySettings day = ctx.scene.GetTimeOfDay().Settings();
+                    day.fogDayDensity = JsonFloat(tgt(), "dayDensity", defaults.fogDayDensity);
+                    day.fogDuskDensity = JsonFloat(tgt(), "duskDensity", defaults.fogDuskDensity);
+                    day.fogNightDensity = JsonFloat(tgt(), "nightDensity", defaults.fogNightDensity);
+                    day.fogDayFullDeg = JsonFloat(tgt(), "dayFullDeg", defaults.fogDayFullDeg);
+                    day.fogDuskDeg = JsonFloat(tgt(), "duskDeg", defaults.fogDuskDeg);
+                    day.fogNightFullDeg = JsonFloat(tgt(), "nightFullDeg", defaults.fogNightFullDeg);
+                    const HeightFogSettings& fog = ctx.scene.GetHeightFog();
+                    const bool absolute = fog.enabled && fog.density > 0.0f; // else the multiplier alone
+                    const float base = absolute ? fog.density : 1.0f;
+                    const float nowHours = std::clamp(day.timeHours, 0.0f, 24.0f); // the live clock (it runs when animated)
+
+                    constexpr int kSamples = 97; // every 15 minutes
+                    float elev[kSamples];
+                    float lo = 1.0e30f, hi = -1.0e30f;
+                    int noon = 0;
+                    for (int i = 0; i < kSamples; ++i)
+                    {
+                        elev[i] = SunElevationAtHours(day, 24.0 * i / (kSamples - 1));
+                        const float d = std::log10(std::max(base * FogDensityScaleAt(day, elev[i]), 1.0e-7f));
+                        lo = std::min(lo, d);
+                        hi = std::max(hi, d);
+                        if (elev[i] > elev[noon]) { noon = i; }
+                    }
+                    for (const float m : { day.fogDayDensity, day.fogDuskDensity, day.fogNightDensity })
+                    {
+                        const float d = std::log10(std::max(base * m, 1.0e-7f));
+                        lo = std::min(lo, d);
+                        hi = std::max(hi, d);
+                    }
+                    lo -= 0.25f;
+                    hi += 0.25f;
+                    if (hi - lo < 1.0f) { const float mid = 0.5f * (lo + hi); lo = mid - 0.5f; hi = mid + 0.5f; }
+                    // The range holds still while a handle is dragged, or the plot would rescale under the mouse.
+                    static int dragWhat = -1; // 0 day, 1 dusk, 2 night, 3 the clock
+                    static float dragLo = 0.0f, dragHi = 1.0f;
+                    if (dragWhat >= 0) { lo = dragLo; hi = dragHi; }
+
+                    const ImVec2 origin = ImGui::GetCursorScreenPos();
+                    const float width = std::max(ImGui::GetContentRegionAvail().x, 240.0f);
+                    const float kLeft = ImGui::CalcTextSize(absolute ? "0.0005" : "x0.05").x + 6.0f;
+                    const float kRight = absolute ? ImGui::CalcTextSize("16 km").x + 8.0f : 8.0f;
+                    const float kPlotH = 160.0f, kAxisH = 16.0f;
+                    const float x0 = origin.x + kLeft, x1 = origin.x + width - kRight;
+                    const float y0 = origin.y + 4.0f, y1 = y0 + kPlotH;
+                    const auto xOf = [&](float h) { return x0 + (x1 - x0) * h / 24.0f; };
+                    const auto hourOf = [&](float x) { return std::clamp((x - x0) / (x1 - x0) * 24.0f, 0.0f, 24.0f); };
+                    const auto yOf = [&](float density) {
+                        const float d = std::log10(std::max(density, 1.0e-7f));
+                        return y1 - (y1 - y0) * std::clamp((d - lo) / (hi - lo), 0.0f, 1.0f);
+                    };
+                    const auto densityOf = [&](float y) { return std::pow(10.0f, lo + (y1 - y) / (y1 - y0) * (hi - lo)); };
+                    // Where the afternoon passes an elevation (the handle's place); -1 if the sun never does.
+                    const auto afternoonHourAt = [&](float deg) {
+                        for (int i = noon; i + 1 < kSamples; ++i)
+                        {
+                            if (elev[i] >= deg && elev[i + 1] < deg)
+                            {
+                                const float t = (elev[i] - deg) / std::max(elev[i] - elev[i + 1], 1.0e-6f);
+                                return 24.0f * (i + t) / (kSamples - 1);
+                            }
+                        }
+                        return -1.0f;
+                    };
+                    const float handleDeg[3] = { day.fogDayFullDeg, day.fogDuskDeg, day.fogNightFullDeg };
+                    const float handleMult[3] = { day.fogDayDensity, day.fogDuskDensity, day.fogNightDensity };
+                    ImVec2 handlePos[3];
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        const float h = afternoonHourAt(handleDeg[k]);
+                        handlePos[k] = ImVec2(h < 0.0f ? -1.0e6f : xOf(h), yOf(base * handleMult[k]));
+                    }
+
+                    ImGui::InvisibleButton("##fogCurve", ImVec2(width, kPlotH + kAxisH + 8.0f));
+                    const ImVec2 mouse = ImGui::GetIO().MousePos;
+                    if (ImGui::IsItemActivated())
+                    {
+                        dragWhat = 3;
+                        float best = 10.0f * 10.0f;
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            const float dx = mouse.x - handlePos[k].x, dy = mouse.y - handlePos[k].y;
+                            if (dx * dx + dy * dy < best) { best = dx * dx + dy * dy; dragWhat = k; }
+                        }
+                        dragLo = lo;
+                        dragHi = hi;
+                    }
+                    bool changed = false;
+                    float newMult = 0.0f, newDeg = 0.0f, newHours = nowHours;
+                    if (ImGui::IsItemActive() && dragWhat >= 0)
+                    {
+                        const float h = hourOf(mouse.x);
+                        if (dragWhat == 3)
+                        {
+                            newHours = std::round(h * 60.0f) / 60.0f;
+                            changed = std::fabs(newHours - nowHours) > 1.0e-4f;
+                        }
+                        else
+                        {
+                            newMult = std::round(std::clamp(densityOf(mouse.y) / base, 0.0f, 100.0f) * 100.0f) / 100.0f;
+                            newDeg = std::round(SunElevationAtHours(day, h) * 2.0f) / 2.0f;
+                            // The three stay in order with half a degree between them.
+                            if (dragWhat == 0) { newDeg = std::clamp(newDeg, day.fogDuskDeg + 0.5f, 89.0f); }
+                            if (dragWhat == 1) { newDeg = std::clamp(newDeg, day.fogNightFullDeg + 0.5f, day.fogDayFullDeg - 0.5f); }
+                            if (dragWhat == 2) { newDeg = std::clamp(newDeg, -89.0f, day.fogDuskDeg - 0.5f); }
+                            changed = std::fabs(newMult - handleMult[dragWhat]) > 1.0e-4f ||
+                                      std::fabs(newDeg - handleDeg[dragWhat]) > 1.0e-4f;
+                        }
+                    }
+                    beginContinuousEdit(changed);
+                    if (changed)
+                    {
+                        static const char* const kMultKey[3] = { "dayDensity", "duskDensity", "nightDensity" };
+                        static const char* const kDegKey[3] = { "dayFullDeg", "duskDeg", "nightFullDeg" };
+                        if (dragWhat == 3) { props["time"] = newHours; }
+                        else
+                        {
+                            tgt()[kMultKey[dragWhat]] = newMult;
+                            tgt()[kDegKey[dragWhat]] = newDeg;
+                        }
+                        ImGui::MarkItemEdited(ImGui::GetItemID());
+                    }
+                    trackContinuousEdit(changed);
+                    if (!ImGui::IsItemActive()) { dragWhat = -1; }
+                    const bool hovered = ImGui::IsItemHovered();
+
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(18, 20, 28, 255));
+                    for (int i = 0; i + 1 < kSamples; ++i)
+                    {
+                        const float e = 0.5f * (elev[i] + elev[i + 1]);
+                        const ImU32 band = e >= day.fogDayFullDeg ? IM_COL32(70, 120, 200, 70)
+                                         : e > day.fogNightFullDeg ? IM_COL32(220, 140, 60, 70) : IM_COL32(0, 0, 0, 0);
+                        dl->AddRectFilled(ImVec2(xOf(24.0f * i / (kSamples - 1)), y0),
+                                          ImVec2(xOf(24.0f * (i + 1) / (kSamples - 1)), y1), band);
+                    }
+                    const ImU32 gridCol = IM_COL32(255, 255, 255, 28);
+                    const ImU32 labelCol = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+                    char text[48];
+                    for (int decade = static_cast<int>(std::floor(lo)); decade <= static_cast<int>(std::ceil(hi)); ++decade)
+                    {
+                        for (const float step : { 1.0f, 2.0f, 5.0f })
+                        {
+                            const float d = step * std::pow(10.0f, static_cast<float>(decade));
+                            const float l = std::log10(d);
+                            if (l < lo || l > hi) { continue; }
+                            const float y = yOf(d);
+                            dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), gridCol);
+                            std::snprintf(text, sizeof(text), absolute ? "%g" : "x%g", d);
+                            dl->AddText(ImVec2(origin.x, y - 7.0f), labelCol, text);
+                            if (absolute)
+                            {
+                                // Koschmieder at sea level: 3.912 / sigma, sigma = density (ln 2)^2 (height_fog.hlsli).
+                                const float km = 3.912f / (0.48045301f * d) / 1000.0f;
+                                std::snprintf(text, sizeof(text), km >= 10.0f ? "%.0f km" : "%.1f km", km);
+                                dl->AddText(ImVec2(x1 + 4.0f, y - 7.0f), labelCol, text);
+                            }
+                        }
+                    }
+                    for (int h = 0; h <= 24; h += 3)
+                    {
+                        dl->AddLine(ImVec2(xOf(static_cast<float>(h)), y1), ImVec2(xOf(static_cast<float>(h)), y1 + 3.0f), labelCol);
+                        std::snprintf(text, sizeof(text), "%d", h);
+                        dl->AddText(ImVec2(xOf(static_cast<float>(h)) - 4.0f, y1 + 3.0f), labelCol, text);
+                    }
+                    // The sun's arc, -30..75 degrees over the plot's height, faint behind the curve.
+                    ImVec2 arc[kSamples], curve[kSamples];
+                    for (int i = 0; i < kSamples; ++i)
+                    {
+                        const float x = xOf(24.0f * i / (kSamples - 1));
+                        arc[i] = ImVec2(x, y1 - (y1 - y0) * std::clamp((elev[i] + 30.0f) / 105.0f, 0.0f, 1.0f));
+                        curve[i] = ImVec2(x, yOf(base * FogDensityScaleAt(day, elev[i])));
+                    }
+                    dl->AddPolyline(arc, kSamples, IM_COL32(255, 220, 120, 70), ImDrawFlags_None, 1.0f);
+                    const float horizonY = y1 - (y1 - y0) * (30.0f / 105.0f);
+                    dl->AddLine(ImVec2(x0, horizonY), ImVec2(x1, horizonY), IM_COL32(255, 220, 120, 35));
+                    dl->AddPolyline(curve, kSamples, IM_COL32(120, 190, 255, 255), ImDrawFlags_None, 2.0f);
+                    dl->AddLine(ImVec2(xOf(nowHours), y0), ImVec2(xOf(nowHours), y1), IM_COL32(255, 200, 60, 230), 1.5f);
+                    static const char* const kHandleName[3] = { "day", "dusk", "night" };
+                    ImVec4 placed[3]; // the labels drawn so far (x0, y0, x1, y1): a label that would cover one goes below
+                    int placedCount = 0;
+                    for (int k = 0; k < 3; ++k)
+                    {
+                        if (handlePos[k].x < x0 - 1.0f) { continue; } // the sun never passes that elevation today
+                        const bool hot = dragWhat == k;
+                        dl->AddCircleFilled(handlePos[k], hot ? 6.5f : 5.5f, IM_COL32(235, 240, 250, 255));
+                        dl->AddCircle(handlePos[k], hot ? 6.5f : 5.5f, IM_COL32(60, 140, 230, 255), 0, 2.0f);
+                        std::snprintf(text, sizeof(text), "%s x%.2f", kHandleName[k], handleMult[k]);
+                        const ImVec2 size = ImGui::CalcTextSize(text);
+                        const float lx = std::clamp(handlePos[k].x - 0.5f * size.x, x0, x1 - size.x);
+                        float ly = handlePos[k].y - size.y - 8.0f;
+                        const auto covers = [&](float y) {
+                            for (int j = 0; j < placedCount; ++j)
+                            {
+                                if (lx < placed[j].z && lx + size.x > placed[j].x && y < placed[j].w && y + size.y > placed[j].y) { return true; }
+                            }
+                            return false;
+                        };
+                        if (ly < y0 || covers(ly)) { ly = handlePos[k].y + 8.0f; }
+                        if (covers(ly)) { ly += size.y + 2.0f; }
+                        placed[placedCount++] = ImVec4(lx, ly, lx + size.x, ly + size.y);
+                        dl->AddText(ImVec2(lx, ly), IM_COL32(235, 240, 250, 230), text);
+                    }
+                    if (hovered && dragWhat < 0)
+                    {
+                        const float h = hourOf(mouse.x);
+                        const float e = SunElevationAtHours(day, h);
+                        const float d = base * FogDensityScaleAt(day, e);
+                        const int minutes = static_cast<int>(std::lround(h * 60.0f));
+                        if (absolute)
+                        {
+                            ImGui::SetTooltip("%02d:%02d  sun %.1f deg\ndensity %.4f (x%.2f)  visibility ~%.1f km\n"
+                                              "drag a handle: up/down = multiplier, left/right = its sun height;\n"
+                                              "drag elsewhere = the clock", minutes / 60, minutes % 60, e, d,
+                                              d / base, 3.912f / (0.48045301f * d) / 1000.0f);
+                        }
+                        else
+                        {
+                            ImGui::SetTooltip("%02d:%02d  sun %.1f deg  x%.2f\n(the height fog is off: the multiplier alone)",
+                                              minutes / 60, minutes % 60, e, d);
+                        }
+                    }
+                    const float eNow = SunElevationAtHours(day, nowHours);
+                    const float dNow = base * FogDensityScaleAt(day, eNow);
+                    const int nowMinutes = static_cast<int>(std::lround(nowHours * 60.0f));
+                    if (absolute)
+                    {
+                        ImGui::TextDisabled("Now %02d:%02d  sun %.1f deg  density %.4f (x%.2f)  visibility ~%.1f km", nowMinutes / 60,
+                                            nowMinutes % 60, eNow, dNow, dNow / base, 3.912f / (0.48045301f * dNow) / 1000.0f);
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("Now %02d:%02d  sun %.1f deg  density x%.2f (the height fog is off)", nowMinutes / 60,
+                                            nowMinutes % 60, eNow, dNow);
+                    }
+                }
+                dragF("Day Density x", "dayDensity", defaults.fogDayDensity, 0.005f, 0.0f, 100.0f, "%.3f");
+                dragF("Dusk Density x", "duskDensity", defaults.fogDuskDensity, 0.005f, 0.0f, 100.0f, "%.3f");
+                dragF("Night Density x", "nightDensity", defaults.fogNightDensity, 0.005f, 0.0f, 100.0f, "%.3f");
+                InspectorHelp("Multipliers on the height fog's Density (Exponential Height Fog), by the sun's height: Day "
+                              "with the sun at Day Full and over, Dusk at Dusk, Night at Night Full and under, smoothly "
+                              "between; dawn mirrors dusk. Ultra Dynamic Sky's Fog Density Daytime / Nighttime "
+                              "Multiplier, with a dusk of its own. A clear afternoon by the sea sees 20-40 km (a density "
+                              "~0.0005); the evening's damp air is the sunset haze. Author Density for the dusk and take "
+                              "the day down -- e.g. 0.15. The sunset glow itself is the fog's Sun Scatter and the "
+                              "volume's Phase G, not this. All 1 = the level's density at every hour.");
+                dragF("Day Full At (deg)", "dayFullDeg", defaults.fogDayFullDeg, 0.1f, -90.0f, 90.0f, "%.1f");
+                dragF("Dusk At (deg)", "duskDeg", defaults.fogDuskDeg, 0.1f, -90.0f, 90.0f, "%.1f");
+                dragF("Night Full At (deg)", "nightFullDeg", defaults.fogNightFullDeg, 0.1f, -90.0f, 90.0f, "%.1f");
             }
             ImGui::PopID();
 
@@ -2710,6 +3018,7 @@ namespace
                 {
                     ImGui::PushID(section.key);
                     groupKey = section.key;
+                    scrollAnchor();
                     if (std::string_view(section.key) == "cameraExposure") { drawCameraExposure(); }
                     else if (std::string_view(section.key) == "colorPipeline") { drawColorPipeline(); }
                     else if (std::string_view(section.key) == "gtao") { drawGtao(); }
@@ -4222,7 +4531,8 @@ void InspectorPanel::Draw(EditorContext& ctx,
                 env,
                 !multiSelection,
                 environmentEditObject_,
-                environmentPropertiesBeforeEdit_);
+                environmentPropertiesBeforeEdit_,
+                scrollToGroup_);
             DrawInspectorDropTarget(ctx, commandStack, registry, &env);
             ImGui::End();
             return;

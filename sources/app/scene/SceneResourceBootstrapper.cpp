@@ -293,6 +293,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     fogParams2 = material->ComputeCB0FieldHandle("fogParams2");
     fogSunDir = material->ComputeCB0FieldHandle("fogSunDir");
     fogSunColor = material->ComputeCB0FieldHandle("fogSunColor");
+    fogInscatter = material->ComputeCB0FieldHandle("fogInscatter");
     fogDebugView = material->ComputeCB0FieldHandle("fogDebugView");
     preExposure = material->ComputeCB0FieldHandle("preExposure");
     fogVolumeParams = material->ComputeCB0FieldHandle("fogVolumeParams");
@@ -2016,6 +2017,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.fogParams2, data.fogParams2, dest);
     matComposeCS_->UpdateCBField(handles.fogSunDir, data.fogSunDir, dest);
     matComposeCS_->UpdateCBField(handles.fogSunColor, data.fogSunColor, dest);
+    matComposeCS_->UpdateCBField(handles.fogInscatter, data.fogInscatter, dest);
     matComposeCS_->UpdateCBField(handles.fogDebugView, data.fogDebugView, dest);
     matComposeCS_->UpdateCBField(handles.fogVolumeParams, data.fogVolumeParams, dest);
     matComposeCS_->UpdateCBField(handles.fogVolumeZParams, data.fogVolumeZParams, dest);

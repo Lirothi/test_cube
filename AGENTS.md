@@ -55,6 +55,20 @@ auto camera at 24:00; candles 4 -> 0.5 lm move the camera 0.21 stop instead of t
 `setTime` ("18:30", "sunset", "+2h") and `setDate` ("2026-06-21", switches to real positions); every
 `timeOfDay.*` key is in the document, so `setEnvironment` reaches the rest.
 
+The height fog's density by the sun's height (`timeOfDay.fog`, 2026-10-31, owner: "with the sun high the fog should be far,
+at sunset I want the sunset haze"): `dayDensity` / `duskDensity` / `nightDensity` multiply the FRAME's `heightFog.density`
+(the level keeps its own) with the sun at `dayFullDeg` (25) and over / at `duskDeg` (5) / at `nightFullDeg` (-8) and under,
+smoothstep between, dawn = dusk (`TimeOfDay::FogDensityScale`, Inspector Time of Day > "Fog By Sun Height", `--set
+tod.fogDayDensity` ...); all 1 (the default) = the level's density at every hour. Ultra Dynamic Sky's Fog Density Daytime /
+Nighttime Multiplier with a dusk. Author the level's density for the dusk and take the day down: a clear afternoon at the
+sea sees 20-40 km (density ~0.0005), wind_test's 0.004 is 2.4 km of mist at 15:00; 0.15 by day keeps the far palms crisp at
+13:00-15:00 and leaves 18:00 and the twilight as they were. The sunset GLOW is the fog's sun lobe (`sunScatterStrength`
+0.5, `sunScatterExponent` 8) and the volume's `phaseG` (0.7), not the density. The Inspector draws the curve over the
+level's day (x = the clock on its date and place, `SunElevationAtHours`; y = density, log, visibility in km beside it;
+the day / twilight / night bands and the sun's arc): a handle dragged up / down sets its multiplier, left / right the sun
+elevation it sits at (drawn where the afternoon passes it); a drag elsewhere moves the clock. One function
+(`FogDensityScaleAt`) for the frame and the graph. Photograph it with `--inspect=timeOfDay#fog`.
+
 Night lamps (plan L, `rendering/lighting/NightLamps.h`): a point/spot light or a glowing mesh with `"onAt": "night"`
 (or `"day"`) switches when the sun crosses `timeOfDay.lamps.sunElevationDeg` (0 = UDS's Sunset), UDS-style delay and
 warm-up, instant when the clock is set by hand; a night lamp takes `nightBrightness` as the night comes in. Brightness,
@@ -432,7 +446,8 @@ entry, nothing to save, an Inspector edit of the same object re-applies the docu
 re-meters the exposure; `screenshot {clean: true, path: "...png", settleFrames: 60}` writes the
 frame WITHOUT the editor's panels (scene + HUD, comparable with a headless `--shot`) at full size and
 sends no picture back unless `image`; `reset_settings` puts every environment object back to the open
-document (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*`, `skyVis.*`, `gi.*`,
+document and `fog.debugView` / `fog.skyAlongView` back to 0 (a debug view used to survive it: 2026-10-31 a whole
+sweep measured `fog.debugView:4`) (project-wide switches -- `cloudTrace.*`, `cloudShadow.*`, `frame.*`, `skyVis.*`, `gi.*`,
 `render.*` -- are not in the document and stay as last set: a bisect that turns `skyVis.enabled:0` off for one
 arm runs every later arm without it unless each arm names it); `get_readouts` returns the metered/adapted EV100, the pre-exposure,
 the sun probe (disc colour, visible share) and the frame rate; `set_camera {lookAt: "sun",
@@ -534,6 +549,9 @@ the tab) and its save (delete the file: the boot writes it whole from Capture --
 `<name>` selected, so its details pane -- size, split, material preview, LOD, chunking -- can be
 photographed; `--edit-mesh=<models/x/x.mesh.json>` does the same for the Mesh Editor, and
 `--edit-mesh=<models/x/x.mesh.json>#buoyancy` opens it with the Buoyancy section expanded.
+`--inspect=<environment type>[#<group>]` (implies `--editor`) selects the level's environment object of that type and
+scrolls the Inspector to the group by its JSON key -- `timeOfDay#fog` (the fog curve), `timeOfDay#lamps`,
+`postProcess#heightFog`; the log says `--inspect: selected '<name>', group <key>`.
 
 **Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
 hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
@@ -1381,6 +1399,24 @@ The UE review that followed (owner: "fix the volumetric fog"), each against `Vol
 - Cost (Scatter + Integrate, editor open, alternated x3): the start at 0 instead of 10 m +0.01 ms on the grove, 0 in
   the tunnel and over the sea; 60 m instead of 300 would add +0.02. GBV (`VolumetricFog,Compose,Skybox,
   TransparentFog,Translucent` + Skybox self-test, the bathroom at 00:00): clean.
+
+**The analytic fog's COLOUR is UE's under the procedural sky** (2026-10-31, owner after a side-by-side with UE 5.8: wind_test
+at 18:00 rebuilt in his UE -- island, 661 palms, UE's ocean, our sky and fog numbers, one exposure -- "do it as in UE").
+Extinction and the volume were already UE's (palm-line contrast kept at density 0.002 / 0.01 / 0.04: ours 89/61/22 %, UE
+82/49/28 %); the colour was not. UE 5.8: `FogInscatteringLuminance` (black) + `SkyAtmosphereAmbientContributionColorScale`
+(white) x the distant sky light LUT (`HeightFogCommon.ush:154-198`), ONE colour for every direction, on geometry and on
+the sky; its directional lobe is black by default. Ours took the sky along the view and was an identity over the sky, so
+the air never veiled the horizon: horizon sky -1 / -3 / -8 % where UE's HDR frame has -9 / -27 / -35 %. Now
+`PackHeightFog` hands compose, fog_apply (the water) and glass `inscatter` = `heightFog.inscatteringLuminance` +
+`heightFog.skyAmbientContribution` x `SkyAtmosphere::DistantSkyLight` (read back to the CPU after each rebuild, 16 bytes;
+x the level's `skyLuminanceFactor`, which UE bakes into that LUT) -- w = 0 (the HDRI sky, or the first frames) keeps the
+sky along the view, UE's InscatteringColorCubemap option. Our sun lobe (`sunScatterStrength`) now reaches the sky too, as
+UE's. After: -5 / -20 / -24 % (UE -9 / -27 / -35), analytic only at 0.04 -47 % (UE -52 %), the haze grey-blue like UE's.
+What it costs: at twilight a horizontal ray always hits `maxOpacity` (0.9), so the sunset band behind the palms is 90 %
+fog colour, as in UE (19:30, horizon band 90.8 vs 102.6 of 255 without fog; 24:00 49.9 vs 53.5). Knobs: Inspector "Fog
+colour (procedural sky)", `--set fog.skyAmbient` / `fog.inscatterLuminance` (grays), `fog.skyAlongView:1` = the old colour,
+the A/B (reproduces the old frame: 0.7 of 255 mean, clouds). No volumetric shafts at that view in UE either, at any density
+(g 0.2). GBV (`SkyDistant,Compose,TransparentFog,Translucent,Skybox` + the Skybox self-test): clean.
 
 ## GI Probe Volume (DDGI) -- the Bounce
 

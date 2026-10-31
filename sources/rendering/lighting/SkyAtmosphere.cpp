@@ -98,8 +98,8 @@ void SkyAtmosphere::Reset()
     nightReady_ = nightFailed_ = nightWanted_ = false; environmentNightKey_ = {};
     distant_.Reset(); distantHeap_.Reset(); distantMaterial_.reset();
     for (auto& r : distantReadback_) r.Reset();
-    distantSrv_ = {}; distantUav_ = {}; distantPending_ = {};
-    distantActive_ = distantReady_ = distantFailed_ = false; distantBuilds_ = 0;
+    distantSrv_ = {}; distantUav_ = {}; distantPending_ = {}; distantValidate_ = {};
+    distantActive_ = distantReady_ = distantFailed_ = distantValueValid_ = false; distantBuilds_ = 0;
     for (auto& resource : environment_) resource.Reset();
     environmentView_.Reset(); environmentHeap_.Reset(); captureMaterial_.reset(); filterMaterial_.reset();
     environmentSrv_ = {}; environmentUav_ = {}; environmentViewSrv_ = {}; environmentViewUav_ = {};
@@ -120,7 +120,7 @@ void SkyAtmosphere::Prepare(Renderer* renderer, const SkyAtmosphereSettings& set
 {
     // BeginFrame already waited for THIS slot. Never map a different in-flight slot.
     ValidateReadback(renderer->GetCurrentFrameIndex());
-    ValidateDistant(renderer->GetCurrentFrameIndex());
+    ReadBackDistant(renderer->GetCurrentFrameIndex());
     if (settings.mode && !failed_) PrepareDistant(renderer);
     if (settings.mode && !failed_) PrepareMoon(renderer);
     if (settings.mode && !failed_ && nightWanted_) PrepareNight(renderer);
@@ -1024,12 +1024,15 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
             for (auto& r : lut_) ctx.Use(r.Get(), kRest);
             ctx.Use(distant_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
             ctx.NextPoint(); points[1] = ctx.usePoint ? *ctx.usePoint : 0u;
-            if (validate) ctx.Use(distant_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            // Every rebuild is copied out: the height fog's colour reads the texel on the CPU (UE's fog colour,
+            // HeightFogSettings::skyAmbientContribution). 16 bytes, only on the frames that rebuild.
+            ctx.Use(distant_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
             ctx.NextPoint(); points[2] = ctx.usePoint ? *ctx.usePoint : 0u;
             ctx.Use(distant_.Get(), kRest);
             const UINT slot = renderer->GetCurrentFrameIndex();
             distantParameters_ = params; distantKey_ = view; distantReady_ = true;
-            distantPending_[slot] = validate;
+            distantPending_[slot] = true;
+            distantValidate_[slot] = validate;
             LOG_DEBUG(logging::LogCategory::Render, "distant sky light rebuild {}: 64 rays x 10 samples, 6 km", ++distantBuilds_);
             // The MAJOR revision (DistantMajorRevision): far from the last major key, or the first.
             {
@@ -1065,7 +1068,7 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
                     ++distantMajorBuilds_;
                 }
             }
-            return [this, renderer, params, view, validate, slot, points](RenderGraphPassContext c) {
+            return [this, renderer, params, view, slot, points](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyDistant);
                 auto t = c.BeginCL(); SetCommandListName(t.cl, c.pass);
                 {
@@ -1077,7 +1080,6 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
                         {srv_[0], srv_[1]}, {distantUav_}, sampler, 8, 8);
                 }
                 renderer->EmitPoint(t.cl, points[1]);
-                if (validate)
                 {
                     D3D12_TEXTURE_COPY_LOCATION dst{}, src{};
                     dst.pResource = distantReadback_[slot].Get(); dst.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
@@ -1090,18 +1092,25 @@ size_t SkyAtmosphere::BuildDistant(Renderer* renderer, RenderGraph<static_cast<s
         });
 }
 
-void SkyAtmosphere::ValidateDistant(UINT slot)
+void SkyAtmosphere::ReadBackDistant(UINT slot)
 {
     if (!distantPending_[slot]) return;
     distantPending_[slot] = false;
+    const bool validate = distantValidate_[slot];
+    distantValidate_[slot] = false;
     void* data = nullptr;
     const D3D12_RANGE read{0, sizeof(float)*4};
     if (FAILED(distantReadback_[slot]->Map(0, &read, &data)) || !data)
-    { LOG_ERROR(logging::LogCategory::Render, "distant sky light validation: map failed"); return; }
+    { LOG_ERROR(logging::LogCategory::Render, "distant sky light readback: map failed"); return; }
     float value[4]; std::memcpy(value, data, sizeof(value));
     const D3D12_RANGE written{0, 0}; distantReadback_[slot]->Unmap(0, &written);
     const bool ok = std::isfinite(value[0]) && std::isfinite(value[1]) && std::isfinite(value[2])
         && value[0] >= 0 && value[1] >= 0 && value[2] >= 0 && value[3] == 0;
+    if (ok)
+    {
+        std::memcpy(distantValue_, value, sizeof(distantValue_));
+        distantValueValid_ = true;
+    }
     if (!ok) LOG_ERROR(logging::LogCategory::Render, "distant sky light validation FAIL: [{}, {}, {}, {}]", value[0], value[1], value[2], value[3]);
-    else LOG_INFO(logging::LogCategory::Render, "distant sky light validation PASS: raw RGB [{:.6f}, {:.6f}, {:.6f}] at 6 km", value[0], value[1], value[2]);
+    else if (validate) LOG_INFO(logging::LogCategory::Render, "distant sky light validation PASS: raw RGB [{:.6f}, {:.6f}, {:.6f}] at 6 km", value[0], value[1], value[2]);
 }

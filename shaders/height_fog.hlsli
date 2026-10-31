@@ -169,11 +169,14 @@ float HeightFogTransmittance(float opticalDepth, float minTransmittance)
 // term only builds up past `sunScatterStartDistance`. They also keep the lobe separate from the
 // non-directional colour, which is why it is added rather than blended.
 //
-// DELIBERATE DEPARTURE: `skyAlongView` is the sky sampled DOWN THE VIEW RAY where UE use an
-// authored FogInscatteringColor (or an inscattering cubemap). Sampling the sky is what makes the
-// fog agree with the horizon by construction instead of by tuning -- at grazing angles the fog
-// colour and the pixel behind it converge on the same sample, so there is no seam to hide. That is
-// the plan's item 4, and it is the one place this file is knowingly not a transcription.
+// `skyAlongView` is the base colour. UNDER THE PROCEDURAL SKY IT IS UE's (since 2026-10-31): one isotropic
+// colour, FogInscatteringLuminance + SkyAtmosphereAmbientContributionColorScale x the distant sky light
+// (HeightFogCommon.ush:154-198), the same on geometry and on the sky, so both sides of a silhouette meet by
+// construction and the air veils the horizon. Side by side with UE 5.8 on wind_test the old colour (below)
+// left the horizon sky at -1 / -3 / -8 % where UE's is at -9 / -27 / -35 % (density 0.002 / 0.01 / 0.04):
+// the fog converged on whatever sky stood behind each pixel and read as no fog at all. With the HDRI sky
+// it is still the sky sampled DOWN THE VIEW RAY -- UE's InscatteringColorCubemap option -- which makes the
+// fog agree with the horizon by sampling the same sky the pixel behind shows.
 //
 // The lobe was once faded out by `headroom` (a warm band on the water stopping dead at the horizon,
 // while the sky was not fogged); that gate is gone with its reason -- see inside HeightFogColor.

@@ -654,6 +654,7 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
             c.fogParams0 = fog.params0;
             c.fogParams1 = fog.params1;
             c.fogParams2 = fog.params2;
+            c.fogInscatter = fog.inscatter;
             if (frame_->dirLight)
             {
                 // Negated HERE, exactly as compose receives it: the shader is handed the direction

@@ -24,6 +24,8 @@ public:
         const AssetRegistry& registry,
         const EditorExtensionRegistry& extensions,
         bool* open);
+    // Scroll to an environment object's group (its JSON key, e.g. "fog" of timeOfDay) the next time it is drawn.
+    void ScrollToGroup(std::string key) { scrollToGroup_ = std::move(key); }
 
 private:
     void DrawTransformEditor(EditorContext& ctx, EditorCommandStack& commandStack, EditorObject& object);
@@ -40,6 +42,7 @@ private:
     EditorObjectId environmentEditObject_{};
     nlohmann::json environmentPropertiesBeforeEdit_;
     EditorTransform transformBeforeEdit_{}; // captured when a transform edit gesture begins
+    std::string scrollToGroup_;             // ScrollToGroup: cleared once the group has been scrolled to
 };
 
 #endif // WITH_EDITOR

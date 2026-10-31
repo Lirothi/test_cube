@@ -198,6 +198,16 @@ struct HeightFogSettings
     // run with the fade off showed the band gone either way. That was the cube, not this.
     float nonDirectionalDistance = 0.0f;
     float fullyDirectionalDistance = 0.0f;
+    // THE FOG'S COLOUR UNDER THE PROCEDURAL SKY IS UE 5.8's (2026-10-31, owner after a side-by-side with UE on
+    // wind_test: "do it as in UE"). ComputeInscatteringColor (HeightFogCommon.ush:154-198) = FogInscatteringLuminance
+    // + SkyAtmosphereAmbientContributionColorScale x the atmosphere's distant sky light (GetViewDistanceSkyLightColor,
+    // SkyAtmosphereCommon.ush:356): ONE isotropic colour for every direction, on geometry and on the sky alike, so the
+    // air reads as a veil over the horizon instead of converging on whatever sky stands behind each pixel (the sky
+    // along the view, which made a fogged sky an identity: -1 / -3 / -8 % at the horizon where UE's frame has -9 /
+    // -27 / -35 % at densities 0.002 / 0.01 / 0.04). The HDRI sky keeps the sky along the view: there is no distant
+    // light, and that is UE's InscatteringColorCubemap option. cd/m2, absolute; UE's defaults (black, white).
+    float3 inscatteringLuminance{0.0f, 0.0f, 0.0f};
+    float3 skyAmbientContribution{1.0f, 1.0f, 1.0f};
 
     // ---- Volumetric (froxel) fog, docs/volumetric_fog_sky_clouds_ssgi_plan.md part A. UE's
     // VolumetricFog on top of the analytic model above: inside `volumetricDistance` the air is a
@@ -463,6 +473,13 @@ struct BloomSettings
 // and a debug view saved into a level is a trap -- the same reasoning that keeps
 // ocean::g_foamDebugView out of OceanRenderConfig. 0 = normal, 1 = transmittance, 2 = in-scattering.
 inline uint32_t g_fogDebugView = 0u;
+// The atmosphere's distant sky light for this frame's fog colour (HeightFogSettings::skyAmbientContribution): rgb =
+// SkyAtmosphere's DistantSkyLight read back to the CPU, times UE's SkyLuminanceFactor (UE puts it in that LUT,
+// SkyAtmosphere.usf:1466; ours leaves it out of the light), raw cd/m2; w = 1 while the procedural sky has one. Set by
+// the scene renderer once a frame before any pass packs the fog. A few frames old: it is rebuilt only as the sun moves.
+inline float4 g_fogDistantSkyLight{};
+// A/B, transient (--set fog.skyAlongView:1): the fog coloured by the sky along the view again, as before 2026-10-31.
+inline bool g_fogSkyAlongView = false;
 
 // The exact numbers the shaders receive. TWO passes apply aerial perspective -- compose, for opaque
 // geometry, and the ocean's forward surface -- and the plan's own warning about this feature is that
@@ -474,6 +491,7 @@ struct HeightFogPacked
     float4 params0{}; // density, height falloff, reference height, start distance
     float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
     float4 params2{}; // sky blur, sky back-scatter, directional-fade inverse range, its bias
+    float4 inscatter{}; // UE's fog colour (raw cd/m2), w = 1: use it on geometry and sky; w = 0: the sky along the view
 };
 
 inline HeightFogPacked PackHeightFog(const HeightFogSettings& a, bool hasSun)
@@ -492,6 +510,13 @@ inline HeightFogPacked PackHeightFog(const HeightFogSettings& a, bool hasSun)
     // rather than a phase (height_fog.hlsli). Left as 0 rather than repacked, so every consumer's
     // swizzle keeps meaning what it means.
     p.params2 = float4(std::clamp(a.skyBlur, 0.0f, 1.0f), 0.0f, invRange, -nonDir * invRange);
+    if (g_fogDistantSkyLight.w > 0.0f && !g_fogSkyAlongView)
+    {
+        const float4& d = g_fogDistantSkyLight;
+        p.inscatter = float4(std::max(a.inscatteringLuminance.x + a.skyAmbientContribution.x * d.x, 0.0f),
+                             std::max(a.inscatteringLuminance.y + a.skyAmbientContribution.y * d.y, 0.0f),
+                             std::max(a.inscatteringLuminance.z + a.skyAmbientContribution.z * d.z, 0.0f), 1.0f);
+    }
     return p;
 }
 

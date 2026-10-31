@@ -89,6 +89,7 @@ cbuffer PerFrame : register(b0)
     float4 fogParams2;   // x: sky blur (roughness at the lightly-fogged end), yzw reserved
     float4 fogSunDir;    // xyz: direction TO the sun (world)
     float4 fogSunColor;  // rgb: the sun's effective colour
+    float4 fogInscatter; // PackHeightFog's: UE's fog colour (raw), w = 1 = use it on geometry and sky (else the sky along the view)
     // P7 item 8. 0 = normal, 1 = transmittance, 2 = in-scattering. Rides the fog block so a view
     // costs nothing when the fog is off -- and shows nothing either, which is the honest answer.
     // Volumetric fog (plan part A) adds 3 = the froxel slice grid, 4 = the volume's own
@@ -653,6 +654,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     {
         // Sky or surface: decided once, used by the sun lobe's gate and by the ray below.
         const bool isSky = !(z > kEps);
+        // UE's fog colour (procedural sky): one isotropic colour, so the sky is fogged like geometry and the lobe
+        // reaches it as in UE -- the two gates below exist for the sky-along-the-view colour only.
+        const bool ueColour = fogInscatter.w > 0.5f;
 
         HeightFogParams fog;
         fog.density = fogParams0.x;
@@ -670,7 +674,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // This is the gate the lobe should have had all along. It used to ride `headroom`, which
         // faded the lobe out as the fog saturated -- that hid the double count at the horizon but
         // made the term non-monotonic in distance, which drew its own dark line along the water.
-        fog.sunScatterStrength = isSky ? 0.0f : fogParams1.y;
+        fog.sunScatterStrength = (isSky && !ueColour) ? 0.0f : fogParams1.y;
         fog.sunScatterExponent = fogParams1.z;
         fog.sunScatterStartDistance = fogParams1.w;
 
@@ -725,7 +729,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // everywhere else, and the bloom turned that into a flare. Continuity at a distant
         // silhouette does not need this -- it comes from the GEOMETRY side converging on the sky,
         // and geometry still samples the cube below.
-        const float3 skyAlongView = isSky
+        //
+        // UNDER THE PROCEDURAL SKY NEITHER: the colour is UE's (fogInscatter, HeightFogSettings::skyAmbientContribution)
+        // on both sides of a silhouette, so they meet by construction and the sky behind the air is veiled as in UE.
+        const float3 skyAlongView = ueColour
+            ? fogInscatter.rgb
+            : isSky
             ? lit
             : FogSkyAlongView(SkyboxTex, gSmp, viewDir, dist,
                               HeightFogSkyRoughness(headroom, fogParams2.x), fogParams2.zw, skyboxIntensity);

@@ -1000,6 +1000,14 @@ int WINAPI WinMain(
             g_bootShowImport = true;
             g_bootEditor = true;
         }
+        // "--inspect=<type>[#<group>]": the Inspector on that environment object, scrolled to the group (implies --editor).
+        if (const char* flag = std::strstr(lpCmdLine, "--inspect=")) {
+            const char* value = flag + std::strlen("--inspect=");
+            const char* end = value;
+            while (*end && *end != ' ' && *end != '\t') { ++end; }
+            g_bootInspect.assign(value, end);
+            g_bootEditor = g_bootEditor || !g_bootInspect.empty();
+        }
         // "--intent=<phrase>": one phrase through the editor's real pipeline, then quit.
         // Implies --editor, because the pipeline lives behind EditorController::Draw.
         if (const char* flag = std::strstr(lpCmdLine, "--intent=")) {

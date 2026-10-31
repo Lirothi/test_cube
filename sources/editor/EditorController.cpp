@@ -3152,6 +3152,30 @@ void EditorController::Draw(
         }
         g_bootShowImport = false;
     }
+    // "--inspect=<type>[#<group>]": once the level's environment holds that type, select it and scroll the Inspector to
+    // the group. Waits for the document (a few frames at boot); gives up with a warning after 600.
+    if (!g_bootInspect.empty())
+    {
+        static int waited = 0;
+        const size_t anchor = g_bootInspect.find('#');
+        const std::string type = g_bootInspect.substr(0, anchor);
+        for (const EditorObject& env : document_.Environment())
+        {
+            if (env.type != type) { continue; }
+            selection_.Replace(env.id);
+            showInspector_ = true;
+            if (anchor != std::string::npos) { inspector_.ScrollToGroup(g_bootInspect.substr(anchor + 1)); }
+            LOG_INFO(logging::LogCategory::Editor, "--inspect: selected '{}'{}{}", env.name,
+                anchor != std::string::npos ? ", group " : "", anchor != std::string::npos ? g_bootInspect.substr(anchor + 1) : "");
+            g_bootInspect.clear();
+            break;
+        }
+        if (!g_bootInspect.empty() && ++waited > 600)
+        {
+            LOG_WARNING(logging::LogCategory::Editor, "--inspect: the level has no environment object of type '{}'", type);
+            g_bootInspect.clear();
+        }
+    }
     ctx.openMaterialEditor = [this](const std::string& materialName, const std::string& materialPath)
     {
         materialEditor_.Open(materialName, materialPath);

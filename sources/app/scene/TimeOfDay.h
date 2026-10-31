@@ -72,6 +72,8 @@ public:
     const float* OzoneTint() const { return ozoneTint_; }
     // What the frame's sky luminance scale is multiplied by (TimeOfDaySettings::daySkyBrightness at the day blend).
     float SkyLuminanceScale() const { return skyLuminanceScale_; }
+    // What the frame's height-fog density is multiplied by (TimeOfDaySettings::fogDayDensity .. by the sun's height).
+    float FogDensityScale() const { return fogDensityScale_; }
     // Stops added to the frame camera's compensation (TimeOfDaySettings::nightExposureEv by the night's share).
     float NightExposureEv() const { return nightExposureEv_; }
     // The night's share, 0 with the sun above -6 degrees (civil twilight's end), 1 from -12 (nautical's), smoothstep:
@@ -122,6 +124,7 @@ private:
     float rayleighTint_[3] = {1.0f, 1.0f, 1.0f};
     float ozoneTint_[3] = {1.0f, 1.0f, 1.0f};
     float skyLuminanceScale_ = 1.0f;
+    float fogDensityScale_ = 1.0f;
     float nightExposureEv_ = 0.0f;
     float nightShare_ = 0.0f;
     float handOverFade_ = 1.0f;
@@ -142,6 +145,12 @@ private:
 // False with a sentence that says what IS accepted.
 bool ResolveTimeOfDaySpec(std::string_view spec, const TimeOfDaySettings& settings, float& outHours,
                           std::string& outError);
+// The sun's elevation in degrees at a local clock time (0..24) on the section's date and place, by the path Tick
+// takes (real positions or the simple path) -- the editor's Fog By Sun Height graph draws the day with it.
+float SunElevationAtHours(const TimeOfDaySettings& s, double hours);
+// The height fog's density multiplier at a sun elevation (TimeOfDaySettings::fogDayDensity ..): day over fogDayFullDeg,
+// dusk at fogDuskDeg, night under fogNightFullDeg, smoothstep between. What Tick applies and the graph draws.
+float FogDensityScaleAt(const TimeOfDaySettings& s, double sunElevationDeg);
 // "YYYY-MM-DD".
 bool ParseTimeOfDayDate(std::string_view spec, int& year, int& month, int& day, std::string& outError);
 // "HH:MM", the minute rounded.

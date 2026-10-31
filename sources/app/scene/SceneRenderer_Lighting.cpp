@@ -1130,6 +1130,7 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
             constants.fogParams0 = fog.params0;
             constants.fogParams1 = fog.params1;
             constants.fogParams2 = fog.params2;
+            constants.fogInscatter = fog.inscatter;
             constants.fogDebugView = g_fogDebugView;
             constants.preExposure = preExposure_;   // P16.1
             // Volumetric fog (plan part A): the froxel volume inside `volumetricDistance`, the

@@ -14235,9 +14235,9 @@
       "name": "staticMesh #722 Copy",
       "normalStrength": 0.0,
       "position": [
-        -47.874446868896484,
-        2.186403751373291,
-        67.99213409423828
+        -49.07444763183594,
+        1.9864037036895752,
+        69.49213409423828
       ],
       "rotationDeg": [
         0.0,
@@ -38874,9 +38874,9 @@
       "convChroma": 0.10000000149011612,
       "convFalloff": 3.0,
       "convGhostBokeh": 2.0,
-      "convGhostIntensity": 0.001500000013038516,
+      "convGhostIntensity": 0.003000000026077032,
       "convGhostSpacing": 0.44999998807907104,
-      "convGhostThreshold": 9.0,
+      "convGhostThreshold": 8.0,
       "convGhosts": 8,
       "convKernel": "textures/BloomKernelStarAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
@@ -38893,7 +38893,7 @@
       "convSpokeLength": 0.8999999761581421,
       "convSpokeStrength": 0.4000000059604645,
       "convSpokeWidth": 4.0,
-      "convSunGhostScale": 0.25,
+      "convSunGhostScale": 0.20000000298023224,
       "convSunKernelScale": 0.25,
       "enabled": true,
       "fireflyClamp": true,
@@ -38903,7 +38903,7 @@
       "softKnee": 0.5,
       "sunGlareIntensity": 0.0104,
       "sunGlareRadiusDeg": 2.0,
-      "sunGlareSmoothingSec": 0.0,
+      "sunGlareSmoothingSec": 0.019999999552965164,
       "sunGlareVeil": 0.25,
       "sunGlareVeilRadiusDeg": 7.0,
       "sunRaysBundleStrength": 0.4000000059604645,
@@ -39012,19 +39012,21 @@
       "worldRadius": 1.2000000476837158
     },
     "heightFog": {
-      "density": 0.001500000013038516,
+      "density": 0.004000000189989805,
       "enabled": true,
       "heightFalloff": 0.05999999865889549,
       "maxOpacity": 0.8999999761581421,
+      "phaseG": 0.699999988079071,
       "skyBackScatter": 0.4000000059604645,
       "skyBlur": 0.30000001192092896,
       "startDistance": 10.0,
       "sunScatter": 1.0,
-      "sunScatterExponent": 32.0,
+      "sunScatterExponent": 8.0,
       "sunScatterStartDistance": 100.0,
-      "sunScatterStrength": 0.10000000149011612,
+      "sunScatterStrength": 0.5,
       "volumetric": true,
-      "volumetricDistance": 60.0
+      "volumetricDistance": 60.0,
+      "volumetricStartDistance": 0.0
     }
   },
   "skyAtmosphere": {
@@ -39898,6 +39900,14 @@
     "daySkyBrightness": 2.0,
     "dusk": 18.0,
     "extendTwilight": 0.0,
+    "fog": {
+      "dayDensity": 0.15,
+      "dayFullDeg": 25.0,
+      "duskDeg": 5.0,
+      "duskDensity": 1.0,
+      "nightDensity": 1.0,
+      "nightFullDeg": -8.0
+    },
     "heightOffset": 0.0,
     "lamps": {
       "dayBrightness": 48000.0,
@@ -40008,7 +40018,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 16.0,
+    "time": 18.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

@@ -31,6 +31,16 @@ inline void ApplyOverrides(const nlohmann::json& j, HeightFogSettings& s)
     s.skyBlur = j.value("skyBlur", s.skyBlur);
     s.nonDirectionalDistance = j.value("nonDirectionalDistance", s.nonDirectionalDistance);
     s.fullyDirectionalDistance = j.value("fullyDirectionalDistance", s.fullyDirectionalDistance);
+    const auto colour = [&j](const char* key, float3& v)
+    {
+        const auto it = j.find(key);
+        if (it != j.end() && it->is_array() && it->size() == 3)
+        {
+            v = float3((*it)[0].get<float>(), (*it)[1].get<float>(), (*it)[2].get<float>());
+        }
+    };
+    colour("inscatteringLuminance", s.inscatteringLuminance);
+    colour("skyAmbientContribution", s.skyAmbientContribution);
     s.volumetric = j.value("volumetric", s.volumetric);
     s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
     s.volumetricStartDistance = j.value("volumetricStartDistance", s.volumetricStartDistance);
@@ -66,6 +76,8 @@ inline nlohmann::json ToJson(const HeightFogSettings& s)
     j["skyBlur"] = s.skyBlur;
     j["nonDirectionalDistance"] = s.nonDirectionalDistance;
     j["fullyDirectionalDistance"] = s.fullyDirectionalDistance;
+    j["inscatteringLuminance"] = { s.inscatteringLuminance.x, s.inscatteringLuminance.y, s.inscatteringLuminance.z };
+    j["skyAmbientContribution"] = { s.skyAmbientContribution.x, s.skyAmbientContribution.y, s.skyAmbientContribution.z };
     j["volumetric"] = s.volumetric;
     j["volumetricDistance"] = s.volumetricDistance;
     j["volumetricStartDistance"] = s.volumetricStartDistance;
