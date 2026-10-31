@@ -125,6 +125,14 @@ struct CameraExposureSettings
     float nightSteadyEv100 = 0.0f;
     float nightSteadyFollow = 1.0f;
     float nightSteadyWeight = 0.0f;
+    // ...the night's exposure trim (TimeOfDaySettings::nightExposureEv x the night's share, EV, negative darkens), on the
+    // camera after the curve; the open-sky share both come in by (nightCameraOpenFrom -> nightCameraOpenFull; Full
+    // <= From = always whole); and how many stops past the steady EV a closed frame may open (nightCameraIndoorLift).
+    // The frame's, written by Scene each frame, never serialized.
+    float nightExposureEv = 0.0f;
+    float nightOpenSkyFrom = 0.0f;
+    float nightOpenSkyFull = 0.0f;
+    float nightIndoorLift = 0.0f;
     // Histogram percentiles used to derive the metered luminance. Clipping the tails is what keeps
     // a sun glint or a patch of sky from dragging the whole frame, without hard-coding what water
     // or sky look like.

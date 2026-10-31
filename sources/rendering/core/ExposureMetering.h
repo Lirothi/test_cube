@@ -61,6 +61,9 @@ public:
     // Log-luminance bins. 256 is the usual choice: fine enough that a percentile lands within a
     // fraction of a stop over the plan's metering range, and it is one thread group of 256.
     static constexpr UINT kHistogramBins = 256u;
+    // Behind the bins, the build's two OPEN-SKY sums (exposure_histogram_cs.hlsl kOpenSkyOffset): the
+    // metering-weighted sky visibility of the frame and the weights, which the solve divides.
+    static constexpr UINT kHistogramWords = kHistogramBins + 2u;
 
     // P3B base log-luminance layer for local exposure. Same fixed grid the metering samples, so
     // it is resolution-independent for the same reasons and needs no resize handling.
@@ -105,6 +108,11 @@ public:
         // trim plus curve, EV, positive brightens), and the eye's adaptation before the curve.
         float compensationEv = 0.0f;
         float eyeEv100 = 0.0f;
+        // The frame's open-sky share as the solve smoothed it (1 = all sky, 0 = a closed room), and the
+        // share of the OPEN night's camera the frame takes (TimeOfDaySettings::nightCameraOpenFrom / Full,
+        // followed at the adaptation's speeds).
+        float openSky = 0.0f;
+        float openNight = 0.0f;
         // The sun probe's output (bloom_conv_cs.hlsl stage 10): the disc colour the glare reads (rgb,
         // pre-exposed, gate and off-frame fade applied) and the disc's visible share.
         float sunProbe[3] = {};

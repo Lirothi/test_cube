@@ -1,7 +1,7 @@
 // Photographic camera, step P2: log2-luminance histogram of the scene-referred HDR image.
 //
 // Two entry points share one root signature so both dispatches bind identically:
-//   CSClear  -- zero the 256 bins (the build below only ever InterlockedAdds).
+//   CSClear  -- zero the 256 bins and the open-sky sums (the build below only ever InterlockedAdds).
 //   CSBuild  -- sample the HDR scene on a FIXED grid and accumulate into the bins.
 //
 // The grid is fixed rather than one-thread-per-pixel for two reasons the plan asks for: the pass
@@ -10,15 +10,18 @@
 //
 // t0: scene-referred HDR colour, PRE-tonemap and PRE-exposure. Exposure must never be metered from
 //     an already-exposed image -- that is a feedback loop.
-// u0: raw (byte-address) histogram, 256 uint bins.
+// t1: the RT sky visibility (rt_sky_visibility_cs.hlsl's target: .xyz the bent normal, its length how much sky a
+//     point sees; .w the device depth, 0 = the sky itself), read only while `skyVisValid` says it was traced.
+// u0: raw (byte-address) histogram, 256 uint bins, then the frame's OPEN-SKY share as two sums (kOpenSkyWords).
 
 #define EXPOSURE_HISTOGRAM_CS_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 Texture2D<float4> SceneColor : register(t0);
+Texture2D<float4> SkyVis : register(t1);
 RWByteAddressBuffer Histogram : register(u0);
 SamplerState gSmp : register(s0);
 
@@ -39,9 +42,13 @@ cbuffer ExposureHistogramCB : register(b0)
     float maskInnerRadius;
     float maskOuterRadius;
     float maskSkyBias;
+    uint skyVisValid;    // 1 = t1 holds this frame's traced sky visibility; 0 = every sample counts as open sky
 };
 
 static const uint kBins = 256u;
+// Behind the bins (byte kBins * 4): the metering-weighted sum of each sample's open-sky share, then the sum of the
+// weights -- exposure_solve_cs.hlsl divides them. Fixed point like the bins.
+static const uint kOpenSkyOffset = kBins * 4u;
 
 // Weights are accumulated as fixed point because InterlockedAdd has no float form. 256 units per
 // 1.0 of weight: with a 256x144 grid the worst case is 36864 * 256 = 9.4M in a single bin, three
@@ -90,6 +97,10 @@ void CSClear(uint3 dtid : SV_DispatchThreadID)
     {
         Histogram.Store((thread * 4u + i) * 4u, 0u);
     }
+    if (thread == 0u)
+    {
+        Histogram.Store2(kOpenSkyOffset, uint2(0u, 0u));
+    }
 }
 
 [numthreads(8, 8, 1)]
@@ -102,6 +113,31 @@ void CSBuild(uint3 dtid : SV_DispatchThreadID)
     }
 
     const float2 uv = (float2(dtid.xy) + 0.5f) / float2(sampleGridX, sampleGridY);
+    const float meterWeight = MeteringWeight(uv);
+
+    // The frame's OPEN-SKY share (time of day: the night's camera trims are the OPEN night's, exposure_solve_cs.hlsl):
+    // the sky itself counts 1, a surface how much sky it sees -- a beach ~0.9, a wall outdoors ~0.5, a closed room ~0.
+    // Weighted as the meter weighs, so it is the share of what the camera is metering. One atomic per wave: every
+    // thread of the grid adds to the same two words.
+    {
+        float open = 1.0f;
+        if (skyVisValid != 0u)
+        {
+            uint w, h;
+            SkyVis.GetDimensions(w, h);
+            const uint2 texel = min(uint2(uv * float2(w, h)), uint2(w - 1u, h - 1u));
+            const float4 v = SkyVis.Load(int3(texel, 0));
+            open = v.w <= 0.0f ? 1.0f : saturate(length(v.xyz));
+        }
+        const uint openSum = WaveActiveSum((uint)(open * meterWeight * kWeightScale + 0.5f));
+        const uint weightSum = WaveActiveSum((uint)(meterWeight * kWeightScale + 0.5f));
+        if (WaveIsFirstLane())
+        {
+            Histogram.InterlockedAdd(kOpenSkyOffset, openSum);
+            Histogram.InterlockedAdd(kOpenSkyOffset + 4u, weightSum);
+        }
+    }
+
     const float3 color = SceneColor.SampleLevel(gSmp, uv, 0).rgb * invPreExposure;
     const float lum = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
 
@@ -121,6 +157,6 @@ void CSBuild(uint3 dtid : SV_DispatchThreadID)
     // Weighted rather than counted: this is what makes the mask above mean anything. The solve
     // works on cumulative FRACTIONS of the total, so it needs no change -- the total is simply a
     // sum of weights now instead of a sample count.
-    const uint weight = (uint)(MeteringWeight(uv) * kWeightScale + 0.5f);
+    const uint weight = (uint)(meterWeight * kWeightScale + 0.5f);
     Histogram.InterlockedAdd(bin * 4u, weight);
 }

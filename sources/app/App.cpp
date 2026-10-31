@@ -1069,6 +1069,9 @@ namespace
                 { "nightExposureEv", &t.nightExposureEv, -10.0f, 10.0f },
                 { "nightCameraEv100", &t.nightCameraEv100, -20.0f, 30.0f },
                 { "nightCameraFollow", &t.nightCameraFollow, 0.0f, 1.0f },
+                { "nightCameraOpenFrom", &t.nightCameraOpenFrom, 0.0f, 1.0f },
+                { "nightCameraOpenFull", &t.nightCameraOpenFull, 0.0f, 1.0f },
+                { "nightCameraIndoorLift", &t.nightCameraIndoorLift, 0.0f, 30.0f },
                 // Plan L: the night lamps' switch (timeOfDay.lamps.*).
                 { "lampSunElevationDeg", &t.lampSunElevationDeg, -90.0f, 90.0f },
                 { "lampRandomDelaySec", &t.lampRandomDelaySec, 0.0f, 600.0f },
@@ -2025,10 +2028,10 @@ namespace
             char text[1024];
             int n = std::snprintf(text, sizeof(text),
                 "{\"valid\":%s,\"adaptedEv100\":%.3f,\"targetEv100\":%.3f,\"eyeEv100\":%.3f,"
-                "\"compensationEv\":%.3f,\"preExposure\":%.6g,\"sunProbe\":[%.4g,%.4g,%.4g],"
-                "\"sunProbeVisibleShare\":%.3f,\"fps\":%.1f,\"frame\":%llu",
+                "\"compensationEv\":%.3f,\"openSky\":%.3f,\"openNight\":%.3f,\"preExposure\":%.6g,"
+                "\"sunProbe\":[%.4g,%.4g,%.4g],\"sunProbeVisibleShare\":%.3f,\"fps\":%.1f,\"frame\":%llu",
                 rb.valid ? "true" : "false", rb.adaptedEv100, rb.targetEv100, rb.eyeEv100,
-                rb.compensationEv, static_cast<double>(render::g_preExposure),
+                rb.compensationEv, rb.openSky, rb.openNight, static_cast<double>(render::g_preExposure),
                 rb.sunProbe[0], rb.sunProbe[1], rb.sunProbe[2], rb.sunProbeShare,
                 renderer_.GetFPS(), static_cast<unsigned long long>(renderer_.GetTotalFrameNumber()));
             // The pixel probe, while one is asked for (`debug.probeU/probeV/probeRadius`): pre-exposed

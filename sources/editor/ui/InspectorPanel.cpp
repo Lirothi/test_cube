@@ -2965,6 +2965,16 @@ namespace
             InspectorHelp("How much of the auto exposure's departure from the Night Camera EV100 the camera "
                           "still follows: 0 = held exactly, 1 = the auto exposure. The eye's own adaptation "
                           "(the meter, night vision) is not touched.");
+            dragF("Night Camera Open Sky From", "nightCameraOpenFrom", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
+            dragF("Night Camera Open Sky Full", "nightCameraOpenFull", 0.35f, 0.005f, 0.0f, 1.0f, "%.3f");
+            InspectorHelp("Night Exposure and the steady Night Camera are the OPEN night's: they come in by how "
+                          "much open sky the frame sees (the sky itself 1, a surface its RT sky visibility), "
+                          "none below From, whole from Full, followed at the exposure's adaptation speeds. Full "
+                          "at or below From = always whole. get_readouts' openSky / openNight.");
+            dragF("Night Camera Indoor Lift (stops)", "nightCameraIndoorLift", 5.0f, 0.05f, 0.0f, 30.0f, "%.2f");
+            InspectorHelp("A closed frame at night follows the auto exposure as by day, but opens at most this "
+                          "many stops past the Night Camera EV100: a candle-lit room is exposed for its candles, "
+                          "an unlit one stays dark. 0 = never brighter than the open night.");
             ImGui::SeparatorText("Cost");
             dragF("Light Update Threshold (deg)", "lightUpdateThresholdDeg", 0.05f, 0.005f, 0.0f, 5.0f, "%.3f");
             InspectorHelp("While the clock runs, the scene light (and with it every shadow) turns only once "

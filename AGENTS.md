@@ -51,7 +51,8 @@ only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--tim
 (`timeOfDay.nightCameraEv100`, 0 = off; `nightCameraFollow`, 0.2): at night (the -6 -> -12 degree share) the camera
 is held near that EV100 and follows only `follow` of where the auto exposure goes -- `exposure_solve_cs.hlsl`
 `nightSteady`, after the curve, the eye untouched -- so dim lamps look dim (wind_test: 13.13 = the moonlit beach's
-auto camera at 24:00; candles 4 -> 0.5 lm move the camera 0.21 stop instead of the auto exposure's 0.96). In the editor (command bar, MCP):
+auto camera at 24:00; candles 4 -> 0.5 lm move the camera 0.21 stop instead of the auto exposure's 0.96) -- under the OPEN
+sky only (below, "The night camera is the OPEN night's"). In the editor (command bar, MCP):
 `setTime` ("18:30", "sunset", "+2h") and `setDate` ("2026-06-21", switches to real positions); every
 `timeOfDay.*` key is in the document, so `setEnvironment` reaches the rest.
 
@@ -68,6 +69,40 @@ level's day (x = the clock on its date and place, `SunElevationAtHours`; y = den
 the day / twilight / night bands and the sun's arc): a handle dragged up / down sets its multiplier, left / right the sun
 elevation it sits at (drawn where the afternoon passes it); a drag elsewhere moves the clock. One function
 (`FogDensityScaleAt`) for the frame and the graph. Photograph it with `--inspect=timeOfDay#fog`.
+
+**Night Brightness is ONE gain that comes in with the night** (`TimeOfDay::NightGain` = `nightBrightness^NightShare`, the
+sun -6 -> -12, 2026-10-31): the moon (the ground's light, the atmosphere's second light, the disc), the night sky (stars,
+airglow, Milky Way), the night lamps AND the sun's twilight sky all take it, and the steady night camera's EV moves with
+it (`nightCameraEv100 + log2(NightGain / nightBrightness)`, Scene). The moon and the night sky used to take the whole x11364
+at any hour, so a full moon rising at dusk (the level's 2026-09-27) was a ~3600-lux second sun over a physical twilight:
+clouds and sand lit white, a giant aureole, the night's stars over a blue-hour sky (owner: "very pretty, not realistic"),
+and by day a moon in the sky lit the atmosphere at 3 % of the sun. One gain keeps every ratio physical at dusk and makes
+the multiplier an exposure shift by night. Measured on the moonrise view (cam -10.94 6.19 72.56): 21:00 and 24:00 unchanged
+(0.18 % / 0.03 % of pixels over 8 levels, the noise), the dusk -> night now monotonic (median 55 / 12 / 8 / 7 at 19:54 /
+20:06 / 20:15 / 20:24; the camera held at 13.13 alone had put 20:15 1.4 stops under both). What dusk shows now is the
+twilight sky itself, and UDS's tints make it saturated blue (`twilight.ozoneNightTint` R x6.15: sky R/B 0.05 at 19:54);
+unit tints give Hillaire's pink-violet (0.32, the sand pink) -- the truth lies between, not calibrated yet.
+
+**The night camera is the OPEN night's** (2026-10-31, owner at the bathroom, 20:21: "can the outside be not too bright and
+the inside normal?"). Held at the moonlit beach's EV, the candle-lit bathroom (cam -23.30 1.85 86.04) was 3.4 stops under
+its own eye -- median 2 of 255, 86 % of the frame under 20. Now `nightExposureEv` and the steady camera come in by the
+frame's OPEN-SKY share: `exposure_histogram_cs.hlsl` reads the RT sky visibility on its metering grid (the sky itself 1, a
+surface the length of its bent normal; untraced = 1, every frame open) into two sums behind the bins, `exposure_solve_cs.hlsl`
+smooths it (0.5 s) and takes `timeOfDay.nightCameraOpenFrom` 0.15 -> `nightCameraOpenFull` 0.35 of the OPEN night's camera
+(`NightOpenCamera`: the trim, then the steady hold); a CLOSED frame takes `NightClosedCamera` -- the auto camera, opened at
+most `nightCameraIndoorLift` (5) stops past `nightCameraEv100`, so a lit room keeps its own brightness and an unlit one stays
+dark (followed freely, the empty tent at midnight came out as a grey day, camera EV 1.4). The share the camera takes moves at
+the level's adaptation speeds (a full switch moves the camera `span` stops: `speedUp` / `speedDown` x dt / span a frame;
+smoothed alone the 4 stops beach -> bathroom passed in 0.75 s). The trim moved from compensationEv to the camera after the
+curve: at the full share the frame is the same, the eye readout (`eyeEv100`) is now the scene's. Shares at night: the
+beach 0.88-0.91, the grove 0.39-0.76, the bathroom 0.03-0.10, the second room 0.07-0.11, the tent 0.001-0.007
+(`get_readouts` openSky / openNight). Measured: bathroom 20:21 camera 12.47 -> 8.64 (eye 7.56), median 2 -> 74, under-20
+share 0.87 -> 0.25; the beach at 21:00 / 24:00 and the grove at 24:00 unchanged to the digit; the tent and the second room
+held at the floor (8.13). Dim candles still look dim: the bathroom's candles x0.125 (4 -> 0.5 lm) move its eye 2.8 stops
+and the camera 0.6 (8.64 -> 8.05, the floor at 20:21), median 74 -> 13. Full <= From = always whole, the A/B
+(`--set tod.nightCameraOpenFull:0`). Inspector Time of Day >
+"Night Camera Open Sky From / Full", "Night Camera Indoor Lift". GBV (`ExposureMetering,Skybox` + the Skybox self-test,
+the bathroom at 20:21): clean.
 
 Night lamps (plan L, `rendering/lighting/NightLamps.h`): a point/spot light or a glowing mesh with `"onAt": "night"`
 (or `"day"`) switches when the sun crosses `timeOfDay.lamps.sunElevationDeg` (0 = UDS's Sunset), UDS-style delay and

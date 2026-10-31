@@ -382,6 +382,7 @@ void SceneExposureHistogramCBHandles::Populate(Material* material)
     maskInnerRadius = material->ComputeCB0FieldHandle("maskInnerRadius");
     maskOuterRadius = material->ComputeCB0FieldHandle("maskOuterRadius");
     maskSkyBias = material->ComputeCB0FieldHandle("maskSkyBias");
+    skyVisValid = material->ComputeCB0FieldHandle("skyVisValid");
 }
 
 void SceneExposureBaseLumCBHandles::Populate(Material* material)
@@ -446,6 +447,7 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
     curveCompA = material->ComputeCB0FieldHandle("curveCompA");
     curveCompB = material->ComputeCB0FieldHandle("curveCompB");
     nightSteady = material->ComputeCB0FieldHandle("nightSteady");
+    nightOpenSky = material->ComputeCB0FieldHandle("nightOpenSky");
 }
 
 #if WITH_EDITOR
@@ -1951,6 +1953,7 @@ void SceneResourceBootstrapper::WriteExposureHistogramConstants(const ExposureMe
     matExposureBuildCS_->UpdateCBField(handles.maskInnerRadius, data.maskInnerRadius, dest);
     matExposureBuildCS_->UpdateCBField(handles.maskOuterRadius, data.maskOuterRadius, dest);
     matExposureBuildCS_->UpdateCBField(handles.maskSkyBias, data.maskSkyBias, dest);
+    matExposureBuildCS_->UpdateCBField(handles.skyVisValid, data.skyVisValid, dest);
 }
 
 void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteringConstants& data, uint8_t* dest) const
@@ -1985,6 +1988,7 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
     matExposureSolveCS_->UpdateCBField(handles.curveCompA, data.curveCompA, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveCompB, data.curveCompB, dest);
     matExposureSolveCS_->UpdateCBField(handles.nightSteady, data.nightSteady, dest);
+    matExposureSolveCS_->UpdateCBField(handles.nightOpenSky, data.nightOpenSky, dest);
 }
 
 void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants& data, uint8_t* dest) const

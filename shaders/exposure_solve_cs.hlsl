@@ -10,7 +10,9 @@
 //     high percentile luminance, target EV100. (The same buffer carries the sun probe behind
 //     them -- sun_probe.hlsli -- which this pass never touches.) Time-of-day E1 adds a record
 //     behind the probe (kExposureCompensationOffset): the compensation in effect, and the EYE's
-//     adaptation before the curve, which is what adapts from frame to frame.
+//     adaptation before the curve, which is what adapts from frame to frame; then the frame's smoothed
+//     open-sky share and the share of the night's camera it let in (kExposureOpenSkyOffset).
+// t0 also carries the histogram build's open-sky sums behind the bins (kOpenSkyOffset).
 
 #include "sun_probe.hlsli"
 
@@ -66,12 +68,21 @@ cbuffer ExposureSolveCB : register(b0)
     float4 curveCompB;
     // Time of day: the STEADY night camera (TimeOfDaySettings::nightCameraEv100 / nightCameraFollow). x the camera
     // EV100 the night is held at, y the share of the auto camera's departure from it that is still followed, z the
-    // weight (the night's share; 0 = off). Applied to the CAMERA after the curve, so the eye's adaptation, the meter
+    // weight (the night's share; 0 = off), w the night's exposure trim (TimeOfDaySettings::nightExposureEv x the
+    // night's share, EV, negative darkens). Applied to the CAMERA after the curve, so the eye's adaptation, the meter
     // and night vision are untouched.
     float4 nightSteady;
+    // Both are the OPEN night's camera (TimeOfDaySettings::nightCameraOpenFrom / nightCameraOpenFull): they come in
+    // by the frame's open-sky share (exposure_histogram_cs.hlsl), smoothed -- x the share where they start, y where
+    // they are whole (y <= x: always whole), z the smoothing's time constant (seconds), w how many stops brighter than
+    // the open night a CLOSED frame may be exposed (TimeOfDaySettings::nightCameraIndoorLift).
+    float4 nightOpenSky;
 };
 
 static const uint kBins = 256u;
+// exposure_histogram_cs.hlsl's open-sky sums behind the bins; the smoothed share and the factor it gave are kept in
+// the compensation record (sun_probe.hlsli kExposureOpenSkyOffset).
+static const uint kOpenSkyOffset = kBins * 4u;
 
 groupshared uint gBins[kBins];
 
@@ -105,6 +116,34 @@ float ExposureCurve(float ev)
         }
     }
     return result;
+}
+
+// The OPEN night's camera for an auto camera EV `c` (after the curve): the night's exposure trim, then the steady
+// night by the night's share -- the camera stays near the night's EV and follows only `nightSteady.y` of where the
+// meter would take it, so the moonlit outdoors keeps its darkness instead of being metered up to a dim day. (The trim
+// used to ride compensationEv, which moved the eye's adaptation with it; on the camera alone the open frame is the
+// same, and the eye -- night vision's key -- is the scene's.)
+float NightOpenCamera(float c)
+{
+    c -= nightSteady.w;
+    if (nightSteady.z > 0.0f)
+    {
+        c = lerp(c, nightSteady.x + saturate(nightSteady.y) * (c - nightSteady.x), saturate(nightSteady.z));
+    }
+    return c;
+}
+
+// A CLOSED frame's: the auto camera as by day, opened at most `nightOpenSky.w` stops past the night's EV (by the
+// night's share) -- a lit room keeps its own brightness, an unlit one stays dark (owner, 2026-10-31: "the outside not
+// too bright and the inside normal" -- held at the beach's EV the candle-lit bathroom was 3.4 stops under the eye;
+// followed freely, the empty tent at midnight came out as a grey day).
+float NightClosedCamera(float c)
+{
+    if (nightSteady.z > 0.0f)
+    {
+        c = lerp(c, max(c, nightSteady.x - max(nightOpenSky.w, 0.0f)), saturate(nightSteady.z));
+    }
+    return c;
 }
 
 // Writes the frame's record. `eyeEv` is the adaptation BEFORE the curve (what the next frame adapts
@@ -286,6 +325,24 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
     adapted = clamp(adapted, minEv100, maxEv100);
 
+    // The frame's open-sky share, smoothed over `nightOpenSky.z` seconds so a few frames of a wall do not move it, and
+    // the share of the OPEN night's camera it asks for. Measured while the night is not on too, so it is settled when
+    // the night comes. The share the camera actually takes (`openNight`) follows it below, at the adaptation's speeds.
+    const uint openWeight = Histogram.Load(kOpenSkyOffset + 4u);
+    const float frameOpen = openWeight > 0u
+        ? saturate((float)Histogram.Load(kOpenSkyOffset) / (float)openWeight) : 1.0f;
+    const float prevOpen = asfloat(ExposureValue.Load(kExposureOpenSkyOffset));
+    const bool prevOpenValid = !isnan(prevOpen) && prevOpen >= 0.0f && prevOpen <= 1.0f;
+    float openSky = frameOpen;
+    if (resetHistory == 0u && prevOpenValid)
+    {
+        openSky = lerp(prevOpen, frameOpen, 1.0f - exp(-max(deltaTime, 0.0f) / max(nightOpenSky.z, 1.0e-3f)));
+    }
+    const float openWanted = nightOpenSky.y > nightOpenSky.x ? smoothstep(nightOpenSky.x, nightOpenSky.y, openSky) : 1.0f;
+    const float prevOpenNight = asfloat(ExposureValue.Load(kExposureOpenSkyOffset + 4u));
+    const bool prevOpenNightValid = !isnan(prevOpenNight) && prevOpenNight >= 0.0f && prevOpenNight <= 1.0f;
+    float openNight = openWanted;
+
     // Time-of-day E1: the compensation curve, keyed on the light the eye is ADAPTED to (the smoothed
     // value plus the static trim it carries, i.e. the scene's own EV) and applied OUTSIDE the
     // adaptation, like UE's EyeAdaptationCommon. Unlike UE it reads the smoothed value, not this
@@ -297,24 +354,33 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     float compensation = 0.0f;
     if (autoExposure != 0u)
     {
-        cameraEv = clamp(adapted - ExposureCurve(adapted + compensationEv), minEv100, maxEv100);
-        cameraTargetEv = clamp(targetEv - ExposureCurve(targetEv + compensationEv), minEv100, maxEv100);
-        // The steady night: the camera stays near the night's EV and follows only `nightSteady.y` of where the
-        // meter would take it -- dim candles stay dim instead of being exposed back up to a lamp-lit room.
-        if (nightSteady.z > 0.0f)
+        const float autoCamera = clamp(adapted - ExposureCurve(adapted + compensationEv), minEv100, maxEv100);
+        const float autoTarget = clamp(targetEv - ExposureCurve(targetEv + compensationEv), minEv100, maxEv100);
+        // The night's camera is the OPEN night's under the open sky, a CLOSED frame's indoors, by the open-sky share
+        // (NightOpenCamera / NightClosedCamera). The share moves no faster than the eye adapts: a full switch moves
+        // the camera by `span` stops, so it takes `rate` x dt / span a frame -- speedUp where the camera darkens (out
+        // into the moonlight), speedDown where it opens (into a lit room), as the adaptation itself. Smoothed alone,
+        // the 4 stops between the moonlit beach and the candle-lit bathroom passed in 0.75 s, up to 0.3 EV a frame.
+        const float openCamera = NightOpenCamera(autoCamera);
+        const float closedCamera = NightClosedCamera(autoCamera);
+        if (resetHistory == 0u && prevOpenNightValid)
         {
-            const float follow = saturate(nightSteady.y);
-            const float weight = saturate(nightSteady.z);
-            cameraEv = clamp(lerp(cameraEv, nightSteady.x + follow * (cameraEv - nightSteady.x), weight), minEv100, maxEv100);
-            cameraTargetEv = clamp(lerp(cameraTargetEv, nightSteady.x + follow * (cameraTargetEv - nightSteady.x), weight),
-                                   minEv100, maxEv100);
+            const float span = openCamera - closedCamera;
+            const float step = openWanted - prevOpenNight;
+            const float rate = span * step > 0.0f ? speedUp : speedDown;
+            const float maxStep = abs(span) > 1.0e-3f ? max(rate, 0.0f) * max(deltaTime, 0.0f) / abs(span) : 1.0f;
+            openNight = prevOpenNight + clamp(step, -maxStep, maxStep);
         }
+        cameraEv = clamp(lerp(closedCamera, openCamera, openNight), minEv100, maxEv100);
+        cameraTargetEv = clamp(lerp(NightClosedCamera(autoTarget), NightOpenCamera(autoTarget), openNight),
+                               minEv100, maxEv100);
         // Everything between the scene the eye is adapted to (adapted + compensationEv) and the
         // camera, as the camera finally applies it -- clamps included.
         compensation = adapted + compensationEv - cameraEv;
     }
 
     StoreExposure(cameraEv, cameraTargetEv, adapted, compensation);
+    ExposureValue.Store2(kExposureOpenSkyOffset, uint2(asuint(openSky), asuint(openNight)));
     ExposureValue.Store(4, asuint(exp2(loLogLum)));
     ExposureValue.Store(8, asuint(exp2(hiLogLum)));
 }

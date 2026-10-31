@@ -203,8 +203,12 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         // "UNBOUND SRV table at root index 1" (and what GBV calls an uninitialised root argument).
         // Binding the same scene SRV the build binds costs one staged descriptor and keeps the two
         // dispatches binding identically, as the shader's own header promises.
+        // t1: the traced sky visibility for the open-sky share; untraced, the scene stands in (the
+        // table is positional and declared whole) and the build is told not to read it.
+        const bool skyVisValid = decisions_.skyVisTraced && D.skyVisSRV.ptr != 0;
+        const D3D12_CPU_DESCRIPTOR_HANDLE openSkySrv = skyVisValid ? D.skyVisSRV : D.sceneSRV;
         RecordComputeDispatch(renderer, t.cl, clearMat.get(),
-            { D.sceneSRV }, { metering.HistogramUav() }, samplerTable,
+            { D.sceneSRV, openSkySrv }, { metering.HistogramUav() }, samplerTable,
             kComputeDispatchGroupSize, kComputeDispatchGroupSize,
             metering.HistogramResource());
 
@@ -216,6 +220,7 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         constants.maskInnerRadius = settings.meterMaskInnerRadius;
         constants.maskOuterRadius = settings.meterMaskOuterRadius;
         constants.maskSkyBias = settings.meterMaskSkyBias;
+        constants.skyVisValid = skyVisValid ? 1u : 0u;
 
         // 2) Accumulate. The source is the scene-referred HDR image BEFORE the tone curve and
         // before any exposure has been applied to it.
@@ -224,7 +229,7 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             [this, &constants](uint8_t* dest) {
                 resources_.WriteExposureHistogramConstants(constants, dest);
             },
-            { D.sceneSRV }, { metering.HistogramUav() }, samplerTable,
+            { D.sceneSRV, openSkySrv }, { metering.HistogramUav() }, samplerTable,
             ExposureMeteringConstants::kSampleGridX, ExposureMeteringConstants::kSampleGridY,
             metering.HistogramResource());
 
@@ -296,6 +301,14 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         constants.nightSteady[0] = settings.nightSteadyEv100;
         constants.nightSteady[1] = settings.nightSteadyFollow;
         constants.nightSteady[2] = settings.nightSteadyWeight;
+        constants.nightSteady[3] = settings.nightExposureEv;
+        // The open-sky share's smoothing, so a few frames of a wall do not move it; how fast the camera
+        // then follows it is the adaptation's speeds (exposure_solve_cs.hlsl).
+        constexpr float kOpenSkySmoothingSeconds = 0.5f;
+        constants.nightOpenSky[0] = settings.nightOpenSkyFrom;
+        constants.nightOpenSky[1] = settings.nightOpenSkyFull;
+        constants.nightOpenSky[2] = kOpenSkySmoothingSeconds;
+        constants.nightOpenSky[3] = settings.nightIndoorLift;
         constants.startDistance = settings.adaptationStartDistance;
         // Slope-match factors for the hybrid adaptation, derived exactly as UE derives them: make
         // the exponential's slope equal the linear's at the switch point so the two halves join

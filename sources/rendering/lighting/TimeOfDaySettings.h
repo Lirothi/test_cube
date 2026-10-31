@@ -136,7 +136,9 @@ struct TimeOfDaySettings
     float moonEarthshine = 1.0f;
     // The owner's manual multiplier on the night's light (1 = physics): the moon's light and the night
     // sky's own layers below (N2) -- and the night lamps' (plan L: lights and glows "onAt": "night"), so a lamp
-    // keeps its outdoor ratio to the moonlight (~100x under it) whatever the night is lifted by.
+    // keeps its outdoor ratio to the moonlight (~100x under it) whatever the night is lifted by. It comes in with
+    // the NIGHT, on everything at once, the sun's twilight sky included (TimeOfDay::NightGain = this^NightShare,
+    // the sun -6 -> -12): at dusk and by day the moon is physical, and the steady night camera moves with it.
     float nightBrightness = 1.0f;
     // The owner's manual multiplier on the SKY BY DAY (1 = as the atmosphere gives it): the sky's light into every
     // LUT -- the sky itself, the aerial perspective, the distant light and the capture, so the sky, its
@@ -161,6 +163,16 @@ struct TimeOfDaySettings
     // moonlit beach at 24:00: 12.9), so the outdoors keeps its picture and a lit room keeps its own brightness.
     float nightCameraEv100 = 0.0f;
     float nightCameraFollow = 0.2f;
+    // Both night trims above (nightExposureEv and the steady camera) are the OPEN night's camera (owner, 2026-10-31:
+    // "the outside not too bright and the inside normal"): they come in by the frame's OPEN-SKY share -- the sky
+    // itself counts 1, a surface how much sky it sees (the RT sky visibility; without it every frame is open) --
+    // smoothstep from `nightCameraOpenFrom` to `nightCameraOpenFull`, followed at the exposure's adaptation speeds;
+    // Full <= From = always whole, as before. A CLOSED frame's camera follows the meter as by day, but opens at most
+    // `nightCameraIndoorLift` stops past nightCameraEv100: a lit room keeps its own brightness (wind_test's candle-lit
+    // bathroom at 20:21 meters 4.3 stops past it), an unlit one stays dark (the empty tent at midnight, 11.5).
+    float nightCameraOpenFrom = 0.15f;
+    float nightCameraOpenFull = 0.35f;
+    float nightCameraIndoorLift = 5.0f;
 
     // --- Night lamps (plan L, rendering/lighting/NightLamps.h) ---------------------------------------
     // Lights and glowing meshes marked "onAt": "night" (or "day") switch when the SUN crosses this elevation:

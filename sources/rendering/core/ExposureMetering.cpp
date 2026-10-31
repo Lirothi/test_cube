@@ -24,7 +24,8 @@ namespace
     // the curve, EV), so night vision can recover what the eye is adapted to from what the camera
     // shows (tonemap_cs.hlsl); 68-71 the eye's adaptation before the curve, which is the state the
     // solve adapts from (offset kExposureCompensationOffset in sun_probe.hlsli). Read back beside the
-    // exposure record, for the Inspector's curve read-out.
+    // exposure record, for the Inspector's curve read-out. Bytes 72-79: the frame's smoothed open-sky
+    // share and the share of the night's camera it let in (sun_probe.hlsli kExposureOpenSkyOffset).
     constexpr UINT64 kCompensationOffset = kExposureRecordBytes + kSunProbeBytes;
     constexpr UINT64 kCompensationRecordBytes = 16u;
     // Bytes 80-111: the PIXEL PROBE (bloom_conv_cs.hlsl stage 11, sun_probe.hlsli kPixelProbeOffset),
@@ -83,7 +84,7 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
     // so declaring anything else would just add a barrier at each end. It stays exactly as it was --
     // P12.2 changed only the CREATION argument inside CreateRawUavBuffer, which is a different fact.
     histogram_.Attach(renderer->Declarations(),
-        CreateRawUavBuffer(device, static_cast<UINT64>(kHistogramBins) * sizeof(std::uint32_t), L"Exposure.Histogram"),
+        CreateRawUavBuffer(device, static_cast<UINT64>(kHistogramWords) * sizeof(std::uint32_t), L"Exposure.Histogram"),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, L"Exposure.Histogram");
     exposure_.Attach(renderer->Declarations(),
         CreateRawUavBuffer(device, kMeteringBufferBytes, L"Exposure.Value"),
@@ -128,9 +129,9 @@ void ExposureMetering::EnsureResources(Renderer* renderer)
 
     constexpr UINT kExposureWords = static_cast<UINT>(kMeteringBufferBytes / sizeof(std::uint32_t));
     histogramSrv_ = next();
-    rawSrv(histogram_.Get(), kHistogramBins, histogramSrv_);
+    rawSrv(histogram_.Get(), kHistogramWords, histogramSrv_);
     histogramUav_ = next();
-    rawUav(histogram_.Get(), kHistogramBins, histogramUav_);
+    rawUav(histogram_.Get(), kHistogramWords, histogramUav_);
     exposureSrv_ = next();
     rawSrv(exposure_.Get(), kExposureWords, exposureSrv_);
     exposureUav_ = next();
@@ -373,6 +374,8 @@ ExposureMetering::Readback ExposureMetering::ReadSlot(std::uint64_t slot) const
     out.targetEv100 = record[3];
     out.compensationEv = record[4];
     out.eyeEv100 = record[5];
+    out.openSky = record[6];
+    out.openNight = record[7];
     out.sunProbe[0] = record[8];
     out.sunProbe[1] = record[9];
     out.sunProbe[2] = record[10];

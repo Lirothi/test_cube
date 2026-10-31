@@ -198,8 +198,9 @@ DirectionalLight TimeOfDay::MoonLight(double phaseAngleDeg, double distanceScale
     // The phase law, lifted off zero by moonNewBrightness (UDS's New Moon Light Brightness): the LIGHT only --
     // the drawn disc keeps the bare law (litScale), dark at new moon as UDS's is.
     const double floor = std::clamp(static_cast<double>(settings_.moonNewBrightness), 0.0, 1.0);
+    // Night Brightness by the night's share (nightGain_, Tick): a physical moon at dusk and by day.
     const double lux = settings_.moonIlluminanceLux * (floor + (1.0 - floor) * astro::MoonPhaseBrightness(phaseAngleDeg)) *
-                       distanceScale * settings_.nightBrightness;
+                       distanceScale * nightGain_;
     moon.SetSunIlluminanceLux(static_cast<float>(lux));
     moon.SetLightSourceAngleDegrees(settings_.moonAngleDeg);
     moon.SetLightSourceSoftAngleDegrees(settings_.moonSoftAngleDeg);
@@ -282,6 +283,22 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     sunToward_ = sunToward;
     moonToward_ = moonToward;
 
+    // The night's share and the owner's night exposure (TimeOfDaySettings::nightExposureEv): none above -6 degrees,
+    // all of it from -12. Before the lights below: the night's light is scaled by it.
+    {
+        const float x = std::clamp(static_cast<float>((-6.0 - sunElevation) / 6.0), 0.0f, 1.0f);
+        nightShare_ = x * x * (3.0f - 2.0f * x);
+        nightExposureEv_ = s.nightExposureEv * nightShare_;
+    }
+    // ONE night gain for everything that lights the night -- the moon (the ground's light, the atmosphere's second
+    // light, the disc), the night sky (stars, airglow, Milky Way), the night lamps (Scene) AND the sun's twilight sky:
+    // nightBrightness^NightShare. The moon and the night sky took the whole multiplier at any hour, so at dusk a
+    // x11364 moon (~3600 lux) outshone the physical twilight -- the rising full moon at 19:30-19:54 lit the clouds
+    // and the sand as a second sun under a giant aureole, with the night's stars over a blue-hour sky (owner,
+    // 2026-10-31: "very pretty but not realistic"). One gain on all of them keeps every ratio physical at dusk and
+    // makes Night Brightness what it is at night, an exposure shift; with the sun under -12 degrees nothing changes.
+    nightGain_ = std::pow(std::max(s.nightBrightness, 1.0e-6f), nightShare_);
+
     // Who reaches the ground: a body lights while any of its disc is above the horizon -- exactly where
     // Scene::PrepareViews' disc fraction (and so its light) is non-zero. The body in charge keeps it to
     // that very edge, so its light has reached 0 when it lets go; a body taking over must be a
@@ -337,7 +354,8 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     DirectionalLight sky = sunTemplate_;
     sky.SetDirection(-sunToward);
     sunSkyShare_ = TwilightRamp(sunElevation, s.sunSkyStartDeg, s.sunSkyFullDeg);
-    if (sunSkyShare_ < 1.0f) { sky.SetSunIlluminanceLux(sky.GetSunIlluminanceLux() * sunSkyShare_); }
+    // The twilight is night light too (nightGain_, above): x1 until the sun is 6 degrees down.
+    if (sunSkyShare_ * nightGain_ != 1.0f) { sky.SetSunIlluminanceLux(sky.GetSunIlluminanceLux() * sunSkyShare_ * nightGain_); }
     skySun = sky;
     // UDS's night Rayleigh: the tint while the sun is down, easing out to none by rayleighDayFullDeg.
     {
@@ -354,12 +372,6 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     // fogDuskDeg, night under fogNightFullDeg, smoothstep between. Not stepped like the atmosphere's tints: the fog
     // rebuilds no LUT, and its volume's history follows a medium that changes this slowly.
     fogDensityScale_ = FogDensityScaleAt(s, sunElevation);
-    // The owner's night exposure (TimeOfDaySettings::nightExposureEv): none above -6 degrees, all of it from -12.
-    {
-        const float x = std::clamp(static_cast<float>((-6.0 - sunElevation) / 6.0), 0.0f, 1.0f);
-        nightShare_ = x * x * (3.0f - 2.0f * x);
-        nightExposureEv_ = s.nightExposureEv * nightShare_;
-    }
     // UDS's twilight ozone: night -> sunrise (at 0) -> the authored ozone, across +-ozoneBlendDeg, in the same
     // 1/64 steps (of each half).
     {
@@ -504,7 +516,7 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
                 nightSky_.worldToEquatorial[row * 3 + col] = static_cast<float>(sum);
             }
         }
-        const float bright = std::max(0.0f, s.nightBrightness);
+        const float bright = nightGain_;
         const float* ac = s.airglowColor;
         const float luma = 0.2126f * ac[0] + 0.7152f * ac[1] + 0.0722f * ac[2];
         for (int k = 0; k < 3; ++k)

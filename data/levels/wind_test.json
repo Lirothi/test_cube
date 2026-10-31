@@ -39965,6 +39965,9 @@
     "nightBrightness": 11364.0,
     "nightCameraEv100": 13.13,
     "nightCameraFollow": 0.2,
+    "nightCameraIndoorLift": 3.0,
+    "nightCameraOpenFrom": 0.15000000596046448,
+    "nightCameraOpenFull": 0.3499999940395355,
     "nightExposureEv": -1.5,
     "nightLengthMin": 2.0,
     "nightSky": {
@@ -40018,7 +40021,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 15.0,
+    "time": 21.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

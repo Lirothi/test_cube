@@ -91,6 +91,9 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
     s.nightExposureEv = std::clamp(Number(j, "nightExposureEv", s.nightExposureEv), -10.0f, 10.0f);
     s.nightCameraEv100 = std::clamp(Number(j, "nightCameraEv100", s.nightCameraEv100), -20.0f, 30.0f);
     s.nightCameraFollow = std::clamp(Number(j, "nightCameraFollow", s.nightCameraFollow), 0.0f, 1.0f);
+    s.nightCameraOpenFrom = std::clamp(Number(j, "nightCameraOpenFrom", s.nightCameraOpenFrom), 0.0f, 1.0f);
+    s.nightCameraOpenFull = std::clamp(Number(j, "nightCameraOpenFull", s.nightCameraOpenFull), 0.0f, 1.0f);
+    s.nightCameraIndoorLift = std::clamp(Number(j, "nightCameraIndoorLift", s.nightCameraIndoorLift), 0.0f, 30.0f);
     s.lightUpdateThresholdDeg = std::clamp(Number(j, "lightUpdateThresholdDeg", s.lightUpdateThresholdDeg), 0.0f, 5.0f);
 
     if (const auto it = j.find("sun"); it != j.end() && it->is_object())
@@ -280,6 +283,9 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
     j["nightExposureEv"] = s.nightExposureEv;
     j["nightCameraEv100"] = s.nightCameraEv100;
     j["nightCameraFollow"] = s.nightCameraFollow;
+    j["nightCameraOpenFrom"] = s.nightCameraOpenFrom;
+    j["nightCameraOpenFull"] = s.nightCameraOpenFull;
+    j["nightCameraIndoorLift"] = s.nightCameraIndoorLift;
     j["lightUpdateThresholdDeg"] = s.lightUpdateThresholdDeg;
     j["sun"] = {
         { "enabled", true },

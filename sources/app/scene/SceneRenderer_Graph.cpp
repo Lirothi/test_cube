@@ -2669,7 +2669,9 @@ void SceneRenderer::BuildPost(Renderer* renderer, GraphBuild& gb)
     // disabled camera costs one empty command list rather than a graph-shape change per frame.
     const size_t pExposure = rg.AddPass2(RenderPass::Main_ExposureMetering, { gb.pSelectionOutline },
         /*mtDeps=*/{},
-        { { D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
+        { { D.scene.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+          // The histogram's open-sky share (t1, read when traced); already in that state, its rest.
+          { D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE } },
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             ExposurePoints pts{};
             // UNCONDITIONAL, and it has to be: the body hands `scene` to the metering read BEFORE

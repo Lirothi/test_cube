@@ -77,8 +77,11 @@ public:
     // Stops added to the frame camera's compensation (TimeOfDaySettings::nightExposureEv by the night's share).
     float NightExposureEv() const { return nightExposureEv_; }
     // The night's share, 0 with the sun above -6 degrees (civil twilight's end), 1 from -12 (nautical's), smoothstep:
-    // what the night exposure and the night lamps' Night Brightness come in by.
+    // what the night exposure and the night's light (NightGain) come in by.
     float NightShare() const { return nightShare_; }
+    // nightBrightness^NightShare: the ONE gain on everything that lights the night -- the moon, the night sky, the
+    // night lamps and the sun's twilight sky -- so their ratios stay physical at dusk.
+    float NightGain() const { return nightGain_; }
     // The scene light's share through the hand-over cross-fade (TimeOfDaySettings::lightHandOverDeg), 0..1.
     float HandOverFade() const { return handOverFade_; }
     // Plan L: the clock was SET rather than run since the last call -- a level load, an edit of the authored time or
@@ -127,6 +130,7 @@ private:
     float fogDensityScale_ = 1.0f;
     float nightExposureEv_ = 0.0f;
     float nightShare_ = 0.0f;
+    float nightGain_ = 1.0f;
     float handOverFade_ = 1.0f;
     bool clockSetPending_ = true;  // Reset/Apply moved the clock; the next Tick reports it
     bool clockSetByHand_ = false;  // this Tick's (the sunrise / sunset event says so)

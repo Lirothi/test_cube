@@ -1721,8 +1721,7 @@ void Scene::TickNightLamps(float deltaTime)
     // multiplied, and a lamp at x11364 there outshone the dusk (measured: blown pools at -0.3 degrees). So it rises in
     // stops by the night's share (TimeOfDay::NightShare, sun -6 -> -12): a physical lamp at sunset, faint against
     // the sky as street lights are, the full multiplier once the night is the moon's.
-    const float nightLight = timeOfDay_.Present()
-        ? std::pow(std::max(t.nightBrightness, 1.0e-6f), timeOfDay_.NightShare()) : 1.0f;
+    const float nightLight = timeOfDay_.Present() ? timeOfDay_.NightGain() : 1.0f;
     // An ALWAYS-ON lamp (2026-10-21, the hundred lamps of wind_test) is the night's light by night -- Night Brightness,
     // as above -- and by day weighed against the day as Ultra Dynamic Sky weighs it (lampDayBrightness: its sun is 5
     // lux, ours 120000), from one to the other in stops by the night's share. Both 1 = physics.
@@ -2168,13 +2167,24 @@ void Scene::PrepareViews(Renderer* renderer)
         dirLight_.SetCloudVisibility(skyAtmosphere_.mode != 0u ? CloudSunGroundVisibility(volumetricCloud_) : 1.0f);
     }
     frameData_.cameraExposure = cameraExposure_;
-    // The owner's night exposure (TimeOfDaySettings::nightExposureEv), on the FRAME's camera: the level keeps
-    // its compensation as written. Into the static trim, so the curve stays keyed on the scene's own EV.
-    if (timeOfDay_.Present()) { frameData_.cameraExposure.compensationEv += timeOfDay_.NightExposureEv(); }
-    // ...and the steady night camera (TimeOfDaySettings::nightCameraEv100), by the same night share.
+    // The owner's night exposure (TimeOfDaySettings::nightExposureEv), on the FRAME's camera after the curve (the
+    // curve stays keyed on the scene's own EV), by the frame's open-sky share like the steady camera below: the open
+    // night darker, a closed room as by day (exposure_solve_cs.hlsl).
+    if (timeOfDay_.Present())
+    {
+        frameData_.cameraExposure.nightExposureEv = timeOfDay_.NightExposureEv();
+        frameData_.cameraExposure.nightOpenSkyFrom = timeOfDay_.Settings().nightCameraOpenFrom;
+        frameData_.cameraExposure.nightOpenSkyFull = timeOfDay_.Settings().nightCameraOpenFull;
+        frameData_.cameraExposure.nightIndoorLift = timeOfDay_.Settings().nightCameraIndoorLift;
+    }
+    // ...and the steady night camera (TimeOfDaySettings::nightCameraEv100), by the same night share. Its EV is the
+    // FULL night's (the light at x nightBrightness); the night's light comes in by TimeOfDay::NightGain, so the
+    // camera is held that many stops under it until then -- held at 13.13 while the moon was still x4310, the sun
+    // 10.8 degrees down was 1.4 stops darker than both the dusk and the night (2026-10-31).
     if (timeOfDay_.Present() && timeOfDay_.Settings().nightCameraEv100 != 0.0f)
     {
-        frameData_.cameraExposure.nightSteadyEv100 = timeOfDay_.Settings().nightCameraEv100;
+        frameData_.cameraExposure.nightSteadyEv100 = timeOfDay_.Settings().nightCameraEv100 +
+            std::log2(timeOfDay_.NightGain() / std::max(timeOfDay_.Settings().nightBrightness, 1.0e-6f));
         frameData_.cameraExposure.nightSteadyFollow = timeOfDay_.Settings().nightCameraFollow;
         frameData_.cameraExposure.nightSteadyWeight = timeOfDay_.NightShare();
     }

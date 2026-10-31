@@ -15,6 +15,10 @@ static const uint kSunProbeCentroid = 48u;  // centroid of what shows of the dis
 // curve, positive brightens) -- night vision adds it to the camera's exposure to find what the eye is
 // adapted to -- and at +4 the eye's adaptation before the curve, the state the solve adapts from.
 static const uint kExposureCompensationOffset = 64u;
+// ...and at +8 the frame's OPEN-SKY share, smoothed (the state the solve smooths from), at +12 the share of the OPEN
+// night's camera the frame takes -- moved toward what the share asks for (TimeOfDaySettings::nightCameraOpenFrom /
+// nightCameraOpenFull) at the adaptation's speeds, also a state.
+static const uint kExposureOpenSkyOffset = kExposureCompensationOffset + 8u;
 // THE PIXEL PROBE (ExposureMetering.cpp kPixelProbeBytes, bloom_conv_cs.hlsl stage 11), behind the
 // compensation record: +0 the brightest pixel's rgb (pre-exposed) and +12 its luminance after the
 // FFT input's local exposure; +16 the window's mean rgb and +28 the luminance of a 4x4 box at the

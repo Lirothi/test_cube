@@ -282,6 +282,7 @@ struct SceneExposureHistogramCBHandles
     Material::CBFieldHandle maskInnerRadius;
     Material::CBFieldHandle maskOuterRadius;
     Material::CBFieldHandle maskSkyBias;
+    Material::CBFieldHandle skyVisValid; // the open-sky share reads the traced sky visibility
 
     void Populate(Material* material);
 };
@@ -337,6 +338,7 @@ struct SceneExposureSolveCBHandles
     Material::CBFieldHandle curvePoints; // time-of-day E1
     Material::CBFieldHandle curveEvA, curveEvB, curveCompA, curveCompB;
     Material::CBFieldHandle nightSteady; // time of day: the steady night camera
+    Material::CBFieldHandle nightOpenSky; // ...and the open-sky share it comes in by
 
     void Populate(Material* material);
 };
@@ -1024,6 +1026,7 @@ struct ExposureMeteringConstants
     float maskInnerRadius = 0.35f;
     float maskOuterRadius = 1.0f;
     float maskSkyBias = 0.6f;
+    uint32_t skyVisValid = 0; // the histogram build reads the traced sky visibility for the open-sky share
     float highPercentile = 0.80f;
     float speedUp = 3.0f;
     float speedDown = 1.0f;
@@ -1041,8 +1044,11 @@ struct ExposureMeteringConstants
     uint32_t curvePoints = 0;
     float curveEvA[4] = {}, curveEvB[4] = {};
     float curveCompA[4] = {}, curveCompB[4] = {};
-    // Time of day: the steady night camera -- EV100, follow share, weight (0 = off), unused.
+    // Time of day: the steady night camera -- EV100, follow share, weight (0 = off), the night's exposure trim (EV).
     float nightSteady[4] = {};
+    // ...the OPEN night's: the open-sky share where it starts and where it is whole, the share's smoothing (s), and how
+    // many stops past the open night a closed frame may be exposed.
+    float nightOpenSky[4] = {};
 };
 
 #if WITH_EDITOR
