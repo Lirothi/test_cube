@@ -38934,19 +38934,19 @@
       "exposureCurve": [
         [
           4.550000190734863,
-          -4.920000076293945
+          -1.5
         ],
         [
           8.550000190734863,
-          -2.5199999809265137
+          -1.0
         ],
         [
           10.550000190734863,
-          -1.3200000524520874
+          -0.8
         ],
         [
           12.550000190734863,
-          -0.8500000238418579
+          -0.6
         ],
         [
           14.550000190734863,
@@ -39034,13 +39034,13 @@
     "distantSkyLight": true,
     "enabled": true,
     "environmentLighting": true,
-    "groundAlbedo": 0.4019777774810791,
+    "groundAlbedo": 0.08,
     "luminanceScale": 1.0,
-    "mieAnisotropy": 0.6000000238418579,
-    "mieScale": 1.0,
+    "mieAnisotropy": 0.8,
+    "mieScale": 10.0,
     "multiScatteringFactor": 1.0,
     "ozoneScale": 1.0,
-    "rayleighScale": 1.21,
+    "rayleighScale": 1.0,
     "skyLuminanceFactor": 1.0
   },
   "skybox": {
@@ -39999,7 +39999,7 @@
       ],
       "lightShaftBloomMaxBrightness": 0.5,
       "lightShaftBloomScale": 0.3499999940395355,
-      "lightShaftBloomThreshold": 0.699999988079071,
+      "lightShaftBloomThreshold": 3.0,
       "lightShaftBloomTint": [
         1.0,
         1.0,
@@ -40018,7 +40018,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 18.0,
+    "time": 15.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

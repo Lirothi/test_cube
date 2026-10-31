@@ -84,6 +84,40 @@ Brightness for an always-on lamp; without a time of day it is always day. Checke
 their range in ~600 px (`dragF`: ImGui moves a log drag's 0..1 parameter by speed x px / (max - min), and a "%.0f"
 row rounded the flux back to 0 or 1 every frame).
 
+## Sun / Sky Calibration -- the Sky's SHAPE, Not Only Its Energy
+
+Calibrated 2026-10-31 (owner: "the sun / sky calibration"), against physics rather than photos (a photo's processing
+moves shadows more than any lighting term). The probe: a matte grey 4 m `models/box` 45 m over the island (`place` +
+`setSurface {metal 0, roughness 1, normalStrength 0, albedo}`, never saved), clouds / fog / GI / sky visibility /
+reflections / aerial perspective / `light.groundAlbedo` off, each face probed with `light.skyFillIntensity` 1 and 0 --
+sky and sun apart, albedo cancelled. The sun on the side faces follows its cosine to 0.01 (the lighting maths is
+right), the diffuse cube equals the radiance capture integrated at mip 0 with black below (`fog.debugView:10` = the
+diffuse probe as a raw equirect, read with the pixel probe), and the bare sky by elevation equals UE 5.8's within 2 %.
+- **The energy was right**: the sky's share of horizontal illuminance (6 / 10.7 / 20 / 36 degrees: 0.66 / 0.48 / 0.34 /
+  0.24) is Ineichen-Perez at Linke turbidity ~4 -- a humid tropical sky.
+- **The shape was not**: vertical / horizontal sky irradiance was 0.91-0.99 facing the sun and 0.71-0.81 facing away;
+  the CIE standard clear skies (ISO 15469 types 12 / 13) give 1.1-1.8 and 0.28-0.54. The sky had no aureole, and a
+  vertical face turned from the sun took 1.5-2x the sky light it should -- our trunks against the photos. Cause: UE's
+  Earth defaults carry almost no aerosol (Mie 0.004 / km over 1.2 km = optical depth 0.005; maritime air is 0.05-0.15),
+  and Rayleigh is symmetric fore and aft; the level also had Mie anisotropy 0.6 (UE 0.8), Rayleigh x1.21 and the
+  atmosphere's ground albedo 0.40 (land; the sea around the island is ~0.08).
+- wind_test now: `skyAtmosphere` rayleighScale 1.0, mieScale 10 (optical depth ~0.05, clean maritime; the JSON and
+  `--set` clamp it at 10), mieAnisotropy 0.8, groundAlbedo 0.08. Shares 0.58 / 0.40 / 0.28 at 10.7 / 20 / 36 degrees
+  (Linke ~4 in lux), away from the sun 0.57 / 0.48 / 0.40 (CIE 12: 0.50 / 0.44 / 0.38), toward 1.6-1.9.
+- **Light shaft bloom thresholds are in luminance AFTER exposure** (light_shafts_cs.hlsl, UE's units), so they are
+  measured at the real auto exposure, never at a pinned one: at the level's 0.7 the shafts were 64 % of a backlit
+  trunk's light (1609 vs 584 without), +27 % on the lit sand, and moved the metering 0.6 EV -- invisible at a pinned EV
+  1.5 stops darker, where they did not trigger. With the aureole they took the trunks x4.4; the sun's
+  `lightShaftBloomThreshold` is 3 now (about the old strength). UE ships them OFF (`bEnableLightShaftBloom`,
+  LightComponent.cpp:491). Result on the sunset view: trunk / sand 0.128 -> 0.103 (photos 0.07-0.10), p5 / share < 20 /
+  p95 9 / 0.12 / 232 (photos ~7 / 0.11 / 230).
+- **The exposure curve followed a camera, not a game**: wind_test's `cameraExposure.exposureCurve` took a dim room
+  3.4 EV under its metering (EV 4.55 / 8.55 / 10.55 / 12.55 -> -4.92 / -2.52 / -1.32 / -0.85, UDS-style "dark stays
+  dark"): the bathroom at 15:00 (cam -23.44 1.46 86.06) had 65 % of its pixels under 20/255 while its scene spans a
+  plausible 10 stops (window 4591, walls ~23, dark wood 3-6). Now -1.5 / -1.0 / -0.8 / -0.6 (14.55 and 15.55 kept, so
+  the daylight fit stays): the room 0.24 under 20/255, median 68; 18:00 outside unchanged, noon +0.14 EV. Nights are
+  `nightCameraEv100`'s, not this curve's.
+
 ## Line Endings
 
 - Preserve the existing line ending style of every edited file.
