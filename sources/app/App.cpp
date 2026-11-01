@@ -1105,6 +1105,7 @@ namespace
                 { "ozoneSunriseTintG", &t.ozoneSunriseTint[1], 0.0f, 20.0f },
                 { "ozoneSunriseTintB", &t.ozoneSunriseTint[2], 0.0f, 20.0f },
                 { "ozoneBlendDeg", &t.ozoneBlendDeg, 0.001f, 90.0f },
+                { "mieNightScale", &t.mieNightScale, 0.0f, 10.0f },
                 { "lightHandOverDeg", &t.lightHandOverDeg, 0.0f, 20.0f },
             };
             for (const FloatKnob& k : knobs)
@@ -1600,7 +1601,7 @@ namespace
             return true;
         }
         // ...and point by point, so a running editor's set_settings can shape one live:
-        // `exposure.curvePoints` (0..6), `exposure.curveEv<i>` / `exposure.curveComp<i>`. The points must stay
+        // `exposure.curvePoints` (0..8), `exposure.curveEv<i>` / `exposure.curveComp<i>`. The points must stay
         // in ascending EV, as the level's own are -- the caller's job, here as in the Inspector's rows.
         if (setting == "exposure.curvePoints")
         {
@@ -2030,10 +2031,13 @@ namespace
             char text[1024];
             int n = std::snprintf(text, sizeof(text),
                 "{\"valid\":%s,\"adaptedEv100\":%.3f,\"targetEv100\":%.3f,\"eyeEv100\":%.3f,"
-                "\"compensationEv\":%.3f,\"openSky\":%.3f,\"openNight\":%.3f,\"preExposure\":%.6g,"
+                "\"compensationEv\":%.3f,\"openSky\":%.3f,\"openNight\":%.3f,\"nightLightEv\":%.2f,\"nightEv100\":%.2f,"
+                "\"preExposure\":%.6g,"
                 "\"sunProbe\":[%.4g,%.4g,%.4g],\"sunProbeVisibleShare\":%.3f,\"fps\":%.1f,\"frame\":%llu",
                 rb.valid ? "true" : "false", rb.adaptedEv100, rb.targetEv100, rb.eyeEv100,
-                rb.compensationEv, rb.openSky, rb.openNight, static_cast<double>(render::g_preExposure),
+                rb.compensationEv, rb.openSky, rb.openNight, scene_.GetTimeOfDay().NightLightEv(),
+                scene_.GetTimeOfDay().NightEv100(),
+                static_cast<double>(render::g_preExposure),
                 rb.sunProbe[0], rb.sunProbe[1], rb.sunProbe[2], rb.sunProbeShare,
                 renderer_.GetFPS(), static_cast<unsigned long long>(renderer_.GetTotalFrameNumber()));
             // The pixel probe, while one is asked for (`debug.probeU/probeV/probeRadius`): pre-exposed

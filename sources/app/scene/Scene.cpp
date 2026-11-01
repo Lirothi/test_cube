@@ -2112,10 +2112,15 @@ void Scene::PrepareViews(Renderer* renderer)
     {
         const float* rayleigh = timeOfDay_.RayleighTint();
         const float* ozone = timeOfDay_.OzoneTint();
+        // ...and the night's aerosol (TimeOfDaySettings::mieNightScale): scattering and absorption, the anisotropy (.w)
+        // kept.
+        const float mie = timeOfDay_.MieScale();
         for (int c = 0; c < 3; ++c)
         {
             frameData_.settings.skyAtmosphere.parameters.rayleigh[c] *= rayleigh[c];
             frameData_.settings.skyAtmosphere.parameters.ozone[c] *= ozone[c];
+            frameData_.settings.skyAtmosphere.parameters.mieScattering[c] *= mie;
+            frameData_.settings.skyAtmosphere.parameters.mieAbsorption[c] *= mie;
         }
         // ...and the day sky's brightness (TimeOfDaySettings::daySkyBrightness), the same way.
         frameData_.settings.skyAtmosphere.luminanceScale *= timeOfDay_.SkyLuminanceScale();
@@ -2183,8 +2188,20 @@ void Scene::PrepareViews(Renderer* renderer)
     // 10.8 degrees down was 1.4 stops darker than both the dusk and the night (2026-10-31).
     if (timeOfDay_.Present() && timeOfDay_.Settings().nightCameraEv100 != 0.0f)
     {
+        // nightCameraEv100 is the camera for the full moon 45 degrees up; another night's light moves it as the exposure
+        // compensation CURVE says, read at that light's PHYSICAL EV (TimeOfDay::NightEv100: middle grey under the moon,
+        // the twilight and the night sky, before Night Brightness -- -3.3 full moon, -6.9 quarter, -11 none): the camera
+        // follows the light less the curve's change, (1 - slope) of it, as the auto exposure follows a scene. The
+        // physical key keeps the night's section of the curve under the day's EVs: with Night Brightness in it a
+        // quarter-moon beach (eye 7.56) and wind_test's bathroom by day (6.74) sat on the same point (owner, 2026-11-01:
+        // "we have a special correction curve for the night, edit it"). Steady all the same: computed from the sky's
+        // bodies, not the meter, so a lamp or a turn of the view does not move it. A curve flat there = the light in full.
+        const float lightEv = timeOfDay_.NightLightEv();
+        const float curveShift = render::EvaluateExposureCurve(frameData_.cameraExposure, timeOfDay_.NightEv100()) -
+                                 render::EvaluateExposureCurve(frameData_.cameraExposure, timeOfDay_.NightRefEv100());
         frameData_.cameraExposure.nightSteadyEv100 = timeOfDay_.Settings().nightCameraEv100 +
-            std::log2(timeOfDay_.NightGain() / std::max(timeOfDay_.Settings().nightBrightness, 1.0e-6f));
+            std::log2(timeOfDay_.NightGain() / std::max(timeOfDay_.Settings().nightBrightness, 1.0e-6f)) +
+            lightEv - curveShift;
         frameData_.cameraExposure.nightSteadyFollow = timeOfDay_.Settings().nightCameraFollow;
         frameData_.cameraExposure.nightSteadyWeight = timeOfDay_.NightShare();
     }

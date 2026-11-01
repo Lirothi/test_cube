@@ -116,7 +116,10 @@ struct CameraExposureSettings
     // does not do that: it adapts only part of the way, and a night stays dark. The curve is that
     // "part of the way". NONE BY DEFAULT (0 points): every level renders exactly as it did; the
     // "eye" preset (SetEyeExposureCurve) is what a level with a time of day wants.
-    static constexpr std::uint32_t kExposureCurveMaxPoints = 6;
+    // The steady night camera reads it too, at the night's PHYSICAL EV (TimeOfDay::NightEv100, -3.3 under a full moon
+    // at 45 degrees, -11 with none; Scene): the points under ~0 EV are the night's. Eight, so a level keeps its six for
+    // the day and the rooms and has two for the night (the shader's two float4 pairs hold eight).
+    static constexpr std::uint32_t kExposureCurveMaxPoints = 8;
     std::uint32_t exposureCurvePoints = 0;
     float exposureCurveEv[kExposureCurveMaxPoints] = {};   // scene EV100, ascending
     float exposureCurveComp[kExposureCurveMaxPoints] = {}; // compensation EV at that scene EV
@@ -339,10 +342,21 @@ inline void SetEyeExposureCurve(CameraExposureSettings& s)
 // noon (EV 15.4 -> 0.919) so the day stays as it was. Six points fit it to 0.07 EV. Measured on wind_test
 // (sun-azimuth view, the sky's luminance relative to the sun at +9.7 degrees, stops): UDS -0.44 / -1.59 / -2.50 /
 // -2.88 at 0 / -3.3 / -6.5 / -19.4 degrees, ours -0.76 / -1.69 / -2.68 / -2.21.
+// THE NIGHT'S SECTION (2026-11-01): the steady night camera reads the curve at the night's PHYSICAL EV (TimeOfDay::
+// NightEv100: -3.3 a full moon at 45 degrees, -6.9 a quarter moon 22 degrees up, -11 none), and a curve flat there has
+// it follow the night's light in FULL -- the owner's UDS Steady Night under a last-quarter moon 11 degrees up exposed
+// the night as a dim day, the moon's aerosol aureole a great glow (camera 9.45, median 57 of 255; owner: "why such a
+// glow round the moon?"). Every preset for UDS's moon carries the same night: from -3.5 at its first point's value,
+// 1.05 stops down at -7 and 0.6 more at -11 -- the camera follows 70 % of the darkening from the full moon to a
+// quarter, 85 % on to no moon. A first cut followed 35 % / 79 % to keep the moon's aerosol aureole down; with that
+// taken out at its root (TimeOfDaySettings::mieNightScale) it left every partial moon nearly black -- wind_test's
+// first quarter median 1-3 of 255 on the sea, the island and the grove, the palms black under a full moon (2026-11-01,
+// owner: "check that the lighting is sane at every phase, the island and the trees too"). Eight points: (8.55, -1.75)
+// went, 0.06 EV off the line between its neighbours.
 inline void SetUdsExposureCurve(CameraExposureSettings& s)
 {
-    static constexpr float kEv[] = {4.55f, 8.55f, 10.55f, 12.55f, 14.55f, 15.55f};
-    static constexpr float kComp[] = {-2.43f, -1.75f, -1.32f, -0.85f, -0.32f, 0.06f};
+    static constexpr float kEv[] = {-11.0f, -7.0f, -3.5f, 4.55f, 10.55f, 12.55f, 14.55f, 15.55f};
+    static constexpr float kComp[] = {-4.08f, -3.48f, -2.43f, -2.43f, -1.32f, -0.85f, -0.32f, 0.06f};
     static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
     static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
     s.exposureCurvePoints = kPoints;
@@ -356,10 +370,11 @@ inline void SetUdsExposureCurve(CameraExposureSettings& s)
 // UDS's from 10.55 up -- the day and the bright twilight untouched -- and falls 0.6 a stop below it: the night's
 // camera follows 40 %. Measured on wind_test at 21:00 (Frankfurt, 27 Sep): under the palms 0.62-0.63 stops instead
 // of 1.26-1.29; the open night 0.57 stops darker than UDS's (Time of Day > Night Exposure +0.57 puts it back).
+// With the night's section of SetUdsExposureCurve under -3.5 (there); (8.55, -2.52) went -- it lay on the line.
 inline void SetUdsSteadyNightExposureCurve(CameraExposureSettings& s)
 {
-    static constexpr float kEv[] = {4.55f, 8.55f, 10.55f, 12.55f, 14.55f, 15.55f};
-    static constexpr float kComp[] = {-4.92f, -2.52f, -1.32f, -0.85f, -0.32f, 0.06f};
+    static constexpr float kEv[] = {-11.0f, -7.0f, -3.5f, 4.55f, 10.55f, 12.55f, 14.55f, 15.55f};
+    static constexpr float kComp[] = {-6.57f, -5.97f, -4.92f, -4.92f, -1.32f, -0.85f, -0.32f, 0.06f};
     static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
     static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
     s.exposureCurvePoints = kPoints;

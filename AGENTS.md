@@ -50,9 +50,11 @@ only). Headless: `--time=HH:MM`, `--date=YYYY-MM-DD`, `--time-speed=<x>`, `--tim
 `--set/--sweep=tod.<key>`; the HUD prints `Time: HH:MM` under `Cam:`. The STEADY night camera
 (`timeOfDay.nightCameraEv100`, 0 = off; `nightCameraFollow`, 0.2): at night (the -6 -> -12 degree share) the camera
 is held near that EV100 and follows only `follow` of where the auto exposure goes -- `exposure_solve_cs.hlsl`
-`nightSteady`, after the curve, the eye untouched -- so dim lamps look dim (wind_test: 13.13 = the moonlit beach's
+`nightSteady`, after the curve, the eye untouched -- so dim lamps look dim (wind_test: 13.13 was the moonlit beach's
 auto camera at 24:00; candles 4 -> 0.5 lm move the camera 0.21 stop instead of the auto exposure's 0.96) -- under the OPEN
-sky only (below, "The night camera is the OPEN night's"). In the editor (command bar, MCP):
+sky only (below, "The night camera is the OPEN night's"), following the night's own light through the exposure
+compensation curve's night section, with the trims in full (below, "The night camera follows the night's own light").
+In the editor (command bar, MCP):
 `setTime` ("18:30", "sunset", "+2h") and `setDate` ("2026-06-21", switches to real positions); every
 `timeOfDay.*` key is in the document, so `setEnvironment` reaches the rest.
 
@@ -103,6 +105,72 @@ and the camera 0.6 (8.64 -> 8.05, the floor at 20:21), median 74 -> 13. Full <= 
 (`--set tod.nightCameraOpenFull:0`). Inspector Time of Day >
 "Night Camera Open Sky From / Full", "Night Camera Indoor Lift". GBV (`ExposureMetering,Skybox` + the Skybox self-test,
 the bathroom at 20:21): clean.
+
+**The night camera follows the night's own light, and its trims work in full** (2026-11-01, owner: "at night with a partial
+moon it is terribly dark and no knob does anything"). Held at the full moon's EV, a quarter moon 22 degrees up (14x less
+light on the ground) came out nearly black and a moonless night wholly black -- 01:00 on the moonrise view, camera 12.86 /
+12.53 / 11.64 for full / quarter / none, median 8 / 1 / 0 of 255, p95 33 / 26 / 0 -- and Night Exposure and the
+compensation sat INSIDE the auto camera the steady hold follows by 0.2 (Night Exposure -1.5 -> 0 moved the quarter-moon
+camera 0.3 stop). Now (a) the night's light: `TimeOfDay::NightEv100` = the EV100 a meter reads off middle grey under it
+(log2(0.18 E / pi) + 3), physical lux before Night Brightness -- the moon (its phase law, distance, sin of its height), a
+clear sky's twilight (log10 lux 0.53 at -6 degrees, -0.43 a degree: 3.4 / 0.08 / 0.009 at -6 / -10 / -12) and the night sky
+(2 pi x airglow zenith + stars + Milky Way, ~0.001 lux): -3.27 for the full moon at 45 degrees (`NightRefEv100`), -6.9 a
+quarter moon 22 degrees up, -11 no moon (`get_readouts` nightEv100, nightLightEv = the difference from the full moon). The
+steady EV (Scene) = `nightCameraEv100` + that difference - [curve(NightEv100) - curve(NightRefEv100)]: the camera follows
+the night's light less the exposure compensation CURVE's change, (1 - slope) of it, as the auto exposure follows a scene --
+computed from the sky's bodies, not the meter, so lamps and a turn of the view still do not move it. Read at the PHYSICAL
+EV on purpose (owner, 2026-11-01: "we have a special correction curve for the night, edit it"): keyed with Night Brightness
+in it, a quarter-moon beach (eye 7.56), wind_test's bathroom by day (6.74) and at night (7.6) sat on one point of the curve,
+so the night could not be darkened without the day's room; physical, the night's section lies under ~0 EV, away from every
+day scene. A curve flat there = the night's light followed in full. The curve holds 8 points now (it was 6; the shader's
+float4 pairs had room). (b) `exposure_solve_cs.hlsl`: the open night's anchor is `nightCameraEv100 - nightExposureEv -
+compensationEv` and the closed frame's floor `- compensationEv`, so a stop of either is a stop of the night.
+`nightCameraEv100` is therefore the camera for the full moon 45 degrees up with the trims at 0: wind_test's 13.13 had its
+-1.5 inside and would put that full moon 0.9 stop darker; 11.93 keeps it (camera 12.76 vs 12.86, median 9 vs 8).
+THE PRESETS CARRY THE NIGHT (`SetUdsExposureCurve`, `SetUdsSteadyNightExposureCurve`): from -3.5 at their first point's
+value, 1.05 stops down at -7, 0.6 more at -11 -- the camera follows 70 % of the darkening from the full moon to a quarter,
+85 % on to no moon (a first cut, 35 % / 79 % below, held the moon's aureole down before the aerosol was cut at night and
+left every partial moon black); each dropped its 8.55 point for room (UDS Steady Night's lay on the line, UDS's 0.06 EV off it). A
+curve FLAT under ~0 follows the night's light in full: the owner's UDS Steady Night as it was (2026-11-01, 00:00, a
+last-quarter moon 10.8 degrees up, cam -9.00 7.65 89.30) exposed the night as a dim day, the moon in a great glow --
+camera 9.45, median 57, p95 186; with the night section 11.34 / 5 / 72. wind_test is that preset (the owner's pick). With
+the first night section (35 % / 79 %) on the moonrise view at 01:00 (2026-09-27 / 10-03 / 10-07): full 12.76 / median 9 /
+p95 35, quarter 11.38 / 4 / 60 (a 50 % follow gave 8 / 78, a flat curve 41 / 160), no moon 7.95 / 1 / 5 with the stars and
+the island's silhouette; the moonrise 19:54 / 20:06 / 20:15 / 20:24 median 52 / 21 / 20 / 21 (was 55 / 12 / 8 / 7). A
+closed frame keys the curve on the meter as before, so the curve's day section sets the rooms: under UDS Steady Night the
+bathroom at night is median 17, under the gentle 10-31 curve 73.
+THE GLOW ROUND A LOW MOON is the sky's aerosol (mieScale 10, g 0.8 -- the day's calibrated aureole, the same air). On the
+owner's view, clouds off, the sky's median display value at 2 / 4 / 7 / 10 / 15 / 20 / 30 / 40 degrees from the moon: 105 /
+95 / 78 / 54 / 26 / 11 / 4.4 / 2.3. The height fog off: 111 / 100 / 80 / 52 / 22; its sun lobe off or the volume's sun off
+moved it 2-6; `sky.mieScale:1` 41 / 39 / 33 / 23.5 / 12; both 22 / 20 / 15 / 7.7 / 3.4. Not it: the moon's glow, its
+shafts, the bloom (p95 0-2 of 255), the night tints (unit: 54 -> 48 at 10 degrees), the local exposure (lifts the
+background, keeps the glow). A larger Mie g made it BRIGHTER here (g 0.9: 86 at 10 degrees, 5.5 at 40), not tighter.
+The owner, looking at the real moon from a window: "nowhere near any glow"; photographs of a moon over the sea (Wikimedia
+Commons, long exposures, e.g. "Moon At Francavilla Al Mare Coast") show a halo a few degrees wide on an even dark-blue sky --
+the great glows are the misty nights'. So (owner's pick: less aerosol at night) **`timeOfDay.twilight.mieNightScale`**
+(Inspector Time of Day > Twilight "Night Aerosol", `--set tod.mieNightScale`; 1 = physics): the frame atmosphere's Mie
+scattering and absorption times it by the night's share (the sun -6 -> -12, in the tints' 1/64 steps so the LUTs rebuild
+at most 64 times a dusk; the anisotropy kept), not by the tints' day blend -- the sunset's haze round the sun stays.
+wind_test: 0.1 (the sky's aerosol at UE's default by night), and its `fog.nightDensity` 1 -> 0.15 (the day's: at 1 the
+night was 2.4 km of mist, and the fog's moon scattering was most of what remained). The rings at 2 / 4 / 7 / 10 / 15 / 20
+/ 30 / 40 degrees: 25 / 23 / 18 / 10 / 4.4 / 2.4 / 1.5 / 1.3 (0.1 alone: 42 / 39 / 33 / 23.5 / 12 / 5.5; 0.3: 61 / 56 / 47 /
+32 / 16); the frame median 5 -> 3, p95 72 -> 35, the moon's path on the water as it was. The day and the sunset unchanged
+(16:30-17:40 toward the sun: 0.3-0.8 % of the frame moved > 8 levels); the fog's dusk -> night ramp thins the twilight's
+haze a little (18:00 3 %, 18:20 9 %, 18:40 14 % of the frame, a crisper horizon, the blue hour kept).
+THE MOON'S CYCLE CHECKED (2026-11-01, owner: "check the lighting is sane at every phase -- the island and the trees too"):
+Oct 26 - Nov 24 2026 at 20 / 23 / 02 / 05, then the sea view (above), the palm grove ([34, 3.5, 68] yaw 80 pitch 8) and
+the island from above ([-75, 28, 40] toward [10, 0, 90]). The light is consistent: nightLightEv full 0 / gibbous -0.9 /
+quarters -2.5 .. -3.8 / a crescent 9 degrees up -6.5 / no moon -7.75 (a quarter's ground light 15 % of the full one's, the
+new-moon floor 1.5 % in it), the palms' shadows wherever the moon is up and none under the horizon, nothing blown out; a
+moon rising (10-29 20:00, its centre -0.3 degrees, the level's 2-degree disc half up) gives the frame of a moonless night
+with a faint glow and a path on the water at the horizon. But at the 35 % follow and Night Exposure -1.5 every night read
+too dark: the full moon's grove median 0 (the palms black: their albedo a third of the sand's, all in the tone curve's
+toe), the quarters' median 1-3 on every view. So the night section is 70 % / 85 % and wind_test's `nightExposureEv` -1.5
+-> -0.5 (the owner's knob): median full / last quarter / first quarter / no moon -- sea 22 / 9 / 11 / 16, island 25 / 10 /
+11 / 5, grove 1 / 0 / 2 / 1 with p95 85 / 46 / 34 / 41 (the palms and the sand read, the shadows of the fronds); the low
+last-quarter moon of the owner's view: camera 9.28, median 32, the glow 61 at 10 degrees on a sky of 18 at 40 -- a compact
+halo, the stars and the path on the water. The bathroom (closed: the curve's day section, the owner's UDS Steady Night)
+camera 10.11 at 15:00, 10.44 at night.
 
 Night lamps (plan L, `rendering/lighting/NightLamps.h`): a point/spot light or a glowing mesh with `"onAt": "night"`
 (or `"day"`) switches when the sun crosses `timeOfDay.lamps.sunElevationDeg` (0 = UDS's Sunset), UDS-style delay and

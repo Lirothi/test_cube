@@ -718,8 +718,8 @@ namespace
                         // ApplyOverrides and evaluated by the CPU twin of the shader's ExposureCurve.
                         render::CameraExposureSettings parsed;
                         render::PhotographicSettingsJson::ApplyOverrides(tgt(), parsed);
-                        constexpr int kSamples = 49;
-                        constexpr float kLoEv = -8.0f, kHiEv = 16.0f;
+                        constexpr int kSamples = 57;
+                        constexpr float kLoEv = -12.0f, kHiEv = 16.0f; // the night's section included (under ~0)
                         float samples[kSamples];
                         float lo = -1.0f, hi = 0.0f; // always show 0 and a stop below it
                         for (int s = 0; s < kSamples; ++s)
@@ -729,7 +729,7 @@ namespace
                             lo = std::min(lo, samples[s]);
                             hi = std::max(hi, samples[s]);
                         }
-                        ImGui::PlotLines("##curvePlot", samples, kSamples, 0, "EV100 -8 .. 16", lo - 0.5f, hi + 0.5f,
+                        ImGui::PlotLines("##curvePlot", samples, kSamples, 0, "EV100 -12 .. 16", lo - 0.5f, hi + 0.5f,
                                          ImVec2(ImGui::GetContentRegionAvail().x, 50.0f));
                     }
                     if (removeAt < count)
@@ -791,7 +791,9 @@ namespace
                         ImGui::SetTooltip("Ultra Dynamic Sky's curve, for UDS's moon (Time of Day > Night Brightness "
                                           "~11400: the moon 1/33 of the sun): a night ~1.5 stops under the day, the "
                                           "dawn a moonlit blue until the sun is nearly up. With the physical moon "
-                                          "(Night Brightness 1) it leaves the night far too dark -- that one wants Eye.");
+                                          "(Night Brightness 1) it leaves the night far too dark -- that one wants Eye. "
+                                          "Its points under 0 are the steady night camera's: from the full moon to a "
+                                          "quarter the camera follows 70 %% of the darkening, on to no moon 85 %%.");
                     }
                     ImGui::SameLine();
                     if (ImGui::SmallButton("UDS Steady Night"))
@@ -812,7 +814,8 @@ namespace
                                           "of the scene's darkening (UDS: 80 %%). Among dark palms the sky through the "
                                           "leaves no longer lights up: the camera opened 1.3 stops there, now 0.6. "
                                           "The open night comes out ~0.6 stops darker -- Time of Day > Night "
-                                          "Exposure to taste.");
+                                          "Exposure to taste. Under 0 the same night section as UDS: a quarter or "
+                                          "a low moon darker than the full one, not exposed up to a dim day.");
                     }
                     ImGui::PopID();
                 }
@@ -824,12 +827,18 @@ namespace
                               "Why: percentile metering lands any correctly lit scene on the same middle "
                               "grey, so under auto exposure a moonlit beach reads as a dim day. The eye "
                               "adapts only part of the way and a night stays dark; this curve is the rest "
-                              "(UE's Exposure Compensation Curve). Piecewise linear through up to six "
+                              "(UE's Exposure Compensation Curve). Piecewise linear through up to eight "
                               "points, flat past its ends. It follows the eye's SMOOTHED adaptation, so a "
                               "dark room darkens the picture as the eye adapts rather than on one frame. "
                               "Min/Max EV100 still bound the camera. Night vision reads the eye's "
                               "adaptation, not the darkened camera. The SLOPE is the adaptation's strength: where the "
-                              "compensation rises s stops a stop, the camera follows (1 - s) of the scene's change. "
+                              "compensation rises s stops a stop, the camera follows (1 - s) of the scene's change.\n\n"
+                              "THE NIGHT'S SECTION: with a time of day and its Night Camera EV100, the open night's "
+                              "camera reads this curve at the night's PHYSICAL light (middle grey under the moon, the "
+                              "twilight and the stars, before Night Brightness): -3.3 a full moon at 45 degrees (the "
+                              "Night Camera EV100 itself), -6.9 a quarter moon 22 degrees up, -11 no moon. Points there "
+                              "set how much darker a darker night looks; the day's EVs (a dim room meters 4-8) are "
+                              "not touched by them. Flat there = the camera follows the night's light in full. "
                               "--set=exposure.curve:<0 none|1 eye|2 uds|3 uds steady night>");
                 ImGui::SeparatorText("Metering (which pixels set the exposure)");
                 dragF("Low Percentile", "lowPercentile", 0.15f, 0.005f, 0.0f, 1.0f, "%.3f");
@@ -2628,6 +2637,11 @@ namespace
                               "ozone layer edge-on -- comes out magenta; UDS's absorbs red as hard and its twilight "
                               "is blue. UDS's values: x(6.15, 1.81, 1.43) at night, x(4.62, 1.56, 4.03) at sunrise, "
                               "1.95 degrees. (1, 1, 1) twice = none.");
+                dragF("Night Aerosol", "mieNightScale", defaults.mieNightScale, 0.005f, 0.0f, 10.0f, "%.3f");
+                InspectorHelp("The atmosphere's aerosol (its Mie scattering, Sky Atmosphere > Mie Scale) times this at "
+                              "night -- none with the sun above -6 degrees, all of it from -12. The glow round a low "
+                              "moon is that aerosol's aureole: what a camera sees under a dark sky, not what an eye at a "
+                              "window does. The day and the sunset's haze stay as they are. 1 = the same air as by day.");
                 dragF("Light Hand-over (deg)", "lightHandOverDeg", defaults.lightHandOverDeg, 0.05f, 0.0f, 20.0f, "%.2f");
                 InspectorHelp("When the light passes between the moon and the sun (the sun's disc wholly under the "
                               "horizon), the body that has it fades out over this many degrees of the sun's height "
@@ -2958,9 +2972,12 @@ namespace
                           "Negative darkens; 0 = none.");
             dragF("Night Camera EV100", "nightCameraEv100", 0.0f, 0.05f, -20.0f, 30.0f, "%.2f");
             InspectorHelp("The steady night: the camera held near this EV100 at night (by the same night share), "
-                          "so dim candles stay dim instead of being exposed back up. Set it to what the open "
-                          "night meters (get_readouts' adaptedEv100 on the moonlit beach). 0 = off, the auto "
-                          "exposure as before.");
+                          "so dim candles stay dim instead of being exposed back up. It is the camera for the full "
+                          "moon 45 degrees up with Night Exposure and the compensation at 0 (both move it in full). "
+                          "Another night -- a quarter moon, no moon, the twilight -- moves it as Camera Exposure > "
+                          "Compensation curve says at that night's physical EV (its points under 0: -3.3 is the full "
+                          "moon at 45 degrees, -6.9 a quarter moon 22 degrees up, -11 no moon). Taken from the sky, not "
+                          "the meter: a lamp or a turn of the view does not move it. 0 = off, the auto exposure as before.");
             dragF("Night Camera Follow", "nightCameraFollow", 0.2f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("How much of the auto exposure's departure from the Night Camera EV100 the camera "
                           "still follows: 0 = held exactly, 1 = the auto exposure. The eye's own adaptation "

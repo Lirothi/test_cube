@@ -214,6 +214,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         tint3("ozoneNightTint", s.ozoneNightTint);
         tint3("ozoneSunriseTint", s.ozoneSunriseTint);
         s.ozoneBlendDeg = std::clamp(Number(w, "ozoneBlendDeg", s.ozoneBlendDeg), 0.001f, 90.0f);
+        s.mieNightScale = std::clamp(Number(w, "mieNightScale", s.mieNightScale), 0.0f, 10.0f);
         s.lightHandOverDeg = std::clamp(Number(w, "lightHandOverDeg", s.lightHandOverDeg), 0.0f, 20.0f);
     }
 }
@@ -349,6 +350,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "ozoneNightTint", { s.ozoneNightTint[0], s.ozoneNightTint[1], s.ozoneNightTint[2] } },
         { "ozoneSunriseTint", { s.ozoneSunriseTint[0], s.ozoneSunriseTint[1], s.ozoneSunriseTint[2] } },
         { "ozoneBlendDeg", s.ozoneBlendDeg },
+        { "mieNightScale", s.mieNightScale },
         { "lightHandOverDeg", s.lightHandOverDeg },
     };
     j["lamps"] = {

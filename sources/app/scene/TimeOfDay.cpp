@@ -299,6 +299,42 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     // makes Night Brightness what it is at night, an exposure shift; with the sun under -12 degrees nothing changes.
     nightGain_ = std::pow(std::max(s.nightBrightness, 1.0e-6f), nightShare_);
 
+    // The night's light on a level surface, physical lux (before Night Brightness), as the EV100 a meter reads off middle
+    // grey under it and against the full moon's at 45 degrees -- what the steady night camera follows through the exposure
+    // compensation curve (Scene). Held at the full moon's EV whatever the moon did, a quarter moon 22 degrees up (14x less
+    // light) came out nearly black and a moonless night wholly black, p95 0 of 255 (owner, 2026-10-31: "at night with a
+    // partial moon it is terribly dark").
+    {
+        constexpr double kRefMoonElevationDeg = 45.0; // wind_test's full moon at 01:00 on 2026-09-27 stands at 44.6
+        const double moonFloor = std::clamp(static_cast<double>(s.moonNewBrightness), 0.0, 1.0);
+        const double moonLux = s.moonEnabled
+            ? std::max(static_cast<double>(s.moonIlluminanceLux), 0.0) *
+              (moonFloor + (1.0 - moonFloor) * astro::MoonPhaseBrightness(phaseAngleDeg)) * distanceScale *
+              std::max(std::sin(moonElevation * kPi / 180.0), 0.0)
+            : 0.0;
+        // A clear sky's twilight on a level surface: log10 lux 0.53 with the sun 6 degrees down, falling 0.43 a degree --
+        // 3.4 / 0.5 / 0.08 / 0.009 lux at -6 / -8 / -10 / -12 (the published clear-sky twilight tables). Held at the -6
+        // degree value above it, where the night camera is not on.
+        const double depression = std::max(-6.0 - sunElevation, 0.0);
+        const double twilightLux = std::pow(10.0, 0.53 - 0.43 * depression);
+        // The night sky: the airglow (zenith luminance x pi, x2 for its brightening toward the horizon), the stars and the
+        // Milky Way (~2e-4 / 1e-4 lux at their unit brightness): ~0.001 lux at the defaults, a moonless clear night's.
+        const double nightSkyLux = s.nightSkyEnabled
+            ? 2.0 * kPi * std::max(static_cast<double>(s.airglowZenith), 0.0) +
+              2.0e-4 * std::max(static_cast<double>(s.starsBrightness), 0.0) +
+              1.0e-4 * std::max(static_cast<double>(s.milkyWayBrightness), 0.0)
+            : 0.0;
+        const double refLux = std::max(static_cast<double>(s.moonIlluminanceLux), 0.0) *
+                              std::sin(kRefMoonElevationDeg * kPi / 180.0) + nightSkyLux;
+        const double lux = moonLux + twilightLux + nightSkyLux;
+        nightLightEv_ = (refLux > 0.0 && lux > 0.0) ? static_cast<float>(std::log2(lux / refLux)) : 0.0f;
+        // Middle grey (0.18) under E lux is 0.18 E / pi cd/m2, EV100 log2(L) + 3 (the meter's form): the full moon at
+        // 45 degrees -3.27, a quarter moon 22 degrees up -6.9, a moonless night -11.
+        const auto meterEv = [](double e) { return static_cast<float>(std::log2(std::max(e, 1.0e-9) * 0.18 / kPi) + 3.0); };
+        nightEv100_ = meterEv(lux);
+        nightRefEv100_ = meterEv(refLux);
+    }
+
     // Who reaches the ground: a body lights while any of its disc is above the horizon -- exactly where
     // Scene::PrepareViews' disc fraction (and so its light) is non-zero. The body in charge keeps it to
     // that very edge, so its light has reached 0 when it lets go; a body taking over must be a
@@ -367,6 +403,12 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
         }
         // The day sky's brightness comes in with UDS's day sky, on the same (stepped) blend.
         skyLuminanceScale_ = 1.0f + (std::max(s.daySkyBrightness, 0.0f) - 1.0f) * day;
+    }
+    // The night's aerosol (TimeOfDaySettings::mieNightScale) by the night's share, stepped like the tints so the sky's
+    // LUTs rebuild at most 64 times across the dusk.
+    {
+        const float night = std::round(nightShare_ * kTwilightBlendSteps) / kTwilightBlendSteps;
+        mieScale_ = 1.0f + (std::max(s.mieNightScale, 0.0f) - 1.0f) * night;
     }
     // The height fog by the sun's height (TimeOfDaySettings::fogDayDensity ..): day over fogDayFullDeg, dusk at
     // fogDuskDeg, night under fogNightFullDeg, smoothstep between. Not stepped like the atmosphere's tints: the fog

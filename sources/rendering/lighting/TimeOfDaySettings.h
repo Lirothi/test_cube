@@ -149,18 +149,21 @@ struct TimeOfDaySettings
     // wind_test at noon: sky 2380 cd/m2 at 75 degrees from the sun against a CIE clear sky's ~3300-4900, sunlit
     // sand 12540 (albedo 0.4 at ~100 klx, right).
     float daySkyBrightness = 1.0f;
-    // The owner's "night darker / lighter" (2026-10-20), in STOPS of exposure: added to the camera's compensation
-    // (CameraExposureSettings::compensationEv, the FRAME's copy) by the night's share -- 0 with the sun above -6
-    // degrees (the end of civil twilight), all of it from -12 (the end of nautical), smoothstep between. The camera
-    // only: the light, the meter, the curve's key (the scene's own EV) and the night vision (the eye) stay as they
-    // are, so it moves the night's picture and nothing else. Negative darkens; 0 = none.
+    // The owner's "night darker / lighter" (2026-10-20), in STOPS of exposure: added to the camera by the night's
+    // share -- 0 with the sun above -6 degrees (the end of civil twilight), all of it from -12 (the end of nautical),
+    // smoothstep between -- IN FULL, the steady night camera's anchor included (since 2026-10-31: inside the auto
+    // camera alone it moved a steady night 0.2 stop a stop). The camera only: the light, the meter, the curve's key
+    // (the scene's own EV) and the night vision (the eye) stay as they are. Negative darkens; 0 = none.
     float nightExposureEv = 0.0f;
     // The STEADY night camera (owner, 2026-10-24: "at night the camera should hardly chase the candles, so dim
     // candles look dim"). With nightCameraEv100 non-zero the frame camera is held near that EV100 by the night's
     // share (the same -6 -> -12 degree smoothstep) and follows only `nightCameraFollow` of where the auto exposure
     // would take it: camera = steady + follow * (auto - steady). The eye -- the meter, the curve's key, night
-    // vision -- is untouched. 0 = off, the auto camera as before. Set it to what the open night meters (wind_test's
-    // moonlit beach at 24:00: 12.9), so the outdoors keeps its picture and a lit room keeps its own brightness.
+    // vision -- is untouched. 0 = off, the auto camera as before. It is the camera for the FULL MOON 45 degrees up,
+    // with the camera's trims at 0 (compensationEv and nightExposureEv move it in full); another night's light moves it
+    // as the camera exposure's compensation curve says at that light's physical EV (Scene, TimeOfDay::NightEv100: the
+    // curve's section under ~0 EV is the night's). For wind_test's trims (nightExposureEv -1.5, compensationEv 0.3), 11.93
+    // keeps its moonlit beach at 01:00 on 2026-09-27 at the camera it had (12.8); its old 13.13 had the trims inside.
     float nightCameraEv100 = 0.0f;
     float nightCameraFollow = 0.2f;
     // Both night trims above (nightExposureEv and the steady camera) are the OPEN night's camera (owner, 2026-10-31:
@@ -242,6 +245,14 @@ struct TimeOfDaySettings
     float ozoneNightTint[3] = {6.154f, 1.806f, 1.428f};
     float ozoneSunriseTint[3] = {4.615f, 1.557f, 4.031f};
     float ozoneBlendDeg = 1.95f;
+    // LESS AEROSOL AT NIGHT (owner, 2026-11-01, at the window: "nowhere near any glow round the moon"): the atmosphere's
+    // Mie scattering and absorption times this by the night's share (the sun -6 -> -12, in the tints' 1/64 steps; the
+    // anisotropy kept). The glow round a low moon is that aerosol's aureole -- the day's calibrated one (skyAtmosphere
+    // mieScale 10), physical for a camera under a dark sky, but not what an eye at a window sees: on wind_test's
+    // last-quarter moon 10.8 degrees up the sky 10 degrees from it read 54 of 255 against 2.3 forty degrees away. By the
+    // night's share and not the tints' day blend: the sunset's haze round the sun is gone from the sky by -6 (its light
+    // leaves the atmosphere, sunSkyStartDeg). The FRAME's atmosphere only. 1 = physics (the same air as by day).
+    float mieNightScale = 1.0f;
     // THE HAND-OVER, ONE LIGHT AT A TIME, CROSS-FADED: the scene light's body fades out over this many degrees
     // of SUN elevation before the light changes hands (the sun's disc wholly under the horizon) and the
     // incoming body fades in over as many after -- smoothstep, so both meet at 0. At dawn the moon fades

@@ -70,11 +70,15 @@ public:
     float SunSkyShare() const { return sunSkyShare_; }
     const float* RayleighTint() const { return rayleighTint_; }
     const float* OzoneTint() const { return ozoneTint_; }
+    // What the frame's atmosphere multiplies its Mie (aerosol) scattering and absorption by: mieNightScale by the night's
+    // share, 1 by day.
+    float MieScale() const { return mieScale_; }
     // What the frame's sky luminance scale is multiplied by (TimeOfDaySettings::daySkyBrightness at the day blend).
     float SkyLuminanceScale() const { return skyLuminanceScale_; }
     // What the frame's height-fog density is multiplied by (TimeOfDaySettings::fogDayDensity .. by the sun's height).
     float FogDensityScale() const { return fogDensityScale_; }
-    // Stops added to the frame camera's compensation (TimeOfDaySettings::nightExposureEv by the night's share).
+    // Stops added to the frame camera at night (TimeOfDaySettings::nightExposureEv by the night's share): in full, the
+    // steady night camera's anchor moves with it (exposure_solve_cs.hlsl NightOpenCamera).
     float NightExposureEv() const { return nightExposureEv_; }
     // The night's share, 0 with the sun above -6 degrees (civil twilight's end), 1 from -12 (nautical's), smoothstep:
     // what the night exposure and the night's light (NightGain) come in by.
@@ -82,6 +86,16 @@ public:
     // nightBrightness^NightShare: the ONE gain on everything that lights the night -- the moon, the night sky, the
     // night lamps and the sun's twilight sky -- so their ratios stay physical at dusk.
     float NightGain() const { return nightGain_; }
+    // The night's light on the ground against the full moon's at 45 degrees, in stops (log2; 0 = that full moon, about
+    // -3.6 at a quarter moon 22 degrees up, about -7.8 with no moon): the moon's horizontal illuminance (its phase law,
+    // distance and elevation), the twilight's (a clear sky's, by the sun's depression) and the night sky's (airglow,
+    // stars, Milky Way) -- physical lux, before Night Brightness.
+    float NightLightEv() const { return nightLightEv_; }
+    // The same light as the EV100 a meter reads off middle grey under it (log2(0.18 E / pi) + 3): -3.27 for the full moon
+    // at 45 degrees (NightRefEv100), -6.9 for a quarter moon 22 degrees up, -11 with no moon. Where the steady night
+    // camera reads the exposure compensation curve (Scene) -- under the day's EVs, away from a dim room's.
+    float NightEv100() const { return nightEv100_; }
+    float NightRefEv100() const { return nightRefEv100_; }
     // The scene light's share through the hand-over cross-fade (TimeOfDaySettings::lightHandOverDeg), 0..1.
     float HandOverFade() const { return handOverFade_; }
     // Plan L: the clock was SET rather than run since the last call -- a level load, an edit of the authored time or
@@ -126,11 +140,15 @@ private:
     float sunSkyShare_ = 1.0f;
     float rayleighTint_[3] = {1.0f, 1.0f, 1.0f};
     float ozoneTint_[3] = {1.0f, 1.0f, 1.0f};
+    float mieScale_ = 1.0f;
     float skyLuminanceScale_ = 1.0f;
     float fogDensityScale_ = 1.0f;
     float nightExposureEv_ = 0.0f;
     float nightShare_ = 0.0f;
     float nightGain_ = 1.0f;
+    float nightLightEv_ = 0.0f;
+    float nightEv100_ = -3.27f;
+    float nightRefEv100_ = -3.27f;
     float handOverFade_ = 1.0f;
     bool clockSetPending_ = true;  // Reset/Apply moved the clock; the next Tick reports it
     bool clockSetByHand_ = false;  // this Tick's (the sunrise / sunset event says so)

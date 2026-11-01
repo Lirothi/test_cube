@@ -57,13 +57,13 @@ cbuffer ExposureSolveCB : register(b0)
     // the meter decided; in manual it offsets a number the author already chose by hand, so it is
     // a quick +/- on top of a solved shutter rather than a correction to a measurement.
     float manualCompensationEv;
-    // Time-of-day E1: the compensation CURVE (CameraExposureSettings::exposureCurve*), up to six
+    // Time-of-day E1: the compensation CURVE (CameraExposureSettings::exposureCurve*), up to eight
     // points: x = the EV100 the eye is adapted to, ascending, y = compensation EV. 0 points = none.
     uint  curvePoints;
     float _padComp1;
     float _padComp2;
     float4 curveEvA;      // points 0-3
-    float4 curveEvB;      // points 4-5 in xy
+    float4 curveEvB;      // points 4-7
     float4 curveCompA;
     float4 curveCompB;
     // Time of day: the STEADY night camera (TimeOfDaySettings::nightCameraEv100 / nightCameraFollow). x the camera
@@ -91,13 +91,14 @@ groupshared uint gBins[kBins];
 // loop bound is the literal maximum -- a bound read from the constant buffer is a trap here.
 float ExposureCurve(float ev)
 {
-    const uint n = min(curvePoints, 6u);
+    const uint n = min(curvePoints, 8u);
     if (n == 0u)
     {
         return 0.0f;
     }
-    const float xs[6] = { curveEvA.x, curveEvA.y, curveEvA.z, curveEvA.w, curveEvB.x, curveEvB.y };
-    const float ys[6] = { curveCompA.x, curveCompA.y, curveCompA.z, curveCompA.w, curveCompB.x, curveCompB.y };
+    const float xs[8] = { curveEvA.x, curveEvA.y, curveEvA.z, curveEvA.w, curveEvB.x, curveEvB.y, curveEvB.z, curveEvB.w };
+    const float ys[8] = { curveCompA.x, curveCompA.y, curveCompA.z, curveCompA.w,
+                          curveCompB.x, curveCompB.y, curveCompB.z, curveCompB.w };
     if (ev <= xs[0])
     {
         return ys[0];
@@ -105,7 +106,7 @@ float ExposureCurve(float ev)
     float result = ys[n - 1u];
     bool found = false;
     [unroll]
-    for (uint i = 1u; i < 6u; ++i)
+    for (uint i = 1u; i < 8u; ++i)
     {
         if (!found && i < n && ev <= xs[i])
         {
@@ -123,12 +124,17 @@ float ExposureCurve(float ev)
 // meter would take it, so the moonlit outdoors keeps its darkness instead of being metered up to a dim day. (The trim
 // used to ride compensationEv, which moved the eye's adaptation with it; on the camera alone the open frame is the
 // same, and the eye -- night vision's key -- is the scene's.)
+//
+// The camera's trims pass through WHOLE: the anchor moves by them too. Inside `c` alone (the auto camera, which the
+// steady hold follows by `follow` 0.2) a stop of Night Exposure or of compensation moved the night 0.2 stop -- the
+// owner's knobs "did nothing" (2026-10-31: Night Exposure -1.5 -> 0 moved the quarter-moon camera 0.3 stop).
 float NightOpenCamera(float c)
 {
     c -= nightSteady.w;
     if (nightSteady.z > 0.0f)
     {
-        c = lerp(c, nightSteady.x + saturate(nightSteady.y) * (c - nightSteady.x), saturate(nightSteady.z));
+        const float anchor = nightSteady.x - nightSteady.w - compensationEv;
+        c = lerp(c, anchor + saturate(nightSteady.y) * (c - anchor), saturate(nightSteady.z));
     }
     return c;
 }
@@ -141,7 +147,7 @@ float NightClosedCamera(float c)
 {
     if (nightSteady.z > 0.0f)
     {
-        c = lerp(c, max(c, nightSteady.x - max(nightOpenSky.w, 0.0f)), saturate(nightSteady.z));
+        c = lerp(c, max(c, nightSteady.x - compensationEv - max(nightOpenSky.w, 0.0f)), saturate(nightSteady.z));
     }
     return c;
 }

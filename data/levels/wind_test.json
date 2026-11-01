@@ -38933,20 +38933,28 @@
       "enabled": true,
       "exposureCurve": [
         [
-          4.550000190734863,
-          -1.5
+          -11.0,
+          -6.57
         ],
         [
-          8.550000190734863,
-          -1.0
+          -7.0,
+          -5.97
+        ],
+        [
+          -3.5,
+          -4.92
+        ],
+        [
+          4.550000190734863,
+          -4.920000076293945
         ],
         [
           10.550000190734863,
-          -0.8
+          -1.3200000524520874
         ],
         [
           12.550000190734863,
-          -0.6
+          -0.8500000238418579
         ],
         [
           14.550000190734863,
@@ -39892,8 +39900,8 @@
     "animate": false,
     "date": [
       2026,
-      9,
-      27
+      11,
+      1
     ],
     "dawn": 6.0,
     "dayLengthMin": 2.0,
@@ -39905,7 +39913,7 @@
       "dayFullDeg": 25.0,
       "duskDeg": 5.0,
       "duskDensity": 1.0,
-      "nightDensity": 1.0,
+      "nightDensity": 0.15,
       "nightFullDeg": -8.0
     },
     "heightOffset": 0.0,
@@ -39963,12 +39971,12 @@
       "phaseAuto": true
     },
     "nightBrightness": 11364.0,
-    "nightCameraEv100": 13.13,
+    "nightCameraEv100": 11.93,
     "nightCameraFollow": 0.2,
     "nightCameraIndoorLift": 3.0,
     "nightCameraOpenFrom": 0.15000000596046448,
     "nightCameraOpenFull": 0.3499999940395355,
-    "nightExposureEv": -1.5,
+    "nightExposureEv": -0.5,
     "nightLengthMin": 2.0,
     "nightSky": {
       "airglowColor": [
@@ -40021,10 +40029,11 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 21.0,
+    "time": 24.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,
+      "mieNightScale": 0.1,
       "ozoneBlendDeg": 1.9500000476837158,
       "ozoneNightTint": [
         6.1539998054504395,
