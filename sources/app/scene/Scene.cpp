@@ -550,7 +550,7 @@ void Scene::BumpStaticSetVersion()
     renderQueueSourcesValid_ = false;
     shadowCasterSource_.Clear();
     cameraObjectSource_.Clear();
-    camera_.GetView().queue.Clear();
+    renderCamera_.GetView().queue.Clear();
     for (SceneView& view : cascadeViews_) { view.queue.Clear(); }
     for (SceneView& view : clipmapViews_) { view.queue.Clear(); }
     for (SceneView& view : spotShadowViews_) { view.queue.Clear(); }
@@ -568,7 +568,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     const float zNear = camera.GetZNear();
     const float zFar = camera.GetZFar();
     SceneFrameData::CascadeData& cascades = frameData_.cascades;
-    const auto splits = cascadeConfig_.BuildSplitScheme(zNear, zFar);
+    const auto splits = renderCascadeConfig_.BuildSplitScheme(zNear, zFar);
     for (size_t i = 0; i < splits.size(); ++i)
     {
         cascades.splitsVS[i] = splits[i];
@@ -607,7 +607,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     // i.e. exactly the scale the texel snap exists to pin down. The shadow map has no business
     // tracking a sub-pixel camera jitter.
     const mat4& invProj = camera.GetInvProjMatrixNoJitter();
-    const float3 sunDirWS = dirLight_.GetDirection();
+    const float3 sunDirWS = renderSun_.GetDirection();
 
     std::string c0Survivors; // S14 readout diagnostic, filled only on the dump frame
     // UpdateCascades runs before this frame's queues are rebuilt. Its diagnostic reads below are
@@ -653,7 +653,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // never needed. Assert safety is structural, not empirical: the snap shifts the centre by
         // at most one unitsPerTexel per axis, and the padding is two estimated texels.
         const float texelEstimate = (2.0f * sphereRadius) / static_cast<float>(contentRes);
-        const float radius = sphereRadius + cascadeConfig_.overlapInTexels * texelEstimate;
+        const float radius = sphereRadius + renderCascadeConfig_.overlapInTexels * texelEstimate;
         const float unitsPerTexel = (2.0f * radius) / static_cast<float>(contentRes);
 
         const float3 up(0, 1, 0);
@@ -662,7 +662,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // only guarantees that any caster within casterReachWS of the light still has z_ls > 0, i.e.
         // lies inside the culling ortho box. The old max(1, maxDistance) put the eye INSIDE the
         // volume for the far cascade (lightDistance < radius), where near hit the 0.001 clamp.
-        const float lightDistance = radius + cascadeConfig_.casterReachWS + 1.0f;
+        const float lightDistance = radius + renderCascadeConfig_.casterReachWS + 1.0f;
 
         // Texel snap — the actual stabilization. Snap the cascade center along the FIXED
         // light right/up axes to whole-texel steps in WORLD space, BEFORE building the
@@ -724,14 +724,14 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // (SceneView::frustum) and the GPU cull (Frustum::Planes -> ShadowGpuData::UpdateViewFrustums,
         // slots 0..3). So `casterReachWS` stays alive; only its meaning narrows, from "how far back
         // to push the projection" to "how far toward the light to look for casters".
-        const float zPad = cascadeConfig_.zPadding;
-        const float nearProjLS = std::max(0.001f, minZ - cascadeConfig_.pancakeSlackWS);
-        const float nearCullLS = std::max(0.001f, minZ - cascadeConfig_.casterReachWS);
+        const float zPad = renderCascadeConfig_.zPadding;
+        const float nearProjLS = std::max(0.001f, minZ - renderCascadeConfig_.pancakeSlackWS);
+        const float nearCullLS = std::max(0.001f, minZ - renderCascadeConfig_.casterReachWS);
         const float farLS = maxZ + zPad;
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearProjLS, farLS);
 
-        const float depthBiasInTexels = cascadeConfig_.depthBiasInTexels;
+        const float depthBiasInTexels = renderCascadeConfig_.depthBiasInTexels;
         // The cascade's world texel. Was `normalBiasInTexels * unitsPerTexel` until the receiver
         // normal offset was deleted for UE parity; the legacy 3x3 filter arm still needs the
         // per-cascade RATIO, which is the same number with the artist multiplier divided out.
@@ -757,7 +757,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             const CascadeScissor sc = ComputeCascadeScissor(
                 cornersWS, camera.GetPosition(), lightView * lightProj, contentRes,
                 static_cast<UINT>(tileOriginX), static_cast<UINT>(tileOriginY),
-                cascadeConfig_.scissorPadTexels);
+                renderCascadeConfig_.scissorPadTexels);
             cascades.scissor[idx] = sc.rect;
             cascades.scissorAreaDbg[idx] = sc.areaFrac;
         }
@@ -780,7 +780,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         cascades.cullLeakDbg[idx] = 0u;
         {
             const float bandPrev = (idx > 0)
-                ? (cascades.splitsVS[idx] - cascades.splitsVS[idx - 1]) * cascadeConfig_.blendFraction
+                ? (cascades.splitsVS[idx] - cascades.splitsVS[idx - 1]) * renderCascadeConfig_.blendFraction
                 : 0.0f;
             std::array<float3, 8> cullCorners{};
             BuildFrustumSliceCornersWS(invView, invProj, std::max(zNear, sliceNear - bandPrev),
@@ -804,7 +804,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // whose bounds may have changed since that cull -- dynamic casters, an editor move this
             // frame -- prove nothing either way and are left out. Frame 0 has no previous pair; an
             // invalid Frustum passes everything.
-            const Frustum& otherPrev = cascadeConfig_.accurateCasterCull ? cascadeBoxPrev_[idx] : cascadeAccPrev_[idx];
+            const Frustum& otherPrev = renderCascadeConfig_.accurateCasterCull ? cascadeBoxPrev_[idx] : cascadeAccPrev_[idx];
             const auto settledCaster = [](const RenderableObjectBase* o)
             {
                 const RenderableObject* ro = o->AsRenderableObject();
@@ -853,7 +853,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             if (previousCascadeQueuesCurrent)
             {
                 static std::uint32_t staleLogged = 0;
-                const Frustum& otherNow = cascadeConfig_.accurateCasterCull ? boxFrustum : accFrustum;
+                const Frustum& otherNow = renderCascadeConfig_.accurateCasterCull ? boxFrustum : accFrustum;
                 for (const auto& bucket : cascadeView.queue.VisibleBuckets())
                 {
                     for (const RenderableObjectBase* obj : bucket)
@@ -881,7 +881,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                                       cascadeBoxPrev_[idx].Intersects(b) ? 1 : 0, cascadeAccPrev_[idx].Intersects(b) ? 1 : 0,
                                       boxFrustum.Intersects(b) ? 1 : 0, accFrustum.Intersects(b) ? 1 : 0,
                                       mn.x, mn.y, mn.z, mx.x, mx.y, mx.z, cam.x, cam.y, cam.z,
-                                      cascadeConfig_.accurateCasterCull ? 1 : 0, vol.count);
+                                      renderCascadeConfig_.accurateCasterCull ? 1 : 0, vol.count);
                         if (leak)
                         {
                             LOG_FATAL(logging::LogCategory::RenderShadow, "{}", line);
@@ -904,7 +904,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // have been culled with (accFrustum already IS the box when the volume degenerated).
             cascadeBoxPrev_[idx] = boxFrustum;
             cascadeAccPrev_[idx] = accFrustum;
-            if (cascadeConfig_.accurateCasterCull && vol.count > 0)
+            if (renderCascadeConfig_.accurateCasterCull && vol.count > 0)
             {
                 cascadeView.frustum = accFrustum;
                 cascades.cullPlanesDbg[idx] = static_cast<std::uint32_t>(vol.count);
@@ -953,7 +953,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
                               "S14 cascade {}: {}  corner {}  p=({:.3f},{:.3f},{:.3f})  worst plane {}/{} dist {:.5f} (tol {:.5f})  "
                               "sun=({:.4f},{:.4f},{:.4f}) reach={:.1f} nearCull={:.3f} minZ~{:.3f} radius={:.3f}",
                               idx, what, corner, p.x, p.y, p.z, worstPlane, vol.count, worstDist, worstTol,
-                              sunDirWS.x, sunDirWS.y, sunDirWS.z, cascadeConfig_.casterReachWS,
+                              sunDirWS.x, sunDirWS.y, sunDirWS.z, renderCascadeConfig_.casterReachWS,
                               nearCullLS, minZ, radius);
                     for (int i = 0; i < vol.count; ++i)
                     {
@@ -1058,8 +1058,8 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
             // in last frame's tile), `hzbB` = how many of them pass B drew after the retest; the
             // cut is the difference. GPU counters of frame N - 3, 0 with the knob off.
             f.Printf("cascade  slice(m)         tile  texel(mm)  radius(m)  nearLS   farLS   zRange(m)  D16step(mm)  scissor%%  rect(atlas)  cullPl  casters  leak  hzbDef  hzbB  applied=%d accurateCull=%d hzbCull=%d\n",
-                     cascadeConfig_.scissorOptim ? 1 : 0, cascadeConfig_.accurateCasterCull ? 1 : 0,
-                     cascadeConfig_.hzbCull ? 1 : 0);
+                     renderCascadeConfig_.scissorOptim ? 1 : 0, renderCascadeConfig_.accurateCasterCull ? 1 : 0,
+                     renderCascadeConfig_.hzbCull ? 1 : 0);
             for (int i = 0; i < kCascades; ++i)
             {
                 const float zRange = cascades.farLsDbg[i] - cascades.nearLsDbg[i];
@@ -1084,7 +1084,7 @@ void Scene::UpdateClipmap(const Camera& camera)
     // VSM mode uses instead of CSM cascades. Level i covers extent E0*2^i (E0 = the finest,
     // runtime-tunable g_clipmapBaseExtent), texel-snapped in the fixed light frame for stability
     // (mirrors the cascade snap). Consumed only in VSM mode; add-dormant until 24e/24f render+sample.
-    const float3 sunDirWS = dirLight_.GetDirection();
+    const float3 sunDirWS = renderSun_.GetDirection();
     const float3 fwd = sunDirWS.Normalized();
     if (fwd.Dot(fwd) < 1e-8f) // no valid sun direction -> reject-all views
     {
@@ -1658,13 +1658,7 @@ void Scene::Tick(float deltaTime) {
         OceanRenderable* ocean = FindOceanRenderable();
         const float clock = ocean ? ocean->GetElapsedTime() : (windState_.time + deltaTime);
         windState_.Tick(clock);
-        // W8: the fade origin is the CAMERA, shared by the gbuffer and every shadow view, so both
-        // sides of vfx::WindDistanceFade agree and the shadow cannot detach from the tree.
-        vfx::g_windFadeOriginWS = camera_.GetPosition();
-        // W8: and the drift push for GPU particle emitters (they have no Scene pointer).
-        vfx::g_windDriftXZ = Math::float2(
-            windState_.windDirXZ.x * windState_.strength * windState_.gustMul,
-            windState_.windDirXZ.y * windState_.strength * windState_.gustMul);
+        // W8: the fade origin (the camera) and the particles' drift push go to the render half at Sync.
 
         // W1/W2 verify (self-limiting): the wind clock tracks the ocean, windDirXZ is unit, and (W2)
         // the ocean's wind dir/force reflect the authored wind entity when it is active.
@@ -1860,7 +1854,7 @@ void Scene::PrepareViewQueue(SceneView& view, uint32_t cameraLayerMask)
         // Camera LOD must be selected before camera batches build their per-tier member lists.
         // S1: the view's own frustum rides along -- the chunk/instance masks use the planes the
         // object cull above used, so "object in, chunk out" is the same test at a finer grain.
-        view.queue.SelectLods(camera_, view.frustum);
+        view.queue.SelectLods(renderCamera_, view.frustum);
         // S4: stamp what the camera's frustum kept -- the registry offers the GPU camera cull
         // only these (an object outside carries stale verdicts, and this frame's counters below
         // count exactly this set as "in the frustum").
@@ -2033,7 +2027,7 @@ void Scene::ConsiderLightOcclusion(const Frustum& cameraFrustum)
 
 int Scene::VisibilitySlotFor(const SceneView& view) const
 {
-    if (&view == &camera_.GetView()) { return static_cast<int>(render::kVisibilityViewCamera); }
+    if (&view == &renderCamera_.GetView()) { return static_cast<int>(render::kVisibilityViewCamera); }
     const SceneView* first = cascadeViews_.data();
     if (&view >= first && &view < first + cascadeViews_.size())
     {
@@ -2064,12 +2058,25 @@ AABB Scene::ComputeStaticBounds() const
 // Game thread plan G1: the frame's values that come from GAME state -- the level's settings, the time of day's
 // tints and night camera, the sun's transmittance, the selection -- copied into frameData_ at the hand-over, where
 // nothing else runs (docs/game_thread_plan.md section 3.3). PrepareViews publishes the render side's own pointers.
-void Scene::Sync()
+void Scene::Sync(Renderer* renderer)
 {
     TC_CHECK_SYNC("Scene::Sync");
     CPU_SCOPE(ProfilerScopes::kSceneSync);
     threading::ClearRenderParked(); // the render half runs again after this
     syncedThisFrame_ = true;
+
+    // G2: the camera. The render half takes the game camera's pose (and a cut, by its revision); the game camera's own
+    // matrices are refreshed for the pose about to render -- the gizmo, picking and the HUD read them next frame, as
+    // they read the frame's CalcMatrices before.
+    renderCameraCut_ |= renderCamera_.TakePose(camera_);
+    if (renderer) { camera_.CalcMatrices(renderer); }
+    // W8: the wind's fade origin is the CAMERA, shared by the G-buffer and every shadow view; and the drift push of the
+    // GPU particle emitters. Read by the recording and by the emitters' tick (which ran before and reads last frame's,
+    // as it always did).
+    vfx::g_windFadeOriginWS = camera_.GetPosition();
+    vfx::g_windDriftXZ = Math::float2(
+        windState_.windDirXZ.x * windState_.strength * windState_.gustMul,
+        windState_.windDirXZ.y * windState_.strength * windState_.gustMul);
 
     frameData_.skyMoon = timeOfDay_.Present() ? timeOfDay_.GetSkyMoon() : SkyMoonFrame{};
     frameData_.nightSky = timeOfDay_.Present() ? timeOfDay_.GetNightSky() : NightSkyFrame{};
@@ -2184,17 +2191,30 @@ void Scene::Sync()
     }
     frameData_.colorPipeline = colorPipeline_;
 #if WITH_EDITOR
-    frameData_.selectedEditorObjectIds =
-        selectedEditorObjectIds_.empty() ? nullptr : selectedEditorObjectIds_.data();
+    renderSelection_ = selectedEditorObjectIds_; // the outline and the LOD view draw THIS frame's selection
+    frameData_.selectedEditorObjectIds = renderSelection_.empty() ? nullptr : renderSelection_.data();
     // A clean MCP capture draws no selection outline (render::g_cleanCapture).
     frameData_.selectedEditorObjectCount = render::g_cleanCapture.load(std::memory_order_relaxed)
-        ? 0u : static_cast<std::uint32_t>(selectedEditorObjectIds_.size());
+        ? 0u : static_cast<std::uint32_t>(renderSelection_.size());
     frameData_.selectionOutlineRadius = std::clamp<std::uint32_t>(selectionOutlineRadius_, 1u, 8u);
 #else
     frameData_.selectedEditorObjectIds = nullptr;
     frameData_.selectedEditorObjectCount = 0;
     frameData_.selectionOutlineRadius = 1;
 #endif
+
+    // G2: the render half's copies of the game's sun, sky sun, wind and cascade knobs -- after the transmittance above
+    // went into the game light (the Mesh Editor's preview reads its effective colour), so the copy carries it too. With
+    // no time of day the sky is lit by the scene light itself, as before: the same copy.
+    renderSun_ = dirLight_;
+    if (timeOfDay_.Present()) { renderSkySun_ = skySun_; }
+    frameData_.dirLight = &renderSun_;
+    frameData_.skyLight = timeOfDay_.Present() ? &renderSkySun_ : &renderSun_;
+    frameData_.sunGlintScale = timeOfDay_.Present() ? timeOfDay_.GlintScale() : 1.0f;
+    renderWind_ = windState_;
+    frameData_.wind = &renderWind_; // W3: gbuffer per-view CB reads this
+    renderCascadeConfig_ = cascadeConfig_;
+    frameData_.cascadeConfig = &renderCascadeConfig_; // S8: a Developer Controls edit reaches the next frame
 }
 
 void Scene::PrepareViews(Renderer* renderer)
@@ -2208,18 +2228,25 @@ void Scene::PrepareViews(Renderer* renderer)
     render::g_lodOutputWidthPx = static_cast<float>(std::max(renderer->GetWidth(), 1u));
 
     OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
-    SceneView& mainView = camera_.GetView();
+    SceneView& mainView = renderCamera_.GetView();
     SceneView* shoreViewPtr = nullptr;
-    const uint32_t camMask = camera_.GetRenderLayerMask();
+    const uint32_t camMask = renderCamera_.GetRenderLayerMask();
     std::optional<Profiler::ScopedCpu> prepareViewsSetupScope(
         std::in_place, ProfilerScopes::kPrepareViewsSetup);
-    camera_.CalcMatrices(renderer);
-    renderer->UpdateDlssCameraData(camera_);
+    renderCamera_.CalcMatrices(renderer);
+    if (renderCameraCut_)
+    {
+        // The game camera was cut (set_camera, framing, a bookmark: its CalcMatrices, then ResetHistory). The render
+        // camera repeats it in the same order, before anything reads its revision.
+        renderCamera_.ResetHistory();
+        renderCameraCut_ = false;
+    }
+    renderer->UpdateDlssCameraData(renderCamera_);
 
     // Publish this frame's pass inputs. SceneRenderer's pass bodies read frameData_,
     // not Scene members.
-    frameData_.camera = &camera_;
-    frameData_.mainView = &camera_.GetView();
+    frameData_.camera = &renderCamera_;
+    frameData_.mainView = &renderCamera_.GetView();
     frameData_.cascadeViews = &cascadeViews_;
     frameData_.clipmapViews = &clipmapViews_;
     frameData_.clipmapSquares = &clipmapSquares_;
@@ -2231,17 +2258,13 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.lightManager = &lightManager_;
     frameData_.skybox = skyBox_.get();
     frameData_.objects = &objects_;
-    frameData_.dirLight = &dirLight_;
-    frameData_.skyLight = timeOfDay_.Present() ? &skySun_ : &dirLight_;
-    frameData_.cascadeConfig = &cascadeConfig_;
     frameData_.shadowGpu = &shadowGpu_;
     frameData_.localShadowCache = &localShadowCache_;
     frameData_.vsm = &vsm_;
-    frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
     frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
 
-    mainView.renderLayerMask = camera_.GetRenderLayerMask();
-    mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, camera_.GetZNear(), camera_.GetZFar());
+    mainView.renderLayerMask = renderCamera_.GetRenderLayerMask();
+    mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, renderCamera_.GetZNear(), renderCamera_.GetZFar());
     mainView.type = SceneView::Type::Camera;
     mainView.requiresDepthCheck = false;
 
@@ -2310,7 +2333,7 @@ void Scene::PrepareViews(Renderer* renderer)
                 }
             }
         }
-        occlusionHistory_.BeginFrame(frameNo, GetTimeSeconds(), camera_, renderer->GetRenderWidth(),
+        occlusionHistory_.BeginFrame(frameNo, GetTimeSeconds(), renderCamera_, renderer->GetRenderWidth(),
                                      renderer->GetRenderHeight(), staticSetVersion_, results, method);
         frameData_.occlusionPlan = &occlusionHistory_.Plan();
         frameData_.occlusionQueries = &occlusionQueries_;
@@ -2358,11 +2381,11 @@ void Scene::PrepareViews(Renderer* renderer)
                 shoreAreaValid_ = true;
             }
         }
-        oceanSimulation->UpdateShoreView(camera_);
+        oceanSimulation->UpdateShoreView(renderCamera_);
         shoreViewPtr = &oceanSimulation->GetShoreDepthView();
     }
-    UpdateCascades(camera_, renderer);
-    UpdateClipmap(camera_); // Step 24d: directional clipmap views (consumed only in VSM mode)
+    UpdateCascades(renderCamera_, renderer);
+    UpdateClipmap(renderCamera_); // Step 24d: directional clipmap views (consumed only in VSM mode)
 
     // Choose which lit spots cast shadows this frame (highest projected size among
     // those whose influence intersects the view frustum) and their atlas slots,
@@ -2376,10 +2399,10 @@ void Scene::PrepareViews(Renderer* renderer)
     // flickers (Release-only, since jitter is active there). Shadow-caster
     // selection must be temporally stable, so cull against the un-jittered frustum.
     const Frustum shadowSelectFrustum = Frustum::FromInvViewProj(
-        mainView.invView, camera_.GetProjMatrixNoJitter(), camera_.GetZNear(), camera_.GetZFar());
+        mainView.invView, renderCamera_.GetProjMatrixNoJitter(), renderCamera_.GetZNear(), renderCamera_.GetZFar());
     // Local-light shadow plan S3: UE's ScreenScale (LocalLightSceneProxy.cpp:104) at the RENDER resolution, as UE's
     // View.ViewRect is after the screen percentage.
-    const mat4& shadowSelectProj = camera_.GetProjMatrixNoJitter();
+    const mat4& shadowSelectProj = renderCamera_.GetProjMatrixNoJitter();
     const float shadowScreenScale = std::max(
         0.5f * static_cast<float>(renderer->GetRenderWidth()) * shadowSelectProj.m._11,
         0.5f * static_cast<float>(renderer->GetRenderHeight()) * shadowSelectProj.m._22);
@@ -2389,12 +2412,12 @@ void Scene::PrepareViews(Renderer* renderer)
     // Plan S9e: every mode shadows as many spots / points as the view capacity holds (VSM's views are the whole cull
     // layout past the cascades, vsm::SpotView / PointFaceView); wanting more grows it at the next ReconcileShadowMode.
     const bool vsmLocal = render::VsmActive();
-    lightManager_.SelectShadowedSpots(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
+    lightManager_.SelectShadowedSpots(renderCamera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
         render::ShadowSpotCapacity());
     // B2a: choose which point lights cast (cube) shadows this frame, same non-jittered
     // frustum. Drives Pass_PointLights' shadowParams.x; the cube views + render pass are
     // B2b, sampling is B3, so this is inert (no visual change) until those land.
-    lightManager_.SelectShadowedPoints(camera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
+    lightManager_.SelectShadowedPoints(renderCamera_.GetPosition(), shadowSelectFrustum, shadowScreenScale, localShadowMaxRes,
         render::ShadowPointCapacity());
     // Plan S9: place them in the resident atlas pages (shrinking / dropping the lowest-ranked if they do not fit); the
     // pages it wants are grown at the next ReconcileShadowMode. VSM has no atlas.
@@ -2421,7 +2444,7 @@ void Scene::PrepareViews(Renderer* renderer)
     // -- in the atlas modes wholly cached, in VSM its pages drawn rigid and kept from wind dirt (VSM_VIEW_WIND_RIGID, via
     // the view list's mip.y). 1 m of hysteresis, so a light on the edge does not refill its cache entry (redraw its pages)
     // every frame the camera wobbles across it.
-    const Math::float3 windCamera = camera_.GetPosition();
+    const Math::float3 windCamera = renderCamera_.GetPosition();
     const auto windRigid = [&](std::vector<std::uint8_t>& memo, size_t lightIndex, const float3& position, float reach)
     {
         if (memo.size() <= lightIndex) { memo.resize(lightIndex + 1u, 0u); }
@@ -2457,7 +2480,7 @@ void Scene::PrepareViews(Renderer* renderer)
         {
             view.frustum = RejectAllFrustum();
         }
-        view.renderLayerMask = camera_.GetRenderLayerMask();
+        view.renderLayerMask = renderCamera_.GetRenderLayerMask();
         view.position = desc.position;
         view.zNear = nearPlane;
         view.zFar = farPlane;
@@ -2530,7 +2553,7 @@ void Scene::PrepareViews(Renderer* renderer)
                     view.frustum = RejectAllFrustum();
                 }
             }
-            view.renderLayerMask = camera_.GetRenderLayerMask();
+            view.renderLayerMask = renderCamera_.GetRenderLayerMask();
             view.position = P;
             view.zNear = nearPlane;
             view.zFar = farPlane;
@@ -2789,8 +2812,8 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     render::sdsm::AnalyzeConstants cb{};
     // NON-JITTERED, exactly as S1's cascade fit is: the DLSS sub-pixel offset has no business
     // moving a shadow partition, and the reduction would carry it straight into the box.
-    cb.invProj = mat4::Inverse(camera_.GetProjMatrixNoJitter()).m;
-    cb.invView = camera_.GetInvViewMatrix().m;
+    cb.invProj = mat4::Inverse(renderCamera_.GetProjMatrixNoJitter()).m;
+    cb.invView = renderCamera_.GetInvViewMatrix().m;
 
     // The light frame: orthonormal, anchored at the camera so light-space metres stay small (a
     // world-anchored frame puts a kilometre of magnitude into every reduced coordinate, and the
@@ -2801,13 +2824,13 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // is held by hysteresis first, which is what gives the snap a fixed grid to snap to, and the
     // grid is anchored to the world through this matrix's translation row.
     {
-        const float3 fwd = dirLight_.GetDirection().Normalized();
+        const float3 fwd = renderSun_.GetDirection().Normalized();
         const float3 up(0.0f, 1.0f, 0.0f);
         float3 right = up.Cross(fwd);
         if (right.Dot(right) < 1e-12f) { right = float3(0, 0, 1).Cross(fwd); }
         right = right.Normalized();
         const float3 trueUp = fwd.Cross(right);
-        const float3 eye = camera_.GetPosition();
+        const float3 eye = renderCamera_.GetPosition();
         mat4 lv{};
         lv.m._11 = right.x;  lv.m._12 = trueUp.x;  lv.m._13 = fwd.x;  lv.m._14 = 0.0f;
         lv.m._21 = right.y;  lv.m._22 = trueUp.y;  lv.m._23 = fwd.y;  lv.m._24 = 0.0f;
@@ -2820,19 +2843,19 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     }
 
     // tan(halfFov) from the projection, the same read S1's sphere does.
-    const mat4& proj = camera_.GetProjMatrixNoJitter();
+    const mat4& proj = renderCamera_.GetProjMatrixNoJitter();
     const float tanHalfX = 1.0f / std::max(1e-6f, proj.m._11);
     const float tanHalfY = 1.0f / std::max(1e-6f, proj.m._22);
-    const float3 camPos = camera_.GetPosition();
-    const float3 camDir = camera_.GetDirection();
+    const float3 camPos = renderCamera_.GetPosition();
+    const float3 camDir = renderCamera_.GetDirection();
     cb.camPosWS = DirectX::XMFLOAT4(camPos.x, camPos.y, camPos.z, tanHalfX);
     cb.camDirWS = DirectX::XMFLOAT4(camDir.x, camDir.y, camDir.z, tanHalfY);
 
-    cb.nearZ = camera_.GetZNear();
+    cb.nearZ = renderCamera_.GetZNear();
     // The reduction's accept window, NOT the camera's far plane: a partition set that has to reach
     // 10 km would put the whole island in one logarithmic step. `maxDistance` is the same number
     // the Legacy splits end at, so the two modes shade the same range and the A/B is honest.
-    cb.farZ = std::max(cb.nearZ + 1.0f, cascadeConfig_.maxDistance);
+    cb.farZ = std::max(cb.nearZ + 1.0f, renderCascadeConfig_.maxDistance);
     cb.partitions = std::min<std::uint32_t>(render::sdsm::g_partitions, render::sdsm::kMaxPartitions);
     cb.depthWidth = renderer->GetRenderWidth();
     cb.depthHeight = renderer->GetRenderHeight();
@@ -2851,12 +2874,12 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // S21: stable partitions (see Finalize).
     cb.texelSnap = render::sdsm::g_texelSnap ? 1u : 0u;
     cb.sizeHysteresis = std::clamp(render::sdsm::g_sizeHysteresis, 0.0f, 0.5f);
-    cb.pancakeSlack = cascadeConfig_.pancakeSlackWS;
-    cb.casterReach = cascadeConfig_.casterReachWS;
-    cb.depthBiasTexels = cascadeConfig_.depthBiasInTexels;
-    cb.slopeScale = cascadeConfig_.slopeScale;
-    cb.maxSlope = cascadeConfig_.maxSlope;
-    cb.clampNear = cascadeConfig_.pancakeCasters ? 1.0f : 0.0f;
+    cb.pancakeSlack = renderCascadeConfig_.pancakeSlackWS;
+    cb.casterReach = renderCascadeConfig_.casterReachWS;
+    cb.depthBiasTexels = renderCascadeConfig_.depthBiasInTexels;
+    cb.slopeScale = renderCascadeConfig_.slopeScale;
+    cb.maxSlope = renderCascadeConfig_.maxSlope;
+    cb.clampNear = renderCascadeConfig_.pancakeCasters ? 1.0f : 0.0f;
     cb.atlasRes = static_cast<float>(D.shadowRes);
     cb.contentRes = static_cast<float>(contentRes);
     cb.tileRes = tileRes;
@@ -2867,8 +2890,8 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // S15.4: the accurate cull volume, on the SAME knob Legacy uses -- it is the same construction
     // (UE's ComputeShadowCullingVolume), just evaluated in the analyze instead of on the CPU,
     // because the partition intervals it needs are a GPU result.
-    cb.blendFraction = cascadeConfig_.blendFraction;
-    cb.accurateCull = cascadeConfig_.accurateCasterCull ? 1u : 0u;
+    cb.blendFraction = renderCascadeConfig_.blendFraction;
+    cb.accurateCull = renderCascadeConfig_.accurateCasterCull ? 1u : 0u;
 
     // S20 -- the partition cache: which partitions RENDER this frame (render::sdsm::g_cacheFrames).
     // Partition 0 always; partition p >= 1 every min(N, 2^p) frames, staggered (phases 0 / 1 / 3)
@@ -2881,14 +2904,14 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         const std::uint32_t cacheFrames = std::clamp<std::uint32_t>(render::sdsm::g_cacheFrames, 1u, 16u);
         const float dilation = std::clamp(render::sdsm::g_cacheDilation, 0.0f, 0.5f);
         const std::uint64_t frame = renderer->GetTotalFrameNumber();
-        const std::uint32_t sunVersion = dirLight_.GetTransformVersion();
-        const std::uint64_t camRevision = camera_.GetHistoryRevision();
+        const std::uint32_t sunVersion = renderSun_.GetTransformVersion();
+        const std::uint64_t camRevision = renderCamera_.GetHistoryRevision();
         const void* atlas = D.shadow;
         // A frame whose light does not reach the ground (a closed deck, a body under the horizon)
         // renders no partition at all (the shadow passes are off, FrameDecisions::sunShadowsOff) --
         // the "analyze did not run" case: the frame after it keeps nothing, however still the camera
         // stayed while the tiles went unrendered.
-        const bool sunOff = !dirLight_.ReachesGround();
+        const bool sunOff = !renderSun_.ReachesGround();
         const bool keep = !sunOff && cacheFrames > 1u && sdsmCacheFrame_ + 1u == frame &&
             sunVersion == sdsmCacheSunVersion_ && camRevision == sdsmCacheCamRevision_ &&
             D.shadowRes == sdsmCacheAtlasRes_ && atlas == sdsmCacheAtlas_ &&
@@ -2949,20 +2972,20 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
     // The gbuffer's wind, so the analyze can write a COMPLETE PerView block per partition. Read
     // from the SAME WindState the gbuffer CB is built from -- a shadow swaying to different
     // numbers than its own tree detaches from it (W5).
-    cb.windTime = windState_.time;
-    cb.windPrevTime = windState_.prevTime;
-    cb.windDirX = windState_.windDirXZ.x;
-    cb.windDirZ = windState_.windDirXZ.y;
-    cb.windSwayAmp = windState_.swayAmplitude;
-    cb.windSwayFreq = windState_.swayFrequency;
-    cb.windGustMul = windState_.gustMul;
-    cb.windPrevGustMul = windState_.prevGustMul;
+    cb.windTime = renderWind_.time;
+    cb.windPrevTime = renderWind_.prevTime;
+    cb.windDirX = renderWind_.windDirXZ.x;
+    cb.windDirZ = renderWind_.windDirXZ.y;
+    cb.windSwayAmp = renderWind_.swayAmplitude;
+    cb.windSwayFreq = renderWind_.swayFrequency;
+    cb.windGustMul = renderWind_.gustMul;
+    cb.windPrevGustMul = renderWind_.prevGustMul;
 
     // Occlusion S5b for SDSM: the same pyramids and the same knob as Legacy. The MATRICES are the
     // analyze's own (this frame's partitions and last frame's copy); these four rows are the part
     // only the CPU knows, and they travel in the analyze CB so the block it writes is complete.
     {
-        const bool wantHzb = cascadeConfig_.hzbCull && render::g_indirectShadowsEnabled;
+        const bool wantHzb = renderCascadeConfig_.hzbCull && render::g_indirectShadowsEnabled;
         const ShadowGpuData::SdsmHzbState hzb =
             shadowGpu_.SetSdsmHzbViews(renderer, renderer->GetTotalFrameNumber(), wantHzb, contentRes);
         for (int c = 0; c < 4; ++c)
@@ -3321,7 +3344,7 @@ void Scene::Render(Renderer* renderer) {
         // render last frame's settings: say so, once, and hand over here.
         LOG_ERROR_ONCE(logging::LogCategory::Scene, "Scene::Render without Scene::Sync this frame -- synced late");
         threading::RoleScope syncRole(threading::ThreadRole::Sync);
-        Sync();
+        Sync(renderer);
     }
     syncedThisFrame_ = false;
     CPU_SCOPE(ProfilerScopes::kSceneRender);
@@ -3389,7 +3412,7 @@ void Scene::Render(Renderer* renderer) {
     // the camera flags + crossfade tables from the verdicts PrepareViews just produced.
     {
         CPU_SCOPE(ProfilerScopes::kRefreshCasterLods);
-        shadowGpu_.RefreshCasterLods(renderer, objects_, camera_.GetPosition(), occlusionHistory_.Enabled(),
+        shadowGpu_.RefreshCasterLods(renderer, objects_, renderCamera_.GetPosition(), occlusionHistory_.Enabled(),
                                      renderer->GetTotalFrameNumber());
     }
 
@@ -3409,19 +3432,19 @@ void Scene::Render(Renderer* renderer) {
         // of every object per selected id -- the old shape was O(selection x objects) and a few
         // hundred selected meshes made it the most expensive thing in the editor frame.
         std::vector<const RenderableObjectBase*> sel;
-        sel.reserve(selectedEditorObjectIds_.size());
+        sel.reserve(renderSelection_.size());
         for (size_t o = 0; o < objectIds_.size() && o < objects_.size(); ++o)
         {
-            if (std::binary_search(selectedEditorObjectIds_.begin(),
-                    selectedEditorObjectIds_.end(), objectIds_[o]))
+            if (std::binary_search(renderSelection_.begin(),
+                    renderSelection_.end(), objectIds_[o]))
             {
                 sel.push_back(objects_[o].get());
             }
         }
-        render::DrawLodDebug(renderer, camera_, objects_, sel.data(), sel.size());
+        render::DrawLodDebug(renderer, renderCamera_, objects_, sel.data(), sel.size());
     }
 #else
-    render::DrawLodDebug(renderer, camera_, objects_);
+    render::DrawLodDebug(renderer, renderCamera_, objects_);
 #endif
 
     // Rung 0 / Step 2: upload the active shadow views' frustum planes (the per-view cull input)
@@ -3474,7 +3497,7 @@ void Scene::Render(Renderer* renderer) {
                 render::VsmActive() ? &clipmapViews_[i].frustum : nullptr;
         }
         // S4: the camera, this frame's (PrepareViews above built it).
-        const SceneView& camView = camera_.GetView();
+        const SceneView& camView = renderCamera_.GetView();
         frustums[maxViews] = &camView.frustum;
         // Local-light plan S9e: each local view's light bounds, and -- atlas modes, the knob -- UE's hull of its light and
         // the camera frustum (one per light: a point light's six faces share it). VSM caches pages: no hull (UE).
@@ -3590,7 +3613,7 @@ void Scene::Render(Renderer* renderer) {
             const UINT tile = D.shadowRes / 2u;
             const UINT border = render::kCascadeAtlasBorder;
             const UINT content = (tile > 2u * border) ? (tile - 2u * border) : tile;
-            const bool wantOn = cascadeConfig_.hzbCull && !render::VsmActive() && render::g_indirectShadowsEnabled &&
+            const bool wantOn = renderCascadeConfig_.hzbCull && !render::VsmActive() && render::g_indirectShadowsEnabled &&
                                 cascadeViews_[0].frustum.IsValid();
             shadowGpu_.SetCascadeHzbViews(renderer, lightViewProj.data(), renderer->GetTotalFrameNumber(), wantOn, content);
         }
@@ -3625,7 +3648,7 @@ void Scene::Clear()
     selectedEditorObjectIds_.clear();
     selectionOutlineRadius_ = 1;
 #endif
-    camera_.GetView().queue.Clear();
+    renderCamera_.GetView().queue.Clear();
     for (auto& view : cascadeViews_)
     {
         view.queue.Clear();

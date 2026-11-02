@@ -23,6 +23,7 @@
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderer.h"
 #include "core/task/TaskSystem.h" // viewTasks_
+#include "core/threading/ThreadRole.h" // game thread plan: the accessors say which half they belong to
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a
 #include "rendering/visibility/OcclusionQueries.h"
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
@@ -38,14 +39,20 @@ class OceanRenderable;
 class Scene {
 public:
 
-    Camera& CameraRef() { return camera_; }
-    const Camera& CameraRef() const { return camera_; }
+    // THE GAME camera (game thread plan G2): input, the editor, MCP, the HUD move and read it. Its matrices are the
+    // frame's about to render, refreshed at the hand-over (Sync). The render half has its own (RenderCamera).
+    Camera& CameraRef() { TC_CHECK_GAME("Scene::CameraRef"); return camera_; }
+    const Camera& CameraRef() const { TC_CHECK_GAME("Scene::CameraRef"); return camera_; }
+    // The render half's camera: the game camera's pose taken at Sync, its own jitter, matrices and history.
+    const Camera& RenderCamera() const { TC_CHECK_RENDER("Scene::RenderCamera"); return renderCamera_; }
 
-    const DirectionalLight& GetDirectionalLight() const { return dirLight_; }
+    const DirectionalLight& GetDirectionalLight() const { TC_CHECK_GAME("Scene::GetDirectionalLight"); return dirLight_; }
+    // The render half's sun: the scene light (with the atmosphere's transmittance) as Sync copied it.
+    const DirectionalLight& RenderSun() const { TC_CHECK_RENDER("Scene::RenderSun"); return renderSun_; }
     // P4 measurement hook: the sweep harness needs to drive the sun's own controls to measure how
     // much of the level's `exposure` the auto-exposure silently cancels. Runtime only -- like the
     // camera settings above, nothing here writes the level.
-    DirectionalLight& DirectionalLightRef() { return dirLight_; }
+    DirectionalLight& DirectionalLightRef() { TC_CHECK_GAME("Scene::DirectionalLightRef"); return dirLight_; }
     // Time-of-day plan T2: the level's clock (TimeOfDay.h). With a `timeOfDay` section it owns the
     // directional light -- every Tick it hands it to the sun or the moon -- and the sky gets its own,
     // always-the-sun light (SceneFrameData::skyLight). Set at level load; the light is placed at once.
@@ -66,7 +73,11 @@ public:
     // window) should edit them: the time of day's sun template when the level has one -- the scene light
     // is rewritten from it every Tick, so an edit of dirLight_ would be undone a frame later -- else the
     // light itself.
-    DirectionalLight& SunLightRef() { return timeOfDay_.Present() ? timeOfDay_.SunTemplateRef() : dirLight_; }
+    DirectionalLight& SunLightRef()
+    {
+        TC_CHECK_GAME("Scene::SunLightRef");
+        return timeOfDay_.Present() ? timeOfDay_.SunTemplateRef() : dirLight_;
+    }
     // Where the sun is (unit, world, TOWARD it), and putting it somewhere: with a time of day that is a
     // time and a path solved to stand the sun there exactly (astro::SolveSimpleTime -- simple positions,
     // the clock left as it was), without one the light's direction.
@@ -114,8 +125,9 @@ public:
     const float* GetCascadeSplitsVS() const { return frameData_.cascades.splitsVS; }
     // S0.1: the whole cascade block, including the *Dbg diagnostics the developer window reads.
     const SceneFrameData::CascadeData& GetCascadeData() const { return frameData_.cascades; }
-    CascadeShadowConfig& CascadeConfig() { return cascadeConfig_; }
-    const CascadeShadowConfig& CascadeConfig() const { return cascadeConfig_; }
+    // The game's copy (Developer Controls, --set); the render half reads the one Sync took (game thread plan G2).
+    CascadeShadowConfig& CascadeConfig() { TC_CHECK_GAME("Scene::CascadeConfig"); return cascadeConfig_; }
+    const CascadeShadowConfig& CascadeConfig() const { TC_CHECK_GAME("Scene::CascadeConfig"); return cascadeConfig_; }
     // Occlusion plan S5b: the cascade HZB cull's counters for the Render tab (read-only).
     const ShadowGpuData& ShadowGpu() const { return shadowGpu_; }
     // S15: the SDSM partition readout (dev window + --sdsm-readout).
@@ -183,9 +195,9 @@ public:
 
     void Tick(float deltaTime);
     // Game thread plan (docs/game_thread_plan.md): the hand-over between the game half of the frame and the render
-    // half -- the frame's values that come from game state go into frameData_ here, where nothing else runs. Every
-    // frame calls Sync() (role Sync) between the game half and Render() (role Render).
-    void Sync();
+    // half -- the frame's values that come from game state go into frameData_ and the render half's copies here, where
+    // nothing else runs. Every frame calls Sync() (role Sync) between the game half and Render() (role Render).
+    void Sync(Renderer* renderer);
     void Render(Renderer* renderer);
 
     void Clear();
@@ -253,13 +265,13 @@ public:
     }
     const SceneRenderSettings& GetRenderSettings() const { return renderSettings_; }
 
-    const SceneFrameData& FrameData() const { return frameData_; }
+    const SceneFrameData& FrameData() const { TC_CHECK_RENDER("Scene::FrameData"); return frameData_; }
 
     // W1: the global wind source of truth (drives the ocean's force/direction and, from W3 on,
     // foliage sway). Advanced each Tick from the ocean's shared clock; authored by the "wind"
     // level entity (W2).
-    vfx::WindState& GetWindState() { return windState_; }
-    const vfx::WindState& GetWindState() const { return windState_; }
+    vfx::WindState& GetWindState() { TC_CHECK_GAME("Scene::GetWindState"); return windState_; }
+    const vfx::WindState& GetWindState() const { TC_CHECK_GAME("Scene::GetWindState"); return windState_; }
 
     // Rung 1 (Step 11) foundation: monotonic version of the shadow-caster set — bumped when its
     // membership or editor visibility changes. A shadow cache compares it to know its data is
@@ -411,7 +423,17 @@ private:
     std::uint32_t sdsmCacheStaticSet_ = ~0u;
     std::uint64_t sdsmCacheFrame_ = ~0ull; // the frame the analyze last ran; a gap = the mode was off
     LightManager lightManager_{};
-    Camera camera_;
+    Camera camera_;       // the GAME camera (CameraRef)
+    // Game thread plan G2: the render half's copies, written only by Sync (and by the render half itself), never read by
+    // the game half -- the camera (pose taken, matrices and history its own), the suns, the wind, the cascade knobs and
+    // the editor selection the frame draws.
+    Camera renderCamera_;
+    bool renderCameraCut_ = false; // the game camera was cut since the last frame: repeat it after CalcMatrices
+    DirectionalLight renderSun_;
+    DirectionalLight renderSkySun_;
+    vfx::WindState renderWind_{};
+    CascadeShadowConfig renderCascadeConfig_{};
+    std::vector<std::uint64_t> renderSelection_;
 
     SceneRenderSettings renderSettings_{};
     std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes

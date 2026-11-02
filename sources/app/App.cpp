@@ -2497,7 +2497,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 {
                     // The hand-over (plan section 3.3): the frame's values from game state go to the render half.
                     threading::RoleScope syncRole(threading::ThreadRole::Sync);
-                    scene.Sync();
+                    scene.Sync(&renderer);
                 }
                 {
                     threading::RoleScope renderRole(threading::ThreadRole::Render);
@@ -2540,7 +2540,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // nobody asked.
             {
                 threading::RoleScope renderRole(threading::ThreadRole::Render); // after Present: the render half's
-                editormcp::ServiceScreenshot(renderer, scene.CameraRef());
+                editormcp::ServiceScreenshot(renderer, scene.RenderCamera()); // the camera of the frame it captures
             }
 #endif
 

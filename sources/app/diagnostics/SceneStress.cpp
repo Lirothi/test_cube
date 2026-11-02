@@ -986,7 +986,7 @@ private:
 
                 {
                     threading::RoleScope syncRole(threading::ThreadRole::Sync);
-                    scene_.Sync();
+                    scene_.Sync(&renderer_);
                 }
                 const auto renderBegin = std::chrono::steady_clock::now();
                 {

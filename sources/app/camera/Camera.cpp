@@ -128,6 +128,27 @@ void Camera::CalcMatrices(Renderer* r)
     }
 }
 
+bool Camera::TakePose(const Camera& game)
+{
+    position_ = game.position_;
+    pitch_ = game.pitch_;
+    yaw_ = game.yaw_;
+    roll_ = game.roll_;
+    rotation_ = game.rotation_;
+    view_.hfov = game.view_.hfov;
+    view_.zNear = game.view_.zNear;
+    view_.zFar = game.view_.zFar;
+    renderLayerMask_ = game.renderLayerMask_;
+    view_.renderLayerMask = game.view_.renderLayerMask;
+    moveSpeedMultiplier_ = game.moveSpeedMultiplier_;
+    if (game.historyRevision_ == takenRevision_)
+    {
+        return false;
+    }
+    takenRevision_ = game.historyRevision_;
+    return true;
+}
+
 void Camera::ResetHistory()
 {
     lookOwedYaw_ = lookOwedPitch_ = 0.0f; // a cut: no smoothed look input carries over

@@ -991,6 +991,9 @@ struct SceneFrameData
     // disc (SkyViewFrameData light 1). `present` false without a time of day: light 1 is skipped.
     SkyMoonFrame skyMoon{};
     NightSkyFrame nightSky{}; // time-of-day N2: stars, the Milky Way, the airglow
+    // Time-of-day N4: the light's glints on the water fade with the moon's phase (TimeOfDay::GlintScale; 1 without a
+    // time of day). Taken at Sync so the ocean's constants never read the game's clock (game thread plan G2).
+    float sunGlintScale = 1.0f;
     // S8: the CSM knobs the lighting pass needs (receiver bias / sharpen / over-blur). Same object
     // the developer window edits, so a slider move reaches the shader the very next frame.
     const CascadeShadowConfig* cascadeConfig = nullptr;

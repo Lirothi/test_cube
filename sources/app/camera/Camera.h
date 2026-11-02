@@ -98,6 +98,12 @@ public:
 
     void CalcMatrices(Renderer* r);
 
+    // Game thread plan G2: the render half's camera takes the GAME camera's pose at the hand-over -- where it stands,
+    // how it looks, its lens and layers -- and keeps its own matrices, jitter and history. A cut (the game camera's
+    // ResetHistory, which every caller makes right after its CalcMatrices) is carried by the revision: TakePose returns
+    // true once per cut, and the render camera repeats the cut after ITS CalcMatrices, as the game side did.
+    bool TakePose(const Camera& game);
+
     SceneView& GetView() { return view_; }
     const SceneView& GetView() const { return view_; }
 
@@ -154,6 +160,7 @@ private:
     uint32_t renderLayerMask_ = kRenderLayerAll;
     bool hasPrevViewProj_ = false;
     uint64_t historyRevision_ = 0u;
+    uint64_t takenRevision_ = 0u; // TakePose: the game camera's revision last taken
 
     void ClampPitch() {
         const float limit = XM_PIDIV2 - 0.01f;

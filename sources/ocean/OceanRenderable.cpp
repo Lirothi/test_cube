@@ -1444,7 +1444,7 @@ Math::float4 OceanRenderable::GetSpecularParams() const
 {
     const OceanRenderConfig& render = GetRenderConfig();
     // Time-of-day N4: the moon's glints fade with its phase beyond its light (TimeOfDay::GlintScale).
-    const float glint = (scene_ && scene_->GetTimeOfDay().Present()) ? scene_->GetTimeOfDay().GlintScale() : 1.0f;
+    const float glint = scene_ ? scene_->FrameData().sunGlintScale : 1.0f; // taken at Sync (game thread plan G2)
     return Math::float4(
         render.specularStrength * glint,
         render.roughnessScale,
@@ -1800,7 +1800,7 @@ Math::float4 OceanRenderable::GetSunDirAmbient() const
     float ambient = 0.1f;
     if (scene_)
     {
-        const auto& light = scene_->GetDirectionalLight();
+        const auto& light = scene_->RenderSun(); // the render half's copy (game thread plan G2)
         dir = light.GetDirection();
         // P4: this reaches ONLY `LitFoamColor` in ocean_surface.hlsl -- it is a foam sky term, not
         // a fill for the water surface. See the note in DirectionalLight.h.
@@ -1837,7 +1837,7 @@ Math::float4 OceanRenderable::GetSunColorExposure() const
     float exposure = 1.0f;
     if (scene_)
     {
-        const auto& light = scene_->GetDirectionalLight();
+        const auto& light = scene_->RenderSun();
         // P4: the shader computes `xyz * w`, so the sun intensity riding in the colour with a
         // retired 1.0 multiplier is the same product the legacy pair produced.
         color = light.GetEffectiveColor();
@@ -1852,8 +1852,8 @@ Math::float4 OceanRenderable::GetSunShapeParams() const
     // same number lighting_cs gives EvalBRDF (UE's sphere light), so a wave facet shows the disc at
     // its own radiance x F instead of a Blinn-Phong spot of ~1/1000 of it.
     // y: its soft radius (UE SoftSourceRadius), which widens the glint's roughness as lighting_cs does.
-    const float radius = scene_ ? scene_->GetDirectionalLight().GetSunHalfApexRadians() : 0.0f;
-    const float softRadius = scene_ ? scene_->GetDirectionalLight().GetSoftSourceRadius() : 0.0f;
+    const float radius = scene_ ? scene_->RenderSun().GetSunHalfApexRadians() : 0.0f;
+    const float softRadius = scene_ ? scene_->RenderSun().GetSoftSourceRadius() : 0.0f;
     // z, w: the sun's shadow from geometry on the water (OceanSunShadow) and its SMRT rays -- ocean::g_sunShadow(Rays).
     return Math::float4(radius, softRadius, ocean::g_sunShadow ? 1.0f : 0.0f,
                         static_cast<float>(std::max(ocean::g_sunShadowRays, 0)));
@@ -1971,7 +1971,7 @@ Math::float4 OceanRenderable::GetDepthTextureSize(const Renderer* renderer) cons
 
 Math::float2 OceanRenderable::GetDepthParams() const
 {
-    const Camera* camera = scene_ ? &scene_->CameraRef() : camera_;
+    const Camera* camera = scene_ ? &scene_->RenderCamera() : camera_; // the camera of the frame being recorded
     const float zNear = camera ? camera->GetZNear() : 0.01f;
     const float zFar = camera ? camera->GetZFar() : 10000.0f;
     return { zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear) };
