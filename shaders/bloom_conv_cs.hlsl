@@ -644,7 +644,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // sea below a low sun can glitter as bright as the disc. Their centroid is where the
         // corona's rays leave from, and the visible share how far inside it they start. The
         // horizon used to be a separate analytic segment on the CPU; this covers it and every
-        // occluder with one rule. Both are held, like the colour, unless every tap is in frame.
+        // occluder with one rule. Both are held, with the colour, while no tap lands on the disc.
         //   record +16  last disc colour seen (rgb) and last gate (a) -- held off the frame
         //   record +32  this frame's value (rgb) = colour x gate x off-frame fade; (a) visible share
         //   record +48  centroid of what shows: tangent-plane offset from the disc's centre (xy)
@@ -675,11 +675,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // test zone"): 64 taps over the WHOLE disc and a quarter of its radius beyond, where there were
             // 32 over its flat core (0.7 R). The disc's soft edge (0.71-1 R, compose_cs.hlsl SunDiscRaw) and
             // the gaps fronds leave round its rim were invisible to the probe: a core under leaves read as
-            // no sun while that edge still bloomed white. The zone's mean goes back to the CORE radiance a
-            // clear disc reads -- x kZone^2 / kProfileMean, the disc profile saturate(2 (1 - rho^2)) averaging
-            // 0.75 over the unit disc -- so a clear sun reads as before and a covered one by the share of its
-            // ENERGY that shows anywhere in the zone. (The sky inside the zone adds (kZone^2 - 1) / 0.75 of its
-            // own radiance: thousands of times under the disc.)
+            // no sun while that edge still bloomed white. The zone's sum goes back to the CORE radiance a
+            // clear disc reads -- over what a clear disc puts into the same taps, its profile
+            // saturate(2 (1 - rho^2)) summed (below) -- so a clear sun reads as before and a covered one by the
+            // share of its ENERGY that shows anywhere in the zone. (The sky inside the zone adds
+            // (kZone^2 - 1) / 0.75 of its own radiance: thousands of times under the disc.)
             //   EVERYTHING is read from the scene BEFORE the upscaler (the same image without DLSS). DLSS
             // rings on the disc: its brightest tap, the share's denominator, read a clear disc as half
             // covered, and its energy over the disc jumped 2-6 % frame to frame with nothing moving (owner,
@@ -693,13 +693,36 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
             // `debug.sunProbeAfterDlss:1` = the upscaled frame, the A/B.
             static const uint kZoneTaps = 64u;
             static const float kZone = 1.25f;
-            static const float kProfileMean = 0.75f;
+            //   WHAT THE FRAME HOLDS OF THE ZONE (2026-11-02, owner, the sun at the frame's top edge: "at start
+            // the corona blows up until I turn the camera"). The share was measured only with every tap in
+            // the frame and held otherwise, while the colour took whatever taps landed, normalised as if all
+            // had: a view that never had the whole zone in it kept the share the buffer started with, 0 --
+            // and Partial Sun takes the corona x share^(exponent - 1), x100 at wind_test's 0 (its clamp at a
+            // hundredth). And a sun whose centre sits past the edge with a sliver of its disc in the frame
+            // -- that view -- had no tap on the sliver at all (owner: "the corona must show for the
+            // smallest piece of the disc"). So every tap is CLAMPED into the frame and reads the TEXEL it
+            // lands on, point-sampled, against the disc's profile where that texel looks (the scene
+            // draws exactly that per pixel, compose_cs.hlsl SunDiscRaw, so a clear
+            // texel reads profile x the core's radiance; a bilinear tap at the rim read up to several times
+            // its own profile): the taps beyond the edge pile onto the edge row, and any of its texels on
+            // the disc measures it. Colour and share are taken against what a CLEAR disc puts into the
+            // same taps -- `expect`, their profiles summed (the whole zone: ~30.7, what its mean was
+            // scaled by) -- and the clear disc's radiance is read off every tap as lum / max(profile, 0.5):
+            // the brightest core tap where the core shows clear, as before, and the rim's where only the
+            // rim is in. A tap under a tenth of the profile is left out (the sky round the disc would be
+            // most of what it reads); while no tap is over it, colour, share, centroid and gate are held.
+            uint2 srcSize;
+            HDRColor.GetDimensions(srcSize.x, srcSize.y);
+            // SunDiscRaw's own terms: the profile is in the ANGLE from the sun, not in the camera's tangent
+            // plane, where a sun 24-29 degrees off the axis is 1.1-1.3x wider (the clear sun read share 0.59).
+            const float discRadius = atan(discTan);
+            const float cosRadius = cos(discRadius);
+            const float oneMinusCos = 2.0f * sin(0.5f * discRadius) * sin(0.5f * discRadius);
             float3 disc = 0.0f.xxx;
-            float discTaps = 0.0f;
-            float allInFrame = 1.0f;
+            float expect = 0.0f;
             float weight = 0.0f;
             float2 weighted = 0.0f.xx;
-            float lumMax = 0.0f;
+            float lumClear = 0.0f;
             [unroll]
             for (uint k = 0u; k < kZoneTaps; ++k)
             {
@@ -709,32 +732,26 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                 const float2 t = float2(cos(a), sin(a)) * (rho * discTan);
                 const float2 tapNdc = (sunTan + t) * sunGlareProj.xy + jitterNdc;
                 const float2 tapUV = float2(0.5f + 0.5f * tapNdc.x, 0.5f - 0.5f * tapNdc.y);
-                if (all(tapUV >= 0.0f) && all(tapUV <= 1.0f))
+                const int2 texel = clamp(int2(floor(tapUV * float2(srcSize))), int2(0, 0), int2(srcSize) - 1);
+                // Where that texel looks, as an offset from the disc's centre on the tangent plane.
+                const float2 texelUV = (float2(texel) + 0.5f) / float2(srcSize);
+                const float2 texelNdc = float2(2.0f * texelUV.x - 1.0f, 1.0f - 2.0f * texelUV.y);
+                const float2 shown = (texelNdc - jitterNdc) / sunGlareProj.xy - sunTan;
+                const float3 texelDir = normalize(float3(sunTan + shown, 1.0f));
+                const float profile = saturate(2.0f * (dot(texelDir, sunDir) - cosRadius) / max(oneMinusCos, 1.0e-12f));
+                if (profile >= 0.1f)
                 {
                     // Softened over a fifth of the disc's radius, so a setting sun slides instead
                     // of stepping tap by tap.
-                    const float above =
-                        saturate(dot(normalize(float3(sunTan + t, 1.0f)), upView) / (0.2f * discTan) + 0.5f);
-                    const float3 col = max(HDRColor.SampleLevel(gSmp, tapUV, 0.0f).rgb, 0.0f.xxx) * above;
+                    const float above = saturate(dot(texelDir, upView) / (0.2f * discTan) + 0.5f);
+                    const float3 col = max(HDRColor.Load(int3(texel, 0)).rgb, 0.0f.xxx) * above;
                     const float lum = dot(col, lumaW);
                     disc += col;
-                    discTaps += 1.0f;
+                    expect += profile;
                     weight += lum;
-                    weighted += lum * t;
-                    lumMax = max(lumMax, lum);
+                    weighted += lum * shown;
+                    lumClear = max(lumClear, lum / max(profile, 0.5f));
                 }
-                else
-                {
-                    allInFrame = 0.0f;
-                }
-            }
-            if (allInFrame > 0.5f)
-            {
-                shownAt = weight > 0.0f ? weighted / weight : 0.0f.xx;
-                // The share of the disc that shows: its energy as read (the zone's mean, normalised as the
-                // colour below) over a clear disc of the brightest tap's radiance.
-                share = lumMax > 0.0f
-                    ? saturate(weight / (float)kZoneTaps * (kZone * kZone / kProfileMean) / lumMax) : 0.0f;
             }
             // THE SUN, NOT THE SKY IN FRONT OF IT: a gate on how much brighter the disc is than a
             // ring 2.5 disc radii out. Glare structure comes from a POINT source far brighter than
@@ -757,13 +774,16 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
                     ringTaps += 1.0f;
                 }
             }
-            if (discTaps > 0.0f)
+            if (expect > 0.0f)
             {
                 // The disc as it is -- physical since 2026-10-14, thousands of times the sky round
                 // it -- with no FilterPixel: the glare and the corona scale with the disc's ENERGY
                 // (BloomRenderer::SunGlareScale / SunRays), so a disc dimmed by a thin cloud or a
                 // sunset dims them in proportion, where a capped value would stay pinned at the cap.
-                held = max(min(disc / discTaps * (kZone * kZone / kProfileMean), 65504.0f.xxx), 0.0f.xxx);
+                held = max(min(disc / expect, 65504.0f.xxx), 0.0f.xxx);
+                // The share of the disc that shows: its energy as read over a clear disc in the same taps.
+                share = lumClear > 0.0f ? saturate(weight / (expect * lumClear)) : 0.0f;
+                shownAt = weight > 0.0f ? weighted / weight : 0.0f.xx;
                 if (ringTaps > 0.0f)
                 {
                     const float3 lumaW = float3(0.2126f, 0.7152f, 0.0722f);
