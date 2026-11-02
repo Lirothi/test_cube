@@ -1266,6 +1266,9 @@ void SceneRenderer::Pass_WaterReflection(Renderer* renderer, RenderGraphPassCont
             c.camPos = camera.GetPosition();
             c.roughnessDistance = frame_->ocean ? frame_->ocean->GetRoughnessDistance() : 1.0f;
             c.uvBreakup = frame_->settings.waterReflectionSurfaceNormal ? 0u : 1u;
+            // The prefilter of the undersampled reflection (water_composite_cs): sigma across the columns, half along them.
+            const float prefilterSigma = std::max(frame_->settings.waterReflectionPrefilter, 0.0f);
+            c.prefilter = float4(prefilterSigma, 0.5f * prefilterSigma, 0.0f, 0.0f);
             const auto compositeSamplers = std::array{ *SamplerManager::LinearClamp() };
             RecordComputeDispatch(renderer, t.cl, resources_.GetWaterCompositeMaterial().get(), resources_.GetWaterCompositeCBSizeBytes(),
                 [&](uint8_t* dest) { std::memcpy(dest, &c, sizeof(c)); },

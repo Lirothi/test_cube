@@ -790,7 +790,13 @@ struct SceneRenderSettings
     // gbVelocity, which under water is the SURFACE's motion -- ~0 with a still camera -- so the still
     // inertia relaxes the clamp and stretches the history ~4x while the waves change the reflection
     // every frame. Off = the trace's raw output; DLSS still accumulates the final image.
+    // On, it runs only while no temporal upscaler accumulates the frame -- UE's rule
+    // (ScreenSpaceRayTracing.cpp:213-222 IsSSRTemporalPassRequired, which SingleLayerWaterRendering.cpp:1748 asks for
+    // the water too): under DLSS the two accumulators in a row turned the trace's grain into crawling blotches
+    // (2026-11-02, the owner's lagoon view: the reflection's coarse detail +40 %, its fine grain not lower).
     bool waterReflectionTemporal = false;
+    // UE's r.SSR.Temporal 1: the water resolve under DLSS too (`--set ssr.waterTemporalUnderDlss:1`, transient; the A/B).
+    bool waterReflectionTemporalUnderDlss = false;
     // Its own blend and still inertia (the deferred resolve's knobs above stay the deferred one's).
     // Inertia defaults to 0 for the reason above: the surface's own motion reads as "still", and the
     // inertia's relaxed clamp + longer history is exactly what smeared the waves.
@@ -806,6 +812,15 @@ struct SceneRenderSettings
     // resolve sent neighbouring rays apart). The sky in the reflection keeps the full normal.
     // Handed to the ocean every frame (OceanRenderable::SetReflectionNormalCascades).
     std::uint32_t waterReflectionNormalCascades = 4u;
+    // How many mips coarser than the shading normal the water reflection's DIRECTION is taken (the sky's and GB1's; the
+    // surf-sim surface), its dropped slope variance going to the sky's blur -- AGENTS.md "The Water Reflection". 0 = the
+    // shading normal. Developer Controls > Reflections, graphics_settings.json reflections.waterNormalFilter, `--set
+    // ocean.reflectionNormalFilter`; handed to the ocean every frame (OceanRenderable::SetReflectionNormalFilter).
+    float waterReflectionNormalFilter = 0.0f;
+    // The water reflection's prefilter (water_composite_cs, AGENTS.md "The Water Reflection"): the Gaussian sigma across
+    // the screen's columns in render pixels, half that along them; 0 = off. Developer Controls > Reflections,
+    // graphics_settings.json reflections.waterPrefilter, `--set ocean.reflectionPrefilter`.
+    float waterReflectionPrefilter = 1.0f;
     bool doFxaa = false;
     bool debugTexMode = false;
     // Which target the fullscreen debug blit shows. It used to be hardwired to the cascade shadow

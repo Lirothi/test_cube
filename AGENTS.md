@@ -727,6 +727,65 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   with nothing floating costs 0 us CPU and no copy. The copy was tried on the async
   queue inside Main_ObjectCompute and cost the frame ~108 us: the ocean draw waits on that pass.
 
+## The Water Reflection -- Its Resolve Runs Only Without DLSS
+
+`Main_WaterReflection` traces the water's SSR (with `ssr.waterSurfaceNormal` from GB1, the wave normal of
+`waterNormalCascades` cascades) and may resolve it in time (`ssr_temporal_cs`, `waterReflectionTemporal`). **That resolve
+runs only while no temporal upscaler accumulates the frame** (2026-11-02, owner at cam 41.47 5.51 8.46, 14:00: "with the
+temporal resolve the water's reflections crawl in big pixels; without it noisier but more real") -- UE's rule:
+`IsSSRTemporalPassRequired` (ScreenSpaceRayTracing.cpp:213-222, asked for the water by SingleLayerWaterRendering.cpp:1748)
+skips the SSR temporal pass under TAA / TSR / DLSS unless `r.SSR.Temporal` (default 0) forces it. Two accumulators in a row
+turned the trace's grain into blotches: on that view (DLSS Balanced, the owner's 3 cascades, 1.0 resolution) the
+reflection band's coarse detail (9-px box minus a 31-px trend) 5.4-5.8 -> 7.8-7.9 with the resolve, its fine grain not
+lower (5.3 -> 6.1); without DLSS the resolve takes the grain 23 -> 14 and is what calms the raw trace. Developer Controls
+"Water reflection temporal resolve (without DLSS)" shows "idle" under DLSS; `--set ssr.waterTemporalUnderDlss:1` = before
+(UE's r.SSR.Temporal 1, the A/B; transient). The deferred SSR's own resolve is unchanged (it was measured useful there).
+
+**The grain in shaded water is the reflection itself** (same day, the owner at cam 4.37 1.92 -38.31, 14:00, the palms'
+shadow on the water: "without the resolve, with DLSS, still noisy"). The sun's shadow on the water (below) took the lit
+body away there and left the reflection on top: the shore, the sky between the crowns and the palms, mirrored by ripples
+smaller than a pixel at 15-40 m, one sample a pixel. Not the shadow: sparks (> 40 levels over their 7x7 box) in the shaded
+water 2.50 / 2.42 / 2.55 % at 1 / 8 rays / the single tap, 2.65 % with the sun glint off, 1.55 % with the water's shadow off
+(the bright body masks it), 5.4 % without the SSR hit (the sky alone sparkles more); frame-to-frame std with the wind held
+0.91 / 0.71 at 1 / 8 rays. Caustics and the surface refraction do not move it either (pixel boil 3.41 / 3.30 with the
+refraction at 0). Developer Controls > Reflections "Water reflection normal filter (mips)" (graphics_settings.json
+`reflections.waterNormalFilter`, `--set ocean.reflectionNormalFilter`, 0-4; default 0 = the frame bit for bit as before;
+SceneRenderSettings -> `OceanRenderable::SetReflectionNormalFilter` every frame, like the cascades) takes the
+reflection's DIRECTION -- the sky's and GB1's -- from the derivatives that many mips coarser (`LightingInput::
+reflectionNormal`, surf-sim surface; the run-up one has its macro normal) and adds the slope variance it drops to the sky's
+blur by Bruneton's distance law at 2^w the distance; the Fresnel weight keeps the full normal (from the filtered one the
+sun-lit lagoon turned bluer: at a grazing view the mean of F over the ripples is below F of their mean normal). Measured
+with the wind held: the shaded water's fine grain 8.51 / 8.37 / 8.32 / 7.56 at 0 / 1 / 2 / 3 mips, its pattern coherent
+ripples instead of salt and pepper; in motion the pixel-scale boil the same (3.26 -> 3.14 at 2, within run noise), and on
+sun-lit water 2-3 show the swell's sky reflection as coherent bands where 0 averages it to an even turquoise. `Ocean.Surface`
++0.007-0.009 ms (the derivatives read once more, up to 4 cascades). Left at 0 for the owner's pick; `ssr.waterNormalCascades:2` (the swell only in
+the ray) gave the most coherent shore reflection on that view. GBV (`Transparent,Transparent.Water,WaterReflection,Skybox`
++ the Skybox self-test, that view, the resolve on, the filter at 2): clean.
+
+**The stretched pixel zones by the shore are the reflection's undersampling, and a prefilter in space takes them out**
+(same day, the owner at cam -15.63 3.52 -39.53 / 10.97 0.96 -47.95, 14:00, his reflection settings: "zones of stretched
+pixels, even without DLSS -- is it the SSR, the sampling, something else?"). Not the tracer: the water's hit mask (white =
+the ray hit, `debug.tex:12` with `debug.texMode:1`) near the shore was the same at 8 and 64 steps, starting the march at
+the HZB's mip 1 (UE's, SSRTRayCast.ush:660; our HZB's mip 0 is half the render resolution) or 0, with UE High's GGX rays or
+one mirror ray, and at 0.5 resolution only coarser; it is hits on the shaded beach and the trunks broken by horizontal runs
+of misses (the sky between the crowns) along the ripples. Each water pixel casts ONE mirror ray, from ripples finer than the
+pixel at a grazing view (horizontal slivers a pixel tall), into a scene of high contrast -- one sample per pixel of a
+reflection that varies faster than the pixels. With the waves HELD, DLSS adds its jittered frames up to a clean, coherent
+rippled reflection: the reflection is right, it is undersampled. With them running, nothing can follow the ripples (they run
+at their phase speed, no surface point carries them, so no motion vector does): without DLSS the raw runs show, under DLSS
+its clamped history smears them -- the stretched zones. `water_composite_cs` now reconstructs the pixel in space, as a TAA
+resolve's spatial kernel does: the reflected radiance (the hit, and the sky where the ray missed: GB2 / (W x
+preExposure)) averaged over the neighbouring water by a Gaussian of `waterReflectionPrefilter` render pixels across the
+columns and half that along them (the ripples are horizontal slivers; a tall kernel merged crests), radius 2 sigma capped
+at 3 x 2. Not gated: the reflected ray steps tens of the reflected image's pixels between neighbours on near and far water
+alike, and the second difference of those steps (a smooth sweep against a scatter) lit the near crests as much as the far
+grain. Developer Controls > Reflections "Water reflection prefilter (px)" (graphics_settings.json `reflections.waterPrefilter`,
+`--set ocean.reflectionPrefilter`, 0-3; **default 1**, 0 = before). Sigma 1.5-2 already softened the near shore; 1 turned the
+grain into coherent ripples on both views with DLSS, the waves running (the zones' fine grain 3.96 -> 3.54 and 4.94 -> 4.12),
+and halved it without DLSS. The near water is unchanged (refraction and glints, not the reflection). `WaterReflection.Composite`
+0.012 -> 0.027-0.030 ms. The very grazing band at the waterline (view 2) keeps some horizontal streaking. GBV (the same passes,
+the resolve on, the prefilter at its default): clean.
+
 ## The Sun's Shadow on the Water
 
 The ocean takes the sun's shadow from GEOMETRY (2026-11-02, owner: "make the ocean receive shadows"; until then only the

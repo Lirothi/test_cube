@@ -226,8 +226,9 @@ namespace scene_internal
         float2 invRenderSize{};
         float preExposure = 1.0f;
         uint32_t uvBreakup = 1u; // 1 = read the flat mirror at the planar UV offset, 0 = at the pixel itself
+        float4 prefilter{};      // the reflection prefilter's sigma across / along columns (render px, 0 = off); zw unused
     };
-    static_assert(sizeof(WaterCompositeConstants) == 96,
+    static_assert(sizeof(WaterCompositeConstants) == 112,
         "WaterCompositeConstants must stay byte-identical to WaterCompositeCB in "
         "shaders/water_composite_cs.hlsl -- it is uploaded by raw memcpy.");
 

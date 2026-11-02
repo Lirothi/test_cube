@@ -445,6 +445,7 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         frame.ocean->SetFogParams(fog.params0, fog.params1, fog.params2);
         frame.ocean->SetFogDebugView(g_fogDebugView);
         frame.ocean->SetReflectionNormalCascades(frame.settings.waterReflectionNormalCascades);
+        frame.ocean->SetReflectionNormalFilter(frame.settings.waterReflectionNormalFilter);
     }
     // UE's SSRT color resolve is a separate temporal consumer: after finding a hit in CURRENT
     // depth it reprojects that hit into the PREVIOUS temporal SceneColor. Our Deferred.scene is

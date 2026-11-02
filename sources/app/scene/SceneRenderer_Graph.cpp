@@ -2371,7 +2371,9 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             const auto temporal = resources_.GetSsrTemporalMaterial();
             const UINT ow = p.renderer->GetOceanReflectionTextureWidth();
             const UINT oh = p.renderer->GetOceanReflectionTextureHeight();
+            // UE's rule (SceneFrameData waterReflectionTemporal): not while DLSS accumulates the frame itself.
             pts.temporalRun = pts.trace && frame_->settings.waterReflectionTemporal &&
+                (!decisions_.willDlss || frame_->settings.waterReflectionTemporalUnderDlss) &&
                 temporal && temporal->GetPipelineState() && resources_.GetSsrTemporalCBSizeBytes() != 0u &&
                 DW.oceanReflectionHistory.Get() != nullptr && DW.oceanReflectionHistoryUAV.ptr != 0 &&
                 PW.oceanReflectionHistorySRV.ptr != 0 && DW.oceanReflectionSRV.ptr != 0;

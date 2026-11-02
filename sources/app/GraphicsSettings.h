@@ -45,6 +45,8 @@ enum class GraphicsControl
     WaterReflectionTemporalStillInertia,
     WaterReflectionSurfaceNormal,
     WaterReflectionNormalCascades,
+    WaterReflectionNormalFilter,
+    WaterReflectionPrefilter,
     ReflectionResolution,
     ReflectionGlossyScale,
     SunMetalSpecInfluence,

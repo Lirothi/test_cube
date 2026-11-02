@@ -1015,13 +1015,40 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "faded out ~20 m from the camera, so 3 looks like 4 on far water. 4 = the full "
                         "shading normal; 2 = the swell only; 1 = an almost calm mirror. The sky in the "
                         "reflection and the sun glints keep the full normal either way.");
+                GRAPHICS_CONTROL(WaterReflectionNormalFilter, "waterReflectionNormalFilter",
+                    ImGui::SliderFloat("Water reflection normal filter (mips)", &settings.waterReflectionNormalFilter,
+                                       0.0f, 4.0f, "%.2f"));
+                DevHelp("How many mips coarser than the shading normal the water reflection's DIRECTION is "
+                        "taken -- the sky's and the screen-space ray's (the surf-sim surface). A mip is the "
+                        "pixel's footprint, so 2 keeps every ripple wider than ~4 pixels and drops the ones a "
+                        "single mirror sample per pixel can only alias; their slope variance goes to the sky's "
+                        "blur. The Fresnel weight, the sun glints, the foam and the body keep the full normal. "
+                        "0 = the shading normal (the default). 2-3 turn a still frame's salt-and-pepper "
+                        "reflection into coherent ripples and show the swell's sky on sun-lit water; the boil "
+                        "in motion stays. ~+0.008 ms above 0.");
+                GRAPHICS_CONTROL(WaterReflectionPrefilter, "waterReflectionPrefilter",
+                    ImGui::SliderFloat("Water reflection prefilter (px)", &settings.waterReflectionPrefilter,
+                                       0.0f, 3.0f, "%.2f"));
+                DevHelp("A pixel reconstruction filter on the water's reflection (the screen-space hit, and the "
+                        "sky where the ray missed): a Gaussian of this many render pixels across the screen's "
+                        "columns, half along them, over the neighbouring water. Each water pixel casts one mirror "
+                        "ray from ripples finer than the pixel, so near the shore neighbouring rays land on the "
+                        "beach, a trunk, the sky between the crowns -- runs of pixels without DLSS, stretched "
+                        "smears under it (DLSS cannot follow ripples). 1 (default) = clean ripples; 0 = off.");
                 GRAPHICS_CONTROL(WaterReflectionTemporal, "waterReflectionTemporal",
-                    ImGui::Checkbox("Water reflection temporal resolve", &settings.waterReflectionTemporal));
-                DevHelp("The water reflection's OWN temporal resolve, separate from the one below. Off by "
+                    ImGui::Checkbox("Water reflection temporal resolve (without DLSS)", &settings.waterReflectionTemporal));
+                DevHelp("The water reflection's OWN temporal resolve, separate from the one below. It runs "
+                        "only while DLSS is off -- UE's rule (IsSSRTemporalPassRequired): with a temporal "
+                        "upscaler the two accumulators in a row turn the trace's grain into crawling "
+                        "blotches. Without DLSS the raw trace flickers and the resolve calms it. Off by "
                         "default: it judges stillness by the water SURFACE's motion, ~0 with a still "
                         "camera, so any still inertia stretches the history while the waves change the "
-                        "reflection every frame -- it smears. Off = the raw trace (DLSS still "
-                        "accumulates the final image).");
+                        "reflection every frame -- it smears.");
+                if (settings.waterReflectionTemporal && renderer.IsDlssActive() &&
+                    !settings.waterReflectionTemporalUnderDlss)
+                {
+                    ImGui::TextDisabled("  idle: DLSS accumulates the frame");
+                }
                 ImGui::BeginDisabled(!settings.waterReflectionTemporal);
                 {
                     GRAPHICS_CONTROL_WIDTH(WaterReflectionTemporalBlend, "waterReflectionTemporalBlend", 98.0f,

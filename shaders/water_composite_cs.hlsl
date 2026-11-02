@@ -52,6 +52,8 @@ cbuffer WaterCompositeCB : register(b0)
     float    preExposure;
     uint     uvBreakup;         // 1 = the flat mirror read at the UV offset; 0 = the trace already took
                                 //     the wave normal (UE's way), read at the pixel itself
+    // The prefilter (below): x, y = its Gaussian sigma across / along the screen's columns (render px), 0 = off; zw unused.
+    float4   prefilter;
 };
 
 // The planar reflection's UV offset, VERBATIM from the water shader it lived in until S4: how far the
@@ -72,6 +74,15 @@ float OceanReflectionEdgeFade(float2 uv)
 {
     float2 edgeDist = min(uv, float2(1.0f, 1.0f) - uv);
     return saturate(min(edgeDist.x, edgeDist.y) * 64.0f);
+}
+
+// The reflected radiance a water pixel shows: the screen-space hit, and where its ray missed the sky the water's own draw
+// took (GB2 = W x sky x preExposure, so the sky is GB2 / (W preExposure)). `uv` is where the reflection is read.
+float3 WaterReflectedRadiance(int2 px, float2 reflectionUv, float weight)
+{
+    const float4 ssr = WaterReflection.SampleLevel(gSmpLinear, saturate(reflectionUv), 0.0f);
+    const float3 sky = GB2.Load(int3(px, 0)).rgb / max(weight * preExposure, 1.0e-8f);
+    return ssr.rgb + sky * (1.0f - saturate(ssr.a));
 }
 
 [numthreads(8, 8, 1)]
@@ -101,6 +112,49 @@ void CSMain(uint3 tid : SV_DispatchThreadID)
     const float3 skyWeighted = GB2.Load(int3(tid.xy, 0)).rgb;
 
     float4 c = SceneColor[tid.xy];
+
+    // THE PREFILTER (2026-11-02, owner: "zones of stretched pixels by the shore, even without DLSS"). Each water pixel
+    // casts ONE mirror ray, from a normal whose ripples near the shore are finer than the pixel: neighbouring rays land on
+    // the shaded beach, a trunk, the sky between the crowns -- the reflection is sampled far more sparsely than it varies,
+    // and it aliases into runs of pixels (raw without DLSS; under DLSS, which cannot follow ripples that run at their
+    // phase speed, into stretched smears). With the waves held DLSS's own jittered frames add up to a clean reflection,
+    // which is what this does in space, for the frame at hand -- a pixel reconstruction filter, as a TAA resolve's spatial
+    // kernel: the reflected radiance (the hit, and the sky where the ray missed) averaged over the neighbouring water by a
+    // Gaussian of prefilter.xy px. Wider across the columns than along them: at a grazing view the ripples are horizontal
+    // slivers, and a tall kernel would merge neighbouring crests. Everywhere on the water, not gated: the reflected ray
+    // steps tens of the reflected image's pixels between neighbours on near and far water alike, and the second
+    // difference of those steps (smooth sweep vs scatter) lit the near crests as much as the far grain -- nothing told the
+    // two apart per pixel (2026-11-02).
+    const float2 sigma = prefilter.xy;
+    [branch] if (max(sigma.x, sigma.y) > 0.25f && aux.a > 1.0e-4f)
+    {
+        const int2 radius = int2(min(ceil(2.0f * sigma), float2(3.0f, 2.0f)));
+        const float2 inv2s2 = 0.5f / max(sigma * sigma, 1.0e-4f);
+        const float2 offset = reflectionUv - uv; // the break-up's (0 when the trace took the wave normal)
+        float3 sum = 0.0f;
+        float wsum = 0.0f;
+        [loop] for (int dy = -radius.y; dy <= radius.y; ++dy)
+        {
+            [loop] for (int dx = -radius.x; dx <= radius.x; ++dx)
+            {
+                const int2 q = clamp(int2(tid.xy) + int2(dx, dy), int2(0, 0), int2(w - 1, h - 1));
+                const float4 qa = GBAux.Load(int3(q, 0));
+                if (DecodeShadingModel(qa.b) != kShadingModelWater || qa.a <= 1.0e-4f) { continue; }
+                const float wq = exp(-(float)(dx * dx) * inv2s2.x - (float)(dy * dy) * inv2s2.y);
+                const float2 quv = (float2(q) + 0.5f) * invRenderSize + offset;
+                sum += wq * WaterReflectedRadiance(q, quv, qa.a);
+                wsum += wq;
+            }
+        }
+        const float3 filtered = sum / max(wsum, 1.0e-6f);
+        // The sky this pixel's draw added, swapped for the filtered reflection; the break-up's screen-edge fade takes it
+        // back toward that sky, as the plain path fades its hit.
+        const float3 skyOnly = skyWeighted / max(aux.a * preExposure, 1.0e-8f);
+        const float3 reflected = lerp(skyOnly, filtered, edgeFade);
+        c.rgb = max(c.rgb - skyWeighted + aux.a * preExposure * reflected, 0.0f);
+        SceneColor[tid.xy] = c;
+        return;
+    }
     c.rgb = max(c.rgb + aux.a * preExposure * ssr.rgb - saturate(ssr.a) * skyWeighted, 0.0f);
     SceneColor[tid.xy] = c;
 }

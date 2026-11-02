@@ -205,6 +205,10 @@ struct LightData
 struct LightingInput
 {
     float3 normal;
+    // The normal the REFLECTION's direction is taken about -- the sky's direction, GB1 for the screen-space ray: the same
+    // derivatives filtered over 2^w more pixels (normalSamplingParams.w, PSMain; w = 0 = `normal`). `normal` keeps every
+    // ripple for the Fresnel weight, the sun's glint, the foam and the body.
+    float3 reflectionNormal;
     float3 viewDir;
     float viewDist;
     float roughnessMap;
@@ -691,6 +695,17 @@ float3 LitFoamColor(const LightingInput li, const FoamData foamData)
     return foamData.albedo * foamTint.rgb * (ndotl * li.mainLight.color * kInvPi + skyAmbient);
 }
 
+// Bruneton's slope variance the normal does not resolve at `dist` (per wind axis), scaled by the preset's roughness.
+float2 OceanUnresolvedSlopeVariance(const LightingInput li, float dist)
+{
+    float windSpeed = max(windParams0.x, 0.0f);
+    float wavesScale = max(windParams0.y, 0.0f);
+    float alignment = windParams0.z;
+    float roughScale = max(specularParams.y, 0.0f);
+    return roughScale * (1.0f + li.roughnessMap * 0.3f)
+        * SlopeVarianceSquared(windSpeed * wavesScale, dist, alignment, max(specularParams.z, 1.0f));
+}
+
 BrunetonInputs BuildBrunetonInputs(const LightingInput li)
 {
     float3 tangentY = float3(0.0f, li.normal.z, -li.normal.y);
@@ -704,13 +719,18 @@ BrunetonInputs BuildBrunetonInputs(const LightingInput li)
     bi.tangentXWind = TransformToWind(tangentX);
     bi.tangentYWind = TransformToWind(tangentY);
 
-    float windSpeed = max(windParams0.x, 0.0f);
-    float wavesScale = max(windParams0.y, 0.0f);
-    float alignment = windParams0.z;
-    float roughScale = max(specularParams.y, 0.0f);
-    float2 slopeVariance = roughScale * (1.0f + li.roughnessMap * 0.3f)
-        * SlopeVarianceSquared(windSpeed * wavesScale, li.viewDist, alignment, max(specularParams.z, 1.0f));
-    bi.slopeVarianceSquared = slopeVariance;
+    bi.slopeVarianceSquared = OceanUnresolvedSlopeVariance(li, li.viewDist);
+    return bi;
+}
+
+// The REFLECTION's Bruneton inputs: its filtered normal, and the slope variance that normal leaves unresolved -- the
+// same distance law at the distance whose pixel is as wide as the filter (2^w the pixel: the footprint grows with the
+// distance, so the filter is the water seen 2^w times farther). w = 0 is the sun's inputs exactly.
+BrunetonInputs BuildReflectionBrunetonInputs(const LightingInput li, const BrunetonInputs sun)
+{
+    BrunetonInputs bi = sun;
+    bi.normalWind = TransformToWind(li.reflectionNormal);
+    bi.slopeVarianceSquared = OceanUnresolvedSlopeVariance(li, li.viewDist * exp2(max(normalSamplingParams.w, 0.0f)));
     return bi;
 }
 
@@ -718,12 +738,12 @@ BrunetonInputs BuildBrunetonInputs(const LightingInput li)
 // Bruneton model -- but it does carry the physical quantity roughness stands for: the slope
 // VARIANCE of the microfacet distribution. sqrt of it is an RMS slope, which is what maps onto a
 // GGX alpha, so the caller passes that instead of the fixed mip 3 this used to blur by.
-// The normal the reflection is taken about: the shading normal tilted toward +Y by the reflection
+// The normal the reflection is taken about: the reflection's filtered normal tilted toward +Y by the reflection
 // normal strength. The screen-space trace starts from the same one (GB1, OceanGBuffer, plan S3).
 float3 OceanReflectionNormal(const LightingInput li)
 {
     float reflectionNormalStrength = heightFogParams.w;
-    return normalize(lerp(li.normal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
+    return normalize(lerp(li.reflectionNormal, float3(0.0f, 1.0f, 0.0f), reflectionNormalStrength));
 }
 
 float3 Reflection(const LightingInput li, float roughness)
@@ -859,6 +879,12 @@ float4 HorizonBlend(const LightingInput li)
 float3 GetOceanColor(const LightingInput li, const FoamData foamData, out OceanGBuffer gb)
 {
     BrunetonInputs bi = BuildBrunetonInputs(li);
+    // The reflection's DIRECTION takes its own (filtered) normal and its blur the slope variance the filter left to it:
+    // point-sampled through every ripple, the reflected direction flipped pixel to pixel between the sky and the shore --
+    // grain that only the sun-lit body hid (2026-11-02, the water in the palms' shadow). The Fresnel WEIGHT keeps the
+    // full normal: at a grazing view the mean of F over the ripples is below F of their mean normal, which the distance
+    // law's variance does not make up -- taken from the filtered normal the sun-lit lagoon turned bluer.
+    const BrunetonInputs reflectionBi = BuildReflectionBrunetonInputs(li, bi);
     float2 sss = SubsurfaceScatteringFactor(li);
     float3 foamLitColor = LitFoamColor(li, foamData);
 
@@ -867,7 +893,10 @@ float3 GetOceanColor(const LightingInput li, const FoamData foamData, out OceanG
     // Bruneton slope variance -> an RMS slope -> a GGX-ish roughness for the shared environment.
     // Clamped low: open water is a near-mirror and the variance can spike on wave crests.
     const float oceanRoughness = clamp(sqrt(max(bi.slopeVarianceSquared.x, 0.0f)), 0.02f, 0.6f);
-    float3 reflected = Reflection(li, oceanRoughness);
+    // The sky's blur takes the reflection's unresolved variance too. GB0 (below) keeps the sun's: the screen-space ray
+    // casts GGX rays above roughness 0.1 (UE High), and a rougher GB0 would trade the grain for their noise.
+    const float skyRoughness = clamp(sqrt(max(reflectionBi.slopeVarianceSquared.x, 0.0f)), 0.02f, 0.6f);
+    float3 reflected = Reflection(li, skyRoughness);
     //return reflected;
     float3 refracted = Refraction(li, foamData, sss, foamLitColor);
     //return refracted;
@@ -952,6 +981,17 @@ PSOut PSMain(VSOutput input)
     float4 combinedDerivatives = CombineDerivatives(deriv, normalWeights);
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
     //return float4(normal, 1);
+    // The REFLECTION's normal (LightingInput::reflectionNormal): the same derivatives `w` mips coarser
+    // (`ocean.reflectionNormalFilter`, normalSamplingParams.w; 0 = the shading normal). A mip IS the pixel footprint, so
+    // this keeps every ripple wider than 2^w pixels -- near the camera the waves still bend the reflection -- and drops
+    // the ones a single mirror sample per pixel can only alias; their slope variance goes to the reflection's roughness.
+    DerivativesSet reflectionDeriv = deriv;
+    [branch] if (normalSamplingParams.w > 0.0f)
+    {
+        reflectionDeriv = SampleDerivatives(input.baseXZ, weights, cascadesCount,
+                                            normalSamplingParams.y + normalSamplingParams.w);
+    }
+    const float3 reflectionNormal = NormalFromCombinedDerivatives(CombineDerivatives(reflectionDeriv, normalWeights));
 
     float3 viewDir = normalize(clipMapViewer.xyz - input.worldPos);
     float3 lightDir = normalize(sunDirAmbient.xyz);
@@ -988,6 +1028,7 @@ PSOut PSMain(VSOutput input)
 
     LightingInput li;
     li.normal = normal;
+    li.reflectionNormal = reflectionNormal;
     li.viewDir = viewDir;
     li.viewDist = viewDist;
     li.roughnessMap = roughnessMap;
@@ -1005,13 +1046,13 @@ PSOut PSMain(VSOutput input)
 
     OceanGBuffer gb;
     float3 color = GetOceanColor(li, foamData, gb);
-    // EXPERIMENT (2026-10-12): the reflection normal from the first N cascades only; the sky sample
+    // EXPERIMENT (2026-10-12): the reflection normal (GB1) from the first N cascades only; the sky sample
     // inside GetOceanColor keeps the full one. 4 = all, and GB1 is what it always was.
     [branch] if (normalSamplingParams.z < 3.5f)
     {
         LightingInput reflectionLi = li;
-        reflectionLi.normal = NormalFromCombinedDerivatives(
-            CombineDerivatives(deriv, normalWeights * ReflectionCascadeMask(normalSamplingParams.z)));
+        reflectionLi.reflectionNormal = NormalFromCombinedDerivatives(
+            CombineDerivatives(reflectionDeriv, normalWeights * ReflectionCascadeMask(normalSamplingParams.z)));
         gb.reflectionNormal = OceanReflectionNormal(reflectionLi);
     }
 

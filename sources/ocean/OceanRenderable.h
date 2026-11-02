@@ -206,6 +206,9 @@ public:
     // FFT cascades in the reflection normal GB1 (SceneRenderSettings::waterReflectionNormalCascades), a
     // reflection setting handed over every frame like the fog; normalSamplingParams.z for the shader.
     void SetReflectionNormalCascades(std::uint32_t n) { reflectionNormalCascades_ = n; }
+    // Mips coarser for the reflection's direction (SceneRenderSettings::waterReflectionNormalFilter), handed over every
+    // frame the same way; normalSamplingParams.w for the shader.
+    void SetReflectionNormalFilter(float mips) { reflectionNormalFilter_ = mips; }
 
 private:
     struct ClipLevel
@@ -306,6 +309,7 @@ private:
     Math::float4 fogParams2_{};
     std::uint32_t fogDebugView_ = 0u;
     std::uint32_t reflectionNormalCascades_ = 4u;
+    float reflectionNormalFilter_ = 0.0f;
     Math::float4 fogVolumeParams_{};    // x = 0: no volume (default)
     Math::float4 fogVolumeZParams_{};
     Math::mat4 cloudShadowViewProj_{};  // plan C3

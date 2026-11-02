@@ -87,6 +87,8 @@ namespace
         float waterReflectionTemporalStillInertia = 0.0f;
         bool waterReflectionSurfaceNormal = false;
         std::uint32_t waterReflectionNormalCascades = 4u;
+        float waterReflectionNormalFilter = 0.0f;
+        float waterReflectionPrefilter = 1.0f;
         float reflectionResolution = 0.5f;
         float oceanReflectionResolution = 0.5f;
         float reflectionGlossyScale = 1.0f;
@@ -336,7 +338,9 @@ namespace
         s.waterReflectionTemporalBlend = std::clamp(finite(s.waterReflectionTemporalBlend, 0.125f), 0.02f, 1.0f);
         s.waterReflectionTemporalStillInertia = std::clamp(finite(s.waterReflectionTemporalStillInertia, 0.0f), 0.0f, 2.0f);
         s.waterReflectionNormalCascades = std::clamp(s.waterReflectionNormalCascades, 1u, 4u);
-        s.reflectionResolution = std::clamp(finite(s.reflectionResolution, 0.5f), 0.25f, 1.0f);
+        s.waterReflectionNormalFilter = std::clamp(finite(s.waterReflectionNormalFilter, 0.0f), 0.0f, 4.0f);
+        s.waterReflectionPrefilter = std::clamp(finite(s.waterReflectionPrefilter, 1.0f), 0.0f, 3.0f);
+        s.reflectionResolution =std::clamp(finite(s.reflectionResolution, 0.5f), 0.25f, 1.0f);
         s.oceanReflectionResolution = std::clamp(finite(s.oceanReflectionResolution, 0.5f), 0.25f, 1.0f);
         s.reflectionGlossyScale = std::clamp(finite(s.reflectionGlossyScale, 1.0f), 0.0f, 24.0f);
         s.sunMetalSpecInfluence = std::clamp(finite(s.sunMetalSpecInfluence, 0.0f), 0.0f, 16.0f);
@@ -510,6 +514,8 @@ namespace
         s.waterReflectionTemporalStillInertia = settings.waterReflectionTemporalStillInertia;
         s.waterReflectionSurfaceNormal = settings.waterReflectionSurfaceNormal;
         s.waterReflectionNormalCascades = settings.waterReflectionNormalCascades;
+        s.waterReflectionNormalFilter = settings.waterReflectionNormalFilter;
+        s.waterReflectionPrefilter = settings.waterReflectionPrefilter;
         s.reflectionResolution = renderer.GetReflectionTextureScale().x;
         s.oceanReflectionResolution = renderer.GetOceanReflectionTextureScale().x;
         s.reflectionGlossyScale = settings.reflectionGlossyScale;
@@ -693,6 +699,8 @@ namespace
         settings.waterReflectionTemporalStillInertia = s.waterReflectionTemporalStillInertia;
         settings.waterReflectionSurfaceNormal = s.waterReflectionSurfaceNormal;
         settings.waterReflectionNormalCascades = s.waterReflectionNormalCascades;
+        settings.waterReflectionNormalFilter = s.waterReflectionNormalFilter;
+        settings.waterReflectionPrefilter = s.waterReflectionPrefilter;
         settings.reflectionGlossyScale = s.reflectionGlossyScale;
         settings.sunMetalSpecInfluence = s.sunMetalSpecInfluence;
         settings.reflectionSource = s.reflectionSource;
@@ -908,6 +916,8 @@ namespace
                 { "waterTemporalStillInertia", s.waterReflectionTemporalStillInertia },
                 { "waterSurfaceNormal", s.waterReflectionSurfaceNormal },
                 { "waterNormalCascades", s.waterReflectionNormalCascades },
+                { "waterNormalFilter", s.waterReflectionNormalFilter },
+                { "waterPrefilter", s.waterReflectionPrefilter },
                 { "resolution", s.reflectionResolution },
                 { "oceanResolution", s.oceanReflectionResolution },
                 { "glossyBlur", s.reflectionGlossyScale },
@@ -1127,6 +1137,8 @@ namespace
         Read(reflections, "waterTemporalStillInertia", s.waterReflectionTemporalStillInertia);
         Read(reflections, "waterSurfaceNormal", s.waterReflectionSurfaceNormal);
         Read(reflections, "waterNormalCascades", s.waterReflectionNormalCascades);
+        Read(reflections, "waterNormalFilter", s.waterReflectionNormalFilter);
+        Read(reflections, "waterPrefilter", s.waterReflectionPrefilter);
         Read(reflections, "resolution", s.reflectionResolution);
         Read(reflections, "oceanResolution", s.oceanReflectionResolution);
         Read(reflections, "glossyBlur", s.reflectionGlossyScale);
@@ -1466,6 +1478,8 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         current.waterReflectionTemporalStillInertia = defaults.waterReflectionTemporalStillInertia; break;
     case GraphicsControl::WaterReflectionSurfaceNormal:   current.waterReflectionSurfaceNormal = defaults.waterReflectionSurfaceNormal; break;
     case GraphicsControl::WaterReflectionNormalCascades:  current.waterReflectionNormalCascades = defaults.waterReflectionNormalCascades; break;
+    case GraphicsControl::WaterReflectionNormalFilter:    current.waterReflectionNormalFilter = defaults.waterReflectionNormalFilter; break;
+    case GraphicsControl::WaterReflectionPrefilter:       current.waterReflectionPrefilter = defaults.waterReflectionPrefilter; break;
     case GraphicsControl::ReflectionResolution:           current.reflectionResolution = defaults.reflectionResolution; break;
     case GraphicsControl::ReflectionGlossyScale:          current.reflectionGlossyScale = defaults.reflectionGlossyScale; break;
     case GraphicsControl::SunMetalSpecInfluence:          current.sunMetalSpecInfluence = defaults.sunMetalSpecInfluence; break;

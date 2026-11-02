@@ -1488,9 +1488,10 @@ Math::float4 OceanRenderable::GetNormalSamplingParams(const Renderer* renderer) 
     const float macroMipBias = renderer && renderer->IsDlssActive()
         ? render.macroNormalMipBiasDlss
         : render.macroNormalMipBiasNative;
-    // z: how many FFT cascades the reflection normal takes (SetReflectionNormalCascades).
+    // z: how many FFT cascades the reflection normal takes (SetReflectionNormalCascades); w: how many mips coarser the
+    // reflection's direction is sampled (SetReflectionNormalFilter).
     return Math::float4(render.detailNormalMipBias, macroMipBias,
-                        static_cast<float>(reflectionNormalCascades_), 0.0f);
+                        static_cast<float>(reflectionNormalCascades_), std::max(reflectionNormalFilter_, 0.0f));
 }
 
 Math::float4 OceanRenderable::GetShoreBehaviorParams0() const

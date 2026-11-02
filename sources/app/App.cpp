@@ -822,6 +822,7 @@ namespace
         // the RT reflection at half res boils under DLSS jitter just like the SSR buffer did.
         if (setting == "ssr.temporal")   { renderSettings.ssrTemporal = value != 0.0f; return true; }
         if (setting == "ssr.waterTemporal") { renderSettings.waterReflectionTemporal = value != 0.0f; return true; }
+        if (setting == "ssr.waterTemporalUnderDlss") { renderSettings.waterReflectionTemporalUnderDlss = value != 0.0f; return true; }
         if (setting == "ssr.waterTemporalBlend") { renderSettings.waterReflectionTemporalBlend = value; return true; }
         if (setting == "ssr.waterTemporalInertia") { renderSettings.waterReflectionTemporalStillInertia = value; return true; }
         // EXPERIMENT (2026-10-12): the water traced from its own normal and read at the pixel (UE's way).
@@ -1421,6 +1422,10 @@ namespace
         // The sun's shadow from geometry on the water (OceanSunShadow): 0 = off (the A/B); its VSM SMRT rays, 0 = one tap.
         if (setting == "ocean.sunShadow") { ocean::g_sunShadow = value != 0.0f; return true; }
         if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays = std::clamp(static_cast<int>(value), 0, 16); return true; }
+        // The water reflection's normal filter in mips (SceneRenderSettings::waterReflectionNormalFilter); 0 = the shading normal.
+        if (setting == "ocean.reflectionNormalFilter") { renderSettings.waterReflectionNormalFilter = std::clamp(value, 0.0f, 4.0f); return true; }
+        // The water reflection's prefilter (water_composite_cs): sigma across the columns in render px, 0 = off.
+        if (setting == "ocean.reflectionPrefilter") { renderSettings.waterReflectionPrefilter = std::clamp(value, 0.0f, 3.0f); return true; }
         // Sky-reflection horizon pull (OceanSkyReflectDir; 1 = off). Here so the streak A/B is a
         // command line rather than a level edit — same one-binary discipline as the VSM levers.
         if (setting == "ocean.skyHorizonPull")
