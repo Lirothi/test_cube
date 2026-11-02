@@ -2084,6 +2084,7 @@ void Scene::Sync(Renderer* renderer)
     threading::ClearRenderParked(); // the render half runs again after this
     syncedThisFrame_ = true;
     knob::Exchange(); // G5: the knobs the game half set (and the ones the render half consumed) cross here
+    if (renderer) { renderer->FlushHandOverSubmits(); } // G7: the game's GPU work (thumbnails, previews) to the queue
 
     // G2: the camera. The render half takes the game camera's pose (and a cut, by its revision); the game camera's own
     // matrices are refreshed for the pose about to render -- the gizmo, picking and the HUD read them next frame, as

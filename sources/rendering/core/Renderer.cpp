@@ -1885,15 +1885,82 @@ void Renderer::WaitForPreviousFrame() {
     // it rather than touching the scheduler. That is why making it queue-correct here makes all of
     // them queue-correct, and why the plan puts this in step 2 instead of the hardening step — the
     // gates for every step in between are exactly that churn.
-    frameScheduler_.WaitForGpuIdle(GetCommandQueue(), GetComputeQueue());
     // Game thread plan section 3.7: from the game half this is also where the render half PARKS -- until the next
     // hand-over the game may change what the render half walks (the scene's membership, the targets, the queue).
-    if (threading::CurrentRole() == threading::ThreadRole::Game)
+    const bool fromGame = threading::CurrentRole() == threading::ThreadRole::Game;
+    if (fromGame)
     {
         threading::NoteRenderParked();
+    }
+    FlushHandOverSubmits(); // G7: the game's deferred GPU work goes first, so the idle below covers it
+    frameScheduler_.WaitForGpuIdle(GetCommandQueue(), GetComputeQueue());
+    if (fromGame)
+    {
         // G5: a parked render half takes the game's knobs at once -- a live setter that parks (a target rebuild)
         // reads the value the game half just set.
         knob::Exchange();
+    }
+}
+
+bool Renderer::HandOverSubmitsGoNow() const
+{
+    const threading::ThreadRole role = threading::CurrentRole();
+    return role == threading::ThreadRole::Render || role == threading::ThreadRole::Sync ||
+           (role == threading::ThreadRole::Game && threading::RenderParked());
+}
+
+void Renderer::ExecuteOrDefer(ID3D12CommandList* list)
+{
+    if (!list) { return; }
+    if (HandOverSubmitsGoNow())
+    {
+        FlushHandOverSubmits(); // keep the queue order: anything deferred before this goes first
+        GetCommandQueue()->ExecuteCommandLists(1, &list);
+        return;
+    }
+    std::lock_guard<std::mutex> lock(handOverMutex_);
+    HandOverOp op;
+    op.list = list;
+    handOverOps_.push_back(std::move(op));
+}
+
+bool Renderer::SignalOrDefer(ID3D12Fence* fence, UINT64 value)
+{
+    if (!fence) { return false; }
+    if (HandOverSubmitsGoNow())
+    {
+        FlushHandOverSubmits();
+        return SUCCEEDED(GetCommandQueue()->Signal(fence, value));
+    }
+    std::lock_guard<std::mutex> lock(handOverMutex_);
+    HandOverOp op;
+    op.fence = fence;
+    op.value = value;
+    handOverOps_.push_back(std::move(op));
+    return true;
+}
+
+void Renderer::FlushHandOverSubmits()
+{
+    std::vector<HandOverOp> ops;
+    {
+        std::lock_guard<std::mutex> lock(handOverMutex_);
+        if (handOverOps_.empty()) { return; }
+        ops.swap(handOverOps_);
+    }
+    TC_CHECK_THREAD(HandOverSubmitsGoNow(), "render|sync, or game with the render half parked",
+                    "Renderer::FlushHandOverSubmits");
+    for (HandOverOp& op : ops)
+    {
+        if (op.list)
+        {
+            ID3D12CommandList* list = op.list.Get();
+            GetCommandQueue()->ExecuteCommandLists(1, &list);
+        }
+        else if (op.fence && FAILED(GetCommandQueue()->Signal(op.fence.Get(), op.value)))
+        {
+            LOG_ERROR(logging::LogCategory::RenderRhi, "hand-over: a deferred fence signal failed (value {})", op.value);
+        }
     }
 }
 

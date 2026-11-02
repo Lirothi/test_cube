@@ -1672,8 +1672,7 @@ void AssetThumbnailCache::StartGpuJob(Renderer& renderer)
         entry->failureReason = "Thumbnail GPU submission failed.";
         return;
     }
-    if (FAILED(renderer.GetCommandQueue()->Signal(
-            job->fence.Get(), job->fenceValue)))
+    if (!renderer.SignalOrDefer(job->fence.Get(), job->fenceValue)) // G7: after its list, at the hand-over
     {
         // Exceptional device/queue failure: keep upload intermediates alive until
         // the already submitted command list is known to be finished.

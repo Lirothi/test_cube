@@ -294,6 +294,12 @@ public:
     void InitImGui();
     void BeginImGuiFrame();
     void EndImGuiFrame(); // game thread plan G1: the game half closes the UI frame; RenderImGui records it
+    // Game thread plan G7: GPU work the game half records outside the frame (a thumbnail, the Mesh Editor's preview,
+    // an upload batch) goes to the queue at the hand-over -- never while the render half records -- in the order it
+    // was submitted. From the render half, at the hand-over or with the render half parked, it goes at once.
+    void ExecuteOrDefer(ID3D12CommandList* list);
+    bool SignalOrDefer(ID3D12Fence* fence, UINT64 value);
+    void FlushHandOverSubmits(); // Scene::Sync, and where the game half parks the render half
     void RenderImGui(ID3D12GraphicsCommandList* commandList);
     // ImGui and other external renderers replace descriptor heaps, root state,
     // viewport, and scissor. Call before recording engine-native draws afterward.
@@ -1066,6 +1072,16 @@ private:
     ComPtr<ID3D12CommandSignature> dispatchMeshCmdSig_; // Tessy N6 (lazy)
     // The three above are built on first use by whichever thread asks -- pass bodies record on workers.
     std::mutex fixedCmdSigMtx_;
+    // G7: the game half's deferred queue work (ExecuteOrDefer / SignalOrDefer), in submission order.
+    struct HandOverOp
+    {
+        ComPtr<ID3D12CommandList> list;
+        ComPtr<ID3D12Fence> fence;
+        UINT64 value = 0;
+    };
+    std::mutex handOverMutex_;
+    std::vector<HandOverOp> handOverOps_;
+    bool HandOverSubmitsGoNow() const;
     std::atomic<int> meshShaderTier_{-1}; // -1 = not asked yet
     // A6: bindless G-buffer command signatures per root signature (see getter).
     struct BindlessCmdSig { ComPtr<ID3D12RootSignature> rs; ComPtr<ID3D12CommandSignature> sig; };

@@ -47,8 +47,9 @@ bool UploadBatch::Submit(Renderer* renderer)
         open_ = false;
         return false;
     }
-    ID3D12CommandList* lists[] = { cmdList_.Get() };
-    renderer->GetCommandQueue()->ExecuteCommandLists(1, lists);
+    // Game thread plan G7: from the game half, unparked, the list waits for the hand-over (the batch's owner keeps it
+    // and its allocator alive until the GPU is done, as before); SubmitAndWait parks first and so goes at once.
+    renderer->ExecuteOrDefer(cmdList_.Get());
     open_ = false;
     return true;
 }
