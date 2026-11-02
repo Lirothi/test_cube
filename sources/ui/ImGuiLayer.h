@@ -83,5 +83,8 @@ private:
     bool initialized_ = false;
     bool frameBegun_ = false;
     bool drawDataReady_ = false; // EndFrame closed the frame; Render has not recorded it yet
+    ImDrawData snapshot_;        // G6: the closed frame's draw lists, cloned (TakeDrawDataSnapshot)
+    void TakeDrawDataSnapshot();
+    void FreeDrawDataSnapshot();
     bool pendingRightClickFocusClear_ = false;
 };

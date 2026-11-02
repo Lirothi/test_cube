@@ -65,6 +65,7 @@ extern const Profiler::ScopeNameKey kSceneTickWind;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kSceneSync; // game thread plan G1: the hand-over
 extern const Profiler::ScopeNameKey kSceneSyncObjects; // G4: the objects' part of it
+extern const Profiler::ScopeNameKey kImGuiEndFrame;    // G6: ImGui::Render + the draw lists' snapshot
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassTextureStreaming;
 extern const Profiler::ScopeNameKey kPassObjectCompute;

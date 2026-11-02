@@ -16,6 +16,8 @@
 #pragma comment(lib, "ws2_32.lib")
 
 #include <algorithm>
+#include <functional>
+#include <mutex>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -356,6 +358,20 @@ namespace editormcp
         RuntimeHost* g_runtimeHost = nullptr; // the same
         LevelHost* g_levelHost = nullptr; // the same
         ThumbnailHost* g_thumbnailHost = nullptr; // the same
+        // Game thread plan G6: calls that read the RENDER half (get_readouts: the exposure, the lights' shadows, VSM,
+        // Tessy) run at the hand-over (ServiceHandOver from App's Sync), where both halves may be read.
+        std::mutex g_handOverMutex;
+        std::vector<std::function<void()>> g_handOverWork;
+    }
+
+    void ServiceHandOver()
+    {
+        std::vector<std::function<void()>> work;
+        {
+            std::lock_guard<std::mutex> lock(g_handOverMutex);
+            work.swap(g_handOverWork);
+        }
+        for (std::function<void()>& item : work) { item(); }
     }
 
     void SetImportHost(ImportHost* host)
@@ -1370,6 +1386,30 @@ namespace editormcp
         {
             if (job->abandoned)
             {
+                continue;
+            }
+            if (job->name == "get_readouts")
+            {
+                std::lock_guard<std::mutex> lock(g_handOverMutex);
+                g_handOverWork.push_back([job]() {
+                    ToolResult result;
+                    try
+                    {
+                        if (!g_runtimeHost)
+                        {
+                            result = Error("There is no running app here to set or read (this host has none).");
+                        }
+                        else
+                        {
+                            result.text = g_runtimeHost->Readouts(std::clamp(job->arguments.value("history", 0), 0, 512));
+                        }
+                    }
+                    catch (const std::exception& e)
+                    {
+                        result = Error(std::string("That call threw: ") + e.what());
+                    }
+                    job->done.set_value(std::move(result));
+                });
                 continue;
             }
             CallRecord record;

@@ -2501,6 +2501,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     // The hand-over (plan section 3.3): the frame's values from game state go to the render half.
                     threading::RoleScope syncRole(threading::ThreadRole::Sync);
                     scene.Sync(&renderer);
+                    appController_.PublishHud(renderer); // G6: the HUD's lines into the render half's text buffer
+#if WITH_EDITOR
+                    editormcp::ServiceHandOver(); // G6: the MCP calls that read the render half (get_readouts)
+#endif
                 }
                 {
                     threading::RoleScope renderRole(threading::ThreadRole::Render);

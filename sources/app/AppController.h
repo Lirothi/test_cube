@@ -24,8 +24,11 @@ public:
     void ApplySceneGraphicsSettings(Scene& scene) const;
     void FlushGraphicsSettings(Renderer& renderer, const Scene& scene);
     void Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime);
-    void BuildHud(Renderer& renderer, const Scene& scene) const;
+    void BuildHud(Renderer& renderer, const Scene& scene);
     void WaitForHudBuild();
+    // Game thread plan G6: the HUD's lines (formatted by the build task, the game half's) into the render half's text
+    // buffer -- at the hand-over (App's Sync).
+    void PublishHud(Renderer& renderer);
 #if WITH_EDITOR
     void OnLevelChangeRequestCompleted(const LevelChangeRequest& request,
         bool loaded,
@@ -49,6 +52,15 @@ private:
     // The level's time of day for the HUD line, copied when the build is scheduled: the build runs
     // beside Scene::Tick, which advances the clock. < 0 = the level has no time of day.
     float hudTimeOfDayHours_ = -1.0f;
+    struct HudLine
+    {
+        int x = 0;
+        int y = 0;
+        float px = 16.0f;
+        float4 color{};
+        std::wstring text;
+    };
+    std::vector<HudLine> hudLines_; // G6: the build task's output, published at the hand-over
     DeveloperWindow developerWindow_;
 #if WITH_EDITOR
     EditorController editorController_;

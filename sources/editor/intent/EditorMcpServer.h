@@ -205,6 +205,8 @@ namespace editormcp
     // camera this frame was drawn with: the reply names its pose, so a frame taken mid-motion can be
     // retaken still from exactly there.
     void ServiceScreenshot(Renderer& renderer, const Camera& camera);
+    // Game thread plan G6: the calls that read the render half (get_readouts), run at the hand-over (App's Sync).
+    void ServiceHandOver();
 }
 
 #endif // WITH_EDITOR

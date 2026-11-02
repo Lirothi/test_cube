@@ -1072,6 +1072,7 @@ void Renderer::BeginImGuiFrame()
 void Renderer::EndImGuiFrame()
 {
     TC_CHECK_GAME("Renderer::EndImGuiFrame");
+    CPU_SCOPE(ProfilerScopes::kImGuiEndFrame);
     imguiLayer_.EndFrame();
 }
 

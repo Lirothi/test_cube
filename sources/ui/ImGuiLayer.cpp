@@ -207,6 +207,7 @@ void ImGuiLayer::Shutdown()
     }
 
     ReleasePreviewDescriptors();
+    FreeDrawDataSnapshot();
 
     ImGui_ImplDX12_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -258,7 +259,43 @@ void ImGuiLayer::EndFrame()
     }
     ImGui::Render();
     frameBegun_ = false;
+    TakeDrawDataSnapshot();
     drawDataReady_ = true;
+}
+
+// Game thread plan G6: the frame's draw lists as the game half closed them -- the render half records THESE, not
+// ImGui's own lists, which the next NewFrame starts rewriting. The atlas's texture list stays shared: the backend
+// updates it while recording (with a render thread that update moves to the game half, plan G8).
+void ImGuiLayer::TakeDrawDataSnapshot()
+{
+    FreeDrawDataSnapshot();
+    const ImDrawData* src = ImGui::GetDrawData();
+    if (!src)
+    {
+        return;
+    }
+    snapshot_.Valid = src->Valid;
+    snapshot_.TotalIdxCount = src->TotalIdxCount;
+    snapshot_.TotalVtxCount = src->TotalVtxCount;
+    snapshot_.DisplayPos = src->DisplayPos;
+    snapshot_.DisplaySize = src->DisplaySize;
+    snapshot_.FramebufferScale = src->FramebufferScale;
+    snapshot_.OwnerViewport = src->OwnerViewport;
+    snapshot_.Textures = src->Textures;
+    for (ImDrawList* list : src->CmdLists)
+    {
+        snapshot_.CmdLists.push_back(list->CloneOutput());
+    }
+    snapshot_.CmdListsCount = snapshot_.CmdLists.Size;
+}
+
+void ImGuiLayer::FreeDrawDataSnapshot()
+{
+    for (ImDrawList* list : snapshot_.CmdLists)
+    {
+        IM_DELETE(list);
+    }
+    snapshot_.Clear();
 }
 
 void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
@@ -279,7 +316,7 @@ void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
     }
     ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
     commandList->SetDescriptorHeaps(1, heaps);
-    ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), commandList);
+    ImGui_ImplDX12_RenderDrawData(&snapshot_, commandList);
 }
 
 bool ImGuiLayer::HandleWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)

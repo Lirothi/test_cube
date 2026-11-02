@@ -14,6 +14,10 @@
 #include "rendering/renderables/InstanceTypes.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "text/TextManager.h"
+#include "core/threading/ThreadRole.h" // G6: PublishHud is the hand-over's
+
+#include <cstdarg>
+#include <cwchar>
 
 void AppController::InitializeGraphicsSettings(Renderer& renderer, Scene& scene)
 {
@@ -244,19 +248,29 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     ScheduleHudBuild(renderer, scene);
 }
 
-void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
+void AppController::BuildHud(Renderer& renderer, const Scene& scene)
 {
-    auto* tb = renderer.GetTextManager();
-    tb->Begin(renderer.GetWidth(), renderer.GetHeight(), 1.0f);
-    // "--no-hud" (see App.h): Begin() still runs, so the buffer is emptied rather than left holding
-    // the previous frame's text; only the emission below is skipped.
+    // Game thread plan G6: the task only FORMATS the lines into the game half's list; PublishHud writes them into the
+    // render half's text buffer at the hand-over (the profiler overlay and the LOD view add to it on the render side).
+    hudLines_.clear();
+    const auto line = [this](int x, int y, float px, const float4& color, const wchar_t* fmt, ...)
+    {
+        wchar_t buffer[512];
+        va_list args;
+        va_start(args, fmt);
+        std::vswprintf(buffer, sizeof(buffer) / sizeof(buffer[0]), fmt, args);
+        va_end(args);
+        hudLines_.push_back(HudLine{ x, y, px, color, buffer });
+    };
+    // "--no-hud" (see App.h): PublishHud still begins the buffer, so it is emptied rather than left holding the
+    // previous frame's text; only the lines are skipped.
     if (g_hudHidden)
     {
         return;
     }
     const float fps = renderer.GetFPS();
     const float frameMs = fps > 0.0f ? 1000.0f / fps : 0.0f;
-    tb->AddTextfShadow(8, 8, 32.0f, float4(1, 1, 1, 0.6f), true, L"FPS:%.0f MS:%0.2f Scale:%0.2f", fps, frameMs, renderer.GetRenderResolutionScale());
+    line(8, 8, 32.0f, float4(1, 1, 1, 0.6f), L"FPS:%.0f MS:%0.2f Scale:%0.2f", fps, frameMs, renderer.GetRenderResolutionScale());
     const Camera& camera = scene.CameraRef();
     const auto& camPos = camera.GetPosition();
     // Orientation as a QUATERNION next to the position: the pair is everything needed to reproduce
@@ -270,7 +284,7 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
         DirectX::XMStoreFloat4(&q, DirectX::XMQuaternionRotationMatrix(DirectX::XMLoadFloat4x4(&camRot.m)));
         return q;
     }();
-    tb->AddTextfShadow(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f), true,
+    line(8, 8 + 32, 16.0f, float4(1, 1, 1, 0.9f),
         L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, Shadows: %hs",
         camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, camera.GetMoveSpeedMult(),
         renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique,
@@ -279,12 +293,23 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
     if (hudTimeOfDayHours_ >= 0.0f)
     {
         const int minutes = static_cast<int>(hudTimeOfDayHours_ * 60.0f) % (24 * 60);
-        tb->AddTextfShadow(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), true, L"Time: %02d:%02d", minutes / 60, minutes % 60);
+        line(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), L"Time: %02d:%02d", minutes / 60, minutes % 60);
     }
 
     //tb->AddTextfShadow(8, 8 + 32 + 32, 32.0f, float4(1, 1, 1, 0.99f), true, L"A quick brown fox 1234567890 ABCDEEFG");
     //tb->AddTextfShadow(8, 8 + 32 + 32 + 32, 64.0f, float4(1, 1, 1, 0.75f), true, L"A quick brown fox 1234567890 ABCDEEFG");
     //tb->AddTextfShadow(8, 8 + 32 + 32 + 32 + 64, 64.0f + 32.0f, float4(1, 1, 1, 0.5f), true, L"A quick brown fox 1234567890 ABCDEEFG");
+}
+
+void AppController::PublishHud(Renderer& renderer)
+{
+    TC_CHECK_SYNC("AppController::PublishHud");
+    auto* tb = renderer.GetTextManager();
+    tb->Begin(renderer.GetWidth(), renderer.GetHeight(), 1.0f);
+    for (const HudLine& hud : hudLines_)
+    {
+        tb->AddText(hud.x, hud.y, hud.px, hud.color, std::wstring_view(hud.text), true);
+    }
 }
 
 void AppController::WaitForHudBuild()
