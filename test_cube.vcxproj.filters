@@ -1160,6 +1160,9 @@
     <ClInclude Include="sources/core/threading/ThreadRole.h">
       <Filter>sources\core\threading</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/threading/Knob.h">
+      <Filter>sources\core\threading</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystemEnki.h">
       <Filter>sources\core\task</Filter>
     </ClInclude>

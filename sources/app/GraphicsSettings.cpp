@@ -15,12 +15,12 @@
 #include "rendering/streaming/StreamingSettings.h" // A3: streaming.* globals
 #include "rendering/core/VisibilityStats.h"
 #include "rendering/debug/LodDebugView.h"
-#include "rendering/lighting/VolumetricCloudSettings.h" // render::g_cloudShadowUpdateFrames
+#include "rendering/lighting/VolumetricCloudSettings.h" // render::g_cloudShadowUpdateFrames_game
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/core/RasterSettings.h" // A6: rasterBindless
 #include "rendering/shadows/VirtualShadowMap.h"
-#include "rendering/shadows/TessySettings.h" // Tessy N3: tessy::g_vsm
+#include "rendering/shadows/TessySettings.h" // Tessy N3: tessy::g_vsm_game
 #include "rendering/visibility/OcclusionHistory.h"
 #include "third_party/json/json.hpp"
 
@@ -100,21 +100,21 @@ namespace
         float rtWindBlasRadius = 40.0f;
 
         bool lodEnabled = true;
-        bool lodUeScreenSize = true; // render::g_lodUeScreenSize / g_lodPixelError / g_lodDistanceScale
+        bool lodUeScreenSize = true; // render::g_lodUeScreenSize_game / g_lodPixelError / g_lodDistanceScale
         float lodPixelError = 1.0f; // pixels of THIS screen (LodSelect.h); persisted as "screenPixelError"
         float lodDistanceScale = 1.0f;
-        float lodBound0 = 8.0f;  // render::g_lodBound0..2 (LodSelect.h says why these)
+        float lodBound0 = 8.0f;  // render::g_lodBound0_game..2 (LodSelect.h says why these)
         float lodBound1 = 16.0f;
         float lodBound2 = 32.0f;
-        float lodTemporalLag = 0.5f; // render::g_lodTemporalLag (UE lod.TemporalLag)
+        float lodTemporalLag = 0.5f; // render::g_lodTemporalLag_game (UE lod.TemporalLag)
         float chunkLodDistance = 24.0f;
         float chunkLodFactor = 2.0f;
 
         render::ShadowMode shadowMode = render::ShadowMode::VSM;
         bool giIndirectShadows = true;
-        float localShadowWindRange = 30.0f; // render::g_localShadowWindRange (metres, < 0 = every light sways)
+        float localShadowWindRange = 30.0f; // render::g_localShadowWindRange_game (metres, < 0 = every light sways)
         CascadeShadowConfig csm{};
-        // The CSM atlas edge (render::g_csmAtlasRes) -- a RESOURCE size, shared by Legacy and
+        // The CSM atlas edge (render::g_csmAtlasRes_game) -- a RESOURCE size, shared by Legacy and
         // SDSM, reallocated at GPU idle by Scene::ReconcileShadowMode.
         std::uint32_t csmAtlasRes = 4096u;
 
@@ -174,20 +174,20 @@ namespace
         float vsmClipmapDepthBiasDecay = 1.0f;
         float vsmClipmapDepthBiasFloorTexels = 0.0f;
         float vsmClipmapNormalBias = 1.0f;
-        float vsmLocalLateralTexels = 1.5f; // plan S10b: the 3x3 PCF's reach (vsm::g_localLateralTexels)
+        float vsmLocalLateralTexels = 1.5f; // plan S10b: the 3x3 PCF's reach (vsm::g_localLateralTexels_game)
         float vsmLocalDepthPushTexels = 0.5f;
         bool vsmResidentOnly = true;
         bool vsmSingleDraw = true;
         bool vsmHzbCull = false;
         bool vsmPageCaching = true;
-        bool tessyEnabled = true; // Tessy: the master switch (tessy::g_enabled)
-        bool tessyVsm = true; // Tessy N3 (tessy::g_vsm)
-        bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader)
-        bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas)
-        bool tessyGBuffer = true; // Tessy N5 (tessy::g_gbuffer); on by default since 2026-10-30 (owner)
-        bool tessySdsm = true;    // Tessy (tessy::g_sdsm): the SDSM sun partitions; on by default (owner, 2026-10-30)
-        bool tessyLod = false;    // Tessy N7 (tessy::g_lod): the cluster DAG's cut (camera, lamp atlases, VSM pages)
-        float tessyLodPixelError = 1.0f; // Tessy N7 (tessy::g_lodPixelError): the camera's DAG cut threshold, screen pixels
+        bool tessyEnabled = true; // Tessy: the master switch (tessy::g_enabled_game)
+        bool tessyVsm = true; // Tessy N3 (tessy::g_vsm_game)
+        bool tessyRaster = true; // Tessy N6 (tessy::g_vsmMeshShader_game)
+        bool tessyAtlas = true;  // Tessy N4 (tessy::g_atlas_game)
+        bool tessyGBuffer = true; // Tessy N5 (tessy::g_gbuffer_game); on by default since 2026-10-30 (owner)
+        bool tessySdsm = true;    // Tessy (tessy::g_sdsm_game): the SDSM sun partitions; on by default (owner, 2026-10-30)
+        bool tessyLod = false;    // Tessy N7 (tessy::g_lod_game): the cluster DAG's cut (camera, lamp atlases, VSM pages)
+        float tessyLodPixelError = 1.0f; // Tessy N7 (tessy::g_lodPixelError_game): the camera's DAG cut threshold, screen pixels
         std::uint32_t vsmWindAnimateMaxLevel = 4u;
     };
 
@@ -461,30 +461,30 @@ namespace
                                      const SceneRenderSettings& settings)
     {
         GraphicsSettingsSnapshot s{};
-        s.asyncCompute = !render::g_noAsyncCompute;
-        s.vsync = render::g_vsync;
-        s.maxFps = render::g_maxFps;
+        s.asyncCompute = !render::g_noAsyncCompute_game;
+        s.vsync = render::g_vsync_game;
+        s.maxFps = render::g_maxFps_game;
         s.mouseSmoothingMs = g_cameraMouseSmoothingMs;
-        s.visibilityChunkMask = render::g_visChunkMask;
-        s.occlusionMethod = vis::g_occlusion.method;
-        s.occlusionQueryLatency = vis::g_occlusion.queryLatency;
-        s.occlusionIndirectQueries = vis::g_occlusion.indirectQueries;
-        s.indirectGBuffer = render::g_indirectGBufferEnabled;
-        s.gbufferHzbCull = render::g_gbufferHzbCullEnabled;
-        s.rasterBindless = render::g_rasterBindless;
-        s.fogGridPixels = static_cast<int>(render::g_fogGridPixels);
-        s.fogGridZ = static_cast<int>(render::g_fogGridZ);
-        s.cloudShadowUpdateFrames = render::g_cloudShadowUpdateFrames;
-        s.cloudShadowBilinearWeather = render::g_cloudShadowBilinearWeather;
-        s.cloudShadowDetailMean = render::g_cloudShadowDetailMean;
-        s.cloudTraceMode = render::g_cloudTraceMode;
-        s.streamingEnabled = streaming::g_enabled;
-        s.streamingPoolSizeMB = streaming::g_poolSizeMB;
-        s.streamingMipBias = streaming::g_mipBias;
-        s.streamingBoost = streaming::g_boost;
-        s.streamingHiddenScale = streaming::g_hiddenScale;
-        s.streamingMipFade = streaming::g_mipFade;
-        s.streamingPerTextureBias = streaming::g_perTextureBias;
+        s.visibilityChunkMask = render::g_visChunkMask_game;
+        s.occlusionMethod = vis::g_occlusion_game.method;
+        s.occlusionQueryLatency = vis::g_occlusion_game.queryLatency;
+        s.occlusionIndirectQueries = vis::g_occlusion_game.indirectQueries;
+        s.indirectGBuffer = render::g_indirectGBufferEnabled_game;
+        s.gbufferHzbCull = render::g_gbufferHzbCullEnabled_game;
+        s.rasterBindless = render::g_rasterBindless_game;
+        s.fogGridPixels = static_cast<int>(render::g_fogGridPixels_game);
+        s.fogGridZ = static_cast<int>(render::g_fogGridZ_game);
+        s.cloudShadowUpdateFrames = render::g_cloudShadowUpdateFrames_game;
+        s.cloudShadowBilinearWeather = render::g_cloudShadowBilinearWeather_game;
+        s.cloudShadowDetailMean = render::g_cloudShadowDetailMean_game;
+        s.cloudTraceMode = render::g_cloudTraceMode_game;
+        s.streamingEnabled = streaming::g_enabled_game;
+        s.streamingPoolSizeMB = streaming::g_poolSizeMB_game;
+        s.streamingMipBias = streaming::g_mipBias_game;
+        s.streamingBoost = streaming::g_boost_game;
+        s.streamingHiddenScale = streaming::g_hiddenScale_game;
+        s.streamingMipFade = streaming::g_mipFade_game;
+        s.streamingPerTextureBias = streaming::g_perTextureBias_game;
         s.giEnabled = settings.giEnabled;
         s.giSpacing = settings.giSpacing;
         s.giHysteresis = settings.giHysteresis;
@@ -526,89 +526,89 @@ namespace
         s.rtWindBlas = settings.rtWindBlas;
         s.rtWindBlasRadius = settings.rtWindBlasRadius;
 
-        s.lodEnabled = render::g_lodEnabled;
-        s.lodUeScreenSize = render::g_lodUeScreenSize;
-        s.lodPixelError = render::g_lodPixelError;
-        s.lodDistanceScale = render::g_lodDistanceScale;
-        s.lodBound0 = render::g_lodBound0;
-        s.lodBound1 = render::g_lodBound1;
-        s.lodBound2 = render::g_lodBound2;
-        s.lodTemporalLag = render::g_lodTemporalLag;
-        s.chunkLodDistance = render::g_chunkLodDist0;
-        s.chunkLodFactor = render::g_chunkLodDistFactor;
+        s.lodEnabled = render::g_lodEnabled_game;
+        s.lodUeScreenSize = render::g_lodUeScreenSize_game;
+        s.lodPixelError = render::g_lodPixelError_game;
+        s.lodDistanceScale = render::g_lodDistanceScale_game;
+        s.lodBound0 = render::g_lodBound0_game;
+        s.lodBound1 = render::g_lodBound1_game;
+        s.lodBound2 = render::g_lodBound2_game;
+        s.lodTemporalLag = render::g_lodTemporalLag_game;
+        s.chunkLodDistance = render::g_chunkLodDist0_game;
+        s.chunkLodFactor = render::g_chunkLodDistFactor_game;
 
-        s.shadowMode = render::g_shadowModeFromCli ? render::g_shadowModePersisted : render::g_shadowMode;
-        s.giIndirectShadows = render::g_giIndirectShadowsEnabled;
-        s.localShadowWindRange = render::g_localShadowWindRange;
+        s.shadowMode = render::g_shadowModeFromCli_game ? render::g_shadowModePersisted_game : render::g_shadowMode_game;
+        s.giIndirectShadows = render::g_giIndirectShadowsEnabled_game;
+        s.localShadowWindRange = render::g_localShadowWindRange_game;
         s.csm = scene.CascadeConfig();
-        s.csmAtlasRes = render::g_csmAtlasRes;
+        s.csmAtlasRes = render::g_csmAtlasRes_game;
 
-        s.sdsmPartitions = render::sdsm::g_partitions;
-        s.sdsmBorderTexels = render::sdsm::g_borderTexels;
-        s.sdsmDilation = render::sdsm::g_dilation;
-        s.sdsmMinScaleOverSphere = render::sdsm::g_minScaleOverSphere;
-        s.sdsmZMargin = render::sdsm::g_zMargin;
-        s.sdsmStabilityFrames = render::sdsm::g_stabilityFrames;
-        s.sdsmCacheFrames = render::sdsm::g_cacheFrames;
-        s.sdsmCacheDilation = render::sdsm::g_cacheDilation;
-        s.sdsmTexelSnap = render::sdsm::g_texelSnap;
-        s.sdsmSizeHysteresis = render::sdsm::g_sizeHysteresis;
-        s.sdsmEvsm = render::sdsm::g_evsm;
-        s.sdsmEvsmPos = render::sdsm::g_evsmPos;
-        s.sdsmEvsmNeg = render::sdsm::g_evsmNeg;
-        s.sdsmBlur = render::sdsm::g_evsmBlur;
-        s.sdsmBlurMaxTexels = render::sdsm::g_evsmBlurMaxTexels;
+        s.sdsmPartitions = render::sdsm::g_partitions_game;
+        s.sdsmBorderTexels = render::sdsm::g_borderTexels_game;
+        s.sdsmDilation = render::sdsm::g_dilation_game;
+        s.sdsmMinScaleOverSphere = render::sdsm::g_minScaleOverSphere_game;
+        s.sdsmZMargin = render::sdsm::g_zMargin_game;
+        s.sdsmStabilityFrames = render::sdsm::g_stabilityFrames_game;
+        s.sdsmCacheFrames = render::sdsm::g_cacheFrames_game;
+        s.sdsmCacheDilation = render::sdsm::g_cacheDilation_game;
+        s.sdsmTexelSnap = render::sdsm::g_texelSnap_game;
+        s.sdsmSizeHysteresis = render::sdsm::g_sizeHysteresis_game;
+        s.sdsmEvsm = render::sdsm::g_evsm_game;
+        s.sdsmEvsmPos = render::sdsm::g_evsmPos_game;
+        s.sdsmEvsmNeg = render::sdsm::g_evsmNeg_game;
+        s.sdsmBlur = render::sdsm::g_evsmBlur_game;
+        s.sdsmBlurMaxTexels = render::sdsm::g_evsmBlurMaxTexels_game;
 
-        s.contactEnabled = render::contact::g_enabled;
-        s.contactLocalMode = render::contact::g_localMode;
-        s.contactTemporalDither = render::contact::g_temporalDither;
-        s.contactLengthInWorldSpace = render::contact::g_lengthInWorldSpace;
-        s.contactLength = render::contact::g_length;
-        s.contactIntensity = render::contact::g_intensity;
-        s.contactSteps = render::contact::g_steps;
-        s.contactMaxThickness = render::contact::g_maxThicknessFrac;
-        s.contactNormalOffset = render::contact::g_normalOffsetFrac;
-        s.contactGrazingFade = render::contact::g_grazingFadeNdotL;
-        s.contactMinDistance = render::contact::g_minDistanceM;
-        s.contactMaxDistance = render::contact::g_maxDistanceM;
-        s.contactFadeBand = render::contact::g_fadeBandM;
+        s.contactEnabled = render::contact::g_enabled_game;
+        s.contactLocalMode = render::contact::g_localMode_game;
+        s.contactTemporalDither = render::contact::g_temporalDither_game;
+        s.contactLengthInWorldSpace = render::contact::g_lengthInWorldSpace_game;
+        s.contactLength = render::contact::g_length_game;
+        s.contactIntensity = render::contact::g_intensity_game;
+        s.contactSteps = render::contact::g_steps_game;
+        s.contactMaxThickness = render::contact::g_maxThicknessFrac_game;
+        s.contactNormalOffset = render::contact::g_normalOffsetFrac_game;
+        s.contactGrazingFade = render::contact::g_grazingFadeNdotL_game;
+        s.contactMinDistance = render::contact::g_minDistanceM_game;
+        s.contactMaxDistance = render::contact::g_maxDistanceM_game;
+        s.contactFadeBand = render::contact::g_fadeBandM_game;
 
-        s.shadowLodBias = render::g_shadowLodBias;
-        s.shadowLodBiasNearTier = render::g_shadowLodBiasNearTier;
-        s.shadowLodTierStride = render::g_shadowLodTierStride;
-        s.vsmLodRefDistance = vsm::g_refDist;
-        s.vsmRequestDownscale = vsm::g_requestDownscale;
-        s.vsmLruFrames = vsm::g_lruThreshold;
-        s.vsmClipmapBaseExtent = vsm::g_clipmapBaseExtent;
-        s.vsmClipmapBlend = vsm::g_clipmapBlendEnabled;
-        s.vsmClipmapBlendWidth = vsm::g_clipmapBlendWidth;
-        s.smrtRayCount = vsm::g_smrtRayCount;
-        s.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay;
-        s.smrtTemporalDither = vsm::g_smrtTemporalDither;
-        s.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;
-        s.smrtLevelMargin = vsm::g_smrtLevelMargin;
-        s.smrtSunAngleDeg = vsm::g_smrtSourceAngleDeg;
-        s.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale;
-        s.smrtRayLengthScale = vsm::g_smrtRayLengthScale;
-        s.vsmClipmapDepthBias = vsm::g_clipmapDepthBias;
-        s.vsmClipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
-        s.vsmClipmapDepthBiasFloorTexels = vsm::g_clipmapDepthBiasFloorTexels;
-        s.vsmClipmapNormalBias = vsm::g_clipmapNormalBias;
-        s.vsmLocalLateralTexels = vsm::g_localLateralTexels;
-        s.vsmLocalDepthPushTexels = vsm::g_localDepthPushTexels;
-        s.vsmResidentOnly = vsm::g_residentIterOnly;
-        s.vsmSingleDraw = vsm::g_pageDrawSingle;
-        s.vsmHzbCull = vsm::g_hzbCull;
-        s.vsmPageCaching = vsm::g_pageCaching;
-        s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel;
-        s.tessyEnabled = tessy::g_enabled;
-        s.tessyVsm = tessy::g_vsm;
-        s.tessyRaster = tessy::g_vsmMeshShader;
-        s.tessyAtlas = tessy::g_atlas;
-        s.tessyGBuffer = tessy::g_gbuffer;
-        s.tessySdsm = tessy::g_sdsm;
-        s.tessyLod = tessy::g_lod;
-        s.tessyLodPixelError = tessy::g_lodPixelError;
+        s.shadowLodBias = render::g_shadowLodBias_game;
+        s.shadowLodBiasNearTier = render::g_shadowLodBiasNearTier_game;
+        s.shadowLodTierStride = render::g_shadowLodTierStride_game;
+        s.vsmLodRefDistance = vsm::g_refDist_game;
+        s.vsmRequestDownscale = vsm::g_requestDownscale_game;
+        s.vsmLruFrames = vsm::g_lruThreshold_game;
+        s.vsmClipmapBaseExtent = vsm::g_clipmapBaseExtent_game;
+        s.vsmClipmapBlend = vsm::g_clipmapBlendEnabled_game;
+        s.vsmClipmapBlendWidth = vsm::g_clipmapBlendWidth_game;
+        s.smrtRayCount = vsm::g_smrtRayCount_game;
+        s.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay_game;
+        s.smrtTemporalDither = vsm::g_smrtTemporalDither_game;
+        s.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount_game;
+        s.smrtLevelMargin = vsm::g_smrtLevelMargin_game;
+        s.smrtSunAngleDeg = vsm::g_smrtSourceAngleDeg_game;
+        s.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale_game;
+        s.smrtRayLengthScale = vsm::g_smrtRayLengthScale_game;
+        s.vsmClipmapDepthBias = vsm::g_clipmapDepthBias_game;
+        s.vsmClipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay_game;
+        s.vsmClipmapDepthBiasFloorTexels = vsm::g_clipmapDepthBiasFloorTexels_game;
+        s.vsmClipmapNormalBias = vsm::g_clipmapNormalBias_game;
+        s.vsmLocalLateralTexels = vsm::g_localLateralTexels_game;
+        s.vsmLocalDepthPushTexels = vsm::g_localDepthPushTexels_game;
+        s.vsmResidentOnly = vsm::g_residentIterOnly_game;
+        s.vsmSingleDraw = vsm::g_pageDrawSingle_game;
+        s.vsmHzbCull = vsm::g_hzbCull_game;
+        s.vsmPageCaching = vsm::g_pageCaching_game;
+        s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel_game;
+        s.tessyEnabled = tessy::g_enabled_game;
+        s.tessyVsm = tessy::g_vsm_game;
+        s.tessyRaster = tessy::g_vsmMeshShader_game;
+        s.tessyAtlas = tessy::g_atlas_game;
+        s.tessyGBuffer = tessy::g_gbuffer_game;
+        s.tessySdsm = tessy::g_sdsm_game;
+        s.tessyLod = tessy::g_lod_game;
+        s.tessyLodPixelError = tessy::g_lodPixelError_game;
         Sanitize(s);
         return s;
     }
@@ -616,21 +616,21 @@ namespace
     // One Apply per Developer Controls tab, so a tab's Reset touches only its own knobs.
     void ApplyFrame(const GraphicsSettingsSnapshot& s)
     {
-        render::g_noAsyncCompute = !s.asyncCompute;
-        render::g_vsync = s.vsync;
-        render::g_maxFps = render::ClampMaxFps(s.maxFps);
+        render::g_noAsyncCompute_game = !s.asyncCompute;
+        render::g_vsync_game = s.vsync;
+        render::g_maxFps_game = render::ClampMaxFps(s.maxFps);
         g_cameraMouseSmoothingMs = s.mouseSmoothingMs;
     }
 
     void ApplyVisibility(const GraphicsSettingsSnapshot& s)
     {
-        render::g_visChunkMask = s.visibilityChunkMask;
-        vis::g_occlusion.method = s.occlusionMethod;
-        vis::g_occlusion.queryLatency = s.occlusionQueryLatency;
-        vis::g_occlusion.indirectQueries = s.occlusionIndirectQueries;
-        render::g_indirectGBufferEnabled = s.indirectGBuffer;
-        render::g_gbufferHzbCullEnabled = s.gbufferHzbCull;
-        render::g_rasterBindless = s.rasterBindless; // the renderer's tick rebuilds the PSOs on a change
+        render::g_visChunkMask_game = s.visibilityChunkMask;
+        vis::g_occlusion_game.method = s.occlusionMethod;
+        vis::g_occlusion_game.queryLatency = s.occlusionQueryLatency;
+        vis::g_occlusion_game.indirectQueries = s.occlusionIndirectQueries;
+        render::g_indirectGBufferEnabled_game = s.indirectGBuffer;
+        render::g_gbufferHzbCullEnabled_game = s.gbufferHzbCull;
+        render::g_rasterBindless_game = s.rasterBindless; // the renderer's tick rebuilds the PSOs on a change
     }
 
     void ApplyUpscale(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -646,27 +646,27 @@ namespace
 
     void ApplyFog(const GraphicsSettingsSnapshot& s)
     {
-        render::g_fogGridPixels = static_cast<unsigned>(std::clamp(s.fogGridPixels, 4, 64)); // the renderer rounds to a power of two
-        render::g_fogGridZ = static_cast<unsigned>(std::clamp(s.fogGridZ, 16, 128));
+        render::g_fogGridPixels_game = static_cast<unsigned>(std::clamp(s.fogGridPixels, 4, 64)); // the renderer rounds to a power of two
+        render::g_fogGridZ_game = static_cast<unsigned>(std::clamp(s.fogGridZ, 16, 128));
     }
 
     void ApplySky(const GraphicsSettingsSnapshot& s)
     {
-        render::g_cloudShadowUpdateFrames = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
-        render::g_cloudShadowBilinearWeather = s.cloudShadowBilinearWeather;
-        render::g_cloudShadowDetailMean = s.cloudShadowDetailMean;
-        render::g_cloudTraceMode = render::SanitizeCloudTraceMode(s.cloudTraceMode); // the renderer recreates at the frame boundary
+        render::g_cloudShadowUpdateFrames_game = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
+        render::g_cloudShadowBilinearWeather_game = s.cloudShadowBilinearWeather;
+        render::g_cloudShadowDetailMean_game = s.cloudShadowDetailMean;
+        render::g_cloudTraceMode_game = render::SanitizeCloudTraceMode(s.cloudTraceMode); // the renderer recreates at the frame boundary
     }
 
     void ApplyStreaming(const GraphicsSettingsSnapshot& s)
     {
-        streaming::g_enabled = s.streamingEnabled;
-        streaming::g_poolSizeMB = std::max(s.streamingPoolSizeMB, -1);
-        streaming::g_mipBias = std::clamp(s.streamingMipBias, 0, 8);
-        streaming::g_boost = std::clamp(s.streamingBoost, 0.1f, 8.0f);
-        streaming::g_hiddenScale = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
-        streaming::g_mipFade = s.streamingMipFade;
-        streaming::g_perTextureBias = s.streamingPerTextureBias;
+        streaming::g_enabled_game = s.streamingEnabled;
+        streaming::g_poolSizeMB_game = std::max(s.streamingPoolSizeMB, -1);
+        streaming::g_mipBias_game = std::clamp(s.streamingMipBias, 0, 8);
+        streaming::g_boost_game = std::clamp(s.streamingBoost, 0.1f, 8.0f);
+        streaming::g_hiddenScale_game = std::clamp(s.streamingHiddenScale, 0.0f, 1.0f);
+        streaming::g_mipFade_game = s.streamingMipFade;
+        streaming::g_perTextureBias_game = s.streamingPerTextureBias;
     }
 
     void ApplyGi(const GraphicsSettingsSnapshot& s, SceneRenderSettings& settings)
@@ -715,98 +715,98 @@ namespace
 
     void ApplyLod(const GraphicsSettingsSnapshot& s)
     {
-        render::g_lodEnabled = s.lodEnabled;
-        render::g_lodUeScreenSize = s.lodUeScreenSize;
-        render::g_lodPixelError = s.lodPixelError;
-        render::g_lodDistanceScale = s.lodDistanceScale;
-        render::g_lodBound0 = s.lodBound0;
-        render::g_lodBound1 = s.lodBound1;
-        render::g_lodBound2 = s.lodBound2;
-        render::g_lodTemporalLag = s.lodTemporalLag;
-        render::g_chunkLodDist0 = s.chunkLodDistance;
-        render::g_chunkLodDistFactor = s.chunkLodFactor;
+        render::g_lodEnabled_game = s.lodEnabled;
+        render::g_lodUeScreenSize_game = s.lodUeScreenSize;
+        render::g_lodPixelError_game = s.lodPixelError;
+        render::g_lodDistanceScale_game = s.lodDistanceScale;
+        render::g_lodBound0_game = s.lodBound0;
+        render::g_lodBound1_game = s.lodBound1;
+        render::g_lodBound2_game = s.lodBound2;
+        render::g_lodTemporalLag_game = s.lodTemporalLag;
+        render::g_chunkLodDist0_game = s.chunkLodDistance;
+        render::g_chunkLodDistFactor_game = s.chunkLodFactor;
     }
 
     void ApplySdsm(const GraphicsSettingsSnapshot& s)
     {
-        render::sdsm::g_partitions = s.sdsmPartitions;
-        render::sdsm::g_borderTexels = s.sdsmBorderTexels;
-        render::sdsm::g_dilation = s.sdsmDilation;
-        render::sdsm::g_minScaleOverSphere = s.sdsmMinScaleOverSphere;
-        render::sdsm::g_zMargin = s.sdsmZMargin;
-        render::sdsm::g_stabilityFrames = s.sdsmStabilityFrames;
-        render::sdsm::g_cacheFrames = s.sdsmCacheFrames;
-        render::sdsm::g_cacheDilation = s.sdsmCacheDilation;
-        render::sdsm::g_texelSnap = s.sdsmTexelSnap;
-        render::sdsm::g_sizeHysteresis = s.sdsmSizeHysteresis;
-        render::sdsm::g_evsm = s.sdsmEvsm;
-        render::sdsm::g_evsmPos = s.sdsmEvsmPos;
-        render::sdsm::g_evsmNeg = s.sdsmEvsmNeg;
-        render::sdsm::g_evsmBlur = s.sdsmBlur;
-        render::sdsm::g_evsmBlurMaxTexels = s.sdsmBlurMaxTexels;
+        render::sdsm::g_partitions_game = s.sdsmPartitions;
+        render::sdsm::g_borderTexels_game = s.sdsmBorderTexels;
+        render::sdsm::g_dilation_game = s.sdsmDilation;
+        render::sdsm::g_minScaleOverSphere_game = s.sdsmMinScaleOverSphere;
+        render::sdsm::g_zMargin_game = s.sdsmZMargin;
+        render::sdsm::g_stabilityFrames_game = s.sdsmStabilityFrames;
+        render::sdsm::g_cacheFrames_game = s.sdsmCacheFrames;
+        render::sdsm::g_cacheDilation_game = s.sdsmCacheDilation;
+        render::sdsm::g_texelSnap_game = s.sdsmTexelSnap;
+        render::sdsm::g_sizeHysteresis_game = s.sdsmSizeHysteresis;
+        render::sdsm::g_evsm_game = s.sdsmEvsm;
+        render::sdsm::g_evsmPos_game = s.sdsmEvsmPos;
+        render::sdsm::g_evsmNeg_game = s.sdsmEvsmNeg;
+        render::sdsm::g_evsmBlur_game = s.sdsmBlur;
+        render::sdsm::g_evsmBlurMaxTexels_game = s.sdsmBlurMaxTexels;
     }
 
     void ApplyContact(const GraphicsSettingsSnapshot& s)
     {
-        render::contact::g_enabled = s.contactEnabled;
-        render::contact::g_localMode = s.contactLocalMode;
-        render::contact::g_temporalDither = s.contactTemporalDither;
-        render::contact::g_lengthInWorldSpace = s.contactLengthInWorldSpace;
-        render::contact::g_length = s.contactLength;
-        render::contact::g_intensity = s.contactIntensity;
-        render::contact::g_steps = s.contactSteps;
-        render::contact::g_maxThicknessFrac = s.contactMaxThickness;
-        render::contact::g_normalOffsetFrac = s.contactNormalOffset;
-        render::contact::g_grazingFadeNdotL = s.contactGrazingFade;
-        render::contact::g_minDistanceM = s.contactMinDistance;
-        render::contact::g_maxDistanceM = s.contactMaxDistance;
-        render::contact::g_fadeBandM = s.contactFadeBand;
+        render::contact::g_enabled_game = s.contactEnabled;
+        render::contact::g_localMode_game = s.contactLocalMode;
+        render::contact::g_temporalDither_game = s.contactTemporalDither;
+        render::contact::g_lengthInWorldSpace_game = s.contactLengthInWorldSpace;
+        render::contact::g_length_game = s.contactLength;
+        render::contact::g_intensity_game = s.contactIntensity;
+        render::contact::g_steps_game = s.contactSteps;
+        render::contact::g_maxThicknessFrac_game = s.contactMaxThickness;
+        render::contact::g_normalOffsetFrac_game = s.contactNormalOffset;
+        render::contact::g_grazingFadeNdotL_game = s.contactGrazingFade;
+        render::contact::g_minDistanceM_game = s.contactMinDistance;
+        render::contact::g_maxDistanceM_game = s.contactMaxDistance;
+        render::contact::g_fadeBandM_game = s.contactFadeBand;
     }
 
     void ApplyVsm(const GraphicsSettingsSnapshot& s)
     {
         // A `--shadow-mode=` boot override keeps the mode it set; the file's value is remembered
         // so a save in that session writes the file's own mode back, not the override.
-        render::g_shadowModePersisted = s.shadowMode;
-        if (!render::g_shadowModeFromCli) { render::g_shadowMode = s.shadowMode; }
-        render::g_giIndirectShadowsEnabled = s.giIndirectShadows;
-        render::g_localShadowWindRange = s.localShadowWindRange;
-        render::g_shadowLodBias = s.shadowLodBias;
-        render::g_shadowLodBiasNearTier = s.shadowLodBiasNearTier;
-        render::g_shadowLodTierStride = s.shadowLodTierStride;
-        vsm::g_refDist = s.vsmLodRefDistance;
-        vsm::g_requestDownscale = s.vsmRequestDownscale;
-        vsm::g_lruThreshold = s.vsmLruFrames;
-        vsm::g_clipmapBaseExtent = s.vsmClipmapBaseExtent;
-        vsm::g_clipmapBlendEnabled = s.vsmClipmapBlend;
-        vsm::g_clipmapBlendWidth = s.vsmClipmapBlendWidth;
-        vsm::g_smrtRayCount = s.smrtRayCount;
-        vsm::g_smrtSamplesPerRay = s.smrtSamplesPerRay;
-        vsm::g_smrtTemporalDither = s.smrtTemporalDither;
-        vsm::g_smrtAdaptiveRayCount = s.smrtAdaptiveRayCount;
-        vsm::g_smrtLevelMargin = s.smrtLevelMargin;
-        vsm::g_smrtSourceAngleDeg = s.smrtSunAngleDeg;
-        vsm::g_smrtTexelDitherScale = s.smrtTexelDitherScale;
-        vsm::g_smrtRayLengthScale = s.smrtRayLengthScale;
-        vsm::g_clipmapDepthBias = s.vsmClipmapDepthBias;
-        vsm::g_clipmapDepthBiasDecay = s.vsmClipmapDepthBiasDecay;
-        vsm::g_clipmapDepthBiasFloorTexels = s.vsmClipmapDepthBiasFloorTexels;
-        vsm::g_clipmapNormalBias = s.vsmClipmapNormalBias;
-        vsm::g_localLateralTexels = s.vsmLocalLateralTexels;
-        vsm::g_localDepthPushTexels = s.vsmLocalDepthPushTexels;
-        vsm::g_residentIterOnly = s.vsmResidentOnly;
-        vsm::g_pageDrawSingle = s.vsmSingleDraw;
-        vsm::g_hzbCull = s.vsmHzbCull;
-        vsm::g_pageCaching = s.vsmPageCaching;
-        tessy::g_enabled = s.tessyEnabled;
-        tessy::g_vsm = s.tessyVsm;
-        tessy::g_vsmMeshShader = s.tessyRaster;
-        tessy::g_atlas = s.tessyAtlas;
-        tessy::g_gbuffer = s.tessyGBuffer;
-        tessy::g_sdsm = s.tessySdsm;
-        tessy::g_lod = s.tessyLod;
-        tessy::g_lodPixelError = s.tessyLodPixelError;
-        vsm::g_windAnimateMaxLevel = s.vsmWindAnimateMaxLevel;
+        render::g_shadowModePersisted_game = s.shadowMode;
+        if (!render::g_shadowModeFromCli_game) { render::g_shadowMode_game = s.shadowMode; }
+        render::g_giIndirectShadowsEnabled_game = s.giIndirectShadows;
+        render::g_localShadowWindRange_game = s.localShadowWindRange;
+        render::g_shadowLodBias_game = s.shadowLodBias;
+        render::g_shadowLodBiasNearTier_game = s.shadowLodBiasNearTier;
+        render::g_shadowLodTierStride_game = s.shadowLodTierStride;
+        vsm::g_refDist_game = s.vsmLodRefDistance;
+        vsm::g_requestDownscale_game = s.vsmRequestDownscale;
+        vsm::g_lruThreshold_game = s.vsmLruFrames;
+        vsm::g_clipmapBaseExtent_game = s.vsmClipmapBaseExtent;
+        vsm::g_clipmapBlendEnabled_game = s.vsmClipmapBlend;
+        vsm::g_clipmapBlendWidth_game = s.vsmClipmapBlendWidth;
+        vsm::g_smrtRayCount_game = s.smrtRayCount;
+        vsm::g_smrtSamplesPerRay_game = s.smrtSamplesPerRay;
+        vsm::g_smrtTemporalDither_game = s.smrtTemporalDither;
+        vsm::g_smrtAdaptiveRayCount_game = s.smrtAdaptiveRayCount;
+        vsm::g_smrtLevelMargin_game = s.smrtLevelMargin;
+        vsm::g_smrtSourceAngleDeg_game = s.smrtSunAngleDeg;
+        vsm::g_smrtTexelDitherScale_game = s.smrtTexelDitherScale;
+        vsm::g_smrtRayLengthScale_game = s.smrtRayLengthScale;
+        vsm::g_clipmapDepthBias_game = s.vsmClipmapDepthBias;
+        vsm::g_clipmapDepthBiasDecay_game = s.vsmClipmapDepthBiasDecay;
+        vsm::g_clipmapDepthBiasFloorTexels_game = s.vsmClipmapDepthBiasFloorTexels;
+        vsm::g_clipmapNormalBias_game = s.vsmClipmapNormalBias;
+        vsm::g_localLateralTexels_game = s.vsmLocalLateralTexels;
+        vsm::g_localDepthPushTexels_game = s.vsmLocalDepthPushTexels;
+        vsm::g_residentIterOnly_game = s.vsmResidentOnly;
+        vsm::g_pageDrawSingle_game = s.vsmSingleDraw;
+        vsm::g_hzbCull_game = s.vsmHzbCull;
+        vsm::g_pageCaching_game = s.vsmPageCaching;
+        tessy::g_enabled_game = s.tessyEnabled;
+        tessy::g_vsm_game = s.tessyVsm;
+        tessy::g_vsmMeshShader_game = s.tessyRaster;
+        tessy::g_atlas_game = s.tessyAtlas;
+        tessy::g_gbuffer_game = s.tessyGBuffer;
+        tessy::g_sdsm_game = s.tessySdsm;
+        tessy::g_lod_game = s.tessyLod;
+        tessy::g_lodPixelError_game = s.tessyLodPixelError;
+        vsm::g_windAnimateMaxLevel_game = s.vsmWindAnimateMaxLevel;
     }
 
     void ApplyAll(const GraphicsSettingsSnapshot& s, Renderer& renderer, Scene& scene,
@@ -827,7 +827,7 @@ namespace
         scene.CascadeConfig() = s.csm;
         // A RESOURCE size, so it is only recorded here; Scene::ReconcileShadowMode reallocates
         // the atlas at GPU idle on the next frame that sees the change.
-        render::g_csmAtlasRes = s.csmAtlasRes;
+        render::g_csmAtlasRes_game = s.csmAtlasRes;
     }
 
     json ToJson(const GraphicsSettingsSnapshot& s)
@@ -1658,7 +1658,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
              value <= static_cast<unsigned>(GraphicsControl::CsmAtlasRes))
     {
         scene.CascadeConfig() = current.csm;
-        render::g_csmAtlasRes = current.csmAtlasRes;
+        render::g_csmAtlasRes_game = current.csmAtlasRes;
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::SdsmPartitions) &&
              value <= static_cast<unsigned>(GraphicsControl::SdsmBlurMax))

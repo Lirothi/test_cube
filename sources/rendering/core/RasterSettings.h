@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace render {
 
@@ -13,6 +14,8 @@ namespace render {
 // `--set=raster.bindless:0|1`, and the toggle rebuilds the affected PSOs in place, keep-alive for
 // the frames in flight).
 inline bool g_rasterBindless = true;
+inline bool g_rasterBindless_game = true;
+inline const bool g_rasterBindless_knob = ::knob::Register(g_rasterBindless_game, g_rasterBindless, "render::g_rasterBindless");
 // Bumped by every change of g_rasterBindless; the renderer's tick compares it with what it last
 // applied and flags the G-buffer materials for a hot reload.
 inline std::uint32_t g_rasterBindlessGen = 0;

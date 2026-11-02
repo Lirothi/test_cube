@@ -30,6 +30,7 @@
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
 #include "core/threading/ThreadRole.h" // game thread plan: who may touch what, and when
+#include "core/threading/Knob.h"       // G5: the knobs cross at the hand-over
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/math/AABB.h"
@@ -2082,6 +2083,7 @@ void Scene::Sync(Renderer* renderer)
     CPU_SCOPE(ProfilerScopes::kSceneSync);
     threading::ClearRenderParked(); // the render half runs again after this
     syncedThisFrame_ = true;
+    knob::Exchange(); // G5: the knobs the game half set (and the ones the render half consumed) cross here
 
     // G2: the camera. The render half takes the game camera's pose (and a cut, by its revision); the game camera's own
     // matrices are refreshed for the pose about to render -- the gizmo, picking and the HUD read them next frame, as

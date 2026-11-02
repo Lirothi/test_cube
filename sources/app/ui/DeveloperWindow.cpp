@@ -30,7 +30,7 @@
 #include "rendering/core/RenderStats.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/VisibilityStats.h" // S0 occlusion plan: per-view visibility table
-#include "rendering/visibility/OcclusionHistory.h" // S3a: vis::g_occlusion
+#include "rendering/visibility/OcclusionHistory.h" // S3a: vis::g_occlusion_game
 #include "rendering/meshes/LodSelect.h"
 #include "rendering/debug/LodDebugView.h"
 #include "rendering/renderables/InstanceTypes.h"
@@ -491,11 +491,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
     auto DrawShadowModeCombo = [&](const char* id)
     {
         static const char* const kModeNames[] = { "Legacy CSM", "VSM (clipmap)", "SDSM (GPU-fit)" };
-        int modeIdx = static_cast<int>(render::g_shadowMode);
+        int modeIdx = static_cast<int>(render::g_shadowMode_game);
         if (GRAPHICS_CONTROL(ShadowMode, id,
             ImGui::Combo("Shadow mode [Ctrl+V]", &modeIdx, kModeNames, 3)))
         {
-            render::g_shadowMode = static_cast<render::ShadowMode>(std::clamp(modeIdx, 0, 2));
+            render::g_shadowMode_game = static_cast<render::ShadowMode>(std::clamp(modeIdx, 0, 2));
         }
         if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Which machinery produces the SUN's shadow.\n"
@@ -647,17 +647,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 else
                 {
-                    ImGui::TextDisabled(render::g_pipelineStatsMode == 0
+                    ImGui::TextDisabled(render::g_pipelineStatsMode_game == 0
                         ? "Triangles (GPU): off (--set=stats.pipeline:0)"
                         : "Triangles (GPU): measuring...");
                 }
 
                 ImGui::Separator();
                 // Frame pacing: UE's r.VSync and t.MaxFPS, both off by default as UE ships them.
-                bool vsync = render::g_vsync;
+                bool vsync = render::g_vsync_game;
                 if (GRAPHICS_CONTROL(VSync, "vsync", ImGui::Checkbox("VSync", &vsync)))
                 {
-                    render::g_vsync = vsync;
+                    render::g_vsync_game = vsync;
                 }
                 DevHelp("UE r.VSync. On: Present waits for the monitor's vblank (sync interval 1), "
                         "so the frame rate tops out at the refresh rate and nothing tears. Off: "
@@ -665,11 +665,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Enter-to-apply: typing "144" must not pass through a 1 fps and a 14 fps cap on
                 // the way. The local copy is reseeded every frame; the field keeps its own text
                 // while it is being edited.
-                int maxFps = render::g_maxFps;
+                int maxFps = render::g_maxFps_game;
                 if (GRAPHICS_CONTROL(MaxFps, "maxFps",
                         ImGui::InputInt("Max FPS", &maxFps, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)))
                 {
-                    render::g_maxFps = render::ClampMaxFps(maxFps);
+                    render::g_maxFps_game = render::ClampMaxFps(maxFps);
                 }
                 DevHelp("UE t.MaxFPS. 0 = uncapped, otherwise 10..1000; press Enter to apply. The "
                         "main loop sleeps out the rest of each 1/N s frame, so the GPU sits idle "
@@ -704,11 +704,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 else
                 {
-                    bool asyncCompute = !render::g_noAsyncCompute;
+                    bool asyncCompute = !render::g_noAsyncCompute_game;
                     if (GRAPHICS_CONTROL(AsyncCompute, "asyncCompute",
                                          ImGui::Checkbox("Async compute", &asyncCompute)))
                     {
-                        render::g_noAsyncCompute = !asyncCompute;
+                        render::g_noAsyncCompute_game = !asyncCompute;
                     }
                     DevHelp("Runs Pass_BuildAS and Pass_RTTrace on the second (compute) queue, "
                             "overlapped with shadow rasterisation. Worth about -3% frame time on "
@@ -846,7 +846,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Headless: --vis-readout -> logs/visibility_readout.log.");
                 // S1 rollback, live: with it off every chunk/instance of a passed object draws again.
                 GRAPHICS_CONTROL(VisibilityChunkMask, "visibilityChunkMask",
-                    ImGui::Checkbox("Chunk / instance frustum mask (S1)", &render::g_visChunkMask));
+                    ImGui::Checkbox("Chunk / instance frustum mask (S1)", &render::g_visChunkMask_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Frustum test below the object level: terrain chunks (camera + Legacy CSM\n"
                                       "CPU loop) and GPU-instanced cloud instances (camera). Off = pre-S1: an\n"
@@ -854,11 +854,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // S3a: the occlusion method, live, and what last frame asked and learned.
                 {
                     static const char* kMethods[] = { "off", "hardware queries", "hzb tester" };
-                    int method = std::clamp(vis::g_occlusion.method, 0, 2);
+                    int method = std::clamp(vis::g_occlusion_game.method, 0, 2);
                     if (GRAPHICS_CONTROL_WIDTH(OcclusionMethod, "occlusionMethod", 126.0f,
                         ImGui::Combo("Occlusion", &method, kMethods, 3)))
                     {
-                        vis::g_occlusion.method = method;
+                        vis::g_occlusion_game.method = method;
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Camera-only occlusion culling against the G-buffer depth, with a history and a\n"
@@ -868,13 +868,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                           "Shadows never consult either. --set=vis.method:0|1|2, vis.queryLatency:1..3");
                     ImGui::SameLine();
                     GRAPHICS_CONTROL_WIDTH(OcclusionQueryLatency, "occlusionQueryLatency", 56.0f,
-                        ImGui::SliderInt("latency", &vis::g_occlusion.queryLatency, 1,
+                        ImGui::SliderInt("latency", &vis::g_occlusion_game.queryLatency, 1,
                                          static_cast<int>(vis::kOcclusionBufferedFrames)));
                     // S6: ownership -- objects the GPU-driven G-buffer draws are occluded by its own
                     // two-pass (S5) and leave this history; the checkbox restores the pre-S6 overlap.
                     ImGui::SameLine();
                     GRAPHICS_CONTROL(OcclusionIndirectQueries, "occlusionIndirectQueries",
-                        ImGui::Checkbox("also query GPU-driven objects", &vis::g_occlusion.indirectQueries));
+                        ImGui::Checkbox("also query GPU-driven objects", &vis::g_occlusion_game.indirectQueries));
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("OFF (S6 rule): an object the GPU-driven G-buffer draws is occluded by the camera's\n"
                                           "two-pass HZB (zero latency) and is not queried here at all -- the CPU path and the\n"
@@ -890,7 +890,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Occlusion plan S4: the camera's G-buffer through the same registry.
                 GRAPHICS_CONTROL(IndirectGBuffer, "indirectGBuffer",
                     ImGui::Checkbox("GPU-driven G-buffer (ExecuteIndirect per group)",
-                                    &render::g_indirectGBufferEnabled));
+                                    &render::g_indirectGBufferEnabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The opaque G-buffer drawn from the shadow registry's camera cull: one\n"
                                       "ExecuteIndirect per (mesh submesh, LOD), the group's material bound by the CPU.\n"
@@ -900,7 +900,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Texture streaming A6: material textures by index in one shader-visible heap.
                 GRAPHICS_CONTROL(RasterBindless, "rasterBindless",
                     ImGui::Checkbox("Bindless material textures (SM6.6 ResourceDescriptorHeap)",
-                                    &render::g_rasterBindless));
+                                    &render::g_rasterBindless_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("G-buffer and masked-shadow PSOs read albedo/MR/normal by heap index instead of a\n"
                                       "per-draw descriptor table; the GPU-driven G-buffer then draws every group of one PSO\n"
@@ -915,7 +915,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Occlusion plan S5: the camera's two-pass HZB occlusion inside that G-buffer.
                 GRAPHICS_CONTROL(GbufferHzb, "gbufferHzb",
                     ImGui::Checkbox("HZB occlusion in the GPU-driven G-buffer (two-pass)",
-                                    &render::g_gbufferHzbCullEnabled));
+                                    &render::g_gbufferHzbCullEnabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Nanite's main/post split on the indirect G-buffer: candidates last frame's depth\n"
                                       "pyramid hid are deferred, pass A draws the rest, the pyramid of pass A's depth\n"
@@ -1297,9 +1297,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         static const char* kFogCells[] = { "4 px", "8 px", "16 px (UE default)", "32 px", "64 px" };
                         static const unsigned kFogCellPx[] = { 4u, 8u, 16u, 32u, 64u };
                         int idx = 2;
-                        for (int i = 0; i < 5; ++i) { if (render::g_fogGridPixels == kFogCellPx[i]) { idx = i; } }
+                        for (int i = 0; i < 5; ++i) { if (render::g_fogGridPixels_game == kFogCellPx[i]) { idx = i; } }
                         const bool changed = ImGui::Combo("Volumetric fog cell", &idx, kFogCells, 5);
-                        if (changed) { render::g_fogGridPixels = kFogCellPx[idx]; }
+                        if (changed) { render::g_fogGridPixels_game = kFogCellPx[idx]; }
                         return changed;
                     })());
                 if (ImGui::IsItemHovered())
@@ -1311,9 +1311,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         static const char* kFogSlices[] = { "16", "32", "48", "64 (UE default)", "96", "128" };
                         static const unsigned kFogSliceN[] = { 16u, 32u, 48u, 64u, 96u, 128u };
                         int idx = 3;
-                        for (int i = 0; i < 6; ++i) { if (render::g_fogGridZ == kFogSliceN[i]) { idx = i; } }
+                        for (int i = 0; i < 6; ++i) { if (render::g_fogGridZ_game == kFogSliceN[i]) { idx = i; } }
                         const bool changed = ImGui::Combo("Volumetric fog slices", &idx, kFogSlices, 6);
-                        if (changed) { render::g_fogGridZ = kFogSliceN[idx]; }
+                        if (changed) { render::g_fogGridZ_game = kFogSliceN[idx]; }
                         return changed;
                     })());
                 if (ImGui::IsItemHovered())
@@ -1435,11 +1435,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Project-wide, UE's r.VolumetricRenderTarget.Mode by its own numbers; index 0 = mode 1.
                 static const char* const kCloudTraceModes[] = {
                     "Half-res trace, full-res resolve (ours)", "Quarter-res trace, half-res resolve (UE mode 0)" };
-                int traceMode = render::g_cloudTraceMode == 0u ? 1 : 0;
+                int traceMode = render::g_cloudTraceMode_game == 0u ? 1 : 0;
                 if (GRAPHICS_CONTROL(CloudTraceMode, "cloudTraceMode",
                         ImGui::Combo("Cloud trace", &traceMode, kCloudTraceModes, IM_ARRAYSIZE(kCloudTraceModes))))
                 {
-                    render::g_cloudTraceMode = traceMode == 1 ? 0u : 1u;
+                    render::g_cloudTraceMode_game = traceMode == 1 ? 0u : 1u;
                 }
                 DevHelp("Where the clouds' view march runs. Ours: a ray per half-res texel through one render "
                         "pixel of its 2x2 a frame, rebuilt at the render resolution over four frames. UE mode 0 "
@@ -1453,12 +1453,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // actually traced -- the proof the switch reached the GPU.
                 static const char* const kCloudShadowUpdateModes[] = {
                     "Every frame (UE)", "1/4 per frame (2x2)", "1/16 per frame (4x4)" };
-                int updateMode = render::g_cloudShadowUpdateFrames >= 16u ? 2 : (render::g_cloudShadowUpdateFrames >= 4u ? 1 : 0);
+                int updateMode = render::g_cloudShadowUpdateFrames_game >= 16u ? 2 : (render::g_cloudShadowUpdateFrames_game >= 4u ? 1 : 0);
                 if (GRAPHICS_CONTROL(CloudShadowUpdateFrames, "cloudShadowUpdateFrames",
                         ImGui::Combo("Cloud shadow update", &updateMode, kCloudShadowUpdateModes,
                                      IM_ARRAYSIZE(kCloudShadowUpdateModes))))
                 {
-                    render::g_cloudShadowUpdateFrames = updateMode == 2 ? 16u : (updateMode == 1 ? 4u : 1u);
+                    render::g_cloudShadowUpdateFrames_game = updateMode == 2 ? 16u : (updateMode == 1 ? 4u : 1u);
                 }
                 DevHelp("How much of the cloud shadow map (512x512, a march through the layer per "
                         "texel) is re-traced each frame. Every frame is UE's behaviour and costs about "
@@ -1468,11 +1468,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "rebuild or a wind jump re-traces the whole map that frame. "
                         "--set=cloudShadow.updateFrames:1|4|16");
                 // The map march's cheap density: each is a texture tap per sample the view keeps.
-                bool bilinearWeather = render::g_cloudShadowBilinearWeather;
+                bool bilinearWeather = render::g_cloudShadowBilinearWeather_game;
                 if (GRAPHICS_CONTROL(CloudShadowBilinearWeather, "cloudShadowBilinearWeather",
                         ImGui::Checkbox("Cloud shadow: bilinear macro variation", &bilinearWeather)))
                 {
-                    render::g_cloudShadowBilinearWeather = bilinearWeather;
+                    render::g_cloudShadowBilinearWeather_game = bilinearWeather;
                 }
                 DevHelp("The shadow map reads the macro variation's field (the weather map) with one bilinear "
                         "tap instead of the view's 4-tap B-spline; only matters while the level's Macro "
@@ -1480,11 +1480,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "into streaks across distant clouds); the map is a top-down grid blurred 3x3 "
                         "afterwards. Off = the map sees exactly the view's coverage. "
                         "--set=cloudShadow.bilinearWeather:0|1");
-                bool detailMean = render::g_cloudShadowDetailMean;
+                bool detailMean = render::g_cloudShadowDetailMean_game;
                 if (GRAPHICS_CONTROL(CloudShadowDetailMean, "cloudShadowDetailMean",
                         ImGui::Checkbox("Cloud shadow: erosion by its mean", &detailMean)))
                 {
-                    render::g_cloudShadowDetailMean = detailMean;
+                    render::g_cloudShadowDetailMean_game = detailMean;
                 }
                 DevHelp("The shadow map erodes the cloud by the cells volume's MEAN erosion instead of "
                         "fetching it, and leaves out the fine detail -- what the clouds' own far self-shadow "
@@ -1714,9 +1714,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 ImGui::Checkbox("Profiler overlay", &settings.showProfiler);
 #if WITH_EDITOR
-                ImGui::Checkbox("GPU instancing [F12]", &render::g_instancingEnabled);
+                ImGui::Checkbox("GPU instancing [F12]", &render::g_instancingEnabled_game);
 #else
-                ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled);
+                ImGui::Checkbox("GPU instancing", &render::g_instancingEnabled_game);
 #endif
 
                 // (Mesh LOD enable/force + the selection boundaries moved to the "LOD" tab.)
@@ -1928,39 +1928,39 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
 #if WITH_EDITOR
                 GRAPHICS_CONTROL(LodEnabled, "lodEnabled",
-                    ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled));
+                    ImGui::Checkbox("Mesh LOD [F10]", &render::g_lodEnabled_game));
 #else
                 GRAPHICS_CONTROL(LodEnabled, "lodEnabled",
-                    ImGui::Checkbox("Mesh LOD", &render::g_lodEnabled));
+                    ImGui::Checkbox("Mesh LOD", &render::g_lodEnabled_game));
 #endif
-                ImGui::BeginDisabled(!render::g_lodEnabled);
+                ImGui::BeginDisabled(!render::g_lodEnabled_game);
                 // -1 = automatic (screen-size / cascade); 0..3 force that level on every mesh.
                 static const char* kForcedLodLabels[] = { "Auto", "0 (full)", "1", "2", "3" };
-                int forcedLodCombo = render::g_forcedLod + 1; // map -1..3 -> 0..4
+                int forcedLodCombo = render::g_forcedLod_game + 1; // map -1..3 -> 0..4
                 if (ImGui::Combo("Force LOD level", &forcedLodCombo, kForcedLodLabels, IM_ARRAYSIZE(kForcedLodLabels)))
                 {
-                    render::g_forcedLod = forcedLodCombo - 1;
+                    render::g_forcedLod_game = forcedLodCombo - 1;
                 }
 
                 ImGui::SeparatorText("Regular meshes (UE screen size)");
                 GRAPHICS_CONTROL(LodUeScreenSize, "lodUeScreenSize",
-                    ImGui::Checkbox("UE screen size, per mesh", &render::g_lodUeScreenSize));
+                    ImGui::Checkbox("UE screen size, per mesh", &render::g_lodUeScreenSize_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE's static-mesh LOD: a LOD is drawn while the object's screen size\n"
                                       "(bounding-sphere diameter / screen height) is at most that LOD's screen\n"
                                       "size, estimated per mesh from its baked deviation (UE's automatic screen\n"
                                       "size: the deviation spans 'Pixel error' pixels of this screen) or authored\n"
                                       "in mesh.json \"lodScreenSize\". Off = the global distance/radius ratios below.");
-                ImGui::BeginDisabled(!render::g_lodUeScreenSize);
+                ImGui::BeginDisabled(!render::g_lodUeScreenSize_game);
                 GRAPHICS_CONTROL(LodPixelError, "lodPixelError",
-                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError, 0.25f, 16.0f, "%.2f px"));
+                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError_game, 0.25f, 16.0f, "%.2f px"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("How many pixels OF THIS SCREEN a LOD's baked deviation may span at the\n"
                                       "distance it switches in (default 1). UE's PixelError is 8 pixels of a fixed\n"
                                       "1080p screen -- a visible pop, tuned to UE's own deviation metric. Higher =\n"
                                       "coarser sooner. mesh.json \"lodPixelError\" overrides it per asset.");
                 GRAPHICS_CONTROL(LodDistanceScale, "lodDistanceScale",
-                    ImGui::SliderFloat("LOD distance scale", &render::g_lodDistanceScale, 0.1f, 8.0f, "%.2f"));
+                    ImGui::SliderFloat("LOD distance scale", &render::g_lodDistanceScale_game, 0.1f, 8.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE r.StaticMeshLODDistanceScale (default 1): multiplies every LOD's screen\n"
                                       "size, so ABOVE 1 SWITCHES EARLIER (2 = half the distance) -- the opposite\n"
@@ -1969,9 +1969,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::EndDisabled();
 
                 ImGui::SeparatorText("Regular meshes (distance / radius)");
-                ImGui::BeginDisabled(render::g_lodUeScreenSize);
+                ImGui::BeginDisabled(render::g_lodUeScreenSize_game);
                 GRAPHICS_CONTROL(LodBound0, "lodBound0",
-                    ImGui::SliderFloat("LOD1 at ratio", &render::g_lodBound0,
+                    ImGui::SliderFloat("LOD1 at ratio", &render::g_lodBound0_game,
                                        2.0f, 60.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("distance / instance radius where LOD0 steps to LOD1. A 2 m-radius palm\n"
@@ -1980,14 +1980,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "with the LOD dither time > 0 a switch is a temporal dissolve, else +/-15%%\n"
                                       "hysteresis. Foliage takes these in UE mode too (no automatic estimate).");
                 GRAPHICS_CONTROL(LodBound1, "lodBound1",
-                    ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1,
+                    ImGui::SliderFloat("LOD2 at ratio", &render::g_lodBound1_game,
                                        4.0f, 120.0f, "%.0f"));
                 GRAPHICS_CONTROL(LodBound2, "lodBound2",
-                    ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2,
+                    ImGui::SliderFloat("LOD3 at ratio", &render::g_lodBound2_game,
                                        8.0f, 240.0f, "%.0f"));
                 ImGui::EndDisabled();
                 GRAPHICS_CONTROL(LodTemporalLag, "lodTemporalLag",
-                    ImGui::SliderFloat("LOD dither time", &render::g_lodTemporalLag,
+                    ImGui::SliderFloat("LOD dither time", &render::g_lodTemporalLag_game,
                                        0.0f, 2.0f, "%.2f s"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE's temporal LOD (lod.TemporalLag, default 0.5 s): the LOD is selected from\n"
@@ -1999,7 +1999,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::SeparatorText("Chunked terrain (metres, per chunk)");
                 GRAPHICS_CONTROL(ChunkLodDistance, "chunkLodDistance",
                     ImGui::SliderFloat("Chunk LOD distance (m)",
-                                       &render::g_chunkLodDist0,
+                                       &render::g_chunkLodDist0_game,
                                        24.0f, 400.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("A terrain chunk closer than this (closest point of its box) draws AND\n"
@@ -2008,7 +2008,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "self-shadow banding/phantom family -- this knob trades triangles for pop-in\n"
                                       "distance only.");
                 GRAPHICS_CONTROL(ChunkLodFactor, "chunkLodFactor",
-                    ImGui::SliderFloat("Chunk LOD factor", &render::g_chunkLodDistFactor,
+                    ImGui::SliderFloat("Chunk LOD factor", &render::g_chunkLodDistFactor_game,
                                        1.2f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Distance multiplier between LOD steps: LOD2 starts at distance*factor,\n"
@@ -2023,10 +2023,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "this frame, never re-derived.");
                 static const char* kLodDebugLabels[] = {
                     "Off", "Tier (selected LOD)", "Density (apparent triangle size)" };
-                int lodDebugCombo = static_cast<int>(render::g_lodDebugMode);
+                int lodDebugCombo = static_cast<int>(render::g_lodDebugMode_game);
                 if (ImGui::Combo("LOD debug view", &lodDebugCombo, kLodDebugLabels, IM_ARRAYSIZE(kLodDebugLabels)))
                 {
-                    render::g_lodDebugMode = static_cast<render::LodDebugMode>(lodDebugCombo);
+                    render::g_lodDebugMode_game = static_cast<render::LodDebugMode>(lodDebugCombo);
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Tier: colour = the LOD each chunk selected (green 0 -> red 3).\n"
@@ -2036,15 +2036,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "count, so an equal tier is not equal detail. That gap is exactly why\n"
                                       "a nearer chunk can look coarser than a farther one.");
 
-                ImGui::BeginDisabled(render::g_lodDebugMode == render::LodDebugMode::Off);
+                ImGui::BeginDisabled(render::g_lodDebugMode_game == render::LodDebugMode::Off);
 #if WITH_EDITOR
                 // Only offered where a selection can exist; in a non-editor build there is nothing
                 // to select, so the control is absent rather than present and inert.
                 static const char* kLodDebugFilterLabels[] = { "Whole level", "Selection only" };
-                int lodDebugFilterCombo = static_cast<int>(render::g_lodDebugFilter);
+                int lodDebugFilterCombo = static_cast<int>(render::g_lodDebugFilter_game);
                 if (ImGui::Combo("Report on", &lodDebugFilterCombo, kLodDebugFilterLabels, IM_ARRAYSIZE(kLodDebugFilterLabels)))
                 {
-                    render::g_lodDebugFilter = static_cast<render::LodDebugFilter>(lodDebugFilterCombo);
+                    render::g_lodDebugFilter_game = static_cast<render::LodDebugFilter>(lodDebugFilterCombo);
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Selection only narrows the view to the objects picked in the viewport\n"
@@ -2052,23 +2052,23 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "It does not quietly widen back to the whole level when nothing is\n"
                                       "selected -- the readout says the selection is empty instead.");
 #endif
-                ImGui::Checkbox("Boxes", &render::g_lodDebugBoxes);
+                ImGui::Checkbox("Boxes", &render::g_lodDebugBoxes_game);
                 ImGui::SameLine();
-                ImGui::Checkbox("Labels", &render::g_lodDebugLabels);
+                ImGui::Checkbox("Labels", &render::g_lodDebugLabels_game);
                 ImGui::SameLine();
-                ImGui::Checkbox("Criteria", &render::g_lodDebugCriteria);
+                ImGui::Checkbox("Criteria", &render::g_lodDebugCriteria_game);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Draws the boundaries as what they geometrically ARE: spheres around\n"
                                       "the camera, sliced at sea level. It is why height alone can put every\n"
                                       "chunk past a boundary. Also probes the chunk under the crosshair --\n"
                                       "white box, plus the exact closest-point segment its distance was\n"
                                       "measured along.");
-                ImGui::Checkbox("Include regular meshes", &render::g_lodDebugRegularMeshes);
+                ImGui::Checkbox("Include regular meshes", &render::g_lodDebugRegularMeshes_game);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Palms and props select on distance/RADIUS (the ratio sliders above),\n"
                                       "not on metres. Off by default so the two curves stay separable.");
-                ImGui::SliderFloat("Debug range (m)", &render::g_lodDebugRange, 40.0f, 800.0f, "%.0f");
-                ImGui::SliderInt("Max boxes", &render::g_lodDebugMaxBoxes, 0, 800);
+                ImGui::SliderFloat("Debug range (m)", &render::g_lodDebugRange_game, 40.0f, 800.0f, "%.0f");
+                ImGui::SliderInt("Max boxes", &render::g_lodDebugMaxBoxes_game, 0, 800);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("A populated level has hundreds of meshes and every box is 12 lines,\n"
                                       "which buries the terrain the view is usually there to judge. Chunks\n"
@@ -2110,7 +2110,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::SeparatorText("Local lights (atlas)");
                 ImGui::BeginDisabled(render::VsmActive());
                 GRAPHICS_CONTROL(LocalShadowWindRange, "localShadowWindRange",
-                    ImGui::SliderFloat("Lamp shadow sway range (m)", &render::g_localShadowWindRange,
+                    ImGui::SliderFloat("Lamp shadow sway range (m)", &render::g_localShadowWindRange_game,
                                        -1.0f, 200.0f, "%.0f"));
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                     ImGui::SetTooltip("A spot / point light whose reach comes within this many metres of the camera\n"
@@ -2132,11 +2132,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     static const char* const kResNames[] = { "512", "1024", "2048", "4096", "8192" };
                     static const unsigned kResValues[] = { 512u, 1024u, 2048u, 4096u, 8192u };
                     int resIdx = 3;
-                    for (int i = 0; i < 5; ++i) { if (kResValues[i] == render::g_csmAtlasRes) { resIdx = i; } }
+                    for (int i = 0; i < 5; ++i) { if (kResValues[i] == render::g_csmAtlasRes_game) { resIdx = i; } }
                     if (GRAPHICS_CONTROL(CsmAtlasRes, "csmAtlasRes",
                         ImGui::Combo("Atlas resolution", &resIdx, kResNames, 5)))
                     {
-                        render::g_csmAtlasRes = kResValues[std::clamp(resIdx, 0, 4)];
+                        render::g_csmAtlasRes_game = kResValues[std::clamp(resIdx, 0, 4)];
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Edge of the shared CSM atlas, in texels. A tile is half of it,\n"
@@ -2147,13 +2147,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                           "geometry and reaches Legacy's density at half the edge -- that is\n"
                                           "the whole S16 bet, and this is what tests it.",
                                           render::kCascadeAtlasBorder);
-                    const double mb = (static_cast<double>(render::g_csmAtlasRes) *
-                                       render::g_csmAtlasRes * 2.0) / (1024.0 * 1024.0);
+                    const double mb = (static_cast<double>(render::g_csmAtlasRes_game) *
+                                       render::g_csmAtlasRes_game * 2.0) / (1024.0 * 1024.0);
                     ImGui::TextDisabled("tile %u, content %u, %.1f MB",
-                                        render::g_csmAtlasRes / 2u,
-                                        (render::g_csmAtlasRes / 2u) > 2u * render::kCascadeAtlasBorder
-                                            ? (render::g_csmAtlasRes / 2u) - 2u * render::kCascadeAtlasBorder
-                                            : (render::g_csmAtlasRes / 2u),
+                                        render::g_csmAtlasRes_game / 2u,
+                                        (render::g_csmAtlasRes_game / 2u) > 2u * render::kCascadeAtlasBorder
+                                            ? (render::g_csmAtlasRes_game / 2u) - 2u * render::kCascadeAtlasBorder
+                                            : (render::g_csmAtlasRes_game / 2u),
                                         mb);
                 }
                 GRAPHICS_CONTROL(CsmMaxDistance, "csmMaxDistance",
@@ -2492,9 +2492,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Applied AFTER sharpen, in UE's order. Only affects the tent kernels.");
 
                 ImGui::SeparatorText("Debug");
-                bool csmTint = render::g_csmDebugMode == render::CsmDebugMode::CascadeTint;
+                bool csmTint = render::g_csmDebugMode_game == render::CsmDebugMode::CascadeTint;
                 if (ImGui::Checkbox("Cascade tint", &csmTint))
-                    render::g_csmDebugMode = csmTint ? render::CsmDebugMode::CascadeTint
+                    render::g_csmDebugMode_game = csmTint ? render::CsmDebugMode::CascadeTint
                                                      : render::CsmDebugMode::Off;
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Tint each pixel by the cascade its shadow sample RESOLVED to:\n"
@@ -2561,12 +2561,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     // How many partitions are analysed AND rendered. Fewer means bigger tiles for
                     // the ones that remain (they still land on the same 2x2 grid), which is S17's
                     // whole idea -- in a top-down view three of four tiles are wasted.
-                    int parts = static_cast<int>(render::sdsm::g_partitions);
+                    int parts = static_cast<int>(render::sdsm::g_partitions_game);
                     if (GRAPHICS_CONTROL(SdsmPartitions, "sdsmPartitions",
                         ImGui::SliderInt("Partitions", &parts, 1,
                                          static_cast<int>(render::sdsm::kMaxPartitions))))
                     {
-                        render::sdsm::g_partitions = static_cast<std::uint32_t>(
+                        render::sdsm::g_partitions_game = static_cast<std::uint32_t>(
                             std::clamp(parts, 1, static_cast<int>(render::sdsm::kMaxPartitions)));
                     }
                     DevHelp("How many partitions are analysed and drawn. Fewer means BIGGER tiles for "
@@ -2578,7 +2578,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             "the far partitions cover almost no screen.");
                 }
                 GRAPHICS_CONTROL(SdsmBorder, "sdsmBorder",
-                    ImGui::SliderFloat("Filter border (texels)", &render::sdsm::g_borderTexels, 0.0f, 16.0f, "%.0f"));
+                    ImGui::SliderFloat("Filter border (texels)", &render::sdsm::g_borderTexels_game, 0.0f, 16.0f, "%.0f"));
                 DevHelp("Room reserved INSIDE the partition's box for the filter kernel, measured in "
                         "texels of that partition's own tile. Too low: a wide filter reaches past the "
                         "fitted box and its outer taps read cleared (lit) texels, so shadows thin out "
@@ -2586,7 +2586,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "which costs resolution everywhere. This is NOT the atlas gutter -- that is a "
                         "separate 4-texel ring outside the content rect and it still exists.");
                 GRAPHICS_CONTROL(SdsmDilation, "sdsmDilation",
-                    ImGui::SliderFloat("Dilation (fraction)", &render::sdsm::g_dilation, 0.0f, 0.2f, "%.3f"));
+                    ImGui::SliderFloat("Dilation (fraction)", &render::sdsm::g_dilation_game, 0.0f, 0.2f, "%.3f"));
                 DevHelp("Grows the measured box by this fraction of its own extent, on every side. The "
                         "reduction only ever sees VISIBLE depth samples, so a caster whose shadow lands "
                         "just past the last of them would fall outside the projection and stop casting; "
@@ -2594,7 +2594,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "1% wider box and a 1% coarser texel -- so raise it only if shadows clip at the "
                         "edges of what the camera can see.");
                 GRAPHICS_CONTROL(SdsmMinScale, "sdsmMinScale",
-                    ImGui::SliderFloat("Min box / sphere", &render::sdsm::g_minScaleOverSphere, 0.005f, 1.0f, "%.3f"));
+                    ImGui::SliderFloat("Min box / sphere", &render::sdsm::g_minScaleOverSphere_game, 0.005f, 1.0f, "%.3f"));
                 DevHelp("A FLOOR on the box size, written as a fraction of the Legacy bounding sphere "
                         "for the same depth interval -- which makes it a CEILING on how far SDSM may "
                         "zoom in. Without it a partition holding a handful of pixels magnifies without "
@@ -2602,7 +2602,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "Legacy, which is the A/B control; 0.02 = at most 50x tighter. It is also the "
                         "fallback box for a partition that saw no samples at all.");
                 GRAPHICS_CONTROL(SdsmZMargin, "sdsmZMargin",
-                    ImGui::SliderFloat("Z margin (m)", &render::sdsm::g_zMargin, 0.0f, 200.0f, "%.0f"));
+                    ImGui::SliderFloat("Z margin (m)", &render::sdsm::g_zMargin_game, 0.0f, 200.0f, "%.0f"));
                 DevHelp("Metres added to the light-space DEPTH range beyond the measured bounds, so a "
                         "caster standing between the sun and the visible geometry is still inside the "
                         "partition's projection and still casts. Too low and tall casters clip out "
@@ -2611,7 +2611,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "by the same pancake clamp the Legacy path uses, not by this.");
                 GRAPHICS_CONTROL(SdsmStability, "sdsmStability",
                     ImGui::SliderFloat("Stability (half-life, frames)",
-                        &render::sdsm::g_stabilityFrames, 0.0f, 240.0f, "%.0f"));
+                        &render::sdsm::g_stabilityFrames_game, 0.0f, 240.0f, "%.0f"));
                 DevHelp("How many FRAMES it takes for half of a wobble in the measured depth range to "
                         "decay. The interior boundaries are logarithmic over [minZ, maxZ], so anything "
                         "that moves either end moves ALL of them and the cascade edge walks across the "
@@ -2623,11 +2623,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "boundary in the wrong place for a moment after a hard cut or a fast turn. "
                         "Counted in FRAMES, so the real time constant follows the frame rate.");
                 {
-                    int cacheFrames = static_cast<int>(render::sdsm::g_cacheFrames);
+                    int cacheFrames = static_cast<int>(render::sdsm::g_cacheFrames_game);
                     if (GRAPHICS_CONTROL(SdsmCacheFrames, "sdsmCacheFrames",
                         ImGui::SliderInt("Far partitions every N frames", &cacheFrames, 1, 8)))
                     {
-                        render::sdsm::g_cacheFrames = static_cast<std::uint32_t>(std::clamp(cacheFrames, 1, 16));
+                        render::sdsm::g_cacheFrames_game = static_cast<std::uint32_t>(std::clamp(cacheFrames, 1, 16));
                     }
                 }
                 DevHelp("The partition cache. Partition 0 renders every frame; partition p >= 1 every "
@@ -2638,14 +2638,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "out of turn when the sun moves, the camera cuts or turns/moves past the box's "
                         "margin below, the atlas or the partition count changes. 1 = off.");
                 GRAPHICS_CONTROL(SdsmCacheDilation, "sdsmCacheDilation",
-                    ImGui::SliderFloat("Cached box margin", &render::sdsm::g_cacheDilation, 0.0f, 0.3f, "%.3f"));
+                    ImGui::SliderFloat("Cached box margin", &render::sdsm::g_cacheDilation_game, 0.0f, 0.3f, "%.3f"));
                 DevHelp("How much wider (fraction of its own extent, per side) a partition that will be "
                         "kept is fitted, so the camera can turn and move a little before a receiver walks "
                         "off its tile (off it, the next partition shadows it, and past the last one "
                         "nothing does). The camera guard re-renders at half of this margin. Wider = more "
                         "headroom and slightly coarser far shadows.");
                 GRAPHICS_CONTROL(SdsmTexelSnap, "sdsmTexelSnap",
-                    ImGui::Checkbox("Stable partitions (texel snap)", &render::sdsm::g_texelSnap));
+                    ImGui::Checkbox("Stable partitions (texel snap)", &render::sdsm::g_texelSnap_game));
                 DevHelp("Every box is re-measured from the depth buffer each frame, and the DLSS jitter "
                         "makes its edges wander even when nothing moves, so each re-render puts the "
                         "shadow edges up to a texel elsewhere. With the cache above that shift is held "
@@ -2654,9 +2654,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "the box is snapped to a world-anchored texel grid -- a still camera re-renders "
                         "the same tile bit for bit, a moving one slides it by whole texels. Off = the raw "
                         "per-frame fit.");
-                ImGui::BeginDisabled(!render::sdsm::g_texelSnap);
+                ImGui::BeginDisabled(!render::sdsm::g_texelSnap_game);
                 GRAPHICS_CONTROL(SdsmSizeHysteresis, "sdsmSizeHysteresis",
-                    ImGui::SliderFloat("Size hysteresis", &render::sdsm::g_sizeHysteresis, 0.0f, 0.3f, "%.3f"));
+                    ImGui::SliderFloat("Size hysteresis", &render::sdsm::g_sizeHysteresis_game, 0.0f, 0.3f, "%.3f"));
                 ImGui::EndDisabled();
                 DevHelp("How much larger than the measured box a kept texel (and a kept depth range) "
                         "may be before the partition is refitted -- a fraction of the measured size. "
@@ -2667,7 +2667,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // ---- S16: EVSM4 -------------------------------------------------------------
                 ImGui::SeparatorText("SDSM filter (EVSM4)");
                 GRAPHICS_CONTROL(SdsmEvsm, "sdsmEvsm",
-                    ImGui::Checkbox("EVSM4 moments instead of PCF", &render::sdsm::g_evsm));
+                    ImGui::Checkbox("EVSM4 moments instead of PCF", &render::sdsm::g_evsm_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The depth tile is converted to four exponentially-warped MOMENTS and\n"
                                       "sampled through a Chebyshev bound. Moments are PREFILTERABLE: bilinear,\n"
@@ -2676,22 +2676,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Costs a second atlas, RGBA32F -- four times the bytes per texel of the\n"
                                       "depth it comes from, which is why the mode pays for it with a SMALLER\n"
                                       "atlas rather than a bigger one.");
-                ImGui::BeginDisabled(!render::sdsm::g_evsm);
+                ImGui::BeginDisabled(!render::sdsm::g_evsm_game);
                 GRAPHICS_CONTROL(SdsmEvsmPos, "sdsmEvsmPos",
-                    ImGui::SliderFloat("Positive exponent", &render::sdsm::g_evsmPos,
+                    ImGui::SliderFloat("Positive exponent", &render::sdsm::g_evsmPos_game,
                                        1.0f, render::sdsm::kEvsmMaxExponent, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The steep warp: sharp contact, and what crushes light leaking.\n"
                                       "42 is the fp32 ceiling, not a taste -- exp(42) SQUARED is already\n"
                                       "2.9e36 against the format's 3.4e38.");
                 GRAPHICS_CONTROL(SdsmEvsmNeg, "sdsmEvsmNeg",
-                    ImGui::SliderFloat("Negative exponent", &render::sdsm::g_evsmNeg,
+                    ImGui::SliderFloat("Negative exponent", &render::sdsm::g_evsmNeg_game,
                                        1.0f, render::sdsm::kEvsmMaxExponent, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The shallow warp, which catches what the positive one lets through.\n"
                                       "The sample's ratio is 8:1 against the positive one.");
                 GRAPHICS_CONTROL(SdsmBlur, "sdsmBlur",
-                    ImGui::SliderFloat("Edge softening (of partition)", &render::sdsm::g_evsmBlur,
+                    ImGui::SliderFloat("Edge softening (of partition)", &render::sdsm::g_evsmBlur_game,
                                        0.0f, 0.05f, "%.4f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Separable box over the moments, its width a FRACTION OF THE PARTITION --\n"
@@ -2700,7 +2700,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "0 skips both blur passes. The sample's 0.02 is 3 m on our far partition\n"
                                       "and washes the field flat: our scene is measured in metres, theirs is not.");
                 GRAPHICS_CONTROL(SdsmBlurMax, "sdsmBlurMax",
-                    ImGui::SliderFloat("Softening cap (texels)", &render::sdsm::g_evsmBlurMaxTexels,
+                    ImGui::SliderFloat("Softening cap (texels)", &render::sdsm::g_evsmBlurMaxTexels_game,
                                        1.0f, 64.0f, "%.0f"));
                 ImGui::EndDisabled();
 
@@ -2769,7 +2769,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 GRAPHICS_CONTROL(ContactEnabled, "contactEnabled",
                     ImGui::Checkbox("Contact shadows ENABLED",
-                                    &render::contact::g_enabled));
+                                    &render::contact::g_enabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Master switch, and OFF is the default -- which matches UE, whose per-light\n"
                                       "ContactShadowLength defaults to 0. Off takes not a single depth sample.\n\n"
@@ -2777,7 +2777,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "scale a shadow-map texel cannot. Works in BOTH shadow modes and for"
                                       " EVERY light -- sun, spot and point -- as UE run it from one"
                                       " GetShadowTermsBase.");
-                ImGui::BeginDisabled(!render::contact::g_enabled);
+                ImGui::BeginDisabled(!render::contact::g_enabled_game);
 
                 {
                     // Either/or for spot + point. The sun is not on this list: there the contact
@@ -2786,10 +2786,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                                          "Contacts INSTEAD of the shadow map",
                                                          "Auto: contacts only where no shadow slot",
                                                          "Both (UE: contacts on top of the map)" };
-                    int mode = (int)std::min<std::uint32_t>(render::contact::g_localMode, 3u);
+                    int mode = (int)std::min<std::uint32_t>(render::contact::g_localMode_game, 3u);
                     if (GRAPHICS_CONTROL(ContactLocalMode, "contactLocalMode",
                         ImGui::Combo("Local lights (spot/point)", &mode, kLocalModes, 4)))
-                        render::contact::g_localMode = (std::uint32_t)mode;
+                        render::contact::g_localMode_game = (std::uint32_t)mode;
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("The first three give a local light ONE shadow source. Stacking a contact\n"
                                           "trace on a small-range light's shadow map darkens the same contact twice.\n\n"
@@ -2809,7 +2809,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactTemporal, "contactTemporal",
                     ImGui::Checkbox("Temporal dither (TAA/DLSS averages it)",
-                                    &render::contact::g_temporalDither));
+                                    &render::contact::g_temporalDither_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE: InterleavedGradientNoise(PixelPos, StateFrameIndexMod8). The dither\n"
                                       "pattern shifts every frame over an 8-frame cycle, so the temporal pass\n"
@@ -2820,7 +2820,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactLengthWorldSpace, "contactLengthWorldSpace",
                     ImGui::Checkbox("Length in METRES",
-                                    &render::contact::g_lengthInWorldSpace));
+                                    &render::contact::g_lengthInWorldSpace_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE support both readings and pick between them by the SIGN of the value.\n\n"
                                       "OFF (their default): length is a MULTIPLE OF VIEW DEPTH, so the trace covers\n"
@@ -2828,22 +2828,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "ON: plain metres. Predictable, but shrinks below a pixel far away and stops\n"
                                       "doing anything there.");
 
-                const float lenMax = render::contact::g_lengthInWorldSpace ? 2.0f : 0.3f;
+                const float lenMax = render::contact::g_lengthInWorldSpace_game ? 2.0f : 0.3f;
                 GRAPHICS_CONTROL(ContactLength, "contactLength",
                     ImGui::SliderFloat(
-                        render::contact::g_lengthInWorldSpace ? "Length (m)" : "Length (x view depth)",
-                        &render::contact::g_length, 0.0f, lenMax, "%.4f"));
+                        render::contact::g_lengthInWorldSpace_game ? "Length (m)" : "Length (x view depth)",
+                        &render::contact::g_length_game, 0.0f, lenMax, "%.4f"));
 
                 GRAPHICS_CONTROL(ContactIntensity, "contactIntensity",
-                    ImGui::SliderFloat("Intensity", &render::contact::g_intensity,
+                    ImGui::SliderFloat("Intensity", &render::contact::g_intensity_game,
                                        0.0f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("How dark a hit makes the pixel (UE ContactShadowCastingIntensity).");
 
-                int csSteps = static_cast<int>(render::contact::g_steps);
+                int csSteps = static_cast<int>(render::contact::g_steps_game);
                 if (GRAPHICS_CONTROL(ContactSteps, "contactSteps",
                                      ImGui::SliderInt("Steps", &csSteps, 1, 16)))
-                    render::contact::g_steps = static_cast<std::uint32_t>(csSteps);
+                    render::contact::g_steps_game = static_cast<std::uint32_t>(csSteps);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Depth samples along the ray. UE hardcode 8, and that is not laziness: their\n"
                                       "compare tolerance is |rayDepthSpan| * (1/steps) * 2, so THE STEP COUNT IS\n"
@@ -2858,7 +2858,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactThickness, "contactThickness",
                     ImGui::SliderFloat("Max thickness (x ray length)",
-                        &render::contact::g_maxThicknessFrac, 0.0f, 3.0f, "%.2f"));
+                        &render::contact::g_maxThicknessFrac_game, 0.0f, 3.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("THE knob for far-field speckle. A hit whose occluder sits further BEHIND\n"
                                       "the ray point than this fraction of the ray length is rejected -- it is not\n"
@@ -2871,7 +2871,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactNormalOffset, "contactNormalOffset",
                     ImGui::SliderFloat("Normal offset (x ray length)",
-                        &render::contact::g_normalOffsetFrac, 0.0f, 0.5f, "%.3f"));
+                        &render::contact::g_normalOffsetFrac_game, 0.0f, 0.5f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Starts the ray this far off the surface along the normal. A ray that begins\n"
                                       "ON the surface is ambiguous at its very first step. UE do not do this --\n"
@@ -2883,7 +2883,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactGrazingFade, "contactGrazingFade",
                     ImGui::SliderFloat("Grazing fade (NdotL)",
-                        &render::contact::g_grazingFadeNdotL, 0.0f, 0.5f, "%.3f"));
+                        &render::contact::g_grazingFadeNdotL_game, 0.0f, 0.5f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Fades the term out below this NdotL. As the sun grazes a surface the ray\n"
                                       "runs nearly PARALLEL to it and the march measures depth-buffer quantisation\n"
@@ -2892,21 +2892,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ContactMinDistance, "contactMinDistance",
                     ImGui::SliderFloat("Min distance (m)",
-                        &render::contact::g_minDistanceM, 0.0f, 2000.0f, "%.0f"));
+                        &render::contact::g_minDistanceM_game, 0.0f, 2000.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Nearer than this the term is off, fading IN over the band below. Push it out\n"
                                       "to spend contacts only where the cascades are too coarse to resolve contact\n"
                                       "detail -- the near field already has the shadow map for that.");
                 GRAPHICS_CONTROL(ContactMaxDistance, "contactMaxDistance",
                     ImGui::SliderFloat("Max distance (m)",
-                        &render::contact::g_maxDistanceM, 0.0f, 2000.0f, "%.0f"));
+                        &render::contact::g_maxDistanceM_game, 0.0f, 2000.0f, "%.0f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Metres from the camera. 0 max = no far limit. Outside the window the term\n"
                                       "is off entirely -- which is the blunt way to kill artifacts in the far field\n"
                                       "where contacts buy the least anyway.");
                 GRAPHICS_CONTROL(ContactFadeBand, "contactFadeBand",
                     ImGui::SliderFloat("Fade band (m)",
-                        &render::contact::g_fadeBandM, 0.1f, 200.0f, "%.1f"));
+                        &render::contact::g_fadeBandM_game, 0.1f, 200.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Applies to BOTH edges of the window: N metres after Min to fade in, N metres\n"
                                       "before Max to fade out. Without it either boundary reads as a line across\n"
@@ -2932,7 +2932,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // GI casts in VSM + via indirect in Legacy; OFF = GI reverts to the Legacy CPU tail.
                 GRAPHICS_CONTROL(GiIndirectShadows, "giIndirectShadows",
                     ImGui::Checkbox("GPU-instanced casters -> indirect/VSM [Ctrl+G]",
-                                    &render::g_giIndirectShadowsEnabled));
+                                    &render::g_giIndirectShadowsEnabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: GPU-instanced objects cast shadows in VSM (and via the indirect path in\n"
                                       "Legacy), dropping their CPU RenderShadow tail. OFF: Legacy CPU tail only (no VSM).");
@@ -2950,7 +2950,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // does not have is worse than no control, hence the move and the renames.
                 GRAPHICS_CONTROL(ShadowLodBias, "shadowLodBias",
                     ImGui::SliderInt("Shadow LOD bias (VSM only)",
-                                     &render::g_shadowLodBias, -2, 3));
+                                     &render::g_shadowLodBias_game, -2, 3));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ADDITIVE offset on the per-view shadow LOD, VSM ONLY (clipmap levels plus\n"
                                       "the local lights, which are pinned at tier 0). Each view picks a base LOD by\n"
@@ -2961,7 +2961,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ShadowLodBiasNearTier, "shadowLodBiasNearTier",
                     ImGui::Checkbox("Bias the NEAREST tier too (VSM only)",
-                                    &render::g_shadowLodBiasNearTier));
+                                    &render::g_shadowLodBiasNearTier_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Default OFF. The bias shifts the TIER curve, but clipmap level 0 and the local\n"
                                       "lights (pinned at tier 0) have no distance to hide a coarser caster behind, so\n"
@@ -2971,7 +2971,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(ShadowLodTierStride, "shadowLodTierStride",
                     ImGui::SliderInt("Shadow tiers per LOD (VSM only)",
-                                     &render::g_shadowLodTierStride, 1, 8));
+                                     &render::g_shadowLodTierStride_game, 1, 8));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("How many consecutive shadow-view tiers share one caster mesh LOD.\n"
                                       "1 = the aggressive 0,1,2,3 curve; 2 = 0,0,1,1,2,2, which avoids changing caster\n"
@@ -2980,7 +2980,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Changing it rebuilds the caster tables (a hitch).\n");
 
                 GRAPHICS_CONTROL(VsmRefDistance, "vsmRefDistance",
-                    ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist,
+                    ImGui::SliderFloat("LOD ref distance", &vsm::g_refDist_game,
                                        1.0f, 40.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Smaller = coarser pages: fewer/faster + more stable, softer near.\n"
@@ -2988,38 +2988,38 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Local lights' surfaces use it only with the pixel-footprint mip off\n"
                                       "(--set vsm.localMipFromPixel:0); glass and the fog always.");
 
-                int ds = static_cast<int>(vsm::g_requestDownscale);
+                int ds = static_cast<int>(vsm::g_requestDownscale_game);
                 if (GRAPHICS_CONTROL(VsmRequestDownscale, "vsmRequestDownscale",
                                      ImGui::SliderInt("Request downscale", &ds, 1, 8)))
-                    vsm::g_requestDownscale = static_cast<std::uint32_t>(ds < 1 ? 1 : ds);
+                    vsm::g_requestDownscale_game = static_cast<std::uint32_t>(ds < 1 ? 1 : ds);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Screen sub-sampling for page discovery.\n"
                                       "1 = full res (best coverage, costliest); higher = cheaper, may miss pages.");
 
-                int lru = static_cast<int>(vsm::g_lruThreshold);
+                int lru = static_cast<int>(vsm::g_lruThreshold_game);
                 if (GRAPHICS_CONTROL(VsmLru, "vsmLru",
                                      ImGui::SliderInt("LRU eviction frames", &lru, 1, static_cast<int>(vsm::kMaxLruFrames))))
-                    vsm::g_lruThreshold = static_cast<std::uint32_t>(lru < 1 ? 1 : lru);
+                    vsm::g_lruThreshold_game = static_cast<std::uint32_t>(lru < 1 ? 1 : lru);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Frames a resident page survives unrequested before it is freed (UE 1000).\n"
                                       "Before that it is taken back only when the pool has no empty page left,\n"
                                       "least recently requested first.");
 
                 GRAPHICS_CONTROL(VsmClipmapBaseExtent, "vsmClipmapBaseExtent",
-                    ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent,
+                    ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent_game,
                                        4.0f, 200.0f, "%.1f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Step 24f directional clipmap: finest level's world extent (level i = base*2^i).\n"
                                       "Smaller = sharper near shadows but less far coverage; larger = the reverse.");
                 GRAPHICS_CONTROL(VsmClipmapBlend, "vsmClipmapBlend",
-                    ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled));
+                    ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Hard performance A/B switch. OFF sends width 0 to both the page requester\n"
                                       "and samplers: no new parent requests and no second PCF sample. Parent pages\n"
                                       "requested before the switch age out after the configured LRU frame count.");
-                ImGui::BeginDisabled(!vsm::g_clipmapBlendEnabled);
+                ImGui::BeginDisabled(!vsm::g_clipmapBlendEnabled_game);
                 GRAPHICS_CONTROL(VsmClipmapBlendWidth, "vsmClipmapBlendWidth",
-                    ImGui::SliderFloat("Clipmap blend width", &vsm::g_clipmapBlendWidth,
+                    ImGui::SliderFloat("Clipmap blend width", &vsm::g_clipmapBlendWidth_game,
                                        0.0f, 0.30f, "%.3f"));
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
@@ -3032,7 +3032,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // taking one biased comparison. Directional clipmap only, so it sits with the
                 // clipmap knobs and inside the same VsmActive() gate.
                 ImGui::Separator();
-                bool smrtOn = vsm::g_smrtRayCount > 0u;
+                bool smrtOn = vsm::g_smrtRayCount_game > 0u;
                 // Remembers the ray count across an off/on cycle, so unticking is not destructive.
                 // 7 = UE's RayCountDirectional default, and the right thing to hand someone who
                 // just ticked the box. ONE ray is the noisiest configuration this feature has: the
@@ -3042,12 +3042,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 static int smrtLastRays = 7;
                 if (smrtOn)
                 {
-                    smrtLastRays = static_cast<int>(vsm::g_smrtRayCount);
+                    smrtLastRays = static_cast<int>(vsm::g_smrtRayCount_game);
                 }
                 if (GRAPHICS_CONTROL(VsmSmrtEnabled, "vsmSmrtEnabled",
                     ImGui::Checkbox("SMRT ray-marched clipmap", &smrtOn)))
                 {
-                    vsm::g_smrtRayCount = smrtOn
+                    vsm::g_smrtRayCount_game = smrtOn
                         ? static_cast<std::uint32_t>(smrtLastRays)
                         : 0u;
                 }
@@ -3061,12 +3061,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "i.e. the shadow stays where it was.");
 
                 ImGui::BeginDisabled(!smrtOn);
-                int smrtRays = static_cast<int>(vsm::g_smrtRayCount);
+                int smrtRays = static_cast<int>(vsm::g_smrtRayCount_game);
                 if (GRAPHICS_CONTROL(VsmSmrtRays, "vsmSmrtRays",
                     ImGui::SliderInt("SMRT rays", &smrtRays, 1,
                                      static_cast<int>(vsm::kSmrtMaxRays))))
                 {
-                    vsm::g_smrtRayCount = static_cast<std::uint32_t>(smrtRays);
+                    vsm::g_smrtRayCount_game = static_cast<std::uint32_t>(smrtRays);
                     smrtLastRays = smrtRays;
                 }
                 if (ImGui::IsItemHovered())
@@ -3075,17 +3075,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Until Step 3 adds the per-ray dither every ray is identical, so counts\n"
                                       "above 1 buy nothing yet and only cost.");
 
-                int smrtSteps = static_cast<int>(vsm::g_smrtSamplesPerRay);
+                int smrtSteps = static_cast<int>(vsm::g_smrtSamplesPerRay_game);
                 if (GRAPHICS_CONTROL(VsmSmrtSamples, "vsmSmrtSamples",
                     ImGui::SliderInt("SMRT samples/ray", &smrtSteps, 1,
                                      static_cast<int>(vsm::kSmrtMaxSamplesPerRay))))
-                    vsm::g_smrtSamplesPerRay = static_cast<std::uint32_t>(smrtSteps);
+                    vsm::g_smrtSamplesPerRay_game = static_cast<std::uint32_t>(smrtSteps);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Steps along each ray (UE default 8). Too few and a thin occluder is\n"
                                       "stepped over, so its shadow disappears rather than softening.");
 
                 GRAPHICS_CONTROL(VsmSmrtTemporal, "vsmSmrtTemporal",
-                    ImGui::Checkbox("SMRT temporal dither", &vsm::g_smrtTemporalDither));
+                    ImGui::Checkbox("SMRT temporal dither", &vsm::g_smrtTemporalDither_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Rotates the sample set once per frame, so the temporal pass sees a\n"
                                       "different set each frame and averages them (UE feed StateFrameIndex\n"
@@ -3094,10 +3094,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "turn it off when judging a still. Measured with DLSS on: -13.7%% noise\n"
                                       "at 1 ray, -2.6%% at 7 -- it matters most where quality is worst.");
 
-                int adaptive = static_cast<int>(vsm::g_smrtAdaptiveRayCount);
+                int adaptive = static_cast<int>(vsm::g_smrtAdaptiveRayCount_game);
                 if (GRAPHICS_CONTROL(VsmSmrtAdaptive, "vsmSmrtAdaptive",
                     ImGui::SliderInt("SMRT adaptive after N rays", &adaptive, 0, 8)))
-                    vsm::g_smrtAdaptiveRayCount = static_cast<std::uint32_t>(adaptive);
+                    vsm::g_smrtAdaptiveRayCount_game = static_cast<std::uint32_t>(adaptive);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("After N rays, a wave whose lanes ALL agree stops early (UE default 1).\n"
                                       "Fully lit and fully umbral pixels are most of the screen and need one\n"
@@ -3106,7 +3106,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "0.23%% of pixels changed. Compute only -- glass always shoots them all.");
 
                 GRAPHICS_CONTROL(VsmSmrtMargin, "vsmSmrtMargin",
-                    ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin,
+                    ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin_game,
                                        0.25f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Fraction of a clipmap level square within which a receiver is accepted.\n"
@@ -3119,7 +3119,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(VsmSmrtSunAngle, "vsmSmrtSunAngle",
                     ImGui::SliderFloat("SMRT sun angle (deg)",
-                        &vsm::g_smrtSourceAngleDeg, 0.0f, 8.0f, "%.3f"));
+                        &vsm::g_smrtSourceAngleDeg_game, 0.0f, 8.0f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The light angular SIZE -- what a penumbra is actually made of.\n"
                                       "UE default is 0.5357 deg, the real sun disc. At 0 every ray collapses\n"
@@ -3129,7 +3129,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(VsmSmrtTexelDither, "vsmSmrtTexelDither",
                     ImGui::SliderFloat("SMRT texel dither",
-                        &vsm::g_smrtTexelDitherScale, 0.0f, 4.0f, "%.2f"));
+                        &vsm::g_smrtTexelDitherScale_game, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Jitters each ray start by up to this many shadow texels (UE default 2.0),\n"
                                       "trading the resolution staircase for noise the temporal pass absorbs.\n"
@@ -3138,7 +3138,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(VsmSmrtRayLength, "vsmSmrtRayLength",
                     ImGui::SliderFloat("SMRT ray length scale",
-                        &vsm::g_smrtRayLengthScale, 0.0f, 4.0f, "%.2f"));
+                        &vsm::g_smrtRayLengthScale_game, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Ray length as a multiple of distance-to-camera (UE default 1.5). This is\n"
                                       "the knob that REPLACES the depth bias as the thing to tune, and UE's own\n"
@@ -3152,7 +3152,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // because a slider that visibly does nothing is worse than an absent one.
                 ImGui::BeginDisabled(smrtOn);
                 GRAPHICS_CONTROL(VsmDepthBias, "vsmDepthBias",
-                    ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias,
+                    ImGui::SliderFloat("Clipmap depth bias", &vsm::g_clipmapDepthBias_game,
                                        0.0f, 0.01f, "%.4f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Directional clipmap NDC depth bias at LEVEL 0 (0.0001 = 1.23 shadow texels).\n"
@@ -3160,14 +3160,14 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "level -- raise it with decay < 1 or far thin shadows detach.");
                 GRAPHICS_CONTROL(VsmDepthBiasDecay, "vsmDepthBiasDecay",
                     ImGui::SliderFloat("Depth bias decay /level",
-                        &vsm::g_clipmapDepthBiasDecay, 0.25f, 1.0f, "%.2f"));
+                        &vsm::g_clipmapDepthBiasDecay_game, 0.25f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("bias(L) = max(depthBias * decay^L, floor). 1.0 = legacy constant-in-texels;\n"
                                       "0.5 = constant WORLD-size bias (the near value everywhere). Lets the near bias\n"
                                       "rise against acne without peter-panning the far levels.");
                 GRAPHICS_CONTROL(VsmDepthBiasFloor, "vsmDepthBiasFloor",
                     ImGui::SliderFloat("Depth bias floor (texels)",
-                        &vsm::g_clipmapDepthBiasFloorTexels, 0.0f, 1.5f, "%.2f"));
+                        &vsm::g_clipmapDepthBiasFloorTexels_game, 0.0f, 1.5f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Lower bound of the decayed bias, in texels of the level actually sampled.\n"
                                       "The D32 pool has effectively no quantization floor, so 0 is legal -- the\n"
@@ -3179,7 +3179,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // receiver).
                 GRAPHICS_CONTROL(VsmNormalBias, "vsmNormalBias",
                     ImGui::SliderFloat("Clipmap normal bias (UE units)",
-                        &vsm::g_clipmapNormalBias, 0.0f, 4.0f, "%.3f"));
+                        &vsm::g_clipmapNormalBias_game, 0.0f, 4.0f, "%.3f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Receiver offset along the normal, UE's r.Shadow.Virtual.NormalBias units\n"
                                       "(their default 0.5): scaled by distance-to-camera and the FOV, /1000 on the CPU.\n"
@@ -3188,21 +3188,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(VsmLocalLateralBias, "vsmLocalLateralBias",
                     ImGui::SliderFloat("Local lateral bias (texels)",
-                        &vsm::g_localLateralTexels, 0.0f, 4.0f, "%.2f"));
+                        &vsm::g_localLateralTexels_game, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Spot + point VSM: offset along the geometric normal, in texels of the mip actually\n"
                                       "sampled. 1.5 = the 3x3 PCF's reach (less leaves acne at grazing light).\n"
                                       "Higher = less acne but the shadow Peter-pans (lifts off the base).");
                 GRAPHICS_CONTROL(VsmLocalDepthPush, "vsmLocalDepthPush",
                     ImGui::SliderFloat("Local depth push (texels)",
-                        &vsm::g_localDepthPushTexels, 0.0f, 4.0f, "%.2f"));
+                        &vsm::g_localDepthPushTexels_game, 0.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Spot + point VSM: along-the-light-ray depth push in shadow texels,\n"
                                       "slope-scaled by 1/N.L. The main acne knob; barely Peter-pans (depth-only).");
 
                 GRAPHICS_CONTROL(VsmResidentOnly, "vsmResidentOnly",
                     ImGui::Checkbox("Resident-only render (faster, may flicker)",
-                                    &vsm::g_residentIterOnly));
+                                    &vsm::g_residentIterOnly_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: render only pages a 3-frame-old snapshot says are resident (fewer CPU\n"
                                       "draws), but shadows blink for ~3 frames when the set changes (motion/churn).\n"
@@ -3211,7 +3211,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(VsmSingleDraw, "vsmSingleDraw",
                     ImGui::Checkbox("Single-draw page render (dormant)",
-                                    &vsm::g_pageDrawSingle));
+                                    &vsm::g_pageDrawSingle_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: one ExecuteIndirect over every (page, group) arg instead of the 1024-page\n"
                                       "CPU loop; the per-page viewport becomes a VS clip remap + SV_ClipDistance page\n"
@@ -3227,7 +3227,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // barrier compile seeds from. The other page-draw flag needs no such treatment:
                 // its two states are both reads and are declared as a union.
                 ImGui::BeginDisabled();
-                ImGui::Checkbox("Compact draw args (boot-only: --vsm-page-compact)", &vsm::g_pageDrawCompact);
+                ImGui::Checkbox("Compact draw args (boot-only: --vsm-page-compact)", &vsm::g_pageDrawCompact_game);
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: the setup CS appends only NON-EMPTY (page, group) records and the draw\n"
@@ -3239,7 +3239,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 // Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages.
                 GRAPHICS_CONTROL(VsmHzbCull, "vsmHzbCull",
                     ImGui::Checkbox("Light-space HZB occlusion (two-pass, clipmap pages)",
-                                    &vsm::g_hzbCull));
+                                    &vsm::g_hzbCull_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("A (caster, page) pair that LAST frame's pool pyramid hid is deferred; pass A\n"
                                       "draws the rest; the pyramid is rebuilt from the pages pass A drew; the deferred\n"
@@ -3254,15 +3254,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 ImGui::TextDisabled("Tessy (cluster geometry): its switches and counters are in the Tessy tab.");
                 GRAPHICS_CONTROL(VsmPageCaching, "vsmPageCaching",
-                    ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching));
+                    ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching_game));
                 {
-                    int windLvl = static_cast<int>(vsm::g_windAnimateMaxLevel);
+                    int windLvl = static_cast<int>(vsm::g_windAnimateMaxLevel_game);
                     if (GRAPHICS_CONTROL_WIDTH(VsmWindAnimateMaxLevel,
                         "vsmWindAnimateMaxLevel", 105.0f,
                         ImGui::SliderInt("Wind animate below level", &windLvl, 0,
                                          static_cast<int>(vsm::kNumClipmapLevels))))
                     {
-                        vsm::g_windAnimateMaxLevel = static_cast<std::uint32_t>(windLvl);
+                        vsm::g_windAnimateMaxLevel_game = static_cast<std::uint32_t>(windLvl);
                     }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Clipmap levels BELOW this sway in the shadow map and re-render every\n"
@@ -3286,7 +3286,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "depth. Measured no avg gain + worse spikes on this scene (cull-bound + dynamic\n"
                                       "teapots + gated clear slower than the hardware clear). Kept for a future coarse-skip.");
 
-                ImGui::Checkbox("Log page stats to debug output", &vsm::g_logPageStats);
+                ImGui::Checkbox("Log page stats to debug output", &vsm::g_logPageStats_game);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Periodically print \"[VSM] request ... | resident=...\" to DBWIN. Off by default\n"
                                       "(spammy); the live numbers above/below always update regardless.");
@@ -3295,7 +3295,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Separator();
                 ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",
                     vsm::kPoolPageCount, vsm::kPoolTexels, vsm::kPoolTexels,
-                    vsm::g_refDist, vsm::g_requestDownscale, vsm::g_lruThreshold);
+                    vsm::g_refDist_game, vsm::g_requestDownscale_game, vsm::g_lruThreshold_game);
 
                 // --- Live page stats + physical-pool residency grid (kFrameCount-old snapshot). ---
                 ImGui::Separator();
@@ -3396,15 +3396,15 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     "triangles, culled and drawn cluster by cluster: the VSM pages, the lamps' atlas views and, with "
                     "\"Camera G-buffer\", the camera itself (plan step N5).");
                 GRAPHICS_CONTROL(TessyEnabled, "tessyEnabled",
-                    ImGui::Checkbox("Tessy (master switch)", &tessy::g_enabled));
+                    ImGui::Checkbox("Tessy (master switch)", &tessy::g_enabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("OFF: no Tessy path runs anywhere -- the VSM pages and the lamps' atlases draw\n"
                                       "whole meshes, the cluster view is off -- whatever the switches below say (they\n"
                                       "keep their values). The cluster tables stay loaded, so it switches instantly\n"
                                       "both ways. --set=tessy.enabled:0|1");
-                ImGui::BeginDisabled(!tessy::g_enabled);
+                ImGui::BeginDisabled(!tessy::g_enabled_game);
                 GRAPHICS_CONTROL(TessyVsm, "tessyVsm",
-                    ImGui::Checkbox("Tessy: draw casters cluster by cluster", &tessy::g_vsm));
+                    ImGui::Checkbox("Tessy: draw casters cluster by cluster", &tessy::g_vsm_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: a (page, caster) pair whose mesh has clusters (a .mesh.bin v4) is culled\n"
                                       "cluster by cluster against the page (each cluster's box padded by how far this\n"
@@ -3413,7 +3413,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "OFF: every caster drawn whole into every page its box touches.\n"
                                       "The depth is the same either way. --set=tessy.vsm:0|1");
                 GRAPHICS_CONTROL(TessyRaster, "tessyRaster",
-                    ImGui::Checkbox("Tessy: mesh shader raster", &tessy::g_vsmMeshShader));
+                    ImGui::Checkbox("Tessy: mesh shader raster", &tessy::g_vsmMeshShader_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: the surviving clusters go through a mesh shader -- each meshlet vertex\n"
                                       "transformed once, a triangle wholly outside its page culled before setup.\n"
@@ -3421,7 +3421,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "triangle. Without a mesh shader tier ON draws through the VS.\n"
                                       "The depth is the same either way. --set=tessy.raster:0|1");
                 GRAPHICS_CONTROL(TessyAtlas, "tessyAtlas",
-                    ImGui::Checkbox("Tessy: lamp atlases cluster by cluster", &tessy::g_atlas));
+                    ImGui::Checkbox("Tessy: lamp atlases cluster by cluster", &tessy::g_atlas_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON (Legacy / SDSM): a point light's cube face or a spot draws the casters whose\n"
                                       "meshes have clusters cluster by cluster -- each cluster's box (padded for the\n"
@@ -3429,7 +3429,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "OFF: every such caster drawn whole into every view it touches.\n"
                                       "Needs a mesh shader tier. The depth is the same either way. --set=tessy.atlas:0|1");
                 GRAPHICS_CONTROL(TessySdsm, "tessySdsm",
-                    ImGui::Checkbox("Tessy: SDSM sun partitions cluster by cluster", &tessy::g_sdsm));
+                    ImGui::Checkbox("Tessy: SDSM sun partitions cluster by cluster", &tessy::g_sdsm_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON (SDSM): each sun partition draws the casters whose meshes have clusters cluster\n"
                                       "by cluster -- each cluster's box (padded for the wind) against the partition's cull\n"
@@ -3439,7 +3439,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Needs a mesh shader tier. The depth is the same either way. --set=tessy.sdsm:0|1");
                 ImGui::Text("SDSM partitions: %s", scene.ShadowGpu().TessySunVerdict());
                 GRAPHICS_CONTROL(TessyGBuffer, "tessyGBuffer",
-                    ImGui::Checkbox("Tessy: camera G-buffer cluster by cluster", &tessy::g_gbuffer));
+                    ImGui::Checkbox("Tessy: camera G-buffer cluster by cluster", &tessy::g_gbuffer_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("ON: the camera's indirect G-buffer draws every caster whose mesh has clusters cluster\n"
                                       "by cluster -- each cluster's box (padded for the wind) against the camera frustum,\n"
@@ -3450,8 +3450,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Text("camera G-buffer: %s (%u of %u PSO runs have a mesh shader twin)", scene.ShadowGpu().TessyGBufferVerdict(),
                             scene.ShadowGpu().TessyGBufferRuns(), scene.ShadowGpu().TessyGBufferRunsTotal());
                 ImGui::Indent();
-                ImGui::BeginDisabled(!tessy::g_gbuffer);
-                ImGui::Checkbox("Clusters against the previous HZB (two-pass)", &tessy::g_gbufferHzb);
+                ImGui::BeginDisabled(!tessy::g_gbuffer_game);
+                ImGui::Checkbox("Clusters against the previous HZB (two-pass)", &tessy::g_gbufferHzb_game);
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE Nanite's two-pass occlusion per CLUSTER: a cluster last frame's pyramid hid waits\n"
                                       "for pass B, is retested against this frame's pyramid and drawn there if visible. Off\n"
@@ -3461,7 +3461,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::EndDisabled();
                 ImGui::Unindent();
                 GRAPHICS_CONTROL(TessyLod, "tessyLod",
-                    ImGui::Checkbox("Tessy: cluster DAG LOD (camera, lamp atlases, VSM pages)", &tessy::g_lod));
+                    ImGui::Checkbox("Tessy: cluster DAG LOD (camera, lamp atlases, VSM pages)", &tessy::g_lod_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("N7: the assets with a cluster DAG (baked into every .mesh.bin v5; a v4 file builds one\n"
                                       "at load for mesh.json \"tessyLod\" or --tessy-lod-build) draw the DAG's cut --\n"
@@ -3477,7 +3477,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Indent();
                 ImGui::SetNextItemWidth(220.0f);
                 GRAPHICS_CONTROL(TessyLodPixelError, "tessyLodPixelError",
-                    ImGui::SliderFloat("DAG pixel error", &tessy::g_lodPixelError, 0.25f, 16.0f, "%.2f px",
+                    ImGui::SliderFloat("DAG pixel error", &tessy::g_lodPixelError_game, 0.25f, 16.0f, "%.2f px",
                                        ImGuiSliderFlags_Logarithmic));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("The camera's DAG cut: how many pixels of this screen a cluster's simplification error may\n"
@@ -3487,10 +3487,10 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "the VSM pages keep tessy.lodShadowTexels. --set=tessy.lodPixelError:<px>");
                 ImGui::Unindent();
                 {
-                    int view = static_cast<int>(tessy::g_debugView);
+                    int view = static_cast<int>(tessy::g_debugView_game);
                     const char* const views[] = { "Off", "Clusters", "Meshlets", "Levels" };
                     ImGui::SetNextItemWidth(160.0f);
-                    if (ImGui::Combo("Cluster view", &view, views, 4)) { tessy::g_debugView = static_cast<unsigned>(view); }
+                    if (ImGui::Combo("Cluster view", &view, views, 4)) { tessy::g_debugView_game = static_cast<unsigned>(view); }
                     if (ImGui::IsItemHovered())
                         ImGui::SetTooltip("Every caster the camera draws, over the lit frame, one colour per cluster (or per\n"
                                           "meshlet: a cluster cut into runs of <= 64 vertices for the mesh shader). From the\n"
@@ -3510,7 +3510,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::Text("tessy: clusters for %u of %u caster groups (%u clusters, %llu KB)",
                                 sg.TessyGroupsWithClusters(), sg.TessyGroupsTotal(), sg.TessyClusterCount(),
                                 static_cast<unsigned long long>((sg.TessyBytes() + 1023u) / 1024u));
-                    if (tessy::g_vsm && scene.Vsm().TessyOffReason()[0] != '\0')
+                    if (tessy::g_vsm_game && scene.Vsm().TessyOffReason()[0] != '\0')
                     {
                         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "tessy: classic path -- %s", scene.Vsm().TessyOffReason());
                     }
@@ -3544,27 +3544,27 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
             {
                 ImGui::TextWrapped("Texture streaming (UE r.Streaming.*): level textures load their 7 smallest mips and the "
                     "manager streams the rest by distance, inside the pool budget. --set=streaming.<knob>:<v>");
-                GRAPHICS_CONTROL(StreamingEnabled, "streamingEnabled", ImGui::Checkbox("Enabled", &streaming::g_enabled));
+                GRAPHICS_CONTROL(StreamingEnabled, "streamingEnabled", ImGui::Checkbox("Enabled", &streaming::g_enabled_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Off: no new requests; textures keep the mips they have. Textures loaded while off load whole.");
-                GRAPHICS_CONTROL(StreamingPoolSizeMB, "streamingPoolSizeMB", ImGui::InputInt("Pool size MB", &streaming::g_poolSizeMB));
+                GRAPHICS_CONTROL(StreamingPoolSizeMB, "streamingPoolSizeMB", ImGui::InputInt("Pool size MB", &streaming::g_poolSizeMB_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("-1 = 70%% of dedicated VRAM (UE), 0 = unlimited. Over budget the manager drops the least-kept mips first.");
-                GRAPHICS_CONTROL(StreamingMipBias, "streamingMipBias", ImGui::SliderInt("Global mip bias", &streaming::g_mipBias, 0, 4));
+                GRAPHICS_CONTROL(StreamingMipBias, "streamingMipBias", ImGui::SliderInt("Global mip bias", &streaming::g_mipBias_game, 0, 4));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE r.Streaming.MipBias. Per-texture bias ON: how many top mips the budget may take from one texture "
                         "when the pool is over budget; while the pool has room nothing changes. OFF: every texture loses this many top mips now.");
-                GRAPHICS_CONTROL(StreamingPerTextureBias, "streamingPerTextureBias", ImGui::Checkbox("Per-texture bias", &streaming::g_perTextureBias));
+                GRAPHICS_CONTROL(StreamingPerTextureBias, "streamingPerTextureBias", ImGui::Checkbox("Per-texture bias", &streaming::g_perTextureBias_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE r.Streaming.UsePerTextureBias (default on): over budget, textures lose their top mips one at a time up to "
                         "Global mip bias and get them back when the pool has room. Off: Global mip bias caps every texture directly.");
-                GRAPHICS_CONTROL(StreamingBoost, "streamingBoost", ImGui::SliderFloat("Boost", &streaming::g_boost, 0.25f, 4.0f, "%.2f"));
+                GRAPHICS_CONTROL(StreamingBoost, "streamingBoost", ImGui::SliderFloat("Boost", &streaming::g_boost_game, 0.25f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Scales the screen size every texture is judged against: 2 = one mip sharper everywhere.");
-                GRAPHICS_CONTROL(StreamingHiddenScale, "streamingHiddenScale", ImGui::SliderFloat("Hidden primitive scale", &streaming::g_hiddenScale, 0.0f, 1.0f, "%.2f"));
+                GRAPHICS_CONTROL(StreamingHiddenScale, "streamingHiddenScale", ImGui::SliderFloat("Hidden primitive scale", &streaming::g_hiddenScale_game, 0.0f, 1.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Objects outside the frustum ask for this fraction of their size (UE 0.5): what stays warm for a camera turn.");
-                GRAPHICS_CONTROL(StreamingMipFade, "streamingMipFade", ImGui::Checkbox("Mip fade", &streaming::g_mipFade));
+                GRAPHICS_CONTROL(StreamingMipFade, "streamingMipFade", ImGui::Checkbox("Mip fade", &streaming::g_mipFade_game));
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Newly arrived mips reveal over 0.3 s per mip (UE FMipBiasFade) instead of popping. --set=streaming.mipFade / mipFadeIn / mipFadeOut");
                 ImGui::Separator();

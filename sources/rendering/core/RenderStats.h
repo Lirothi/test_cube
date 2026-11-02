@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace render
 {
@@ -79,6 +80,8 @@ inline RenderStats g_renderStats;
 // RequestPipelineStats while it is drawn), and then on one frame in 32; a closed panel costs
 // nothing. `--set=stats.pipeline:0|1|2` = off | every frame | on demand (default).
 inline int g_pipelineStatsMode = 2;
+inline int g_pipelineStatsMode_game = 2;
+inline const bool g_pipelineStatsMode_knob = ::knob::Register(g_pipelineStatsMode_game, g_pipelineStatsMode, "render::g_pipelineStatsMode");
 inline std::atomic<bool> g_pipelineStatsRequested{ false };
 inline void RequestPipelineStats() { g_pipelineStatsRequested.store(true, std::memory_order_relaxed); }
 } // namespace render

@@ -32,6 +32,7 @@
 #include "core/memory/MemTags.h"
 #include "core/memory/MemTrace.h"
 #include "core/threading/ThreadRole.h" // game thread plan G1: the frame's phases, as App::Run gives them
+#include "core/threading/Knob.h"
 #include "rendering/core/MemGates.h"
 #include "core/logging/Log.h"
 
@@ -1401,6 +1402,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
 
     // Same real bootstrap as App::Run(), in the same roles: boot and teardown hand over, the driver is the game half.
     threading::SetCurrentRole(threading::ThreadRole::Sync);
+    knob::Exchange(); // G5: the command line's knobs, before the boot reads them
     systems_ = std::make_unique<Systems::AppSystems>();
     Systems::Init(systems_.get());
 
@@ -1424,6 +1426,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
         // The harness honours --set like the app does (occlusion plan S3a: a GBV gate that could
         // not switch the occlusion pass on was validating the default, not the pass).
         ApplyFixedSettings(systems_->scene);
+        knob::Exchange(); // --set's knobs
         Log("boot: window + device + scene ready (initial level loaded) at %.1f s\n",
             boot::ElapsedMs() / 1000.0);
         // The whole point of the split: this run's headline number is minutes, and until

@@ -4,17 +4,22 @@
 #include <cstdint>
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace render
 {
 // Runtime kill-switch for mesh LOD (default on). When off, Mesh::SelectLod ignores the
 // requested tier and draws full detail — useful for A/B debugging and before/after measurement.
 inline bool g_lodEnabled = true;
+inline bool g_lodEnabled_game = true;
+inline const bool g_lodEnabled_knob = ::knob::Register(g_lodEnabled_game, g_lodEnabled, "render::g_lodEnabled");
 
 // Debug override: when >= 0, forces this LOD level on EVERY mesh draw (clamped to available),
 // ignoring per-object screen-size / cascade selection. -1 = automatic selection. Lets you
 // inspect each level. (No effect when g_lodEnabled is false — that forces full detail.)
 inline int g_forcedLod = -1;
+inline int g_forcedLod_game = -1;
+inline const bool g_forcedLod_knob = ::knob::Register(g_forcedLod_game, g_forcedLod, "render::g_forcedLod");
 
 // Maximum distinct shadow LODs the GPU-driven caster path plumbs per mesh (mega slices +
 // per-(group,lod) table depth). Meshes with fewer LODs clamp to their coarsest. The shaders get it as
@@ -29,6 +34,8 @@ inline constexpr unsigned int kMaxShadowLods = 4u;
 // everywhere, negative = sharper. Changing it needs a GPU-idle caster rebuild (Scene polls
 // BuiltShadowLod() vs this each frame).
 inline int g_shadowLodBias = 1;
+inline int g_shadowLodBias_game = 1;
+inline const bool g_shadowLodBias_knob = ::knob::Register(g_shadowLodBias_game, g_shadowLodBias, "render::g_shadowLodBias");
 
 // Number of consecutive shadow-view tiers that share one caster mesh LOD. A tier is a CSM
 // cascade or a VSM clipmap level. 1 preserves the original aggressive 1:1 mapping; 2 produces
@@ -40,8 +47,12 @@ inline int g_shadowLodBias = 1;
 // on thin shells. See the note at the assignment in ShadowGpuData.cpp.
 // --set=vsm.shadowLodBiasNearTier
 inline bool g_shadowLodBiasNearTier = false;
+inline bool g_shadowLodBiasNearTier_game = false;
+inline const bool g_shadowLodBiasNearTier_knob = ::knob::Register(g_shadowLodBiasNearTier_game, g_shadowLodBiasNearTier, "render::g_shadowLodBiasNearTier");
 
 inline int g_shadowLodTierStride = 2;
+inline int g_shadowLodTierStride_game = 2;
+inline const bool g_shadowLodTierStride_knob = ::knob::Register(g_shadowLodTierStride_game, g_shadowLodTierStride, "render::g_shadowLodTierStride");
 
 inline int ShadowLodTierStride()
 {
@@ -63,7 +74,11 @@ inline int ShadowLodTierStride()
 // LOD0; each g_chunkLodDistFactor further steps one LOD coarser. +/-15% hysteresis on the tier a
 // chunk already has, so a boundary chunk does not flip while the camera breathes.
 inline float g_chunkLodDist0 = 24.0f;
+inline float g_chunkLodDist0_game = 24.0f;
+inline const bool g_chunkLodDist0_knob = ::knob::Register(g_chunkLodDist0_game, g_chunkLodDist0, "render::g_chunkLodDist0");
 inline float g_chunkLodDistFactor = 2.0f;
+inline float g_chunkLodDistFactor_game = 2.0f;
+inline const bool g_chunkLodDistFactor_knob = ::knob::Register(g_chunkLodDistFactor_game, g_chunkLodDistFactor, "render::g_chunkLodDistFactor");
 
 inline unsigned int SelectChunkLodTier(float distMeters, unsigned int currentTier)
 {
@@ -154,8 +169,14 @@ inline int ShadowTierBaseLod(unsigned int tier)
 // 1.25, and still on the detailed side of UE's usual hand-authored 0.5/0.25/0.125 (ratio 3.6/7/14).
 // Measured on wind_test (level camera, interleaved x3): frame -0.03 ms.
 inline float g_lodBound0 = 8.0f;  // ratio where LOD0 -> 1
+inline float g_lodBound0_game = 8.0f;
+inline const bool g_lodBound0_knob = ::knob::Register(g_lodBound0_game, g_lodBound0, "render::g_lodBound0");
 inline float g_lodBound1 = 16.0f; // ratio where LOD1 -> 2
+inline float g_lodBound1_game = 16.0f;
+inline const bool g_lodBound1_knob = ::knob::Register(g_lodBound1_game, g_lodBound1, "render::g_lodBound1");
 inline float g_lodBound2 = 32.0f; // ratio where LOD2 -> 3
+inline float g_lodBound2_game = 32.0f;
+inline const bool g_lodBound2_knob = ::knob::Register(g_lodBound2_game, g_lodBound2, "render::g_lodBound2");
 
 // --- FOV normalization ---------------------------------------------------------------------------
 //
@@ -233,8 +254,14 @@ inline void UpdateLodFovScale(float hfovRadians)
 // the field of view, and lod.pixelError is in those pixels, default 1: a LOD comes in where its worst deviation
 // spans one pixel of the screen it is seen on. The OUTPUT width, not DLSS's input: a pop is seen on the output.
 inline bool g_lodUeScreenSize = true;       // false = the global distance/radius bounds g_lodBound0..2
+inline bool g_lodUeScreenSize_game = true;
+inline const bool g_lodUeScreenSize_knob = ::knob::Register(g_lodUeScreenSize_game, g_lodUeScreenSize, "render::g_lodUeScreenSize");
 inline float g_lodPixelError = 1.0f;        // pixels of THIS screen (UE's PixelError: 1080p pixels, 8)
+inline float g_lodPixelError_game = 1.0f;
+inline const bool g_lodPixelError_knob = ::knob::Register(g_lodPixelError_game, g_lodPixelError, "render::g_lodPixelError");
 inline float g_lodDistanceScale = 1.0f;     // UE r.StaticMeshLODDistanceScale
+inline float g_lodDistanceScale_game = 1.0f;
+inline const bool g_lodDistanceScale_knob = ::knob::Register(g_lodDistanceScale_game, g_lodDistanceScale, "render::g_lodDistanceScale");
 inline float g_lodScreenMultiple = 0.8889f; // max(0.5 P[0][0], 0.5 P[1][1]) of this frame's camera
 inline float g_lodPixelsPerUnit = 960.0f;   // 0.5 * output width * P[0][0] of this frame (UE's fixed 960)
 inline constexpr unsigned int kLodScreenSizes = 4u; // LOD0..3, the most any mesh bakes
@@ -331,6 +358,8 @@ inline void AutoLodScreenSizes(const float* deviation, unsigned int count, float
 // into the mask's dots -- the band made that permanent on every object near a boundary; in time it
 // lasts the half second of the dissolve.
 inline float g_lodTemporalLag = 0.5f; // UE lod.TemporalLag, seconds; 0 = no dither (hard switches)
+inline float g_lodTemporalLag_game = 0.5f;
+inline const bool g_lodTemporalLag_knob = ::knob::Register(g_lodTemporalLag_game, g_lodTemporalLag, "render::g_lodTemporalLag");
 
 struct TemporalLodState
 {

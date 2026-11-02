@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "core/math/Math.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace vfx
 {
@@ -16,9 +17,15 @@ namespace vfx
 // Frozen time also freezes the gust envelope (it is a function of `time`), so the whole wind state is
 // deterministic — nothing is left riding on wall-clock timing or frame rate.
 inline bool  g_windFreeze     = false; // stop taking time from the shared clock
+inline bool  g_windFreeze_game     = false;
+inline const bool g_windFreeze_knob = ::knob::Register(g_windFreeze_game, g_windFreeze, "vfx::g_windFreeze");
 inline float g_windFrozenTime = 0.0f;  // the held time; tracks the live clock while not frozen, so
+inline float g_windFrozenTime_game = 0.0f;
+inline const bool g_windFrozenTime_knob = ::knob::Register(g_windFrozenTime_game, g_windFrozenTime, "vfx::g_windFrozenTime");
                                        // toggling freeze on holds the CURRENT pose instead of jumping
 inline float g_windStep       = 0.0f;  // one-shot: added to the held time on the next Tick, then cleared
+inline float g_windStep_game       = 0.0f;
+inline const bool g_windStep_knob = ::knob::Register(g_windStep_game, g_windStep, "vfx::g_windStep");
 
 // W1 — the single global wind source of truth. A `wind` level entity (W2) authors these params; the
 // Scene owns one WindState and advances its derived per-frame values every Tick from the SAME
@@ -121,7 +128,11 @@ inline Math::float2 g_windDriftXZ = Math::float2(0.0f, 0.0f);
 // hundreds of metres out, and freezing those is far more noticeable than the aliasing the fade is
 // meant to prevent. Dial it in against a real vista — the Wind inspector has both sliders.
 inline float g_windFadeStart = 0.0f;  // metres: full sway closer than this
+inline float g_windFadeStart_game = 0.0f;
+inline const bool g_windFadeStart_knob = ::knob::Register(g_windFadeStart_game, g_windFadeStart, "vfx::g_windFadeStart");
 inline float g_windFadeEnd   = 0.0f;  // metres: rigid beyond this (<= start disables the fade)
+inline float g_windFadeEnd_game   = 0.0f;
+inline const bool g_windFadeEnd_knob = ::knob::Register(g_windFadeEnd_game, g_windFadeEnd, "vfx::g_windFadeEnd");
 inline Math::float3 g_windFadeOriginWS = Math::float3(0.0f, 0.0f, 0.0f); // camera position
 
 // THE single definition of the fade. Both the gbuffer and the shadow scale their windStrength by

@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace render
 {
@@ -70,6 +71,8 @@ inline VisibilityStats g_visibilityStats;
 // Set by `--vis-readout`: dump the per-view table once to logs/visibility_readout.log, on frame
 // 600 (not earlier -- the level is still streaming in, see the csm_readout note in Scene.cpp).
 inline bool g_visDumpReadout = false;
+inline bool g_visDumpReadout_game = false;
+inline const bool g_visDumpReadout_knob = ::knob::Register(g_visDumpReadout_game, g_visDumpReadout, "render::g_visDumpReadout");
 
 // S1: the frustum test BELOW the object level -- terrain chunks (camera: RenderableObject::SelectLod
 // writes the mask; cascades: RenderShadow tests on the spot against the cascade's cull volume) and
@@ -77,4 +80,6 @@ inline bool g_visDumpReadout = false;
 // rollback: every chunk/instance whose OBJECT passed is drawn, as before S1. Shadows cast by the
 // GPU-driven path (ExecuteIndirect, VSM) never read this -- their per-chunk cull is the GPU's.
 inline bool g_visChunkMask = true;
+inline bool g_visChunkMask_game = true;
+inline const bool g_visChunkMask_knob = ::knob::Register(g_visChunkMask_game, g_visChunkMask, "render::g_visChunkMask");
 } // namespace render

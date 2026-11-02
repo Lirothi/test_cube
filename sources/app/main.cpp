@@ -452,7 +452,7 @@ int WINAPI WinMain(
     // Parsed BEFORE the scene-stress branch below, which returns without reading the rest of
     // the command line: the churn is exactly where this wants to run.
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cmp")) {
-        render::g_barrierComparator = true;
+        render::g_barrierComparator_game = true;
     }
     // "--set=...": above the scene-stress branch too, so the harness can pin the setting a gate
     // is about (App::ApplyFixedSettings runs after its bootstrap).
@@ -505,33 +505,33 @@ int WINAPI WinMain(
     // globals: "--vsm-page-multidraw" turns g_pageDrawSingle OFF; "--vsm-page-compact" /
     // "--vsm-page-nocompact" force g_pageDrawCompact (default ON) either way.
     if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-multidraw")) {
-        vsm::g_pageDrawSingle = false;
+        vsm::g_pageDrawSingle_game = false;
     }
     // Compaction is ON by default since 2026-08-24, so keep BOTH directions: a flag that only sets
     // the value it already has is a control that does nothing.
     // S5 A/B: "--vsm-no-local-scatter" puts local (spot/point) views back on the brute-force
     // per-page cull, so both local-light paths are reachable from one binary.
     if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-no-local-scatter")) {
-        vsm::g_scatterLocalViews = false;
+        vsm::g_scatterLocalViews_game = false;
     }
     if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-nocompact")) {
-        vsm::g_pageDrawCompact = false;
+        vsm::g_pageDrawCompact_game = false;
     }
     else if (lpCmdLine && std::strstr(lpCmdLine, "--vsm-page-compact")) {
-        vsm::g_pageDrawCompact = true;
+        vsm::g_pageDrawCompact_game = true;
     }
 
     // Step 7: "--barrier-compile-log" prints the compiled barrier count per frame. The compile
     // itself always runs once every graph has Prepares; only the logging is gated.
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-compile-log")) {
-        render::g_barrierCompileLog = true;
+        render::g_barrierCompileLog_game = true;
     }
 
     // "--barrier-flip-trace" logs every emitted barrier point plus every request that matched
     // none. Loud — for chasing one resource. (The flip itself is no longer a flag: the compiled
     // barriers are the only barrier path there is, ResourceStateTracker having been deleted.)
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-flip-trace")) {
-        render::g_barrierFlipTrace = true;
+        render::g_barrierFlipTrace_game = true;
     }
     // "--barrier-cache-verify" recompiles the barriers every frame and diffs them against what the
     // cross-frame cache would have served. Slower than no cache at all; it is a correctness gate.
@@ -564,11 +564,11 @@ int WINAPI WinMain(
         barriers::SetWideSync(true);
     }
     if (lpCmdLine && std::strstr(lpCmdLine, "--barrier-cache-verify")) {
-        render::g_barrierCacheVerify = true;
+        render::g_barrierCacheVerify_game = true;
     }
 
     if (lpCmdLine && std::strstr(lpCmdLine, "--canonical-check")) {
-        render::g_canonicalCheck = true;
+        render::g_canonicalCheck_game = true;
     }
 
     // Async-compute plan step 1: "--compute-lane-probe" acquires one COMPUTE allocator + command
@@ -576,7 +576,7 @@ int WINAPI WinMain(
     // to the session log ([caps] compute-lane probe). Submits nothing. Parsed here, above the scene-stress branch, for the
     // same reason as the flags around it — that branch returns before the boot flags are read.
     if (lpCmdLine && std::strstr(lpCmdLine, "--compute-lane-probe")) {
-        render::g_computeLaneProbe = true;
+        render::g_computeLaneProbe_game = true;
     }
 
     // Async-compute plan step 2: "--async-empty-submit" puts one EMPTY compute command list on the
@@ -584,7 +584,7 @@ int WINAPI WinMain(
     // step's proof device — the gates are run with it ON. Parsed above the scene-stress branch for
     // the same reason as everything around it.
     if (lpCmdLine && std::strstr(lpCmdLine, "--async-empty-submit")) {
-        render::g_asyncEmptySubmit = true;
+        render::g_asyncEmptySubmit_game = true;
     }
 
     // Async-compute plan step 3: "--async-order-probe" adds a known-ordered cross-queue pair
@@ -598,7 +598,7 @@ int WINAPI WinMain(
     // queue. PERMANENT, like "--legacy-barriers" — a suspected async regression must be one flag
     // away from being bisected, not a rebuild away.
     if (lpCmdLine && std::strstr(lpCmdLine, "--no-async-compute")) {
-        render::g_noAsyncCompute = true;
+        render::g_noAsyncCompute_game = true;
     }
     // Tessy N7: "--tessy-lod-build=all|<part>,<part>" builds the cluster DAG at load for every clustered asset or the
     // ones whose .mesh.bin path holds a part -- mesh.json "tessyLod" without touching the manifests.
@@ -609,19 +609,19 @@ int WINAPI WinMain(
     }
     // N7e: "--tessy-lod-prune=0" -- the DAG's leaf cards simplified by edge collapses alone (the A/B of the whole-card prune).
     if (lpCmdLine && std::strstr(lpCmdLine, "--tessy-lod-prune=0")) {
-        tessy::g_lodPrune = false;
+        tessy::g_lodPrune_game = false;
     }
     // "--tessy-lod-fold=0" -- a double-sided sheet of duplicates keeps both sides in the DAG's simplification (the A/B of
     // TessyDag's FoldTwins).
     if (lpCmdLine && std::strstr(lpCmdLine, "--tessy-lod-fold=0")) {
-        tessy::g_lodFold = false;
+        tessy::g_lodFold_game = false;
     }
 
     // "--no-streamline": take the Streamline SDK out entirely (no slInit, no device proxy).
     // PERMANENT, like "--no-async-compute": a hang that survives "--dlss=off" still has the SDK
     // wrapping the queue, and that must be one flag away from being excluded, not a rebuild away.
     if (lpCmdLine && std::strstr(lpCmdLine, "--no-streamline")) {
-        render::g_noStreamline = true;
+        render::g_noStreamline_game = true;
     }
 
     // "--no-bind-batching": make every Material::Bind issue its root bindings in full instead of
@@ -633,7 +633,7 @@ int WINAPI WinMain(
     // which shows up in the wild as the graphics queue quietly stopping mid-batch.
     // PERMANENT, like "--no-async-compute": one flag, not a rebuild.
     if (lpCmdLine && std::strstr(lpCmdLine, "--no-bind-batching")) {
-        render::g_bindBatchingEnabled = false;
+        render::g_bindBatchingEnabled_game = false;
     }
 
     // "--async-pass=<names>": narrow which passes may use the async compute queue (BuildAS,
@@ -649,10 +649,10 @@ int WINAPI WinMain(
             char buf[128] = {};
             for (size_t i = 0; i < sizeof(buf) - 1 && list[i] && list[i] != ' '; ++i) { buf[i] = list[i]; }
             const auto has = [&buf](const char* n) { return std::strstr(buf, n) != nullptr; };
-            render::g_asyncPassBuildAS = has("BuildAS");
-            render::g_asyncPassObjectCompute = has("ObjectCompute");
-            render::g_asyncPassRtTrace = has("RTTrace");
-            render::g_asyncPassCloudTrace = has("CloudTrace");
+            render::g_asyncPassBuildAS_game = has("BuildAS");
+            render::g_asyncPassObjectCompute_game = has("ObjectCompute");
+            render::g_asyncPassRtTrace_game = has("RTTrace");
+            render::g_asyncPassCloudTrace_game = has("CloudTrace");
         }
     }
 
@@ -662,22 +662,22 @@ int WINAPI WinMain(
     // Measured at 0.207 us per call = 0.006 % of the frame, so turning it on costs nothing
     // measurable — this is the switch to reach for when hunting a removal, not a perf lever.
     if (lpCmdLine && std::strstr(lpCmdLine, "--dr-check")) {
-        render::g_deviceRemovalCheck = true;
+        render::g_deviceRemovalCheck_game = true;
     }
 
     // Async-compute plan step 7: "--dump-barriers" writes every compiled barrier once, for a
     // before/after diff of the barrier compile itself.
     if (lpCmdLine && std::strstr(lpCmdLine, "--dump-barriers")) {
-        render::g_dumpBarriers = true;
+        render::g_dumpBarriers_game = true;
     }
 
     if (lpCmdLine && std::strstr(lpCmdLine, "--dump-submit-order")) {
-        render::g_dumpSubmitOrder = true;
+        render::g_dumpSubmitOrder_game = true;
     }
 
     if (lpCmdLine && std::strstr(lpCmdLine, "--async-order-probe")) {
-        render::g_asyncOrderProbe = true;
-        render::g_asyncEmptySubmit = true;
+        render::g_asyncOrderProbe_game = true;
+        render::g_asyncEmptySubmit_game = true;
     }
 
     // Same reason as --barrier-cmp: parsed here rather than with the other boot flags below,
@@ -692,18 +692,18 @@ int WINAPI WinMain(
             // which turned a typo into a silent mode switch (see ShadowSettings.h); it now leaves
             // the mode where it was and is reported.
             if (std::strncmp(p, "legacy", 6) == 0 || std::strncmp(p, "csm", 3) == 0) {
-                render::g_shadowMode = render::ShadowMode::Legacy;
+                render::g_shadowMode_game = render::ShadowMode::Legacy;
             } else if (std::strncmp(p, "sdsm", 4) == 0) {
-                render::g_shadowMode = render::ShadowMode::Sdsm;
+                render::g_shadowMode_game = render::ShadowMode::Sdsm;
             } else if (std::strncmp(p, "vsm", 3) == 0) {
-                render::g_shadowMode = render::ShadowMode::VSM;
+                render::g_shadowMode_game = render::ShadowMode::VSM;
             } else {
-                render::g_shadowModeCliUnknown = true;
+                render::g_shadowModeCliUnknown_game = true;
             }
             // An unrecognised token is NOT an override: the settings file decides, exactly as if
             // the flag had not been passed. Otherwise a typo would still pin the session to
             // whatever the build default happens to be.
-            render::g_shadowModeFromCli = !render::g_shadowModeCliUnknown;
+            render::g_shadowModeFromCli_game = !render::g_shadowModeCliUnknown_game;
         }
     }
 
@@ -848,9 +848,9 @@ int WINAPI WinMain(
         // authoring swayFrequency 0 for determinism instead makes a frozen shadow indistinguishable
         // from a correct static lean.
         if (const char* flag = std::strstr(lpCmdLine, "--wind-freeze")) {
-            vfx::g_windFreeze = true;
+            vfx::g_windFreeze_game = true;
             const char* p = flag + std::strlen("--wind-freeze");
-            vfx::g_windFrozenTime = (*p == '=') ? static_cast<float>(std::atof(p + 1)) : 0.0f;
+            vfx::g_windFrozenTime_game = (*p == '=') ? static_cast<float>(std::atof(p + 1)) : 0.0f;
         }
         // Temporary VSM perf harness (see App.h). "--profdump=<path>" dumps profiler rows + exits.
         // "--vsm-extent=<f>" / "--vsm-refdist=<f>" pre-set the runtime VSM tunables for a sweep;
@@ -873,21 +873,21 @@ int WINAPI WinMain(
         // Boot-only: it selects a shader VARIANT (a clip behind a runtime branch is still a discard
         // in the compiled shader and restores nothing). Compare two runs.
         if (std::strstr(lpCmdLine, "--ocean-shore-sink")) {
-            ocean::g_shoreSinkCut = true;
+            ocean::g_shoreSinkCut_game = true;
         }
         // "--ocean-wind=<0..1>": force the sea state for a headless capture (see the global's
         // comment). The shore artifacts only appear in a swell, so a calm level proves nothing.
         if (const char* flag = std::strstr(lpCmdLine, "--ocean-wind=")) {
-            ocean::g_windForceOverride =
+            ocean::g_windForceOverride_game =
                 (float)std::atof(flag + std::strlen("--ocean-wind="));
         }
         // "--ocean-vs-depth-probe": swap the shore SDF for a screen-space depth probe in the vertex
         // shader, to compare the two. See the global's comment for what it is expected to get wrong.
         if (std::strstr(lpCmdLine, "--ocean-vs-depth-probe")) {
-            ocean::g_vsDepthProbe = true;
+            ocean::g_vsDepthProbe_game = true;
         }
         if (const char* flag = std::strstr(lpCmdLine, "--ocean-geomfade=")) {
-            ocean::g_geometryFadeOverride =
+            ocean::g_geometryFadeOverride_game =
                 (float)std::atof(flag + std::strlen("--ocean-geomfade="));
         }
         // Ocean surface variant (see OceanRenderable.h): the surf-sim surface (the default) vs the
@@ -895,34 +895,34 @@ int WINAPI WinMain(
         // is the surf-sim flag's old name (the surface was called "legacy"/"classic" until
         // 2026-09-12) and keeps working.
         if (std::strstr(lpCmdLine, "--ocean-surf-sim-shore") || std::strstr(lpCmdLine, "--ocean-classic-shore")) {
-            ocean::g_shoreRunup = false;
+            ocean::g_shoreRunup_game = false;
         }
         if (std::strstr(lpCmdLine, "--ocean-runup-shore")) {
-            ocean::g_shoreRunup = true;
+            ocean::g_shoreRunup_game = true;
         }
         // "--ocean-foam-debug[=<view>]": compile the contact-foam diagnostic views into the ocean
         // shader. Without this flag the combo in the ocean window (F7) is inert, because the views
         // are not in the compiled shader at all. The optional "=<view>" preselects one so a view can
         // be captured headless with --shot; otherwise pick it from the combo.
         if (const char* flag = std::strstr(lpCmdLine, "--ocean-foam-debug")) {
-            ocean::g_foamDebug = true;
+            ocean::g_foamDebug_game = true;
             const char* p = flag + std::strlen("--ocean-foam-debug");
             if (*p == '=') {
-                ocean::g_foamDebugView = std::atoi(p + 1);
+                ocean::g_foamDebugView_game = std::atoi(p + 1);
             }
         }
         // surf sim injection: "--ocean-surf-sim" force-enables the surf sim regardless of the
         // level's surfSimEnabled; "--ocean-surf-debug=<view>" preselects a debug tint so the sim
         // can be captured headless with --shot (both are plain runtime state, no variant).
         if (std::strstr(lpCmdLine, "--ocean-surf-sim")) {
-            ocean::g_surfSimForce = true;
+            ocean::g_surfSimForce_game = true;
         }
         if (const char* flag = std::strstr(lpCmdLine, "--ocean-surf-debug=")) {
-            ocean::g_surfSimDebugView = std::atoi(flag + std::strlen("--ocean-surf-debug="));
+            ocean::g_surfSimDebugView_game = std::atoi(flag + std::strlen("--ocean-surf-debug="));
         }
         // surf sim S1: auto-poke cadence for headless wave captures (seconds between pokes).
         if (const char* flag = std::strstr(lpCmdLine, "--ocean-surf-poke=")) {
-            ocean::g_surfSimPokeInterval =
+            ocean::g_surfSimPokeInterval_game =
                 (float)std::atof(flag + std::strlen("--ocean-surf-poke="));
         }
         // "--trace=<frames>": headless equivalent of the CaptureTrace key.
@@ -956,9 +956,9 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--dlss-mvec=")) {
             const char* p = flag + std::strlen("--dlss-mvec=");
             const auto is = [p](const char* name) { return std::strncmp(p, name, std::strlen(name)) == 0; };
-            if      (is("engine")) { render::g_dlssMvecMode = 0; }
-            else if (is("camera")) { render::g_dlssMvecMode = 1; }
-            else if (is("legacy")) { render::g_dlssMvecMode = 2; }
+            if      (is("engine")) { render::g_dlssMvecMode_game = 0; }
+            else if (is("camera")) { render::g_dlssMvecMode_game = 1; }
+            else if (is("legacy")) { render::g_dlssMvecMode_game = 2; }
         }
         // "--log-window": open the session-log viewer at boot (see App.h).
         if (std::strstr(lpCmdLine, "--log-window")) {
@@ -1154,38 +1154,38 @@ int WINAPI WinMain(
         }
         // "--set=...": parsed once, above the scene-stress branch (ParseFixedSettingsArg).
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
-            vsm::g_clipmapBaseExtent = (float)std::atof(flag + std::strlen("--vsm-extent="));
+            vsm::g_clipmapBaseExtent_game = (float)std::atof(flag + std::strlen("--vsm-extent="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-refdist=")) {
-            vsm::g_refDist = (float)std::atof(flag + std::strlen("--vsm-refdist="));
+            vsm::g_refDist_game = (float)std::atof(flag + std::strlen("--vsm-refdist="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-normalbias=")) {
-            vsm::g_clipmapNormalBias = (float)std::atof(flag + std::strlen("--vsm-normalbias="));
+            vsm::g_clipmapNormalBias_game = (float)std::atof(flag + std::strlen("--vsm-normalbias="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-clipblend=")) {
             const float width = std::clamp(
                 (float)std::atof(flag + std::strlen("--vsm-clipblend=")), 0.0f, 0.5f);
-            vsm::g_clipmapBlendEnabled = width > 0.0f;
-            if (width > 0.0f) { vsm::g_clipmapBlendWidth = width; }
+            vsm::g_clipmapBlendEnabled_game = width > 0.0f;
+            if (width > 0.0f) { vsm::g_clipmapBlendWidth_game = width; }
         }
         if (std::strstr(lpCmdLine, "--vsm-resident")) {
-            vsm::g_residentIterOnly = true;
+            vsm::g_residentIterOnly_game = true;
         }
         // "--vsm-singledraw=0|1" forces the single-draw page render off/on. The flag defaults ON, so
         // without this there is no headless A/B of the flip at all — the per-page loop would only be
         // reachable through the dev-window checkbox, i.e. not from --profdump.
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-singledraw=")) {
-            vsm::g_pageDrawSingle = (std::atoi(flag + std::strlen("--vsm-singledraw=")) != 0);
+            vsm::g_pageDrawSingle_game = (std::atoi(flag + std::strlen("--vsm-singledraw=")) != 0);
         }
         // "--vsm-compactargs=0|1": same, for the compacted (page, group) arg records.
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-compactargs=")) {
-            vsm::g_pageDrawCompact = (std::atoi(flag + std::strlen("--vsm-compactargs=")) != 0);
+            vsm::g_pageDrawCompact_game = (std::atoi(flag + std::strlen("--vsm-compactargs=")) != 0);
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodbias=")) {
-            render::g_shadowLodBias = std::atoi(flag + std::strlen("--vsm-lodbias="));
+            render::g_shadowLodBias_game = std::atoi(flag + std::strlen("--vsm-lodbias="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-lodstride=")) {
-            render::g_shadowLodTierStride = std::clamp(
+            render::g_shadowLodTierStride_game = std::clamp(
                 std::atoi(flag + std::strlen("--vsm-lodstride=")), 1, 8);
         }
         // S0: "--shadow-mode=legacy|vsm" picks the directional shadow method at boot. The build
@@ -1195,7 +1195,7 @@ int WINAPI WinMain(
         // scene-stress path.) "--csm-tint" additionally turns the cascade-tint debug view on
         // from the command line, so the tint can be captured with --shot.
         if (std::strstr(lpCmdLine, "--csm-tint")) {
-            render::g_csmDebugMode = render::CsmDebugMode::CascadeTint;
+            render::g_csmDebugMode_game = render::CsmDebugMode::CascadeTint;
         }
         // "--csm-readout": dump the cascade fit table to logs/csm_readout.log on the first frame.
         // The dev window shows the same numbers, but a headless capture cannot open it, and zRange
@@ -1204,17 +1204,17 @@ int WINAPI WinMain(
         // terrain chunks, instances, triangles) to logs/visibility_readout.log on frame 600.
         // S0 of docs/occlusion_culling_plan.md.
         if (std::strstr(lpCmdLine, "--vis-readout")) {
-            render::g_visDumpReadout = true;
+            render::g_visDumpReadout_game = true;
         }
         if (std::strstr(lpCmdLine, "--csm-readout")) {
-            render::g_csmDumpReadout = true;
+            render::g_csmDumpReadout_game = true;
         }
         // S15: "--sdsm-readout" dumps the partition table (interval, light-space box, texel size,
         // sample count, the CPU-caster tail) into the session log once the analysis has settled.
         // Same reason as --csm-readout: a headless --shot run has no dev window to read it from,
         // and the texel size is the whole acceptance criterion of the step.
         if (std::strstr(lpCmdLine, "--sdsm-readout")) {
-            render::sdsm::g_dumpReadout = true;
+            render::sdsm::g_dumpReadout_game = true;
         }
         // "--uv-density=models/x/x.mesh.json[,models/y/y.mesh.json...]" (texture streaming A1): measure
         // the per-slot UV density of each manifest's geometry as it is on disk (the baked .bin) and

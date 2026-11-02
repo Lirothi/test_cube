@@ -1,6 +1,7 @@
 #pragma once
 #include <d3d12.h>
 #include "rendering/core/RenderContext.h" // RenderContext::kMaxBindings
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 // Step 3 (draw batching / state-change minimization): per-command-list cache of the
 // last-bound pipeline/root state, so Material::Bind and Mesh::Draw can skip redundant
@@ -15,6 +16,8 @@ namespace render
 {
     // Toggle (env-driven, for before/after measurement). Default on.
     inline bool g_bindBatchingEnabled = true;
+    inline bool g_bindBatchingEnabled_game = true;
+    inline const bool g_bindBatchingEnabled_knob = ::knob::Register(g_bindBatchingEnabled_game, g_bindBatchingEnabled, "render::g_bindBatchingEnabled");
 
     struct CommandListBindState
     {

@@ -13,6 +13,7 @@
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSurfSim.h" // surf sim injection (docs/ocean_surf_sim_plan.md)
 #include "ocean/OceanWetness.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Camera;
 class SamplerManager;
@@ -29,6 +30,8 @@ namespace ocean
 //
 // Boot-only for the same reason — flipping it rebuilds the material. Compare two runs.
 inline bool g_shoreSinkCut = true;
+inline bool g_shoreSinkCut_game = true;
+inline const bool g_shoreSinkCut_knob = ::knob::Register(g_shoreSinkCut_game, g_shoreSinkCut, "ocean::g_shoreSinkCut");
 
 // OCEAN_SHORE_RUNUP variant switch. false (the default) = the SURF-SIM surface,
 // ocean_surface_surf_sim.hlsli -- classic depth-map damping, the surf sim's injected height and
@@ -39,12 +42,18 @@ inline bool g_shoreSinkCut = true;
 // variant = material rebuild, so boot-only). Renamed from "legacy"/"classic" on 2026-09-12: the
 // surf-sim surface stopped being a byte-faithful baseline long ago and is the main surface.
 inline bool g_shoreRunup = false;
+inline bool g_shoreRunup_game = false;
+inline const bool g_shoreRunup_knob = ::knob::Register(g_shoreRunup_game, g_shoreRunup, "ocean::g_shoreRunup");
 
 // The sun's shadow from geometry on the water (OceanSunShadow; `--set ocean.sunShadow`, transient): 0 = none (the A/B).
 // `ocean.sunShadowRays`: the VSM clipmap's SMRT rays on the water, at most the frame's (vsm.smrtRayCount); 0 = its
 // single tap. Legacy / SDSM read their cascades either way.
 inline bool g_sunShadow = true;
+inline bool g_sunShadow_game = true;
+inline const bool g_sunShadow_knob = ::knob::Register(g_sunShadow_game, g_sunShadow, "ocean::g_sunShadow");
 inline int g_sunShadowRays = 1;
+inline int g_sunShadowRays_game = 1;
+inline const bool g_sunShadowRays_knob = ::knob::Register(g_sunShadowRays_game, g_sunShadowRays, "ocean::g_sunShadowRays");
 
 // "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
 // Boot-only and a VARIANT for the same reason as above — the views need per-pixel intermediates
@@ -52,21 +61,29 @@ inline int g_sunShadowRays = 1;
 // pay for them. With the variant compiled in, the VIEW itself is a plain uniform, so switching
 // views in the ocean window is free and needs no rebuild.
 inline bool g_foamDebug = false;
+inline bool g_foamDebug_game = false;
+inline const bool g_foamDebug_knob = ::knob::Register(g_foamDebug_game, g_foamDebug, "ocean::g_foamDebug");
 
 // Which diagnostic view the shader renders (0 = normal shading). Deliberately NOT part of
 // OceanRenderConfig: it is a debugging knob, and putting it there would serialize it into the
 // user's ocean settings. Rides shoreFoamBreakupParams.w.
 inline int g_foamDebugView = 0;
+inline int g_foamDebugView_game = 0;
+inline const bool g_foamDebugView_knob = ::knob::Register(g_foamDebugView_game, g_foamDebugView, "ocean::g_foamDebugView");
 
 // surf sim injection: which surf-sim channel the LEGACY surface tints with (0 = off, 1 = sim
 // height, 2 = sim foam, 3 = shore SDF isolines, 4 = shore depth). A plain runtime uniform, not
 // a variant, and not serialized — same reasoning as g_foamDebugView. Rides surfSimParams.w.
 inline int g_surfSimDebugView = 0;
+inline int g_surfSimDebugView_game = 0;
+inline const bool g_surfSimDebugView_knob = ::knob::Register(g_surfSimDebugView_game, g_surfSimDebugView, "ocean::g_surfSimDebugView");
 
 // "--ocean-surf-sim": force-enable the surf sim regardless of the level's surfSimEnabled, so a
 // headless capture can exercise it without editing authored level JSON. Runtime OR with the
 // config flag, not a variant.
 inline bool g_surfSimForce = false;
+inline bool g_surfSimForce_game = false;
+inline const bool g_surfSimForce_knob = ::knob::Register(g_surfSimForce_game, g_surfSimForce, "ocean::g_surfSimForce");
 
 
 // "--ocean-vs-depth-probe": A/B experiment, OFF. Replaces the world-space shore SDF with a
@@ -84,6 +101,8 @@ inline bool g_surfSimForce = false;
 // buffer another pass writes in the same frame. Kept compilable because re-running the comparison
 // is easier than re-arguing it.
 inline bool g_vsDepthProbe = false;
+inline bool g_vsDepthProbe_game = false;
+inline const bool g_vsDepthProbe_knob = ::knob::Register(g_vsDepthProbe_game, g_vsDepthProbe, "ocean::g_vsDepthProbe");
 }
 
 class Scene;

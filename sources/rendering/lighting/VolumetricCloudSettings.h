@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 // Volumetric clouds, part C of docs/volumetric_fog_sky_clouds_ssgi_plan.md. AUTHORED BY THE LEVEL
 // (the `volumetricCloud` object): a level with the section has clouds, one without has none -- the
@@ -255,6 +256,8 @@ inline float CloudAirSunScale(float sunGroundVisibility)
 namespace render
 {
 inline std::uint32_t g_cloudShadowUpdateFrames = 4u;
+inline std::uint32_t g_cloudShadowUpdateFrames_game = 4u;
+inline const bool g_cloudShadowUpdateFrames_knob = ::knob::Register(g_cloudShadowUpdateFrames_game, g_cloudShadowUpdateFrames, "render::g_cloudShadowUpdateFrames");
 inline std::uint32_t SanitizeCloudShadowUpdateFrames(std::uint32_t frames)
 {
     return frames >= 16u ? 16u : (frames >= 4u ? 4u : 1u);
@@ -269,6 +272,8 @@ inline std::uint32_t SanitizeCloudShadowUpdateFrames(std::uint32_t frames)
 //     quarter of the reconstruction's pixels; the detail is half as fine in each axis.
 // A change recreates the cloud targets at the frame boundary (Renderer::BeginFrame), GPU idle.
 inline std::uint32_t g_cloudTraceMode = 1u;
+inline std::uint32_t g_cloudTraceMode_game = 1u;
+inline const bool g_cloudTraceMode_knob = ::knob::Register(g_cloudTraceMode_game, g_cloudTraceMode, "render::g_cloudTraceMode");
 inline std::uint32_t SanitizeCloudTraceMode(std::uint32_t mode) { return mode == 0u ? 0u : 1u; }
 
 // Cheap density for the MAP's march only (the view, its self-shadow and the capture keep the full
@@ -288,16 +293,24 @@ inline std::uint32_t SanitizeCloudTraceMode(std::uint32_t mode) { return mode ==
 // So bilinear stays ON (free in the image), and mean erosion is OFF by default: for this density
 // model it buys 0.01 ms for a shadow that visibly leaves its cloud.
 inline bool g_cloudShadowBilinearWeather = true;
+inline bool g_cloudShadowBilinearWeather_game = true;
+inline const bool g_cloudShadowBilinearWeather_knob = ::knob::Register(g_cloudShadowBilinearWeather_game, g_cloudShadowBilinearWeather, "render::g_cloudShadowBilinearWeather");
 inline bool g_cloudShadowDetailMean = false;
+inline bool g_cloudShadowDetailMean_game = false;
+inline const bool g_cloudShadowDetailMean_knob = ::knob::Register(g_cloudShadowDetailMean_game, g_cloudShadowDetailMean, "render::g_cloudShadowDetailMean");
 // Time-of-day plan N3: the clouds' light reaches each sample through the air (cloud_march.hlsli
 // CloudLightTransmittance) and is the sun until it leaves the layer, then the moon -- or, OFF, the
 // pre-N3 behaviour: the ground's light with the air applied once at the camera. The A/B switch
 // (`--set=cloud.perSampleTransmittance:0`), session only.
 inline bool g_cloudPerSampleTransmittance = true;
+inline bool g_cloudPerSampleTransmittance_game = true;
+inline const bool g_cloudPerSampleTransmittance_knob = ::knob::Register(g_cloudPerSampleTransmittance_game, g_cloudPerSampleTransmittance, "render::g_cloudPerSampleTransmittance");
 // The view march's start offset from the spatiotemporal blue-noise mask (UE's way; textures/noise, made by
 // tools/gen_stbn.py) -- or, OFF, our earlier interleaved gradient noise + golden ratio. The A/B switch
 // (`--set=cloud.blueNoise:0`), session only; without the file the mask is off either way.
 inline bool g_cloudBlueNoise = true;
+inline bool g_cloudBlueNoise_game = true;
+inline const bool g_cloudBlueNoise_knob = ::knob::Register(g_cloudBlueNoise_game, g_cloudBlueNoise, "render::g_cloudBlueNoise");
 inline std::uint32_t CloudShadowCheapBits()
 {
     return (g_cloudShadowBilinearWeather ? 1u : 0u) | (g_cloudShadowDetailMean ? 2u : 0u);

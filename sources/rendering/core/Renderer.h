@@ -46,6 +46,7 @@ namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWri
 #include "streamline/include/sl.h"
 #include "streamline/include/sl_core_types.h"
 #include "streamline/include/sl_dlss.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 using Microsoft::WRL::ComPtr;
 
@@ -60,15 +61,21 @@ namespace render {
 // measurement that says whether D2's "every frame ends at canonical" invariant is real, and
 // exactly which resources need an epilogue transition before Step 7 makes it load-bearing.
 inline bool g_canonicalCheck = false;
+inline bool g_canonicalCheck_game = false;
+inline const bool g_canonicalCheck_knob = ::knob::Register(g_canonicalCheck_game, g_canonicalCheck, "render::g_canonicalCheck");
 
 // Step 8: recompile the barriers every frame EVEN ON A CACHE HIT and diff the result against what
 // the cache would have served. The only honest way to ship a cache on the barrier path — run it
 // over the full --scene-stress churn and require silence. `--barrier-cache-verify`.
 inline bool g_barrierCacheVerify = false;
+inline bool g_barrierCacheVerify_game = false;
+inline const bool g_barrierCacheVerify_knob = ::knob::Register(g_barrierCacheVerify_game, g_barrierCacheVerify, "render::g_barrierCacheVerify");
 // Step 7: per-emission trace of the compiled barriers — which point each Transition request
 // matched, and `[flip-miss]` (with the CURRENT point's contents) when it matched none. Loud; for
 // chasing a specific resource only. `--barrier-flip-trace`.
 inline bool g_barrierFlipTrace = false;
+inline bool g_barrierFlipTrace_game = false;
+inline const bool g_barrierFlipTrace_knob = ::knob::Register(g_barrierFlipTrace_game, g_barrierFlipTrace, "render::g_barrierFlipTrace");
 
 // Async-compute plan step 1: `--compute-lane-probe` runs a ONE-SHOT check that the COMPUTE lane of
 // the FrameResource pools actually works, and logs the verdict to the session log ([caps] line).
@@ -81,6 +88,8 @@ inline bool g_barrierFlipTrace = false;
 //
 // The probe SUBMITS NOTHING — it opens a list, checks it, closes it and drops it. Default off.
 inline bool g_computeLaneProbe = false;
+inline bool g_computeLaneProbe_game = false;
+inline const bool g_computeLaneProbe_knob = ::knob::Register(g_computeLaneProbe_game, g_computeLaneProbe, "render::g_computeLaneProbe");
 
 // Async-compute plan step 2: `--async-empty-submit` submits ONE empty COMPUTE command list to the
 // async queue every frame, so the two-queue frame fence is exercised by a real submission instead
@@ -91,6 +100,8 @@ inline bool g_computeLaneProbe = false;
 // vacuously true and the machinery would ship untested. Step 8 replaces it with the first real
 // pass. Default off.
 inline bool g_asyncEmptySubmit = false;
+inline bool g_asyncEmptySubmit_game = false;
+inline const bool g_asyncEmptySubmit_knob = ::knob::Register(g_asyncEmptySubmit_game, g_asyncEmptySubmit, "render::g_asyncEmptySubmit");
 
 // Async-compute plan step 3: `--async-order-probe` makes the empty compute submission SIGNAL the
 // cross-queue fence and the next frame's graphics submission WAIT on it, producing a pair whose
@@ -106,6 +117,8 @@ inline bool g_asyncEmptySubmit = false;
 // stall shows an idle queue, a healthy device and no cross-queue edge of ours outstanding, this
 // is the only switch that actually takes the SDK out of the picture.
 inline bool g_noStreamline = false;
+inline bool g_noStreamline_game = false;
+inline const bool g_noStreamline_knob = ::knob::Register(g_noStreamline_game, g_noStreamline, "render::g_noStreamline");
 
 // "--dlss-mvec=engine|camera|legacy": what the upscaler is told about our motion vectors.
 // 0 = engine MVs with the NGX sign convention applied (the shipping path, see the DlssHandler
@@ -114,8 +127,12 @@ inline bool g_noStreamline = false;
 // the A/B that found the "sand smears under DLSS in motion" bug (2026-09-11). Headless recipe:
 // --cam-fly at 24 m/s past a textured ground, --shot after a second of motion, compare.
 inline int g_dlssMvecMode = 0;
+inline int g_dlssMvecMode_game = 0;
+inline const bool g_dlssMvecMode_knob = ::knob::Register(g_dlssMvecMode_game, g_dlssMvecMode, "render::g_dlssMvecMode");
 
 inline bool g_asyncOrderProbe = false;
+inline bool g_asyncOrderProbe_game = false;
+inline const bool g_asyncOrderProbe_knob = ::knob::Register(g_asyncOrderProbe_game, g_asyncOrderProbe, "render::g_asyncOrderProbe");
 
 // The last frame's per-queue submission TOPOLOGY, recorded so a fence stall can print the exact
 // cross-queue edge it is parked on. The command-list dump (--dump-submit-order) shows WHAT was
@@ -147,6 +164,8 @@ inline unsigned   g_submitEdgeCount = 0;  // saturates at kSubmitEdgeRing
 // pointers differ between runs and say nothing; the names are the pass identities, which is what
 // "the array is unchanged" actually means.
 inline bool g_dumpSubmitOrder = false;
+inline bool g_dumpSubmitOrder_game = false;
+inline const bool g_dumpSubmitOrder_knob = ::knob::Register(g_dumpSubmitOrder_game, g_dumpSubmitOrder, "render::g_dumpSubmitOrder");
 
 // Async-compute plan step 8 (design D4): `--no-async-compute` forces EVERY pass back onto the
 // graphics queue, whatever it was registered as.
@@ -177,11 +196,21 @@ inline bool g_dumpSubmitOrder = false;
 // Empty string = the default, every pass keeps whatever queue it asked for.
 // Examples: `--async-pass=none`, `--async-pass=BuildAS`, `--async-pass=BuildAS,RTTrace`.
 inline bool g_asyncPassBuildAS = true;
+inline bool g_asyncPassBuildAS_game = true;
+inline const bool g_asyncPassBuildAS_knob = ::knob::Register(g_asyncPassBuildAS_game, g_asyncPassBuildAS, "render::g_asyncPassBuildAS");
 inline bool g_asyncPassObjectCompute = true;
+inline bool g_asyncPassObjectCompute_game = true;
+inline const bool g_asyncPassObjectCompute_knob = ::knob::Register(g_asyncPassObjectCompute_game, g_asyncPassObjectCompute, "render::g_asyncPassObjectCompute");
 inline bool g_asyncPassRtTrace = true;
+inline bool g_asyncPassRtTrace_game = true;
+inline const bool g_asyncPassRtTrace_knob = ::knob::Register(g_asyncPassRtTrace_game, g_asyncPassRtTrace, "render::g_asyncPassRtTrace");
 inline bool g_asyncPassCloudTrace = true;
+inline bool g_asyncPassCloudTrace_game = true;
+inline const bool g_asyncPassCloudTrace_knob = ::knob::Register(g_asyncPassCloudTrace_game, g_asyncPassCloudTrace, "render::g_asyncPassCloudTrace");
 
 inline bool g_noAsyncCompute = false;
+inline bool g_noAsyncCompute_game = false;
+inline const bool g_noAsyncCompute_knob = ::knob::Register(g_noAsyncCompute_game, g_noAsyncCompute, "render::g_noAsyncCompute");
 
 // What the switch above actually PRODUCED on the GPU last frame: command lists submitted to the
 // compute queue, and cross-queue waits the graph asked for. Written by the submit loop, read by the
@@ -207,7 +236,11 @@ inline std::uint32_t g_crossQueueWaits = 0;
 inline constexpr int kMaxFpsFloor = 10;
 inline constexpr int kMaxFpsCeiling = 1000;
 inline bool g_vsync = false;
+inline bool g_vsync_game = false;
+inline const bool g_vsync_knob = ::knob::Register(g_vsync_game, g_vsync, "render::g_vsync");
 inline int g_maxFps = 0;
+inline int g_maxFps_game = 0;
+inline const bool g_maxFps_knob = ::knob::Register(g_maxFps_game, g_maxFps, "render::g_maxFps");
 
 // 0 (or less) = uncapped; anything else lands in [kMaxFpsFloor, kMaxFpsCeiling].
 inline int ClampMaxFps(int fps)
@@ -230,6 +263,8 @@ inline int ClampMaxFps(int fps)
 // poll is what additionally catches a removal that never reaches Present — turn it on when hunting
 // one (the open async-toggle report is exactly that case).
 inline bool g_deviceRemovalCheck = false;
+inline bool g_deviceRemovalCheck_game = false;
+inline const bool g_deviceRemovalCheck_knob = ::knob::Register(g_deviceRemovalCheck_game, g_deviceRemovalCheck, "render::g_deviceRemovalCheck");
 } // namespace render
 
 namespace streaming { class TextureStreaming; } // A2; the member is a unique_ptr, ~Renderer is out of line

@@ -7,6 +7,7 @@
 #include "core/math/Math.h"
 #include "ocean/OceanSimulationInputs.h"
 #include "ocean/OceanSimulationSettings.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 struct OceanRenderConfig
 {
@@ -269,10 +270,14 @@ namespace ocean
 // artifacts this exists to check only show up in a swell. Negative = no override. Diagnostic only;
 // never written back to any config.
 inline float g_windForceOverride = -1.0f;
+inline float g_windForceOverride_game = -1.0f;
+inline const bool g_windForceOverride_knob = ::knob::Register(g_windForceOverride_game, g_windForceOverride, "ocean::g_windForceOverride");
 
 // "--ocean-geomfade=<metres>": override shoreGeometryFadeDistance for a headless capture without
 // touching the level file. Negative = no override. Diagnostic only.
 inline float g_geometryFadeOverride = -1.0f;
+inline float g_geometryFadeOverride_game = -1.0f;
+inline const bool g_geometryFadeOverride_knob = ::knob::Register(g_geometryFadeOverride_game, g_geometryFadeOverride, "ocean::g_geometryFadeOverride");
 }
 
 OceanSimulationConfig CloneOceanSimulationConfig(const OceanSimulationConfig& config);

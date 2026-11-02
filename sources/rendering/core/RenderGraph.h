@@ -73,6 +73,7 @@ inline constexpr std::size_t kResourceUsesPerPassBudget = 48;
 
 #include <chrono>
 #include <string>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace render {
 // Barrier plan step 3: diff every converted pass's registered state usage against what
@@ -89,11 +90,17 @@ inline bool g_barrierComparator = true;
 #else
 inline bool g_barrierComparator = false;
 #endif
+inline bool g_barrierComparator_game = g_barrierComparator; // game thread plan G5: the game's copy
+inline const bool g_barrierComparator_knob = ::knob::Register(g_barrierComparator_game, g_barrierComparator, "render::g_barrierComparator");
 // Step 7: one line per frame with the compiled barrier count. DEFAULT OFF.
 inline bool g_barrierCompileLog = false;
+inline bool g_barrierCompileLog_game = false;
+inline const bool g_barrierCompileLog_knob = ::knob::Register(g_barrierCompileLog_game, g_barrierCompileLog, "render::g_barrierCompileLog");
 // Async-compute step 7: `--dump-barriers` writes every compiled barrier ONCE (pass, point,
 // resource NAME, before -> after) to logs/barrier_dump.log, for a before/after diff of the compile.
 inline bool g_dumpBarriers = false;
+inline bool g_dumpBarriers_game = false;
+inline const bool g_dumpBarriers_knob = ::knob::Register(g_dumpBarriers_game, g_dumpBarriers, "render::g_dumpBarriers");
 } // namespace render
 
 // Debug name for a pass's command list: PIX, GBV and the breadcrumb dump all read it, so the

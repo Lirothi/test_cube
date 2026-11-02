@@ -22,6 +22,7 @@
 
 #include "core/math/Math.h"
 #include "rendering/core/ResourceDeclarations.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Renderer;
 class Material;
@@ -33,7 +34,11 @@ namespace ocean
 // by the sim's pass builder on the next frame. "--ocean-surf-poke=<sec>" auto-pokes on that
 // cadence so a headless phase series can watch a wave without a GUI.
 inline bool g_surfSimPokeRequest = false;
+inline bool g_surfSimPokeRequest_game = false;
+inline const bool g_surfSimPokeRequest_knob = ::knob::Register(g_surfSimPokeRequest_game, g_surfSimPokeRequest, "ocean::g_surfSimPokeRequest");
 inline float g_surfSimPokeInterval = 0.0f;
+inline float g_surfSimPokeInterval_game = 0.0f;
+inline const bool g_surfSimPokeInterval_knob = ::knob::Register(g_surfSimPokeInterval_game, g_surfSimPokeInterval, "ocean::g_surfSimPokeInterval");
 }
 
 class OceanSurfSim

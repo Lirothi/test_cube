@@ -16,6 +16,7 @@
 #include "rendering/core/ResourceDeclarations.h"
 
 #include "rendering/shadows/ShadowSettings.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 class Renderer;
 class Material;
 class Camera;
@@ -204,6 +205,8 @@ namespace vsm
     // buffer sizing (kVirtualRes / kNumMipLevels / kPoolPageCount stay compile-time), so changing
     // them needs no reallocation. Defaults = the constexpr values above. ---
     inline float         g_refDist = kLodRefDist;
+    inline float         g_refDist_game = kLodRefDist;
+    inline const bool g_refDist_knob = ::knob::Register(g_refDist_game, g_refDist, "vsm::g_refDist");
     // Local-light plan S10e: UE's dynamic VSM resolution (VirtualShadowMapCacheManager.cpp:155-187, 683-722). When the
     // page pool's load (1 - free / pool, above 1 when requests were refused) passes MaxPagePoolLoadFactor, the local
     // lights' mips are biased coarser -- target = last bias + log2(load / factor), approached by 0.5 a frame while over,
@@ -213,7 +216,11 @@ namespace vsm
     // and every sampler alike. `--set vsm.dynamicResMaxLodBias:<b>` (UE r.Shadow.Virtual.DynamicRes.MaxResolutionLodBias
     // 2.0, 0 = off), `vsm.dynamicResMaxPoolLoad:<f>` (UE ...MaxPagePoolLoadFactor 0.85, 0 = off).
     inline float         g_dynamicResMaxLodBias = 2.0f;
+    inline float         g_dynamicResMaxLodBias_game = 2.0f;
+    inline const bool g_dynamicResMaxLodBias_knob = ::knob::Register(g_dynamicResMaxLodBias_game, g_dynamicResMaxLodBias, "vsm::g_dynamicResMaxLodBias");
     inline float         g_dynamicResMaxPoolLoad = 0.85f;
+    inline float         g_dynamicResMaxPoolLoad_game = 0.85f;
+    inline const bool g_dynamicResMaxPoolLoad_knob = ::knob::Register(g_dynamicResMaxPoolLoad_game, g_dynamicResMaxPoolLoad, "vsm::g_dynamicResMaxPoolLoad");
     inline float         g_dynamicLodBias = 0.0f;  // this frame's (VirtualShadowMap::UpdateDynamicResolution)
     inline float LocalRefDist() { return g_refDist * std::exp2(-g_dynamicLodBias); }
     // Plan S10e: the local lights' mip by the camera pixel's footprint in the light's texels (UE's: the light's distance
@@ -222,17 +229,25 @@ namespace vsm
     // (0; -1 doubles the resolution) = `vsm.resolutionLodBiasLocal`. The dynamic-resolution bias adds to it. Glass and
     // the fog keep the distance select (their mip falls back coarser when the request's is not resident).
     inline bool  g_localMipFromPixel = true;
+    inline bool  g_localMipFromPixel_game = true;
+    inline const bool g_localMipFromPixel_knob = ::knob::Register(g_localMipFromPixel_game, g_localMipFromPixel, "vsm::g_localMipFromPixel");
     // Plan S10e: the page request tests a receiver against each local light's reach first, and projects a point light's
     // receiver into the one cube face its direction falls in (UE marks a pixel only for its light-grid cell's lights).
     // `--set vsm.requestLightCull:0|1`.
     inline bool  g_requestLightCull = true;
+    inline bool  g_requestLightCull_game = true;
+    inline const bool g_requestLightCull_knob = ::knob::Register(g_requestLightCull_game, g_requestLightCull, "vsm::g_requestLightCull");
     // Plan S10c: a light whose shadow slot changes takes its pages to the new view (UE's per-light cache) instead of
     // re-rendering them. `--set vsm.lightPageRemap:0|1`.
     inline bool  g_lightPageRemap = true;
+    inline bool  g_lightPageRemap_game = true;
+    inline const bool g_lightPageRemap_knob = ::knob::Register(g_lightPageRemap_game, g_lightPageRemap, "vsm::g_lightPageRemap");
     // ...and a light that LEFT the shadowed set keeps its pages this many frames on a view nobody holds; back inside it
     // in time, they move to its new view (UE r.Shadow.Virtual.Cache.MaxLightAgeSinceLastRequest, 10: the unreferenced
     // light keeps its cache entry and gets an unreferenced VSM id). 0 = drop at once. `--set vsm.maxLightAge:<frames>`.
     inline std::uint32_t g_maxLightAgeFrames = 10;
+    inline std::uint32_t g_maxLightAgeFrames_game = 10;
+    inline const bool g_maxLightAgeFrames_knob = ::knob::Register(g_maxLightAgeFrames_game, g_maxLightAgeFrames, "vsm::g_maxLightAgeFrames");
     // Plan S10d (UE distant lights: r.Shadow.Virtual.DistantLightMode 1, r.Shadow.Virtual.MaxDistantUpdatePerFrame 1,
     // ShadowSceneRenderer.cpp:33-46, 210-260, 329-430). A local light whose FINEST possible mip -- the camera pixel at the
     // near side of its sphere, over its whole radius in light depth (GetConservativeMipLevelLocal) -- is the last one has
@@ -241,8 +256,14 @@ namespace vsm
     // longest first (< 0 = all). Turning distant redraws it at once (UE: the flag is part of the light's cache key).
     // `--set vsm.distantLightMode:0|1`, `vsm.maxDistantUpdatePerFrame:<n>`.
     inline int   g_distantLightMode = 1;
+    inline int   g_distantLightMode_game = 1;
+    inline const bool g_distantLightMode_knob = ::knob::Register(g_distantLightMode_game, g_distantLightMode, "vsm::g_distantLightMode");
     inline int   g_maxDistantUpdatesPerFrame = 1;
+    inline int   g_maxDistantUpdatesPerFrame_game = 1;
+    inline const bool g_maxDistantUpdatesPerFrame_knob = ::knob::Register(g_maxDistantUpdatesPerFrame_game, g_maxDistantUpdatesPerFrame, "vsm::g_maxDistantUpdatesPerFrame");
     inline float g_resolutionLodBiasLocal = 0.0f;
+    inline float g_resolutionLodBiasLocal_game = 0.0f;
+    inline const bool g_resolutionLodBiasLocal_knob = ::knob::Register(g_resolutionLodBiasLocal_game, g_resolutionLodBiasLocal, "vsm::g_resolutionLodBiasLocal");
     inline float LocalMipBias() { return g_resolutionLodBiasLocal + g_dynamicLodBias; }
     // Plan S10e: UE r.Shadow.Virtual.ResolutionLodBiasLocalMoving (1: a moving light's pages one mip coarser) and
     // r.Shadow.Scene.LightActiveFrameCount (10: frames the bias takes to fade back once it stops). A light's bias is
@@ -251,7 +272,11 @@ namespace vsm
     // the light's GPU data). A moving light re-renders every page it has each frame, so this is a cost cap.
     // `--set vsm.resolutionLodBiasLocalMoving`, `vsm.lightActiveFrameCount`.
     inline float g_resolutionLodBiasLocalMoving = 1.0f;
+    inline float g_resolutionLodBiasLocalMoving_game = 1.0f;
+    inline const bool g_resolutionLodBiasLocalMoving_knob = ::knob::Register(g_resolutionLodBiasLocalMoving_game, g_resolutionLodBiasLocalMoving, "vsm::g_resolutionLodBiasLocalMoving");
     inline std::uint32_t g_lightActiveFrameCount = 10;
+    inline std::uint32_t g_lightActiveFrameCount_game = 10;
+    inline const bool g_lightActiveFrameCount_knob = ::knob::Register(g_lightActiveFrameCount_game, g_lightActiveFrameCount, "vsm::g_lightActiveFrameCount");
     inline float LocalMovingMipBias(float mobility)
     {
         const float still = g_resolutionLodBiasLocal;
@@ -279,9 +304,13 @@ namespace vsm
                                  PixelRadiusPerDepth(invProj, renderWidth, renderHeight), 0.0f);
     }
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
+    inline std::uint32_t g_requestDownscale_game = kRequestDownscale;
+    inline const bool g_requestDownscale_knob = ::knob::Register(g_requestDownscale_game, g_requestDownscale, "vsm::g_requestDownscale");
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
     inline float         g_clipmapBaseExtent = 8.0f;
+    inline float         g_clipmapBaseExtent_game = 8.0f;
+    inline const bool g_clipmapBaseExtent_knob = ::knob::Register(g_clipmapBaseExtent_game, g_clipmapBaseExtent, "vsm::g_clipmapBaseExtent");
     // [r.Shadow.Virtual.Clipmap.ZRangeScale, UE default 1000] A clipmap level's reach UP-SUN as a
     // multiple of its RADIUS -- same shape as UE's, so the number is directly comparable to theirs.
     //
@@ -320,6 +349,8 @@ namespace vsm
     // mean something is ZRangeScale 3, where the range DOES bind: coverage falls to 53.632 % and
     // 3.197 % of pixels change, i.e. the tall caster's shadow is being cut off.
     inline float         g_clipmapZRangeScale = 1000.0f;
+    inline float         g_clipmapZRangeScale_game = 1000.0f;
+    inline const bool g_clipmapZRangeScale_knob = ::knob::Register(g_clipmapZRangeScale_game, g_clipmapZRangeScale, "vsm::g_clipmapZRangeScale");
 
     // A clipmap level's depth range as a MULTIPLE OF ITS EXTENT:
     //     depthUp = radius * ZRangeScale = extent * ZRangeScale/2,  depthDown = extent * 1
@@ -335,7 +366,11 @@ namespace vsm
     // PCF sample. 0.12 blends the outer 12% of each nested square and hides caster-LOD silhouette
     // changes without coarsening the finest level near the camera.
     inline bool          g_clipmapBlendEnabled = true;
+    inline bool          g_clipmapBlendEnabled_game = true;
+    inline const bool g_clipmapBlendEnabled_knob = ::knob::Register(g_clipmapBlendEnabled_game, g_clipmapBlendEnabled, "vsm::g_clipmapBlendEnabled");
     inline float         g_clipmapBlendWidth = 0.12f;
+    inline float         g_clipmapBlendWidth_game = 0.12f;
+    inline const bool g_clipmapBlendWidth_knob = ::knob::Register(g_clipmapBlendWidth_game, g_clipmapBlendWidth, "vsm::g_clipmapBlendWidth");
     inline float ClipmapBlendWidth()
     {
         return g_clipmapBlendEnabled ? std::clamp(g_clipmapBlendWidth, 0.0f, 0.5f) : 0.0f;
@@ -354,19 +389,27 @@ namespace vsm
     // 2-point gain is acne, not shadow. The plan's "set it to 0" assumed SMRT would be the only
     // path; while both ship, the constant belongs to the one that has no march to derive it from.
     inline float         g_clipmapDepthBias = 0.0002f;
+    inline float         g_clipmapDepthBias_game = 0.0002f;
+    inline const bool g_clipmapDepthBias_knob = ::knob::Register(g_clipmapDepthBias_game, g_clipmapDepthBias, "vsm::g_clipmapDepthBias");
     // Per-level shaping of the constant bias: bias(L) = max(g_clipmapDepthBias * decay^L, floor).
     // decay 1 = constant-in-texels (world size doubles per level -- raising the base then detaches
     // thin far shadows); 0.5 = a constant WORLD-size bias (the near value everywhere). The floor is
     // authored in TEXELS of the landed level. Both are inert at the 0-bias default; they shape the
     // constant if one is ever brought back.
     inline float         g_clipmapDepthBiasDecay = 1.0f;
+    inline float         g_clipmapDepthBiasDecay_game = 1.0f;
+    inline const bool g_clipmapDepthBiasDecay_knob = ::knob::Register(g_clipmapDepthBiasDecay_game, g_clipmapDepthBiasDecay, "vsm::g_clipmapDepthBiasDecay");
     inline float         g_clipmapDepthBiasFloorTexels = 0.0f;
+    inline float         g_clipmapDepthBiasFloorTexels_game = 0.0f;
+    inline const bool g_clipmapDepthBiasFloorTexels_knob = ::knob::Register(g_clipmapDepthBiasFloorTexels_game, g_clipmapDepthBiasFloorTexels, "vsm::g_clipmapDepthBiasFloorTexels");
     // Step 24f / P16.16: directional-clipmap normal offset. UNITS ARE UNREAL'S, so the number here
     // is directly comparable to `r.Shadow.Virtual.NormalBias` (their default 0.5): the shader
     // divides by 1000 and multiplies by distance-to-camera * tan(hFov/2), i.e. it is referred to the
     // world size of a SCREEN PIXEL, not to the shadow texel. The old form was "texels * dist/1024",
     // which at its shipped 2.0 worked out 3.9x this and ignored the field of view entirely.
     inline float         g_clipmapNormalBias = 1.0f;
+    inline float         g_clipmapNormalBias_game = 1.0f;
+    inline const bool g_clipmapNormalBias_knob = ::knob::Register(g_clipmapNormalBias_game, g_clipmapNormalBias, "vsm::g_clipmapNormalBias");
 
     // ---- SMRT (shadow-map ray tracing), docs/vsm_smrt_plan.md -------------------------------
     // Marches a ray from the receiver toward the light through the clipmap instead of taking one
@@ -384,14 +427,20 @@ namespace vsm
     inline constexpr std::uint32_t kSmrtMaxRays = 16u;
     inline constexpr std::uint32_t kSmrtMaxSamplesPerRay = 32u;
     inline std::uint32_t g_smrtRayCount = 7u;
+    inline std::uint32_t g_smrtRayCount_game = 7u;
+    inline const bool g_smrtRayCount_knob = ::knob::Register(g_smrtRayCount_game, g_smrtRayCount, "vsm::g_smrtRayCount");
     // UE's r.Shadow.Virtual.SMRT.SamplesPerRayDirectional (their default 8).
     inline std::uint32_t g_smrtSamplesPerRay = 8u;
+    inline std::uint32_t g_smrtSamplesPerRay_game = 8u;
+    inline const bool g_smrtSamplesPerRay_knob = ::knob::Register(g_smrtSamplesPerRay_game, g_smrtSamplesPerRay, "vsm::g_smrtSamplesPerRay");
     // UE's r.Shadow.Virtual.SMRT.RayLengthScaleDirectional (their default 1.5), scaled by distance
     // to camera. Dimensionless, so it transfers from their centimetres unchanged. Their own
     // warning, and it is the knob that replaces the depth bias as the thing to tune: "Too high
     // values will cause shadows to detach from their contact points (unless more samples are
     // used). Too low values will greatly restrict how large penumbras can be."
     inline float         g_smrtRayLengthScale = 1.5f;
+    inline float         g_smrtRayLengthScale_game = 1.5f;
+    inline const bool g_smrtRayLengthScale_knob = ::knob::Register(g_smrtRayLengthScale_game, g_smrtRayLengthScale, "vsm::g_smrtRayLengthScale");
     // UE's r.Shadow.Virtual.SMRT.ExtrapolateMaxSlopeDirectional. THEIR DEFAULT 5.0 IS IN
     // CENTIMETRES -- this engine's world unit is the metre, so the same quantity is 0.05 here.
     // Copying the 5.0 would have been a hundredfold over-clamp, i.e. no clamp at all.
@@ -406,13 +455,19 @@ namespace vsm
     // 0 is still a valid setting and is exactly their SMRT_EXTRAPOLATE_SLOPE=0 path -- with the
     // clamp at 0 the extrapolated depth collapses to the last recorded one.
     inline float         g_smrtExtrapolateMaxSlope = 0.05f;
+    inline float         g_smrtExtrapolateMaxSlope_game = 0.05f;
+    inline const bool g_smrtExtrapolateMaxSlope_knob = ::knob::Register(g_smrtExtrapolateMaxSlope_game, g_smrtExtrapolateMaxSlope, "vsm::g_smrtExtrapolateMaxSlope");
     // Step 3 -- the light's angular SIZE, which is what a penumbra is made of. UE's directional
     // default SourceAngle is 0.5357 degrees (the real sun's disc); the shader wants sin of the
     // RADIUS, so half of it. With 0 here every ray collapses onto the light axis and rayCount is
     // pure cost -- which is exactly the state Steps 1 and 2 shipped in.
     inline float         g_smrtSourceAngleDeg = 0.5357f;
+    inline float         g_smrtSourceAngleDeg_game = 0.5357f;
+    inline const bool g_smrtSourceAngleDeg_knob = ::knob::Register(g_smrtSourceAngleDeg_game, g_smrtSourceAngleDeg, "vsm::g_smrtSourceAngleDeg");
     // r.Shadow.Virtual.SMRT.TexelDitherScaleDirectional (UE default 2.0), in texels.
     inline float         g_smrtTexelDitherScale = 2.0f;
+    inline float         g_smrtTexelDitherScale_game = 2.0f;
+    inline const bool g_smrtTexelDitherScale_knob = ::knob::Register(g_smrtTexelDitherScale_game, g_smrtTexelDitherScale, "vsm::g_smrtTexelDitherScale");
     // Fraction of a clipmap level's square within which a receiver is accepted, SMRT only.
     // 1.0 = the finest level that contains it at all, which is the single-tap rule and keeps the
     // sharpest level available. 0.5 mirrors UE, whose level covers twice the radius its selection
@@ -421,16 +476,22 @@ namespace vsm
     // were leaflets. Default 1.0: the theory the margin was added for (rays running out of level)
     // was disproven by instrumenting the march, so it has to earn its place on looks alone.
     inline float         g_smrtLevelMargin = 1.0f;
+    inline float         g_smrtLevelMargin_game = 1.0f;
+    inline const bool g_smrtLevelMargin_knob = ::knob::Register(g_smrtLevelMargin_game, g_smrtLevelMargin, "vsm::g_smrtLevelMargin");
     // TEMPORAL DITHER. Rotates the whole per-pixel sample set once per frame, the way UE feed
     // View.StateFrameIndex into their blue-noise lookup. On its own it makes a still frame NOISIER;
     // it pays off through the temporal pass, which sees a different set each frame and averages
     // them. Default ON because this engine ships with DLSS on -- turn it off to judge a single
     // frame, or when running with --dlss=off.
     inline bool          g_smrtTemporalDither = true;
+    inline bool          g_smrtTemporalDither_game = true;
+    inline const bool g_smrtTemporalDither_knob = ::knob::Register(g_smrtTemporalDither_game, g_smrtTemporalDither, "vsm::g_smrtTemporalDither");
     // r.Shadow.Virtual.SMRT.AdaptiveRayCount (UE default 1): after this many rays, a wave whose
     // lanes ALL agree stops early. Fully lit and fully umbral regions are most of the screen and
     // need one or two rays; only penumbrae need the full count. 0 disables it.
     inline std::uint32_t g_smrtAdaptiveRayCount = 1u;
+    inline std::uint32_t g_smrtAdaptiveRayCount_game = 1u;
+    inline const bool g_smrtAdaptiveRayCount_knob = ::knob::Register(g_smrtAdaptiveRayCount_game, g_smrtAdaptiveRayCount, "vsm::g_smrtAdaptiveRayCount");
 
     // SCREEN-SPACE RAY (r.Shadow.Virtual.ScreenRayLength, UE default 0.015). A short march through
     // the CAMERA depth buffer away from the receiver, whose result becomes the SMRT ray's start
@@ -455,7 +516,11 @@ namespace vsm
     // Kept, not deleted: the code is a faithful transcription and a scene with real acne would
     // want it. Turn it on with `--set=vsm.smrtScreenRayLength:0.015`.
     inline float         g_smrtScreenRayLength = 0.0f;
+    inline float         g_smrtScreenRayLength_game = 0.0f;
+    inline const bool g_smrtScreenRayLength_knob = ::knob::Register(g_smrtScreenRayLength_game, g_smrtScreenRayLength, "vsm::g_smrtScreenRayLength");
     inline std::uint32_t g_smrtScreenRaySamples = 4u; // UE's SCREEN_RAY_SAMPLES
+    inline std::uint32_t g_smrtScreenRaySamples_game = 4u;
+    inline const bool g_smrtScreenRaySamples_knob = ::knob::Register(g_smrtScreenRaySamples_game, g_smrtScreenRaySamples, "vsm::g_smrtScreenRaySamples");
     // Local-light (spot + point) VSM shadow bias, in units of one shadow texel at the receiver
     // (auto-sized per-pixel from the light's cone width, distance and mip level in the shaders).
     // Lateral = surface-normal offset (~1 texel keeps Peter-panning to a texel); depth push =
@@ -466,20 +531,30 @@ namespace vsm
     // pixels darker than the atlas by >= 3 % -- 12.6 % with the old bias, 0.51 % at 1.0, 0.07 % at 1.5, 0.04 at 2.0;
     // the shadows' feet do not move (pixels lighter than the atlas stay 1.72 -> 1.75 %).
     inline float         g_localLateralTexels   = 1.5f;
+    inline float         g_localLateralTexels_game   = 1.5f;
+    inline const bool g_localLateralTexels_knob = ::knob::Register(g_localLateralTexels_game, g_localLateralTexels, "vsm::g_localLateralTexels");
     inline float         g_localDepthPushTexels = 0.5f;
+    inline float         g_localDepthPushTexels_game = 0.5f;
+    inline const bool g_localDepthPushTexels_knob = ::knob::Register(g_localDepthPushTexels_game, g_localDepthPushTexels, "vsm::g_localDepthPushTexels");
     // Local-light plan S10b: the texel is that of the mip the sampler actually READS (a page that fell back to a coarser
     // level has bigger texels -- sized for the requested one, the whole page went to acne: hatched quads with bright
     // seams), and the push is along the GEOMETRIC normal rebuilt from depth (a normal map's ripple left a ripple of acne
     // at any push -- plan S9). 0 = the old bias (requested level, shading normal). `--set vsm.localTexelBias:0|1`,
     // `vsm.localLateralTexels`, `vsm.localDepthPushTexels`.
     inline bool          g_localTexelBias = true;
+    inline bool          g_localTexelBias_game = true;
+    inline const bool g_localTexelBias_knob = ::knob::Register(g_localTexelBias_game, g_localTexelBias, "vsm::g_localTexelBias");
     inline std::uint32_t g_lruThreshold = kLruFrameThreshold;
+    inline std::uint32_t g_lruThreshold_game = kLruFrameThreshold;
+    inline const bool g_lruThreshold_knob = ::knob::Register(g_lruThreshold_game, g_lruThreshold, "vsm::g_lruThreshold");
     // A page nobody requested for this many frames that the last render still found dirty goes at the next allocation
     // instead of being redrawn again (vsm_page_alloc_freelist_cs.hlsl). The setup redraws every dirty RESIDENT page --
     // the sub-sampled request misses pages pixels still read -- so with a 1000-frame page age a view the camera left
     // kept being redrawn under wind: VsmPageRender 1.8 -> 3.0 ms on wind_test. 16 = the old page age, the window the
     // sub-sampling needs. 0 = off. `--set vsm.redrawUnrequestedFrames`.
     inline std::uint32_t g_redrawUnrequestedFrames = 16;
+    inline std::uint32_t g_redrawUnrequestedFrames_game = 16;
+    inline const bool g_redrawUnrequestedFrames_knob = ::knob::Register(g_redrawUnrequestedFrames_game, g_redrawUnrequestedFrames, "vsm::g_redrawUnrequestedFrames");
 
     // Render only the pages a kFrameCount-old physOwner snapshot says are resident (skips the ~free
     // pool pages → far fewer CPU draw calls). DEFAULT ON: the CPU saving is worth the artifact here.
@@ -490,12 +565,16 @@ namespace vsm
     // g_pageDrawSingle below removes the same artifact WITHOUT paying that CPU: one draw over every
     // page has nothing to skip, so this flag simply stops applying (it still governs the loop path).
     inline bool g_residentIterOnly = true;
+    inline bool g_residentIterOnly_game = true;
+    inline const bool g_residentIterOnly_knob = ::knob::Register(g_residentIterOnly_game, g_residentIterOnly, "vsm::g_residentIterOnly");
 
     // Single-draw page render: ONE ExecuteIndirect over all (page, group) args instead of the
     // kPoolPageCount-iteration CPU loop (per-page viewport -> VS clip-space remap + SV_ClipDistance
     // page borders). Requires the mega buffer (geometry bound once). Default ON; OFF restores the
     // per-page loop for A/B and for per-page inspection in PIX.
     inline bool g_pageDrawSingle = true;
+    inline bool g_pageDrawSingle_game = true;
+    inline const bool g_pageDrawSingle_knob = ::knob::Register(g_pageDrawSingle_game, g_pageDrawSingle, "vsm::g_pageDrawSingle");
 
     // Compacted draw args (single-draw only): the setup CS appends ONLY non-empty (page, group)
     // records via an atomic and the draw reads that counter as ExecuteIndirect's count buffer,
@@ -527,6 +606,8 @@ namespace vsm
     // Neutral on a light scene, -0.057 ms on a group-heavy one: ON is the right default at both ends.
     // Boot flags: --vsm-page-nocompact forces it off (the A/B control), --vsm-page-compact on.
     inline bool g_pageDrawCompact = true;
+    inline bool g_pageDrawCompact_game = true;
+    inline const bool g_pageDrawCompact_knob = ::knob::Register(g_pageDrawCompact_game, g_pageDrawCompact, "vsm::g_pageDrawCompact");
 
     // S5: scatter LOCAL (spot/point) views too, instead of leaving them to the setup CS's
     // brute-force per-page cull. ON removes the last mesh-group cap (that cull's two per-thread
@@ -542,7 +623,11 @@ namespace vsm
 // every instance of a group (reproduces the pre-contract record layout inside one binary, for
 // cost attribution). Chunk EXACT is unaffected. --set=vsm.perInstanceCasterLod
 inline bool g_perInstanceCasterLod = true;
+inline bool g_perInstanceCasterLod_game = true;
+inline const bool g_perInstanceCasterLod_knob = ::knob::Register(g_perInstanceCasterLod_game, g_perInstanceCasterLod, "vsm::g_perInstanceCasterLod");
 inline bool g_scatterLocalViews = true;
+inline bool g_scatterLocalViews_game = true;
+inline const bool g_scatterLocalViews_knob = ::knob::Register(g_scatterLocalViews_game, g_scatterLocalViews, "vsm::g_scatterLocalViews");
 
     // Occlusion plan S5b.2: light-space two-pass HZB occlusion of the clipmap pages (Unreal's
     // r.Shadow.Virtual.NonNanite.UseHZB). A (caster, page) pair that last frame's pool pyramid
@@ -558,6 +643,8 @@ inline bool g_scatterLocalViews = true;
     // cull: the mechanism is correct (parity at the floor, GBV CLEAN) and waits for content whose
     // hidden casters are expensive -- a town, walls with interiors -- not palms under a high sun.
     inline bool g_hzbCull = false;
+    inline bool g_hzbCull_game = false;
+    inline const bool g_hzbCull_knob = ::knob::Register(g_hzbCull_game, g_hzbCull, "vsm::g_hzbCull");
 
     // Page cache (Rung 1): skip re-rendering pages whose content didn't change (cached depth kept;
     // only new / dynamic-caster-overlapping / forced pages re-render). DEFAULT OFF: measured a net
@@ -566,16 +653,22 @@ inline bool g_scatterLocalViews = true;
     // hardware full-pool clear on spike frames (max regressed). ON draws only dirty pages + uses the
     // gated clear; keep for a future coarse-skip (skip the cull for pages far from any mover).
     inline bool g_pageCaching = true;
+    inline bool g_pageCaching_game = true;
+    inline const bool g_pageCaching_knob = ::knob::Register(g_pageCaching_game, g_pageCaching, "vsm::g_pageCaching");
 // Wind page-cache range (Unreal's per-level WPO disable, transcribed): clipmap levels BELOW
 // this animate wind (and re-render every frame while it blows); levels at/above render their
 // casters RIGID and can cache. Locals always animate. Only matters with g_pageCaching on —
 // without caching every page redraws anyway. --set=vsm.windMaxLevel; >= level count = all.
 inline std::uint32_t g_windAnimateMaxLevel = 4;
+inline std::uint32_t g_windAnimateMaxLevel_game = 4;
+inline const bool g_windAnimateMaxLevel_knob = ::knob::Register(g_windAnimateMaxLevel_game, g_windAnimateMaxLevel, "vsm::g_windAnimateMaxLevel");
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
     // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
     // stats; flip this on only when you want them in the debug output too.
     inline bool g_logPageStats = false;
+    inline bool g_logPageStats_game = false;
+    inline const bool g_logPageStats_knob = ::knob::Register(g_logPageStats_game, g_logPageStats, "vsm::g_logPageStats");
 
     // Per-shadow-view data (BuildVsmViews' list): what the request pass projects screen pixels through, and the view
     // matrix the page render draws with. params.x = valid (0/1), .y = a point face's cube face (0..5; -1 = a spot or

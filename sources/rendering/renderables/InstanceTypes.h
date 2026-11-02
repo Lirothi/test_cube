@@ -1,6 +1,7 @@
 #pragma once
 #include <DirectXMath.h>
 #include <cstdint>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 namespace render
 {
@@ -143,6 +144,8 @@ inline constexpr uint32_t kInstancingThreshold = 8;
 // Runtime kill-switch for auto-instancing (default on). Useful for A/B debugging and
 // before/after measurement; when off, BuildInstancedBatches is a no-op (per-object path).
 inline bool g_instancingEnabled = true;
+inline bool g_instancingEnabled_game = true;
+inline const bool g_instancingEnabled_knob = ::knob::Register(g_instancingEnabled_game, g_instancingEnabled, "render::g_instancingEnabled");
 
 // Shadow-system state lives in rendering/shadows/ShadowSettings.h (mode, indirect toggles,
 // the cascade-tint debug view) and in CascadeShadowConfig (per-scene CSM tuning, incl. the

@@ -16,6 +16,7 @@
 #include "rendering/lighting/TimeOfDaySettings.h" // N1: SkyMoonFrame
 #include "rendering/lighting/VolumetricCloudSettings.h"
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kNumClipmapLevels (Step 24d)
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Camera;
 class DirectionalLight;
@@ -473,6 +474,8 @@ struct BloomSettings
 // and a debug view saved into a level is a trap -- the same reasoning that keeps
 // ocean::g_foamDebugView out of OceanRenderConfig. 0 = normal, 1 = transmittance, 2 = in-scattering.
 inline uint32_t g_fogDebugView = 0u;
+inline uint32_t g_fogDebugView_game = 0u;
+inline const bool g_fogDebugView_knob = ::knob::Register(g_fogDebugView_game, g_fogDebugView, "g_fogDebugView");
 // The atmosphere's distant sky light for this frame's fog colour (HeightFogSettings::skyAmbientContribution): rgb =
 // SkyAtmosphere's DistantSkyLight read back to the CPU, times UE's SkyLuminanceFactor (UE puts it in that LUT,
 // SkyAtmosphere.usf:1466; ours leaves it out of the light), raw cd/m2; w = 1 while the procedural sky has one. Set by
@@ -480,6 +483,8 @@ inline uint32_t g_fogDebugView = 0u;
 inline float4 g_fogDistantSkyLight{};
 // A/B, transient (--set fog.skyAlongView:1): the fog coloured by the sky along the view again, as before 2026-10-31.
 inline bool g_fogSkyAlongView = false;
+inline bool g_fogSkyAlongView_game = false;
+inline const bool g_fogSkyAlongView_knob = ::knob::Register(g_fogSkyAlongView_game, g_fogSkyAlongView, "g_fogSkyAlongView");
 
 // The exact numbers the shaders receive. TWO passes apply aerial perspective -- compose, for opaque
 // geometry, and the ocean's forward surface -- and the plan's own warning about this feature is that

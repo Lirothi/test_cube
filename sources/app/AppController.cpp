@@ -110,28 +110,28 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #if WITH_EDITOR
         if (ImGui::IsKeyPressed(ImGuiKey_F12, false)) // editor build relocates instancing to F12 (F2 = Level Editor)
         {
-            render::g_instancingEnabled = !render::g_instancingEnabled;
+            render::g_instancingEnabled_game = !render::g_instancingEnabled_game;
         }
 #else
         if (input.WasActionPressed("ToggleInstancing"))
         {
-            render::g_instancingEnabled = !render::g_instancingEnabled; // F2: A/B Step 4 auto-instancing
+            render::g_instancingEnabled_game = !render::g_instancingEnabled_game; // F2: A/B Step 4 auto-instancing
         }
 #endif
         if (input.WasActionPressed("ToggleLOD"))
         {
-            render::g_lodEnabled = !render::g_lodEnabled; // F10: A/B Step 6 mesh LOD
+            render::g_lodEnabled_game = !render::g_lodEnabled_game; // F10: A/B Step 6 mesh LOD
         }
         if (input.WasActionPressed("ToggleIndirectShadows"))
         {
             // Ctrl+I: A/B Rung-0 GPU-driven indirect shadow submission vs the CPU path.
-            render::g_indirectShadowsEnabled = !render::g_indirectShadowsEnabled;
+            render::g_indirectShadowsEnabled_game = !render::g_indirectShadowsEnabled_game;
         }
         if (input.WasActionPressed("ToggleGiIndirectShadows"))
         {
             // Ctrl+G: A/B folding GPU-instanced casters into the indirect/VSM shadow path (ON) vs
             // the Legacy CPU RenderShadow tail only (OFF — nothing in VSM, today's behavior).
-            render::g_giIndirectShadowsEnabled = !render::g_giIndirectShadowsEnabled;
+            render::g_giIndirectShadowsEnabled_game = !render::g_giIndirectShadowsEnabled_game;
         }
         if (input.WasActionPressed("ToggleVsmPageRequest"))
         {
@@ -139,11 +139,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             // (Step 24a; S15 added the third). Drives which sampler the light/glass shaders use,
             // whether the VSM pipeline runs, and whether the cascades are fitted on the CPU
             // (Legacy) or reduced from this frame's depth on the GPU (SDSM).
-            switch (render::g_shadowMode)
+            switch (render::g_shadowMode_game)
             {
-            case render::ShadowMode::Legacy: render::g_shadowMode = render::ShadowMode::VSM;    break;
-            case render::ShadowMode::VSM:    render::g_shadowMode = render::ShadowMode::Sdsm;   break;
-            default:                         render::g_shadowMode = render::ShadowMode::Legacy; break;
+            case render::ShadowMode::Legacy: render::g_shadowMode_game = render::ShadowMode::VSM;    break;
+            case render::ShadowMode::VSM:    render::g_shadowMode_game = render::ShadowMode::Sdsm;   break;
+            default:                         render::g_shadowMode_game = render::ShadowMode::Legacy; break;
             }
         }
         if (input.WasActionPressed("CycleReflectionSource"))
@@ -274,7 +274,7 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene) const
         L"Cam: %0.2f %0.2f %0.2f, rot: %0.4f %0.4f %0.4f %0.4f, speed: %0.2f, DLSS: %i, SSR: %i, Shadows: %hs",
         camPos.x, camPos.y, camPos.z, camRotF.x, camRotF.y, camRotF.z, camRotF.w, camera.GetMoveSpeedMult(),
         renderer.IsDlssActive() ? (int)renderer.GetDlssMode() : -1, (int)settings_.ssrTechnique,
-        render::ShadowModeLabel(render::g_shadowMode));
+        render::ShadowModeLabel(render::g_shadowMode_game));
     // The level's clock, so a screenshot also carries its hour (`--time=HH:MM` reproduces it).
     if (hudTimeOfDayHours_ >= 0.0f)
     {

@@ -2,6 +2,7 @@
 
 #include <atomic>       // g_cleanCapture
 #include <dxgiformat.h> // DXGI_FORMAT
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 // Rendering-wide compile-time constants, in the render:: namespace. Single
 // source of truth shared across the renderer core (Renderer, SwapchainManager,
@@ -118,6 +119,8 @@ inline constexpr DXGI_FORMAT kSceneColorFormat       = DXGI_FORMAT_R16G16B16A16_
 // each measured transparent (glass, particles, the ocean, the SSR history, the metering, the two
 // overlays; see P16.1 in the plan for the table). Back off with "--set=render.preExposure:0".
 inline bool g_preExposureEnabled = true;
+inline bool g_preExposureEnabled_game = true;
+inline const bool g_preExposureEnabled_knob = ::knob::Register(g_preExposureEnabled_game, g_preExposureEnabled, "render::g_preExposureEnabled");
 // The factor itself, published once per frame by SceneRenderer. A global for the same reason
 // g_windFreeze is one: the writers of scene colour are independent systems (the skybox, the ocean,
 // glass, particles) that have no path to the scene renderer, and they must all use the SAME number
@@ -174,7 +177,11 @@ inline constexpr unsigned    kFogGridZ                      = 64;
 // performance/fogGridPixels, the Render tab). Renderer::SetFogGridPixels recreates the deferred
 // ring when it changes, the way a DLSS mode change does; kFogGridPixels stays the default.
 inline unsigned              g_fogGridPixels                = kFogGridPixels; // powers of two 4..64 (the conservative depth reads HZB mips)
+inline unsigned              g_fogGridPixels_game                = kFogGridPixels;
+inline const bool g_fogGridPixels_knob = ::knob::Register(g_fogGridPixels_game, g_fogGridPixels, "render::g_fogGridPixels");
 inline unsigned              g_fogGridZ                     = kFogGridZ;      // 16..128 slices (UE r.VolumetricFog.GridSizeZ; the integrate loop's literal is 128)
+inline unsigned              g_fogGridZ_game                     = kFogGridZ;
+inline const bool g_fogGridZ_knob = ::knob::Register(g_fogGridZ_game, g_fogGridZ, "render::g_fogGridZ");
 inline constexpr float       kFogDepthDistributionScale     = 32.0f;
 inline constexpr DXGI_FORMAT kFogFormat                     = DXGI_FORMAT_R16G16B16A16_FLOAT;
 // Plan A7 light shafts: UE's PF_FloatRGB (CreateLightShaftTexture) -- an HDR triple, no alpha.

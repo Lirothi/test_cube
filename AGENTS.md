@@ -290,7 +290,9 @@ everything Info, and never log per frame without one of the gates above. Session
 rotated at boot: of every `logs/session_*.log` (auto-named or an explicit `--log-file` that keeps
 the prefix) the newest 10 by write time (or 100 MiB) are kept — never more than 10 on disk;
 fixed-name artifacts use other prefixes and are never deleted. `python tools/check_logging.py`
-reports any new direct output (exit code = findings) — run it before committing.
+reports any new direct output (exit code = findings) — run it before committing. So does
+`python tools/check_render_knobs.py`: a game file (the command line, `--set`/MCP, settings, Developer Controls...) that
+touches a render knob's render copy instead of its `_game` twin (`core/threading/Knob.h`, docs/game_thread_plan.md G5).
 
 **Diagnostics are events, not files.** Anything a subsystem wants to say -- a pre-assert dump, a
 validator's mismatch list, a self-test's per-case lines and verdict, a cross-check that fired --

@@ -23,6 +23,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/threading/ThreadRole.h"
+#include "core/threading/Knob.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "materials/Texture2D.h" // shared-texture cache stats reported at shutdown
@@ -1889,6 +1890,9 @@ void Renderer::WaitForPreviousFrame() {
     if (threading::CurrentRole() == threading::ThreadRole::Game)
     {
         threading::NoteRenderParked();
+        // G5: a parked render half takes the game's knobs at once -- a live setter that parks (a target rebuild)
+        // reads the value the game half just set.
+        knob::Exchange();
     }
 }
 

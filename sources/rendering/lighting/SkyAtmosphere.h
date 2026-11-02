@@ -8,6 +8,7 @@
 #include "rendering/core/RenderPass.h"
 #include "rendering/core/ResourceDeclarations.h"
 #include "rendering/lighting/SkyAtmosphereSettings.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Camera;
 class Skybox;
@@ -22,6 +23,8 @@ namespace render
 // and their light stay within a tolerance of it (SkyAtmosphere.cpp, NearlySameView). false = the exact keys
 // of before -- every change rebuilds; the A/B arm (`--set=sky.keyTolerance`).
 inline bool g_skyKeyTolerance = true;
+inline bool g_skyKeyTolerance_game = true;
+inline const bool g_skyKeyTolerance_knob = ::knob::Register(g_skyKeyTolerance_game, g_skyKeyTolerance, "render::g_skyKeyTolerance");
 }
 
 // Plan C4: something composited INTO the sky's radiance cube between its capture and its probe

@@ -35,7 +35,7 @@
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "ocean/OceanRenderConfigJson.h"
-#include "ocean/OceanRenderable.h" // ocean::g_shoreRunup gates the Shore and surf section
+#include "ocean/OceanRenderable.h" // ocean::g_shoreRunup_game gates the Shore and surf section
 #include "ocean/OceanSimulation.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/lighting/DirectionalLight.h"
@@ -3897,7 +3897,7 @@ namespace
                     }
                     // Mirrors OceanControlsWindow: the two surface variants read different
                     // settings, so only the live ones are shown per mode.
-                    if (!ocean::g_shoreRunup)
+                    if (!ocean::g_shoreRunup_game)
                     {
                         ImGui::TextDisabled(
                             "Legacy ocean surface (relaunch with --ocean-runup-shore for the modern stack).");
@@ -4196,7 +4196,7 @@ namespace
                             1.0f);
                         ImGui::TreePop();
                     }
-                    } // modern shore stack (ocean::g_shoreRunup)
+                    } // modern shore stack (ocean::g_shoreRunup_game)
                 }
 
                 if (ImGui::CollapsingHeader("Foam"))
@@ -4456,9 +4456,9 @@ namespace
             // the shot, and a value baked into a level would freeze foliage someone else framed
             // deliberately. Off while End <= Start.
             ImGui::SeparatorText("Distance Fade");
-            ImGui::DragFloat("Fade Start", &vfx::g_windFadeStart, 1.0f, 0.0f, 5000.0f, "%.0f m");
-            ImGui::DragFloat("Fade End", &vfx::g_windFadeEnd, 1.0f, 0.0f, 5000.0f, "%.0f m");
-            if (!(vfx::g_windFadeEnd > vfx::g_windFadeStart))
+            ImGui::DragFloat("Fade Start", &vfx::g_windFadeStart_game, 1.0f, 0.0f, 5000.0f, "%.0f m");
+            ImGui::DragFloat("Fade End", &vfx::g_windFadeEnd_game, 1.0f, 0.0f, 5000.0f, "%.0f m");
+            if (!(vfx::g_windFadeEnd_game > vfx::g_windFadeStart_game))
             {
                 ImGui::TextDisabled("Disabled (End must exceed Start)");
             }
@@ -4466,16 +4466,16 @@ namespace
             // W8 debug freeze. Deliberately NOT written into the object properties: this is a viewing
             // data, so it must never end up saved in the level or land in the undo stack.
             ImGui::SeparatorText("Debug");
-            ImGui::Checkbox("Freeze time", &vfx::g_windFreeze);
-            ImGui::BeginDisabled(!vfx::g_windFreeze);
+            ImGui::Checkbox("Freeze time", &vfx::g_windFreeze_game);
+            ImGui::BeginDisabled(!vfx::g_windFreeze_game);
             ImGui::SameLine();
             static float s_windStepSeconds = 1.0f; // UI-only; the freeze itself is a global
-            if (ImGui::Button("Step")) { vfx::g_windStep = s_windStepSeconds; }
+            if (ImGui::Button("Step")) { vfx::g_windStep_game = s_windStepSeconds; }
             ImGui::SetNextItemWidth(120.0f);
             ImGui::DragFloat("Step size", &s_windStepSeconds, 0.01f, 0.001f, 10.0f, "%.3f s");
             ImGui::EndDisabled();
             ImGui::TextDisabled("Wind clock: %.3f s%s", wind.time,
-                vfx::g_windFreeze ? " (frozen)" : "");
+                vfx::g_windFreeze_game ? " (frozen)" : "");
         }
         else
         {

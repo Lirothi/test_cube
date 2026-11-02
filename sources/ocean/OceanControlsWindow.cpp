@@ -1113,10 +1113,10 @@ namespace
         {
             static const char* kSurfSimViews[] = {
                 "Off", "Sim height", "Sim foam", "Shore SDF", "Shore depth map" };
-            int surfSimView = std::clamp(ocean::g_surfSimDebugView, 0, 4);
+            int surfSimView = std::clamp(ocean::g_surfSimDebugView_game, 0, 4);
             if (ImGui::Combo("Surf sim debug view", &surfSimView, kSurfSimViews, 5))
             {
-                ocean::g_surfSimDebugView = surfSimView;
+                ocean::g_surfSimDebugView_game = surfSimView;
             }
             // S2 spawner knobs (shared config fields, serialized with the level).
             drag("Spawn distance", render.surfSimSpawnDistance, 0.25f, 5.0f, 200.0f);
@@ -1148,7 +1148,7 @@ namespace
             // S1 gate: inject a test hump at the sim window's centre (i.e. under the camera).
             if (ImGui::Button("Poke"))
             {
-                ocean::g_surfSimPokeRequest = true;
+                ocean::g_surfSimPokeRequest_game = true;
             }
             if (ImGui::IsItemHovered())
             {
@@ -1160,7 +1160,7 @@ namespace
         // The two surface variants read DIFFERENT settings, so the section only shows the live
         // ones. The legacy (June-22) surface has its damping built in and exactly one authored
         // shore knob; everything below the else is modern-only and would be silently inert there.
-        if (!ocean::g_shoreRunup)
+        if (!ocean::g_shoreRunup_game)
         {
             ImGui::TextDisabled(
                 "Legacy ocean surface (relaunch with --ocean-runup-shore for the modern stack).");
@@ -1427,10 +1427,10 @@ namespace
             };
             ImGui::Combo(
                 "Foam debug view",
-                &ocean::g_foamDebugView,
+                &ocean::g_foamDebugView_game,
                 kFoamDebugViews,
                 static_cast<int>(std::size(kFoamDebugViews)));
-            if (!ocean::g_foamDebug)
+            if (!ocean::g_foamDebug_game)
             {
                 ImGui::TextDisabled("inert: relaunch with --ocean-foam-debug");
                 if (ImGui::IsItemHovered())
@@ -1442,7 +1442,7 @@ namespace
             }
             ImGui::TreePop();
         }
-        } // modern shore stack (ocean::g_shoreRunup)
+        } // modern shore stack (ocean::g_shoreRunup_game)
 
         ImGui::SeparatorText("Foam");
         drawColor("Foam tint", render.foamTint);

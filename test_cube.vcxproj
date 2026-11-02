@@ -592,6 +592,7 @@
     <ClInclude Include="sources/core/task/TaskSystem.h" />
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
     <ClInclude Include="sources/core/threading/ThreadRole.h" />
+    <ClInclude Include="sources/core/threading/Knob.h" />
     <ClInclude Include="sources/core/task/diagnostics/TaskSystemStress.h" />
     <ClInclude Include="sources/core/task/TaskSystemEnki.h" />
     <ClInclude Include="sources/core/task/TaskSystemTBB.h" />

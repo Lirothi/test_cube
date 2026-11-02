@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 // Process-wide shadow-system state: the things that select WHICH shadow machinery runs, and the
 // debug view over it. Everything here spans BOTH algorithms (or is a debug view), which is exactly
@@ -49,12 +50,16 @@ inline constexpr unsigned kCascadeAtlasBorder = 4u;
 inline constexpr unsigned kCsmAtlasResMin = 512u;
 inline constexpr unsigned kCsmAtlasResMax = 8192u;
 inline unsigned g_csmAtlasRes = 4096u;
+inline unsigned g_csmAtlasRes_game = 4096u;
+inline const bool g_csmAtlasRes_knob = ::knob::Register(g_csmAtlasRes_game, g_csmAtlasRes, "render::g_csmAtlasRes");
 
 // Rung 0 runtime toggle (default ON): the shadow passes draw via GPU cull + ExecuteIndirect
 // (ShadowGpuData) instead of the per-object CPU RenderShadow loop — the CPU-submission win.
 // Toggle OFF (Ctrl+I, "ToggleIndirectShadows") for the CPU-path A/B. If the cull PSOs fail to
 // build, IndirectDrawReady() returns false and the passes fall back to the CPU path anyway.
 inline bool g_indirectShadowsEnabled = true;
+inline bool g_indirectShadowsEnabled_game = true;
+inline const bool g_indirectShadowsEnabled_knob = ::knob::Register(g_indirectShadowsEnabled_game, g_indirectShadowsEnabled, "render::g_indirectShadowsEnabled");
 
 // GI→VSM runtime toggle (default ON): fold GPU-instanced casters' instances into the consolidated
 // ShadowGpuData caster set (GPU scatter → cull → indirect), so they cast in VSM and via the indirect
@@ -63,6 +68,8 @@ inline bool g_indirectShadowsEnabled = true;
 // exactly today's behavior. Also the safety fallback: if the scatter PSO fails or an object is over
 // the group cap, GI keeps drawing through the retained CPU tail. Requires g_indirectShadowsEnabled.
 inline bool g_giIndirectShadowsEnabled = true;
+inline bool g_giIndirectShadowsEnabled_game = true;
+inline const bool g_giIndirectShadowsEnabled_knob = ::knob::Register(g_giIndirectShadowsEnabled_game, g_giIndirectShadowsEnabled, "render::g_giIndirectShadowsEnabled");
 
 // Occlusion plan S4: the camera's opaque G-buffer through the same registry -- the cull's camera
 // row, one ExecuteIndirect per (mesh submesh, LOD) with the group's material bound by the CPU.
@@ -72,6 +79,8 @@ inline bool g_giIndirectShadowsEnabled = true;
 // shots, camera row of the cull validator PASS, K=4 GPU flat, worker record 0.51 -> 0.04 ms for
 // a 0.08 ms serial record. `--set=gbuffer.indirect:0` is the A/B (both paths in one binary).
 inline bool g_indirectGBufferEnabled = true;
+inline bool g_indirectGBufferEnabled_game = true;
+inline const bool g_indirectGBufferEnabled_knob = ::knob::Register(g_indirectGBufferEnabled_game, g_indirectGBufferEnabled, "render::g_indirectGBufferEnabled");
 
 // Occlusion plan S5: the camera's two-pass HZB occlusion INSIDE that indirect G-buffer (Nanite's
 // main/post split): the cull defers every candidate last frame's depth pyramid hid, pass A draws
@@ -80,6 +89,8 @@ inline bool g_indirectGBufferEnabled = true;
 // price is a second pyramid build + the mostly-empty pass-B ExecuteIndirects. Needs
 // `g_indirectGBufferEnabled`. `--set=gbuffer.hzb:0|1` is the A/B.
 inline bool g_gbufferHzbCullEnabled = true;
+inline bool g_gbufferHzbCullEnabled_game = true;
+inline const bool g_gbufferHzbCullEnabled_knob = ::knob::Register(g_gbufferHzbCullEnabled_game, g_gbufferHzbCullEnabled, "render::g_gbufferHzbCullEnabled");
 
 // Rung 2 / Step 24a — active shadow method. Legacy = the CSM directional + spot/point/glass ATLAS
 // path; VSM = the virtual page pool (spot/point/glass today; directional after Step 24). Drives both
@@ -100,6 +111,8 @@ inline bool g_gbufferHzbCullEnabled = true;
 // Legacy ask SdsmActive() explicitly.
 enum class ShadowMode : std::uint32_t { Legacy = 0, VSM = 1, Sdsm = 2 };
 inline ShadowMode g_shadowMode = ShadowMode::VSM;
+inline ShadowMode g_shadowMode_game = ShadowMode::VSM;
+inline const bool g_shadowMode_knob = ::knob::Register(g_shadowMode_game, g_shadowMode, "render::g_shadowMode");
 inline bool VsmActive() { return g_shadowMode == ShadowMode::VSM; }
 inline bool SdsmActive() { return g_shadowMode == ShadowMode::Sdsm; }
 // The directional sun comes from the CSM ATLAS (Legacy fit or SDSM partitions) rather than from
@@ -110,7 +123,11 @@ inline bool AtlasDirectional() { return g_shadowMode != ShadowMode::VSM; }
 // applied after the flag and silently replaced it, so a headless `--shadow-mode=vsm` run
 // measured Legacy whenever the saved mode was Legacy -- a control that lied.
 inline bool g_shadowModeFromCli = false;
+inline bool g_shadowModeFromCli_game = false;
+inline const bool g_shadowModeFromCli_knob = ::knob::Register(g_shadowModeFromCli_game, g_shadowModeFromCli, "render::g_shadowModeFromCli");
 inline ShadowMode g_shadowModePersisted = ShadowMode::VSM; // what the settings file holds (saved back unchanged under the override)
+inline ShadowMode g_shadowModePersisted_game = ShadowMode::VSM;
+inline const bool g_shadowModePersisted_knob = ::knob::Register(g_shadowModePersisted_game, g_shadowModePersisted, "render::g_shadowModePersisted");
 // ...and it lied a SECOND way, found 2026-09-14: the flag's parser mapped everything it did not
 // recognise onto VSM, so `--shadow-mode=csm` (the obvious spelling for the Legacy CSM mode) ran a
 // whole measurement session against VSM while every log line and every `csm.*` knob said Legacy.
@@ -118,6 +135,8 @@ inline ShadowMode g_shadowModePersisted = ShadowMode::VSM; // what the settings 
 // unrecognised token now LEAVES THE MODE ALONE and raises this flag, which the first reconcile
 // turns into a WARN next to the mode it actually settled on.
 inline bool g_shadowModeCliUnknown = false;
+inline bool g_shadowModeCliUnknown_game = false;
+inline const bool g_shadowModeCliUnknown_knob = ::knob::Register(g_shadowModeCliUnknown_game, g_shadowModeCliUnknown, "render::g_shadowModeCliUnknown");
 inline const char* ShadowModeLabel(ShadowMode m)
 {
     return (m == ShadowMode::Legacy) ? "Legacy CSM" : (m == ShadowMode::Sdsm) ? "SDSM" : "VSM";
@@ -128,13 +147,19 @@ inline const char* ShadowModeLabel(ShadowMode m)
 // as a fraction of the distance (:1962-1983). false = the old receiver biases (a spot's NDC shadowDepthBias, a point's
 // 0.10 m + 0.05 m normal), for the A/B in one binary: `--set shadow.localBiasUe:0`.
 inline bool g_localShadowBiasUe = true;
+inline bool g_localShadowBiasUe_game = true;
+inline const bool g_localShadowBiasUe_knob = ::knob::Register(g_localShadowBiasUe_game, g_localShadowBiasUe, "render::g_localShadowBiasUe");
 // Plan S2: UE's filters on the atlases -- a spot's Manual5x5PCF (6x6 tent, soft occlusion ramp), a point's 29-tap
 // CubemapHardwarePCF, both sharpened and squared. false = the old 3x3 boxes: `--set shadow.localFilterUe:0`.
 inline bool g_localShadowFilterUe = true;
+inline bool g_localShadowFilterUe_game = true;
+inline const bool g_localShadowFilterUe_knob = ::knob::Register(g_localShadowFilterUe_game, g_localShadowFilterUe, "render::g_localShadowFilterUe");
 // Plan S3: UE's shadow fade by the resolution a light wants on screen (CalculateShadowFadeAlpha: full above 64 texels,
 // none at 32) -- a distant lamp's shadow thins out instead of switching off when it loses its slot. false = every
 // shadowed light at full strength (the slots are still ranked by that resolution): `--set shadow.localFadeUe:0`.
 inline bool g_localShadowFadeUe = true;
+inline bool g_localShadowFadeUe_game = true;
+inline const bool g_localShadowFadeUe_knob = ::knob::Register(g_localShadowFadeUe_game, g_localShadowFadeUe, "render::g_localShadowFadeUe");
 // The peter-panning fix (2026-10-20, owner: "I see it"): the TEXEL bias (shaders/local_shadow_bias.hlsli
 // LocalShadowTexelOffset) -- our VSM local-light model on the atlases: the receiver pushed `g_localShadowNormalTexels`
 // shadow texels along its normal and `g_localShadowPushTexels` x slope (1 / NoL, 1..6) toward the light, no depth-pass
@@ -148,8 +173,14 @@ inline bool g_localShadowFadeUe = true;
 // of every pillar touching like the VSM's where UE's leaves a gap. false = UE's / the old bias (shadow.localBiasUe).
 // `--set shadow.localBiasTexel:0|1`, `shadow.localNormalTexels`, `shadow.localPushTexels`.
 inline bool g_localShadowBiasTexel = true;
+inline bool g_localShadowBiasTexel_game = true;
+inline const bool g_localShadowBiasTexel_knob = ::knob::Register(g_localShadowBiasTexel_game, g_localShadowBiasTexel, "render::g_localShadowBiasTexel");
 inline float g_localShadowNormalTexels = 3.0f;
+inline float g_localShadowNormalTexels_game = 3.0f;
+inline const bool g_localShadowNormalTexels_knob = ::knob::Register(g_localShadowNormalTexels_game, g_localShadowNormalTexels, "render::g_localShadowNormalTexels");
 inline float g_localShadowPushTexels = 0.5f;
+inline float g_localShadowPushTexels_game = 0.5f;
+inline const bool g_localShadowPushTexels_knob = ::knob::Register(g_localShadowPushTexels_game, g_localShadowPushTexels, "render::g_localShadowPushTexels");
 // Plan S8: a light's OWN Shadow Bias / Shadow Slope Bias (UE's per-light knobs, 0.5 each) scale the texel bias, so the
 // Inspector fields keep meaning something with it on: 0.5 = the global texels above, 1.0 = twice, 0 = none. (They drove
 // only UE's bias before, which the texel bias replaced -- two knobs that moved nothing.) The normal push stays above 0:
@@ -168,16 +199,24 @@ inline float LocalShadowPushTexels(float shadowSlopeBias)
 // group. Needs the mega buffer (uniform vertex stride, R32 indices; dropped by a mid-game Rebuild until the next
 // load). false = one ExecuteIndirect per group: `--set shadow.localCompact:0|1`.
 inline bool g_localShadowCompact = true;
+inline bool g_localShadowCompact_game = true;
+inline const bool g_localShadowCompact_knob = ::knob::Register(g_localShadowCompact_game, g_localShadowCompact, "render::g_localShadowCompact");
 // Local-light plan S7: UE's whole-scene shadow cache for the atlas lights (render::LocalShadowCache) -- the static
 // casters' depth kept per light in a pool and copied in every frame, only the movable ones drawn on top. Needs S6a's
 // compaction (the static rows are drawn the same way). `--set shadow.localCache:0|1`; the pool grows to what the lights
 // want up to `shadow.localCacheMaxPages` pages of localMaxRes^2 D16 (UE r.Shadow.WholeSceneShadowCacheMb 150).
 inline bool g_localShadowCache = true;
+inline bool g_localShadowCache_game = true;
+inline const bool g_localShadowCache_knob = ::knob::Register(g_localShadowCache_game, g_localShadowCache, "render::g_localShadowCache");
 inline unsigned g_localShadowCacheMaxPages = 8u;
+inline unsigned g_localShadowCacheMaxPages_game = 8u;
+inline const bool g_localShadowCacheMaxPages_knob = ::knob::Register(g_localShadowCacheMaxPages_game, g_localShadowCacheMaxPages, "render::g_localShadowCacheMaxPages");
 // UE r.Shadow.CacheWPOPrimitives (0): a caster that sways in the wind is MOVABLE for the cache, drawn every frame. 1 caches
 // it with the statics -- right only while the wind stands still (wind.freeze), the case UE's switch exists for.
 // `--set shadow.localCacheWind:0|1`.
 inline bool g_localShadowCacheWind = false;
+inline bool g_localShadowCacheWind_game = false;
+inline const bool g_localShadowCacheWind_knob = ::knob::Register(g_localShadowCacheWind_game, g_localShadowCacheWind, "render::g_localShadowCacheWind");
 // The wind range of the atlas lights' shadows (owner, 2026-10-22: "радиус качания 30 м с ручкой"): a spot / point light
 // whose reach comes within this many metres of the camera (max(0, |light - camera| - radius) <= range) draws its swaying
 // casters every frame, as above; farther away its shadow is RIGID -- the wind casters drawn without sway and cached with
@@ -189,11 +228,15 @@ inline bool g_localShadowCacheWind = false;
 // `--set shadow.localWindRange:<metres>`, Developer > CSM "Lamp shadow sway range". On wind_test (100 lamps, 22:00) the
 // swaying palms were ~0.63 ms of the point lights' 0.78.
 inline float g_localShadowWindRange = 30.0f;
+inline float g_localShadowWindRange_game = 30.0f;
+inline const bool g_localShadowWindRange_knob = ::knob::Register(g_localShadowWindRange_game, g_localShadowWindRange, "render::g_localShadowWindRange");
 // Local-light plan S7, the direct read (UE ShadowSetup.cpp:6002-6009 / 6643-6653: a cached whole-scene shadow with no
 // movable subject primitives is projected straight from its cached map): a light whose views all hit the cache, that is
 // past the wind range and has nothing movable in reach is read by its receivers from the pool -- no copy, no draw.
 // `--set shadow.localDirectRead:0|1`.
 inline bool g_localShadowDirectRead = true;
+inline bool g_localShadowDirectRead_game = true;
+inline const bool g_localShadowDirectRead_knob = ::knob::Register(g_localShadowDirectRead_game, g_localShadowDirectRead, "render::g_localShadowDirectRead");
 constexpr float kLocalShadowWindRangeHysteresis = 1.0f;
 constexpr unsigned kLocalShadowCacheMaxPagesLimit = 16u;
 // Local-light plan S6b: how many atlas views (a spot, a cube face) one command list of the spot / point shadow passes
@@ -202,6 +245,8 @@ constexpr unsigned kLocalShadowCacheMaxPagesLimit = 16u;
 // Measured on demo (9 spots + 30 faces, editor closed): GPU frame 3.94 ms at 1, 3.84 at 2, 3.76 at 4, 3.74 at 8, 3.71
 // at 16, 3.72 at 64; the shadow lists' CPU recording 1.05 -> 0.22 ms in total.
 inline unsigned g_localShadowViewsPerList = 16u;
+inline unsigned g_localShadowViewsPerList_game = 16u;
+inline const bool g_localShadowViewsPerList_knob = ::knob::Register(g_localShadowViewsPerList_game, g_localShadowViewsPerList, "render::g_localShadowViewsPerList");
 // Local-light plan S9e: the GPU cull's tests for a spot / point-face view beyond its own frustum, UE's. Bounds: the
 // caster's box against the light's reach sphere and a spot's bounding sphere against its cone (UE AffectsBounds, the
 // light-primitive interaction; camera-independent, so the S7 cache and VSM take it too). Hull: UE
@@ -213,11 +258,19 @@ inline unsigned g_localShadowViewsPerList = 16u;
 // like UE (SDCM_StaticPrimitivesOnly, VSM) -- neither touches the S7 cache's static rows nor VSM.
 // `--set shadow.localBoundsCull:0|1`, `shadow.localHullCull:0|1`, `shadow.localRadiusThreshold:<share>` (0 = off).
 inline bool g_localShadowBoundsCull = true;
+inline bool g_localShadowBoundsCull_game = true;
+inline const bool g_localShadowBoundsCull_knob = ::knob::Register(g_localShadowBoundsCull_game, g_localShadowBoundsCull, "render::g_localShadowBoundsCull");
 inline bool g_localShadowHullCull = true;
+inline bool g_localShadowHullCull_game = true;
+inline const bool g_localShadowHullCull_knob = ::knob::Register(g_localShadowHullCull_game, g_localShadowHullCull, "render::g_localShadowHullCull");
 inline float g_localShadowRadiusThreshold = 0.01f;
+inline float g_localShadowRadiusThreshold_game = 0.01f;
+inline const bool g_localShadowRadiusThreshold_knob = ::knob::Register(g_localShadowRadiusThreshold_game, g_localShadowRadiusThreshold, "render::g_localShadowRadiusThreshold");
 // `--set shadow.cullValidate:1` (MCP set_settings too): the shadow cull's one-shot CPU validation runs again on the next
 // frame at the current view; its verdict line also says how many local caster draws each S9e test removed there.
 inline bool g_shadowCullRevalidate = false;
+inline bool g_shadowCullRevalidate_game = false;
+inline const bool g_shadowCullRevalidate_knob = ::knob::Register(g_shadowCullRevalidate_game, g_shadowCullRevalidate, "render::g_shadowCullRevalidate");
 // The atlas modes' point-light cube faces are rendered this many texels wider each side (Scene.cpp, the face fov) and
 // sampled in their inner 90 degrees -- MIRRORS kPointShadowGuardTexels in shaders/local_shadow_filter.hlsli.
 constexpr float kPointShadowGuardTexels = 2.0f;
@@ -231,6 +284,8 @@ inline bool LocalShadowTexelBias() { return g_localShadowBiasTexel && !VsmActive
 // (Material::LinearDepthVariant). The atlas modes only: VSM's pool keeps its own perspective depth.
 // false = the old perspective depth and a 0.1 m near: `--set shadow.spotLinearDepth:0|1`.
 inline bool g_spotShadowLinearDepth = true;
+inline bool g_spotShadowLinearDepth_game = true;
+inline const bool g_spotShadowLinearDepth_knob = ::knob::Register(g_spotShadowLinearDepth_game, g_spotShadowLinearDepth, "render::g_spotShadowLinearDepth");
 inline bool SpotShadowLinearDepth() { return g_spotShadowLinearDepth && !VsmActive(); }
 // UE MinLightW 0.1 (cm: SpotLightSceneProxy.cpp:101) -- the floor of any spot's near, authored or not.
 constexpr float kSpotShadowMinNear = 0.001f;
@@ -246,6 +301,8 @@ constexpr float kVsmLocalShadowNear = 0.01f;
 // otherwise UE's 1 mm on the linear depth, VSM's 1 cm, the old 0.1 m on a perspective atlas (1 mm there would leave
 // steps of centimetres at the far end of the D16 atlas).
 inline bool g_pointShadowNearUe = true;
+inline bool g_pointShadowNearUe_game = true;
+inline const bool g_pointShadowNearUe_knob = ::knob::Register(g_pointShadowNearUe_game, g_pointShadowNearUe, "render::g_pointShadowNearUe");
 inline float SpotShadowNear(float authored)
 {
     if (authored > 0.0f) { return authored > kSpotShadowMinNear ? authored : kSpotShadowMinNear; }
@@ -261,6 +318,8 @@ inline float SpotShadowNear(float authored)
 // (kVsmLocalShadowNear above). `--set shadow.pointLinearDepth:0|1` (0 = the perspective depth), `shadow.pointNearUe:0|1`
 // (0 = the old near max(0.2 m, 2 % of the radius); perspective + 1 cm on the D16 atlas is the A/B that shows the steps).
 inline bool g_pointShadowLinearDepth = true;
+inline bool g_pointShadowLinearDepth_game = true;
+inline const bool g_pointShadowLinearDepth_knob = ::knob::Register(g_pointShadowLinearDepth_game, g_pointShadowLinearDepth, "render::g_pointShadowLinearDepth");
 constexpr float kPointShadowUeNear = 0.01f;
 static_assert(kPointShadowUeNear == kVsmLocalShadowNear, "the atlases and VSM take UE's point near alike");
 inline bool PointShadowLinearDepth() { return g_pointShadowLinearDepth && !VsmActive(); }
@@ -276,6 +335,8 @@ inline float PointShadowNear(float radius)
 // pages are sized from it (a spot page max^2, a point page 1.5 max x max -- see g_localShadowMaxPages). Reallocated by
 // Scene::ReconcileShadowMode; `--set shadow.localMaxRes:<n>`.
 inline unsigned g_localShadowMaxRes = 2048u;
+inline unsigned g_localShadowMaxRes_game = 2048u;
+inline const bool g_localShadowMaxRes_knob = ::knob::Register(g_localShadowMaxRes_game, g_localShadowMaxRes, "render::g_localShadowMaxRes");
 constexpr unsigned kLocalShadowMaxResMin = 256u;
 constexpr unsigned kLocalShadowMaxResMax = 4096u;
 constexpr unsigned kLocalShadowMinRes = 32u; // UE r.Shadow.MinResolution
@@ -285,6 +346,8 @@ constexpr unsigned kLocalShadowMinRes = 32u; // UE r.Shadow.MinResolution
 // (R16), so 4 + 4 = 80 MB at most. A frame that needs more halves every light a step (UE's VSM global LOD bias).
 // `--set shadow.localMaxPages:<n>`; grown (never shrunk below the need) in Scene::ReconcileShadowMode.
 inline unsigned g_localShadowMaxPages = 4u; // 1 .. render::kLocalShadowMaxPagesLimit
+inline unsigned g_localShadowMaxPages_game = 4u;
+inline const bool g_localShadowMaxPages_knob = ::knob::Register(g_localShadowMaxPages_game, g_localShadowMaxPages, "render::g_localShadowMaxPages");
 
 // S0.3 — Legacy CSM debug visualization, forwarded to lighting_cs.hlsl as `csmDebugMode`.
 // 0 = off (the shader's only cost is one uint compare). 1 = tint each pixel by the cascade the
@@ -294,12 +357,16 @@ inline unsigned g_localShadowMaxPages = 4u; // 1 .. render::kLocalShadowMaxPages
 // parsed before a Scene exists, which a per-scene field could not serve.
 enum class CsmDebugMode : std::uint32_t { Off = 0, CascadeTint = 1 };
 inline CsmDebugMode g_csmDebugMode = CsmDebugMode::Off;
+inline CsmDebugMode g_csmDebugMode_game = CsmDebugMode::Off;
+inline const bool g_csmDebugMode_knob = ::knob::Register(g_csmDebugMode_game, g_csmDebugMode, "render::g_csmDebugMode");
 
 // Set by `--csm-readout`: dump the cascade fit table (slice, texel, near/far, zRange, D16 step)
 // to logs/csm_readout.log on the next UpdateCascades, then clear itself. The dev window has the
 // same table, but a headless --shot/--profdump run cannot open a GUI -- and zRange / D16 step
 // are exactly what S7 pancaking is judged on.
 inline bool g_csmDumpReadout = false;
+inline bool g_csmDumpReadout_game = false;
+inline const bool g_csmDumpReadout_knob = ::knob::Register(g_csmDumpReadout_game, g_csmDumpReadout, "render::g_csmDumpReadout");
 
 // ---- CONTACT SHADOWS (docs/csm_improvement_plan.md S12) ------------------------------------
 // A short march through the CAMERA depth buffer toward the light, recovering the scale a shadow
@@ -316,6 +383,8 @@ namespace contact
     // defaults to 0. Contact shadows are an opt-in artist tool there, not a global on. Off means
     // not a single depth sample is taken.
     inline bool          g_enabled = false;
+    inline bool          g_enabled_game = false;
+    inline const bool g_enabled_knob = ::knob::Register(g_enabled_game, g_enabled, "render::contact::g_enabled");
 
     // ---- the four knobs UE actually expose --------------------------------------------------
     // Trace length. UE support BOTH interpretations and encode the choice in the SIGN of their
@@ -327,7 +396,11 @@ namespace contact
     //   world space ON  -> METRES, flat. Predictable, but at distance it shrinks to sub-pixel and
     //                      stops doing anything.
     inline float         g_length = 0.05f;
+    inline float         g_length_game = 0.05f;
+    inline const bool g_length_knob = ::knob::Register(g_length_game, g_length, "render::contact::g_length");
     inline bool          g_lengthInWorldSpace = false;
+    inline bool          g_lengthInWorldSpace_game = false;
+    inline const bool g_lengthInWorldSpace_knob = ::knob::Register(g_lengthInWorldSpace_game, g_lengthInWorldSpace, "render::contact::g_lengthInWorldSpace");
     // A CAP ON THE RAY LENGTH IN METRES WAS TRIED HERE AND REMOVED. It looked right on paper --
     // the screen-scaled ray is 17.5 m at 350 m, so shorten it -- and a median-based metric even
     // said it worked. The IMAGE said otherwise: a 0.5 m ray at 350 m is shorter than the depth
@@ -336,6 +409,8 @@ namespace contact
     // black. The distance window below is the fix that actually holds up.
     // How dark a hit makes the pixel. UE's ContactShadowCastingIntensity.
     inline float         g_intensity = 1.0f;
+    inline float         g_intensity_game = 1.0f;
+    inline const bool g_intensity_knob = ::knob::Register(g_intensity_game, g_intensity, "render::contact::g_intensity");
     // UE hardcode 8 at their call site, and that is NOT laziness: their compare tolerance is
     // `|rayDepthSpan| * (1/steps) * 2`, so the step count is baked into the acceptance window.
     // Raising it narrows the window per sample while adding samples along a ray that hugs the
@@ -343,6 +418,8 @@ namespace contact
     // speckle, not less. Measured added speckle: 4 steps +3.49 pp, 8 +4.00, 16 +4.05, 32 +5.77.
     // Capped at 16 in the UI for that reason; it is a cost/robustness knob, not a quality one.
     inline std::uint32_t g_steps = 8u;
+    inline std::uint32_t g_steps_game = 8u;
+    inline const bool g_steps_knob = ::knob::Register(g_steps_game, g_steps, "render::contact::g_steps");
 
     // ---- OURS, not UE's. Everything below is a departure and is here for one reason ----------
     // A screen-space march along a ray that runs nearly PARALLEL to the surface it started on
@@ -363,9 +440,13 @@ namespace contact
     // anything. Tied to the ray -- which is itself a multiple of view depth -- it keeps its
     // meaning at any range, and this feature then has ONE scaling concept instead of three.
     inline float         g_normalOffsetFrac = 0.04f;
+    inline float         g_normalOffsetFrac_game = 0.04f;
+    inline const bool g_normalOffsetFrac_knob = ::knob::Register(g_normalOffsetFrac_game, g_normalOffsetFrac, "render::contact::g_normalOffsetFrac");
     // Below this NdotL the sun is grazing, the ray is nearly parallel to the surface, and the
     // march is measuring quantisation rather than geometry. Faded out, not cut, so no visible edge.
     inline float         g_grazingFadeNdotL = 0.15f;
+    inline float         g_grazingFadeNdotL_game = 0.15f;
+    inline const bool g_grazingFadeNdotL_knob = ::knob::Register(g_grazingFadeNdotL_game, g_grazingFadeNdotL, "render::contact::g_grazingFadeNdotL");
     // OURS. A FRACTION OF THE RAY LENGTH -- deliberately not metres. A hit whose occluder sits
     // further behind the ray point than this is not a contact: without the test a hit can be the
     // far side of a dune, reported per pixel as binary occlusion, i.e. a speckle field.
@@ -376,6 +457,8 @@ namespace contact
     // real contacts. As a fraction it rides the ray and stays meaningful at 10 m and at 3 km.
     // 0 = no thickness test (UE behaviour).
     inline float         g_maxThicknessFrac = 0.5f;
+    inline float         g_maxThicknessFrac_game = 0.5f;
+    inline const bool g_maxThicknessFrac_knob = ::knob::Register(g_maxThicknessFrac_game, g_maxThicknessFrac, "render::contact::g_maxThicknessFrac");
     // TEMPORAL DITHER -- and this one IS UE's: their contact dither is
     // `InterleavedGradientNoise(PixelPos, View.StateFrameIndexMod8)`, i.e. it rotates over an
     // 8-frame cycle and TAA averages the binary per-pixel outcomes into a smooth value. That is
@@ -383,6 +466,8 @@ namespace contact
     // already run does the work. Off = today's static IGN (UE's formula with FrameId 0 IS the
     // static one), for judging a single still frame.
     inline bool          g_temporalDither = true;
+    inline bool          g_temporalDither_game = true;
+    inline const bool g_temporalDither_knob = ::knob::Register(g_temporalDither_game, g_temporalDither, "render::contact::g_temporalDither");
     // LOCAL LIGHTS (spot + point): which shadow source they use once contacts are enabled.
     //   0 = their shadow map; contacts stay off for locals.
     //   1 = contacts INSTEAD of the map -- the map is not sampled at all, which is also a cost
@@ -395,6 +480,8 @@ namespace contact
     // asked for an either/or -- which is what they are. Sun is unaffected -- there the contact
     // term sits on top of CSM/VSM by design, recovering what a far cascade cannot resolve.
     inline std::uint32_t g_localMode = 1u;
+    inline std::uint32_t g_localMode_game = 1u;
+    inline const bool g_localMode_knob = ::knob::Register(g_localMode_game, g_localMode, "render::contact::g_localMode");
     // What the local-light passes actually receive. The mode is meaningless with the master
     // switch off, and mode 1 with a zero-length trace would leave spot/point with NO shadow at
     // all -- so off always means "shadow map", whatever the combo says.
@@ -405,12 +492,18 @@ namespace contact
     // metres. Raising it to where there IS ground (the ask was 500 m: keep contacts only out
     // where the cascades are too coarse to resolve anything) needs the near ramp too.
     inline float         g_minDistanceM = 0.0f;
+    inline float         g_minDistanceM_game = 0.0f;
+    inline const bool g_minDistanceM_knob = ::knob::Register(g_minDistanceM_game, g_minDistanceM, "render::contact::g_minDistanceM");
     // 0 = NO LIMIT, and it stays that way. A 150 m default was tried here and it was the wrong
     // answer to the wrong question: the ask was contacts that KEEP WORKING at distance, and
     // switching them off past 150 m is not a fix for the far-field speckle, it is deleting the
     // feature. The speckle at 350 m is still open -- see the note on the real conflict below.
     inline float         g_maxDistanceM = 0.0f;
+    inline float         g_maxDistanceM_game = 0.0f;
+    inline const bool g_maxDistanceM_knob = ::knob::Register(g_maxDistanceM_game, g_maxDistanceM, "render::contact::g_maxDistanceM");
     inline float         g_fadeBandM = 10.0f;
+    inline float         g_fadeBandM_game = 10.0f;
+    inline const bool g_fadeBandM_knob = ::knob::Register(g_fadeBandM_game, g_fadeBandM, "render::contact::g_fadeBandM");
 
     // ONE writer for the contact fields of every light pass's constants (sun, spot, point). The
     // three CBs carry identically named members -- that is the contract that lets the same
@@ -461,6 +554,8 @@ namespace sdsm
     // both the default and the cap until S17 makes the count dynamic.
     inline constexpr std::uint32_t kMaxPartitions = 4u;
     inline std::uint32_t g_partitions = 4u;
+    inline std::uint32_t g_partitions_game = 4u;
+    inline const bool g_partitions_knob = ::knob::Register(g_partitions_game, g_partitions, "render::sdsm::g_partitions");
 
     // `mLightSpaceBorder` (SDSMPartitions.hlsl:35). Expressed in TEXELS of the partition's own
     // tile, not in the sample's normalized light-space units: our bounds are metres, so a
@@ -468,11 +563,15 @@ namespace sdsm
     // the filter kernel inside the partition's own box -- it is NOT the S5 atlas gutter, which
     // still exists and still sits outside the content rect.
     inline float g_borderTexels = 4.0f;
+    inline float g_borderTexels_game = 4.0f;
+    inline const bool g_borderTexels_knob = ::knob::Register(g_borderTexels_game, g_borderTexels, "render::sdsm::g_borderTexels");
 
     // `mDilationFactor` (SDSMPartitions.hlsl:38). A fraction of the box's own extent added on
     // every side. Covers what the per-sample reduction cannot see: a caster whose shadow lands
     // just outside the visible samples' bounds, and the anisotropic reach of a filter kernel.
     inline float g_dilation = 0.01f;
+    inline float g_dilation_game = 0.01f;
+    inline const bool g_dilation_knob = ::knob::Register(g_dilation_game, g_dilation, "render::sdsm::g_dilation");
 
     // `mMaxScale` (SDSMPartitions.hlsl:36), expressed as a MULTIPLE OF THE LEGACY SPHERE. The
     // sample clamp the zoom so a partition holding a handful of samples cannot magnify without
@@ -480,12 +579,16 @@ namespace sdsm
     // FALLBACK when a partition has no samples at all. 1 = never tighter than Legacy (the A/B
     // control), 0.05 = at most 20x tighter.
     inline float g_minScaleOverSphere = 0.02f;
+    inline float g_minScaleOverSphere_game = 0.02f;
+    inline const bool g_minScaleOverSphere_knob = ::knob::Register(g_minScaleOverSphere_game, g_minScaleOverSphere, "render::sdsm::g_minScaleOverSphere");
 
     // Metres added to the light-space Z range on both sides of the sampled bounds, so a caster
     // between the sun and the visible geometry is still inside the projection. The Legacy twin is
     // `casterReachWS` + `zPadding`; here the near side is handled by the same pancake clamp S7
     // uses, so this only has to cover the far cap and the depth-precision margin.
     inline float g_zMargin = 25.0f;
+    inline float g_zMargin_game = 25.0f;
+    inline const bool g_zMargin_knob = ::knob::Register(g_zMargin_game, g_zMargin, "render::sdsm::g_zMargin");
 
     // S16.7. How much of LAST frame's reduced depth range survives into this one, 0 = none (the
     // raw per-frame reduction, and the A/B). The partition boundaries are logarithmic over
@@ -504,6 +607,8 @@ namespace sdsm
     // 0 = off. Frames rather than seconds because the average IS per frame -- seconds would be
     // a lie at a different frame rate, and the wind clock can be frozen at dt = 0.
     inline float g_stabilityFrames = 30.0f;
+    inline float g_stabilityFrames_game = 30.0f;
+    inline const bool g_stabilityFrames_knob = ::knob::Register(g_stabilityFrames_game, g_stabilityFrames, "render::sdsm::g_stabilityFrames");
 
     // S20 PARTITION CACHE ("кэширование дальних каскадов тени плюс обновление реже начиная с не
     // 0го каскада"). Partition 0 renders every frame; partition p >= 1 every min(N, 2^p) frames,
@@ -516,12 +621,16 @@ namespace sdsm
     // the partition count changes, or the camera has turned or moved further than its widened box
     // covers (Scene::UpdateSdsmFrameParams).
     inline std::uint32_t g_cacheFrames = 4u;
+    inline std::uint32_t g_cacheFrames_game = 4u;
+    inline const bool g_cacheFrames_knob = ::knob::Register(g_cacheFrames_game, g_cacheFrames, "render::sdsm::g_cacheFrames");
     // How much wider (fraction of the box's own extent, per side, in light-space XY) a partition
     // that will be kept is fitted, so the camera can turn and move a little before a receiver walks
     // off its tile -- off it, CsmSampleChain falls to the next partition, and past the last one to
     // lit. 0.05 covers about 5 degrees of turn at a 90-degree field of view; the camera guard
     // re-renders at half of that.
     inline float g_cacheDilation = 0.05f;
+    inline float g_cacheDilation_game = 0.05f;
+    inline const bool g_cacheDilation_knob = ::knob::Register(g_cacheDilation_game, g_cacheDilation, "render::sdsm::g_cacheDilation");
 
     // S21 STABLE PARTITIONS. The analyze re-measures every box from the depth buffer each frame,
     // and that buffer carries the DLSS jitter, so with the camera and the scene standing still the
@@ -536,10 +645,14 @@ namespace sdsm
     // D16, a wandering near plane re-quantises every stored depth). A still camera then renders the
     // same tile bit for bit; a moving one slides it by whole texels. Off = the raw fit (the A/B).
     inline bool g_texelSnap = true;
+    inline bool g_texelSnap_game = true;
+    inline const bool g_texelSnap_knob = ::knob::Register(g_texelSnap_game, g_texelSnap, "render::sdsm::g_texelSnap");
     // The band, as a fraction of the measured size: how much larger than needed a kept texel (and a
     // kept depth range) may be before it is refitted. Wider = rarer refits while the camera moves,
     // at up to that much coarser shadows (half of it on average).
     inline float g_sizeHysteresis = 0.1f;
+    inline float g_sizeHysteresis_game = 0.1f;
+    inline const bool g_sizeHysteresis_knob = ::knob::Register(g_sizeHysteresis_game, g_sizeHysteresis, "render::sdsm::g_sizeHysteresis");
 
     // NO `analyzeFullRes` KNOB, and that is a decision rather than an omission. The plan listed
     // one; it was written, wired to --set, and read by NOBODY -- a control that lies. The
@@ -557,6 +670,8 @@ namespace sdsm
     // Master switch, default OFF: it costs a second atlas (RGBA32F) and a conversion pass, and the
     // PCF arm stays the A/B and the fallback.
     inline bool g_evsm = false;
+    inline bool g_evsm_game = false;
+    inline const bool g_evsm_knob = ::knob::Register(g_evsm_game, g_evsm, "render::sdsm::g_evsm");
 
     // The warp exponents, applied to the partition's OWN depth rescaled to [-1, 1].
     //
@@ -574,7 +689,11 @@ namespace sdsm
     // Past it the second moment is Inf and every shadow test returns garbage.
     inline constexpr float kEvsmMaxExponent = 42.0f;
     inline float g_evsmPos = 42.0f;
+    inline float g_evsmPos_game = 42.0f;
+    inline const bool g_evsmPos_knob = ::knob::Register(g_evsmPos_game, g_evsmPos, "render::sdsm::g_evsmPos");
     inline float g_evsmNeg = 5.25f;
+    inline float g_evsmNeg_game = 5.25f;
+    inline const bool g_evsmNeg_knob = ::knob::Register(g_evsmNeg_game, g_evsmNeg, "render::sdsm::g_evsmNeg");
 
     // Edge softening: a separable box over the moments, its width a FRACTION OF THE PARTITION
     // (the sample's edgeSofteningAmount, 0.02). Because a partition's box is fitted to the
@@ -588,15 +707,21 @@ namespace sdsm
     // softness that grows with distance, which is what a penumbra does, instead of erasing the
     // shadow. The sample's scene is simply not measured in metres.
     inline float g_evsmBlur = 0.002f;
+    inline float g_evsmBlur_game = 0.002f;
+    inline const bool g_evsmBlur_knob = ::knob::Register(g_evsmBlur_game, g_evsmBlur, "render::sdsm::g_evsmBlur");
     // ...capped, because the kernel must not reach out of its own tile: the S5 gutter is 4
     // texels and past it lies ANOTHER partition. The blur clamps its taps to the tile, so the
     // cap is about cost and about the edge going flat, not about correctness.
     // (the sample's maxEdgeSofteningFilter, 16 texels.)
     inline float g_evsmBlurMaxTexels = 16.0f;
+    inline float g_evsmBlurMaxTexels_game = 16.0f;
+    inline const bool g_evsmBlurMaxTexels_knob = ::knob::Register(g_evsmBlurMaxTexels_game, g_evsmBlurMaxTexels, "render::sdsm::g_evsmBlurMaxTexels");
 
     // Dump the partition readout (intervals, box extents, texel size, sample counts, the
     // CPU-caster tail) to the session log on the next analyze, then clear itself. `--sdsm-readout`.
     inline bool g_dumpReadout = false;
+    inline bool g_dumpReadout_game = false;
+    inline const bool g_dumpReadout_knob = ::knob::Register(g_dumpReadout_game, g_dumpReadout, "render::sdsm::g_dumpReadout");
 }
 
 } // namespace render

@@ -45,6 +45,7 @@
 #include "core/math/Math.h"
 #include "rendering/core/RenderConstants.h"
 #include "third_party/robin_hood.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Camera;
 
@@ -92,6 +93,8 @@ struct OcclusionSettings
     bool  indirectQueries = false;
 };
 inline OcclusionSettings g_occlusion;
+inline OcclusionSettings g_occlusion_game;
+inline const bool g_occlusion_knob = ::knob::Register(g_occlusion_game, g_occlusion, "vis::g_occlusion");
 
 // A primitive is a RenderableObjectBase; `sub` 0 is the object itself, 1 + chunk index a terrain
 // chunk (UE: FPrimitiveOcclusionHistoryKey{PrimitiveId, CustomIndex}).
