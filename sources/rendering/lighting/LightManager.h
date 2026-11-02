@@ -85,6 +85,10 @@ public:
     const std::vector<SpotLight>& SpotLights() const { return spotLights_; }
 
     void UpdateSpotLightCache();
+    // Game thread plan G3: every light's game desc (and lamp level, and a point light's flicker) into the copy the
+    // render half reads -- Scene::Sync, and at the end of a level load. Membership itself changes only with the render
+    // half parked.
+    void SyncToRender();
 
     // Per-frame: among lit spots whose influence intersects the camera frustum,
     // choose the highest-priority projected/bright spots up to

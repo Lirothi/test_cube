@@ -18,6 +18,8 @@ public:
     void Init(Renderer* renderer,
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
+    // Game thread plan G4c: the transform's hand-over plus the material params' (SyncMaterialsToRender).
+    void SyncSceneState(SceneObjectSyncReason reason) override;
 
     GBufferRenderable* AsGBufferRenderable() override { return this; }
     const GBufferRenderable* AsGBufferRenderable() const override { return this; }
@@ -47,9 +49,15 @@ public:
     {
         instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
         materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
+        paramsDirty_ = true;
         return matParamses_[0];
     }
     const MaterialParams& MaterialParamsRef() const { return matParamses_[0]; }
+    // Game thread plan G4c: the render half's copy of slot 0's params (RT's instance albedo and the like).
+    const MaterialParams& RenderMaterialParams() const
+    {
+        return RenderParams()[0];
+    }
 
     // Fields explicitly supplied by the effective object JSON. Material-file defaults are merged
     // per field during Init, so overriding roughness does not accidentally discard emissive, tint,
@@ -86,6 +94,7 @@ public:
     {
         windStrength_ = w;
         for (MaterialParams& mp : matParamses_) { mp.windStrength = w; }
+        paramsDirty_ = true;
         // Writes matParamses_ without going through MaterialParamsRef, so it owes the bump itself.
         // The wind-fade check in Step 7 does NOT cover this: that one watches the camera DISTANCE
         // fade and only while `g_windFadeEnd > g_windFadeStart`.
@@ -101,7 +110,7 @@ public:
     // mirror re-uploads) and the slot identity (a multi-slot batch shares its lead's slot params), so the
     // frames it does not change cost nothing.
     void SetEmissiveScale(float scale);
-    float InstanceEmissiveScale() const override { return emissiveScale_.load(std::memory_order_relaxed); }
+    float InstanceEmissiveScale() const override { return renderEmissiveScale_; } // G4c: as Sync took it
     // True when any slot glows at all -- the Inspector offers the switch only then.
     bool HasEmissive() const;
 
@@ -126,8 +135,9 @@ public:
     // ShadowGpuData uses this to give each per-slot caster id its own weight.
     float FoliageForSlot(size_t slot) const
     {
-        if (matParamses_.empty()) { return 0.0f; }
-        return matParamses_[slot < matParamses_.size() ? slot : 0].windFoliage;
+        const std::vector<MaterialParams>& params = RenderParams();
+        if (params.empty()) { return 0.0f; }
+        return params[slot < params.size() ? slot : 0].windFoliage;
     }
 
     MaterialData* GetMaterialData() const { return matDatas_.empty() ? nullptr : matDatas_[0].get(); }
@@ -161,7 +171,8 @@ public:
     // loop passes the slot instead of setting currentDrawSlot_ (which belongs to the camera's one G-buffer draw).
     const MaterialParams& DrawParamsForSlot(size_t slot) const
     {
-        return matParamses_[slot < matParamses_.size() ? slot : 0];
+        const std::vector<MaterialParams>& params = RenderParams();
+        return params[slot < params.size() ? slot : 0];
     }
     // Pre-Init only: per-slot preset names from level JSON ("materials": [...]); "auto" = glTF.
     void SetSlotPresets(std::vector<std::string> presets)
@@ -211,7 +222,7 @@ public:
         }
         // Slot 0 represents the object in RT (single albedo per TLAS instance; refine later).
         MaterialData* md = GetMaterialData();
-        const MaterialParams& mp = matParamses_[0];
+        const MaterialParams& mp = RenderMaterialParams();
         if (md && md->hasAlbedo && mp.texFlags.x > 0.5f)   // off when the object went flat (useAlbedo)
         {
             out.albedoTex = md->albedo.GetResource();
@@ -294,7 +305,8 @@ public:
     MaterialData* InstanceSlotData(size_t slot) const override { return GetMaterialDataForSlot(slot); }
     const MaterialParams* InstanceSlotParams(size_t slot) const override
     {
-        return slot < matParamses_.size() ? &matParamses_[slot] : nullptr;
+        const std::vector<MaterialParams>& params = RenderParams();
+        return slot < params.size() ? &params[slot] : nullptr;
     }
     std::uint64_t InstanceSlotsCompatibilityKey() const override;
 
@@ -351,6 +363,7 @@ private:
     // Every live surface edit: the instanced draw's slot compatibility and the GPU mirror must refresh.
     void ObjectMaterialEdited()
     {
+        paramsDirty_ = true;
         instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
         materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -364,6 +377,18 @@ private:
     // factory can write params before Init). slotPresets_[i] = preset name or "auto" (glTF).
     std::vector<std::shared_ptr<MaterialData>> matDatas_;
     std::vector<MaterialParams> matParamses_;
+    // Game thread plan G4c: matParamses_ and the emissive scale above are the GAME's (the level, the editor, the night
+    // lamps write them); the render half reads these copies, taken at the hand-over when a writer set paramsDirty_.
+    std::vector<MaterialParams> renderMatParamses_;
+    float renderEmissiveScale_ = 1.0f;
+    bool paramsDirty_ = true;
+    void SyncMaterialsToRender();
+    // The render half's params; before the object's first hand-over (a level load builds from it with the render half
+    // parked) the game's, which nothing else is writing then.
+    const std::vector<MaterialParams>& RenderParams() const
+    {
+        return renderMatParamses_.empty() ? matParamses_ : renderMatParamses_;
+    }
     mutable std::atomic<std::uint64_t> instanceSlotsCompatibilityKey_{ 0 };
     // See MaterialContentVersion(). Atomic for the same reason the key above is: the render-graph
     // workers read it while the editor writes from the UI thread.

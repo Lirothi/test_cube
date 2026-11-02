@@ -29,11 +29,11 @@ void SetCastShadowCommand::Apply(EditorContext& ctx, EditorObjectId id, bool cas
     {
         if (RenderableObject* object = base->AsRenderableObject())
         {
-            const bool changed = object->CastsShadow() != castShadow;
+            const bool changed = object->CastsShadowGame() != castShadow;
             object->SetCastsShadow(castShadow);
             // The caster set changed: the GPU caster tables, the mega buffer, the shared shadow queue and the shadow
             // caches rebuild once after this command (or the composite it is in) -- SetEnabledCommand's road.
-            if (changed && object->IsVisible())
+            if (changed && object->IsVisibleGame())
             {
                 ctx.scene.NotifyEditorShadowCasterVisibilityChanged();
             }

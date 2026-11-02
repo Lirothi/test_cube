@@ -27,6 +27,7 @@ public:
 
     void Tick(float deltaTime) override;
     void SyncSceneState(SceneObjectSyncReason reason) override;
+    void AdvanceSpin();
     // Step 6: override the camera draw to issue one instanced draw per LOD tier (per-instance
     // LOD) — the base path would draw the whole cloud at one LOD.
     void Render(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera, D3D12_GPU_VIRTUAL_ADDRESS viewCB) override;
@@ -82,6 +83,7 @@ private:
     InstanceBuffer instanceBuffer_;
     UINT instanceCount_ = 0;
     float deltaTime_ = 0.0f;
+    float pendingDt_ = 0.0f; // G4d: the game's time since the last hand-over
     float angularSpeed_ = DirectX::XM_PIDIV2;
 
     // Compute pipeline

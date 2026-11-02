@@ -18,6 +18,13 @@ LightManager::~LightManager()
     Reset();
 }
 
+void LightManager::SyncToRender()
+{
+    TC_CHECK_GAME_PARKED_OR_SYNC("LightManager::SyncToRender");
+    for (SpotLight& light : spotLights_) { light.SyncToRender(); }
+    for (PointLight& light : pointLights_) { light.SyncToRender(); }
+}
+
 void LightManager::UpdateSpotLightCache()
 {
     // Step A3: the total spot-light count is uncapped — every spot lights the
@@ -169,7 +176,7 @@ void LightManager::SelectShadowedSpots(const Math::float3& cameraPos, const Frus
     for (size_t i = 0; i < candidateCount; ++i)
     {
         const SpotLight& spot = spotLights_[i];
-        const SpotLightDesc& desc = spot.GetDesc();
+        const SpotLightDesc& desc = spot.GetRenderDesc();
         if (!desc.shadowsEnabled || spot.EffectiveFluxLm() <= 0.0f)
         {
             continue; // lights the scene, but opted out of casting shadows -- or lights nothing now (plan L, by day)
@@ -265,7 +272,7 @@ void LightManager::SelectShadowedPoints(const Math::float3& cameraPos, const Fru
     candidates.reserve(candidateCount);
     for (size_t i = 0; i < candidateCount; ++i)
     {
-        const PointLightDesc& desc = pointLights_[i].GetDesc();
+        const PointLightDesc& desc = pointLights_[i].GetRenderDesc();
         if (!desc.shadowsEnabled || desc.radius <= 0.0f || desc.luminousFluxLm <= 0.0f)
         {
             continue; // lights the scene, but never a cube-shadow caster -- or lights nothing now (plan L)
@@ -705,14 +712,14 @@ void LightManager::UpdateLightMobility(std::uint64_t frame, std::uint32_t active
     track(spotPose_, spotMovedFrame_, spotLights_.size(), [this](size_t i)
     {
         const SpotLight& light = spotLights_[i];
-        const auto& d = light.GetDesc();
+        const auto& d = light.GetRenderDesc();
         const Math::float3 dir = light.GetDirection();
         return ShadowPose{ { d.position.x, d.position.y, d.position.z, dir.x, dir.y, dir.z, d.range, light.GetCosOuter(),
                              d.nearPlane } };
     });
     track(pointPose_, pointMovedFrame_, pointLights_.size(), [this](size_t i)
     {
-        const auto& d = pointLights_[i].GetDesc();
+        const auto& d = pointLights_[i].GetRenderDesc();
         return ShadowPose{ { d.position.x, d.position.y, d.position.z, d.radius } };
     });
     mobileLights_ = 0;

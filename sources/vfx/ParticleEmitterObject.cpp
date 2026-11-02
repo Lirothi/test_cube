@@ -273,9 +273,17 @@ void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
 
 void ParticleEmitterObject::Tick(float dt)
 {
+    pendingDt_ += dt;
+}
+
+void ParticleEmitterObject::SyncSceneState(SceneObjectSyncReason reason)
+{
+    RenderableObject::SyncSceneState(reason);
+    const float dt = pendingDt_;
+    pendingDt_ = 0.0f;
     // Conservative swept bounds for culling/sorting: max travel + sprite radius, gravity drift
     // included. Cheap enough to refresh every frame (position may be animated/gizmo-dragged).
-    const Math::float3 pos = GetPosition();
+    const Math::float3 pos = GetRenderPosition();
     // W8: wind drift is a constant acceleration like gravity, so it enters the swept bound the same
     // way. Leaving it out would let a windblown plume drift outside its own culling AABB and pop.
     const float windAccel = std::abs(desc_.windInfluence) *
@@ -309,7 +317,7 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
 
     // Per-frame emitter CB (b1). Refill-from-desc each frame => editor tweaks are live.
     vfx::GpuEmitterParams prm{};
-    const Math::float3 pos = GetPosition();
+    const Math::float3 pos = GetRenderPosition();
     prm.emitterPos[0] = pos.x; prm.emitterPos[1] = pos.y; prm.emitterPos[2] = pos.z;
     prm.dt = dt_;
     prm.coneDir[0] = desc_.coneDir.x; prm.coneDir[1] = desc_.coneDir.y; prm.coneDir[2] = desc_.coneDir.z;

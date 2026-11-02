@@ -216,7 +216,7 @@ namespace editorframing
         for (const EditorObject& object : document.Objects())
         {
             const RenderableObjectBase* runtime = scene.FindEditorObject(object.id.value);
-            if (object.enabled && runtime && runtime->IsVisible())
+            if (object.enabled && runtime && runtime->IsVisibleGame())
             {
                 visibleObjects.Add(object.id, false);
             }

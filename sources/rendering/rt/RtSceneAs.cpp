@@ -34,7 +34,7 @@ namespace
     {
         // Slot 0 is the only material-parameter slot with a public mutable accessor; slots 1+
         // are immutable after Init and material/mesh hot reloads call Invalidate().
-        const MaterialParams& p = object.MaterialParamsRef();
+        const MaterialParams& p = object.RenderMaterialParams(); // the hand-over's copy (game thread plan G4c)
         uint64_t h = 1469598103934665603ull;
         const auto mix = [&h](uint64_t value) { h ^= value; h *= 1099511628211ull; };
         const auto mixFloat = [&mix](float value)

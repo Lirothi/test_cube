@@ -716,6 +716,12 @@ void OceanRenderable::Tick(float deltaTime)
     // as the wind signal being measured). PINNED to the same number rather than merely paused, so a
     // frozen frame is reproducible across runs instead of holding wherever wall-clock left it.
     if (vfx::g_windFreeze) { elapsedTime_ = vfx::g_windFrozenTime; }
+}
+
+void OceanRenderable::SyncSceneState(SceneObjectSyncReason reason)
+{
+    RenderableObject::SyncSceneState(reason);
+    renderElapsedTime_ = elapsedTime_;
     if (camera_)
     {
         const auto pos = camera_->GetPosition();
@@ -746,7 +752,7 @@ void OceanRenderable::RecordCompute(Renderer* renderer, ID3D12GraphicsCommandLis
     {
         return;
     }
-    simulation_->Update(renderer, cl, elapsedTime_);
+    simulation_->Update(renderer, cl, renderElapsedTime_);
     lengthScales_ = simulation_->GetLengthScales();
     invLengthScales_ = simulation_->GetInvLengthScales();
     UpdateFoamTrailState();
@@ -821,7 +827,7 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildSurfSimPass(
             std::max(wind.z - std::clamp(wind.y, 0.0f, 1.0f), 1e-3f),
         0.0f, 1.0f);
 
-    return surfSim_->BuildPass(ctx, elapsedTime_, shore, tuning);
+    return surfSim_->BuildPass(ctx, renderElapsedTime_, shore, tuning);
 }
 
 std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWetnessPass(
@@ -834,7 +840,7 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWetnessPass(
     const OceanRenderConfig& render = GetRenderConfig();
     return wetness_->BuildUpdatePass(
         ctx,
-        elapsedTime_,
+        renderElapsedTime_,
         std::max(render.shoreWetnessWetTime, 0.05f),
         std::max(render.shoreWetnessDryTime, 0.05f));
 }
@@ -1330,7 +1336,7 @@ void OceanRenderable::UpdateFoamTrailState()
         foamTrailDirection0_ = windDir;
         foamTrailDirection1_ = windDir;
         foamTrailBlendValue_ = 0.0f;
-        foamTrailBlendStartTime_ = elapsedTime_;
+        foamTrailBlendStartTime_ = renderElapsedTime_;
         foamTrailBlendDuration_ = 0.0f;
         foamTrailBlendActive_ = false;
         foamTrailHasHistory_ = false;
@@ -1343,7 +1349,7 @@ void OceanRenderable::UpdateFoamTrailState()
         foamTrailTextureSize1_ = foam.trailTextureSize;
         foamTrailDirection0_ = windDir;
         foamTrailDirection1_ = windDir;
-        foamTrailBlendStartTime_ = elapsedTime_;
+        foamTrailBlendStartTime_ = renderElapsedTime_;
         foamTrailBlendValue_ = 0.0f;
         foamTrailBlendDuration_ = updateTime;
         foamTrailHasHistory_ = true;
@@ -1351,14 +1357,14 @@ void OceanRenderable::UpdateFoamTrailState()
         return;
     }
 
-    const float timeSinceStart = elapsedTime_ - foamTrailBlendStartTime_;
+    const float timeSinceStart = renderElapsedTime_ - foamTrailBlendStartTime_;
     if (!foamTrailBlendActive_ || timeSinceStart >= updateTime)
     {
         foamTrailTextureSize0_ = foamTrailTextureSize1_;
         foamTrailDirection0_ = foamTrailDirection1_;
         foamTrailTextureSize1_ = foam.trailTextureSize;
         foamTrailDirection1_ = windDir;
-        foamTrailBlendStartTime_ = elapsedTime_;
+        foamTrailBlendStartTime_ = renderElapsedTime_;
         foamTrailBlendValue_ = 0.0f;
         foamTrailBlendDuration_ = updateTime;
         foamTrailBlendActive_ = true;
@@ -1374,7 +1380,7 @@ Math::float4 OceanRenderable::GetSimulationParams() const
 {
     const float patchLength = simulation_ ? simulation_->GetPatchLength() : 200.0f;
     const float invPatch = (patchLength > Math::EPS) ? (1.0f / patchLength) : 0.0f;
-    return Math::float4(patchLength, invPatch, elapsedTime_, (float)simulation_->GetCascadeCount());
+    return Math::float4(patchLength, invPatch, renderElapsedTime_, (float)simulation_->GetCascadeCount());
 }
 
 Math::float4 OceanRenderable::GetViewerParams() const
@@ -1759,7 +1765,7 @@ Math::float4 OceanRenderable::GetWetnessComposeAppearance() const
         std::clamp(GetRenderConfig().shoreWetnessReflectionStrength, 0.0f, 2.0f),
         std::cos(maxSlopeDegrees * kDegreesToRadians),
         std::cos(fullWetSlopeDegrees * kDegreesToRadians),
-        GetWaterLevel());
+        GetRenderWaterLevel());
 }
 
 Math::float4 OceanRenderable::GetWetnessComposeFallback() const

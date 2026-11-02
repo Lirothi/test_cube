@@ -26,8 +26,12 @@ public:
         ID3D12GraphicsCommandList* uploadCmdList,
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
     void Tick(float dt) override;
+    // Game thread plan G4d: the emitter's state is the render half's (RecordCompute spends the spawn accumulator); Tick
+    // only hands the frame's time over and this advances the emitter at the hand-over.
+    void SyncSceneState(SceneObjectSyncReason reason) override;
 
     bool CastsShadow() const override { return false; }
+    bool CastsShadowGame() const override { return false; }
     bool IsSimpleRender() const override { return true; }
     // E2: draws in the sorted TransparentSimple bucket of Pass_Transparent.
     bool IsTransparent() const override { return true; }
@@ -63,6 +67,7 @@ private:
     vfx::EmitterDesc desc_;
 
     float dt_ = 0.0f;
+    float pendingDt_ = 0.0f; // G4d: the game's time since the last hand-over
     float spawnAccum_ = 0.0f;
     float logAccum_ = 0.0f;
     uint32_t frameCounter_ = 0;

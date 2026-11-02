@@ -374,11 +374,11 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
                 constants.causticsTint =
                     float4(oc.causticsTint.x, oc.causticsTint.y, oc.causticsTint.z, 1.0f);
                 constants.causticsParams0 = float4(oc.causticsIntensity, oc.causticsScale,
-                    oc.causticsSpeed, frame_->ocean->GetWaterLevel());
+                    oc.causticsSpeed, frame_->ocean->GetRenderWaterLevel());
                 constants.causticsParams1 = float4(oc.causticsDepthFade, oc.causticsSurfaceFade,
                     oc.causticsUpFacing, oc.causticsBias);
                 constants.causticsParams2 = float4(oc.causticsDispersion, oc.causticsLayerBlend,
-                    frame_->ocean->GetElapsedTime(), pixelWorldScale);
+                    frame_->ocean->GetRenderElapsedTime(), pixelWorldScale);
                 constants.causticsAtlasLayout = frame_->ocean->GetCausticsAtlasLayout();
                 constants.causticsFrameSize = frame_->ocean->GetCausticsFrameSize();
             }

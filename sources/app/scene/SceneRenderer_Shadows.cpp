@@ -132,7 +132,7 @@ DirectX::XMFLOAT4 SceneRenderer::VsmWaterPlane(const SceneFrameData& frame)
 {
     const bool water = frame.ocean && frame.mainView && !frame.mainView->transparentWater.empty() &&
                        ocean::g_sunShadow;
-    return water ? DirectX::XMFLOAT4(1.0f, frame.ocean->GetWaterLevel(), 0.0f, 0.0f)
+    return water ? DirectX::XMFLOAT4(1.0f, frame.ocean->GetRenderWaterLevel(), 0.0f, 0.0f)
                  : DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
 }
 

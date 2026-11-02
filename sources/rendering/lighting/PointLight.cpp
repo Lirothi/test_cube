@@ -65,6 +65,7 @@ namespace
 
 void PointLight::SetDesc(const PointLightDesc& d)
 {
+    TC_CHECK_GAME("PointLight::SetDesc");
     baseDesc_ = d;
     ApplyFlicker();
     ++transformVersion_;
@@ -72,6 +73,7 @@ void PointLight::SetDesc(const PointLightDesc& d)
 
 void PointLight::Tick(float deltaTime)
 {
+    TC_CHECK_GAME("PointLight::Tick");
     const PointLightFlickerDesc& flicker = baseDesc_.flicker;
     if (deltaTime <= 0.0f || flicker.amplitude <= 0.0f || flicker.frequencyHz <= 0.0f)
     {
@@ -84,6 +86,7 @@ void PointLight::Tick(float deltaTime)
 
 void PointLight::SetLampLevel(float level)
 {
+    TC_CHECK_GAME("PointLight::SetLampLevel");
     if (level == lampLevel_) { return; }
     lampLevel_ = level;
     ApplyFlicker();
@@ -113,8 +116,8 @@ void PointLight::ApplyFlicker()
 
 mat4 PointLight::BuildModel() const
 {
-    const float s = std::max(0.001f, desc_.radius) * 2;
-    return mat4::Scaling(s, s, s) * mat4::Translation(desc_.position);
+    const float s = std::max(0.001f, renderDesc_.radius) * 2;
+    return mat4::Scaling(s, s, s) * mat4::Translation(renderDesc_.position);
 }
 
 void PointLight::Init(Renderer* r, ID3D12GraphicsCommandList* uploadCmdList,
@@ -231,11 +234,11 @@ void PointLight::RenderColor(Renderer* r, ID3D12GraphicsCommandList* cl,
     auto cb1 = r->GetFrameResource()->AllocDynamic(
         matColorFS_->GetCBSizeBytesAligned(1, render::kConstantBufferAlignment),
         render::kConstantBufferAlignment);
-    matColorFS_->UpdateCBField(cbHandles_.color.light.position, desc_.position, (uint8_t*)cb1.cpu);
-    matColorFS_->UpdateCBField(cbHandles_.color.light.radius, desc_.radius, (uint8_t*)cb1.cpu);
-    matColorFS_->UpdateCBField(cbHandles_.color.light.color, desc_.color, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.position, renderDesc_.position, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.radius, renderDesc_.radius, (uint8_t*)cb1.cpu);
+    matColorFS_->UpdateCBField(cbHandles_.color.light.color, renderDesc_.color, (uint8_t*)cb1.cpu);
     matColorFS_->UpdateCBField(cbHandles_.color.light.intensity,
-                               render::CandelaFromLumens(desc_.luminousFluxLm), (uint8_t*)cb1.cpu);
+                               render::CandelaFromLumens(renderDesc_.luminousFluxLm), (uint8_t*)cb1.cpu);
 
     // GBuffer SRV table: t0..t4 = GB0, GB1, GB2, GBVelocity, Depth
     auto tbl = r->StageGBufferSrvTable();

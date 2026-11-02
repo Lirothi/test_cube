@@ -169,6 +169,7 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // their view buffers resident; its own selection grows it again at the first ReconcileShadowMode. GPU idle here, and
     // the caster Rebuild below makes the cull's rows for it.
     lightManager_.ForgetWantedShadowed();
+    lightManager_.SyncToRender(); // G3: the level's lights as loaded, before anything builds from them
     if (render::g_shadowSpotCapacity != render::kShadowSpotsInitial ||
         render::g_shadowPointCapacity != render::kShadowPointsInitial)
     {
@@ -542,7 +543,16 @@ void AccumulateVisibility(render::VisibilityViewCounters& c, const SceneRenderQu
 
 void Scene::BumpStaticSetVersion()
 {
-    ++staticSetVersion_;
+    ++staticSetVersion_; // the game's (the editor's command stack compares it)
+    // Game thread plan G4b': the render half's queues hold raw object pointers and its version keys the caster set; both
+    // are its own. A membership change happens with the render half parked (its objects die right after), so they go
+    // at once; a visibility edit from the game half waits for the hand-over (Sync).
+    if (threading::GameParkedOrSync()) { ApplyStaticSetToRender(); }
+}
+
+void Scene::ApplyStaticSetToRender()
+{
+    renderStaticSetVersion_ = staticSetVersion_;
 
     // Queue entries are non-owning raw pointers. An editor mutation can destroy an object between
     // frames, before UpdateCascades and other previous-frame diagnostics run. Drop every borrowed
@@ -617,7 +627,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
     // pointer until PrepareViewQueue clears it later in this same frame.
     const bool previousCascadeQueuesCurrent =
         renderQueueSourcesValid_ &&
-        renderQueueSourceVersion_ == staticSetVersion_ &&
+        renderQueueSourceVersion_ == renderStaticSetVersion_ &&
         renderQueueSourceMask_ == camera.GetRenderLayerMask();
     for (size_t idx = 0; idx < cascadeViews_.size(); ++idx)
     {
@@ -1241,7 +1251,7 @@ void Scene::SetOceanVisible(bool visible)
     {
         if (obj && obj->AsOceanRenderable())
         {
-            changed |= obj->IsVisible() != visible;
+            changed |= obj->IsVisibleGame() != visible;
             obj->SetVisible(visible);
         }
     }
@@ -1340,6 +1350,14 @@ void Scene::RefreshShadowGpuForEditor(Renderer& renderer)
     // Rebuild and drop megaReady_ — but nothing rebuilds the consolidated mega VB/IB mid-game (it is
     // only built at level load). Without it, VirtualShadowMap::RecordPageRender falls back to per-group
     // binding: 1024 pool pages × mesh-groups × (bind VB/IB + ExecuteIndirect) → ~10ms CPU, forever.
+    // Game thread plan G4b': park the render half first, then hand it the edit this refresh is for (an object shown,
+    // hidden or switched out of the shadows) -- the rebuild reads the render half's switches.
+    renderer.WaitForPreviousFrame();
+    for (const std::unique_ptr<RenderableObjectBase>& obj : objects_)
+    {
+        if (obj) { obj->SyncSwitchesToRender(); }
+    }
+    if (renderStaticSetVersion_ != staticSetVersion_) { ApplyStaticSetToRender(); }
     RebuildShadowCasters(renderer);
 }
 
@@ -1421,7 +1439,7 @@ Scene::SceneObjectId Scene::RaycastEditorObject(const Math::float3& origin,
         const bool ignoredBySet = ignoredObjectIds &&
             std::find(ignoredObjectIds->begin(), ignoredObjectIds->end(), objectIds_[i]) != ignoredObjectIds->end();
         if (objectIds_[i] == 0 || objectIds_[i] == ignoredObjectId || ignoredBySet ||
-            !objects_[i] || !objects_[i]->IsVisible() || !objects_[i]->IsRaycastPickable())
+            !objects_[i] || !objects_[i]->IsVisibleGame() || !objects_[i]->IsRaycastPickable())
         {
             continue; // editor-owned + visible + pickable only (skip emitters/helpers)
         }
@@ -1616,8 +1634,8 @@ void Scene::Tick(float deltaTime) {
             }, batchSize);
     }
 
-    // Buoyancy between the objects' Tick (the ocean clock is this frame's now) and their PostTick,
-    // which folds the render offsets it writes into this frame's model matrices.
+    // Buoyancy after the objects' Tick (the ocean clock is this frame's now); the render offsets it writes are folded
+    // into this frame's model matrices at the hand-over (Scene::Sync, SyncSceneState).
     buoyancy_.Tick(FindOceanRenderable(), Systems::GetRenderer(), deltaTime);
 
     {
@@ -2015,7 +2033,7 @@ void Scene::ConsiderLightOcclusion(const Frustum& cameraFrustum)
     }
     for (size_t i = 0; i < points.size(); ++i)
     {
-        const PointLightDesc& desc = points[i].GetDesc();
+        const PointLightDesc& desc = points[i].GetRenderDesc();
         const Math::float3 r(desc.radius, desc.radius, desc.radius);
         const AABB bounds(desc.position - r, desc.position + r);
         if (!cameraFrustum.Intersects(bounds)) { continue; }
@@ -2070,6 +2088,19 @@ void Scene::Sync(Renderer* renderer)
     // they read the frame's CalcMatrices before.
     renderCameraCut_ |= renderCamera_.TakePose(camera_);
     if (renderer) { camera_.CalcMatrices(renderer); }
+    // G4: every object's transform, bounds and move flag (SyncSceneState -- the step PostTick used to run), its
+    // material params and the render-facing animation of emitters, spinners and the ocean, and its switches.
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneSyncObjects);
+        TaskSystem::ParallelFor(objects_.size(),
+            [this](size_t index) {
+                if (index >= objects_.size() || !objects_[index]) { return; }
+                objects_[index]->SyncSceneState(SceneObjectSyncReason::Frame);
+                objects_[index]->SyncSwitchesToRender();
+            }, 64);
+    }
+    if (renderStaticSetVersion_ != staticSetVersion_) { ApplyStaticSetToRender(); }
+    if (renderer) { buoyancy_.SyncReadback(FindOceanRenderable(), *renderer); }
     // W8: the wind's fade origin is the CAMERA, shared by the G-buffer and every shadow view; and the drift push of the
     // GPU particle emitters. Read by the recording and by the emitters' tick (which ran before and reads last frame's,
     // as it always did).
@@ -2077,6 +2108,8 @@ void Scene::Sync(Renderer* renderer)
     vfx::g_windDriftXZ = Math::float2(
         windState_.windDirXZ.x * windState_.strength * windState_.gustMul,
         windState_.windDirXZ.y * windState_.strength * windState_.gustMul);
+    // G3: the lights' game descs (the editor's edits, the night lamps' levels, the candles' flicker) to the render half.
+    lightManager_.SyncToRender();
 
     frameData_.skyMoon = timeOfDay_.Present() ? timeOfDay_.GetSkyMoon() : SkyMoonFrame{};
     frameData_.nightSky = timeOfDay_.Present() ? timeOfDay_.GetNightSky() : NightSkyFrame{};
@@ -2271,14 +2304,14 @@ void Scene::PrepareViews(Renderer* renderer)
     // The camera queue is independent of cascade/local-light view construction once its matrices
     // and shared source are ready. Publish it first so a worker can overlap its expensive
     // Cull/LOD/instancing chain with the remainder of PrepareViews setup on the main thread.
-    if (!renderQueueSourcesValid_ || renderQueueSourceVersion_ != staticSetVersion_ ||
+    if (!renderQueueSourcesValid_ || renderQueueSourceVersion_ != renderStaticSetVersion_ ||
         renderQueueSourceMask_ != camMask)
     {
         shadowCasterSource_.Bucketize(objects_, camMask, /*filterShadowCaster=*/true);
         shadowCasterSource_.SortOpaqueSource();
         cameraObjectSource_.Bucketize(objects_, camMask, /*filterShadowCaster=*/false);
         cameraObjectSource_.SortOpaqueSource();
-        renderQueueSourceVersion_ = staticSetVersion_;
+        renderQueueSourceVersion_ = renderStaticSetVersion_;
         renderQueueSourceMask_ = camMask;
         renderQueueSourcesValid_ = true;
     }
@@ -2334,7 +2367,7 @@ void Scene::PrepareViews(Renderer* renderer)
             }
         }
         occlusionHistory_.BeginFrame(frameNo, GetTimeSeconds(), renderCamera_, renderer->GetRenderWidth(),
-                                     renderer->GetRenderHeight(), staticSetVersion_, results, method);
+                                     renderer->GetRenderHeight(), renderStaticSetVersion_, results, method);
         frameData_.occlusionPlan = &occlusionHistory_.Plan();
         frameData_.occlusionQueries = &occlusionQueries_;
         frameData_.hzbTester = &hzbTester_;
@@ -2470,7 +2503,7 @@ void Scene::PrepareViews(Renderer* renderer)
         view.proj = light.GetProjMatrix();
         view.invView = mat4::Inverse(view.view);
         view.invProj = mat4::Inverse(view.proj);
-        const auto& desc = light.GetDesc();
+        const auto& desc = light.GetRenderDesc();
         const float nearPlane = light.GetShadowNear(); // plan S4: what its projection was built with
         const float farPlane = light.GetShadowFar();
         view.frustum = Frustum::FromInvViewProj(view.invView, view.proj, nearPlane, farPlane);
@@ -2519,7 +2552,7 @@ void Scene::PrepareViews(Renderer* renderer)
     for (size_t s = 0; s < shadowedPointCount; ++s)
     {
         const size_t lightIndex = lightManager_.GetShadowedPointLightIndex(s);
-        const auto& desc = pointLights[lightIndex].GetDesc();
+        const auto& desc = pointLights[lightIndex].GetRenderDesc();
         const float3 P = desc.position;
         // Plan S4: UE's 1 cm on the atlases' linear depth, else 2% of radius (min 0.2) so far/near stays ~20 for a usable
         // D16 perspective depth (render::PointShadowNear). MUST equal Pass_PointLights' shadowParams.z — the sampler
@@ -2915,14 +2948,14 @@ void Scene::UpdateSdsmFrameParams(Renderer* renderer)
         const bool keep = !sunOff && cacheFrames > 1u && sdsmCacheFrame_ + 1u == frame &&
             sunVersion == sdsmCacheSunVersion_ && camRevision == sdsmCacheCamRevision_ &&
             D.shadowRes == sdsmCacheAtlasRes_ && atlas == sdsmCacheAtlas_ &&
-            cb.partitions == sdsmCachePartitions_ && staticSetVersion_ == sdsmCacheStaticSet_;
+            cb.partitions == sdsmCachePartitions_ && renderStaticSetVersion_ == sdsmCacheStaticSet_;
         sdsmCacheFrame_ = sunOff ? 0u : frame;
         sdsmCacheSunVersion_ = sunVersion;
         sdsmCacheCamRevision_ = camRevision;
         sdsmCacheAtlasRes_ = D.shadowRes;
         sdsmCacheAtlas_ = atlas;
         sdsmCachePartitions_ = cb.partitions;
-        sdsmCacheStaticSet_ = staticSetVersion_;
+        sdsmCacheStaticSet_ = renderStaticSetVersion_;
 
         std::uint32_t mask = ~0u;
         if (keep)

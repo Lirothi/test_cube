@@ -698,7 +698,7 @@ namespace
                     "MESH: Mesh Editor > Buoyancy. Waves need the ocean preset's readbackCascades set to\n"
                     "One or Two; with None everything floats on a flat surface.");
             }
-            if (!ocean->IsVisible())
+            if (!ocean->IsVisibleGame())
             {
                 ImGui::TextDisabled("The ocean is disabled -- nothing floats.");
                 return;

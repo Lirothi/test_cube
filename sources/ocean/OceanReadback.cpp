@@ -183,8 +183,8 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     s.viewer = Math::float3(viewer.x, viewer.y, viewer.z);
     s.fadeScale = ocean.GetClipMapParams().w;
     s.warpStrength = ocean.GetWindParams0().w;
-    s.waterLevel = ocean.GetWaterLevel();
-    s.time = ocean.GetElapsedTime();
+    s.waterLevel = ocean.GetRenderWaterLevel();
+    s.time = ocean.GetRenderElapsedTime();
     s.cascades = cascades;
     s.simCascades = sim->GetCascadeCount();
     s.resolution = layoutResolution_;

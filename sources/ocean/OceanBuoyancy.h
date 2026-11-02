@@ -36,6 +36,10 @@ public:
     // Works from the REGISTRY below, never a walk of the scene: a level where nothing floats pays one
     // empty check, and one where five boats float pays for five boats, not for 1400 objects.
     void Tick(OceanRenderable* ocean, Renderer& renderer, float deltaTime);
+    // Game thread plan G4e: the readback ring is the render half's (Main_OceanReadback writes it). At the hand-over
+    // (Scene::Sync), where nothing records, the next copy is requested and a finished one adopted; Tick samples the
+    // adopted surface, frozen until the next hand-over.
+    void SyncReadback(OceanRenderable* ocean, Renderer& renderer);
 
     // The floating objects: RenderableObject::SetBuoyant(true) registers, SetBuoyant(false) and the
     // destructor unregister. Thread-safe (a level load may build objects on workers).

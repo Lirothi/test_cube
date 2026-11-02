@@ -5,6 +5,7 @@
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 #include "core/math/OBB.h"
+#include "core/threading/ThreadRole.h" // game thread plan G3: the game's copy and the render half's
 #include "rendering/lighting/NightLamps.h"
 
 struct SpotLightDesc {
@@ -52,12 +53,17 @@ public:
     void SetShadowDepthBias(float bias);
     void SetNearPlane(float nearPlane);
 
-    const SpotLightDesc& GetDesc() const { return desc_; }
+    // Game thread plan G3: the setters above and GetDesc / the lamp level are the GAME's copy (the level, the editor,
+    // the night lamps); SyncToRender (LightManager, from Scene::Sync) carries a change into the render half's desc and
+    // rebuilds the cached cone, matrices and version from it. Everything below reads the render half's.
+    const SpotLightDesc& GetDesc() const { return gameDesc_; }
+    const SpotLightDesc& GetRenderDesc() const { TC_CHECK_RENDER("SpotLight::GetRenderDesc"); return desc_; }
+    void SyncToRender();
 
     // Plan L: the night lamps' level (NightLamps::Level). The desc keeps the authored flux; what lights the frame
     // and earns a shadow slot is EffectiveFluxLm.
-    void SetLampLevel(float level) { lampLevel_ = level; }
-    float GetLampLevel() const { return lampLevel_; }
+    void SetLampLevel(float level) { TC_CHECK_GAME("SpotLight::SetLampLevel"); gameLampLevel_ = level; }
+    float GetLampLevel() const { return gameLampLevel_; }
     float EffectiveFluxLm() const { return desc_.luminousFluxLm * lampLevel_; }
 
     const Math::float3& GetDirection() const { return direction_; }
@@ -102,7 +108,9 @@ public:
     std::uint32_t GetTransformVersion() const { return transformVersion_; }
 
 private:
-    SpotLightDesc desc_{};
+    SpotLightDesc gameDesc_{}; // G3: the game's copy, what the setters write
+    float gameLampLevel_ = 1.0f;
+    SpotLightDesc desc_{};     // the render half's, taken at Sync
     Math::float3 direction_ = Math::float3(0.0f, -1.0f, 0.0f);
     float        innerAngle_ = 0.0f;
     float        outerAngle_ = 0.0f;

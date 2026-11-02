@@ -284,6 +284,8 @@ private:
     // them immediately; waiting for PrepareViews is too late because UpdateCascades reads the
     // previous frame's cascade queues first.
     void BumpStaticSetVersion();
+    // Game thread plan G4b': the render half's side of a caster-set change -- its queues dropped, its version moved.
+    void ApplyStaticSetToRender();
 
     static constexpr int kCascades = SceneFrameData::kCascades;
 
@@ -436,7 +438,8 @@ private:
     std::vector<std::uint64_t> renderSelection_;
 
     SceneRenderSettings renderSettings_{};
-    std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes
+    std::uint32_t staticSetVersion_ = 0; // Step 11: bumped on shadow-caster membership/visibility changes (the game's)
+    std::uint32_t renderStaticSetVersion_ = 0; // G4b': the render half's, moved by ApplyStaticSetToRender
 
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)

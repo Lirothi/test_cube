@@ -13,93 +13,73 @@ SpotLight::SpotLight()
 SpotLight::SpotLight(const SpotLightDesc& desc)
 {
     SetDesc(desc);
+    SyncToRender(); // a new light is not the render half's yet: it starts with its cache built
 }
 
+// Game thread plan G3: the setters write the GAME's copy only; the cached cone, matrices and version are the render
+// half's and are rebuilt from the copy SyncToRender takes.
 void SpotLight::SetDesc(const SpotLightDesc& d)
 {
-    if (std::memcmp(&desc_, &d, sizeof(SpotLightDesc)) == 0)
-    {
-        UpdateCachedData();
-        return;
-    }
-    desc_ = d;
-    dirty_ = true;
-    UpdateCachedData();
+    TC_CHECK_GAME("SpotLight::SetDesc");
+    std::memcpy(&gameDesc_, &d, sizeof(SpotLightDesc)); // the padding too: SyncToRender compares bytes
 }
 
 void SpotLight::SetPosition(const Math::float3& position)
 {
-    if (desc_.position.x == position.x && desc_.position.y == position.y && desc_.position.z == position.z)
-    {
-        return;
-    }
-    desc_.position = position;
-    dirty_ = true;
-    UpdateCachedData();
+    gameDesc_.position = position;
 }
 
 void SpotLight::SetDirection(const Math::float3& direction)
 {
-    if (desc_.direction.x == direction.x && desc_.direction.y == direction.y && desc_.direction.z == direction.z)
-    {
-        return;
-    }
-    desc_.direction = direction;
-    dirty_ = true;
-    UpdateCachedData();
+    gameDesc_.direction = direction;
 }
 
 void SpotLight::SetRange(float range)
 {
-    if (desc_.range == range)
-    {
-        return;
-    }
-    desc_.range = range;
-    dirty_ = true;
-    UpdateCachedData();
+    gameDesc_.range = range;
 }
 
 void SpotLight::SetAngles(float inner, float outer)
 {
-    if (desc_.innerAngle == inner && desc_.outerAngle == outer)
-    {
-        return;
-    }
-    desc_.innerAngle = inner;
-    desc_.outerAngle = outer;
-    dirty_ = true;
-    UpdateCachedData();
+    gameDesc_.innerAngle = inner;
+    gameDesc_.outerAngle = outer;
 }
 
 void SpotLight::SetColor(const Math::float3& color)
 {
-    desc_.color = color;
+    gameDesc_.color = color;
 }
 
 void SpotLight::SetIntensity(float intensity)
 {
-    desc_.luminousFluxLm = intensity; // P16.5: the argument is LUMENS now
+    gameDesc_.luminousFluxLm = intensity; // P16.5: the argument is LUMENS now
 }
 
 void SpotLight::SetShadowNormalBias(float bias)
 {
-    desc_.shadowNormalBias = bias;
+    gameDesc_.shadowNormalBias = bias;
 }
 
 void SpotLight::SetShadowDepthBias(float bias)
 {
-    desc_.shadowDepthBias = bias;
+    gameDesc_.shadowDepthBias = bias;
 }
 
 void SpotLight::SetNearPlane(float nearPlane)
 {
-    if (desc_.nearPlane == nearPlane)
+    gameDesc_.nearPlane = nearPlane;
+}
+
+void SpotLight::SyncToRender()
+{
+    // A byte-for-byte copy, so an unchanged desc compares equal here every frame (the version, which the shadow caches
+    // key on, moves only on a real change -- as each setter's own compare had it).
+    if (std::memcmp(&desc_, &gameDesc_, sizeof(SpotLightDesc)) != 0)
     {
-        return;
+        std::memcpy(&desc_, &gameDesc_, sizeof(SpotLightDesc));
+        dirty_ = true;
     }
-    desc_.nearPlane = nearPlane;
-    dirty_ = true;
+    lampLevel_ = gameLampLevel_;
     UpdateCachedData();
 }
 

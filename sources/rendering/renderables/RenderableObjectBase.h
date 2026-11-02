@@ -9,6 +9,7 @@
 #include "core/math/Math.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/core/RenderGraph.h"
+#include "core/threading/ThreadRole.h" // game thread plan G4: the game's switches and the render half's copies
 
 class Renderer;
 class Frustum;
@@ -300,8 +301,22 @@ public:
     // Visibility: hidden objects are skipped during bucketization (not drawn in
     // any view) but stay in the scene. Default visible. Used by the editor's
     // "enabled" toggle.
+    //
+    // Game thread plan G4: two copies. The GAME's (SetVisible / IsVisibleGame: the editor, buoyancy) and the render
+    // half's (IsVisible: the queues, the casters, RT), which takes the game's at the hand-over (SyncSwitchesToRender,
+    // Scene::Sync) -- and at once while the render half is parked or at the hand-over, so a parked caster rebuild sees
+    // the edit it was parked for.
     bool IsVisible() const { return visible_; }
-    void SetVisible(bool visible) { visible_ = visible; }
+    bool IsVisibleGame() const { return gameVisible_; }
+    void SetVisible(bool visible)
+    {
+        gameVisible_ = visible;
+        if (threading::GameParkedOrSync()) { visible_ = visible; }
+    }
+    // The game's switches (visibility, a mesh's shadow switch) into the render half's copies.
+    virtual void SyncSwitchesToRender() { visible_ = gameVisible_; }
+    // The game's view of the shadow switch (the editor's commands); types that never cast say false in both.
+    virtual bool CastsShadowGame() const { return CastsShadow(); }
 
     // Occlusion plan S4: this object's G-buffer draws come out of the GPU registry's indirect
     // path (ShadowGpuData decides at Rebuild: every submesh slot's material matches its group's).
@@ -332,7 +347,8 @@ protected:
     std::uint64_t editorObjectId_ = 0;
 #endif
     std::uint64_t cameraVisibleFrame_ = ~0ull;
-    bool visible_ = true;
+    bool visible_ = true;     // the render half's (G4)
+    bool gameVisible_ = true; // the game's
     bool gbufferIndirect_ = false;
     bool cameraOccluded_ = false;
 };

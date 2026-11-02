@@ -303,6 +303,15 @@ bool GpuInstancedModels::RecordShadow(Renderer* renderer, ID3D12GraphicsCommandL
 
 void GpuInstancedModels::Tick(float deltaTime)
 {
+    pendingDt_ += deltaTime;
+}
+
+// Game thread plan G4d: the spin is the render half's (RecordCompute reads deltaTime_, RT the rotations); it advances
+// at the hand-over by the game's time, before the transform's own sync.
+void GpuInstancedModels::AdvanceSpin()
+{
+    const float deltaTime = pendingDt_;
+    pendingDt_ = 0.0f;
     deltaTime_ = deltaTime;
     bool resized = false;
     if (instanceRotations_.size() < instanceCount_)
@@ -345,6 +354,7 @@ void GpuInstancedModels::Tick(float deltaTime)
 
 void GpuInstancedModels::SyncSceneState(SceneObjectSyncReason reason)
 {
+    AdvanceSpin();
     GBufferRenderable::SyncSceneState(reason);
     (void)GetWorldBounds();
 }

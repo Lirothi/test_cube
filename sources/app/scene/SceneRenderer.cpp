@@ -179,7 +179,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
             for (size_t i = 0; i < spots; ++i)
             {
                 const auto& light = spotLights[i];
-                const auto& desc = light.GetDesc();
+                const auto& desc = light.GetRenderDesc();
                 spotCPU[i].positionRange = Math::float4(desc.position, desc.range);
                 spotCPU[i].directionCosOuter = Math::float4(light.GetDirection(), light.GetCosOuter());
                 spotCPU[i].colorIntensity =
@@ -251,7 +251,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
             const auto& pointLights = lm.PointLights();
             for (size_t i = 0; i < points; ++i)
             {
-                const auto& desc = pointLights[i].GetDesc();
+                const auto& desc = pointLights[i].GetRenderDesc();
                 pointCPU[i].position = desc.position;
                 pointCPU[i].radius = desc.radius;
                 pointCPU[i].color = desc.color;

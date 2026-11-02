@@ -537,6 +537,10 @@ const AABB& RenderableObject::GetWorldBounds() const
 
 void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
 {
+    // Game thread plan G4: the hand-over (Scene::Sync every frame; a load or a spawn with the render half parked)
+    // is the ONLY writer of what the render half reads here -- the model matrices, the bounds, the move flag.
+    TC_CHECK_GAME_PARKED_OR_SYNC("RenderableObject::SyncSceneState");
+    renderPos_ = pos_;
     const bool resetMotionHistory = reason != SceneObjectSyncReason::Frame;
 
     if (!prevModelMatrixValid_)
@@ -579,8 +583,8 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
 
 void RenderableObject::PostTick(float dt)
 {
-    SyncSceneState(SceneObjectSyncReason::Frame);
-
+    // The frame's SyncSceneState runs at the hand-over now (Scene::Sync, game thread plan G4), after everything the
+    // game half does to a transform this frame -- the editor, the buoyancy, a level load.
     RenderableObjectBase::PostTick(dt);
 
     //Systems::GetRenderer().GetDebugDrawSystem()->AddBox(GetWorldBounds(), { 1.0f, 0.0f, 0.0f, 0.7f }, true);
@@ -600,6 +604,9 @@ void RenderableObject::MarkWorldBoundsDirty()
 
 void RenderableObject::MarkTransformDirty()
 {
+    // Game thread plan G4: every transform input (position, rotation, scale, the buoyancy's render offset) is the
+    // game's; the matrices the render half reads are rebuilt from them at the hand-over (SyncSceneState).
+    TC_CHECK_GAME("RenderableObject transform");
     transformDirty_ = true;
 }
 

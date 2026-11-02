@@ -23,9 +23,9 @@ void SetEnabledCommand::Apply(EditorContext& ctx, bool enabled)
     // stack rebuilds the mega-buffer once after this command or a composite.
     if (RenderableObjectBase* base = ctx.scene.FindEditorObject(id_.value))
     {
-        const bool visibilityChanged = base->IsVisible() != enabled;
+        const bool visibilityChanged = base->IsVisibleGame() != enabled;
         base->SetVisible(enabled);
-        if (visibilityChanged && base->CastsShadow())
+        if (visibilityChanged && base->CastsShadowGame())
         {
             ctx.scene.NotifyEditorShadowCasterVisibilityChanged();
         }
@@ -47,7 +47,7 @@ bool SetEnabledCommand::Execute(EditorContext& ctx)
         }
         else if (const RenderableObjectBase* base = ctx.scene.FindEditorObject(id_.value))
         {
-            oldEnabled_ = base->IsVisible();
+            oldEnabled_ = base->IsVisibleGame();
         }
         else
         {

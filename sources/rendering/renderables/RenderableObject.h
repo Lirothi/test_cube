@@ -113,6 +113,9 @@ public:
     void SetRotationEulerDeg(const Math::float3& eulerDegXYZ);
 
     Math::float3 GetPosition() const { return pos_; }
+    // Game thread plan G4: the position as the hand-over took it (SyncSceneState) -- what the render half reads (the
+    // wind's distance fade, an emitter's origin, the water's level); pos_ above is the game's, moved at any time.
+    const Math::float3& GetRenderPosition() const { return renderPos_; }
     Math::float3 GetScale() const { return scale_; }
     Math::float3 GetRotationEulerRad() const { return rotEuler_; }
     Math::mat4 GetOrientationMatrix() const { return Math::mat4::RotationFromEulerXYZRad(rotEuler_); }
@@ -270,7 +273,19 @@ public:
     // page dirty and re-renders the whole pool -- measured at ~195 ms per frame in Debug against a
     // 0.38 ms baseline while a mesh was being dragged. A transient ghost like the editor's spawn
     // preview has no business paying that, or making the rest of the scene pay it.
-    void SetCastsShadow(bool v) { castsShadow_ = v; }
+    // Game thread plan G4: the game's switch; the render half's copy follows at Sync (or at once when parked), as
+    // visibility does (RenderableObjectBase::SetVisible).
+    void SetCastsShadow(bool v)
+    {
+        gameCastsShadow_ = v;
+        if (threading::GameParkedOrSync()) { castsShadow_ = v; }
+    }
+    bool CastsShadowGame() const override { return gameCastsShadow_; }
+    void SyncSwitchesToRender() override
+    {
+        RenderableObjectBase::SyncSwitchesToRender();
+        castsShadow_ = gameCastsShadow_;
+    }
     // The per-object switch is what says no (the level's "castShadow": false, the Inspector) -- not a type that never
     // casts (the ocean, particles: their CastsShadow() override is false with the switch left on). Such an object
     // keeps its shadow PSOs and its place in the GPU-driven table (ShadowGpuData::IsCaster) so the switch can go back.
@@ -327,7 +342,8 @@ protected:
 
     void MarkTransformDirty();
 
-    bool castsShadow_ = true; // see SetCastsShadow
+    bool castsShadow_ = true; // see SetCastsShadow; the render half's (G4)
+    bool gameCastsShadow_ = true;
     float rtCutoutOpacity_ = 1.0f; // see SetRtCutoutOpacity
 
     template<typename T>
@@ -410,6 +426,7 @@ private:
     std::vector<std::uint8_t> chunkVisCamera_; // S1: per-chunk camera frustum mask (see ChunkCameraVisible)
 
     Math::float3 pos_{};
+    Math::float3 renderPos_{}; // G4: pos_ as SyncSceneState took it
     Math::float3 scale_ = Math::float3(1.0f, 1.0f, 1.0f);
     Math::float3 rotEuler_{};
     Math::mat4 renderOffset_;

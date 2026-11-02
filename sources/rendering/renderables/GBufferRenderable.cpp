@@ -241,11 +241,12 @@ std::uint64_t GBufferRenderable::InstanceSlotsCompatibilityKey() const
         mix(bits);
     };
 
-    mix(static_cast<std::uint64_t>(matParamses_.size()));
-    for (size_t i = 0; i < matParamses_.size(); ++i)
+    const std::vector<MaterialParams>& params = RenderParams();
+    mix(static_cast<std::uint64_t>(params.size()));
+    for (size_t i = 0; i < params.size(); ++i)
     {
         mix(reinterpret_cast<std::uint64_t>(GetMaterialDataForSlot(i)));
-        const MaterialParams& p = matParamses_[i];
+        const MaterialParams& p = params[i];
         mixFloat(p.baseColor.x); mixFloat(p.baseColor.y);
         mixFloat(p.baseColor.z); mixFloat(p.baseColor.w);
         mixFloat(p.metalRough.x); mixFloat(p.metalRough.y);
@@ -283,8 +284,30 @@ void GBufferRenderable::SetEmissiveScale(float scale)
 {
     if (scale == emissiveScale_.load(std::memory_order_relaxed)) { return; }
     emissiveScale_.store(scale, std::memory_order_relaxed);
+    paramsDirty_ = true; // the render half's copy of the scale follows at the hand-over
     instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed);
     materialContentVersion_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GBufferRenderable::SyncSceneState(SceneObjectSyncReason reason)
+{
+    RenderableObject::SyncSceneState(reason);
+    SyncMaterialsToRender();
+}
+
+// Game thread plan G4c: the game's params and emissive scale into the render half's copies -- only when a writer
+// marked them (a vector copy per object per frame would be the hand-over's whole cost).
+void GBufferRenderable::SyncMaterialsToRender()
+{
+    const float scale = emissiveScale_.load(std::memory_order_relaxed);
+    if (!paramsDirty_ && renderMatParamses_.size() == matParamses_.size() && renderEmissiveScale_ == scale)
+    {
+        return;
+    }
+    renderMatParamses_ = matParamses_;
+    renderEmissiveScale_ = scale;
+    paramsDirty_ = false;
+    instanceSlotsCompatibilityKey_.store(0, std::memory_order_relaxed); // recomputed from the new copy
 }
 
 bool GBufferRenderable::HasEmissive() const
@@ -488,6 +511,7 @@ void GBufferRenderable::RenderShadow(Renderer* renderer, ID3D12GraphicsCommandLi
 void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams& defaults,
                                               const MaterialParams& objectValues)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     if (slot >= matParamses_.size())
     {
         return;
@@ -548,18 +572,21 @@ void GBufferRenderable::MergeMaterialDefaults(size_t slot, const MaterialParams&
 
 void GBufferRenderable::SetObjectTexOffsScale(const Math::float4& v)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     for (MaterialParams& mp : matParamses_) { mp.texOffsScale = v; }
     ObjectMaterialEdited();
 }
 
 void GBufferRenderable::SetObjectNormalStrength(float strength)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     for (MaterialParams& mp : matParamses_) { mp.SetNormalStrength(strength); }
     ObjectMaterialEdited();
 }
 
 void GBufferRenderable::SetObjectUseMR(bool on)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     for (size_t i = 0; i < matParamses_.size(); ++i)
     {
         const MaterialData* md = i < matDatas_.size() ? matDatas_[i].get() : nullptr;
@@ -570,6 +597,7 @@ void GBufferRenderable::SetObjectUseMR(bool on)
 
 void GBufferRenderable::SetObjectUseAlbedo(bool on)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     for (size_t i = 0; i < matParamses_.size(); ++i)
     {
         const MaterialData* md = i < matDatas_.size() ? matDatas_[i].get() : nullptr;
@@ -580,12 +608,14 @@ void GBufferRenderable::SetObjectUseAlbedo(bool on)
 
 void GBufferRenderable::SetObjectMetalRough(const Math::float2& metalRough)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     for (MaterialParams& mp : matParamses_) { mp.metalRough = metalRough; }
     ObjectMaterialEdited();
 }
 
 void GBufferRenderable::SetObjectBaseColorRgb(const Math::float3& rgb)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     for (MaterialParams& mp : matParamses_) { mp.baseColor = Math::float4(rgb.x, rgb.y, rgb.z, mp.baseColor.w); }
     ObjectMaterialEdited();
 }
@@ -594,6 +624,7 @@ void GBufferRenderable::ResolveMaterialSlots(Renderer* renderer,
     ID3D12GraphicsCommandList* uploadCmdList,
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
+    paramsDirty_ = true; // game thread plan G4c: the render half takes the copy at the hand-over
     MaterialDataManager* mgr = renderer->GetMaterialDataManager();
     const std::string gltfSrc = GetGltfMaterialSourcePath(); // "" unless the model is a glTF
     const Mesh* mesh = GetMesh();
@@ -893,7 +924,8 @@ void GBufferRenderable::FillInstanceDataForSlot(render::InstancePerObject& out, 
     // Slot `slot`'s params (slot 0 for the instanced CB array, whose multi-slot draws (B2b) ignore
     // these material fields anyway -- the PS reads the per-slot CB (b2) -- but world/prevWorld/
     // objectId stay per-instance). S4: the GPU registry asks for each submesh's own slot.
-    const MaterialParams& p = matParamses_[slot < matParamses_.size() ? slot : 0];
+    const std::vector<MaterialParams>& params = RenderParams();
+    const MaterialParams& p = params[slot < params.size() ? slot : 0];
     out.baseColor = DirectX::XMFLOAT4(p.baseColor.x, p.baseColor.y, p.baseColor.z, p.baseColor.w);
     out.metalRough = DirectX::XMFLOAT2(p.metalRough.x, p.metalRough.y);
     out.alphaCutoff = p.alphaCutoff; // C1 (single-slot instanced; multi-slot uses b2)
@@ -914,7 +946,7 @@ void GBufferRenderable::FillInstanceDataForSlot(render::InstancePerObject& out, 
 float GBufferRenderable::EffectiveWindStrength(float rawWindStrength) const
 {
     if (rawWindStrength <= 0.0f) { return 0.0f; } // keep the exact no-wind early-out
-    return rawWindStrength * vfx::WindDistanceFade(GetPosition());
+    return rawWindStrength * vfx::WindDistanceFade(GetRenderPosition());
 }
 
 float GBufferRenderable::GetWindLeafScaleWorld() const

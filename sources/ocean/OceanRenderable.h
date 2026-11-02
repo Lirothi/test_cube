@@ -99,6 +99,9 @@ public:
         std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive) override;
 
     void Tick(float deltaTime) override;
+    // Game thread plan G4d: the render half's view of the ocean at the hand-over -- its clock, and what follows the
+    // viewer (the surf sim and wetness windows, the clip levels) -- after the transform's own (RenderableObject).
+    void SyncSceneState(SceneObjectSyncReason reason) override;
 
     void RecordCompute(Renderer* renderer, ID3D12GraphicsCommandList* cl) override;
     bool PrepareCompute(RenderGraphPassContext& ctx) override;
@@ -127,6 +130,7 @@ public:
     bool IsDepthWritingTransparent() const override { return true; }
     bool IsSimpleRender() const override { return false; }
     bool CastsShadow() const override { return false; }
+    bool CastsShadowGame() const override { return false; }
     // Rung 1 (Step 10): the surface is compute-simulated every frame — dynamic (moot while it
     // isn't a shadow caster, but correct if that ever changes).
     bool IsDynamicCaster() const override { return true; }
@@ -141,7 +145,8 @@ public:
 
     // W1: the ocean's simulation clock (seconds), accumulated in Tick and fed to the FFT sim. The
     // wind system reads this as its shared clock so waves and foliage sway stay phase-coherent.
-    float GetElapsedTime() const { return elapsedTime_; }
+    float GetElapsedTime() const { return elapsedTime_; } // the GAME's clock (the wind, buoyancy)
+    float GetRenderElapsedTime() const { return renderElapsedTime_; } // as the hand-over took it
 
     // Caustics: the flipbook lives with the ocean because it IS a water effect, but it is consumed
     // by the deferred lighting pass (see SceneRenderer::Pass_Lighting), which needs the CPU-side
@@ -151,6 +156,7 @@ public:
     Math::float4 GetCausticsFrameSize() const;   // width, height, 1/width, 1/height
     // World-space Y of the still water plane. Everything below it receives caustics.
     float GetWaterLevel() const { return GetPosition().y; }
+    float GetRenderWaterLevel() const { return GetRenderPosition().y; } // the render half's (G4)
 
     bool IsWetnessReady() const { return wetness_ && wetness_->IsReady(); }
     ID3D12Resource* GetWetnessResource() const;
@@ -316,6 +322,7 @@ private:
     Math::float4 cloudShadowParams_{};  // x = 0: no map (default)
     D3D12_CPU_DESCRIPTOR_HANDLE cloudShadowSrv_{};
     float elapsedTime_ = 0.0f;
+    float renderElapsedTime_ = 0.0f; // G4d: elapsedTime_ at the hand-over
     Math::float2 viewerXZ_ = Math::float2(0.0f, 0.0f);
     float viewerHeight_ = 0.0f;
 

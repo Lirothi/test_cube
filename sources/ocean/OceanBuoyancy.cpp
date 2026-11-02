@@ -293,6 +293,16 @@ void OceanBuoyancy::Step(Body& body, const OceanRenderable& ocean, float deltaTi
     }
 }
 
+void OceanBuoyancy::SyncReadback(OceanRenderable* ocean, Renderer& renderer)
+{
+    TC_CHECK_GAME_PARKED_OR_SYNC("OceanBuoyancy::SyncReadback");
+    // What this frame's Tick floated (floating_): nothing floating, no copy -- the same rule Tick kept.
+    if (!ocean || ocean != lastOcean_ || floating_.empty()) { return; }
+    OceanReadback& readback = ocean->GetReadback();
+    readback.Request();
+    readback.Poll(&renderer, *ocean);
+}
+
 void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float deltaTime)
 {
     CPU_SCOPE(ProfilerScopes::kSceneTickBuoyancy);
@@ -308,12 +318,12 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
         if (registry.objects.empty() && bodies_.empty()) { return; } // nothing floats: free
         registered = registry.objects; // into the kept capacity
     }
-    const bool oceanOn = ocean && ocean->IsVisible() && ocean->GetSimulation();
+    const bool oceanOn = ocean && ocean->IsVisibleGame() && ocean->GetSimulation();
     std::vector<RenderableObject*>& floating = floating_;
     floating.clear();
     for (RenderableObject* object : registered)
     {
-        if (oceanOn && object->IsVisible())
+        if (oceanOn && object->IsVisibleGame())
         {
             floating.push_back(object);
         }
@@ -332,9 +342,9 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
     }
     if (floating.empty()) { return; }
 
-    OceanReadback& readback = ocean->GetReadback();
-    readback.Request();
-    readback.Poll(&renderer, *ocean);
+    // The readback ring is the render half's; Request / Poll run at the hand-over (SyncReadback), and the steps below
+    // sample the surface Poll adopted there -- frozen until the next one (game thread plan G4e).
+    (void)renderer;
     if (ocean->GetSimulation()->GetSettings().GetReadbackMode() ==
         OceanSimulationSettings::ReadbackCascadesMode::None)
     {
@@ -362,6 +372,7 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
 
     if (!bodies_.empty())
     {
+        const OceanReadback& readback = ocean->GetReadback(); // what the last hand-over adopted, read only
         const Body& first = bodies_.begin()->second;
         LOG_DEBUG_THROTTLED(std::chrono::seconds(2), logging::LogCategory::Ocean,
             "buoyancy: {} floating, surface {} frame(s) old ({} cascade(s)); '{}' heave {:.3f} m (v {:.3f}), tilt x {:.2f} z {:.2f} deg",

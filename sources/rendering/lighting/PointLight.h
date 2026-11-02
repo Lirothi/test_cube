@@ -4,6 +4,7 @@
 #include "rendering/meshes/Mesh.h"
 #include "rendering/lighting/NightLamps.h"
 #include "materials/Material.h"
+#include "core/threading/ThreadRole.h" // game thread plan G3: the game's desc and the render half's copy
 
 class Renderer;
 
@@ -43,7 +44,14 @@ public:
         std::vector<ComPtr<ID3D12Resource>>* uploadKeepAlive);
 
     void SetDesc(const PointLightDesc& d);
+    // The GAME's effective desc (the editor, the night lamps, MCP read it). The render half reads GetRenderDesc.
     const PointLightDesc& GetDesc() const { return desc_; }
+    // Game thread plan G3: what the render half reads -- the effective desc and its version as the hand-over took them
+    // (LightManager::SyncToRender, from Scene::Sync), so a flicker, a lamp level or an editor edit on the game side
+    // never lands in the middle of a frame being recorded.
+    void SyncToRender() { renderDesc_ = desc_; renderTransformVersion_ = transformVersion_; }
+    const PointLightDesc& GetRenderDesc() const { TC_CHECK_RENDER("PointLight::GetRenderDesc"); return renderDesc_; }
+    std::uint32_t GetRenderTransformVersion() const { return renderTransformVersion_; }
 
     // Smooth, deterministic modulation for fire-like lights. This deliberately uses
     // layered sine waves rather than frame-random values, which would visibly strobe.
@@ -111,6 +119,8 @@ private:
 
     PointLightDesc baseDesc_{};
     PointLightDesc desc_{}; // effective desc after flicker modulation
+    PointLightDesc renderDesc_{}; // G3: desc_ as Sync took it; the render half's
+    std::uint32_t renderTransformVersion_ = 0;
     float flickerTime_ = 0.0f;
     float lampLevel_ = 1.0f; // plan L
     std::uint32_t transformVersion_ = 0; // Step 11: bumped on SetDesc
