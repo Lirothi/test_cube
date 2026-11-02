@@ -2283,12 +2283,16 @@ std::wstring MaterialManager::BuildKey(const Material::ComputeDesc& cd)
 std::shared_ptr<Material> MaterialManager::GetOrCreateGraphics(Renderer* r, const Material::GraphicsDesc& gd)
 {
     std::wstring key = BuildKey(gd);
-    auto it = materials_.find(key);
-    if (it != materials_.end()) { return it->second; }
+    {
+        std::lock_guard<std::mutex> lock(materialsMtx_);
+        auto it = materials_.find(key);
+        if (it != materials_.end()) { return it->second; }
+    }
+    // Built outside the lock: a compile is milliseconds, and the probe only needs the map.
     auto m = std::make_shared<Material>();
     m->CreateGraphics(r, gd);
-    materials_[key] = m;
-    return m;
+    std::lock_guard<std::mutex> lock(materialsMtx_);
+    return materials_.try_emplace(std::move(key), std::move(m)).first->second;
 }
 
 void MaterialManager::LinkLinearDepthVariant(Renderer* r, Material& base)
@@ -2309,12 +2313,15 @@ void MaterialManager::LinkLinearDepthVariant(Renderer* r, Material& base)
 std::shared_ptr<Material> MaterialManager::GetOrCreateCompute(Renderer* r, const Material::ComputeDesc& cd)
 {
     std::wstring key = BuildKey(cd);
-    auto it = materials_.find(key);
-    if (it != materials_.end()) { return it->second; }
+    {
+        std::lock_guard<std::mutex> lock(materialsMtx_);
+        auto it = materials_.find(key);
+        if (it != materials_.end()) { return it->second; }
+    }
     auto m = std::make_shared<Material>();
     m->CreateCompute(r, cd);
-    materials_[key] = m;
-    return m;
+    std::lock_guard<std::mutex> lock(materialsMtx_);
+    return materials_.try_emplace(std::move(key), std::move(m)).first->second;
 }
 
 bool MaterialManager::RequestFSProbeAsync()
@@ -2325,11 +2332,18 @@ bool MaterialManager::RequestFSProbeAsync()
     }
 
     auto requestJob = [this]() {
-        for (auto& kv : materials_) {
-            auto& mat = kv.second;
-            if (mat) {
-                (void)mat->FSProbeAndFlagPending();
+        // A snapshot, probed unlocked: the probe stats every watched file, and holding the map for
+        // that long would stall the frame thread's next GetOrCreate.
+        std::vector<std::shared_ptr<Material>> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(materialsMtx_);
+            snapshot.reserve(materials_.size());
+            for (const auto& kv : materials_) {
+                if (kv.second) { snapshot.push_back(kv.second); }
             }
+        }
+        for (const auto& mat : snapshot) {
+            (void)mat->FSProbeAndFlagPending();
         }
         fsProbeInFlight_.store(false, std::memory_order_release);
     };
@@ -2370,12 +2384,14 @@ void MaterialManager::Clear()
         static_cast<double>(psoCreateUs) / 1000.0,
         static_cast<unsigned long long>(psoBytes));
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::Render, psoLine);
+    std::lock_guard<std::mutex> lock(materialsMtx_);
     materials_.clear();
 }
 
 unsigned MaterialManager::RequestReloadWhere(bool (*pred)(const std::wstring& shaderFile))
 {
     unsigned flagged = 0;
+    std::lock_guard<std::mutex> lock(materialsMtx_);
     for (auto& kv : materials_) {
         auto& mat = kv.second;
         if (mat && !mat->IsCompute() && pred(mat->GetCachedGraphicsDesc().shaderFile)) {
@@ -2389,6 +2405,7 @@ unsigned MaterialManager::RequestReloadWhere(bool (*pred)(const std::wstring& sh
 bool MaterialManager::ApplyPendingHotReloads(Renderer* r, uint64_t frameNumber, uint64_t keepAliveFrames)
 {
     bool anyReloaded = false;
+    std::lock_guard<std::mutex> lock(materialsMtx_); // a rebuild never calls back into the manager
     for (auto& kv : materials_) {
         auto& mat = kv.second;
         if (mat) {

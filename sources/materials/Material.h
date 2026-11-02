@@ -302,8 +302,10 @@ public:
     void Clear();
 
 private:
-    // key → material
+    // key → material. Guarded by materialsMtx_: the shader watcher's probe walks it on a detached worker
+    // (RequestFSProbeAsync) while the frame thread inserts -- a rehash under the walk's iterator.
     std::unordered_map<std::wstring, std::shared_ptr<Material>> materials_;
+    std::mutex materialsMtx_;
     std::atomic<bool> fsProbeInFlight_{ false };
 
 private:
