@@ -73,8 +73,10 @@
       "useSurfaceRoughness": true
     },
     "waterNormalCascades": 3,
+    "waterNormalFilter": 0.0,
+    "waterPrefilter": 1.0,
     "waterSurfaceNormal": true,
-    "waterTemporal": false,
+    "waterTemporal": true,
     "waterTemporalBlend": 0.125,
     "waterTemporalStillInertia": 0.0
   },
@@ -128,7 +130,7 @@
       "zPadding": 25.0
     },
     "localLightWindRange": 30.0,
-    "mode": "sdsm",
+    "mode": "vsm",
     "sdsm": {
       "borderTexels": 4.0,
       "cacheDilation": 0.05000000074505806,
