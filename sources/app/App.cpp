@@ -101,6 +101,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/core/Screenshot.h"
 #include "rendering/core/UploadBatch.h"
 #include "rendering/core/RenderStats.h"
+#include "core/threading/ThreadRole.h" // game thread plan: the frame's phases and their roles
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include <fstream>
@@ -348,6 +349,8 @@ namespace
         const float stepX = std::max(ext.x, 50.0f) * 1.1f;
         const float stepZ = std::max(ext.z, 50.0f) * 1.1f;
 
+        // The render half parks first (game thread plan section 3.7): the copies join the scene it walks.
+        renderer.WaitForPreviousFrame();
         UploadBatch uploads;
         if (!uploads.Begin(&renderer))
         {
@@ -2263,6 +2266,9 @@ void App::PaintLoadingScreen(HDC dc) const
 }
 
 void App::Run(HINSTANCE hInstance, int nCmdShow) {
+    // Game thread plan (docs/game_thread_plan.md section 3.4): boot and shutdown are the hand-over role -- nothing
+    // else runs, both halves' state is built or torn down here. The frame loop below gives each phase its role.
+    threading::SetCurrentRole(threading::ThreadRole::Sync);
     {
         // The systems (renderer, scene, input, levels) are built here, before any of their own
         // scopes exist: most of what they allocate at construction is the renderer's.
@@ -2329,6 +2335,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         double lastTime = GetTimeSeconds();
         bool firstFrameDumped = false;
         double frameStart = GetTimeSeconds();
+        // The frame's phases, on one thread (frame.renderThread 0): the loop runs as the GAME half; the render
+        // half's calls take the Render role, the hand-over between them the Sync role (plan sections 3.2-3.4).
+        threading::SetCurrentRole(threading::ThreadRole::Game);
         while (isRunning_) {
             if (!firstFrameDumped && renderer.GetTotalFrameNumber() > 0)
             {
@@ -2337,13 +2346,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
             logging::SetFrameNumber(renderer.GetTotalFrameNumber());
-            render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
-            render::g_visibilityStats.NextFrame(); // occlusion plan S0: per-view visibility, same moment
-            TaskSystem::Get().WaitForTrackedAsyncTasks();
-            renderer.BeginFrame();
+            {
+                threading::RoleScope renderRole(threading::ThreadRole::Render);
+                render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
+                render::g_visibilityStats.NextFrame(); // occlusion plan S0: per-view visibility, same moment
+                // No join of tracked tasks here: the render half joins its own before the frame is submitted
+                // (SceneRenderer::Render), and a game-half join would wait on nothing (TaskSystem: one list per role).
+                renderer.BeginFrame();
 #if PROF_GPU_ENABLED
-            Profiler::Get().CollectGpuResults();
+                Profiler::Get().CollectGpuResults();
 #endif
+            }
 
             {
                 CPU_SCOPE(ProfilerScopes::kWholeCycle);
@@ -2429,12 +2442,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     }
                 }
                 {
-                    MEM_SCOPE(MemTag::Renderer);
-                    renderer.Tick(deltaTime);
+                    // The render half's own upkeep (fonts, the shader watcher, PSO hot reloads) and the memory line;
+                    // with a render thread (plan G8) they move to its frame start.
+                    threading::RoleScope renderRole(threading::ThreadRole::Render);
+                    {
+                        MEM_SCOPE(MemTag::Renderer);
+                        renderer.Tick(deltaTime);
+                    }
+                    // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
+                    // frame's work is joined so the providers read settled state.
+                    render::TickMemoryReport(renderer.GetDevice(), now); // providers tex.ret / rt.as.bin / rt.as.retired; the rest is the GPU census
                 }
-                // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
-                // frame's work is joined so the providers read settled state.
-                render::TickMemoryReport(renderer.GetDevice(), now); // providers tex.ret / rt.as.bin / rt.as.retired; the rest is the GPU census
                 {
                     MEM_SCOPE(MemTag::Ui); // the HUD, the developer window, the editor (its own scope narrows it)
                     appController_.Tick(input, renderer, scene, levelManager, deltaTime);
@@ -2475,7 +2493,14 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
 
                 appController_.WaitForHudBuild();
+                renderer.EndImGuiFrame(); // the UI frame is final here; the render half records it in its epilogue
                 {
+                    // The hand-over (plan section 3.3): the frame's values from game state go to the render half.
+                    threading::RoleScope syncRole(threading::ThreadRole::Sync);
+                    scene.Sync();
+                }
+                {
+                    threading::RoleScope renderRole(threading::ThreadRole::Render);
                     MEM_SCOPE(MemTag::Renderer); // the render graph's tasks inherit it
                     scene.Render(&renderer);
                 }
@@ -2504,6 +2529,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // dlss.mode asked for by --set / set_settings: here, where the frame has been presented.
             if (g_requestDlssMode >= 0)
             {
+                threading::RoleScope renderRole(threading::ThreadRole::Render); // the renderer's targets
                 renderer.SetDlssMode(static_cast<sl::DLSSMode>(g_requestDlssMode));
                 g_requestDlssMode = -1;
             }
@@ -2512,7 +2538,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             // A screenshot Claude Code asked for over MCP. Same safe point as --shot below: the
             // frame has been presented and the GPU can be waited on. One uncontended lock when
             // nobody asked.
-            editormcp::ServiceScreenshot(renderer, scene.CameraRef());
+            {
+                threading::RoleScope renderRole(threading::ThreadRole::Render); // after Present: the render half's
+                editormcp::ServiceScreenshot(renderer, scene.CameraRef());
+            }
 #endif
 
             // "--shot=<path>": after the warmup delay (ocean/particle sim settling), grab the
@@ -2596,7 +2625,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                             LOG_ERROR(logging::LogCategory::Profiling, "profiler overlay dump FAILED: {}", dumpPath);
                         }
                     }
-                    const bool ok = Screenshot::SaveBackbufferPng(renderer, path);
+                    bool ok = false;
+                    {
+                        threading::RoleScope renderRole(threading::ThreadRole::Render); // the presented backbuffer
+                        ok = Screenshot::SaveBackbufferPng(renderer, path);
+                    }
                     if (ok)
                     {
                         LOG_INFO(logging::LogCategory::App, "screenshot saved: {} (frame {})", path,
@@ -2752,6 +2785,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         }
 
         timeEndPeriod(1);
+        threading::SetCurrentRole(threading::ThreadRole::Sync); // teardown: nothing else runs
         // The memory trace ends with the main loop: its End record is the steady state, not the teardown.
         memtrace::Stop();
 #if WITH_EDITOR
@@ -2767,6 +2801,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         renderer.Shutdown();
     }
 
+    threading::LogRoleCheckSummary(); // the verdict a gate reads (Debug: "thread roles: clean")
     Systems::Shutdown();
     systems_.reset();
 

@@ -76,6 +76,9 @@
     <Filter Include="sources\core\task\diagnostics">
       <UniqueIdentifier>{d1bbfba0-b798-45a8-a1b8-0a9ff5061066}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\threading">
+      <UniqueIdentifier>{3f6c2a71-9b4e-4d8a-a5c2-7e1d0b9f4c36}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\input">
       <UniqueIdentifier>{849f6304-d894-4dd4-9d93-005e85a0b4e2}</UniqueIdentifier>
     </Filter>
@@ -506,6 +509,9 @@
     </ClCompile>
     <ClCompile Include="sources/core/task/TaskSystemTBB.cpp">
       <Filter>sources\core\task</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/threading/ThreadRole.cpp">
+      <Filter>sources\core\threading</Filter>
     </ClCompile>
     <ClCompile Include="sources/input/ActionMap.cpp">
       <Filter>sources\input</Filter>
@@ -1150,6 +1156,9 @@
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h">
       <Filter>sources\core\task</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/threading/ThreadRole.h">
+      <Filter>sources\core\threading</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystemEnki.h">
       <Filter>sources\core\task</Filter>

@@ -2,6 +2,7 @@
 
 #ifdef TASKSYSTEM_USE_LOCKFREE
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -63,6 +64,8 @@ public:
         // The MemScope tag current where the task was created (memory profiling plan M3): the worker
         // runs the body under it, so a scope around a fan-out owns what the workers allocate.
         std::uint8_t memTag_ = 0;
+        // The thread role current where it was created (game thread plan section 3.4), the same way.
+        std::uint8_t role_ = 0;
 
     protected:
         void Prepare(std::size_t depCapacity);
@@ -107,6 +110,8 @@ public:
 
     // Transfers the caller's reference. Waiting also drains tasks registered by
     // those tasks, without holding the registration mutex across user callbacks.
+    // One list per thread role (core/threading/ThreadRole.h): a task joins its creator's list, and a
+    // wait joins the caller's -- the game half never waits on the render half's work, nor the reverse.
     void TrackFrameTask(TaskHandle handle);
     void WaitForTrackedAsyncTasks();
 
@@ -187,7 +192,7 @@ private:
     mutable std::mutex waitMutex_;
     std::condition_variable waitCv_;
     std::mutex trackedFrameMutex_;
-    std::vector<TaskHandle> trackedFrameTasks_;
+    std::array<std::vector<TaskHandle>, 4> trackedFrameTasks_; // by threading::ThreadRole
     // An epoch (not an item count) also changes at shutdown, so atomic::wait
     // cannot miss a wake when all queued entries have already been claimed.
     alignas(64) std::atomic<std::uint64_t> workEpoch_{0};

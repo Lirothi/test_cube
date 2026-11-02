@@ -236,6 +236,8 @@ void ImGuiLayer::BeginFrame()
         frameBegun_ = false;
     }
 
+    drawDataReady_ = false; // a closed frame nobody recorded is dropped with it
+
     ImGui_ImplDX12_NewFrame();
     ImGui_ImplWin32_NewFrame();
     ImGui::NewFrame();
@@ -248,15 +250,29 @@ void ImGuiLayer::BeginFrame()
     ApplyPendingRightClickFocusClear();
 }
 
-void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
+void ImGuiLayer::EndFrame()
 {
-    if (!initialized_ || !commandList || !frameBegun_)
+    if (!initialized_ || !frameBegun_)
     {
         return;
     }
-
     ImGui::Render();
     frameBegun_ = false;
+    drawDataReady_ = true;
+}
+
+void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
+{
+    if (!initialized_ || !commandList)
+    {
+        return;
+    }
+    EndFrame(); // no-op when the game half closed it
+    if (!drawDataReady_)
+    {
+        return;
+    }
+    drawDataReady_ = false;
     if (g_suppressImGuiDraw.load(std::memory_order_relaxed))
     {
         return; // the frame is still closed, only its draw data goes unrecorded

@@ -33,6 +33,7 @@
     <ClCompile Include="profiler_regression.cpp" />
     <ClCompile Include="..\sources\core\profiling\Profiler.cpp" />
     <ClCompile Include="..\sources\core\task\TaskSystemLockFree.cpp" />
+    <ClCompile Include="..\sources\core\threading\ThreadRole.cpp" />
     <ClCompile Include="..\sources\core\memory\MemNew.cpp" />
     <ClCompile Include="..\sources\core\memory\MemTrace.cpp" />
     <ClCompile Include="..\sources\core\diagnostics\ArtifactWriter.cpp" />

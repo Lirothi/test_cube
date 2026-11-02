@@ -258,6 +258,7 @@ public:
     void EndFrame();                   // barrier RT->Present, Execute, Present, signal fence
     void InitImGui();
     void BeginImGuiFrame();
+    void EndImGuiFrame(); // game thread plan G1: the game half closes the UI frame; RenderImGui records it
     void RenderImGui(ID3D12GraphicsCommandList* commandList);
     // ImGui and other external renderers replace descriptor heaps, root state,
     // viewport, and scissor. Call before recording engine-native draws afterward.
@@ -1028,7 +1029,9 @@ private:
     ComPtr<ID3D12CommandSignature> drawIndexedCmdSig_;
     ComPtr<ID3D12CommandSignature> drawCmdSig_; // Tessy N3 (lazy), see GetDrawCommandSignature
     ComPtr<ID3D12CommandSignature> dispatchMeshCmdSig_; // Tessy N6 (lazy)
-    int meshShaderTier_ = -1; // -1 = not asked yet
+    // The three above are built on first use by whichever thread asks -- pass bodies record on workers.
+    std::mutex fixedCmdSigMtx_;
+    std::atomic<int> meshShaderTier_{-1}; // -1 = not asked yet
     // A6: bindless G-buffer command signatures per root signature (see getter).
     struct BindlessCmdSig { ComPtr<ID3D12RootSignature> rs; ComPtr<ID3D12CommandSignature> sig; };
     std::unordered_map<ID3D12RootSignature*, BindlessCmdSig> bindlessCmdSigs_;

@@ -28,6 +28,9 @@ public:
     void Shutdown();
 
     void BeginFrame();
+    // The game half's end (game thread plan G1): ImGui::Render() closes the frame and the draw data is final; the
+    // render half only records it (Render). A frame nobody closed is closed by Render, as it always was.
+    void EndFrame();
     void Render(ID3D12GraphicsCommandList* commandList);
 
     bool HandleWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -79,5 +82,6 @@ private:
     std::vector<uint32_t> freeDescriptorIndices_;
     bool initialized_ = false;
     bool frameBegun_ = false;
+    bool drawDataReady_ = false; // EndFrame closed the frame; Render has not recorded it yet
     bool pendingRightClickFocusClear_ = false;
 };

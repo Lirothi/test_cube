@@ -3,6 +3,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/task/TaskSystem.h"
+#include "core/threading/ThreadRole.h"
 
 #ifdef TASKSYSTEM_USE_LOCKFREE
 
@@ -122,6 +123,11 @@ TaskSystem::TaskWithDeps::TaskWithDeps(TaskSystem& owner, TaskKind kind, std::si
     , kind_(kind)
 {
     prerequisites_.reserve(depCapacity);
+    // A task made fresh (its pool empty) never runs Prepare, which a pooled one does on reuse: capture what the
+    // creator's context gives it here too. Without it a fresh task ran untagged and role-less -- a tracked one
+    // landed in no frame's list and outlived the frame it recorded for (game thread plan G1).
+    memTag_ = static_cast<std::uint8_t>(mem::CurrentTag());
+    role_ = static_cast<std::uint8_t>(threading::CurrentRole());
 }
 
 void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
@@ -137,6 +143,7 @@ void TaskSystem::TaskWithDeps::Prepare(std::size_t depCapacity)
     executionClaimed_.store(false, std::memory_order_relaxed);
     nextReady_ = nullptr;
     memTag_ = static_cast<std::uint8_t>(mem::CurrentTag());
+    role_ = static_cast<std::uint8_t>(threading::CurrentRole());
 }
 
 bool TaskSystem::TaskWithDeps::AddDependent(TaskHandle dependent)
@@ -382,6 +389,7 @@ void TaskSystem::RunTask(TaskWithDeps* task)
     currentTask_ = task;
     try {
         MEM_SCOPE(static_cast<MemTag>(task->memTag_));
+        threading::RoleScope roleScope(static_cast<threading::ThreadRole>(task->role_));
         task->Execute();
     } catch (const std::exception& error) {
         // Wait remains non-throwing, as before; failures are session events.
@@ -757,24 +765,29 @@ void TaskSystem::TrackFrameTask(TaskHandle handle)
     if (!handle) {
         return;
     }
+    // Joined by its role's WaitForTrackedAsyncTasks; a role-less one would be joined by nobody.
+    TC_CHECK_THREAD(handle->role_ != static_cast<std::uint8_t>(threading::ThreadRole::None), "game|render|sync",
+                    "TaskSystem::TrackFrameTask");
     std::lock_guard<std::mutex> lock(trackedFrameMutex_);
-    trackedFrameTasks_.push_back(handle);
+    trackedFrameTasks_[handle->role_ % trackedFrameTasks_.size()].push_back(handle);
 }
 
 void TaskSystem::WaitForTrackedAsyncTasks()
 {
     std::vector<TaskHandle> pending;
+    std::vector<TaskHandle>& tracked =
+        trackedFrameTasks_[static_cast<std::size_t>(threading::CurrentRole()) % trackedFrameTasks_.size()];
     for (;;) {
         {
             std::lock_guard<std::mutex> lock(trackedFrameMutex_);
-            if (trackedFrameTasks_.empty()) {
+            if (tracked.empty()) {
                 // Keep the reusable frame list's capacity after the unlocked join.
-                if (pending.capacity() > trackedFrameTasks_.capacity()) {
-                    pending.swap(trackedFrameTasks_);
+                if (pending.capacity() > tracked.capacity()) {
+                    pending.swap(tracked);
                 }
                 return;
             }
-            pending.swap(trackedFrameTasks_);
+            pending.swap(tracked);
         }
         for (auto& handle : pending) {
             Wait(handle);

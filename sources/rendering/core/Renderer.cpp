@@ -22,6 +22,7 @@
 #include <d3d12sdklayers.h> // ID3D12Debug*, ID3D12InfoQueue
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
+#include "core/threading/ThreadRole.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
 #include "materials/Texture2D.h" // shared-texture cache stats reported at shutdown
@@ -693,6 +694,7 @@ void Renderer::DumpDredBreadcrumbs(diag::ArtifactFile& f)
 }
 
 void Renderer::BeginFrame() {
+    TC_CHECK_RENDER("Renderer::BeginFrame");
     CPU_SCOPE(ProfilerScopes::kRendererBeginFrame);
 
     // WM_SIZE can arrive after BeginFrame (including reentrantly inside DXGI). Rebuilding the
@@ -892,6 +894,7 @@ void Renderer::ProbeComputeLaneOnce()
 }
 
 void Renderer::EndFrame() {
+    TC_CHECK_RENDER("Renderer::EndFrame");
     ExecuteTimelineAndPresent();
 }
 
@@ -1063,6 +1066,12 @@ void Renderer::InitImGui()
 void Renderer::BeginImGuiFrame()
 {
     imguiLayer_.BeginFrame();
+}
+
+void Renderer::EndImGuiFrame()
+{
+    TC_CHECK_GAME("Renderer::EndImGuiFrame");
+    imguiLayer_.EndFrame();
 }
 
 void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
@@ -1875,6 +1884,12 @@ void Renderer::WaitForPreviousFrame() {
     // them queue-correct, and why the plan puts this in step 2 instead of the hardening step — the
     // gates for every step in between are exactly that churn.
     frameScheduler_.WaitForGpuIdle(GetCommandQueue(), GetComputeQueue());
+    // Game thread plan section 3.7: from the game half this is also where the render half PARKS -- until the next
+    // hand-over the game may change what the render half walks (the scene's membership, the targets, the queue).
+    if (threading::CurrentRole() == threading::ThreadRole::Game)
+    {
+        threading::NoteRenderParked();
+    }
 }
 
 void Renderer::OnResize(UINT width, UINT height) {
@@ -2434,6 +2449,7 @@ void Renderer::EnsureVsmDummySrvs() {
 }
 
 ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
+    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
     if (drawIndexedCmdSig_) {
         return drawIndexedCmdSig_.Get();
     }
@@ -2458,6 +2474,7 @@ ID3D12CommandSignature* Renderer::GetDrawIndexedCommandSignature() {
 }
 
 ID3D12CommandSignature* Renderer::GetDrawCommandSignature() {
+    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
     if (drawCmdSig_) {
         return drawCmdSig_.Get();
     }
@@ -2481,22 +2498,30 @@ ID3D12CommandSignature* Renderer::GetDrawCommandSignature() {
 }
 
 bool Renderer::SupportsMeshShaders() {
-    if (meshShaderTier_ < 0) {
+    int tier = meshShaderTier_.load(std::memory_order_acquire);
+    if (tier < 0) {
         D3D12_FEATURE_DATA_D3D12_OPTIONS7 o7{};
         ID3D12Device* device = GetDevice();
-        meshShaderTier_ = (device && SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7))))
+        const int asked = (device && SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS7, &o7, sizeof(o7))))
             ? static_cast<int>(o7.MeshShaderTier) : 0;
-        LOG_INFO(logging::LogCategory::RenderRhi, "mesh shader tier: {}", meshShaderTier_);
+        if (meshShaderTier_.compare_exchange_strong(tier, asked, std::memory_order_acq_rel)) {
+            LOG_INFO(logging::LogCategory::RenderRhi, "mesh shader tier: {}", asked); // once: the thread that stored it
+        }
+        tier = meshShaderTier_.load(std::memory_order_acquire);
     }
-    return meshShaderTier_ > 0;
+    return tier > 0;
 }
 
 ID3D12CommandSignature* Renderer::GetDispatchMeshCommandSignature() {
+    if (!SupportsMeshShaders()) {
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(fixedCmdSigMtx_);
     if (dispatchMeshCmdSig_) {
         return dispatchMeshCmdSig_.Get();
     }
     ID3D12Device* device = GetDevice();
-    if (!device || !SupportsMeshShaders()) {
+    if (!device) {
         return nullptr;
     }
     D3D12_INDIRECT_ARGUMENT_DESC arg{};

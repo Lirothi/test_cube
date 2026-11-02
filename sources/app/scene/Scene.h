@@ -182,6 +182,10 @@ public:
 #endif
 
     void Tick(float deltaTime);
+    // Game thread plan (docs/game_thread_plan.md): the hand-over between the game half of the frame and the render
+    // half -- the frame's values that come from game state go into frameData_ here, where nothing else runs. Every
+    // frame calls Sync() (role Sync) between the game half and Render() (role Render).
+    void Sync();
     void Render(Renderer* renderer);
 
     void Clear();
@@ -304,9 +308,10 @@ private:
     SceneRenderer sceneRenderer_{};
     CascadeShadowConfig cascadeConfig_{};
 
-    // Per-frame pass inputs, filled by PrepareViews (cascade caches, view/light
-    // pointers, render settings). SceneRenderer's pass bodies read from this.
+    // Per-frame pass inputs, filled by Sync (the values from game state) and PrepareViews (cascade caches,
+    // view/light pointers). SceneRenderer's pass bodies read from this.
     SceneFrameData frameData_{};
+    bool syncedThisFrame_ = false; // Sync ran since the last Render
 
     std::vector<std::unique_ptr<RenderableObjectBase>> objects_;
     // Has the ocean been told where this level's terrain sits? One sweep of objects_ per load.

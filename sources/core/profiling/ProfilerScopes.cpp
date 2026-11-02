@@ -54,6 +54,7 @@ const Profiler::ScopeNameKey kSceneTickPostObjects = Profiler::RegisterTraceLite
 const Profiler::ScopeNameKey kSceneTickBuoyancy = Profiler::RegisterTraceLiteral(L"Scene::TickBuoyancy");
 const Profiler::ScopeNameKey kSceneTickWind = Profiler::RegisterTraceLiteral(L"Scene::Tick.Wind");
 const Profiler::ScopeNameKey kSceneRender = Profiler::RegisterTraceLiteral(L"Scene::Render");
+const Profiler::ScopeNameKey kSceneSync = Profiler::RegisterTraceLiteral(L"Scene::Sync");
 const Profiler::ScopeNameKey kPassPrologueClear = Profiler::RegisterTraceLiteral(L"Pass_PrologueClear");
 const Profiler::ScopeNameKey kPassTextureStreaming = Profiler::RegisterTraceLiteral(L"Pass_TextureStreaming");
 const Profiler::ScopeNameKey kPassObjectCompute = Profiler::RegisterTraceLiteral(L"Pass_ObjectCompute");

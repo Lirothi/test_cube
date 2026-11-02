@@ -29,6 +29,7 @@
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
+#include "core/threading/ThreadRole.h" // game thread plan: who may touch what, and when
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/math/AABB.h"
@@ -1177,6 +1178,7 @@ void Scene::SetSkybox(std::unique_ptr<Skybox> skybox)
 }
 
 void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::AddObject");
 #if WITH_EDITOR
     if (obj)
     {
@@ -1192,6 +1194,7 @@ void Scene::AddObject(std::unique_ptr<RenderableObjectBase> obj) {
 
 bool Scene::AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::unique_ptr<RenderableObjectBase> obj)
 {
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::AddInitializedObject");
     if (!obj || !uploads.IsOpen())
     {
         return false;
@@ -1212,6 +1215,7 @@ bool Scene::AddInitializedObject(Renderer& renderer, UploadBatch& uploads, std::
 
 bool Scene::RemoveOceanObjects()
 {
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::RemoveOceanObjects");
     bool removed = false;
     for (size_t i = 0; i < objects_.size();)
     {
@@ -1247,6 +1251,7 @@ void Scene::SetOceanVisible(bool visible)
 #if WITH_EDITOR
 Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase> obj)
 {
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::AddEditorObject");
     const SceneObjectId id = nextEditorId_++;
     if (obj)
     {
@@ -1261,6 +1266,7 @@ Scene::SceneObjectId Scene::AddEditorObject(std::unique_ptr<RenderableObjectBase
 void Scene::AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, SceneObjectId id)
 {
     assert(id != 0 && "AddObjectWithEditorId requires a non-zero editor id");
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::AddObjectWithEditorId");
 
     if (obj)
     {
@@ -1281,6 +1287,7 @@ void Scene::AddObjectWithEditorId(std::unique_ptr<RenderableObjectBase> obj, Sce
 bool Scene::AddInitializedEditorObject(Renderer& renderer, UploadBatch& uploads, SceneObjectId id,
     std::unique_ptr<RenderableObjectBase> obj, bool visible)
 {
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::AddInitializedEditorObject");
     if (!obj || !uploads.IsOpen())
     {
         return false;
@@ -1310,6 +1317,7 @@ bool Scene::RemoveEditorObject(SceneObjectId id)
     {
         return false;
     }
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::RemoveEditorObject");
     bool removed = false;
     for (size_t i = 0; i < objectIds_.size();)
     {
@@ -1584,6 +1592,7 @@ void Scene::SetSunToward(const Math::float3& toward)
 }
 
 void Scene::Tick(float deltaTime) {
+    TC_CHECK_GAME("Scene::Tick");
     CPU_SCOPE(ProfilerScopes::kSceneTick);
 
     {
@@ -2052,52 +2061,20 @@ AABB Scene::ComputeStaticBounds() const
     return any ? AABB(mn, mx) : AABB::Empty();
 }
 
-void Scene::PrepareViews(Renderer* renderer)
+// Game thread plan G1: the frame's values that come from GAME state -- the level's settings, the time of day's
+// tints and night camera, the sun's transmittance, the selection -- copied into frameData_ at the hand-over, where
+// nothing else runs (docs/game_thread_plan.md section 3.3). PrepareViews publishes the render side's own pointers.
+void Scene::Sync()
 {
-    CPU_SCOPE(ProfilerScopes::kPrepareViews);
-    if (!renderer)
-    {
-        return;
-    }
-    // The LOD estimate projects each level's deviation onto the screen it is seen on (LodSelect.h).
-    render::g_lodOutputWidthPx = static_cast<float>(std::max(renderer->GetWidth(), 1u));
+    TC_CHECK_SYNC("Scene::Sync");
+    CPU_SCOPE(ProfilerScopes::kSceneSync);
+    threading::ClearRenderParked(); // the render half runs again after this
+    syncedThisFrame_ = true;
 
-    OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
-    SceneView& mainView = camera_.GetView();
-    SceneView* shoreViewPtr = nullptr;
-    const uint32_t camMask = camera_.GetRenderLayerMask();
-    std::optional<Profiler::ScopedCpu> prepareViewsSetupScope(
-        std::in_place, ProfilerScopes::kPrepareViewsSetup);
-    camera_.CalcMatrices(renderer);
-    renderer->UpdateDlssCameraData(camera_);
-
-    // Publish this frame's pass inputs. SceneRenderer's pass bodies read frameData_,
-    // not Scene members.
-    frameData_.camera = &camera_;
-    frameData_.mainView = &camera_.GetView();
-    frameData_.cascadeViews = &cascadeViews_;
-    frameData_.clipmapViews = &clipmapViews_;
-    frameData_.clipmapSquares = &clipmapSquares_;
-    frameData_.smrtFrameIndex = vsm::g_smrtTemporalDither
-        ? static_cast<std::uint32_t>((renderer->GetTotalFrameNumber() & 63ull) + 1ull)
-        : 0u;
-    frameData_.spotShadowViews = &spotShadowViews_;
-    frameData_.pointShadowViews = &pointShadowViews_;
-    frameData_.lightManager = &lightManager_;
-    frameData_.skybox = skyBox_.get();
-    frameData_.objects = &objects_;
-    frameData_.dirLight = &dirLight_;
-    frameData_.skyLight = timeOfDay_.Present() ? &skySun_ : &dirLight_;
     frameData_.skyMoon = timeOfDay_.Present() ? timeOfDay_.GetSkyMoon() : SkyMoonFrame{};
     frameData_.nightSky = timeOfDay_.Present() ? timeOfDay_.GetNightSky() : NightSkyFrame{};
     // The stars twinkle on the scene's wind clock, so --wind-freeze stills them with everything else.
     frameData_.nightSky.timeSeconds = windState_.time;
-    frameData_.cascadeConfig = &cascadeConfig_;
-    frameData_.shadowGpu = &shadowGpu_;
-    frameData_.localShadowCache = &localShadowCache_;
-    frameData_.vsm = &vsm_;
-    frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
-    frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
     frameData_.settings = renderSettings_;
     // The atmosphere's authoritative copy is `heightFog_` (HeightFogRef: level load, Inspector,
     // --set). SetRenderSettings mirrors it into renderSettings_, but nothing guarantees a caller
@@ -2218,6 +2195,50 @@ void Scene::PrepareViews(Renderer* renderer)
     frameData_.selectedEditorObjectCount = 0;
     frameData_.selectionOutlineRadius = 1;
 #endif
+}
+
+void Scene::PrepareViews(Renderer* renderer)
+{
+    CPU_SCOPE(ProfilerScopes::kPrepareViews);
+    if (!renderer)
+    {
+        return;
+    }
+    // The LOD estimate projects each level's deviation onto the screen it is seen on (LodSelect.h).
+    render::g_lodOutputWidthPx = static_cast<float>(std::max(renderer->GetWidth(), 1u));
+
+    OceanSimulation* oceanSimulation = Systems::GetOceanSimulation();
+    SceneView& mainView = camera_.GetView();
+    SceneView* shoreViewPtr = nullptr;
+    const uint32_t camMask = camera_.GetRenderLayerMask();
+    std::optional<Profiler::ScopedCpu> prepareViewsSetupScope(
+        std::in_place, ProfilerScopes::kPrepareViewsSetup);
+    camera_.CalcMatrices(renderer);
+    renderer->UpdateDlssCameraData(camera_);
+
+    // Publish this frame's pass inputs. SceneRenderer's pass bodies read frameData_,
+    // not Scene members.
+    frameData_.camera = &camera_;
+    frameData_.mainView = &camera_.GetView();
+    frameData_.cascadeViews = &cascadeViews_;
+    frameData_.clipmapViews = &clipmapViews_;
+    frameData_.clipmapSquares = &clipmapSquares_;
+    frameData_.smrtFrameIndex = vsm::g_smrtTemporalDither
+        ? static_cast<std::uint32_t>((renderer->GetTotalFrameNumber() & 63ull) + 1ull)
+        : 0u;
+    frameData_.spotShadowViews = &spotShadowViews_;
+    frameData_.pointShadowViews = &pointShadowViews_;
+    frameData_.lightManager = &lightManager_;
+    frameData_.skybox = skyBox_.get();
+    frameData_.objects = &objects_;
+    frameData_.dirLight = &dirLight_;
+    frameData_.skyLight = timeOfDay_.Present() ? &skySun_ : &dirLight_;
+    frameData_.cascadeConfig = &cascadeConfig_;
+    frameData_.shadowGpu = &shadowGpu_;
+    frameData_.localShadowCache = &localShadowCache_;
+    frameData_.vsm = &vsm_;
+    frameData_.wind = &windState_; // W3: gbuffer per-view CB reads this
+    frameData_.ocean = FindOceanRenderable(); // caustics source for the deferred lighting pass
 
     mainView.renderLayerMask = camera_.GetRenderLayerMask();
     mainView.frustum = Frustum::FromInvViewProj(mainView.invView, mainView.proj, camera_.GetZNear(), camera_.GetZFar());
@@ -3293,6 +3314,16 @@ void Scene::Render(Renderer* renderer) {
     if (!renderer) {
         return;
     }
+    TC_CHECK_RENDER("Scene::Render");
+    if (!syncedThisFrame_)
+    {
+        // Every frame loop calls Sync before Render (App::Run, the scene-stress harness). One that does not would
+        // render last frame's settings: say so, once, and hand over here.
+        LOG_ERROR_ONCE(logging::LogCategory::Scene, "Scene::Render without Scene::Sync this frame -- synced late");
+        threading::RoleScope syncRole(threading::ThreadRole::Sync);
+        Sync();
+    }
+    syncedThisFrame_ = false;
     CPU_SCOPE(ProfilerScopes::kSceneRender);
 
     ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
@@ -3578,6 +3609,7 @@ void Scene::Render(Renderer* renderer) {
 
 void Scene::Clear()
 {
+    TC_CHECK_GAME_PARKED_OR_SYNC("Scene::Clear");
     sceneRenderer_.Reset();
     skyAtmosphere_ = {};
     frameData_ = SceneFrameData{}; // drop pointers into objects we are about to destroy

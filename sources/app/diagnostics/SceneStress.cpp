@@ -31,6 +31,7 @@
 #include "core/diagnostics/ArtifactWriter.h"
 #include "core/memory/MemTags.h"
 #include "core/memory/MemTrace.h"
+#include "core/threading/ThreadRole.h" // game thread plan G1: the frame's phases, as App::Run gives them
 #include "rendering/core/MemGates.h"
 #include "core/logging/Log.h"
 
@@ -348,6 +349,15 @@ public:
             {
                 return FinishFault_(iterations_, "roughness-coverage", "RT stopped building; possible SSR fallback");
             }
+        }
+        // Game thread plan G1: the phase checks (Debug) are part of the verdict -- a role violation is an
+        // ownership bug that a render thread would turn into a race.
+        threading::LogRoleCheckSummary();
+        if (const std::uint32_t roleViolations = threading::RoleViolationCount())
+        {
+            char detail[96];
+            std::snprintf(detail, sizeof(detail), "%u thread role violations (see 'thread role:' errors)", roleViolations);
+            return FinishFault_(iterations_, "thread-roles", detail);
         }
         LogBarrierEmits_();
         Log("verdict: CLEAN after %d iterations (total %.1f s)\n",
@@ -913,20 +923,22 @@ private:
             const auto frameBegin = std::chrono::steady_clock::now();
             Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber());
             logging::SetFrameNumber(renderer_.GetTotalFrameNumber());
-            TaskSystem::Get().WaitForTrackedAsyncTasks();
+            // The frame's phases and roles as App::Run gives them (game thread plan G1); the driver runs as the
+            // game half, so its churn ops are checked the way the editor's are.
             {
+                threading::RoleScope renderRole(threading::ThreadRole::Render);
                 const auto beginFrameBegin = std::chrono::steady_clock::now();
                 renderer_.BeginFrame();
                 boot::AddBucket("frame: Renderer::BeginFrame",
                                 std::chrono::duration<double, std::milli>(
                                     std::chrono::steady_clock::now() - beginFrameBegin).count(),
                                 label);
-            }
 
-            // Match App::Run: consume completed timestamp batches before the readback ring wraps.
-            // Without this the sky stress trace retained old batches until capture end and read
-            // overwritten slots; it could not measure dirty passes reliably.
-            Profiler::Get().CollectGpuResults();
+                // Match App::Run: consume completed timestamp batches before the readback ring wraps.
+                // Without this the sky stress trace retained old batches until capture end and read
+                // overwritten slots; it could not measure dirty passes reliably.
+                Profiler::Get().CollectGpuResults();
+            }
 
             // Service window messages (WM_SIZE from our resizes, paint, etc.).
             MSG msg = {};
@@ -962,14 +974,25 @@ private:
             try
             {
                 renderer_.BeginImGuiFrame();
-                renderer_.Tick(1.0f / 60.0f);
+                {
+                    threading::RoleScope renderRole(threading::ThreadRole::Render);
+                    renderer_.Tick(1.0f / 60.0f);
+                }
                 scene_.Tick(1.0f / 60.0f);
                 levelManager_.Tick(1.0f / 60.0f);
 
                 PumpPendingLevelRequest_();
+                renderer_.EndImGuiFrame();
 
+                {
+                    threading::RoleScope syncRole(threading::ThreadRole::Sync);
+                    scene_.Sync();
+                }
                 const auto renderBegin = std::chrono::steady_clock::now();
-                scene_.Render(&renderer_);
+                {
+                    threading::RoleScope renderRole(threading::ThreadRole::Render);
+                    scene_.Render(&renderer_);
+                }
                 boot::AddBucket("frame: Scene::Render",
                                 std::chrono::duration<double, std::milli>(
                                     std::chrono::steady_clock::now() - renderBegin).count(),
@@ -1376,7 +1399,8 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
 
     int exitCode = 1;
 
-    // Same real bootstrap as App::Run().
+    // Same real bootstrap as App::Run(), in the same roles: boot and teardown hand over, the driver is the game half.
+    threading::SetCurrentRole(threading::ThreadRole::Sync);
     systems_ = std::make_unique<Systems::AppSystems>();
     Systems::Init(systems_.get());
 
@@ -1412,6 +1436,7 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
             (void)input;
             SceneStressDriver driver(hWnd_, renderer, scene, levelManager, iterations, gbvContinue, roughnessEdits, skyEdits);
             driver.SetOnLevelLoaded([this]() { ApplyFixedSettings(systems_->scene); });
+            threading::RoleScope gameRole(threading::ThreadRole::Game);
             exitCode = driver.Run();
             faultCaught = driver.FaultCaught();
         }

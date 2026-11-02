@@ -96,9 +96,9 @@ Status Request(const Texture2D::CreateDesc& desc)
         gInFlight[key] = true; // claimed here so a retry next frame does not dispatch again
     }
 
-    // SubmitDetach, NOT DispatchTrack. The main loop calls WaitForTrackedAsyncTasks() at the top
-    // of EVERY frame (App.cpp:493), so a TRACKED task is joined by the next frame — the frame
-    // would wait for a two-second PNG decode and reproduce the exact stall this exists to remove,
+    // SubmitDetach, NOT DispatchTrack. Every frame joins the tracked tasks of its role
+    // (TaskSystem::WaitForTrackedAsyncTasks, in SceneRenderer::Render), so a TRACKED task is joined by
+    // the frame — the frame would wait for a two-second PNG decode and reproduce the exact stall this exists to remove,
     // one layer down. Every other long job in this path (preview init, preflight, PNG encode)
     // already uses SubmitDetach; this was the one that did not.
     TaskSystem::Get().SubmitDetach([desc, key]() mutable
