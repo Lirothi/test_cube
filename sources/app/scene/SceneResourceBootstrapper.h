@@ -47,6 +47,7 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle sunAngularSize;
     Material::CBFieldHandle sunSoftRadius;           // UE SoftSourceRadius of the light (EvalBRDF)
     Material::CBFieldHandle sunTerminator;           // the sun gated by the geometric normal (lighting_cs)
+    Material::CBFieldHandle terminatorOffset;        // Hanika's terminator offset scale (lighting_cs)
     Material::CBFieldHandle lightPreExposure;        // the light target is pre-exposed (lighting_cb.hlsli)
     Material::CBFieldHandle useVsm;           // Step 24f: directional clipmap sampling
     Material::CBFieldHandle vsmDepthBias;
@@ -707,6 +708,7 @@ struct LightingPassConstants
     float sunAngularSize = 0.0f;
     float sunSoftRadius = 0.0f;                   // DirectionalLight::GetSoftSourceRadius
     float sunTerminator = 1.0f;                   // SceneRenderSettings::sunGeometricTerminator
+    float terminatorOffset = 1.0f;                // SceneRenderSettings::terminatorOffset
     float lightPreExposure = 1.0f;                // render::g_preExposure: the light target is pre-exposed
     uint32_t useVsm = 0;                          // Step 24f: 1 = sample the directional VSM clipmap
     float vsmDepthBias = 0.0f;

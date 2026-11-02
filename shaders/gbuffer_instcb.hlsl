@@ -101,6 +101,8 @@ struct VSOutInst
     float2 UV : TEXCOORD0;
     nointerpolation uint IID : TEXCOORD5;
     nointerpolation uint objectId : TEXCOORD6;
+    nointerpolation float3 vtxPosWS : TEXCOORD9; // VSOut's, for Hanika's terminator offset
+    nointerpolation float3 vtxNWS : TEXCOORD10;
 };
 
 [RootSignature(GBUFFER_INSTCB_RS)]
@@ -127,11 +129,13 @@ VSOutInst VSMain(VSInInst i)
     o.UV = b.UV;
     o.IID = i.IID;
     o.objectId = b.objectId;
+    o.vtxPosWS = b.vtxPosWS;
+    o.vtxNWS = b.vtxNWS;
     return o;
 }
 
 [RootSignature(GBUFFER_INSTCB_RS)]
-PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
+PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace, float3 bary : SV_Barycentrics)
 {
     InstancePerObject d = inst[i.IID];
     LodFadeClip(i.H.xy, gLodFade[i.IID >> 2u][i.IID & 3u]);
@@ -212,5 +216,6 @@ PSOut PSMain(VSOutInst i, bool isFrontFace : SV_IsFrontFace)
     const float3 emissiveOut = ApplyEmissiveMap(mEmissive, gEmissiveMap, gSmp, i.UV, mTexOffsScale, mTexIndices.w);
     return FinalizeGBuffer(albedo, mr, N, emissiveOut, mSubsurfaceColor, mTransmissionStrength,
                            mAmbientOcclusion, mIndirectSpecularScale, mTransmissionAlbedoPower,
-                           mTransmissionNormalWeight, motion, i.objectId);
+                           mTransmissionNormalWeight, motion, i.objectId, NNorm * faceSign,
+                           GBUFFER_TERMINATOR_HEIGHT(i, bary, faceSign));
 }

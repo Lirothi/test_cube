@@ -38929,7 +38929,7 @@
     "cameraExposure": {
       "apertureFStop": 16.0,
       "autoExposure": true,
-      "compensationEv": 0.3,
+      "compensationEv": 0.0,
       "enabled": true,
       "exposureCurve": [
         [
@@ -39045,7 +39045,7 @@
     "groundAlbedo": 0.08,
     "luminanceScale": 1.0,
     "mieAnisotropy": 0.8,
-    "mieScale": 10.0,
+    "mieScale": 1.0,
     "multiScatteringFactor": 1.0,
     "ozoneScale": 1.0,
     "rayleighScale": 1.0,
@@ -40029,11 +40029,11 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 24.0,
+    "time": 14.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,
-      "mieNightScale": 0.1,
+      "mieNightScale": 1.0,
       "ozoneBlendDeg": 1.9500000476837158,
       "ozoneNightTint": [
         6.1539998054504395,

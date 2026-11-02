@@ -317,10 +317,20 @@ bool SunGeometricNormal(uint2 px, float3 P, float3 V, out float3 Ng)
     return true;
 }
 
-float SunGeometricTerminator(uint2 px, float3 P, float3 V, float3 L)
+// ...ONLY WHERE THE VERTEX NORMAL IS BEHIND TOO (owner, 2026-11-02, a beach at 14:00 in November, the sun 24 degrees
+// up: "the shadow triangles in VSM and SDSM"). The tent's leak had its interpolated vertex normals away from the sun
+// as well; a smooth-shaded low-poly surface does not -- its normals face the sun while a FACET of the dune's lee slope
+// leans past it, and the gate blacked such triangles whole: dark teeth on the sand, in every shadow mode, with no
+// caster between the sand and the sun. `vertexFacesLight` is GB1.a (gbuffer_common.hlsli FinalizeGBuffer): the visible
+// side's vertex normal against the frame's light; 1 = the smooth surface faces it, its shading N.L decides alone.
+float SunGeometricTerminator(uint2 px, float3 P, float3 V, float3 L, float vertexFacesLight)
 {
     float3 Ng;
-    if (sunTerminator < 0.5f || !SunGeometricNormal(px, P, V, Ng)) { return 1.0f; }
+    // sunTerminator 2 = the facet alone (2026-10-28 .. 11-02), the A/B.
+    if (sunTerminator < 0.5f || (vertexFacesLight >= 0.5f && sunTerminator < 1.5f) || !SunGeometricNormal(px, P, V, Ng))
+    {
+        return 1.0f;
+    }
     return saturate(dot(Ng, L) * 20.0f);
 }
 
@@ -375,6 +385,20 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (isFoliage)
     {
         subsurface = GB2.SampleLevel(gSmpPoint, uv, 0).rgb;
+    }
+    // HANIKA'S TERMINATOR OFFSET (gbuffer_common.hlsli GBufferTerminatorHeight): the sun's shadow is looked up from the
+    // smooth surface the vertex normals describe, the stored height above this pixel's flat triangle -- along the triangle's
+    // own normal, rebuilt from depth (the shading normal carries the normal map's tilt and would jitter the lookup; off an
+    // edge it is all there is). Foliage keeps its cards; water writes its own GBAux.
+    float3 Pshadow = P;
+    if (!isFoliage && shadingModel != kShadingModelWater && terminatorOffset > 0.0f)
+    {
+        const float lift = DecodeTerminatorHeight(gbAux.a) * terminatorOffset;
+        if (lift > 0.0f)
+        {
+            float3 Ng;
+            Pshadow = P + (SunGeometricNormal(dispatchThreadId.xy, P, V, Ng) ? Ng : N) * lift;
+        }
     }
 
     // Q2: diffuse ambient applies to the dielectric (non-metal) fraction only. Metals have
@@ -531,7 +555,7 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (sunLit && fr.NdotL > 0.0)
         {
             float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
-            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L); // the transmission below is not gated
+            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L, gb1.a); // the transmission below is not gated
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
@@ -557,8 +581,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (sunLit && br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
-            float shadow = SampleSunShadow(P, N, br.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
-            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L);
+            float shadow = SampleSunShadow(Pshadow, N, br.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
+            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L, gb1.a);
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);

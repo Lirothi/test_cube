@@ -151,7 +151,8 @@ the great glows are the misty nights'. So (owner's pick: less aerosol at night) 
 (Inspector Time of Day > Twilight "Night Aerosol", `--set tod.mieNightScale`; 1 = physics): the frame atmosphere's Mie
 scattering and absorption times it by the night's share (the sun -6 -> -12, in the tints' 1/64 steps so the LUTs rebuild
 at most 64 times a dusk; the anisotropy kept), not by the tints' day blend -- the sunset's haze round the sun stays.
-wind_test: 0.1 (the sky's aerosol at UE's default by night), and its `fog.nightDensity` 1 -> 0.15 (the day's: at 1 the
+wind_test: 0.1 (the sky's aerosol at UE's default by night; 1 since the day's mieScale went back to 1 on 2026-11-02, the
+same night), and its `fog.nightDensity` 1 -> 0.15 (the day's: at 1 the
 night was 2.4 km of mist, and the fog's moon scattering was most of what remained). The rings at 2 / 4 / 7 / 10 / 15 / 20
 / 30 / 40 degrees: 25 / 23 / 18 / 10 / 4.4 / 2.4 / 1.5 / 1.3 (0.1 alone: 42 / 39 / 33 / 23.5 / 12 / 5.5; 0.3: 61 / 56 / 47 /
 32 / 16); the frame median 5 -> 3, p95 72 -> 35, the moon's path on the water as it was. The day and the sunset unchanged
@@ -204,9 +205,18 @@ diffuse probe as a raw equirect, read with the pixel probe), and the bare sky by
   Earth defaults carry almost no aerosol (Mie 0.004 / km over 1.2 km = optical depth 0.005; maritime air is 0.05-0.15),
   and Rayleigh is symmetric fore and aft; the level also had Mie anisotropy 0.6 (UE 0.8), Rayleigh x1.21 and the
   atmosphere's ground albedo 0.40 (land; the sea around the island is ~0.08).
-- wind_test now: `skyAtmosphere` rayleighScale 1.0, mieScale 10 (optical depth ~0.05, clean maritime; the JSON and
+- wind_test then: `skyAtmosphere` rayleighScale 1.0, mieScale 10 (optical depth ~0.05, clean maritime; the JSON and
   `--set` clamp it at 10), mieAnisotropy 0.8, groundAlbedo 0.08. Shares 0.58 / 0.40 / 0.28 at 10.7 / 20 / 36 degrees
   (Linke ~4 in lux), away from the sun 0.57 / 0.48 / 0.40 (CIE 12: 0.50 / 0.44 / 0.38), toward 1.6-1.9.
+- **mieScale is 1 again since 2026-11-02 -- the owner's pick, the look over the shape** (owner, at 14:00 on Nov 1, the sun
+  24 degrees up: "where does this glare round the sun come from? I don't see the corona, and Sun Glare does nothing").
+  Mie 10's aureole left the sky near the sun almost white -- display 244 / 239 / 219 / 166 of 255 at 2 / 4 / 10 / 20
+  degrees -- and the corona and Sun Glare, small additions on top, had nothing left to brighten: x10 of either moved the
+  2-degree ring +4 / +5, the bloom off -2; the sun probe read the disc whole (share 1), the fog and the shafts moved it
+  0-3. Mie 5 / 3 / 1: 204 / 191 / 168 at 10 degrees, 147 / 135 / 123 at 20; at 1 the corona's needles read again on a
+  blue sky; a larger g (0.9) only whitened the patch. The trade: a face turned from the sun takes the sky light it took
+  before the calibration again (vertical / horizontal 0.71-0.81 away from the sun, CIE 0.28-0.54). The night is as it was:
+  `twilight.mieNightScale` 0.1 -> 1 keeps the night's aerosol at 1 x UE's (Night Aerosol, below).
 - **Light shaft bloom thresholds are in luminance AFTER exposure** (light_shafts_cs.hlsl, UE's units), so they are
   measured at the real auto exposure, never at a pinned one: at the level's 0.7 the shafts were 64 % of a backlit
   trunk's light (1609 vs 584 without), +27 % on the lit sand, and moved the metering 0.6 EV -- invisible at a pinned EV
@@ -1228,6 +1238,39 @@ VSM leaked alike with every bias at zero and the LODs off. Traced on the staged 
 normals the same; the tent's normal strength at 0 made the leak go. Measured with the exposure pinned: the tent -5.9 %,
 the bathroom -1.1 % (0.07 % of pixels over 8 levels), the grove -0.13 % (1.4 %, under its 1.7 % frame-to-frame floor),
 Pass_Lighting +0.01-0.015 ms. `--set light.geometricTerminator:0` = before. Local lights are not gated (yet).
+**Only where the VERTEX normal is behind the light too** (2026-11-02, owner at cam -5.44 5.72 78.10, 14:00 on Nov 1, the
+sun 24 degrees up: "the shadow triangles in VSM and SDSM"). Gated on the facet alone, a smooth-shaded low-poly dune lost
+the sun on every triangle of its lee slope that leaned past the light while its vertex normals still faced it: dark
+teeth on the sand, the same in VSM, SDSM and Legacy, untouched by tessy.lod / tessy.enabled / the shadow LOD bias / LOD0
+(0-0.4 % of the teeth moved), nothing between the sand and the sun (MCP `lookingAt` from the sand toward it: no hit), gone
+with the gate off. The tent's normals faced away as well, so the G-buffer now writes GB1.a = whether the visible side's
+interpolated vertex normal faces the frame's light (`gbuffer_common.hlsli FinalizeGBuffer`, the light in PerView's new
+tail `gbLightToward`, PerViewCB 240 -> 256 bytes -- SDSM's per-partition blocks were 256 already and do not write it),
+and the facet gate runs only on the 0s (the ocean writes 0: its gate as it was). The teeth box's mean 85 -> 99.5 (gate off
+99.6), all three modes; the tent's leak held -- the new gate against the old one 0.88 % of the frame moved > 8 levels, the
+old against itself 0.96 %, no gate 1.70 %. `light.geometricTerminator` 0 / 1 / 2 = none / this / the facet alone
+(2026-10-28 .. 11-02). GBV (`GBuffer,Lighting,Skybox` + the Skybox self-test, that view): clean.
+
+**The sun's shadow is looked up from the SMOOTH surface: Hanika's terminator offset** (2026-11-02, owner at cam -11.6 4.17
+73.6, rot -0.1281 0.8834 -0.2052 -0.4086, 14:00 on Nov 1: "what is this staircase then? -- the offset after Hanika"). A
+smooth-shaded low-poly surface is SHADED by its interpolated normals but SHADOWED by its flat triangles: under a grazing sun
+a facet of the island's convex dune fell into its neighbours' shadow while the shading said lit, and the shadow's edge
+followed the triangles -- the classic shadow terminator problem. Sharpest under VSM's SMRT (precise rays), blurred by SDSM's
+and Legacy's filters; untouched by the gate (0.1 %), tessy.lod / tessy.enabled / the shadow LOD bias / LOD0 (0 %: the
+island's own geometry casts), the SMRT knobs (the screen ray 0.015, dither, extrapolation, source angle) and the normal bias
+(it only moved the edge). The practice: Hanika, "Hacking the Shadow Terminator" (Ray Tracing Gems II ch. 4; Blender Cycles'
+Shadow Terminator Geometry Offset is the same idea). `gbuffer_common.hlsli GBufferTerminatorHeight`: the G-buffer PS reads
+its triangle's three vertices (`GetAttributeAtVertex` on VSOut's new `nointerpolation vtxPosWS / vtxNWS`, `SV_Barycentrics`;
+every G-buffer PS and the Tessy mesh-shader twins), lifts the point by each vertex's tangent plane it lies under, blended by
+the barycentrics, and stores the lift's length in GBAux.a (sqrt-encoded over 2 m; foliage keeps its transmission normal
+weight there, water its reflection weight); lighting_cs looks the SUN's shadow up that far above the pixel along the
+triangle's normal rebuilt from depth (`Pshadow`; the shading normal's map tilt would jitter it). Flat-shaded and concave
+triangles get 0. On the owner's slope the staircase is gone in VSM, SDSM and Legacy -- the lee slope now darkens smoothly
+by its normals; low over the sand at 15:00 the striped self-shadow on the near sand went with it (28 % of that frame
+brighter); the grove 8.9 % moved (its frame-to-frame floor with the wind held ~1.5-4 %), the bathroom 0.2 %, the tent 0.5 %,
+the island from above 0.7 %, the trunks' and palms' shadows where they were. Cost: GBuffer_Indirect 0.152-0.153 ms on the
+grove (0.155-0.163 documented before), Pass_Lighting on / off the same (0.39 / 0.39, 0.41 / 0.41). `--set
+light.terminatorOffset:0` = before (the A/B; a scale, 1 = the smooth surface). The lamps' shadows do not take it (yet).
 
 **A leaf passes the sky behind it, not only the sun** (2026-10-31, owner on the island against the sun at 15:03, cam
 71.70 6.95 114.59: "isn't it too black now?"). A two-sided foliage pixel adds `subsurface payload x (sky irradiance(-N) +

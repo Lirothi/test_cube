@@ -284,7 +284,7 @@ VSOutIndirect VSMain(VSInIndirect i)
 #endif
 
 [RootSignature(GBUFFER_INDIRECT_RS)]
-PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
+PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace, float3 bary : SV_Barycentrics)
 {
 #if TESSY_GBUFFER_MS
     // Neighbouring pixels of one wave may belong to different groups' materials: the indices are not uniform.
@@ -343,5 +343,6 @@ PSOut PSMain(VSOutIndirect v, bool isFrontFace : SV_IsFrontFace)
     const float3 emissiveOut = ApplyEmissiveMap(emissive, gEmissiveMap, gSmp, i.UV, texOffsScale, texIndices.w);
     return FinalizeGBuffer(albedo, mr, N, emissiveOut, subsurfaceColor, transmissionStrength,
                            ambientOcclusion, indirectSpecularScale, transmissionAlbedoPower,
-                           transmissionNormalWeight, motion, i.objectId);
+                           transmissionNormalWeight, motion, i.objectId, NNorm * faceSign,
+                           GBUFFER_TERMINATOR_HEIGHT(v.b, bary, faceSign));
 }

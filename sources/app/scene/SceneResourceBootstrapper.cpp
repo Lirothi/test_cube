@@ -52,6 +52,7 @@ void SceneLightingCBHandles::Populate(Material* material)
     sunAngularSize = material->ComputeCB0FieldHandle("sunAngularSize");
     sunSoftRadius = material->ComputeCB0FieldHandle("sunSoftRadius");
     sunTerminator = material->ComputeCB0FieldHandle("sunTerminator");
+    terminatorOffset = material->ComputeCB0FieldHandle("terminatorOffset");
     lightPreExposure = material->ComputeCB0FieldHandle("lightPreExposure");
     useVsm = material->ComputeCB0FieldHandle("useVsm");
     vsmDepthBias = material->ComputeCB0FieldHandle("vsmDepthBias");
@@ -1686,6 +1687,7 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.sunAngularSize, data.sunAngularSize, dest);
     matLighting_->UpdateCBField(handles.sunSoftRadius, data.sunSoftRadius, dest);
     matLighting_->UpdateCBField(handles.sunTerminator, data.sunTerminator, dest);
+    matLighting_->UpdateCBField(handles.terminatorOffset, data.terminatorOffset, dest);
     matLighting_->UpdateCBField(handles.lightPreExposure, data.lightPreExposure, dest);
     matLighting_->UpdateCBField(handles.useVsm, data.useVsm, dest);
     matLighting_->UpdateCBField(handles.vsmDepthBias, data.vsmDepthBias, dest);

@@ -839,9 +839,14 @@ struct SceneRenderSettings
     bool sunProbeAfterDlss = false;
     // The sun's direct light gated by the visible side's GEOMETRIC normal (lighting_cs.hlsl SunGeometricTerminator):
     // a normal map may tilt a pixel toward a sun that lies behind its triangle -- the back of a tent's cloth lit through
-    // itself, where no shadow map helps (the receiver is the caster). false = the frame before 2026-10-28
-    // (`--set light.geometricTerminator:0`, the A/B).
-    bool sunGeometricTerminator = true;
+    // itself, where no shadow map helps (the receiver is the caster). 1 = only where the visible side's VERTEX normal
+    // faces away from the light too (G-buffer GB1.a), 2 = on every facet that does, the frame 2026-10-28 .. 11-02 (its
+    // dark triangles on a low-poly dune's lee slope), 0 = the frame before 2026-10-28 (`--set light.geometricTerminator`).
+    std::uint32_t sunGeometricTerminator = 1u;
+    // Hanika's shadow terminator offset (lighting_cs.hlsl, gbuffer_common.hlsli GBufferTerminatorHeight): the sun's
+    // shadow looked up this many times the height of the smooth surface the vertex normals describe above the flat
+    // triangle. 1 = that surface; 0 = the triangle, the frame before 2026-11-02 (`--set light.terminatorOffset`, the A/B).
+    float terminatorOffset = 1.0f;
     // A two-sided foliage leaf passes the sky and the ground's bounce behind it (lighting_cs.hlsl, UE's backface sky
     // lighting); false = only the sun through it, the frame before 2026-10-31 (`--set light.foliageBackSky:0`, the A/B).
     bool foliageBackSky = true;

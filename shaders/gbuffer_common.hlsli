@@ -90,6 +90,9 @@ cbuffer PerView : register(b1)
     float  shadowSlopeBias;   // 228
     float  shadowMaxSlope;    // 232
     float  shadowClampNear;   // 236 (S7)
+    // 240: the frame's directional light (the sun or the moon) for the G-buffer's GB1.a, xyz TOWARD it, w = 1 when set
+    // (FinalizeGBuffer). The shadow views leave it 0.
+    float4 gbLightToward;
 };
 
 // W4/W5: single call site of the PerView wind fields for every shader that includes this header
@@ -151,6 +154,10 @@ struct VSOut
     float4 TWS : TEXCOORD2; // .xyz = tangent in world, .w = sign
     float2 UV : TEXCOORD0;
     nointerpolation uint objectId : TEXCOORD5;
+    // The triangle's own vertices for Hanika's terminator offset (GBufferTerminatorHeight): read per vertex in the pixel
+    // shader by GetAttributeAtVertex, so never interpolated.
+    nointerpolation float3 vtxPosWS : TEXCOORD9;
+    nointerpolation float3 vtxNWS : TEXCOORD10;
 };
 
 struct PSOut
@@ -210,8 +217,33 @@ inline VSOut BaseVS(float3 pos,
     o.NWS = N;
     o.UV = uv;
     o.objectId = objectIdValue;
+    o.vtxPosWS = worldPos.xyz;
+    o.vtxNWS = N;
     return o;
 }
+
+// HANIKA'S SHADOW TERMINATOR OFFSET (Ray Tracing Gems II ch. 4, "Hacking the Shadow Terminator"; Blender Cycles' Shadow
+// Terminator Geometry Offset is the same idea). A smooth-shaded low-poly surface is shaded by its interpolated normals but
+// shadowed by its flat triangles: under a grazing light a facet of a convex dune falls into its neighbours' shadow while
+// the shading still says lit, and the shadow's edge follows the triangles -- the owner's staircase on wind_test's lee slope
+// (2026-11-02), sharpest under VSM's SMRT, the island's own geometry casting (no LOD, DAG or bias knob moved it). The
+// shadow is looked up from the surface the vertex normals describe instead: each vertex's tangent plane lifts the point
+// above it when it lies below (P - p_i along n_i < 0), blended by the barycentrics. Flat-shaded and concave triangles get
+// 0. Returns the lift's length in metres; `n_i` are the visible side's.
+float GBufferTerminatorHeight(float3 bary, float3 p0, float3 p1, float3 p2, float3 n0, float3 n1, float3 n2)
+{
+    const float3 P = bary.x * p0 + bary.y * p1 + bary.z * p2;
+    const float d0 = min(0.0f, dot(P - p0, n0));
+    const float d1 = min(0.0f, dot(P - p1, n1));
+    const float d2 = min(0.0f, dot(P - p2, n2));
+    return length(bary.x * d0 * n0 + bary.y * d1 * n1 + bary.z * d2 * n2);
+}
+// `v` is the pixel shader's input carrying VSOut's vtxPosWS / vtxNWS (GetAttributeAtVertex takes the input itself, not a
+// copy), `sign` the visible side (+1 front, -1 back of a two-sided surface).
+#define GBUFFER_TERMINATOR_HEIGHT(v, bary, sign)                                                                      \
+    GBufferTerminatorHeight(bary, GetAttributeAtVertex((v).vtxPosWS, 0), GetAttributeAtVertex((v).vtxPosWS, 1),      \
+                            GetAttributeAtVertex((v).vtxPosWS, 2), (sign) * GetAttributeAtVertex((v).vtxNWS, 0),     \
+                            (sign) * GetAttributeAtVertex((v).vtxNWS, 1), (sign) * GetAttributeAtVertex((v).vtxNWS, 2))
 
 // Part E: the emissive MAP. SurfaceParams.texIndices.w is its bindless slot, or kNoEmissiveMap when
 // the material has none (MaterialData::GatherGBufferIndices) -- the flag in BOTH permutations: the
@@ -228,11 +260,15 @@ inline float3 ApplyEmissiveMap(float3 emissiveValue, Texture2D emissiveMap, Samp
 #define EMISSIVE_MAP_INDEX(t) ((t).w == kNoEmissiveMap ? (t).x : (t).w)
 
 // Final MRT output using prepared values
+// `vertexNVisible` is the interpolated VERTEX normal of the side the camera sees (before the normal map). GB1.a says
+// whether it faces the frame's light: 1 = yes, 0 = no -- lighting_cs SunGeometricTerminator gates the direct sun by the
+// triangle's own facing only on the 0s (a writer that does not know, the ocean, writes 0: the gate as it always was).
 inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
                              float3 emissiveValue, float3 subsurfaceColorValue,
                              float transmissionStrengthValue, float ambientOcclusionValue,
                              float indirectSpecularScaleValue, float transmissionAlbedoPowerValue,
-                             float transmissionNormalWeightValue, float2 motion, uint objectIdValue)
+                             float transmissionNormalWeightValue, float2 motion, uint objectIdValue,
+                             float3 vertexNVisible, float terminatorHeight)
 {
     PSOut o;
     float metal = mr.x;
@@ -241,7 +277,8 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
     //albedo = test[0].rgb;
     o.RT0 = float4(albedo, PackRM(rough, metal));
     //o.RT1 = float4(NrmTo01(NormalizeSafe(NWS, float3(0, 0, 1))), 1.0);
-    o.RT1 = float4(NrmTo01(NWS), 1.0);
+    const bool vertexFacesLight = gbLightToward.w < 0.5f || dot(vertexNVisible, gbLightToward.xyz) > 0.0f;
+    o.RT1 = float4(NrmTo01(NWS), vertexFacesLight ? 1.0f : 0.0f);
 #if SHADING_MODEL_ID == 1
     // Use linear albedo as a spatial absorption/thickness proxy. This is a Beer-Lambert-like
     // relation (T = T0^distance): dark veins/stems transmit less while color variation survives.
@@ -252,13 +289,19 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
     o.RT2 = float4(emissiveValue, 0.0);
 #endif
     o.RT3 = motion;
+    // GBAux.a: foliage's transmission normal weight; every other material's terminator height (utils.hlsli).
+#if SHADING_MODEL_ID == 1
+    const float auxA = saturate(transmissionNormalWeightValue);
+#else
+    const float auxA = EncodeTerminatorHeight(terminatorHeight);
+#endif
 #ifdef EDITOR_OBJECT_ID
     o.RT4 = objectIdValue;
     o.RT5 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
-                   EncodeShadingModel(SHADING_MODEL_ID), saturate(transmissionNormalWeightValue));
+                   EncodeShadingModel(SHADING_MODEL_ID), auxA);
 #else
     o.RT4 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
-                   EncodeShadingModel(SHADING_MODEL_ID), saturate(transmissionNormalWeightValue));
+                   EncodeShadingModel(SHADING_MODEL_ID), auxA);
 #endif
     return o;
 }

@@ -262,7 +262,7 @@ void SceneRenderer::Pass_GBuffer(Renderer* renderer, RenderGraphPassContext ctx,
     const auto& D = renderer->GetDeferredForFrame();
 
     // Shared per-view CB (b1) for every opaque object in this pass.
-    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera, frame_->wind);
+    const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera, frame_->wind, frame_->dirLight);
 
     // pass-flow S7d: the inner driver DECLARES NOTHING. Its states are the outer pass's — declared
     // once by the Main_GBuffer builder — and it emits that point as a marker. The inner graph runs
@@ -720,7 +720,8 @@ void SceneRenderer::Pass_DebugDraw(Renderer* renderer, RenderGraphPassContext ct
         // (the jittered matrix and the wind the G-buffer drew with), so the very same triangles land on the depth.
         if (frame_->shadowGpu && frame_->shadowGpu->TessyViewThisFrame())
         {
-            frame_->shadowGpu->RecordTessyView(renderer, t.cl, BuildGBufferViewCB(renderer, camera, frame_->wind));
+            frame_->shadowGpu->RecordTessyView(renderer, t.cl,
+                                               BuildGBufferViewCB(renderer, camera, frame_->wind, frame_->dirLight));
         }
         if (debugDraw && debugDraw->HasCommands())
         {
@@ -879,7 +880,7 @@ void SceneRenderer::Pass_GBufferB(Renderer* renderer, RenderGraphPassContext ctx
         ShadowGpuData* const shadowGpu = frame_->shadowGpu;
         if (shadowGpu)
         {
-            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera, frame_->wind);
+            const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGBufferViewCB(renderer, camera, frame_->wind, frame_->dirLight);
             shadowGpu->RecordIndirectGBufferDraws(renderer, t.cl, viewCB, renderer->GetWireframeMode(),
                                                   0u, shadowGpu->VirtualGroupCount(), /*passB=*/true);
         }

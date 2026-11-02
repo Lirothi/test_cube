@@ -32,6 +32,20 @@ inline uint DecodeShadingModel(float encoded)
 	return (uint)round(saturate(encoded) * float(kShadingModelMask));
 }
 
+// Hanika's shadow terminator offset (gbuffer_common.hlsli GBufferTerminatorHeight): how far the smooth surface the vertex
+// normals describe lies above a pixel's flat triangle, in GBAux.a of every shading model that has no other use for it --
+// not foliage (its transmission normal weight), not water (its reflection weight). Metres, sqrt-encoded over 2 m: steps of
+// 1 mm at 1 cm, 6 mm at 30 cm.
+static const float kTerminatorHeightMax = 2.0f;
+inline float EncodeTerminatorHeight(float h)
+{
+	return sqrt(saturate(h / kTerminatorHeightMax));
+}
+inline float DecodeTerminatorHeight(float encoded)
+{
+	return encoded * encoded * kTerminatorHeightMax;
+}
+
 // ============ normalize helpers ============
 inline float3 NormalizeSafe(float3 v, float3 fallback)
 {

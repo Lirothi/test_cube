@@ -60,8 +60,9 @@ cbuffer PerFrame : register(b0)
     float sunAngularSize;
     // UE's SoftSourceRadius, sin(half of LightSourceSoftAngle): widens the glint's roughness (EvalBRDF).
     float sunSoftRadius;
-    // 1 = the sun's direct light is gated by the visible side's GEOMETRIC normal (lighting_cs.hlsl
-    // SunGeometricTerminator); 0 = by the shading normal alone, the frame before 2026-10-28.
+    // 1 = the sun's direct light is gated by the visible side's GEOMETRIC normal where its vertex normal faces
+    // away too (lighting_cs.hlsl SunGeometricTerminator); 2 = on every facet that faces away, 2026-10-28 .. 11-02;
+    // 0 = by the shading normal alone, the frame before 2026-10-28.
     float sunTerminator;
     // Rung 2 / Step 24f: sample directional shadows from the VSM clipmap (VSM mode) instead of the
     // CSM cascades. clipmapViewProj[i] = clipmap level i's camera-centered ortho viewProj.
@@ -104,7 +105,9 @@ cbuffer PerFrame : register(b0)
     float contactShadowFadeBand;
     float contactShadowThickness;     // ours: FRACTION of the ray length; 0 = UE behaviour
     uint  contactShadowFrameId;       // UE StateFrameIndexMod8 + 1; 0 = static dither
-    float _padContact;
+    // Hanika's shadow terminator offset (lighting_cs.hlsl): the sun's shadow looked up this many times the G-buffer's
+    // terminator height above the flat triangle (GBAux.a, gbuffer_common.hlsli). 1 = the smooth surface, 0 = off.
+    float terminatorOffset;
     float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // mirrored in LightingPassConstants
     // P16.16: inverse transpose of world -> shadow UVZ, for the receiver-plane depth bias. One
     // matrix covers every level (the extent cancels out of the gradient); UE build theirs the same

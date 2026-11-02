@@ -54,7 +54,7 @@ VSOut VSMain(VSIn i)
 }
 
 [RootSignature(GBUFFER_RS)]
-PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
+PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace, float3 bary : SV_Barycentrics)
 {
 #if GBUFFER_BINDLESS
     Texture2D gAlbedo = ResourceDescriptorHeap[texIndices.x];
@@ -106,5 +106,6 @@ PSOut PSMain(VSOut i, bool isFrontFace : SV_IsFrontFace)
     const float3 emissiveOut = ApplyEmissiveMap(emissive, gEmissiveMap, gSmp, i.UV, texOffsScale, texIndices.w);
     return FinalizeGBuffer(albedo, mr, N, emissiveOut, subsurfaceColor, transmissionStrength,
                            ambientOcclusion, indirectSpecularScale, transmissionAlbedoPower,
-                           transmissionNormalWeight, motion, i.objectId);
+                           transmissionNormalWeight, motion, i.objectId, NNorm * faceSign,
+                           GBUFFER_TERMINATOR_HEIGHT(i, bary, faceSign));
 }

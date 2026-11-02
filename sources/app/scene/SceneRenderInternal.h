@@ -160,11 +160,15 @@ namespace scene_internal
         float shadowSlopeBias = 0.0f;   // 228
         float shadowMaxSlope  = 0.0f;   // 232
         float shadowClampNear = 0.0f;   // 236 (S7 pancaking; plumbed here, still unused)
+        // 240: the G-buffer's view only -- the frame's directional light, xyz TOWARD it, w = 1 when set: GB1.a says
+        // whether the visible side's vertex normal faces it (gbuffer_common.hlsli FinalizeGBuffer, lighting_cs
+        // SunGeometricTerminator). The shadow views leave it 0 and no shadow shader reads it.
+        float gbLightToward[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
     };
-    static_assert(sizeof(PerViewCB) == 240, "PerViewCB must match the gbuffer/shadow HLSL layout");
+    static_assert(sizeof(PerViewCB) == 256, "PerViewCB must match the gbuffer/shadow HLSL layout");
     // S15: what SDSM's analyze pass writes per partition, in this very layout, straight into a
     // DEFAULT-heap buffer that the depth pass then binds as its b1 root CBV. 256 because a root
-    // CBV address must be 256-byte aligned; the block's last 16 bytes are padding.
+    // CBV address must be 256-byte aligned; the block's last 16 bytes (the G-buffer's light) are not written there.
     inline constexpr std::uint32_t kSdsmViewCbStride = 256u;
 
     // Matches glass.hlsl `cbuffer GlassView : register(b1)`.
@@ -253,13 +257,25 @@ namespace scene_internal
     }
 
     inline D3D12_GPU_VIRTUAL_ADDRESS BuildGBufferViewCB(Renderer* renderer, const Camera& camera,
-                                                        const vfx::WindState* wind)
+                                                        const vfx::WindState* wind, const DirectionalLight* light)
     {
         PerViewCB vc{};
         vc.viewProj = camera.GetViewProjMatrix();
         vc.viewProjNoJitter = camera.GetViewProjMatrixNoJitter();
         vc.prevViewProjNoJitter = camera.GetPrevViewProjMatrixNoJitter();
         ApplyWind(vc, wind); // W3: W4's VS reads it for the sway + the prev-position motion vectors
+        if (light != nullptr)
+        {
+            const float3 d = light->GetDirection();
+            const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+            if (len > 1.0e-6f)
+            {
+                vc.gbLightToward[0] = -d.x / len;
+                vc.gbLightToward[1] = -d.y / len;
+                vc.gbLightToward[2] = -d.z / len;
+                vc.gbLightToward[3] = 1.0f;
+            }
+        }
         return UploadFrameCB(renderer, vc);
     }
 

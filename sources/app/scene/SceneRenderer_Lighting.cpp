@@ -349,7 +349,8 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     constants.sunMetalSpec = frame_->settings.sunMetalSpecInfluence;
     constants.sunAngularSize = frame_->dirLight ? frame_->dirLight->GetSunHalfApexRadians() : 0.0f;
     constants.sunSoftRadius = frame_->dirLight ? frame_->dirLight->GetSoftSourceRadius() : 0.0f;
-    constants.sunTerminator = frame_->settings.sunGeometricTerminator ? 1.0f : 0.0f;
+    constants.sunTerminator = static_cast<float>(frame_->settings.sunGeometricTerminator);
+    constants.terminatorOffset = frame_->settings.terminatorOffset;
     // The light target is pre-exposed (lighting_cb.hlsli lightPreExposure); 1 when pre-exposure is off.
     constants.lightPreExposure = render::g_preExposure;
 
