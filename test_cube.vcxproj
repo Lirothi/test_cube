@@ -879,6 +879,7 @@
     <None Include="shaders\vsm_page_request_cs.hlsl" />
     <None Include="shaders\fog_common.hlsli" />
     <None Include="shaders\glass_view_cb.hlsli" />
+    <None Include="shaders\forward_sun_shadow.hlsli" />
     <None Include="shaders\fog_integrate_cs.hlsl" />
     <None Include="shaders\fog_scatter_cs.hlsl" />
     <None Include="shaders\light_shafts_cs.hlsl" />

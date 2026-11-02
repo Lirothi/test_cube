@@ -614,6 +614,9 @@ private:
         bool water = false;
     };
     bool WaterDrawsThisFrame() const;
+    // The ocean's plane for the VSM page request (vsm::PageRequestConstants::waterPlane): (1, its height) on a frame
+    // the water draws and takes the sun's shadow (ocean::g_sunShadow), else zeros.
+    static DirectX::XMFLOAT4 VsmWaterPlane(const SceneFrameData& frame);
     // Ocean G-buffer plan S3/S4: Main_WaterReflection's points and the decisions they were declared
     // from. `entry` is emitted on every path (it returns the water's G-buffer layer to rest).
     struct WaterReflectionPoints
@@ -811,7 +814,7 @@ private:
     // Local-light plan S10e: what the page request depends on besides the view -- the mip select (mode, biases, refDist,
     // the render resolution the pixel footprint is taken at). A change is not "still": the pages would stay the old
     // select's while the samplers read with the new one.
-    std::array<float, 7> vsmLastRequestKey_{};
+    std::array<float, 9> vsmLastRequestKey_{};
     bool vsmHasRendered_ = false;
     std::uint32_t vsmStillFrames_ = 0;
     // FrameDecisions::sunShadowsOff last frame (the change is logged once), and whether the VSM update

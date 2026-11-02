@@ -31,6 +31,34 @@ float CloudSunVisibility(float3 worldPos)
                 saturate(cloudShadowParams.x));
 }
 
+// The sun's shadow from GEOMETRY on the water (2026-11-02, owner: "make the ocean receive shadows"): the frame's
+// clipmap (VSM) / cascades (Legacy) / partitions (SDSM), read exactly as glass reads them -- forward_sun_shadow.hlsli
+// and the transparent pass's GlassView CB at b1, declared as a struct because OceanCB already names view, proj,
+// sunDirAmbient and the fog block. The bindings are the transports glass uses (GlassPassSrvs).
+#include "vsm_sample.hlsli"
+#include "csm_sample.hlsli"
+#define GLASS_VIEW_CB_STRUCT 1
+#include "glass_view_cb.hlsli"
+#include "forward_sun_shadow.hlsli"
+Texture2D ShadowAtlas : register(t22);                          // the sun's cascade / SDSM atlas
+StructuredBuffer<uint> VsmPageTable : register(t23);
+Texture2D VsmPool : register(t24);
+StructuredBuffer<SdsmPartition> SdsmPartitions : register(t25); // the inert dummy outside SDSM (csmSdsmParams.x gates)
+SamplerComparisonState ShadowCompareSampler : register(s4);
+
+// sunShapeParams.z: 0 = no geometry shadow (`ocean.sunShadow:0`, the A/B); w: the VSM clipmap's SMRT rays
+// (`ocean.sunShadowRays`, at most the frame's; 0 = its single tap). Legacy and SDSM read their cascades either way.
+// The biases take the FLAT surface, not the shading normal: the water is no caster, so they only keep the sea floor at
+// the waterline from shadowing it, and a ripple's normal would tilt the receiver plane a texel never sees.
+float OceanSunShadow(float3 worldPos)
+{
+    [branch] if (sunShapeParams.z < 0.5f) { return 1.0f; }
+    const float3 Ng = float3(0.0f, 1.0f, 0.0f);
+    const float NdotL = saturate(-normalize(sunDirAmbient.xyz).y);
+    return ForwardSunShadow(worldPos, Ng, NdotL, (uint)sunShapeParams.w,
+                            ShadowAtlas, VsmPageTable, VsmPool, SdsmPartitions, ShadowCompareSampler, LinearClampSampler);
+}
+
 // THE WATER'S G-BUFFER LAYER (docs/ocean_gbuffer_ssr_unification_plan.md S1/S4, UE SingleLayerWater):
 // what the forward draw leaves behind for Main_WaterReflection -- its screen-space trace reads the
 // normal and roughness, its composite (water_composite_cs.hlsl) the weight and the sky.
@@ -531,7 +559,8 @@ float3 OceanSunSpecular(const LightingInput li, const BrunetonInputs bi)
     brdf.V = li.viewDir;
     brdf.L = -li.mainLight.direction;
     const BRDFResult r = EvalBRDF(brdf, sunShapeParams.x, sunShapeParams.y);
-    return r.specBRDF * r.NdotL * li.mainLight.color * (specularParams.x * li.mainLight.shadowAttenuation);
+    return r.specBRDF * r.NdotL * li.mainLight.color
+         * (specularParams.x * li.mainLight.shadowAttenuation * li.mainLight.geometryShadow);
 }
 
 // Horizon pull for the ENVIRONMENT reflection ray (skyParams.w; 1 = identity, the shipped default).

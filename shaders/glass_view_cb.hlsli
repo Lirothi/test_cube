@@ -5,9 +5,20 @@
 #define GLASS_VIEW_CB_HLSLI
 
 // Needs VSM_NUM_CLIPMAP_LEVELS (a static const in vsm_addressing.hlsli): include it first.
+//
+// GLASS_VIEW_CB_STRUCT 1 declares the same layout as ConstantBuffer<GlassViewData> gGlassView instead of globals --
+// the ocean's own b0 already names view, proj, sunDirAmbient and the fog block. GLASS_VIEW(x) reaches a field
+// either way (forward_sun_shadow.hlsli reads it so).
+#ifndef GLASS_VIEW_CB_STRUCT
+#define GLASS_VIEW_CB_STRUCT 0
+#endif
 
 // Per-view/per-frame data shared by every glass object in the pass. Filled once.
+#if GLASS_VIEW_CB_STRUCT
+struct GlassViewData
+#else
 cbuffer GlassView : register(b1)
+#endif
 {
     float4x4 view;
     float4x4 proj;
@@ -69,5 +80,11 @@ cbuffer GlassView : register(b1)
     // PackHeightFog's UE fog colour (raw), w = 1 = use it instead of the sky along the view. Appended at the tail.
     float4 fogInscatter;
 };
+#if GLASS_VIEW_CB_STRUCT
+ConstantBuffer<GlassViewData> gGlassView : register(b1);
+#define GLASS_VIEW(x) gGlassView.x
+#else
+#define GLASS_VIEW(x) x
+#endif
 
 #endif // GLASS_VIEW_CB_HLSLI

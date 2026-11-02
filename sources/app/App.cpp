@@ -1418,6 +1418,9 @@ namespace
         // shadow/terrain artifacts live on dune slopes the water covers, and the user's repro
         // screenshots are taken with the ocean hidden. 0 = hidden.
         if (setting == "ocean.visible") { scene.SetOceanVisible(value != 0.0f); return true; }
+        // The sun's shadow from geometry on the water (OceanSunShadow): 0 = off (the A/B); its VSM SMRT rays, 0 = one tap.
+        if (setting == "ocean.sunShadow") { ocean::g_sunShadow = value != 0.0f; return true; }
+        if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays = std::clamp(static_cast<int>(value), 0, 16); return true; }
         // Sky-reflection horizon pull (OceanSkyReflectDir; 1 = off). Here so the streak A/B is a
         // command line rather than a level edit — same one-binary discipline as the VSM levers.
         if (setting == "ocean.skyHorizonPull")

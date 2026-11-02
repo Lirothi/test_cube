@@ -40,6 +40,9 @@ cbuffer PageRequestCB : register(b0)
     uint     gSpotLights;
     uint     gPointLights;
     uint     gPointExtraView;
+    // The ocean's surface (x = 1 when it draws, y = its height): the forward water samples the clipmap there, and the
+    // camera depth this pass reads is the opaque scene's (the water draws later).
+    float4   waterPlane;
 };
 
 Texture2D                       DepthT  : register(t0);
@@ -95,71 +98,12 @@ bool OutsideLight(float4 cull, float3 P)
     return cull.w >= 0.0f && dot(toP, toP) > cull.w * cull.w;
 }
 
-[numthreads(8, 8, 1)]
-[RootSignature(VSM_PAGE_REQUEST_RS)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
+// --- Directional clipmap (Step 24d): views [VSM_CLIPMAP_FIRST, VSM_CLIPMAP_END) are camera-centered ortho
+// levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain). Mark
+// the finest containing level and, inside its transition band, the next coarser level too. A
+// zero blend width preserves the old exact-one-page request path. ---
+void MarkClipmap(float3 P, uint count)
 {
-    const uint w = (uint)screen.x;
-    const uint h = (uint)screen.y;
-    const uint ds = max((uint)lodParams.z, 1u);
-
-    // Reduced-res: dtid indexes down-sampled blocks; sample the block-center full-res pixel.
-    const uint2 px = dtid.xy * ds + (ds >> 1u);
-    if (px.x >= w || px.y >= h) { return; }
-
-    const float2 uv = (float2(px) + 0.5f) * screen.zw;
-    const float z = DepthT.Load(int3(int2(px), 0)).r;
-    if (z <= kEpsilon) { return; } // background / no geometry (reverse-Z: 0 = far/cleared)
-
-    const float3 P = ReconstructPosWS(uv, z, invProj, invView);
-
-    // Camera-distance mip: farther receivers need coarser shadow texels (screen-pixel world
-    // footprint grows with distance). Distance heuristic first; ddx/ddy refinement is future.
-    const float refDist  = max(lodParams.x, 1e-3f);
-    const uint  maxLevel = min((uint)lodParams.y, kMaxLevel);
-    const float distCam  = length(P - camPosWS.xyz);
-    const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
-    const uint  levelByDistance = (uint)clamp(rawLevel, 0, (int)maxLevel);
-
-    const uint count = min(numViews, VSM_VIEW_CEILING);
-
-    // --- Local lights: per view, a projection + a mip chain. Plan S9e: walked per LIGHT (a point's six faces share its
-    // sphere: one distance test, then only the face P's direction falls in -- VsmCubeFace, the sampler's rule), bounded
-    // by the literal ceiling and stopped by the CB's counts. localMip.w = 0 (vsm.requestLightCull) tests nothing and
-    // projects into every face. ---
-    // Plan S10e: the camera pixel's radius at this receiver (UE VirtualShadowMapCalcPixelFootprintLocal).
-    const bool pixelMip = localMip.x != 0.0f;
-    const float pixelRadiusWorld = dot(P - camPosWS.xyz, invView[2].xyz) * localMip.z;
-    const bool lightCull = localMip.w != 0.0f;
-    [loop] for (uint s = 0; s < VSM_VIEW_CEILING; ++s)
-    {
-        if (s >= gSpotLights) { break; }
-        const uint v = (s < VSM_PREFIX_SPOTS) ? s : VSM_CLIPMAP_END + (s - VSM_PREFIX_SPOTS); // vsm::SpotView
-        if (lightCull && OutsideLight(Views[v].cull, P)) { continue; }
-        MarkLocalView(v, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
-    }
-    const uint prefixPoints = (VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS) / 6u;
-    [loop] for (uint q = 0; q < VSM_VIEW_CEILING / 6u; ++q)
-    {
-        if (q >= gPointLights) { break; }
-        const uint first = (q < prefixPoints) ? VSM_PREFIX_SPOTS + 6u * q : gPointExtraView + 6u * (q - prefixPoints);
-        const float4 cull = Views[first].cull; // the light's sphere, the same on all six faces
-        if (lightCull && cull.w >= 0.0f)
-        {
-            if (OutsideLight(cull, P)) { continue; }
-            MarkLocalView(first + VsmCubeFace(P - cull.xyz), P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
-            continue;
-        }
-        [loop] for (uint face = 0u; face < 6u; ++face)
-        {
-            MarkLocalView(first + face, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
-        }
-    }
-
-    // --- Directional clipmap (Step 24d): views [VSM_CLIPMAP_FIRST, VSM_CLIPMAP_END) are camera-centered ortho
-    // levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain). Mark
-    // the finest containing level and, inside its transition band, the next coarser level too. A
-    // zero blend width preserves the old exact-one-page request path. ---
     const float clipBlendWidth = clamp(lodParams.w, 0.0f, 0.5f);
     const uint clipEnd = min(count, VSM_CLIPMAP_END);
     for (uint cv = VSM_CLIPMAP_FIRST; cv < clipEnd; ++cv)
@@ -200,4 +144,90 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         }
         break; // finest containing clipmap level only
     }
+}
+
+[numthreads(8, 8, 1)]
+[RootSignature(VSM_PAGE_REQUEST_RS)]
+void CSMain(uint3 dtid : SV_DispatchThreadID)
+{
+    const uint w = (uint)screen.x;
+    const uint h = (uint)screen.y;
+    const uint ds = max((uint)lodParams.z, 1u);
+
+    // Reduced-res: dtid indexes down-sampled blocks; sample the block-center full-res pixel.
+    const uint2 px = dtid.xy * ds + (ds >> 1u);
+    if (px.x >= w || px.y >= h) { return; }
+
+    const float2 uv = (float2(px) + 0.5f) * screen.zw;
+    const float z = DepthT.Load(int3(int2(px), 0)).r;
+    const bool geometry = z > kEpsilon; // reverse-Z: 0 = far/cleared, the background
+    const uint count = min(numViews, VSM_VIEW_CEILING);
+
+    // The water's surface (ocean_surface_common.hlsli OceanSunShadow samples the clipmap there): where this pixel's
+    // view ray meets the ocean's plane before the opaque surface -- or the background -- its sun pages are marked too.
+    // The plane, not the displaced wave: a crest moves the sample within a page or into its neighbour, which the
+    // sampler's walk to a coarser resident level covers. Local lights are not the water's.
+    if (waterPlane.x != 0.0f)
+    {
+        const float3 ray = ReconstructPosWS(uv, 1.0f, invProj, invView) - camPosWS.xyz; // reverse-Z: 1 = the near plane
+        const float t = (abs(ray.y) > 1e-7f) ? (waterPlane.y - camPosWS.y) / ray.y : -1.0f;
+        if (t > 0.0f)
+        {
+            const float3 Pw = camPosWS.xyz + ray * t;
+            const float3 toW = Pw - camPosWS.xyz;
+            bool inFront = !geometry;
+            if (geometry)
+            {
+                const float3 toP = ReconstructPosWS(uv, z, invProj, invView) - camPosWS.xyz;
+                inFront = dot(toW, toW) < dot(toP, toP);
+            }
+            if (inFront) { MarkClipmap(Pw, count); }
+        }
+    }
+    if (!geometry) { return; }
+
+    const float3 P = ReconstructPosWS(uv, z, invProj, invView);
+
+    // Camera-distance mip: farther receivers need coarser shadow texels (screen-pixel world
+    // footprint grows with distance). Distance heuristic first; ddx/ddy refinement is future.
+    const float refDist  = max(lodParams.x, 1e-3f);
+    const uint  maxLevel = min((uint)lodParams.y, kMaxLevel);
+    const float distCam  = length(P - camPosWS.xyz);
+    const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
+    const uint  levelByDistance = (uint)clamp(rawLevel, 0, (int)maxLevel);
+
+    // --- Local lights: per view, a projection + a mip chain. Plan S9e: walked per LIGHT (a point's six faces share its
+    // sphere: one distance test, then only the face P's direction falls in -- VsmCubeFace, the sampler's rule), bounded
+    // by the literal ceiling and stopped by the CB's counts. localMip.w = 0 (vsm.requestLightCull) tests nothing and
+    // projects into every face. ---
+    // Plan S10e: the camera pixel's radius at this receiver (UE VirtualShadowMapCalcPixelFootprintLocal).
+    const bool pixelMip = localMip.x != 0.0f;
+    const float pixelRadiusWorld = dot(P - camPosWS.xyz, invView[2].xyz) * localMip.z;
+    const bool lightCull = localMip.w != 0.0f;
+    [loop] for (uint s = 0; s < VSM_VIEW_CEILING; ++s)
+    {
+        if (s >= gSpotLights) { break; }
+        const uint v = (s < VSM_PREFIX_SPOTS) ? s : VSM_CLIPMAP_END + (s - VSM_PREFIX_SPOTS); // vsm::SpotView
+        if (lightCull && OutsideLight(Views[v].cull, P)) { continue; }
+        MarkLocalView(v, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+    }
+    const uint prefixPoints = (VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS) / 6u;
+    [loop] for (uint q = 0; q < VSM_VIEW_CEILING / 6u; ++q)
+    {
+        if (q >= gPointLights) { break; }
+        const uint first = (q < prefixPoints) ? VSM_PREFIX_SPOTS + 6u * q : gPointExtraView + 6u * (q - prefixPoints);
+        const float4 cull = Views[first].cull; // the light's sphere, the same on all six faces
+        if (lightCull && cull.w >= 0.0f)
+        {
+            if (OutsideLight(cull, P)) { continue; }
+            MarkLocalView(first + VsmCubeFace(P - cull.xyz), P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+            continue;
+        }
+        [loop] for (uint face = 0u; face < 6u; ++face)
+        {
+            MarkLocalView(first + face, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+        }
+    }
+
+    MarkClipmap(P, count);
 }

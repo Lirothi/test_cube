@@ -75,6 +75,7 @@ cbuffer GlassParams : register(b0)
 };
 
 #include "glass_view_cb.hlsli" // b1: the transparent pass's shared per-view CB (also particles)
+#include "forward_sun_shadow.hlsli" // the sun's shadow, the ocean's own
 
 Texture2D SceneOpaque : register(t0);
 Texture2D ShadowAtlas : register(t1);
@@ -244,74 +245,12 @@ VSOut VSMain(VSIn input)
 #define NORMALMAP_IS_RG 0
 #endif
 
+// The clipmap / cascades / SDSM partitions with lighting_cs's arithmetic and numbers (forward_sun_shadow.hlsli,
+// shared with the ocean), SMRT at the frame's full ray count.
 float SampleShadowCSM(float3 Pws, float3 Nws, float NdotL)
 {
-    // Step 24f: VSM mode samples the directional clipmap (matches lighting_cs.hlsl); Legacy = cascades.
-    if (vsmParams.x != 0.0f)
-    {
-        // P16.16: same arithmetic and the same numbers lighting_cs gets, or glass shades against
-        // a differently-biased shadow.
-        VsmSmrtParams smrt;
-        smrt.rayCount = (uint)smrtParams.x;
-        smrt.samplesPerRay = (uint)smrtParams.y;
-        smrt.rayLengthScale = smrtParams.z;
-        smrt.extrapolateMaxSlope = smrtParams.w;
-        smrt.sourceRadius = smrtParams2.x;
-        smrt.texelDitherScale = smrtParams2.y;
-        smrt.levelMargin = smrtParams2.z;
-        smrt.frameIndex = (uint)smrtParams2.w;
-        smrt.adaptiveRayCount = 0u; // pixel shader: no wave-op early out (see VSM_SMRT_COMPUTE)
-        return VsmClipmapShadow(Pws, Nws, camPosSky.xyz, clipmapParams.y, clipmapParams.z,
-                                clipmapParams.w, vsmParams.z, vsmParams.w,
-                                invProj._11, clipmapUvNormal,
-                                normalize(-sunDirAmbient.xyz), smrt,
-                                // No screen-space ray here: the transparent pass has no scene
-                                // depth to march, and a glass surface is not where contact detail
-                                // is judged. Same scope note as the adaptive ray count above.
-                                0.0f,
-                                clipmapViewProj, VsmPageTable, VsmPool, ShadowSampler);
-    }
-
-    // S3: the cascade path now goes through the SHARED csm_sample.hlsli, same as lighting_cs.
-    // This is a deliberate behaviour FIX, not a refactor: the copy that used to live here had no
-    // coarser-cascade fallback (it returned "lit" the moment the point left the tile) and no blend
-    // band, so glass disagreed with the geometry next to it at every cascade boundary.
-    CsmParams p;
-    [unroll]
-    for (int i = 0; i < 4; ++i)
-    {
-        p.lightViewProj[i] = lightViewProj[i];
-        p.scaleBias[i]     = cascadeScaleBias[i];
-    }
-    p.splitsVS     = cascadeSplitsVS;
-    p.depthBiasNDC = shadowBiasNDC;
-    p.cascadeTexelWS = cascadeTexelWS;
-    p.atlasSize    = shadowAtlasSizeInv.xy;   // xy = size, zw = 1/size (see the GlassView cbuffer)
-    p.camPosWS     = camPosSky.xyz;
-    p.camDirWS     = normalize(camDirWS.xyz);
-    p.pcfRadius    = 1.0f;
-    // S8: same derivation as lighting_cs -- shadowBiasNDC already scales with the cascade's world
-    // texel, so it IS the transition width. Glass must match the geometry beside it exactly.
-    [unroll]
-    for (int t = 0; t < 4; ++t)
-    {
-        p.transitionScale[t] = 1.0f / max(1e-6f, shadowBiasNDC[t]);
-    }
-    p.receiverBiasMin  = csmFilterMode.y;
-    p.sharpen          = csmFilterMode.z;
-    p.overBlurCorrect  = csmFilterMode.w;
-    p.normalBiasTexels = csmFilterParams.w;
-    p.farSplit             = csmFilterParams.x;
-    p.blendFraction        = csmFilterParams.y;
-    p.distanceFadeFraction = csmFilterParams.z;
-    p.useGatherPcf     = (uint)csmFilterMode.x;
-    p.evsmExponents    = float2(0.0f, 0.0f); // S16: see lighting_cb.hlsli
-    // S15: same overlay as lighting_cb.hlsli's MakeCsmParams. Glass has to agree with the geometry
-    // beside it EXACTLY -- that was the whole point of S3 -- so this is not optional here.
-    if (csmSdsmParams.x > 0.0f) { CsmApplySdsm(p, SdsmPartitions, (uint)csmSdsmParams.x); }
-
-    int cascade;
-    return CsmSampleShadow(p, ShadowAtlas, ShadowSampler, LinearSampler, Pws, Nws, NdotL, cascade);
+    return ForwardSunShadow(Pws, Nws, NdotL, 0xFFFFFFFFu, ShadowAtlas, VsmPageTable, VsmPool, SdsmPartitions,
+                            ShadowSampler, LinearSampler);
 }
 
 float ShadowPCF3x3Array(Texture2DArray atlas, float3 uvw, float depth, float2 texel)

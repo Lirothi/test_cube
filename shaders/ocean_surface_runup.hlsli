@@ -4,7 +4,8 @@
 // swash, contact foam with the torn dither edge, the SDF, the sink. Split out of ocean_surface.hlsl
 // on 2026-09-12 when the owner renamed the two surfaces by what they are instead of "legacy".
 
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), DescriptorTable(SRV(t0, numDescriptors=22, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE))"
+// t22-t25, s4 and b1 (the transparent pass's GlassView CB): the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=26, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
@@ -198,7 +199,8 @@ struct LightData
 {
     float3 direction;
     float3 color;
-    float shadowAttenuation;
+    float shadowAttenuation; // the cloud's (plan C3); the body takes cloudShadowParams.z of it
+    float geometryShadow;    // the sun's shadow from geometry (OceanSunShadow): every sun term takes it whole
 };
 
 struct LightingInput
@@ -1532,7 +1534,7 @@ float3 SkyFillRadiance(float3 normal)
 float3 LitFoamColor(const LightingInput li, const FoamData foamData)
 {
     float ndotl = (0.2f + 0.8f * saturate(dot(foamData.normal, -li.mainLight.direction)))
-        * li.mainLight.shadowAttenuation;
+        * li.mainLight.shadowAttenuation * li.mainLight.geometryShadow;
     // P16.7: `SkyFillRadiance` is the sky's MEASURED irradiance; `li.ambient` is the legacy
     // FRACTION-OF-THE-SUN knob (0.05-0.15). Multiplying one by the other is the exact mistake F8
     // documents about its own first version -- "multiplying an absolute measured irradiance by a
@@ -1650,7 +1652,9 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     // sides and undersides add light -- light our cube does not yet carry (its undersides are lit
     // by the distant sky only), so a body that followed the sun as the land does went too dark
     // (owner, 2026-09-12: "вода не так реагирует на тень, как плотная геометрия").
-    const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z));
+    // A shadow from GEOMETRY is taken whole (the surf-sim surface says why).
+    const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z))
+                           * li.mainLight.geometryShadow;
     const float3 skyFill = SkyFillRadiance(li.normal);
     // The sun's share scaled by how much of it gets INTO the water at its height (SunBodyEntry):
     // a low sun lights the sea through its reflection and its sky, not through a glowing body.
@@ -1978,6 +1982,7 @@ PSOut PSMain(VSOutput input)
     light.direction = lightDir;
     light.color = sunColorExposure.xyz * sunColorExposure.w;
     light.shadowAttenuation = CloudSunVisibility(input.worldPos); // plan C3: the cloud shadow (was a constant 1)
+    light.geometryShadow = OceanSunShadow(mul(float4(input.worldPos, 1.0f), model).xyz); // worldPos is pre-model
 
     LightingInput li;
     li.normal = normal;

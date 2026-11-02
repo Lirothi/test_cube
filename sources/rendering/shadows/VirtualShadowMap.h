@@ -625,6 +625,10 @@ inline std::uint32_t g_windAnimateMaxLevel = 4;
         std::uint32_t       spotLights = 0;
         std::uint32_t       pointLights = 0;
         std::uint32_t       pointExtraView = 0;
+        // The ocean's surface, which the forward water samples the clipmap on but the camera depth (opaque only) never
+        // saw: x = 1 when the water draws this frame, y = its height (m). Its pages are marked where the view ray
+        // meets that plane before the opaque surface.
+        DirectX::XMFLOAT4   waterPlane{ 0.0f, 0.0f, 0.0f, 0.0f };
     };
 }
 

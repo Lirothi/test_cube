@@ -40,6 +40,12 @@ inline bool g_shoreSinkCut = true;
 // surf-sim surface stopped being a byte-faithful baseline long ago and is the main surface.
 inline bool g_shoreRunup = false;
 
+// The sun's shadow from geometry on the water (OceanSunShadow; `--set ocean.sunShadow`, transient): 0 = none (the A/B).
+// `ocean.sunShadowRays`: the VSM clipmap's SMRT rays on the water, at most the frame's (vsm.smrtRayCount); 0 = its
+// single tap. Legacy / SDSM read their cascades either way.
+inline bool g_sunShadow = true;
+inline int g_sunShadowRays = 1;
+
 // "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
 // Boot-only and a VARIANT for the same reason as above — the views need per-pixel intermediates
 // (sweep position, feather, tear noise) kept alive, and a runtime `if` would make every water pixel

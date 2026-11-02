@@ -727,6 +727,42 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   with nothing floating costs 0 us CPU and no copy. The copy was tried on the async
   queue inside Main_ObjectCompute and cost the frame ~108 us: the ocean draw waits on that pass.
 
+## The Sun's Shadow on the Water
+
+The ocean takes the sun's shadow from GEOMETRY (2026-11-02, owner: "make the ocean receive shadows"; until then only the
+cloud shadow, plan C3, reached it -- a boat cast no shadow on the sea and the water kept its glints inside a dune's shadow).
+`ocean_surface_common.hlsli OceanSunShadow` reads the frame's own clipmap (VSM) / cascades (Legacy) / partitions (SDSM)
+through `shaders/forward_sun_shadow.hlsli` -- glass's sun shadow moved there, ONE function for both forward surfaces,
+lighting_cs's arithmetic and numbers -- from the transparent pass's GlassView CB (b1, which RenderableObject already
+handed every draw): `GLASS_VIEW_CB_STRUCT 1` declares it as `ConstantBuffer<GlassViewData> gGlassView`, because OceanCB
+already names view, proj, sunDirAmbient and the fog block (`GLASS_VIEW(x)` reaches a field either way). The ocean RS grew
+CBV(b1), t22-t25 (the sun atlas or its EVSM moments, the VSM page table and pool, the SDSM partitions -- the transports
+Pass_Transparent publishes, a buffer slot falling back to the dummy BUFFER) and s4 (ComparisonLinearClamp).
+
+- Every sun term takes it whole -- the glint, the foam and the body's scatter (the shadow volume of a hull goes on down
+  into the water along the sun); the cloud shadow stays dosed for the body (`cloud.oceanBodyShadow`). The sea floor seen
+  through the water keeps its own shadow from lighting_cs, displaced by the depth, as it should be.
+- The biases take the FLAT surface (0, 1, 0), not the ripples' shading normal: the water is no caster, so a bias only keeps
+  the sea floor at the waterline from shadowing it.
+- **VSM pages for the water**: the page request reads the OPAQUE depth (the water draws later), so `vsm_page_request_cs`
+  also marks the clipmap page where each pixel's view ray meets the ocean's plane before the opaque surface or the sky
+  (`PageRequestConstants::waterPlane` = `SceneRenderer::VsmWaterPlane`: 1 and the water level on a frame the water draws
+  and takes the shadow; it is in the still-camera request key too). The plane, not the displaced wave: a crest moves the
+  sample within a page or to a coarser resident level.
+- **Rays** (`ocean.sunShadowRays`, default 1, at most the frame's SMRT count; 0 = the clipmap's single tap): the single
+  tap's constant depth bias swallowed the low parts of a hull close to the water -- part of a boat's shadow was missing
+  where Legacy, SDSM and SMRT all had it. Boat view (cam -33 4 24, rot 0.0635 0.9056 -0.1464 0.3930, 16:00, the water ~70 %
+  of the frame), the shadow's mean luminance (off 90.6): tap 76.6, 1 ray 70.7, 2 rays 70.4, 8 rays 70.1; frame-to-frame
+  std inside it 0.35-0.36 in every arm (DLSS resolves it). `Ocean.Surface` (alternated twice): off 0.220 ms, tap 0.237,
+  2 rays 0.316, 8 rays 0.624; on the lagoon view (cam -11.6 4.17 73.6) 0.20 / 0.21 / 0.24 / 0.38. 1 ray, alternated
+  three times: VSM boat 0.212-0.221 -> 0.260-0.266 ms, lagoon 0.196 -> 0.223-0.228; SDSM (the cascades, no rays) boat
+  0.213 -> 0.254, lagoon 0.199 -> 0.215. `Pass_VsmPageRequest` the same within noise (0.057-0.070).
+- `ocean.sunShadow:0` = before (the A/B; transient, like `ocean.sunShadowRays`). Legacy / SDSM need no residency:
+  SDSM's partitions are fitted to the opaque samples, and on wind_test's views the water above the sea floor lay inside
+  them (boats and palm shadows on the water as in VSM and Legacy).
+- GBV (`Transparent,Transparent.Water,Translucent,VsmPageRequest,Skybox` + the Skybox self-test, the boat view): VSM
+  and SDSM clean.
+
 ## Cast Shadow — Per Object
 
 A level mesh `"castShadow": false` (Inspector: Lighting > "Cast Shadow", MCP: `setCastShadow`; staticMesh and

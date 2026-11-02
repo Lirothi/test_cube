@@ -892,7 +892,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
     // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
     // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 22> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 26> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -1021,6 +1021,16 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // t21: plan C3, the cloud shadow map (Main_Transparent declares it PIXEL-readable on the frames
     // it exists; SceneRenderer hands the SRV over with the projection), gated by cloudShadowParams.x.
     pushSrv(cloudShadowSrv_.ptr != 0 ? cloudShadowSrv_ : fallbackSrv);
+    // t22-t25: the sun's shadow (OceanSunShadow), the transports Pass_Transparent publishes before this draw and
+    // glass reads the same way (GlassPassSrvs): the sun atlas (EVSM moments under S16), the VSM page table and pool,
+    // the SDSM partitions. A buffer slot falls back to the inert dummy BUFFER, never a texture; the shader reads the
+    // page table and pool only under vsmParams.x and the partitions only under csmSdsmParams.x.
+    const D3D12_CPU_DESCRIPTOR_HANDLE sunAtlasSrv =
+        renderer->GetSdsmMomentsSrv().ptr != 0 ? renderer->GetSdsmMomentsSrv() : deferred.shadowSRV;
+    pushSrv(sunAtlasSrv.ptr != 0 ? sunAtlasSrv : fallbackSrv);
+    pushSrv(renderer->GetVsmPageTableSrv().ptr != 0 ? renderer->GetVsmPageTableSrv() : renderer->VsmDummyBufferSrv());
+    pushSrv(renderer->GetVsmPoolSrv().ptr != 0 ? renderer->GetVsmPoolSrv() : fallbackSrv);
+    pushSrv(renderer->GetSdsmPartitionSrv().ptr != 0 ? renderer->GetSdsmPartitionSrv() : renderer->VsmDummyBufferSrv());
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
@@ -1034,7 +1044,8 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         *SamplerManager::LinearWrap(),
         *SamplerManager::LinearClamp(),
         *SamplerManager::PointClamp(),
-        *SamplerManager::AnisoWrap(16) };
+        *SamplerManager::AnisoWrap(16),
+        *SamplerManager::ComparisonLinearClamp() }; // s4: the sun's shadow, glass's s1
     ctx.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, samplers);
 
     const D3D12_RESOURCE_STATES srvState =
@@ -1842,7 +1853,9 @@ Math::float4 OceanRenderable::GetSunShapeParams() const
     // y: its soft radius (UE SoftSourceRadius), which widens the glint's roughness as lighting_cs does.
     const float radius = scene_ ? scene_->GetDirectionalLight().GetSunHalfApexRadians() : 0.0f;
     const float softRadius = scene_ ? scene_->GetDirectionalLight().GetSoftSourceRadius() : 0.0f;
-    return Math::float4(radius, softRadius, 0.0f, 0.0f);
+    // z, w: the sun's shadow from geometry on the water (OceanSunShadow) and its SMRT rays -- ocean::g_sunShadow(Rays).
+    return Math::float4(radius, softRadius, ocean::g_sunShadow ? 1.0f : 0.0f,
+                        static_cast<float>(std::max(ocean::g_sunShadowRays, 0)));
 }
 
 Math::float4 OceanRenderable::GetDeepScatterColor() const

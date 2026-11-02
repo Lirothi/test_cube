@@ -128,6 +128,14 @@ void SceneRenderer::Pass_ShadowCull(Renderer* renderer, RenderGraphPassContext c
     ctx.EndCL(t);
 }
 
+DirectX::XMFLOAT4 SceneRenderer::VsmWaterPlane(const SceneFrameData& frame)
+{
+    const bool water = frame.ocean && frame.mainView && !frame.mainView->transparentWater.empty() &&
+                       ocean::g_sunShadow;
+    return water ? DirectX::XMFLOAT4(1.0f, frame.ocean->GetWaterLevel(), 0.0f, 0.0f)
+                 : DirectX::XMFLOAT4(0.0f, 0.0f, 0.0f, 0.0f);
+}
+
 void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassContext ctx,
     const VirtualShadowMap::PageRequestPoints& pts)
 {
@@ -165,6 +173,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.pointLights = static_cast<std::uint32_t>(std::min(frame_->lightManager->GetShadowedPointCount(),
                                                          frame_->pointShadowViews->size() / 6u));
     cb.pointExtraView = vsm::PointFaceView(6u * render::kShadowViewVsmPoints);
+    cb.waterPlane = VsmWaterPlane(*frame_); // the water samples the clipmap on its surface (OceanSunShadow)
 
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
