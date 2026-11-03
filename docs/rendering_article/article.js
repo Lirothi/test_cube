@@ -1,0 +1,23 @@
+(() => {
+  'use strict';
+  const $ = s => document.querySelector(s);
+  const links = [...document.querySelectorAll('.toc a')];
+  const chapters = [...document.querySelectorAll('.chapter')];
+  const menu = $('#menu');
+  menu.addEventListener('click', () => {const open=$('.sidebar').classList.toggle('open');menu.setAttribute('aria-expanded',String(open));});
+  links.forEach(a=>a.addEventListener('click',()=>{$('.sidebar').classList.remove('open');menu.setAttribute('aria-expanded','false');}));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('.sidebar').classList.remove('open');menu.setAttribute('aria-expanded','false');}});
+  $('#theme').addEventListener('click',()=>{const on=document.body.classList.toggle('dark');$('#theme').setAttribute('aria-pressed',String(on));$('#theme').textContent=on?'Светлая тема':'Тёмная тема';});
+  $('#font-size').addEventListener('click',()=>{const on=document.body.classList.toggle('large');$('#font-size').setAttribute('aria-pressed',String(on));});
+  $('#search').addEventListener('input',e=>{const q=e.target.value.toLocaleLowerCase('ru').trim();let n=0;links.forEach((a,i)=>{a.hidden=Boolean(q&&!chapters[i].textContent.toLocaleLowerCase('ru').includes(q));if(!a.hidden)n++;});$('#noresults').hidden=n>0;$('#search-count').textContent=q?`Найдено глав: ${n}`:'';});
+  let pending=false;
+  function progress(){const range=document.documentElement.scrollHeight-innerHeight;const p=range>0?Math.max(0,Math.min(1,scrollY/range)):0;$('.progress').style.transform=`scaleX(${p})`;$('#progress-text').textContent=`Прочитано ${Math.round(p*100)}%`;let current=0;for(let i=0;i<chapters.length;i++)if(chapters[i].getBoundingClientRect().top<innerHeight*.4)current=i;links.forEach((a,i)=>{a.classList.toggle('active',i===current);if(i===current)a.setAttribute('aria-current','location');else a.removeAttribute('aria-current');});pending=false;}
+  addEventListener('scroll',()=>{if(!pending){pending=true;requestAnimationFrame(progress);}},{passive:true});addEventListener('resize',progress);progress();
+  const rgb=a=>'rgb('+a.map(v=>Math.round(v)).join(',')+')';
+  function fog(){const sigma=Number($('#fog-slider').value);$('#fog-value').textContent=sigma.toFixed(4).replace('.',',')+' м⁻¹';const bg=[204,222,224];const blend=(base,d)=>base.map((v,i)=>v*Math.exp(-sigma*d)+bg[i]*(1-Math.exp(-sigma*d)));let s='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 280" role="img" aria-label="Три силуэта на разных расстояниях в однородном тумане"><rect width="800" height="280" fill="'+rgb(bg)+'"/>';for(const [d,base,path,labelX,labelY]of[[900,[35,75,100],'M0 160 L100 80 L170 130 L285 45 L400 155 L510 72 L630 150 L735 57 L800 120 V280 H0Z',580,65],[400,[30,85,82],'M0 205 L120 160 L230 192 L360 117 L485 190 L610 140 L800 205 V280 H0Z',400,110],[100,[23,62,57],'M0 255 L80 225 L180 247 L290 200 L435 242 L540 215 L680 245 L800 208 V280 H0Z',75,215]]){s+='<path d="'+path+'" fill="'+rgb(blend(base,d))+'"/><text x="'+labelX+'" y="'+labelY+'" fill="#233b45" font-family="Segoe UI,Arial,sans-serif" font-size="15">'+d+' м · T = '+Math.exp(-sigma*d).toFixed(2)+'</text>';}$('#fog-scene').innerHTML=s+'</svg>';}
+  function exposure(){const ev=Number($('#ev-slider').value),gain=2**(-ev);$('#ev-value').textContent=(ev>0?'+':'')+ev.toFixed(2).replace('.',',')+' EV · ×'+gain.toFixed(2).replace('.',',');$('#ev-patches').innerHTML=[.02,.18,1,8].map(v=>{const x=v*gain,t=x/(1+x),s=t<=.0031308?12.92*t:1.055*t**(1/2.4)-.055,g=Math.round(s*255);return `<div class="patch" style="background:rgb(${g},${g},${g})"><span>L = ${v}</span></div>`}).join('');}
+  $('#fog-slider').addEventListener('input',fog);$('#ev-slider').addEventListener('input',exposure);fog();exposure();
+  const dialog=document.createElement('dialog');dialog.id='figure-dialog';dialog.setAttribute('aria-labelledby','zoom-title');dialog.innerHTML='<div class="dialog-bar"><b id="zoom-title">Схема</b><button class="tool" id="zoom-close">Закрыть ×</button></div><div class="zoom-content"></div>';document.body.append(dialog);
+  $('#zoom-close').addEventListener('click',()=>dialog.close());dialog.addEventListener('click',e=>{if(e.target===dialog)dialog.close();});
+  document.querySelectorAll('figure.diagram').forEach(figure=>{const button=document.createElement('button');button.type='button';button.className='zoom-button';button.textContent='Увеличить ↗';button.setAttribute('aria-label','Увеличить: '+figure.querySelector('svg').getAttribute('aria-label'));figure.append(button);button.addEventListener('click',()=>{const original=figure.querySelector('svg');$('#zoom-title').textContent=original.getAttribute('aria-label');$('.zoom-content').innerHTML=original.outerHTML.replace(/arr-(\d+)/g,'zoom-arr-$1');dialog.showModal();});});
+})();
