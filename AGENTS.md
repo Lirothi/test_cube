@@ -133,7 +133,13 @@ value, 1.05 stops down at -7, 0.6 more at -11 -- the camera follows 70 % of the 
 left every partial moon black); each dropped its 8.55 point for room (UDS Steady Night's lay on the line, UDS's 0.06 EV off it). A
 curve FLAT under ~0 follows the night's light in full: the owner's UDS Steady Night as it was (2026-11-01, 00:00, a
 last-quarter moon 10.8 degrees up, cam -9.00 7.65 89.30) exposed the night as a dim day, the moon in a great glow --
-camera 9.45, median 57, p95 186; with the night section 11.34 / 5 / 72. wind_test is that preset (the owner's pick). With
+camera 9.45, median 57, p95 186; with the night section 11.34 / 5 / 72. wind_test is that preset (the owner's pick), except
+its EV 4.55 point: -2 instead of -4.92 since 2026-11-03 (owner at the bathroom, 16:00, cam -22.89 1.49 87.92: "isn't it too
+dark?"). The room was not under-lit -- a grey probe at desk height read 316 lux against 46.7 klux in the open (a daylight
+factor of ~2 % of the sky alone, normal for one small window) -- the curve took it 3.43 EV under its meter (eye 7.03, camera
+10.46, median 8). Now -1.72 (camera 8.76, median 45). Everything metering EV -3.5 .. 10.55 moves: the bathroom at night
++1.4 stops (median 12 -> 43), the blue hour outdoors at 19:30 +1.9-2.1 (median 2 -> 13-16), the open night 21:00-24:00
+0.2-0.45 stop brighter (the steady camera's follow above the full moon's EV), the day outdoors unchanged. With
 the first night section (35 % / 79 %) on the moonrise view at 01:00 (2026-09-27 / 10-03 / 10-07): full 12.76 / median 9 /
 p95 35, quarter 11.38 / 4 / 60 (a 50 % follow gave 8 / 78, a flat curve 41 / 160), no moon 7.95 / 1 / 5 with the stars and
 the island's silhouette; the moonrise 19:54 / 20:06 / 20:15 / 20:24 median 52 / 21 / 20 / 21 (was 55 / 12 / 8 / 7). A

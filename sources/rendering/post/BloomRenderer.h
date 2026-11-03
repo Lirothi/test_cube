@@ -17,6 +17,7 @@
 // lets the shared flare build emit its markers without knowing which method called it.
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -82,7 +83,8 @@ public:
     // tonemap's list BEFORE Record() and the tone curve; nothing when neither sun effect is on or
     // the sun is not in view. `sceneSource` is the scene as rendered, BEFORE the upscaler when DLSS
     // runs (DLSS rings on the disc differently every frame); `jittered` = it was drawn with the
-    // camera's jitter, and the taps follow it.
+    // camera's jitter, and the taps follow it. Called every frame: a frame it does not run in breaks
+    // its track of the disc, and the next run starts the record over from nothing.
     void RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                         D3D12_CPU_DESCRIPTOR_HANDLE sceneSource, bool jittered);
     // Stage 11, the PIXEL PROBE (SceneRenderSettings::debugProbe*): a debug read-out of the HDR frame
@@ -120,6 +122,10 @@ private:
                D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const Points& pts);
     void Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                   D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const Points& pts);
+    // RecordSunProbe's dispatch: false when it did not run (the effects off, the sun out of view, no
+    // material). `restart` = it did not run last frame; `dt` = seconds since last frame's call.
+    bool DispatchSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                          D3D12_CPU_DESCRIPTOR_HANDLE sceneSource, bool jittered, bool restart, double dt);
     BloomConvConstants FlareConstants(Renderer* renderer) const;
     void FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                      D3D12_CPU_DESCRIPTOR_HANDLE hdrSource, const BloomConvConstants& conv,
@@ -156,7 +162,10 @@ private:
 
     SceneResourceBootstrapper* resources_ = nullptr;
     const SceneFrameData* frame_ = nullptr;
-    double probeLastSeconds_ = -1.0; // the sun probe's temporal blend: when it last ran
+    double probeAskedSeconds_ = -1.0; // the sun probe's temporal blend: when it was last asked, run or not
+    // Consecutive frames the sun probe has run; 0 = it did not run last frame, so it restarts. Atomic: the
+    // light shafts' seed (SunGlareSeedFor) reads it while the tonemap pass records on another worker.
+    std::atomic<std::uint32_t> probeRuns_{ 0u };
     bool localGridBuilt_ = false;    // SetLocalExposureGrid
 
     // ---- the decisions, taken once per frame in Decide() ----

@@ -38874,7 +38874,7 @@
       "convChroma": 0.10000000149011612,
       "convFalloff": 3.0,
       "convGhostBokeh": 2.0,
-      "convGhostIntensity": 0.003000000026077032,
+      "convGhostIntensity": 0.0020000000949949026,
       "convGhostSpacing": 0.44999998807907104,
       "convGhostThreshold": 8.0,
       "convGhosts": 8,
@@ -38922,7 +38922,7 @@
       "sunRaysSpikes": 0.10000000149011612,
       "sunRaysTexture": "",
       "sunRaysTextureSizeDeg": 12.899999618530273,
-      "sunRaysVisibleExponent": 0.0,
+      "sunRaysVisibleExponent": 0.5,
       "sunRaysWidthDeg": 0.5,
       "threshold": 4.0
     },
@@ -38946,7 +38946,7 @@
         ],
         [
           4.550000190734863,
-          -4.920000076293945
+          -2.0
         ],
         [
           10.550000190734863,
@@ -38978,8 +38978,8 @@
       "meterMaskStrength": 0.699999988079071,
       "minEv100": -12.0,
       "shutterSpeedSec": 0.00798999983817339,
-      "speedDown": 3.0,
-      "speedUp": 4.0
+      "speedDown": 4.0,
+      "speedUp": 5.0
     },
     "colorPipeline": {
       "agxPower": 1.350000023841858,
@@ -39035,11 +39035,7 @@
       "volumetric": true,
       "volumetricDistance": 60.0,
       "volumetricStartDistance": 0.0
-    },
-    "localDetailStrength": 1.100000023841858,
-    "localHighlightThreshold": 0.25,
-    "localShadowContrast": 0.75,
-    "localShadowThreshold": 0.25
+    }
   },
   "skyAtmosphere": {
     "aerialPerspective": true,
@@ -39904,8 +39900,8 @@
     "animate": false,
     "date": [
       2026,
-      11,
-      1
+      9,
+      27
     ],
     "dawn": 6.0,
     "dayLengthMin": 2.0,
@@ -40033,7 +40029,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 14.0,
+    "time": 16.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

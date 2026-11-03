@@ -1229,7 +1229,21 @@ SunRaysConstants BloomRenderer::SunRays() const
 void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                                    D3D12_CPU_DESCRIPTOR_HANDLE sceneSource, bool jittered)
 {
-    if (!frame_) { return; }
+    // A frame the probe does not run in -- the sun out of view, more than kSunOffFrameFadeDeg past the frame's
+    // edge, or the effects off -- leaves the record as it was, its temporal blend half done and its held disc
+    // from before. The next run starts it over (bloom_conv_cs.hlsl stage 10, "A RESTART").
+    const double now = GetTimeSeconds();
+    const double dt = probeAskedSeconds_ >= 0.0 ? std::clamp(now - probeAskedSeconds_, 0.0, 0.1) : 0.1;
+    probeAskedSeconds_ = now;
+    const std::uint32_t runs = probeRuns_.load(std::memory_order_relaxed);
+    const bool ran = DispatchSunProbe(renderer, cl, sceneSource, jittered, runs == 0u, dt);
+    probeRuns_.store(ran ? std::min(runs + 1u, 1u << 20) : 0u, std::memory_order_relaxed);
+}
+
+bool BloomRenderer::DispatchSunProbe(Renderer* renderer, ID3D12GraphicsCommandList* cl,
+                                     D3D12_CPU_DESCRIPTOR_HANDLE sceneSource, bool jittered, bool restart, double dt)
+{
+    if (!frame_) { return false; }
     const BloomSettings& settings = frame_->settings.bloom;
     Math::float3 v;
     float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
@@ -1237,11 +1251,11 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     if (!(settings.sunGlareIntensity > 0.0f || settings.sunRaysIntensity > 0.0f) || !metering.IsReady() ||
         !SunInView(v, sx, sy, discTan))
     {
-        return;
+        return false;
     }
     const auto& D = renderer->GetDeferredForFrame();
     auto convMaterial = resources_->GetBloomConvMaterial();
-    if (!convMaterial) { return; }
+    if (!convMaterial) { return false; }
     const UINT convCb = resources_->GetBloomConvCBSizeBytes();
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
     const D3D12_GPU_DESCRIPTOR_HANDLE samplerTable =
@@ -1260,11 +1274,8 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     BloomConvConstants g{};
     g.convStage = 10u;
     g.sourceSize = uint2{ 1u, 1u };
-    // w: the temporal blend of the probe's output (stage 10), 1 - exp(-dt / smoothing) on a delta capped
-    // like the light shafts' -- a frame the probe did not run in (sun out of view) restarts it softly.
-    const double now = GetTimeSeconds();
-    const double dt = probeLastSeconds_ >= 0.0 ? std::clamp(now - probeLastSeconds_, 0.0, 0.1) : 0.1;
-    probeLastSeconds_ = now;
+    // w: the temporal blend of the probe's output (stage 10), 1 - exp(-dt / smoothing) on the frame's delta,
+    // capped like the light shafts'. A restart blends in from nothing at the same rate.
     const float smoothing = std::max(settings.sunGlareSmoothingSec, 0.0f);
     const float blend = smoothing > 0.0f ? std::max(1.0f - std::exp(-static_cast<float>(dt) / smoothing), 1.0e-3f) : 1.0f;
     g.sunGlareDir = Math::float4(v.x, v.y, v.z, blend);
@@ -1273,16 +1284,17 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
     const Math::float3 upView = ToView(Math::float3(0.0f, 1.0f, 0.0f));
     g.sunGlareParams = Math::float4(kSunOffFrameFadeDeg * kDeg, upView.x, upView.y, upView.z);
     // historyParams.xy (stage 12's, free here): this frame's jitter in NDC, what Camera added to the
-    // projection's _31/_32 -- the scene was drawn with it, so the taps follow the disc.
+    // projection's _31/_32 -- the scene was drawn with it, so the taps follow the disc. z: 1 = restart.
+    const float restartFlag = restart ? 1.0f : 0.0f;
     if (jittered)
     {
         const Math::mat4& drawn = frame_->camera->GetProjMatrix();
         const Math::mat4& plain = frame_->camera->GetProjMatrixNoJitter();
-        g.historyParams = Math::float4(drawn.m._31 - plain.m._31, drawn.m._32 - plain.m._32, 0.0f, 0.0f);
+        g.historyParams = Math::float4(drawn.m._31 - plain.m._31, drawn.m._32 - plain.m._32, restartFlag, 0.0f);
     }
     else
     {
-        g.historyParams = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+        g.historyParams = Math::float4(0.0f, 0.0f, restartFlag, 0.0f);
     }
     // One group, one working thread; the UAV barrier makes its record visible to the glare and the
     // tone curve after it. u0/u1 are only there because the table is positional.
@@ -1292,6 +1304,7 @@ void BloomRenderer::RecordSunProbe(Renderer* renderer, ID3D12GraphicsCommandList
               renderer->Exposure().BilateralGridSrv(), renderer->Exposure().BaseLumSrv() },
         { D.streakAUAV, D.bloomUpMipUAV[0], metering.ExposureUav() },
         samplerTable, 1u, 1u, metering.ExposureResource());
+    return true;
 }
 
 // UE apply local exposure to the FFT's input (PostProcessFFTBloom.cpp:826-850): the tone curve's own
@@ -1392,6 +1405,9 @@ bool BloomRenderer::SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) 
     Math::float3 v;
     float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
     if (!SunInView(v, sx, sy, discTan)) { return false; }
+    // The read-back is a few frames old: right after the probe restarts it still holds what the probe left
+    // when it stopped -- the glare of a sun since hidden. Wait until it holds a frame of the new run.
+    if (probeRuns_.load(std::memory_order_relaxed) <= render::kFrameCount + 1u) { return false; }
     // Stage 9's glare in the SCENE's units: the bloom target is added by the tone curve as it is
     // (exposureMultiplier is 1 under pre-exposure).
     const float k = SunGlareScale(discTan);

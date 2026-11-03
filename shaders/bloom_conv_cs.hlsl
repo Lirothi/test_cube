@@ -649,12 +649,23 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         //   record +32  this frame's value (rgb) = colour x gate x off-frame fade; (a) visible share
         //   record +48  centroid of what shows: tangent-plane offset from the disc's centre (xy)
         if (any(pixel != 0u)) { return; }
-        float3 held = asfloat(ExposureValue.Load3(kSunProbeHeld));
-        float gate = asfloat(ExposureValue.Load(kSunProbeHeld + 12u));
-        float share = asfloat(ExposureValue.Load(kSunProbeOut + 12u));
-        float2 shownAt = asfloat(ExposureValue.Load2(kSunProbeCentroid));
+        // A RESTART (historyParams.z, BloomRenderer::RecordSunProbe): the probe did not run last frame -- the sun
+        // was more than kSunOffFrameFadeDeg past the frame's edge, or the effects were off -- so the record is
+        // what it left when it stopped: the temporal blend half done and the disc held as it was then. Read as
+        // it was, that came back as a corona over whatever now stood in front of the sun (owner, 2026-11-03: look
+        // at the sun, tilt away fast, step behind a wall, raise the camera to the sun -- the corona over the wall
+        // goes on fading out, the longer the more sunGlareSmoothingSec): back in the off-frame zone the stale
+        // held disc x the rising fade drew it, and once the disc showed behind the wall the gate's 0 was blended
+        // in from the stale output at the smoothing's pace. So a restart starts from nothing -- no held disc, no
+        // gate, no output; the share and the centroid take this frame's own reading -- and the off-frame hold
+        // only carries a disc the probe saw since; what it has not seen yet it does not show.
+        const bool restart = historyParams.z > 0.5f;
+        float3 held = restart ? 0.0f.xxx : asfloat(ExposureValue.Load3(kSunProbeHeld));
+        float gate = restart ? 0.0f : asfloat(ExposureValue.Load(kSunProbeHeld + 12u));
+        float share = restart ? 0.0f : asfloat(ExposureValue.Load(kSunProbeOut + 12u));
+        float2 shownAt = restart ? 0.0f.xx : asfloat(ExposureValue.Load2(kSunProbeCentroid));
         // Last frame's OUTPUT, for the temporal blend at the end.
-        const float3 prevOut = asfloat(ExposureValue.Load3(kSunProbeOut));
+        const float3 prevOut = restart ? 0.0f.xxx : asfloat(ExposureValue.Load3(kSunProbeOut));
         const float prevShare = share;
         const float2 prevShownAt = shownAt;
         float fade = 0.0f;
@@ -808,8 +819,11 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (blend < 1.0f && all(isfinite(prevOut)) && isfinite(prevShare) && all(isfinite(prevShownAt)))
         {
             outColour = lerp(max(prevOut, 0.0f.xxx), outColour, blend);
-            share = lerp(prevShare, share, blend);
-            shownAt = lerp(prevShownAt, shownAt, blend);
+            if (!restart)
+            {
+                share = lerp(prevShare, share, blend);
+                shownAt = lerp(prevShownAt, shownAt, blend);
+            }
         }
         ExposureValue.Store3(kSunProbeHeld, asuint(held));
         ExposureValue.Store(kSunProbeHeld + 12u, asuint(gate));
