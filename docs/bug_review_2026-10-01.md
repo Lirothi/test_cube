@@ -437,7 +437,7 @@ int main()
     {
         EditorSceneDocument document;
         document.Add(EditorSceneDocument::ObjectFromJson({1},
-            Json{{"type", "staticMesh"}, {"enabled", true}, {"mesh", "models/box/box.mesh.json"}}));
+            Json{ {"type", "staticMesh"}, {"enabled", true}, {"mesh", "models/box/box.mesh.json"}}));
         EditorContext ctx{*renderer, *scene, levels, document, selection};
         SetEnabledCommand command({1}, true);
         command.Execute(ctx);
@@ -449,7 +449,7 @@ int main()
     {
         EditorSceneDocument document;
         document.Add(EditorSceneDocument::ObjectFromJson({1},
-            Json{{"type", "staticMesh"}, {"mesh", "models/box/box.mesh.json"}}));
+            Json{ {"type", "staticMesh"}, {"mesh", "models/box/box.mesh.json"}}));
         EditorContext ctx{*renderer, *scene, levels, document, selection};
         const Json original = EditorSceneDocument::ObjectToJson(*document.Find({1}));
         const Json before = SceneObjectFactory::ResolveMeshAsset(original);
@@ -467,7 +467,7 @@ int main()
     {
         EditorSceneDocument document;
         document.Add(EditorSceneDocument::ObjectFromJson({1},
-            Json{{"type", "staticMesh"}, {"mesh", "models/tent/tent.mesh.json"}}));
+            Json{ {"type", "staticMesh"}, {"mesh", "models/tent/tent.mesh.json"}}));
         EditorContext ctx{*renderer, *scene, levels, document, selection};
         SetMaterialCommand command({1}, "bronze");
         command.Execute(ctx);
@@ -479,7 +479,7 @@ int main()
         confirmed += gb->SlotPreset(0) != "bronze";
     }
     {
-        const Json object{{"type", "staticMesh"}, {"mesh", "models/box/box.mesh.json"}, {"enabled", false}};
+        const Json object{ {"type", "staticMesh"}, {"mesh", "models/box/box.mesh.json"}, {"enabled", false}};
         auto runtime = SceneObjectFactory::CreateStaticMeshFromJson(object);
         std::printf("factory used by material/mesh respawn on disabled object: expected=false actual=%s\n",
             runtime->IsVisible() ? "true" : "false");
