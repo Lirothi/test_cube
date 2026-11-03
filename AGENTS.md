@@ -293,14 +293,23 @@ fixed-name artifacts use other prefixes and are never deleted. `python tools/che
 reports any new direct output (exit code = findings) — run it before committing. So does
 `python tools/check_render_knobs.py`: a game file (the command line, `--set`/MCP, settings, Developer Controls...) that
 touches a render knob's render copy instead of its `_game` twin (`core/threading/Knob.h`, docs/game_thread_plan.md G5).
-`frame.renderThread` 1 (Developer Controls > Frame "Render thread", `--set`, default 0) runs `Scene::Render` on its
-own thread, named `Render` in the log (plan G8): the game thread runs the next frame's game half meanwhile -- the UI,
-the editor, MCP, `Scene::Tick`. Game-half code that reaches what the frame in flight uses calls
-`threading::WaitRenderForGame("<site>")` first (or hands over at Sync, as ImGui's textures do); the line `render thread:
-the game half waited for its frame N times` names the sites every 5 s. `frame.oneFrameThreadLag` (default 1, UE's
-`r.OneFrameThreadLag`; 0 = the game half waits for each frame right after handing it over: no overlap, no frame of lag).
-A gate that touches the frame's order runs in both modes. A `--trace` lists its rows as GPU Graphics, GPU Compute,
-MainThread, RenderThread, then the workers (`thread_sort_index`).
+`frame.renderThread` 1 (Developer Controls > Frame "Render thread", `--set`; the DEFAULT since 2026-11-03, the owner's
+call after the G9 gates; 0 = one thread) runs `Scene::Render` on its own thread, named `Render` in the log (plan G8):
+the game thread runs the next frame's game half meanwhile -- the UI, the editor, MCP, `Scene::Tick`. Game-half code that
+reaches what the frame in flight uses calls `threading::WaitRenderForGame("<site>")` first (or hands over at Sync, as
+ImGui's textures do); the line `render thread: the game half waited for its frame N times` names the sites every 5 s.
+`frame.oneFrameThreadLag` (default 1, UE's `r.OneFrameThreadLag`; 0 = the game half waits for each frame right after
+handing it over: no overlap, no frame of lag); the line `frame: input to present N frames` measures it (0 / 1 / 0 for
+one thread / the default / lag 0). A gate that touches the frame's order runs in both modes (`--set=frame.renderThread:0`
+for one thread). **`--rt-audit[=<s>]`** (600 by default; `--rt-audit-selftest` must FAIL naming `object #0 model
+matrix`): random 0-2 ms pauses where the halves meet, and the render thread hashes everything the hand-over froze for it
+(objects' matrices, positions, switches, the lights' render descs) at its frame's start and end -- `rt audit: PASS|FAIL
+<field> xN` in the session log, the exit code the fields that moved (`app/diagnostics/RtAudit.h`). Run it after any
+change to what the game half touches -- for coverage over time: `--scene-stress=150 --rt-audit` rides the level churn
+(verdict at the harness's end), and an editor run with `--rt-audit=<s>` rides an MCP script; 600 s on one static view
+adds rare timing windows, not code paths. A `--trace` lists its rows as GPU Graphics, GPU Compute, MainThread,
+RenderThread, then the workers (`thread_sort_index`). MCP `open_level {path, discardChanges}` switches the level (refused
+over unsaved edits unless told to discard them).
 
 **Diagnostics are events, not files.** Anything a subsystem wants to say -- a pre-assert dump, a
 validator's mismatch list, a self-test's per-case lines and verdict, a cross-check that fired --

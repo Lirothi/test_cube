@@ -110,6 +110,9 @@ namespace editormcp
     public:
         virtual ~LevelHost() = default;
         virtual bool Save(std::string& outText) = 0; // false + the reason (no file yet, write failed)
+        // open_level: File > Open's road; the load runs at the next frame. False + the reason (no such file, unsaved
+        // edits without discardChanges).
+        virtual bool Open(const std::string& path, bool discardChanges, std::string& outText) = 0;
     };
     void SetLevelHost(LevelHost* host);
 

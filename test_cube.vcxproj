@@ -250,6 +250,7 @@
     </ClCompile>
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/diagnostics/SceneStress.cpp" />
+    <ClCompile Include="sources/app/diagnostics/RtAudit.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/editor/EditorController.cpp" />
     <ClCompile Include="sources/editor/EditorExtensionRegistry.cpp" />
@@ -475,6 +476,7 @@
     <ClInclude Include="sources/assets/AssetImporter.h" />
     <ClInclude Include="sources/assets/AssetInvalidation.h" />
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />
+    <ClInclude Include="sources/app/diagnostics/RtAudit.h" />
     <ClInclude Include="sources/app/diagnostics/CullBenchmark.h" />
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />

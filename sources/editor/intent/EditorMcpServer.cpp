@@ -668,6 +668,20 @@ namespace editormcp
                 { "inputSchema", ObjectSchema() },
             },
             {
+                { "name", "open_level" },
+                { "description",
+                  "Open another level file, as File > Open does: the load runs at the next frame -- poll "
+                  "get_camera or editor_guide until they answer from the new level. Refused while the open "
+                  "level has unsaved edits unless discardChanges is true (those edits are the person's: ask "
+                  "first). For a check across levels; take the person back to their level when done." },
+                { "inputSchema", ObjectSchema({
+                    { "path", { { "type", "string" },
+                        { "description", "the level file, e.g. data/levels/demo.json" } } },
+                    { "discardChanges", { { "type", "boolean" },
+                        { "description", "open even with unsaved edits, which are lost (default false)" } } } },
+                    json::array({ "path" })) },
+            },
+            {
                 { "name", "import_status" },
                 { "description",
                   "Whether an import is running, its texture progress, the Import window's "
@@ -990,6 +1004,31 @@ namespace editormcp
             ToolResult result;
             result.text = text;
             result.isError = !saved;
+            return result;
+        }
+
+        if (name == "open_level")
+        {
+            if (!g_levelHost)
+            {
+                return Error("There is no level editor here to open a level with.");
+            }
+            const std::string path = arguments.value("path", std::string());
+            if (path.empty())
+            {
+                return Error("open_level needs a path (e.g. data/levels/demo.json).");
+            }
+            const bool discard = arguments.contains("discardChanges") && arguments["discardChanges"].is_boolean() &&
+                                 arguments["discardChanges"].get<bool>();
+            std::string text;
+            const bool opening = g_levelHost->Open(path, discard, text);
+            outRecord.title = "open_level " + path;
+            outRecord.verdict = text;
+            outRecord.failed = !opening;
+            outRecord.show = true;
+            ToolResult result;
+            result.text = text;
+            result.isError = !opening;
             return result;
         }
 

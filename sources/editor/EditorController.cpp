@@ -2736,6 +2736,36 @@ bool EditorController::McpLevelHost::Save(std::string& outText)
     return true;
 }
 
+bool EditorController::McpLevelHost::Open(const std::string& path, bool discardChanges, std::string& outText)
+{
+    if (!levelManager)
+    {
+        outText = "the editor has not drawn a frame yet; try again";
+        return false;
+    }
+    const std::string normalized = NormalizeLevelPath(path);
+    if (normalized.empty() || !LevelFileExists(normalized))
+    {
+        outText = "no level file at " + path;
+        return false;
+    }
+    if (owner_.document_.IsDirty() && !discardChanges)
+    {
+        outText = "the open level (" + owner_.document_.LevelPath() + ") has unsaved edits -- the person's: save_level "
+                  "if they asked, or open_level with discardChanges: true if they agreed to lose them";
+        return false;
+    }
+    if (!owner_.RequestOpenLevelPath(*levelManager, normalized, /*preserveCameraTransform=*/false,
+                                     /*bypassUnsavedChangesConfirmation=*/true))
+    {
+        outText = owner_.levelStatus_.empty() ? "opening " + normalized + " failed" : owner_.levelStatus_;
+        return false;
+    }
+    LOG_INFO(logging::LogCategory::Editor, "MCP: opening {}", normalized);
+    outText = "Opening " + normalized + " -- the load runs at the next frame; get_camera answers from it once it is in.";
+    return true;
+}
+
 void EditorController::UpdateThumbnailEnvironment(Scene& scene)
 {
     const Skybox* skybox = scene.GetSkybox();
@@ -3101,6 +3131,7 @@ void EditorController::Draw(
             EditorContext closedCtx{ renderer, scene, levelManager, document_, selection_ };
             const EditorActionContext closedActionCtx{ closedCtx, assetRegistry_, extensions_ };
             editormcp::SetImportHost(&mcpImportHost_);
+            mcpLevelHost_.levelManager = &levelManager;
             editormcp::SetLevelHost(&mcpLevelHost_);
             editormcp::SetThumbnailHost(&mcpThumbnailHost_);
             mcpImportHost_.Tick();
@@ -4361,6 +4392,7 @@ void EditorController::Draw(
     // Claude Code's calls (MCP), every frame. Here rather than in the command bar's Draw so a
     // closed panel cannot leave a caller waiting out its timeout for a frame that never comes.
     editormcp::SetImportHost(&mcpImportHost_);
+    mcpLevelHost_.levelManager = &levelManager;
     editormcp::SetLevelHost(&mcpLevelHost_);
     editormcp::SetThumbnailHost(&mcpThumbnailHost_);
     mcpImportHost_.Tick();

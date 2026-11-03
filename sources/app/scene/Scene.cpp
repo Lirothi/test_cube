@@ -2074,6 +2074,95 @@ AABB Scene::ComputeStaticBounds() const
     return any ? AABB(mn, mx) : AABB::Empty();
 }
 
+namespace
+{
+std::uint64_t FrozenHashBytes(const void* data, std::size_t size, std::uint64_t h = 1469598103934665603ull)
+{
+    const auto* p = static_cast<const unsigned char*>(data);
+    for (std::size_t i = 0; i < size; ++i)
+    {
+        h = (h ^ p[i]) * 1099511628211ull; // FNV-1a
+    }
+    return h;
+}
+} // namespace
+
+void Scene::HashFrozenState(FrozenStateHash& out) const
+{
+    out.hashes.clear();
+    out.objects = objects_.size();
+    out.pointLights = lightManager_.PointLights().size();
+    out.spotLights = lightManager_.SpotLights().size();
+    out.hashes.reserve(out.objects * kFrozenObjectFields + out.pointLights + out.spotLights);
+    for (const auto& obj : objects_)
+    {
+        const RenderableObject* r = obj ? obj->AsRenderableObject() : nullptr;
+        out.hashes.push_back(r ? FrozenHashBytes(&r->GetModelMatrix(), sizeof(Math::mat4)) : 0u);
+        out.hashes.push_back(r ? FrozenHashBytes(&r->GetPreviousModelMatrix(), sizeof(Math::mat4)) : 0u);
+        out.hashes.push_back(r ? FrozenHashBytes(&r->GetRenderPosition(), sizeof(Math::float3)) : 0u);
+        out.hashes.push_back(obj && obj->IsVisible() ? 1u : 0u);
+        out.hashes.push_back(obj && obj->CastsShadow() ? 1u : 0u);
+    }
+    for (const PointLight& light : lightManager_.PointLights())
+    {
+        const PointLightDesc& d = light.GetRenderDesc();
+        std::uint64_t h = FrozenHashBytes(&d.position, sizeof(d.position));
+        h = FrozenHashBytes(&d.radius, sizeof(d.radius), h);
+        h = FrozenHashBytes(&d.color, sizeof(d.color), h);
+        out.hashes.push_back(FrozenHashBytes(&d.luminousFluxLm, sizeof(d.luminousFluxLm), h));
+    }
+    for (const SpotLight& light : lightManager_.SpotLights())
+    {
+        const SpotLightDesc& d = light.GetRenderDesc();
+        const float flux = light.EffectiveFluxLm();
+        std::uint64_t h = FrozenHashBytes(&d.position, sizeof(d.position));
+        h = FrozenHashBytes(&d.range, sizeof(d.range), h);
+        h = FrozenHashBytes(&d.color, sizeof(d.color), h);
+        out.hashes.push_back(FrozenHashBytes(&flux, sizeof(flux), h));
+    }
+}
+
+std::string Scene::FrozenFieldName(const FrozenStateHash& layout, std::size_t index) const
+{
+    static const char* const kObjectFields[kFrozenObjectFields] = {
+        "model matrix", "previous model matrix", "render position", "visibility", "cast shadow" };
+    const std::size_t objectHashes = layout.objects * kFrozenObjectFields;
+    if (index < objectHashes)
+    {
+        const std::size_t object = index / kFrozenObjectFields;
+        std::string name = "object #" + std::to_string(object);
+#if WITH_EDITOR
+        if (object < objectIds_.size() && objectIds_[object] != 0u)
+        {
+            name += " (editor id " + std::to_string(objectIds_[object]) + ")";
+        }
+#endif
+        return name + " " + kObjectFields[index % kFrozenObjectFields];
+    }
+    index -= objectHashes;
+    if (index < layout.pointLights)
+    {
+        return "point light #" + std::to_string(index) + " render desc";
+    }
+    return "spot light #" + std::to_string(index - layout.pointLights) + " render desc";
+}
+
+bool Scene::ScribbleFrozenStateForAudit()
+{
+    for (const auto& obj : objects_)
+    {
+        RenderableObject* r = obj ? obj->AsRenderableObject() : nullptr;
+        if (r)
+        {
+            Math::mat4 m = r->GetModelMatrix();
+            m.m._42 += 0.001f; // a millimetre up (row-vector translation): a game-half write into the frozen copy
+            r->SetModelMatrix(m);
+            return true;
+        }
+    }
+    return false;
+}
+
 // Game thread plan G1: the frame's values that come from GAME state -- the level's settings, the time of day's
 // tints and night camera, the sun's transmittance, the selection -- copied into frameData_ at the hand-over, where
 // nothing else runs (docs/game_thread_plan.md section 3.3). PrepareViews publishes the render side's own pointers.

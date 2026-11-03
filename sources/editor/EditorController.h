@@ -241,6 +241,8 @@ private:
         explicit McpLevelHost(EditorController& owner) : owner_(owner) {}
         ~McpLevelHost() override { editormcp::SetLevelHost(nullptr); }
         bool Save(std::string& outText) override;
+        bool Open(const std::string& path, bool discardChanges, std::string& outText) override;
+        LevelManager* levelManager = nullptr; // Draw's, set every frame before the host is registered
 
     private:
         EditorController& owner_;

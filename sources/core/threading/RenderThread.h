@@ -20,8 +20,9 @@
 namespace threading
 {
 // The switch the game loop reads at the start of each frame (Developer Controls > Frame "Render thread",
-// graphics_settings.json frame.renderThread, --render-thread, --set frame.renderThread). Game half only.
-inline bool g_renderThreadEnabled = false;
+// graphics_settings.json frame.renderThread, --set frame.renderThread). Game half only. On by default since 2026-11-03
+// (the owner's Q1, after the G9 gates); 0 = the frame on one thread, as before.
+inline bool g_renderThreadEnabled = true;
 // UE's r.OneFrameThreadLag (RenderingThread.cpp:2435-2439, 2497-2510): true (the default, UE's 1) lets the game half run
 // one frame ahead of the render thread; false (UE's 0) waits for the frame right after handing it over -- no overlap, no
 // frame of lag. Developer Controls > Frame "One frame thread lag", graphics_settings.json frame.oneFrameThreadLag,

@@ -1049,8 +1049,9 @@ namespace
             // Live metering state and the histogram, the same readouts the developer window shows.
             // They belong here too: the percentile and mask sliders above are unreadable without
             // seeing the distribution they are clipping.
-            const ExposureMetering& metering = ctx.renderer.Exposure();
-            const ExposureMetering::Readback readback = metering.LatestReadback();
+            // Game thread plan G8b: the hand-over's copy -- read with no wait for the render thread's frame.
+            const Renderer::ExposureView& metering = ctx.renderer.ExposureForGame();
+            const ExposureMetering::Readback& readback = metering.readback;
             ImGui::SeparatorText("Live");
             if (readback.valid)
             {
@@ -1083,8 +1084,10 @@ namespace
             {
                 static float bins[ExposureMetering::kHistogramBins] = {};
                 UINT total = 0;
-                if (metering.LatestHistogram(bins, ExposureMetering::kHistogramBins, &total) && total > 0)
+                if (metering.histogramValid && metering.histogramTotal > 0)
                 {
+                    std::copy(metering.histogram.begin(), metering.histogram.end(), bins);
+                    total = metering.histogramTotal;
                     constexpr int kBinCount = static_cast<int>(ExposureMetering::kHistogramBins);
                     const ImVec2 size(ImGui::GetContentRegionAvail().x, 70.0f);
                     const ImVec2 origin = ImGui::GetCursorScreenPos();

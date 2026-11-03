@@ -35,7 +35,7 @@ namespace
         bool vsync = false; // UE r.VSync default
         int maxFps = 0;     // UE t.MaxFPS default: uncapped
         float mouseSmoothingMs = 0.0f; // g_cameraMouseSmoothingMs: 0 = the look input applied at once
-        bool renderThread = false;     // threading::g_renderThreadEnabled (game thread plan G8): one thread by default
+        bool renderThread = true;      // threading::g_renderThreadEnabled (game thread plan G8/G9): on by default
         bool oneFrameThreadLag = true; // threading::g_oneFrameThreadLag: UE's r.OneFrameThreadLag 1
         bool visibilityChunkMask = true;
         int occlusionMethod = static_cast<int>(vis::OcclusionMethod::Queries);

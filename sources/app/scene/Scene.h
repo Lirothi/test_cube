@@ -200,6 +200,23 @@ public:
     void Sync(Renderer* renderer);
     void Render(Renderer* renderer);
 
+    // Plan G9, --rt-audit (app/diagnostics/RtAudit.h): what the hand-over froze for the render half, hashed -- per object
+    // its model matrix, last frame's, position, visibility and shadow switch (kFrozenObjectFields), then one hash a
+    // point light and a spot light (their render descs). Render half (or the hand-over).
+    static constexpr std::size_t kFrozenObjectFields = 5;
+    struct FrozenStateHash
+    {
+        std::vector<std::uint64_t> hashes;
+        std::size_t objects = 0;
+        std::size_t pointLights = 0;
+        std::size_t spotLights = 0;
+    };
+    void HashFrozenState(FrozenStateHash& out) const;
+    std::string FrozenFieldName(const FrozenStateHash& layout, std::size_t index) const;
+    // --rt-audit-selftest: writes one object's model matrix from the game half while the render thread draws -- what
+    // the audit must report. False when the scene has no object to write.
+    bool ScribbleFrozenStateForAudit();
+
     void Clear();
 
     void SetDirectionalLight(DirectionalLight light);

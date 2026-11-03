@@ -390,6 +390,9 @@
     <ClCompile Include="sources/app/diagnostics/SceneStress.cpp">
       <Filter>sources\app\diagnostics</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/diagnostics/RtAudit.cpp">
+      <Filter>sources\app\diagnostics</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/camera/Camera.cpp">
       <Filter>sources\app\camera</Filter>
     </ClCompile>
@@ -1029,6 +1032,9 @@
       <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/diagnostics/SceneStress.h">
+      <Filter>sources\app\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/diagnostics/RtAudit.h">
       <Filter>sources\app\diagnostics</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/diagnostics/CullBenchmark.h">

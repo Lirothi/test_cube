@@ -34,6 +34,7 @@
 #include "core/threading/ThreadRole.h" // game thread plan G1: the frame's phases, as App::Run gives them
 #include "core/threading/Knob.h"
 #include "core/threading/RenderThread.h" // G8: frame.renderThread 1 in the stress too
+#include "app/diagnostics/RtAudit.h"     // G9: --rt-audit over the level churn
 #include "rendering/core/MemGates.h"
 #include "core/logging/Log.h"
 
@@ -352,6 +353,8 @@ public:
                 return FinishFault_(iterations_, "roughness-coverage", "RT stopped building; possible SSR fallback");
             }
         }
+        // Game thread plan G9: an --rt-audit riding the churn gives its verdict here (the exit code carries it).
+        rtaudit::Finished(0.0, /*now=*/true);
         // Game thread plan G1: the phase checks (Debug) are part of the verdict -- a role violation is an
         // ownership bug that a render thread would turn into a race.
         threading::LogRoleCheckSummary();
@@ -919,7 +922,7 @@ private:
     bool RenderFrames_(int count, const char* label, bool resizeDuringFrame = false)
     {
         UINT expectedResizeWidth = 0;
-        const bool threaded = threading::g_renderThreadEnabled;
+        const bool threaded = threading::g_renderThreadEnabled || rtaudit::Enabled(); // --rt-audit rides the churn
         std::chrono::steady_clock::time_point inFlightBegin{};
         // A frame's end, after its Present: at once on one thread, after the wait for it with a render thread.
         const auto finishFrame = [&](std::chrono::steady_clock::time_point frameBegin)
@@ -965,6 +968,7 @@ private:
             if (threaded)
             {
                 // The game half's frame up to the wait, while the render thread draws the previous one.
+                rtaudit::Jitter(); // --rt-audit (G9): a different overlap every frame; nothing otherwise
                 MSG msg = {};
                 while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
                 {
@@ -973,6 +977,8 @@ private:
                 }
                 scene_.Tick(1.0f / 60.0f);
                 levelManager_.Tick(1.0f / 60.0f);
+                rtaudit::GameHalf(scene_);
+                rtaudit::Jitter();
                 if (!waitRenderThread())
                 {
                     return false;
@@ -1055,7 +1061,14 @@ private:
                 if (threaded)
                 {
                     inFlightBegin = frameBegin;
-                    renderThread_.Kick([this]() { scene_.Render(&renderer_); });
+                    renderThread_.Kick([this]()
+                    {
+                        rtaudit::BeginRenderFrame(scene_);
+                        rtaudit::Jitter();
+                        scene_.Render(&renderer_);
+                        rtaudit::Jitter();
+                        rtaudit::EndRenderFrame(scene_);
+                    });
                     if (!threading::g_oneFrameThreadLag && !waitRenderThread())
                     {
                         return false; // UE's r.OneFrameThreadLag 0: drawn before the next frame's game half
@@ -1512,6 +1525,10 @@ int App::RunSceneStress(HINSTANCE hInstance, int nCmdShow, int iterations, bool 
             driver.SetOnLevelLoaded([this]() { ApplyFixedSettings(systems_->scene); });
             threading::RoleScope gameRole(threading::ThreadRole::Game);
             exitCode = driver.Run();
+            if (exitCode == 0)
+            {
+                exitCode = rtaudit::ExitCode(); // G9: an --rt-audit riding the churn (its verdict is in the session log)
+            }
             faultCaught = driver.FaultCaught();
         }
         catch (const std::exception& e)

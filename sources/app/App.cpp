@@ -105,6 +105,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "core/threading/ThreadRole.h" // game thread plan: the frame's phases and their roles
 #include "core/threading/Knob.h"      // G5: the knobs' exchange at boot
 #include "core/threading/RenderThread.h" // G8: Scene::Render on a thread of its own (frame.renderThread)
+#include "app/diagnostics/RtAudit.h"     // G9: --rt-audit
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include <fstream>
@@ -2822,8 +2823,37 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         // wait for it -- across the loop's turn, so it is held here and closed where that wait returns, before afterFrame
         // ends the profiler's frame.
         std::optional<Profiler::ScopedCpu> wholeCycle;
+        // G9: frames between reading the input and presenting the frame built from it -- 0 on one thread, 1 with the
+        // render thread a frame behind (UE r.OneFrameThreadLag 1), 0 again at frame.oneFrameThreadLag 0 (plan section
+        // 5). The game thread counts the input it reads; the hand-over stamps the frame with that count; the frame,
+        // presented, compares it with the count now.
+        std::atomic<std::uint64_t> inputFrames{0};
+        std::uint64_t handedInputFrame = 0; // the game thread's at the hand-over; read by the frame it handed over
+        std::atomic<std::uint64_t> lagSum{0};
+        std::atomic<std::uint64_t> lagFrames{0};
+        std::atomic<std::uint64_t> lagMax{0};
+        const auto notePresented = [&]()
+        {
+            const std::uint64_t lag = inputFrames.load(std::memory_order_acquire) - handedInputFrame;
+            lagSum.fetch_add(lag, std::memory_order_relaxed);
+            lagFrames.fetch_add(1, std::memory_order_relaxed);
+            std::uint64_t seen = lagMax.load(std::memory_order_relaxed);
+            while (lag > seen && !lagMax.compare_exchange_weak(seen, lag, std::memory_order_relaxed)) {}
+        };
+        const auto logInputLag = [&](const char* when)
+        {
+            const std::uint64_t frames = lagFrames.exchange(0, std::memory_order_relaxed);
+            const std::uint64_t sum = lagSum.exchange(0, std::memory_order_relaxed);
+            const std::uint64_t worst = lagMax.exchange(0, std::memory_order_relaxed);
+            if (frames > 0)
+            {
+                LOG_INFO(logging::LogCategory::Core, "frame: input to present {:.2f} frames (max {}) over {} frames{}",
+                         static_cast<double>(sum) / static_cast<double>(frames), worst, frames, when);
+            }
+        };
         while (isRunning_) {
-            const bool threaded = threading::g_renderThreadEnabled; // switched only here, between frames
+            // Switched only here, between frames. --rt-audit (G9) runs with the render thread whatever the settings say.
+            const bool threaded = threading::g_renderThreadEnabled || rtaudit::Enabled();
             if (threaded)
             {
                 // G8b: the next frame's game half while the render thread draws this one -- the messages, the clock,
@@ -2831,7 +2861,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // frame first (threading::WaitRenderForGame; a park, Renderer::WaitForPreviousFrame) or goes through
                 // the hand-over (ImGui's textures, GPU work, the knobs' twins, the scene's render copies).
                 CPU_SCOPE(ProfilerScopes::kGameSimulate);
+                rtaudit::Jitter(); // --rt-audit: a different overlap every frame (nothing otherwise)
                 input.NewFrame();
+                inputFrames.fetch_add(1, std::memory_order_release); // G9: this frame's input is being read
                 if (!pumpMessages()) {
                     break;
                 }
@@ -2839,7 +2871,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 beginUi();
                 tickUi();
                 tickScene();
+                rtaudit::GameHalf(scene); // --rt-audit-selftest's write into a frozen copy
                 loadPendingLevel();
+                rtaudit::Jitter();
                 closeUi();
             }
             if (renderFramePending)
@@ -2851,6 +2885,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 wholeCycle.reset(); // the frame is drawn
                 renderFramePending = false;
                 afterFrame();
+                if (rtaudit::Finished(GetTimeSeconds())) {
+                    isRunning_ = false; // the audit's verdict is in; main returns its exit code
+                }
                 if (!isRunning_) {
                     break;
                 }
@@ -2858,6 +2895,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 if (frameStart - gameWaitLogStart >= 5.0)
                 {
                     threading::LogGameWaits(frameStart - gameWaitLogStart); // what took the overlap away, by site
+                    logInputLag("");
                     gameWaitLogStart = frameStart;
                 }
             }
@@ -2869,11 +2907,13 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 CPU_SCOPE(ProfilerScopes::kGameHandOver);
                 renderUpkeep();
                 handOver();
+                handedInputFrame = inputFrames.load(std::memory_order_relaxed); // G9: the input this frame is built from
             }
             else
             {
                 CPU_SCOPE(ProfilerScopes::kWholeCycle);
                 input.NewFrame();
+                inputFrames.fetch_add(1, std::memory_order_release); // G9: this frame's input is being read
                 if (!pumpMessages()) {
                     break;
                 }
@@ -2885,15 +2925,22 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 loadPendingLevel();
                 closeUi();
                 handOver();
+                handedInputFrame = inputFrames.load(std::memory_order_relaxed); // G9: the input this frame is built from
                 threading::RoleScope renderRole(threading::ThreadRole::Render);
                 renderScene();
+                notePresented();
             }
             if (threaded)
             {
-                renderThread.Kick([&renderScene]()
+                renderThread.Kick([&renderScene, &scene, &notePresented]()
                 {
                     CPU_SCOPE(ProfilerScopes::kRenderThreadFrame);
+                    rtaudit::BeginRenderFrame(scene); // --rt-audit: what the hand-over froze, hashed (nothing otherwise)
+                    rtaudit::Jitter();
                     renderScene();
+                    notePresented();
+                    rtaudit::Jitter();
+                    rtaudit::EndRenderFrame(scene);   // ... and compared: a hash that moved is a game-half write
                 });
                 renderFramePending = true;
                 if (!threading::g_oneFrameThreadLag)
@@ -2912,6 +2959,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         }
         wholeCycle.reset();
         renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
+        logInputLag(" (the rest of the run)");
 
         timeEndPeriod(1);
         threading::SetCurrentRole(threading::ThreadRole::Sync); // teardown: nothing else runs

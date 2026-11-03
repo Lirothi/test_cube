@@ -11,6 +11,7 @@
 #include "editor/assets/MaterialFileGen.h" // --seam-ratio (empty outside WITH_EDITOR)
 #include "app/diagnostics/CullBenchmark.h"
 #include "app/diagnostics/SceneStress.h"
+#include "app/diagnostics/RtAudit.h" // game thread plan G9: --rt-audit
 #include "app/scene/SceneRenderQueue.h"
 #include "core/logging/Log.h"
 #include "core/logging/diagnostics/LogStress.h"
@@ -458,6 +459,13 @@ int WINAPI WinMain(
     // is about (App::ApplyFixedSettings runs after its bootstrap).
     ParseFixedSettingsArg(lpCmdLine);
     ParseTimeOfDayArgs(lpCmdLine);
+    // "--rt-audit[=<seconds>]" and "--rt-audit-selftest": the render thread's audit (app/diagnostics/RtAudit.h). Above
+    // the scene-stress branch: the audit rides the harness's level churn too (its verdict at the harness's end).
+    if (lpCmdLine && std::strstr(lpCmdLine, "--rt-audit")) {
+        const char* timed = std::strstr(lpCmdLine, "--rt-audit=");
+        const double seconds = timed ? std::atof(timed + std::strlen("--rt-audit=")) : 600.0;
+        rtaudit::Configure(seconds, std::strstr(lpCmdLine, "--rt-audit-selftest") != nullptr);
+    }
     // "--memtrace[=all|cpu|gpu][,stacks=big|all|off|1/N][,start=<frame>]": every allocation and
     // free into traces/memtrace_*.mtrace (memory profiling plan M4, core/memory/MemTrace.h);
     // tools/memtrace.py reads it. Starts here unless start= delays it -- above the scene-stress
@@ -1466,5 +1474,7 @@ int WINAPI WinMain(
     App app;
     app.Run(hInstance, nShowCmd);
     memtrace::Stop(); // App::Run stops it after the main loop; this catches a run that ended another way
-    return memgate::ExitCode(); // a --mem-readout's failing series; 0 otherwise
+    // A --mem-readout's failing series, else an --rt-audit's moved fields; 0 otherwise.
+    const int memExit = memgate::ExitCode();
+    return memExit != 0 ? memExit : rtaudit::ExitCode();
 }

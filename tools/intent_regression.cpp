@@ -987,6 +987,22 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     Check(listsSave, "the tool list offers save_level");
     const std::optional<json> noLevel = call(10, "tools/call", { { "name", "save_level" } });
     Check((*noLevel)["result"]["isError"].get<bool>(), "save_level without a level host is refused: " + text(noLevel));
+    // open_level (game thread plan G9: a level switch under MCP): listed, needs a path, and with no level host is
+    // refused the same way.
+    bool listsOpen = false;
+    bool openNeedsPath = false;
+    for (const json& tool : (*list)["result"]["tools"])
+    {
+        if (tool.value("name", "") != "open_level") { continue; }
+        listsOpen = true;
+        openNeedsPath = tool["inputSchema"].contains("required") &&
+                        tool["inputSchema"]["required"] == json::array({ "path" });
+    }
+    Check(listsOpen, "the tool list offers open_level");
+    Check(openNeedsPath, "and open_level requires a path");
+    const std::optional<json> noOpen = call(1300, "tools/call", { { "name", "open_level" },
+        { "arguments", { { "path", "data/levels/demo.json" } } } });
+    Check((*noOpen)["result"]["isError"].get<bool>(), "open_level without a level host is refused: " + text(noOpen));
 
     // thumbnails: listed; refused without the editor's thumbnail host and without assets; with one, the asset
     // list reaches it as given and its answer comes back verbatim.

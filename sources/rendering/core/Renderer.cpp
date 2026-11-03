@@ -1152,6 +1152,10 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
 void Renderer::HandOverImGui()
 {
     TC_CHECK_RENDER("Renderer::HandOverImGui");
+    exposureView_.ready = exposureMetering_.IsReady();
+    exposureView_.readback = exposureMetering_.LatestReadback();
+    exposureView_.histogramValid = exposureMetering_.LatestHistogram(
+        exposureView_.histogram.data(), ExposureMetering::kHistogramBins, &exposureView_.histogramTotal);
     for (ID3D12Resource* resource : gameReadableMarks_)
     {
         SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);

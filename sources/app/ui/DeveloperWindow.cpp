@@ -700,11 +700,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     threading::g_renderThreadEnabled = renderThread; // taken at the next frame's start
                 }
-                DevHelp("Game thread plan G8 (docs/game_thread_plan.md). On: Scene::Render -- views, recording, "
-                        "submit, Present -- runs on a thread of its own, while this thread simulates the next frame "
-                        "(messages, the clock, Scene::Tick) and waits for it before the UI and the hand-over; never "
-                        "more than one frame ahead. Off: one thread, the frame as before. The picture is the same "
-                        "either way.");
+                DevHelp("Game thread plan G8 (docs/game_thread_plan.md). On (the default): Scene::Render -- views, "
+                        "recording, submit, Present -- runs on a thread of its own, while this thread runs the next "
+                        "frame's game half (messages, the UI and the editor, MCP, Scene::Tick) and then waits for it "
+                        "before the hand-over. Off: one thread, the frame as before. The picture is the same either "
+                        "way.");
                 ImGui::BeginDisabled(!threading::g_renderThreadEnabled);
                 bool oneFrameLag = threading::g_oneFrameThreadLag;
                 if (GRAPHICS_CONTROL(OneFrameThreadLag, "oneFrameThreadLag",

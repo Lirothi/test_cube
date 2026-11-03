@@ -1796,11 +1796,11 @@ bool MeshEditorPanel::BuildPreviewLighting(EditorContext& ctx,
     // else a literal 1) and its colour pipeline. The EV is rounded to 1/64 stop so an exposure
     // that is still settling does not re-render the preview every frame for an invisible change.
     const render::CameraExposureSettings& camera = scene.GetCameraExposure();
-    const ExposureMetering& metering = ctx.renderer.Exposure();
+    const Renderer::ExposureView& metering = ctx.renderer.ExposureForGame(); // G8b: the hand-over's copy, no wait
     out.exposure = 1.0f;
-    if (camera.enabled && metering.IsReady())
+    if (camera.enabled && metering.ready)
     {
-        const float ev = std::round(metering.LatestReadback().adaptedEv100 * 64.0f) / 64.0f;
+        const float ev = std::round(metering.readback.adaptedEv100 * 64.0f) / 64.0f;
         const float multiplier = render::ExposureMultiplierFromEv100(ev);
         if (std::isfinite(ev) && std::isfinite(multiplier) && multiplier > 0.0f)
         {

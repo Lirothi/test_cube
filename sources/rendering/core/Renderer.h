@@ -297,7 +297,8 @@ public:
     void EndImGuiFrame(); // game thread plan G1: the game half closes the UI frame; RenderImGui records it
     // Plan G8b, at the hand-over (after BeginFrame, nothing rendering): the UI's texture requests become descriptors in
     // this frame's slot and real IDs in its draw lists, the textures it marked readable are declared, and the atlas
-    // textures ImGui changed are uploaded. The UI may have run while the render thread drew the previous frame.
+    // textures ImGui changed are uploaded. The UI may have run while the render thread drew the previous frame. The
+    // readouts it shows next frame are copied here too (ExposureForGame).
     void HandOverImGui();
     // Game thread plan G7: GPU work the game half records outside the frame (a thumbnail, the Mesh Editor's preview,
     // an upload batch) goes to the queue at the hand-over -- never while the render half records -- in the order it
@@ -657,6 +658,17 @@ public:
     // dispatched, until P2. See ExposureMetering.h.
     ExposureMetering& Exposure() { threading::WaitRenderForGame("Renderer::Exposure"); return exposureMetering_; }
     const ExposureMetering& Exposure() const { threading::WaitRenderForGame("Renderer::Exposure"); return exposureMetering_; }
+    // Game thread plan G8b: what the UI shows of the exposure (Inspector, Mesh Editor), copied at the hand-over
+    // (HandOverImGui) -- read by the game half with no wait for the render thread; a frame older than the metering's own.
+    struct ExposureView
+    {
+        bool ready = false;                    // ExposureMetering::IsReady
+        ExposureMetering::Readback readback{}; // LatestReadback
+        bool histogramValid = false;           // LatestHistogram answered
+        UINT histogramTotal = 0;
+        std::array<float, ExposureMetering::kHistogramBins> histogram{};
+    };
+    const ExposureView& ExposureForGame() const { return exposureView_; }
     // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
     // Logging, not enforcing — each hit is either a mis-declaration or a resource that genuinely
     // needs an epilogue transition, and this is the step that finds them all.
@@ -1024,6 +1036,7 @@ private:
     std::vector<ID3D12Resource*> pendingImGuiTextureResources_;
     std::vector<ID3D12Resource*> gameReadableMarks_; // G8b: MarkImGuiTextureShaderReadable from the game half
     std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> imguiKeepAlive_; // G8b: the frame's shown textures, until drawn
+    ExposureView exposureView_; // G8b: ExposureForGame, written at the hand-over
 
     float fps_ = 0.0f;
     float fpsAlpha_ = 0.99f; // exponential smoothing: 0..1 (higher is smoother)
