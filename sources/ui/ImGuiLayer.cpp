@@ -208,6 +208,9 @@ void ImGuiLayer::Shutdown()
 
     ReleasePreviewDescriptors();
     FreeDrawDataSnapshot();
+    FreeSnapshot(renderSnapshot_);
+    renderReady_ = false;
+    textureRequests_.clear();
 
     ImGui_ImplDX12_Shutdown();
     ImGui_ImplWin32_Shutdown();
@@ -264,8 +267,7 @@ void ImGuiLayer::EndFrame()
 }
 
 // Game thread plan G6: the frame's draw lists as the game half closed them -- the render half records THESE, not
-// ImGui's own lists, which the next NewFrame starts rewriting. The atlas's texture list stays shared: the backend
-// updates it while recording (with a render thread that update moves to the game half, plan G8).
+// ImGui's own lists, which the next NewFrame starts rewriting. Their texture IDs are made real at the hand-over (G8b).
 void ImGuiLayer::TakeDrawDataSnapshot()
 {
     FreeDrawDataSnapshot();
@@ -289,34 +291,39 @@ void ImGuiLayer::TakeDrawDataSnapshot()
     snapshot_.CmdListsCount = snapshot_.CmdLists.Size;
 }
 
-void ImGuiLayer::FreeDrawDataSnapshot()
+void ImGuiLayer::FreeSnapshot(ImDrawData& data)
 {
-    for (ImDrawList* list : snapshot_.CmdLists)
+    for (ImDrawList* list : data.CmdLists)
     {
         IM_DELETE(list);
     }
-    snapshot_.Clear();
+    data.Clear();
 }
 
+void ImGuiLayer::FreeDrawDataSnapshot()
+{
+    FreeSnapshot(snapshot_);
+}
+
+// The render half: the frame the hand-over gave it, nothing of the game half's (whose next UI frame may be open now).
 void ImGuiLayer::Render(ID3D12GraphicsCommandList* commandList)
 {
     if (!initialized_ || !commandList)
     {
         return;
     }
-    EndFrame(); // no-op when the game half closed it
-    if (!drawDataReady_)
+    if (!renderReady_)
     {
         return;
     }
-    drawDataReady_ = false;
+    renderReady_ = false;
     if (g_suppressImGuiDraw.load(std::memory_order_relaxed))
     {
         return; // the frame is still closed, only its draw data goes unrecorded
     }
     ID3D12DescriptorHeap* heaps[] = { srvHeap_.Get() };
     commandList->SetDescriptorHeaps(1, heaps);
-    ImGui_ImplDX12_RenderDrawData(&snapshot_, commandList);
+    ImGui_ImplDX12_RenderDrawData(&renderSnapshot_, commandList);
 }
 
 bool ImGuiLayer::HandleWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -401,6 +408,96 @@ ImTextureID ImGuiLayer::CreateTextureIdForSrv(ID3D12Device* device,
         descriptors.srvWritten[frameIndex] = true;
     }
     return static_cast<ImTextureID>(descriptors.gpu[frameIndex].ptr);
+}
+
+ImTextureID ImGuiLayer::RequestTexture(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc)
+{
+    if (!initialized_ || !srvHeap_ || !resource)
+    {
+        return ImTextureID_Invalid;
+    }
+    // One request per view of a resource a frame: an icon atlas is asked for at every icon.
+    for (std::size_t i = 0; i < textureRequests_.size(); ++i)
+    {
+        const TextureRequest& r = textureRequests_[i];
+        if (r.resource.Get() == resource && std::memcmp(&r.srv, &srvDesc, sizeof(srvDesc)) == 0)
+        {
+            return kVirtualTextureTag | static_cast<ImTextureID>(i);
+        }
+    }
+    textureRequests_.push_back(TextureRequest{ resource, srvDesc });
+    return kVirtualTextureTag | static_cast<ImTextureID>(textureRequests_.size() - 1u);
+}
+
+void ImGuiLayer::DropTextureRequests(ID3D12Resource* resource)
+{
+    for (TextureRequest& r : textureRequests_)
+    {
+        if (r.resource.Get() == resource)
+        {
+            r.resource.Reset();
+        }
+    }
+}
+
+void ImGuiLayer::HandOver(ID3D12Device* device, UINT frameIndex, std::vector<ID3D12Resource*>& shown,
+                          std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keepAlive)
+{
+    if (!initialized_)
+    {
+        return;
+    }
+    // The atlas textures ImGui created or changed this frame (1.92 rasterises glyphs on demand): uploaded here, where
+    // nothing records, instead of inside RenderDrawData on the render half. The backend submits and waits on its own.
+    for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
+    {
+        if (tex->Status != ImTextureStatus_OK)
+        {
+            ImGui_ImplDX12_UpdateTexture(tex);
+        }
+    }
+    std::vector<ImTextureID> real(textureRequests_.size(), ImTextureID_Invalid);
+    for (std::size_t i = 0; i < textureRequests_.size(); ++i)
+    {
+        TextureRequest& r = textureRequests_[i];
+        if (!r.resource)
+        {
+            continue;
+        }
+        real[i] = CreateTextureIdForSrv(device, r.resource.Get(), r.srv, frameIndex);
+        shown.push_back(r.resource.Get());
+        keepAlive.push_back(std::move(r.resource));
+    }
+    textureRequests_.clear();
+    if (drawDataReady_)
+    {
+        for (ImDrawList* list : snapshot_.CmdLists)
+        {
+            for (ImDrawCmd& cmd : list->CmdBuffer)
+            {
+                if (cmd.TexRef._TexData != nullptr)
+                {
+                    cmd.TexRef._TexID = cmd.TexRef._TexData->TexID; // uploaded just above
+                    cmd.TexRef._TexData = nullptr;
+                }
+                else if ((cmd.TexRef._TexID & kVirtualTextureTag) != 0)
+                {
+                    const std::size_t index = static_cast<std::size_t>(cmd.TexRef._TexID & ~kVirtualTextureTag);
+                    cmd.TexRef._TexID = index < real.size() ? real[index] : ImTextureID_Invalid;
+                    if (cmd.TexRef._TexID == ImTextureID_Invalid)
+                    {
+                        cmd.ClipRect = ImVec4(0.0f, 0.0f, 0.0f, 0.0f); // a dropped texture: the backend skips it
+                    }
+                }
+            }
+        }
+        snapshot_.Textures = nullptr; // uploaded above: the render half's RenderDrawData has nothing to update
+        // The render half's now. Its previous one was recorded (nothing renders during the hand-over); it goes.
+        FreeSnapshot(renderSnapshot_);
+        std::swap(snapshot_, renderSnapshot_);
+        renderReady_ = true;
+        drawDataReady_ = false;
+    }
 }
 
 void ImGuiLayer::ReleasePreviewDescriptors()

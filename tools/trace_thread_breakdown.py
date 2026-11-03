@@ -33,6 +33,10 @@ def main():
     spans = [e for e in events if e.get('ph') == 'X']
     is_marker = lambda e: re.match(r'Frame \d+', e['name']) is not None
     frames = sum(1 for e in spans if e['tid'] == tid and is_marker(e))
+    if frames == 0:
+        # A thread without frame markers of its own (the render thread, game thread plan G8): the capture's frames are
+        # the markers of whichever thread has them.
+        frames = len({e['name'] for e in spans if is_marker(e)})
     track = sorted((e for e in spans if e['tid'] == tid and not is_marker(e)), key=lambda e: (e['ts'], -e['dur']))
     if not track or frames == 0:
         raise SystemExit("the thread has no scopes or no frame markers")

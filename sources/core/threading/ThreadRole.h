@@ -55,8 +55,17 @@ inline bool GameParkedOrSync() noexcept
 // Renderer::WaitForPreviousFrame calls ParkRender from the game role; with no render thread registered it does
 // nothing -- on one thread the render half is the game thread's own next phase. May rethrow what that frame threw.
 using ParkRenderHook = void (*)();
-void SetParkRenderHook(ParkRenderHook hook) noexcept;
+using RenderInFlightHook = bool (*)();
+void SetParkRenderHook(ParkRenderHook hook, RenderInFlightHook inFlight = nullptr) noexcept;
 void ParkRender();
+// Plan G8b: a game-half call that reaches what the render thread's frame in flight uses (a renderer setter, a
+// subsystem the editor mutates) waits for that frame first -- correct by construction, at the price of that frame's
+// overlap. Counted per site; LogGameWaits prints the sites (Info, `core`) and starts over.
+void WaitRenderForGame(const char* site);
+void LogGameWaits(double seconds);
+// On the game thread: the render thread is drawing a frame now (the UI runs beside it), so a per-frame-slot resource
+// the UI picks by Renderer::GetCurrentFrameIndex may still be the GPU's. False on one thread.
+bool RenderBusyForGame();
 
 void ReportRoleViolation(const char* expected, const char* what, const char* file, int line) noexcept;
 std::uint32_t RoleViolationCount() noexcept;

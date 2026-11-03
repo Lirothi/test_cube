@@ -34,6 +34,16 @@ void AppController::FlushGraphicsSettings(Renderer& renderer, const Scene& scene
     graphicsSettings_.Flush(renderer, scene, settings_);
 }
 
+void AppController::ReleaseGpuResources(Renderer& renderer)
+{
+    developerWindow_.ReleaseGpuResources();
+#if WITH_EDITOR
+    editorController_.ReleaseGpuResources(renderer);
+#else
+    (void)renderer;
+#endif
+}
+
 void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime)
 {
     CPU_SCOPE(ProfilerScopes::kAppControllerTick);

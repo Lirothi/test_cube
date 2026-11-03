@@ -400,6 +400,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 )
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
+    // Game thread plan G8b: open, the window reads and sets the render half everywhere (counters, targets, the ocean)
+    // -- it waits for the render thread's frame in flight first. Closed it costs nothing; the texture inspector and the
+    // ocean controls wait on their own when they are open.
+    if (open_)
+    {
+        threading::WaitRenderForGame("DeveloperWindow::Draw");
+    }
     // Run independently of the selected tab and the window's visibility.
     if (sunElevationPlaying_)
     {

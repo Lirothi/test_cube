@@ -21,6 +21,9 @@ public:
     enum class Op { Select, Translate, Rotate, Scale };
     enum class TransformSpace { Local, World };
 
+    // Shutdown, the GPU idle: the icon atlas goes before the device does (the gizmo itself outlives it).
+    void ReleaseGpuResources() { iconAtlas_.Release(); iconAtlasTried_ = false; iconAtlasReady_ = false; }
+
     struct PersistentState
     {
         bool snapEnabled = false;

@@ -4,6 +4,7 @@
 #include "core/diagnostics/BootProfile.h"
 
 #include <chrono>
+#include <new> // Release: the default-constructed object in place
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/TextureCreate.h"
 #include "rendering/core/GpuAlloc.h"
@@ -45,6 +46,14 @@ Texture2D::~Texture2D()
     if (bindlessIndex_ != render::BindlessHeap::kInvalidIndex) {
         if (auto* heap = render::BindlessHeap::Instance()) { heap->RetireSlot(bindlessIndex_); }
     }
+}
+
+void Texture2D::Release()
+{
+    // The destructor's work and then a default-constructed object in place: every member the class grows is reset
+    // with it, with no second list of them to keep in step.
+    this->~Texture2D();
+    new (this) Texture2D();
 }
 
 void Texture2D::RenameBindless_()

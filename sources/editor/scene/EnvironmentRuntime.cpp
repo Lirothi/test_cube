@@ -167,6 +167,9 @@ namespace
 
 void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
 {
+    // Game thread plan G8b: an environment object reaches the render half's own objects (the sky's LUT settings, the
+    // ocean simulation, the skybox's textures): the render thread's frame in flight finishes first.
+    threading::WaitRenderForGame("EnvironmentRuntime::Apply");
     const nlohmann::json& p = env.properties;
 
     if (env.type == "pointLight")
@@ -385,6 +388,7 @@ void EnvironmentRuntime::ApplyChange(
     const EditorObject& env,
     const EditorObject& previous)
 {
+    threading::WaitRenderForGame("EnvironmentRuntime::ApplyChange"); // as Apply
     const bool enabledChanged =
         env.properties.value("enabled", true) !=
         previous.properties.value("enabled", true);
@@ -447,6 +451,7 @@ void EnvironmentRuntime::ApplyChange(
 
 void EnvironmentRuntime::Remove(EditorContext& ctx, const EditorObject& env)
 {
+    threading::WaitRenderForGame("EnvironmentRuntime::Remove"); // as Apply
     if (env.type == "pointLight" || env.type == "spotLight")
     {
         RebuildLights(ctx);

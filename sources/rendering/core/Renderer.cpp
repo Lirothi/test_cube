@@ -902,6 +902,7 @@ void Renderer::EndFrame() {
 #if WITH_EDITOR
 bool Renderer::RequestObjectIdPick(float displayX, float displayY)
 {
+    threading::WaitRenderForGame("Renderer::RequestObjectIdPick"); // a click: the frame in flight reads the request
     if (!GetDevice() || !rtManager_.IsCreated() || objectIdPickRequested_ || objectIdPickInFlight_)
     {
         return false;
@@ -1027,13 +1028,14 @@ void Renderer::ResolveObjectIdPickReadback()
 
 bool Renderer::ConsumeObjectIdPick(uint32_t& outObjectId)
 {
-    if (!objectIdPickResultValid_)
+    // Every frame from the game half (the gizmo), with no wait: the render thread publishes the result before the flag.
+    if (!objectIdPickResultValid_.load(std::memory_order_acquire))
     {
         return false;
     }
-    outObjectId = objectIdPickResult_;
-    objectIdPickResult_ = 0;
-    objectIdPickResultValid_ = false;
+    outObjectId = objectIdPickResult_.load(std::memory_order_relaxed);
+    objectIdPickResult_.store(0u, std::memory_order_relaxed);
+    objectIdPickResultValid_.store(false, std::memory_order_release);
     return true;
 }
 
@@ -1082,6 +1084,8 @@ void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
     // textures (created shader-readable, so this is a no-op) and engine render targets shown by
     // TextureDebugViewer (left at their canonical by the frame's graph work, since the overlay
     // runs last). Both answers come from the canonical registry, so no tracker is involved.
+    // G8b: what is drawn is the frame the hand-over gave the render half (HandOverImGui) -- never ImGui's own state,
+    // which the game half's next UI frame may be writing now. A loop that never hands over draws no UI.
     for (ID3D12Resource* resource : pendingImGuiTextureResources_)
     {
         TransitionExplicit(commandList, resource, GetCanonicalState(resource),
@@ -1105,6 +1109,7 @@ void Renderer::RenderImGui(ID3D12GraphicsCommandList* commandList)
                            GetCanonicalState(resource));
     }
     pendingImGuiTextureResources_.clear();
+    imguiKeepAlive_.clear(); // recorded: the frame's list holds them now, and their owners idle the GPU to free them
 }
 
 void Renderer::RestoreGraphicsStateAfterExternalDraw(ID3D12GraphicsCommandList* commandList)
@@ -1128,6 +1133,12 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
     {
         return ImTextureID_Invalid;
     }
+    // G8b: the game half gets a VIRTUAL ID, made real at the hand-over (HandOverImGui) in the slot of the frame that
+    // draws it -- the UI may run while the render thread draws the previous frame, before this frame's slot is free.
+    if (threading::CurrentRole() == threading::ThreadRole::Game)
+    {
+        return imguiLayer_.RequestTexture(resource, srvDesc);
+    }
 
     if (std::find(pendingImGuiTextureResources_.begin(),
             pendingImGuiTextureResources_.end(),
@@ -1138,9 +1149,33 @@ ImTextureID Renderer::CreateImGuiTextureId(ID3D12Resource* resource, const D3D12
     return imguiLayer_.CreateTextureIdForSrv(GetDevice(), resource, srvDesc, currentFrameIndex_);
 }
 
+void Renderer::HandOverImGui()
+{
+    TC_CHECK_RENDER("Renderer::HandOverImGui");
+    for (ID3D12Resource* resource : gameReadableMarks_)
+    {
+        SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    }
+    gameReadableMarks_.clear();
+    std::vector<ID3D12Resource*> shown;
+    imguiLayer_.HandOver(GetDevice(), currentFrameIndex_, shown, imguiKeepAlive_);
+    for (ID3D12Resource* resource : shown)
+    {
+        if (std::find(pendingImGuiTextureResources_.begin(), pendingImGuiTextureResources_.end(), resource) ==
+            pendingImGuiTextureResources_.end())
+        {
+            pendingImGuiTextureResources_.push_back(resource);
+        }
+    }
+}
+
 #if WITH_EDITOR
 void Renderer::ReleaseImGuiTextureDescriptors(ID3D12Resource* resource)
 {
+    threading::WaitRenderForGame("Renderer::ReleaseImGuiTextureDescriptors");
+    imguiLayer_.DropTextureRequests(resource); // a request of this frame draws nothing (G8b)
+    gameReadableMarks_.erase(std::remove(gameReadableMarks_.begin(), gameReadableMarks_.end(), resource),
+                             gameReadableMarks_.end());
     imguiLayer_.ReleasePreviewDescriptorsForResource(resource);
     canonicalStates_.Forget(resource);
 }
@@ -1157,6 +1192,16 @@ void Renderer::MarkImGuiTextureShaderReadable(ID3D12Resource* resource)
     // instead and keep their real tracked state, so they are unaffected.
     if (resource)
     {
+        // G8b: from the game half it is declared at the hand-over (HandOverImGui) -- the canonical registry is the
+        // frame in flight's.
+        if (threading::CurrentRole() == threading::ThreadRole::Game)
+        {
+            if (std::find(gameReadableMarks_.begin(), gameReadableMarks_.end(), resource) == gameReadableMarks_.end())
+            {
+                gameReadableMarks_.push_back(resource);
+            }
+            return;
+        }
         // Step 7: this now DECLARES the texture's canonical (it is created shader-readable and
         // stays there), rather than papering over the tracker's global map. That is why it
         // survives the tracker's deletion instead of going with it as D2 assumed.
@@ -2043,6 +2088,7 @@ void Renderer::ClearResourceState(ID3D12Resource* res) {
 }
 
 D3D12_RESOURCE_STATES Renderer::GetCanonicalState(ID3D12Resource* res) const {
+    threading::WaitRenderForGame("Renderer::GetCanonicalState"); // G8b: the frame in flight declares into it
     return canonicalStates_.Get(res);
 }
 
@@ -2914,6 +2960,7 @@ void Renderer::RecreateDeferredTargets()
 
 void Renderer::SetReflectionTextureScale(Math::float2 scale)
 {
+    threading::WaitRenderForGame("Renderer::SetReflectionTextureScale");
     Math::float2 sanitized{ scale.x, scale.y };
     if (sanitized.x < 0.0f) { sanitized.x = 0.0f; }
     if (sanitized.y < 0.0f) { sanitized.y = 0.0f; }
@@ -2982,6 +3029,7 @@ UINT Renderer::GetReflectionTextureHeight() const
 
 void Renderer::SetOceanReflectionTextureScale(Math::float2 scale)
 {
+    threading::WaitRenderForGame("Renderer::SetOceanReflectionTextureScale");
     Math::float2 sanitized{ scale.x, scale.y };
     if (sanitized.x < 0.0f) { sanitized.x = 0.0f; }
     if (sanitized.y < 0.0f) { sanitized.y = 0.0f; }
@@ -3028,6 +3076,7 @@ void Renderer::UpdateRenderResolutionFromScale()
 
 void Renderer::SetRenderResolutionScale(float scale)
 {
+    threading::WaitRenderForGame("Renderer::SetRenderResolutionScale");
     float sanitized = scale;
     if (!std::isfinite(sanitized))
     {
@@ -3140,6 +3189,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE Renderer::MakeDebugPreviewSourceSrv(
 
 void Renderer::SetJitterPaused(bool paused)
 {
+    threading::WaitRenderForGame("Renderer::SetJitterPaused");
     if (dlssHandler_) { dlssHandler_->SetJitterPaused(paused); }
 }
 
@@ -3166,6 +3216,7 @@ bool Renderer::IsJitterPaused() const
 // quality combo can no longer disagree about what the renderer is doing.
 void Renderer::SetDlssActive(bool active)
 {
+    threading::WaitRenderForGame("Renderer::SetDlssActive");
     if (!dlssHandler_)
     {
         return;
@@ -3199,6 +3250,7 @@ void Renderer::SetDlssActive(bool active)
 
 void Renderer::SetDlssMode(sl::DLSSMode mode)
 {
+    threading::WaitRenderForGame("Renderer::SetDlssMode");
     if (dlssMode_ == mode)
     {
         return;

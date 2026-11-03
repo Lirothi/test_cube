@@ -2216,6 +2216,8 @@ void OceanControlsWindow::Draw(Renderer& renderer)
     {
         return;
     }
+    // Game thread plan G8b: the simulation it edits is the one the render thread's frame in flight runs.
+    threading::WaitRenderForGame("OceanControlsWindow::Draw");
 
     ImGui::SetNextWindowSize(ImVec2(520.0f, 720.0f), ImGuiCond_FirstUseEver);
 

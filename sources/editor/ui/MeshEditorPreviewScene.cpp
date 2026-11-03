@@ -242,6 +242,12 @@ struct MeshEditorPreviewScene::Impl
         {
             return false;
         }
+        // Game thread plan G8b: beside the render thread's frame the slot index is that frame's, and its last use need
+        // not be done -- idle first (the preview re-renders only when something in it changed). One thread: nothing.
+        if (threading::RenderBusyForGame())
+        {
+            renderer.WaitForPreviousFrame();
+        }
 
         // BeginFrame has already waited for this swapchain slot. Replacing its
         // allocator and rewriting its private preview resources is therefore safe.

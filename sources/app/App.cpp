@@ -2346,9 +2346,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         // The frame's phases (plan sections 3.2-3.4). The loop runs as the GAME half; the render half's calls take the
         // Render role, the hand-over between them the Sync role. On one thread (frame.renderThread 0) a frame is: its
         // start, the messages, the UI, Scene::Tick, the hand-over, Scene::Render, the work after Present. With a render
-        // thread (1, plan G8) Scene::Render runs THERE, and this thread meanwhile simulates the next frame -- the
-        // messages, the clock, Scene::Tick -- and then waits for it: everything else that touches the render half (the
-        // frame start, the UI and the editor, the hand-over, the screenshots after Present) runs while it is idle.
+        // thread (1, plan G8) Scene::Render runs THERE, and this thread meanwhile runs the next frame's game half --
+        // the messages, the clock, the UI and the editor, Scene::Tick (G8b) -- and then waits for it: the frame start,
+        // the hand-over and the screenshots after Present run while it is idle.
         threading::SetCurrentRole(threading::ThreadRole::Game);
         threading::RenderThread renderThread;
 
@@ -2507,13 +2507,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #endif
             }
         };
-        const auto handOver = [&]()
+        const auto closeUi = [&]()
         {
             appController_.WaitForHudBuild();
-            renderer.EndImGuiFrame(); // the UI frame is final here; the render half records it in its epilogue
+            renderer.EndImGuiFrame(); // the UI frame is final here; the hand-over gives it to the render half
+        };
+        const auto handOver = [&]()
+        {
             // The hand-over (plan section 3.3): the frame's values from game state go to the render half.
             threading::RoleScope syncRole(threading::ThreadRole::Sync);
             scene.Sync(&renderer);
+            renderer.HandOverImGui(); // G8b: the UI's textures into this frame's slot, the atlas uploaded
             appController_.PublishHud(renderer); // G6: the HUD's lines into the render half's text buffer
 #if WITH_EDITOR
             editormcp::ServiceHandOver(); // G6: the MCP calls that read the render half (get_readouts)
@@ -2807,52 +2811,69 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
         };
 
+        bool renderFramePending = false; // kicked, its after-frame work not done (a park may have finished it early)
+        double gameWaitLogStart = GetTimeSeconds();
         while (isRunning_) {
             const bool threaded = threading::g_renderThreadEnabled; // switched only here, between frames
             if (threaded)
             {
-                // G8: the next frame's simulation while the render thread draws this one. Nothing here reaches the
-                // render half: Scene::Tick writes game state only (plan G2-G5), the messages queue input and a resize.
+                // G8b: the next frame's game half while the render thread draws this one -- the messages, the clock,
+                // the UI and the editor, Scene::Tick, a level load. What in it reaches the render half waits for that
+                // frame first (threading::WaitRenderForGame; a park, Renderer::WaitForPreviousFrame) or goes through
+                // the hand-over (ImGui's textures, GPU work, the knobs' twins, the scene's render copies).
                 CPU_SCOPE(ProfilerScopes::kGameSimulate);
                 input.NewFrame();
                 if (!pumpMessages()) {
                     break;
                 }
                 advanceTime();
+                beginUi();
+                tickUi();
                 tickScene();
+                loadPendingLevel();
+                closeUi();
             }
-            if (renderThread.InFlight())
+            if (renderFramePending)
             {
                 {
                     CPU_SCOPE(ProfilerScopes::kRenderThreadWait);
                     renderThread.WaitIdle(); // UE FFrameEndSync: never more than one frame ahead; pumps messages
                 }
+                renderFramePending = false;
                 afterFrame();
                 if (!isRunning_) {
                     break;
                 }
                 paceFrame();
+                if (frameStart - gameWaitLogStart >= 5.0)
+                {
+                    threading::LogGameWaits(frameStart - gameWaitLogStart); // what took the overlap away, by site
+                    gameWaitLogStart = frameStart;
+                }
             }
 
             beginFrame();
             {
                 CPU_SCOPE(ProfilerScopes::kWholeCycle);
-                if (!threaded)
+                if (threaded)
+                {
+                    renderUpkeep();
+                    handOver();
+                }
+                else
                 {
                     input.NewFrame();
                     if (!pumpMessages()) {
                         break;
                     }
-                }
-                beginUi();
-                if (!threaded) { advanceTime(); }
-                renderUpkeep();
-                tickUi();
-                if (!threaded) { tickScene(); }
-                loadPendingLevel();
-                handOver();
-                if (!threaded)
-                {
+                    beginUi();
+                    advanceTime();
+                    renderUpkeep();
+                    tickUi();
+                    tickScene();
+                    loadPendingLevel();
+                    closeUi();
+                    handOver();
                     threading::RoleScope renderRole(threading::ThreadRole::Render);
                     renderScene();
                 }
@@ -2864,6 +2885,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     CPU_SCOPE(ProfilerScopes::kRenderThreadFrame);
                     renderScene();
                 });
+                renderFramePending = true;
                 continue;
             }
             afterFrame();
@@ -2882,6 +2904,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         TaskSystem::Get().Stop();
 
         renderer.WaitForPreviousFrame();
+        appController_.ReleaseGpuResources(renderer); // the UI's textures before the device (the debug layer's exit report)
         memgate::ReleaseSelfTest();
         scene.Clear();
         Systems::DestroyOceanSimulation();

@@ -59,6 +59,9 @@ public:
         Columns
     };
 
+    // Shutdown, the GPU idle: the icon atlas goes before the device does (the panel itself outlives it).
+    void ReleaseGpuResources() { iconAtlas_.Release(); iconAtlasTried_ = false; iconAtlasReady_ = false; }
+
     struct PersistentState
     {
         std::array<bool, 5> activeTypeFilters{};

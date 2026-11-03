@@ -44,6 +44,9 @@ public:
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
     void Draw(Renderer& renderer, Scene& scene, LevelManager& levelManager, bool logWindowOpen);
+    // Shutdown, before the renderer's: the editor's GPU textures (thumbnails, icon atlases) go while the device is
+    // there -- the controller itself outlives it, and the debug layer's exit report named them live.
+    void ReleaseGpuResources(Renderer& renderer);
     bool RequestOpenLevelPath(LevelManager& levelManager,
         const std::string& path,
         bool preserveCameraTransform,

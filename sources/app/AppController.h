@@ -23,6 +23,8 @@ public:
     void InitializeGraphicsSettings(Renderer& renderer, Scene& scene);
     void ApplySceneGraphicsSettings(Scene& scene) const;
     void FlushGraphicsSettings(Renderer& renderer, const Scene& scene);
+    // Shutdown, the GPU idle, before Renderer::Shutdown: the UI's own GPU textures go while the device is there.
+    void ReleaseGpuResources(Renderer& renderer);
     void Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime);
     void BuildHud(Renderer& renderer, const Scene& scene);
     void WaitForHudBuild();

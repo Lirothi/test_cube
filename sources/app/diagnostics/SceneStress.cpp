@@ -1050,6 +1050,7 @@ private:
                 {
                     threading::RoleScope syncRole(threading::ThreadRole::Sync);
                     scene_.Sync(&renderer_);
+                    renderer_.HandOverImGui(); // G8b: the UI frame is the render half's from here
                 }
                 if (threaded)
                 {

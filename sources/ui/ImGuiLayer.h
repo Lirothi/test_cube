@@ -29,7 +29,7 @@ public:
 
     void BeginFrame();
     // The game half's end (game thread plan G1): ImGui::Render() closes the frame and the draw data is final; the
-    // render half only records it (Render). A frame nobody closed is closed by Render, as it always was.
+    // hand-over gives it to the render half (HandOver), which only records it (Render).
     void EndFrame();
     void Render(ID3D12GraphicsCommandList* commandList);
 
@@ -46,6 +46,18 @@ public:
     // editor thumbnail cache when it evicts a GPU thumbnail). Idle the GPU first.
     void ReleasePreviewDescriptorsForResource(ID3D12Resource* resource);
 #endif
+
+    // Game thread plan G8b. The game half's texture IDs are VIRTUAL: a request (the resource and its view) and its
+    // index under a tag, because the UI may run while the render thread draws the previous frame, before this frame's
+    // descriptor slot is free. HandOver (after BeginFrame, nothing rendering) uploads the atlas textures ImGui changed
+    // -- on the game thread, the queue idle -- writes each request's descriptor into the frame's slot and puts the
+    // real IDs into the closed frame's draw lists (the atlas's too: the render half then never reads ImTextureData).
+    // The closed frame then becomes the render half's (renderSnapshot_): the game half's next frame -- which may run
+    // while the render thread records this one -- only ever touches its own.
+    ImTextureID RequestTexture(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
+    void DropTextureRequests(ID3D12Resource* resource); // its descriptors are going: this frame's draws of it are cut
+    void HandOver(ID3D12Device* device, UINT frameIndex, std::vector<ID3D12Resource*>& shown,
+                  std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keepAlive);
 
 private:
     struct PreviewSrvDescriptors
@@ -82,8 +94,18 @@ private:
     std::vector<uint32_t> freeDescriptorIndices_;
     bool initialized_ = false;
     bool frameBegun_ = false;
-    bool drawDataReady_ = false; // EndFrame closed the frame; Render has not recorded it yet
-    ImDrawData snapshot_;        // G6: the closed frame's draw lists, cloned (TakeDrawDataSnapshot)
+    bool drawDataReady_ = false; // EndFrame closed the frame; the hand-over has not taken it yet (game half)
+    ImDrawData snapshot_;        // G6: the closed frame's draw lists, cloned (TakeDrawDataSnapshot) -- the game half's
+    ImDrawData renderSnapshot_;  // G8b: the frame the hand-over gave the render half, with real texture IDs
+    bool renderReady_ = false;   // ... and not recorded yet (render half)
+    static void FreeSnapshot(ImDrawData& data);
+    struct TextureRequest
+    {
+        Microsoft::WRL::ComPtr<ID3D12Resource> resource; // null once dropped
+        D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    };
+    std::vector<TextureRequest> textureRequests_;
+    static constexpr ImTextureID kVirtualTextureTag = ImTextureID(1) << 62; // above any GPU descriptor address
     void TakeDrawDataSnapshot();
     void FreeDrawDataSnapshot();
     bool pendingRightClickFocusClear_ = false;

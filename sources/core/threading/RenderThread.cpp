@@ -20,7 +20,8 @@ RenderThread::RenderThread()
     kickEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     doneEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr); // manual: a nested wait leaves it set for the outer one
     g_parkTarget = this;
-    SetParkRenderHook(&RenderThread::Park);
+    owner_ = std::this_thread::get_id();
+    SetParkRenderHook(&RenderThread::Park, &RenderThread::InFlightForGame);
 }
 
 RenderThread::~RenderThread()
@@ -130,10 +131,26 @@ void RenderThread::Stop()
 
 void RenderThread::Park()
 {
-    if (g_parkTarget != nullptr)
+    if (g_parkTarget != nullptr && std::this_thread::get_id() == g_parkTarget->owner_)
     {
         g_parkTarget->WaitIdle();
     }
+}
+
+bool RenderThread::InFlightForGame()
+{
+    if (g_parkTarget == nullptr || !g_parkTarget->inFlight_.load(std::memory_order_acquire))
+    {
+        return false;
+    }
+    if (std::this_thread::get_id() != g_parkTarget->owner_)
+    {
+        // A task of the game half: it cannot wait for the frame (only the game thread hands frames over and waits).
+        LOG_ERROR_ONCE(logging::LogCategory::Core,
+                       "render thread: a game-half TASK reached the renderer during the render thread's frame");
+        return false;
+    }
+    return true;
 }
 
 void RenderThread::Main()

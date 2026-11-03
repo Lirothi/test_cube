@@ -30,6 +30,7 @@
 #include "app/camera/Camera.h"
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
+#include "core/threading/ThreadRole.h" // game thread plan G8b: WaitRenderForGame before a call runs
 #include "editor/EditorContext.h"
 #include "editor/commands/EditorCommand.h"
 #include "editor/commands/EditorCommandStack.h"
@@ -1382,6 +1383,12 @@ namespace editormcp
             taken.swap(jobs_);
         }
         std::vector<CallRecord> records;
+        if (!taken.empty())
+        {
+            // Game thread plan G8b: a call may set or read anything (set_settings reaches the renderer, the ocean, the
+            // exposure): the render thread's frame in flight finishes first. Calls are rare; the frame's overlap is not.
+            threading::WaitRenderForGame("EditorMcpServer::Service");
+        }
         for (const std::shared_ptr<Job>& job : taken)
         {
             if (job->abandoned)

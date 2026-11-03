@@ -28,6 +28,9 @@ public:
         Texture2D() = default;
         Texture2D(const Texture2D&) = delete;
         Texture2D& operator=(const Texture2D&) = delete;
+        // Drops the GPU objects now, as the destructor would; the object is then as default-constructed. For an owner
+        // that outlives the device (a UI panel's icon atlas): released at shutdown, before the device goes.
+        void Release();
         enum class Usage : uint32_t {
                 AlbedoSRGB, // SRV will be *_SRGB
                 NormalMap, // linear sampling; supports RGB or RG via a flag

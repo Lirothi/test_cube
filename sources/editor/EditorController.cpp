@@ -2960,6 +2960,13 @@ bool EditorController::PanelStateMatches(const PanelStateSnapshot& a,
         ViewportGizmoStatesMatch(a.viewportGizmo, b.viewportGizmo);
 }
 
+void EditorController::ReleaseGpuResources(Renderer& renderer)
+{
+    thumbnailCache_.ReleaseAll(renderer);
+    contentBrowser_.ReleaseGpuResources();
+    viewportGizmo_.ReleaseGpuResources();
+}
+
 void EditorController::Draw(
     Renderer& renderer,
     Scene& scene,

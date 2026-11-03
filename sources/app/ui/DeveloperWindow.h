@@ -27,6 +27,13 @@ public:
     void SetOpen(bool open) { open_ = open; }
     void ToggleOpen() { open_ = !open_; }
     void ToggleTextureInspector();
+    // Shutdown, the GPU idle: the reset-icon atlas goes before the device does (the window itself outlives it).
+    void ReleaseGpuResources()
+    {
+        resetIconAtlas_.Release();
+        resetIconAtlasTried_ = false;
+        resetIconAtlasReady_ = false;
+    }
     void ToggleOceanControls() { oceanControlsWindow_.ToggleOpen(); }
     void OpenOceanControls() { oceanControlsWindow_.SetOpen(true); }
     // "--mem-window": the window open on the Memory tab, so a headless --shot can photograph it.

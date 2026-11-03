@@ -16,6 +16,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include "core/logging/LogLevel.h" // DiagLog/CanonicalLogOnce take the session-log level
+#include "core/threading/ThreadRole.h" // game thread plan G8b: WaitRenderForGame in the game-reachable accessors
 
 namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWriter.h)
 
@@ -294,6 +295,10 @@ public:
     void InitImGui();
     void BeginImGuiFrame();
     void EndImGuiFrame(); // game thread plan G1: the game half closes the UI frame; RenderImGui records it
+    // Plan G8b, at the hand-over (after BeginFrame, nothing rendering): the UI's texture requests become descriptors in
+    // this frame's slot and real IDs in its draw lists, the textures it marked readable are declared, and the atlas
+    // textures ImGui changed are uploaded. The UI may have run while the render thread drew the previous frame.
+    void HandOverImGui();
     // Game thread plan G7: GPU work the game half records outside the frame (a thumbnail, the Mesh Editor's preview,
     // an upload batch) goes to the queue at the hand-over -- never while the render half records -- in the order it
     // was submitted. From the render half, at the hand-over or with the render half parked, it goes at once.
@@ -372,7 +377,11 @@ public:
     DXGI_FORMAT GetReflectionFormat() const { return render::kReflectionFormat; }
     DXGI_FORMAT GetReflectionScratchFormat() const { return render::kReflectionScratchFormat; }
 
-    const DeferredTargets& GetDeferredForFrame() const { return rtManager_.Deferred(currentFrameIndex_); }
+    const DeferredTargets& GetDeferredForFrame() const
+    {
+        threading::WaitRenderForGame("Renderer::GetDeferredForFrame");
+        return rtManager_.Deferred(currentFrameIndex_);
+    }
 
     // P6B: the set the PREVIOUS frame rendered into. The frame index cycles 0..kFrameCount-1 in
     // order, so this is genuinely frame N-1 and not "some earlier frame" — which is what a temporal
@@ -576,20 +585,30 @@ public:
     SamplerManager* GetSamplerManager() { return &samplerManager_; }
     MaterialManager* GetMaterialManager() { return &materialManager_; }
     InputLayoutManager* GetInputLayoutManager() { return &inputLayoutManager_; }
-    MeshManager* GetMeshManager() { return &meshManager_; }
+    // Game thread plan G8b: from the game half these wait for the render thread's frame in flight first
+    // (threading::WaitRenderForGame) -- the editor and the developer window change what that frame walks.
+    MeshManager* GetMeshManager() { threading::WaitRenderForGame("Renderer::GetMeshManager"); return &meshManager_; }
     // Texture streaming A2 (null before the device exists and after Shutdown).
-    streaming::TextureStreaming* GetTextureStreaming() { return textureStreaming_.get(); }
+    streaming::TextureStreaming* GetTextureStreaming()
+    {
+        threading::WaitRenderForGame("Renderer::GetTextureStreaming");
+        return textureStreaming_.get();
+    }
     // A6: the one shader-visible CBV_SRV_UAV heap (frame rings + RT region + texture slots).
     render::BindlessHeap* GetBindlessHeap() { return &bindlessHeap_; }
-    TextManager* GetTextManager() { return &textManager_; }
+    TextManager* GetTextManager() { threading::WaitRenderForGame("Renderer::GetTextManager"); return &textManager_; }
     FontManager* GetFontManager() { return &fontManager_; }
-    MaterialDataManager* GetMaterialDataManager() { return &materialDataManager_; }
+    MaterialDataManager* GetMaterialDataManager()
+    {
+        threading::WaitRenderForGame("Renderer::GetMaterialDataManager");
+        return &materialDataManager_;
+    }
     RenderContextPool* GetRenderContextPool() { return &ctxPool_; }
     DebugDrawSystem* GetDebugDrawSystem() { return &debugDrawSystem_; }
     const DebugDrawSystem* GetDebugDrawSystem() const { return &debugDrawSystem_; }
 
 	float GetFPS() const { return fps_; }
-    void SetWireframeMode(bool w) { wireframeMode_ = w; }
+    void SetWireframeMode(bool w) { threading::WaitRenderForGame("Renderer::SetWireframeMode"); wireframeMode_ = w; }
     bool GetWireframeMode() const { return wireframeMode_; }
 
     // --- Barrier plan, step 6: canonical (resting) states ---
@@ -636,8 +655,8 @@ public:
 
     // P1: persistent eye-adaptation state. Dormant -- created and lifecycle-managed, never
     // dispatched, until P2. See ExposureMetering.h.
-    ExposureMetering& Exposure() { return exposureMetering_; }
-    const ExposureMetering& Exposure() const { return exposureMetering_; }
+    ExposureMetering& Exposure() { threading::WaitRenderForGame("Renderer::Exposure"); return exposureMetering_; }
+    const ExposureMetering& Exposure() const { threading::WaitRenderForGame("Renderer::Exposure"); return exposureMetering_; }
     // Step 6 diagnostic: log every declared resource that did not END the frame at canonical.
     // Logging, not enforcing — each hit is either a mis-declaration or a resource that genuinely
     // needs an epilogue transition, and this is the step that finds them all.
@@ -820,7 +839,11 @@ public:
         bool stretch = false;
         bool showAlpha = false;
     };
-    void RequestDebugPreview(const DebugPreviewRequest& req) { debugPreviewRequest_ = req; }
+    void RequestDebugPreview(const DebugPreviewRequest& req)
+    {
+        threading::WaitRenderForGame("Renderer::RequestDebugPreview");
+        debugPreviewRequest_ = req;
+    }
     const DebugPreviewRequest& DebugPreviewRequestRef() const { return debugPreviewRequest_; }
     void ClearDebugPreviewRequest() { debugPreviewRequest_ = {}; }
     // Builds the requested view into the per-frame scratch slot and hands back its handle.
@@ -978,10 +1001,12 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> objectIdReadback_;
     UINT objectIdPickX_ = 0;
     UINT objectIdPickY_ = 0;
-    uint32_t objectIdPickResult_ = 0;
+    // The result and its flag are atomic: the gizmo asks every frame from the game half (ConsumeObjectIdPick) while
+    // the render thread may be resolving it (plan G8b).
+    std::atomic<uint32_t> objectIdPickResult_{0};
     bool objectIdPickRequested_ = false;
     bool objectIdPickInFlight_ = false;
-    bool objectIdPickResultValid_ = false;
+    std::atomic<bool> objectIdPickResultValid_{false};
 #endif
 
     // Reflection targets (this and the ocean's below) as a fraction of the RENDER resolution.
@@ -997,6 +1022,8 @@ private:
 
     bool wireframeMode_ = false;
     std::vector<ID3D12Resource*> pendingImGuiTextureResources_;
+    std::vector<ID3D12Resource*> gameReadableMarks_; // G8b: MarkImGuiTextureShaderReadable from the game half
+    std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> imguiKeepAlive_; // G8b: the frame's shown textures, until drawn
 
     float fps_ = 0.0f;
     float fpsAlpha_ = 0.99f; // exponential smoothing: 0..1 (higher is smoother)
