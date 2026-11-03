@@ -229,6 +229,10 @@ namespace editorzone
         std::vector<Zone> zones;
         for (const EditorObject& object : document.Objects())
         {
+            if (object.type != kTypeName)
+            {
+                continue; // before the Zone: its string and vectors are heap work per object in Debug (see ViewportGizmo)
+            }
             Zone zone;
             if (FromObject(object, zone))
             {

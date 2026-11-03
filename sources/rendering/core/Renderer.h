@@ -326,6 +326,7 @@ public:
     bool HandleImGuiWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     bool ImGuiWantsMouse() const;
     bool ImGuiWantsKeyboard() const;
+    bool ImGuiWantsTextInput() const;
 
     void Tick(float dt);
     bool ConsumeMaterialHotReloadFlag();

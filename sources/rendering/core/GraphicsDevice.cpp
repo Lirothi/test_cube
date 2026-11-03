@@ -25,6 +25,7 @@ namespace
     // device creation, read here.
     std::atomic<bool> g_dredForStress{ false };
     std::atomic<bool> g_gbvForStress{ false };
+    std::atomic<bool> g_noDebugLayer{ false }; // --no-d3d-debug: a Debug run without the D3D12 debug layer
 
     // GBV shader patch mode. GBV works by REWRITING each shader with validation code, and the
     // rewrite happens the first time a pipeline is used in a command list -- which is why the cost
@@ -260,6 +261,11 @@ void GraphicsDevice::EnableGbvForStress(bool enable)
     g_gbvForStress.store(enable, std::memory_order_relaxed);
 }
 
+void GraphicsDevice::DisableDebugLayer(bool disable)
+{
+    g_noDebugLayer.store(disable, std::memory_order_relaxed);
+}
+
 bool GraphicsDevice::GbvEnabled()
 {
 #ifdef _DEBUG
@@ -280,6 +286,11 @@ void GraphicsDevice::InitDevice()
     const bool gbvStress = g_gbvForStress.load(std::memory_order_relaxed);
 
 #ifdef _DEBUG
+    // --no-d3d-debug: what the debug layer costs the CPU of a Debug frame (it validates every call recorded), and a
+    // faster Debug session when the validation is not the question. GBV needs the layer, so it wins.
+    if (g_noDebugLayer.load(std::memory_order_relaxed) && !gbvStress) {
+        LOG_INFO(logging::LogCategory::RenderRhi, "D3D12 debug layer: off (--no-d3d-debug)");
+    } else
     {
         Microsoft::WRL::ComPtr<ID3D12Debug> dbg;
         if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&dbg)))) {

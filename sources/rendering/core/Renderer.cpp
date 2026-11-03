@@ -1249,6 +1249,11 @@ bool Renderer::ImGuiWantsKeyboard() const
     return imguiLayer_.WantsKeyboard();
 }
 
+bool Renderer::ImGuiWantsTextInput() const
+{
+    return imguiLayer_.WantsTextInput();
+}
+
 void Renderer::ReportLiveObjects()
 {
     graphicsDevice_.ReportLiveObjects();

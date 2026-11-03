@@ -292,7 +292,17 @@ void Profiler::DrainThreadSamples(bool capture, uint64_t startUs) {
         buffer->drainedSamples.clear();
         if (capture) {
             for (auto ev : buffer->drainedTraces) {
-                ev.tsUs = ev.tsUs >= startUs ? ev.tsUs - startUs : 0;
+                if (ev.tsUs < startUs) {
+                    // Begun before the capture (a MarkThreadCrossFrame thread's scope, the RHI thread's submit):
+                    // keep the part inside it. Moved to 0 with its whole duration, its end overlapped the scope after
+                    // it -- Perfetto's SLICE_SPILL_OVERLAPPING_COMPLETE_EVENT on Service3 / Service4 (2026-11-03).
+                    const uint64_t endUs = ev.tsUs + ev.durUs;
+                    if (endUs <= startUs) { continue; }
+                    ev.durUs = endUs - startUs;
+                    ev.tsUs = 0;
+                } else {
+                    ev.tsUs -= startUs;
+                }
                 traceEvents_.push_back(ev);
             }
         }

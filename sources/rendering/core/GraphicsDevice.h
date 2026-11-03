@@ -25,6 +25,8 @@ public:
     // it doesn't hide the device-hang race DRED is meant to catch.
     static void EnableDredForStress(bool enable);
     static void EnableGbvForStress(bool enable);
+    // --no-d3d-debug: a Debug run without the D3D12 debug layer (before device creation; GBV keeps it).
+    static void DisableDebugLayer(bool disable);
     // True when GPU-based validation is on (Debug, `--gbv` / `--scene-stress-gbv`). Paths GBV cannot track take their
     // trackable twin under it -- the G-buffer's merged bindless ExecuteIndirect (ShadowGpuData).
     static bool GbvEnabled();

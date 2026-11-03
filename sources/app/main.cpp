@@ -724,6 +724,11 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--dred")) {
             GraphicsDevice::EnableDredForStress(true);
         }
+        // "--no-d3d-debug": a Debug run without the D3D12 debug layer -- what the layer's validation of every recorded call
+        // costs the frame, and a faster Debug session when validation is not the question.
+        if (std::strstr(lpCmdLine, "--no-d3d-debug")) {
+            GraphicsDevice::DisableDebugLayer(true);
+        }
         if (const char* flag = std::strstr(lpCmdLine, "scene-stress")) {
             int iterations = 0; // 0 => driver default
             if (const char* eq = std::strchr(flag, '=')) {

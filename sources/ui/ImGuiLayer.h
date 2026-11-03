@@ -36,6 +36,7 @@ public:
     bool HandleWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
     bool WantsMouse() const;
     bool WantsKeyboard() const;
+    bool WantsTextInput() const; // a text field is being typed in (WantsKeyboard is also true for a merely focused window)
     bool IsInitialized() const { return initialized_; }
     ImTextureID CreateTextureIdForSrv(ID3D12Device* device,
         ID3D12Resource* resource,

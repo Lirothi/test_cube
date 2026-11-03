@@ -461,9 +461,17 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
     // every far clipmap. The static walk below overwrites its own slots.
     casterLod_.assign(std::max<std::uint32_t>(count_, 1u), render::kCasterLodExactBit);
 
+    // S4: this frame's camera flags + crossfade per caster -- zero on a frame the indirect G-buffer does not run, so the
+    // cull emits nothing for the camera.
+    casterCamCpu_.assign(casterLod_.size(), 0u);
+    casterFadeCpu_.assign(casterLod_.size(), 0.0f);
+
     // Walk objects EXACTLY like Rebuild does — the caster slot cursor is the mapping. UpdateForFrame
     // rebuilds on any caster-count change before this runs, so the orders agree; the bounds guard
     // below is for the one frame a mismatch could slip through, not a supported state.
+    // ONE walk for the LOD table and the camera flags (2026-11-03): they were two passes over every object of the scene
+    // with the same caster test, slot count and mesh lookup -- 0.40 + 0.11 ms of the render thread's Debug frame on
+    // wind_test.
     std::optional<Profiler::ScopedCpu> walkScope(std::in_place, ProfilerScopes::kRefreshCasterLodsWalk);
     std::uint32_t idx = 0;
     for (const auto& objPtr : objects)
@@ -476,7 +484,8 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
         const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
         if (!mesh) { idx += slots; continue; }
 
-        if (mesh->IsChunkedSubmeshes())
+        const bool chunked = mesh->IsChunkedSubmeshes();
+        if (chunked)
         {
             const std::vector<std::uint8_t>& lods = ro->ChunkCameraLods();
             const auto it = meshFirstGroup_.find(mesh);
@@ -497,56 +506,35 @@ void ShadowGpuData::RefreshCasterLods(Renderer* renderer,
                 render::EffectiveDrawLod(ro->ComputeReceiverLodTier(cameraPos)));
             for (std::uint32_t s = 0; s < slots; ++s) { casterLod_[idx + s] = lod; }
         }
+
+        // Candidates: eligible AND kept by the camera's CPU frustum cull this frame. The
+        // rest carry stale verdicts and would only cost an empty ExecuteIndirect per group
+        // (measured: the wall camera at K=4 issued ~all 448 groups for 7 visible objects).
+        if (gbufferIndirectFrame_ && obj->GBufferIndirect() && obj->CameraVisibleAt(frameNumber))
+        {
+            const bool occluded = cameraOcclusionValid && obj->CameraOccluded();
+            const std::vector<std::uint8_t>& mask = ro->ChunkCameraVisible();
+            // The CPU path's crossfade rule (RenderableObject::Render): never for a chunked
+            // mesh, only when a next tier exists. Buckets stop at kMaxShadowLods.
+            const unsigned int lod = casterLod_[idx] & render::kCasterLodMask;
+            const float fadeWeight = ro->GetCameraLodFade();
+            const bool fading = !chunked && fadeWeight > 0.0f && (lod + 1u) < mesh->GetLodCount() &&
+                                (lod + 1u) < render::kMaxShadowLods;
+            for (std::uint32_t s = 0; s < slots; ++s)
+            {
+                // A chunk's mask is its frustum AND occlusion verdict (S1 + S3a); a whole
+                // object takes the history's verdict.
+                const bool skip = chunked ? (s < mask.size() && mask[s] == 0u) : occluded;
+                casterCamCpu_[idx + s] = 1u | (skip ? 2u : 0u);
+                casterFadeCpu_[idx + s] = fading ? fadeWeight : 0.0f;
+            }
+        }
         idx += slots;
     }
     walkScope.reset();
-    // S4: this frame's camera flags + crossfade per caster -- zero on a frame the indirect
-    // G-buffer does not run, so the cull emits nothing for the camera. Same object walk, same
-    // cursor as the LOD table above.
-    std::optional<Profiler::ScopedCpu> cameraScope(std::in_place, ProfilerScopes::kRefreshCasterLodsCamera);
-    casterCamCpu_.assign(casterLod_.size(), 0u);
-    casterFadeCpu_.assign(casterLod_.size(), 0.0f);
-    if (gbufferIndirectFrame_)
-    {
-        std::uint32_t c = 0;
-        for (const auto& objPtr : objects)
-        {
-            const RenderableObjectBase* obj = objPtr.get();
-            if (!IsCaster(obj)) { continue; }
-            const std::uint32_t slots = static_cast<std::uint32_t>(CasterSlots(obj));
-            if (c + slots > casterCamCpu_.size()) { break; }
-            const RenderableObject* ro = obj->AsRenderableObject();
-            const Mesh* mesh = ro ? ro->GetMesh() : nullptr;
-            // Candidates: eligible AND kept by the camera's CPU frustum cull this frame. The
-            // rest carry stale verdicts and would only cost an empty ExecuteIndirect per group
-            // (measured: the wall camera at K=4 issued ~all 448 groups for 7 visible objects).
-            if (obj->GBufferIndirect() && mesh && obj->CameraVisibleAt(frameNumber))
-            {
-                const bool chunked = mesh->IsChunkedSubmeshes();
-                const bool occluded = cameraOcclusionValid && obj->CameraOccluded();
-                const std::vector<std::uint8_t>& mask = ro->ChunkCameraVisible();
-                // The CPU path's crossfade rule (RenderableObject::Render): never for a chunked
-                // mesh, only when a next tier exists. Buckets stop at kMaxShadowLods.
-                const unsigned int lod = casterLod_[c] & render::kCasterLodMask;
-                const float fadeWeight = ro->GetCameraLodFade();
-                const bool fading = !chunked && fadeWeight > 0.0f && (lod + 1u) < mesh->GetLodCount() &&
-                                    (lod + 1u) < render::kMaxShadowLods;
-                for (std::uint32_t s = 0; s < slots; ++s)
-                {
-                    // A chunk's mask is its frustum AND occlusion verdict (S1 + S3a); a whole
-                    // object takes the history's verdict.
-                    const bool skip = chunked ? (s < mask.size() && mask[s] == 0u) : occluded;
-                    casterCamCpu_[c + s] = 1u | (skip ? 2u : 0u);
-                    casterFadeCpu_[c + s] = fading ? fadeWeight : 0.0f;
-                }
-            }
-            c += slots;
-        }
-    }
     // Change detection for the page cache: any LOD move invalidates cached pages (they hold
     // the old geometry). Rebuild resizes the table, which reads as a change — correct, a new
     // caster set must flush too.
-    cameraScope.reset();
     std::optional<Profiler::ScopedCpu> uploadScope(std::in_place, ProfilerScopes::kRefreshCasterLodsUpload);
     if (casterLodPrev_ != casterLod_)
     {

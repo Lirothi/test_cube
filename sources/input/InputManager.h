@@ -10,7 +10,9 @@
 class InputManager {
 public:
     void Initialize(HWND hwnd);
-    void NewFrame(); // Reset delta/pressed/released at the start of the frame
+    // The frame's input: the presses, releases, mouse motion and wheel that arrived since the last NewFrame (whenever
+    // their messages were pumped) become this frame's, and the accumulators start over.
+    void NewFrame();
 
     // Forward WndProc messages from App::WndProc
     void OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -59,6 +61,12 @@ private:
     std::array<uint8_t, 256> keyDown_{};     // Current state
     std::array<uint8_t, 256> keyPressed_{};  // Triggered during this frame
     std::array<uint8_t, 256> keyReleased_{}; // Released during this frame
+    // Game thread plan G8 fix (2026-11-03): what the window's messages brought since the last NewFrame. The game thread
+    // pumps messages while it waits for the render thread (RenderThread::WaitIdle), i.e. after this frame's Tick, and
+    // NewFrame used to ZERO the frame's state -- every press, release and mouse move that arrived during the wait was
+    // gone before the next Tick saw it (F9 in Debug, where the wait is most of the frame, almost never toggled).
+    std::array<uint8_t, 256> pendingPressed_{};
+    std::array<uint8_t, 256> pendingReleased_{};
 
     bool lButtonDown_ = false;
     bool mButtonDown_ = false;
@@ -67,5 +75,8 @@ private:
     int mouseDX_ = 0;
     int mouseDY_ = 0;
     int mouseWheelDelta_ = 0;
+    int pendingDX_ = 0;
+    int pendingDY_ = 0;
+    int pendingWheel_ = 0;
     bool mouseCaptured_ = false;
 };

@@ -111,7 +111,11 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     }
 #endif
 
-    if (!uiCapturingKeyboard)
+    // The function-key toggles never type text, so only a text field being typed in holds them back. Gated on
+    // WantCaptureKeyboard -- true whenever an ImGui window has the focus, i.e. nearly always with the editor's panels
+    // open -- F9 (the profiler overlay), F3, F5, F6, F10 and F12 did nothing in the editor (2026-11-03, owner: "F9 does
+    // not work for the overlay"). The Ctrl combinations below still yield to any keyboard focus (Ctrl+V pastes).
+    if (!renderer.ImGuiWantsTextInput())
     {
         if (input.WasActionPressed("ToggleProfiler"))
         {
@@ -136,6 +140,27 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         {
             render::g_lodEnabled_game = !render::g_lodEnabled_game; // F10: A/B Step 6 mesh LOD
         }
+        if (input.WasActionPressed("CycleReflectionSource"))
+        {
+            // F5: cycle None -> SkyOnly -> SSR -> RT -> None (skip RT on
+            // non-RT hardware).
+            const bool rt = renderer.IsRaytracingSupported();
+            switch (settings_.reflectionSource)
+            {
+            case ReflectionSource::None:    settings_.reflectionSource = ReflectionSource::SkyOnly; break;
+            case ReflectionSource::SkyOnly: settings_.reflectionSource = ReflectionSource::SSR; break;
+            case ReflectionSource::SSR:     settings_.reflectionSource = rt ? ReflectionSource::RT : ReflectionSource::None; break;
+            default:                        settings_.reflectionSource = ReflectionSource::None; break;
+            }
+        }
+        if (input.WasActionPressed("ToggleRTDebugView"))
+        {
+            settings_.rtDebugView = !settings_.rtDebugView; // F6: S6 RT hit/visibility debug viz -> Reflection target
+        }
+    }
+
+    if (!uiCapturingKeyboard)
+    {
         if (input.WasActionPressed("ToggleIndirectShadows"))
         {
             // Ctrl+I: A/B Rung-0 GPU-driven indirect shadow submission vs the CPU path.
@@ -159,23 +184,6 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
             case render::ShadowMode::VSM:    render::g_shadowMode_game = render::ShadowMode::Sdsm;   break;
             default:                         render::g_shadowMode_game = render::ShadowMode::Legacy; break;
             }
-        }
-        if (input.WasActionPressed("CycleReflectionSource"))
-        {
-            // F5: cycle None -> SkyOnly -> SSR -> RT -> None (skip RT on
-            // non-RT hardware).
-            const bool rt = renderer.IsRaytracingSupported();
-            switch (settings_.reflectionSource)
-            {
-            case ReflectionSource::None:    settings_.reflectionSource = ReflectionSource::SkyOnly; break;
-            case ReflectionSource::SkyOnly: settings_.reflectionSource = ReflectionSource::SSR; break;
-            case ReflectionSource::SSR:     settings_.reflectionSource = rt ? ReflectionSource::RT : ReflectionSource::None; break;
-            default:                        settings_.reflectionSource = ReflectionSource::None; break;
-            }
-        }
-        if (input.WasActionPressed("ToggleRTDebugView"))
-        {
-            settings_.rtDebugView = !settings_.rtDebugView; // F6: S6 RT hit/visibility debug viz -> Reflection target
         }
 
         const auto setDlssMode = [&renderer](sl::DLSSMode mode)

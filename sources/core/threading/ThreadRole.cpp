@@ -8,6 +8,8 @@
 #include <vector>
 
 #include "core/logging/Log.h"
+#include "core/profiling/Profiler.h"
+#include "core/profiling/ProfilerScopes.h"
 
 namespace threading
 {
@@ -93,6 +95,7 @@ void WaitRenderForGame(const char* site)
         }
         ++it->count;
     }
+    CPU_SCOPE(ProfilerScopes::kGameParkRender); // the game half waiting out the render thread's frame (a trace shows it)
     ParkRender();
 }
 

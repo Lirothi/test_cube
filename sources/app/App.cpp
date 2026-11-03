@@ -1383,6 +1383,8 @@ namespace
         // mask, 9 GB1 normal (colour), 10 shading model (GBAux.b x5: water white), 11 GBAux alpha
         // (the water's reflection weight), 12 the water trace's hit mask, 13 GB0 alpha (~roughness);
         // `debug.texMode` turns the blit on.
+        // The profiler overlay (F9) without a key: a headless --shot of it, or MCP set_settings.
+        if (setting == "debug.profilerOverlay") { renderSettings.showProfiler = value != 0.0f; return true; }
         if (setting == "debug.texMode")    { renderSettings.debugTexMode = value != 0.0f; return true; }
         if (setting == "debug.tex")        { renderSettings.debugTexTarget = (int)value; return true; }
         if (setting == "debug.texMip")     { renderSettings.debugTexMip = (int)value; return true; }
@@ -1682,9 +1684,14 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
 
         const bool mouseMessage = message >= WM_MOUSEFIRST && message <= WM_MOUSELAST;
         const bool keyMessage = message >= WM_KEYFIRST && message <= WM_KEYLAST;
+        // The function keys are the engine's debug toggles and never type text: they reach InputManager unless a text
+        // field is being typed in. Held back by WantCaptureKeyboard -- true whenever an ImGui window has the focus,
+        // i.e. nearly always with the editor's panels open -- F9 (the profiler overlay), F3, F5, F6, F10, F11 never
+        // arrived there (2026-11-03, owner: "F9 does not work"). AppController gates their actions the same way.
+        const bool functionKey = keyMessage && wParam >= VK_F1 && wParam <= VK_F24;
         const bool consumedByImGui =
             (mouseMessage && renderer.ImGuiWantsMouse()) ||
-            (keyMessage && renderer.ImGuiWantsKeyboard());
+            (keyMessage && (functionKey ? renderer.ImGuiWantsTextInput() : renderer.ImGuiWantsKeyboard()));
         const bool inputStateRelease =
             message == WM_KEYUP ||
             message == WM_SYSKEYUP ||
@@ -2897,11 +2904,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 // the hand-over (ImGui's textures, GPU work, the knobs' twins, the scene's render copies).
                 CPU_SCOPE(ProfilerScopes::kGameSimulate);
                 rtaudit::Jitter(); // --rt-audit: a different overlap every frame (nothing otherwise)
-                input.NewFrame();
                 inputFrames.fetch_add(1, std::memory_order_release); // G9: this frame's input is being read
                 if (!pumpMessages()) {
                     break;
                 }
+                input.NewFrame(); // after the pump: this frame takes what came since the last one, the wait's too
                 advanceTime();
                 beginUi();
                 tickUi();
@@ -2947,11 +2954,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             else
             {
                 CPU_SCOPE(ProfilerScopes::kWholeCycle);
-                input.NewFrame();
                 inputFrames.fetch_add(1, std::memory_order_release); // G9: this frame's input is being read
                 if (!pumpMessages()) {
                     break;
                 }
+                input.NewFrame(); // after the pump (as with a render thread)
                 beginUi();
                 advanceTime();
                 renderUpkeep();

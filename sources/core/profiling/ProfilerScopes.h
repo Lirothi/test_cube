@@ -72,6 +72,7 @@ extern const Profiler::ScopeNameKey kRenderThreadFrame; // G8: the render thread
 extern const Profiler::ScopeNameKey kGameHandOver;     // G8: with a render thread, the frame start's upkeep and Sync
 extern const Profiler::ScopeNameKey kRhiThreadOp;      // G10b: one queue operation on the RHI thread (a frame's submit)
 extern const Profiler::ScopeNameKey kRhiThreadWait;    // G10b: a thread waiting for the RHI thread's ops
+extern const Profiler::ScopeNameKey kGameParkRender;   // G8b: threading::WaitRenderForGame parking the render thread
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassTextureStreaming;
 extern const Profiler::ScopeNameKey kPassObjectCompute;
@@ -230,7 +231,6 @@ extern const Profiler::ScopeNameKey kUpdateCascades;
 // trace 2026-10-21, wind_test Release: a third of the main thread's cycle).
 extern const Profiler::ScopeNameKey kRefreshCasterLods;
 extern const Profiler::ScopeNameKey kRefreshCasterLodsWalk;    // the receiver LOD per caster slot
-extern const Profiler::ScopeNameKey kRefreshCasterLodsCamera;  // the camera flags + crossfade (indirect G-buffer)
 extern const Profiler::ScopeNameKey kRefreshCasterLodsUpload;  // the LOD tables into the ring (+ S7 movable bit)
 extern const Profiler::ScopeNameKey kRefreshCasterLodsGroups;  // the virtual-group bases
 extern const Profiler::ScopeNameKey kSceneEditorSelection;

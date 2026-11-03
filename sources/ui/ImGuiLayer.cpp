@@ -376,6 +376,11 @@ bool ImGuiLayer::WantsKeyboard() const
     return initialized_ && ImGui::GetIO().WantCaptureKeyboard;
 }
 
+bool ImGuiLayer::WantsTextInput() const
+{
+    return initialized_ && ImGui::GetIO().WantTextInput;
+}
+
 ImTextureID ImGuiLayer::CreateTextureIdForSrv(ID3D12Device* device,
     ID3D12Resource* resource,
     const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc,

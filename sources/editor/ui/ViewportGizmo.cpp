@@ -902,6 +902,13 @@ void ViewportGizmo::Update(EditorContext& ctx,
     {
         for (const EditorObject& object : ctx.document.Objects())
         {
+            // The type first: a Zone holds a string and two vectors, and in Debug (_ITERATOR_DEBUG_LEVEL 2) every one of
+            // them allocates its iterator proxy even empty -- built for each of wind_test's 1564 objects every frame, this
+            // loop was 3.76 of ViewportGizmo::Update's 4.25 ms on a level without a single zone (2026-11-03).
+            if (object.type != editorzone::kTypeName)
+            {
+                continue;
+            }
             editorzone::Zone zone;
             if (!editorzone::FromObject(object, zone))
             {

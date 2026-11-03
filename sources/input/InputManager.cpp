@@ -14,11 +14,16 @@ void InputManager::Initialize(HWND hwnd) {
 }
 
 void InputManager::NewFrame() {
-    for (auto& v : keyPressed_) { v = 0; }
-    for (auto& v : keyReleased_) { v = 0; }
-    mouseDX_ = 0;
-    mouseDY_ = 0;
-    mouseWheelDelta_ = 0;
+    keyPressed_ = pendingPressed_;
+    keyReleased_ = pendingReleased_;
+    pendingPressed_.fill(0);
+    pendingReleased_.fill(0);
+    mouseDX_ = pendingDX_;
+    mouseDY_ = pendingDY_;
+    mouseWheelDelta_ = pendingWheel_;
+    pendingDX_ = 0;
+    pendingDY_ = 0;
+    pendingWheel_ = 0;
 }
 
 void InputManager::SetMouseCapture(bool capture) {
@@ -61,8 +66,8 @@ void InputManager::HandleRawInput_(HRAWINPUT hRaw) {
     RAWINPUT* ri = reinterpret_cast<RAWINPUT*>(buffer.data());
     if (ri->header.dwType == RIM_TYPEMOUSE && mouseCaptured_) {
         const RAWMOUSE& m = ri->data.mouse;
-        mouseDX_ += static_cast<int>(m.lLastX);
-        mouseDY_ += static_cast<int>(m.lLastY);
+        pendingDX_ += static_cast<int>(m.lLastX);
+        pendingDY_ += static_cast<int>(m.lLastY);
 
         if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) { rButtonDown_ = true; }
         if (m.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP)   { rButtonDown_ = false; }
@@ -79,7 +84,7 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_SYSKEYDOWN: {
             const int vk = static_cast<int>(wParam) & 0xFF;
             if (keyDown_[vk] == 0) {
-                keyPressed_[vk] = 1;
+                pendingPressed_[vk] = 1;
             }
             keyDown_[vk] = 1;
             break;
@@ -88,7 +93,7 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_SYSKEYUP: {
             const int vk = static_cast<int>(wParam) & 0xFF;
             if (keyDown_[vk] != 0) {
-                keyReleased_[vk] = 1;
+                pendingReleased_[vk] = 1;
             }
             keyDown_[vk] = 0;
             break;
@@ -100,7 +105,7 @@ void InputManager::OnWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
         case WM_RBUTTONDOWN: { rButtonDown_ = true; break; }
         case WM_RBUTTONUP: { rButtonDown_ = false; break; }
         case WM_MOUSEWHEEL: {
-            mouseWheelDelta_ += GET_WHEEL_DELTA_WPARAM(wParam);
+            pendingWheel_ += GET_WHEEL_DELTA_WPARAM(wParam);
             break;
         }
         case WM_ACTIVATE: {

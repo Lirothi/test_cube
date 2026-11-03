@@ -297,7 +297,20 @@ touches a render knob's render copy instead of its `_game` twin (`core/threading
 call after the G9 gates; 0 = one thread) runs `Scene::Render` on its own thread, named `Render` in the log (plan G8):
 the game thread runs the next frame's game half meanwhile -- the UI, the editor, MCP, `Scene::Tick`. Game-half code that
 reaches what the frame in flight uses calls `threading::WaitRenderForGame("<site>")` first (or hands over at Sync, as
-ImGui's textures do); the line `render thread: the game half waited for its frame N times` names the sites every 5 s.
+ImGui's textures do); the line `render thread: the game half waited for its frame N times` names the sites every 5 s,
+and a `--trace` shows each such wait as `Game: Park Render`. A UI panel waits only where it reaches the render half's
+objects (Developer Controls: its Visibility, Sky, Debug, CSM, VSM, Tessy, Streaming and Memory tabs), never as a whole:
+waiting for every tab took the overlap away whenever the window was open (Debug wind_test: the game half 12.6 -> 2.6 ms).
+INPUT is latched per frame: `InputManager` accumulates the presses, releases, mouse motion and wheel its messages bring
+whenever they are pumped (the game thread pumps while it waits -- `RenderThread::WaitIdle`, a park), and `NewFrame`,
+called right AFTER the frame's own pump, hands them to the frame; it used to zero them, so a key or a mouse move that
+arrived during the wait was lost (F9 in Debug almost never toggled). The function keys reach `InputManager` unless an
+ImGui text field is being typed in (not merely while a window has keyboard focus). `--set` / MCP
+`debug.profilerOverlay:1` turns the F9 overlay on without a key. WHAT A DEBUG FRAME PAYS FOR (2026-11-03, wind_test with
+the editor and Developer Controls, two rounds): as built 13.0-13.2 ms; with `/Ob1` and no `/JMC` / `/RTC1` 6.3-9.1 ms
+(the render thread 11.4 -> 5.1-7.7); without the D3D12 debug layer (`--no-d3d-debug`, Debug only, GBV keeps the layer)
+11.4-11.8. A container of our own would only win STL's iterator checks back -- under `/Ob0` its `operator[]` is still a
+call; a Debug build at `_ITERATOR_DEBUG_LEVEL=0` does not link (the prebuilt Debug `mimalloc.lib` was compiled at 2).
 `frame.oneFrameThreadLag` (default 1, UE's `r.OneFrameThreadLag`; 0 = the game half waits for each frame right after
 handing it over: no overlap, no frame of lag); the line `frame: input to present N frames` measures it (0 / 1 / 0 for
 one thread / the default / lag 0). A gate that touches the frame's order runs in both modes (`--set=frame.renderThread:0`

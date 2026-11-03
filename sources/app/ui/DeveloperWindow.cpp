@@ -400,13 +400,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 )
 {
     CPU_SCOPE(ProfilerScopes::kBuildDeveloperWindow);
-    // Game thread plan G8b: open, the window reads and sets the render half everywhere (counters, targets, the ocean)
-    // -- it waits for the render thread's frame in flight first. Closed it costs nothing; the texture inspector and the
-    // ocean controls wait on their own when they are open.
-    if (open_)
-    {
-        threading::WaitRenderForGame("DeveloperWindow::Draw");
-    }
+    // Game thread plan G8b: the tabs that read or set the render half's own objects wait for the render thread's frame
+    // in flight -- just before the tab's content is drawn, below. The others work on the game half's copies (the
+    // settings, the knobs' _game twins, the game-owned cascade config) and the renderer's setters, which wait on their
+    // own; they keep the overlap. Waiting for every tab took it away whenever the window was open: on wind_test in Debug
+    // the game half stood 6.6 ms a frame in that wait (2026-11-03). The texture inspector and the ocean controls wait
+    // on their own when they are open.
     // Run independently of the selected tab and the window's visibility.
     if (sunElevationPlaying_)
     {
@@ -602,6 +601,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
         }
         ImGui::EndChild();
         ImGui::SameLine();
+        // The tabs that reach the render half's objects directly (the caster table, the VSM, the cascades and SDSM,
+        // the sky's and the clouds' LUT objects, the debug targets, the streaming registry, the memory providers).
+        switch (activeTab_)
+        {
+        case Tab::Visibility: case Tab::Sky: case Tab::Debug: case Tab::Csm: case Tab::Vsm: case Tab::Tessy:
+        case Tab::Streaming: case Tab::Memory:
+            threading::WaitRenderForGame("DeveloperWindow::Draw (render-half tab)");
+            break;
+        default:
+            break;
+        }
         // A separate child per tab preserves its scroll position; navigation stays visible.
         ImGui::PushID(static_cast<int>(activeTab_));
         if (ImGui::BeginChild("DeveloperControlsContent", ImVec2(0, 0), false,

@@ -3561,6 +3561,10 @@ void Scene::Render(Renderer* renderer) {
     // The editor selection, resolved from ids to pointers here because objectIds_ is what holds the
     // lockstep mapping. Kept out of SceneFrameData: this is a same-frame main-thread read, and the
     // frame data is for what the render threads consume.
+    // Only the LOD view's "selected only" filter reads the pointers, and the view is off by default: resolved every frame
+    // regardless, the walk below (a binary search per object) was 0.5 ms of the render thread's Debug frame on
+    // wind_test with nothing selected (2026-11-03).
+    if (render::g_lodDebugMode != render::LodDebugMode::Off)
     {
         CPU_SCOPE(ProfilerScopes::kSceneEditorSelection);
         // One pass over the objects testing each against the sorted selection, instead of a scan
@@ -3568,7 +3572,7 @@ void Scene::Render(Renderer* renderer) {
         // hundred selected meshes made it the most expensive thing in the editor frame.
         std::vector<const RenderableObjectBase*> sel;
         sel.reserve(renderSelection_.size());
-        for (size_t o = 0; o < objectIds_.size() && o < objects_.size(); ++o)
+        for (size_t o = 0; o < objectIds_.size() && o < objects_.size() && !renderSelection_.empty(); ++o)
         {
             if (std::binary_search(renderSelection_.begin(),
                     renderSelection_.end(), objectIds_[o]))
