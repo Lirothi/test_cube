@@ -26,6 +26,7 @@
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0: per-view visibility counters
 #include "rendering/core/RenderStats.h"     // occlusion plan S0: draw/primitive totals in the readout
 #include "core/diagnostics/ArtifactWriter.h" // S7: headless cascade readout dump
+#include "core/diagnostics/BootProfile.h"    // game thread plan G10d: the level load's phases
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -164,7 +165,10 @@ void Scene::InitializeCommonResources(Renderer* renderer, ID3D12GraphicsCommandL
 
 void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* uploadCmdList, std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>* uploadKeepAlive)
 {
-    sceneRenderer_.FinalizeLevelLoad(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
+    {
+        BOOT_SCOPE("SceneResources::Finalize");
+        sceneRenderer_.FinalizeLevelLoad(renderer, objects_, uploadCmdList, uploadKeepAlive, skyBox_.get());
+    }
     SyncObjectsForRender(SceneObjectSyncReason::LevelLoad);
     // Local-light plan S9e: a fresh level starts from the initial shadow capacity -- the last level's lights do not keep
     // their view buffers resident; its own selection grows it again at the first ReconcileShadowMode. GPU idle here, and
@@ -182,10 +186,16 @@ void Scene::FinalizeLevelLoad(Renderer* renderer, ID3D12GraphicsCommandList* upl
     // NOTE: anything FillBounds/Rebuild consumes must be identical here and in a mid-session
     // RebuildShadowCasters — a value published elsewhere on a different schedule (like the removed
     // W5 sway-extent global, docs/bug_shadow_lod_bias_perf.md) splits the two builds' cost/behavior.
-    shadowGpu_.Rebuild(renderer, objects_);
+    {
+        BOOT_SCOPE("ShadowGpuData::Rebuild");
+        shadowGpu_.Rebuild(renderer, objects_);
+    }
     // Rung 2 mega-buffer: concatenate the caster meshes' VB/IB on this GPU-idle upload CL (meshes
     // are all in COMMON here, so the copy uses implicit promotion) for the VSM per-page draws.
-    shadowGpu_.EnsureMegaBuffer(renderer, uploadCmdList);
+    {
+        BOOT_SCOPE("ShadowGpuData::EnsureMegaBuffer");
+        shadowGpu_.EnsureMegaBuffer(renderer, uploadCmdList);
+    }
     BumpStaticSetVersion(); // Step 11: a fresh level = a new static caster set
     // Rung 2 (Step 24b): allocate the persistent VSM page pool + page table only when VSM is the
     // active mode — Legacy mode keeps ZERO VSM resources resident. A runtime Ctrl+V switch reconciles

@@ -68,6 +68,7 @@ namespace
 #include "rendering/core/PhotographicSettingsJson.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SceneObjectFactory.h" // G10d: MeshAssetLoadScope
 #include "app/scene/SceneObjectRegistry.h"
 #include "core/math/Math.h"
 #include "rendering/lighting/LightManager.h"
@@ -212,6 +213,7 @@ void AddAnonymousObjects(Scene& scene, SceneObjectRegistry::ObjectList objects)
 void JsonLevel::Load(const LevelLoadContext& ctx)
 {
     BOOT_SCOPE("JsonLevel::Load");
+    SceneObjectFactory::MeshAssetLoadScope meshAssets; // game thread plan G10d: each mesh.json read once per load
     auto& renderer = ctx.renderer;
     auto& scene = ctx.scene;
     auto& lightManager = scene.GetLightManager();

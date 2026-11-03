@@ -2504,7 +2504,11 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
             {
                 MEM_SCOPE(MemTag::Scene); // the loaders' own scopes (meshes, textures, ocean) narrow it
-                renderer.WaitForPreviousFrame();
+                BOOT_SCOPE("Level switch (runtime)"); // game thread plan G10d: what the frame stands still for
+                {
+                    BOOT_SCOPE("WaitForPreviousFrame (level switch)");
+                    renderer.WaitForPreviousFrame();
+                }
 
                 bool levelLoaded = false;
                 UploadBatch levelBatch;
@@ -2521,7 +2525,10 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                         : levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options);
                     if (levelLoaded)
                     {
-                        levelBatch.SubmitAndWait(&renderer);
+                        {
+                            BOOT_SCOPE("UploadBatch::SubmitAndWait");
+                            levelBatch.SubmitAndWait(&renderer);
+                        }
                         appController_.ApplySceneGraphicsSettings(scene);
                     }
                 }

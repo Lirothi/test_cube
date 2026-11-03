@@ -4,6 +4,7 @@
 
 #include "app/levels/JsonLevel.h"
 #include "app/scene/Scene.h"
+#include "core/diagnostics/BootProfile.h"
 #include "rendering/core/UploadBatch.h"
 
 namespace
@@ -74,10 +75,14 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx,
 
     if (activeLevel_)
     {
+        BOOT_SCOPE("Level::Unload");
         activeLevel_->Unload(ctx);
     }
 
-    scene.InitializeCommonResources(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
+    {
+        BOOT_SCOPE("Scene::InitializeCommonResources");
+        scene.InitializeCommonResources(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
+    }
 
     activeLevel_ = it->second.get();
     activeLevelName_ = it->first;
@@ -93,7 +98,10 @@ bool LevelManager::LoadLevel(std::string_view name, const LevelLoadContext& ctx,
         RestoreCameraTransform(scene.CameraRef(), *preservedCameraTransform);
     }
 
-    scene.FinalizeLevelLoad(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
+    {
+        BOOT_SCOPE("Scene::FinalizeLevelLoad");
+        scene.FinalizeLevelLoad(&renderer, ctx.uploads.CommandList(), ctx.uploads.KeepAlive());
+    }
 
     return true;
 }

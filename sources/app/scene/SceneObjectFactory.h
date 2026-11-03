@@ -61,6 +61,24 @@ namespace SceneObjectFactory
     std::vector<std::string> MeshAssetErrors(const nlohmann::json& objectJson,
                                              MeshAssetScanCache* cache = nullptr);
 
+    // Game thread plan G10d: while one of these lives on a thread, every ResolveMeshAsset on that thread without a
+    // cache of its own reads each mesh.json once (JsonLevel::Load holds one). A level load resolved every object's
+    // asset from disk -- twice for a static mesh (its creator, then CreateStaticMeshFromJson): ~2900 file reads and
+    // parses on wind_test, most of the 100 ms its 1454 objects took to create. Scoped to one load, so an edited
+    // mesh.json is read again by the next one.
+    class MeshAssetLoadScope
+    {
+    public:
+        MeshAssetLoadScope();
+        ~MeshAssetLoadScope();
+        MeshAssetLoadScope(const MeshAssetLoadScope&) = delete;
+        MeshAssetLoadScope& operator=(const MeshAssetLoadScope&) = delete;
+
+    private:
+        MeshAssetScanCache cache_;
+        MeshAssetScanCache* outer_ = nullptr;
+    };
+
     // Create a TransparentStaticMesh from a level/editor object JSON entry.
     std::unique_ptr<RenderableObjectBase> CreateTransparentMeshFromJson(Scene& scene, const nlohmann::json& objectJson);
 

@@ -37,7 +37,7 @@ namespace
         float mouseSmoothingMs = 0.0f; // g_cameraMouseSmoothingMs: 0 = the look input applied at once
         bool renderThread = true;      // threading::g_renderThreadEnabled (game thread plan G8/G9): on by default
         bool oneFrameThreadLag = true; // threading::g_oneFrameThreadLag: UE's r.OneFrameThreadLag 1
-        bool rhiThread = false;        // threading::g_rhiThreadEnabled (G10b, UE r.RHIThread.Enable): off until measured
+        bool rhiThread = true;         // threading::g_rhiThreadEnabled (G10b, UE r.RHIThread.Enable): on by default
         bool visibilityChunkMask = true;
         int occlusionMethod = static_cast<int>(vis::OcclusionMethod::Queries);
         int occlusionQueryLatency = static_cast<int>(vis::kOcclusionBufferedFrames);

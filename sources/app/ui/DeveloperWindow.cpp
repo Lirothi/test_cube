@@ -725,7 +725,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 DevHelp("Game thread plan G10b, UE r.RHIThread.Enable. On: the frame's submission -- its command "
                         "lists, the waits between the queues, Present and the frame fences -- runs on a thread of its "
                         "own, so the frame ends before Present and the next one records meanwhile (at most one frame "
-                        "ahead of it). Off (the default): the frame submits and presents itself. The picture is the "
+                        "ahead of it); the default. Off: the frame submits and presents itself. The picture is the "
                         "same either way.");
 
                 ImGui::Separator();

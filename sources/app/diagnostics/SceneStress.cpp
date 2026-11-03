@@ -1118,7 +1118,11 @@ private:
             return;
         }
 
-        renderer_.WaitForPreviousFrame();
+        BOOT_SCOPE("Level switch (runtime)");
+        {
+            BOOT_SCOPE("WaitForPreviousFrame (level switch)");
+            renderer_.WaitForPreviousFrame();
+        }
 
         UploadBatch levelBatch;
         if (levelBatch.Begin(&renderer_))
@@ -1134,7 +1138,10 @@ private:
                 : levelManager_.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options);
             if (levelLoaded)
             {
-                levelBatch.SubmitAndWait(&renderer_);
+                {
+                    BOOT_SCOPE("UploadBatch::SubmitAndWait");
+                    levelBatch.SubmitAndWait(&renderer_);
+                }
                 if (onLevelLoaded_) { onLevelLoaded_(); }
             }
         }

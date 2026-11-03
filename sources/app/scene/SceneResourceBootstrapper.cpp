@@ -1,4 +1,5 @@
 #include "core/diagnostics/ArtifactWriter.h"
+#include "core/diagnostics/BootProfile.h" // game thread plan G10d: the level load's phases
 #include <cstdio>
 #include <utility>
 #include "app/scene/SceneResourceBootstrapper.h"
@@ -485,15 +486,19 @@ void SceneResourceBootstrapper::Finalize(Renderer* renderer,
     UploadList* uploadKeepAlive,
     Skybox* skybox)
 {
-    for (const auto& obj : objects)
     {
-        if (obj)
+        BOOT_SCOPE("Objects Init");
+        for (const auto& obj : objects)
         {
-            obj->Init(renderer, uploadCmdList, uploadKeepAlive);
+            if (obj)
+            {
+                obj->Init(renderer, uploadCmdList, uploadKeepAlive);
+            }
         }
     }
 
     RefreshHandles();
+    BOOT_SCOPE("RefreshObjectMaterials");
     RefreshObjectMaterials(renderer, objects, skybox);
 }
 

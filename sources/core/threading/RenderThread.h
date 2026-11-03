@@ -31,8 +31,9 @@ inline bool g_oneFrameThreadLag = true;
 // UE's r.RHIThread.Enable (game thread plan G10b): true moves the frame's submission -- ExecuteCommandLists, the waits and
 // signals between the queues, Present, the frame fences -- to a thread of its own (RhiQueue), so the frame ends before
 // Present and the next one records meanwhile. Developer Controls > Frame "RHI thread", graphics_settings.json
-// frame.rhiThread, --set frame.rhiThread. Taken by Renderer::BeginFrame. Off by default until measured.
-inline bool g_rhiThreadEnabled = false;
+// frame.rhiThread, --set frame.rhiThread. Taken by Renderer::BeginFrame. On by default since 2026-11-03 (the owner's
+// call after the G10b gates; the render thread's frame 0.3 ms shorter, 0.6 with VSync); 0 = the frame submits itself.
+inline bool g_rhiThreadEnabled = true;
 
 class RenderThread
 {

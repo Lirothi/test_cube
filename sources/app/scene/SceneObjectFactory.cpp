@@ -103,10 +103,27 @@ namespace SceneObjectFactory
         return scratch.is_object() ? &scratch : nullptr;
     }
 
+    namespace
+    {
+        thread_local MeshAssetScanCache* t_loadScopeCache = nullptr; // MeshAssetLoadScope
+    }
+
+    MeshAssetLoadScope::MeshAssetLoadScope()
+        : outer_(t_loadScopeCache)
+    {
+        t_loadScopeCache = &cache_;
+    }
+
+    MeshAssetLoadScope::~MeshAssetLoadScope()
+    {
+        t_loadScopeCache = outer_;
+    }
+
     json ResolveMeshAsset(const json& o, MeshAssetScanCache* cache)
     {
         const auto meshIt = o.find("mesh");
         if (meshIt == o.end() || !meshIt->is_string()) { return o; }
+        if (!cache) { cache = t_loadScopeCache; } // G10d: a level load reads each mesh.json once
 
         const json* assetPtr = LoadMeshAssetJson(meshIt->get<std::string>(), cache);
         if (!assetPtr) { return o; }

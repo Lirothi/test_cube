@@ -307,10 +307,12 @@ matrix`): random 0-2 ms pauses where the halves meet, and the render thread hash
 <field> xN` in the session log, the exit code the fields that moved (`app/diagnostics/RtAudit.h`). Run it after any
 change to what the game half touches -- for coverage over time: `--scene-stress=150 --rt-audit` rides the level churn
 (verdict at the harness's end), and an editor run with `--rt-audit=<s>` rides an MCP script; 600 s on one static view
-adds rare timing windows, not code paths. `frame.rhiThread` (default 0, UE's `r.RHIThread.Enable`; plan G10b) moves the
+adds rare timing windows, not code paths. `frame.rhiThread` (default 1 since 2026-11-03, UE's `r.RHIThread.Enable`; plan G10b) moves the
 frame's submission -- ExecuteCommandLists, the waits between the queues, Present, the frame fences -- to a thread named
 `RHI` (`rendering/core/RhiQueue.h`): every queue operation of a frame in flight goes through `Renderer::Rhi().Run`, never
-to the queue directly, and anything that needs them done waits with `Flush` (`WaitForPreviousFrame` does). A `--trace`
+to the queue directly, and anything that needs them done waits with `Flush` (`WaitForPreviousFrame` does). A level
+switch's phases are in the boot profile's dump as `Level switch (runtime)` (its tree is Debug: `--log-level=debug`;
+`--scene-stress=<n> --stress-level=<level.json>` boots into that level and reloads it first, plan G10d). A `--trace`
 lists its rows as GPU Graphics, GPU Compute, MainThread, RenderThread, RHIThread, then the workers
 (`thread_sort_index`). MCP `open_level {path, discardChanges}` switches the level (refused over unsaved edits unless told
 to discard them).
