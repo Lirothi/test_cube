@@ -18,6 +18,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <optional> // the main thread's "Whole Cycle" held across the loop's turn (render thread, plan G8)
 #include <thread>
 #include <mimalloc.h>
 #include <vector>
@@ -402,6 +403,8 @@ namespace
         if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
         // Game thread plan G8: Scene::Render on a thread of its own; the loop takes it at the next frame's start.
         if (setting == "frame.renderThread") { threading::g_renderThreadEnabled = value != 0.0f; return true; }
+        // UE's r.OneFrameThreadLag: 0 = the game half waits for each frame right after handing it over.
+        if (setting == "frame.oneFrameThreadLag") { threading::g_oneFrameThreadLag = value != 0.0f; return true; }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze_game = value != 0.0f; return true; }
@@ -2813,6 +2816,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 
         bool renderFramePending = false; // kicked, its after-frame work not done (a park may have finished it early)
         double gameWaitLogStart = GetTimeSeconds();
+        // "Whole Cycle" is the main thread's frame from its start (after BeginFrame's wait for the GPU) to the moment the
+        // frame is drawn. On one thread that is one block: the game half, the hand-over, Scene::Render. With a render
+        // thread (G8) it runs from the hand-over, through the next frame's game half beside the render thread, to the
+        // wait for it -- across the loop's turn, so it is held here and closed where that wait returns, before afterFrame
+        // ends the profiler's frame.
+        std::optional<Profiler::ScopedCpu> wholeCycle;
         while (isRunning_) {
             const bool threaded = threading::g_renderThreadEnabled; // switched only here, between frames
             if (threaded)
@@ -2839,6 +2848,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     CPU_SCOPE(ProfilerScopes::kRenderThreadWait);
                     renderThread.WaitIdle(); // UE FFrameEndSync: never more than one frame ahead; pumps messages
                 }
+                wholeCycle.reset(); // the frame is drawn
                 renderFramePending = false;
                 afterFrame();
                 if (!isRunning_) {
@@ -2853,30 +2863,30 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
 
             beginFrame();
+            if (threaded)
+            {
+                wholeCycle.emplace(ProfilerScopes::kWholeCycle); // closed where the wait for this frame returns
+                CPU_SCOPE(ProfilerScopes::kGameHandOver);
+                renderUpkeep();
+                handOver();
+            }
+            else
             {
                 CPU_SCOPE(ProfilerScopes::kWholeCycle);
-                if (threaded)
-                {
-                    renderUpkeep();
-                    handOver();
+                input.NewFrame();
+                if (!pumpMessages()) {
+                    break;
                 }
-                else
-                {
-                    input.NewFrame();
-                    if (!pumpMessages()) {
-                        break;
-                    }
-                    beginUi();
-                    advanceTime();
-                    renderUpkeep();
-                    tickUi();
-                    tickScene();
-                    loadPendingLevel();
-                    closeUi();
-                    handOver();
-                    threading::RoleScope renderRole(threading::ThreadRole::Render);
-                    renderScene();
-                }
+                beginUi();
+                advanceTime();
+                renderUpkeep();
+                tickUi();
+                tickScene();
+                loadPendingLevel();
+                closeUi();
+                handOver();
+                threading::RoleScope renderRole(threading::ThreadRole::Render);
+                renderScene();
             }
             if (threaded)
             {
@@ -2886,11 +2896,21 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                     renderScene();
                 });
                 renderFramePending = true;
+                if (!threading::g_oneFrameThreadLag)
+                {
+                    // UE's r.OneFrameThreadLag 0: the next frame's game half starts only once this one is drawn.
+                    {
+                        CPU_SCOPE(ProfilerScopes::kRenderThreadWait);
+                        renderThread.WaitIdle();
+                    }
+                    wholeCycle.reset(); // the frame is drawn
+                }
                 continue;
             }
             afterFrame();
             paceFrame();
         }
+        wholeCycle.reset();
         renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
 
         timeEndPeriod(1);

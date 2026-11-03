@@ -297,8 +297,10 @@ touches a render knob's render copy instead of its `_game` twin (`core/threading
 own thread, named `Render` in the log (plan G8): the game thread runs the next frame's game half meanwhile -- the UI,
 the editor, MCP, `Scene::Tick`. Game-half code that reaches what the frame in flight uses calls
 `threading::WaitRenderForGame("<site>")` first (or hands over at Sync, as ImGui's textures do); the line `render thread:
-the game half waited for its frame N times` names the sites every 5 s. A gate that touches the frame's order runs in both
-modes.
+the game half waited for its frame N times` names the sites every 5 s. `frame.oneFrameThreadLag` (default 1, UE's
+`r.OneFrameThreadLag`; 0 = the game half waits for each frame right after handing it over: no overlap, no frame of lag).
+A gate that touches the frame's order runs in both modes. A `--trace` lists its rows as GPU Graphics, GPU Compute,
+MainThread, RenderThread, then the workers (`thread_sort_index`).
 
 **Diagnostics are events, not files.** Anything a subsystem wants to say -- a pre-assert dump, a
 validator's mismatch list, a self-test's per-case lines and verdict, a cross-check that fired --

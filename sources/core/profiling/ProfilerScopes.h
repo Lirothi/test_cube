@@ -69,6 +69,7 @@ extern const Profiler::ScopeNameKey kImGuiEndFrame;    // G6: ImGui::Render + th
 extern const Profiler::ScopeNameKey kGameSimulate;     // G8: the game half's frame before it waits for the render thread
 extern const Profiler::ScopeNameKey kRenderThreadWait; // G8: the game thread waiting for the render thread's frame
 extern const Profiler::ScopeNameKey kRenderThreadFrame; // G8: the render thread's frame
+extern const Profiler::ScopeNameKey kGameHandOver;     // G8: with a render thread, the frame start's upkeep and Sync
 extern const Profiler::ScopeNameKey kPassPrologueClear;
 extern const Profiler::ScopeNameKey kPassTextureStreaming;
 extern const Profiler::ScopeNameKey kPassObjectCompute;

@@ -60,8 +60,8 @@ const Profiler::ScopeNameKey kGpuFrameKey = Profiler::RegisterTraceLiteral(L"GPU
 constexpr uint32_t kGpuTraceThreadIndex = 0u;           // direct queue
 constexpr uint32_t kGpuTraceThreadIndexCompute = 1u;    // async compute queue
 constexpr uint32_t kCpuTraceThreadIndexBase = 2u;       // CPU threads start after both GPU rows
-constexpr const char* kGpuTraceThreadName = "GPU Queue";
-constexpr const char* kGpuTraceThreadNameCompute = "GPU Queue (async compute)";
+constexpr const char* kGpuTraceThreadName = "GPU Graphics";       // the direct queue
+constexpr const char* kGpuTraceThreadNameCompute = "GPU Compute";  // the async compute queue
 // Built-in whole-CPU-frame counter, emitted automatically each EndFrame so no
 // manual CPU_SCOPE is needed; spans the profiler's BeginFrame..EndFrame bracket,
 // which includes Renderer::BeginFrame's fence wait.
@@ -1006,20 +1006,46 @@ void Profiler::WriteTraceJson(const TraceDumpData& dump) {
         LOG_ERROR(logging::LogCategory::Profiling, "trace capture FAILED: cannot write {}", fileName);
         return;
     }
+    // Rows in the order they are read (owner, 2026-11-03): GPU graphics, GPU compute, the main thread, the render thread
+    // (game thread plan G8), then every other thread in the order it first recorded. The tid follows that order -- the
+    // order every viewer falls back to -- and each row says it again as thread_sort_index (chrome://tracing, Perfetto).
+    std::vector<uint64_t> cpuTid(dump.threadNames.size(), 0u);
+    {
+        uint64_t next = kCpuTraceThreadIndexBase;
+        const auto place = [&](const char* name) {
+            for (size_t i = 0; i < dump.threadNames.size(); ++i) {
+                if (cpuTid[i] == 0u && dump.threadNames[i] == name) { cpuTid[i] = next++; }
+            }
+        };
+        place("MainThread");
+        place("RenderThread");
+        for (uint64_t& tid : cpuTid) {
+            if (tid == 0u) { tid = next++; }
+        }
+    }
+    const auto outputTid = [&](const TraceEvent& ev) -> uint64_t {
+        if (ev.category == TraceEvent::Category::Gpu) { return TraceOutputThreadIndex(ev); }
+        // A thread the name table does not know goes after every one it does.
+        return ev.threadIndex < cpuTid.size() ? cpuTid[ev.threadIndex]
+                                              : TraceOutputThreadIndex(ev) + cpuTid.size();
+    };
     out << "{\n\"traceEvents\":[\n";
     bool first = true;
     auto separator = [&]() { if (!first) { out << ",\n"; } first = false; };
-    auto threadName = [&](size_t tid, const std::string& name) {
+    auto threadName = [&](uint64_t tid, const std::string& name) {
         separator();
         out << "  {\"name\":\"thread_name\",\"ph\":\"M\",\"pid\":0,\"tid\":" << tid
             << ",\"args\":{\"name\":\"" << EscapeJson(name) << "\"}}";
+        separator();
+        out << "  {\"name\":\"thread_sort_index\",\"ph\":\"M\",\"pid\":0,\"tid\":" << tid
+            << ",\"args\":{\"sort_index\":" << tid << "}}";
     };
 #if PROF_GPU_ENABLED
     threadName(kGpuTraceThreadIndex, kGpuTraceThreadName);
     threadName(kGpuTraceThreadIndexCompute, kGpuTraceThreadNameCompute);
 #endif
-    for (size_t tid = 0; tid < dump.threadNames.size(); ++tid) {
-        if (!dump.threadNames[tid].empty()) { threadName(tid + kCpuTraceThreadIndexBase, dump.threadNames[tid]); }
+    for (size_t i = 0; i < dump.threadNames.size(); ++i) {
+        if (!dump.threadNames[i].empty()) { threadName(cpuTid[i], dump.threadNames[i]); }
     }
     // Cache escaped names once per distinct name, not once per event; do not
     // reserve an events-sized hash table for a capture with millions of events.
@@ -1032,7 +1058,7 @@ void Profiler::WriteTraceJson(const TraceDumpData& dump) {
         out << "  {\"name\":\"" << it->second << "\",\"cat\":\""
             << (ev.category == TraceEvent::Category::Gpu ? "GPU" : "CPU")
             << "\",\"ph\":\"X\",\"ts\":" << ev.tsUs << ",\"dur\":" << ev.durUs
-            << ",\"pid\":0,\"tid\":" << TraceOutputThreadIndex(ev);
+            << ",\"pid\":0,\"tid\":" << outputTid(ev);
         if (ev.hasFrameNumber) { out << ",\"args\":{\"frame\":" << ev.frameNumber << "}"; }
         out << "}";
     }

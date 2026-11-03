@@ -1056,6 +1056,10 @@ private:
                 {
                     inFlightBegin = frameBegin;
                     renderThread_.Kick([this]() { scene_.Render(&renderer_); });
+                    if (!threading::g_oneFrameThreadLag && !waitRenderThread())
+                    {
+                        return false; // UE's r.OneFrameThreadLag 0: drawn before the next frame's game half
+                    }
                     continue; // finished after the next frame's simulation, or below
                 }
                 const auto renderBegin = std::chrono::steady_clock::now();

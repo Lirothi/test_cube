@@ -60,6 +60,7 @@ const Profiler::ScopeNameKey kImGuiEndFrame = Profiler::RegisterTraceLiteral(L"I
 const Profiler::ScopeNameKey kGameSimulate = Profiler::RegisterTraceLiteral(L"Game: Simulate");
 const Profiler::ScopeNameKey kRenderThreadWait = Profiler::RegisterTraceLiteral(L"Game: Wait Render Thread");
 const Profiler::ScopeNameKey kRenderThreadFrame = Profiler::RegisterTraceLiteral(L"RenderThread Frame");
+const Profiler::ScopeNameKey kGameHandOver = Profiler::RegisterTraceLiteral(L"Game: Hand-over");
 const Profiler::ScopeNameKey kPassPrologueClear = Profiler::RegisterTraceLiteral(L"Pass_PrologueClear");
 const Profiler::ScopeNameKey kPassTextureStreaming = Profiler::RegisterTraceLiteral(L"Pass_TextureStreaming");
 const Profiler::ScopeNameKey kPassObjectCompute = Profiler::RegisterTraceLiteral(L"Pass_ObjectCompute");

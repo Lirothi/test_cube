@@ -705,6 +705,18 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "(messages, the clock, Scene::Tick) and waits for it before the UI and the hand-over; never "
                         "more than one frame ahead. Off: one thread, the frame as before. The picture is the same "
                         "either way.");
+                ImGui::BeginDisabled(!threading::g_renderThreadEnabled);
+                bool oneFrameLag = threading::g_oneFrameThreadLag;
+                if (GRAPHICS_CONTROL(OneFrameThreadLag, "oneFrameThreadLag",
+                        ImGui::Checkbox("One frame thread lag", &oneFrameLag)))
+                {
+                    threading::g_oneFrameThreadLag = oneFrameLag;
+                }
+                ImGui::EndDisabled();
+                DevHelp("UE r.OneFrameThreadLag (default on, as in UE). On: the game half runs the next frame while "
+                        "the render thread draws this one -- the overlap, and one frame between input and picture. "
+                        "Off: the game half waits for each frame right after handing it over -- no overlap, no frame "
+                        "of lag. Only with the render thread on.");
 
                 ImGui::Separator();
                 // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the
