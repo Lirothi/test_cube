@@ -39,6 +39,7 @@
 #include "rendering/shadows/ShadowGpuData.h" // Tessy N3: the cluster counter
 #include "rendering/shadows/TessySettings.h"
 #include "rendering/core/RasterSettings.h" // A6: the bindless checkbox
+#include "core/threading/RenderThread.h"  // game thread plan G8: the Frame tab's switch
 #include "ocean/OceanSimulation.h"
 #include "text/TextManager.h"
 
@@ -687,6 +688,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "which at a few hundred fps arrive unevenly and make a turn stutter. 0 = off. For "
                         "recording a video 40-80 ms reads smooth; the turn finishes after the button is let go. "
                         "Ctrl+click to type a value.");
+                bool renderThread = threading::g_renderThreadEnabled;
+                if (GRAPHICS_CONTROL(RenderThread, "renderThread", ImGui::Checkbox("Render thread", &renderThread)))
+                {
+                    threading::g_renderThreadEnabled = renderThread; // taken at the next frame's start
+                }
+                DevHelp("Game thread plan G8 (docs/game_thread_plan.md). On: Scene::Render -- views, recording, "
+                        "submit, Present -- runs on a thread of its own, while this thread simulates the next frame "
+                        "(messages, the clock, Scene::Tick) and waits for it before the UI and the hand-over; never "
+                        "more than one frame ahead. Off: one thread, the frame as before. The picture is the same "
+                        "either way.");
 
                 ImGui::Separator();
                 // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the

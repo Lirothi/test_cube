@@ -76,15 +76,16 @@ struct WindState
         // W8: the freeze substitutes the clock and nothing else, so every authored parameter still
         // reads exactly as it does in-game. Tracking the live clock while unfrozen is what makes
         // toggling it hold the current pose rather than snap to some stale time.
-        if (g_windFreeze)
+        // The game half's twins (game thread plan G5): this runs in Scene::Tick, which overlaps the render thread.
+        if (g_windFreeze_game)
         {
-            g_windFrozenTime += g_windStep;
-            g_windStep = 0.0f;
-            clockSeconds = g_windFrozenTime;
+            g_windFrozenTime_game += g_windStep_game;
+            g_windStep_game = 0.0f;
+            clockSeconds = g_windFrozenTime_game;
         }
         else
         {
-            g_windFrozenTime = clockSeconds;
+            g_windFrozenTime_game = clockSeconds;
         }
 
         prevTime = time;

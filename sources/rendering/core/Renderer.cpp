@@ -1890,6 +1890,7 @@ void Renderer::WaitForPreviousFrame() {
     const bool fromGame = threading::CurrentRole() == threading::ThreadRole::Game;
     if (fromGame)
     {
+        threading::ParkRender(); // G8: a render thread finishes its frame in flight first (no thread: nothing)
         threading::NoteRenderParked();
     }
     FlushHandOverSubmits(); // G7: the game's deferred GPU work goes first, so the idle below covers it

@@ -293,6 +293,9 @@ fixed-name artifacts use other prefixes and are never deleted. `python tools/che
 reports any new direct output (exit code = findings) — run it before committing. So does
 `python tools/check_render_knobs.py`: a game file (the command line, `--set`/MCP, settings, Developer Controls...) that
 touches a render knob's render copy instead of its `_game` twin (`core/threading/Knob.h`, docs/game_thread_plan.md G5).
+`frame.renderThread` 1 (Developer Controls > Frame "Render thread", `--set`, default 0) runs `Scene::Render` on its
+own thread, named `Render` in the log (plan G8): the game thread simulates the next frame meanwhile and does
+everything else that touches the renderer while it is idle. A gate that touches the frame's order runs in both modes.
 
 **Diagnostics are events, not files.** Anything a subsystem wants to say -- a pre-assert dump, a
 validator's mismatch list, a self-test's per-case lines and verdict, a cross-check that fired --

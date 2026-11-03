@@ -41,6 +41,21 @@ void ClearRenderParked() noexcept { g_renderParked.store(false, std::memory_orde
 
 bool RenderParked() noexcept { return g_renderParked.load(std::memory_order_acquire); }
 
+namespace
+{
+std::atomic<ParkRenderHook> g_parkRenderHook{nullptr};
+} // namespace
+
+void SetParkRenderHook(ParkRenderHook hook) noexcept { g_parkRenderHook.store(hook, std::memory_order_release); }
+
+void ParkRender()
+{
+    if (const ParkRenderHook hook = g_parkRenderHook.load(std::memory_order_acquire))
+    {
+        hook();
+    }
+}
+
 void ReportRoleViolation(const char* expected, const char* what, const char* file, int line) noexcept
 {
     g_violations.fetch_add(1u, std::memory_order_relaxed);

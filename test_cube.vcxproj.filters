@@ -513,6 +513,9 @@
     <ClCompile Include="sources/core/threading/ThreadRole.cpp">
       <Filter>sources\core\threading</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/threading/RenderThread.cpp">
+      <Filter>sources\core\threading</Filter>
+    </ClCompile>
     <ClCompile Include="sources/input/ActionMap.cpp">
       <Filter>sources\input</Filter>
     </ClCompile>
@@ -1161,6 +1164,9 @@
       <Filter>sources\core\threading</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/threading/Knob.h">
+      <Filter>sources\core\threading</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/threading/RenderThread.h">
       <Filter>sources\core\threading</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/task/TaskSystemEnki.h">

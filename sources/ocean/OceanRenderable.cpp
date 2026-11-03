@@ -715,7 +715,7 @@ void OceanRenderable::Tick(float deltaTime)
     // frozen frame (measured: the ocean alone put the run-to-run noise at 15.5 % of pixels, as large
     // as the wind signal being measured). PINNED to the same number rather than merely paused, so a
     // frozen frame is reproducible across runs instead of holding wherever wall-clock left it.
-    if (vfx::g_windFreeze) { elapsedTime_ = vfx::g_windFrozenTime; }
+    if (vfx::g_windFreeze_game) { elapsedTime_ = vfx::g_windFrozenTime_game; } // the game half's twins (G5)
 }
 
 void OceanRenderable::SyncSceneState(SceneObjectSyncReason reason)

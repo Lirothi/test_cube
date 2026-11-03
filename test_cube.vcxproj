@@ -354,6 +354,7 @@
     <ClCompile Include="sources/core/task/diagnostics/TaskSystemStress.cpp" />
     <ClCompile Include="sources/core/task/TaskSystemTBB.cpp" />
     <ClCompile Include="sources/core/threading/ThreadRole.cpp" />
+    <ClCompile Include="sources/core/threading/RenderThread.cpp" />
     <ClCompile Include="sources/input/ActionMap.cpp" />
     <ClCompile Include="sources/input/InputManager.cpp" />
     <ClCompile Include="sources/materials/Material.cpp" />
@@ -593,6 +594,7 @@
     <ClInclude Include="sources/core/task/TaskSystemLockFree.h" />
     <ClInclude Include="sources/core/threading/ThreadRole.h" />
     <ClInclude Include="sources/core/threading/Knob.h" />
+    <ClInclude Include="sources/core/threading/RenderThread.h" />
     <ClInclude Include="sources/core/task/diagnostics/TaskSystemStress.h" />
     <ClInclude Include="sources/core/task/TaskSystemEnki.h" />
     <ClInclude Include="sources/core/task/TaskSystemTBB.h" />

@@ -33,6 +33,7 @@
 #include "core/memory/MemTrace.h"
 #include "core/threading/ThreadRole.h" // game thread plan G1: the frame's phases, as App::Run gives them
 #include "core/threading/Knob.h"
+#include "core/threading/RenderThread.h" // G8: frame.renderThread 1 in the stress too
 #include "rendering/core/MemGates.h"
 #include "core/logging/Log.h"
 
@@ -912,9 +913,48 @@ private:
     // Renders `count` real frames. Mirrors the essential per-frame steps of the
     // interactive App loop (message pump + BeginFrame + level-request pump +
     // scene render). Returns false if a frame render threw (caught here).
+    // With frame.renderThread 1 (game thread plan G8) the frame is split as App::Run splits it: Scene::Render on the
+    // render thread while this thread simulates the next frame (messages, Scene::Tick) and then waits for it. The last
+    // frame is waited for before returning, so the driver's churn between calls meets an idle render thread.
     bool RenderFrames_(int count, const char* label, bool resizeDuringFrame = false)
     {
         UINT expectedResizeWidth = 0;
+        const bool threaded = threading::g_renderThreadEnabled;
+        std::chrono::steady_clock::time_point inFlightBegin{};
+        // A frame's end, after its Present: at once on one thread, after the wait for it with a render thread.
+        const auto finishFrame = [&](std::chrono::steady_clock::time_point frameBegin)
+        {
+            Profiler::Get().EndFrame();
+            memtrace::OnFrameEnd(renderer_.GetTotalFrameNumber());
+            memgate::OnFrameEnd(renderer_.GetDevice(), boot::ElapsedMs() / 1000.0); // --mem-selftest's leak
+            boot::AddBucket("frame: WHOLE",
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() - frameBegin).count(),
+                            label);
+            boot::AddCount("frames rendered");
+        };
+        // G8: the render thread's frame in flight, waited for and finished; false (the fault recorded) if it threw.
+        const auto waitRenderThread = [&]() -> bool
+        {
+            if (!renderThread_.InFlight())
+            {
+                return true;
+            }
+            try
+            {
+                renderThread_.WaitIdle();
+            }
+            catch (const std::exception& e)
+            {
+                std::snprintf(faultDetail_, sizeof(faultDetail_),
+                              "exception during %s frame (render thread): %.200s", label, e.what());
+                Log("EXCEPTION: %s\n", faultDetail_);
+                Profiler::Get().EndFrame();
+                return false;
+            }
+            finishFrame(inFlightBegin);
+            return true;
+        };
         for (int f = 0; f < count && !faultCaught_; ++f)
         {
             // Per-FRAME breakdown, in buckets rather than tree scopes: a stress run renders
@@ -922,6 +962,22 @@ private:
             // "a GBV frame costs 17 s" has three very different explanations -- the wait for the
             // previous frame, recording, or the submit -- and they need different fixes.
             const auto frameBegin = std::chrono::steady_clock::now();
+            if (threaded)
+            {
+                // The game half's frame up to the wait, while the render thread draws the previous one.
+                MSG msg = {};
+                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+                {
+                    TranslateMessage(&msg);
+                    DispatchMessage(&msg);
+                }
+                scene_.Tick(1.0f / 60.0f);
+                levelManager_.Tick(1.0f / 60.0f);
+                if (!waitRenderThread())
+                {
+                    return false;
+                }
+            }
             Profiler::Get().BeginFrame(renderer_.GetTotalFrameNumber());
             logging::SetFrameNumber(renderer_.GetTotalFrameNumber());
             // The frame's phases and roles as App::Run gives them (game thread plan G1); the driver runs as the
@@ -942,11 +998,14 @@ private:
             }
 
             // Service window messages (WM_SIZE from our resizes, paint, etc.).
-            MSG msg = {};
-            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+            if (!threaded)
             {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
+                MSG msg = {};
+                while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+                {
+                    TranslateMessage(&msg);
+                    DispatchMessage(&msg);
+                }
             }
 
             if (resizeDuringFrame)
@@ -979,8 +1038,11 @@ private:
                     threading::RoleScope renderRole(threading::ThreadRole::Render);
                     renderer_.Tick(1.0f / 60.0f);
                 }
-                scene_.Tick(1.0f / 60.0f);
-                levelManager_.Tick(1.0f / 60.0f);
+                if (!threaded)
+                {
+                    scene_.Tick(1.0f / 60.0f);
+                    levelManager_.Tick(1.0f / 60.0f);
+                }
 
                 PumpPendingLevelRequest_();
                 renderer_.EndImGuiFrame();
@@ -988,6 +1050,12 @@ private:
                 {
                     threading::RoleScope syncRole(threading::ThreadRole::Sync);
                     scene_.Sync(&renderer_);
+                }
+                if (threaded)
+                {
+                    inFlightBegin = frameBegin;
+                    renderThread_.Kick([this]() { scene_.Render(&renderer_); });
+                    continue; // finished after the next frame's simulation, or below
                 }
                 const auto renderBegin = std::chrono::steady_clock::now();
                 {
@@ -1008,14 +1076,11 @@ private:
                 return false;
             }
 
-            Profiler::Get().EndFrame();
-            memtrace::OnFrameEnd(renderer_.GetTotalFrameNumber());
-            memgate::OnFrameEnd(renderer_.GetDevice(), boot::ElapsedMs() / 1000.0); // --mem-selftest's leak
-            boot::AddBucket("frame: WHOLE",
-                            std::chrono::duration<double, std::milli>(
-                                std::chrono::steady_clock::now() - frameBegin).count(),
-                            label);
-            boot::AddCount("frames rendered");
+            finishFrame(frameBegin);
+        }
+        if (threaded && !waitRenderThread())
+        {
+            return false;
         }
         if (resizeDuringFrame)
         {
@@ -1347,6 +1412,7 @@ private:
     diag::ArtifactFile dredFile_;
     bool faultCaught_ = false;
     char faultDetail_[320] = {};
+    threading::RenderThread renderThread_; // G8: Scene::Render's thread under frame.renderThread 1
 
     int nextLevelIndex_ = g_sceneStressExtraLevel.empty() ? 0 : 3; // --stress-level boots into the extra level
     int resizeIndex_ = 0;

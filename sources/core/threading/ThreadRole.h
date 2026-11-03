@@ -51,6 +51,12 @@ inline bool GameParkedOrSync() noexcept
 {
     return CurrentRole() == ThreadRole::Sync || (CurrentRole() == ThreadRole::Game && RenderParked());
 }
+// How the game half parks a render THREAD (plan G8, core/threading/RenderThread.h): wait for its frame in flight.
+// Renderer::WaitForPreviousFrame calls ParkRender from the game role; with no render thread registered it does
+// nothing -- on one thread the render half is the game thread's own next phase. May rethrow what that frame threw.
+using ParkRenderHook = void (*)();
+void SetParkRenderHook(ParkRenderHook hook) noexcept;
+void ParkRender();
 
 void ReportRoleViolation(const char* expected, const char* what, const char* file, int line) noexcept;
 std::uint32_t RoleViolationCount() noexcept;

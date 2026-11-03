@@ -17,6 +17,7 @@ enum class GraphicsControl
     VSync,
     MaxFps,
     MouseSmoothing,
+    RenderThread,                 // game thread plan G8: frame.renderThread
     VisibilityChunkMask,          // Visibility ...
     OcclusionMethod,
     OcclusionQueryLatency,

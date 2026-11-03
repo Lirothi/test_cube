@@ -103,6 +103,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "rendering/core/RenderStats.h"
 #include "core/threading/ThreadRole.h" // game thread plan: the frame's phases and their roles
 #include "core/threading/Knob.h"      // G5: the knobs' exchange at boot
+#include "core/threading/RenderThread.h" // G8: Scene::Render on a thread of its own (frame.renderThread)
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
 #include <fstream>
@@ -399,6 +400,8 @@ namespace
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync_game = value != 0.0f; return true; }
         if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
+        // Game thread plan G8: Scene::Render on a thread of its own; the loop takes it at the next frame's start.
+        if (setting == "frame.renderThread") { threading::g_renderThreadEnabled = value != 0.0f; return true; }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze_game = value != 0.0f; return true; }
@@ -2338,10 +2341,19 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         double lastTime = GetTimeSeconds();
         bool firstFrameDumped = false;
         double frameStart = GetTimeSeconds();
-        // The frame's phases, on one thread (frame.renderThread 0): the loop runs as the GAME half; the render
-        // half's calls take the Render role, the hand-over between them the Sync role (plan sections 3.2-3.4).
+        double now = lastTime;
+        float deltaTime = 0.0f;
+        // The frame's phases (plan sections 3.2-3.4). The loop runs as the GAME half; the render half's calls take the
+        // Render role, the hand-over between them the Sync role. On one thread (frame.renderThread 0) a frame is: its
+        // start, the messages, the UI, Scene::Tick, the hand-over, Scene::Render, the work after Present. With a render
+        // thread (1, plan G8) Scene::Render runs THERE, and this thread meanwhile simulates the next frame -- the
+        // messages, the clock, Scene::Tick -- and then waits for it: everything else that touches the render half (the
+        // frame start, the UI and the editor, the hand-over, the screenshots after Present) runs while it is idle.
         threading::SetCurrentRole(threading::ThreadRole::Game);
-        while (isRunning_) {
+        threading::RenderThread renderThread;
+
+        const auto beginFrame = [&]()
+        {
             if (!firstFrameDumped && renderer.GetTotalFrameNumber() > 0)
             {
                 firstFrameDumped = true;
@@ -2349,170 +2361,172 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
             Profiler::Get().BeginFrame(renderer.GetTotalFrameNumber());
             logging::SetFrameNumber(renderer.GetTotalFrameNumber());
-            {
-                threading::RoleScope renderRole(threading::ThreadRole::Render);
-                render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
-                render::g_visibilityStats.NextFrame(); // occlusion plan S0: per-view visibility, same moment
-                // No join of tracked tasks here: the render half joins its own before the frame is submitted
-                // (SceneRenderer::Render), and a game-half join would wait on nothing (TaskSystem: one list per role).
-                renderer.BeginFrame();
+            threading::RoleScope renderRole(threading::ThreadRole::Render);
+            render::g_renderStats.NextFrame(); // snapshot last frame's draw/primitive counts
+            render::g_visibilityStats.NextFrame(); // occlusion plan S0: per-view visibility, same moment
+            // No join of tracked tasks here: the render half joins its own before the frame is submitted
+            // (SceneRenderer::Render), and a game-half join would wait on nothing (TaskSystem: one list per role).
+            renderer.BeginFrame();
 #if PROF_GPU_ENABLED
-                Profiler::Get().CollectGpuResults();
+            Profiler::Get().CollectGpuResults();
 #endif
+        };
+        const auto pumpMessages = [&]() -> bool // false on WM_QUIT
+        {
+            CPU_SCOPE(ProfilerScopes::kWinMessages);
+            while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessage(&msg);
+                if (msg.message == WM_QUIT) {
+                    break; // Break out of the loop and stop rendering
+                }
             }
-
+            return msg.message != WM_QUIT;
+        };
+        const auto beginUi = [&]()
+        {
+            // Everything from here to AppController::Tick used to be a blank stretch on the
+            // timeline between "Win Messages" and the first scoped call — three unattributed
+            // calls, one of which (the ImGui frame start) is not obviously cheap.
             {
-                CPU_SCOPE(ProfilerScopes::kWholeCycle);
-                input.NewFrame();
+                CPU_SCOPE(ProfilerScopes::kBeginImGuiFrame);
+                MEM_SCOPE(MemTag::Ui);
+                renderer.BeginImGuiFrame();
+            }
+            {
+                CPU_SCOPE(ProfilerScopes::kProfilerTick);
+                MEM_SCOPE(MemTag::Profiler);
+                Profiler::Get().Tick();
+            }
+        };
+        const auto advanceTime = [&]()
+        {
+            now = GetTimeSeconds();
+            deltaTime = static_cast<float>(now - lastTime);
+            lastTime = now;
 
-                {
-                    CPU_SCOPE(ProfilerScopes::kWinMessages);
-                    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-                        TranslateMessage(&msg);
-                        DispatchMessage(&msg);
-                        if (msg.message == WM_QUIT) {
-                            break; // Break out of the loop and stop rendering
-                        }
-                    }
-                    if (msg.message == WM_QUIT) {
-                        break;
-                    }
-                }
+            deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
 
-                // Everything from here to AppController::Tick used to be a blank stretch on the
-                // timeline between "Win Messages" and the first scoped call — three unattributed
-                // calls, one of which (the ImGui frame start) is not obviously cheap.
-                {
-                    CPU_SCOPE(ProfilerScopes::kBeginImGuiFrame);
-                    MEM_SCOPE(MemTag::Ui);
-                    renderer.BeginImGuiFrame();
-                }
-
-                {
-                    CPU_SCOPE(ProfilerScopes::kProfilerTick);
-                    MEM_SCOPE(MemTag::Profiler);
-                    Profiler::Get().Tick();
-                }
-
-                double now = GetTimeSeconds();
-                float deltaTime = static_cast<float>(now - lastTime);
-                lastTime = now;
-
-                deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
-
-                // "--cam-fly=x,z": drift the camera at a constant world velocity (m/s). The ONLY
-                // headless way to exercise motion-dependent paths — window relocations (wetness,
-                // surf sim), clipmap snapping, DLSS history — a fixed --cam-pos never triggers them.
-                if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f || g_camFlyYaw != 0.0f)
-                {
-                    static const double flyStart = GetTimeSeconds();
-                    if (now - flyStart >= (double)g_camFlyDelay)
-                    {
-                        Camera& cam = scene.CameraRef();
-                        const float3 p = cam.GetPosition();
-                        cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
-                                               p.z + g_camFly[1] * deltaTime));
-                        if (g_camFlyYaw != 0.0f)
-                        {
-                            cam.AddYaw(DirectX::XMConvertToRadians(g_camFlyYaw) * deltaTime);
-                        }
-                    }
-                }
-                if (g_camFlyForward != 0.0f)
+            // "--cam-fly=x,z": drift the camera at a constant world velocity (m/s). The ONLY
+            // headless way to exercise motion-dependent paths — window relocations (wetness,
+            // surf sim), clipmap snapping, DLSS history — a fixed --cam-pos never triggers them.
+            if (g_camFly[0] != 0.0f || g_camFly[1] != 0.0f || g_camFlyYaw != 0.0f)
+            {
+                static const double flyStart = GetTimeSeconds();
+                if (now - flyStart >= (double)g_camFlyDelay)
                 {
                     Camera& cam = scene.CameraRef();
-                    cam.SetPosition(cam.GetPosition() + cam.GetDirection() * (g_camFlyForward * deltaTime));
-                }
-                if (g_camOrbit[0] > 0.0f)
-                {
-                    static const double orbitStart = GetTimeSeconds();
-                    static float3 orbitCentre;
-                    static bool orbitInit = false;
-                    static std::uint64_t orbitFrames = 0; // the fixed-step clock (third value)
-                    Camera& cam = scene.CameraRef();
-                    if (!orbitInit) { orbitCentre = cam.GetPosition(); orbitInit = true; }
-                    const double t = g_camOrbit[2] > 0.0f
-                        ? static_cast<double>(orbitFrames++) * g_camOrbit[2] - (double)g_camFlyDelay
-                        : now - orbitStart - (double)g_camFlyDelay;
-                    if (t >= 0.0)
+                    const float3 p = cam.GetPosition();
+                    cam.SetPosition(float3(p.x + g_camFly[0] * deltaTime, p.y,
+                                           p.z + g_camFly[1] * deltaTime));
+                    if (g_camFlyYaw != 0.0f)
                     {
-                        const float ang = DirectX::XMConvertToRadians(g_camOrbit[1]) * static_cast<float>(t);
-                        const float r = g_camOrbit[0];
-                        cam.SetPosition(float3(orbitCentre.x + r * std::cos(ang), orbitCentre.y,
-                                               orbitCentre.z + r * std::sin(ang)));
-                        // Tangent of the circle; yaw is measured from +Z toward +X.
-                        cam.SetYawPitch(std::atan2(-std::sin(ang), std::cos(ang)), cam.GetPitch());
+                        cam.AddYaw(DirectX::XMConvertToRadians(g_camFlyYaw) * deltaTime);
                     }
-                }
-                {
-                    // The render half's own upkeep (fonts, the shader watcher, PSO hot reloads) and the memory line;
-                    // with a render thread (plan G8) they move to its frame start.
-                    threading::RoleScope renderRole(threading::ThreadRole::Render);
-                    {
-                        MEM_SCOPE(MemTag::Renderer);
-                        renderer.Tick(deltaTime);
-                    }
-                    // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
-                    // frame's work is joined so the providers read settled state.
-                    render::TickMemoryReport(renderer.GetDevice(), now); // providers tex.ret / rt.as.bin / rt.as.retired; the rest is the GPU census
-                }
-                {
-                    MEM_SCOPE(MemTag::Ui); // the HUD, the developer window, the editor (its own scope narrows it)
-                    appController_.Tick(input, renderer, scene, levelManager, deltaTime);
-                }
-                {
-                    MEM_SCOPE(MemTag::Scene);
-                    scene.Tick(deltaTime);
-                    levelManager.Tick(deltaTime);
-                }
-
-                if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
-                {
-                    MEM_SCOPE(MemTag::Scene); // the loaders' own scopes (meshes, textures, ocean) narrow it
-                    renderer.WaitForPreviousFrame();
-
-                    bool levelLoaded = false;
-                    UploadBatch levelBatch;
-                    if (levelBatch.Begin(&renderer))
-                    {
-                        LevelLoadContext levelCtx{ levelBatch, renderer, scene
-#if WITH_EDITOR
-                            , pendingLevel->options.editorDocument
-#endif
-                        };
-
-                        levelLoaded = pendingLevel->loadFromPath
-                            ? levelManager.LoadLevelFromPath(pendingLevel->sourcePath, levelCtx, pendingLevel->options)
-                            : levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options);
-                        if (levelLoaded)
-                        {
-                            levelBatch.SubmitAndWait(&renderer);
-                            appController_.ApplySceneGraphicsSettings(scene);
-                        }
-                    }
-#if WITH_EDITOR
-                    appController_.OnLevelChangeRequestCompleted(*pendingLevel, levelLoaded, renderer, scene, levelManager);
-#endif
-                }
-
-                appController_.WaitForHudBuild();
-                renderer.EndImGuiFrame(); // the UI frame is final here; the render half records it in its epilogue
-                {
-                    // The hand-over (plan section 3.3): the frame's values from game state go to the render half.
-                    threading::RoleScope syncRole(threading::ThreadRole::Sync);
-                    scene.Sync(&renderer);
-                    appController_.PublishHud(renderer); // G6: the HUD's lines into the render half's text buffer
-#if WITH_EDITOR
-                    editormcp::ServiceHandOver(); // G6: the MCP calls that read the render half (get_readouts)
-#endif
-                }
-                {
-                    threading::RoleScope renderRole(threading::ThreadRole::Render);
-                    MEM_SCOPE(MemTag::Renderer); // the render graph's tasks inherit it
-                    scene.Render(&renderer);
                 }
             }
+            if (g_camFlyForward != 0.0f)
+            {
+                Camera& cam = scene.CameraRef();
+                cam.SetPosition(cam.GetPosition() + cam.GetDirection() * (g_camFlyForward * deltaTime));
+            }
+            if (g_camOrbit[0] > 0.0f)
+            {
+                static const double orbitStart = GetTimeSeconds();
+                static float3 orbitCentre;
+                static bool orbitInit = false;
+                static std::uint64_t orbitFrames = 0; // the fixed-step clock (third value)
+                Camera& cam = scene.CameraRef();
+                if (!orbitInit) { orbitCentre = cam.GetPosition(); orbitInit = true; }
+                const double t = g_camOrbit[2] > 0.0f
+                    ? static_cast<double>(orbitFrames++) * g_camOrbit[2] - (double)g_camFlyDelay
+                    : now - orbitStart - (double)g_camFlyDelay;
+                if (t >= 0.0)
+                {
+                    const float ang = DirectX::XMConvertToRadians(g_camOrbit[1]) * static_cast<float>(t);
+                    const float r = g_camOrbit[0];
+                    cam.SetPosition(float3(orbitCentre.x + r * std::cos(ang), orbitCentre.y,
+                                           orbitCentre.z + r * std::sin(ang)));
+                    // Tangent of the circle; yaw is measured from +Z toward +X.
+                    cam.SetYawPitch(std::atan2(-std::sin(ang), std::cos(ang)), cam.GetPitch());
+                }
+            }
+        };
+        const auto renderUpkeep = [&]()
+        {
+            // The render half's own upkeep (fonts, the shader watcher, PSO hot reloads) and the memory line. With a
+            // render thread too it runs here, on this thread, while that one is idle.
+            threading::RoleScope renderRole(threading::ThreadRole::Render);
+            {
+                MEM_SCOPE(MemTag::Renderer);
+                renderer.Tick(deltaTime);
+            }
+            // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
+            // frame's work is joined so the providers read settled state.
+            render::TickMemoryReport(renderer.GetDevice(), now); // providers tex.ret / rt.as.bin / rt.as.retired; the rest is the GPU census
+        };
+        const auto tickUi = [&]()
+        {
+            MEM_SCOPE(MemTag::Ui); // the HUD, the developer window, the editor (its own scope narrows it)
+            appController_.Tick(input, renderer, scene, levelManager, deltaTime);
+        };
+        const auto tickScene = [&]()
+        {
+            MEM_SCOPE(MemTag::Scene);
+            scene.Tick(deltaTime);
+            levelManager.Tick(deltaTime);
+        };
+        const auto loadPendingLevel = [&]()
+        {
+            if (auto pendingLevel = levelManager.ConsumePendingLevelRequest())
+            {
+                MEM_SCOPE(MemTag::Scene); // the loaders' own scopes (meshes, textures, ocean) narrow it
+                renderer.WaitForPreviousFrame();
 
+                bool levelLoaded = false;
+                UploadBatch levelBatch;
+                if (levelBatch.Begin(&renderer))
+                {
+                    LevelLoadContext levelCtx{ levelBatch, renderer, scene
+#if WITH_EDITOR
+                        , pendingLevel->options.editorDocument
+#endif
+                    };
+
+                    levelLoaded = pendingLevel->loadFromPath
+                        ? levelManager.LoadLevelFromPath(pendingLevel->sourcePath, levelCtx, pendingLevel->options)
+                        : levelManager.LoadLevel(pendingLevel->levelName, levelCtx, pendingLevel->options);
+                    if (levelLoaded)
+                    {
+                        levelBatch.SubmitAndWait(&renderer);
+                        appController_.ApplySceneGraphicsSettings(scene);
+                    }
+                }
+#if WITH_EDITOR
+                appController_.OnLevelChangeRequestCompleted(*pendingLevel, levelLoaded, renderer, scene, levelManager);
+#endif
+            }
+        };
+        const auto handOver = [&]()
+        {
+            appController_.WaitForHudBuild();
+            renderer.EndImGuiFrame(); // the UI frame is final here; the render half records it in its epilogue
+            // The hand-over (plan section 3.3): the frame's values from game state go to the render half.
+            threading::RoleScope syncRole(threading::ThreadRole::Sync);
+            scene.Sync(&renderer);
+            appController_.PublishHud(renderer); // G6: the HUD's lines into the render half's text buffer
+#if WITH_EDITOR
+            editormcp::ServiceHandOver(); // G6: the MCP calls that read the render half (get_readouts)
+#endif
+        };
+        const auto renderScene = [&]()
+        {
+            MEM_SCOPE(MemTag::Renderer); // the render graph's tasks inherit it
+            scene.Render(&renderer);
+        };
+        // After Present: the harness, the screenshots, the profiler's frame end.
+        const auto afterFrame = [&]()
+        {
             // "--set=<name>:<value>;...": pin settings for the run. Applied once, here, because the
             // scene has to exist first — several names in the table reach through it. Same
             // dispatcher as --sweep, so a name works in both or in neither.
@@ -2742,7 +2756,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             {
                 isRunning_ = false; // the readout's verdict is in; main returns its exit code
             }
-
+        };
+        const auto paceFrame = [&]()
+        {
             // Frame budget = the tighter of two caps: the user's (render::g_maxFps_game, UE t.MaxFPS)
             // and the model throttle below. One wait serves both (WaitOutFrameBudget).
             //
@@ -2789,7 +2805,71 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 LOG_INFO(logging::LogCategory::Render, "frame pacing: vsync={} maxFps={}{}",
                          render::g_vsync_game ? "on" : "off", maxFps, maxFps == 0 ? " (uncapped)" : "");
             }
+        };
+
+        while (isRunning_) {
+            const bool threaded = threading::g_renderThreadEnabled; // switched only here, between frames
+            if (threaded)
+            {
+                // G8: the next frame's simulation while the render thread draws this one. Nothing here reaches the
+                // render half: Scene::Tick writes game state only (plan G2-G5), the messages queue input and a resize.
+                CPU_SCOPE(ProfilerScopes::kGameSimulate);
+                input.NewFrame();
+                if (!pumpMessages()) {
+                    break;
+                }
+                advanceTime();
+                tickScene();
+            }
+            if (renderThread.InFlight())
+            {
+                {
+                    CPU_SCOPE(ProfilerScopes::kRenderThreadWait);
+                    renderThread.WaitIdle(); // UE FFrameEndSync: never more than one frame ahead; pumps messages
+                }
+                afterFrame();
+                if (!isRunning_) {
+                    break;
+                }
+                paceFrame();
+            }
+
+            beginFrame();
+            {
+                CPU_SCOPE(ProfilerScopes::kWholeCycle);
+                if (!threaded)
+                {
+                    input.NewFrame();
+                    if (!pumpMessages()) {
+                        break;
+                    }
+                }
+                beginUi();
+                if (!threaded) { advanceTime(); }
+                renderUpkeep();
+                tickUi();
+                if (!threaded) { tickScene(); }
+                loadPendingLevel();
+                handOver();
+                if (!threaded)
+                {
+                    threading::RoleScope renderRole(threading::ThreadRole::Render);
+                    renderScene();
+                }
+            }
+            if (threaded)
+            {
+                renderThread.Kick([&renderScene]()
+                {
+                    CPU_SCOPE(ProfilerScopes::kRenderThreadFrame);
+                    renderScene();
+                });
+                continue;
+            }
+            afterFrame();
+            paceFrame();
         }
+        renderThread.Stop(); // a frame still in flight finishes (its after-frame work is not wanted: the loop is over)
 
         timeEndPeriod(1);
         threading::SetCurrentRole(threading::ThreadRole::Sync); // teardown: nothing else runs
