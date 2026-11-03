@@ -31,6 +31,7 @@ namespace diag { class ArtifactFile; } // device_removed.log writer (ArtifactWri
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/RenderTargetManager.h"
 #include "rendering/core/SubmitTimeline.h"
+#include "rendering/core/RhiQueue.h"
 #include "rendering/core/RenderConstants.h"
 #include "third_party/robin_hood.h"
 #include "rendering/descriptors/SamplerManager.h"
@@ -493,6 +494,8 @@ public:
     // Step 6: record a cross-queue dependency for a batch (see SubmitTimeline).
     void SetSubmitBatchCrossQueueWait(size_t batchIndex, size_t waitForBatch);
     void ExecuteTimelineAndPresent();
+    // Game thread plan G10: the one road to the GPU queues for a frame in flight (RhiQueue.h).
+    RhiQueue& Rhi() { return rhi_; }
     void RecordBindAndClear(ID3D12GraphicsCommandList* cl);
     void RecordBindDefaultsNoClear(ID3D12GraphicsCommandList* cl);
     void RegisterPassDriver(ID3D12GraphicsCommandList* cl, size_t batchIndex);
@@ -955,8 +958,9 @@ private:
     // Async-compute step 1: the one-shot COMPUTE-lane probe (see render::g_computeLaneProbe).
     // Runs at the end of the first BeginFrame that has frame resources, then never again.
     void ProbeComputeLaneOnce();
-    // Async-compute step 2: one empty COMPUTE submission per frame (see render::g_asyncEmptySubmit).
-    void SubmitEmptyComputeWork();
+    // Async-compute step 2: one empty COMPUTE list per frame (see render::g_asyncEmptySubmit), recorded with the frame
+    // and submitted by SubmitFrame_.
+    ID3D12CommandList* RecordEmptyComputeWork();
     // Async-compute step 5/6: the emission-side queue-legality backstop, called from BOTH places
     // that emit a compiled barrier point (Transition and EmitPoint).
     void CheckCompiledPointOnQueue(ID3D12GraphicsCommandList* cl, const CompiledBarriers::Point& pt, int pass) const;
@@ -989,12 +993,32 @@ private:
     std::vector<std::array<char, 48>> listStatsNames_; // [slot * kListStatsPerFrame + i]
 
     SubmitTimeline submitTimeline_;
-    // Step 6: the frame's submissions, one per contiguous same-queue run of batches.
-    std::vector<SubmitTimeline::Submission> submitSegmentsScratch_;
+    // Step 6: the frame's submissions, one per contiguous same-queue run of batches. One set per frame slot (G10b): the
+    // RHI thread submits slot k's while the next frame gathers into the other, and BeginFrame waits for the RHI thread
+    // to have submitted a slot's before the slot records again.
+    std::array<std::vector<SubmitTimeline::Submission>, render::kFrameCount> submitSegments_;
     // Step 8: (producer batch -> cross-queue fence value) for this frame, in submission order.
     // batch -> the edge that batch signalled. Carries the FENCE too, because there is one per
     // producing queue now (FrameScheduler: a fence with two writers is not monotonic).
     std::vector<std::pair<size_t, FrameScheduler::CrossQueuePoint>> crossQueueSignals_;
+    // G10a: the queue's half of ExecuteTimelineAndPresent -- one operation of rhi_. What it needs of the frame that
+    // recorded it travels with it (the RHI thread of G10b runs it while the next frame records).
+    struct FrameSubmit
+    {
+        UINT frameIndex = 0;       // the backbuffer this frame drew (and its slot's submitSegments_)
+        UINT predictedNext = 0;    // the one the next frame draws (FLIP_DISCARD goes round the kFrameCount buffers)
+        std::uint64_t totalFrame = 0;
+        bool vsync = false;
+        bool orderProbe = false;   // render::g_asyncOrderProbe as the frame recorded it
+        ID3D12CommandList* emptyCompute = nullptr; // --async-empty-submit's list, from the slot's pool
+    };
+    void SubmitFrame_(const FrameSubmit& submit);
+    RhiQueue rhi_;
+    // G10b: the newest frame's SubmitFrame_ op and the one before it. BeginFrame waits for the one before: the RHI
+    // thread at most one frame behind the recording (UE's GTSyncType 0), and that frame's slot (kFrameCount - 1 back,
+    // or less) long submitted.
+    RhiQueue::Ticket lastSubmit_ = 0;
+    RhiQueue::Ticket prevSubmit_ = 0;
 
     // Per-frame deferred render targets + their CPU descriptor heaps
     RenderTargetManager rtManager_;

@@ -717,6 +717,16 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "the render thread draws this one -- the overlap, and one frame between input and picture. "
                         "Off: the game half waits for each frame right after handing it over -- no overlap, no frame "
                         "of lag. Only with the render thread on.");
+                bool rhiThread = threading::g_rhiThreadEnabled;
+                if (GRAPHICS_CONTROL(RhiThread, "rhiThread", ImGui::Checkbox("RHI thread", &rhiThread)))
+                {
+                    threading::g_rhiThreadEnabled = rhiThread; // taken at the next frame's start (Renderer::BeginFrame)
+                }
+                DevHelp("Game thread plan G10b, UE r.RHIThread.Enable. On: the frame's submission -- its command "
+                        "lists, the waits between the queues, Present and the frame fences -- runs on a thread of its "
+                        "own, so the frame ends before Present and the next one records meanwhile (at most one frame "
+                        "ahead of it). Off (the default): the frame submits and presents itself. The picture is the "
+                        "same either way.");
 
                 ImGui::Separator();
                 // Async compute (plan step 8's `--no-async-compute`, made live). Sits next to the

@@ -56,6 +56,9 @@ public:
     // while the render thread records this one -- only ever touches its own.
     ImTextureID RequestTexture(ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC& srvDesc);
     void DropTextureRequests(ID3D12Resource* resource); // its descriptors are going: this frame's draws of it are cut
+    // An atlas texture ImGui created or changed waits for upload (HandOver submits on the queue itself; plan G10's RHI
+    // queue is flushed first, only then -- it is rare).
+    bool HasTextureUpdates() const;
     void HandOver(ID3D12Device* device, UINT frameIndex, std::vector<ID3D12Resource*>& shown,
                   std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>>& keepAlive);
 

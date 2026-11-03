@@ -23,6 +23,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/threading/ThreadRole.h"
+#include "core/threading/RenderThread.h" // G10b: threading::g_rhiThreadEnabled
 #include "core/threading/Knob.h"
 #include "app/Systems.h"
 #include "app/camera/Camera.h"
@@ -107,6 +108,7 @@ void Renderer::Shutdown()
     if (hasDevice && hasQueue && hasFence) {
         WaitForPreviousFrame(); // your full-synchronization helper :contentReference[oaicite:2]{index=2}
     }
+    rhi_.SetThreaded(false); // G10b: the RHI thread is joined; anything after this runs inline
 
 #if PROF_GPU_ENABLED
     Profiler::Get().ShutdownGpu();
@@ -739,6 +741,16 @@ void Renderer::BeginFrame() {
         ReportDeviceRemovalOnce();
     }
 
+    // Game thread plan G10b: frame.rhiThread switches here, with everything handed over run first. Then the frame before
+    // the last one handed over must have reached the queues: the RHI thread at most one frame behind (UE's GTSyncType 0
+    // -- game N + 2, render N + 1, RHI N), and this slot's last submission, whose SignalFrame is the fence value
+    // WaitForFrame waits for, is older still.
+    if (rhi_.Threaded() != threading::g_rhiThreadEnabled)
+    {
+        rhi_.SetThreaded(threading::g_rhiThreadEnabled);
+    }
+    rhi_.WaitFor(prevSubmit_);
+
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
 
@@ -1161,6 +1173,10 @@ void Renderer::HandOverImGui()
         SetResourceState(resource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     gameReadableMarks_.clear();
+    if (imguiLayer_.HasTextureUpdates())
+    {
+        rhi_.Flush(); // G10: the backend's upload submits on the queue itself -- after everything already handed over
+    }
     std::vector<ID3D12Resource*> shown;
     imguiLayer_.HandOver(GetDevice(), currentFrameIndex_, shown, imguiKeepAlive_);
     for (ID3D12Resource* resource : shown)
@@ -1605,15 +1621,16 @@ void Renderer::EndThreadCommandBundle(ThreadCL& b, size_t batchIndex, uint32_t l
 void Renderer::ExecuteTimelineAndPresent() {
     CPU_SCOPE(ProfilerScopes::kRendererExecuteTimelineAndPresent);
 
-    // GatherFrameLists empties submitSegmentsScratch_ itself, recycling its list vectors -- a
-    // clear() here would free them first.
+    // GatherFrameLists empties segments itself, recycling its list vectors -- a
+    // clear() here would free them first. The slot's own set (G10b): the RHI thread may still be submitting the other.
+    std::vector<SubmitTimeline::Submission>& segments = submitSegments_[currentFrameIndex_];
 
     // Gather batches in order, split into per-queue SEGMENTS (step 6). With every pass on the
     // graphics queue — which is every pass until step 8 — this yields exactly ONE segment holding
     // exactly the array a single-queue submit produced.
     {
         CPU_SCOPE(ProfilerScopes::kService1);
-        submitTimeline_.GatherFrameLists(submitSegmentsScratch_, [this]() {
+        submitTimeline_.GatherFrameLists(segments, [this]() {
             // Fallback: a batch has bundles but no driver — create a temporary one
             FrameResource* fr = frameScheduler_.GetFrameResource(currentFrameIndex_);
             ID3D12CommandAllocator* alloc =
@@ -1635,11 +1652,11 @@ void Renderer::ExecuteTimelineAndPresent() {
     size_t firstGraphicsSeg = (size_t)-1;
     size_t lastGraphicsSeg = (size_t)-1;
     size_t graphicsListCount = 0;
-    for (size_t i = 0; i < submitSegmentsScratch_.size(); ++i) {
-        if (submitSegmentsScratch_[i].queue != RenderQueue::Graphics) { continue; }
+    for (size_t i = 0; i < segments.size(); ++i) {
+        if (segments[i].queue != RenderQueue::Graphics) { continue; }
         if (firstGraphicsSeg == (size_t)-1) { firstGraphicsSeg = i; }
         lastGraphicsSeg = i;
-        graphicsListCount += submitSegmentsScratch_[i].lists.size();
+        graphicsListCount += segments[i].lists.size();
     }
 
     (void)graphicsListCount;
@@ -1656,8 +1673,8 @@ void Renderer::ExecuteTimelineAndPresent() {
     // make one. Cannot happen today (the frame always has graphics work) but the wrapping must not
     // depend on that.
     if (firstGraphicsSeg == (size_t)-1) {
-        submitSegmentsScratch_.push_back(SubmitTimeline::Submission{});
-        firstGraphicsSeg = lastGraphicsSeg = submitSegmentsScratch_.size() - 1;
+        segments.push_back(SubmitTimeline::Submission{});
+        firstGraphicsSeg = lastGraphicsSeg = segments.size() - 1;
     }
 
 #if PROF_GPU_ENABLED
@@ -1667,7 +1684,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         ID3D12GraphicsCommandList* cl = acquireDirectCL();
         Profiler::Get().BeginGpuFrame(cl);
         ThrowIfFailed(cl->Close());
-        auto& lists = submitSegmentsScratch_[firstGraphicsSeg].lists;
+        auto& lists = segments[firstGraphicsSeg].lists;
         lists.insert(lists.begin(), cl);
     }
 #endif
@@ -1708,7 +1725,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         Profiler::Get().EndGpuFrame(epilogueCmd);
 #endif
         ThrowIfFailed(epilogueCmd->Close());
-        submitSegmentsScratch_[lastGraphicsSeg].lists.push_back(epilogueCmd);
+        segments[lastGraphicsSeg].lists.push_back(epilogueCmd);
     }
 
     // Step 6: the frame's compiles have all run by here, so `predicted` is the frame's true
@@ -1720,18 +1737,39 @@ void Renderer::ExecuteTimelineAndPresent() {
     // literally what is submitted, not a reconstruction of it.
     if (render::g_dumpSubmitOrder) {
         render::g_dumpSubmitOrder = false; // once per process; a per-frame dump drowns the diff
-        for (const auto& seg : submitSegmentsScratch_) {
+        for (const auto& seg : segments) {
             DumpSubmitOrder(seg.queue == RenderQueue::AsyncCompute ? "compute" : "graphics", seg.lists);
         }
     }
 
+    // Game thread plan G10a: the queue's half of the frame -- every wait, signal and ExecuteCommandLists, Present and the
+    // frame fences -- as ONE operation of rhi_, the road every queue operation of a frame in flight takes. Run at once
+    // today; an RHI thread (G10b) runs it while the next frame records. The next frame's slot: FLIP_DISCARD goes round
+    // the kFrameCount buffers, so it is known before Present (SubmitFrame_ checks the swapchain agrees).
+    FrameSubmit submit;
+    submit.frameIndex = currentFrameIndex_;
+    submit.predictedNext = (currentFrameIndex_ + 1u) % render::kFrameCount;
+    submit.totalFrame = totalFrameNumber_;
+    submit.vsync = render::g_vsync;
+    submit.orderProbe = render::g_asyncOrderProbe;
+    // Recorded here, after the epilogue (its GPU scope where it always was); the submit only executes it.
+    submit.emptyCompute = render::g_asyncEmptySubmit ? RecordEmptyComputeWork() : nullptr;
+    lastPresentedIndex_ = submit.frameIndex; // the buffer handed to Present (screenshots flush the road first)
+    prevSubmit_ = lastSubmit_;
+    lastSubmit_ = rhi_.Run([this, submit]() { SubmitFrame_(submit); });
+    currentFrameIndex_ = rhi_.Threaded() ? submit.predictedNext : swapchain_.CurrentBackBufferIndex();
+    RefreshCurrentFrameCaches();
+}
+
+void Renderer::SubmitFrame_(const FrameSubmit& submit)
+{
     {
         CPU_SCOPE(ProfilerScopes::kService3);
         // Step 3's ordering probe: make the graphics queue wait for LAST frame's compute signal
         // before it starts this frame's work. A GPU-side wait — the CPU does not block. The value
         // is from the previous frame, so the signal was always submitted before this wait and the
         // pair can never deadlock.
-        if (render::g_asyncOrderProbe && asyncOrderProbeValue_.valid()) {
+        if (submit.orderProbe && asyncOrderProbeValue_.valid()) {
             frameScheduler_.WaitCrossQueue(GetCommandQueue(), asyncOrderProbeValue_);
         }
 
@@ -1761,7 +1799,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         // frame, so the numbers describe this frame and cannot go stale when the toggle flips.
         render::g_asyncComputeLists = 0;
         render::g_crossQueueWaits = 0;
-        for (const auto& seg : submitSegmentsScratch_) {
+        for (const auto& seg : submitSegments_[submit.frameIndex]) {
             const bool isCompute = (seg.queue == RenderQueue::AsyncCompute);
             UINT64 edgeWait = 0;
             UINT64 edgeSignal = 0;
@@ -1806,7 +1844,7 @@ void Renderer::ExecuteTimelineAndPresent() {
             }
             {
                 render::SubmitEdge& e = render::g_submitEdgeRing[render::g_submitEdgeNext];
-                e.frame = totalFrameNumber_;
+                e.frame = submit.totalFrame;
                 e.compute = isCompute;
                 e.lists = static_cast<unsigned>(seg.lists.size());
                 e.waitValue = edgeWait;
@@ -1824,13 +1862,23 @@ void Renderer::ExecuteTimelineAndPresent() {
     // queue, which is what makes "the slot waits for both" a claim with evidence.
     //
     // Off by default (`--async-empty-submit`); step 8 replaces it with the first real pass.
-    if (render::g_asyncEmptySubmit) {
-        SubmitEmptyComputeWork();
+    if (submit.emptyCompute != nullptr && GetComputeQueue() != nullptr) {
+        ID3D12CommandList* lists[] = { submit.emptyCompute };
+        GetComputeQueue()->ExecuteCommandLists(1, lists);
+        // Step 3 acceptance: a KNOWN-ORDERED cross-queue pair, so the shared timebase can be checked
+        // rather than assumed. The compute queue signals here; the next frame's graphics submission
+        // waits on that value before it starts (above). The trace must then show every
+        // `Async.EmptySubmit` ending before the following `GPU.Frame` begins -- if the two rows were
+        // calibrated independently and wrongly, that ordering would not hold.
+        //
+        // This deliberately SERIALISES the two queues, so it is its own flag and never on by default.
+        if (submit.orderProbe) {
+            asyncOrderProbeValue_ = frameScheduler_.SignalCrossQueue(GetComputeQueue());
+        }
     }
 
     {
         CPU_SCOPE(ProfilerScopes::kService4);
-        lastPresentedIndex_ = currentFrameIndex_; // the buffer about to be shown (screenshots)
         // Present is the most likely place a device removal surfaces, and it was a bare throw: the
         // process died leaving nothing on disk. Report before rethrowing — BeginFrame's per-frame
         // check catches the cases that never reach here (a fence wait that never returns, a TDR
@@ -1838,7 +1886,7 @@ void Renderer::ExecuteTimelineAndPresent() {
         try {
             {
                 const auto presentBegin = std::chrono::steady_clock::now();
-                swapchain_.Present(render::g_vsync);
+                swapchain_.Present(submit.vsync);
                 if (boot::g_frameProfiling) {
                     boot::AddBucket("DXGI Present",
                                     std::chrono::duration<double, std::milli>(
@@ -1852,9 +1900,16 @@ void Renderer::ExecuteTimelineAndPresent() {
             throw;
         }
     }
-    SignalFrame(currentFrameIndex_);
-    currentFrameIndex_ = swapchain_.CurrentBackBufferIndex();
-    RefreshCurrentFrameCaches();
+    SignalFrame(submit.frameIndex);
+    // G10a: the slot ExecuteTimelineAndPresent predicted for the next frame is the swapchain's (an RHI thread's next
+    // frame records into it before this Present runs).
+    const UINT actualNext = swapchain_.CurrentBackBufferIndex();
+    if (actualNext != submit.predictedNext)
+    {
+        LOG_ERROR_ONCE(logging::LogCategory::RenderRhi,
+                       "frame submit: the swapchain's next backbuffer is {} where {} was predicted (frame {})",
+                       actualNext, submit.predictedNext, submit.totalFrame);
+    }
 }
 
 // Async-compute plan step 6 — write one queue's submitted command-list array to
@@ -1879,26 +1934,27 @@ void Renderer::DumpSubmitOrder(const char* queueName,
     }
 }
 
-// Async-compute plan step 2 — submit one empty COMPUTE command list to the async queue.
+// Async-compute plan step 2 — one empty COMPUTE command list for the async queue (SubmitFrame_
+// submits it after the frame's segments).
 //
 // The point is NOT the work (there is none). It is that the compute queue receives a real
 // submission every frame, so the Signal that follows has something to order behind and the
 // "a frame slot is free only when BOTH queues passed its value" rule is exercised rather than
 // merely written. Without this the compute fence would be signalled on an idle queue and complete
 // instantly, and every wait added in this step would be vacuously true.
-void Renderer::SubmitEmptyComputeWork()
+ID3D12CommandList* Renderer::RecordEmptyComputeWork()
 {
     ID3D12CommandQueue* computeQueue = GetComputeQueue();
     FrameResource* fr = currentFrameResource_;
     if (!computeQueue || !fr || !GetDevice()) {
-        return;
+        return nullptr;
     }
     ID3D12CommandAllocator* alloc =
         fr->AcquireCommandAllocator(GetDevice(), D3D12_COMMAND_LIST_TYPE_COMPUTE);
     ID3D12GraphicsCommandList* cl =
         fr->AcquireCommandList(GetDevice(), D3D12_COMMAND_LIST_TYPE_COMPUTE, alloc);
     if (!cl) {
-        return;
+        return nullptr;
     }
     // Records no WORK — but step 3 adds a GPU scope around the nothing, because an empty command
     // list produces no timestamps and therefore an EMPTY second trace row, which proves nothing
@@ -1908,22 +1964,9 @@ void Renderer::SubmitEmptyComputeWork()
         GPU_SCOPE(cl, ProfilerScopes::kAsyncEmptySubmit);
     }
     if (FAILED(cl->Close())) {
-        RendererInvariantFailure("Renderer::SubmitEmptyComputeWork: Close() failed");
+        RendererInvariantFailure("Renderer::RecordEmptyComputeWork: Close() failed");
     }
-    ID3D12CommandList* lists[] = { cl };
-    computeQueue->ExecuteCommandLists(1, lists);
-
-    // Step 3 acceptance: a KNOWN-ORDERED cross-queue pair, so the shared timebase can be checked
-    // rather than assumed. The compute queue signals here; the next frame's graphics submission
-    // waits on that value before it starts (see ExecuteTimelineAndPresent). The trace must then
-    // show every `Async.EmptySubmit` ending before the following `GPU.Frame` begins — if the two
-    // rows were calibrated independently and wrongly, that ordering would not hold.
-    //
-    // This deliberately SERIALISES the two queues, so it is its own flag and never on by default.
-    // It also gives step 2's dormant SignalCrossQueue/WaitCrossQueue their first real exercise.
-    if (render::g_asyncOrderProbe) {
-        asyncOrderProbeValue_ = frameScheduler_.SignalCrossQueue(computeQueue);
-    }
+    return cl;
 }
 
 void Renderer::WaitForPreviousFrame() {
@@ -1943,6 +1986,7 @@ void Renderer::WaitForPreviousFrame() {
         threading::NoteRenderParked();
     }
     FlushHandOverSubmits(); // G7: the game's deferred GPU work goes first, so the idle below covers it
+    rhi_.Flush();           // G10: everything handed to the queues' road has reached them
     frameScheduler_.WaitForGpuIdle(GetCommandQueue(), GetComputeQueue());
     if (fromGame)
     {
@@ -1965,7 +2009,12 @@ void Renderer::ExecuteOrDefer(ID3D12CommandList* list)
     if (HandOverSubmitsGoNow())
     {
         FlushHandOverSubmits(); // keep the queue order: anything deferred before this goes first
-        GetCommandQueue()->ExecuteCommandLists(1, &list);
+        Microsoft::WRL::ComPtr<ID3D12CommandList> keep(list);
+        rhi_.Run([this, keep]()
+        {
+            ID3D12CommandList* l = keep.Get();
+            GetCommandQueue()->ExecuteCommandLists(1, &l);
+        });
         return;
     }
     std::lock_guard<std::mutex> lock(handOverMutex_);
@@ -1980,7 +2029,19 @@ bool Renderer::SignalOrDefer(ID3D12Fence* fence, UINT64 value)
     if (HandOverSubmitsGoNow())
     {
         FlushHandOverSubmits();
-        return SUCCEEDED(GetCommandQueue()->Signal(fence, value));
+        if (!rhi_.Threaded())
+        {
+            return SUCCEEDED(GetCommandQueue()->Signal(fence, value));
+        }
+        Microsoft::WRL::ComPtr<ID3D12Fence> keep(fence);
+        rhi_.Run([this, keep, value]()
+        {
+            if (FAILED(GetCommandQueue()->Signal(keep.Get(), value)))
+            {
+                LOG_ERROR(logging::LogCategory::RenderRhi, "a fence signal failed (value {})", value);
+            }
+        });
+        return true;
     }
     std::lock_guard<std::mutex> lock(handOverMutex_);
     HandOverOp op;
@@ -2000,18 +2061,22 @@ void Renderer::FlushHandOverSubmits()
     }
     TC_CHECK_THREAD(HandOverSubmitsGoNow(), "render|sync, or game with the render half parked",
                     "Renderer::FlushHandOverSubmits");
-    for (HandOverOp& op : ops)
+    rhi_.Run([this, ops = std::move(ops)]()
     {
-        if (op.list)
+        for (const HandOverOp& op : ops)
         {
-            ID3D12CommandList* list = op.list.Get();
-            GetCommandQueue()->ExecuteCommandLists(1, &list);
+            if (op.list)
+            {
+                ID3D12CommandList* list = op.list.Get();
+                GetCommandQueue()->ExecuteCommandLists(1, &list);
+            }
+            else if (op.fence && FAILED(GetCommandQueue()->Signal(op.fence.Get(), op.value)))
+            {
+                LOG_ERROR(logging::LogCategory::RenderRhi, "hand-over: a deferred fence signal failed (value {})",
+                          op.value);
+            }
         }
-        else if (op.fence && FAILED(GetCommandQueue()->Signal(op.fence.Get(), op.value)))
-        {
-            LOG_ERROR(logging::LogCategory::RenderRhi, "hand-over: a deferred fence signal failed (value {})", op.value);
-        }
-    }
+    });
 }
 
 void Renderer::OnResize(UINT width, UINT height) {

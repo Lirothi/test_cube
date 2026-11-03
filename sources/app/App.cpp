@@ -406,6 +406,8 @@ namespace
         if (setting == "frame.renderThread") { threading::g_renderThreadEnabled = value != 0.0f; return true; }
         // UE's r.OneFrameThreadLag: 0 = the game half waits for each frame right after handing it over.
         if (setting == "frame.oneFrameThreadLag") { threading::g_oneFrameThreadLag = value != 0.0f; return true; }
+        // G10b, UE's r.RHIThread.Enable: the frame's submission and Present on a thread of their own (next BeginFrame).
+        if (setting == "frame.rhiThread") { threading::g_rhiThreadEnabled = value != 0.0f; return true; }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze_game = value != 0.0f; return true; }
@@ -1818,6 +1820,23 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     MEM_SCOPE(MemTag::Profiler);
     Profiler::Get().InitGpu(renderer.GetDevice(), renderer.GetCommandQueue(),
                             renderer.GetComputeQueue());
+    // Game thread plan G10: the drain fence's signal takes the queues' one road, behind the frame it drains.
+    Profiler::Get().SetQueueSignalHook([&renderer](ID3D12CommandQueue* queue, ID3D12Fence* fence, UINT64 value)
+    {
+        if (!renderer.Rhi().Threaded())
+        {
+            return SUCCEEDED(queue->Signal(fence, value));
+        }
+        Microsoft::WRL::ComPtr<ID3D12Fence> keep(fence);
+        renderer.Rhi().Run([queue, keep, value]()
+        {
+            if (FAILED(queue->Signal(keep.Get(), value)))
+            {
+                LOG_ERROR(logging::LogCategory::Profiling, "GPU profiler fence signal failed (value {})", value);
+            }
+        });
+        return true;
+    });
 #endif
 }
 
@@ -2815,6 +2834,15 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
         };
 
+        // --set's threading knobs take effect from the first frame (the rest of --set waits for the first frame, in
+        // afterFrame): "--set=frame.renderThread:0" is one thread from the start, not after a threaded first frame.
+        for (const auto& kv : g_fixedSettings)
+        {
+            if (kv.first == "frame.renderThread" || kv.first == "frame.oneFrameThreadLag" || kv.first == "frame.rhiThread")
+            {
+                ApplySweepValue(scene, appController_.SettingsRef(), kv.first, kv.second);
+            }
+        }
         bool renderFramePending = false; // kicked, its after-frame work not done (a park may have finished it early)
         double gameWaitLogStart = GetTimeSeconds();
         // "Whole Cycle" is the main thread's frame from its start (after BeginFrame's wait for the GPU) to the moment the
@@ -2976,6 +3004,9 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         memgate::ReleaseSelfTest();
         scene.Clear();
         Systems::DestroyOceanSimulation();
+#if PROF_GPU_ENABLED
+        Profiler::Get().SetQueueSignalHook(nullptr); // the renderer it routes through goes next (G10)
+#endif
         renderer.Shutdown();
     }
 

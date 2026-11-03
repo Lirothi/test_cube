@@ -28,6 +28,11 @@ inline bool g_renderThreadEnabled = true;
 // frame of lag. Developer Controls > Frame "One frame thread lag", graphics_settings.json frame.oneFrameThreadLag,
 // --set frame.oneFrameThreadLag. Game half only, taken at the next hand-over.
 inline bool g_oneFrameThreadLag = true;
+// UE's r.RHIThread.Enable (game thread plan G10b): true moves the frame's submission -- ExecuteCommandLists, the waits and
+// signals between the queues, Present, the frame fences -- to a thread of its own (RhiQueue), so the frame ends before
+// Present and the next one records meanwhile. Developer Controls > Frame "RHI thread", graphics_settings.json
+// frame.rhiThread, --set frame.rhiThread. Taken by Renderer::BeginFrame. Off by default until measured.
+inline bool g_rhiThreadEnabled = false;
 
 class RenderThread
 {

@@ -397,7 +397,11 @@ void Profiler::EndFrame() {
         batch.frameNo = frameNo_;
         batch.fenceValue = gpuDrainFenceValue_++;
         for (UINT q = 0; q < kGpuQueueCount; ++q) {
-            if (gpuQueue_[q] && FAILED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), batch.fenceValue))) {
+            if (!gpuQueue_[q]) { continue; }
+            const bool signalled = queueSignalHook_
+                ? queueSignalHook_(gpuQueue_[q], gpuDrainFence_[q].Get(), batch.fenceValue) // G10: the queues' road
+                : SUCCEEDED(gpuQueue_[q]->Signal(gpuDrainFence_[q].Get(), batch.fenceValue));
+            if (!signalled) {
                 LOG_ERROR(logging::LogCategory::Profiling, "GPU profiler fence signal failed on queue {}", q);
                 batch.fenceValue = UINT64_MAX; // never reuse a slot whose completion is unknown
                 break;
@@ -492,11 +496,12 @@ void Profiler::EndFrame() {
 }
 
 void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, CpuClock::time_point end, uint64_t epoch) {
-    if (!GetEnabled() || sampleEpoch_.load(std::memory_order_acquire) != epoch) { return; }
+    const bool anyEpoch = epoch == kAnyEpoch; // MarkThreadCrossFrame: the frame that drains it takes it
+    if (!GetEnabled() || (!anyEpoch && sampleEpoch_.load(std::memory_order_acquire) != epoch)) { return; }
     auto& buffer = GetThreadSamples();
     std::lock_guard<std::mutex> lock(buffer.mutex);
     // The frame may have closed while the producer was finding/locking its buffer.
-    if (sampleEpoch_.load(std::memory_order_acquire) != epoch) { return; }
+    if (!anyEpoch && sampleEpoch_.load(std::memory_order_acquire) != epoch) { return; }
     buffer.samples.push_back({ key, std::chrono::duration<double, std::milli>(end - start).count() });
     if (traceCapturingAtomic_.load(std::memory_order_acquire)) {
         TraceEvent ev;
@@ -1007,7 +1012,7 @@ void Profiler::WriteTraceJson(const TraceDumpData& dump) {
         return;
     }
     // Rows in the order they are read (owner, 2026-11-03): GPU graphics, GPU compute, the main thread, the render thread
-    // (game thread plan G8), then every other thread in the order it first recorded. The tid follows that order -- the
+    // (game thread plan G8), the RHI thread (G10b), then every other thread in the order it first recorded. The tid follows that order -- the
     // order every viewer falls back to -- and each row says it again as thread_sort_index (chrome://tracing, Perfetto).
     std::vector<uint64_t> cpuTid(dump.threadNames.size(), 0u);
     {
@@ -1019,6 +1024,7 @@ void Profiler::WriteTraceJson(const TraceDumpData& dump) {
         };
         place("MainThread");
         place("RenderThread");
+        place("RHIThread"); // G10b
         for (uint64_t& tid : cpuTid) {
             if (tid == 0u) { tid = next++; }
         }

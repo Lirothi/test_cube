@@ -388,6 +388,7 @@
     <ClCompile Include="sources/rendering/core/TextureCreate.cpp" />
     <ClCompile Include="sources/rendering/core/ExposureMetering.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
+    <ClCompile Include="sources/rendering/core/RhiQueue.cpp" />
     <ClCompile Include="sources/rendering/core/Screenshot.cpp" />
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
     <ClCompile Include="sources/rendering/diagnostics/RendererSubmissionStress.cpp" />
@@ -660,6 +661,7 @@
     <ClInclude Include="sources/rendering/core/RenderTargetManager.h" />
     <ClInclude Include="sources/rendering/core/ResourceDeclarations.h" />
     <ClInclude Include="sources/rendering/core/SubmitTimeline.h" />
+    <ClInclude Include="sources/rendering/core/RhiQueue.h" />
     <ClInclude Include="sources/rendering/core/SwapchainManager.h" />
     <ClInclude Include="sources/rendering/core/UploadBatch.h" />
     <ClInclude Include="sources/rendering/rt/AccelerationStructure.h" />

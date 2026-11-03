@@ -429,6 +429,22 @@ ImTextureID ImGuiLayer::RequestTexture(ID3D12Resource* resource, const D3D12_SHA
     return kVirtualTextureTag | static_cast<ImTextureID>(textureRequests_.size() - 1u);
 }
 
+bool ImGuiLayer::HasTextureUpdates() const
+{
+    if (!initialized_)
+    {
+        return false;
+    }
+    for (const ImTextureData* tex : ImGui::GetPlatformIO().Textures)
+    {
+        if (tex->Status != ImTextureStatus_OK)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void ImGuiLayer::DropTextureRequests(ID3D12Resource* resource)
 {
     for (TextureRequest& r : textureRequests_)

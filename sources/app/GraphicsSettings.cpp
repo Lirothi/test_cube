@@ -37,6 +37,7 @@ namespace
         float mouseSmoothingMs = 0.0f; // g_cameraMouseSmoothingMs: 0 = the look input applied at once
         bool renderThread = true;      // threading::g_renderThreadEnabled (game thread plan G8/G9): on by default
         bool oneFrameThreadLag = true; // threading::g_oneFrameThreadLag: UE's r.OneFrameThreadLag 1
+        bool rhiThread = false;        // threading::g_rhiThreadEnabled (G10b, UE r.RHIThread.Enable): off until measured
         bool visibilityChunkMask = true;
         int occlusionMethod = static_cast<int>(vis::OcclusionMethod::Queries);
         int occlusionQueryLatency = static_cast<int>(vis::kOcclusionBufferedFrames);
@@ -470,6 +471,7 @@ namespace
         s.mouseSmoothingMs = g_cameraMouseSmoothingMs;
         s.renderThread = threading::g_renderThreadEnabled;
         s.oneFrameThreadLag = threading::g_oneFrameThreadLag;
+        s.rhiThread = threading::g_rhiThreadEnabled;
         s.visibilityChunkMask = render::g_visChunkMask_game;
         s.occlusionMethod = vis::g_occlusion_game.method;
         s.occlusionQueryLatency = vis::g_occlusion_game.queryLatency;
@@ -627,6 +629,7 @@ namespace
         g_cameraMouseSmoothingMs = s.mouseSmoothingMs;
         threading::g_renderThreadEnabled = s.renderThread; // the loop takes it at the next frame's start
         threading::g_oneFrameThreadLag = s.oneFrameThreadLag;
+        threading::g_rhiThreadEnabled = s.rhiThread; // Renderer::BeginFrame takes it
     }
 
     void ApplyVisibility(const GraphicsSettingsSnapshot& s)
@@ -847,7 +850,8 @@ namespace
                 { "maxFps", s.maxFps },
                 { "mouseSmoothingMs", s.mouseSmoothingMs },
                 { "renderThread", s.renderThread },
-                { "oneFrameThreadLag", s.oneFrameThreadLag }
+                { "oneFrameThreadLag", s.oneFrameThreadLag },
+                { "rhiThread", s.rhiThread }
             } },
             { "cloudShadow", {
                 { "updateFrames", s.cloudShadowUpdateFrames },
@@ -1071,6 +1075,7 @@ namespace
         Read(frame, "mouseSmoothingMs", s.mouseSmoothingMs);
         Read(frame, "renderThread", s.renderThread);
         Read(frame, "oneFrameThreadLag", s.oneFrameThreadLag);
+        Read(frame, "rhiThread", s.rhiThread);
         const json& cloudShadow = Section(root, "cloudShadow");
         Read(cloudShadow, "updateFrames", s.cloudShadowUpdateFrames);
         Read(cloudShadow, "bilinearWeather", s.cloudShadowBilinearWeather);
@@ -1457,6 +1462,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::MouseSmoothing:                 current.mouseSmoothingMs = defaults.mouseSmoothingMs; break;
     case GraphicsControl::RenderThread:                   current.renderThread = defaults.renderThread; break;
     case GraphicsControl::OneFrameThreadLag:              current.oneFrameThreadLag = defaults.oneFrameThreadLag; break;
+    case GraphicsControl::RhiThread:                      current.rhiThread = defaults.rhiThread; break;
     case GraphicsControl::VisibilityChunkMask:             current.visibilityChunkMask = defaults.visibilityChunkMask; break;
     case GraphicsControl::OcclusionMethod:                 current.occlusionMethod = defaults.occlusionMethod; break;
     case GraphicsControl::OcclusionQueryLatency:           current.occlusionQueryLatency = defaults.occlusionQueryLatency; break;
@@ -1639,7 +1645,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
 
     Sanitize(current);
     const auto value = static_cast<unsigned>(control);
-    if (value <= static_cast<unsigned>(GraphicsControl::OneFrameThreadLag))
+    if (value <= static_cast<unsigned>(GraphicsControl::RhiThread))
     {
         ApplyFrame(current);
     }

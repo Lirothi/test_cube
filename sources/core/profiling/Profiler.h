@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 #include "third_party/robin_hood.h"
@@ -168,11 +169,21 @@ public:
     // buffer was the first cut and the debug layer rejected it outright.
     void InitGpu(ID3D12Device* device, ID3D12CommandQueue* queue,
                  ID3D12CommandQueue* computeQueue = nullptr, UINT maxQueries = 1024);
+    // Game thread plan G10: the drain fence's signal (EndFrame) goes the queues' one road (the renderer's RhiQueue),
+    // so it lands behind the frame it drains even when an RHI thread submits that frame later. False = the signal
+    // failed (known at once only without an RHI thread). Unset: the queue is signalled directly.
+    using QueueSignalHook = std::function<bool(ID3D12CommandQueue*, ID3D12Fence*, UINT64)>;
+    void SetQueueSignalHook(QueueSignalHook hook) { queueSignalHook_ = std::move(hook); }
     void CollectGpuResults();
     void BeginGpuFrame(ID3D12GraphicsCommandList* cl);
     void EndGpuFrame(ID3D12GraphicsCommandList* cl);
     void ShutdownGpu();
 #endif
+
+    // Game thread plan G10b: the calling thread's scopes are kept even when they cross a frame boundary (the RHI
+    // thread submits frame N while the game thread closes it and opens N + 1); they land in the frame that drains them.
+    // Every other thread's scope that outlives its frame is dropped (sampleEpoch_).
+    static void MarkThreadCrossFrame() { crossFrameThread_ = true; }
 
     // Scoped marker (CPU)
     class ScopedCpu {
@@ -181,7 +192,9 @@ public:
 #if PROF_ENABLED
             key_ = key;
             auto& profiler = Profiler::Get();
-            epoch_ = profiler.GetEnabled() ? profiler.sampleEpoch_.load(std::memory_order_acquire) : 0;
+            epoch_ = !profiler.GetEnabled() ? 0
+                   : crossFrameThread_    ? kAnyEpoch
+                                          : profiler.sampleEpoch_.load(std::memory_order_acquire);
             if (epoch_) { start_ = Clock::now(); }
 #endif
         }
@@ -380,6 +393,8 @@ private:
     std::mutex buffersMutex_;
     std::vector<std::unique_ptr<ThreadSamples>> threadSamples_;
     std::atomic<uint64_t> sampleEpoch_{ 0 }; // 0 = closed; prevents late producers crossing frames
+    static constexpr uint64_t kAnyEpoch = UINT64_MAX; // a MarkThreadCrossFrame thread's scope: kept whatever the epoch
+    static inline thread_local bool crossFrameThread_ = false;
     uint64_t nextSampleEpoch_ = 0;
     uint64_t frameNo_ = 0;
     bool frameOpen_ = false;
@@ -433,6 +448,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_[kGpuQueueCount];
     Microsoft::WRL::ComPtr<ID3D12Fence> gpuDrainFence_[kGpuQueueCount];
     ID3D12CommandQueue* gpuQueue_[kGpuQueueCount] = {};
+    QueueSignalHook queueSignalHook_; // G10: SetQueueSignalHook
     UINT64* gpuMappedReadback_[kGpuQueueCount] = {};
     UINT64 gpuFreq_[kGpuQueueCount] = {};
     UINT64 gpuTraceQpcFreq_ = 0, gpuTraceQpcOrigin_ = 0;

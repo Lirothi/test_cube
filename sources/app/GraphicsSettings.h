@@ -19,6 +19,7 @@ enum class GraphicsControl
     MouseSmoothing,
     RenderThread,                 // game thread plan G8: frame.renderThread
     OneFrameThreadLag,            // ... and frame.oneFrameThreadLag (UE r.OneFrameThreadLag)
+    RhiThread,                    // ... and frame.rhiThread (G10b, UE r.RHIThread.Enable)
     VisibilityChunkMask,          // Visibility ...
     OcclusionMethod,
     OcclusionQueryLatency,
