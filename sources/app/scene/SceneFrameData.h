@@ -352,6 +352,12 @@ struct BloomSettings
     // MCP pixel probe, before vs after DLSS), so the kernel's star never formed, while UE's TSR keeps
     // it. The grid is a fraction of the display either way and samples by UV, so the render-resolution
     // image only changes what reaches it. No effect without DLSS.
+    // UE's FFT bloom reads the upscaler's OUTPUT (PostProcessing.cpp:1131-1183, 1485-1515) and its glints survive because
+    // TSR keeps them. Tried for UE's path on 2026-11-04 (owner: "one to one with theirs", his view of sparkles with UE's
+    // little stars, UE cam (-3065, -9795, 450)): behind DLSS a sparkle's bloom is GONE -- the frame with the bloom and
+    // without it the same, x10 intensity too, under preset M as under F (M kept 61 % of a low sun's broad glitter path,
+    // F 30 %, but not the sparkles); without the upscaler, or with this scene before it, they glow. So this stays on:
+    // it is what TSR does for UE's bloom. 0 = the upscaled image, UE's path, the A/B.
     bool convBeforeUpscale = true;
     // What the scene before the upscaler costs: it is JITTERED, so a glint under a pixel lands in it or
     // not frame by frame and the star on a chrome glint flickered 40-50 % frame to frame. The bloom's

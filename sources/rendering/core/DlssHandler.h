@@ -2,6 +2,7 @@
 
 #include <d3d12.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <wrl/client.h>
 
@@ -13,6 +14,10 @@
 
 class Camera;
 class Renderer;
+
+// `--set dlss.preset:<sl::DLSSPreset>` / MCP: the DLSS model for every mode, live (0 = the DLL's own default per mode,
+// 6 = F (CNN), 10 J, 11 K, 12 L, 13 M -- transformers); -1 = the handler's own choice (DlssHandler's constructor).
+extern std::atomic<int> g_dlssPresetOverride;
 
 class DlssHandler {
 public:

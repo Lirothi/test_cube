@@ -45,6 +45,8 @@ namespace
     }
 }
 
+std::atomic<int> g_dlssPresetOverride{ -1 };
+
 DlssHandler::DlssHandler(Renderer& renderer)
     : renderer_(renderer)
 {
@@ -55,14 +57,19 @@ DlssHandler::DlssHandler(Renderer& renderer)
     options_.useAutoExposure = sl::Boolean::eTrue;
     options_.alphaUpscalingEnabled = sl::Boolean::eFalse;
 
-    // Force the CNN model (preset F, the only CNN preset left on 310.x DLLs; A-E are removed).
-    // The transformer default (K) drops history trust over temporally unstable content —
-    // ocean refraction/specular — and smears it during camera motion. Verified via the NGX
+    // Until 2026-11-04 the CNN model was forced (preset F, the only CNN preset left on 310.x DLLs; A-E are removed):
+    // the transformer default (K) drops history trust over temporally unstable content --
+    // ocean refraction/specular -- and smears it during camera motion. Verified via the NGX
     // debug HUD (ShowDlssIndicator): eDefault resolves to K on our 310.4 DLL.
-    // NOTE: the water fix is the COMBO of preset F + AUTO-exposure. Manual exposure (a 1x1
+    // NOTE: that water fix was the COMBO of preset F + AUTO-exposure. Manual exposure (a 1x1
     // tagged texture, see kTagManualExposure in Evaluate) brings the smearing back: the
     // network normalizes input by exposure before its history decisions, and our raw HDR at
     // exposure=1 sits outside the range the CNN behaves well in.
+    // Re-measured 2026-11-04 on DLL 310.7 (`--set dlss.preset:<n>` switches live; 0 = the DLL's default per mode): a low
+    // sun's broad glitter path keeps 30 % of its bloom light through F / J / K, 46 % through L, 61 % through M (no
+    // upscaler = 100 %), and the sea's SPARKLES none under any of them -- so the bloom keeps reading the scene before
+    // DLSS (BloomSettings::convBeforeUpscale). M also softens the animated water in a flight (boat view, 6 m/s, waves
+    // live) where F keeps the ripples. Hence still F.
     options_.dlaaPreset = sl::DLSSPreset::ePresetF;
     options_.qualityPreset = sl::DLSSPreset::ePresetF;
     options_.balancedPreset = sl::DLSSPreset::ePresetF;
@@ -648,6 +655,12 @@ bool DlssHandler::EvaluateInternal(ID3D12GraphicsCommandList* cl)
         options_.mode = renderer_.dlssMode_;
         options_.outputWidth = renderer_.width_;
         options_.outputHeight = renderer_.height_;
+        if (const int preset = g_dlssPresetOverride.load(std::memory_order_relaxed); preset >= 0)
+        {
+            const auto p = static_cast<sl::DLSSPreset>(preset);
+            options_.dlaaPreset = options_.qualityPreset = options_.balancedPreset = p;
+            options_.performancePreset = options_.ultraPerformancePreset = options_.ultraQualityPreset = p;
+        }
 
         if (slDLSSSetOptions(viewport_, options_) != sl::Result::eOk)
         {

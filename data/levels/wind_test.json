@@ -38870,7 +38870,7 @@
         1.0
       ],
       "convAnamorphicWidth": 5.0,
-      "convBeforeUpscale": true,
+      "convBeforeUpscale": false,
       "convBlades": 8,
       "convChroma": 0.10000000149011612,
       "convFalloff": 3.0,
@@ -38882,9 +38882,9 @@
       "convKernel": "textures/BloomKernelStarAnamorphic.dds",
       "convKernelRadius": 0.0015999999595806003,
       "convKernelTint": [
-        0.4618,
-        0.4904,
-        1.0
+        0.4883720874786377,
+        0.4883720874786377,
+        0.4883720874786377
       ],
       "convPercent": 25.0,
       "convPreFilterMax": 2000.0,
@@ -38895,14 +38895,14 @@
       "convSpokeStrength": 0.4000000059604645,
       "convSpokeWidth": 4.0,
       "convSunGhostScale": 0.20000000298023224,
-      "convSunKernelScale": 0.25,
+      "convSunKernelScale": 1.0,
       "enabled": true,
       "fireflyClamp": true,
       "intensity": 1.0,
       "method": 1,
       "radius": 1.0,
       "softKnee": 0.5,
-      "sunGlareIntensity": 0.0104,
+      "sunGlareIntensity": 0.012784001417458057,
       "sunGlareRadiusDeg": 2.0,
       "sunGlareSmoothingSec": 0.019999999552965164,
       "sunGlareVeil": 0.25,
@@ -40077,7 +40077,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 17.0,
+    "time": 18.1299991607666,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

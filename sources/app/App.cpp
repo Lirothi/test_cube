@@ -1,6 +1,7 @@
 #include "app/App.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "rendering/core/MemoryReport.h"    // the memory line in the session log
+#include "rendering/core/DlssHandler.h"     // --set dlss.preset (g_dlssPresetOverride)
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
 #include "core/diagnostics/BootProfile.h"
@@ -421,6 +422,7 @@ namespace
         if (setting == "camera.mouseSmoothing") { g_cameraMouseSmoothingMs = std::clamp(value, 0.0f, kCameraMouseSmoothingMaxMs); return true; }
         if (setting == "camera.spin") { g_camFlyYaw = std::clamp(value, -720.0f, 720.0f); return true; }
         if (setting == "dlss.mode") { g_requestDlssMode = std::clamp(static_cast<int>(value), 0, 6); return true; }
+        if (setting == "dlss.preset") { g_dlssPresetOverride.store(std::clamp(static_cast<int>(value), -1, 15)); return true; }
         // The cloud shadow map's time slicing (project-wide, graphics_settings.json "cloudShadow"):
         // 1 = every texel every frame (UE), 4, 16. Not under cloud.*, whose keys are the LEVEL's.
         if (setting == "cloudShadow.updateFrames")
