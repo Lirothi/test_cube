@@ -3,6 +3,7 @@
 #include "utils.hlsli"
 #include "sky_view_mapping.hlsli"
 #include "night_sky.hlsli"
+#include "uds_sky.hlsli"
 
 cbuffer PerFrame : register(b0)
 {
@@ -32,6 +33,11 @@ cbuffer PerFrame : register(b0)
     float4 nightRow0;            // world -> equatorial by rows; w 1 = the night sky is drawn
     float4 nightRow1;
     float4 nightRow2;
+    // Ultra Dynamic Sky's sky material over the atmosphere (UdsSkyFrameData, uds_sky.hlsli); udsSkyGlow.w 0 = off.
+    float4 udsSkyParams;
+    float4 udsSkyGlow;
+    float4 udsSkySun;
+    float4 udsSkyMoon;
 }
 
 struct VSIn {
@@ -152,6 +158,9 @@ PSOut PSMain(VSOut i)
         // carries SkyAndAerialPerspectiveLuminanceFactor (`luminanceScale`), which is the one that lights.
         c = skyViewLut.SampleLevel(samLinear, SkyViewDirToUvNoPlanet(dir, height, bottom), 0).rgb
             / max(skyExposure.x, 1.e-8f) * skyExposure.y;
+        // Ultra Dynamic Sky's sky material over the atmosphere -- its sphere's (TimeOfDaySettings::skyUdsMaterial). On the
+        // atmosphere alone, as UDS applies its gradient: the moon, the stars and the airglow below keep their own light.
+        c = UdsSkyLayer(c, worldDir, udsSkyParams, udsSkyGlow, udsSkySun, udsSkyMoon, 1.0f);
         // THE SUN'S DISC IS NOT DRAWN HERE ANY MORE (2026-10-14): compose_cs.hlsl draws it, PRE-EXPOSED, as UE
         // do (SkyAtmosphere.usf:357-377). This target holds RAW radiance in FP16, and at this project's
         // illuminance the disc is ~7e7 against a ceiling of 65504 -- it used to be clamped there BEFORE the

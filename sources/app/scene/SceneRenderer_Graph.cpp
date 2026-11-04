@@ -243,20 +243,49 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
     }
     const auto environmentView = MakeSkyView(frame_->settings.skyAtmosphere, 1.0f, 1.0f, 0.0f, frame_->skyLight,
                                              frame_->skyMoon, frame_->nightSky);
-    const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
-        environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay,
-        MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady()), gb.pSkyNight);
-    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
-    const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
-    if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
     // The height fog's colour this frame (UE ComputeInscatteringColor): the distant sky light times UE's
-    // SkyLuminanceFactor, which UE bakes into that LUT and ours keeps out of the light. Every PackHeightFog reads it.
+    // SkyLuminanceFactor, which UE bakes into that LUT and ours keeps out of the light. Every PackHeightFog reads it --
+    // the sky's capture below too, so it is set first (the LUT's readback is a few frames old either way).
     {
         float distant[3]{};
         const float f = std::max(frame_->settings.skyAtmosphere.skyLuminanceFactor, 0.0f);
         g_fogDistantSkyLight = skyAtmosphere_.DistantSkyLight(distant)
             ? float4(distant[0] * f, distant[1] * f, distant[2] * f, 1.0f) : float4(0.0f, 0.0f, 0.0f, 0.0f);
     }
+    // UE's DistantHeightFog: the analytic fog at infinity in the sky's capture, so the probes -- the water's sky
+    // reflection above all -- see the haze the frame shows (UE: the fog off, the far sea turns from the haze's grey to the
+    // sunset's yellow; ours did not move). Compose's numbers; the probe at sea level (world height 0).
+    {
+        SkyEnvironmentFog fog{};
+        if (g_fogInSkyCapture && frame_->dirLight)
+        {
+            const HeightFogPacked p = PackHeightFog(frame_->settings.heightFog, true, frame_->dirLight->GetOuterSpaceLuminance());
+            const auto row = [](const float4& v) { return std::array<float, 4>{v.x, v.y, v.z, v.w}; };
+            fog.params0 = row(p.params0);
+            fog.params1 = row(p.params1);
+            fog.params2 = row(p.params2);
+            fog.inscatter = row(p.inscatter);
+            fog.sunDirectional = row(p.sunDirectional);
+            const float3 sun = frame_->dirLight->GetEffectiveColor();
+            const float3 toSun = -frame_->dirLight->GetDirection();
+            fog.sunColor = {sun.x, sun.y, sun.z, 0.0f};
+            fog.sunDir = {toSun.x, toSun.y, toSun.z, 0.0f};
+        }
+        // Ultra Dynamic Sky's sky material: UDS's sky light captures its sky sphere, so the probes see the layer too.
+        const UdsSkyFrameData& uds = frame_->udsSky;
+        const auto row4 = [](const float v[4]) { return std::array<float, 4>{v[0], v[1], v[2], v[3]}; };
+        fog.udsParams = row4(uds.params);
+        fog.udsGlow = row4(uds.glow);
+        fog.udsSun = row4(uds.sun);
+        fog.udsMoon = row4(uds.moon);
+        skyAtmosphere_.SetEnvironmentFog(fog);
+    }
+    const auto pEnvironment = skyAtmosphere_.BuildEnvironment(renderer, rg, frame_->settings.skyAtmosphere,
+        environmentView, frame_->skybox, gb.pSkyLuts, &cloudOverlay,
+        MakeNightSky(frame_->nightSky, skyAtmosphere_.NightReady()), gb.pSkyNight);
+    RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList environmentDeps;
+    const auto pDistant = skyAtmosphere_.BuildDistant(renderer, rg, frame_->settings.skyAtmosphere, environmentView, pEnvironment);
+    if (pDistant != GraphBuild::kNone) environmentDeps.push_back(pDistant);
     // The cloud shadow map and the AS build are registered after the prologue clear, below.
     gb.pBuildAS = (size_t)-1;
 
@@ -1827,6 +1856,8 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
             const SkyMoonFrame& moon = frame_->skyMoon;
             const bool glow = drawView.planet[3] != 0 && moon.present;
             frame_->skybox->SetMoonGlow(glow ? moon.glow : 0.0f, glow ? moon.glowRadiusRad : 0.0f);
+            // Ultra Dynamic Sky's sky material over the atmosphere (procedural sky only; skybox.hlsl applies it there).
+            frame_->skybox->SetUdsSky(frame_->udsSky);
             const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
             return [this, renderer, point](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkybox);

@@ -60,13 +60,6 @@ cbuffer LightShaftCB : register(b0)
     // Temporal only: x = this frame's weight (1 - exp(-dt / smoothing); 1 = no history), y = the
     // history's pre-exposure rescale (now / then), z = 1 when last frame's history is valid, w = 0.
     float4 lsTemporal;
-    // Downsample only, the SUN GLARE in the seed (ours): rgb = its colour at the sun's centre in the scene's
-    // units (0 = none: the moon's shafts, the glare off), w = the core's e-folding angle (rad).
-    float4 lsGlareColor;
-    // xyz = the direction to the sun in view space, w = the veil's weight.
-    float4 lsGlareDir;
-    // xy = the projection's x/y scales (ndc = tangent x scale), z = the veil's half-strength angle (rad).
-    float4 lsGlareProj;
 };
 
 static const int kNumSamples = 12; // r.LightShaftNumSamples, baked into the shader like UE's define
@@ -86,21 +79,8 @@ void CSDownsample(uint3 tid : SV_DispatchThreadID)
     const float2 uv = (float2(tid.xy) + 0.5f) * lsInvSize.xy;
     // The half-res texel centre sits on the corner between four render-res texels, so one bilinear
     // tap IS the 2x2 box; UE's CalcSceneColor is one tap too (usf:62).
-    float3 sceneColor = SrcColor.SampleLevel(gSmpLinear, uv, 0).rgb;
-    // THE SUN GLARE IN THE SEED (ours; owner, 2026-10-14: "blur after the glare is laid"). UE seed on the
-    // scene over the threshold; Ultra Dynamic Sky's sky is bright enough round the sun that a wide disc of
-    // it passes, and its rays run long through the crowns -- ours is darker, day and night, and only the
-    // disc passed. The glare (bloom_conv_cs.hlsl stage 9, the same core + veil about the sun's direction)
-    // is that bright sky as the picture shows it; laid on here, it seeds wherever the sky shows through
-    // the leaves -- the depth mask below still keeps it off the leaves themselves.
-    if (any(lsGlareColor.rgb > 0.0f))
-    {
-        const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-        const float3 dir = normalize(float3(ndc / lsGlareProj.xy, 1.0f));
-        const float angle = acos(clamp(dot(dir, lsGlareDir.xyz), -1.0f, 1.0f));
-        const float v = angle / max(lsGlareProj.z, 1.0e-4f);
-        sceneColor += lsGlareColor.rgb * (exp(-angle / max(lsGlareColor.w, 1.0e-4f)) + lsGlareDir.w / (1.0f + v * v));
-    }
+    // UE seed on the scene alone (the glare that was laid on here, `lightShaftGlareSeed`, is gone: 2026-11-03, owner).
+    const float3 sceneColor = SrcColor.SampleLevel(gSmpLinear, uv, 0).rgb;
     const float deviceZ = DepthTex.SampleLevel(gSmpPoint, uv, 0).r;
     const float sceneDepth = lsDepth.y / max(deviceZ - lsDepth.x, 1e-8f); // usf:63 CalcSceneDepth
 

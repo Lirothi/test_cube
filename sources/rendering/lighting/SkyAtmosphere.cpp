@@ -82,6 +82,32 @@ bool NearlySameNight(const NightSkyFrameData& now, const NightSkyFrameData& key)
     for (int c = 0; c < 3; ++c) { rest.row0[c] = key.row0[c]; rest.row1[c] = key.row1[c]; rest.row2[c] = key.row2[c]; }
     return std::memcmp(&rest, &key, sizeof(rest)) == 0;
 }
+
+// The captured fog the same way: its settings exactly, its colour (the distant sky light, read back a few frames late)
+// and the sun's within kKeyLightShare, the sun's direction within kKeyTurnCos.
+bool NearlySameFog(const SkyEnvironmentFog& now, const SkyEnvironmentFog& key)
+{
+    if (!render::g_skyKeyTolerance) return std::memcmp(&now, &key, sizeof(now)) == 0;
+    if (now.params0 != key.params0 || now.params1 != key.params1 || now.params2 != key.params2 ||
+        now.inscatter[3] != key.inscatter[3] || now.sunDir[3] != key.sunDir[3])
+        return false;
+    for (int c = 0; c < 3; ++c)
+    {
+        const auto within = [](float a, float b) { return std::fabs(a - b) <= kKeyLightShare * std::max(std::fabs(a), std::fabs(b)); };
+        if (!within(now.inscatter[c], key.inscatter[c]) || !within(now.sunColor[c], key.sunColor[c]) ||
+            !within(now.sunDirectional[c], key.sunDirectional[c])) return false;
+    }
+    // Ultra Dynamic Sky's layer: its numbers within the light share, its sun's and moon's directions as the sun's.
+    if (now.udsGlow[3] != key.udsGlow[3] || now.udsSun[3] != key.udsSun[3] || now.udsMoon[3] != key.udsMoon[3]) return false;
+    for (int c = 0; c < 4; ++c)
+    {
+        const auto within = [](float a, float b) { return std::fabs(a - b) <= kKeyLightShare * std::max(std::fabs(a), std::fabs(b)); };
+        if (!within(now.udsParams[c], key.udsParams[c]) || (c < 3 && !within(now.udsGlow[c], key.udsGlow[c]))) return false;
+    }
+    if (now.udsGlow[3] > 0.0f && (!SameDirection(now.udsSun.data(), key.udsSun.data()) || !SameDirection(now.udsMoon.data(), key.udsMoon.data())))
+        return false;
+    return SameDirection(now.sunDir.data(), key.sunDir.data());
+}
 }
 
 // The bytes these LUTs hold are the `sky` tag of the GPU census (rendering/core/GpuAlloc.h); the
@@ -625,6 +651,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     const bool dirty = !environmentReady_ || std::memcmp(&params, &environmentParameters_, sizeof(params)) != 0
         || !NearlySameView(view, environmentKey_)
         || !NearlySameNight(night, environmentNightKey_)
+        || !NearlySameFog(environmentFog_, environmentFogKey_)
         || (overlayActive && overlay->dirty) || overlayActive != environmentOverlayActive_;
     // Select descriptors before any serial pass builder/worker consumes the frame's environment.
     sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()});
@@ -665,6 +692,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     pass.params = params;
     pass.view = view;
     pass.night = night;
+    pass.fog = environmentFog_;
     return graph.AddPass2(RenderPass::Main_SkyEnvironment, deps, {}, {},
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             const EnvironmentPassFrame& pass = environmentPass_;
@@ -687,6 +715,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             ctx.NextPoint(); points[3] = ctx.usePoint ? *ctx.usePoint : 0u;
             for (auto& r : environment_) ctx.Use(r.Get(), kRest);
             environmentReady_ = true; environmentParameters_ = pass.params; environmentKey_ = pass.view; environmentNightKey_ = night;
+            environmentFogKey_ = pass.fog;
             environmentOverlayActive_ = ov.material != nullptr;
             //LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
             //          ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
@@ -720,16 +749,26 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
                         // taps) against the map's 360 / 2048): log2(512 / (size x taps)), within its chain.
                         const float nightMip = std::clamp(std::log2(512.0f / static_cast<float>(size * taps)), 0.0f,
                                                           static_cast<float>(kNightMips - 1u));
-                        const std::array<float, 28> capture{view.planet[0], view.planet[1], 1024.0f,
+                        std::array<float, 72> capture{view.planet[0], view.planet[1], 1024.0f,
                             static_cast<float>(size), static_cast<float>(taps), view.planet[2], nightMip, 0.0f,
                             night.glow[0], night.glow[1], night.glow[2], night.glow[3],
                             night.layers[0], night.layers[1], night.layers[2], night.layers[3],
                             night.row0[0], night.row0[1], night.row0[2], night.row0[3],
                             night.row1[0], night.row1[1], night.row1[2], night.row1[3],
                             night.row2[0], night.row2[1], night.row2[2], night.row2[3]};
+                        // The distant height fog's rows and Ultra Dynamic Sky's layer (sky_ibl_capture_cs.hlsl's cbuffer tail).
+                        const std::array<const std::array<float, 4>*, 11> fogRows{&pass.fog.params0, &pass.fog.params1,
+                            &pass.fog.params2, &pass.fog.inscatter, &pass.fog.sunColor, &pass.fog.sunDir,
+                            &pass.fog.sunDirectional, &pass.fog.udsParams, &pass.fog.udsGlow, &pass.fog.udsSun,
+                            &pass.fog.udsMoon};
+                        for (size_t r = 0; r < fogRows.size(); ++r)
+                        {
+                            std::copy(fogRows[r]->begin(), fogRows[r]->end(), capture.begin() + 28 + 4 * r);
+                        }
+                        static_assert(sizeof(capture) <= 2 * render::kConstantBufferAlignment, "the capture's constants");
                         // The overlay below reads and rewrites the same mips: one UAV barrier after
                         // the last capture orders the two.
-                        RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), render::kConstantBufferAlignment,
+                        RecordComputeDispatch(renderer, t.cl, captureMaterial_.get(), 2 * render::kConstantBufferAlignment,
                             [&capture](uint8_t* dst) { std::memcpy(dst, capture.data(), sizeof(capture)); },
                             {environmentViewSrv_, srv_[0], nightMap ? nightSrv_ : (nightNullSrv_.ptr ? nightNullSrv_ : environmentViewSrv_)},
                             {environmentUav_[mip]}, sampler, size, size*6,

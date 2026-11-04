@@ -83,6 +83,15 @@ public:
         return Math::float3(color_.x * t.x, color_.y * t.y, color_.z * t.z) * sunIlluminanceLux_;
     }
 
+    // The outer-space illuminance as one number, by UE's FLinearColor::GetLuminance (0.3, 0.59, 0.11): UE scale the
+    // height fog's DirectionalInscatteringLuminance by SunLight->Proxy->GetColor().GetLuminance() (FogRendering.cpp:436),
+    // and a directional light's GetColor() is that illuminance (DirectionalLightComponent.cpp:582-585).
+    float GetOuterSpaceLuminance() const
+    {
+        const Math::float3 o = GetOuterSpaceIlluminance();
+        return 0.3f * o.x + 0.59f * o.y + 0.11f * o.z;
+    }
+
     // THE SUN AS IT ARRIVES, for everything that lights a surface. Without the transmittance the sun
     // keeps its full outer-space illuminance at any elevation and only the N.L term dims it: at 2.8
     // degrees that still puts 4166 lux on horizontal ground, a bright overcast day's worth, and it
@@ -253,13 +262,8 @@ public:
     // that fall-off to 1/distance^(2 - length) -- 2 = rays that do not fade at all (light_shafts_cs.hlsl).
     float GetLightShaftLength() const { return lightShaftLength_; }
     void SetLightShaftLength(float v) { lightShaftLength_ = v; }
-    // Not UE's: how much of the SUN GLARE (Bloom > Sun glare) joins the shafts' seed (owner, 2026-10-14:
-    // "blur after the glare is laid"). UE's seed is the scene over the threshold; Ultra Dynamic Sky's bright
-    // sky lets a wide disc of it through, and its rays run long through crowns, while our darker sky let
-    // only the disc through. The glare is that bright sky round the sun as the picture shows it, so with
-    // it in the seed the gaps in the crowns seed too. 0 = UE's seed, 1 = the glare as drawn. The sun only.
-    float GetLightShaftGlareSeed() const { return lightShaftGlareSeed_; }
-    void SetLightShaftGlareSeed(float v) { lightShaftGlareSeed_ = v; }
+    // (The shafts' glare seed, `lightShaftGlareSeed` -- the sun glare laid into the seed, not UE's -- is gone since
+    // 2026-11-03, owner: the seed is UE's, the scene over the threshold. A level that still carries the key ignores it.)
 
     // THE SUN'S ANGULAR SIZE -- UE's LightSourceAngle (DirectionalLightComponent.cpp:1024: 0.5357 deg,
     // "Angle of earth's sun"), an APEX angle in degrees, i.e. the disc's angular diameter; the renderer
@@ -310,7 +314,6 @@ private:
     float lightShaftOcclusionDepthRange_ = 1000.0f; // metres (UE 100000 cm)
     float lightShaftSmoothingSec_ = 0.15f;
     float lightShaftLength_ = 1.0f; // UE's reach, see the accessors
-    float lightShaftGlareSeed_ = 1.0f; // the glare as drawn joins the seed, see the accessors
     float lightSourceAngleDeg_ = 0.5357f; // UE's LightSourceAngle: the real sun's angular diameter
     float lightSourceSoftAngleDeg_ = 0.0f; // UE's LightSourceSoftAngle (their default 0)
 };

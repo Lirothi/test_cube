@@ -22,10 +22,16 @@
 namespace SkyAtmosphereSettingsJson
 {
 
-inline float ScaleOf(const float authored[4], const float earth[4])
+inline void ReadTint(const nlohmann::json& j, const char* key, float out[3])
 {
-    // Recovered from the first channel; the three are always written as one scale.
-    return earth[0] > 0.0f ? authored[0] / earth[0] : 1.0f;
+    const auto it = j.find(key);
+    if (it != j.end() && it->is_array() && it->size() == 3)
+    {
+        for (unsigned c = 0; c < 3; ++c)
+        {
+            out[c] = (*it)[c].is_number() ? std::clamp((*it)[c].get<float>(), 0.0f, 20.0f) : out[c];
+        }
+    }
 }
 
 inline void ApplyOverrides(const nlohmann::json& j, SkyAtmosphereSettings& s)
@@ -40,17 +46,22 @@ inline void ApplyOverrides(const nlohmann::json& j, SkyAtmosphereSettings& s)
     s.aerialViewDistanceScale = std::clamp(j.value("aerialViewDistanceScale", s.aerialViewDistanceScale), 0.01f, 100.0f);
     s.environmentLighting = j.value("environmentLighting", s.environmentLighting);
     s.aerialPerspective = j.value("aerialPerspective", s.aerialPerspective);
+    s.heightFogContribution = std::clamp(j.value("heightFogContribution", 1.0f), 0.0f, 10.0f);
 
     const SkyAtmosphereParameters earth{};
     const float rayleigh = std::clamp(j.value("rayleighScale", 1.0f), 0.0f, 10.0f);
     const float mie = std::clamp(j.value("mieScale", 1.0f), 0.0f, 10.0f);
     const float ozone = std::clamp(j.value("ozoneScale", 1.0f), 0.0f, 10.0f);
+    // The medium's colours over the x Earth scales (absent = Earth's): UE's colour / its default, per channel.
+    for (unsigned c = 0; c < 3; ++c) { s.rayleighTint[c] = s.mieTint[c] = s.ozoneTint[c] = 1.0f; }
+    ReadTint(j, "rayleighTint", s.rayleighTint);
+    ReadTint(j, "mieTint", s.mieTint);
+    ReadTint(j, "ozoneTint", s.ozoneTint);
+    const float absorption = j.value("mieAbsorptionScale", -1.0f); // < 0 (or absent) = the Mie scale's
+    s.mieAbsorptionScale = absorption < 0.0f ? -1.0f : std::min(absorption, 10.0f);
+    SetSkyMedium(s, rayleigh, mie, ozone);
     for (unsigned i = 0; i < 3; ++i)
     {
-        s.parameters.rayleigh[i] = earth.rayleigh[i] * rayleigh;
-        s.parameters.mieScattering[i] = earth.mieScattering[i] * mie;
-        s.parameters.mieAbsorption[i] = earth.mieAbsorption[i] * mie;
-        s.parameters.ozone[i] = earth.ozone[i] * ozone;
         s.parameters.groundAlbedo[i] = std::clamp(j.value("groundAlbedo", earth.groundAlbedo[0]), 0.0f, 1.0f);
     }
     s.parameters.groundAlbedo[3] =
@@ -73,9 +84,15 @@ inline nlohmann::json ToJson(const SkyAtmosphereSettings& s)
     j["aerialViewDistanceScale"] = s.aerialViewDistanceScale;
     j["environmentLighting"] = s.environmentLighting;
     j["aerialPerspective"] = s.aerialPerspective;
-    j["rayleighScale"] = ScaleOf(s.parameters.rayleigh, earth.rayleigh);
-    j["mieScale"] = ScaleOf(s.parameters.mieScattering, earth.mieScattering);
-    j["ozoneScale"] = ScaleOf(s.parameters.ozone, earth.ozone);
+    j["heightFogContribution"] = s.heightFogContribution;
+    j["rayleighScale"] = SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint);
+    j["mieScale"] = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
+    j["ozoneScale"] = SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint);
+    const auto tint = [](const float t[3]) { return nlohmann::json::array({t[0], t[1], t[2]}); };
+    j["rayleighTint"] = tint(s.rayleighTint);
+    j["mieTint"] = tint(s.mieTint);
+    j["ozoneTint"] = tint(s.ozoneTint);
+    if (s.mieAbsorptionScale >= 0.0f) { j["mieAbsorptionScale"] = s.mieAbsorptionScale; }
     j["groundAlbedo"] = s.parameters.groundAlbedo[0];
     j["multiScatteringFactor"] = s.parameters.groundAlbedo[3];
     j["mieAnisotropy"] = s.parameters.mieScattering[3];

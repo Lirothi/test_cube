@@ -90,6 +90,7 @@ cbuffer PerFrame : register(b0)
     float4 fogSunDir;    // xyz: direction TO the sun (world)
     float4 fogSunColor;  // rgb: the sun's effective colour
     float4 fogInscatter; // PackHeightFog's: UE's fog colour (raw), w = 1 = use it on geometry and sky (else the sky along the view)
+    float4 fogSunDirectional; // PackHeightFog's: rgb the sun lobe's own (DirectionalInscatteringLuminance) term / 4 pi, cd/m2
     // P7 item 8. 0 = normal, 1 = transmittance, 2 = in-scattering. Rides the fog block so a view
     // costs nothing when the fog is off -- and shows nothing either, which is the honest answer.
     // Volumetric fog (plan part A) adds 3 = the froxel slice grid, 4 = the volume's own
@@ -667,14 +668,17 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         // NO SUN LOBE ON THE SKY. UE's directional in-scattering exists because their fog colour
         // is an authored constant with no sun in it; ours is the sky along the ray, which already
         // contains the sun's glow, so on a SKY pixel the lobe adds it a second time -- and adds it
-        // raw: `sunColor * sunScatterStrength` is 85000 lux times 0.5 here, dumped in a halo around
-        // the sun. That is what started tearing the bloom apart. On GEOMETRY the base has no sun in
-        // it and the lobe is doing exactly UE's job, so it stays.
+        // raw: the sun's tens of thousands of lux dumped in a halo around the sun. That is what started
+        // tearing the bloom apart. On GEOMETRY the base has no sun in it and the lobe is doing exactly
+        // UE's job, so it stays. (Under the procedural sky the base is UE's isotropic colour, and the
+        // lobe reaches the sky too, as UE's.)
         //
         // This is the gate the lobe should have had all along. It used to ride `headroom`, which
         // faded the lobe out as the fog saturated -- that hid the double count at the horizon but
         // made the term non-monotonic in distance, which drew its own dark line along the water.
-        fog.sunScatterStrength = (isSky && !ueColour) ? 0.0f : fogParams1.y;
+        const bool lobeHere = !(isSky && !ueColour);
+        fog.sunGroundScale = lobeHere ? fogParams1.y : 0.0f;
+        fog.sunDirectional = lobeHere ? fogSunDirectional.rgb : (float3)0.0f;
         fog.sunScatterExponent = fogParams1.z;
         fog.sunScatterStartDistance = fogParams1.w;
 

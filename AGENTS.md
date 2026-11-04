@@ -122,12 +122,14 @@ computed from the sky's bodies, not the meter, so lamps and a turn of the view s
 EV on purpose (owner, 2026-11-01: "we have a special correction curve for the night, edit it"): keyed with Night Brightness
 in it, a quarter-moon beach (eye 7.56), wind_test's bathroom by day (6.74) and at night (7.6) sat on one point of the curve,
 so the night could not be darkened without the day's room; physical, the night's section lies under ~0 EV, away from every
-day scene. A curve flat there = the night's light followed in full. The curve holds 8 points now (it was 6; the shader's
-float4 pairs had room). (b) `exposure_solve_cs.hlsl`: the open night's anchor is `nightCameraEv100 - nightExposureEv -
+day scene. A curve flat there = the night's light followed in full. The curve holds 12 points now (6, then 8; 12 since
+2026-11-04 so UDS's eight day points keep the night's three: the shader's three float4 pairs). (b) `exposure_solve_cs.hlsl`: the open night's anchor is `nightCameraEv100 - nightExposureEv -
 compensationEv` and the closed frame's floor `- compensationEv`, so a stop of either is a stop of the night.
 `nightCameraEv100` is therefore the camera for the full moon 45 degrees up with the trims at 0: wind_test's 13.13 had its
 -1.5 inside and would put that full moon 0.9 stop darker; 11.93 keeps it (camera 12.76 vs 12.86, median 9 vs 8).
-THE PRESETS CARRY THE NIGHT (`SetUdsExposureCurve`, `SetUdsSteadyNightExposureCurve`): from -3.5 at their first point's
+THE PRESETS CARRY THE NIGHT (`SetUdsSteadyNightExposureCurve`, `SetUdsExposureCurve` -- the latter UDS's curve one to one
+by day and, for one afternoon of 2026-11-04, flat -1.51 under our EV 5.3 as UDS's is, which made every moon phase as bright
+as the full moon: below "Ultra Dynamic Sky", "The night under UDS"): from -3.5 at their first point's
 value, 1.05 stops down at -7, 0.6 more at -11 -- the camera follows 70 % of the darkening from the full moon to a quarter,
 85 % on to no moon (a first cut, 35 % / 79 % below, held the moon's aureole down before the aerosol was cut at night and
 left every partial moon black); each dropped its 8.55 point for room (UDS Steady Night's lay on the line, UDS's 0.06 EV off it). A
@@ -227,7 +229,8 @@ diffuse probe as a raw equirect, read with the pixel probe), and the bare sky by
   measured at the real auto exposure, never at a pinned one: at the level's 0.7 the shafts were 64 % of a backlit
   trunk's light (1609 vs 584 without), +27 % on the lit sand, and moved the metering 0.6 EV -- invisible at a pinned EV
   1.5 stops darker, where they did not trigger. With the aureole they took the trunks x4.4; the sun's
-  `lightShaftBloomThreshold` is 3 now (about the old strength). UE ships them OFF (`bEnableLightShaftBloom`,
+  `lightShaftBloomThreshold` was 3 (about the old strength) -- 0.7 again since 2026-11-03, UE's (below, "The light
+  shafts are UE's again"). UE ships them OFF (`bEnableLightShaftBloom`,
   LightComponent.cpp:491). Result on the sunset view: trunk / sand 0.128 -> 0.103 (photos 0.07-0.10), p5 / share < 20 /
   p95 9 / 0.12 / 232 (photos ~7 / 0.11 / 230).
 - **The exposure curve followed a camera, not a game**: wind_test's `cameraExposure.exposureCurve` took a dim room
@@ -236,6 +239,140 @@ diffuse probe as a raw equirect, read with the pixel probe), and the bare sky by
   plausible 10 stops (window 4591, walls ~23, dark wood 3-6). Now -1.5 / -1.0 / -0.8 / -0.6 (14.55 and 15.55 kept, so
   the daylight fit stays): the room 0.24 under 20/255, median 68; 18:00 outside unchanged, noon +0.14 EV. Nights are
   `nightCameraEv100`'s, not this curve's.
+
+## Matching UE 5.8 -- the Same Settings Give the Same Picture
+
+The owner keeps wind_test rebuilt in his UE (`/Game/ClaudeTest/Maps/WindTest`, MCP 127.0.0.1:8000) and compares views.
+UE's (x, y, z) = ours (z, x, y) x 100 (fitted on 735 palms: 0.000 m), the same yaw, the pitch's sign flipped. Checked
+2026-11-03 at his viewport (ours [-18.68, 31.35, 26.10], yaw -59.29, 6.57 down; sun 10.66 degrees, 120 klux) with UE's
+scene numbers mirrored (`skyAtmosphere` rayleigh 1.21, mie 1, g 0.6, ground albedo 0.40 -- UE's FColor 170 is LINEAR 0.40
+--, skyLuminanceFactor 2; fog 0.002 / falloff 0.06 / start 10 / lobe 0.5, exp 8, from 100 m / volume 60 m, g 0.4; unit
+twilight tints; `daySkyBrightness` 1):
+- **The sky and the fog in HDR**: the sky +1-3 % at +0.5 .. +17 degrees, its R/B within 0.01; the fog's saturated band at
+  the horizon 3700 vs 3575 cd/m2 toward the sun (48.5 degrees off), 3337 vs 3256 away; fog on / off above 0.3 degrees
+  within 1-3 %. `timeOfDay.daySkyBrightness` 2 (2026-10-19, for UDS's look) doubled the whole sky against UE's 1
+  (it scales SkyAndAerialPerspectiveLuminanceFactor) -- wind_test has 1 since (owner).
+- **The display**: `colorPipeline.ueGamut` (default on; Inspector Post Process > Film "UE colour pipeline (AP1)", `--set
+  color.ueGamut`, `color.expandGamut` 1, `color.blueCorrection` 0.6 -- UE's defaults) runs UE's LUT as UE builds it
+  (`shaders/ue_color_pipeline.hlsli`, from PostProcessCombineLUTs.usf / TonemapCommon.ush FilmToneMap / ACESCommon.ush):
+  AP1 working space, ExpandGamut, the grade with AP1 luma, BlueCorrection, the ACES glow and red modifier around the
+  five-knob curve -- and the grade AFTER the local exposure and the bloom, where UE's LUT sits (ours graded before them).
+  Off = the linear-sRGB path, the A/B. On a blue sky the two differ by 1-3 levels. UE's natural vignette is ours too:
+  `colorPipeline.vignetteIntensity` (UE VignetteIntensity, default 0.4 -- every level; Inspector "Vignette", `--set
+  color.vignette`), the cosine-fourth law in UE's vignette space on the scene and the bloom before the grade
+  (PostProcessCommon.ush ComputeVignetteMask, PostProcessTonemap.usf:513-526): 86 % at the top edge's centre, 57 % in a
+  corner of a 16:9 frame.
+- **wind_test carries UE's scene now** (owner, 2026-11-03: "make everything as in UE, overwrite the calibration"): the sky
+  above (replacing the 10-31 calibration's rayleigh 1.0 / g 0.8 / ground albedo 0.08 / skyLuminanceFactor 1), the fog
+  0.002 with its volume to 60 m and `timeOfDay.fog` all 1 (UE's density does not follow the sun), the sun WITHOUT its
+  6500 K temperature (UE's light is plain white; our blackbody 6500 K is pinker than D65 and put the sky's R and B 7-8 %
+  over UE's against G), the grade 1.15 / 1.3 / 1.1, local exposure 1 / 1, no meter mask, and the exposure curve's day
+  points (12.55 / 14.55 / 15.55) at +0.5 = UE's histogram bias (the room and night points as they were). UE's sun
+  (10.66 degrees) is our 18:00 on the level's date. Result at his viewport, the level as it is: the sky +3-4 % at every
+  height (blue +2-4 % more), +0.5 degrees +3 %; the water -3 .. -18 degrees within 6 % with the clouds on in both; the
+  displayed horizon at +2 degrees (218, 212, 170) vs UE (219, 213, 169). The exposures, solved from the displayed pixels
+  through UE's pipeline (scratchpad `solve_exposure.py`, which recovers ours to 0.06 stop): UE 2^-13.9 (its own readout
+  says 13.8), ours 2^-14.0 -- our clouds (UE's are its own, smaller) and our wider sun glitter meter brighter.
+- **Then PHYSICS in both** (owner, same day: "set physics in both"): the UE scene's numbers above were OUR pre-calibration
+  level copied into UE on 10-31 (only Mie x1, ground albedo 0.40 and fog density 0.02 were UE's defaults). wind_test and
+  the UE scene now carry: Rayleigh x1.0, Mie x10 (AOD ~0.05, clean maritime; scattering and absorption both), g 0.8,
+  ground albedo 0.08 (sea; UE FColor 80), skyLuminanceFactor 1; the height fog as a marine haze -- density 0.0002 / m
+  with heightFalloff 0.0015 (UE's 0.002 / 0.015: UE's two numbers are per 10 m, ours per metre -- the Inspector's hint
+  says so), maxOpacity 1, start 0, the grey sun lobe 0 with exponent 4 (UE's defaults), the volume g 0.75; the sun disc
+  0.53 degrees, soft angle 0 (UE 0.5357 / 0). Clear-day visibility at the sea ~25 km (Mie 0.044 + Rayleigh 0.014 + fog
+  0.1 per km). The UE scene is changed in the editor, NOT saved. Result at his viewport (linear, clouds on): the sky
+  +0.5 .. +5 degrees within 2-6 %; the water -0.5 .. -18 degrees ours 1.2-1.9x UE's and warmer -- with the body at 0
+  ours is already over UE's whole water in R and G, the sun glint off moves nothing, the fog off or AP off moves
+  nothing: it is our water's sky reflection. The fit above (deepScatter 0.0013 / 0.055 / 0.12) was made while UE's
+  skyLuminanceFactor 2 also doubled UE's sky LIGHT (UE puts it into the sky-light capture; ours does not by design), so
+  it was 2x high for equal lighting. Against photographs of a low sun over the sea from height (Unsplash): the glitter
+  is a column a few sun widths wide near the horizon, widening toward the camera, of distinct sparkles, the water beside
+  it dark in a clear sky -- UE's is a narrower calm-water column, ours a broad smooth cone: `ocean.render.windSpeed` 12
+  m/s (the Bruneton unresolved roughness) against a sea state of windForce 0.4 (~2.5 m/s in the preset) -- the two are
+  not the same wind.
+- **The sun glint's smear is a knob** (owner: "we reflect the sky honestly, we do not need the analytic smear of the
+  specular by roughness, only the glitter path -- or a knob to fade it"). `OceanSunSpecular`'s GGX alpha is the Bruneton
+  unresolved slope variance, and GGX's long tails times the sun's radiance spread it into a broad smooth patch a few tens
+  of sun widths across, brighter than the sky around it -- Cox-Munk at 2.5 m/s puts the glitter's half width at ~2.7
+  degrees at the horizon. `ocean.render.sunGlintSmear` (ocean window "Sun glint smear", `--set ocean.sunGlintSmear`;
+  windParams1.w) scales that alpha: 0 = every resolved facet mirrors the disc (UE's sphere light at the disc's radius) --
+  scattered sparkles over the resolved waves' whole slope spread, no continuous path; **1 = the default**, the path as it
+  was (owner, at 0: "fix the water's specular back, bring the path back"). The sky reflection keeps the variance (its blur).
+- **The land was 0.6 of UE's, and two causes were ours** (owner: "UE shows the leaves' SSS more", then "you overdid the SSS",
+  "the same assets are imported, keep comparing"). Linear, both engines at the same pose (UE's viewport by
+  `ue_linear_view.py`, ours by the pixel probe, scratchpad `crowns_compare.py`): the backlit crowns and sand from 35 m
+  up 0.58-0.67 of UE in every third of the land band, ours bluer in the shade; UE's TwoSidedBxDF lobe moved it 2 %.
+  A 4 m grey box (albedo 0.5, matte) 45 m over the island in both (`ue_box.py` / `ours_box.py`): the top and the sunlit
+  faces 0.95-1.05 -- the sun and the sky agree --, the faces turned from the sun 0.69-0.71 and bluer (R/B 0.54-0.65 vs
+  0.78-0.85). (1) **The GI probes' rays stopped at 30 m** (`gi.rayDistance`), so nothing more than 30 m over the ground
+  took its bounce, and `light.groundAlbedo` (0.033 in wind_test) stands in only outside the volume: 200 m now (UE's
+  r.Lumen.MaxTraceDistance) -- the box's shaded faces 0.87-0.95 and UE's colour, the crowns' land 0.72-0.84; the trace
+  +0.15 ms seen from 35 m up, +0.02-0.04 on the grove. (2) **UE's diffuse is rough** (BaseWindowsEngine.ini:37
+  r.Substrate.RoughDiffuse=1 -> Diffuse_GGX_Rough v3 = EON at roughness x 0.4, BRDF.ush:213-249): `utils.hlsli DiffuseEON`
+  in EvalBRDF for every direct light (UE's weight 1 for the sun and small lights), `light.roughDiffuse:0` = Lambert for the
+  sun (the A/B; Lambert exactly, EON at roughness 0). The sunlit west beach seen from the sea with the sun behind
+  (cam -110 6 0, yaw 90, 14 down, clouds off in both): 0.45 -> 0.62 of UE, the dry sand uniform; the backlit crowns 0.74 ->
+  0.71 (EON darkens a rough surface seen against the light). Still open there: a constant ~1.6 on grazing-lit sand that
+  the box's faces do not show -- not the sand's normal map (normalStrength 0: 0.62), not the terminator gate or offset
+  (identical), not the shore wetness (the dry rows 0.61-0.69). UE runs no GI ray limit, ours `gi.farSpacing` 2 leaves the
+  land under a camera 35 m up outside the volume (`gi.debug:1` all red; 8 m covers it, +2-3 % there).
+  MEASURING IT: `gi.*` survives `reset_settings` -- one arm with `gi.enabled:0` left every later arm without GI (a
+  "GI does nothing" that was GI switched off); and clouds drift in both engines -- hide them in both or keep them in both.
+- **The height fog is in the sky's capture, as UE's** (owner: "in UE turning the fog off changes the water, ours does
+  not move -- their fog goes into the cubemap?"). It does: UE's real-time sky capture draws the analytic fog at an
+  infinite distance from the probe over the sky and under the clouds (ReflectionEnvironmentRealTimeCapture.cpp:919-962,
+  DistantHeightFog; ReflectionEnvironmentShaders.usf:1041-1073; the fog's bVisibleInRealTimeSkyCaptures, default true;
+  volumetric fog not in it), so its probes -- the water's sky reflection, the sky light -- see the haze. Ours now too:
+  `sky_ibl_capture_cs.hlsl` per tap `sky x T + HeightFogColor` (compose's sky branch, UE's colour, the probe at world
+  height 0; `SkyAtmosphere::SetEnvironmentFog` from SceneRenderer_Graph, the cube rebuilt when the fog moves past
+  kKeyLightShare); off under the HDRI and the sky-along-view A/B; `--set fog.inSkyCapture:0` = before (transient). At
+  the owner's viewport (UE (-141, -3603, 5376), yaw -36.5, 3.8 up; clouds hidden in both; linear): the water -1 .. -8
+  degrees was 1.5-2.4x UE's -- most of the "our water is brighter" above -- and is 1.04-1.27x now, toward the sun and
+  away; the fog off: ours 0.85-1.31x of UE's foggless water, both brightening ~2x toward the sun. PHOTOGRAPHING IT: UE's
+  sky capture is TIME-SLICED (r.SkyLight.RealTimeReflectionCapture.TimeSlice 1) and an editor in the background draws
+  few frames -- a capture taken 6 s after hiding the fog still reflected the fog; `ue_linear_view.py` RECAPTURE=1 sets
+  TimeSlice 0 and calls recapture_sky() (restored after).
+- **The light shafts are UE's again** (owner, his viewport at 18:00 with clouds off: "look at these sun shafts, make ours
+  the same"). The port is UE's line for line (LightShaftShader.usf:62-121); what differed was its input. Measured at ONE
+  pre-exposure (ours pinned, UE's viewport in linear at bias = log2 of ours, the light's shaft bloom on / off;
+  scratchpad `shaft_contrib.py`): with UE's numbers -- threshold 0.7, our own glare seed off, length 1 -- the shafts add
+  0.05 / 0.05 / 0.12 / 0.07 / 0.01 (sky 6 degrees off the sun / sky over the crowns / crowns under the sun / crowns /
+  sand) where UE's add 0.05 / 0.07 / 0.04 / 0.04 / 0.01-0.02; with wind_test's threshold 3 nothing. The sky round the sun
+  is the same in both once UE's shafts are off (0.5 .. 8 degrees within 0-23 %; UE's +103 k cd/m2 at 0.5 degrees is its
+  shafts, seeded by the disc at the cap). wind_test: the sun's `lightShaftBloomThreshold` 3 -> 0.7, and the shafts'
+  glare seed (`lightShaftGlareSeed`, ours: the sun glare laid into the seed) is DELETED -- code, key, Inspector, `--set`
+  (owner) -- a level that still carries the key ignores it; and `postProcess.bloom.threshold` 4 -> -1 (UE's BloomThreshold -1: the pyramid -- UE's Standard bloom --
+  blooms everything; the FFT path has no threshold, so the level's FFT look does not move). Still different on that
+  view: UE's auto exposure ~0.5 EV brighter (ours meters 13.2-13.7, the water's glint, the shafts and the bloom move it
+  0.01), the larger halo of UE's Standard bloom round the disc, our lens ghosts.
+- **A sun moving in the sky leaves no streak** (2026-11-04, owner: "if I move the sun quickly it trails across the sky").
+  Not DLSS (bloom off: no streak with DLSS on) -- the bloom's temporal input (`bloom_conv_cs.hlsl` stage 12): under DLSS
+  the FFT reads the scene BEFORE the upscaler (`bloom.convBeforeUpscale`, 2026-10-15: DLSS flattened a glint to ~10 % and
+  the star never formed) and averages it over frames by the G-buffer velocity (`convTemporalWeight` 0.1, the jitter made
+  glints flicker 40-50 %), with no neighbourhood clamp on purpose. The sky's motion vectors are the camera's, so a sun the
+  clock or a drag turns stayed in the history at ~64000 pre-exposed and the FFT drew every old disc into a streak (the
+  same on the pre-UDS level, with one thread or two). UE has no such stage: its FFT bloom reads TSR's output, and TSR
+  clamps the history (its light shafts go through TAA with a clamp, LightShaftRendering.cpp:347-365); dragging UDS's sun in
+  UE leaves none. Now while the sun's direction moves (> 0.01 degrees a frame) the history texels on its disc this frame
+  and on its disc in the history's frame take this frame alone (`BloomRenderer::RecordTemporalInput`: 2x the disc's
+  radius + 0.15 degrees + 2 texels); a still sun keeps the full average. `--set bloom.convTemporalSunReject:0` = before
+  (transient). The time stepped 0.02 h per MCP call at the owner's position: the streak gone, the still frame identical.
+  The moon is not covered (dimmer; not seen trailing). GBV (`Tonemap,Skybox` + the Skybox self-test, `--time-speed=600`):
+  clean.
+- **The water** (UE's ocean, Lumen reflections) in UE's LINEAR viewport, not a scene capture (below): our body was half as
+  bright and bluer. wind_test's `ocean.render.deepScatterColor` (0, 0.0127, 0.040) -> (0.0013, 0.055, 0.12), fitted by
+  least squares over -3 .. -18 degrees (the body is linear in it): those rows within 1-6 %, G/B and R/B matched. Still
+  ours: -0.5 .. -2 degrees +16-30 % and warmer (the reflection of the low sky), and a far wider, brighter sun glitter.
+  The sea state `ocean.windForce` 0.6 -> 0.4 (owner: flatter; `--set ocean.windForce`, the colours `ocean.deepScatterR|G|B`,
+  `ocean.diffuseR|G|B`, `ocean.sssR|G|B`, `ocean.absorption<0-3><R|G|B>` -- all live).
+- **Photographing UE**: a SceneCapture2D switches Lumen GI and reflections OFF unless told (SceneCaptureRendering.cpp:
+  799-801) -- its sky and fog are right, its water is not (half the viewport's, even with Lumen overridden and a
+  persistent view state). For the viewport in linear: set the unbound PPV to manual exposure 2^bias (physical camera off),
+  tone curve 0, neutral grade, no bloom / vignette / lens flares / grain / expand gamut, CaptureViewport, decode sRGB /
+  2^bias, then restore every touched property WITH its override flag (scratchpad `ue_linear_view.py`); its sky equals the
+  capture's HDR within 1-3 %. HighResShot writes nothing while UE is in the background. At the owner's exposure (13.8)
+  UE's default `r.EyeAdaptation.CachedLightingPreExposure` clipped Lumen's cache and the sky capture (the red warning; the
+  safe range is that value -12 .. +8): the water's reflection was cut -- 8 is set for his session.
 
 ## Line Endings
 
@@ -645,8 +782,9 @@ the sun probe (disc colour, visible share) and the frame rate; `set_camera {look
 offsetYawDeg, offsetPitchDeg}` faces the sky's sun wherever the time of day has it (`position`
 optional; `lookAt: "moon"` the moon; positive offsetPitchDeg tilts DOWN, so a view 4 degrees over the horizon
 toward a sun at elevation e is `offsetPitchDeg: e - 4`). An exposure curve is shaped live with
-`exposure.curvePoints` / `exposure.curveEv<i>` / `exposure.curveComp<i>` (`exposure.curve:0|1|2|3` = none/Eye/UDS/UDS
-Steady Night; the curve's slope is the adaptation's strength -- the camera follows 1 - slope of the scene's change).
+`exposure.curvePoints` / `exposure.curveEv<i>` / `exposure.curveComp<i>` (`exposure.curve:0|1|2|3|4` = none/Eye/UDS/UDS
+Steady Night/UE -- UE's wind_test has NO curve, one constant Exposure Compensation +0.5 on its PPV, the Inspector's "UE"
+button; the curve's slope is the adaptation's strength -- the camera follows 1 - slope of the scene's change).
 The Level Editor closed (F2) still serves every call -- MEASURE COSTS WITH IT CLOSED (its panels are a load of
 their own) and on a real view, not wherever the camera happened to be: `get_profile {filter, reset}` returns the
 profiler's rows (GPU/CPU per pass: EMA, max since `reset`, runs last frame), and `shadow.mode:0|1|2`
@@ -1411,6 +1549,23 @@ the island from above 0.7 %, the trunks' and palms' shadows where they were. Cos
 grove (0.155-0.163 documented before), Pass_Lighting on / off the same (0.39 / 0.39, 0.41 / 0.41). `--set
 light.terminatorOffset:0` = before (the A/B; a scale, 1 = the smooth surface). The lamps' shadows do not take it (yet).
 
+**The normal map's bumps do not light a surface the sun has left: the bump terminator** (2026-11-03, owner at cam -55.21
+4.85 29.13, rot -0.0525 0.9330 -0.1521 -0.3220, 18:00, the sun 10.7 degrees up: "what is this shadow's silhouette?", then
+"why so sharp -- a crease?", then "make the edge smooth"). Not a crease: the beach there slopes at the sun's elevation, the
+island's facets' N.L runs -0.016 .. +0.029 across it (exact against the OBJ, scratchpad `island_shadow.py`), and the
+island's own shadow (UE's too, the same mesh) ends where the facets turn to the sun. It was SHARP because the sand's normal
+map kept the shading N.L above 0 there -- the sun-only probe stepped 66 -> 237 across the edge; with the map off it ramped
+50 -> 69 -> 87 .. 205. `utils.hlsli SunBumpShadowing` (Chiang, Li, Burley 2019, "Taming the Shadow Terminator"; Blender
+Cycles' bump_shadowing_term): g = (Ng.L) / ((Ns.L) (Ng.Ns)), Ng the interpolated vertex normal, the cubic -g^3 + g^2 + g,
+computed in FinalizeGBuffer for the frame's light (PerView gbLightToward) and stored as 1 - G in GBAux.b's HIGH four bits
+(the shading model's ID keeps the low four: `EncodeShadingModel` is n/255 now, `DecodeShadingModel` masks; a writer that
+does not know -- the ocean -- leaves 0 = none), dithered by a hash of the mapped normal; lighting_cs multiplies the direct
+sun by it (opaque and the foliage's front; not the transmission). After: the edge ramps 51 -> 57 -> 70 .. 200, the full
+frame 425 -> 415 -> 422 .. 539 (was 446 -> 564). The price is the grazing-lit sand's relief: bumps no longer light up where
+the smooth surface barely faces the sun (that view 9.8 % of the frame > 8 levels, mean -7 %); the beach at 14:00 0.79 %
+(floor 0.84), the grove at 15:00 1.30 % (floor 0.97). UE has no such term (its edge is as sharp as ours was). `--set
+light.bumpShadowing:0` = before (the A/B).
+
 **A leaf passes the sky behind it, not only the sun** (2026-10-31, owner on the island against the sun at 15:03, cam
 71.70 6.95 114.59: "isn't it too black now?"). A two-sided foliage pixel adds `subsurface payload x (sky irradiance(-N) +
 GroundBounceOverPi(-N))` to its fill, under the front's occlusion (`lighting_cs.hlsl`, after the sky fill) -- UE's
@@ -1737,8 +1892,7 @@ The UE review that followed (owner: "fix the volumetric fog"), each against `Vol
   `Inscattering * (1 - T) + DirectionalInscattering`, :407): it was returned inside the colour and multiplied by
   (1 - T) with it -- (1 - T)^2. On wind_test (strength 0.1, exponent 32) the difference is under 1.3 of 255; levels
   at the default 0.35 / 8 see it more. The line integral switches to its Taylor pair at |f| 0.01 (UE FLT_EPSILON2), not
-  1e-6 (float cancellation). The lobe's strength (0.35 default vs UE's 1/4pi on a colour with no sun in it) stands:
-  our base is the sky along the view, which already holds the sun's aureole.
+  1e-6 (float cancellation). The lobe's strength is UE's since 2026-11-03 (below, "The sun lobe is UE's too").
 - Every local light stays shadowed in the volume (UE's points and spots default `bCastVolumetricShadow` off).
 - Cost (Scatter + Integrate, editor open, alternated x3): the start at 0 instead of 10 m +0.01 ms on the grove, 0 in
   the tunnel and over the sea; 60 m instead of 300 would add +0.02. GBV (`VolumetricFog,Compose,Skybox,
@@ -1761,6 +1915,117 @@ fog colour, as in UE (19:30, horizon band 90.8 vs 102.6 of 255 without fog; 24:0
 colour (procedural sky)", `--set fog.skyAmbient` / `fog.inscatterLuminance` (grays), `fog.skyAlongView:1` = the old colour,
 the A/B (reproduces the old frame: 0.7 of 255 mean, clouds). No volumetric shafts at that view in UE either, at any density
 (g 0.2). GBV (`SkyDistant,Compose,TransparentFog,Translucent,Skybox` + the Skybox self-test): clean.
+
+**The sun lobe is UE's too** (2026-11-03): `HeightFogColor` adds `(HeightFogContribution (1) x the sun's illuminance on the
+ground after the atmosphere + sunScatterStrength x the sun's OUTER-SPACE luminance (grey)) / 4pi x pow(V.L, exponent) x
+(1 - 2^-tau past sunScatterStartDistance)` -- HeightFogCommon.ush:328-340 with FogRendering.cpp:431-438
+(DirectionalInscatteringLuminance x SunLight GetColor().GetLuminance(), UE's 0.3 / 0.59 / 0.11 weights): `sunScatterStrength`
+IS UE's DirectionalInscatteringLuminance. `PackHeightFog(a, hasSun, sunOuterLuminance)`, `DirectionalLight::
+GetOuterSpaceLuminance`. The froxel volume keeps extinction 0.4805 x density (exact parity with the analytic integral)
+where UE writes 0.5 (VolumetricFog.usf MatchHeightFogFactor): 4 % over its first 60 m. Measured against UE's HDR: above.
+**The ocean reaches the horizon**: its skirt is 50 ring widths (~200 km, `OceanRenderable::BuildMesh`), and wind_test's far
+plane 100 km. At 10 the water stopped at ~41 km and the level's 10 km far plane nearer still: a strip of the lower sky,
+fully fogged, showed between the waterline and the true horizon (0.18 degrees from 34 m up) -- the dark line UE's far
+water mesh does not have.
+**`timeOfDay.fog` checked** (the curve's maths): continuous at `duskDeg` (both branches give dusk), monotonic, smoothstep,
+dawn = dusk, one function for the frame and the Inspector graph. Its numbers on wind_test (density 0.005, falloff 0.06;
+visibility 3.912 / (0.4805 x density x 2^-0.06h)): at sea level 1.6 km at dusk (mist), 11 km by day and by night; from 34 m
+along the horizon 6.7 / 45 km. A clear tropical evening at sea is 10-20 km: the dusk key is an artistic haze, the
+sunset's GLOW is the lobe -- UE's scene runs 0.002 at every hour (= dusk 0.4 x 0.005).
+
+## Ultra Dynamic Sky -- What It Does to the Fog and the Sky (2026-11-04)
+
+The owner's UE WindTest carries UDS (actor `CLAUDE_TEST_UDS`, editor layer `CLAUDE_UDS`; our env sun / sky / skylight / fog
+/ clouds are layer `CLAUDE_Env`; WindTest is no World Partition map, so no data layers). Owner: UDS is the default there
+(`CLAUDE_UDS` shown, `CLAUDE_Env` hidden; not saved by us). Read off it with UE Python (scratchpad `ue_uds_sweep.py`:
+setting its `Time of Day` re-runs its construction and REPLACES its components -- fetch them again after every set;
+`ue_fngraph.py` / `ue_matdump.py` walk its material graphs; Git Bash rewrites `/Game/...` arguments -- `MSYS_NO_PATHCONV=1`).
+- **Why UE's plain height fog draws a dark band at a high sun**: its colour is the distant sky light (the sky's AVERAGE,
+  isotropic) plus a narrow `pow(V.L, e)` lobe -- no side or back phase of the sun, no multiple scattering -- so a dense
+  horizontal fog is darker and bluer than the horizon sky it covers. UE's legacy artist model; the physical haze is meant to
+  be the SkyAtmosphere's aerial perspective.
+- **UDS's fog** (UE units / 10 = ours per metre): density 0.0055, falloff 0.06, at z -1.5 m, start 73.5 m, max opacity 1, no
+  volumetric fog, aerial perspective OFF (`AerialPespectiveViewDistanceScale` 0: the haze is the height fog alone), its
+  SkyAtmosphere's `HeightFogContribution` 2 by day (it scales BOTH the fog's sky ambient and the ground half of the sun lobe,
+  HeightFogCommon.ush:190 / :334), a warm `DirectionalInscatteringLuminance` (0.79, 0.64, 0.56) at exponent 5 from 100 m,
+  both easing to the horizon (UDS's curves: `TimeOfDay.cpp kUdsFog*`), a blue `FogInscatteringLuminance` floor from the
+  sunset on. Its sky: Rayleigh x1.21 (its colour 0.1686 / 0.4078 / 1), Mie x3.5 with a BLUISH colour (0.802, 0.880, 1) and
+  Earth's absorption, g 0.75, ozone (0.8972, 1, 0.0953) x 0.002, ground albedo 0.40, sun disc 1 degree, 6500 K.
+- **Ours now has every one of them**: `skyAtmosphere.heightFogContribution` (`--set sky.heightFogContribution`), the
+  medium's per-channel `rayleighTint` / `mieTint` / `ozoneTint` and `mieAbsorptionScale` over the x Earth scales (Inspector
+  Sky Atmosphere > Medium; `SetSkyMedium`), the fog's `sunScatterColor` (UE's DirectionalInscatteringLuminance is a colour;
+  `--set fog.sunScatterR|G|B`; the packed fog grew `sunDirectional`, params2.y is reserved), and `timeOfDay.fog.udsColor`
+  (Inspector Time of Day > Fog By Sun Height "Ultra Dynamic Sky fog colour", `--set tod.fogUdsColor`): UDS's three curves
+  by the sun's elevation, multiplying the level's HeightFogContribution and sun scatter and adding its floor (per lux of
+  its 5-lux sun x ours). Off and at 1 / white = the frame before, bit for bit. A copy of wind_test with UDS's numbers:
+  scratchpad `make_uds_level.py` (the level's tints relative to UDS's day: night ozone (2.23, 1.70, 0.64), sunrise (1.67,
+  1.46, 1.80), night Rayleigh (1.43, 0.85, 0.61)). GBV (`SkyEnvironment,Compose,TransparentFog,Transparent,Translucent,
+  Skybox` + the Skybox self-test, that copy at 17:36): clean.
+- **Compared** (scratchpad `ours_uds_shots.py` / `ue_uds_shots.py` / `uds_sheet.py`, the owner's viewport, toward and away
+  from the sun, ours with the sun put exactly where UDS's is -- `sun.elevation` / `sun.azimuth` = UE light yaw + 180 --,
+  both exposures pinned, UDS's 14.55 stops up for its 5 lux): the horizon haze, the sunset's colours and the glitter column
+  match; no dark band. What remains is NOT the fog:
+- **UDS's sky is an art layer over the SkyAtmosphere** (`Ultra_Dynamic_Sky_Mat`, read node by node): sky = `Overall
+  Intensity` x contrast(`Contrast Midpoint`, `Extra_Contrast` 0.1) x [ SkyAtmosphereViewLuminance x S x (1 - A) + A^2 x S ]
+  + `Night Sky Glow Color`, with A = `Ambient Color` ((0.15, 0.27, 0.50) at noon -- half the blue replaced by a constant),
+  S = `Lit_Intensity` 0.8 x (2.3 + 1.8 (u + v)), u = (1 + dot(view stretched vertically, sun)) / 2 (`Sun_Centered_Gradient`,
+  a Customized UV), v the moon's at night. `Overall Intensity` 0.375 by day, 0.69 at sunset, 1.23 at -3 degrees: by day the
+  sky is x0.69 away from the sun and x1.23 toward it; ours measured 1.3-2x UDS's in cd/m2 by day. Its twilight is brighter
+  still for its MOON: 0.15 lux = 1/33 of its sun, full, opposite the sun, from the sunset on, and its Night Sky Glow.
+- **Ported, all of it (owner, same day: "fit everything of ours to them, create new entities if needed")**:
+  `timeOfDay.twilight.udsSkyMaterial` (`--set tod.skyUdsMaterial`, Inspector Time of Day > Twilight) = `shaders/uds_sky.hlsli
+  UdsSkyLayer` on the drawn sky (skybox.hlsl) AND its capture (sky_ibl_capture_cs.hlsl: UDS's sky light captures its
+  sphere; its glow x2 there), UDS's Overall Intensity / Contrast Midpoint / Night Sky Glow by the sun's elevation
+  (`TimeOfDay.cpp kUdsSky*`, read off its material instance every 3-30 minutes; `UdsSkyFrameData`). Its Ambient Color lerp is
+  left out: measured, it does nothing. CHECKED: ours with / without the layer against UDS / UE's bare atmosphere at 6
+  times x 4 views x 4 points (scratchpad `ours_layer_check.py`): median 0.99-1.005, p10-p90 0.90-1.18.
+  `timeOfDay.moon.udsMoon` (`--set tod.udsMoon`, Inspector Moon "Ultra Dynamic Sky moon"): the moon and the night sky take
+  Night Brightness in full from the sunset (0 at +1.15 degrees, linear, as UDS's moon light), the sun's twilight sky none
+  (`TimeOfDay::MoonGain`; the lamps and the night camera keep NightGain). UDS's sun path is our SIMPLE path yaw 180 / tilt 30
+  / 6:00-18:00 (within 0.05 degrees), its moon full, tilt 33.73 (within 2.6: UDS's sits ~2.3 higher).
+- **wind_test carries UDS since 2026-11-04** (scratchpad `make_uds_level.py uds_edit`, written by `apply_uds_to_level.py`,
+  which touches only the changed lines; the file before is `wind_test_before_uds.json` in the scratchpad): the sky above
+  (tints, Mie 3.5 bluish, AP off, ground 0.40), the fog (0.000551 / 0.006 / -1.5 m / start 73.5 m, lobe 1 x5 from 100 m),
+  `timeOfDay.fog` all 1 + udsColor, the twilight tints relative to UDS's day, udsSkyMaterial, udsMoon, the simple path's
+  numbers (UDS's), the sun disc 1 degree / soft 0.5 / 6500 K, and the exposure = UDS's curve ONE TO ONE with compensation 0
+  (owner, the same evening: `SetUdsExposureCurve` is that now -- its .uasset's five cubic keys +14.55 EV, eight points within
+  0.015 EV, checked against UE's own get_float_value to 0.00007 EV; the Inspector's "UDS" button sets the compensation 0 with
+  it). The owner KEPT his volumetric fog, real sun positions and the sun's light shafts (UDS has none of the three; he
+  switched them back on, and `uds_edit` no longer touches them). Before the one-to-one curve (the old preset + 0.85 by day,
+  each engine on its own auto exposure, the owner's viewport toward / away from the sun 12:00-18:15): the sky within ~0.3
+  stop on most views, the horizon's haze, the sunset and the blue hour with the moon rising as UDS's; the old preset was
+  shifted -0.919 to keep the old day, and the one-to-one curve is ~+0.9 over it by day -- the same gap. Still different:
+  the water (UE's water body is another system) and our wider sun glitter (`ocean.sunGlintSmear` 1).
+- **The night under UDS** (owner, the same day, at 21:54 on Sep 11 -- a new moon, under the horizon -- cam -18.30 10.42
+  88.47: "insanely bright with the moon invisible"; median 206 of 255, a pale day). Two of ours: (1) the steady night camera
+  follows the night's light as TimeOfDay models it (moon + twilight + night sky), and UDS's Night Sky Glow is a light of its
+  own -- a moonless night under it is 3.6 stops under the full moon, the model said 7.9, and the camera opened the
+  difference: every waning phase BRIGHTER than the full moon (simple path, 21:54, full / gibbous / quarter / crescent /
+  new: median 45 / 46 / 55 / 88 / 108). `TimeOfDay` now counts the glow (2.618 x its luminance on a level surface, x2 in
+  the capture, x Overall Intensity), and under `udsMoon` each light with the gain it is drawn with (the moon and the night
+  sky Night Brightness from the sunset, the twilight none): the model reads -4.15 for the new moon against the frame's
+  -3.8. (2) the one-to-one curve was flat under 5.3, i.e. the night's light followed in full; `SetUdsExposureCurve` carries
+  the night section again (12 points) and so does wind_test's curve (three points written under its eight). After: full /
+  gibbous / quarter / crescent / new 43 / 35 / 29 / 29 / 30, the owner's view 34 (36 % of the frame under 20, stars, the
+  island's silhouette); real dates at 21:54 -- Sep 15 / 18 (the quarter low) 33, 22 36, 26 (the full moon rising, its path
+  on the water) 59, 27 at 01:00 41, Oct 4 / 7 at 01:00 / 03:00 32 / 31; the dusk at his view 18:00-21:00 122 / 107 / 69 /
+  68 / 36 (monotonic); the bathroom (closed) 64 at 16:00, 58-60 at night with any moon. Root fix alone (the flat curve)
+  left the new moon at 54 over the full moon's 43. UDS ITSELF in UE (the same view, 21:54, its own auto exposure, coverage
+  0, Moon Phase 0 / 3.75 / 7.5 / 11.25 / 15 days = full .. new): a dim DAY at every phase, median 172-184, the moon's
+  shadows as hard as the sun's -- its moon light follows the phase (0.15 lux x lerp(0.015, 1, lit), lit 0.158 at a quarter)
+  but its sky material's Overall Intensity RISES as the moon wanes (0.45 full -> 1.35 new) and its auto exposure lifts the
+  rest. Not ported (it brightens what the owner calls too bright). Also seen: the rising full moon wears a tall Mie aureole
+  (`twilight.mieNightScale` 1 from uds_edit, UDS's Mie 3.5; 0.1 -- the owner's 2026-11-01 pick -- takes most of it).
+  GBV (`ExposureMetering,Skybox` + the Skybox self-test, that view): clean.
+- **MEASURING UE UNDER UDS** (cost an afternoon): (1) UDS rebuilds its components on every property edit, so pinning ITS
+  post process does nothing -- the frame at bias b and b+1 decoded 2x apart; pin with a post process volume of our own on
+  top (scratchpad `ue_linpp.py`: unbound, priority 1000, label CLAUDE_TEST_linear_ppv, destroyed after). (2)
+  `CaptureViewport` from a transform other than the viewport's renders a view of its own whose exposure does not follow:
+  move the viewport (`UnrealEditorSubsystem.set_level_viewport_camera_info`) and capture there; the first frame after the
+  volume appears is stale. (3) Absolute cd/m2 do NOT carry between UDS's 5-lux world and ours: under a 5-lux sun at
+  exposure +14.55 UE lit the probe box's SHADED face 600x what it got at 120 klux (Lumen's cache and the sky light are kept
+  at a fixed CachedLightingPreExposure), and its bare atmosphere read 2x ours everywhere. Compare RATIOS within a frame (UDS
+  / the bare atmosphere, sky / ground) and the display as each engine exposes it, not absolute radiance across worlds.
 
 ## GI Probe Volume (DDGI) -- the Bounce
 

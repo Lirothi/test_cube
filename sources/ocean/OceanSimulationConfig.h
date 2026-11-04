@@ -17,6 +17,13 @@ struct OceanRenderConfig
     Math::float4 foamTint = Math::float4(1.0f, 1.0f, 1.0f, 1.0f);
 
     float specularStrength = 1.1f;
+    // How much of the UNRESOLVED slope variance (Bruneton, `roughnessScale`) widens the SUN's glint (OceanSunSpecular).
+    // 0 = the glitter path alone: each resolved wave facet mirrors the disc (UE's sphere light), the path made of
+    // sparkles as in photographs; 1 = the old glint, smeared by that variance through GGX's long tails into a broad
+    // smooth patch (the sun's ~1e9 cd/m2 makes the tails visible tens of degrees out). The sky's reflection keeps its
+    // blur either way -- it is the honest reflection. Owner, 2026-11-03: "we only need the path -- or a knob to fade it";
+    // then, at 0: "fix the water's specular back, bring the path back" -- 1 (the path as it was) is the default.
+    float sunGlintSmear = 1.0f;
     float roughnessScale = 0.7f;
     float roughnessDistance = 150.0f;
     float horizonFogStrength = 0.55f;

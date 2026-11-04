@@ -291,12 +291,14 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
             settings.apertureFStop, settings.shutterSpeedSec, settings.isoSensitivity);
         constants.autoExposure = settings.autoExposure ? 1u : 0u;
         constants.blackBucketInfluence = settings.blackBucketInfluence;
-        // Time-of-day E1: the compensation curve, points 0-3 in the A halves and 4-5 in the B halves.
+        // Time-of-day E1: the compensation curve, points 0-3 in the A quarters, 4-7 in the B, 8-11 in the C.
         constants.curvePoints = std::min(settings.exposureCurvePoints, render::CameraExposureSettings::kExposureCurveMaxPoints);
         for (std::uint32_t i = 0; i < constants.curvePoints; ++i)
         {
-            (i < 4u ? constants.curveEvA : constants.curveEvB)[i & 3u] = settings.exposureCurveEv[i];
-            (i < 4u ? constants.curveCompA : constants.curveCompB)[i & 3u] = settings.exposureCurveComp[i];
+            float* const ev[3] = { constants.curveEvA, constants.curveEvB, constants.curveEvC };
+            float* const comp[3] = { constants.curveCompA, constants.curveCompB, constants.curveCompC };
+            ev[i / 4u][i & 3u] = settings.exposureCurveEv[i];
+            comp[i / 4u][i & 3u] = settings.exposureCurveComp[i];
         }
         constants.nightSteady[0] = settings.nightSteadyEv100;
         constants.nightSteady[1] = settings.nightSteadyFollow;

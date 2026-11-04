@@ -1051,6 +1051,12 @@ namespace
             if (key == "moonPhaseAuto") { t.moonPhaseAuto = value != 0.0f; return true; }
             if (key == "moonPhase") { t.moonPhase = value - std::floor(value); return true; }
             if (key == "nightSky") { t.nightSkyEnabled = value != 0.0f; return true; } // N2
+            // Ultra Dynamic Sky's fog colour by the sun's height (timeOfDay.fog.udsColor).
+            if (key == "fogUdsColor") { t.fogUdsColor = value != 0.0f; return true; }
+            // ...and its sky material over the atmosphere (timeOfDay.twilight.udsSkyMaterial).
+            if (key == "skyUdsMaterial") { t.skyUdsMaterial = value != 0.0f; return true; }
+            // ...and its moon: Night Brightness in full from the sunset (timeOfDay.moon.udsMoon).
+            if (key == "udsMoon") { t.udsMoon = value != 0.0f; return true; }
             struct FloatKnob { const char* name; float* field; float lo, hi; };
             const FloatKnob knobs[] = {
                 { "dayLengthMin", &t.dayLengthMin, 0.01f, 10000.0f }, { "nightLengthMin", &t.nightLengthMin, 0.01f, 10000.0f },
@@ -1146,28 +1152,32 @@ namespace
         if (setting == "sky.lutValidate") { scene.SkyAtmosphereRef().lutValidate = value != 0.0f; return true; }
         if (setting == "sky.lutEnabled") { scene.SkyAtmosphereRef().lutEnabled = value != 0.0f; return true; }
         if (setting == "sky.lutDebugView") { scene.SkyAtmosphereRef().lutDebugView = static_cast<unsigned>(std::clamp(value, 0.0f, 2.0f)); return true; }
-        if (setting == "sky.rayleighScale")
+        // The x Earth scales keep the level's per-channel colours (SkyAtmosphereSettings rayleighTint / mieTint / ozoneTint).
+        if (setting == "sky.rayleighScale" || setting == "sky.mieScale" || setting == "sky.ozoneScale")
         {
+            auto& s = scene.SkyAtmosphereRef();
             const SkyAtmosphereParameters earth{};
-            for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.rayleigh[i] = earth.rayleigh[i] * std::clamp(value, 0.0f, 10.0f);
+            float rayleigh = SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint);
+            float mie = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
+            float ozone = SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint);
+            const float v = std::clamp(value, 0.0f, 10.0f);
+            (setting == "sky.rayleighScale" ? rayleigh : setting == "sky.mieScale" ? mie : ozone) = v;
+            SetSkyMedium(s, rayleigh, mie, ozone);
             return true;
         }
-        if (setting == "sky.mieScale")
+        // UE's MieAbsorptionScale over Earth's (0.000444); < 0 = follows sky.mieScale.
+        if (setting == "sky.mieAbsorptionScale")
         {
+            auto& s = scene.SkyAtmosphereRef();
             const SkyAtmosphereParameters earth{};
-            for (unsigned i = 0; i < 3; ++i)
-            {
-                scene.SkyAtmosphereRef().parameters.mieScattering[i] = earth.mieScattering[i] * std::clamp(value, 0.0f, 10.0f);
-                scene.SkyAtmosphereRef().parameters.mieAbsorption[i] = earth.mieAbsorption[i] * std::clamp(value, 0.0f, 10.0f);
-            }
+            const float mie = SkyMediumScaleOf(s.parameters.mieScattering, earth.mieScattering, s.mieTint);
+            s.mieAbsorptionScale = value < 0.0f ? -1.0f : std::min(value, 10.0f);
+            SetSkyMedium(s, SkyMediumScaleOf(s.parameters.rayleigh, earth.rayleigh, s.rayleighTint), mie,
+                         SkyMediumScaleOf(s.parameters.ozone, earth.ozone, s.ozoneTint));
             return true;
         }
-        if (setting == "sky.ozoneScale")
-        {
-            const SkyAtmosphereParameters earth{};
-            for (unsigned i = 0; i < 3; ++i) scene.SkyAtmosphereRef().parameters.ozone[i] = earth.ozone[i] * std::clamp(value, 0.0f, 10.0f);
-            return true;
-        }
+        // UE's SkyAtmosphere HeightFogContribution: the sky's light in the height fog (its ambient colour, the lobe's ground term).
+        if (setting == "sky.heightFogContribution") { scene.SkyAtmosphereRef().heightFogContribution = std::clamp(value, 0.0f, 10.0f); return true; }
         if (setting == "sky.mieAnisotropy")
         {
             // UE MieAnisotropy: 0 scatters uniformly, near 1 scatters forward and haloes the sun.
@@ -1194,7 +1204,6 @@ namespace
         if (setting == "lightShafts.bloomThreshold") { scene.SunLightRef().SetLightShaftBloomThreshold(value); return true; }
         if (setting == "lightShafts.bloomMaxBrightness") { scene.SunLightRef().SetLightShaftBloomMaxBrightness(value); return true; }
         if (setting == "lightShafts.smoothing") { scene.SunLightRef().SetLightShaftSmoothingSec(std::max(value, 0.0f)); return true; }
-        if (setting == "lightShafts.glareSeed") { scene.SunLightRef().SetLightShaftGlareSeed(std::clamp(value, 0.0f, 4.0f)); return true; }
         if (setting == "lightShafts.length") { scene.SunLightRef().SetLightShaftLength(std::clamp(value, 0.0f, 2.0f)); return true; }
         if (setting == "lightShafts.occlusionDepthRange") { scene.SunLightRef().SetLightShaftOcclusionDepthRange(value); return true; }
         if (setting == "fog.density") { scene.HeightFogRef().density = value; return true; }
@@ -1224,6 +1233,10 @@ namespace
             scene.HeightFogRef().sunScatterStrength = value;
             return true;
         }
+        // UE's DirectionalInscatteringLuminance colour (the tint of fog.sunScatter), per channel.
+        if (setting == "fog.sunScatterR") { scene.HeightFogRef().sunScatterColor.x = std::max(value, 0.0f); return true; }
+        if (setting == "fog.sunScatterG") { scene.HeightFogRef().sunScatterColor.y = std::max(value, 0.0f); return true; }
+        if (setting == "fog.sunScatterB") { scene.HeightFogRef().sunScatterColor.z = std::max(value, 0.0f); return true; }
         if (setting == "fog.sunScatterExp")
         {
             scene.HeightFogRef().sunScatterExponent = value;
@@ -1240,6 +1253,8 @@ namespace
         if (setting == "fog.skyAmbient") { scene.HeightFogRef().skyAmbientContribution = float3(std::max(value, 0.0f)); return true; }
         if (setting == "fog.inscatterLuminance") { scene.HeightFogRef().inscatteringLuminance = float3(std::max(value, 0.0f)); return true; }
         if (setting == "fog.skyAlongView") { g_fogSkyAlongView_game = value != 0.0f; return true; }
+        // fog.inSkyCapture:0 = the height fog out of the sky's capture (the water's sky reflection, the sky fill), the A/B.
+        if (setting == "fog.inSkyCapture") { g_fogInSkyCapture_game = value != 0.0f; return true; }
         if (setting == "fog.nonDirectionalDistance") { scene.HeightFogRef().nonDirectionalDistance = value; return true; }
         if (setting == "fog.fullyDirectionalDistance") { scene.HeightFogRef().fullyDirectionalDistance = value; return true; }
         // Volumetric fog (docs/volumetric_fog_sky_clouds_ssgi_plan.md, part A).
@@ -1297,6 +1312,7 @@ namespace
         if (setting == "bloom.convPercent") { scene.BloomRef().convPercent = value; return true; }
         if (setting == "bloom.convBeforeUpscale") { scene.BloomRef().convBeforeUpscale = value != 0.0f; return true; }
         if (setting == "bloom.convTemporalWeight") { scene.BloomRef().convTemporalWeight = std::clamp(value, 0.01f, 1.0f); return true; }
+        if (setting == "bloom.convTemporalSunReject") { scene.BloomRef().convTemporalSunReject = value != 0.0f; return true; }
         // The art split: the sun disc's own share of the kernel and of the ghosts (1 = like any source).
         if (setting == "bloom.sunKernelScale") { scene.BloomRef().convSunKernelScale = std::clamp(value, 0.0f, 10.0f); return true; }
         if (setting == "bloom.sunGhostScale") { scene.BloomRef().convSunGhostScale = std::clamp(value, 0.0f, 10.0f); return true; }
@@ -1401,6 +1417,9 @@ namespace
             return true;
         }
         if (setting == "light.foliageBackSky") { renderSettings.foliageBackSky = value != 0.0f; return true; }
+        if (setting == "light.foliageTransmissionUe") { renderSettings.foliageTransmissionUe = value != 0.0f; return true; }
+        if (setting == "light.roughDiffuse") { renderSettings.roughDiffuse = value != 0.0f; return true; }
+        if (setting == "light.bumpShadowing") { renderSettings.bumpShadowing = value != 0.0f; return true; }
         // (1 + metal * this) on the analytic sun specular (graphics_settings reflections.sunMetalSpec).
         if (setting == "light.sunMetalSpec") { renderSettings.sunMetalSpecInfluence = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "light.sunTemperatureK")
@@ -1473,8 +1492,9 @@ namespace
             return true;
         }
         // The sun's glint on the water (OceanSunSpecular): its brightness multiplier and the unresolved
-        // roughness scale (the Bruneton slope variance it takes its GGX alpha from).
-        if (setting == "ocean.specularStrength" || setting == "ocean.roughnessScale")
+        // roughness scale (the Bruneton slope variance it takes its GGX alpha from), and how much of that variance the
+        // glint takes (sunGlintSmear: 0 = the glitter path alone, 1 = the broad GGX patch).
+        if (setting == "ocean.specularStrength" || setting == "ocean.roughnessScale" || setting == "ocean.sunGlintSmear")
         {
             if (OceanRenderable* ocean = scene.FindOceanRenderable())
             {
@@ -1482,6 +1502,7 @@ namespace
                 {
                     OceanRenderConfig cfg = sim->GetRenderConfig();
                     if (setting == "ocean.specularStrength") { cfg.specularStrength = std::clamp(value, 0.0f, 100.0f); }
+                    else if (setting == "ocean.sunGlintSmear") { cfg.sunGlintSmear = Math::Saturate(value); }
                     else { cfg.roughnessScale = Math::Saturate(value); }
                     sim->SetRenderConfig(cfg);
                 }
@@ -1499,6 +1520,52 @@ namespace
                     OceanRenderConfig cfg = sim->GetRenderConfig();
                     cfg.lowSunBodyLight = Math::Saturate(value);
                     sim->SetRenderConfig(cfg);
+                }
+            }
+            return true;
+        }
+        // The water's colours by component, to tune them live against a reference instead of a level edit and a
+        // relaunch: `ocean.deepScatterG`, `ocean.diffuseB`, `ocean.sssR`, `ocean.absorption<key 0-3><R|G|B>` (the
+        // gradient key's position .w stays). OceanRenderConfig's deepScatterColor / diffuseColor / sssColor /
+        // absorptionColors -- what the Ocean controls' colour pickers edit.
+        if (setting.size() > 7 && setting.rfind("ocean.", 0) == 0)
+        {
+            const char last = setting.back();
+            const int ch = last == 'R' ? 0 : last == 'G' ? 1 : last == 'B' ? 2 : -1;
+            const std::string stem = setting.substr(6, setting.size() - 7);
+            const bool absorption = stem.size() == 11 && stem.rfind("absorption", 0) == 0 && stem[10] >= '0' && stem[10] <= '3';
+            if (ch >= 0 && (stem == "deepScatter" || stem == "diffuse" || stem == "sss" || absorption))
+            {
+                if (OceanRenderable* ocean = scene.FindOceanRenderable())
+                {
+                    if (OceanSimulation* sim = ocean->GetSimulation())
+                    {
+                        OceanRenderConfig cfg = sim->GetRenderConfig();
+                        Math::float4* color = stem == "deepScatter" ? &cfg.deepScatterColor
+                                            : stem == "diffuse"     ? &cfg.diffuseColor
+                                            : stem == "sss"         ? &cfg.sssColor
+                                            : (static_cast<size_t>(stem[10] - '0') < cfg.absorptionColors.size()
+                                                   ? &cfg.absorptionColors[static_cast<size_t>(stem[10] - '0')] : nullptr);
+                        if (color)
+                        {
+                            (ch == 0 ? color->x : ch == 1 ? color->y : color->z) = std::max(value, 0.0f);
+                            sim->SetRenderConfig(cfg);
+                        }
+                    }
+                }
+                return true;
+            }
+        }
+        // The sea state live (the level's ocean.windForce, 0..1 across the preset's keys -- what the Inspector's "Wind
+        // Force" slider sets), to pick it on a view; `--ocean-wind=<v>` is the boot-time override.
+        if (setting == "ocean.windForce")
+        {
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    sim->SetSceneVariables(&Systems::GetRenderer(), sim->GetLocalWindDirectionDegrees(),
+                                           sim->GetSwellDirectionDegrees(), Math::Saturate(value));
                 }
             }
             return true;
@@ -1595,11 +1662,18 @@ namespace
         if (setting == "render.preExposure") { render::g_preExposureEnabled_game = value != 0.0f; return true; }
         if (setting == "exposure.enabled")         { e.enabled = value != 0.0f;      return true; }
         if (setting == "exposure.autoExposure")    { e.autoExposure = value != 0.0f; return true; }
+        // 0 legacy, 1 AgX, 2 the film curve (render::ToneCurve). Any non-zero value used to mean AgX, so the film
+        // curve every level ships with could not be set back after an A/B.
         if (setting == "color.toneCurve")
         {
-            c.toneCurve = (value != 0.0f) ? render::ToneCurve::AgX : render::ToneCurve::LegacyAces;
+            c.toneCurve = value >= 1.5f ? render::ToneCurve::Filmic
+                        : value >= 0.5f ? render::ToneCurve::AgX : render::ToneCurve::LegacyAces;
             return true;
         }
+        if (setting == "color.ueGamut")        { c.ueGamut = value != 0.0f; return true; }
+        if (setting == "color.expandGamut")    { c.expandGamut = std::clamp(value, 0.0f, 4.0f); return true; }
+        if (setting == "color.blueCorrection") { c.blueCorrection = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "color.vignette")       { c.vignetteIntensity = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "color.agxSlope")      { c.agxSlope = value;      return true; }
         if (setting == "color.agxPower")      { c.agxPower = value;      return true; }
         if (setting == "color.agxSaturation") { c.agxSaturation = value; return true; }
@@ -1619,18 +1693,19 @@ namespace
         if (setting == "exposure.nightVision") { e.nightVision = std::clamp(value, 0.0f, 1.0f); return true; } // E2
         if (setting == "exposure.nightDesaturation") { e.nightDesaturation = std::clamp(value, 0.0f, 1.0f); return true; }
         // Time-of-day E1: the compensation curve, 0 = none, 1 = the eye preset (the A/B of a night), 2 = UDS's,
-        // 3 = UDS's with a steady night.
+        // 3 = UDS's with a steady night, 4 = UE's (no curve: one constant +0.5, the owner's UE PPV).
         if (setting == "exposure.curve")
         {
-            if (value >= 2.5f) { render::SetUdsSteadyNightExposureCurve(e); }
+            if (value >= 3.5f) { render::SetUeExposureCurve(e); }
+            else if (value >= 2.5f) { render::SetUdsSteadyNightExposureCurve(e); }
             else if (value >= 1.5f) { render::SetUdsExposureCurve(e); }
             else if (value != 0.0f) { render::SetEyeExposureCurve(e); }
             else { e.exposureCurvePoints = 0u; }
             return true;
         }
         // ...and point by point, so a running editor's set_settings can shape one live:
-        // `exposure.curvePoints` (0..8), `exposure.curveEv<i>` / `exposure.curveComp<i>`. The points must stay
-        // in ascending EV, as the level's own are -- the caller's job, here as in the Inspector's rows.
+        // `exposure.curvePoints` (0..12), `exposure.curveEv<i>` / `exposure.curveComp<i>` (i 0..11). The points must
+        // stay in ascending EV, as the level's own are -- the caller's job, here as in the Inspector's rows.
         if (setting == "exposure.curvePoints")
         {
             e.exposureCurvePoints = static_cast<std::uint32_t>(std::clamp(
@@ -1640,10 +1715,12 @@ namespace
         for (const auto& [prefix, field] : { std::pair{ std::string_view("exposure.curveEv"), e.exposureCurveEv },
                                              std::pair{ std::string_view("exposure.curveComp"), e.exposureCurveComp } })
         {
-            if (setting.size() == prefix.size() + 1u && setting.compare(0, prefix.size(), prefix) == 0)
+            const std::size_t digits = setting.size() - std::min(setting.size(), prefix.size());
+            if ((digits == 1u || digits == 2u) && setting.compare(0, prefix.size(), prefix) == 0 &&
+                std::all_of(setting.begin() + prefix.size(), setting.end(), [](char c) { return c >= '0' && c <= '9'; }))
             {
-                const int i = setting.back() - '0';
-                if (i < 0 || i >= static_cast<int>(render::CameraExposureSettings::kExposureCurveMaxPoints)) { return false; }
+                const int i = std::stoi(setting.substr(prefix.size()));
+                if (i >= static_cast<int>(render::CameraExposureSettings::kExposureCurveMaxPoints)) { return false; }
                 field[i] = std::clamp(value, -20.0f, 30.0f);
                 return true;
             }

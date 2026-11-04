@@ -51,6 +51,21 @@ struct SkyEnvironmentOverlay
     float groundSunScale = 1.0f;
 };
 
+// UE's DistantHeightFog in the real-time sky capture (ReflectionEnvironmentRealTimeCapture.cpp:919-962, the fog's
+// bVisibleInRealTimeSkyCaptures, default true): the analytic height fog at an infinite distance from the probe, over the
+// sky and under the clouds, so the probes -- the water's sky reflection, the sky fill -- see the haze the frame shows.
+// PackHeightFog's four rows and the sun's colour on the ground / the direction TO it (sky_ibl_capture_cs.hlsl); params0[0]
+// 0 or inscatter[3] 0 (the HDRI sky, the sky-along-view A/B) = none. sunDir[3] = the probe's world height.
+// sunDirectional = PackHeightFog's coloured lobe term (DirectionalInscatteringLuminance).
+// uds* = Ultra Dynamic Sky's sky material over the atmosphere (UdsSkyFrameData; udsGlow[3] 0 = off): UDS's sky light
+// CAPTURES its sky sphere, so the probes see that layer -- ours too (sky_ibl_capture_cs.hlsl, its glow x 2 as UDS's
+// Night Sky Glow Reflection Intensity).
+struct SkyEnvironmentFog
+{
+    std::array<float, 4> params0{}, params1{}, params2{}, inscatter{}, sunColor{}, sunDir{}, sunDirectional{};
+    std::array<float, 4> udsParams{}, udsGlow{}, udsSun{}, udsMoon{};
+};
+
 // Fixed-size transfer LUTs (parameter-dirty) and SkyView (per frame). Graphics queue only.
 // Changes overwrite in place only after previous graphics readers; resize never reallocates.
 class SkyAtmosphere
@@ -72,6 +87,8 @@ public:
     size_t BuildEnvironment(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                             const SkyAtmosphereSettings& settings, SkyViewFrameData view, Skybox* sky, size_t luts,
                             const SkyEnvironmentOverlay* overlay, const NightSkyFrameData& night, size_t nightPass);
+    // The fog the next BuildEnvironment captures (a change past a few per cent rebuilds the cube).
+    void SetEnvironmentFog(const SkyEnvironmentFog& fog) { environmentFog_ = fog; }
     unsigned EnvironmentRevision() const { return environmentBuilds_; }
     size_t BuildDistant(Renderer* renderer, RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>& graph,
                         const SkyAtmosphereSettings& settings, SkyViewFrameData view, size_t after);
@@ -173,6 +190,8 @@ private:
     SkyViewFrameData environmentKey_{};
     bool environmentReady_ = false, environmentFailed_ = false;
     bool environmentOverlayActive_ = false; // what the last build composited: a switch either way rebuilds
+    SkyEnvironmentFog environmentFog_{};    // this frame's (SetEnvironmentFog)
+    SkyEnvironmentFog environmentFogKey_{}; // what the last capture drew
     unsigned environmentBuilds_ = 0;
     // The rebuild's inputs, which its builder and body read here rather than copy into their closures (a closure
     // past std::function's 56 B small buffer is a heap allocation, and these are ~1 KB -- with the overlay's own
@@ -185,6 +204,7 @@ private:
         std::array<float, 4> groundSun{};
         std::array<float, 3> groundAlbedo{};
         NightSkyFrameData night{};
+        SkyEnvironmentFog fog{};
     };
     EnvironmentPassFrame environmentPass_;
     std::array<GpuResource, 2> lut_;

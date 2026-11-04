@@ -59,6 +59,7 @@ cbuffer FogApply : register(b0)
     float4   fogApplyMisc;      // x: sky intensity, y: debug view, z: preExposure, w: unused
     float4   aerialParams;      // enabled, start view depth (m), 1/preExposure, reserved -- compose's, byte for byte
     float4   fogInscatter;      // PackHeightFog's: UE's fog colour (raw), w = 1 = use it instead of the sky along the view
+    float4   fogSunDirectional; // PackHeightFog's: rgb the sun lobe's own (DirectionalInscatteringLuminance) term / 4 pi
 };
 
 struct VSOut
@@ -113,7 +114,8 @@ float4 PSMain(VSOut i) : SV_Target
     fog.referenceHeight = fogParams0.z;
     fog.startDistance = fogParams0.w;
     fog.maxOpacity = fogParams1.x;
-    fog.sunScatterStrength = fogParams1.y;
+    fog.sunGroundScale = fogParams1.y;
+    fog.sunDirectional = fogSunDirectional.rgb;
     fog.sunScatterExponent = fogParams1.z;
     fog.sunScatterStartDistance = fogParams1.w;
 

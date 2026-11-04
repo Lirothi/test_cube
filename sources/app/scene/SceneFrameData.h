@@ -209,6 +209,20 @@ struct HeightFogSettings
     // light, and that is UE's InscatteringColorCubemap option. cd/m2, absolute; UE's defaults (black, white).
     float3 inscatteringLuminance{0.0f, 0.0f, 0.0f};
     float3 skyAmbientContribution{1.0f, 1.0f, 1.0f};
+    // UE's DirectionalInscatteringLuminance is a COLOUR; `sunScatterStrength` is its grey and this its tint (white =
+    // the grey alone). Ultra Dynamic Sky's is warm by day, (0.79, 0.64, 0.56), reddening to 0 as the sun sets
+    // (timeOfDay.fog's UDS curves).
+    float3 sunScatterColor{1.0f, 1.0f, 1.0f};
+
+    // ---- FRAME-ONLY, never serialized (HeightFogSettingsJson does not know them): the scene writes them on the FRAME's
+    // copy every frame, beside the density's time-of-day scale (Scene::Tick), for PackHeightFog.
+    // UE's SkyAtmosphere HeightFogContribution (SkyAtmosphereSettings::heightFogContribution) x timeOfDay.fog's UDS
+    // curve: it scales the sky ambient in the fog's colour and the ground-illuminance half of the sun lobe.
+    float frameSkyContribution = 1.0f;
+    // timeOfDay.fog's UDS directional-inscattering curve, multiplying sunScatterStrength x sunScatterColor.
+    float3 frameSunScatterTint{1.0f, 1.0f, 1.0f};
+    // timeOfDay.fog's UDS twilight floor, cd/m2, added to inscatteringLuminance.
+    float3 frameInscatterFloor{0.0f, 0.0f, 0.0f};
 
     // ---- Volumetric (froxel) fog, docs/volumetric_fog_sky_clouds_ssgi_plan.md part A. UE's
     // VolumetricFog on top of the analytic model above: inside `volumetricDistance` the air is a
@@ -345,6 +359,10 @@ struct BloomSettings
     // the G-buffer velocity (bloom_conv_cs.hlsl stage 12) -- the averaging UE gets from TSR, whose output
     // their bloom reads. This frame's weight: 1 = no accumulation.
     float convTemporalWeight = 0.1f;
+    // A sun moving in the SKY (the clock, a drag) has no motion vector: the history above kept its disc where it was
+    // and the FFT drew a streak behind it (2026-11-04). While it moves, its disc now and its disc in the history take
+    // this frame alone (BloomRenderer::RecordTemporalInput). Transient (`--set bloom.convTemporalSunReject:0` = before).
+    bool convTemporalSunReject = true;
     // ART CONTROLS, not physics (owner, 2026-10-15: "dim the sun's kernel while raising it for the rest").
     // The sun disc carries thousands of times a glint's light, so with one Intensity its star and ghosts
     // dominate while a glint's barely show. These scale the DISC's own share -- its tiles of the
@@ -485,6 +503,12 @@ inline float4 g_fogDistantSkyLight{};
 inline bool g_fogSkyAlongView = false;
 inline bool g_fogSkyAlongView_game = false;
 inline const bool g_fogSkyAlongView_knob = ::knob::Register(g_fogSkyAlongView_game, g_fogSkyAlongView, "g_fogSkyAlongView");
+// A/B, transient (--set fog.inSkyCapture:0): the analytic height fog stays out of the procedural sky's capture (the
+// probes: the water's sky reflection, the sky fill), as before 2026-11-03. UE's ExponentialHeightFog
+// bVisibleInRealTimeSkyCaptures, default true (ReflectionEnvironmentRealTimeCapture.cpp:919-962).
+inline bool g_fogInSkyCapture = true;
+inline bool g_fogInSkyCapture_game = true;
+inline const bool g_fogInSkyCapture_knob = ::knob::Register(g_fogInSkyCapture_game, g_fogInSkyCapture, "g_fogInSkyCapture");
 
 // The exact numbers the shaders receive. TWO passes apply aerial perspective -- compose, for opaque
 // geometry, and the ocean's forward surface -- and the plan's own warning about this feature is that
@@ -494,33 +518,54 @@ inline const bool g_fogSkyAlongView_knob = ::knob::Register(g_fogSkyAlongView_ga
 struct HeightFogPacked
 {
     float4 params0{}; // density, height falloff, reference height, start distance
-    float4 params1{}; // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
-    float4 params2{}; // sky blur, sky back-scatter, directional-fade inverse range, its bias
+    float4 params1{}; // max opacity, the sun lobe's ground-illuminance factor, sun scatter exponent, sun scatter start
+    float4 params2{}; // sky blur, RESERVED (0; was the lobe's grey term), directional-fade inverse range, its bias
     float4 inscatter{}; // UE's fog colour (raw cd/m2), w = 1: use it on geometry and sky; w = 0: the sky along the view
+    // rgb: UE's DirectionalInscatteringColor -- DirectionalInscatteringLuminance (colour) x the sun's outer-space
+    // luminance -- / (4 pi), cd/m2: the lobe's own term beside the ground illuminance's (params1.y). w reserved.
+    float4 sunDirectional{};
 };
 
-inline HeightFogPacked PackHeightFog(const HeightFogSettings& a, bool hasSun)
+// `sunOuterLuminance`: the sun's outer-space illuminance as a luminance (DirectionalLight::GetOuterSpaceLuminance), 0
+// without a sun.
+inline HeightFogPacked PackHeightFog(const HeightFogSettings& a, bool hasSun, float sunOuterLuminance)
 {
     const bool on = a.enabled && hasSun && a.density > 0.0f;
     HeightFogPacked p{};
     p.params0 = float4(on ? std::max(a.density, 0.0f) : 0.0f, std::max(a.heightFalloff, 0.0f),
                        a.referenceHeight, std::max(a.startDistance, 0.0f));
-    p.params1 = float4(std::clamp(a.maxOpacity, 0.0f, 1.0f), std::max(a.sunScatterStrength, 0.0f),
+    // THE SUN LOBE IS UE's (2026-11-03, owner: "the same settings must work the same as in UE"), with a SkyAtmosphere
+    // affecting the fog (HeightFogCommon.ush:328-340, FogRendering.cpp:431-438): (DirectionalInscatteringLuminance x the
+    // sun's outer-space luminance + the SkyAtmosphere's HeightFogContribution x the sun's illuminance on the ground after
+    // the atmosphere) x pow(V.L, exponent) x the uniform phase 1 / (4 pi). `sunScatterStrength` is that
+    // DirectionalInscatteringLuminance (grey; UE's default black, 0.5 in the owner's UE wind_test) and the contribution
+    // is UE's default 1. Ours was strength x the ground illuminance with no 1 / (4 pi) and no outer-space term: the same
+    // 0.5 drew the lobe ~3-4x UE's. y of params1 = the ground illuminance's factor, y of params2 = the grey term in cd/m2;
+    // the shader adds them over the sun colour its caller already has (height_fog.hlsli HeightFogColor).
+    constexpr float kInv4Pi = 0.0795774715f;
+    // UE's SkyAtmosphere HeightFogContribution (default 1; Ultra Dynamic Sky drives it by the sun's height, 2 by day):
+    // the sky's light in the fog -- the ambient colour (:190) and the ground-illuminance half of the lobe (:334).
+    const float skyContribution = std::max(a.frameSkyContribution, 0.0f);
+    p.params1 = float4(std::clamp(a.maxOpacity, 0.0f, 1.0f), skyContribution * kInv4Pi,
                        std::max(a.sunScatterExponent, 1.0f), std::max(a.sunScatterStartDistance, 0.0f));
     // UE FogRendering.cpp:273,284: InvRange over the gap, and the bias that makes
     // saturate(rayLength * zw.x + zw.y) reach 0 at nonDirectional and 1 at fullyDirectional.
     const float nonDir = std::max(a.nonDirectionalDistance, 0.0f);
     const float invRange = 1.0f / std::max(a.fullyDirectionalDistance - nonDir, 1.0e-5f);
-    // params2.y is RESERVED: it carried `skyBackScatter` until the phase was found to be a dimmer
-    // rather than a phase (height_fog.hlsli). Left as 0 rather than repacked, so every consumer's
-    // swizzle keeps meaning what it means.
+    // y carried `skyBackScatter` until the phase was found to be a dimmer (height_fog.hlsli), then the lobe's grey term,
+    // which is the coloured `sunDirectional` since 2026-11-04 (UE's DirectionalInscatteringLuminance is a colour).
     p.params2 = float4(std::clamp(a.skyBlur, 0.0f, 1.0f), 0.0f, invRange, -nonDir * invRange);
+    const float grey = std::max(a.sunScatterStrength, 0.0f) * std::max(sunOuterLuminance, 0.0f) * kInv4Pi;
+    p.sunDirectional = float4(grey * std::max(a.sunScatterColor.x * a.frameSunScatterTint.x, 0.0f),
+                              grey * std::max(a.sunScatterColor.y * a.frameSunScatterTint.y, 0.0f),
+                              grey * std::max(a.sunScatterColor.z * a.frameSunScatterTint.z, 0.0f), 0.0f);
     if (g_fogDistantSkyLight.w > 0.0f && !g_fogSkyAlongView)
     {
         const float4& d = g_fogDistantSkyLight;
-        p.inscatter = float4(std::max(a.inscatteringLuminance.x + a.skyAmbientContribution.x * d.x, 0.0f),
-                             std::max(a.inscatteringLuminance.y + a.skyAmbientContribution.y * d.y, 0.0f),
-                             std::max(a.inscatteringLuminance.z + a.skyAmbientContribution.z * d.z, 0.0f), 1.0f);
+        const float3 own = a.inscatteringLuminance + a.frameInscatterFloor;
+        p.inscatter = float4(std::max(own.x + skyContribution * a.skyAmbientContribution.x * d.x, 0.0f),
+                             std::max(own.y + skyContribution * a.skyAmbientContribution.y * d.y, 0.0f),
+                             std::max(own.z + skyContribution * a.skyAmbientContribution.z * d.z, 0.0f), 1.0f);
     }
     return p;
 }
@@ -753,7 +798,11 @@ struct SceneRenderSettings
     // noise (0.61 at 1/1), only how fast it decorrelates: 4 / (1 - 0.98) = 200 frames to settle.
     float giHysteresis = 0.98f;
     float giIntensity = 1.0f;
-    float giRayDistance = 30.0f;
+    // 200 m, UE's r.Lumen.MaxTraceDistance (2026-11-03, the UE A/B). At 30 m a probe more than 30 m over the ground
+    // never saw it: a 4 m grey box 45 m over the island took 0.69-0.71 of UE's light on its faces turned from the sun
+    // and bluer (the sunlit sand's warm bounce missing), 0.87-0.95 and UE's colour at 120 m; the trace +0.15 ms seen
+    // from 35 m up, +0.02-0.04 on the grove (its rays end on geometry anyway).
+    float giRayDistance = 200.0f;
     bool giInfiniteBounce = true;
     // A probe ray that meets a two-sided material (MaterialData::doubleSided) from behind met its other face, not the
     // inside of a solid (ddgi_trace_cs.hlsl). 0 = every opaque back face is a solid's inside, the behaviour before.
@@ -870,6 +919,18 @@ struct SceneRenderSettings
     // A two-sided foliage leaf passes the sky and the ground's bounce behind it (lighting_cs.hlsl, UE's backface sky
     // lighting); false = only the sun through it, the frame before 2026-10-31 (`--set light.foliageBackSky:0`, the A/B).
     bool foliageBackSky = true;
+    // The sun through a two-sided foliage leaf takes UE's TwoSidedBxDF lobe (utils.hlsli EvalFoliageBRDF: a wrap of the light
+    // behind the face times GGX alpha 0.6 around the line to the light -- ~2x the old lobe looking straight into the sun);
+    // false = the softer lobe before 2026-11-03 (`--set light.foliageTransmissionUe:0`, the A/B).
+    bool foliageTransmissionUe = true;
+    // The sun's direct diffuse is UE's rough diffuse (utils.hlsli DiffuseEON: EON at roughness x 0.4, what the owner's UE
+    // renders -- BaseWindowsEngine.ini r.Substrate.RoughDiffuse=1); false = Lambert, the A/B (`--set light.roughDiffuse:0`).
+    // The local lights, glass and the RT hits take it either way.
+    bool roughDiffuse = true;
+    // The direct sun takes the bump terminator (utils.hlsli SunBumpShadowing, GBAux.b's high bits): it fades as the smooth
+    // surface turns from the sun whatever the normal map says -- a soft edge where the island's own shadow cut a lit,
+    // normal-mapped beach; false = before (`--set light.bumpShadowing:0`, the A/B).
+    bool bumpShadowing = true;
     bool showProfiler = false;
     // S8: the reflection source. Default RT (today's behavior). RT runs the
     // Tier-1 ray-traced pass instead of SSR; SkyOnly clears the reflection buffer
@@ -996,6 +1057,7 @@ struct SceneFrameData
     // disc (SkyViewFrameData light 1). `present` false without a time of day: light 1 is skipped.
     SkyMoonFrame skyMoon{};
     NightSkyFrame nightSky{}; // time-of-day N2: stars, the Milky Way, the airglow
+    UdsSkyFrameData udsSky{}; // Ultra Dynamic Sky's sky material over the atmosphere (TimeOfDaySettings::skyUdsMaterial)
     // Time-of-day N4: the light's glints on the water fade with the moon's phase (TimeOfDay::GlintScale; 1 without a
     // time of day). Taken at Sync so the ocean's constants never read the game's clock (game thread plan G2).
     float sunGlintScale = 1.0f;

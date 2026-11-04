@@ -131,7 +131,8 @@ cbuffer BloomConvCB : register(b0)
     float4 sunGlareProj;     // xy: projection _11/_22; zw: the sun disc's radius in source UV
     float4 sunGlareParams;   // stage 9: x intensity, y core radius (rad), z veil weight, w veil radius (rad)
                              // stage 10: x the off-frame fade angle (rad), yzw world up in view space
-    float4 historyParams;    // stage 12: x this frame's weight, y the history's pre-exposure rescale, z 1 = valid
+    float4 historyParams;    // stage 12: x this frame's weight, y the history's pre-exposure rescale, z 1 = valid,
+                             // w 1 = the sun moved in the sky (its discs in sunShare / sunGlareParams, stage 12's use)
     // Stage 0, the ART split (BloomSettings::convSunKernelScale): the sun's own share of the kernel's
     // light. x the scale, y the sun's radius (rad: the disc and the sky round it), z 1 = the sun is in
     // view (its direction and the projection then ride in sunGlareDir.xyz / sunGlareProj.xy).
@@ -319,7 +320,19 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         if (historyParams.z > 0.5f)
         {
             const float2 prevUv = uv - FlareBlur.SampleLevel(gSmp, uv, 0).xy;
-            if (all(prevUv >= 0.0f) && all(prevUv <= 1.0f))
+            // The SUN MOVED IN THE SKY this frame (historyParams.w; BloomRenderer::RecordTemporalInput): no motion
+            // vector carries it, so on its disc now (sunShare: UV centre, UV radius) and on its disc in the history's
+            // frame (sunGlareParams) this frame stands alone -- else every old disc stays in the average and the FFT
+            // draws them as a streak behind the sun.
+            bool sunMoved = false;
+            if (historyParams.w > 0.5f)
+            {
+                const float2 dNow = (uv - sunShare.xy) / max(sunShare.zw, 1e-6f);
+                const float2 dThen = (prevUv - sunGlareParams.xy) / max(sunGlareParams.zw, 1e-6f);
+                sunMoved = (sunShare.z > 0.0f && dot(dNow, dNow) <= 1.0f) ||
+                           (sunGlareParams.z > 0.0f && dot(dThen, dThen) <= 1.0f);
+            }
+            if (!sunMoved && all(prevUv >= 0.0f) && all(prevUv <= 1.0f))
             {
                 const float3 history = BloomKernel.SampleLevel(gSmp, prevUv, 0).rgb * historyParams.y;
                 result = lerp(history, current, saturate(historyParams.x));

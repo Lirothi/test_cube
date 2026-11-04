@@ -41,6 +41,7 @@ inline void ApplyOverrides(const nlohmann::json& j, HeightFogSettings& s)
     };
     colour("inscatteringLuminance", s.inscatteringLuminance);
     colour("skyAmbientContribution", s.skyAmbientContribution);
+    colour("sunScatterColor", s.sunScatterColor);
     s.volumetric = j.value("volumetric", s.volumetric);
     s.volumetricDistance = j.value("volumetricDistance", s.volumetricDistance);
     s.volumetricStartDistance = j.value("volumetricStartDistance", s.volumetricStartDistance);
@@ -78,6 +79,7 @@ inline nlohmann::json ToJson(const HeightFogSettings& s)
     j["fullyDirectionalDistance"] = s.fullyDirectionalDistance;
     j["inscatteringLuminance"] = { s.inscatteringLuminance.x, s.inscatteringLuminance.y, s.inscatteringLuminance.z };
     j["skyAmbientContribution"] = { s.skyAmbientContribution.x, s.skyAmbientContribution.y, s.skyAmbientContribution.z };
+    j["sunScatterColor"] = { s.sunScatterColor.x, s.sunScatterColor.y, s.sunScatterColor.z };
     j["volumetric"] = s.volumetric;
     j["volumetricDistance"] = s.volumetricDistance;
     j["volumetricStartDistance"] = s.volumetricStartDistance;

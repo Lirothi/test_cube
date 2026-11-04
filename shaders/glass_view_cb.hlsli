@@ -79,6 +79,8 @@ cbuffer GlassView : register(b1)
     float4 glassSkyVis;
     // PackHeightFog's UE fog colour (raw), w = 1 = use it instead of the sky along the view. Appended at the tail.
     float4 fogInscatter;
+    // PackHeightFog's sun lobe own coloured term (DirectionalInscatteringLuminance) / 4 pi, cd/m2. Appended at the tail.
+    float4 fogSunDirectional;
 };
 #if GLASS_VIEW_CB_STRUCT
 ConstantBuffer<GlassViewData> gGlassView : register(b1);

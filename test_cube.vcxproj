@@ -823,6 +823,8 @@
     <None Include="shaders\agx.hlsli" />
     <None Include="shaders\color_grade.hlsli" />
     <None Include="shaders\film_curve.hlsli" />
+    <None Include="shaders\ue_color_pipeline.hlsli" />
+    <None Include="shaders\uds_sky.hlsli" />
     <None Include="shaders\local_exposure.hlsli" />
     <None Include="shaders\ibl_common.hlsli" />
     <None Include="shaders\gtao_cs.hlsl" />

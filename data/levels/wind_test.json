@@ -1,7 +1,7 @@
 {
   "camera": {
     "hfovDeg": 90.0,
-    "zFar": 10000.0,
+    "zFar": 100000.0,
     "zNear": 0.009999999776482582
   },
   "objects": [
@@ -37183,9 +37183,9 @@
       ],
       "causticsUpFacing": 0.699999988079071,
       "deepScatterColor": [
-        0.0,
-        0.01274509821087122,
-        0.04019607976078987,
+        0.0005960208945907652,
+        0.012000000104308128,
+        0.03999999910593033,
         1.0
       ],
       "detailNormalMipBias": 0.0,
@@ -37280,7 +37280,7 @@
       "shoreWetnessReflectionStrength": 0.3499999940395355,
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
-      "specularStrength": 1.5,
+      "specularStrength": 1.0,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -37289,6 +37289,7 @@
       ],
       "sssFadeDistance": 6.0,
       "sssHeightBias": 0.0,
+      "sunGlintSmear": 1.0,
       "sunScatterStrength": 0.3499999940395355,
       "surfSimBreakOnset": 0.10000000149011612,
       "surfSimBreakerGamma": 0.5,
@@ -38912,7 +38913,7 @@
       "sunRaysCount": 53,
       "sunRaysHalo": 0.10000000149011612,
       "sunRaysHaloRadiusDeg": 4.150000095367432,
-      "sunRaysIntensity": 0.00259178,
+      "sunRaysIntensity": 0.0020000000949949026,
       "sunRaysLengthDeg": 2.0,
       "sunRaysRotationDeg": 13.0,
       "sunRaysSharpness": 2.0,
@@ -38924,7 +38925,7 @@
       "sunRaysTextureSizeDeg": 12.899999618530273,
       "sunRaysVisibleExponent": 0.5,
       "sunRaysWidthDeg": 0.5,
-      "threshold": 4.0
+      "threshold": -1.0
     },
     "cameraExposure": {
       "apertureFStop": 16.0,
@@ -38934,48 +38935,60 @@
       "exposureCurve": [
         [
           -11.0,
-          -6.570000171661377
+          -3.161
         ],
         [
           -7.0,
-          -5.96999979019165
+          -2.561
         ],
         [
           -3.5,
-          -4.920000076293945
+          -1.511
         ],
         [
-          4.550000190734863,
-          -2.0
+          5.335,
+          -1.511
         ],
         [
-          10.550000190734863,
-          -1.3200000524520874
+          7.054,
+          -1.1344
         ],
         [
-          12.550000190734863,
-          -0.8500000238418579
+          8.774,
+          -0.7853
         ],
         [
-          14.550000190734863,
-          -0.3199999928474426
+          10.555,
+          -0.3989
         ],
         [
-          15.550000190734863,
-          0.05999999865889549
+          13.525,
+          0.3144
+        ],
+        [
+          14.994,
+          0.7386
+        ],
+        [
+          15.651,
+          1.0287
+        ],
+        [
+          17.863,
+          1.0146
         ]
       ],
       "highPercentile": 0.949999988079071,
       "isoSensitivity": 100.0,
       "localBlurredBlend": 0.6000000238418579,
       "localDetailStrength": 1.0,
-      "localHighlightContrast": 0.6499999761581421,
+      "localHighlightContrast": 1.0,
       "localHighlightThreshold": 0.5,
       "localShadowContrast": 1.0,
       "localShadowThreshold": 0.5,
       "lowPercentile": 0.15000000596046448,
       "maxEv100": 17.0,
-      "meterMaskStrength": 0.699999988079071,
+      "meterMaskStrength": 0.0,
       "minEv100": -12.0,
       "shutterSpeedSec": 0.00798999983817339,
       "speedDown": 4.0,
@@ -38990,11 +39003,11 @@
       "filmSlope": 0.8799999952316284,
       "filmToe": 0.550000011920929,
       "filmWhiteClip": 0.03999999910593033,
-      "gradeContrast": 1.3,
+      "gradeContrast": 1.15,
       "gradeGain": 1.0,
       "gradeGamma": 1.100000023841858,
       "gradeOffset": 0.0,
-      "gradeSaturation": 1.15,
+      "gradeSaturation": 1.3,
       "localDetailStrength": 1.0,
       "localHighlightContrast": 0.7,
       "localHighlightThreshold": 0.5,
@@ -39020,35 +39033,69 @@
       "worldRadius": 1.2000000476837158
     },
     "heightFog": {
-      "density": 0.004000000189989805,
+      "density": 0.000551,
       "enabled": true,
-      "heightFalloff": 0.05999999865889549,
-      "maxOpacity": 0.8999999761581421,
-      "phaseG": 0.699999988079071,
+      "extinctionScale": 4.0,
+      "heightFalloff": 0.006,
+      "inscatteringLuminance": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "maxOpacity": 1.0,
+      "phaseG": 0.4000000059604645,
+      "referenceHeight": -1.5,
+      "skyAmbientContribution": [
+        1.0,
+        1.0,
+        1.0
+      ],
       "skyBackScatter": 0.4000000059604645,
       "skyBlur": 0.30000001192092896,
-      "startDistance": 10.0,
+      "startDistance": 73.48,
       "sunScatter": 1.0,
-      "sunScatterExponent": 8.0,
+      "sunScatterColor": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "sunScatterExponent": 5.0,
       "sunScatterStartDistance": 100.0,
-      "sunScatterStrength": 0.5,
+      "sunScatterStrength": 1.0,
       "volumetric": true,
       "volumetricDistance": 60.0,
       "volumetricStartDistance": 0.0
     }
   },
   "skyAtmosphere": {
-    "aerialPerspective": true,
+    "aerialPerspective": false,
     "distantSkyLight": true,
     "enabled": true,
     "environmentLighting": true,
-    "groundAlbedo": 0.08,
+    "groundAlbedo": 0.402,
+    "heightFogContribution": 1.0,
     "luminanceScale": 1.0,
-    "mieAnisotropy": 0.8,
-    "mieScale": 1.0,
+    "mieAbsorptionScale": 1.0,
+    "mieAnisotropy": 0.75,
+    "mieScale": 3.5025,
+    "mieTint": [
+      0.8021,
+      0.88,
+      1.0
+    ],
     "multiScatteringFactor": 1.0,
-    "ozoneScale": 1.0,
-    "rayleighScale": 1.0,
+    "ozoneScale": 1.0633,
+    "ozoneTint": [
+      2.5964,
+      1.0,
+      2.1092
+    ],
+    "rayleighScale": 1.2085,
+    "rayleighTint": [
+      0.9619,
+      0.9956,
+      1.0
+    ],
     "skyLuminanceFactor": 1.0
   },
   "skybox": {
@@ -39905,16 +39952,17 @@
     ],
     "dawn": 6.0,
     "dayLengthMin": 2.0,
-    "daySkyBrightness": 2.0,
+    "daySkyBrightness": 1.0,
     "dusk": 18.0,
     "extendTwilight": 0.0,
     "fog": {
-      "dayDensity": 0.15,
+      "dayDensity": 1.0,
       "dayFullDeg": 25.0,
       "duskDeg": 5.0,
       "duskDensity": 1.0,
-      "nightDensity": 0.15,
-      "nightFullDeg": -8.0
+      "nightDensity": 1.0,
+      "nightFullDeg": -8.0,
+      "udsColor": true
     },
     "heightOffset": 0.0,
     "lamps": {
@@ -39965,10 +40013,11 @@
       "lightSourceSoftAngle": 0.0,
       "newMoonBrightness": 0.015,
       "orbitOffsetDeg": 0.0,
-      "pathTiltDeg": 35.0,
+      "pathTiltDeg": 33.73,
       "pathYawDeg": 180.0,
       "phase": 0.5,
-      "phaseAuto": true
+      "phaseAuto": false,
+      "udsMoon": true
     },
     "nightBrightness": 11364.0,
     "nightCameraEv100": 11.93,
@@ -39988,12 +40037,12 @@
       "enabled": true,
       "milkyWay": 1.0,
       "siderealAtMidnight": 18.0,
-      "stars": 1.0,
-      "twinkle": 0.30000001192092896
+      "stars": 0.5,
+      "twinkle": 0.5
     },
     "northYawDeg": 0.0,
     "pathTiltDeg": 30.0,
-    "pathYawDeg": 322.8896076655306,
+    "pathYawDeg": 180.0,
     "realPositions": true,
     "sun": {
       "ambient": 0.10000000149011612,
@@ -40010,50 +40059,50 @@
       ],
       "lightShaftBloomMaxBrightness": 0.5,
       "lightShaftBloomScale": 0.3499999940395355,
-      "lightShaftBloomThreshold": 3.0,
+      "lightShaftBloomThreshold": 0.7,
       "lightShaftBloomTint": [
         1.0,
         1.0,
         1.0
       ],
-      "lightShaftGlareSeed": 4.0,
       "lightShaftLength": 1.0,
       "lightShaftOcclusionDepthRange": 1000.0,
       "lightShaftOpenSky": 1.0,
       "lightShaftSmoothing": 0.05000000074505806,
       "lightShaftsEnabled": true,
-      "lightSourceAngle": 2.0,
+      "lightSourceAngle": 1.0,
       "lightSourceSoftAngle": 0.5,
       "skyFillIntensity": 1.0,
       "sunIlluminanceLux": 120000.0,
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 16.0,
+    "time": 17.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,
-      "mieNightScale": 1.0,
+      "mieNightScale": 0.5,
       "ozoneBlendDeg": 1.9500000476837158,
       "ozoneNightTint": [
-        6.1539998054504395,
-        1.805999994277954,
-        1.4279999732971191
+        2.2292,
+        1.6984,
+        0.6369
       ],
       "ozoneSunriseTint": [
-        4.614999771118164,
-        1.5570000410079956,
-        4.031000137329102
+        1.6719,
+        1.464,
+        1.7973
       ],
       "rayleighDayFullDeg": 3.680000066757202,
       "rayleighDayStartDeg": -2.069999933242798,
       "rayleighNightTint": [
-        0.825,
-        0.4906,
-        0.3523
+        1.4306,
+        0.8516,
+        0.6094
       ],
       "sunSkyFullDeg": -6.489999771118164,
-      "sunSkyStartDeg": -9.029999732971191
+      "sunSkyStartDeg": -9.029999732971191,
+      "udsSkyMaterial": true
     },
     "utcOffset": 2.0
   },

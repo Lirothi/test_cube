@@ -189,6 +189,10 @@ inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
     out.filmShoulder  = j.value("filmShoulder",  out.filmShoulder);
     out.filmBlackClip = j.value("filmBlackClip", out.filmBlackClip);
     out.filmWhiteClip = j.value("filmWhiteClip", out.filmWhiteClip);
+    out.ueGamut        = j.value("ueGamut",        out.ueGamut);
+    out.expandGamut    = j.value("expandGamut",    out.expandGamut);
+    out.blueCorrection = j.value("blueCorrection", out.blueCorrection);
+    out.vignetteIntensity = j.value("vignetteIntensity", out.vignetteIntensity);
 
     out.agxSlope      = std::clamp(out.agxSlope,      0.0f, 4.0f);
     out.agxPower      = std::clamp(out.agxPower,      0.1f, 4.0f);
@@ -203,6 +207,9 @@ inline void ApplyOverrides(const nlohmann::json& j, ColorPipelineSettings& out)
     out.filmShoulder  = std::clamp(out.filmShoulder,  0.0f, 1.0f);
     out.filmBlackClip = std::clamp(out.filmBlackClip, 0.0f, 1.0f);
     out.filmWhiteClip = std::clamp(out.filmWhiteClip, 0.0f, 1.0f);
+    out.expandGamut    = std::clamp(out.expandGamut,    0.0f, 4.0f);
+    out.blueCorrection = std::clamp(out.blueCorrection, 0.0f, 1.0f);
+    out.vignetteIntensity = std::clamp(out.vignetteIntensity, 0.0f, 1.0f);
 }
 
 inline nlohmann::json ToJson(const ColorPipelineSettings& s)
@@ -223,6 +230,10 @@ inline nlohmann::json ToJson(const ColorPipelineSettings& s)
         { "filmShoulder",  s.filmShoulder },
         { "filmBlackClip", s.filmBlackClip },
         { "filmWhiteClip", s.filmWhiteClip },
+        { "ueGamut",        s.ueGamut },
+        { "expandGamut",    s.expandGamut },
+        { "blueCorrection", s.blueCorrection },
+        { "vignetteIntensity", s.vignetteIntensity },
     };
 }
 

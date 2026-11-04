@@ -60,6 +60,12 @@ struct TimeOfDaySettings
 
     // --- The moon's light ----------------------------------------------------------------------------
     bool moonEnabled = true;
+    // ULTRA DYNAMIC SKY'S MOON (timeOfDay.moon.udsMoon; 2026-11-04, owner: "fit everything of ours to UDS"): the moon --
+    // its light on the ground, in the atmosphere and its disc -- and the night sky take Night Brightness IN FULL from the
+    // sunset, as UDS's moon has its 0.15 lux (1/33 of its sun) from the sun's centre at the horizon (0 at +1.15 degrees,
+    // linear), and the sun's twilight sky takes none (UDS's twilight is its physical sun; its sky material brightens
+    // it, TimeOfDaySettings::skyUdsMaterial). Off = the one night gain by the night's share (NightGain).
+    bool udsMoon = false;
     // A FULL moon's illuminance outside the atmosphere at its mean distance. The sun's 127 klx times
     // the full moon's 14.0 magnitudes fainter (-12.74 against -26.74): 0.32 lux, ~0.27 at the ground
     // with the moon at the zenith. The phase law and (real) the distance scale it from there.
@@ -212,6 +218,22 @@ struct TimeOfDaySettings
     float fogDayFullDeg = 25.0f;
     float fogDuskDeg = 5.0f;
     float fogNightFullDeg = -8.0f;
+    // ULTRA DYNAMIC SKY'S FOG COLOUR BY THE SUN'S HEIGHT (timeOfDay.fog.udsColor; 2026-11-04, owner: "fit us to UDS").
+    // UDS animates three of its height fog's colour terms with the sun, read off its actor every 3 minutes of its day
+    // (TimeOfDay.cpp kUdsFog*: piecewise linear in the sun's elevation, dawn = dusk) and applied on the FRAME's fog:
+    //   * its SkyAtmosphere's HeightFogContribution -- x the level's skyAtmosphere.heightFogContribution: 2 by day,
+    //     down to 0.84 just over the horizon, 1.21 at it, ~2 through the night (1.65 under -29 degrees);
+    //   * its DirectionalInscatteringLuminance -- x the level's heightFog sunScatterStrength x sunScatterColor: 0 at the
+    //     horizon, a red (0.24, 0.10, 0.02) at 6.5 degrees, (0.72, 0.44, 0.22) at 13, (0.79, 0.64, 0.56) from 43;
+    //   * its FogInscatteringLuminance -- added, per lux of the sun's outer-space illuminance (UDS's / its 5-lux sun):
+    //     0 by day, a blue floor from 3 degrees down, strongest at -2.6.
+    // Off = the level's own numbers at every hour.
+    bool fogUdsColor = false;
+    // ULTRA DYNAMIC SKY'S SKY MATERIAL over the atmosphere (timeOfDay.twilight.udsSkyMaterial; uds_sky.hlsli UdsSkyLayer):
+    // the drawn sky and its capture (the probes, the water's sky reflection) x Overall Intensity x 0.8 (2.3 + 1.8 (u + v))
+    // with its light contrast and its Night Sky Glow -- by day x0.69 away from the sun to x1.23 toward it, x1.25 the
+    // twilight's peak at -2.6 degrees, a blue glow through the night. Off = the atmosphere as it is.
+    bool skyUdsMaterial = false;
 
     // --- Twilight, as Ultra Dynamic Sky draws it -----------------------------------------------------
     // THE SUN LEAVES THE ATMOSPHERE before the night falls: its light into the sky -- the sky's LUTs, the

@@ -56,6 +56,7 @@ namespace OceanRenderConfigJson
 
         render.specularStrength = std::max(
             0.0f, ReadFloat(object, "specularStrength", render.specularStrength));
+        render.sunGlintSmear = Math::Saturate(ReadFloat(object, "sunGlintSmear", render.sunGlintSmear));
         render.roughnessScale = Math::Saturate(
             ReadFloat(object, "roughnessScale", render.roughnessScale));
         render.roughnessDistance = std::max(
@@ -574,6 +575,7 @@ namespace OceanRenderConfigJson
         out["foamTint"] = WriteFloat4(render.foamTint);
 
         out["specularStrength"] = render.specularStrength;
+        out["sunGlintSmear"] = render.sunGlintSmear;
         out["roughnessScale"] = render.roughnessScale;
         out["roughnessDistance"] = render.roughnessDistance;
         out["horizonFogStrength"] = render.horizonFogStrength;

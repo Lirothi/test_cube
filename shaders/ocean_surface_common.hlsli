@@ -550,7 +550,9 @@ float EffectiveFresnel(const LightingInput li, const BrunetonInputs bi)
 // specularParams.x is a plain multiplier on it: 1 = physical.
 float3 OceanSunSpecular(const LightingInput li, const BrunetonInputs bi)
 {
-    const float alpha = sqrt(max(bi.slopeVarianceSquared.x + bi.slopeVarianceSquared.y, 0.0f));
+    // windParams1.w (OceanRenderConfig::sunGlintSmear): 0 = the glitter path alone -- each resolved facet mirrors the
+    // disc; 1 = smeared by the unresolved slope variance through GGX's long tails into a broad patch (before 2026-11-03).
+    const float alpha = sqrt(max(bi.slopeVarianceSquared.x + bi.slopeVarianceSquared.y, 0.0f)) * saturate(windParams1.w);
     BRDFInput brdf;
     brdf.albedo = 0.02f.xxx; // water's F0 (n 1.33), through the metal path: F0 = albedo, no diffuse
     brdf.metal = 1.0f;

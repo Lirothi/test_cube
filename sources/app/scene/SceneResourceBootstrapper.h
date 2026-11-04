@@ -30,6 +30,9 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle gtaoStrength;        // P6B
     Material::CBFieldHandle groundAlbedoRgb;     // P16.12 ground bounce
     Material::CBFieldHandle foliageBackSky;      // a foliage leaf passes the sky behind it (lighting_cs)
+    Material::CBFieldHandle foliageTransmissionUe; // the sun through a leaf: UE's TwoSidedBxDF lobe (lighting_cs)
+    Material::CBFieldHandle roughDiffuse;          // the sun's diffuse: UE's rough diffuse (EON) or Lambert (lighting_cs)
+    Material::CBFieldHandle bumpShadowing;         // the sun's bump terminator from GBAux.b (lighting_cs)
     Material::CBFieldHandle exposure;
     Material::CBFieldHandle camPos;
     Material::CBFieldHandle camDir;
@@ -210,7 +213,7 @@ struct SceneComposeCBHandles
     Material::CBFieldHandle shoreWetnessFallback;
     Material::CBFieldHandle shoreWetnessBreakup;
     // P7 aerial perspective.
-    Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogInscatter, fogDebugView;
+    Material::CBFieldHandle fogParams0, fogParams1, fogParams2, fogSunDir, fogSunColor, fogInscatter, fogSunDirectional, fogDebugView;
     Material::CBFieldHandle fogVolumeParams, fogVolumeZParams;
     Material::CBFieldHandle preExposure;
     Material::CBFieldHandle skyViewPlanet; // B6.2: the sky's own LUT, for the fog's sky colour
@@ -239,6 +242,10 @@ struct SceneTonemapCBHandles
     Material::CBFieldHandle preExposure;
     Material::CBFieldHandle preExposureActive;
     Material::CBFieldHandle toneCurve;
+    Material::CBFieldHandle ueColorPipeline;
+    Material::CBFieldHandle expandGamut;
+    Material::CBFieldHandle blueCorrection;
+    Material::CBFieldHandle vignetteIntensity;
     Material::CBFieldHandle agxSlope;
     Material::CBFieldHandle agxPower;
     Material::CBFieldHandle agxSaturation;
@@ -338,7 +345,7 @@ struct SceneExposureSolveCBHandles
     Material::CBFieldHandle exponentialDownM;
     Material::CBFieldHandle blackBucketInfluence;
     Material::CBFieldHandle curvePoints; // time-of-day E1
-    Material::CBFieldHandle curveEvA, curveEvB, curveCompA, curveCompB;
+    Material::CBFieldHandle curveEvA, curveEvB, curveEvC, curveCompA, curveCompB, curveCompC;
     Material::CBFieldHandle nightSteady; // time of day: the steady night camera
     Material::CBFieldHandle nightOpenSky; // ...and the open-sky share it comes in by
 
@@ -521,13 +528,10 @@ struct LightShaftConstants
     uint32_t size[4] = { 1u, 1u, 0u, 0u }; // target size, blur pass index, 0
     float4 invSize{};  // 1/size.xy, half a SOURCE texel (UE's UVMinMax bilinear inset)
     float4 temporal{ 1.0f, 1.0f, 0.0f, 0.0f }; // this frame's weight, history pre-exposure rescale, history valid, 0
-    float4 glareColor{};                     // the sun glare in the seed: rgb at the sun, w the core's angle (rad)
-    float4 glareDir{ 0.0f, 0.0f, 1.0f, 0.0f }; // to the sun (view space), w the veil's weight
-    float4 glareProj{ 1.0f, 1.0f, 0.0f, 0.0f }; // projection x/y scales, the veil's angle (rad), 0
 };
 struct LightShaftHandles
 {
-    Material::CBFieldHandle origin, bloom, tint, depth, size, invSize, temporal, glareColor, glareDir, glareProj;
+    Material::CBFieldHandle origin, bloom, tint, depth, size, invSize, temporal;
     void Populate(Material* material);
 };
 
@@ -691,6 +695,9 @@ struct LightingPassConstants
     // P16.12: the ground's diffuse reflectance. 0 switches the bounce off; see DirectionalLight.
     float3 groundAlbedoRgb{ 0.25f, 0.25f, 0.25f };
     float foliageBackSky = 1.0f;                  // SceneRenderSettings::foliageBackSky
+    float foliageTransmissionUe = 1.0f;           // SceneRenderSettings::foliageTransmissionUe
+    float roughDiffuse = 1.0f;                    // SceneRenderSettings::roughDiffuse
+    float bumpShadowing = 1.0f;                   // SceneRenderSettings::bumpShadowing
     float exposure = 1.0f;
     float3 camPos{};
     float3 camDir{};
@@ -929,6 +936,7 @@ struct ComposePassConstants
     float4 fogSunDir{};
     float4 fogSunColor{};
     float4 fogInscatter{}; // PackHeightFog's: UE's fog colour, w = 1 = in use
+    float4 fogSunDirectional{}; // PackHeightFog's: the sun lobe's own coloured term / 4 pi
     uint32_t fogDebugView = 0u;
     float preExposure = 1.0f;
     // Volumetric fog: x = volume built this frame, y = its far plane (view depth, m),
@@ -972,6 +980,7 @@ struct FogApplyConstants
     float4 fogApplyMisc{}; // x: sky intensity, y: debug view, z: preExposure, w: unused
     float4 aerialParams{}; // enabled, start view depth (m), 1/preExposure, reserved -- the same values compose gets
     float4 fogInscatter{}; // PackHeightFog's: UE's fog colour, w = 1 = in use
+    float4 fogSunDirectional{}; // PackHeightFog's: the sun lobe's own coloured term / 4 pi
 };
 
 struct FxaaPassConstants
@@ -1044,10 +1053,10 @@ struct ExposureMeteringConstants
     float exponentialUpM = 1.0f;
     float exponentialDownM = 1.0f;
     float blackBucketInfluence = 1.0f;
-    // Time-of-day E1: the compensation curve (CameraExposureSettings::exposureCurve*), as four float4s.
+    // Time-of-day E1: the compensation curve (CameraExposureSettings::exposureCurve*), as six float4s.
     uint32_t curvePoints = 0;
-    float curveEvA[4] = {}, curveEvB[4] = {};
-    float curveCompA[4] = {}, curveCompB[4] = {};
+    float curveEvA[4] = {}, curveEvB[4] = {}, curveEvC[4] = {};
+    float curveCompA[4] = {}, curveCompB[4] = {}, curveCompC[4] = {};
     // Time of day: the steady night camera -- EV100, follow share, weight (0 = off), the night's exposure trim (EV).
     float nightSteady[4] = {};
     // ...the OPEN night's: the open-sky share where it starts and where it is whole, the share's smoothing (s), and how

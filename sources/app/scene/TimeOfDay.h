@@ -5,6 +5,7 @@
 
 #include "core/math/Math.h"
 #include "rendering/lighting/DirectionalLight.h"
+#include "rendering/lighting/SkyAtmosphereSettings.h"
 #include "rendering/lighting/TimeOfDaySettings.h"
 
 // Time-of-day plan T2: the entity that owns the scene's directional light (docs/time_of_day_night_sky_plan.md).
@@ -77,6 +78,14 @@ public:
     float SkyLuminanceScale() const { return skyLuminanceScale_; }
     // What the frame's height-fog density is multiplied by (TimeOfDaySettings::fogDayDensity .. by the sun's height).
     float FogDensityScale() const { return fogDensityScale_; }
+    // Ultra Dynamic Sky's fog colour by the sun's height (TimeOfDaySettings::fogUdsColor; 1, (1, 1, 1), 0 when off): what
+    // the frame's SkyAtmosphere HeightFogContribution and its fog's sun-lobe colour are multiplied by, and the floor
+    // added to its inscattering colour (cd/m2: per lux of the sun x the sun's outer-space luminance).
+    float FogSkyContribution() const { return fogSkyContribution_; }
+    const float* FogSunScatterTint() const { return fogSunScatterTint_; }
+    const float* FogInscatterFloor() const { return fogInscatterFloor_; }
+    // Ultra Dynamic Sky's sky material over the atmosphere this frame (TimeOfDaySettings::skyUdsMaterial; glow[3] 0 = off).
+    const UdsSkyFrameData& UdsSky() const { return udsSky_; }
     // Stops added to the frame camera at night (TimeOfDaySettings::nightExposureEv by the night's share): in full, the
     // steady night camera's anchor moves with it (exposure_solve_cs.hlsl NightOpenCamera).
     float NightExposureEv() const { return nightExposureEv_; }
@@ -86,10 +95,14 @@ public:
     // nightBrightness^NightShare: the ONE gain on everything that lights the night -- the moon, the night sky, the
     // night lamps and the sun's twilight sky -- so their ratios stay physical at dusk.
     float NightGain() const { return nightGain_; }
+    // What the MOON and the night sky are multiplied by: NightGain, or with Ultra Dynamic Sky's moon
+    // (TimeOfDaySettings::udsMoon) Night Brightness in full from the sunset.
+    float MoonGain() const { return moonGain_; }
     // The night's light on the ground against the full moon's at 45 degrees, in stops (log2; 0 = that full moon, about
     // -3.6 at a quarter moon 22 degrees up, about -7.8 with no moon): the moon's horizontal illuminance (its phase law,
     // distance and elevation), the twilight's (a clear sky's, by the sun's depression) and the night sky's (airglow,
-    // stars, Milky Way) -- physical lux, before Night Brightness.
+    // stars, Milky Way) -- physical lux, before Night Brightness; with Ultra Dynamic Sky's sky material its Night Sky Glow
+    // too, and under its moon each light with the gain it is drawn with (all over the night gain: TimeOfDay.cpp).
     float NightLightEv() const { return nightLightEv_; }
     // The same light as the EV100 a meter reads off middle grey under it (log2(0.18 E / pi) + 3): -3.27 for the full moon
     // at 45 degrees (NightRefEv100), -6.9 for a quarter moon 22 degrees up, -11 with no moon. Where the steady night
@@ -143,9 +156,15 @@ private:
     float mieScale_ = 1.0f;
     float skyLuminanceScale_ = 1.0f;
     float fogDensityScale_ = 1.0f;
+    float fogSkyContribution_ = 1.0f;
+    float fogSunScatterTint_[3] = {1.0f, 1.0f, 1.0f};
+    float fogInscatterFloor_[3] = {0.0f, 0.0f, 0.0f};
+    UdsSkyFrameData udsSky_{};
     float nightExposureEv_ = 0.0f;
     float nightShare_ = 0.0f;
     float nightGain_ = 1.0f;
+    float moonGain_ = 1.0f;
+    float sunSkyGain_ = 1.0f; // the sun's twilight sky: NightGain, or 1 with Ultra Dynamic Sky's moon
     float nightLightEv_ = 0.0f;
     float nightEv100_ = -3.27f;
     float nightRefEv100_ = -3.27f;
@@ -173,6 +192,12 @@ float SunElevationAtHours(const TimeOfDaySettings& s, double hours);
 // The height fog's density multiplier at a sun elevation (TimeOfDaySettings::fogDayDensity ..): day over fogDayFullDeg,
 // dusk at fogDuskDeg, night under fogNightFullDeg, smoothstep between. What Tick applies and the graph draws.
 float FogDensityScaleAt(const TimeOfDaySettings& s, double sunElevationDeg);
+// Ultra Dynamic Sky's fog colour terms at a sun elevation (TimeOfDaySettings::fogUdsColor's tables): its SkyAtmosphere
+// HeightFogContribution, its DirectionalInscatteringLuminance (rgb) and its FogInscatteringLuminance per lux of its sun.
+void UdsFogColorAt(double sunElevationDeg, float& skyContribution, float sunScatter[3], float floorPerLux[3]);
+// Ultra Dynamic Sky's sky-material numbers at a sun elevation (TimeOfDaySettings::skyUdsMaterial): Overall Intensity, and
+// its Contrast Midpoint and Night Sky Glow Color per lux of its sun, its Lit_Intensity and Extra_Contrast.
+void UdsSkyAt(double sunElevationDeg, float& overall, float& midpointPerLux, float glowPerLux[3], float& lit, float& extraContrast);
 // "YYYY-MM-DD".
 bool ParseTimeOfDayDate(std::string_view spec, int& year, int& month, int& day, std::string& outError);
 // "HH:MM", the minute rounded.

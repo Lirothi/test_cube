@@ -214,6 +214,7 @@ namespace scene_internal
         float4 glassRefraction;       // x = the glass shell's wall (m), 0 = straight through (glass.hlsl)
         float4 glassSkyVis;           // plan S: lighting's skyVisParams, for the glass slots' sky terms
         float4 fogInscatter;          // PackHeightFog's: UE's fog colour, w = 1 = in use (appended at the tail)
+        float4 fogSunDirectional;     // PackHeightFog's: the sun lobe's own coloured term / 4 pi (appended at the tail)
     };
 
     // MIRRORS WaterCompositeCB in shaders/water_composite_cs.hlsl (ocean G-buffer plan S4), uploaded
@@ -477,11 +478,13 @@ namespace scene_internal
         vc.fogVolumeParams = fogVolumeParams;
         vc.fogVolumeZParams = fogVolumeZParams;
         {
-            const HeightFogPacked fog = PackHeightFog(frame.settings.heightFog, frame.dirLight != nullptr);
+            const HeightFogPacked fog = PackHeightFog(frame.settings.heightFog, frame.dirLight != nullptr,
+                frame.dirLight ? frame.dirLight->GetOuterSpaceLuminance() : 0.0f);
             vc.fogParams0 = fog.params0;
             vc.fogParams1 = fog.params1;
             vc.fogParams2 = fog.params2;
             vc.fogInscatter = fog.inscatter;
+            vc.fogSunDirectional = fog.sunDirectional;
         }
         // S8: glass must filter cascades exactly like the geometry beside it (that is what S3 was for).
         const CascadeShadowConfig* csmCfg = frame.cascadeConfig;

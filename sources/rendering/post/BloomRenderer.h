@@ -102,18 +102,6 @@ public:
     // The sun's star for the tone curve pass (BloomSettings::sunRays*); off when the setting is 0
     // or the sun is behind the camera / well off screen.
     SunRaysConstants SunRays() const;
-    // The SUN GLARE as the light shafts' seed sees it (owner, 2026-10-14: "blur after the glare is laid"):
-    // stage 9's analytic halo in the scene's own pre-exposed units, from a sun-probe colour (the caller's
-    // read-back one: the shafts run before this frame's probe). False when the glare is off, the bloom is
-    // off (the glare is then not in the picture either) or the sun is out of view.
-    struct SunGlareSeed
-    {
-        Math::float3 color{};   // at the sun's centre, before the core / veil fall-off
-        Math::float3 viewDir{}; // to the sun, view space
-        float projX = 1.0f, projY = 1.0f;
-        float coreRad = 0.0f, veil = 0.0f, veilRad = 0.0f;
-    };
-    bool SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) const;
 
 private:
     void Downsample(Renderer* renderer, ID3D12GraphicsCommandList* cl,
@@ -163,8 +151,8 @@ private:
     SceneResourceBootstrapper* resources_ = nullptr;
     const SceneFrameData* frame_ = nullptr;
     double probeAskedSeconds_ = -1.0; // the sun probe's temporal blend: when it was last asked, run or not
-    // Consecutive frames the sun probe has run; 0 = it did not run last frame, so it restarts. Atomic: the
-    // light shafts' seed (SunGlareSeedFor) reads it while the tonemap pass records on another worker.
+    // Consecutive frames the sun probe has run; 0 = it did not run last frame, so it restarts. Atomic: it was read
+    // by the light shafts' glare seed on another worker (removed 2026-11-03); kept, it costs nothing.
     std::atomic<std::uint32_t> probeRuns_{ 0u };
     bool localGridBuilt_ = false;    // SetLocalExposureGrid
 
@@ -189,6 +177,12 @@ private:
     std::uint32_t historyWidth_ = 0u, historyHeight_ = 0u;
     std::uint64_t historyRevision_ = 0u;
     float historyPreExposure_ = 1.0f;
+    // ...and the SUN it was written with: its world direction and where its disc lay in that frame's image
+    // (UV, valid = in front of the camera). A sun the clock or a drag moved has no motion vector, so the
+    // history keeps it where it was; stage 12 drops the history on its old disc and its new one.
+    Math::float3 historySunDir_{ 0.0f, 0.0f, 0.0f };
+    float historySunUv_[2] = { 0.0f, 0.0f };
+    bool historySunValid_ = false;
     void RecordTemporalInput(Renderer* renderer, ID3D12GraphicsCommandList* cl, D3D12_CPU_DESCRIPTOR_HANDLE scene);
 
     // The kernel's spectrum is a pure function of these, so it is only rebuilt when one moves.

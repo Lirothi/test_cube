@@ -117,9 +117,9 @@ struct CameraExposureSettings
     // "part of the way". NONE BY DEFAULT (0 points): every level renders exactly as it did; the
     // "eye" preset (SetEyeExposureCurve) is what a level with a time of day wants.
     // The steady night camera reads it too, at the night's PHYSICAL EV (TimeOfDay::NightEv100, -3.3 under a full moon
-    // at 45 degrees, -11 with none; Scene): the points under ~0 EV are the night's. Eight, so a level keeps its six for
-    // the day and the rooms and has two for the night (the shader's two float4 pairs hold eight).
-    static constexpr std::uint32_t kExposureCurveMaxPoints = 8;
+    // at 45 degrees, -11 with none; Scene): the points under ~0 EV are the night's. Twelve, so UDS's eight day points
+    // keep the night's three beside them (SetUdsExposureCurve; the shader's three float4 pairs hold twelve).
+    static constexpr std::uint32_t kExposureCurveMaxPoints = 12;
     std::uint32_t exposureCurvePoints = 0;
     float exposureCurveEv[kExposureCurveMaxPoints] = {};   // scene EV100, ascending
     float exposureCurveComp[kExposureCurveMaxPoints] = {}; // compensation EV at that scene EV
@@ -334,29 +334,29 @@ inline void SetEyeExposureCurve(CameraExposureSettings& s)
     for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
 }
 
-// ULTRA DYNAMIC SKY'S CURVE (owner, 2026-10-16: "raise the moon and fit the curve, as theirs"), for a level whose
-// moon is UDS's -- 1/33 of the sun, `timeOfDay.nightBrightness` ~11400 -- so a night meters ~5.5 EV under the
-// day instead of ~19, and the curve is all that keeps it darker. Their `Exposure_Compensation_Curve` (read off
-// the owner's editor 2026-10-13: -1.511 below EV -10, -0.4 at -4, 0.596 at 0, 0.976 at 1, 1.0 from 9) is keyed
-// on THEIR scene EV, lit by a 5-lux sun against our 120 klx: +14.55 EV onto ours. Shifted by its value at our
-// noon (EV 15.4 -> 0.919) so the day stays as it was. Six points fit it to 0.07 EV. Measured on wind_test
-// (sun-azimuth view, the sky's luminance relative to the sun at +9.7 degrees, stops): UDS -0.44 / -1.59 / -2.50 /
-// -2.88 at 0 / -3.3 / -6.5 / -19.4 degrees, ours -0.76 / -1.69 / -2.68 / -2.21.
-// THE NIGHT'S SECTION (2026-11-01): the steady night camera reads the curve at the night's PHYSICAL EV (TimeOfDay::
-// NightEv100: -3.3 a full moon at 45 degrees, -6.9 a quarter moon 22 degrees up, -11 none), and a curve flat there has
-// it follow the night's light in FULL -- the owner's UDS Steady Night under a last-quarter moon 11 degrees up exposed
-// the night as a dim day, the moon's aerosol aureole a great glow (camera 9.45, median 57 of 255; owner: "why such a
-// glow round the moon?"). Every preset for UDS's moon carries the same night: from -3.5 at its first point's value,
-// 1.05 stops down at -7 and 0.6 more at -11 -- the camera follows 70 % of the darkening from the full moon to a
-// quarter, 85 % on to no moon. A first cut followed 35 % / 79 % to keep the moon's aerosol aureole down; with that
-// taken out at its root (TimeOfDaySettings::mieNightScale) it left every partial moon nearly black -- wind_test's
-// first quarter median 1-3 of 255 on the sea, the island and the grove, the palms black under a full moon (2026-11-01,
-// owner: "check that the lighting is sane at every phase, the island and the trees too"). Eight points: (8.55, -1.75)
-// went, 0.06 EV off the line between its neighbours.
+// ULTRA DYNAMIC SKY'S CURVE, ONE TO ONE (owner, 2026-11-04: "put UDS's curve one to one, the compensation 0, and keep it
+// under the UDS preset"), for a level whose moon is UDS's (1/33 of the sun, `timeOfDay.nightBrightness` ~11400). Its
+// `Exposure_Compensation_Curve` read from the .uasset itself (D:\zalupa\Game\Content\UltraDynamicSky\Materials\
+// Float_Curves, its FRichCurveKey array): five CUBIC keys -- (-9.2155, -1.511, tangent 0.2373), (-4.4704, -0.506, 0.2252),
+// (-0.5966, 0.4304, 0.2755), (1.1, 1.0287, arrive 0.5409 / leave -0.0077), (10, 1, 0) -- constant outside, keyed on ITS
+// scene EV, lit by a 5-lux sun against our 120 klx: +14.55 EV onto ours, the values as they are. Ours is linear: eight
+// points on UE's own evaluation (FRichCurve::Eval, Bezier with the tangents x the interval / 3), the breaks optimised for
+// the largest error -- 0.015 EV (scratchpad uds_curve_fit.py). UDS's Exposure Bias is 0: the preset sets the level's
+// compensationEv 0 with it (the Inspector's button). On wind_test (2026-11-04) each engine on its own auto exposure, the
+// owner's viewport toward / away from the sun: the day this curve's +0.9 over the old preset's (which was shifted -0.919 to
+// keep wind_test's day) is what UDS's frame is brighter by -- 0.75-0.95 stop measured.
+// AND OUR NIGHT UNDER IT (2026-11-04, owner at 21:54 on a new moon: "it is insanely bright with the moon invisible"): UDS's
+// -1.51 runs on flat below our EV 5.3, and the steady night camera reads the curve at the night's PHYSICAL EV (-3.3 full
+// moon .. -11 none), so flat there it followed the moon's going in full -- every phase as bright as the full moon, a
+// moonless night a dim day (UE's UDS does the same: its auto exposure lifts a new-moon night to the full moon's frame). The
+// three points under -3.5 are the night section the presets carried before (SetUdsSteadyNightExposureCurve's, from the first
+// point's value): 1.05 stops down at -7, 0.6 more at -11 -- the camera follows 70 % of the darkening from the full moon to a
+// quarter, 85 % on to none. None of them lies in a day scene's reach (a meter reads 5 and up there, the rooms included).
 inline void SetUdsExposureCurve(CameraExposureSettings& s)
 {
-    static constexpr float kEv[] = {-11.0f, -7.0f, -3.5f, 4.55f, 10.55f, 12.55f, 14.55f, 15.55f};
-    static constexpr float kComp[] = {-4.08f, -3.48f, -2.43f, -2.43f, -1.32f, -0.85f, -0.32f, 0.06f};
+    static constexpr float kEv[] = {-11.0f, -7.0f, -3.5f, 5.335f, 7.054f, 8.774f, 10.555f, 13.525f, 14.994f, 15.651f, 17.863f};
+    static constexpr float kComp[] = {-3.161f, -2.561f, -1.511f, -1.511f, -1.1344f, -0.7853f, -0.3989f, 0.3144f, 0.7386f,
+                                      1.0287f, 1.0146f};
     static constexpr std::uint32_t kPoints = static_cast<std::uint32_t>(std::size(kEv));
     static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
     s.exposureCurvePoints = kPoints;
@@ -379,6 +379,18 @@ inline void SetUdsSteadyNightExposureCurve(CameraExposureSettings& s)
     static_assert(kPoints <= CameraExposureSettings::kExposureCurveMaxPoints);
     s.exposureCurvePoints = kPoints;
     for (std::uint32_t i = 0; i < kPoints; ++i) { s.exposureCurveEv[i] = kEv[i]; s.exposureCurveComp[i] = kComp[i]; }
+}
+
+// UE'S OWN (owner, 2026-11-03: "what curve is that -- is UE's the same? if so, a preset with a button"). UE's wind_test
+// carries no compensation curve at all (its PPV's AutoExposureBiasCurve is None): a histogram with one constant Exposure
+// Compensation, 0.5 there (the project's r.DefaultFeature.AutoExposure.Bias is 1.0). One point = that constant at every
+// EV (EvaluateExposureCurve is flat past its ends). The night is then followed in full: no section under 0 holds it, and
+// UE has no steady night camera either (Time of Day > Night Camera EV100 0 for the whole UE picture).
+inline void SetUeExposureCurve(CameraExposureSettings& s)
+{
+    s.exposureCurvePoints = 1u;
+    s.exposureCurveEv[0] = 0.0f;
+    s.exposureCurveComp[0] = 0.5f;
 }
 
 // Display transform (plan section 6.1 / step P3).
@@ -450,6 +462,19 @@ struct ColorPipelineSettings
     float filmShoulder = 0.26f;
     float filmBlackClip = 0.0f;
     float filmWhiteClip = 0.04f;
+
+    // UE's whole colour pipeline around the film curve (shaders/ue_color_pipeline.hlsli, transcribed from UE 5.8.2's
+    // PostProcessCombineLUTs.usf / TonemapCommon.ush / ACESCommon.ush): the grade and the curve in ACEScg (AP1) with
+    // the ACES glow module and red modifier, UE's ExpandGamut and BlueCorrection, and the grade AFTER the local
+    // exposure and the bloom, where UE's LUT sits. Filmic only. false = the linear-sRGB path before 2026-11-03 (the
+    // A/B): on wind_test's sea view against the owner's UE 5.8 with the same HDR sky, the same exposure and the same
+    // grade numbers it put the upper sky at sRGB (157, 181, 200) where UE shows (127, 161, 179).
+    bool ueGamut = true;
+    float expandGamut = 1.0f;    // UE FPostProcessSettings::ExpandGamut default
+    float blueCorrection = 0.6f; // UE FPostProcessSettings::BlueCorrection default
+    // UE's natural vignette (FPostProcessSettings::VignetteIntensity, default 0.4; the cosine-fourth law in UE's
+    // vignette space, tonemap_cs.hlsl): every curve, on the scene and the bloom before the grade. 0 = none.
+    float vignetteIntensity = 0.4f;
 };
 
 // ---- EV100 conventions (plan section 6.2), documented once, here ----

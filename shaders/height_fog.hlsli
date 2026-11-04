@@ -64,7 +64,10 @@ struct HeightFogParams
     float referenceHeight;    // world Y at which `density` is exactly the value above
     float startDistance;      // metres of fog-free air in front of the camera
     float maxOpacity;         // ceiling on the fog's coverage
-    float sunScatterStrength; // weight of the forward-scattered sun lobe
+    // The sun lobe's colour is UE's (PackHeightFog): sunGroundScale x the caller's sun colour (its illuminance on the
+    // ground after the atmosphere) + sunDirectional, both over 4 pi already -- fogParams1.y and fogSunDirectional.
+    float sunGroundScale;     // UE's SkyAtmosphere HeightFogContribution / (4 pi)
+    float3 sunDirectional;    // UE's DirectionalInscatteringLuminance (a colour) x the sun's outer-space luminance / (4 pi), cd/m2
     float sunScatterExponent; // UE's DirectionalInscatteringExponent; their default is 4
     float sunScatterStartDistance; // UE keep the sun lobe off the near field with its own distance
 };
@@ -262,10 +265,10 @@ float3 HeightFogColor(float3 skyAlongView, float3 sunColor, float viewDotSun,
     //
     // Compose fogs the sky now (its analytic branch lost the `z > kEps` gate, as UE's does not have
     // one either), so BOTH sides of that horizon get the lobe and the seam it was hiding cannot
-    // form. What is left is UE's own term, unmodified: DirectionalInscatteringColor weighted by
-    // DirectionalInscatteringExponent and held off the near field by its own start distance.
-    const float sun = lobe * max(p.sunScatterStrength, 0.0f) * sunFactor;
-    return base * (1.0f - transmittance) + sunColor * sun;
+    // form. What is left is UE's own term, unmodified (HeightFogCommon.ush:328-368): DirectionalInscatteringColor weighted
+    // by DirectionalInscatteringExponent and the uniform phase, held off the near field by its own start distance.
+    const float3 sunInscatter = max(p.sunGroundScale, 0.0f) * sunColor + max(p.sunDirectional, 0.0f);
+    return base * (1.0f - transmittance) + sunInscatter * (lobe * sunFactor);
 }
 
 #endif // ATMOSPHERE_HLSLI

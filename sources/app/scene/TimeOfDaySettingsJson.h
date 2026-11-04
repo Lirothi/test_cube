@@ -26,7 +26,8 @@
 //                   "rayleighDayStartDeg": -2.07, "rayleighDayFullDeg": 3.68, "ozoneNightTint": [6.154, 1.806, 1.428],
 //                   "ozoneSunriseTint": [4.615, 1.557, 4.031], "ozoneBlendDeg": 1.95 },
 //     "lamps": { "sunElevationDeg": 0, "randomDelaySec": 1, "turnOnSec": 1.5, "turnOnFlicker": 0.2, "turnOnExponent": 0.6 },
-//     "fog": { "dayDensity": 1, "duskDensity": 1, "nightDensity": 1, "dayFullDeg": 25, "duskDeg": 5, "nightFullDeg": -8 }
+//     "fog": { "dayDensity": 1, "duskDensity": 1, "nightDensity": 1, "dayFullDeg": 25, "duskDeg": 5, "nightFullDeg": -8,
+//              "udsColor": false }
 //   }
 //
 // Every key is optional; an absent one keeps the struct default.
@@ -106,6 +107,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.moonEnabled = Flag(m, "enabled", s.moonEnabled);
         s.moonIlluminanceLux = std::clamp(Number(m, "illuminanceLux", s.moonIlluminanceLux), 0.0f, 1000.0f);
         s.moonNewBrightness = std::clamp(Number(m, "newMoonBrightness", s.moonNewBrightness), 0.0f, 1.0f);
+        if (const auto u = m.find("udsMoon"); u != m.end() && u->is_boolean()) { s.udsMoon = u->get<bool>(); }
         if (const auto lc = m.find("lightColor"); lc != m.end() && lc->is_array() && lc->size() >= 3)
         {
             for (int c = 0; c < 3; ++c)
@@ -185,6 +187,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         s.fogDayFullDeg = std::clamp(Number(f, "dayFullDeg", s.fogDayFullDeg), -90.0f, 90.0f);
         s.fogDuskDeg = std::clamp(Number(f, "duskDeg", s.fogDuskDeg), -90.0f, 90.0f);
         s.fogNightFullDeg = std::clamp(Number(f, "nightFullDeg", s.fogNightFullDeg), -90.0f, 90.0f);
+        if (const auto u = f.find("udsColor"); u != f.end() && u->is_boolean()) { s.fogUdsColor = u->get<bool>(); }
     }
     // The twilight as Ultra Dynamic Sky draws it: the sun leaving the atmosphere, the night Rayleigh.
     if (const auto it = j.find("twilight"); it != j.end() && it->is_object())
@@ -215,6 +218,7 @@ inline void ApplyOverrides(const nlohmann::json& j, TimeOfDaySettings& s, Direct
         tint3("ozoneSunriseTint", s.ozoneSunriseTint);
         s.ozoneBlendDeg = std::clamp(Number(w, "ozoneBlendDeg", s.ozoneBlendDeg), 0.001f, 90.0f);
         s.mieNightScale = std::clamp(Number(w, "mieNightScale", s.mieNightScale), 0.0f, 10.0f);
+        if (const auto u = w.find("udsSkyMaterial"); u != w.end() && u->is_boolean()) { s.skyUdsMaterial = u->get<bool>(); }
         s.lightHandOverDeg = std::clamp(Number(w, "lightHandOverDeg", s.lightHandOverDeg), 0.0f, 20.0f);
     }
 }
@@ -305,7 +309,6 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "lightShaftOcclusionDepthRange", sun.GetLightShaftOcclusionDepthRange() },
         { "lightShaftSmoothing", sun.GetLightShaftSmoothingSec() },
         { "lightShaftLength", sun.GetLightShaftLength() },
-        { "lightShaftGlareSeed", sun.GetLightShaftGlareSeed() },
         { "lightSourceAngle", sun.GetLightSourceAngleDegrees() },
         { "lightSourceSoftAngle", sun.GetLightSourceSoftAngleDegrees() },
     };
@@ -313,6 +316,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "enabled", s.moonEnabled },
         { "illuminanceLux", s.moonIlluminanceLux },
         { "newMoonBrightness", s.moonNewBrightness },
+        { "udsMoon", s.udsMoon },
         { "lightColor", { s.moonLightColor[0], s.moonLightColor[1], s.moonLightColor[2] } },
         { "discColor", { s.moonDiscColor[0], s.moonDiscColor[1], s.moonDiscColor[2] } },
         { "glow", s.moonGlow },
@@ -351,6 +355,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "ozoneSunriseTint", { s.ozoneSunriseTint[0], s.ozoneSunriseTint[1], s.ozoneSunriseTint[2] } },
         { "ozoneBlendDeg", s.ozoneBlendDeg },
         { "mieNightScale", s.mieNightScale },
+        { "udsSkyMaterial", s.skyUdsMaterial },
         { "lightHandOverDeg", s.lightHandOverDeg },
     };
     j["lamps"] = {
@@ -368,6 +373,7 @@ inline nlohmann::json ToJson(const TimeOfDaySettings& s, const DirectionalLight&
         { "dayFullDeg", s.fogDayFullDeg },
         { "duskDeg", s.fogDuskDeg },
         { "nightFullDeg", s.fogNightFullDeg },
+        { "udsColor", s.fogUdsColor },
     };
     return j;
 }

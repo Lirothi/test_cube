@@ -125,6 +125,10 @@ public:
             nightRowHandle_[0] = material->ComputeCBFieldHandle(0, "nightRow0");
             nightRowHandle_[1] = material->ComputeCBFieldHandle(0, "nightRow1");
             nightRowHandle_[2] = material->ComputeCBFieldHandle(0, "nightRow2");
+            udsHandle_[0] = material->ComputeCBFieldHandle(0, "udsSkyParams");
+            udsHandle_[1] = material->ComputeCBFieldHandle(0, "udsSkyGlow");
+            udsHandle_[2] = material->ComputeCBFieldHandle(0, "udsSkySun");
+            udsHandle_[3] = material->ComputeCBFieldHandle(0, "udsSkyMoon");
         }
     }
 
@@ -164,6 +168,12 @@ public:
         UpdateUniform(owner, nightRowHandle_[0], material, night.row0, cbData);
         UpdateUniform(owner, nightRowHandle_[1], material, night.row1, cbData);
         UpdateUniform(owner, nightRowHandle_[2], material, night.row2, cbData);
+        // Ultra Dynamic Sky's sky material over the atmosphere (uds_sky.hlsli); glow.w 0 = off.
+        const UdsSkyFrameData& uds = owner_.UdsSky();
+        UpdateUniform(owner, udsHandle_[0], material, uds.params, cbData);
+        UpdateUniform(owner, udsHandle_[1], material, uds.glow, cbData);
+        UpdateUniform(owner, udsHandle_[2], material, uds.sun, cbData);
+        UpdateUniform(owner, udsHandle_[3], material, uds.moon, cbData);
     }
 
 private:
@@ -181,6 +191,7 @@ private:
     Material::CBFieldHandle moonGlowHandle_{};
     Material::CBFieldHandle nightGlowHandle_{}, nightLayersHandle_{};
     Material::CBFieldHandle nightRowHandle_[3]{};
+    Material::CBFieldHandle udsHandle_[4]{};
 };
 } // namespace
 

@@ -106,6 +106,9 @@ public:
     // moon's mean disc radiance, the phase law applied, and its radius in radians; 0 = none.
     void SetMoonGlow(float peak, float radiusRad) { moonGlow_ = { peak, radiusRad, 0.0f, 0.0f }; }
     const std::array<float, 4>& MoonGlow() const { return moonGlow_; }
+    // Ultra Dynamic Sky's sky material over the atmosphere (uds_sky.hlsli); glow[3] 0 = off.
+    void SetUdsSky(const UdsSkyFrameData& uds) { udsSky_ = uds; }
+    const UdsSkyFrameData& UdsSky() const { return udsSky_; }
 
     bool IsSimpleRender() const { return true; }
     bool CastsShadow() const { return false; }
@@ -125,6 +128,7 @@ private:
     SkyViewFrameData skyViewFrame_{};
     NightSkyFrameData nightSky_{};
     std::array<float, 4> moonGlow_{};
+    UdsSkyFrameData udsSky_{};
     D3D12_CPU_DESCRIPTOR_HANDLE skyViewSrv_{}, transmittanceSrv_{}, moonSrv_{}, nightMapSrv_{}, nullSkyViewSrv_{};
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> nullSkyViewHeap_;
     TextureCube cube_;

@@ -16,6 +16,9 @@
   "frame": {
     "maxFps": 0,
     "mouseSmoothingMs": 30.0,
+    "oneFrameThreadLag": true,
+    "renderThread": true,
+    "rhiThread": true,
     "vsync": false
   },
   "gi": {

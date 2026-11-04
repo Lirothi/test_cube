@@ -84,7 +84,6 @@ inline void ApplyOverrides(const nlohmann::json& j, DirectionalLight& dl)
     dl.SetLightShaftOcclusionDepthRange(Number(j, "lightShaftOcclusionDepthRange", dl.GetLightShaftOcclusionDepthRange()));
     dl.SetLightShaftSmoothingSec(Number(j, "lightShaftSmoothing", dl.GetLightShaftSmoothingSec()));
     dl.SetLightShaftLength(Number(j, "lightShaftLength", dl.GetLightShaftLength()));
-    dl.SetLightShaftGlareSeed(Number(j, "lightShaftGlareSeed", dl.GetLightShaftGlareSeed()));
     // The angular diameter in degrees (UE LightSourceAngle); drives the drawn disc and the specular floor.
     dl.SetLightSourceAngleDegrees(Number(j, "lightSourceAngle", dl.GetLightSourceAngleDegrees()));
     // UE LightSourceSoftAngle (degrees, apex): softens the specular glint's edge; 0 = UE's default.

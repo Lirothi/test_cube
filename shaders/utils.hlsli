@@ -11,9 +11,9 @@ static const float kMinRoughness = 0.02f; // UE's SUBSTRATE_MIN_GGX_ROUGHNESS (S
 static const float kMinAlpha = kMinRoughness * kMinRoughness;
 static const float3 kF0Dielectric = float3(0.04f, 0.04f, 0.04f); // IOR ~1.5 for dielectrics
 
-// GBAux.b carries a four-bit shading-model contract in an R8 UNORM channel. Values 0..15 are
-// encoded exactly at n/15; the remaining channel precision is intentionally unused for now.
-// Keep these IDs in sync with the C++ ShadingModel enum in MaterialData.h.
+// GBAux.b carries a four-bit shading-model contract in an R8 UNORM channel: the ID in the low four bits of the byte, and
+// since 2026-11-03 the high four hold 1 - the sun's BUMP SHADOWING (EncodeShadingModelAndSunBump; a writer that does
+// not know -- the ocean -- leaves them 0 = none). Keep these IDs in sync with the C++ ShadingModel enum in MaterialData.h.
 static const uint kShadingModelDefaultLit = 0u;
 static const uint kShadingModelTwoSidedFoliage = 1u;
 static const uint kShadingModelTerrain = 2u;
@@ -24,12 +24,43 @@ static const uint kShadingModelMask = 15u;
 
 inline float EncodeShadingModel(uint id)
 {
-	return float(id & kShadingModelMask) / float(kShadingModelMask);
+	return float(id & kShadingModelMask) / 255.0f;
 }
 
 inline uint DecodeShadingModel(float encoded)
 {
-	return (uint)round(saturate(encoded) * float(kShadingModelMask));
+	return (uint)round(saturate(encoded) * 255.0f) & kShadingModelMask;
+}
+
+// THE BUMP TERMINATOR (owner, 2026-11-03, a beach at 18:00, the sun 10.7 degrees up: "why is the shadow's edge so sharp?
+// make it smooth"). A normal map's bumps turned toward a grazing sun keep the shading N.L above 0 where the smooth surface
+// has already turned away from it, so the light does not fade into the terminator -- the shadow map cuts it there: the
+// island's own shadow on a beach sloping at the sun's elevation stepped 66 -> 237 in one probe step; with the sand's
+// normal map off the same edge ramped 50 -> 69 -> 87 ... 205. Blender Cycles' bump_shadowing_term (Chiang, Li, Burley,
+// "Taming the Shadow Terminator", SIGGRAPH 2019 talk): g = (Ng.L) / ((Ns.L) (Ng.Ns)) with Ng the smooth vertex normal and
+// Ns the mapped one; 1 where g >= 1, 0 where g <= 0, the smooth cubic -g^3 + g^2 + g between -- the light goes to 0 as the
+// smooth surface turns from it, and a bump tilted away from the light (g > 1) keeps its own N.L.
+inline float SunBumpShadowing(float3 Ng, float3 Ns, float3 L)
+{
+	const float cosNI = dot(Ns, L);
+	if (cosNI <= 0.0f) { return 1.0f; } // no direct light on it anyway
+	const float g = dot(Ng, L) / max(cosNI * dot(Ng, Ns), 1.0e-6f);
+	if (g >= 1.0f) { return 1.0f; }
+	if (g <= 0.0f) { return 0.0f; }
+	const float g2 = g * g;
+	return -g2 * g + g2 + g;
+}
+
+// Four bits of (1 - the factor), dithered (`dither` in [0, 1)) so the 16 levels break up instead of banding.
+inline float EncodeShadingModelAndSunBump(uint id, float sunBump, float dither)
+{
+	const uint q = (uint)min(floor(saturate(1.0f - sunBump) * 15.0f + dither), 15.0f);
+	return float((id & kShadingModelMask) | (q << 4)) / 255.0f;
+}
+
+inline float DecodeSunBump(float encoded)
+{
+	return 1.0f - float(((uint)round(saturate(encoded) * 255.0f)) >> 4) / 15.0f;
 }
 
 // Hanika's shadow terminator offset (gbuffer_common.hlsli GBufferTerminatorHeight): how far the smooth surface the vertex
@@ -346,7 +377,7 @@ struct BRDFInput
 
 struct BRDFResult
 {
-    float3 diffBRDF; // Lambert with energy compensation
+    float3 diffBRDF; // UE's rough diffuse (EON, DiffuseEON); Lambert at roughDiffuse 0
 	float3 specBRDF; // GGX Cook-Torrance
 	float NdotL;
 	float NdotV;
@@ -371,7 +402,32 @@ struct BRDFResult
 // (SubstrateEvaluation.ush:565, its transmission weight is 1); r.Substrate.ShadingQuality 1 -> the
 // exact Vis_SmithJoint; F = F_Schlick(F0, F90) with F90 = saturate(50 max3(F0)), the micro-occlusion
 // that only touches an F0 under 2 %; roughness floored at SUBSTRATE_MIN_GGX_ROUGHNESS 0.02.
-inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f, float lightSoftRadius = 0.0f)
+//
+// The diffuse is UE's ROUGH diffuse (2026-11-03): BaseWindowsEngine.ini:37 sets r.Substrate.RoughDiffuse=1, so a Substrate
+// slab's direct diffuse is Diffuse_GGX_Rough (SubstrateEvaluation.ush:552-561), version 3 = Diffuse_EON at roughness x 0.4
+// (BRDF.ush:235-249) -- an energy-preserving Oren-Nayar [Portsmouth et al. 2025]: a rough surface lit and seen from the
+// same side at grazing angles backscatters up to ~2x Lambert, and darkens seen against the light. Measured against the
+// owner's UE (18:00, the island's sunlit west beach seen from the sea, the sun behind the camera): our Lambert sand 0.59
+// of UE's; a grey box's faces seen head-on matched (EON = Lambert there). roughDiffuse is UE's RetroReflectivityWeight
+// (GetAreaLightDiffuseMicroReflWeight: 1 for the sun and small lights, fading for lights tens of cm across, 0 for rect
+// lights); 0 = Lambert exactly (EON at roughness 0), the A/B (`light.roughDiffuse`, the sun in lighting_cs).
+static const float kRoughDiffuseRoughnessScale = 0.4f; // BRDF.ush:249
+float3 DiffuseEON(float3 diffuseColor, float roughness, float NoV, float NoL, float VoL)
+{
+    // BRDF.ush:213-233, term for term.
+    const float3 rho = diffuseColor * (1.0f + (0.189468f - 0.189468f * diffuseColor) * roughness);
+    const float S = VoL - NoV * NoL;
+    const float sOverT = max(S * rcp(max(1.0e-6f, max(NoV, NoL))), S);
+    const float constant1Fon = 0.5f - 2.0f / (3.0f * kPi);
+    const float AF = 1.0f - roughness * (1.0f - 1.0f / (1.0f + constant1Fon));
+    const float fss = AF * (1.0f + roughness * sOverT);
+    const float g1 = 0.262048f;
+    const float gOverPiV = g1 - g1 * NoV;
+    const float fms = 1.0f - AF * (1.0f + roughness * gOverPiV);
+    return rho * (fss + rho * fms) * kInvPi;
+}
+
+inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f, float lightSoftRadius = 0.0f, float roughDiffuse = 1.0f)
 {
 	BRDFResult o;
 	o.NdotL = saturate(dot(bi.N, bi.L));
@@ -408,7 +464,9 @@ inline BRDFResult EvalBRDF(BRDFInput bi, float lightAngularSize = 0.0f, float li
 	float D = D_GGX(specNdotH, sqrt(a2)) * sphereEnergy;
 	float Vis = Vis_SmithJoint(a2, saturate(abs(dot(bi.N, bi.V)) + 1.0e-5f), o.NdotL);
 
-	o.diffBRDF = (1.0f - bi.metal) * bi.albedo * kInvPi;
+	// Diffuse_GGX_Rough's inputs: N.V, N.L and V.H saturated, V.L by the double angle from V.H (BRDF.ush:241-248).
+	o.diffBRDF = DiffuseEON((1.0f - bi.metal) * bi.albedo, saturate(bi.rough) * kRoughDiffuseRoughnessScale * saturate(roughDiffuse),
+	                        o.NdotV, o.NdotL, 2.0f * VdotH * VdotH - 1.0f);
 	o.specBRDF = D * Vis * F;
 
 	return o;
@@ -438,16 +496,24 @@ struct FoliageResult
 // subsurfacePayload = GB2.rgb = subsurfaceColor * transmissionStrength * albedoTransmission.
 // lightAngularSize / lightSoftRadius: the light's size and soft radius (see EvalBRDF). normalWeight
 // blends broad thin-sheet wrap with projected-area weighting without assigning a privileged side to the leaf.
+// ueLobe 1 (the default, every light): UE's TwoSidedBxDF transmission (ShadingModels.ush:944-952; Substrate keeps it for
+// SSS_TYPE_TWO_SIDED_WRAP, SubstrateEvaluation.ush:893-904) -- an energy-conserving wrap of the light behind the visible
+// face, saturate((-N.L + 0.5) / 1.5^2), times a GGX "scatter" lobe of alpha^2 0.36 around the line through the leaf toward
+// the light, D_GGX(0.36, -V.L), times the subsurface colour: 0.59 looking straight into the light through a leaf, 0.26 at
+// 30 degrees off, 0.07 at 60. 0 = the softer lobe before 2026-11-03 (pow(V.-L, 2) / pi x the two interfaces' Fresnel,
+// 0.29 / 0.21 / 0.07) -- the sun's A/B, `light.foliageTransmissionUe` (lighting_cs).
 inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload,
 	float lightAngularSize = 0.0f,
 	float normalWeight = kFoliageTransmissionNormalWeight,
-	float lightSoftRadius = 0.0f)
+	float lightSoftRadius = 0.0f,
+	float ueLobe = 1.0f,
+	float roughDiffuse = 1.0f)
 {
 	FoliageResult o;
 
-	// Front side is byte-for-byte the DefaultLit response (Lambert + GGX). This keeps a
+	// Front side is byte-for-byte the DefaultLit response (rough diffuse + GGX). This keeps a
 	// front-lit leaf indistinguishable from DefaultLit and lets local lights / RT hits reuse it.
-	BRDFResult br = EvalBRDF(bi, lightAngularSize, lightSoftRadius);
+	BRDFResult br = EvalBRDF(bi, lightAngularSize, lightSoftRadius, roughDiffuse);
 	o.diffBRDF = br.diffBRDF;
 	o.specBRDF = br.specBRDF;
 	o.NdotL = br.NdotL;
@@ -469,7 +535,15 @@ inline FoliageResult EvalFoliageBRDF(BRDFInput bi, float3 subsurfacePayload,
 	float viewLightOpposition = saturate(dot(bi.V, -bi.L));
 	float viewScatter = pow(viewLightOpposition, kFoliageTransmissionViewPower);
 	float transmit = incidence * viewScatter;
-	o.transBRDF = subsurfacePayload * interfaceTransmission * transmit * kInvPi;
+	float3 ourTransmission = subsurfacePayload * interfaceTransmission * transmit * kInvPi;
+
+	const float kWrap = 0.5f;
+	const float wrapNoL = saturate((-dot(bi.N, bi.L) + kWrap) / ((1.0f + kWrap) * (1.0f + kWrap)));
+	const float kScatterA2 = 0.6f * 0.6f;
+	const float scatterD = (viewLightOpposition * kScatterA2 - viewLightOpposition) * viewLightOpposition + 1.0f;
+	const float scatter = kScatterA2 / (kPi * scatterD * scatterD);
+	float3 ueTransmission = subsurfacePayload * (wrapNoL * scatter);
+	o.transBRDF = lerp(ourTransmission, ueTransmission, saturate(ueLobe));
 
 	return o;
 }

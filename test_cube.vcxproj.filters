@@ -1815,6 +1815,12 @@
     <None Include="shaders\film_curve.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\ue_color_pipeline.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\uds_sky.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="shaders\local_exposure.hlsli">
       <Filter>shaders</Filter>
     </None>

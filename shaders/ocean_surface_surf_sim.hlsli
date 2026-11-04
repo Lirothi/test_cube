@@ -76,7 +76,7 @@ cbuffer OceanCB : register(b0)
     float4 absorptionGradientParams;   // x: color count, y: gradient type (0 = linear, 1 = curved)
     float4 absorptionColors[8];        // gradient color keys (rgb) and position in w
     float4 windParams0;                // x: wind speed, y: waves scale, z: alignment, w: uv warp strength
-    float4 windParams1;                // xy: wind direction, z: reference wave height, w: padding
+    float4 windParams1;                // xy: wind direction, z: reference wave height, w: the sun glint's roughness smear (OceanSunSpecular)
     float4 foamTrailParams0;           // xy: trail size 0, zw: trail size 1
     float4 foamTrailParams1;           // xy: trail dir 0, zw: trail dir 1
     float4 foamParams2;                // x: trail blend, y: contact foam strength, z: underwater parallax, w: padding

@@ -1238,7 +1238,13 @@ void OceanRenderable::BuildMesh(Renderer* renderer,
         AppendMesh(combined, ring, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(scale, scale, scale));
     }
 
-    const MeshData skirt = BuildSkirt(clipHalfSize, 10.0f);
+    // The skirt reaches the horizon: 50 ring widths out is ~200 km at the finest clip scale (minMeshScale 15 m over a
+    // 103-vertex half ring, x 2^7), past the camera's far plane at any height. At 10 the water stopped at ~41 km and a
+    // level's 10 km far plane cut it even nearer, so a strip of the sky's lower hemisphere showed between the waterline
+    // and the horizontal, fully fogged -- a dark line UE's water (its far mesh) does not have (2026-11-03). Eight quads
+    // either way; the cascades are faded to nothing out there (LodWeights), so the skirt is a flat plane.
+    constexpr float kSkirtBorderScale = 50.0f;
+    const MeshData skirt = BuildSkirt(clipHalfSize, kSkirtBorderScale);
     const float skirtScale = std::pow(2.0f, static_cast<float>(levels));
     AppendMesh(combined, skirt, Math::float3(0.0f, 0.0f, 0.0f), Math::float3(skirtScale, skirtScale, skirtScale));
 
@@ -1931,7 +1937,8 @@ Math::float4 OceanRenderable::GetWindParams1() const
         dir = simulation_->GetLocalWindDirectionVector().Normalized();
     }
     const float amplitude = simulation_ ? simulation_->GetDisplacementAmplitude() : 1.0f;
-    return Math::float4(dir.x, dir.y, amplitude, 0.0f);
+    // w: how much of the unresolved slope variance widens the sun's glint (OceanRenderConfig::sunGlintSmear).
+    return Math::float4(dir.x, dir.y, amplitude, Math::Saturate(GetRenderConfig().sunGlintSmear));
 }
 
 Math::float4 OceanRenderable::GetFoamTrailParams0() const

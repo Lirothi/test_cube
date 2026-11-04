@@ -377,6 +377,9 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // premultiplied subsurface/transmission payload from GB2 (F3).
     const float4 gbAux = GBAux.SampleLevel(gSmpPoint, uv, 0);
     uint shadingModel = DecodeShadingModel(gbAux.b);
+    // The sun's bump terminator (utils.hlsli SunBumpShadowing, written by the G-buffer): the direct sun fades as the smooth
+    // surface turns from it, whatever the normal map says. `bumpShadowing` 0 = off, the A/B.
+    const float sunBump = lerp(1.0f, DecodeSunBump(gbAux.b), saturate(bumpShadowing));
     const bool isFoliage = (shadingModel == kShadingModelTwoSidedFoliage);
     const float transmissionNormalWeight = saturate(gbAux.a);
     // F9: scalar material AO, written by the GBuffer since F3. Default 1 = no occlusion.
@@ -548,14 +551,14 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     if (isFoliage)
     {
         FoliageResult fr = EvalFoliageBRDF(
-            bi, subsurface, sunAngularSize, transmissionNormalWeight, sunSoftRadius);
+            bi, subsurface, sunAngularSize, transmissionNormalWeight, sunSoftRadius, foliageTransmissionUe, roughDiffuse);
 
         // Front hemisphere: the leaf face directly toward the sun (Lambert + GGX), same math
         // and same shadow as DefaultLit.
         if (sunLit && fr.NdotL > 0.0)
         {
             float shadow = SampleSunShadow(P, N, fr.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
-            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L, gb1.a); // the transmission below is not gated
+            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L, gb1.a) * sunBump; // the transmission below is not gated
             const float3 specSun = fr.specBRDF * (1.0 + metal * sunMetalSpec * 1);
             color += (fr.diffBRDF + specSun) * fr.NdotL * lightRgb * shadow * causticsGain;
         }
@@ -577,12 +580,12 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
     else
     {
-        BRDFResult br = EvalBRDF(bi, sunAngularSize, sunSoftRadius);
+        BRDFResult br = EvalBRDF(bi, sunAngularSize, sunSoftRadius, roughDiffuse);
         if (sunLit && br.NdotL > 0.0)
         {
             // Step 24f: VSM mode samples the directional clipmap; Legacy samples the CSM cascades.
             float shadow = SampleSunShadow(Pshadow, N, br.NdotL, csmCascade, dispatchThreadId.xy) * CloudSunVisibility(P);
-            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L, gb1.a);
+            shadow *= SunGeometricTerminator(dispatchThreadId.xy, P, V, L, gb1.a) * sunBump;
             // Boost the analytic sun specular on metals (1 + metal*sunMetalSpec) so the
             // highlight reads against the environment reflection. metal=0 -> no change.
             const float3 specSun = br.specBRDF * (1.0 + metal * sunMetalSpec * 1);

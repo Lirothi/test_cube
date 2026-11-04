@@ -126,6 +126,20 @@ struct SkyAtmosphereSettings
     // Earth's air one metre of view distance counts as. 1 is Earth, which over a few hundred metres is
     // invisible (measured 0.8 % on the far water); artists set 5-20 for a haze that reads at island scale.
     float aerialViewDistanceScale = 1.0f;
+    // UE USkyAtmosphereComponent::HeightFogContribution (default 1): the sky's light IN THE HEIGHT FOG -- the fog's
+    // sky-ambient colour (the distant sky light, HeightFogCommon.ush:190) and the ground-illuminance half of its sun lobe
+    // (:334) -- not the sky itself. Ultra Dynamic Sky drives it by the sun's height (2 by day, ~1.2 at sunset; ours:
+    // timeOfDay.fog's UDS curves multiply this).
+    float heightFogContribution = 1.0f;
+    // THE MEDIUM'S COLOURS, per channel, over the x Earth scales (the level's rayleighScale / mieScale / ozoneScale): UE's
+    // RayleighScattering / MieScattering / OtherAbsorption colours relative to their defaults, so a UE sky ports
+    // exactly. (1, 1, 1) = Earth's colour. Kept beside `parameters` (which hold the products) for --set.
+    float rayleighTint[3] = {1.0f, 1.0f, 1.0f};
+    float mieTint[3] = {1.0f, 1.0f, 1.0f};
+    float ozoneTint[3] = {1.0f, 1.0f, 1.0f};
+    // Mie ABSORPTION x Earth's (UE MieAbsorptionScale / 0.000444). < 0 = the Mie scale's, which `mieScale` has always
+    // moved together with the scattering.
+    float mieAbsorptionScale = -1.0f;
     bool environmentLighting = false; // B4: session opt-in until visual acceptance
     bool aerialPerspective = false; // B3: procedural mode only; enable after visual acceptance
     unsigned aerialDebugView = 0; // 0 scene, 1 transmittance, 2 luminance, 3 depth slices
@@ -133,6 +147,41 @@ struct SkyAtmosphereSettings
     bool lutEnabled = false; // Explicit LUT calculation even in HDRI mode.
     unsigned lutDebugView = 0; // compose: 1 transmittance, 2 multi-scattering (display gain 10).
     SkyAtmosphereParameters parameters{};
+};
+
+// The medium's coefficients from the x Earth scales and the tints (SkyAtmosphereSettings): the ONE place they are
+// multiplied out -- the level reader and --set both come here, so a scale set live keeps the level's colours.
+inline void SetSkyMedium(SkyAtmosphereSettings& s, float rayleighScale, float mieScale, float ozoneScale)
+{
+    const SkyAtmosphereParameters earth{};
+    const float absorption = s.mieAbsorptionScale >= 0.0f ? s.mieAbsorptionScale : mieScale;
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        s.parameters.rayleigh[i] = earth.rayleigh[i] * rayleighScale * s.rayleighTint[i];
+        s.parameters.mieScattering[i] = earth.mieScattering[i] * mieScale * s.mieTint[i];
+        s.parameters.mieAbsorption[i] = earth.mieAbsorption[i] * absorption;
+        s.parameters.ozone[i] = earth.ozone[i] * ozoneScale * s.ozoneTint[i];
+    }
+}
+
+// The scale a coefficient carries over Earth's x its tint, from the channel whose tint is largest (never 0).
+inline float SkyMediumScaleOf(const float authored[4], const float earth[4], const float tint[3])
+{
+    unsigned c = 0;
+    for (unsigned i = 1; i < 3; ++i) { if (tint[i] > tint[c]) c = i; }
+    return (earth[c] > 0.0f && tint[c] > 0.0f) ? authored[c] / (earth[c] * tint[c]) : 1.0f;
+}
+
+// ULTRA DYNAMIC SKY'S SKY MATERIAL over the atmosphere, this frame (TimeOfDaySettings::skyUdsMaterial; uds_sky.hlsli
+// UdsSkyLayer). Read off its Ultra_Dynamic_Sky_Mat node by node and checked against UE's bare SkyAtmosphere with the same
+// numbers (2026-11-04: UDS / bare = Overall Intensity x Lit (2.3 + 1.8 u) to 1-4 % by day). Absolute colours are UDS's
+// (its 5-lux sun) times K = our sun's outer-space luminance / 5.
+struct UdsSkyFrameData
+{
+    float params[4]{}; // x Overall Intensity, y Lit_Intensity, z Contrast Midpoint (cd/m2, ours), w Extra_Contrast
+    float glow[4]{};   // rgb Night Sky Glow Color (cd/m2, ours); w 1 = the layer is on
+    float sun[4]{};    // xyz world, TO the sky's sun; w the moon gradient's gate, saturate(-15 sin(sun elevation))
+    float moon[4]{};   // xyz world, TO the moon; w Enable Moon Gradient
 };
 
 // Shared CPU/HLSL layout; LUT uses local Z-up, world Y is altitude above sea level.

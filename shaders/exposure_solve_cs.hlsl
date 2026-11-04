@@ -57,15 +57,17 @@ cbuffer ExposureSolveCB : register(b0)
     // the meter decided; in manual it offsets a number the author already chose by hand, so it is
     // a quick +/- on top of a solved shutter rather than a correction to a measurement.
     float manualCompensationEv;
-    // Time-of-day E1: the compensation CURVE (CameraExposureSettings::exposureCurve*), up to eight
+    // Time-of-day E1: the compensation CURVE (CameraExposureSettings::exposureCurve*), up to twelve
     // points: x = the EV100 the eye is adapted to, ascending, y = compensation EV. 0 points = none.
     uint  curvePoints;
     float _padComp1;
     float _padComp2;
     float4 curveEvA;      // points 0-3
     float4 curveEvB;      // points 4-7
+    float4 curveEvC;      // points 8-11
     float4 curveCompA;
     float4 curveCompB;
+    float4 curveCompC;
     // Time of day: the STEADY night camera (TimeOfDaySettings::nightCameraEv100 / nightCameraFollow). x the camera
     // EV100 the night is held at, y the share of the auto camera's departure from it that is still followed, z the
     // weight (the night's share; 0 = off), w the night's exposure trim (TimeOfDaySettings::nightExposureEv x the
@@ -91,14 +93,16 @@ groupshared uint gBins[kBins];
 // loop bound is the literal maximum -- a bound read from the constant buffer is a trap here.
 float ExposureCurve(float ev)
 {
-    const uint n = min(curvePoints, 8u);
+    const uint n = min(curvePoints, 12u);
     if (n == 0u)
     {
         return 0.0f;
     }
-    const float xs[8] = { curveEvA.x, curveEvA.y, curveEvA.z, curveEvA.w, curveEvB.x, curveEvB.y, curveEvB.z, curveEvB.w };
-    const float ys[8] = { curveCompA.x, curveCompA.y, curveCompA.z, curveCompA.w,
-                          curveCompB.x, curveCompB.y, curveCompB.z, curveCompB.w };
+    const float xs[12] = { curveEvA.x, curveEvA.y, curveEvA.z, curveEvA.w, curveEvB.x, curveEvB.y, curveEvB.z, curveEvB.w,
+                           curveEvC.x, curveEvC.y, curveEvC.z, curveEvC.w };
+    const float ys[12] = { curveCompA.x, curveCompA.y, curveCompA.z, curveCompA.w,
+                           curveCompB.x, curveCompB.y, curveCompB.z, curveCompB.w,
+                           curveCompC.x, curveCompC.y, curveCompC.z, curveCompC.w };
     if (ev <= xs[0])
     {
         return ys[0];
@@ -106,7 +110,7 @@ float ExposureCurve(float ev)
     float result = ys[n - 1u];
     bool found = false;
     [unroll]
-    for (uint i = 1u; i < 8u; ++i)
+    for (uint i = 1u; i < 12u; ++i)
     {
         if (!found && i < n && ev <= xs[i])
         {

@@ -279,6 +279,17 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
     //o.RT1 = float4(NrmTo01(NormalizeSafe(NWS, float3(0, 0, 1))), 1.0);
     const bool vertexFacesLight = gbLightToward.w < 0.5f || dot(vertexNVisible, gbLightToward.xyz) > 0.0f;
     o.RT1 = float4(NrmTo01(NWS), vertexFacesLight ? 1.0f : 0.0f);
+    // The sun's bump terminator (utils.hlsli SunBumpShadowing) into GBAux.b's high bits; lighting_cs multiplies the sun by
+    // it. The dither is a hash of the mapped normal (it varies texel to texel, and DLSS's jitter moves it per frame).
+    float sunBump = 1.0f;
+    const float vertexLen2 = dot(vertexNVisible, vertexNVisible);
+    const float shadingLen2 = dot(NWS, NWS);
+    if (gbLightToward.w >= 0.5f && vertexLen2 > 1.0e-12f && shadingLen2 > 1.0e-12f)
+    {
+        sunBump = SunBumpShadowing(vertexNVisible * rsqrt(vertexLen2), NWS * rsqrt(shadingLen2), gbLightToward.xyz);
+    }
+    const uint3 nb = asuint(NWS);
+    const float sunBumpDither = float((nb.x * 73856093u ^ nb.y * 19349663u ^ nb.z * 83492791u) & 1023u) / 1024.0f;
 #if SHADING_MODEL_ID == 1
     // Use linear albedo as a spatial absorption/thickness proxy. This is a Beer-Lambert-like
     // relation (T = T0^distance): dark veins/stems transmit less while color variation survives.
@@ -298,10 +309,10 @@ inline PSOut FinalizeGBuffer(float3 albedo, float2 mr, float3 NWS,
 #ifdef EDITOR_OBJECT_ID
     o.RT4 = objectIdValue;
     o.RT5 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
-                   EncodeShadingModel(SHADING_MODEL_ID), auxA);
+                   EncodeShadingModelAndSunBump(SHADING_MODEL_ID, sunBump, sunBumpDither), auxA);
 #else
     o.RT4 = float4(saturate(ambientOcclusionValue), saturate(indirectSpecularScaleValue),
-                   EncodeShadingModel(SHADING_MODEL_ID), auxA);
+                   EncodeShadingModelAndSunBump(SHADING_MODEL_ID, sunBump, sunBumpDither), auxA);
 #endif
     return o;
 }

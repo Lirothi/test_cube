@@ -2215,6 +2215,7 @@ void Scene::Sync(Renderer* renderer)
 
     frameData_.skyMoon = timeOfDay_.Present() ? timeOfDay_.GetSkyMoon() : SkyMoonFrame{};
     frameData_.nightSky = timeOfDay_.Present() ? timeOfDay_.GetNightSky() : NightSkyFrame{};
+    frameData_.udsSky = timeOfDay_.Present() ? timeOfDay_.UdsSky() : UdsSkyFrameData{};
     // The stars twinkle on the scene's wind clock, so --wind-freeze stills them with everything else.
     frameData_.nightSky.timeSeconds = windState_.time;
     frameData_.settings = renderSettings_;
@@ -2245,6 +2246,22 @@ void Scene::Sync(Renderer* renderer)
         frameData_.settings.skyAtmosphere.luminanceScale *= timeOfDay_.SkyLuminanceScale();
         // ...and the height fog's density by the sun's height (TimeOfDaySettings::fogDayDensity ..), the frame's copy.
         frameData_.settings.heightFog.density *= timeOfDay_.FogDensityScale();
+    }
+    // The sky's light in the height fog (UE's SkyAtmosphere HeightFogContribution) and Ultra Dynamic Sky's fog colour by
+    // the sun's height (TimeOfDaySettings::fogUdsColor), on the frame's copy: HeightFogSettings' frame-only fields.
+    {
+        HeightFogSettings& fog = frameData_.settings.heightFog;
+        fog.frameSkyContribution = std::max(skyAtmosphere_.heightFogContribution, 0.0f);
+        fog.frameSunScatterTint = float3(1.0f, 1.0f, 1.0f);
+        fog.frameInscatterFloor = float3(0.0f, 0.0f, 0.0f);
+        if (timeOfDay_.Present())
+        {
+            const float* tint = timeOfDay_.FogSunScatterTint();
+            const float* lift = timeOfDay_.FogInscatterFloor();
+            fog.frameSkyContribution *= timeOfDay_.FogSkyContribution();
+            fog.frameSunScatterTint = float3(tint[0], tint[1], tint[2]);
+            fog.frameInscatterFloor = float3(lift[0], lift[1], lift[2]);
+        }
     }
     frameData_.settings.volumetricCloud = volumetricCloud_;
     // B6.2: THE SUN'S TRANSMITTANCE, here because this is where the frame's light is still mutable

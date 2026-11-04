@@ -377,9 +377,46 @@ void BloomRenderer::RecordTemporalInput(Renderer* renderer, ID3D12GraphicsComman
     c.convStage = 12u;
     c.sourceSize = uint2{ D.bloomHistoryWidth, D.bloomHistoryHeight };
     const float pe = std::max(render::g_preExposure, 1.0e-30f);
+    // The sun MOVED IN THE SKY (2026-11-04, owner: "if I move the sun quickly it trails across the sky"): the clock or a
+    // drag turns it with no motion vector -- the sky's are the camera's -- so the history kept the disc where it was,
+    // ~64000 pre-exposed and no clamp to cut it (on purpose: below), and the FFT drew every old disc as a streak behind
+    // the sun. While the sun's direction moves (over 0.01 degrees a frame) the texels on its disc in THIS frame and on
+    // its disc in the history's frame take this frame alone. Its own disc and the bright sky round it, x2 the radius
+    // + 0.15 degrees + 2 texels; a still sun keeps the full average (the glint flicker it is for).
+    bool sunMoved = false;
+    Math::float3 toSun;
+    float sunUv[2] = { 0.0f, 0.0f }, rUv[2] = { 0.0f, 0.0f };
+    bool sunValid = false;
+    if (SunWorldDirection(toSun) && frame_->camera)
+    {
+        const Math::float3 v = ToView(toSun);
+        const Math::mat4& proj = frame_->camera->GetProjMatrixNoJitter();
+        const float r = std::tan(2.0f * std::max(frame_->skyLight->GetSunHalfApexRadians(), 0.0025f) + 0.15f * 3.14159265f / 180.0f);
+        rUv[0] = 0.5f * proj.m._11 * r + 2.0f / std::max<float>(static_cast<float>(D.bloomHistoryWidth), 1.0f);
+        rUv[1] = 0.5f * proj.m._22 * r + 2.0f / std::max<float>(static_cast<float>(D.bloomHistoryHeight), 1.0f);
+        if (v.z > 0.02f)
+        {
+            sunUv[0] = 0.5f + 0.5f * proj.m._11 * v.x / v.z;
+            sunUv[1] = 0.5f - 0.5f * proj.m._22 * v.y / v.z;
+            sunValid = true;
+        }
+        const Math::float3 p = historySunDir_;
+        const float cx = p.y * toSun.z - p.z * toSun.y, cy = p.z * toSun.x - p.x * toSun.z, cz = p.x * toSun.y - p.y * toSun.x;
+        sunMoved = historyValid_ && (cx * cx + cy * cy + cz * cz) > 1.745e-4f * 1.745e-4f;
+        historySunDir_ = toSun;
+    }
     c.historyParams = Math::float4(std::clamp(frame_->settings.bloom.convTemporalWeight, 0.01f, 1.0f),
                                    historyValid_ ? pe / std::max(historyPreExposure_, 1.0e-30f) : 1.0f,
-                                   historyValid_ ? 1.0f : 0.0f, 0.0f);
+                                   historyValid_ ? 1.0f : 0.0f,
+                                   (sunMoved && frame_->settings.bloom.convTemporalSunReject) ? 1.0f : 0.0f);
+    // Stage 12's own use of the sun fields: sunShare = this frame's disc (UV centre, UV radius), sunGlareParams = the
+    // history's (a radius of 0 matches nothing).
+    c.sunShare = Math::float4(sunUv[0], sunUv[1], sunValid ? rUv[0] : 0.0f, sunValid ? rUv[1] : 0.0f);
+    c.sunGlareParams = Math::float4(historySunUv_[0], historySunUv_[1], historySunValid_ ? rUv[0] : 0.0f,
+                                    historySunValid_ ? rUv[1] : 0.0f);
+    historySunUv_[0] = sunUv[0];
+    historySunUv_[1] = sunUv[1];
+    historySunValid_ = sunValid;
     historyPreExposure_ = pe;
     const auto samplerDescs = std::array{ *SamplerManager::LinearClamp() };
     RecordComputeDispatch(renderer, cl, convMaterial.get(), convCb,
@@ -1396,32 +1433,6 @@ float BloomRenderer::SunGlareScale(float discTan) const
     const float profile = 2.0f * kPi * rc * rc + veil * kPi * rv * rv * std::log(1.0f + (kPi / rv) * (kPi / rv));
     const float discSolidAngle = 2.0f * kPi * (1.0f - std::cos(std::atan(discTan)));
     return strength * discSolidAngle / std::max(profile, 1.0e-12f);
-}
-
-bool BloomRenderer::SunGlareSeedFor(const float probeRgb[3], SunGlareSeed& out) const
-{
-    if (!frame_) { return false; }
-    const BloomSettings& settings = frame_->settings.bloom;
-    Math::float3 v;
-    float sx = 1.0f, sy = 1.0f, discTan = 0.0f;
-    if (!SunInView(v, sx, sy, discTan)) { return false; }
-    // The read-back is a few frames old: right after the probe restarts it still holds what the probe left
-    // when it stopped -- the glare of a sun since hidden. Wait until it holds a frame of the new run.
-    if (probeRuns_.load(std::memory_order_relaxed) <= render::kFrameCount + 1u) { return false; }
-    // Stage 9's glare in the SCENE's units: the bloom target is added by the tone curve as it is
-    // (exposureMultiplier is 1 under pre-exposure).
-    const float k = SunGlareScale(discTan);
-    if (!(k > 0.0f)) { return false; }
-    constexpr float kDeg = 3.14159265f / 180.0f;
-    out.color = Math::float3(std::max(probeRgb[0], 0.0f) * k, std::max(probeRgb[1], 0.0f) * k,
-                             std::max(probeRgb[2], 0.0f) * k);
-    out.viewDir = v;
-    out.projX = sx;
-    out.projY = sy;
-    out.coreRad = std::max(settings.sunGlareRadiusDeg, 0.05f) * kDeg;
-    out.veil = std::max(settings.sunGlareVeil, 0.0f);
-    out.veilRad = std::max(settings.sunGlareVeilRadiusDeg, 0.1f) * kDeg;
-    return out.color.x > 0.0f || out.color.y > 0.0f || out.color.z > 0.0f;
 }
 
 void BloomRenderer::SunGlareComposite(Renderer* renderer, ID3D12GraphicsCommandList* cl,

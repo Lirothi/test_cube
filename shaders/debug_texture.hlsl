@@ -17,8 +17,8 @@ cbuffer DebugTexCB : register(b0)
     // value that can be counted headlessly instead of guessed at from the composited frame. B of
     // GBAux is the shading model; RGB of GB1 is the normal.
     uint channel;
-    // Linear gain after the channel pick (1 = raw). GBAux.b x5 puts the water's ID 3 at white,
-    // terrain at 0.67 and foliage at 0.33.
+    // Linear gain after the channel pick (1 = raw). GBAux.b is the ID in the byte's low four bits (n/255 since
+    // 2026-11-03; the high four are the sun's bump terminator, utils.hlsli): x85 puts the water's ID 3 at white.
     float gain;
 };
 

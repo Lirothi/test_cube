@@ -198,9 +198,10 @@ DirectionalLight TimeOfDay::MoonLight(double phaseAngleDeg, double distanceScale
     // The phase law, lifted off zero by moonNewBrightness (UDS's New Moon Light Brightness): the LIGHT only --
     // the drawn disc keeps the bare law (litScale), dark at new moon as UDS's is.
     const double floor = std::clamp(static_cast<double>(settings_.moonNewBrightness), 0.0, 1.0);
-    // Night Brightness by the night's share (nightGain_, Tick): a physical moon at dusk and by day.
+    // Night Brightness by the night's share (nightGain_, Tick): a physical moon at dusk and by day -- or in full from the
+    // sunset with Ultra Dynamic Sky's moon (moonGain_).
     const double lux = settings_.moonIlluminanceLux * (floor + (1.0 - floor) * astro::MoonPhaseBrightness(phaseAngleDeg)) *
-                       distanceScale * nightGain_;
+                       distanceScale * moonGain_;
     moon.SetSunIlluminanceLux(static_cast<float>(lux));
     moon.SetLightSourceAngleDegrees(settings_.moonAngleDeg);
     moon.SetLightSourceSoftAngleDegrees(settings_.moonSoftAngleDeg);
@@ -298,6 +299,16 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     // 2026-10-31: "very pretty but not realistic"). One gain on all of them keeps every ratio physical at dusk and
     // makes Night Brightness what it is at night, an exposure shift; with the sun under -12 degrees nothing changes.
     nightGain_ = std::pow(std::max(s.nightBrightness, 1.0e-6f), nightShare_);
+    // ...or ULTRA DYNAMIC SKY'S MOON (TimeOfDaySettings::udsMoon): the moon and the night sky in full from the sunset, linear
+    // from +1.15 degrees to 0 as UDS's moon light (0.065 lux at +0.65, 0.15 at 0); the sun's twilight sky without it.
+    moonGain_ = nightGain_;
+    sunSkyGain_ = nightGain_;
+    if (s.udsMoon)
+    {
+        const float t = std::clamp(static_cast<float>((1.15 - sunElevation) / 1.15), 0.0f, 1.0f);
+        moonGain_ = 1.0f + (std::max(s.nightBrightness, 1.0f) - 1.0f) * t;
+        sunSkyGain_ = 1.0f;
+    }
 
     // The night's light on a level surface, physical lux (before Night Brightness), as the EV100 a meter reads off middle
     // grey under it and against the full moon's at 45 degrees -- what the steady night camera follows through the exposure
@@ -326,7 +337,25 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
             : 0.0;
         const double refLux = std::max(static_cast<double>(s.moonIlluminanceLux), 0.0) *
                               std::sin(kRefMoonElevationDeg * kPi / 180.0) + nightSkyLux;
-        const double lux = moonLux + twilightLux + nightSkyLux;
+        // Ultra Dynamic Sky's sky material (skyUdsMaterial, uds_sky.hlsli) adds its Night Sky Glow to the sky -- a light of
+        // its own, never scaled by Night Brightness, which the sky light's capture takes twice over. On a level surface:
+        // the glow's lerp(1.3, 0.6, cos) x cos over the hemisphere = 2.618 x its luminance, x2, x the Overall Intensity.
+        // Left out, a moonless night under it read 7.9 stops under the full moon where the frame was 3.6 under, and the
+        // steady camera opened the difference: a new moon came out a dim day, brighter than the full moon (2026-11-04,
+        // the owner's view at 21:54 on Sep 11: median 206 of 255; the full moon at that hour 45).
+        double glowLux = 0.0;
+        if (s.skyUdsMaterial)
+        {
+            float overall = 1.0f, midpointPerLux = 1.0f, glowPerLux[3]{}, lit = 1.0f, extraContrast = 0.0f;
+            UdsSkyAt(sunElevation, overall, midpointPerLux, glowPerLux, lit, extraContrast);
+            const double luma = 0.2126 * glowPerLux[0] + 0.7152 * glowPerLux[1] + 0.0722 * glowPerLux[2];
+            glowLux = 2.618 * 2.0 * overall * luma * sunTemplate_.GetOuterSpaceLuminance();
+        }
+        // Everything as RENDERED, over the night's gain: the camera (Scene) multiplies the night gain back in, so each
+        // light counts with the gain it is drawn with -- the moon and the night sky moonGain_, the sun's twilight
+        // sunSkyGain_ (both the night gain unless udsMoon), the glow none. Without UDS this is the physical lux as before.
+        const double lux = (moonGain_ * (moonLux + nightSkyLux) + sunSkyGain_ * twilightLux + glowLux) /
+                           std::max(static_cast<double>(nightGain_), 1.0e-9);
         nightLightEv_ = (refLux > 0.0 && lux > 0.0) ? static_cast<float>(std::log2(lux / refLux)) : 0.0f;
         // Middle grey (0.18) under E lux is 0.18 E / pi cd/m2, EV100 log2(L) + 3 (the meter's form): the full moon at
         // 45 degrees -3.27, a quarter moon 22 degrees up -6.9, a moonless night -11.
@@ -391,7 +420,7 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     sky.SetDirection(-sunToward);
     sunSkyShare_ = TwilightRamp(sunElevation, s.sunSkyStartDeg, s.sunSkyFullDeg);
     // The twilight is night light too (nightGain_, above): x1 until the sun is 6 degrees down.
-    if (sunSkyShare_ * nightGain_ != 1.0f) { sky.SetSunIlluminanceLux(sky.GetSunIlluminanceLux() * sunSkyShare_ * nightGain_); }
+    if (sunSkyShare_ * sunSkyGain_ != 1.0f) { sky.SetSunIlluminanceLux(sky.GetSunIlluminanceLux() * sunSkyShare_ * sunSkyGain_); }
     skySun = sky;
     // UDS's night Rayleigh: the tint while the sun is down, easing out to none by rayleighDayFullDeg.
     {
@@ -414,6 +443,36 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
     // fogDuskDeg, night under fogNightFullDeg, smoothstep between. Not stepped like the atmosphere's tints: the fog
     // rebuilds no LUT, and its volume's history follows a medium that changes this slowly.
     fogDensityScale_ = FogDensityScaleAt(s, sunElevation);
+    // Ultra Dynamic Sky's fog colour by the sun's height (TimeOfDaySettings::fogUdsColor): its floor per lux of ITS sun,
+    // times ours (the sun's outer-space luminance, whoever lights the ground: UDS keys it on its sun alone).
+    fogSkyContribution_ = 1.0f;
+    for (int c = 0; c < 3; ++c) { fogSunScatterTint_[c] = 1.0f; fogInscatterFloor_[c] = 0.0f; }
+    if (s.fogUdsColor)
+    {
+        float floorPerLux[3]{};
+        UdsFogColorAt(sunElevation, fogSkyContribution_, fogSunScatterTint_, floorPerLux);
+        const float sunLuminance = sunTemplate_.GetOuterSpaceLuminance();
+        for (int c = 0; c < 3; ++c) { fogInscatterFloor_[c] = floorPerLux[c] * sunLuminance; }
+    }
+    // Ultra Dynamic Sky's sky material over the atmosphere (TimeOfDaySettings::skyUdsMaterial, uds_sky.hlsli): its numbers
+    // by the sun's height, its absolute ones per lux of its sun x ours; the SKY's sun and the moon's direction.
+    udsSky_ = UdsSkyFrameData{};
+    if (s.skyUdsMaterial)
+    {
+        float overall = 1.0f, midpointPerLux = 1.0f, glowPerLux[3]{}, lit = 1.0f, extraContrast = 0.0f;
+        UdsSkyAt(sunElevation, overall, midpointPerLux, glowPerLux, lit, extraContrast);
+        const float k = sunTemplate_.GetOuterSpaceLuminance();
+        udsSky_.params[0] = overall;
+        udsSky_.params[1] = lit;
+        udsSky_.params[2] = midpointPerLux * k;
+        udsSky_.params[3] = extraContrast;
+        for (int c = 0; c < 3; ++c) { udsSky_.glow[c] = glowPerLux[c] * k; }
+        udsSky_.glow[3] = 1.0f;
+        udsSky_.sun[0] = sunToward.x; udsSky_.sun[1] = sunToward.y; udsSky_.sun[2] = sunToward.z;
+        udsSky_.sun[3] = std::clamp(-15.0f * static_cast<float>(std::sin(sunElevation * kPi / 180.0)), 0.0f, 1.0f);
+        udsSky_.moon[0] = moonToward.x; udsSky_.moon[1] = moonToward.y; udsSky_.moon[2] = moonToward.z;
+        udsSky_.moon[3] = s.moonEnabled ? 1.0f : 0.0f;
+    }
     // UDS's twilight ozone: night -> sunrise (at 0) -> the authored ozone, across +-ozoneBlendDeg, in the same
     // 1/64 steps (of each half).
     {
@@ -558,7 +617,7 @@ void TimeOfDay::Tick(float deltaSeconds, DirectionalLight& sceneLight, Direction
                 nightSky_.worldToEquatorial[row * 3 + col] = static_cast<float>(sum);
             }
         }
-        const float bright = nightGain_;
+        const float bright = moonGain_;
         const float* ac = s.airglowColor;
         const float luma = 0.2126f * ac[0] + 0.7152f * ac[1] + 0.0722f * ac[2];
         for (int k = 0; k < 3; ++k)
@@ -683,6 +742,115 @@ bool ParseClock(std::string text, bool allowUnits, double& outHours)
     outHours = static_cast<double>(hours) + static_cast<double>(minutes) / 60.0;
     return true;
 }
+}
+
+namespace
+{
+// ULTRA DYNAMIC SKY'S FOG COLOUR (TimeOfDaySettings::fogUdsColor), read off its actor in the owner's UE 5.8 (2026-11-04,
+// scratchpad ue_uds_sweep.py: its 'Time of Day' every 3 minutes over the sunset, 15 over the day and the night; the
+// construction script replaces its components on every set, so they were fetched again each time). UDS's simple sun
+// path is symmetric (60 degrees at noon, rise 6:00, set 18:00), so one curve in the sun's elevation serves dawn and dusk.
+// Its HeightFogContribution STEPS at the horizon (0.84 at +0.65 degrees, 1.21 at 0): its day and night curves meet there.
+struct UdsKey1 { float elevationDeg, value; };
+struct UdsKey3 { float elevationDeg, rgb[3]; };
+constexpr UdsKey1 kUdsFogSkyContribution[] = {
+    {-90.0f, 1.65f}, {-28.76f, 1.65f}, {-25.66f, 1.735f}, {-22.52f, 1.907f}, {-19.36f, 2.025f}, {-16.16f, 2.083f},
+    {-12.95f, 2.076f}, {-11.02f, 2.037f}, {-9.08f, 1.973f}, {-7.14f, 1.881f}, {-5.19f, 1.761f}, {-3.25f, 1.614f},
+    {-2.60f, 1.558f}, {-1.95f, 1.454f}, {-1.30f, 1.271f}, {-0.65f, 1.304f}, {0.0f, 1.206f}, {0.001f, 0.71f},
+    {0.65f, 0.841f}, {1.30f, 0.976f}, {1.95f, 1.103f}, {2.60f, 1.221f}, {3.25f, 1.331f}, {3.90f, 1.432f},
+    {4.54f, 1.525f}, {5.19f, 1.610f}, {5.84f, 1.686f}, {6.49f, 1.754f}, {7.14f, 1.813f}, {7.79f, 1.864f},
+    {8.43f, 1.907f}, {9.08f, 1.942f}, {9.73f, 1.969f}, {10.37f, 1.987f}, {11.02f, 1.997f}, {11.66f, 2.0f}, {90.0f, 2.0f}};
+// Its DirectionalInscatteringLuminance (UE multiplies it by the sun's luminance, FogRendering.cpp:436).
+constexpr UdsKey3 kUdsFogSunScatter[] = {
+    {0.0f, {0.0f, 0.0f, 0.0f}}, {0.65f, {0.00355f, 0.00048f, 0.00021f}}, {1.30f, {0.01174f, 0.00178f, 0.00049f}},
+    {1.95f, {0.0263f, 0.00529f, 0.0008f}}, {2.60f, {0.04664f, 0.01056f, 0.00114f}}, {3.25f, {0.07277f, 0.01757f, 0.00152f}},
+    {3.90f, {0.09734f, 0.02853f, 0.00325f}}, {4.54f, {0.1252f, 0.04197f, 0.00545f}}, {5.19f, {0.1564f, 0.0579f, 0.00815f}},
+    {5.84f, {0.1937f, 0.07904f, 0.0151f}}, {6.49f, {0.235f, 0.1032f, 0.02337f}}, {7.14f, {0.2802f, 0.1305f, 0.03294f}},
+    {7.79f, {0.3293f, 0.1608f, 0.04381f}}, {8.43f, {0.3822f, 0.1941f, 0.05597f}}, {9.08f, {0.439f, 0.2304f, 0.06943f}},
+    {9.73f, {0.4934f, 0.2671f, 0.09329f}}, {10.37f, {0.5507f, 0.3064f, 0.1196f}}, {11.02f, {0.611f, 0.3482f, 0.1484f}},
+    {11.66f, {0.667f, 0.3885f, 0.1777f}}, {12.31f, {0.6946f, 0.4125f, 0.2f}}, {12.95f, {0.7221f, 0.4365f, 0.2224f}},
+    {16.16f, {0.7535f, 0.4885f, 0.2944f}}, {19.36f, {0.7846f, 0.5402f, 0.3659f}}, {22.52f, {0.7853f, 0.5597f, 0.402f}},
+    {25.66f, {0.7859f, 0.579f, 0.4378f}}, {28.76f, {0.7866f, 0.5981f, 0.4732f}}, {31.82f, {0.7872f, 0.6169f, 0.5081f}},
+    {34.82f, {0.7874f, 0.6235f, 0.5204f}}, {37.76f, {0.7877f, 0.63f, 0.5324f}}, {40.63f, {0.7879f, 0.6363f, 0.5441f}},
+    {43.40f, {0.7881f, 0.6424f, 0.5554f}}, {90.0f, {0.7881f, 0.6424f, 0.5554f}}};
+// Its FogInscatteringLuminance, cd/m2 under its 5-lux sun (TimeOfDay divides by 5: per lux).
+constexpr UdsKey3 kUdsFogFloor[] = {
+    {-90.0f, {0.00045f, 0.00068f, 0.00122f}}, {-28.76f, {0.00045f, 0.00068f, 0.00122f}},
+    {-25.66f, {0.00049f, 0.00074f, 0.00133f}}, {-22.52f, {0.00058f, 0.00089f, 0.00159f}},
+    {-19.36f, {0.00068f, 0.00104f, 0.00187f}}, {-16.16f, {0.00078f, 0.00119f, 0.00215f}},
+    {-12.95f, {0.00089f, 0.00135f, 0.00244f}}, {-9.73f, {0.001f, 0.00152f, 0.00273f}}, {-6.49f, {0.00111f, 0.00168f, 0.00303f}},
+    {-3.25f, {0.00122f, 0.00185f, 0.00334f}}, {-2.60f, {0.00124f, 0.00189f, 0.0034f}}, {-1.95f, {0.00117f, 0.00179f, 0.00322f}},
+    {-1.30f, {0.00085f, 0.0013f, 0.00233f}}, {-0.65f, {0.00056f, 0.00085f, 0.00153f}}, {0.0f, {0.00031f, 0.00047f, 0.00084f}},
+    {0.65f, {0.00012f, 0.00019f, 0.00033f}}, {1.30f, {0.00007f, 0.00011f, 0.0002f}}, {1.95f, {0.00004f, 0.00006f, 0.00011f}},
+    {2.60f, {0.00001f, 0.00002f, 0.00004f}}, {3.25f, {0.0f, 0.0f, 0.00001f}}, {3.90f, {0.0f, 0.0f, 0.0f}}, {90.0f, {0.0f, 0.0f, 0.0f}}};
+constexpr float kUdsSunLux = 5.0f; // UDS's Sun Light Intensity
+
+// ITS SKY MATERIAL's parameters (TimeOfDaySettings::skyUdsMaterial, uds_sky.hlsli), read off the sky sphere's material
+// instance the same way (scratchpad ue_uds_skysweep.py: every 3 minutes over the sunset, 30 over the day and night).
+// Overall Intensity steps at the horizon as its HeightFogContribution does (0.40 at +0.65 degrees, 0.69 at 0); its
+// twilight peak (1.25 at -2.6) is what keeps UDS's dusk sky bright. Contrast Midpoint and Night Sky Glow Color are
+// under its 5-lux sun (TimeOfDay divides by 5: per lux of ours). Lit_Intensity 0.8 and Extra_Contrast 0.1 held still.
+constexpr UdsKey1 kUdsSkyOverall[] = {
+    {-90.0f, 0.45f}, {-31.82f, 0.45f}, {-25.66f, 0.4891f}, {-19.35f, 0.6862f}, {-12.95f, 0.8959f}, {-11.66f, 0.9391f},
+    {-10.37f, 0.9826f}, {-9.08f, 1.0264f}, {-7.79f, 1.0705f}, {-6.49f, 1.1149f}, {-5.19f, 1.1594f}, {-3.90f, 1.2042f},
+    {-3.25f, 1.2267f}, {-2.60f, 1.2492f}, {-1.95f, 1.2245f}, {-1.30f, 1.0966f}, {-0.65f, 0.9265f}, {0.0f, 0.6895f},
+    {0.65f, 0.3955f}, {1.30f, 0.3875f}, {1.95f, 0.3815f}, {2.60f, 0.3774f}, {3.25f, 0.3753f}, {3.90f, 0.375f}, {90.0f, 0.375f}};
+constexpr UdsKey1 kUdsSkyMidpoint[] = {
+    {-90.0f, 0.020513f}, {-60.0f, 0.020513f}, {-53.14f, 0.019743f}, {-48.59f, 0.019213f}, {-43.40f, 0.018445f},
+    {-37.76f, 0.017486f}, {-31.82f, 0.016411f}, {-25.66f, 0.015163f}, {-19.35f, 0.013609f}, {-12.95f, 0.011605f},
+    {-9.73f, 0.010389f}, {-6.49f, 0.008499f}, {-3.25f, 0.006146f}, {-2.60f, 0.005851f}, {-1.95f, 0.005888f},
+    {-1.30f, 0.006802f}, {-0.65f, 0.010517f}, {0.0f, 0.021585f}, {0.65f, 0.047313f}, {1.95f, 0.090485f}, {3.25f, 0.13936f},
+    {4.54f, 0.19009f}, {6.49f, 0.2662f}, {9.73f, 0.36541f}, {12.95f, 0.43484f}, {19.35f, 0.52903f}, {25.66f, 0.60288f},
+    {37.76f, 0.70992f}, {48.59f, 0.78782f}, {60.0f, 0.85288f}, {90.0f, 0.85288f}};
+constexpr UdsKey3 kUdsSkyGlow[] = {
+    {-90.0f, {0.001117f, 0.0017f, 0.003062f}}, {-2.60f, {0.001117f, 0.0017f, 0.003062f}},
+    {-1.95f, {0.001071f, 0.001631f, 0.002938f}}, {-1.30f, {0.000836f, 0.001273f, 0.002293f}},
+    {-0.65f, {0.00063f, 0.000959f, 0.001727f}}, {0.0f, {0.000453f, 0.00069f, 0.001242f}},
+    {0.65f, {0.000305f, 0.000464f, 0.000836f}}, {1.30f, {0.000186f, 0.000284f, 0.000511f}},
+    {1.95f, {0.000097f, 0.000147f, 0.000265f}}, {2.60f, {0.000036f, 0.000055f, 0.000099f}},
+    {3.25f, {0.000005f, 0.000007f, 0.000013f}}, {3.90f, {0.0f, 0.0f, 0.0f}}, {90.0f, {0.0f, 0.0f, 0.0f}}};
+constexpr float kUdsSkyLit = 0.8f;
+constexpr float kUdsSkyExtraContrast = 0.1f;
+
+template <typename Key, size_t N, typename Get>
+void UdsLookup(const Key (&keys)[N], float e, Get&& get)
+{
+    if (e <= keys[0].elevationDeg) { get(keys[0], keys[0], 0.0f); return; }
+    for (size_t i = 1; i < N; ++i)
+    {
+        if (e <= keys[i].elevationDeg)
+        {
+            const float span = keys[i].elevationDeg - keys[i - 1].elevationDeg;
+            get(keys[i - 1], keys[i], span > 0.0f ? (e - keys[i - 1].elevationDeg) / span : 1.0f);
+            return;
+        }
+    }
+    get(keys[N - 1], keys[N - 1], 0.0f);
+}
+}
+
+void UdsFogColorAt(double sunElevationDeg, float& skyContribution, float sunScatter[3], float floorPerLux[3])
+{
+    const float e = static_cast<float>(sunElevationDeg);
+    UdsLookup(kUdsFogSkyContribution, e, [&](const UdsKey1& a, const UdsKey1& b, float t) {
+        skyContribution = a.value + (b.value - a.value) * t; });
+    // Under the horizon its directional term is 0 (the first key).
+    UdsLookup(kUdsFogSunScatter, e, [&](const UdsKey3& a, const UdsKey3& b, float t) {
+        for (int c = 0; c < 3; ++c) { sunScatter[c] = a.rgb[c] + (b.rgb[c] - a.rgb[c]) * t; } });
+    UdsLookup(kUdsFogFloor, e, [&](const UdsKey3& a, const UdsKey3& b, float t) {
+        for (int c = 0; c < 3; ++c) { floorPerLux[c] = (a.rgb[c] + (b.rgb[c] - a.rgb[c]) * t) / kUdsSunLux; } });
+}
+
+void UdsSkyAt(double sunElevationDeg, float& overall, float& midpointPerLux, float glowPerLux[3], float& lit, float& extraContrast)
+{
+    const float e = static_cast<float>(sunElevationDeg);
+    lit = kUdsSkyLit;
+    extraContrast = kUdsSkyExtraContrast;
+    UdsLookup(kUdsSkyOverall, e, [&](const UdsKey1& a, const UdsKey1& b, float t) { overall = a.value + (b.value - a.value) * t; });
+    UdsLookup(kUdsSkyMidpoint, e, [&](const UdsKey1& a, const UdsKey1& b, float t) {
+        midpointPerLux = (a.value + (b.value - a.value) * t) / kUdsSunLux; });
+    UdsLookup(kUdsSkyGlow, e, [&](const UdsKey3& a, const UdsKey3& b, float t) {
+        for (int c = 0; c < 3; ++c) { glowPerLux[c] = (a.rgb[c] + (b.rgb[c] - a.rgb[c]) * t) / kUdsSunLux; } });
 }
 
 float FogDensityScaleAt(const TimeOfDaySettings& s, double sunElevationDeg)

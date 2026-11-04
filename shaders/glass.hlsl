@@ -913,7 +913,8 @@ PSOut PSMain(VSOut i)
             fog.referenceHeight = fogParams0.z;
             fog.startDistance = max(fogParams0.w, FogAnalyticExclude(fogVolumeParams, dist, viewDepth));
             fog.maxOpacity = fogParams1.x;
-            fog.sunScatterStrength = fogParams1.y;
+            fog.sunGroundScale = fogParams1.y;
+            fog.sunDirectional = fogSunDirectional.rgb;
             fog.sunScatterExponent = fogParams1.z;
             fog.sunScatterStartDistance = max(fogParams1.w, FogAnalyticExclude(fogVolumeParams, dist, viewDepth));
                 const float fogShared = HeightFogSharedIntegral(dist, camPos.y, i.posWS.y, fog);

@@ -1,6 +1,9 @@
 #include "sky_view_mapping.hlsli"
 #include "sky_ibl_common.hlsli"
 #include "night_sky.hlsli"
+#include "ibl_common.hlsli"
+#include "height_fog.hlsli"
+#include "uds_sky.hlsli"
 #define SKY_IBL_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 cbuffer Capture : register(b0)
 {
@@ -14,6 +17,24 @@ cbuffer Capture : register(b0)
     float4 nightRow0;
     float4 nightRow1;
     float4 nightRow2;
+    // UE's DistantHeightFog (ReflectionEnvironmentRealTimeCapture.cpp:919-962, ReflectionEnvironmentShaders.usf:1041-1073;
+    // the fog's bVisibleInRealTimeSkyCaptures, default true): the analytic height fog at an infinite distance from the
+    // probe, `sky x T + FogColor`, over the sky and before the clouds. PackHeightFog's numbers as compose takes them
+    // (fogParams0.x 0 or fogInscatter.w 0 = none: the HDRI sky, the sky-along-view A/B, `fog.inSkyCapture:0`); the sun's
+    // colour on the ground and the direction TO it (the lobe); fogSunDir.w = the probe's world height (sea level, 0).
+    float4 fogParams0;
+    float4 fogParams1;
+    float4 fogParams2;
+    float4 fogInscatter;
+    float4 fogSunColor;
+    float4 fogSunDir;
+    float4 fogSunDirectional; // the lobe's own coloured term (DirectionalInscatteringLuminance) / 4 pi
+    // Ultra Dynamic Sky's sky material over the atmosphere (UdsSkyFrameData, uds_sky.hlsli): UDS's sky light captures its
+    // sky sphere, so its probes see the layer -- the glow x 2, its Night Sky Glow Reflection Intensity. udsGlow.w 0 = off.
+    float4 udsParams;
+    float4 udsGlow;
+    float4 udsSun;
+    float4 udsMoon;
 };
 Texture2D<float4> SkyView : register(t0);
 Texture2D<float4> Transmittance : register(t1); // N2: the air in front of the night sky
@@ -51,6 +72,18 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const uint taps = max((uint)captureMip.x, 1u);
     const float invTaps = 1.0f / (float)taps;
     float3 sum = 0.0f.xxx;
+    // The fog's numbers once (compose_cs.hlsl's sky branch, UE's colour: the volume is not in a capture, UE's ExcludeDistance 0).
+    const bool fogOn = fogParams0.x > 0.0f && fogInscatter.w > 0.5f;
+    HeightFogParams fog;
+    fog.density = fogParams0.x;
+    fog.heightFalloff = fogParams0.y;
+    fog.referenceHeight = fogParams0.z;
+    fog.startDistance = fogParams0.w;
+    fog.maxOpacity = fogParams1.x;
+    fog.sunGroundScale = fogParams1.y;
+    fog.sunDirectional = fogSunDirectional.rgb;
+    fog.sunScatterExponent = fogParams1.z;
+    fog.sunScatterStartDistance = fogParams1.w;
     for (uint sy = 0; sy < taps; ++sy)
     {
         for (uint sx = 0; sx < taps; ++sx)
@@ -71,7 +104,12 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             // The SAME clamp the drawn sky uses (sky_view_mapping.hlsli), not merely `ground=false`
             // and not a clamp on the direction: all three readers have to land on one texel or they
             // disagree at the only row where they meet.
-            sum += SkyView.SampleLevel(LinearClamp, SkyViewDirToUvNoPlanet(dir, planet.x, planet.y), 0).rgb;
+            float3 tap = SkyView.SampleLevel(LinearClamp, SkyViewDirToUvNoPlanet(dir, planet.x, planet.y), 0).rgb;
+            // Ultra Dynamic Sky's sky material on the atmosphere (raw radiance: the tap is stored x 1 / planet.z).
+            [branch] if (udsGlow.w > 0.0f)
+            {
+                tap = UdsSkyLayer(tap * planet.z, SkyCubeDirection(uv, face), udsParams, udsGlow, udsSun, udsMoon, 2.0f) / max(planet.z, 1.e-8f);
+            }
             // N2: what the night sky adds. The airglow above the horizon and held at its horizon value
             // below it, as the drawn sky is; the Milky Way and the stars' mean above it only.
             [branch] if (nightRow0.w > 0.0f)
@@ -91,8 +129,22 @@ void CSMain(uint3 id : SV_DispatchThreadID)
                     night += kNightStarsMeanRadiance * nightLayers.x;
                 }
                 // The picture is stored like the LUT, pre-exposed by 1 / planet.z, and decoded below.
-                sum += night * tr / max(planet.z, 1.e-8f);
+                tap += night * tr / max(planet.z, 1.e-8f);
             }
+            [branch] if (fogOn)
+            {
+                // At "infinity" as compose fogs a sky pixel: kSkyFogDistance, cut where the height term has reached UE's
+                // exp2 clamp (a steep ray changes nothing past it). Raw radiance (cd/m2), so the LUT's tap is decoded first.
+                const float3 world = SkyCubeDirection(uv, face);
+                const float reach = min(1.0e5f, 127.0f / (max(fog.heightFalloff, 1.0e-4f) * max(abs(world.y), 1.0e-6f)));
+                const float pointHeight = fogSunDir.w + world.y * reach;
+                const float fogShared = HeightFogSharedIntegral(reach, fogSunDir.w, pointHeight, fog);
+                const float tau = HeightFogOpticalDepth(fogShared, reach, fog);
+                const float T = HeightFogTransmittance(tau, HeightFogMinTransmittance(tau, fog.maxOpacity));
+                const float3 air = HeightFogColor(fogInscatter.rgb, fogSunColor.rgb, dot(world, fogSunDir.xyz), fogShared, reach, T, fog);
+                tap = (tap * planet.z * T + air) / max(planet.z, 1.e-8f);
+            }
+            sum += tap;
         }
     }
     const float3 L = sum * (invTaps * invTaps);

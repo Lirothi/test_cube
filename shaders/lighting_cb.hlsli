@@ -38,6 +38,15 @@ cbuffer PerFrame : register(b0)
     // 1 = a two-sided foliage leaf passes the sky (and the ground's bounce) behind it, UE's backface sky lighting
     // (lighting_cs.hlsl); 0 = only the sun through the leaf, the frame before 2026-10-31.
     float foliageBackSky;
+    // 1 = the sun through a leaf takes UE's TwoSidedBxDF lobe (utils.hlsli EvalFoliageBRDF); 0 = the softer lobe before
+    // 2026-11-03, the A/B (`light.foliageTransmissionUe`). The local lights always take UE's.
+    float foliageTransmissionUe;
+    // 1 = the sun's direct diffuse is UE's rough diffuse (EON at roughness x 0.4, utils.hlsli DiffuseEON); 0 = Lambert, the A/B
+    // (`light.roughDiffuse`). The local lights, glass and the RT hits always take it (EvalBRDF's default).
+    float roughDiffuse;
+    // 1 = the direct sun takes the bump terminator the G-buffer wrote (utils.hlsli SunBumpShadowing); 0 = off, the A/B
+    // (`light.bumpShadowing`).
+    float bumpShadowing;
 
     float4x4 invView;
     float4x4 invProj;

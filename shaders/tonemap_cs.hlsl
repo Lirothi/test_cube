@@ -39,12 +39,15 @@ cbuffer TonemapCB : register(b0)
     // Legacy is bit-identical to the pre-P3 image and exists so any regression can be A/B'd
     // against the curve rather than argued about.
     uint toneCurve;
-    uint tonemapPad0, tonemapPad1;
+    // UE's colour pipeline around the film curve (ue_color_pipeline.hlsli; ColorPipelineSettings::ueGamut): 1 = the
+    // grade and the curve in AP1 after the local exposure and the bloom, with UE's ExpandGamut and BlueCorrection.
+    uint ueColorPipeline;
+    float expandGamut;
     // AgX look: slope / power / saturation. (1,1,1) is neutral.
     float agxSlope;
     float agxPower;
     float agxSaturation;
-    float tonemapPad2;
+    float blueCorrection;
     // P3C colour grade, applied in linear BEFORE the curve. Neutral defaults are a no-op.
     float gradeSaturation;
     float gradeContrast;
@@ -91,7 +94,8 @@ cbuffer TonemapCB : register(b0)
     // The pyramid method has no kernel to survey: sceneApply = 1, its levels carry UE's Gaussian
     // weights. Zero scatterApply is the contract's exact no-op: no bloom is read at all.
     float3 bloomSceneApply;
-    float  tonemapPad4;
+    // UE's natural vignette (ColorPipelineSettings::vignetteIntensity, UE VignetteIntensity, default 0.4); 0 = none.
+    float  vignetteIntensity;
     float3 bloomScatterApply;
     float  tonemapPad5;
     // SUN RAYS (BloomSettings::sunRays*), drawn here at OUTPUT resolution because they are
@@ -116,6 +120,7 @@ cbuffer TonemapCB : register(b0)
 #include "color_grade.hlsli"
 #include "film_curve.hlsli"
 #include "tone_curves.hlsli"
+#include "ue_color_pipeline.hlsli"
 #include "local_exposure.hlsli"
 #include "sun_probe.hlsli"
 
@@ -423,17 +428,18 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     // Grade in linear, before the curve -- the same place Unreal bakes it into its LUT. After the
     // curve you would be grading display code values, where contrast and saturation stop behaving
     // predictably because the range has already been compressed.
+    // UE's pipeline (ueColorPipeline, the film curve only) grades in its LUT, i.e. AFTER the local exposure and the
+    // bloom (PostProcessTonemap.usf: FinalLinearColor, then ColorLookupTable) -- there the grade runs at the end.
+    ColorGradeParams grade;
+    grade.saturation = gradeSaturation;
+    grade.contrast = gradeContrast;
+    grade.gamma = gradeGamma;
+    grade.gain = gradeGain;
+    grade.offset = gradeOffset;
+    const bool uePipeline = ueColorPipeline != 0 && toneCurve == 2;
+    if (!uePipeline && !ColorGradeIsNeutral(grade))
     {
-        ColorGradeParams grade;
-        grade.saturation = gradeSaturation;
-        grade.contrast = gradeContrast;
-        grade.gamma = gradeGamma;
-        grade.gain = gradeGain;
-        grade.offset = gradeOffset;
-        if (!ColorGradeIsNeutral(grade))
-        {
-            hdr = ApplyColorGrade(hdr, grade);
-        }
+        hdr = ApplyColorGrade(hdr, grade);
     }
 
     // P3B: local exposure. After the global exposure and the grade, before the curve -- the curve
@@ -502,6 +508,18 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
         hdr += SunRays(uv, (float)width) * exposureMultiplier;
     }
 
+    // UE's natural vignette, the cosine-fourth law in UE's vignette space (PostProcessCommon.ush ComputeVignetteMask,
+    // VignetteSpace): on the scene and the bloom alike, before the grade and the curve -- PostProcessTonemap.usf:513-526
+    // multiplies both by the same VignetteMask. At 0.4 a 16:9 frame keeps 86 % at the top edge's centre, 57 % in a corner.
+    if (vignetteIntensity > 0.0f)
+    {
+        const float aspect = (float)height / (float)width;
+        const float2 vignettePos = (uv * 2.0f - 1.0f) * float2(1.0f, aspect) * (sqrt(2.0f) / sqrt(1.0f + aspect * aspect))
+                                 * vignetteIntensity;
+        const float cos2 = rcp(dot(vignettePos, vignettePos) + 1.0f);
+        hdr *= cos2 * cos2;
+    }
+
     // TIME-OF-DAY PLAN E2: NIGHT VISION (the Purkinje shift). In the dark the eye's rods take over:
     // they see no colour, they are most sensitive at ~507 nm, so blues outlast reds, and what they
     // report reads as a bluish grey. That -- not a blue moon -- is why a moonlit night looks cold.
@@ -555,7 +573,8 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     film.shoulder = filmShoulder;
     film.blackClip = filmBlackClip;
     film.whiteClip = filmWhiteClip;
-    float3 ldr = ToneCurveToDisplay(hdr, toneCurve, film, agxSlope, agxPower, agxSaturation);
+    float3 ldr = uePipeline ? LinearToSrgb(UeFilmPipeline(hdr, grade, film, expandGamut, blueCorrection))
+                            : ToneCurveToDisplay(hdr, toneCurve, film, agxSlope, agxPower, agxSaturation);
 
     // Optional: add identical noise to every channel — sufficient to break banding
     //float d = Dither(dispatchThreadId.xy) * kDitherAmplitude;

@@ -635,7 +635,8 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
         // names are what Main_Translucent expects to find, and a barrier set that appears and
         // disappears with a material load is the kind of thing that works in every scene but one.
         const HeightFogPacked fog =
-            PackHeightFog(frame_->settings.heightFog, frame_->dirLight != nullptr);
+            PackHeightFog(frame_->settings.heightFog, frame_->dirLight != nullptr,
+                          frame_->dirLight ? frame_->dirLight->GetOuterSpaceLuminance() : 0.0f);
         const bool fogOn = fog.params0.x > 0.0f;
         // `cbBytes` is load-bearing and not defensive noise: the constant buffer only appears in
         // reflection while the PIXEL shader actually READS it. Any edit that returns early enough to
@@ -655,6 +656,7 @@ void SceneRenderer::Pass_TransparentFog(Renderer* renderer, RenderGraphPassConte
             c.fogParams1 = fog.params1;
             c.fogParams2 = fog.params2;
             c.fogInscatter = fog.inscatter;
+            c.fogSunDirectional = fog.sunDirectional;
             if (frame_->dirLight)
             {
                 // Negated HERE, exactly as compose receives it: the shader is handed the direction

@@ -34,9 +34,8 @@ namespace
     constexpr UINT64 kPixelProbeBytes = 32u;
     constexpr UINT64 kMeteringBufferBytes = kPixelProbeOffset + kPixelProbeBytes;
     // One readback slot: the exposure record, then the compensation record, then the sun probe's OUTPUT
-    // (its bytes 32-47: the disc colour the glare reads, and its visible share) -- the light shafts seed
-    // on the sun glare, and they run before this frame's probe (BloomRenderer::SunGlareSeedFor) -- and
-    // last the pixel probe's 32 bytes (get_readouts).
+    // (its bytes 32-47: the disc colour the glare reads, and its visible share; read back for get_readouts'
+    // sun probe) -- and last the pixel probe's 32 bytes (get_readouts).
     constexpr UINT64 kSunProbeOutOffset = kExposureRecordBytes + 16u;
     constexpr UINT64 kSunProbeOutBytes = 16u;
     constexpr UINT64 kReadbackSlotBytes =

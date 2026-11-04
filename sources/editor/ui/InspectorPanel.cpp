@@ -784,16 +784,19 @@ namespace
                         {
                             curve.push_back(nlohmann::json::array({ uds.exposureCurveEv[i], uds.exposureCurveComp[i] }));
                         }
-                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                        // UDS's Exposure Bias is 0: the curve and the compensation together, one undo entry.
+                        nlohmann::json after = withField("exposureCurve", std::move(curve));
+                        after["compensationEv"] = 0.0f;
+                        executeChange(std::move(after), historyLabel);
                     }
                     if (ImGui::IsItemHovered())
                     {
-                        ImGui::SetTooltip("Ultra Dynamic Sky's curve, for UDS's moon (Time of Day > Night Brightness "
-                                          "~11400: the moon 1/33 of the sun): a night ~1.5 stops under the day, the "
-                                          "dawn a moonlit blue until the sun is nearly up. With the physical moon "
-                                          "(Night Brightness 1) it leaves the night far too dark -- that one wants Eye. "
-                                          "Its points under 0 are the steady night camera's: from the full moon to a "
-                                          "quarter the camera follows 70 %% of the darkening, on to no moon 85 %%.");
+                        ImGui::SetTooltip("Ultra Dynamic Sky's curve one to one (its Exposure_Compensation_Curve's five cubic "
+                                          "keys, +14.55 EV for its 5-lux sun, eight points within 0.015 EV) and its "
+                                          "Exposure Bias 0 -- for UDS's moon (Time of Day > Night Brightness ~11400: the "
+                                          "moon 1/33 of the sun). Below EV 5.3 a flat -1.5: the steady night camera follows "
+                                          "the night's light in full. With the physical moon (Night Brightness 1) it leaves "
+                                          "the night far too dark -- that one wants Eye.");
                     }
                     ImGui::SameLine();
                     if (ImGui::SmallButton("UDS Steady Night"))
@@ -816,6 +819,25 @@ namespace
                                           "The open night comes out ~0.6 stops darker -- Time of Day > Night "
                                           "Exposure to taste. Under 0 the same night section as UDS: a quarter or "
                                           "a low moon darker than the full one, not exposed up to a dim day.");
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton("UE"))
+                    {
+                        render::CameraExposureSettings ue;
+                        render::SetUeExposureCurve(ue);
+                        nlohmann::json curve = nlohmann::json::array();
+                        for (std::uint32_t i = 0; i < ue.exposureCurvePoints; ++i)
+                        {
+                            curve.push_back(nlohmann::json::array({ ue.exposureCurveEv[i], ue.exposureCurveComp[i] }));
+                        }
+                        executeChange(withField("exposureCurve", std::move(curve)), historyLabel);
+                    }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("Unreal's: no compensation curve, one constant Exposure Compensation at every "
+                                          "EV -- +0.5, what the owner's UE wind_test PPV carries (UE's project default "
+                                          "is 1.0). The night is followed in full like a day; for UE's whole picture "
+                                          "also set Time of Day > Night Camera EV100 to 0 (UE has no steady night).");
                     }
                     ImGui::PopID();
                 }
@@ -1142,6 +1164,11 @@ namespace
                 trackContinuousEdit(changed);
             }
 
+            dragF("Vignette", "vignetteIntensity", 0.4f, 0.01f, 0.0f, 1.0f, "%.2f");
+            InspectorHelp("UE's natural vignette (VignetteIntensity, default 0.4): the cosine-fourth law, on the "
+                          "scene and the bloom before the grade. At 0.4 the top edge's centre keeps 86 %, a corner 57 %. "
+                          "0 = none.");
+
             ImGui::SeparatorText("Colour grade (applies to every curve)");
             dragF("Grade Saturation", "gradeSaturation", 1.30f, 0.01f, 0.0f, 4.0f, "%.3f");
             InspectorHelp("Chroma around luma, applied in linear BEFORE the curve -- the same place "
@@ -1226,6 +1253,17 @@ namespace
                     after["filmWhiteClip"] = 0.04f;
                     executeChange(std::move(after), historyLabel);
                 }
+                checkB("UE colour pipeline (AP1)", "ueGamut", true);
+                InspectorHelp("Unreal's whole pipeline around this curve: the grade and the curve in ACEScg (AP1) with "
+                              "the ACES glow and red modifier, Expand Gamut, Blue Correction, and the grade after the "
+                              "local exposure and the bloom, where UE's LUT sits. Off = the older linear-sRGB path "
+                              "(paler blue skies than UE's at the same numbers).");
+                dragF("Expand Gamut", "expandGamut", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
+                InspectorHelp("UE's ExpandGamut (default 1): bright saturated colour pushed toward a wider gamut. "
+                              "UE colour pipeline only.");
+                dragF("Blue Correction", "blueCorrection", 0.6f, 0.01f, 0.0f, 1.0f, "%.2f");
+                InspectorHelp("UE's BlueCorrection (default 0.6): keeps bright saturated blues from shifting toward "
+                              "purple. UE colour pipeline only.");
             }
             else if (curveIndex == 1)
             {
@@ -1419,24 +1457,23 @@ namespace
                           "nothing - the shader skips the whole block on a zero density.");
 
             ImGui::SeparatorText("Medium");
-            dragF("Density", "density", 0.004f, 0.0002f, 0.0f, 0.05f, "%.4f");
-            InspectorHelp("UE's FogDensity: extinction per world unit at the reference height. This "
-                          "is the main dial. THEIR DEFAULT (0.02) DOES NOT TRANSFER - UE author "
-                          "against a centimetre world and this engine is in metres, so the shape of "
-                          "the curve is theirs but the magnitude is ours to tune.");
-            dragF("Height Falloff", "heightFalloff", 0.02f, 0.001f, 0.0f, 0.2f, "%.3f");
-            InspectorHelp("UE's FogHeightFalloff, base 2. How fast density thins with altitude; 0 "
-                          "makes it a uniform distance fog. This term is what keeps a high camera "
-                          "from getting a flat screen-space wash - looking down from altitude, most "
-                          "of the ray is already in thin air. Same unit caveat as Density.\n\n"
+            dragF("Density", "density", 0.002f, 0.00005f, 0.0f, 0.05f, "%.5f");
+            InspectorHelp("UE's FogDensity per METRE (UE's is per 10 m: they divide by 1000 per "
+                          "centimetre), so UE's number / 10 = this one: UE's default 0.02 is 0.002 "
+                          "here. Visibility at the reference height ~ 8.1 / Density metres (0.002: "
+                          "4 km of mist; a clear day at sea, 15-30 km, is ~0.0003-0.0005).");
+            dragF("Height Falloff", "heightFalloff", 0.02f, 0.0005f, 0.0f, 0.2f, "%.4f");
+            InspectorHelp("UE's FogHeightFalloff per METRE, base 2: UE's number / 10 = this one (UE's "
+                          "default 0.2 is 0.02 here). How fast density thins with altitude: it halves "
+                          "every 1 / falloff metres; 0 makes it a uniform distance fog. This term is "
+                          "what keeps a high camera from getting a flat screen-space wash - looking "
+                          "down from altitude, most of the ray is already in thin air.\n\n"
                           "IT ALSO SETS HOW THIN THE LAYER IS, and a thin layer seen from above "
-                          "collapses into a BRIGHT LINE ON THE HORIZON. Density halves every "
-                          "1/falloff metres, so 0.058 is a 17 m layer: from 80 m up the whole sea "
-                          "sits at transmittance ~0.9 and the only ray that accumulates any depth "
-                          "is the one aimed exactly at the horizon. Measured at 82 m, the luminance "
-                          "step across the horizon row was 25.7/255 at 0.058 and 1.6 at 0.030. If "
-                          "the camera flies, keep this near 0.02-0.03; a thin ground layer is a "
-                          "look for a camera that stays inside it.");
+                          "collapses into a BRIGHT LINE ON THE HORIZON: 0.058 is a 17 m layer, and "
+                          "from 80 m up the whole sea sits at transmittance ~0.9 while only the ray "
+                          "aimed exactly at the horizon accumulates depth (measured at 82 m: a "
+                          "25.7/255 step across the horizon row at 0.058, 1.6 at 0.030). A marine "
+                          "haze is ~1 km thick: ~0.0015.");
             dragF("Reference Height", "referenceHeight", 0.0f, 0.5f, -100.0f, 500.0f, "%.1f m");
             InspectorHelp("World Y at which Density is exactly the authored value. Sea level here. "
                           "UE call this the fog actor's own height.");
@@ -1493,6 +1530,18 @@ namespace
                           "looking into the sun warms the haze and looking away from it does not. "
                           "Judge it on wind_test's sun_glint view - no other canonical view has a "
                           "sun field to read it against.");
+            {
+                const Math::float3 c = JsonFloat3(tgt(), "sunScatterColor", Math::float3(1.0f, 1.0f, 1.0f));
+                float cv[3] = { c.x, c.y, c.z };
+                const bool changed = ImGui::ColorEdit3("Sun Scatter Colour", cv, ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float);
+                beginContinuousEdit(changed);
+                if (changed) { tgt()["sunScatterColor"] = { std::max(cv[0], 0.0f), std::max(cv[1], 0.0f), std::max(cv[2], 0.0f) }; }
+                trackContinuousEdit(changed);
+            }
+            InspectorHelp("UE's DirectionalInscatteringLuminance is a colour: Sun Scatter is its grey, this its tint "
+                          "(white = the grey alone). UE multiplies it by the sun's luminance in space, so it carries no "
+                          "sunset of its own -- Time of Day > Ultra Dynamic Sky fog colour reddens it with the sun. "
+                          "--set=fog.sunScatterR / G / B.");
             dragF("Sun Scatter Tightness", "sunScatterExponent", 4.0f, 0.25f, 1.0f, 64.0f, "%.0f");
             InspectorHelp("UE's DirectionalInscatteringExponent, and their default of 4 IS used "
                           "here: it is dimensionless, so unlike density it transfers unchanged. "
@@ -2405,12 +2454,6 @@ namespace
             dragF("Smoothing (s)", "lightShaftSmoothing", 0.15f, 0.005f, 0.0f, 2.0f, "%.3f");
             InspectorHelp("The time constant of a temporal blend of the shafts' mask: 0 = every frame as it is "
                           "(the rays tremble with every leaf); higher = more inertia.");
-            dragF("Glare Seed", "lightShaftGlareSeed", 1.0f, 0.01f, 0.0f, 4.0f, "%.2f");
-            InspectorHelp("How much of the Sun Glare (Post Process > Bloom) joins the shafts' seed. Unreal seeds on "
-                          "the scene over the threshold, and Ultra Dynamic Sky's bright sky lets a wide disc of it "
-                          "through -- its rays run long through crowns; our darker sky lets only the disc through. "
-                          "The glare is that bright sky as the picture shows it, so with it the gaps in the leaves "
-                          "seed too. 0 = Unreal's seed, 1 = the glare as drawn.");
             dragF("Shaft Length", "lightShaftLength", 1.0f, 0.01f, 0.05f, 2.0f, "%.2f");
             InspectorHelp("1 = Unreal's rays. Over 1 = LONGER: Unreal's fade as 1/distance from the sun, and this "
                           "slows the fade -- 1.5 as 1/sqrt(distance), 2 not at all (Bloom Scale may then want "
@@ -2444,6 +2487,13 @@ namespace
                           "physics: a new moon sheds nothing and the night is the airglow and the stars. Ultra "
                           "Dynamic Sky's New Moon Light Brightness is 0.015 -- its moonless night stays a dark blue "
                           "sky. The drawn disc follows the bare phase law either way.");
+            checkB("Ultra Dynamic Sky moon", "udsMoon", false);
+            InspectorHelp("The moon -- its light on the ground and in the sky, its disc -- and the night sky take Night "
+                          "Brightness in full from the SUNSET, as Ultra Dynamic Sky's moon shines at 1/33 of its sun from the "
+                          "moment the sun's centre is on the horizon (0 at +1.15 degrees, linear); the sun's twilight sky "
+                          "takes none (UDS's twilight is its physical sun, brightened by its sky material: Twilight > Ultra "
+                          "Dynamic Sky sky material). Off = one night gain coming in with the night (-6 to -12 degrees). The "
+                          "lamps and the night camera keep that one either way. --set=tod.udsMoon.");
             // No Temperature row (removed 2026-10-15): every hue it set has its own row below
             // (TimeOfDaySettings, "NO MOON TEMPERATURE").
             {
@@ -2645,6 +2695,22 @@ namespace
                               "night -- none with the sun above -6 degrees, all of it from -12. The glow round a low "
                               "moon is that aerosol's aureole: what a camera sees under a dark sky, not what an eye at a "
                               "window does. The day and the sunset's haze stay as they are. 1 = the same air as by day.");
+                checkB("Ultra Dynamic Sky sky material", "udsSkyMaterial", defaults.skyUdsMaterial);
+                InspectorHelp("The sky as Ultra Dynamic Sky draws it over the atmosphere -- its sky sphere's material, read node by "
+                              "node in UE and checked against UE's bare atmosphere: x Overall Intensity x 0.8 (2.3 + 1.8 u), u "
+                              "rising toward the sun (by day x0.69 away from it to x1.23 toward it), a light contrast, a blue Night "
+                              "Sky Glow from the sunset on and, at night, the same gradient round the moon; Overall Intensity 0.375 "
+                              "by day, 1.25 at the twilight's peak (-2.6 degrees), 0.45 at night. The drawn sky AND its capture "
+                              "(the probes, the water's sky reflection), as UDS's sky light captures its sphere. Off = the "
+                              "atmosphere as it is. --set=tod.skyUdsMaterial.");
+                {
+                    const UdsSkyFrameData& uds = ctx.scene.GetTimeOfDay().UdsSky();
+                    if (uds.glow[3] > 0.0f)
+                    {
+                        ImGui::TextDisabled("Now: Overall Intensity %.3f, glow (%.1f, %.1f, %.1f) cd/m2", uds.params[0],
+                                            uds.glow[0], uds.glow[1], uds.glow[2]);
+                    }
+                }
                 dragF("Light Hand-over (deg)", "lightHandOverDeg", defaults.lightHandOverDeg, 0.05f, 0.0f, 20.0f, "%.2f");
                 InspectorHelp("When the light passes between the moon and the sun (the sun's disc wholly under the "
                               "horizon), the body that has it fades out over this many degrees of the sun's height "
@@ -2950,6 +3016,21 @@ namespace
                 dragF("Day Full At (deg)", "dayFullDeg", defaults.fogDayFullDeg, 0.1f, -90.0f, 90.0f, "%.1f");
                 dragF("Dusk At (deg)", "duskDeg", defaults.fogDuskDeg, 0.1f, -90.0f, 90.0f, "%.1f");
                 dragF("Night Full At (deg)", "nightFullDeg", defaults.fogNightFullDeg, 0.1f, -90.0f, 90.0f, "%.1f");
+                checkB("Ultra Dynamic Sky fog colour", "udsColor", defaults.fogUdsColor);
+                InspectorHelp("The fog's COLOUR by the sun's height, as Ultra Dynamic Sky animates it (read off its actor in "
+                              "UE every 3 minutes of its day): the sky's light in the fog (Sky Atmosphere > Height Fog "
+                              "Contribution) x2 by day, x0.84 just over the horizon, x1.2 at it, ~x2 at night; the fog's Sun "
+                              "Scatter tinted from 0 at the horizon through red (0.24, 0.10, 0.02) at 6.5 degrees to (0.79, "
+                              "0.64, 0.56) from 43 -- set Sun Scatter 1 and its colour white to get UDS's own; and a blue "
+                              "Inscattering Luminance from the sunset on. Each multiplies the level's own value. Off = the "
+                              "level's numbers at every hour. --set=tod.fogUdsColor.");
+                {
+                    const TimeOfDay& tod = ctx.scene.GetTimeOfDay();
+                    const float* t = tod.FogSunScatterTint();
+                    const float* f = tod.FogInscatterFloor();
+                    ImGui::TextDisabled("Now: sky x%.2f, sun scatter (%.2f, %.2f, %.2f), floor (%.1f, %.1f, %.1f) cd/m2",
+                                        tod.FogSkyContribution(), t[0], t[1], t[2], f[0], f[1], f[2]);
+                }
             }
             ImGui::PopID();
 
@@ -3134,6 +3215,33 @@ namespace
             dragF("Ozone Scale", "ozoneScale", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
             InspectorHelp("Multiplies Earth's ozone absorption, which is what keeps a twilight sky "
                           "blue overhead instead of grey.");
+            {
+                const auto tint3 = [&](const char* label, const char* key) {
+                    const Math::float3 v = JsonFloat3(tgt(), key, Math::float3(1.0f, 1.0f, 1.0f));
+                    float ov[3] = { v.x, v.y, v.z };
+                    const bool edited = ImGui::DragFloat3(label, ov, 0.005f, 0.0f, 20.0f, "%.3f");
+                    beginContinuousEdit(edited);
+                    if (edited) { tgt()[key] = { ov[0], ov[1], ov[2] }; }
+                    trackContinuousEdit(edited);
+                };
+                tint3("Rayleigh Tint", "rayleighTint");
+                tint3("Mie Tint", "mieTint");
+                tint3("Ozone Tint", "ozoneTint");
+            }
+            InspectorHelp("The medium's colours, per channel, over the scales above: UE's RayleighScattering / "
+                          "MieScattering / OtherAbsorption colours against their defaults, so a UE sky ports exactly. "
+                          "(1, 1, 1) = Earth's colour. Ultra Dynamic Sky's: Rayleigh (0.962, 0.996, 1) at scale 1.208, Mie "
+                          "(0.802, 0.880, 1) at 3.503 -- a bluish aerosol --, ozone (2.596, 1, 2.109) at 1.063.");
+            dragF("Mie Absorption Scale", "mieAbsorptionScale", -1.0f, 0.01f, -1.0f, 10.0f, "%.2f");
+            InspectorHelp("Multiplies Earth's Mie absorption on its own (UE MieAbsorptionScale / 0.000444). -1 = the "
+                          "Mie Scale's, which moves scattering and absorption together. Ultra Dynamic Sky's: 1 (Earth's "
+                          "absorption under 3.5x the scattering).");
+            dragF("Height Fog Contribution", "heightFogContribution", 1.0f, 0.01f, 0.0f, 10.0f, "%.2f");
+            InspectorHelp("UE's SkyAtmosphere HeightFogContribution (default 1): the sky's light IN THE HEIGHT FOG -- "
+                          "the fog's colour from the distant sky light, and the ground-illuminance half of its sun "
+                          "lobe. Not the sky. A dense horizontal fog of the sky's AVERAGE colour reads darker than the "
+                          "horizon sky by day; Ultra Dynamic Sky sets 2 (and less at sunset: Time of Day > Ultra "
+                          "Dynamic Sky fog colour multiplies this). --set=sky.heightFogContribution.");
             dragF("Ground Albedo", "groundAlbedo", 0.402f, 0.01f, 0.0f, 1.0f, "%.3f");
             InspectorHelp("The planet's reflectance, as it enters multi-scattering. UE's default is "
                           "FColor(170) converted from sRGB, which is 0.402 linear -- not 170/255.");

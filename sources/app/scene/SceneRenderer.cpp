@@ -441,7 +441,8 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
     if (frame.ocean)
     {
         const HeightFogPacked fog =
-            PackHeightFog(frame.settings.heightFog, frame.dirLight != nullptr);
+            PackHeightFog(frame.settings.heightFog, frame.dirLight != nullptr,
+                          frame.dirLight ? frame.dirLight->GetOuterSpaceLuminance() : 0.0f);
         frame.ocean->SetFogParams(fog.params0, fog.params1, fog.params2);
         frame.ocean->SetFogDebugView(g_fogDebugView);
         frame.ocean->SetReflectionNormalCascades(frame.settings.waterReflectionNormalCascades);

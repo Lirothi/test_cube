@@ -1068,6 +1068,13 @@ namespace
         ImGui::SeparatorText("Specular and reflection");
         drag("Specular strength", render.specularStrength, 0.01f, 0.0f, 10.0f);
         drag("Roughness scale", render.roughnessScale, 0.005f, 0.0f, 1.0f);
+        drag("Sun glint smear", render.sunGlintSmear, 0.01f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How much of the unresolved slope variance (Roughness scale) the SUN's glint takes.\n"
+                              "0 = the glitter path alone: every resolved facet mirrors the disc (the sky reflection\n"
+                              "keeps its own roughness). 1 = smeared through GGX's long tails into a broad patch.");
+        }
         drag("Roughness distance", render.roughnessDistance, 1.0f, 1.0f, 5000.0f, "%.1f");
         drag("Reflection normal flattening", render.reflectionNormalStrength, 0.005f, 0.0f, 1.0f);
         drag("Horizon fog strength", render.horizonFogStrength, 0.005f, 0.01f, 5.0f);

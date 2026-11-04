@@ -36,6 +36,9 @@ void SceneLightingCBHandles::Populate(Material* material)
     gtaoStrength = material->ComputeCB0FieldHandle("gtaoStrength");
     groundAlbedoRgb = material->ComputeCB0FieldHandle("groundAlbedoRgb");
     foliageBackSky = material->ComputeCB0FieldHandle("foliageBackSky");
+    foliageTransmissionUe = material->ComputeCB0FieldHandle("foliageTransmissionUe");
+    roughDiffuse = material->ComputeCB0FieldHandle("roughDiffuse");
+    bumpShadowing = material->ComputeCB0FieldHandle("bumpShadowing");
     exposure = material->ComputeCB0FieldHandle("exposure");
     camPos = material->ComputeCB0FieldHandle("camPosWS");
     camDir = material->ComputeCB0FieldHandle("camDirWS");
@@ -297,6 +300,7 @@ void SceneComposeCBHandles::Populate(Material* material)
     fogSunDir = material->ComputeCB0FieldHandle("fogSunDir");
     fogSunColor = material->ComputeCB0FieldHandle("fogSunColor");
     fogInscatter = material->ComputeCB0FieldHandle("fogInscatter");
+    fogSunDirectional = material->ComputeCB0FieldHandle("fogSunDirectional");
     fogDebugView = material->ComputeCB0FieldHandle("fogDebugView");
     preExposure = material->ComputeCB0FieldHandle("preExposure");
     fogVolumeParams = material->ComputeCB0FieldHandle("fogVolumeParams");
@@ -336,6 +340,10 @@ void SceneTonemapCBHandles::Populate(Material* material)
     preExposure = material->ComputeCB0FieldHandle("preExposure");
     preExposureActive = material->ComputeCB0FieldHandle("preExposureActive");
     toneCurve = material->ComputeCB0FieldHandle("toneCurve");
+    ueColorPipeline = material->ComputeCB0FieldHandle("ueColorPipeline");
+    expandGamut = material->ComputeCB0FieldHandle("expandGamut");
+    blueCorrection = material->ComputeCB0FieldHandle("blueCorrection");
+    vignetteIntensity = material->ComputeCB0FieldHandle("vignetteIntensity");
     agxSlope = material->ComputeCB0FieldHandle("agxSlope");
     agxPower = material->ComputeCB0FieldHandle("agxPower");
     agxSaturation = material->ComputeCB0FieldHandle("agxSaturation");
@@ -447,8 +455,10 @@ void SceneExposureSolveCBHandles::Populate(Material* material)
     curvePoints = material->ComputeCB0FieldHandle("curvePoints");
     curveEvA = material->ComputeCB0FieldHandle("curveEvA");
     curveEvB = material->ComputeCB0FieldHandle("curveEvB");
+    curveEvC = material->ComputeCB0FieldHandle("curveEvC");
     curveCompA = material->ComputeCB0FieldHandle("curveCompA");
     curveCompB = material->ComputeCB0FieldHandle("curveCompB");
+    curveCompC = material->ComputeCB0FieldHandle("curveCompC");
     nightSteady = material->ComputeCB0FieldHandle("nightSteady");
     nightOpenSky = material->ComputeCB0FieldHandle("nightOpenSky");
 }
@@ -1283,9 +1293,6 @@ void LightShaftHandles::Populate(Material* material)
     size = material->ComputeCB0FieldHandle("lsSize");
     invSize = material->ComputeCB0FieldHandle("lsInvSize");
     temporal = material->ComputeCB0FieldHandle("lsTemporal");
-    glareColor = material->ComputeCB0FieldHandle("lsGlareColor");
-    glareDir = material->ComputeCB0FieldHandle("lsGlareDir");
-    glareProj = material->ComputeCB0FieldHandle("lsGlareProj");
 }
 
 UINT SceneResourceBootstrapper::GetLightShaftCBSizeBytes(UINT kernel) const
@@ -1306,9 +1313,6 @@ void SceneResourceBootstrapper::WriteLightShaftConstants(UINT kernel, const Ligh
     material->UpdateCBField(h.size, d.size, dest);
     material->UpdateCBField(h.invSize, d.invSize, dest);
     material->UpdateCBField(h.temporal, d.temporal, dest);
-    material->UpdateCBField(h.glareColor, d.glareColor, dest);
-    material->UpdateCBField(h.glareDir, d.glareDir, dest);
-    material->UpdateCBField(h.glareProj, d.glareProj, dest);
 }
 
 UINT SceneResourceBootstrapper::GetHzbCBSizeBytes() const
@@ -1667,6 +1671,9 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.gtaoStrength, data.gtaoStrength, dest);
     matLighting_->UpdateCBField(handles.groundAlbedoRgb, data.groundAlbedoRgb, dest);
     matLighting_->UpdateCBField(handles.foliageBackSky, data.foliageBackSky, dest);
+    matLighting_->UpdateCBField(handles.foliageTransmissionUe, data.foliageTransmissionUe, dest);
+    matLighting_->UpdateCBField(handles.roughDiffuse, data.roughDiffuse, dest);
+    matLighting_->UpdateCBField(handles.bumpShadowing, data.bumpShadowing, dest);
     matLighting_->UpdateCBField(handles.exposure, data.exposure, dest);
     matLighting_->UpdateCBField(handles.camPos, data.camPos, dest);
     matLighting_->UpdateCBField(handles.camDir, data.camDir, dest);
@@ -1902,6 +1909,10 @@ void SceneResourceBootstrapper::WriteTonemapConstants(bool exposureEnabled,
         static_cast<uint32_t>(render::g_preExposureEnabled ? 1u : 0u), dest);
     matTonemapCS_->UpdateCBField(h.toneCurve,
         static_cast<uint32_t>(color.toneCurve), dest);
+    matTonemapCS_->UpdateCBField(h.ueColorPipeline, static_cast<uint32_t>(color.ueGamut ? 1u : 0u), dest);
+    matTonemapCS_->UpdateCBField(h.expandGamut, color.expandGamut, dest);
+    matTonemapCS_->UpdateCBField(h.blueCorrection, color.blueCorrection, dest);
+    matTonemapCS_->UpdateCBField(h.vignetteIntensity, color.vignetteIntensity, dest);
     matTonemapCS_->UpdateCBField(h.agxSlope, color.agxSlope, dest);
     matTonemapCS_->UpdateCBField(h.agxPower, color.agxPower, dest);
     matTonemapCS_->UpdateCBField(h.agxSaturation, color.agxSaturation, dest);
@@ -1994,8 +2005,10 @@ void SceneResourceBootstrapper::WriteExposureSolveConstants(const ExposureMeteri
     matExposureSolveCS_->UpdateCBField(handles.curvePoints, data.curvePoints, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveEvA, data.curveEvA, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveEvB, data.curveEvB, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curveEvC, data.curveEvC, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveCompA, data.curveCompA, dest);
     matExposureSolveCS_->UpdateCBField(handles.curveCompB, data.curveCompB, dest);
+    matExposureSolveCS_->UpdateCBField(handles.curveCompC, data.curveCompC, dest);
     matExposureSolveCS_->UpdateCBField(handles.nightSteady, data.nightSteady, dest);
     matExposureSolveCS_->UpdateCBField(handles.nightOpenSky, data.nightOpenSky, dest);
 }
@@ -2031,6 +2044,7 @@ void SceneResourceBootstrapper::WriteComposeConstants(const ComposePassConstants
     matComposeCS_->UpdateCBField(handles.fogSunDir, data.fogSunDir, dest);
     matComposeCS_->UpdateCBField(handles.fogSunColor, data.fogSunColor, dest);
     matComposeCS_->UpdateCBField(handles.fogInscatter, data.fogInscatter, dest);
+    matComposeCS_->UpdateCBField(handles.fogSunDirectional, data.fogSunDirectional, dest);
     matComposeCS_->UpdateCBField(handles.fogDebugView, data.fogDebugView, dest);
     matComposeCS_->UpdateCBField(handles.fogVolumeParams, data.fogVolumeParams, dest);
     matComposeCS_->UpdateCBField(handles.fogVolumeZParams, data.fogVolumeZParams, dest);

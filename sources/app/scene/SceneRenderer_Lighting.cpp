@@ -303,6 +303,9 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     // needing a second boolean.
     constants.groundAlbedoRgb = dirLight.GetGroundAlbedo();
     constants.foliageBackSky = frame_->settings.foliageBackSky ? 1.0f : 0.0f;
+    constants.foliageTransmissionUe = frame_->settings.foliageTransmissionUe ? 1.0f : 0.0f;
+    constants.roughDiffuse = frame_->settings.roughDiffuse ? 1.0f : 0.0f;
+    constants.bumpShadowing = frame_->settings.bumpShadowing ? 1.0f : 0.0f;
     // The sky's indirect SPECULAR, moved out of compose so the screen-space reflection pass
     // (which samples this target) sees a metal with its environment on it. These three MUST
     // match compose's own values exactly -- one pass adds the term, the other subtracts the
@@ -603,7 +606,8 @@ void SceneRenderer::Pass_VolumetricFog(Renderer* renderer, RenderGraphPassContex
         {
             fc.jitter = float4(0.5f, 0.5f, 0.5f, 0.0f);
         }
-        const HeightFogPacked packed = PackHeightFog(a, frame_->dirLight != nullptr);
+        const HeightFogPacked packed = PackHeightFog(a, frame_->dirLight != nullptr,
+            frame_->dirLight ? frame_->dirLight->GetOuterSpaceLuminance() : 0.0f);
         fc.medium0 = packed.params0; // density, height falloff, reference height, start distance
         fc.medium1 = float4(std::clamp(a.albedo, 0.0f, 1.0f), std::max(a.extinctionScale, 0.0f),
                             std::clamp(a.phaseG, -0.99f, 0.99f), std::max(a.sunScatter, 0.0f));
@@ -729,20 +733,6 @@ void SceneRenderer::Pass_LightShafts(Renderer* renderer, RenderGraphPassContext 
     const float shaftLength = std::clamp(sun.GetLightShaftLength(), 0.0f, 2.0f);
     c.depth = float4(zNear / (zNear - zFar), (zNear * zFar) / (zFar - zNear),
                      std::min(shaftLength, 1.0f), std::max(shaftLength - 1.0f, 0.0f));
-    // The SUN GLARE in the seed (DirectionalLight::GetLightShaftGlareSeed; the sun's shafts only): the glare
-    // stage 9 draws, from the sun probe's read-back disc colour -- a few frames old, and smoothed itself.
-    if (!fromMoon && sun.GetLightShaftGlareSeed() > 0.0f)
-    {
-        const ExposureMetering::Readback probe = renderer->Exposure().LatestReadback();
-        BloomRenderer::SunGlareSeed seed;
-        if (probe.valid && bloom_.SunGlareSeedFor(probe.sunProbe, seed))
-        {
-            const float k = sun.GetLightShaftGlareSeed();
-            c.glareColor = float4(seed.color.x * k, seed.color.y * k, seed.color.z * k, seed.coreRad);
-            c.glareDir = float4(seed.viewDir.x, seed.viewDir.y, seed.viewDir.z, seed.veil);
-            c.glareProj = float4(seed.projX, seed.projY, seed.veilRad, 0.0f);
-        }
-    }
     // The history was stored at last frame's pre-exposure; scale it into this frame's.
     c.temporal = float4(decisions_.lightShaftBlend,
                         prevPreExposure_ > 0.0f ? preExposure_ / prevPreExposure_ : 1.0f,
@@ -1128,11 +1118,13 @@ void SceneRenderer::Pass_Compose(Renderer* renderer, RenderGraphPassContext ctx,
         // gated on that one number, so "off" is genuinely the pre-P7 image and not a near-miss.
         {
             const HeightFogPacked fog =
-                PackHeightFog(frame_->settings.heightFog, frame_->dirLight != nullptr);
+                PackHeightFog(frame_->settings.heightFog, frame_->dirLight != nullptr,
+                              frame_->dirLight ? frame_->dirLight->GetOuterSpaceLuminance() : 0.0f);
             constants.fogParams0 = fog.params0;
             constants.fogParams1 = fog.params1;
             constants.fogParams2 = fog.params2;
             constants.fogInscatter = fog.inscatter;
+            constants.fogSunDirectional = fog.sunDirectional;
             constants.fogDebugView = g_fogDebugView;
             constants.preExposure = preExposure_;   // P16.1
             // Volumetric fog (plan part A): the froxel volume inside `volumetricDistance`, the
