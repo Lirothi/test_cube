@@ -1,4 +1,24 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          -0.0285,
+          2.7159,
+          -0.0006
+        ],
+        "halfHeight": 2.717,
+        "radius": 0.1163,
+        "rotationDeg": [
+          -0.0478,
+          0.0005,
+          0.6118
+        ],
+        "type": "cylinder"
+      }
+    ]
+  },
   "foliageGrow": 0.44999998807907104,
   "foliageInnerError": 0.30000001192092896,
   "foliageInnerRatio": 0.23000000417232513,

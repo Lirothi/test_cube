@@ -443,6 +443,8 @@ private:
 
 #if PROF_GPU_ENABLED
     static constexpr UINT kGpuQueueCount = 2;
+    GpuTraceCalibration gpuTraceCalibration_[kGpuQueueCount]{}; // the capture's one, see CollectGpuResolvedSamples
+    bool gpuTraceCalibrated_[kGpuQueueCount] = {};
     static constexpr UINT kGpuReadbackFrameSlots = 8;
     Microsoft::WRL::ComPtr<ID3D12QueryHeap> gpuQueryHeap_[kGpuQueueCount];
     Microsoft::WRL::ComPtr<ID3D12Resource> gpuReadback_[kGpuQueueCount];

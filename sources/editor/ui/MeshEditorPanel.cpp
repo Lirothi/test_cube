@@ -13,7 +13,6 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/EditorLightDirection.h"
 #include "ocean/BuoyancyJson.h"
-#include "physics/CollisionJson.h"
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
@@ -206,7 +205,8 @@ void DrawMeshPreview(EditorContext& ctx,
     const EditorPreviewRenderer::PhysicalLighting* physical,
     const std::vector<buoyancy::Pontoon>* pontoons,
     int hoveredPontoon,
-    const std::vector<Math::float3>* collisionLines)
+    CollisionEditorTab* collisionTab,
+    nlohmann::json* collisionDoc)
 {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
@@ -214,10 +214,19 @@ void DrawMeshPreview(EditorContext& ctx,
     const ImVec2 canvasSize(
         std::max(1.0f, available.x),
         std::max(64.0f, available.y - controlsHeight));
-    ImGui::InvisibleButton("##MeshPreview", canvasSize,
-        ImGuiButtonFlags_MouseButtonLeft |
-        ImGuiButtonFlags_MouseButtonRight |
-        ImGuiButtonFlags_MouseButtonMiddle);
+    // A gizmo over the picture takes the mouse only with no item hovered (ImGuizmo CanActivate), and the button is an item: while the
+    // gizmo holds the mouse there is no button, and the camera stays where it is.
+    if (collisionTab && collisionTab->GizmoWantsMouse())
+    {
+        ImGui::Dummy(canvasSize);
+    }
+    else
+    {
+        ImGui::InvisibleButton("##MeshPreview", canvasSize,
+            ImGuiButtonFlags_MouseButtonLeft |
+            ImGuiButtonFlags_MouseButtonRight |
+            ImGuiButtonFlags_MouseButtonMiddle);
+    }
 
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
@@ -257,6 +266,12 @@ void DrawMeshPreview(EditorContext& ctx,
         std::round(requestedWidth * resolutionScale), 64.0f, 1024.0f));
     const std::uint32_t renderHeight = static_cast<std::uint32_t>(std::clamp(
         std::round(requestedHeight * resolutionScale), 64.0f, 1024.0f));
+    EditorPreviewRenderer::PreviewLines collisionLines;
+    if (collisionTab)
+    {
+        collisionLines.plain = &collisionTab->Lines();
+        collisionLines.selected = &collisionTab->SelectedLines();
+    }
     const MeshEditorPreviewScene::View preview = previewScene.Update(ctx.renderer,
         path,
         geometry,
@@ -274,7 +289,9 @@ void DrawMeshPreview(EditorContext& ctx,
         highlightSubmeshOrdinal,
         environment,
         environmentExposure,
-        physical);
+        physical,
+        collisionTab ? &collisionLines : nullptr,
+        collisionTab ? collisionTab->LinesRevision() : 0u);
 
     const ImVec2 min = ImGui::GetItemRectMin();
     const ImVec2 max = ImGui::GetItemRectMax();
@@ -338,27 +355,10 @@ void DrawMeshPreview(EditorContext& ctx,
         drawList->PopClipRect();
     }
 
-    // The collision shape's edges over the picture, with the matrix the picture was rendered with.
-    if (collisionLines && !collisionLines->empty() && preview.state == MeshEditorPreviewScene::State::Ready)
+    // The selected primitive's gizmo over the picture, with the matrices it was rendered with. The shape itself is in the picture.
+    if (collisionTab && preview.state == MeshEditorPreviewScene::State::Ready)
     {
-        const auto project = [&](const Math::float3& p, ImVec2& out)
-        {
-            const Math::float4 clip = preview.viewProj.Transform(Math::float4(p, 1.0f));
-            if (clip.w <= 1e-5f) { return false; }
-            out = ImVec2(min.x + (clip.x / clip.w * 0.5f + 0.5f) * (max.x - min.x),
-                         min.y + (0.5f - clip.y / clip.w * 0.5f) * (max.y - min.y));
-            return true;
-        };
-        drawList->PushClipRect(min, max, true);
-        for (size_t i = 0; i + 1 < collisionLines->size(); i += 2)
-        {
-            ImVec2 a, b;
-            if (project((*collisionLines)[i], a) && project((*collisionLines)[i + 1], b))
-            {
-                drawList->AddLine(a, b, IM_COL32(120, 255, 120, 170), 1.0f);
-            }
-        }
-        drawList->PopClipRect();
+        collisionTab->DrawGizmo(*collisionDoc, drawList, min, max, preview.viewMatrix, preview.projMatrix);
     }
 
     drawList->AddRect(min, max, ImGui::GetColorU32(ImGuiCol_Border));
@@ -483,6 +483,7 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
 
     slots_.clear();
     recomputeNormalSlots_.clear();
+    collisionTab_.Reset(); // a re-bake moves the shape's lines under the same settings
     if (!refresh)
     {
         previewCamera_ = {};
@@ -568,7 +569,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     ImGui::SetNextWindowSize(ImVec2(1080.0f, 720.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(700.0f, 420.0f),
         ImVec2(FLT_MAX, FLT_MAX));
-    if (!ImGui::Begin("Mesh Editor", open))
+    // While the Collision tab's gizmo holds the mouse a drag is the gizmo's, not the window's: there is no item under it to tell ImGui so.
+    if (!ImGui::Begin("Mesh Editor", open, collisionTab_.GizmoWantsMouse() ? ImGuiWindowFlags_NoMove : ImGuiWindowFlags_None))
     {
         ImGui::End();
         return;
@@ -668,7 +670,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         useLevelLighting ? &levelLighting : nullptr,
         buoyancyOpen_ ? &pontoonOverlay.pontoons : nullptr,
         hoveredPontoon_,
-        collisionOpen_ ? &collisionPreview_.lines : nullptr);
+        collisionTabOpen_ ? &collisionTab_ : nullptr,
+        collisionTabOpen_ ? &doc_ : nullptr);
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
@@ -680,6 +683,29 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         doc_.value("geometry", std::string("(none)")).c_str());
     ImGui::Spacing();
 
+    int hoveredSlotThisFrame = -1;
+    int hoveredChunkThisFrame = -1;
+    int hoveredPontoonThisFrame = -1;
+
+    bool collisionTabOpen = false;
+    if (ImGui::BeginTabBar("##meshEditorTabs"))
+    {
+        if (ImGui::BeginTabItem("Mesh")) { ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Collision", nullptr, expandCollision_ ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None))
+        {
+            collisionTabOpen = true;
+            ImGui::EndTabItem();
+        }
+        expandCollision_ = false;
+        ImGui::EndTabBar();
+    }
+    collisionTabOpen_ = collisionTabOpen;
+    if (collisionTabOpen)
+    {
+        collisionTab_.Draw(doc_, slots_);
+    }
+    else // the Mesh tab: everything to the Save row below, not indented so the block stays as it was
+    {
     DrawPreviewSkyControls(registry);
 
     ImGui::SeparatorText("Preview Directional Light");
@@ -748,9 +774,6 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     const bool geometryIsGltf = IsGltfGeometry(materialSource);
 
     // Collected while drawing the settings pane; consumed by the preview on the NEXT frame.
-    int hoveredSlotThisFrame = -1;
-    int hoveredChunkThisFrame = -1;
-    int hoveredPontoonThisFrame = -1;
 
     // --- Chunks (chunked meshes only) -------------------------------------------------------------
     // These submeshes are spatial TILES of one surface, not material slots, so they get their own
@@ -1072,19 +1095,6 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawBuoyancySection(hoveredPontoonThisFrame);
     }
 
-    // Collision: how this mesh meets the physics world. Closed by default; while open the preview draws the shape.
-    ImGui::Spacing();
-    if (expandCollision_)
-    {
-        ImGui::SetNextItemOpen(true);
-        expandCollision_ = false;
-    }
-    collisionOpen_ = ImGui::CollapsingHeader("Collision");
-    if (collisionOpen_)
-    {
-        DrawCollisionSection();
-    }
-
     // Rest pose: how a NEW copy lies. Its numbers act where objects are created (spawn, place, a
     // drop into the viewport -- the drag ghost shows it), not on this preview and not on copies
     // already placed, and the section says so rather than letting a control look inert.
@@ -1362,6 +1372,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         ImGui::EndDisabled(); // chunked mesh
     }
 
+    } // the Mesh tab
+
     hoveredSlot_ = hoveredSlotThisFrame;
     hoveredPontoon_ = hoveredPontoonThisFrame;
     hoveredChunk_ = hoveredChunkThisFrame;
@@ -1445,94 +1457,6 @@ float MeshEditorPanel::WindFoliageForSlot(size_t slot) const
     if (it == doc_.end() || !it->is_array() || slot >= it->size()) { return 0.0f; }
     const auto& v = (*it)[slot];
     return v.is_number() ? v.get<float>() : 0.0f;
-}
-
-void MeshEditorPanel::DrawCollisionSection()
-{
-    physics::CollisionSettings settings;
-    bool namedSlots = false;
-    if (const auto block = doc_.find("collision"); block != doc_.end()) { physics::ReadCollisionSettings(*block, settings, &namedSlots); }
-    // What the factory does for a block that names no slots: a leaf does not collide.
-    std::vector<int> foliageSlots;
-    if (const auto weights = doc_.find("windFoliage"); weights != doc_.end() && weights->is_array())
-    {
-        int slot = 0;
-        for (const nlohmann::json& w : *weights)
-        {
-            if (w.is_number() && w.get<float>() > 0.0f) { foliageSlots.push_back(slot); }
-            ++slot;
-        }
-    }
-    if (!namedSlots) { settings.excludeSlots = foliageSlots; }
-    bool changed = false;
-
-    ImGui::TextDisabled("For every placed copy. Whether it is static or falls is the object's: Inspector > Physics.");
-    const char* const shapes[] = { "Auto", "Mesh", "Hull", "Box", "Sphere", "Capsule", "None" };
-    int shape = static_cast<int>(settings.shape);
-    if (ImGui::Combo("Shape", &shape, shapes, 7))
-    {
-        settings.shape = static_cast<physics::ShapeKind>(shape);
-        changed = true;
-    }
-    if (ImGui::IsItemHovered())
-    {
-        ImGui::SetTooltip("Auto: the triangles for a static or a floating (kinematic) copy, a convex hull for a dynamic one.\n"
-                          "Mesh on a dynamic copy still takes the hull: two meshes cannot collide.");
-    }
-    changed = ImGui::SliderInt("LOD", &settings.lod, 0, 3) || changed;
-    if (!slots_.empty() && ImGui::TreeNode("Slots that collide"))
-    {
-        for (int slot = 0; slot < static_cast<int>(slots_.size()); ++slot)
-        {
-            bool solid = std::find(settings.excludeSlots.begin(), settings.excludeSlots.end(), slot) == settings.excludeSlots.end();
-            const std::string label = std::to_string(slot) + ": " + slots_[static_cast<size_t>(slot)];
-            if (ImGui::Checkbox(label.c_str(), &solid))
-            {
-                if (solid) { settings.excludeSlots.erase(std::remove(settings.excludeSlots.begin(), settings.excludeSlots.end(), slot), settings.excludeSlots.end()); }
-                else { settings.excludeSlots.push_back(slot); }
-                std::sort(settings.excludeSlots.begin(), settings.excludeSlots.end());
-                namedSlots = settings.excludeSlots != foliageSlots;
-                changed = true;
-            }
-        }
-        ImGui::TreePop();
-    }
-    changed = ImGui::DragFloat("Density (kg/m3)", &settings.density, 10.0f, 1.0f, 20000.0f, "%.0f") || changed;
-    changed = ImGui::DragFloat("Mass (kg)", &settings.mass, 0.5f, 0.0f, 100000.0f, settings.mass > 0.0f ? "%.1f" : "from density") || changed;
-    changed = ImGui::SliderFloat("Friction", &settings.friction, 0.0f, 2.0f, "%.2f") || changed;
-    changed = ImGui::SliderFloat("Restitution", &settings.restitution, 0.0f, 1.0f, "%.2f") || changed;
-    changed = ImGui::DragFloat("Rolling drag", &settings.angularDamping, 0.05f, -1.0f, 20.0f, settings.angularDamping < 0.0f ? "default" : "%.2f") || changed;
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("How fast a dynamic copy stops turning (1/s). A round thing with little of it rolls down any slope for ever."); }
-    changed = ImGui::DragFloat("Float", &settings.floatFactor, 0.01f, 0.0f, 2.0f, "%.2f") || changed;
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("A dynamic copy on the ocean: 1 = neutral, less sinks, more floats."); }
-    changed = ImGui::Checkbox("Two-sided", &settings.twoSided) || changed;
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("A triangle stops bodies on its front only. A sheet of cloth met from both sides wants this."); }
-
-    if (changed)
-    {
-        nlohmann::json block = physics::WriteCollisionSettings(settings, namedSlots);
-        if (block.empty()) { doc_.erase("collision"); } // an untouched asset stays byte-identical
-        else { doc_["collision"] = std::move(block); }
-    }
-
-    ImGui::Checkbox("Preview as a dynamic copy", &collisionAsDynamic_);
-    const std::string geometry = doc_.value("geometry", std::string());
-    const std::string key = geometry + (collisionAsDynamic_ ? "|d|" : "|s|") + physics::WriteCollisionSettings(settings, true).dump();
-    if (key != collisionPreviewKey_)
-    {
-        collisionPreviewKey_ = key;
-        physics::PreviewCollision(geometry, settings, collisionAsDynamic_, collisionPreview_);
-    }
-    if (collisionPreview_.sourceTriangles == 0 && collisionPreview_.error.empty())
-    {
-        ImGui::TextDisabled("Nothing solid: copies of this mesh have no body.");
-    }
-    else
-    {
-        ImGui::Text("%s, LOD %u of %u: %u solid triangles, %u in the shape, built in %.1f ms", physics::ShapeKindName(collisionPreview_.kind),
-            collisionPreview_.lodUsed, collisionPreview_.lodCount, collisionPreview_.sourceTriangles, collisionPreview_.shapeTriangles, collisionPreview_.buildMs);
-    }
-    if (!collisionPreview_.error.empty()) { ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", collisionPreview_.error.c_str()); }
 }
 
 void MeshEditorPanel::DrawBuoyancySection(int& hoveredPontoonThisFrame)

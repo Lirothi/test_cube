@@ -324,7 +324,7 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
     worldFloaters_ = false;
     for (RenderableObject* object : registered)
     {
-        // A "buoyant" Dynamic object is the physics world's body (physics/PhysicsWorld.cpp ApplyWater): it writes the offset, and it
+        // A "buoyant" Dynamic object is the physics world's body (physics/PhysicsWorld.cpp SampleWater): it writes the offset, and it
         // reads the surface copied below.
         if (object->GetPhysicsMotion() == physics::Motion::Dynamic)
         {

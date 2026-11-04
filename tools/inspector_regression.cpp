@@ -12,6 +12,7 @@
 #include "app/scene/Scene.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
+#include "editor/ui/CollisionEditorTab.h"
 #include "editor/ui/InspectorMultiEdit.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/InspectorPropertyDelta.h"
@@ -24,6 +25,7 @@
 #include "vfx/ParticleEmitterObject.h"
 #include "imgui.h"
 #include "imgui_internal.h"
+#include "ImGuizmo/ImGuizmo.h"
 #if INSPECTOR_BASELINE
 #include "InspectorPanelBaseline.h"
 #endif
@@ -271,6 +273,136 @@ void TestMouseGesture(EditorContext& ctx)
 // the group "Lamps", mesh 2 off -> one click on the group row's "On" box raises SetGroupEnabled for all three, ON (a
 // mix turns everything on); the controller's road (setEnabled over the targets) changes mesh 2 alone, one undo entry;
 // a second click turns all three off, again one entry. The selection is never touched.
+// The Mesh Editor's Collision tab with real ImGui input: nothing written by looking at it, a click on "+ Box" adds a primitive, a drag of the
+// gizmo's axis moves it, and the block comes off the document again when the shape goes back to Auto.
+void TestCollisionTab()
+{
+    Json doc = { { "geometry", "models/coconut/coconut.mesh.bin" }, { "materials", Json::array({ "m" }) } };
+    const Json untouched = doc;
+    const std::vector<std::string> slots = { "m" };
+    CollisionEditorTab tab;
+    tab.Reset();
+    auto& io = ImGui::GetIO();
+    const ImVec2 canvasMin(0.0f, 2000.0f), canvasMax(1000.0f, 3000.0f);
+    Math::mat4 view, proj;
+    DirectX::XMStoreFloat4x4(&view.m, DirectX::XMMatrixLookAtLH(DirectX::XMVectorSet(0.0f, 2.0f, -5.0f, 1.0f), DirectX::XMVectorZero(), DirectX::XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f)));
+    DirectX::XMStoreFloat4x4(&proj.m, DirectX::XMMatrixPerspectiveFovLH(1.0f, 1.0f, 0.1f, 100.0f));
+    const auto frame = [&]
+    {
+        ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
+        ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(1000, 1900), ImGuiCond_Always);
+        ImGui::Begin("Collision Regression");
+        tab.Draw(doc, slots);
+        ImGui::End();
+        ImGui::SetNextWindowPos(canvasMin, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(canvasMax.x - canvasMin.x, canvasMax.y - canvasMin.y), ImGuiCond_Always);
+        ImGui::Begin("Collision Regression Canvas", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize);
+        tab.DrawGizmo(doc, ImGui::GetWindowDrawList(), canvasMin, canvasMax, view, proj);
+        ImGui::End();
+        ImGui::Render();
+    };
+    frame(); frame();
+    Check(doc == untouched, "the Collision tab writes nothing by being looked at");
+
+    doc["collision"] = { { "shape", "custom" } };
+    frame(); frame();
+    // The button, by its own id: a sweep of the mouse down the window until ImGui says it is under it.
+    ImGuiWindow* window = ImGui::FindWindowByName("Collision Regression");
+    Check(window != nullptr, "the tab's window drawn");
+    const ImGuiID addBox = window->GetID("+ Box");
+    bool found = false;
+    ImVec2 at;
+    for (float y = 0.0f; y < 400.0f && !found; y += 2.0f)
+    {
+        for (float x = 5.0f; x < 120.0f && !found; x += 12.0f)
+        {
+            io.AddMousePosEvent(x, y);
+            frame();
+            if (GImGui->HoveredId == addBox)
+            {
+                found = true;
+                at = ImVec2(x, y);
+            }
+        }
+    }
+    Check(found, "+ Box found under the mouse");
+    const std::uint64_t linesBefore = tab.LinesRevision();
+    io.AddMousePosEvent(at.x, at.y);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    Check(doc["collision"].contains("shapes") && doc["collision"]["shapes"].size() == 1 && doc["collision"]["shapes"][0].value("type", std::string()) == "box", "+ Box adds a box");
+    Check(tab.SelectedPrimitive() == 0, "the new box is selected");
+    // The preview draws these lines and re-renders only when the revision moves: it has to move now, and to stand still while nothing changes, or every frame costs a GPU wait.
+    Check(!tab.SelectedLines().empty() && tab.LinesRevision() != linesBefore, "the new box's edges reach the preview");
+    const std::uint64_t linesSettled = tab.LinesRevision();
+    frame(); frame();
+    Check(tab.LinesRevision() == linesSettled, "the shape's revision stands still while nothing changes");
+
+    // The gizmo. Put the box at the origin, then look for the X axis handle: a sweep along the screen line the axis projects on, until the gizmo says it holds the mouse.
+    doc["collision"]["shapes"][0]["center"] = Json::array({ 0.0, 0.0, 0.0 });
+    frame();
+    const auto toScreen = [&](const Math::float3& p)
+    {
+        const Math::float4 clip = (view * proj).Transform(Math::float4(p, 1.0f));
+        return ImVec2(canvasMin.x + (clip.x / clip.w * 0.5f + 0.5f) * (canvasMax.x - canvasMin.x), canvasMin.y + (0.5f - clip.y / clip.w * 0.5f) * (canvasMax.y - canvasMin.y));
+    };
+    const ImVec2 origin = toScreen(Math::float3(0.0f, 0.0f, 0.0f));
+    const ImVec2 along = toScreen(Math::float3(1.0f, 0.0f, 0.0f));
+    const float length = std::hypot(along.x - origin.x, along.y - origin.y);
+    const ImVec2 axis((along.x - origin.x) / length, (along.y - origin.y) / length);
+    float grab = -1.0f;
+    for (float d = 12.0f; d < 400.0f && grab < 0.0f; d += 6.0f)
+    {
+        io.AddMousePosEvent(origin.x + axis.x * d, origin.y + axis.y * d);
+        frame();
+        frame();
+        if (tab.GizmoWantsMouse()) { grab = d; }
+    }
+    Check(grab > 0.0f, "the gizmo's axis says it holds the mouse");
+    const float beforeX = doc["collision"]["shapes"][0]["center"][0].get<float>();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame();
+    frame();
+    for (int step = 1; step <= 10; ++step)
+    {
+        io.AddMousePosEvent(origin.x + axis.x * (grab + step * 8.0f), origin.y + axis.y * (grab + step * 8.0f));
+        frame();
+    }
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame();
+    const float afterX = doc["collision"]["shapes"][0]["center"][0].get<float>();
+    const float afterY = doc["collision"]["shapes"][0]["center"][1].get<float>();
+    Check(afterX > beforeX + 0.05f && std::fabs(afterY) < 1.0e-3f, "dragging the gizmo's X axis moves the box along x");
+
+    // ImGuizmo's matrix is the engine's: what the gizmo draws is where the primitive stands.
+    {
+        const float translation[3] = { 1.0f, 2.0f, 3.0f }, rotation[3] = { 10.0f, 20.0f, 30.0f }, scale[3] = { 1.0f, 1.0f, 1.0f };
+        float gizmoMatrix[16];
+        ImGuizmo::RecomposeMatrixFromComponents(translation, rotation, scale, gizmoMatrix);
+        constexpr float kToRad = 3.14159265358979f / 180.0f;
+        const Math::mat4 engine = Math::mat4::RotationFromEulerXYZRad(Math::float3(10.0f * kToRad, 20.0f * kToRad, 30.0f * kToRad)) * Math::mat4::Translation(Math::float3(1.0f, 2.0f, 3.0f));
+        DirectX::XMFLOAT4X4 engineFloats;
+        DirectX::XMStoreFloat4x4(&engineFloats, engine.xm());
+        float worst = 0.0f;
+        for (int i = 0; i < 16; ++i) { worst = std::max(worst, std::fabs(gizmoMatrix[i] - (&engineFloats.m[0][0])[i])); }
+        Check(worst < 1.0e-5f, "ImGuizmo's Euler order is the engine's");
+    }
+
+    // Back to no custom shape: the block is written without its defaults, and an emptied one is no key at all.
+    doc["collision"] = { { "shape", "none" } };
+    frame();
+    tab.Reset();
+    Check(!tab.GizmoWantsMouse() && tab.SelectedPrimitive() == -1, "Reset forgets the selection");
+    io.AddMousePosEvent(-1.0f, -1.0f);
+    frame();
+    std::puts("PASS: Collision tab: looking writes nothing, click -> + Box, gizmo drag -> the box moves along its axis, ImGuizmo's Euler order = the engine's");
+}
+
 void TestOutlinerGroupToggle(EditorContext& ctx)
 {
     auto& doc = ctx.document;
@@ -405,6 +537,7 @@ int main()
         io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
         TestMouseGesture(ctx);
         TestOutlinerGroupToggle(ctx);
+        TestCollisionTab();
         selection.Replace(post->id);
 #if INSPECTOR_BASELINE
         std::printf("Post Process BEFORE: %.3f ms/draw (Debug, 5 expanded categories)\n",

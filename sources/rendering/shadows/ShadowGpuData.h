@@ -1099,6 +1099,14 @@ private:
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
     std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow
     std::uint32_t lastMoverCount_ = 0;   // casters re-uploaded last UpdateForFrame (VSM skip gate)
+    // UpdateForFrame's walk: every caster with its first id, so the casters can be updated side by side.
+    struct CasterWalk
+    {
+        const RenderableObjectBase* object;
+        std::uint32_t firstId;
+        std::uint32_t slots;
+    };
+    std::vector<CasterWalk> casterWalk_;
     // Rebuild's meta, kept so UpdateForFrame can re-publish it with this frame's mover bits ORed in.
     std::vector<std::uint32_t> cpuCasterMeta_;
     bool          forceContentRefresh_ = false; // editor rebuild changed material/geometry content

@@ -20,7 +20,7 @@
 // `untracked` = vram local - gpu local (the driver, DLSS/Streamline, the ImGui backend).
 // `mi commit` from mimalloc's own statistics (mi_stats_get; NOT mi_process_info, whose "commit"
 // is the process's private bytes again), `heaps` from HeapSummary over every NT heap of the process (CRT
-// malloc, the D3D12 runtime, the driver), `other` = private - mi commit - heaps. On this machine
+// malloc, the D3D12 runtime, the driver; under --memtrack only: the walk stalls a frame ~20 ms), `other` = private - mi commit - heaps. On this machine
 // `other` is mostly WRITE-COMBINED pages that track the process's video memory one for one (M1:
 // DLSS off moved vram +681 MB and write-combined +633), so private counts the VRAM a second time;
 // the Debug line `mem regions:` (once a minute) splits it. `new/frame` is operator new calls per frame since the previous line,
@@ -86,7 +86,8 @@ struct MemoryPlatform
     std::uint64_t liveAllocations = 0;
     std::uint64_t frame = 0;      // TickMemoryReport calls so far
 };
-MemoryPlatform ReadMemoryPlatform(ID3D12Device* device);
+// walkHeaps: HeapSummary over every NT heap, ~20 ms under the driver's heap lock: never from something periodic.
+MemoryPlatform ReadMemoryPlatform(ID3D12Device* device, bool walkHeaps = true);
 
 // A named snapshot of the platform and the GPU census by tag (Insights' "Size A / Size B / Diff",
 // MemTagTable.cpp:289-497): SaveMemorySnapshot stores the current state under `label`, replacing

@@ -1,5 +1,20 @@
 {
   "bakeScale": 0.7451966404914856,
+  "collision": {
+    "rollingResistance": 0.4,
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          -0.002,
+          0.113,
+          -0.002
+        ],
+        "radius": 0.1185,
+        "type": "sphere"
+      }
+    ]
+  },
   "geometry": "models/coconut/coconut.mesh.bin",
   "material": "coconut_0",
   "source": "import_staging\\coconut\\scene.gltf",

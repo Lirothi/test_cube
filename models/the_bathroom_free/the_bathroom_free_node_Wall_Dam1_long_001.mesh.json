@@ -1,4 +1,22 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          -0.0007,
+          1.3713,
+          -0.0105
+        ],
+        "halfExtents": [
+          1.329,
+          1.3552,
+          0.1194
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Wall_Dam1_long_001.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Wall_Dam1_long_001_0",

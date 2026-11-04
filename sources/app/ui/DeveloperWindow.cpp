@@ -3453,11 +3453,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::DragFloat("Gravity (m/s2)", &settings.gravity, 0.05f, -30.0f, 30.0f, "%.2f");
                 ImGui::DragFloat("Step rate (Hz)", &settings.stepHz, 1.0f, 10.0f, 480.0f, "%.0f");
                 ImGui::DragInt("Threads", &settings.threads, 0.1f, 0, 16);
+                ImGui::Checkbox("Step beside the frame", &settings.async);
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("On: the step on its own thread, the poses taken at the hand-over; a step not done by then leaves the pose for a frame and the frame does not wait.\nOff: the step in Scene::Tick, on the game thread. --set=physics.async:0|1"); }
                 const physics::Stats ps = scene.Physics().GetStats();
                 ImGui::SeparatorText("The world");
                 ImGui::Text("%u objects: %u static, %u kinematic, %u dynamic (%u in the water)", ps.objects, ps.staticBodies, ps.kinematicBodies, ps.dynamicBodies, ps.floatingBodies);
                 ImGui::Text("%u awake, %u steps last frame, a step %.3f ms (avg %.3f)", ps.activeBodies, ps.stepsLastFrame, ps.stepMs, ps.stepMsEma);
-                ImGui::Text("%u shapes of %llu triangles, the last batch built in %.1f ms", ps.shapes, static_cast<unsigned long long>(ps.shapeTriangles), ps.lastBuildMs);
+                ImGui::Text("%llu hand-overs found the step running, %llu calls waited for one", static_cast<unsigned long long>(ps.handOversHeld), static_cast<unsigned long long>(ps.stepWaits));
+                if (ps.stepErrors != 0) { ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "%llu steps ran out of room: bodies are falling through the world", static_cast<unsigned long long>(ps.stepErrors)); }
+                ImGui::Text("%u meshes of %llu triangles, %u hulls, %u primitive; the last batch built in %.1f ms", ps.meshShapes, static_cast<unsigned long long>(ps.shapeTriangles),
+                    ps.hullShapes, ps.primitiveShapes, ps.lastBuildMs);
+                ImGui::Text("%.1f MB held", static_cast<double>(ps.bytes) / (1024.0 * 1024.0));
             }
 
             if (activeTab_ == Tab::Tessy)

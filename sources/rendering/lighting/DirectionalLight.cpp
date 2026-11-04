@@ -4,7 +4,7 @@
 #include <cmath>
 
 DirectionalLight::DirectionalLight()
-    : direction_(0.0f)
+    : direction_(0.0f, -1.0f, 0.0f) // what JsonLevel takes when a light does not say. A level with no light at all kept (0, 0, 0): the sun's LookAt asserted on its eye = its focus
     , color_(0.0f)
     , exposure_(1.0f)
     , ambient_(0.05f)

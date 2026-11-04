@@ -1,4 +1,22 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0,
+          1.3636,
+          -0.0025
+        ],
+        "halfExtents": [
+          0.6818,
+          1.363,
+          0.1282
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Wall_Clear_Short_003.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Wall_Clear_Short_003_0",

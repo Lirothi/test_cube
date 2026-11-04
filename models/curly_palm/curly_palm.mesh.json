@@ -1,4 +1,54 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.1002,
+          1.0316,
+          -0.1834
+        ],
+        "halfHeight": 0.2035,
+        "radius": 0.0611,
+        "rotationDeg": [
+          -176.7234,
+          -0.0021,
+          0.0369
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          0.0679,
+          0.6307,
+          -0.1301
+        ],
+        "halfHeight": 0.2107,
+        "radius": 0.0528,
+        "rotationDeg": [
+          162.037,
+          -2.754,
+          -8.43
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          0.0162,
+          0.2135,
+          -0.0279
+        ],
+        "halfHeight": 0.2234,
+        "radius": 0.0496,
+        "rotationDeg": [
+          170.3727,
+          -0.8264,
+          -4.8599
+        ],
+        "type": "cylinder"
+      }
+    ]
+  },
   "foliageGrow": 0.4000000059604645,
   "foliageInnerError": 0.3199999928474426,
   "foliageInnerRatio": 0.20999999344348907,

@@ -944,6 +944,18 @@ void TestPhysicsRoad(const EditorActionContext& actionCtx)
 
     const std::optional<json> ray = call(5, "physics_raycast", { { "origin", { 0.0, 100.0, 0.0 } }, { "direction", { 0.0, -1.0, 0.0 } } });
     Check(!(*ray)["result"]["isError"].get<bool>(), "physics_raycast answers: " + text(ray));
+
+    // place carries a hand-made shape per item, as it does the motion: the live road of Mesh Editor > Collision's Custom shapes.
+    const json shape = { { "shape", "custom" }, { "shapes", json::array({ { { "type", "sphere" }, { "center", { 0.0, 1.0, 0.0 } }, { "radius", 0.5 } } }) } };
+    const auto placeWith = [&](const json& collision)
+    {
+        json item = { { "asset", "models/coconut_palm/coconut_palm.mesh.json" }, { "position", { 1.0, 2.0, 3.0 } }, { "physics", "dynamic" }, { "collision", collision } };
+        return json{ { "action", "place" }, { "params", { { "items", json::array({ std::move(item) }) } } } };
+    };
+    const std::optional<json> placed = call(6, "preview_action", { { "command", placeWith(shape) } });
+    Check(!(*placed)["result"]["isError"].get<bool>() && text(placed).rfind("Would run", 0) == 0, "place takes a collision block: " + text(placed));
+    const std::optional<json> wrong = call(7, "preview_action", { { "command", placeWith(json(3)) } });
+    Check((*wrong)["result"]["isError"].get<bool>(), "a collision that is not a block is refused: " + text(wrong));
 }
 
 void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)

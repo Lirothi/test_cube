@@ -1,5 +1,100 @@
 {
   "bakeScale": 0.40050816535949707,
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0855,
+          0.2093,
+          0.0142
+        ],
+        "halfHeight": 0.2356,
+        "radius": 0.3144,
+        "rotationDeg": [
+          -1.6203,
+          0.085,
+          3.0012
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          0.0637,
+          0.55,
+          0.0006
+        ],
+        "halfHeight": 0.1061,
+        "radius": 0.2631,
+        "rotationDeg": [
+          -3.7857,
+          0.3382,
+          5.0973
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          0.0498,
+          0.8118,
+          -0.0107
+        ],
+        "halfHeight": 0.1565,
+        "radius": 0.2096,
+        "rotationDeg": [
+          -1.5602,
+          0.0446,
+          1.6371
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          0.0305,
+          1.0204,
+          -0.0208
+        ],
+        "halfHeight": 0.0545,
+        "radius": 0.2025,
+        "rotationDeg": [
+          -6.1729,
+          1.7382,
+          15.6661
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          0.0177,
+          1.1264,
+          -0.0305
+        ],
+        "halfHeight": 0.054,
+        "radius": 0.1777,
+        "rotationDeg": [
+          -4.0115,
+          -0.1541,
+          -2.1963
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          -0.0225,
+          1.8341,
+          -0.0399
+        ],
+        "halfHeight": 0.6553,
+        "radius": 0.1517,
+        "rotationDeg": [
+          -0.497,
+          0.0322,
+          3.7057
+        ],
+        "type": "cylinder"
+      }
+    ]
+  },
   "geometry": "models/young_palm/young_palm.mesh.bin",
   "materials": [
     "young_palm_0",

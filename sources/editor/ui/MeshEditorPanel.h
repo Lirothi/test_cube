@@ -1,5 +1,4 @@
 #pragma once
-#include "physics/PhysicsWorld.h" // physics::CollisionPreview
 #if WITH_EDITOR
 
 #include <cstdint>
@@ -7,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "editor/ui/CollisionEditorTab.h"
 #include "editor/ui/MeshEditorPreviewScene.h"
 #include "materials/TextureCube.h"
 #include "rendering/meshes/MeshManager.h" // BinaryInfo: per-LOD chunk triangle counts
@@ -34,6 +34,7 @@ public:
 
     // Load a `.mesh.json` for editing (content-browser EditMesh action). Resets prior state.
     void Open(const std::string& meshAssetPath);
+    void ReleaseGpuResources(Renderer& renderer) { previewScene_.ReleaseGpuResources(renderer); }
     // Expand a collapsed section on the next draw ("buoyancy"); unknown names are ignored.
     void ExpandSection(const std::string& section)
     {
@@ -84,14 +85,10 @@ private:
     bool          buoyancyOpen_ = false; // the section is open: the preview draws the pontoons
     std::string   restPoseStatus_;       // why the last "Lay flat (auto)" did nothing
     bool          expandBuoyancy_ = false;
-    // Collision (mesh.json "collision", docs/physics_plan.md): the shape these settings give, rebuilt when they change, drawn over
-    // the preview while the section is open.
-    bool          collisionOpen_ = false;
+    // The Collision tab (mesh.json "collision", docs/physics_plan.md). While it is the open tab the preview draws the shape and its gizmo.
+    CollisionEditorTab collisionTab_;
+    bool          collisionTabOpen_ = false;
     bool          expandCollision_ = false;
-    bool          collisionAsDynamic_ = false;
-    std::string   collisionPreviewKey_;
-    physics::CollisionPreview collisionPreview_;
-    void DrawCollisionSection();
     void DrawBuoyancySection(int& hoveredPontoonThisFrame);
     void DrawRestPoseSection();
     MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked

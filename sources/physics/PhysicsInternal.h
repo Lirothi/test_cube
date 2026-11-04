@@ -73,13 +73,17 @@ namespace physics
     };
     bool ReadSolidGeometry(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots, SolidGeometry& out);
 
-    // The kind `Auto` means for this motion, and the fallback where a kind cannot serve it.
+    // The kind a request means for this motion, and the fallback where a kind cannot serve it. Auto on a body that does not move stays
+    // Auto: the geometry's size decides (BuildShape).
     ShapeKind ResolveShapeKind(ShapeKind requested, bool dynamicBody);
 
     struct BuiltShape
     {
         JPH::RefConst<JPH::Shape> shape; // null = no body: nothing solid, or the build failed
+        ShapeKind kind = ShapeKind::None; // what it became: Auto resolved, a hull that failed is a box
         std::uint32_t triangles = 0;     // what the geometry handed in
+        std::uint32_t lodUsed = 0;
+        std::uint32_t lodCount = 0;
         Math::float3 boundsMin;
         Math::float3 boundsMax;
         float smallestExtent = 0.0f;     // m, before the object's scale
@@ -87,8 +91,28 @@ namespace physics
     };
     BuiltShape BuildShape(const SolidGeometry& geometry, const CollisionSettings& settings, ShapeKind kind);
 
-    // The asset's shape under the object's scale. Non-uniform where the shape allows it, the nearest valid scale where not.
+    // What Jolt does not have: a touching body loses speed at a constant rate, as to a torque that does not grow with its spin. Called after each step, on the velocities the
+    // solver left. Only while something other than gravity moved it this step (`lastVelocityY` carries the vertical speed over): a spin in flight stays.
+    void ApplyRollingResistance(JPH::BodyInterface& bodies, JPH::BodyID id, float resistance, float radius, float gravity, float dt, float& lastVelocityY);
+
+    // ShapeKind::Auto: the rule. A mesh under this many metres at its largest takes a hull even when static: sticks, shells, candles and cups
+    // carry thousands of triangles for nothing, and a hull is cheaper to touch. A mesh with leaves takes this LOD (its slots keep their
+    // trunk; LOD 0 has 2 900-4 300 triangles of it for a palm and LOD 2 69-155).
+    constexpr float kAutoHullBelow = 1.0f;
+    constexpr int kAutoFoliageLod = 2;
+
+    // The one road from an asset's settings to its shape: the world, the Mesh Editor's preview and the gates.
+    BuiltShape BuildAssetShape(const std::string& geometryPath, const CollisionSettings& settings, bool dynamicBody);
+
+    // JoltRuntime.cpp: what Jolt holds now, in bytes (mi_usable_size at each allocation and free).
+    std::uint64_t JoltBytes();
+
+    // The asset's shape under the object's scale. Non-uniform where the shape allows it, the nearest valid scale where not (and it says so).
     JPH::RefConst<JPH::Shape> ScaledInstance(const JPH::Shape& shape, const Math::float3& scale, std::string& error);
+
+    // Custom primitives at a scale Jolt cannot apply to them: mirrored, or stretched. A box and a cylinder take it exactly along their own axes; turned against a stretch they stay upright
+    // boxes round the nearest axes; a sphere takes the largest of the three, it has no other form.
+    CollisionSettings BakeScale(const CollisionSettings& settings, const Math::float3& scale);
 
     // A body the water carries. Jolt's buoyancy drag is quadratic, so a small bob dies very slowly: 1 m of box at 1.1 was still moving
     // 0.4 m/s after 20 s on flat water with Jolt's defaults (gate `water`).

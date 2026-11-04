@@ -677,7 +677,7 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         const float radius = sphereRadius + renderCascadeConfig_.overlapInTexels * texelEstimate;
         const float unitsPerTexel = (2.0f * radius) / static_cast<float>(contentRes);
 
-        const float3 up(0, 1, 0);
+        float3 up(0, 1, 0);
         // S7: the light "eye" sits behind the cascade sphere by casterReachWS, not at a fixed
         // maxDistance for every cascade. It does NOT set the depth range (near/far below do) -- it
         // only guarantees that any caster within casterReachWS of the light still has z_ls > 0, i.e.
@@ -693,7 +693,11 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
         // the camera moves, pinning shadow texels to fixed world cells -> no edge crawl.
         const float3 fwd = sunDirWS.Normalized();
         float3 right = up.Cross(fwd);
-        if (right.Dot(right) < 1e-12f) { right = float3(0, 0, 1).Cross(fwd); }
+        if (right.Dot(right) < 1e-12f)
+        {
+            up = float3(0, 0, 1); // a sun straight overhead: LookAtLH below takes it too, or its view has no x axis (a level's default sun, and the quaternion a frustum makes of it)
+            right = up.Cross(fwd);
+        }
         right = right.Normalized();
         const float3 trueUp = fwd.Cross(right);
 
@@ -1119,9 +1123,13 @@ void Scene::UpdateClipmap(const Camera& camera)
         }
         return;
     }
-    const float3 up(0, 1, 0);
+    float3 up(0, 1, 0);
     float3 right = up.Cross(fwd);
-    if (right.Dot(right) < 1e-12f) { right = float3(0, 0, 1).Cross(fwd); }
+    if (right.Dot(right) < 1e-12f)
+    {
+        up = float3(0, 0, 1); // a sun straight overhead: the levels' LookAtLH takes it too
+        right = up.Cross(fwd);
+    }
     right = right.Normalized();
     const float3 trueUp = fwd.Cross(right);
 
@@ -2201,6 +2209,7 @@ void Scene::Sync(Renderer* renderer)
     // they read the frame's CalcMatrices before.
     renderCameraCut_ |= renderCamera_.TakePose(camera_);
     if (renderer) { camera_.CalcMatrices(renderer); }
+    physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
     // G4: every object's transform, bounds and move flag (SyncSceneState -- the step PostTick used to run), its
     // material params and the render-facing animation of emitters, spinners and the ocean, and its switches.
     {
@@ -3540,9 +3549,12 @@ void Scene::Render(Renderer* renderer) {
         RebuildShadowCasters(*renderer);
     }
 
-    lightManager_.UpdateSpotLightCache();
-    // Plan S10e: which lights' shadows moved (UE's light mobility) -- before PrepareViews builds their views.
-    lightManager_.UpdateLightMobility(renderer->GetTotalFrameNumber(), vsm::g_lightActiveFrameCount);
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneRenderLightCache);
+        lightManager_.UpdateSpotLightCache();
+        // Plan S10e: which lights' shadows moved (UE's light mobility) -- before PrepareViews builds their views.
+        lightManager_.UpdateLightMobility(renderer->GetTotalFrameNumber(), vsm::g_lightActiveFrameCount);
+    }
 
     // Rung 0 / Steps 1-2: refresh the persistent per-caster shadow buffers (instance + bounds),
     // re-uploading only the movers' entries into this frame's ring region. Pure CPU write into
@@ -3551,12 +3563,15 @@ void Scene::Render(Renderer* renderer) {
     // A caster-set change mid-session (the editor's setEnabled / spawn) was just rebuilt, and that drops the mega VB/IB:
     // without it the local views lose their compaction and the Tessy atlas path, VSM its single-draw page render.
     if (shadowGpu_.TakeMegaRebuildRequest()) { RebuildShadowMegaBuffer(*renderer); }
-    shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
-    shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
-    shadowGpu_.PollTessyAtlasStats(renderer); // Tessy N4: the atlas cluster cull's counters of frame N - 3
-    vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
-    vsm_.UpdateDynamicResolution(renderer); // S10e: the page pool's load of frame N - kFrameCount -> the local mip bias
-    vsm_.PollHzbStats(renderer);          // S5b.2: the light-space two-pass counters of frame N - 3
+    {
+        CPU_SCOPE(ProfilerScopes::kSceneRenderPolls);
+        shadowGpu_.PollValidation(renderer); // Step 4: one-shot GPU-vs-CPU cull-count check when ready
+        shadowGpu_.PollHzbStats(renderer);   // S5b: the cascade HZB cull's counters of frame N - 3
+        shadowGpu_.PollTessyAtlasStats(renderer); // Tessy N4: the atlas cluster cull's counters of frame N - 3
+        vsm_.PollPageRequestDebug(renderer);  // Step 19: one-shot page-request count log when ready
+        vsm_.UpdateDynamicResolution(renderer); // S10e: the page pool's load of frame N - kFrameCount -> the local mip bias
+        vsm_.PollHzbStats(renderer);          // S5b.2: the light-space two-pass counters of frame N - 3
+    }
 
     // Occlusion plan S4: does the indirect G-buffer run this frame? Decided here, BEFORE the
     // camera prepare (which drops eligible objects from its CPU buckets on such frames) and the

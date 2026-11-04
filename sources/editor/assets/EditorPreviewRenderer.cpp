@@ -40,7 +40,8 @@ namespace
     constexpr std::uint32_t kPreviewFallbackSlot = kPreviewMaterialSlots;
     constexpr std::uint32_t kPreviewLightMarkerSlot = kPreviewFallbackSlot + 1;
     constexpr std::uint32_t kPreviewSkyboxSlot = kPreviewLightMarkerSlot + 1;
-    constexpr std::uint32_t kPreviewDrawSlots = kPreviewSkyboxSlot + 1;
+    constexpr std::uint32_t kPreviewLinesSlot = kPreviewSkyboxSlot + 1;
+    constexpr std::uint32_t kPreviewDrawSlots = kPreviewLinesSlot + 1;
     constexpr std::uint32_t kPreviewMaterialTexturesPerDraw = 3;
     // t3 the sky; t4..t6 the renderer's split-sum IBL (prefiltered radiance, irradiance, BRDF
     // LUT), bound only when the preview is lit by the level (PhysicalLighting) and null otherwise.
@@ -96,11 +97,28 @@ namespace
     static_assert(sizeof(PreviewConstants) <= kPreviewConstantStride,
         "PreviewConstants must fit one aligned preview CB region.");
 
-    ComPtr<ID3DBlob> CompilePreviewShader(const char* entry, const char* target)
+    // shaders/editor_preview_lines.hlsl's cbuffer, and its instance: one segment.
+    struct PreviewLinesConstants
+    {
+        dx::XMFLOAT4X4 viewProj;
+        dx::XMFLOAT4 viewport; // xy = pixels
+    };
+    static_assert(sizeof(PreviewLinesConstants) <= kPreviewConstantStride, "Must fit one aligned preview CB region.");
+    struct PreviewLineSegment
+    {
+        dx::XMFLOAT3 a;
+        float widthPixels;
+        dx::XMFLOAT3 b;
+        float unused;
+        dx::XMFLOAT4 color; // linear: the target is sRGB
+    };
+    static_assert(sizeof(PreviewLineSegment) == 48, "Matches the input layout in EnsureInitialized.");
+
+    ComPtr<ID3DBlob> CompilePreviewShader(const char* entry, const char* target, const wchar_t* file = L"shaders/editor_preview.hlsl")
     {
         ComPtr<ID3DBlob> blob;
         ComPtr<ID3DBlob> errors;
-        const HRESULT hr = D3DCompileFromFile(L"shaders/editor_preview.hlsl",
+        const HRESULT hr = D3DCompileFromFile(file,
             nullptr,
             D3D_COMPILE_STANDARD_FILE_INCLUDE,
             entry,
@@ -148,8 +166,11 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     ComPtr<ID3DBlob> debugPs = CompilePreviewShader("DebugPS", "ps_5_0");
     ComPtr<ID3DBlob> vertexNormalVs = CompilePreviewShader("VertexNormalVS", "vs_5_0");
     ComPtr<ID3DBlob> vertexNormalGs = CompilePreviewShader("VertexNormalGS", "gs_5_0");
+    ComPtr<ID3DBlob> linesVs = CompilePreviewShader("LinesVS", "vs_5_0", L"shaders/editor_preview_lines.hlsl");
+    ComPtr<ID3DBlob> linesFrontPs = CompilePreviewShader("LinesFrontPS", "ps_5_0", L"shaders/editor_preview_lines.hlsl");
+    ComPtr<ID3DBlob> linesBehindPs = CompilePreviewShader("LinesBehindPS", "ps_5_0", L"shaders/editor_preview_lines.hlsl");
     if (!vs || !ps || !cubeVs || !cubePs || !cubeArrayPs || !skyboxPs ||
-        !debugPs || !vertexNormalVs || !vertexNormalGs)
+        !debugPs || !vertexNormalVs || !vertexNormalGs || !linesVs || !linesFrontPs || !linesBehindPs)
     {
         return false;
     }
@@ -274,6 +295,44 @@ bool EditorPreviewRenderer::EnsureInitialized(ID3D12Device* device,
     vertexNormalsPso.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_POINT;
     if (FAILED(device->CreateGraphicsPipelineState(&vertexNormalsPso,
             IID_PPV_ARGS(&vertexNormalsPipeline_))))
+    {
+        return false;
+    }
+
+    // The lines: one instance a segment, six vertices a quad, blended over the picture and writing no depth. Two passes
+    // over the mesh's depth, what is behind it first. No depth clip: the frustum is fitted to the mesh, and a shape may
+    // reach past it (past the far plane it reads as behind, nearer than the near as in front).
+    const D3D12_INPUT_ELEMENT_DESC lineLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 0,  D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32_FLOAT,          0, 12, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "POSITION", 1, DXGI_FORMAT_R32G32B32_FLOAT,    0, 16, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+    };
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC linesPso = pso;
+    linesPso.VS = { linesVs->GetBufferPointer(), linesVs->GetBufferSize() };
+    linesPso.PS = { linesBehindPs->GetBufferPointer(), linesBehindPs->GetBufferSize() };
+    linesPso.InputLayout = { lineLayout, _countof(lineLayout) };
+    linesPso.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    linesPso.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    linesPso.RasterizerState.DepthClipEnable = FALSE;
+    D3D12_RENDER_TARGET_BLEND_DESC& lineBlend = linesPso.BlendState.RenderTarget[0];
+    lineBlend.BlendEnable = TRUE;
+    lineBlend.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    lineBlend.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    lineBlend.BlendOp = D3D12_BLEND_OP_ADD;
+    lineBlend.SrcBlendAlpha = D3D12_BLEND_ONE;
+    lineBlend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    lineBlend.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    linesPso.DepthStencilState.DepthEnable = TRUE;
+    linesPso.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    linesPso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_GREATER;
+    if (FAILED(device->CreateGraphicsPipelineState(&linesPso, IID_PPV_ARGS(&linesBehindPipeline_))))
+    {
+        return false;
+    }
+    linesPso.PS = { linesFrontPs->GetBufferPointer(), linesFrontPs->GetBufferSize() };
+    linesPso.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    if (FAILED(device->CreateGraphicsPipelineState(&linesPso, IID_PPV_ARGS(&linesFrontPipeline_))))
     {
         return false;
     }
@@ -593,7 +652,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     int highlightSubmeshOrdinal,
     const TextureCube* environment,
     float environmentExposure,
-    const PhysicalLighting* physical)
+    const PhysicalLighting* physical,
+    const PreviewLines* lines)
 {
     ID3D12Device* device = renderer.GetDevice();
     if (!initialized_ || !device || !cl || renderSlot >= renderSlots_.size())
@@ -706,6 +766,8 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         fovY, aspect, framedNearZ, framedFarZ);
     const dx::XMMATRIX mvp = dx::XMMatrixMultiply(framedView, proj);
     dx::XMStoreFloat4x4(&lastViewProj_.m, mvp);
+    dx::XMStoreFloat4x4(&lastView_.m, framedView);
+    dx::XMStoreFloat4x4(&lastProj_.m, proj);
 
     auto barrier = [cl](ID3D12Resource* res,
         D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
@@ -1199,6 +1261,11 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
         render::g_renderStats.AddDraw(markerDraw.indexCount, 1u);
     }
 
+    if (lines)
+    {
+        RecordLines(device, cl, frame, *lines, width, height);
+    }
+
     // Leave the thumbnail in a shader-read state, exactly like a loaded texture,
     // and return the depth target to COMMON for the next render.
     barrier(color.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -1213,6 +1280,81 @@ Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordPreview(
     }
 
     return color;
+}
+
+void EditorPreviewRenderer::RecordLines(ID3D12Device* device, ID3D12GraphicsCommandList* cl, RenderSlot& frame, const PreviewLines& lines,
+    std::uint32_t width, std::uint32_t height)
+{
+    const std::size_t plainSegments = lines.plain ? lines.plain->size() / 2 : 0;
+    const std::size_t selectedSegments = lines.selected ? lines.selected->size() / 2 : 0;
+    const std::size_t segments = plainSegments + selectedSegments;
+    if (segments == 0)
+    {
+        return;
+    }
+    if (segments > frame.lineCapacity)
+    {
+        const std::size_t capacity = std::max<std::size_t>(segments * 2, 1024);
+        D3D12_HEAP_PROPERTIES uploadHeap{};
+        uploadHeap.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = static_cast<UINT64>(capacity) * sizeof(PreviewLineSegment);
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = DXGI_FORMAT_UNKNOWN;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ComPtr<ID3D12Resource> buffer;
+        std::uint8_t* mapped = nullptr;
+        const D3D12_RANGE noRead{ 0, 0 };
+        if (FAILED(gpu::CreateCommittedResource(device, &uploadHeap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                MemTag::Editor, L"EditorPreview.Lines", IID_PPV_ARGS(&buffer))) ||
+            FAILED(buffer->Map(0, &noRead, reinterpret_cast<void**>(&mapped))))
+        {
+            LOG_WARNING_ONCE(logging::LogCategory::Editor, "mesh preview: no room for the collision shape's {} lines", segments);
+            return;
+        }
+        frame.lineBuffer = std::move(buffer);
+        frame.lineBufferMapped = mapped;
+        frame.lineCapacity = capacity;
+    }
+
+    auto* out = reinterpret_cast<PreviewLineSegment*>(frame.lineBufferMapped);
+    const auto add = [&out](const std::vector<Math::float3>* points, float widthPixels, const dx::XMFLOAT4& color)
+    {
+        if (!points) { return; }
+        for (std::size_t i = 0; i + 1 < points->size(); i += 2, ++out)
+        {
+            const Math::float3& a = (*points)[i];
+            const Math::float3& b = (*points)[i + 1];
+            *out = PreviewLineSegment{ dx::XMFLOAT3(a.x, a.y, a.z), widthPixels, dx::XMFLOAT3(b.x, b.y, b.z), 0.0f, color };
+        }
+    };
+    add(lines.plain, 1.0f, dx::XMFLOAT4(0.188f, 1.0f, 0.188f, 0.8f));     // sRGB 120 255 120
+    add(lines.selected, 2.0f, dx::XMFLOAT4(1.0f, 0.61f, 0.045f, 1.0f));   // sRGB 255 205 60
+
+    PreviewLinesConstants constants{};
+    constants.viewProj = lastViewProj_.m;
+    constants.viewport = dx::XMFLOAT4(static_cast<float>(width), static_cast<float>(height), 0.0f, 0.0f);
+    std::memcpy(frame.constantBufferMapped + static_cast<std::size_t>(kPreviewLinesSlot) * kPreviewConstantStride, &constants, sizeof(constants));
+
+    D3D12_VERTEX_BUFFER_VIEW view{};
+    view.BufferLocation = frame.lineBuffer->GetGPUVirtualAddress();
+    view.SizeInBytes = static_cast<UINT>(segments * sizeof(PreviewLineSegment));
+    view.StrideInBytes = sizeof(PreviewLineSegment);
+    cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cl->IASetVertexBuffers(0, 1, &view);
+    cl->IASetIndexBuffer(nullptr);
+    cl->SetGraphicsRootConstantBufferView(0, frame.constantBuffer->GetGPUVirtualAddress() +
+        static_cast<UINT64>(kPreviewLinesSlot) * kPreviewConstantStride);
+    for (ID3D12PipelineState* pipeline : { linesBehindPipeline_.Get(), linesFrontPipeline_.Get() })
+    {
+        cl->SetPipelineState(pipeline);
+        cl->DrawInstanced(6, static_cast<UINT>(segments), 0, 0);
+        render::g_renderStats.AddDraw(6u, static_cast<UINT>(segments));
+    }
 }
 
 Microsoft::WRL::ComPtr<ID3D12Resource> EditorPreviewRenderer::RecordCubeThumbnail(

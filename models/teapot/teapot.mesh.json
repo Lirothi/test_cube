@@ -1,4 +1,7 @@
 {
+  "collision": {
+    "shape": "hull"
+  },
   "geometry": "models/teapot/teapot.mesh.bin",
   "lod3Aggressive": false,
   "material": "bronze",

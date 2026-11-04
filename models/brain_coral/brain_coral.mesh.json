@@ -1,5 +1,8 @@
 {
   "bakeScale": 0.17027303576469421,
+  "collision": {
+    "shape": "hull"
+  },
   "geometry": "models/brain_coral/brain_coral.mesh.bin",
   "material": "brain_coral_0",
   "source": "import_staging\\brain_coral\\scene.gltf",

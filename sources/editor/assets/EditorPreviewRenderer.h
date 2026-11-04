@@ -129,6 +129,14 @@ public:
     // Records upload work into `load` on first use; returns null on failure.
     std::shared_ptr<Mesh> EnsureSphere(Renderer& renderer, UploadBatch& load);
 
+    // Lines drawn into the preview after the mesh, against its depth: in full in front of it, faint behind it. Pairs of
+    // points in mesh space (the Mesh Editor's collision shape); `selected` wider and in its own colour.
+    struct PreviewLines
+    {
+        const std::vector<Math::float3>* plain = nullptr;
+        const std::vector<Math::float3>* selected = nullptr;
+    };
+
     // Record one mesh draw into `cl` and return its color target (sRGB, left in
     // PIXEL_SHADER_RESOURCE, ready for ImGui). Passing an existing target updates
     // it in place; renderSlot selects the per-frame descriptors/depth/constants.
@@ -174,7 +182,8 @@ public:
         float environmentExposure = 1.0f,
         // THE RENDERER'S LIGHTING instead of the preview's own. When set, it replaces `light`'s
         // colour/exposure/ambient and `environment` entirely; see PhysicalLighting.
-        const PhysicalLighting* physical = nullptr);
+        const PhysicalLighting* physical = nullptr,
+        const PreviewLines* lines = nullptr);
 
     // Render the +X face of a cube texture into the standard 2D thumbnail
     // target. The caller submits `cl` and owns the returned color target.
@@ -187,9 +196,14 @@ public:
     // identity, so this maps mesh space straight to clip). An overlay drawn over that image --
     // the Mesh Editor's pontoons -- projects with it and cannot drift from the picture.
     const Math::mat4& LastViewProj() const { return lastViewProj_; }
+    // The same, apart: a gizmo needs the eye.
+    const Math::mat4& LastView() const { return lastView_; }
+    const Math::mat4& LastProj() const { return lastProj_; }
 
 private:
     Math::mat4 lastViewProj_;
+    Math::mat4 lastView_;
+    Math::mat4 lastProj_;
 
     struct RenderSlot
     {
@@ -204,6 +218,9 @@ private:
         D3D12_GPU_DESCRIPTOR_HANDLE srvGpuHandle{};
         std::uint8_t* constantBufferMapped = nullptr;
         std::uint32_t depthSize = 0;
+        Microsoft::WRL::ComPtr<ID3D12Resource> lineBuffer; // grown when asked; the slot's last use is done by the time it records
+        std::uint8_t* lineBufferMapped = nullptr;
+        std::size_t lineCapacity = 0;
     };
 
     Microsoft::WRL::ComPtr<ID3D12Resource> CreateColorTarget(ID3D12Device* device,
@@ -212,6 +229,8 @@ private:
     bool CreateSharedDepth(ID3D12Device* device,
         std::uint32_t size,
         RenderSlot& slot);
+    void RecordLines(ID3D12Device* device, ID3D12GraphicsCommandList* cl, RenderSlot& frame, const PreviewLines& lines,
+        std::uint32_t width, std::uint32_t height);
 
     MeshManager meshes_;
     MaterialDataManager materials_;
@@ -223,6 +242,8 @@ private:
     Microsoft::WRL::ComPtr<ID3D12PipelineState> wireframePipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> vertexNormalsPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> lightMarkerPipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> linesFrontPipeline_;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> linesBehindPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> skyboxPipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubePipeline_;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> cubeArrayPipeline_;

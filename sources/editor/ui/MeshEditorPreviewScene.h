@@ -68,6 +68,8 @@ public:
         // Mesh space -> clip for the image in `texture` (the frame it was rendered with, cached
         // or not). Valid when state == Ready.
         Math::mat4 viewProj;
+        Math::mat4 viewMatrix;
+        Math::mat4 projMatrix;
     };
 
     MeshEditorPreviewScene();
@@ -101,11 +103,18 @@ public:
         float environmentExposure = 1.0f,
         // The level's own lighting (see EditorPreviewRenderer::PhysicalLighting); null = the
         // preview's legacy look.
-        const EditorPreviewRenderer::PhysicalLighting* physical = nullptr);
+        const EditorPreviewRenderer::PhysicalLighting* physical = nullptr,
+        // Lines over the mesh against its depth (the collision shape). The revision says when they changed: the preview
+        // re-renders only when something it draws did. 0 = no lines.
+        const EditorPreviewRenderer::PreviewLines* lines = nullptr,
+        std::uint64_t linesRevision = 0);
 
     // Release resources while the renderer is available. Used when switching
     // assets; normal application teardown already idles the GPU first.
     void Reset(Renderer& renderer);
+
+    // Everything, pipelines included, before the device goes (the debug layer's exit report). The next Update builds it again.
+    void ReleaseGpuResources(Renderer& renderer);
 
     // UE's AUTOMATIC screen size of each LOD of the loaded mesh (Mesh::GetLodScreenSizes) -- what an
     // authored mesh.json "lodScreenSize" replaces. Levels the mesh lacks read 0. False while nothing

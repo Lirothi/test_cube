@@ -360,7 +360,7 @@ void UnregisterMemoryProvider(const void* self)
     }
 }
 
-MemoryPlatform ReadMemoryPlatform(ID3D12Device* device)
+MemoryPlatform ReadMemoryPlatform(ID3D12Device* device, bool walkHeaps)
 {
     State& s = St();
     MemoryPlatform p;
@@ -388,9 +388,12 @@ MemoryPlatform ReadMemoryPlatform(ID3D12Device* device)
     mi_stats_get(sizeof(miStats), &miStats);
     p.mimallocCommitBytes = miStats.committed.current > 0 ? static_cast<std::uint64_t>(miStats.committed.current) : 0;
 
-    const HeapTotals heaps = ProcessHeapTotals();
-    p.ntHeapsBytes = heaps.committed;
-    p.ntHeapCount = heaps.count;
+    if (walkHeaps)
+    {
+        const HeapTotals heaps = ProcessHeapTotals();
+        p.ntHeapsBytes = heaps.committed;
+        p.ntHeapCount = heaps.count;
+    }
 
     p.newPerFrame = s.newPerFrame;
     p.mainNewPerFrame = s.mainNewPerFrame;
@@ -849,12 +852,18 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
         DumpMemoryReport(device, s.frames);
     }
     if (s.lastSec >= 0.0 && nowSec - s.lastSec < periodSec) { return; }
+    static const Profiler::ScopeNameKey kScopeLine = Profiler::RegisterTraceLiteral(L"Mem: the line");
+    CPU_SCOPE(kScopeLine);
     const bool first = s.lastSec < 0.0;
     s.lastSec = nowSec;
     const std::uint64_t periodFrames = s.frames - s.framesAtLine;
     s.framesAtLine = s.frames;
 
-    const MemoryPlatform plat = ReadMemoryPlatform(device);
+    // HeapSummary walks a heap's blocks under its lock, and the driver's heaps made that 21.5 ms on wind_test, every other part of this line 0.00 (2026-11-04, a --trace over
+    // 20 s): a spike in the frame each time the line was due. On a thread of its own it spiked just the same, the render thread waiting on the driver's heap lock. So not in
+    // this line, like the region walk below: --memtrack (who asked for detail), --memreport, get_memory and the Memory tab read the heaps.
+    const bool walkHeaps = mem::MemTrackEnabled();
+    const MemoryPlatform plat = ReadMemoryPlatform(device, walkHeaps);
     const std::uint64_t privateBytes = plat.privateBytes;
     const std::uint64_t workingSet = plat.workingSetBytes;
     const bool haveVram = plat.haveVram;
@@ -902,8 +911,11 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
         // A mimalloc built without OS statistics reports 0: say unknown, never "0 MB".
         n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | mi commit n/a");
     }
-    n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | heaps %.0f MB (%u) | other %.0f MB",
-                       Mb(heaps.committed), heaps.count, otherMb);
+    if (walkHeaps)
+    {
+        n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | heaps %.0f MB (%u) | other %.0f MB",
+                           Mb(heaps.committed), heaps.count, otherMb);
+    }
     if (const std::uint32_t ringCapacity = s.ringCapacity.load(std::memory_order_relaxed); ringCapacity > 0)
     {
         n += std::snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " | desc ring %u/%u",
@@ -992,7 +1004,7 @@ void TickMemoryReport(ID3D12Device* device, double nowSec, double periodSec)
                               "mem regions: private commit %.0f MB in %u reservations (walk %.1f ms) | mimalloc %.0f | "
                               "write-combined %.0f | exec %.0f | rest %.0f MB (NT heaps %.0f of it) | biggest:",
                               Mb(r.committed), r.reservations, r.ms, Mb(r.mimalloc), Mb(r.writeCombine), Mb(r.exec),
-                              Mb(rest), Mb(heaps.committed));
+                              Mb(rest), Mb(ProcessHeapTotals().committed));
         for (int i = 0; i < r.topCount && k < static_cast<int>(sizeof(regions)) - 64; ++i)
         {
             const RegionTotals::Big& b = r.top[i];

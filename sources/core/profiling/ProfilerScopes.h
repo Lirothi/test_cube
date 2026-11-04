@@ -63,6 +63,13 @@ extern const Profiler::ScopeNameKey kSceneTickPostObjects;
 extern const Profiler::ScopeNameKey kSceneTickBuoyancy;
 extern const Profiler::ScopeNameKey kSceneTickPhysics;
 extern const Profiler::ScopeNameKey kPhysicsStep;
+extern const Profiler::ScopeNameKey kPhysicsSyncPoses;
+extern const Profiler::ScopeNameKey kPhysicsWaitStep;
+extern const Profiler::ScopeNameKey kPhysicsAfterStep;
+extern const Profiler::ScopeNameKey kShadowGpuUpdate;
+extern const Profiler::ScopeNameKey kShadowGpuCasterMeta;
+extern const Profiler::ScopeNameKey kSceneRenderLightCache;
+extern const Profiler::ScopeNameKey kSceneRenderPolls;
 extern const Profiler::ScopeNameKey kSceneTickWind;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kSceneSync; // game thread plan G1: the hand-over

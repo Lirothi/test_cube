@@ -1,4 +1,22 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "halfExtents": [
+          0.5,
+          0.5,
+          0.5
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/box/box.mesh.bin",
   "lod3Aggressive": false,
   "material": "bronze",

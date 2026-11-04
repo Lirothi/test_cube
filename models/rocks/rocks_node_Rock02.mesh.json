@@ -1,5 +1,8 @@
 {
   "bakeScale": 0.1,
+  "collision": {
+    "shape": "hull"
+  },
   "geometry": "models/rocks/rocks_node_Rock02.mesh.bin",
   "material": "rocks_Rock02_0",
   "pivot": "base",

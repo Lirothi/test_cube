@@ -5,11 +5,18 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <random>
+#include <thread>
 #include <tuple>
 
 #include "core/logging/Log.h"
+#include "core/task/TaskSystem.h"
+#include "core/threading/RenderThread.h"
+#include "core/threading/ThreadRole.h"
+#include "physics/CollisionJson.h"
 #include "physics/PhysicsWorld.h"
+#include "rendering/renderables/RenderableObject.h"
 #include "third_party/json/json.hpp"
 
 // The gates of docs/physics_plan.md section 5. Each one has an arm that MUST come out wrong -- a reversed triangle list, a coarser
@@ -631,6 +638,913 @@ namespace physics
             return std::fabs(platformY - 1.0f) < 0.02f && std::fabs(boxY - 1.48f) < 0.03f ? Verdict::Pass : Verdict::Fail;
         }
 
+        // ------------------------------------------------------------------------------------------------------- autoshape
+        // ShapeKind::Auto's rule on the real assets (the island's triangles, a coconut's hull, a palm's LOD 2 trunk), and a trunk that keeps its
+        // shape: rays through LOD 0's surface along its normal land on the shape where they land on LOD 0. The arms that must come out wrong:
+        // the rule off gives the palm its LOD 0, and LOD 3 stands further from the surface than LOD 2.
+        struct FitBand
+        {
+            int rays = 0;
+            int misses = 0;
+            float medianM = 0.0f;
+            float p95M = 0.0f;
+            float MissShare() const { return rays > 0 ? static_cast<float>(misses) / rays : 0.0f; }
+        };
+        struct TrunkFit
+        {
+            FitBand low;  // under kWalkerReach over the mesh's foot: what a person or a low shot meets
+            FitBand high; // the rest: what only something falling out of the crown meets
+        };
+        constexpr float kWalkerReach = 3.0f;
+
+        // Rays through LOD 0's surface along its normal, area-weighted: where the coarse shape's first hit lies against LOD 0's own (a surface can lie
+        // in front of the one sampled, and then both shapes must find that one).
+        TrunkFit MeasureTrunk(const SolidGeometry& truth, const JPH::Shape& fine, const JPH::Shape& coarse)
+        {
+            TrunkFit out;
+            std::vector<float> weights;
+            weights.reserve(truth.indices.size() / 3);
+            float total = 0.0f;
+            float foot = FLT_MAX;
+            const auto cornerOf = [&truth](size_t i) { return truth.positions[truth.indices[i]]; };
+            for (size_t i = 0; i + 2 < truth.indices.size(); i += 3)
+            {
+                total += 0.5f * (cornerOf(i + 1) - cornerOf(i)).Cross(cornerOf(i + 2) - cornerOf(i)).Length();
+                weights.push_back(total);
+                foot = std::min({ foot, cornerOf(i).y, cornerOf(i + 1).y, cornerOf(i + 2).y });
+            }
+            if (total <= 0.0f) { return out; }
+            TestWorld fineWorld(1), coarseWorld(1);
+            fineWorld.AddStatic(&fine);
+            coarseWorld.AddStatic(&coarse);
+            fineWorld.system.OptimizeBroadPhase();
+            coarseWorld.system.OptimizeBroadPhase();
+            std::mt19937 random(4242);
+            std::uniform_real_distribution<float> pick(0.0f, total);
+            constexpr float kReach = 0.5f; // a trunk is thinner than this: the first hit along the ray is on the side it starts on
+            std::vector<float> offLow, offHigh;
+            for (int r = 0; r < 1500; ++r)
+            {
+                const size_t tri = static_cast<size_t>(std::lower_bound(weights.begin(), weights.end(), pick(random)) - weights.begin());
+                const Math::float3 a = cornerOf(tri * 3), b = cornerOf(tri * 3 + 1), c = cornerOf(tri * 3 + 2);
+                const Math::float3 cross = (b - a).Cross(c - a);
+                if (cross.Length() < 1.0e-9f) { continue; }
+                const Math::float3 normal = cross.Normalized();
+                const Math::float3 centre = (a + b + c) * (1.0f / 3.0f);
+                const JPH::RRayCast ray(ToJolt(centre + normal * kReach), ToJolt(normal * (-2.0f * kReach)));
+                JPH::RayCastResult fineHit, coarseHit;
+                if (!fineWorld.system.GetNarrowPhaseQuery().CastRay(ray, fineHit)) { continue; }
+                const bool low = centre.y - foot < kWalkerReach;
+                FitBand& band = low ? out.low : out.high;
+                ++band.rays;
+                if (!coarseWorld.system.GetNarrowPhaseQuery().CastRay(ray, coarseHit))
+                {
+                    ++band.misses;
+                    continue;
+                }
+                (low ? offLow : offHigh).push_back(std::fabs(coarseHit.mFraction - fineHit.mFraction) * 2.0f * kReach);
+            }
+            const auto finish = [](std::vector<float>& off, FitBand& band)
+            {
+                if (off.empty()) { return; }
+                std::sort(off.begin(), off.end());
+                band.medianM = off[off.size() / 2];
+                band.p95M = off[off.size() * 95 / 100];
+            };
+            finish(offLow, out.low);
+            finish(offHigh, out.high);
+            return out;
+        }
+
+        Verdict GateAutoShape(std::string& detail)
+        {
+            Settings& knobs = GameSettings();
+            const Settings saved = knobs;
+            knobs.autoShapes = true;
+            knobs.forceLod = -1;
+            const BuiltShape island = BuildAssetShape(kIsland, CollisionSettings{}, false);
+            const BuiltShape coconut = BuildAssetShape("models/coconut/coconut.mesh.bin", CollisionSettings{}, false);
+            if (!island.shape || !coconut.shape)
+            {
+                knobs = saved;
+                detail = "no island or no coconut";
+                return Verdict::Skip;
+            }
+            CollisionSettings foliageAsset;
+            bool hasSolid = false;
+            foliageAsset.excludeSlots = FoliageSlotsOf(kPalmJson, hasSolid);
+            const BuiltShape palm = BuildAssetShape(kPalmBin, foliageAsset, false);
+            const BuiltShape palmDynamic = BuildAssetShape(kPalmBin, foliageAsset, true);
+            knobs.autoShapes = false;
+            const BuiltShape palmRuleOff = BuildAssetShape(kPalmBin, foliageAsset, false);
+            const BuiltShape coconutRuleOff = BuildAssetShape("models/coconut/coconut.mesh.bin", CollisionSettings{}, false);
+            knobs = saved;
+            detail = "island " + std::string(ShapeKindName(island.kind)) + " LOD " + std::to_string(island.lodUsed) + " " + std::to_string(island.triangles) + "; coconut " + ShapeKindName(coconut.kind) +
+                "; palm " + ShapeKindName(palm.kind) + " LOD " + std::to_string(palm.lodUsed) + " " + std::to_string(palm.triangles) + ", rule off LOD " + std::to_string(palmRuleOff.lodUsed) + " " +
+                std::to_string(palmRuleOff.triangles);
+            if (island.kind != ShapeKind::Mesh || island.lodUsed != 0 || coconut.kind != ShapeKind::Hull || palm.kind != ShapeKind::Mesh || palm.lodUsed != static_cast<std::uint32_t>(kAutoFoliageLod) ||
+                palmDynamic.kind != ShapeKind::Hull)
+            {
+                return Verdict::Fail;
+            }
+            // The arms: the rule off is the triangles of LOD 0, everywhere.
+            if (palmRuleOff.lodUsed != 0 || palmRuleOff.triangles <= palm.triangles * 4 || coconutRuleOff.kind != ShapeKind::Mesh)
+            {
+                detail += " -- the rule off did not change them: this gate proves nothing";
+                return Verdict::Fail;
+            }
+
+            // What the hull's tolerance gives: the faces every contact walks, and how much of the volume it keeps.
+            {
+                const float defaultTolerance = knobs.hullTolerance;
+                std::uint32_t capFaces = 0, defaultFaces = 0;
+                float defaultVolume = 0.0f;
+                for (const char* name : { "models/coconut/coconut", "models/rock_boulder_game_ready_asset/rock_boulder_game_ready_asset", "models/fishing_boat/fishing_boat" })
+                {
+                    SolidGeometry g;
+                    if (!ReadSolidGeometry(std::string(name) + ".mesh.bin", 0, {}, g)) { continue; }
+                    float volume0 = 0.0f;
+                    for (const float share : { 0.0f, 0.005f, 0.01f, 0.02f, 0.04f, 0.08f })
+                    {
+                        knobs.hullTolerance = share;
+                        const BuiltShape hull = BuildShape(g, CollisionSettings{}, ShapeKind::Hull);
+                        if (!hull.shape) { continue; }
+                        const float volume = hull.shape->GetVolume();
+                        const std::uint32_t faces = hull.shape->GetStats().mNumTriangles;
+                        if (share == 0.0f) { volume0 = volume; }
+                        LOG_INFO(logging::LogCategory::Physics, "physics gate: autoshape hull {} (smallest size {:.2f} m) tolerance {:.3f}: {} tris, {:.1f} % of the volume at 1 mm",
+                            std::filesystem::path(name).filename().string(), hull.smallestExtent, share, faces, volume0 > 0.0f ? 100.0f * volume / volume0 : 0.0f);
+                        if (std::string(name) == "models/coconut/coconut")
+                        {
+                            if (share == 0.0f) { capFaces = faces; }
+                            if (share == defaultTolerance)
+                            {
+                                defaultFaces = faces;
+                                defaultVolume = volume0 > 0.0f ? volume / volume0 : 0.0f;
+                            }
+                        }
+                    }
+                }
+                knobs.hullTolerance = defaultTolerance;
+                detail += "; coconut hull " + std::to_string(defaultFaces) + " faces, " + std::to_string(defaultVolume * 100.0f) + " % of the volume, at 1 mm " + std::to_string(capFaces) + " faces";
+                // The arm: without the tolerance a round asset takes Jolt's cap of 256 points (2 x 256 - 4 faces).
+                if (capFaces < 400 || defaultFaces * 2 > capFaces || defaultVolume < 0.9f)
+                {
+                    detail += " -- the tolerance did not do what it is for";
+                    return Verdict::Fail;
+                }
+            }
+
+            // The trunks: slot 0 of all three palms. An asset's LOD 2 thins or drops the crown's small wood (mesh.json lod2DropSlots: frond boots, the nuts on
+            // the tree), so the trunk alone must stand where LOD 0 has it, at every height; the whole wood is printed, a falling body passes what went.
+            bool fits = true;
+            float trunkMissLod2 = 0.0f, trunkMissLod3 = 0.0f;
+            for (const char* name : { "models/date_palm/date_palm", "models/coconut_palm/coconut_palm", "models/curly_palm/curly_palm", "models/young_palm/young_palm" })
+            {
+                const std::string base(name);
+                bool any = false;
+                const std::vector<int> leaves = FoliageSlotsOf(base + ".mesh.json", any);
+                const std::vector<int> notTrunk = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+                SolidGeometry wood, trunk, trunk2, trunk3, lod1, lod2;
+                const std::string bin = base + ".mesh.bin";
+                if (!ReadSolidGeometry(bin, 0, leaves, wood) || !ReadSolidGeometry(bin, 0, notTrunk, trunk) || !ReadSolidGeometry(bin, kAutoFoliageLod, notTrunk, trunk2) ||
+                    !ReadSolidGeometry(bin, 3, notTrunk, trunk3) || !ReadSolidGeometry(bin, 1, leaves, lod1) || !ReadSolidGeometry(bin, kAutoFoliageLod, leaves, lod2))
+                {
+                    detail += "; " + base + " missing";
+                    return Verdict::Skip;
+                }
+                const BuiltShape woodShape = BuildShape(wood, CollisionSettings{}, ShapeKind::Mesh);
+                const BuiltShape trunkShape = BuildShape(trunk, CollisionSettings{}, ShapeKind::Mesh);
+                const BuiltShape trunk2Shape = BuildShape(trunk2, CollisionSettings{}, ShapeKind::Mesh);
+                const BuiltShape trunk3Shape = BuildShape(trunk3, CollisionSettings{}, ShapeKind::Mesh);
+                const BuiltShape shape1 = BuildShape(lod1, CollisionSettings{}, ShapeKind::Mesh);
+                const BuiltShape shape2 = BuildShape(lod2, CollisionSettings{}, ShapeKind::Mesh);
+                if (!woodShape.shape || !trunkShape.shape || !trunk2Shape.shape || !trunk3Shape.shape || !shape1.shape || !shape2.shape)
+                {
+                    detail += "; " + base + " shape failed";
+                    return Verdict::Fail;
+                }
+                const auto report = [&](const char* label, const SolidGeometry& truth, const BuiltShape& fine, const BuiltShape& coarse)
+                {
+                    const TrunkFit fit = MeasureTrunk(truth, *fine.shape, *coarse.shape);
+                    LOG_INFO(logging::LogCategory::Physics, "physics gate: autoshape {} {} ({} of {} tris): under {} m miss {:.1f} % median {:.1f} p95 {:.1f} cm ({} rays); over it miss {:.1f} % median {:.1f} p95 {:.1f} cm ({} rays)",
+                        std::filesystem::path(base).filename().string(), label, coarse.triangles, fine.triangles, kWalkerReach, fit.low.MissShare() * 100.0f, fit.low.medianM * 100.0f, fit.low.p95M * 100.0f, fit.low.rays,
+                        fit.high.MissShare() * 100.0f, fit.high.medianM * 100.0f, fit.high.p95M * 100.0f, fit.high.rays);
+                    return fit;
+                };
+                report("LOD 1 vs all its wood", wood, woodShape, shape1);
+                report("LOD 2 vs all its wood", wood, woodShape, shape2);
+                const TrunkFit fit2 = report("LOD 2 vs its trunk", trunk, trunkShape, trunk2Shape);
+                const TrunkFit fit3 = report("LOD 3 vs its trunk", trunk, trunkShape, trunk3Shape);
+                // What the asset really collides with, when tools/collision_fit.py has written it: the trunk's cylinders stand where LOD 0's trunk does.
+                {
+                    std::ifstream manifestFile(base + ".mesh.json");
+                    const nlohmann::json manifest = nlohmann::json::parse(manifestFile, nullptr, false);
+                    CollisionSettings fitted;
+                    if (manifest.is_object() && manifest.contains("collision") && ReadCollisionSettings(manifest["collision"], fitted, nullptr) && fitted.shape == ShapeKind::Custom)
+                    {
+                        const BuiltShape cylinders = BuildAssetShape("", fitted, false);
+                        if (!cylinders.shape)
+                        {
+                            detail += "; " + base + " cylinders failed: " + cylinders.error;
+                            return Verdict::Fail;
+                        }
+                        const TrunkFit fit = report("its cylinders vs its trunk", trunk, trunkShape, cylinders);
+                        constexpr float kMaxCylinderMiss = 0.05f;
+                        constexpr float kMaxCylinderMedian = 0.035f;
+                        if (fit.low.MissShare() > kMaxCylinderMiss || fit.high.MissShare() > kMaxCylinderMiss || fit.low.medianM > kMaxCylinderMedian || fit.high.medianM > kMaxCylinderMedian)
+                        {
+                            detail += "; " + std::filesystem::path(base).filename().string() + "'s cylinders do not stand on its trunk";
+                            fits = false;
+                        }
+                    }
+                }
+                const TrunkFit self = MeasureTrunk(trunk, *trunkShape.shape, *trunkShape.shape);
+                if (self.low.misses + self.high.misses != 0 || self.low.medianM + self.high.medianM != 0.0f)
+                {
+                    detail += "; LOD 0 against itself differs";
+                    fits = false;
+                }
+                constexpr float kMaxMiss = 0.03f;
+                constexpr float kMaxMedian = 0.03f;
+                if (fit2.low.MissShare() > kMaxMiss || fit2.high.MissShare() > kMaxMiss || fit2.low.medianM > kMaxMedian || fit2.high.medianM > kMaxMedian)
+                {
+                    detail += "; " + std::filesystem::path(base).filename().string() + " LOD 2 lost its trunk";
+                    fits = false;
+                }
+                trunkMissLod2 += fit2.low.MissShare() + fit2.high.MissShare();
+                trunkMissLod3 += fit3.low.MissShare() + fit3.high.MissShare();
+            }
+            // The arm: the measure sees a coarser trunk.
+            if (trunkMissLod3 <= trunkMissLod2)
+            {
+                detail += " -- LOD 3 misses no more than LOD 2: this measure proves nothing";
+                fits = false;
+            }
+            return fits ? Verdict::Pass : Verdict::Fail;
+        }
+
+        // ---------------------------------------------------------------------------------------------------------- custom
+        // A list of boxes, spheres and capsules: from its JSON and back, where the rays say it stands, what lands on it, and doubled by an object's
+        // scale. The arms that must come out wrong: a capsule that ignored its rotation stands 1 m higher, and a ray between the parts must miss.
+        Verdict GateCustom(std::string& detail)
+        {
+            const nlohmann::json block = nlohmann::json::parse(R"({"shape":"custom","shapes":[
+                {"type":"box","center":[0,1,0],"halfExtents":[1,1,1]},
+                {"type":"sphere","center":[5,1,0],"radius":1},
+                {"type":"capsule","center":[-5,2,0],"rotationDeg":[0,0,90],"radius":0.5,"halfHeight":1},
+                {"type":"box","center":[0,1,10],"rotationDeg":[10,20,30],"halfExtents":[1,0.25,0.5]},
+                {"type":"cylinder","center":[0,1,-8],"rotationDeg":[90,0,0],"radius":0.25,"halfHeight":2}]})");
+            CollisionSettings settings;
+            if (!ReadCollisionSettings(block, settings, nullptr) || settings.shape != ShapeKind::Custom || settings.primitives.size() != 5)
+            {
+                detail = "the block did not read";
+                return Verdict::Fail;
+            }
+            if (WriteCollisionSettings(settings, false) != block)
+            {
+                detail = "the block did not come back: " + WriteCollisionSettings(settings, false).dump();
+                return Verdict::Fail;
+            }
+            CollisionSettings empty;
+            empty.shape = ShapeKind::Custom;
+            if (BuildAssetShape("", empty, false).shape)
+            {
+                detail = "an empty list made a shape";
+                return Verdict::Fail;
+            }
+            const BuiltShape built = BuildAssetShape("", settings, false);
+            if (!built.shape || built.kind != ShapeKind::Custom)
+            {
+                detail = "shape failed: " + built.error;
+                return Verdict::Fail;
+            }
+            std::string error;
+            const JPH::RefConst<JPH::Shape> doubled = ScaledInstance(*built.shape, Math::float3(2.0f, 2.0f, 2.0f), error);
+            if (!doubled)
+            {
+                detail = "scale refused: " + error;
+                return Verdict::Fail;
+            }
+
+            TestWorld world(2);
+            world.AddStatic(built.shape.GetPtr());
+            TestWorld worldDoubled(1);
+            worldDoubled.AddStatic(doubled.GetPtr());
+            world.system.OptimizeBroadPhase();
+            worldDoubled.system.OptimizeBroadPhase();
+            const auto heightAt = [](TestWorld& w, float x, float z, bool& hit)
+            {
+                const JPH::RRayCast ray(JPH::Vec3(x, 100.0f, z), JPH::Vec3(0.0f, -200.0f, 0.0f));
+                JPH::RayCastResult result;
+                hit = w.system.GetNarrowPhaseQuery().CastRay(ray, result);
+                return 100.0f - result.mFraction * 200.0f;
+            };
+            bool hitBox, hitSphere, hitCapsule, hitCapsuleEnd, hitBetween, hitDoubled;
+            const float boxTop = heightAt(world, 0.0f, 0.0f, hitBox);
+            const float sphereTop = heightAt(world, 5.0f, 0.0f, hitSphere);
+            const float capsuleTop = heightAt(world, -5.0f, 0.0f, hitCapsule);
+            const float capsuleEnd = heightAt(world, -6.2f, 0.0f, hitCapsuleEnd); // only a capsule lying along x reaches here
+            heightAt(world, 2.5f, 0.0f, hitBetween);
+            const float doubledTop = heightAt(worldDoubled, 0.0f, 0.0f, hitDoubled);
+            detail = "tops box " + std::to_string(boxTop) + " sphere " + std::to_string(sphereTop) + " capsule " + std::to_string(capsuleTop) + "; doubled box " + std::to_string(doubledTop);
+            // The cylinder lies along z from -10 to -6. Its flat end is where a capsule's cap would still go on, and x = 0.3 is past its radius.
+            bool hitCylinder, hitCylinderEnd, hitPastEnd, hitBeside;
+            const float cylinderTop = heightAt(world, 0.0f, -8.0f, hitCylinder);
+            const float cylinderEnd = heightAt(world, 0.0f, -6.02f, hitCylinderEnd);
+            heightAt(world, 0.0f, -5.98f, hitPastEnd);
+            heightAt(world, 0.3f, -8.0f, hitBeside);
+            detail += "; cylinder top " + std::to_string(cylinderTop) + ", at its end " + std::to_string(cylinderEnd);
+            if (!hitCylinder || !hitCylinderEnd || hitPastEnd || hitBeside || std::fabs(cylinderTop - 1.25f) > 1.0e-3f || std::fabs(cylinderEnd - 1.25f) > 2.0e-3f) { return Verdict::Fail; }
+            if (!hitBox || !hitSphere || !hitCapsule || !hitCapsuleEnd || hitBetween || !hitDoubled || std::fabs(boxTop - 2.0f) > 1.0e-3f || std::fabs(sphereTop - 2.0f) > 1.0e-3f ||
+                std::fabs(capsuleTop - 2.5f) > 1.0e-3f || std::fabs(doubledTop - 4.0f) > 1.0e-3f)
+            {
+                return Verdict::Fail;
+            }
+
+            // A tilted box stands where the engine's own matrix puts it (RotationFromEulerXYZRad, as a level object's rotationDeg): along its face's normal
+            // from outside, a ray lands on the face's centre. Alone (a RotatedTranslated) and inside the compound.
+            CollisionSettings alone;
+            alone.shape = ShapeKind::Custom;
+            alone.primitives.push_back(settings.primitives[3]); // the tilted box
+            const BuiltShape aloneShape = BuildAssetShape("", alone, false);
+            constexpr float kToRad = 3.14159265358979f / 180.0f;
+            const Math::mat4 tilt = Math::mat4::RotationFromEulerXYZRad(Math::float3(10.0f * kToRad, 20.0f * kToRad, 30.0f * kToRad)) * Math::mat4::Translation(Math::float3(0.0f, 1.0f, 10.0f));
+            const Math::float3 faceCentre = tilt.TransformPoint(Math::float3(0.0f, 0.25f, 0.0f));
+            const Math::float3 outside = tilt.TransformPoint(Math::float3(0.0f, 3.25f, 0.0f));
+            float worst = 0.0f;
+            TestWorld aloneWorld(1);
+            aloneWorld.AddStatic(aloneShape.shape.GetPtr());
+            aloneWorld.system.OptimizeBroadPhase();
+            for (TestWorld* w : { &world, &aloneWorld })
+            {
+                const JPH::RRayCast ray(ToJolt(outside), ToJolt(faceCentre - outside) * 2.0f);
+                JPH::RayCastResult result;
+                if (!w->system.GetNarrowPhaseQuery().CastRay(ray, result))
+                {
+                    detail += "; the tilted box is not where the matrix puts it";
+                    return Verdict::Fail;
+                }
+                worst = std::max(worst, std::fabs(result.mFraction * 2.0f - 1.0f) * 3.0f);
+            }
+            detail += "; tilted face off by " + std::to_string(worst * 1000.0f) + " mm";
+            if (worst > 1.0e-3f) { return Verdict::Fail; }
+
+            // What lands on it: a ball on the box (less Jolt's 2 cm of slop); the list as one dynamic body on a floor, its lowest part on it.
+            JPH::SphereShapeSettings sphere(0.5f);
+            sphere.SetEmbedded();
+            const JPH::BodyID ball = world.AddDynamic(sphere.Create().Get().GetPtr(), JPH::Vec3(0.0f, 5.0f, 0.0f), JPH::Quat::sIdentity());
+            world.Step(240);
+            const float ballY = world.system.GetBodyInterface().GetCenterOfMassPosition(ball).GetY();
+
+            TestWorld fall(2);
+            const JPH::RefConst<JPH::Shape> floor = BoxOf(50.0f);
+            JPH::BodyCreationSettings floorSettings(floor.GetPtr(), JPH::Vec3(0.0f, -50.0f, 0.0f), JPH::Quat::sIdentity(), JPH::EMotionType::Static, layers::kNonMoving);
+            fall.system.GetBodyInterface().CreateAndAddBody(floorSettings, JPH::EActivation::DontActivate);
+            CollisionSettings solo;
+            solo.shape = ShapeKind::Custom;
+            CollisionPrimitive box;
+            box.center = Math::float3(0.0f, 1.0f, 0.0f);
+            box.halfExtents = Math::float3(1.0f, 1.0f, 1.0f);
+            CollisionPrimitive other = box;
+            other.center = Math::float3(3.0f, 1.0f, 0.0f);
+            solo.primitives = { box, other };
+            const BuiltShape soloShape = BuildAssetShape("", solo, true);
+            const JPH::BodyID body = fall.AddDynamic(soloShape.shape.GetPtr(), JPH::Vec3(0.0f, 3.0f, 0.0f), JPH::Quat::sIdentity());
+            fall.Step(240);
+            const float bodyY = fall.system.GetBodyInterface().GetPosition(body).GetY();
+            detail += "; ball rests at " + std::to_string(ballY) + ", a two-box body's origin at " + std::to_string(bodyY);
+            return std::fabs(ballY - 2.48f) < 0.01f && std::fabs(bodyY + 0.02f) < 0.02f ? Verdict::Pass : Verdict::Fail;
+        }
+
+        // --------------------------------------------------------------------------------------------------------- rolling
+        // ApplyRollingResistance: on a 10 degree ramp (sine 0.17) a ball with none rolls away (the arm that must come out wrong), at 0.1 rolls slower, at 0.3 stays and sleeps;
+        // on the flat a ball sent at 3 m/s stops where the deceleration says; a spin in flight is left alone.
+        Verdict GateRolling(std::string& detail)
+        {
+            constexpr float kGravity = -9.81f;
+            constexpr float kDt = 1.0f / 60.0f;
+            constexpr float kRadius = 0.12f;
+            const auto makeBall = [](TestWorld& world, JPH::Vec3Arg at)
+            {
+                JPH::SphereShapeSettings sphere(kRadius);
+                sphere.SetEmbedded();
+                JPH::BodyCreationSettings settings(sphere.Create().Get().GetPtr(), at, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, layers::kMoving);
+                settings.mAngularDamping = 0.0f;
+                settings.mFriction = 0.5f;
+                settings.mRestitution = 0.0f;
+                return world.system.GetBodyInterface().CreateAndAddBody(settings, JPH::EActivation::Activate);
+            };
+            struct Result { float x; bool asleep; };
+            const auto onRamp = [&](float resistance)
+            {
+                TestWorld world(1);
+                const JPH::RefConst<JPH::Shape> floor = BoxOf(200.0f);
+                const JPH::Quat tilt = JPH::Quat::sRotation(JPH::Vec3::sAxisZ(), -10.0f * 3.14159265f / 180.0f);
+                JPH::BodyCreationSettings floorSettings(floor.GetPtr(), tilt * JPH::Vec3(0.0f, -200.0f, 0.0f), tilt, JPH::EMotionType::Static, layers::kNonMoving);
+                floorSettings.mFriction = 0.5f;
+                JPH::BodyInterface& bodies = world.system.GetBodyInterface();
+                bodies.CreateAndAddBody(floorSettings, JPH::EActivation::DontActivate);
+                const JPH::BodyID ball = makeBall(world, tilt * JPH::Vec3(0.0f, kRadius + 0.01f, 0.0f));
+                float velocityY = 0.0f;
+                for (int i = 0; i < 240; ++i)
+                {
+                    world.Step(1);
+                    if (resistance > 0.0f && bodies.IsActive(ball)) { ApplyRollingResistance(bodies, ball, resistance, kRadius, kGravity, kDt, velocityY); }
+                }
+                return Result{ bodies.GetPosition(ball).GetX(), !bodies.IsActive(ball) };
+            };
+            const Result none = onRamp(0.0f);
+            const Result some = onRamp(0.1f);
+            const Result held = onRamp(0.3f);
+
+            TestWorld flat(1);
+            const JPH::RefConst<JPH::Shape> floor = BoxOf(200.0f);
+            JPH::BodyCreationSettings floorSettings(floor.GetPtr(), JPH::Vec3(0.0f, -200.0f, 0.0f), JPH::Quat::sIdentity(), JPH::EMotionType::Static, layers::kNonMoving);
+            JPH::BodyInterface& bodies = flat.system.GetBodyInterface();
+            bodies.CreateAndAddBody(floorSettings, JPH::EActivation::DontActivate);
+            const JPH::BodyID sent = makeBall(flat, JPH::Vec3(0.0f, kRadius, 0.0f));
+            bodies.SetLinearVelocity(sent, JPH::Vec3(3.0f, 0.0f, 0.0f));
+            bodies.SetAngularVelocity(sent, JPH::Vec3(0.0f, 0.0f, -3.0f / kRadius));
+            float velocityY = 0.0f;
+            for (int i = 0; i < 300; ++i)
+            {
+                flat.Step(1);
+                if (bodies.IsActive(sent)) { ApplyRollingResistance(bodies, sent, 0.2f, kRadius, kGravity, kDt, velocityY); }
+            }
+            const float rolled = bodies.GetPosition(sent).GetX();
+
+            TestWorld air(1);
+            const JPH::BodyID thrown = makeBall(air, JPH::Vec3(0.0f, 100.0f, 0.0f));
+            JPH::BodyInterface& airBodies = air.system.GetBodyInterface();
+            airBodies.SetAngularVelocity(thrown, JPH::Vec3(0.0f, 0.0f, 10.0f));
+            velocityY = 0.0f;
+            for (int i = 0; i < 60; ++i)
+            {
+                air.Step(1);
+                ApplyRollingResistance(airBodies, thrown, 0.5f, kRadius, kGravity, kDt, velocityY);
+            }
+            const float airSpin = airBodies.GetAngularVelocity(thrown).Length();
+
+            const float expected = 9.0f / (2.0f * (5.0f / 7.0f) * 0.2f * 9.81f); // v^2 / 2a
+            detail = "on a 10 degree ramp after 4 s: none " + std::to_string(none.x) + " m, 0.1 " + std::to_string(some.x) + " m, 0.3 " + std::to_string(held.x) + " m asleep " + (held.asleep ? "yes" : "no") +
+                "; sent at 3 m/s it rolled " + std::to_string(rolled) + " m (v2/2a " + std::to_string(expected) + "); spin in flight " + std::to_string(airSpin);
+            if (std::fabs(none.x) < 5.0f || std::fabs(some.x) >= 0.9f * std::fabs(none.x) || std::fabs(held.x) > 0.1f || !held.asleep) { return Verdict::Fail; }
+            if (std::fabs(rolled - expected) > 0.25f * expected) { return Verdict::Fail; }
+            return airSpin > 9.5f ? Verdict::Pass : Verdict::Fail;
+        }
+
+        // ------------------------------------------------------------------------------------------------------------ async
+        // physics.async, through the real World and real objects (the other gates are plain Jolt). Frame by frame, a step that lands before the hand-over must give the very bytes the
+        // step in line gives: no lag. A slow one must not hold the frame up, the pose must wait instead (the arm that comes out wrong: those frames differ from the step in line, and
+        // the step in line, slowed the same, does stall), and it must lose no step: all arms come to rest on the same bytes. And a ray or an object that goes while a step runs.
+        class GateBody final : public RenderableObject
+        {
+        public:
+            GateBody() : RenderableObject("", L"") {}
+            const std::string& GetGeometryPath() const override { return path_; }
+            bool IsSimpleRender() const override { return false; }
+
+        private:
+            std::string path_ = "gate"; // a custom shape reads no file; the world only wants a name
+        };
+
+        CollisionPrimitive GatePrimitive(PrimitiveKind kind, const Math::float3& halfExtents, float radius)
+        {
+            CollisionPrimitive primitive;
+            primitive.kind = kind;
+            primitive.halfExtents = halfExtents;
+            primitive.radius = radius;
+            return primitive;
+        }
+
+        struct AsyncScene
+        {
+            GateBody floor;
+            std::vector<std::unique_ptr<GateBody>> balls;
+            std::vector<std::unique_ptr<GateBody>> decoys; // never registered: they only move the balls to other addresses
+
+            explicit AsyncScene(int scatter = 0)
+            {
+                CollisionSettings floorShape;
+                floorShape.shape = ShapeKind::Custom;
+                floorShape.primitives.push_back(GatePrimitive(PrimitiveKind::Box, Math::float3(40.0f, 1.0f, 40.0f), 0.0f));
+                floor.SetPosition(Math::float3(0.0f, -1.0f, 0.0f));
+                floor.SetCollisionSettings(floorShape);
+                floor.SetPhysicsMotion(Motion::Static);
+                CollisionSettings ballShape;
+                ballShape.shape = ShapeKind::Custom;
+                ballShape.rollingResistance = 0.4f;
+                ballShape.primitives.push_back(GatePrimitive(PrimitiveKind::Sphere, Math::float3(0.0f, 0.0f, 0.0f), 0.25f));
+                for (int i = 0; i < 48; ++i)
+                {
+                    for (int d = 0; d < (i * scatter) % 5; ++d) { decoys.push_back(std::make_unique<GateBody>()); }
+                    auto ball = std::make_unique<GateBody>();
+                    ball->SetPosition(Math::float3(0.7f * static_cast<float>(i % 8), 0.5f + 0.05f * static_cast<float>(i), 0.7f * static_cast<float>(i / 8)));
+                    ball->SetCollisionSettings(ballShape);
+                    ball->SetPhysicsMotion(Motion::Dynamic);
+                    balls.push_back(std::move(ball));
+                }
+            }
+            std::uint64_t HashOfOffsets() const
+            {
+                std::uint64_t hash = 14695981039346656037ull;
+                for (const auto& ball : balls)
+                {
+                    const Math::mat4 offset = ball->HasRenderOffset() ? ball->GetRenderOffset() : Math::mat4::Identity();
+                    const auto* bytes = reinterpret_cast<const unsigned char*>(&offset.m);
+                    for (size_t i = 0; i < sizeof(offset.m); ++i) { hash = (hash ^ bytes[i]) * 1099511628211ull; }
+                }
+                return hash;
+            }
+        };
+
+        struct AsyncRun
+        {
+            std::vector<std::uint64_t> frames;
+            std::uint64_t rest = 0;
+            float stallP95 = 0.0f; // what Tick + SyncPoses took off the game thread, ms
+            float stallMax = 0.0f;
+            std::uint64_t held = 0;
+            std::uint64_t waits = 0;
+            std::uint64_t steps = 0;
+            bool rested = false;
+        };
+
+        // The same frame times for every arm: a few ms, and now and then a slow frame that owes several steps.
+        float GateFrameTime(int frame)
+        {
+            return frame % 37 == 36 ? 0.040f : 0.003f + 0.0005f * static_cast<float>((frame * 7) % 13);
+        }
+
+        AsyncRun RunAsyncScene(bool async, float delayMs, bool landBeforeHandOver, float frameSleepMs, int frameLimit, bool untilRest, int scatter = 0)
+        {
+            Settings& settings = GameSettings();
+            settings.async = async;
+            settings.stepDelayMs = delayMs;
+            settings.threads = 2;
+            settings.simulate = true;
+            AsyncRun run;
+            AsyncScene scene(scatter);
+            {
+                World world;
+                std::vector<float> stalls;
+                int restFrames = 0;
+                for (int frame = 0; frame < frameLimit; ++frame)
+                {
+                    const auto start = std::chrono::steady_clock::now();
+                    world.Tick(GateFrameTime(frame));
+                    world.KickStep();
+                    float stall = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+                    if (landBeforeHandOver) { world.FinishStep(); }
+                    const auto handOver = std::chrono::steady_clock::now();
+                    world.SyncPoses();
+                    stall += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - handOver).count();
+                    if (frame > 0) { stalls.push_back(stall); } // the first one builds the bodies
+                    run.frames.push_back(scene.HashOfOffsets());
+                    if (frameSleepMs > 0.0f) { std::this_thread::sleep_for(std::chrono::microseconds(static_cast<long long>(frameSleepMs * 1000.0f))); }
+                    restFrames = world.GetStats().activeBodies == 0 ? restFrames + 1 : 0;
+                    if (untilRest && restFrames >= 3) { run.rested = true; break; }
+                }
+                world.FinishStep();
+                const Stats stats = world.GetStats();
+                run.held = stats.handOversHeld;
+                run.waits = stats.stepWaits;
+                run.steps = stats.stepsTotal;
+                run.rest = scene.HashOfOffsets();
+                if (!stalls.empty())
+                {
+                    std::sort(stalls.begin(), stalls.end());
+                    run.stallP95 = stalls[stalls.size() * 95 / 100];
+                    run.stallMax = stalls.back();
+                }
+            }
+            return run;
+        }
+
+        Verdict GateAsync(std::string& detail)
+        {
+            const Settings saved = GameSettings();
+            const bool savedRenderThread = threading::g_renderThreadEnabled;
+            threading::g_renderThreadEnabled = true; // what physics.async needs
+            threading::RoleScope role(threading::ThreadRole::Game);
+            TaskSystem::Get().Start(); // the world builds its shapes on it; running already = nothing
+            const auto finish = [&](Verdict verdict)
+            {
+                GameSettings() = saved;
+                threading::g_renderThreadEnabled = savedRenderThread;
+                return verdict;
+            };
+
+            constexpr int kFrames = 2400;
+            const AsyncRun inLine = RunAsyncScene(false, 0.0f, false, 0.0f, kFrames, true);
+            if (!inLine.rested)
+            {
+                detail = "the balls never came to rest in " + std::to_string(kFrames) + " frames";
+                return finish(Verdict::Fail);
+            }
+            // The control: without it a difference below could be the world's, not the thread's. The objects stand at other addresses in another run, and the world must not care.
+            const AsyncRun again = RunAsyncScene(false, 0.0f, false, 0.0f, static_cast<int>(inLine.frames.size()), false, 3);
+            if (again.frames != inLine.frames)
+            {
+                size_t first = 0;
+                const size_t common = std::min(again.frames.size(), inLine.frames.size());
+                while (first < common && again.frames[first] == inLine.frames[first]) { ++first; }
+                detail = "the same scene twice, in line, differs at frame " + std::to_string(first) + " of " + std::to_string(common);
+                return finish(Verdict::Fail);
+            }
+            const AsyncRun landed = RunAsyncScene(true, 0.0f, true, 0.0f, static_cast<int>(inLine.frames.size()), false);
+            if (landed.frames != inLine.frames)
+            {
+                size_t first = 0;
+                const size_t common = std::min(landed.frames.size(), inLine.frames.size());
+                while (first < common && landed.frames[first] == inLine.frames[first]) { ++first; }
+                detail = "a step that lands before the hand-over differs from the step in line at frame " + std::to_string(first) + " of " + std::to_string(common);
+                return finish(Verdict::Fail);
+            }
+
+            // 6 ms a step against a frame of ~5: most hand-overs find it running.
+            const AsyncRun slow = RunAsyncScene(true, 6.0f, false, 3.0f, kFrames, true);
+            const AsyncRun stalled = RunAsyncScene(false, 6.0f, false, 0.0f, 48, false);
+            std::string numbers = "in line and landed the same over " + std::to_string(inLine.frames.size()) + " frames, " + std::to_string(inLine.steps) + " steps; a step of 6 ms: game thread p95 " +
+                std::to_string(slow.stallP95) + " ms beside the frame, in line " + std::to_string(stalled.stallMax) + " ms at worst; " + std::to_string(slow.held) + " hand-overs of " +
+                std::to_string(slow.frames.size()) + " held";
+            size_t different = 0;
+            for (size_t i = 0; i < std::min(slow.frames.size(), inLine.frames.size()); ++i) { different += slow.frames[i] != inLine.frames[i] ? 1u : 0u; }
+            numbers += ", " + std::to_string(different) + " frames differ";
+            if (!slow.rested) { detail = "the slow step never came to rest: " + numbers; return finish(Verdict::Fail); }
+            if (slow.stallP95 > 3.0f) { detail = "a slow step held the game thread up: " + numbers; return finish(Verdict::Fail); }
+            if (stalled.stallMax < 5.0f) { detail = "the control: the step in line, slowed by 6 ms, should stall: " + numbers; return finish(Verdict::Fail); }
+            if (slow.held == 0 || different == 0) { detail = "the arm that must come out wrong did not: nothing was held back: " + numbers; return finish(Verdict::Fail); }
+            if (slow.rest != inLine.rest) { detail = "the slow step came to rest somewhere else, so it lost or changed a step: " + numbers; return finish(Verdict::Fail); }
+
+            // A ray and an object that goes while a step runs.
+            {
+                Settings& settings = GameSettings();
+                settings.async = true;
+                settings.stepDelayMs = 20.0f;
+                settings.threads = 2;
+                settings.simulate = true;
+                AsyncScene scene;
+                World world;
+                float dt = 0.0f;
+                for (int frame = 0; frame < 8; ++frame)
+                {
+                    dt = GateFrameTime(frame) + 0.017f; // every frame owes a step
+                    world.Tick(dt);
+                    world.KickStep();
+                    if (frame == 3) { scene.balls.resize(24); } // the step has its bodies, these objects are gone
+                    if (frame == 5)
+                    {
+                        RayHit hit;
+                        if (!world.RayCast(Math::float3(30.0f, 5.0f, 30.0f), Math::float3(0.0f, -1.0f, 0.0f), 20.0f, hit) || hit.object != &scene.floor)
+                        {
+                            detail = "a ray during a step did not find the floor";
+                            return finish(Verdict::Fail);
+                        }
+                    }
+                    world.SyncPoses();
+                }
+                world.FinishStep();
+                const Stats stats = world.GetStats();
+                if (stats.objects != 25 || stats.dynamicBodies != 24 || stats.stepWaits == 0)
+                {
+                    detail = "objects " + std::to_string(stats.objects) + " dynamic " + std::to_string(stats.dynamicBodies) + " waits " + std::to_string(stats.stepWaits) + " after half of them went during a step";
+                    return finish(Verdict::Fail);
+                }
+                // Gone between the step and the hand-over: the hand-over writes poses, and must not write to these.
+                settings.stepDelayMs = 0.0f;
+                world.Tick(0.02f);
+                world.FinishStep();
+                scene.balls.resize(12);
+                world.SyncPoses();
+                if (world.GetStats().objects != 13)
+                {
+                    detail = "objects " + std::to_string(world.GetStats().objects) + " at a hand-over after half of them went: it wrote poses to what was still on its list";
+                    return finish(Verdict::Fail);
+                }
+            }
+            detail = numbers;
+            return finish(Verdict::Pass);
+        }
+
+        // ------------------------------------------------------------------------------------------------------------ world
+        // The world as the game drives it, with real objects: what the others take on trust from plain Jolt. A boat through a frame that owes several steps stays on its wave (the premise
+        // that must come out wrong: one MoveKinematic and two steps go twice as far). A pose under a scale and a rotation, in the order the renderer multiplies (the other order is the
+        // arm). Stop. A body under killY stays still and asleep whatever wakes the rest. A custom shape mirrored and stretched stands where the mesh does (Jolt's nearest scale is the arm).
+        Verdict GateWorld(std::string& detail)
+        {
+            const Settings saved = GameSettings();
+            const bool savedRenderThread = threading::g_renderThreadEnabled;
+            threading::g_renderThreadEnabled = true;
+            threading::RoleScope role(threading::ThreadRole::Game);
+            TaskSystem::Get().Start();
+            const auto finish = [&](Verdict verdict)
+            {
+                GameSettings() = saved;
+                threading::g_renderThreadEnabled = savedRenderThread;
+                return verdict;
+            };
+            Settings& settings = GameSettings();
+            settings.async = true;
+            settings.threads = 2;
+            settings.simulate = true;
+            settings.stepDelayMs = 0.0f;
+            const auto frame = [](World& world, float dt)
+            {
+                world.Tick(dt);
+                world.KickStep();
+                world.FinishStep();
+                world.SyncPoses();
+            };
+            const auto topAt = [](World& world, float x, float z, float& y)
+            {
+                RayHit hit;
+                if (!world.RayCast(Math::float3(x, 100.0f, z), Math::float3(0.0f, -1.0f, 0.0f), 200.0f, hit)) { return false; }
+                y = hit.point.y;
+                return true;
+            };
+            const auto customBox = [](const Math::float3& half)
+            {
+                CollisionSettings shape;
+                shape.shape = ShapeKind::Custom;
+                shape.primitives.push_back(GatePrimitive(PrimitiveKind::Box, half, 0.0f));
+                return shape;
+            };
+            const auto customBall = [](float radius)
+            {
+                CollisionSettings shape;
+                shape.shape = ShapeKind::Custom;
+                shape.rollingResistance = 0.4f;
+                shape.primitives.push_back(GatePrimitive(PrimitiveKind::Sphere, Math::float3(0.0f, 0.0f, 0.0f), radius));
+                return shape;
+            };
+
+            std::string report;
+            // A boat.
+            {
+                TestWorld jolt(1);
+                const JPH::RefConst<JPH::Shape> box = BoxOf(0.5f);
+                JPH::BodyCreationSettings body(box.GetPtr(), JPH::Vec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Kinematic, layers::kMoving);
+                JPH::BodyInterface& bodies = jolt.system.GetBodyInterface();
+                const JPH::BodyID id = bodies.CreateAndAddBody(body, JPH::EActivation::Activate);
+                bodies.MoveKinematic(id, JPH::Vec3(0.0f, 1.0f, 0.0f), JPH::Quat::sIdentity(), 1.0f / 60.0f);
+                jolt.Step(2);
+                const float twoSteps = bodies.GetCenterOfMassPosition(id).GetY();
+                if (std::fabs(twoSteps - 2.0f) > 0.01f)
+                {
+                    detail = "the premise: one MoveKinematic and two steps should go 2 m, went " + std::to_string(twoSteps);
+                    return finish(Verdict::Fail);
+                }
+
+                GateBody boat;
+                boat.SetCollisionSettings(customBox(Math::float3(1.0f, 0.5f, 1.0f)));
+                boat.SetBuoyant(true);
+                boat.SetPhysicsMotion(Motion::Static);
+                World world;
+                float worst = 0.0f;
+                float top = 0.0f;
+                for (int i = 0; i < 90; ++i)
+                {
+                    const float wave = i < 60 ? 0.5f * std::sin(0.3f * static_cast<float>(i)) : 0.5f * std::sin(0.3f * 59.0f); // then it holds still: no wave is no speed
+                    boat.SetRenderOffset(Math::mat4::Translation(Math::float3(0.0f, wave, 0.0f)));
+                    frame(world, 0.05f); // three steps a frame: 20 fps
+                    if (!topAt(world, 0.0f, 0.0f, top))
+                    {
+                        detail = "the boat left the world at frame " + std::to_string(i);
+                        return finish(Verdict::Fail);
+                    }
+                    worst = std::max(worst, std::fabs(top - (0.5f + wave)));
+                }
+                report += "boat off its wave by " + std::to_string(worst) + " m at 20 fps; ";
+                if (worst > 0.002f)
+                {
+                    detail = report;
+                    return finish(Verdict::Fail);
+                }
+            }
+            // A pose, and Stop.
+            {
+                GateBody floor;
+                floor.SetCollisionSettings(customBox(Math::float3(40.0f, 1.0f, 40.0f)));
+                floor.SetPosition(Math::float3(0.0f, -1.0f, 0.0f));
+                floor.SetPhysicsMotion(Motion::Static);
+                GateBody ball;
+                ball.SetCollisionSettings(customBall(0.25f));
+                ball.SetPosition(Math::float3(1.0f, 3.0f, -2.0f));
+                ball.SetScale(Math::float3(2.0f, 2.0f, 2.0f));
+                ball.SetRotationEulerDeg(Math::float3(0.0f, 40.0f, 0.0f));
+                ball.SetPhysicsMotion(Motion::Dynamic);
+                World world;
+                int frames = 0;
+                do
+                {
+                    frame(world, 1.0f / 60.0f);
+                } while (world.GetStats().activeBodies != 0 && ++frames < 900);
+                frame(world, 1.0f / 60.0f);
+                const Math::mat4 model = ball.GetAuthoredModelMatrix() * ball.GetRenderOffset();
+                const Math::mat4 wrong = ball.GetRenderOffset() * ball.GetAuthoredModelMatrix();
+                report += "ball at rest at " + std::to_string(model.m._41) + " " + std::to_string(model.m._42) + " " + std::to_string(model.m._43) + "; ";
+                if (std::fabs(model.m._41 - 1.0f) > 0.02f || std::fabs(model.m._42 - 0.5f) > 0.03f || std::fabs(model.m._43 + 2.0f) > 0.02f)
+                {
+                    detail = report + "should stand at 1 0.5 -2, its radius off the floor";
+                    return finish(Verdict::Fail);
+                }
+                if (std::fabs(wrong.m._42 - model.m._42) < 0.5f)
+                {
+                    detail = report + "the arm: the other order of the matrices should land elsewhere";
+                    return finish(Verdict::Fail);
+                }
+                settings.simulate = false;
+                world.Tick(1.0f / 60.0f);
+                float top = 0.0f;
+                if (ball.HasRenderOffset() || !topAt(world, 1.0f, -2.0f, top) || std::fabs(top - 3.5f) > 0.01f)
+                {
+                    detail = report + "Stop should put the ball back at the level's place, its top at 3.5: " + std::to_string(top);
+                    return finish(Verdict::Fail);
+                }
+                settings.simulate = true;
+            }
+            // Under the world.
+            {
+                const float killY = settings.killY;
+                settings.killY = -5.0f;
+                GateBody ball;
+                ball.SetCollisionSettings(customBall(0.25f));
+                ball.SetPhysicsMotion(Motion::Dynamic);
+                World world;
+                int frames = 0;
+                while (world.GetStats().fellOut == 0 && ++frames < 900) { frame(world, 1.0f / 60.0f); }
+                frame(world, 1.0f / 60.0f);
+                const Math::mat4 before = ball.GetRenderOffset();
+                const float gravity = settings.gravity;
+                settings.gravity = -5.0f; // wakes everything that may wake
+                for (int i = 0; i < 20; ++i) { frame(world, 1.0f / 60.0f); }
+                settings.gravity = gravity;
+                settings.killY = killY;
+                const Stats stats = world.GetStats();
+                const bool still = std::memcmp(&before.m, &ball.GetRenderOffset().m, sizeof(before.m)) == 0;
+                report += "fell out after " + std::to_string(frames) + " frames, then " + (still ? "still" : "moving") + ", " + std::to_string(stats.activeBodies) + " awake; ";
+                if (stats.fellOut != 1 || !still || stats.activeBodies != 0)
+                {
+                    detail = report;
+                    return finish(Verdict::Fail);
+                }
+            }
+            // A custom shape, mirrored and stretched.
+            {
+                CollisionSettings shape;
+                shape.shape = ShapeKind::Custom;
+                CollisionPrimitive cylinder = GatePrimitive(PrimitiveKind::Cylinder, Math::float3(0.0f, 0.0f, 0.0f), 0.5f);
+                cylinder.center = Math::float3(2.0f, 1.0f, 0.0f);
+                cylinder.halfHeight = 1.0f;
+                cylinder.rotationDeg = Math::float3(5.0f, 0.0f, 0.0f); // turned: what a palm's trunk is, and what Jolt's compound takes only a uniform scale for
+                shape.primitives.push_back(cylinder);
+                CollisionPrimitive box = GatePrimitive(PrimitiveKind::Box, Math::float3(0.5f, 0.5f, 0.5f), 0.0f);
+                box.center = Math::float3(-2.0f, 0.5f, 0.0f);
+                shape.primitives.push_back(box);
+
+                GateBody stretched;
+                stretched.SetCollisionSettings(shape);
+                stretched.SetScale(Math::float3(1.0f, 3.0f, 1.0f));
+                stretched.SetPhysicsMotion(Motion::Static);
+                GateBody mirrored;
+                mirrored.SetCollisionSettings(shape);
+                mirrored.SetPosition(Math::float3(0.0f, 0.0f, 20.0f));
+                mirrored.SetScale(Math::float3(-1.0f, 1.0f, 1.0f));
+                mirrored.SetPhysicsMotion(Motion::Static);
+                World world;
+                frame(world, 1.0f / 60.0f);
+                float stretchedTrunk = 0.0f, stretchedBox = 0.0f, mirroredTrunk = 0.0f, mirroredBox = 0.0f;
+                const bool hits = topAt(world, 2.0f, 0.0f, stretchedTrunk) && topAt(world, -2.0f, 0.0f, stretchedBox) && topAt(world, -2.0f, 20.0f, mirroredTrunk) && topAt(world, 2.0f, 20.0f, mirroredBox);
+                report += "stretched x3 tops " + std::to_string(stretchedTrunk) + " " + std::to_string(stretchedBox) + ", mirrored " + std::to_string(mirroredTrunk) + " " + std::to_string(mirroredBox) + "; ";
+                if (!hits || std::fabs(stretchedTrunk - 6.0f) > 0.4f || std::fabs(stretchedBox - 3.0f) > 0.05f || std::fabs(mirroredTrunk - 2.0f) > 0.1f || std::fabs(mirroredBox - 1.0f) > 0.05f)
+                {
+                    detail = report + "should be 6 3, 2 1";
+                    return finish(Verdict::Fail);
+                }
+                // The arm: what Jolt makes of that scale by itself.
+                const BuiltShape built = BuildAssetShape("gate", shape, false);
+                std::string error;
+                const JPH::RefConst<JPH::Shape> nearest = ScaledInstance(*built.shape, Math::float3(1.0f, 3.0f, 1.0f), error);
+                TestWorld jolt(1);
+                jolt.AddStatic(nearest.GetPtr());
+                jolt.system.OptimizeBroadPhase();
+                const JPH::RRayCast ray(JPH::Vec3(2.0f, 100.0f, 0.0f), JPH::Vec3(0.0f, -200.0f, 0.0f));
+                JPH::RayCastResult hit;
+                const bool nearestHit = jolt.system.GetNarrowPhaseQuery().CastRay(ray, hit);
+                const float nearestTop = nearestHit ? 100.0f - hit.mFraction * 200.0f : -1000.0f;
+                report += "Jolt's nearest scale " + std::to_string(nearestTop);
+                if (std::fabs(nearestTop - 6.0f) < 0.5f)
+                {
+                    detail = report + ": the arm should come out wrong";
+                    return finish(Verdict::Fail);
+                }
+            }
+            detail = report;
+            return finish(Verdict::Pass);
+        }
+
         struct Gate
         {
             const char* name;
@@ -646,6 +1560,11 @@ namespace physics
             { "walk", &GateWalk },
             { "water", &GateWater },
             { "kinematic", &GateKinematic },
+            { "autoshape", &GateAutoShape },
+            { "custom", &GateCustom },
+            { "rolling", &GateRolling },
+            { "async", &GateAsync },
+            { "world", &GateWorld },
         };
     }
 

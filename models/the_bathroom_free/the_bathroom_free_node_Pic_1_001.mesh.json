@@ -1,4 +1,27 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0588,
+          0.1553,
+          -0.0122
+        ],
+        "halfExtents": [
+          0.1397,
+          0.0985,
+          0.025
+        ],
+        "rotationDeg": [
+          -179.878,
+          -0.097,
+          -78.1661
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Pic_1_001.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Pic_1_001_0",

@@ -1,4 +1,24 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0012,
+          0.0797,
+          0.0004
+        ],
+        "halfHeight": 0.0798,
+        "radius": 0.0385,
+        "rotationDeg": [
+          0.4733,
+          0.0033,
+          -0.4045
+        ],
+        "type": "cylinder"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Cup_glass_2_001.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Cup_glass_2_001_0",

@@ -3611,6 +3611,7 @@ namespace
             if (const auto motion = item.find("physics"); motion != item.end()) { objectJson["physics"] = *motion; }
             if (const auto mass = item.find("mass"); mass != item.end()) { objectJson["mass"] = *mass; }
             if (const auto floats = item.find("buoyant"); floats != item.end()) { objectJson["buoyant"] = *floats; }
+            if (const auto collision = item.find("collision"); collision != item.end()) { objectJson["collision"] = *collision; }
 
             const std::string group = groupOverride.empty() ? GroupForKind(ctx.document, kind) : groupOverride;
             if (!group.empty())
@@ -4603,7 +4604,8 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
                         (key == "scale" && ((v.is_number() && v.get<float>() > 0.0f) || isVec3(v))) ||
                         (key == "physics" && v.is_string()) ||
                         (key == "mass" && v.is_number()) ||
-                        (key == "buoyant" && v.is_boolean());
+                        (key == "buoyant" && v.is_boolean()) ||
+                        (key == "collision" && v.is_object());
                     if (!ok)
                     {
                         const bool known = key == "asset" || key == "position" || key == "yawDeg" ||

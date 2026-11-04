@@ -2,9 +2,11 @@
 #include "core/logging/Log.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/profiling/Profiler.h"
+#include "core/task/TaskSystem.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
@@ -184,7 +186,9 @@ bool ShadowGpuData::EnsureUavRing(Renderer* renderer, UavRing& ring, size_t regi
         return false;
     }
 
-    regionBytes = std::max<size_t>(regionBytes, 16); // never a zero-size region
+    // Never a zero-size region. On 16 bytes: region f starts at f x regionBytes, and a RAW view must start there. 142 views x one group x 20 B = 2840 removed the device
+    // at the view's creation on a level with nothing in it (and on any odd number of groups: Release says only 0x887A0005 at the next create).
+    regionBytes = std::max<size_t>((regionBytes + 15u) & ~static_cast<size_t>(15u), 16);
     if (ring.buffer && ring.regionBytes >= regionBytes)
     {
         return true; // existing allocation fits — reuse (consumers index via regionBytes getter)
@@ -2672,13 +2676,24 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects)
 {
     if (!renderer) { return 0; }
+    CPU_SCOPE(ProfilerScopes::kShadowGpuUpdate);
 
     size_t newStatic = 0; // caster SLOTS (B3: one per (object, submesh)) — must match Rebuild's count
     std::uint32_t newGiInstances = 0;
-    for (const auto& obj : objects)
+    size_t movers = 0;
+    casterWalk_.clear();
+    for (const auto& objPtr : objects)
     {
-        if (IsCaster(obj.get())) { newStatic += CasterSlots(obj.get()); }
-        else if (IsGiFoldable(obj.get())) { newGiInstances += obj->GetInstanceCasterCount(); }
+        const RenderableObjectBase* obj = objPtr.get();
+        if (IsCaster(obj))
+        {
+            const size_t slots = CasterSlots(obj); // B3: an object owns `slots` consecutive caster ids
+            casterWalk_.push_back(CasterWalk{ obj, static_cast<std::uint32_t>(newStatic), static_cast<std::uint32_t>(slots) });
+            newStatic += slots;
+            const RenderableObject* ro = obj->AsRenderableObject();
+            if (ro && ro->MovedThisFrame()) { ++movers; }
+        }
+        else if (IsGiFoldable(obj)) { newGiInstances += obj->GetInstanceCasterCount(); }
     }
 
     // First use, or the caster set changed (level switch / editor spawn-delete) → full rebuild.
@@ -2715,19 +2730,19 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     auto* instBase = reinterpret_cast<render::InstancePerObject*>(instances_.Region(region));
     auto* boundBase = reinterpret_cast<render::CasterBounds*>(bounds_.Region(region));
 
-    std::uint32_t idx = 0;
-    std::uint32_t uploaded = 0;
+    std::atomic<std::uint32_t> uploadedSum{ 0 };
     // W8: the distance fade scales windStrength from the CAMERA, so a swaying caster changes without
     // ever moving — and Step 7 below deliberately skips anything that has not moved, which would
     // leave the shadow swaying at full amplitude while the tree faded out. Re-check wind casters too,
     // but ONLY while the fade is actually enabled: with it off (the default) this is a single bool
     // and the O(movers) property is untouched.
     const bool windFadeActive = vfx::g_windFadeEnd > vfx::g_windFadeStart;
-    for (const auto& objPtr : objects)
+    // One caster. It writes only its own ids and reads only its own object, so the casters can go side by side.
+    const auto updateCaster = [&](size_t walkIndex)
     {
-        const RenderableObjectBase* obj = objPtr.get();
-        if (!IsCaster(obj)) { continue; }
-        const size_t slots = CasterSlots(obj); // B3: an object owns `slots` consecutive caster ids
+        const RenderableObjectBase* obj = casterWalk_[walkIndex].object;
+        const std::uint32_t idx = casterWalk_[walkIndex].firstId;
+        const size_t slots = casterWalk_[walkIndex].slots;
 
         // Step 7: only movers are recomputed + re-uploaded. A static caster is skipped entirely
         // (no fill, no compare) — the per-frame cost is O(movers), not O(casters). The move
@@ -2808,6 +2823,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
         }
         // pending>0 propagates a recent change across all kFrameCount ring regions (even after
         // the object stops moving), so every region converges to the latest transform.
+        std::uint32_t written = 0;
         for (size_t s = 0; s < slots; ++s)
         {
             if (pending_[idx + s] > 0)
@@ -2815,11 +2831,30 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
                 instBase[idx + s] = cpuInstances_[idx + s];
                 boundBase[idx + s] = cpuBounds_[idx + s];
                 --pending_[idx + s];
-                ++uploaded;
+                ++written;
             }
         }
-        idx += static_cast<std::uint32_t>(slots);
+        return written;
+    };
+    // The render thread stands on this, and a heap of moving bodies is thousands of movers while the workers have nothing to do yet (2026-11-04, owner: "what is this hole at the start
+    // of the render frame?"). A level that stands still keeps the plain loop: a dispatch costs more than the few flags it would read. A block adds to the sum once: a caster doing it
+    // would have every worker fighting over that one cache line.
+    constexpr size_t kSideBySideFrom = 512;
+    constexpr size_t kCastersABlock = 256;
+    const size_t blocks = (casterWalk_.size() + kCastersABlock - 1) / kCastersABlock;
+    const auto updateBlock = [&](size_t block)
+    {
+        const size_t end = std::min(casterWalk_.size(), (block + 1) * kCastersABlock);
+        std::uint32_t written = 0;
+        for (size_t i = block * kCastersABlock; i < end; ++i) { written += updateCaster(i); }
+        if (written != 0) { uploadedSum.fetch_add(written, std::memory_order_relaxed); }
+    };
+    if (movers + lastMoverCount_ >= kSideBySideFrom) { TaskSystem::ParallelFor(blocks, updateBlock, 1); }
+    else
+    {
+        for (size_t block = 0; block < blocks; ++block) { updateBlock(block); }
     }
+    const std::uint32_t uploaded = uploadedSum.load(std::memory_order_relaxed);
 
     if (logFramesRemaining_ > 0)
     {
@@ -2840,6 +2875,7 @@ std::uint32_t ShadowGpuData::UpdateForFrame(Renderer* renderer,
     // what made dragging a mesh in the editor cost ~195 ms a frame against a 0.38 ms baseline.
     if (!cpuCasterMeta_.empty() && count_ > 0)
     {
+        CPU_SCOPE(ProfilerScopes::kShadowGpuCasterMeta);
         const UINT frameSlot = renderer->GetCurrentFrameIndex();
         if (auto* metaDst = reinterpret_cast<std::uint32_t*>(casterMeta_.Region(frameSlot)))
         {

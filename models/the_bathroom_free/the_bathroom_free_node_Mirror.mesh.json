@@ -1,4 +1,27 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0022,
+          0.4143,
+          0.0255
+        ],
+        "halfExtents": [
+          0.5056,
+          0.3994,
+          0.0345
+        ],
+        "rotationDeg": [
+          -0.0362,
+          -1.5477,
+          179.5735
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Mirror.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Mirror_0",

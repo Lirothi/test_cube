@@ -1,4 +1,24 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          -0.0012,
+          0.0457,
+          0.0002
+        ],
+        "halfHeight": 0.0458,
+        "radius": 0.0166,
+        "rotationDeg": [
+          0.0057,
+          -0.0002,
+          1.5785
+        ],
+        "type": "cylinder"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Cup_sanitazer.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Cup_sanitazer_0",

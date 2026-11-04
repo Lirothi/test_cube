@@ -1,5 +1,28 @@
 {
   "bakeScale": 0.0001767773210303858,
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          -0.001,
+          0.0265,
+          -0.0352
+        ],
+        "halfExtents": [
+          0.038,
+          0.0341,
+          0.025
+        ],
+        "rotationDeg": [
+          174.8518,
+          -34.8759,
+          -81.0739
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/seashells/seashells_node_scoica_01.mesh.bin",
   "material": "seashells_scoica_01_0",
   "pivot": "base",

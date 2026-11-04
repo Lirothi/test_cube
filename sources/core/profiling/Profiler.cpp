@@ -340,6 +340,7 @@ void Profiler::BeginFrame(uint64_t frameNo) {
         traceRecording_.store(true, std::memory_order_release);
         traceStartUs_ = ToMicroseconds(frameCpuStart_);
         traceFirstFrame_ = frameNo;
+        for (UINT q = 0; q < kGpuQueueCount; ++q) { gpuTraceCalibrated_[q] = false; }
         traceLastFrame_ = UINT64_MAX;
         traceStopRequested_ = false;
     }
@@ -513,7 +514,8 @@ void Profiler::PushSample(const ScopeNameKey& key, CpuClock::time_point start, C
     // The frame may have closed while the producer was finding/locking its buffer.
     if (!anyEpoch && sampleEpoch_.load(std::memory_order_acquire) != epoch) { return; }
     buffer.samples.push_back({ key, std::chrono::duration<double, std::milli>(end - start).count() });
-    if (traceCapturingAtomic_.load(std::memory_order_acquire)) {
+    // A thread that lies across the frames may end a scope between two of them (the physics step, in the wait for the GPU): the capture is open, the frame is not.
+    if (anyEpoch ? traceRecording_.load(std::memory_order_acquire) : traceCapturingAtomic_.load(std::memory_order_acquire)) {
         TraceEvent ev;
         ev.key = key;
         ev.tsUs = ToMicroseconds(start);
@@ -575,11 +577,13 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>& sampleOut,
     std::sort(ready.begin(), ready.begin() + count, [this](UINT a, UINT b) {
         return gpuResolvedBatches_[a].fenceValue < gpuResolvedBatches_[b].fenceValue;
     });
-    GpuTraceCalibration calibration[kGpuQueueCount]{};
-    bool calibrated[kGpuQueueCount] = {};
-    // Durations need frequency only; calibration is solely for captured events.
+    // Durations need frequency only; calibration is solely for captured events. One calibration a capture: GetClockCalibration is good to a microsecond
+    // or two, and taken anew per batch it put a GPU-bound frame's start before the previous frame's end (Perfetto: slice_spill_overlapping_complete_event,
+    // GPU.Frame N against N + 1, 2 us). The two clocks drift far less than that over a capture's few seconds.
     if (traceOut && traceStartUs) {
-        for (UINT q = 0; q < kGpuQueueCount; ++q) { calibrated[q] = CaptureGpuTraceCalibration(q, calibration[q]); }
+        for (UINT q = 0; q < kGpuQueueCount; ++q) {
+            if (!gpuTraceCalibrated_[q]) { gpuTraceCalibrated_[q] = CaptureGpuTraceCalibration(q, gpuTraceCalibration_[q]); }
+        }
     }
     for (size_t i = 0; i < count; ++i) {
         const UINT slot = ready[i];
@@ -592,9 +596,9 @@ void Profiler::CollectGpuResolvedSamples(std::vector<ScopeSample>& sampleOut,
             const UINT64 b = gpuMappedReadback_[q][base + range.end];
             if (b < a) { continue; }
             sampleOut.push_back({ range.key, static_cast<double>(b - a) * 1000.0 / gpuFreq_[q], range.frameNo });
-            if (!traceOut || !calibrated[q] || range.frameNo < traceFirstFrame_ || range.frameNo > traceLastFrame_) { continue; }
-            const uint64_t start = GpuTimestampToCpuUs(a, calibration[q], q);
-            const uint64_t end = GpuTimestampToCpuUs(b, calibration[q], q);
+            if (!traceOut || !gpuTraceCalibrated_[q] || range.frameNo < traceFirstFrame_ || range.frameNo > traceLastFrame_) { continue; }
+            const uint64_t start = GpuTimestampToCpuUs(a, gpuTraceCalibration_[q], q);
+            const uint64_t end = GpuTimestampToCpuUs(b, gpuTraceCalibration_[q], q);
             if (end <= traceStartUs || end < start) { continue; }
             TraceEvent ev;
             ev.key = range.key;

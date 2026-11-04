@@ -831,6 +831,9 @@
     <ClCompile Include="sources/editor/ui/MaterialEditorPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/ui/CollisionEditorTab.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/ui/MeshEditorPanel.cpp">
       <Filter>sources\editor\ui</Filter>
     </ClCompile>
@@ -1637,6 +1640,9 @@
     <ClInclude Include="sources/editor/ui/MaterialEditorPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/ui/CollisionEditorTab.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/ui/MeshEditorPanel.h">
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
@@ -1662,6 +1668,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\editor_preview.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\editor_preview_lines.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\reflection_blur_cs.hlsl">

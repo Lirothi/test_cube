@@ -811,7 +811,9 @@ int WINAPI WinMain(
         if (const char* flag = std::strstr(lpCmdLine, "--level=")) {
             const char* p = flag + std::strlen("--level=");
             std::string path;
-            while (*p && !std::isspace(static_cast<unsigned char>(*p))) { path.push_back(*p); ++p; }
+            const bool quoted = *p == '"';
+            if (quoted) { ++p; }
+            while (*p && (quoted ? *p != '"' : !std::isspace(static_cast<unsigned char>(*p)))) { path.push_back(*p); ++p; }
             g_bootLevelPath = path;
         }
         // "--shot=<path>" grabs the backbuffer to a PNG after "--shot-delay=<sec>" (default 7)

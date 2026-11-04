@@ -272,6 +272,8 @@ namespace
         {
             return false;
         }
+        // Only something to look at: under Simulate a body would push what it floats through and stand in the walk's way.
+        if (RenderableObject* ghost = runtime->AsRenderableObject()) { ghost->SetPhysicsMotion(physics::Motion::None); }
         // The preview casts a shadow like any other object again. It was taken OUT of the caster set
         // as a workaround while one moving caster still forced the whole VSM page pool to re-render;
         // Step 4 of docs/vsm_page_caching_plan.md removed that, so a mover now dirties only its own

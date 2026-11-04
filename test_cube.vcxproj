@@ -262,6 +262,7 @@
     <ClCompile Include="sources/editor/ui/ContentBrowserPanel.cpp" />
     <ClCompile Include="sources/editor/ui/ImportPanel.cpp" />
     <ClCompile Include="sources/editor/ui/MeshEditorPreviewScene.cpp" />
+    <ClCompile Include="sources/editor/ui/CollisionEditorTab.cpp" />
     <ClCompile Include="sources/editor/ui/MeshEditorPanel.cpp" />
     <ClCompile Include="sources/editor/ui/MaterialEditorPanel.cpp" />
     <ClCompile Include="sources/editor/assets/MaterialFileGen.cpp" />
@@ -533,6 +534,7 @@
     <ClInclude Include="sources/editor/ui/ContentBrowserPanel.h" />
     <ClInclude Include="sources/editor/ui/ImportPanel.h" />
     <ClInclude Include="sources/editor/ui/MeshEditorPreviewScene.h" />
+    <ClInclude Include="sources/editor/ui/CollisionEditorTab.h" />
     <ClInclude Include="sources/editor/ui/MeshEditorPanel.h" />
     <ClInclude Include="sources/editor/ui/MaterialEditorPanel.h" />
     <ClInclude Include="sources/editor/assets/MaterialFileGen.h" />
@@ -775,6 +777,7 @@
     <None Include="shaders\particle_update_cs.hlsl" />
     <None Include="shaders\particles.hlsl" />
     <None Include="shaders\editor_preview.hlsl" />
+    <None Include="shaders\editor_preview_lines.hlsl" />
     <None Include="shaders\reflection_blur_cs.hlsl" />
     <None Include="shaders\selection_outline_cs.hlsl" />
     <None Include="shaders\selection_stencil.hlsl" />

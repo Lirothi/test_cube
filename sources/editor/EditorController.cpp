@@ -2996,6 +2996,7 @@ void EditorController::ReleaseGpuResources(Renderer& renderer)
     thumbnailCache_.ReleaseAll(renderer);
     contentBrowser_.ReleaseGpuResources();
     viewportGizmo_.ReleaseGpuResources();
+    meshEditor_.ReleaseGpuResources(renderer);
 }
 
 void EditorController::Draw(

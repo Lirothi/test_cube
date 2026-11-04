@@ -1,5 +1,40 @@
 {
   "bakeScale": 0.009999999776482582,
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0143,
+          0.0261,
+          -0.0008
+        ],
+        "halfHeight": 0.0352,
+        "radius": 0.022,
+        "rotationDeg": [
+          -90.0,
+          -84.8545,
+          -169.466
+        ],
+        "type": "cylinder"
+      },
+      {
+        "center": [
+          -0.094,
+          0.0218,
+          0.0069
+        ],
+        "halfHeight": 0.0747,
+        "radius": 0.02,
+        "rotationDeg": [
+          90.0,
+          -81.6747,
+          -1.6094
+        ],
+        "type": "cylinder"
+      }
+    ]
+  },
   "geometry": "models/lowpoly_sticks/lowpoly_sticks_node_stick_01.mesh.bin",
   "material": "lowpoly_sticks_stick_01_0",
   "pivot": "base",

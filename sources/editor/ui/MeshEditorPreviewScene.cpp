@@ -132,8 +132,11 @@ struct MeshEditorPreviewScene::Impl
     std::array<float, render::kFrameCount> renderedEnvironmentExposures{};
     std::array<std::optional<EditorPreviewRenderer::PhysicalLighting>, render::kFrameCount>
         renderedPhysical{};
+    std::array<std::uint64_t, render::kFrameCount> renderedLinesRevisions{};
     std::array<bool, render::kFrameCount> cameraValid{};
     std::array<Math::mat4, render::kFrameCount> renderedViewProj{};
+    std::array<Math::mat4, render::kFrameCount> renderedView{};
+    std::array<Math::mat4, render::kFrameCount> renderedProj{};
     std::string sourceSignature;
     std::string error;
     bool loaded = false;
@@ -236,7 +239,9 @@ struct MeshEditorPreviewScene::Impl
         int highlightSubmeshOrdinal,
         const TextureCube* environment,
         float environmentExposure,
-        const EditorPreviewRenderer::PhysicalLighting* physical)
+        const EditorPreviewRenderer::PhysicalLighting* physical,
+        const EditorPreviewRenderer::PreviewLines* lines,
+        std::uint64_t linesRevision)
     {
         if (!loaded || !mesh || frameIndex >= render::kFrameCount)
         {
@@ -300,13 +305,16 @@ struct MeshEditorPreviewScene::Impl
                 highlightSubmeshOrdinal,
                 environment,
                 environmentExposure,
-                physical);
+                physical,
+                lines);
         if (!target || !commands->Submit(&renderer))
         {
             error = "Could not submit the mesh preview render.";
             return false;
         }
         renderedViewProj[frameIndex] = previewRenderer.LastViewProj();
+        renderedView[frameIndex] = previewRenderer.LastView();
+        renderedProj[frameIndex] = previewRenderer.LastProj();
 
         targets[frameIndex] = std::move(target);
         frameCommands[frameIndex] = std::move(commands);
@@ -323,6 +331,7 @@ struct MeshEditorPreviewScene::Impl
         renderedPhysical[frameIndex] = physical
             ? std::optional<EditorPreviewRenderer::PhysicalLighting>(*physical)
             : std::nullopt;
+        renderedLinesRevisions[frameIndex] = linesRevision;
         cameraValid[frameIndex] = true;
         error.clear();
         return true;
@@ -377,6 +386,12 @@ void MeshEditorPreviewScene::Reset(Renderer& renderer)
     impl_->loaded = false;
 }
 
+void MeshEditorPreviewScene::ReleaseGpuResources(Renderer& renderer)
+{
+    Reset(renderer);
+    impl_ = std::make_unique<Impl>();
+}
+
 MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     const std::string& assetKey,
     const std::string& geometry,
@@ -394,7 +409,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     int highlightSubmeshOrdinal,
     const TextureCube* environment,
     float environmentExposure,
-    const EditorPreviewRenderer::PhysicalLighting* physical)
+    const EditorPreviewRenderer::PhysicalLighting* physical,
+    const EditorPreviewRenderer::PreviewLines* lines,
+    std::uint64_t linesRevision)
 {
     View view;
     const std::string signature = BuildSourceSignature(assetKey,
@@ -452,7 +469,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         impl_->renderedHighlightOrdinals[frameIndex] != highlightSubmeshOrdinal ||
         impl_->renderedEnvironments[frameIndex] != environmentResource ||
         impl_->renderedEnvironmentExposures[frameIndex] != environmentExposure ||
-        !SamePhysical(impl_->renderedPhysical[frameIndex], physical))
+        !SamePhysical(impl_->renderedPhysical[frameIndex], physical) ||
+        impl_->renderedLinesRevisions[frameIndex] != linesRevision)
     {
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
@@ -467,7 +485,9 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
                 highlightSubmeshOrdinal,
                 environment,
                 environmentExposure,
-                physical))
+                physical,
+                lines,
+                linesRevision))
         {
             view.state = State::Failed;
             view.error = impl_->error.c_str();
@@ -484,6 +504,8 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     view.texture = renderer.CreateImGuiTextureId(impl_->targets[frameIndex].Get(), srv);
     view.state = view.texture != ImTextureID_Invalid ? State::Ready : State::Loading;
     view.viewProj = impl_->renderedViewProj[frameIndex];
+    view.viewMatrix = impl_->renderedView[frameIndex];
+    view.projMatrix = impl_->renderedProj[frameIndex];
     return view;
 }
 

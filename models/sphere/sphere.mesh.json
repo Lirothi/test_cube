@@ -1,4 +1,18 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0002,
+          -0.0002,
+          -0.0
+        ],
+        "radius": 0.4973,
+        "type": "sphere"
+      }
+    ]
+  },
   "geometry": "models/sphere/sphere.mesh.bin",
   "lod3Aggressive": false,
   "lodDistanceScale": 2.0,

@@ -19,6 +19,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <optional> // the main thread's "Whole Cycle" held across the loop's turn (render thread, plan G8)
 #include <thread>
 #include <mimalloc.h>
@@ -417,9 +418,16 @@ namespace
         if (setting == "physics.stepHz") { physics::GameSettings().stepHz = std::clamp(value, 10.0f, 480.0f); return true; }
         if (setting == "physics.maxSteps") { physics::GameSettings().maxSteps = std::clamp(static_cast<int>(value), 1, 32); return true; }
         if (setting == "physics.threads") { physics::GameSettings().threads = std::clamp(static_cast<int>(value), 0, 16); return true; }
+        if (setting == "physics.async") { physics::GameSettings().async = value != 0.0f; return true; }
+        if (setting == "physics.kickInTick") { physics::GameSettings().kickInTick = value != 0.0f; return true; }
+        if (setting == "physics.stepDelayMs") { physics::GameSettings().stepDelayMs = std::max(value, 0.0f); return true; }
         if (setting == "physics.gravity") { physics::GameSettings().gravity = value; return true; }
+        if (setting == "physics.autoShapes") { physics::GameSettings().autoShapes = value != 0.0f; return true; }
+        if (setting == "physics.forceLod") { physics::GameSettings().forceLod = static_cast<int>(std::clamp(value, -1.0f, 3.0f)); return true; }
+        if (setting == "physics.hullTolerance") { physics::GameSettings().hullTolerance = std::clamp(value, 0.0f, 0.25f); return true; }
         if (setting == "physics.killY") { physics::GameSettings().killY = value; return true; }
         if (setting == "physics.angularDamping") { physics::GameSettings().angularDamping = std::max(value, 0.0f); return true; }
+        if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
         if (setting == "physics.walk") { physics::GameSettings().walk = value != 0.0f; return true; }
         if (setting == "physics.walkSpeed") { physics::GameSettings().walkSpeed = std::max(value, 0.0f); return true; }
         if (setting == "physics.walkSprint") { physics::GameSettings().walkSprint = std::max(value, 1.0f); return true; }
@@ -2002,6 +2010,13 @@ void App::InitScene()
         {
             bootLevel = "data/levels/demo.json";
         }
+        std::error_code levelError;
+        if (!std::filesystem::exists(bootLevel, levelError))
+        {
+            // JsonLevel::Load's assert is Debug's: Release went on with no scene, and died in the first target it recreated with the device removed and not a word why.
+            LOG_FATAL(logging::LogCategory::Scene, "the boot level '{}' does not exist", bootLevel);
+            TerminateProcess(GetCurrentProcess(), 3);
+        }
         levelManager.RegisterLevel<JsonLevel>(bootLevel);
     }
 
@@ -2208,15 +2223,17 @@ namespace
             // The physics world (docs/physics_plan.md).
             {
                 const physics::Stats ps = scene_.Physics().GetStats();
-                char physicsItem[512];
+                char physicsItem[720];
                 std::snprintf(physicsItem, sizeof(physicsItem),
                               ",\"physics\":{\"world\":%s,\"simulating\":%s,\"objects\":%u,\"static\":%u,\"kinematic\":%u,\"dynamic\":%u,"
-                              "\"active\":%u,\"floating\":%u,\"shapes\":%u,\"shapeTriangles\":%llu,\"stepsLastFrame\":%u,\"stepsTotal\":%llu,"
-                              "\"stepMs\":%.3f,\"stepMsEma\":%.3f,\"lastBuildMs\":%.1f,\"walking\":%s,\"onGround\":%s,\"fellOut\":%u}",
+                              "\"active\":%u,\"floating\":%u,\"shapes\":%u,\"meshShapes\":%u,\"hullShapes\":%u,\"primitiveShapes\":%u,\"shapeTriangles\":%llu,\"bytes\":%llu,\"stepsLastFrame\":%u,\"stepsTotal\":%llu,"
+                              "\"stepMs\":%.3f,\"stepMsEma\":%.3f,\"lastBuildMs\":%.1f,\"walking\":%s,\"onGround\":%s,\"fellOut\":%u,\"handOversHeld\":%llu,\"stepWaits\":%llu,\"stepErrors\":%llu}",
                               ps.worldExists ? "true" : "false", ps.simulating ? "true" : "false", ps.objects, ps.staticBodies, ps.kinematicBodies, ps.dynamicBodies,
-                              ps.activeBodies, ps.floatingBodies, ps.shapes, static_cast<unsigned long long>(ps.shapeTriangles), ps.stepsLastFrame,
+                              ps.activeBodies, ps.floatingBodies, ps.shapes, ps.meshShapes, ps.hullShapes, ps.primitiveShapes, static_cast<unsigned long long>(ps.shapeTriangles),
+                              static_cast<unsigned long long>(ps.bytes), ps.stepsLastFrame,
                               static_cast<unsigned long long>(ps.stepsTotal), ps.stepMs, ps.stepMsEma, ps.lastBuildMs,
-                              ps.walking ? "true" : "false", ps.walkOnGround ? "true" : "false", ps.fellOut);
+                              ps.walking ? "true" : "false", ps.walkOnGround ? "true" : "false", ps.fellOut,
+                              static_cast<unsigned long long>(ps.handOversHeld), static_cast<unsigned long long>(ps.stepWaits), static_cast<unsigned long long>(ps.stepErrors));
                 out += physicsItem;
             }
             // Plan S10e: the VSM page pool's load and the dynamic-resolution bias it drives (a kFrameCount-old frame).
@@ -3037,6 +3054,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
                 }
                 wholeCycle.reset(); // the frame is drawn
                 renderFramePending = false;
+                scene.Physics().KickStep(); // every core is idle from here to the hand-over: the wait for the GPU
                 afterFrame();
                 if (rtaudit::Finished(GetTimeSeconds())) {
                     isRunning_ = false; // the audit's verdict is in; main returns its exit code

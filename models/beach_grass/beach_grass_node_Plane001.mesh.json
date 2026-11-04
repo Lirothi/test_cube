@@ -1,5 +1,23 @@
 {
   "bakeScale": 6.7996745109558105,
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          -0.0403,
+          -0.024,
+          -0.3346
+        ],
+        "halfExtents": [
+          0.4797,
+          0.025,
+          0.3344
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/beach_grass/beach_grass_node_Plane001.mesh.bin",
   "material": "beach_grass_Plane001_0",
   "pivot": "base",

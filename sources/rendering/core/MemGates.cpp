@@ -178,7 +178,7 @@ void Inject(ID3D12Device* device)
 
 void Sample(ID3D12Device* device, double t)
 {
-    const render::MemoryPlatform plat = render::ReadMemoryPlatform(device);
+    const render::MemoryPlatform plat = render::ReadMemoryPlatform(device, false);
     std::vector<std::int64_t> tags;
     ReadTagBytes(tags);
     if (g_read.series.empty())
