@@ -2931,6 +2931,58 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
     return out;
 }
 
+bool MeshManager::ReadCollisionGeometry(const std::string& binPath, int lod, CollisionGeometry& out)
+{
+    out = CollisionGeometry{};
+    constexpr std::string_view kSuffix = ".mesh.bin";
+    if (binPath.size() < kSuffix.size() || binPath.compare(binPath.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0)
+    {
+        return false;
+    }
+    std::ifstream f(binPath, std::ios::binary);
+    if (!f) { return false; }
+    MeshBinHeader h{};
+    f.read(reinterpret_cast<char*>(&h), sizeof(h));
+    if (!f || h.magic != kMeshBinMagic || !MeshBinVersionReadable(h.version) || h.vertexCount == 0 || h.lodCount == 0)
+    {
+        return false;
+    }
+    std::vector<VertexPNTUV> verts(h.vertexCount);
+    f.read(reinterpret_cast<char*>(verts.data()), static_cast<std::streamsize>(h.vertexCount * sizeof(VertexPNTUV)));
+    if (!f) { return false; }
+    out.positions.resize(h.vertexCount);
+    for (uint32_t i = 0; i < h.vertexCount; ++i) { out.positions[i] = Math::float3(verts[i].position); }
+
+    const uint32_t want = std::min(static_cast<uint32_t>(std::max(lod, 0)), h.lodCount - 1u);
+    out.lodUsed = want;
+    out.lodCount = h.lodCount;
+    for (uint32_t i = 0; i <= want; ++i)
+    {
+        uint32_t ic = 0, sc = 0;
+        float err = 0.0f;
+        f.read(reinterpret_cast<char*>(&ic), sizeof(ic));
+        f.read(reinterpret_cast<char*>(&sc), sizeof(sc));
+        f.read(reinterpret_cast<char*>(&err), sizeof(err));
+        if (!f) { return false; }
+        if (i == want)
+        {
+            out.indices.resize(ic);
+            out.submeshes.resize(sc);
+            f.read(reinterpret_cast<char*>(out.indices.data()), static_cast<std::streamsize>(ic * sizeof(uint32_t)));
+            f.read(reinterpret_cast<char*>(out.submeshes.data()), static_cast<std::streamsize>(sc * sizeof(Mesh::Submesh)));
+            return static_cast<bool>(f);
+        }
+        f.seekg(static_cast<std::streamoff>(ic * sizeof(uint32_t)) + static_cast<std::streamoff>(sc * sizeof(Mesh::Submesh)), std::ios::cur);
+        if (h.version >= 4u)
+        {
+            uint32_t cc = 0;
+            f.read(reinterpret_cast<char*>(&cc), sizeof(cc));
+            f.seekg(static_cast<std::streamoff>(cc) * static_cast<std::streamoff>(sizeof(Mesh::Cluster)), std::ios::cur);
+        }
+    }
+    return false;
+}
+
 bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out)
 {
     out = {};

@@ -10,6 +10,7 @@
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
 #include "ocean/BuoyancyJson.h"
+#include "physics/CollisionJson.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/meshes/StaticMesh.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
@@ -442,6 +443,29 @@ namespace SceneObjectFactory
             {
                 mesh.SetBuoyancySettings(std::move(settings));
             }
+        }
+        // Physics (docs/physics_plan.md): "physics" is the per-OBJECT choice, absent = Static (UE's BlockAll: the world collides
+        // with what it draws); "collision" says how and normally comes from the asset's mesh.json, folded in like every other
+        // asset key. A leaf does not collide: unless the block names its own list, the slots with "windFoliage" > 0 are out.
+        {
+            physics::CollisionSettings collision;
+            bool namedSlots = false;
+            if (o.contains("collision")) { physics::ReadCollisionSettings(o["collision"], collision, &namedSlots); }
+            if (!namedSlots && o.contains("windFoliage") && o["windFoliage"].is_array())
+            {
+                int slot = 0;
+                for (const auto& v : o["windFoliage"])
+                {
+                    if (v.is_number() && v.get<float>() > 0.0f) { collision.excludeSlots.push_back(slot); }
+                    ++slot;
+                }
+            }
+            // The object's own kilograms (the Inspector's Mass) over the asset's density.
+            if (o.contains("mass") && o["mass"].is_number()) { collision.mass = o["mass"].get<float>(); }
+            mesh.SetCollisionSettings(std::move(collision));
+            physics::Motion motion = physics::Motion::Static;
+            if (o.contains("physics") && o["physics"].is_string()) { physics::MotionFromName(o["physics"].get<std::string>(), motion); }
+            mesh.SetPhysicsMotion(motion);
         }
         // Plan L: "onAt": "night" (or "day") -- the mesh's emissive (a bulb, a lit window) comes on with the night
         // lamps (rendering/lighting/NightLamps.h); absent = always.

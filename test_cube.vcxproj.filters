@@ -1,6 +1,9 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
+    <Filter Include="sources\physics">
+      <UniqueIdentifier>{a1f2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources">
       <UniqueIdentifier>{2f945f3e-b723-4214-859a-7577c42810bf}</UniqueIdentifier>
     </Filter>
@@ -297,6 +300,9 @@
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetPhysicsCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetCastShadowCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -560,6 +566,21 @@
     </ClCompile>
     <ClCompile Include="sources/ocean/BuoyancyLayout.cpp">
       <Filter>sources\ocean</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/physics/PhysicsCharacter.cpp">
+      <Filter>sources\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/physics/JoltRuntime.cpp">
+      <Filter>sources\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/physics/PhysicsShapes.cpp">
+      <Filter>sources\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/physics/PhysicsWorld.cpp">
+      <Filter>sources\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/physics/PhysicsSelfTest.cpp">
+      <Filter>sources\physics</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanBuoyancy.cpp">
       <Filter>sources\ocean</Filter>
@@ -983,6 +1004,9 @@
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetPhysicsCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/commands/SetCastShadowCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
@@ -1234,6 +1258,18 @@
     </ClInclude>
     <ClInclude Include="sources/ocean/BuoyancyLayout.h">
       <Filter>sources\ocean</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/physics/PhysicsTypes.h">
+      <Filter>sources\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/physics/PhysicsWorld.h">
+      <Filter>sources\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/physics/CollisionJson.h">
+      <Filter>sources\physics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/physics/PhysicsInternal.h">
+      <Filter>sources\physics</Filter>
     </ClInclude>
     <ClInclude Include="sources/ocean/OceanBuoyancy.h">
       <Filter>sources\ocean</Filter>

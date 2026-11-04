@@ -61,6 +61,8 @@ extern const Profiler::ScopeNameKey kSceneTickPointLights;
 extern const Profiler::ScopeNameKey kSceneTickObjects;
 extern const Profiler::ScopeNameKey kSceneTickPostObjects;
 extern const Profiler::ScopeNameKey kSceneTickBuoyancy;
+extern const Profiler::ScopeNameKey kSceneTickPhysics;
+extern const Profiler::ScopeNameKey kPhysicsStep;
 extern const Profiler::ScopeNameKey kSceneTickWind;
 extern const Profiler::ScopeNameKey kSceneRender;
 extern const Profiler::ScopeNameKey kSceneSync; // game thread plan G1: the hand-over

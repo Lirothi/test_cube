@@ -20,6 +20,7 @@
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/SetBuoyantCommand.h"
+#include "editor/commands/SetPhysicsCommand.h"
 #include "editor/commands/SetCastShadowCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -587,6 +588,7 @@ namespace
             }
 
             DrawCastShadow(ctx, commandStack, obj);
+            DrawPhysics(ctx, commandStack, obj);
             DrawBuoyancy(ctx, commandStack, obj, runtime);
             DrawGlowOnAt(ctx, commandStack, obj, gb);
         }
@@ -619,6 +621,45 @@ namespace
                     "(atlas or VSM), not a ray-traced one. For grass and small clutter (cheaper shadow\n"
                     "passes) or a bulb inside its own lamp. Contact shadows still see it: they trace\n"
                     "the depth buffer (UE keeps those on a separate switch).");
+            }
+        }
+
+        // docs/physics_plan.md: UE's Collision + Simulate Physics on one row. Every selected mesh, one undo entry.
+        static void DrawPhysics(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
+        {
+            ImGui::SeparatorText("Physics");
+            const char* const labels[] = { "None", "Static", "Dynamic" };
+            const physics::Motion motions[] = { physics::Motion::None, physics::Motion::Static, physics::Motion::Dynamic };
+            const physics::Motion current = SetPhysicsCommand::DocumentMotion(obj);
+            float mass = SetPhysicsCommand::DocumentMass(obj);
+            int index = current == physics::Motion::None ? 0 : current == physics::Motion::Dynamic ? 2 : 1;
+            bool changed = ImGui::Combo("Body", &index, labels, 3);
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "Static: things collide with it (the default). Dynamic: it falls and is pushed while the\n"
+                    "simulation runs (Level Editor > Physics > Simulate), as a convex hull of its solid slots.\n"
+                    "None: no body. How it collides -- shape, slots, friction -- is the asset's: Mesh Editor > Collision.");
+            }
+            if (motions[index] == physics::Motion::Dynamic)
+            {
+                ImGui::DragFloat("Mass (kg)", &mass, 0.5f, 0.0f, 100000.0f, mass > 0.0f ? "%.1f" : "from density");
+                changed = changed || ImGui::IsItemDeactivatedAfterEdit();
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("0 = from the asset's density (water's by default)."); }
+            }
+            if (changed)
+            {
+                auto composite = std::make_unique<CompositeCommand>("Set Physics");
+                for (const EditorObjectId id : ctx.selection.Ordered())
+                {
+                    const EditorObject* selected = ctx.document.Find(id);
+                    if (selected && SetPhysicsCommand::AppliesTo(*selected))
+                    {
+                        composite->Add(std::make_unique<SetPhysicsCommand>(id, motions[index], mass));
+                    }
+                }
+                if (composite->Empty()) { composite->Add(std::make_unique<SetPhysicsCommand>(obj.id, motions[index], mass)); }
+                commandStack.Execute(ctx, std::move(composite));
             }
         }
 

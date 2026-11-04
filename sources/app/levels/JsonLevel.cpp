@@ -709,6 +709,9 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             ApplyFreeCameraStart(*freeCameraStart, camera);
         }
     }
+
+    // The bodies of everything this level built, in the load instead of its first frame.
+    ctx.scene.Physics().LoadFinished();
 }
 
 void JsonLevel::Unload(const LevelLoadContext& ctx)

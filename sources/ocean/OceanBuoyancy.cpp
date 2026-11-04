@@ -297,7 +297,7 @@ void OceanBuoyancy::SyncReadback(OceanRenderable* ocean, Renderer& renderer)
 {
     TC_CHECK_GAME_PARKED_OR_SYNC("OceanBuoyancy::SyncReadback");
     // What this frame's Tick floated (floating_): nothing floating, no copy -- the same rule Tick kept.
-    if (!ocean || ocean != lastOcean_ || floating_.empty()) { return; }
+    if (!ocean || ocean != lastOcean_ || (floating_.empty() && !worldFloaters_)) { return; }
     OceanReadback& readback = ocean->GetReadback();
     readback.Request();
     readback.Poll(&renderer, *ocean);
@@ -321,8 +321,16 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
     const bool oceanOn = ocean && ocean->IsVisibleGame() && ocean->GetSimulation();
     std::vector<RenderableObject*>& floating = floating_;
     floating.clear();
+    worldFloaters_ = false;
     for (RenderableObject* object : registered)
     {
+        // A "buoyant" Dynamic object is the physics world's body (physics/PhysicsWorld.cpp ApplyWater): it writes the offset, and it
+        // reads the surface copied below.
+        if (object->GetPhysicsMotion() == physics::Motion::Dynamic)
+        {
+            worldFloaters_ = worldFloaters_ || (oceanOn && object->IsVisibleGame());
+            continue;
+        }
         if (oceanOn && object->IsVisibleGame())
         {
             floating.push_back(object);

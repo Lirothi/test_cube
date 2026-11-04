@@ -30,7 +30,7 @@
     <Link>
       <SubSystem>Console</SubSystem><EntryPointSymbol>mainCRTStartup</EntryPointSymbol>
       <AdditionalLibraryDirectories>$(OutDir);$(Repo)third_party\tbb\lib;$(Repo)third_party\mimalloc\lib\Debug;$(Repo)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>third_party_ui.lib;third_party_tasks.lib;third_party_assets.lib;mimalloc.lib;tbb12_debug.lib;sl.interposer.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>third_party_ui.lib;third_party_tasks.lib;third_party_physics.lib;third_party_assets.lib;mimalloc.lib;tbb12_debug.lib;sl.interposer.lib;gdi32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

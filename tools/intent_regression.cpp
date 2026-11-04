@@ -61,6 +61,7 @@
 #include "rendering/meshes/MeshManager.h"
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
+#include "physics/PhysicsWorld.h"              // TestPhysicsRoad
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -887,6 +888,63 @@ private:
     const EditorActionContext& actionCtx_;
     EditorCommandStack& stack_;
 };
+
+// The physics actions through the same road as every edit: the document's keys, one undo entry, and a body's pose stays out of the
+// level until keepSimulation (docs/physics_plan.md PH3). The gates themselves run in a world of their own.
+void TestPhysicsRoad(const EditorActionContext& actionCtx)
+{
+    using nlohmann::json;
+    EditorContext& ctx = actionCtx.editor;
+    Check(physics::RunGates("") == 0, "the physics gates pass (session log: physics gate:)");
+
+    EditorCommandStack stack;
+    DirectMcpHost host(actionCtx, stack);
+    const auto call = [&](int id, const std::string& name, json arguments)
+    {
+        return editormcp::HandleMessage({ { "jsonrpc", "2.0" }, { "id", id }, { "method", "tools/call" },
+            { "params", { { "name", name }, { "arguments", std::move(arguments) } } } }, host);
+    };
+    const auto text = [](const std::optional<json>& reply)
+    {
+        return (*reply)["result"]["content"][0]["text"].get<std::string>();
+    };
+    const json target = { { "filter", json::array({ "models/coconut_palm/coconut_palm.mesh.json" }) }, { "scope", "all" } };
+    const json makeDynamic = { { "action", "setPhysics" }, { "target", target }, { "params", { { "motion", "dynamic" }, { "mass", 5.0 } } } };
+
+    const std::optional<json> ran = call(1, "run_action", { { "command", makeDynamic } });
+    Check(!(*ran)["result"]["isError"].get<bool>(), "setPhysics runs: " + text(ran));
+    Check(stack.HistorySize() == 1, "as ONE undo entry");
+    bool sawDynamic = false;
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        if (!editormatch::MatchesSearch(object, "coconut_palm")) { continue; }
+        const auto motion = object.properties.find("physics");
+        sawDynamic = sawDynamic || (motion != object.properties.end() && *motion == "dynamic" && object.properties.value("mass", 0.0f) == 5.0f);
+    }
+    Check(sawDynamic, "and the document says dynamic, 5 kg");
+
+    const json bad = { { "action", "setPhysics" }, { "target", target }, { "params", { { "motion", "floppy" } } } };
+    const std::optional<json> refused = call(2, "run_action", { { "command", bad } });
+    Check((*refused)["result"]["isError"].get<bool>(), "a motion that does not exist is refused: " + text(refused));
+
+    const json keep = { { "action", "keepSimulation" }, { "target", { { "scope", "all" } } } };
+    const std::optional<json> kept = call(3, "run_action", { { "command", keep } });
+    Check(text(kept).find("Nothing to keep") != std::string::npos, "with nothing simulated, Keep says so: " + text(kept));
+
+    const std::optional<json> undone = call(4, "undo", json::object());
+    Check(text(undone).rfind("Undid", 0) == 0, "undo names what it undid: " + text(undone));
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        if (editormatch::MatchesSearch(object, "coconut_palm"))
+        {
+            Check(object.properties.find("physics") == object.properties.end() && object.properties.find("mass") == object.properties.end(),
+                "and the keys are gone: Static, the default, is not written");
+        }
+    }
+
+    const std::optional<json> ray = call(5, "physics_raycast", { { "origin", { 0.0, 100.0, 0.0 } }, { "direction", { 0.0, -1.0, 0.0 } } });
+    Check(!(*ray)["result"]["isError"].get<bool>(), "physics_raycast answers: " + text(ray));
+}
 
 void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
 {
@@ -4502,6 +4560,7 @@ int main(int argc, char** argv)
 
         TestOnePhraseIsOneUndo(actionCtx, grammar);
         TestMcpDrivesTheSameRoad(actionCtx);
+        TestPhysicsRoad(actionCtx);
         TestTransforms(actionCtx, grammar);
         TestRandomizeIsVariedAndDeterministic(actionCtx);
         TestReplace(actionCtx, grammar);

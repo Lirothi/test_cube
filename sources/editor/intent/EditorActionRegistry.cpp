@@ -44,6 +44,7 @@
 #include "editor/commands/SetMaterialSlotCommand.h"
 #include "editor/commands/SetMeshAssetCommand.h"
 #include "editor/assets/MeshRestPose.h"
+#include "editor/commands/SetPhysicsCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/InspectorMultiEdit.h"
@@ -484,6 +485,52 @@ namespace
         if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not meshes)"; }
         return FoldIntoOneEntry(std::move(commands),
             std::string(castShadow ? "Cast Shadow On for " : "Cast Shadow Off for ") + std::to_string(count) + " Objects");
+    }
+
+    // ------------------------------------------------------------------ setPhysics, keepSimulation
+
+    std::unique_ptr<EditorCommand> BuildSetPhysics(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        physics::Motion motion = physics::Motion::Static;
+        const std::string name = StringOr(intent.params, "motion", "static");
+        if (!physics::MotionFromName(name, motion))
+        {
+            outStatus = "motion is none, static or dynamic, not '" + name + "'";
+            return nullptr;
+        }
+        const float mass = NumberOr(intent.params, "mass", 0.0f);
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t skipped = 0;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            if (!obj || !SetPhysicsCommand::AppliesTo(*obj))
+            {
+                ++skipped; // lights, zones, water, particles: no body
+                continue;
+            }
+            commands.push_back(std::make_unique<SetPhysicsCommand>(id, motion, mass));
+        }
+        if (commands.empty())
+        {
+            outStatus = "Nothing to give a body: physics is for static meshes";
+            return nullptr;
+        }
+        const std::size_t count = commands.size();
+        outStatus = "Physics " + name + ": " + CountedObjects(count);
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not meshes)"; }
+        return FoldIntoOneEntry(std::move(commands), "Set Physics " + name + " on " + std::to_string(count) + " Objects");
+    }
+
+    std::unique_ptr<EditorCommand> BuildKeepSimulation(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent&,
+        std::string& outStatus)
+    {
+        return BuildKeepSimulationCommand(actionCtx.editor, targets.empty() ? nullptr : &targets, outStatus);
     }
 
     // ------------------------------------------------------------------ setOnAt
@@ -3560,6 +3607,10 @@ namespace
 
             ++perKind[kind->displayName];
             objectJson["name"] = names.Next(kind->displayName);
+            // The item's own place in the physics world (setPhysics' keys): "dynamic" falls when the simulation runs.
+            if (const auto motion = item.find("physics"); motion != item.end()) { objectJson["physics"] = *motion; }
+            if (const auto mass = item.find("mass"); mass != item.end()) { objectJson["mass"] = *mass; }
+            if (const auto floats = item.find("buoyant"); floats != item.end()) { objectJson["buoyant"] = *floats; }
 
             const std::string group = groupOverride.empty() ? GroupForKind(ctx.document, kind) : groupOverride;
             if (!group.empty())
@@ -3726,6 +3777,29 @@ EditorActionRegistry::EditorActionRegistry()
     });
 
     actions_.push_back({
+        "setPhysics",
+        "Give the matching meshes their place in the physics world: \"static\" (the default: things collide with it), \"dynamic\" (it falls and is pushed while the simulation runs, as a convex hull of its solid slots) or \"none\" (no body). mass is kilograms, 0 = from the asset's density. A body's pose never reaches the level until keepSimulation.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "motion", EditorParamKind::Enum, true, "none, static or dynamic", { "none", "static", "dynamic" } },
+          { "mass", EditorParamKind::Number, false, "kilograms; 0 or absent = from the density" } },
+        &BuildSetPhysics,
+    });
+
+    actions_.push_back({
+        "keepSimulation",
+        "UE's Keep Simulation Changes: the poses the dynamic bodies have reached become the transforms of the matching objects (of every moved one with no target), one undo entry. Turn the simulation on first (set_settings physics.simulate:1).",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        {},
+        &BuildKeepSimulation,
+        false,   // filterFromSelection
+        nullptr, // refinePreview
+        false,   // takesDestinationAsset
+        true,    // wholeLevelIsFine
+    });
+
+    actions_.push_back({
         "setOnAt",
         "Make the matching lamps come on at night (or only by day, or always): point and spot lights, and meshes "
         "that glow (a bulb, a lit window -- their emissive). They switch when the sun goes down and comes up, "
@@ -3881,7 +3955,8 @@ EditorActionRegistry::EditorActionRegistry()
         "place",
         "Create new objects at EXACT positions, one per item of params.items: each item is "
         "{asset, position [x, y, z]} with an optional yawDeg, rotationDeg [pitch, yaw, roll] "
-        "and scale (a number, or [x, y, z]; it multiplies the asset's own size). Nothing is "
+        "and scale (a number, or [x, y, z]; it multiplies the asset's own size), physics (\"dynamic\" falls when "
+        "the simulation runs, \"none\" collides with nothing), mass (kg) and buoyant (true floats it). Nothing is "
         "scattered, dropped onto the ground or kept apart -- the positions are used as given, "
         "height included. This is for a layout that was worked out already: numbers the "
         "designer typed, or points computed from the terrain. For \"plant twenty palms here\" "
@@ -4525,7 +4600,10 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
                         (key == "position" && isVec3(v)) ||
                         (key == "yawDeg" && v.is_number()) ||
                         (key == "rotationDeg" && isVec3(v)) ||
-                        (key == "scale" && ((v.is_number() && v.get<float>() > 0.0f) || isVec3(v)));
+                        (key == "scale" && ((v.is_number() && v.get<float>() > 0.0f) || isVec3(v))) ||
+                        (key == "physics" && v.is_string()) ||
+                        (key == "mass" && v.is_number()) ||
+                        (key == "buoyant" && v.is_boolean());
                     if (!ok)
                     {
                         const bool known = key == "asset" || key == "position" || key == "yawDeg" ||

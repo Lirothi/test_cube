@@ -225,6 +225,19 @@ public:
     };
     static bool DescribeMeshBinary(const std::string& binPath, BinaryInfo& out);
 
+    // One LOD's triangles of a baked .mesh.bin for the collision world (docs/physics_plan.md PH1), CPU-only: the positions, that
+    // LOD's indices and submeshes, nothing else of the file. A LOD past the last takes the last. `positions` is the WHOLE vertex
+    // buffer (it can carry LOD3 prune copies): walk the indices, not this. False for anything that is not a readable .mesh.bin.
+    struct CollisionGeometry
+    {
+        std::vector<Math::float3> positions;
+        std::vector<uint32_t> indices;
+        std::vector<Mesh::Submesh> submeshes;
+        uint32_t lodUsed = 0;
+        uint32_t lodCount = 0;
+    };
+    static bool ReadCollisionGeometry(const std::string& binPath, int lod, CollisionGeometry& out);
+
     // Fill the BAKE-affecting fields of `opt` from a mesh.json manifest. Engine-side and
     // authoritative on purpose: the headless bake used to mirror a hand-picked SUBSET of these as
     // --reimport-* flags, so re-baking from the command line silently dropped whatever had no flag

@@ -8,6 +8,7 @@
 
 #include "app/Systems.h"
 #include "ocean/OceanBuoyancy.h" // SetBuoyant registers the floating objects
+#include "physics/PhysicsWorld.h" // SetPhysicsMotion registers with the world
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
 #include "rendering/descriptors/InputLayoutManager.h"
@@ -47,6 +48,7 @@ void RenderableObject::SetPosition(const Math::float3& p)
     }
     pos_ = p;
     MarkTransformDirty();
+    if (physicsRegistered_) { physics::NotifyChanged(this); }
 }
 
 void RenderableObject::SetScale(const Math::float3& s)
@@ -57,6 +59,7 @@ void RenderableObject::SetScale(const Math::float3& s)
     }
     scale_ = s;
     MarkTransformDirty();
+    if (physicsRegistered_) { physics::NotifyChanged(this); }
 }
 
 void RenderableObject::SetRotationEulerRad(const Math::float3& eulerXYZ)
@@ -67,6 +70,7 @@ void RenderableObject::SetRotationEulerRad(const Math::float3& eulerXYZ)
     }
     rotEuler_ = eulerXYZ;
     MarkTransformDirty();
+    if (physicsRegistered_) { physics::NotifyChanged(this); }
 }
 
 void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
@@ -78,6 +82,28 @@ void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
 RenderableObject::~RenderableObject()
 {
     if (buoyant_) { OceanBuoyancy::Unregister(this); }
+    if (physicsRegistered_) { physics::Unregister(this); }
+}
+
+void RenderableObject::SetPhysicsMotion(physics::Motion motion)
+{
+    physicsMotion_ = motion;
+    if (!physicsRegistered_)
+    {
+        physicsRegistered_ = true;
+        physics::Register(this);
+    }
+    else
+    {
+        physics::NotifyChanged(this);
+    }
+}
+
+void RenderableObject::SetCollisionSettings(physics::CollisionSettings settings)
+{
+    collisionSettings_ = std::move(settings);
+    ++collisionRevision_;
+    if (physicsRegistered_) { physics::NotifyChanged(this); }
 }
 
 void RenderableObject::SetBuoyant(bool buoyant)
@@ -93,6 +119,7 @@ void RenderableObject::SetBuoyant(bool buoyant)
         OceanBuoyancy::Unregister(this);
         ClearRenderOffset();
     }
+    if (physicsRegistered_) { physics::NotifyChanged(this); } // kinematic against static
 }
 
 void RenderableObject::Init(Renderer* renderer,
@@ -541,7 +568,8 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
     // is the ONLY writer of what the render half reads here -- the model matrices, the bounds, the move flag.
     TC_CHECK_GAME_PARKED_OR_SYNC("RenderableObject::SyncSceneState");
     renderPos_ = pos_;
-    const bool resetMotionHistory = reason != SceneObjectSyncReason::Frame;
+    const bool resetMotionHistory = reason != SceneObjectSyncReason::Frame || resetMotionOnSync_;
+    resetMotionOnSync_ = false;
 
     if (!prevModelMatrixValid_)
     {

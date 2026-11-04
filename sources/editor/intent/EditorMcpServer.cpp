@@ -451,6 +451,16 @@ namespace editormcp
                     json::array({ "ask" })) },
             },
             {
+                { "name", "physics_raycast" },
+                { "description",
+                  "A ray against the physics world (docs/physics_plan.md): what collides, so no leaves; the first surface along it, front or "
+                  "back. Answers the object, the point, the normal and the distance. Far cheaper than `query lookingAt`, which walks triangles." },
+                { "inputSchema", ObjectSchema({
+                    { "origin", { { "type", "array" }, { "description", "[x, y, z]" } } },
+                    { "direction", { { "type", "array" }, { "description", "[x, y, z]; normalised here" } } },
+                    { "maxDistance", { { "type", "number" }, { "description", "metres, default 1000" } } } }) },
+            },
+            {
                 { "name", "get_camera" },
                 { "description", "Where the editor's camera is and which way it faces." },
                 { "inputSchema", ObjectSchema() },
@@ -894,6 +904,30 @@ namespace editormcp
             }
             ToolResult result;
             result.text = editorquery::Answer(actionCtx, intent);
+            return result;
+        }
+
+        if (name == "physics_raycast")
+        {
+            Math::float3 origin, direction;
+            if (!ReadVec3(arguments, "origin", origin) || !ReadVec3(arguments, "direction", direction) || direction.Dot(direction) < 1.0e-12f)
+            {
+                return Error("physics_raycast needs origin and a non-zero direction, each [x, y, z].");
+            }
+            physics::RayHit hit;
+            nlohmann::json answer;
+            if (ctx.scene.Physics().RayCast(origin, direction.Normalized(), arguments.value("maxDistance", 1000.0f), hit))
+            {
+                answer = { { "hit", true }, { "distance", hit.distance },
+                    { "point", { hit.point.x, hit.point.y, hit.point.z } }, { "normal", { hit.normal.x, hit.normal.y, hit.normal.z } },
+                    { "object", hit.object ? hit.object->GetGeometryPath() : std::string() } };
+            }
+            else
+            {
+                answer = { { "hit", false } };
+            }
+            ToolResult result;
+            result.text = answer.dump();
             return result;
         }
 

@@ -264,12 +264,12 @@ void DeveloperWindow::RefreshLevelList()
     }
 }
 
-const DeveloperWindow::TabEntry DeveloperWindow::kTabs[16] = {
+const DeveloperWindow::TabEntry DeveloperWindow::kTabs[17] = {
     { Tab::Frame, "Frame" }, { Tab::AntiAliasing, "AA / Scale" },
     { Tab::Visibility, "Visibility" }, { Tab::Reflections, "Reflections" }, { Tab::Gi, "GI" },
     { Tab::Fog, "Fog" }, { Tab::Sky, "Sky" }, { Tab::Debug, "Debug" },
     { Tab::Lod, "LOD" }, { Tab::Csm, "CSM" }, { Tab::Contact, "Contact" },
-    { Tab::Vsm, "VSM" }, { Tab::Tessy, "Tessy" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
+    { Tab::Vsm, "VSM" }, { Tab::Tessy, "Tessy" }, { Tab::Physics, "Physics" }, { Tab::Streaming, "Streaming" }, { Tab::Memory, "Memory" },
     { Tab::Bindings, "Bindings" }
 };
 
@@ -3437,6 +3437,27 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         }
                     }
                 }
+            }
+
+            if (activeTab_ == Tab::Physics)
+            {
+                // The physics world (docs/physics_plan.md). Game-side: this tab does not stop the render half.
+                physics::Settings& settings = physics::GameSettings();
+                ImGui::Checkbox("World", &settings.enabled);
+                if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Off: no bodies, no shapes, no cost; every object back where the level has it. The A/B."); }
+                ImGui::Checkbox("Simulate", &settings.simulate);
+                ImGui::Checkbox("Walk", &settings.walk);
+                bool showShapes = settings.debug != 0;
+                if (ImGui::Checkbox("Show collision", &showShapes)) { settings.debug = showShapes ? 1 : 0; }
+                ImGui::DragFloat("Show radius (m)", &settings.debugRadius, 1.0f, 1.0f, 1000.0f, "%.0f");
+                ImGui::DragFloat("Gravity (m/s2)", &settings.gravity, 0.05f, -30.0f, 30.0f, "%.2f");
+                ImGui::DragFloat("Step rate (Hz)", &settings.stepHz, 1.0f, 10.0f, 480.0f, "%.0f");
+                ImGui::DragInt("Threads", &settings.threads, 0.1f, 0, 16);
+                const physics::Stats ps = scene.Physics().GetStats();
+                ImGui::SeparatorText("The world");
+                ImGui::Text("%u objects: %u static, %u kinematic, %u dynamic (%u in the water)", ps.objects, ps.staticBodies, ps.kinematicBodies, ps.dynamicBodies, ps.floatingBodies);
+                ImGui::Text("%u awake, %u steps last frame, a step %.3f ms (avg %.3f)", ps.activeBodies, ps.stepsLastFrame, ps.stepMs, ps.stepMsEma);
+                ImGui::Text("%u shapes of %llu triangles, the last batch built in %.1f ms", ps.shapes, static_cast<unsigned long long>(ps.shapeTriangles), ps.lastBuildMs);
             }
 
             if (activeTab_ == Tab::Tessy)

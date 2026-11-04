@@ -285,6 +285,7 @@
     <ClCompile Include="sources/editor/commands/TransformObjectCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetCastShadowCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/SetPhysicsCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetMaterialCommand.cpp" />
@@ -371,6 +372,11 @@
     <ClCompile Include="sources/ocean/OceanWetness.cpp" />
     <ClCompile Include="sources/ocean/BuoyancyLayout.cpp" />
     <ClCompile Include="sources/ocean/OceanBuoyancy.cpp" />
+    <ClCompile Include="sources/physics/JoltRuntime.cpp" />
+    <ClCompile Include="sources/physics/PhysicsCharacter.cpp" />
+    <ClCompile Include="sources/physics/PhysicsShapes.cpp" />
+    <ClCompile Include="sources/physics/PhysicsWorld.cpp" />
+    <ClCompile Include="sources/physics/PhysicsSelfTest.cpp" />
     <ClCompile Include="sources/ocean/OceanReadback.cpp" />
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp" />
     <ClCompile Include="sources/vfx/ParticlePresets.cpp" />
@@ -471,6 +477,22 @@
       <ForcedIncludeFiles Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"></ForcedIncludeFiles>
     </ClCompile>
   </ItemGroup>
+  <Import Project="third_party\jolt_defines.props" />
+  <ItemGroup>
+    <!-- Jolt (docs/physics_plan.md PH0): only these TUs include its headers. Its defines and /arch:AVX2 must match the
+         library, and the Debug PCH was built without them. -->
+    <ClCompile Update="sources\physics\**\*.cpp">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <PrecompiledHeaderFile></PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile></PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <AdditionalIncludeDirectories>$(JoltIncludeDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>$(JoltDefines);%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <FloatingPointExceptions>false</FloatingPointExceptions>
+    </ClCompile>
+  </ItemGroup>
   <ItemGroup>
     <ClInclude Include="sources/pch.h" />
     <ClInclude Include="sources/app/App.h" />
@@ -537,6 +559,7 @@
     <ClInclude Include="sources/editor/commands/TransformObjectCommand.h" />
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h" />
     <ClInclude Include="sources/editor/commands/SetCastShadowCommand.h" />
+    <ClInclude Include="sources/editor/commands/SetPhysicsCommand.h" />
     <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />
     <ClInclude Include="sources/editor/commands/SetMaterialCommand.h" />
@@ -619,6 +642,10 @@
     <ClInclude Include="sources/ocean/BuoyancyJson.h" />
     <ClInclude Include="sources/ocean/BuoyancyLayout.h" />
     <ClInclude Include="sources/ocean/OceanBuoyancy.h" />
+    <ClInclude Include="sources/physics/PhysicsTypes.h" />
+    <ClInclude Include="sources/physics/PhysicsWorld.h" />
+    <ClInclude Include="sources/physics/CollisionJson.h" />
+    <ClInclude Include="sources/physics/PhysicsInternal.h" />
     <ClInclude Include="sources/ocean/OceanReadback.h" />
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
@@ -942,6 +969,9 @@
     </ProjectReference>
     <ProjectReference Include="third_party\third_party_tasks.vcxproj">
       <Project>{6b73e75b-cda7-48aa-a51c-f0e3e7289a6d}</Project>
+    </ProjectReference>
+    <ProjectReference Include="third_party\third_party_physics.vcxproj">
+      <Project>{7c2b8e41-5d0a-4f6e-9a53-2e1f6b7d8c90}</Project>
     </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

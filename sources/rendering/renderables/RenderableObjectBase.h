@@ -53,6 +53,8 @@ class MaterialData;
 class Mesh;
 class IInstanceable;
 class RenderableObject;
+class RenderableObjectBase;
+namespace physics { void NotifyChanged(RenderableObjectBase* object); }
 class InstancedDrawBatch;
 class GBufferRenderable;
 class TransparentStaticMesh;
@@ -310,8 +312,10 @@ public:
     bool IsVisibleGame() const { return gameVisible_; }
     void SetVisible(bool visible)
     {
+        const bool changed = gameVisible_ != visible;
         gameVisible_ = visible;
         if (threading::GameParkedOrSync()) { visible_ = visible; }
+        if (changed && physicsRegistered_) { physics::NotifyChanged(this); } // a hidden object has no body
     }
     // The game's switches (visibility, a mesh's shadow switch) into the render half's copies.
     virtual void SyncSwitchesToRender() { visible_ = gameVisible_; }
@@ -348,6 +352,7 @@ protected:
 #endif
     std::uint64_t cameraVisibleFrame_ = ~0ull;
     bool visible_ = true;     // the render half's (G4)
+    bool physicsRegistered_ = false; // the world knows this object (RenderableObject::SetPhysicsMotion)
     bool gameVisible_ = true; // the game's
     bool gbufferIndirect_ = false;
     bool cameraOccluded_ = false;

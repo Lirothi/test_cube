@@ -909,6 +909,34 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   with nothing floating costs 0 us CPU and no copy. The copy was tried on the async
   queue inside Main_ObjectCompute and cost the frame ~108 us: the ocean draw waits on that pass.
 
+## Physics -- Jolt, Behind One Folder
+
+`third_party/JoltPhysics` is Jolt 5.6.0 (`Jolt/` and `LICENSE` of the tag), built by `third_party/third_party_physics.vcxproj` from `Jolt.cmake`'s own list. `#include <Jolt/...>` only in
+`sources/physics/*.cpp`: those files take the library's defines and `/arch:AVX2` per file and no PCH (`test_cube.vcxproj`, `third_party/jolt_defines.props`; the defines decide the ABI, and
+`RegisterTypes` aborts on a mismatch). Everything else talks to `physics/PhysicsWorld.h`. Plan and numbers: `docs/physics_plan.md` section 9.
+
+- **The pose is a render offset.** A body moves its object through `RenderableObject::SetRenderOffset`, in `Scene::Tick` after the buoyancy, so the authored transform, the document and a Save
+  never see it; only Keep writes it. Numbers cross as they are (position and quaternion, never a matrix), no change of handedness: the gate `pose` holds it.
+- **What does not move does not pay.** Objects arrive through a registry (`SetPhysicsMotion`, the transform setters and `SetVisible` queue an event; nothing walks the scene), and without an awake
+  body or a moving boat `PhysicsSystem::Update` is not called: `Scene::TickPhysics` 0.001 ms.
+- **Keys.** Level object `"physics": "none" | "static" | "dynamic"` (absent = static, UE's BlockAll) and `"mass"`. mesh.json / object `"collision"`: `shape` (auto | mesh | hull | box | sphere |
+  capsule | none; auto = the triangles for static and kinematic, a convex hull for dynamic), `lod`, `excludeSlots` (absent = the slots with `windFoliage` > 0: a leaf does not collide), `density`,
+  `mass`, `friction`, `restitution`, `angularDamping`, `float`, `convexRadius`, `twoSided`. `"buoyant"` without dynamic = a kinematic body following `OceanBuoyancy`; with dynamic = Jolt's impulse
+  over the surface `OceanReadback` gives (`OceanBuoyancy` leaves the offset to the world and keeps the copies coming).
+- **Every dynamic body is `LinearCast`**: a triangle mesh has no thickness, and a coconut dropped 14 m passes a triangle within one step. `physics.killY` (-200, UE's KillZ) puts to sleep what still
+  leaves the world, and Keep skips it.
+- **Simulate.** Opening the editor stops it (`AppController`) and the bodies go back; Level Editor > Physics > Simulate, Keep Selected, Keep All, Walk, Show Collision; Developer Controls > Physics. MCP:
+  `set_settings physics.simulate:1`, `run_action setPhysics {motion, mass}`, `keepSimulation`, `place` with `physics` / `mass` / `buoyant` per item, `physics_raycast`, `get_readouts` block `physics`.
+  Knobs `physics.*` (enabled, simulate, debug, debugRadius, stepHz, maxSteps, threads, gravity, angularDamping, killY, walk, walkSpeed, walkSprint, eyeHeight, walkMaxDepth, walkTestX / Z) are game-side
+  and survive `reset_settings`: name them in every arm.
+- **Walk** (`physics.walk`): `CharacterVirtual` under the camera, the free camera's keys, on the frame's clock; water deeper than `walkMaxDepth` stops it. A script walks with `physics.walkTestX / Z`.
+- **Gates.** `test_cube.exe --physics-gate[=<name>]`, no window (smoke, pose, ray, foliage, determinism, scale, walk, water; each has an arm that must come out wrong), `physics gate: <name> PASS|FAIL`
+  in the session log, exit code = the failed ones; `intent_regression` runs them too (`TestPhysicsRoad`). The gate projects link the engine's objects from its tlog, so a new library goes into their
+  `AdditionalDependencies` by name.
+- **Why a body stays awake**: the Debug line `physics: N dynamic bodies awake, speed median .. max .. m/s, spin max ..` every 2 s. 180 m/s and no spin = it fell through the world.
+- **A caster count past the level's used to lose whole VSM pages** (`VSM.PageVisibleList`, its capacity remembered in elements and compared with casters; fixed 2026-11-04). Lit rectangles in the
+  shadows, with `clustersLost` / `runsLost` / `refused` all 0: UAV writes past a buffer's end are dropped silently, so a counter behind them sees nothing.
+
 ## The Water Reflection -- Its Resolve Runs Only Without DLSS
 
 `Main_WaterReflection` traces the water's SSR (with `ssr.waterSurfaceNormal` from GB1, the wave normal of

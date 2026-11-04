@@ -50,6 +50,7 @@
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
+#include "editor/commands/SetPhysicsCommand.h"
 #include "editor/commands/SpawnMeshCommand.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/intent/EditorActionRegistry.h"
@@ -4086,6 +4087,36 @@ void EditorController::Draw(
                 {
                     openOceanPresetEditorRequested_ = true;
                 }
+                ImGui::EndMenu();
+            }
+            // UE's Simulate and Keep Simulation Changes (docs/physics_plan.md). The bodies' poses are render offsets: Stop puts
+            // everything back, and a Save in between writes the level as authored.
+            if (ImGui::BeginMenu("Physics"))
+            {
+                physics::Settings& settings = physics::GameSettings();
+                ImGui::MenuItem("Simulate", nullptr, &settings.simulate);
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("The dynamic bodies fall and collide. Off (Stop) puts them back where the level has them.");
+                }
+                std::string keepStatus;
+                if (ImGui::MenuItem("Keep Selected", nullptr, false, settings.simulate && !selection_.Ordered().empty()))
+                {
+                    const std::vector<EditorObjectId> only = selection_.Ordered();
+                    if (auto keep = BuildKeepSimulationCommand(ctx, &only, keepStatus)) { commandStack_.Execute(ctx, std::move(keep)); }
+                }
+                if (ImGui::MenuItem("Keep All", nullptr, false, settings.simulate))
+                {
+                    if (auto keep = BuildKeepSimulationCommand(ctx, nullptr, keepStatus)) { commandStack_.Execute(ctx, std::move(keep)); }
+                }
+                ImGui::Separator();
+                ImGui::MenuItem("Walk", nullptr, &settings.walk);
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("The camera stands on a capsule on the ground: the same keys, gravity and walls.");
+                }
+                bool showShapes = settings.debug != 0;
+                if (ImGui::MenuItem("Show Collision", nullptr, &showShapes)) { settings.debug = showShapes ? 1 : 0; }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Window"))

@@ -1684,11 +1684,16 @@ void VirtualShadowMap::EnsureRenderResources(Renderer* renderer, ShadowGpuData* 
     }
     // Per-page-cull plan (Step 1): per (page, caster-slot) visible list, sized pool-pages x casters.
     // Allocated dormant here; the setup shader writes it and the draw binds it starting Step 2.
+    // renderCasters_ is a CASTER count, as this test reads it. It used to hold the element count (casters x kLods), so the list did not
+    // grow until the casters had quadrupled: past the level's count every (page, caster) slot of the pool's upper pages lay beyond the
+    // buffer, the UAV dropped those writes, and those pages drew nothing -- lit rectangles in the shadows (found by dropping 2000 bodies,
+    // docs/physics_plan.md PH2: 200 more casters lost 5 % of the shaded ground, 2000 lost 93 %; a switch to a larger level did the same).
+    // A quarter of room when it GROWS, so spawning one at a time does not recreate ~60 MB each time; the first one is exact.
     if (!pageVisibleList_ || casters > renderCasters_)
     {
-        const std::uint32_t cap = (casters > 0u ? casters : 1u) * kLods; // kLods buckets per group, each sized for the whole group
-        pageVisibleList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * cap, L"VSM.PageVisibleList"), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr);
-        renderCasters_ = cap;
+        const std::uint32_t room = std::max<std::uint32_t>(pageVisibleList_ ? casters + casters / 4u : casters, 1u);
+        pageVisibleList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount * room * kLods, L"VSM.PageVisibleList"), D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER, nullptr); // kLods buckets per group, each sized for the whole group
+        renderCasters_ = room;
         pageVisibleListUav_ = {}; // force descriptor rebuild
     }
     // Page-caching plan (Step 1): fixed-size (kPoolPageCount) caching buffers, allocated once.

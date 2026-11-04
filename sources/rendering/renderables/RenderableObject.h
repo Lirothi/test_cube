@@ -14,6 +14,7 @@
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "core/math/AABB.h"
 #include "ocean/BuoyancyLayout.h" // buoyancy::Settings, held per object
+#include "physics/PhysicsTypes.h" // physics::Motion, physics::CollisionSettings, held per object
 
 class Renderer;
 class Camera;
@@ -129,6 +130,10 @@ public:
     void SetRenderOffset(const Math::mat4& worldOffset);
     void ClearRenderOffset();
     bool HasRenderOffset() const { return hasRenderOffset_; }
+    const Math::mat4& GetRenderOffset() const { return renderOffset_; }
+    // The next hand-over takes the matrix without a motion vector: a body put back metres away in one frame is a cut, not
+    // motion, and DLSS would smear it. The game half's way to say so; ResetMotionHistory writes what the render half reads.
+    void RequestMotionHistoryReset() { resetMotionOnSync_ = true; }
     // S*R*T without the render offset. Anything that builds a NEW authored transform out of the
     // current one (a gizmo drag, bury) must start here: from GetModelMatrix() it would write this
     // frame's wave into the level.
@@ -149,6 +154,16 @@ public:
     }
     const buoyancy::Settings& GetBuoyancySettings() const { return buoyancySettings_; }
     std::uint32_t GetBuoyancyRevision() const { return buoyancyRevision_; }
+
+    // --- Physics -----------------------------------------------------------------------------
+    // docs/physics_plan.md. Level object "physics" (absent = Static) and "collision" -- normally from the asset's mesh.json.
+    // The first SetPhysicsMotion registers with the world (physics/PhysicsWorld.h), which never walks the scene; the transform
+    // setters and SetVisible then tell it what changed. The body's pose comes back through SetRenderOffset.
+    void SetPhysicsMotion(physics::Motion motion);
+    physics::Motion GetPhysicsMotion() const { return physicsMotion_; }
+    void SetCollisionSettings(physics::CollisionSettings settings);
+    const physics::CollisionSettings& GetCollisionSettings() const { return collisionSettings_; }
+    std::uint32_t GetCollisionRevision() const { return collisionRevision_; }
     // The geometry an automatic pontoon layout analyses (StaticMesh: its .mesh.bin). Empty = none.
     virtual const std::string& GetGeometryPath() const
     {
@@ -434,6 +449,10 @@ private:
     bool buoyant_ = false;
     std::uint32_t buoyancyRevision_ = 0;
     buoyancy::Settings buoyancySettings_;
+    physics::Motion physicsMotion_ = physics::Motion::None;
+    std::uint32_t collisionRevision_ = 0;
+    physics::CollisionSettings collisionSettings_;
+    bool resetMotionOnSync_ = false;
     bool transformDirty_ = true;
     bool prevModelMatrixValid_ = false;
     bool modelMatrixChangedThisTick_ = false;

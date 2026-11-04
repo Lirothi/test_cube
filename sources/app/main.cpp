@@ -3,6 +3,7 @@
 #include <windows.h>
 #include "core/diagnostics/DiagPaths.h"
 #include <mimalloc.h>
+#include "physics/PhysicsWorld.h"
 // operator new/delete are replaced in core/memory/MemNew.cpp (mimalloc + per-thread counters,
 // memory profiling plan M0); this file no longer includes mimalloc-new-delete.h.
 #include "app/App.h"
@@ -343,6 +344,19 @@ int WINAPI WinMain(
     if (lpCmdLine && std::strstr(lpCmdLine, "tasksystem-stress") != nullptr) {
         const bool overflow = std::strstr(lpCmdLine, "stress-overflow") != nullptr;
         return RunTaskSystemStress(overflow);
+    }
+
+    // "--physics-gate[=<name>]": the physics gates (docs/physics_plan.md section 5), no window; exit code = the failed ones.
+    if (lpCmdLine) {
+        if (const char* gate = std::strstr(lpCmdLine, "--physics-gate")) {
+            std::string name;
+            if (gate[std::strlen("--physics-gate")] == '=') {
+                const char* value = gate + std::strlen("--physics-gate=");
+                const char* end = std::strchr(value, ' ');
+                name = end ? std::string(value, end) : std::string(value);
+            }
+            return physics::RunGates(name);
+        }
     }
 
     // "--mem-bench" times the counted operator new/delete against raw mimalloc (memory profiling

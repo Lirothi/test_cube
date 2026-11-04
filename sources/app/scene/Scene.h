@@ -29,6 +29,7 @@
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 #include "vfx/WindState.h"
 #include "ocean/OceanBuoyancy.h"
+#include "physics/PhysicsWorld.h"
 #include "app/scene/TimeOfDay.h"
 #include "rendering/lighting/NightLamps.h"
 
@@ -147,6 +148,9 @@ public:
     OceanRenderable* FindOceanRenderable();
     // What floats and where its pontoons are this frame (the editor's overlay).
     const OceanBuoyancy& Buoyancy() const { return buoyancy_; }
+    // The collision world and the rigid bodies (docs/physics_plan.md).
+    physics::World& Physics() { return physics_; }
+    const physics::World& Physics() const { return physics_; }
 
 #if WITH_EDITOR
     // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
@@ -460,12 +464,14 @@ private:
 
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
+    physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
 
     DirectionalLight dirLight_;
     TimeOfDay timeOfDay_{};    // T2: owns dirLight_ when the level has a `timeOfDay` section
     DirectionalLight skySun_;  // T2: the sky's sun while the time of day runs (frameData_.skyLight)
     NightLamps nightLamps_{};  // plan L: lights / glowing meshes with "onAt" (TickNightLamps, after the time of day)
     void TickNightLamps(float deltaTime);
+    void TickPhysics(float deltaTime);
     render::CameraExposureSettings cameraExposure_{}; // P1, dormant; see PhotographicSettings.h
     render::ColorPipelineSettings colorPipeline_{};   // P3; see PhotographicSettings.h
     GtaoSettings gtao_{};                             // P6B; level-scoped, see GetGtao

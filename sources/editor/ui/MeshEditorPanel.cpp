@@ -13,6 +13,7 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/EditorLightDirection.h"
 #include "ocean/BuoyancyJson.h"
+#include "physics/CollisionJson.h"
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
@@ -204,7 +205,8 @@ void DrawMeshPreview(EditorContext& ctx,
     float environmentExposure,
     const EditorPreviewRenderer::PhysicalLighting* physical,
     const std::vector<buoyancy::Pontoon>* pontoons,
-    int hoveredPontoon)
+    int hoveredPontoon,
+    const std::vector<Math::float3>* collisionLines)
 {
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const float controlsHeight = ImGui::GetFrameHeightWithSpacing() +
@@ -332,6 +334,29 @@ void DrawMeshPreview(EditorContext& ctx,
             drawList->AddCircle(centre, radius, IM_COL32(20, 20, 22, 160), 40, hot ? 4.0f : 3.0f);
             drawList->AddCircle(centre, radius, color, 40, hot ? 2.5f : 1.5f);
             drawList->AddCircleFilled(centre, hot ? 3.5f : 2.5f, color);
+        }
+        drawList->PopClipRect();
+    }
+
+    // The collision shape's edges over the picture, with the matrix the picture was rendered with.
+    if (collisionLines && !collisionLines->empty() && preview.state == MeshEditorPreviewScene::State::Ready)
+    {
+        const auto project = [&](const Math::float3& p, ImVec2& out)
+        {
+            const Math::float4 clip = preview.viewProj.Transform(Math::float4(p, 1.0f));
+            if (clip.w <= 1e-5f) { return false; }
+            out = ImVec2(min.x + (clip.x / clip.w * 0.5f + 0.5f) * (max.x - min.x),
+                         min.y + (0.5f - clip.y / clip.w * 0.5f) * (max.y - min.y));
+            return true;
+        };
+        drawList->PushClipRect(min, max, true);
+        for (size_t i = 0; i + 1 < collisionLines->size(); i += 2)
+        {
+            ImVec2 a, b;
+            if (project((*collisionLines)[i], a) && project((*collisionLines)[i + 1], b))
+            {
+                drawList->AddLine(a, b, IM_COL32(120, 255, 120, 170), 1.0f);
+            }
         }
         drawList->PopClipRect();
     }
@@ -642,7 +667,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         previewSkyExposure,
         useLevelLighting ? &levelLighting : nullptr,
         buoyancyOpen_ ? &pontoonOverlay.pontoons : nullptr,
-        hoveredPontoon_);
+        hoveredPontoon_,
+        collisionOpen_ ? &collisionPreview_.lines : nullptr);
     ImGui::EndChild();
 
     ImGui::SameLine(0.0f, kSplitterWidth);
@@ -1046,6 +1072,19 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawBuoyancySection(hoveredPontoonThisFrame);
     }
 
+    // Collision: how this mesh meets the physics world. Closed by default; while open the preview draws the shape.
+    ImGui::Spacing();
+    if (expandCollision_)
+    {
+        ImGui::SetNextItemOpen(true);
+        expandCollision_ = false;
+    }
+    collisionOpen_ = ImGui::CollapsingHeader("Collision");
+    if (collisionOpen_)
+    {
+        DrawCollisionSection();
+    }
+
     // Rest pose: how a NEW copy lies. Its numbers act where objects are created (spawn, place, a
     // drop into the viewport -- the drag ghost shows it), not on this preview and not on copies
     // already placed, and the section says so rather than letting a control look inert.
@@ -1406,6 +1445,94 @@ float MeshEditorPanel::WindFoliageForSlot(size_t slot) const
     if (it == doc_.end() || !it->is_array() || slot >= it->size()) { return 0.0f; }
     const auto& v = (*it)[slot];
     return v.is_number() ? v.get<float>() : 0.0f;
+}
+
+void MeshEditorPanel::DrawCollisionSection()
+{
+    physics::CollisionSettings settings;
+    bool namedSlots = false;
+    if (const auto block = doc_.find("collision"); block != doc_.end()) { physics::ReadCollisionSettings(*block, settings, &namedSlots); }
+    // What the factory does for a block that names no slots: a leaf does not collide.
+    std::vector<int> foliageSlots;
+    if (const auto weights = doc_.find("windFoliage"); weights != doc_.end() && weights->is_array())
+    {
+        int slot = 0;
+        for (const nlohmann::json& w : *weights)
+        {
+            if (w.is_number() && w.get<float>() > 0.0f) { foliageSlots.push_back(slot); }
+            ++slot;
+        }
+    }
+    if (!namedSlots) { settings.excludeSlots = foliageSlots; }
+    bool changed = false;
+
+    ImGui::TextDisabled("For every placed copy. Whether it is static or falls is the object's: Inspector > Physics.");
+    const char* const shapes[] = { "Auto", "Mesh", "Hull", "Box", "Sphere", "Capsule", "None" };
+    int shape = static_cast<int>(settings.shape);
+    if (ImGui::Combo("Shape", &shape, shapes, 7))
+    {
+        settings.shape = static_cast<physics::ShapeKind>(shape);
+        changed = true;
+    }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Auto: the triangles for a static or a floating (kinematic) copy, a convex hull for a dynamic one.\n"
+                          "Mesh on a dynamic copy still takes the hull: two meshes cannot collide.");
+    }
+    changed = ImGui::SliderInt("LOD", &settings.lod, 0, 3) || changed;
+    if (!slots_.empty() && ImGui::TreeNode("Slots that collide"))
+    {
+        for (int slot = 0; slot < static_cast<int>(slots_.size()); ++slot)
+        {
+            bool solid = std::find(settings.excludeSlots.begin(), settings.excludeSlots.end(), slot) == settings.excludeSlots.end();
+            const std::string label = std::to_string(slot) + ": " + slots_[static_cast<size_t>(slot)];
+            if (ImGui::Checkbox(label.c_str(), &solid))
+            {
+                if (solid) { settings.excludeSlots.erase(std::remove(settings.excludeSlots.begin(), settings.excludeSlots.end(), slot), settings.excludeSlots.end()); }
+                else { settings.excludeSlots.push_back(slot); }
+                std::sort(settings.excludeSlots.begin(), settings.excludeSlots.end());
+                namedSlots = settings.excludeSlots != foliageSlots;
+                changed = true;
+            }
+        }
+        ImGui::TreePop();
+    }
+    changed = ImGui::DragFloat("Density (kg/m3)", &settings.density, 10.0f, 1.0f, 20000.0f, "%.0f") || changed;
+    changed = ImGui::DragFloat("Mass (kg)", &settings.mass, 0.5f, 0.0f, 100000.0f, settings.mass > 0.0f ? "%.1f" : "from density") || changed;
+    changed = ImGui::SliderFloat("Friction", &settings.friction, 0.0f, 2.0f, "%.2f") || changed;
+    changed = ImGui::SliderFloat("Restitution", &settings.restitution, 0.0f, 1.0f, "%.2f") || changed;
+    changed = ImGui::DragFloat("Rolling drag", &settings.angularDamping, 0.05f, -1.0f, 20.0f, settings.angularDamping < 0.0f ? "default" : "%.2f") || changed;
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("How fast a dynamic copy stops turning (1/s). A round thing with little of it rolls down any slope for ever."); }
+    changed = ImGui::DragFloat("Float", &settings.floatFactor, 0.01f, 0.0f, 2.0f, "%.2f") || changed;
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("A dynamic copy on the ocean: 1 = neutral, less sinks, more floats."); }
+    changed = ImGui::Checkbox("Two-sided", &settings.twoSided) || changed;
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("A triangle stops bodies on its front only. A sheet of cloth met from both sides wants this."); }
+
+    if (changed)
+    {
+        nlohmann::json block = physics::WriteCollisionSettings(settings, namedSlots);
+        if (block.empty()) { doc_.erase("collision"); } // an untouched asset stays byte-identical
+        else { doc_["collision"] = std::move(block); }
+    }
+
+    ImGui::Checkbox("Preview as a dynamic copy", &collisionAsDynamic_);
+    const std::string geometry = doc_.value("geometry", std::string());
+    const std::string key = geometry + (collisionAsDynamic_ ? "|d|" : "|s|") + physics::WriteCollisionSettings(settings, true).dump();
+    if (key != collisionPreviewKey_)
+    {
+        collisionPreviewKey_ = key;
+        physics::PreviewCollision(geometry, settings, collisionAsDynamic_, collisionPreview_);
+    }
+    if (collisionPreview_.sourceTriangles == 0 && collisionPreview_.error.empty())
+    {
+        ImGui::TextDisabled("Nothing solid: copies of this mesh have no body.");
+    }
+    else
+    {
+        ImGui::Text("%s, LOD %u of %u: %u solid triangles, %u in the shape, built in %.1f ms", physics::ShapeKindName(collisionPreview_.kind),
+            collisionPreview_.lodUsed, collisionPreview_.lodCount, collisionPreview_.sourceTriangles, collisionPreview_.shapeTriangles, collisionPreview_.buildMs);
+    }
+    if (!collisionPreview_.error.empty()) { ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", collisionPreview_.error.c_str()); }
 }
 
 void MeshEditorPanel::DrawBuoyancySection(int& hoveredPontoonThisFrame)

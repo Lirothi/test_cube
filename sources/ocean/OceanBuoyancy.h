@@ -97,6 +97,7 @@ private:
     // living, they were ~12 allocations a frame for five boats).
     std::vector<RenderableObject*> registered_;
     std::vector<RenderableObject*> floating_;
+    bool worldFloaters_ = false; // a Dynamic "buoyant" object wants the surface too, floated by the physics world
     // A different ocean (a level switch) drops every body: an object pointer reused by the new level
     // must not inherit the old one's water.
     const OceanRenderable* lastOcean_ = nullptr;

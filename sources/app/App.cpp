@@ -409,6 +409,24 @@ namespace
         if (setting == "frame.oneFrameThreadLag") { threading::g_oneFrameThreadLag = value != 0.0f; return true; }
         // G10b, UE's r.RHIThread.Enable: the frame's submission and Present on a thread of their own (next BeginFrame).
         if (setting == "frame.rhiThread") { threading::g_rhiThreadEnabled = value != 0.0f; return true; }
+        // The physics world (docs/physics_plan.md): game-side knobs, no render copy.
+        if (setting == "physics.enabled") { physics::GameSettings().enabled = value != 0.0f; return true; }
+        if (setting == "physics.simulate") { physics::GameSettings().simulate = value != 0.0f; return true; }
+        if (setting == "physics.debug") { physics::GameSettings().debug = static_cast<int>(value); return true; }
+        if (setting == "physics.debugRadius") { physics::GameSettings().debugRadius = std::max(value, 1.0f); return true; }
+        if (setting == "physics.stepHz") { physics::GameSettings().stepHz = std::clamp(value, 10.0f, 480.0f); return true; }
+        if (setting == "physics.maxSteps") { physics::GameSettings().maxSteps = std::clamp(static_cast<int>(value), 1, 32); return true; }
+        if (setting == "physics.threads") { physics::GameSettings().threads = std::clamp(static_cast<int>(value), 0, 16); return true; }
+        if (setting == "physics.gravity") { physics::GameSettings().gravity = value; return true; }
+        if (setting == "physics.killY") { physics::GameSettings().killY = value; return true; }
+        if (setting == "physics.angularDamping") { physics::GameSettings().angularDamping = std::max(value, 0.0f); return true; }
+        if (setting == "physics.walk") { physics::GameSettings().walk = value != 0.0f; return true; }
+        if (setting == "physics.walkSpeed") { physics::GameSettings().walkSpeed = std::max(value, 0.0f); return true; }
+        if (setting == "physics.walkSprint") { physics::GameSettings().walkSprint = std::max(value, 1.0f); return true; }
+        if (setting == "physics.eyeHeight") { physics::GameSettings().eyeHeight = std::max(value, 0.1f); return true; }
+        if (setting == "physics.walkMaxDepth") { physics::GameSettings().walkMaxDepth = std::max(value, 0.0f); return true; }
+        if (setting == "physics.walkTestX") { physics::GameSettings().walkTestX = value; return true; }
+        if (setting == "physics.walkTestZ") { physics::GameSettings().walkTestZ = value; return true; }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze_game = value != 0.0f; return true; }
@@ -2187,6 +2205,20 @@ namespace
             }
             std::string out(text, static_cast<size_t>(n)); // without the closing brace
             out += LocalShadowsJson(scene_.GetLightManager(), scene_.GetLocalShadowCache());
+            // The physics world (docs/physics_plan.md).
+            {
+                const physics::Stats ps = scene_.Physics().GetStats();
+                char physicsItem[512];
+                std::snprintf(physicsItem, sizeof(physicsItem),
+                              ",\"physics\":{\"world\":%s,\"simulating\":%s,\"objects\":%u,\"static\":%u,\"kinematic\":%u,\"dynamic\":%u,"
+                              "\"active\":%u,\"floating\":%u,\"shapes\":%u,\"shapeTriangles\":%llu,\"stepsLastFrame\":%u,\"stepsTotal\":%llu,"
+                              "\"stepMs\":%.3f,\"stepMsEma\":%.3f,\"lastBuildMs\":%.1f,\"walking\":%s,\"onGround\":%s,\"fellOut\":%u}",
+                              ps.worldExists ? "true" : "false", ps.simulating ? "true" : "false", ps.objects, ps.staticBodies, ps.kinematicBodies, ps.dynamicBodies,
+                              ps.activeBodies, ps.floatingBodies, ps.shapes, static_cast<unsigned long long>(ps.shapeTriangles), ps.stepsLastFrame,
+                              static_cast<unsigned long long>(ps.stepsTotal), ps.stepMs, ps.stepMsEma, ps.lastBuildMs,
+                              ps.walking ? "true" : "false", ps.walkOnGround ? "true" : "false", ps.fellOut);
+                out += physicsItem;
+            }
             // Plan S10e: the VSM page pool's load and the dynamic-resolution bias it drives (a kFrameCount-old frame).
             {
                 const VirtualShadowMap::DynamicResStats& dr = scene_.Vsm().DynamicRes();

@@ -1,4 +1,5 @@
 #pragma once
+#include "physics/PhysicsWorld.h" // physics::CollisionPreview
 #if WITH_EDITOR
 
 #include <cstdint>
@@ -34,7 +35,11 @@ public:
     // Load a `.mesh.json` for editing (content-browser EditMesh action). Resets prior state.
     void Open(const std::string& meshAssetPath);
     // Expand a collapsed section on the next draw ("buoyancy"); unknown names are ignored.
-    void ExpandSection(const std::string& section) { expandBuoyancy_ = expandBuoyancy_ || section == "buoyancy"; }
+    void ExpandSection(const std::string& section)
+    {
+        expandBuoyancy_ = expandBuoyancy_ || section == "buoyancy";
+        expandCollision_ = expandCollision_ || section == "collision";
+    }
 
     // Draw the window body (inside the editor's lambda panel). `open` backs the close button.
     // `ctx` gives access to the scene document so Save can live-apply to placed instances.
@@ -79,6 +84,14 @@ private:
     bool          buoyancyOpen_ = false; // the section is open: the preview draws the pontoons
     std::string   restPoseStatus_;       // why the last "Lay flat (auto)" did nothing
     bool          expandBuoyancy_ = false;
+    // Collision (mesh.json "collision", docs/physics_plan.md): the shape these settings give, rebuilt when they change, drawn over
+    // the preview while the section is open.
+    bool          collisionOpen_ = false;
+    bool          expandCollision_ = false;
+    bool          collisionAsDynamic_ = false;
+    std::string   collisionPreviewKey_;
+    physics::CollisionPreview collisionPreview_;
+    void DrawCollisionSection();
     void DrawBuoyancySection(int& hoveredPontoonThisFrame);
     void DrawRestPoseSection();
     MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked

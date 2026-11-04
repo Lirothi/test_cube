@@ -1648,6 +1648,7 @@ void Scene::Tick(float deltaTime) {
     // Buoyancy after the objects' Tick (the ocean clock is this frame's now); the render offsets it writes are folded
     // into this frame's model matrices at the hand-over (Scene::Sync, SyncSceneState).
     buoyancy_.Tick(FindOceanRenderable(), Systems::GetRenderer(), deltaTime);
+    TickPhysics(deltaTime);
 
     {
         CPU_SCOPE(ProfilerScopes::kSceneTickPostObjects);
@@ -1669,6 +1670,7 @@ void Scene::Tick(float deltaTime) {
     }
 
     buoyancy_.Tick(FindOceanRenderable(), Systems::GetRenderer(), deltaTime);
+    TickPhysics(deltaTime);
 
     {
         CPU_SCOPE(ProfilerScopes::kSceneTickPostObjects);
@@ -1717,6 +1719,15 @@ void Scene::Tick(float deltaTime) {
     timeOfDay_.Tick(deltaTime, dirLight_, skySun_);
     // Plan L: then the lamps, by where the time of day has just put the sun.
     TickNightLamps(deltaTime);
+}
+
+void Scene::TickPhysics(float deltaTime)
+{
+    physics_.SetOcean(FindOceanRenderable());
+    physics_.SetCamera(camera_.GetPosition());
+    physics_.Tick(deltaTime);
+    Math::float3 eye;
+    if (physics_.WalkEye(eye)) { camera_.SetPosition(eye); } // physics.walk: the hand-over takes this frame's pose
 }
 
 void Scene::TickNightLamps(float deltaTime)

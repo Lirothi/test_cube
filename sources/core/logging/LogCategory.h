@@ -23,6 +23,7 @@ namespace logging
         Vfx,
         Ocean,
         Profiling,
+        Physics,
         Count
     };
 
@@ -51,7 +52,8 @@ namespace logging
             "render.validation",
             "vfx",
             "ocean",
-            "profiling"
+            "profiling",
+            "physics"
         };
         return IsValid(category) ? names[static_cast<std::size_t>(category)] : "invalid";
     }

@@ -246,6 +246,16 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     }
 #endif
 
+#if WITH_EDITOR
+    // The editor edits the level as authored: opening it stops the simulation, and the bodies go back. Simulate is its own choice
+    // from there (docs/physics_plan.md Q4); closing it does not start anything.
+    {
+        static bool editorWasOpen = false;
+        const bool editorOpen = editorController_.IsOpen();
+        if (editorOpen && !editorWasOpen) { physics::GameSettings().simulate = false; }
+        editorWasOpen = editorOpen;
+    }
+#endif
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     bool allowCameraInput = !uiCapturingInput;
 #if WITH_EDITOR
@@ -256,11 +266,26 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #endif
     if (allowCameraInput)
     {
-        scene.CameraRef().UpdateFromInput(input, deltaTime);
+        // physics.walk: the free camera's keys and look as they are, but what they would have moved is an intent on the ground; the
+        // world puts the camera on the capsule's eye in Scene::Tick.
+        Camera& camera = scene.CameraRef();
+        const Math::float3 before = camera.GetPosition();
+        camera.UpdateFromInput(input, deltaTime);
+        const physics::Settings& physicsSettings = physics::GameSettings();
+        if (physicsSettings.walk)
+        {
+            const Math::float3 moved = camera.GetPosition() - before;
+            camera.SetPosition(before);
+            const float length = std::sqrt(moved.x * moved.x + moved.z * moved.z);
+            const float speed = physicsSettings.walkSpeed * (input.IsActionDown("Sprint") ? physicsSettings.walkSprint : 1.0f);
+            const Math::float3 velocity = length > 1.0e-6f ? Math::float3(moved.x / length * speed, 0.0f, moved.z / length * speed) : Math::float3(0.0f, 0.0f, 0.0f);
+            scene.Physics().SetWalkIntent(velocity, input.GetActionAxis("MoveY") > 0.0f);
+        }
     }
-    else if (input.IsMouseCaptured())
+    else
     {
-        input.SetMouseCapture(false);
+        if (input.IsMouseCaptured()) { input.SetMouseCapture(false); }
+        scene.Physics().SetWalkIntent(Math::float3(0.0f, 0.0f, 0.0f), false);
     }
 
     ScheduleHudBuild(renderer, scene);

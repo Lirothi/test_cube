@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- ONE set of Jolt defines for the library and for every translation unit that includes a Jolt header
+       (sources/physics/*.cpp): they decide the ABI, and RegisterTypes aborts on a mismatch. docs/physics_plan.md PH0.
+       Not here on purpose: JPH_DOUBLE_PRECISION (the world is hundreds of metres), JPH_CROSS_PLATFORM_DETERMINISTIC
+       (one binary), JPH_OBJECT_STREAM, the profiler defines, the GPU compute backends of 5.6. The SIMD set follows
+       from /arch:AVX2 (Jolt/Core/Core.h), which both sides pass. -->
+  <PropertyGroup>
+    <JoltIncludeDir>$(MSBuildThisFileDirectory)JoltPhysics</JoltIncludeDir>
+    <JoltDefines>JPH_DEBUG_RENDERER</JoltDefines>
+  </PropertyGroup>
+</Project>
