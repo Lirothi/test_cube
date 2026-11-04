@@ -595,6 +595,42 @@ namespace physics
             return sinkY < -3.0f ? Verdict::Pass : Verdict::Fail; // the arm that must come out wrong
         }
 
+        // ------------------------------------------------------------------------------------------------------- kinematic
+        // A `buoyant` object that is not dynamic: a kinematic body over the triangles `Auto` gives it. Left to its shape it has no mass
+        // (the arm that must come out wrong; creating it so asserts in Debug), and with one given it carries a box up as it rises.
+        Verdict GateKinematic(std::string& detail)
+        {
+            JPH::TriangleList triangles;
+            triangles.push_back(JPH::Triangle(JPH::Float3(-5.0f, 0.0f, -5.0f), JPH::Float3(-5.0f, 0.0f, 5.0f), JPH::Float3(5.0f, 0.0f, 5.0f)));
+            triangles.push_back(JPH::Triangle(JPH::Float3(-5.0f, 0.0f, -5.0f), JPH::Float3(5.0f, 0.0f, 5.0f), JPH::Float3(5.0f, 0.0f, -5.0f)));
+            JPH::MeshShapeSettings meshSettings(triangles);
+            meshSettings.SetEmbedded();
+            const JPH::RefConst<JPH::Shape> mesh = meshSettings.Create().Get();
+
+            JPH::BodyCreationSettings settings(mesh.GetPtr(), JPH::Vec3::sZero(), JPH::Quat::sIdentity(), JPH::EMotionType::Kinematic, layers::kMoving);
+            const float bareMass = settings.GetMassProperties().mMass;
+            GiveKinematicMass(settings);
+            const float givenMass = settings.GetMassProperties().mMass;
+
+            TestWorld world(1);
+            JPH::BodyInterface& bodies = world.system.GetBodyInterface();
+            const JPH::BodyID platform = bodies.CreateAndAddBody(settings, JPH::EActivation::Activate);
+            const JPH::RefConst<JPH::Shape> boxShape = BoxOf(0.5f);
+            const JPH::BodyID box = world.AddDynamic(boxShape.GetPtr(), JPH::Vec3(0.0f, 0.6f, 0.0f), JPH::Quat::sIdentity());
+            world.Step(60); // the box settles on the platform
+            for (int i = 1; i <= 120; ++i)
+            {
+                bodies.MoveKinematic(platform, JPH::Vec3(0.0f, static_cast<float>(i) * 0.5f / 60.0f, 0.0f), JPH::Quat::sIdentity(), 1.0f / 60.0f);
+                world.Step(1);
+            }
+            const float platformY = bodies.GetCenterOfMassPosition(platform).GetY();
+            const float boxY = bodies.GetCenterOfMassPosition(box).GetY();
+            detail = "mass left to the mesh " + std::to_string(bareMass) + ", given " + std::to_string(givenMass) + "; rose 1 m: platform y " +
+                std::to_string(platformY) + ", box y " + std::to_string(boxY);
+            if (bareMass != 0.0f || givenMass <= 0.0f) { return Verdict::Fail; }
+            return std::fabs(platformY - 1.0f) < 0.02f && std::fabs(boxY - 1.48f) < 0.03f ? Verdict::Pass : Verdict::Fail;
+        }
+
         struct Gate
         {
             const char* name;
@@ -609,6 +645,7 @@ namespace physics
             { "scale", &GateScale },
             { "walk", &GateWalk },
             { "water", &GateWater },
+            { "kinematic", &GateKinematic },
         };
     }
 

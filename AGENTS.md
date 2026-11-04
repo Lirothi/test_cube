@@ -524,7 +524,8 @@ its pipeline is bound, so the cost is minutes, not milliseconds: a full wind_tes
   case-insensitive; `GBuffer` also covers `GBuffer.*`; a CL group's members are patched together
   (logged). It says NOTHING about the unlisted passes -- their shaders are not validated.
 - **"Is the frame clean?"** -- the gate is `--scene-stress-gbv` (guarded, every pass, level churn;
-  it ignores `--gbv-passes`), or a plain `--gbv` without `--gbv-passes` for one level with your
+  it ignores `--gbv-passes`; a Debug build boots the editor's last opened level first, `--stress-level=<level.json>` names
+  it and adds it to the churn), or a plain `--gbv` without `--gbv-passes` for one level with your
   `--set`s. Minutes; run it before trusting a pass/barrier/resource change.
 - **Never gate on `--gbv-mode=state`**: it is falsely clean on uninitialized root arguments (the bug
   class that stalled the queue). `--gbv-rest=none` is the fastest narrowed smoke; the runtime then
@@ -636,6 +637,17 @@ each level's own (338 / 82 / 18 / 9 textures) and `tex.stream` to 51 MB, and win
 (texture loads 752 -> 6907). READING THE VERDICT: the rule wants growth in 2/3 of the steps, so a fill that ends inside
 the run reads by the run's length -- that same climb said `DRIFT` at 150 iterations and `STABLE ... largest climb +1182 MB`
 at 300. Read the largest climb.
+
+**A level load shares its textures on its one upload list** (2026-11-04). `Texture2D::CreateFromFile` handed out no cache
+hit in the frame a texture was uploaded -- the transition lives on the uploader's list, and another list may run first (the
+editor's thumbnail jobs) -- and a level load is one list in one frame, so the cache shared nothing where it mattered:
+`Wall_Trim_*.dds` 20 copies, 347 textures over 171 files, 875 of their 1373 MB at full size. The same list now shares at
+once; another list in that frame still loads its own copy. wind_test in the editor: 339 -> 163 textures; the bathroom at
+arm's reach `tex.stream` 472 -> 166 MB, read 459 -> 161 MB, GPU objects 273 -> 106. Stress 150 (alternated twice): the
+`streaming.dumpRows` table 347 -> 171 rows, the 171 files; `[texcache]` 752 loads / 78 shared -> 576 / 254; the boot's texture
+loads 343 -> 167, 172-191 -> 96-100 ms; the boot 4056-4315 -> 3876 ms; 50 switches 6242-6324 -> 6089-6154 ms. The same picture:
+the bathroom 1.25-2.38 % of pixels over 8 levels against the same arm across processes 1.21 % (within a process up to 2.31 %,
+its candles), the grove 0.10-0.40 % against 0.50 %.
 
 ## Reproducing a Camera View From a Screenshot
 
@@ -950,7 +962,10 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   Knobs `physics.*` (enabled, simulate, debug, debugRadius, stepHz, maxSteps, threads, gravity, angularDamping, killY, walk, walkSpeed, walkSprint, eyeHeight, walkMaxDepth, walkTestX / Z) are game-side
   and survive `reset_settings`: name them in every arm.
 - **Walk** (`physics.walk`): `CharacterVirtual` under the camera, the free camera's keys, on the frame's clock; water deeper than `walkMaxDepth` stops it. A script walks with `physics.walkTestX / Z`.
-- **Gates.** `test_cube.exe --physics-gate[=<name>]`, no window (smoke, pose, ray, foliage, determinism, scale, walk, water; each has an arm that must come out wrong), `physics gate: <name> PASS|FAIL`
+- **A kinematic body is given its mass** (`GiveKinematicMass`, gate `kinematic`; 2026-11-04). A `buoyant` object that is not dynamic gets the triangles (`Auto`), a MeshShape has no mass, and Jolt asks for one for
+  every body that is not static: an assert in Debug (`inMassProperties.mMass > 0.0f`, wind_test did not boot) and 1/0 in Release, unseen because the solver reads that mass only for Dynamic. Jolt's asserts live in Debug only:
+  a level checked in Release has not been through them.
+- **Gates.** `test_cube.exe --physics-gate[=<name>]`, no window (smoke, pose, ray, foliage, determinism, scale, walk, water, kinematic; each has an arm that must come out wrong), `physics gate: <name> PASS|FAIL`
   in the session log, exit code = the failed ones; `intent_regression` runs them too (`TestPhysicsRoad`). The gate projects link the engine's objects from its tlog, so a new library goes into their
   `AdditionalDependencies` by name.
 - **Why a body stays awake**: the Debug line `physics: N dynamic bodies awake, speed median .. max .. m/s, spin max ..` every 2 s. 180 m/s and no spin = it fell through the world.

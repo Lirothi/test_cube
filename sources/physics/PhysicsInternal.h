@@ -95,6 +95,15 @@ namespace physics
     constexpr float kFloatLinearDamping = 0.5f;
     constexpr float kFloatAngularDamping = 0.5f;
 
+    // A kinematic body's mass acts on nothing (the solver reads it only for Dynamic), but Jolt asks the shape for one all the
+    // same, and a MeshShape, what `Auto` gives a kinematic body, has none: 0, an assert in Debug and 1/0 in Release (gate `kinematic`).
+    inline void GiveKinematicMass(JPH::BodyCreationSettings& creation)
+    {
+        creation.mOverrideMassProperties = JPH::EOverrideMassProperties::MassAndInertiaProvided;
+        creation.mMassPropertiesOverride.mMass = 1.0f;
+        creation.mMassPropertiesOverride.mInertia = JPH::Mat44::sIdentity();
+    }
+
     // PhysicsCharacter.cpp: a capsule on the ground, UE's walking mode. Not a body: collision queries only, pushing bodies by
     // impulses as it goes (Jolt's CharacterVirtual). `Feet` is its origin.
     class WalkingCharacter

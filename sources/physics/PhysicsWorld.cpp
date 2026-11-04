@@ -524,6 +524,7 @@ namespace physics
                 creation.mUserData = reinterpret_cast<JPH::uint64>(static_cast<RenderableObjectBase*>(&object));
                 creation.mFriction = settings.friction;
                 creation.mRestitution = settings.restitution;
+                if (motionType == JPH::EMotionType::Kinematic) { GiveKinematicMass(creation); }
                 if (dynamicBody)
                 {
                     if (settings.mass > 0.0f)

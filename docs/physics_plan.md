@@ -554,7 +554,7 @@ GBV на этом плане не нужен, пока рендер не тро�
 
 | План | Сделано | Почему |
 |---|---|---|
-| `--physics-smoke` | `--physics-gate[=<имя>]`: 8 гейтов (`smoke`, `pose`, `ray`, `foliage`, `determinism`, `scale`, `walk`, `water`); их же зовёт `intent_regression` (`TestPhysicsRoad`) | Гейтам не нужны окно и сцена, и в Debug они идут секунды |
+| `--physics-smoke` | `--physics-gate[=<имя>]`: 9 гейтов (`smoke`, `pose`, `ray`, `foliage`, `determinism`, `scale`, `walk`, `water`, `kinematic`); их же зовёт `intent_regression` (`TestPhysicsRoad`) | Гейтам не нужны окно и сцена, и в Debug они идут секунды |
 | `physics_drop` | `place` принимает на элемент `physics`, `mass`, `buoyant` | Та же дорога, что у всех правок: одна запись undo, в документ только через Save |
 | `mass` в блоке `collision` | Ключ объекта `"mass"` | Блок `collision` с объекта целиком перекрыл бы блок ассета |
 | CCD только мельче 20 см | `LinearCast` у всех `dynamic` | См. §9.3 |

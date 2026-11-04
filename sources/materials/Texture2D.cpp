@@ -621,9 +621,10 @@ struct SharedTexKeyHash
 struct SharedTexEntry
 {
     std::weak_ptr<Texture2D> texture;
-    // The frame the upload was RECORDED on. A texture is only safe to hand to a second consumer
-    // once that recording has been executed -- see the guard in CreateFromFile.
+    // The frame the upload was RECORDED on, and the list it went into. A texture is only safe to hand to a
+    // second consumer once that recording has been executed, or on that same list -- see the guard in CreateFromFile.
     std::uint64_t createdFrame = 0;
+    const ID3D12GraphicsCommandList* uploadList = nullptr; // compared, never dereferenced
 };
 
 std::mutex gSharedTexMutex;
@@ -719,22 +720,28 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     //   Barrier layout(D3D12_BARRIER_LAYOUT_COMMON), 'Tex2D:models/tent/textures/Ropes_baseColor.dds'
     //   does not match expected layout (D3D12_BARRIER_LAYOUT_SHADER_RESOURCE) ... list 'Overlay'
     //
-    // A same-frame second request therefore loads its OWN copy -- which is precisely the behaviour
-    // that existed before this cache, so it is safe by construction. From the next frame on, the
-    // recording has been submitted and everyone shares.
+    // A same-frame second request on ANOTHER list therefore loads its OWN copy -- which is precisely
+    // the behaviour that existed before this cache, so it is safe by construction. From the next frame
+    // on, the recording has been submitted and everyone shares.
+    //
+    // ON THE SAME LIST it shares at once: whatever the second consumer records runs after that list,
+    // as the first one's does, so the transition has happened by then (a later batch of the frame that
+    // reuses the address runs after the batch before it, which was closed and enqueued first). A level
+    // load is one list in one frame, so without this every material naming a file loaded its own copy:
+    // wind_test's Wall_Trim_*.dds 20 times, 875 of the 1373 MB its textures come to at full size.
     const std::uint64_t frame = renderer ? renderer->GetTotalFrameNumber() : 0;
     {
         std::lock_guard<std::mutex> lk(gSharedTexMutex);
         auto it = gSharedTex.find(key);
         if (it != gSharedTex.end()) {
             if (std::shared_ptr<Texture2D> hit = it->second.texture.lock()) {
-                if (frame > it->second.createdFrame) {
+                if (frame > it->second.createdFrame || uploadCmd == it->second.uploadList) {
                     shared_ = std::move(hit);
                     debugName_ = shared_->debugName_;
                     ++gSharedTexSaved;
                     return true;
                 }
-                // Uploaded this frame by someone else: fall through and load a private copy.
+                // Uploaded this frame on someone else's list: fall through and load a private copy.
             }
             else {
                 gSharedTex.erase(it); // the last owner released it; reload below
@@ -764,7 +771,7 @@ bool Texture2D::CreateFromFile(Renderer* renderer,
     }
     {
         std::lock_guard<std::mutex> lk(gSharedTexMutex);
-        gSharedTex[key] = SharedTexEntry{ owner, frame };
+        gSharedTex[key] = SharedTexEntry{ owner, frame, uploadCmd };
         ++gSharedTexLoaded;
     }
     debugName_ = owner->debugName_;
