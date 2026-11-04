@@ -39,6 +39,7 @@ struct StreamingTexture
     bool looksLowRes = false;
     bool unknownRef = false;
     bool hasBounds = false;
+    float leftBehindAge = -1.0f;    // seconds since its last box went (its object left the level); < 0 = it has one, or never had one
     bool missingTooManyMips = false;
     int retentionPriority = 0;
     int loadOrderPriority = 0;

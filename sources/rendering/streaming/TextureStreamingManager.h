@@ -37,7 +37,8 @@ public:
         std::uint64_t wantedBytes = 0;    // perfect wanted, before the budget
         std::uint64_t bytesInCycle = 0;   // stream-in bytes requested by the last cycle
         std::uint64_t bytesOutCycle = 0;  // stream-out bytes requested by the last cycle
-        unsigned textures = 0, withBounds = 0, bounds = 0;
+        std::uint64_t leftBehindBytes = 0; // resident mips of the textures that lost their last box
+        unsigned textures = 0, withBounds = 0, bounds = 0, leftBehind = 0;
         unsigned requestsIn = 0, requestsOut = 0, cancels = 0, refused = 0, inFlight = 0;
         unsigned cycles = 0;
         float screenSize = 0.0f;
@@ -51,7 +52,7 @@ public:
         unsigned visibleWanted = 0, hiddenWanted = 0; // "perfect" wanted from distance, before the budget
         float texelFactor = 0.0f, lastSeen = 0.0f, maxSize = 0.0f;
         int retention = 0, loadOrder = 0, bias = 0;
-        bool unknownRef = false, terrain = false;
+        bool unknownRef = false, terrain = false, leftBehind = false;
     };
 
     void Init();
@@ -87,7 +88,7 @@ private:
         double calcMs = 0.0;
         std::vector<std::uint32_t> prioritized, outs, ins; // DoWork_'s working storage, reused cycle to cycle
     };
-    struct Persist { std::uint32_t gen = 0; int budgetMipBias = 0; };
+    struct Persist { std::uint32_t gen = 0; int budgetMipBias = 0; float lastBoxed = -1.0f; }; // lastBoxed: when it last had a box, < 0 = never
 
     void Snapshot_(TextureStreaming& ts, Renderer* renderer, const SceneFrameData& frame);
     static void DoWork_(AsyncData& d);

@@ -290,7 +290,8 @@ void TextureStreaming::OnFrameBegin(Renderer* renderer, std::uint64_t frameNo)
         {
             LOG_INFO(logging::LogCategory::Render, "[texstream]   mips {} resident {} needed {}/{} wanted {} budgeted {} requested {} texel {:.2f} seen {:.1f}{} | {}",
                      r.mipCount, r.resident, r.visibleWanted, r.hiddenWanted, r.wanted, r.budgeted, r.requested,
-                     r.texelFactor, r.lastSeen < 1.0e5f ? r.lastSeen : -1.0f, r.unknownRef ? " unknown-ref" : (r.terrain ? " terrain" : ""), r.path);
+                     r.texelFactor, r.lastSeen < 1.0e5f ? r.lastSeen : -1.0f,
+                     r.leftBehind ? " left-behind" : (r.unknownRef ? " unknown-ref" : (r.terrain ? " terrain" : "")), r.path);
         }
     }
     {
@@ -543,11 +544,12 @@ void TextureStreaming::Readout_(std::uint64_t frameNo)
     const double avgMs = dtCount_ ? dtSumMs_ / dtCount_ : 0.0;
     const TextureStreamingManager::Stats& m = manager_.GetStats();
     LOG_INFO(logging::LogCategory::Render,
-        "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames) | pool {} MB budget {} used {} wanted {} | cycle in {} ({} KB) out {} ({} KB) cancel {} refused {} | lag>2 max {} in {} cycles | fading {} | calc {:.3f} ms",
+        "[texstream] frame {}: {} textures, swaps io {} / ready {} / copied {}, ring {}/{} KB, retired {} ({} KB), done {} failed {}, read {} MB | frame ms avg {:.2f} max quiet {:.2f} max swap {:.2f} ({} swap frames) | pool {} MB budget {} used {} wanted {} left behind {} ({} MB) | cycle in {} ({} KB) out {} ({} KB) cancel {} refused {} | lag>2 max {} in {} cycles | fading {} | calc {:.3f} ms",
         frameNo, registered_, waitIo, ready, copied, ring_.BytesInUse() >> 10, ring_.Capacity() >> 10,
         retire_.Count(), retire_.Bytes() >> 10, swapsDone_, swapsFailed_, io_.BytesRead() >> 20,
         avgMs, dtMaxQuietMs_, dtMaxSwapMs_, swapFrames_,
         m.poolBytes >> 20, m.budgetBytes >> 20, m.usedBytes >> 20, m.wantedBytes >> 20,
+        m.leftBehind, m.leftBehindBytes >> 20,
         m.requestsIn, m.bytesInCycle >> 10, m.requestsOut, m.bytesOutCycle >> 10, m.cancels, m.refused,
         lagMax_, lagCycles_, fadingCount_, m.calcMs);
     dtSumMs_ = 0.0; dtCount_ = 0; dtMaxQuietMs_ = 0.0; dtMaxSwapMs_ = 0.0; swapFrames_ = 0;

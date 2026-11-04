@@ -472,7 +472,9 @@ wanted−resident, таблица текстур); `[texstream]` раз в 5 с 
 Отступления от текста шага: (1) видимость = CPU-тест AABB против фрустума нежиттерной камеры
 (`lastSeenAge < 0.5 с` = visible), а не `LastRenderTime` примитива — у нас его нет; (2) стадии
 1..3 пусты: сотни боксов пересобираются целиком в снимке; (3) текстура без единого бокса (превью,
-LUT, океан) = UE «unknown ref» с `lastRenderTime 0` → всегда полностью резидентна; (4) margin =
+LUT, океан) = UE «unknown ref» с `lastRenderTime 0` → всегда полностью резидентна -- только если
+боксов не было никогда: потерявшая последний бокс хочет только хвост (строка UE
+`AsyncTextureStreaming.cpp:291-293`, была потеряна до 2026-11-04, AGENTS.md > Memory Profiling); (4) margin =
 5 МБ (`[TextureStreaming] MemoryMargin` BaseEngine.ini), не temp — с temp 24-МБ пул давал
 бюджет 0; (5) кламп `distSq ≥ 1 см²` (UE клампит в см), у нас метры; (6) одна вьюха;
 (7) **гистерезис роста бюджета = margin, не temp + margin** (`AsyncTextureStreaming.cpp:654-665`):

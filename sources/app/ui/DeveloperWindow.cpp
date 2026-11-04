@@ -3643,8 +3643,8 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 {
                     const streaming::TextureStreamingManager::Stats& st = ts->Manager().GetStats();
                     const auto mb = [](std::uint64_t b) { return static_cast<double>(b) / (1024.0 * 1024.0); };
-                    ImGui::Text("Textures %u (with bounds %u), bounds %u, cycles %u, calc %.3f ms, screen size %.0f px",
-                                st.textures, st.withBounds, st.bounds, st.cycles, st.calcMs, st.screenSize);
+                    ImGui::Text("Textures %u (with bounds %u, left behind %u: %.1f MB), bounds %u, cycles %u, calc %.3f ms, screen size %.0f px",
+                                st.textures, st.withBounds, st.leftBehind, mb(st.leftBehindBytes), st.bounds, st.cycles, st.calcMs, st.screenSize);
                     ImGui::Text("Pool %.1f MB | budget %.1f | used %.1f | budgeted %.1f | wanted %.1f | retired %.1f",
                                 mb(st.poolBytes), mb(st.budgetBytes), mb(st.usedBytes), mb(st.budgetedBytes), mb(st.wantedBytes), mb(ts->RetiredBytes()));
                     ImGui::Text("Last cycle: in %u (%.2f MB), out %u (%.2f MB), cancels %u, refused %u, in flight %u",
@@ -3680,6 +3680,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             ImGui::TableNextRow();
                             ImGui::TableNextColumn(); ImGui::TextUnformatted(path.c_str());
                             if (r.unknownRef && ImGui::IsItemHovered()) { ImGui::SetTooltip("no placed object references it: kept fully loaded (UE unknown ref)"); }
+                            if (r.leftBehind && ImGui::IsItemHovered()) { ImGui::SetTooltip("its last placed object is gone (the material cache keeps it for the next visit): wants its tail, the budget keeps what it has"); }
                             ImGui::TableNextColumn(); ImGui::Text("%u", r.mipCount);
                             ImGui::TableNextColumn(); ImGui::Text("%u", r.resident);
                             ImGui::TableNextColumn(); ImGui::Text("%u / %u", r.visibleWanted, r.hiddenWanted);

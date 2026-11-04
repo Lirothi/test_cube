@@ -155,7 +155,7 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
         const DdsMipTable& table = tex->GetMipTable();
         if (table.mipCount == 0 || table.mipCount > kMaxMips) { continue; }
         Persist& p = persist_[e];
-        if (p.gen != ts.EntryGen(e)) { p.gen = ts.EntryGen(e); p.budgetMipBias = 0; }
+        if (p.gen != ts.EntryGen(e)) { p.gen = ts.EntryGen(e); p.budgetMipBias = 0; p.lastBoxed = -1.0f; }
 
         StreamingTexture t;
         t.entry = e;
@@ -195,6 +195,14 @@ void TextureStreamingManager::Snapshot_(TextureStreaming& ts, Renderer* renderer
             t.texelFactorMax = std::max(t.texelFactorMax, r.texelFactor);
         }
     }
+    // A texture that had a box and lost it was left behind by its object's level: MaterialDataManager::cache_ outlives
+    // a level, so it stays registered for the next visit. See DoWork_ for why that is not an unknown ref.
+    for (StreamingTexture& t : d.textures)
+    {
+        Persist& p = persist_[t.entry];
+        if (t.hasBounds) { p.lastBoxed = d.now; }
+        else if (p.lastBoxed >= 0.0f) { t.leftBehindAge = d.now - p.lastBoxed; }
+    }
     bounds_.PruneLastSeen(d.now);
 }
 
@@ -208,7 +216,8 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
     {
         t.maxSize = 0.0f;
         t.maxSizeVisibleOnly = 0.0f;
-        t.lastRenderTime = t.hasBounds ? FLT_MAX : 0.0f; // no bounds = an unknown ref, treated as just seen
+        // No bounds and never had any = an unknown ref (a LUT, the ocean, a preview), treated as just seen.
+        t.lastRenderTime = t.hasBounds ? FLT_MAX : std::max(t.leftBehindAge, 0.0f);
     }
     // TextureInstanceView.cpp:286-449 UpdateBoundSizes + ProcessElement (TexelFactor >= 0 branch).
     for (const BoundsEntry& b : d.bounds.entries)
@@ -248,7 +257,12 @@ void TextureStreamingManager::DoWork_(AsyncData& d)
                 t.maxSize *= kExtraBoost;
                 t.maxSizeVisibleOnly *= kExtraBoost;
             }
-            t.unknownRef = (t.maxSize == 0.0f && t.maxSizeVisibleOnly == 0.0f);
+            // :291-293: unknown only if it "has been used since the last reference was removed" (InstanceRemovedTimestamp,
+            // LastRenderTime < TimeSinceRemoved - 5). We have no LastRenderTime of the resource, so a texture that lost its
+            // last box has not been: it wants its tail, and TryKeepMips below holds what it has, with no IO. Without this
+            // term every texture a level left behind (MaterialDataManager::cache_ outlives the level) wanted EVERY mip: four
+            // levels in turn read all 347 to full size, 1373 MB, where what their cameras ask for comes to 55 MB.
+            t.unknownRef = t.maxSize == 0.0f && t.maxSizeVisibleOnly == 0.0f && t.leftBehindAge < 0.0f;
             if (t.unknownRef && t.lastRenderTime < 90.0f)
             {
                 t.maxSize = std::max(t.maxSize, maxAllowedSize);
@@ -467,6 +481,7 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
         if (!ts.EntryAlive(t.entry, t.gen)) { continue; }
         ++s.textures;
         if (t.hasBounds) { ++s.withBounds; }
+        if (t.leftBehindAge >= 0.0f) { ++s.leftBehind; s.leftBehindBytes += t.Size(t.residentMips); }
         if (d.perTextureBias && t.entry < persist_.size()) { persist_[t.entry].budgetMipBias = t.budgetMipBias; }
         const int delta = std::clamp(static_cast<int>(t.wantedMips) - static_cast<int>(t.residentMips), -4, 4);
         ++s.deltaHistogram[static_cast<std::size_t>(delta + 4)];
@@ -480,7 +495,7 @@ void TextureStreamingManager::Apply_(TextureStreaming& ts)
         r.visibleWanted = t.visibleWantedMips; r.hiddenWanted = t.hiddenWantedMips;
         r.texelFactor = t.texelFactorMax; r.lastSeen = t.lastRenderTime; r.maxSize = t.maxSize;
         r.retention = t.retentionPriority; r.loadOrder = t.loadOrderPriority; r.bias = t.budgetMipBias;
-        r.unknownRef = t.unknownRef; r.terrain = t.isTerrain;
+        r.unknownRef = t.unknownRef; r.terrain = t.isTerrain; r.leftBehind = t.leftBehindAge >= 0.0f;
     }
     rows_.resize(rowCount); // fewer textures than last cycle: drop the tail
     for (std::uint32_t i : d.cancels)

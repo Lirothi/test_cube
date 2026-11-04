@@ -617,6 +617,26 @@ M1), so a GPU leak FAILs `private` and `vram.local` together. Release stack name
 are folded by ICF (a vector of pointers shows up as nlohmann's) -- `memtrace.py` groups from the first
 non-`std::` frame; for exact names use Debug.
 
+**A texture its level left behind wants only its tail** (2026-11-04; `--scene-stress=150
+--stress-level=data/levels/wind_test.json` said `mem tags: DRIFT -- tex.stream +1070 MB`, and it was not the budget: the
+pool is 16.9 GB). `MaterialDataManager::cache_` outlives a level on purpose, so every texture stays registered on every
+level, and a texture without a box read as an unknown ref: every mip. Leaving wind_test read all of it to full size in
+the background -- 347 textures, 1373 MB, the plateau by iteration ~165, where what the four levels' cameras ask for comes
+to 55 MB. The port had dropped UE's third term (`AsyncTextureStreaming.cpp:291-293`: unknown only if used since the last
+reference was removed). Now a texture that lost its last box (`Persist::lastBoxed`) wants its tail and `TryKeepMips` holds
+what it has, with no IO: `tex.stream` at the end 1436 -> 111 MB, read 1372 -> 53 MB, `STABLE` (+6.6 / +7.1 MB). One that
+never had a box stays unknown (a LUT, the ocean, the emissive and transmission maps `BoundsBuilder` does not look at).
+The readout: `[texstream] ... left behind N (M MB)`, `left-behind` in the `streaming.dumpRows` table (under `--set` it
+fires again after every level load: a table per visit), Developer Controls > Streaming. What a level left behind keeps its
+mips until the pool presses (`streaming.poolSizeMB:40`: used 28-35 MB, left behind 0-15 MB), so going back reads nothing:
+the bathroom at arm's reach 472 MB, 12 s on demo no reads, back at the same 474 MB and the same picture (1.2 / 3.4 % of
+pixels over 8 levels on the bathroom / the grove, the same arm twice 2.9 / 2.8 %). Proof of the holder and the price of
+giving the memory back: releasing at a switch the materials only the cache holds (a probe, not kept) takes the table to
+each level's own (338 / 82 / 18 / 9 textures) and `tex.stream` to 51 MB, and wind_test's switch 265-427 -> 574-659 ms
+(texture loads 752 -> 6907). READING THE VERDICT: the rule wants growth in 2/3 of the steps, so a fill that ends inside
+the run reads by the run's length -- that same climb said `DRIFT` at 150 iterations and `STABLE ... largest climb +1182 MB`
+at 300. Read the largest climb.
+
 ## Reproducing a Camera View From a Screenshot
 
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:
