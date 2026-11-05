@@ -114,7 +114,7 @@ private:
     std::string previewSkyCubePath_;
     std::string previewSkyError_;
 
-    // previewLight_.levelLighting: the level's sun, sky, exposure and tone curve, in the renderer's
+    // previewLight_.levelLighting: the level's sun, sky and tone curve, the preview's own camera, in the renderer's
     // own units. False = the preview's legacy look (and `out` is untouched).
     bool BuildPreviewLighting(EditorContext& ctx, EditorPreviewRenderer::PhysicalLighting& out);
     // What BuildPreviewLighting took from the level last frame, for the panel to say so.
@@ -122,8 +122,7 @@ private:
     {
         bool built = false;
         float sunLux = 0.0f;           // luminance of the sun's illuminance, before the tint/scale
-        float ev100 = 0.0f;
-        bool metered = false;          // false = the level's camera exposure is off (x1)
+        float ev100 = 0.0f;            // the preview's camera, whichever way it was set
         bool skyIbl = false;           // split-sum sky (else the flat ambient fills)
         float skyScale = 1.0f;         // what the sky's cube values are multiplied by
         bool skyCalibrated = true;     // false = a picked cube with no `_diffuse.dds` beside it

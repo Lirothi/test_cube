@@ -222,6 +222,18 @@ namespace physics
     };
     SolidBounds MeasureSolid(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots);
 
+    // A box turned about the vertical to lie along the mesh: the smallest rectangle round it on the ground. A door standing at an angle in its own space gets a box along its leaf, where the
+    // axes' bounds are a block round it. A mesh along its axes keeps them exactly. The yaw is as a level's or a custom primitive's rotationDeg.y, in (-45, 45]. What Shape: Box and Fit box use.
+    struct SolidBox
+    {
+        Math::float3 centre;
+        Math::float3 half;
+        float yawDeg = 0.0f;
+        bool valid = false;
+    };
+    SolidBox FitSolidBox(const std::vector<Math::float3>& points);
+    SolidBox MeasureSolidBox(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots);
+
     // The gates (docs/physics_plan.md section 5), no window and no scene: `name` empty = all of them. Each logs
     // `physics gate: <name> PASS|FAIL|SKIP ...`; returns the number that failed. --physics-gate and intent_regression run this.
     int RunGates(const std::string& name);

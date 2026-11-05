@@ -87,7 +87,7 @@ public:
         Math::float3 groundAlbedo{};    // DirectionalLight::GetGroundAlbedo(), for the bounce
         // The camera: the tonemap pass's exposure, grade and curve (not its local exposure or
         // bloom, which are operators on a whole frame).
-        float exposure = 1.0f;          // render::ExposureMultiplierFromEv100(metered EV100)
+        float exposure = 1.0f;          // render::ExposureMultiplierFromEv100(the preview's own EV100)
         std::uint32_t toneCurve = 2;    // render::ToneCurve
         float gradeSaturation = 1.0f, gradeContrast = 1.0f, gradeGamma = 1.0f, gradeGain = 1.0f;
         float gradeOffset = 0.0f;

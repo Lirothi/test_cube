@@ -6,8 +6,5 @@
   "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Fabric_Sponge",
   "uvDensity": [
     0.6306447982788086
-  ],
-  "windFoliage": [
-    1.0
   ]
 }

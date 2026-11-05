@@ -1304,7 +1304,59 @@ namespace physics
             fall.Step(240);
             const float bodyY = fall.system.GetBodyInterface().GetPosition(body).GetY();
             detail += "; ball rests at " + std::to_string(ballY) + ", a two-box body's origin at " + std::to_string(bodyY);
-            return std::fabs(ballY - 2.48f) < 0.01f && std::fabs(bodyY + 0.02f) < 0.02f ? Verdict::Pass : Verdict::Fail;
+            if (std::fabs(ballY - 2.48f) >= 0.01f || std::fabs(bodyY + 0.02f) >= 0.02f) { return Verdict::Fail; }
+
+            // A box lies along the mesh: a plate turned 37 degrees comes back at 37 degrees and its own size, where the axes' bounds would be a block round it; a plate along its axes stays on them.
+            const auto plate = [](float yawDeg, Math::float3 at)
+            {
+                const float yaw = yawDeg * 3.14159265f / 180.0f;
+                std::vector<Math::float3> points;
+                for (const float x : { -0.45f, 0.45f })
+                {
+                    for (const float y : { 0.0f, 2.0f })
+                    {
+                        for (const float z : { -0.03f, 0.03f })
+                        {
+                            points.emplace_back(at.x + x * std::cos(yaw) + z * std::sin(yaw), at.y + y, at.z - x * std::sin(yaw) + z * std::cos(yaw));
+                        }
+                    }
+                }
+                return points;
+            };
+            const SolidBox turned = FitSolidBox(plate(37.0f, Math::float3(1.0f, 0.5f, -2.0f)));
+            detail += "; a plate turned 37: yaw " + std::to_string(turned.yawDeg) + ", half " + std::to_string(turned.half.x) + " " + std::to_string(turned.half.z);
+            if (std::fabs(turned.yawDeg - 37.0f) > 0.01f || std::fabs(turned.half.x - 0.45f) > 0.001f || std::fabs(turned.half.y - 1.0f) > 0.001f || std::fabs(turned.half.z - 0.03f) > 0.001f ||
+                std::fabs(turned.centre.x - 1.0f) > 0.001f || std::fabs(turned.centre.y - 1.5f) > 0.001f || std::fabs(turned.centre.z + 2.0f) > 0.001f)
+            {
+                return Verdict::Fail;
+            }
+            const SolidBox straight = FitSolidBox(plate(0.0f, Math::float3(0.0f, 0.0f, 0.0f)));
+            if (straight.yawDeg != 0.0f || std::fabs(straight.half.x - 0.45f) > 0.001f) { detail += "; a plate along its axes left them"; return Verdict::Fail; }
+
+            // The same through a real shape: its box stands where the fit says, and rays square to the plate land on its face.
+            {
+                const std::vector<Math::float3> points = plate(37.0f, Math::float3(0.0f, 0.0f, 0.0f));
+                SolidGeometry geometry;
+                geometry.positions = points;
+                for (const std::uint32_t i : { 0u, 1u, 2u }) { geometry.indices.push_back(i); }
+                CollisionSettings boxSettings;
+                boxSettings.shape = ShapeKind::Box;
+                const BuiltShape built = BuildShape(geometry, boxSettings, ShapeKind::Box);
+                TestWorld world(1);
+                if (!built.shape) { detail += "; no box shape: " + built.error; return Verdict::Fail; }
+                world.AddStatic(built.shape.GetPtr());
+                const float yaw = 37.0f * 3.14159265f / 180.0f;
+                const JPH::Vec3 normal(std::sin(yaw), 0.0f, std::cos(yaw));
+                const JPH::RRayCast ray(normal * 2.0f + JPH::Vec3(0.0f, 1.0f, 0.0f), -normal * 4.0f);
+                world.system.GetBroadPhaseQuery();
+                world.system.OptimizeBroadPhase();
+                JPH::RayCastResult hit;
+                if (!world.system.GetNarrowPhaseQuery().CastRay(ray, hit)) { detail += "; a ray square to the box missed it"; return Verdict::Fail; }
+                const float distance = hit.mFraction * 4.0f;
+                detail += ", through Jolt the face at " + std::to_string(distance) + " (1.97)";
+                if (std::fabs(distance - 1.97f) > 0.005f) { return Verdict::Fail; }
+            }
+            return Verdict::Pass;
         }
 
         // --------------------------------------------------------------------------------------------------------- rolling

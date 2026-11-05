@@ -212,6 +212,17 @@ void CollisionEditorTab::DrawPrimitives(physics::CollisionSettings& settings, co
         {
             primitive.rotationDeg = Math::float3(0.0f, 0.0f, 0.0f);
         }
+        // A box fitted lies along the mesh, not on the mesh's axes: a door at an angle in its own space gets a box along its leaf.
+        if (fit && kind == physics::PrimitiveKind::Box)
+        {
+            const physics::SolidBox box = physics::MeasureSolidBox(geometry, std::max(settings.lod, 0), exclude);
+            if (box.valid)
+            {
+                primitive.center = box.centre;
+                primitive.rotationDeg = Math::float3(0.0f, box.yawDeg, 0.0f);
+                primitive.halfExtents = Math::float3(std::max(box.half.x, 0.005f), std::max(box.half.y, 0.005f), std::max(box.half.z, 0.005f));
+            }
+        }
         settings.primitives.push_back(primitive);
         selected_ = static_cast<int>(settings.primitives.size()) - 1;
         changed = true;

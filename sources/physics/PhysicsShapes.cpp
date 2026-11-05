@@ -204,8 +204,9 @@ namespace physics
         if (kind == ShapeKind::Box)
         {
             const float pad = 0.001f; // a flat mesh's box still has a volume
-            JPH::BoxShapeSettings box(JPH::Vec3(std::max(0.5f * extent.x, pad), std::max(0.5f * extent.y, pad), std::max(0.5f * extent.z, pad)),
-                std::min(radius, std::max(0.5f * out.smallestExtent, 0.0f)));
+            const SolidBox fit = FitSolidBox(geometry.positions);
+            JPH::BoxShapeSettings box(JPH::Vec3(std::max(fit.half.x, pad), std::max(fit.half.y, pad), std::max(fit.half.z, pad)),
+                std::min(radius, std::min({ fit.half.x, fit.half.y, fit.half.z })));
             box.SetEmbedded();
             box.SetDensity(settings.density);
             const JPH::ShapeSettings::ShapeResult result = box.Create();
@@ -214,7 +215,7 @@ namespace physics
                 out.error = result.GetError().c_str();
                 return out;
             }
-            out.shape = Centred(result.Get().GetPtr(), centre, none, out.error);
+            out.shape = Centred(result.Get().GetPtr(), fit.centre, JPH::Quat::sRotation(JPH::Vec3::sAxisY(), JPH::DegreesToRadians(fit.yawDeg)), out.error);
             return out;
         }
         if (kind == ShapeKind::Sphere)
@@ -401,6 +402,91 @@ namespace physics
         out.lodUsed = geometry.lodUsed;
         out.lodCount = geometry.lodCount;
         return out;
+    }
+
+    SolidBox FitSolidBox(const std::vector<Math::float3>& points)
+    {
+        SolidBox out;
+        if (points.empty()) { return out; }
+        // The points on the ground, and their convex hull (Andrew's monotone chain): the smallest enclosing rectangle has a side on one of its edges.
+        std::vector<std::pair<float, float>> flat;
+        flat.reserve(points.size());
+        float yLo = FLT_MAX;
+        float yHi = -FLT_MAX;
+        for (const Math::float3& p : points)
+        {
+            flat.emplace_back(p.x, p.z);
+            yLo = std::min(yLo, p.y);
+            yHi = std::max(yHi, p.y);
+        }
+        std::sort(flat.begin(), flat.end());
+        flat.erase(std::unique(flat.begin(), flat.end()), flat.end());
+        const auto turn = [](const std::pair<float, float>& o, const std::pair<float, float>& a, const std::pair<float, float>& b)
+        {
+            return (a.first - o.first) * (b.second - o.second) - (a.second - o.second) * (b.first - o.first);
+        };
+        std::vector<std::pair<float, float>> hull(flat.size() * 2);
+        std::size_t k = 0;
+        for (const auto& p : flat)
+        {
+            while (k >= 2 && turn(hull[k - 2], hull[k - 1], p) <= 0.0f) { --k; }
+            hull[k++] = p;
+        }
+        for (std::size_t i = flat.size() - 1, lower = k + 1; i-- > 0;)
+        {
+            while (k >= lower && turn(hull[k - 2], hull[k - 1], flat[i]) <= 0.0f) { --k; }
+            hull[k++] = flat[i];
+        }
+        hull.resize(k > 1 ? k - 1 : k);
+
+        struct Rectangle { float yaw, loX, hiX, loZ, hiZ, area; };
+        const auto rectangleAt = [&hull](float yaw)
+        {
+            const float c = std::cos(yaw);
+            const float s = std::sin(yaw);
+            Rectangle r{ yaw, FLT_MAX, -FLT_MAX, FLT_MAX, -FLT_MAX, 0.0f };
+            for (const auto& p : hull)
+            {
+                const float x = p.first * c - p.second * s; // along the box's local x: (cos, -sin), a level's yaw
+                const float z = p.first * s + p.second * c; // along its local z: (sin, cos)
+                r.loX = std::min(r.loX, x);
+                r.hiX = std::max(r.hiX, x);
+                r.loZ = std::min(r.loZ, z);
+                r.hiZ = std::max(r.hiZ, z);
+            }
+            r.area = (r.hiX - r.loX) * (r.hiZ - r.loZ);
+            return r;
+        };
+        constexpr float kQuarterTurn = 1.57079632679f;
+        const Rectangle axes = rectangleAt(0.0f);
+        Rectangle best = axes;
+        for (std::size_t i = 0; i < hull.size(); ++i)
+        {
+            const auto& a = hull[i];
+            const auto& b = hull[(i + 1) % hull.size()];
+            float yaw = std::atan2(-(b.second - a.second), b.first - a.first); // the box's local x along this edge
+            while (yaw > 0.5f * kQuarterTurn) { yaw -= kQuarterTurn; }
+            while (yaw <= -0.5f * kQuarterTurn) { yaw += kQuarterTurn; }
+            const Rectangle r = rectangleAt(yaw);
+            if (r.area < best.area) { best = r; }
+        }
+        if (axes.area <= best.area * 1.001f) { best = axes; } // what lies along its axes keeps them, not a thousandth of a degree of rounding
+        const float c = std::cos(best.yaw);
+        const float s = std::sin(best.yaw);
+        const float midX = 0.5f * (best.loX + best.hiX);
+        const float midZ = 0.5f * (best.loZ + best.hiZ);
+        out.centre = Math::float3(c * midX + s * midZ, 0.5f * (yLo + yHi), -s * midX + c * midZ);
+        out.half = Math::float3(0.5f * (best.hiX - best.loX), 0.5f * (yHi - yLo), 0.5f * (best.hiZ - best.loZ));
+        out.yawDeg = JPH::RadiansToDegrees(best.yaw);
+        out.valid = true;
+        return out;
+    }
+
+    SolidBox MeasureSolidBox(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots)
+    {
+        SolidGeometry geometry;
+        if (!ReadSolidGeometry(geometryPath, lod, excludeSlots, geometry)) { return SolidBox{}; }
+        return FitSolidBox(geometry.positions);
     }
 
     SolidBounds MeasureSolid(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots)

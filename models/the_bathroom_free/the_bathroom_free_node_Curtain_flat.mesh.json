@@ -6,8 +6,5 @@
   "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Curtain_flat",
   "uvDensity": [
     1.8590059280395508
-  ],
-  "windFoliage": [
-    1.0
   ]
 }

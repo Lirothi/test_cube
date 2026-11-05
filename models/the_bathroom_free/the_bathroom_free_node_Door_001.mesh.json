@@ -1,4 +1,27 @@
 {
+  "collision": {
+    "shape": "custom",
+    "shapes": [
+      {
+        "center": [
+          0.0015,
+          1.0054,
+          -0.0014
+        ],
+        "halfExtents": [
+          0.4324,
+          1.0054,
+          0.034
+        ],
+        "rotationDeg": [
+          0.0,
+          42.705,
+          0.0
+        ],
+        "type": "box"
+      }
+    ]
+  },
   "geometry": "models/the_bathroom_free/the_bathroom_free_node_Door_001.mesh.bin",
   "lodDistanceScale": 1.5,
   "material": "the_bathroom_free_Door_001_0",
@@ -6,8 +29,5 @@
   "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Door.001",
   "uvDensity": [
     1.87978994846344
-  ],
-  "windFoliage": [
-    1.0
   ]
 }

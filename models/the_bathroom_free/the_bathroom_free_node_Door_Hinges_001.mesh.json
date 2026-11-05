@@ -6,8 +6,5 @@
   "source": "import_staging\\the_bathroom_free\\scene.gltf#node:Door_Hinges.001",
   "uvDensity": [
     1.7782049179077148
-  ],
-  "windFoliage": [
-    1.0
   ]
 }

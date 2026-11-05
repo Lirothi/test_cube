@@ -37,10 +37,16 @@ struct MeshEditorPreviewLight
     std::string sky;
     float skyIntensity = 1.0f;
     // Light the preview the way the level lights the scene: its sun in lux, its sky through the
-    // split-sum IBL, its metered exposure and its tone curve. Only `direction` (and the sky choice
-    // above) still apply then; `color`, `exposure` and `ambient` belong to the legacy look, which
-    // keeps them for when this is switched off.
+    // split-sum IBL, its tone curve. Only `direction` (and the sky choice above) still apply then;
+    // `color`, `exposure` and `ambient` belong to the legacy look, which keeps them for when this
+    // is switched off.
     bool levelLighting = true;
+    // The camera under level lighting is the preview's OWN: not the viewport's, which stands wherever it stands (a closed room meters 6 stops
+    // under the open sun the preview is lit by, and the asset came out white). Auto = a grey card under the preview's light, over or under by
+    // the compensation (positive = brighter); else the EV100 as given.
+    bool autoExposure = true;
+    float exposureCompensationEv = 0.0f;
+    float manualEv100 = 14.0f;
 };
 
 // A small isolated scene used by the Mesh Editor. Geometry and materials are

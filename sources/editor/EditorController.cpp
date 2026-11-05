@@ -1605,7 +1605,10 @@ namespace
                 { "positionDistance", state.previewLight.positionDistance },
                 { "sky", state.previewLight.sky },
                 { "skyIntensity", state.previewLight.skyIntensity },
-                { "levelLighting", state.previewLight.levelLighting }
+                { "levelLighting", state.previewLight.levelLighting },
+                { "autoExposure", state.previewLight.autoExposure },
+                { "exposureCompensationEv", state.previewLight.exposureCompensationEv },
+                { "manualEv100", state.previewLight.manualEv100 }
             } }
         };
     }
@@ -1647,6 +1650,11 @@ namespace
             ReadFloatMember(*lightIt, "skyIntensity", 0.0f, 16.0f,
                 state.previewLight.skyIntensity);
             ReadBoolMember(*lightIt, "levelLighting", state.previewLight.levelLighting);
+            ReadBoolMember(*lightIt, "autoExposure", state.previewLight.autoExposure);
+            ReadFloatMember(*lightIt, "exposureCompensationEv", -16.0f, 16.0f,
+                state.previewLight.exposureCompensationEv);
+            ReadFloatMember(*lightIt, "manualEv100", -16.0f, 24.0f,
+                state.previewLight.manualEv100);
         }
         meshEditor.SetPersistentState(state);
     }
@@ -1765,7 +1773,10 @@ namespace
             a.previewLight.positionDistance == b.previewLight.positionDistance &&
             a.previewLight.sky == b.previewLight.sky &&
             a.previewLight.skyIntensity == b.previewLight.skyIntensity &&
-            a.previewLight.levelLighting == b.previewLight.levelLighting;
+            a.previewLight.levelLighting == b.previewLight.levelLighting &&
+            a.previewLight.autoExposure == b.previewLight.autoExposure &&
+            a.previewLight.exposureCompensationEv == b.previewLight.exposureCompensationEv &&
+            a.previewLight.manualEv100 == b.previewLight.manualEv100;
     }
 
     void LoadEditorPanelState(bool& showContentBrowser,

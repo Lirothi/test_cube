@@ -561,6 +561,8 @@ void MeshEditorPanel::SetPersistentState(const PersistentState& state)
     previewLight_.ambient = std::clamp(previewLight_.ambient, 0.0f, 10.0f);
     previewLight_.positionDistance = std::clamp(
         previewLight_.positionDistance, 0.25f, 8.0f);
+    previewLight_.exposureCompensationEv = std::clamp(previewLight_.exposureCompensationEv, -16.0f, 16.0f);
+    previewLight_.manualEv100 = std::clamp(previewLight_.manualEv100, -16.0f, 24.0f);
 }
 
 void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* open,
@@ -1843,23 +1845,36 @@ bool MeshEditorPanel::BuildPreviewLighting(EditorContext& ctx,
         addResource(brdfLut->GetResource());
     }
 
-    // The camera: the tonemap pass's exposure (SceneRenderer_Post: enabled AND metering ready,
-    // else a literal 1) and its colour pipeline. The EV is rounded to 1/64 stop so an exposure
-    // that is still settling does not re-render the preview every frame for an invisible change.
-    const render::CameraExposureSettings& camera = scene.GetCameraExposure();
-    const Renderer::ExposureView& metering = ctx.renderer.ExposureForGame(); // G8b: the hand-over's copy, no wait
-    out.exposure = 1.0f;
-    if (camera.enabled && metering.ready)
+    // The camera is the preview's own (MeshEditorPreviewLight::autoExposure). Auto: what a meter reads off middle grey lying under this light
+    // (EV100 = log2(0.18 E / pi) + 3, as TimeOfDay::NightEv100 and the meter's own log2(L) + 3): the sun on a level card by the PREVIEW's direction
+    // and the sky's horizontal illuminance. The EV is rounded to 1/64 stop so a sky that is still moving does not re-render the preview every frame
+    // for an invisible change. The colour pipeline below is the level's.
+    const float sunLuminance = 0.2126f * out.sunIlluminance.x + 0.7152f * out.sunIlluminance.y + 0.0722f * out.sunIlluminance.z;
+    float ev = previewLight_.manualEv100;
+    if (previewLight_.autoExposure)
     {
-        const float ev = std::round(metering.readback.adaptedEv100 * 64.0f) / 64.0f;
-        const float multiplier = render::ExposureMultiplierFromEv100(ev);
-        if (std::isfinite(ev) && std::isfinite(multiplier) && multiplier > 0.0f)
+        constexpr float kPi = 3.14159265358979f;
+        float skyLux = 0.0f;
+        if (previewLight_.sky.empty() && skybox)
         {
-            out.exposure = multiplier;
-            levelReadout_.metered = true;
-            levelReadout_.ev100 = ev;
+            // The procedural sky's distant light is the luminance of a sky of even brightness (a few frames old; before its first readback 0, and the sun alone meters).
+            const float4& distant = g_fogDistantSkyLight;
+            skyLux = skybox->HasEnvironment()
+                ? kPi * (0.2126f * distant.x + 0.7152f * distant.y + 0.0722f * distant.z) * out.skyIntensity
+                : skybox->GetIlluminanceLux() * trim;
         }
+        else if (previewLight_.sky != "none" && previewSkyCube_)
+        {
+            const float levelLux = skybox ? skybox->GetIlluminanceLux() : 0.0f;
+            skyLux = (levelLux > 0.0f ? levelLux : 12000.0f) * trim;
+        }
+        const float lux = sunLuminance * std::max(-previewLight_.direction.y, 0.0f) + skyLux * out.skyFill;
+        constexpr float kMiddleGreyAlbedo = 0.18f;
+        ev = std::log2(std::max(kMiddleGreyAlbedo * lux / kPi, 1.0e-4f)) + 3.0f - previewLight_.exposureCompensationEv;
     }
+    ev = std::round(ev * 64.0f) / 64.0f;
+    out.exposure = render::ExposureMultiplierFromEv100(ev);
+    levelReadout_.ev100 = ev;
     const render::ColorPipelineSettings& color = scene.GetColorPipeline();
     out.toneCurve = static_cast<std::uint32_t>(color.toneCurve);
     out.gradeSaturation = color.gradeSaturation;
@@ -1877,8 +1892,7 @@ bool MeshEditorPanel::BuildPreviewLighting(EditorContext& ctx,
     out.filmWhiteClip = color.filmWhiteClip;
 
     levelReadout_.built = true;
-    levelReadout_.sunLux = 0.2126f * out.sunIlluminance.x + 0.7152f * out.sunIlluminance.y +
-        0.0722f * out.sunIlluminance.z;
+    levelReadout_.sunLux = sunLuminance;
     levelReadout_.skyIbl = out.irradiance.ptr != 0;
     levelReadout_.skyScale = out.skyIntensity;
     levelReadout_.skyCalibrated = calibrated;
@@ -1892,20 +1906,27 @@ void MeshEditorPanel::DrawPreviewSkyControls(AssetRegistry& registry)
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("Light the preview the way the open level lights the scene: its sun in "
-            "lux, its sky's diffuse and specular (split-sum IBL), the camera exposure metered in "
-            "the viewport, and its grade and tone curve. Only the light's direction stays the "
-            "preview's own.\nOff: the preview's own studio light, with no camera.");
+            "lux, its sky's diffuse and specular (split-sum IBL), and its grade and tone curve. The "
+            "light's direction and the exposure below stay the preview's own.\nOff: the preview's "
+            "own studio light, with no camera.");
     }
     if (previewLight_.levelLighting && levelReadout_.built)
     {
-        if (levelReadout_.metered)
+        ImGui::Checkbox("Auto exposure", &previewLight_.autoExposure);
+        if (ImGui::IsItemHovered())
         {
-            ImGui::TextDisabled("Camera: EV100 %.2f, as metered in the viewport",
-                levelReadout_.ev100);
+            ImGui::SetTooltip("On: exposed for the preview's own light -- a grey card lying under this sun and sky. "
+                "The viewport does not come into it:\nit may stand in a closed room, 6 stops under the sun lighting this preview.\n"
+                "Off: the EV100 you give it.");
+        }
+        if (previewLight_.autoExposure)
+        {
+            ImGui::DragFloat("Compensation (EV)", &previewLight_.exposureCompensationEv, 0.05f, -16.0f, 16.0f, "%+.2f");
+            ImGui::TextDisabled("Camera: EV100 %.2f", levelReadout_.ev100);
         }
         else
         {
-            ImGui::TextDisabled("Camera: the level's exposure is off (x1)");
+            ImGui::DragFloat("EV100", &previewLight_.manualEv100, 0.05f, -16.0f, 24.0f, "%.2f");
         }
         ImGui::TextDisabled("Sky fill: %s", levelReadout_.skyIbl
             ? "the sky's irradiance" : "the level's flat ambient (no irradiance cube)");
