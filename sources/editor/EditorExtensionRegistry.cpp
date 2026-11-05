@@ -630,6 +630,14 @@ namespace
         static void DrawPhysics(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
         {
             ImGui::SeparatorText("Physics");
+            // A copy of a "vessel" asset is a boat whatever this row would say (SceneObjectFactory): the row would lie.
+            const RenderableObjectBase* placed = ctx.scene.FindEditorObject(obj.id.value);
+            const RenderableObject* renderable = placed ? placed->AsRenderableObject() : nullptr;
+            if (renderable && renderable->GetVesselSettings())
+            {
+                ImGui::TextDisabled("A vessel: it floats and moves in Play, E takes the helm. Mesh Editor > Vessel.");
+                return;
+            }
             const char* const labels[] = { "None", "Static", "Dynamic" };
             const physics::Motion motions[] = { physics::Motion::None, physics::Motion::Static, physics::Motion::Dynamic };
             const physics::Motion current = SetPhysicsCommand::DocumentMotion(obj);
@@ -639,8 +647,8 @@ namespace
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip(
-                    "Static: things collide with it (the default). Dynamic: it falls and is pushed while the\n"
-                    "simulation runs (Level Editor > Physics > Simulate), as a convex hull of its solid slots.\n"
+                    "Static: things collide with it (the default). Dynamic: it falls and is pushed in Play\n"
+                    "(Level Editor > Play), as a convex hull of its solid slots.\n"
                     "None: no body. How it collides -- shape, slots, friction -- is the asset's: Mesh Editor > Collision.");
             }
             if (motions[index] == physics::Motion::Dynamic)

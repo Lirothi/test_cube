@@ -58,6 +58,11 @@ namespace physics
         bool testJump = false;        // one press, cleared when taken
         bool testCrouch = false;
         bool testSprint = false;
+        bool testInteract = false;    // one press of the helm's key, cleared when taken
+        bool testView = false;        // one press of the view's key, cleared when taken
+        float testThrottle = 0.0f;    // what W and S say at the helm
+        float testRudder = 0.0f;      // what A and D say
+        float testOrbit = 0.0f;       // radians about the boat: a script's shot from the side, held while it is not 0
     };
 
     // What the keys say this frame.
@@ -71,6 +76,23 @@ namespace physics
 
     enum class PlayerMode : std::uint8_t { Walking, Falling, Swimming };
     const char* PlayerModeName(PlayerMode mode);
+
+    // The boat at the helm as the frame shows it (World::GetHelm).
+    struct HelmState
+    {
+        bool exists = false;
+        RenderableObject* object = nullptr;
+        const VesselSettings* settings = nullptr;
+        Math::float3 position;
+        Math::quat rotation;
+        Math::float3 forward;
+        Math::float3 scale;
+        float starboardY = 0.0f; // how far its starboard side has risen
+        float upY = 1.0f;        // of its up: with starboardY, its roll whatever its pitch
+        float halfLength = 0.0f;
+        float halfBeam = 0.0f;
+        VesselState vessel;
+    };
 
     struct PlayerState
     {
@@ -184,6 +206,13 @@ namespace physics
         // Where the eye stands after this frame's Tick. False = no player, or not possessed: the camera is free.
         bool PlayerEye(Math::float3& out) const;
         PlayerState GetPlayerState() const;
+        // The boats (mesh.json "vessel"): the nearest whose hull is within `reach` m of the point; who has the helm; what the helm says. A boat with nobody at the helm floats with its engine off.
+        RenderableObject* FindVessel(const Math::float3& point, float reach) const;
+        bool SetHelm(RenderableObject* vessel);
+        void SetHelmInput(const VesselInput& input);
+        const HelmState& GetHelm() const;
+        // --set / MCP vessel.<key>: on every boat in the world, transient. False = no such key.
+        bool TuneVessels(const std::string& key, float value);
 
         bool RayCast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out) const;
 

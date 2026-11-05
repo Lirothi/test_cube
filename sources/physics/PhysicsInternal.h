@@ -31,6 +31,7 @@
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Renderer/DebugRendererSimple.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -132,6 +133,41 @@ namespace physics
 
     // PhysicsCharacter.cpp: a capsule on the ground, UE's walking mode. Not a body: collision queries only, pushing bodies by
     // impulses as it goes (Jolt's CharacterVirtual). `Feet` is its origin.
+    // What the sea is doing under a boat, measured on the game's side, where the water can be read (MeasureVesselWater): the plane that fits the surface over the hull, which Jolt's buoyancy cuts the
+    // hull with -- a wave shorter than the hull lifts it no more than a real one does --, and three stations along the hull for what one plane cannot say: a slope that differs at the bow and the
+    // stern, a bow falling into a crest.
+    struct VesselStation
+    {
+        float offset = 0.0f;      // m along the hull from the centre of mass: stern, middle, bow
+        float height = 0.0f;      // the water's
+        float speed = 0.0f;       // how fast it rises where the hull is, m/s, the hull's own way in it
+        float slopeAlong = 0.0f;  // of the surface, rising toward the bow
+        float slopeAcross = 0.0f; // rising toward starboard
+    };
+    struct VesselWater
+    {
+        bool valid = false;
+        float height = 0.0f;      // of the plane, at the centre of mass
+        float speed = 0.0f;       // m/s, as a station's
+        JPH::Vec3 normal = JPH::Vec3::sAxisY();
+        JPH::Vec3 spin = JPH::Vec3::sZero();     // how fast the plane turns, rad/s
+        JPH::Vec3 forward = JPH::Vec3::sAxisX(); // the hull's, level
+        JPH::Vec3 starboard = -JPH::Vec3::sAxisZ();
+        float propellerHeight = 0.0f; // the water's, over the propeller: on a crest's back it comes out
+        float calmAcross = 0.0f;  // the surface's rise toward starboard, slowly: what the form stability lies along. The chop passes under a hull faster than it can roll
+        VesselStation stations[3];
+    };
+    // A boat (PhysicsVessel.cpp). Its shape: the hull with its weight low and over the water's lift, so it lies level at its draft; `floatFactor` is what Jolt's buoyancy takes for that. Null = it
+    // cannot float (a triangle mesh has no volume, or the draft is under the hull), and `error` says why.
+    JPH::RefConst<JPH::Shape> MakeVesselShape(const JPH::Shape& hull, const VesselSettings& settings, const Math::float3& scale, float& floatFactor, std::string& error);
+    // What its body is made with, past the shape.
+    void SetVesselBody(JPH::BodyCreationSettings& creation, const VesselSettings& settings);
+    // `height` answers the water's height at (x, z); `elapsed` is the time since the last measure, 0 = a first look, no rates yet. `origin` is the mesh's, `centre` the centre of mass.
+    void MeasureVesselWater(VesselWater& water, const std::function<float(float, float)>& height, JPH::RVec3Arg origin, JPH::RVec3Arg centre, JPH::QuatArg rotation,
+        const VesselSettings& settings, const Math::float3& scale, float halfLength, float halfBeam, float elapsed);
+    // One step on the water: its buoyancy, the helm, the hull and the waves.
+    void PushVessel(JPH::Body& body, const VesselSettings& settings, const Math::float3& scale, VesselState& state, const VesselInput& input, const VesselWater& water, float buoyancy, JPH::Vec3Arg gravity, float dt);
+
     // A height no water reaches: no water here.
     inline constexpr float kNoWater = -1.0e30f;
 

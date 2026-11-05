@@ -91,6 +91,7 @@ private:
     bool          expandCollision_ = false;
     void DrawBuoyancySection(int& hoveredPontoonThisFrame);
     void DrawRestPoseSection();
+    void DrawVesselSection();
     MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked
     std::string   status_;
     MeshEditorPreviewScene previewScene_;

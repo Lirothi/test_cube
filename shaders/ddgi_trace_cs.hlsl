@@ -73,7 +73,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     // only its mesh's opacity of the ray (RtCutoutTransmittance); the rest would bring what lies behind it, which is not
     // traced -- the ray goes no further -- and counts as a miss, no bounce: the hit's radiance is scaled by the card's share.
     RayQuery<RAY_FLAG_FORCE_OPAQUE | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    q.TraceRayInline(tlas, RAY_FLAG_NONE, kRtMaskGiProbe, ray);
     q.Proceed();
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT)
     {

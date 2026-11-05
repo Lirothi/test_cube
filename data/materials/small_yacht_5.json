@@ -1,0 +1,22 @@
+{
+  "albedo": "models/small_yacht/textures/Material__16_baseColor.png",
+  "alphaCutoff": 0.5,
+  "alphaTest": true,
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "metalRough": [
+    0.8590144515037537,
+    0.0
+  ],
+  "normalIsRG": false,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0,
+  "twoSided": true
+}

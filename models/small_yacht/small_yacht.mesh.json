@@ -1,0 +1,62 @@
+{
+  "bakeScale": 0.0009997622109949589,
+  "geometry": "models/small_yacht/small_yacht.mesh.bin",
+  "materials": [
+    "small_yacht_0",
+    "small_yacht_1",
+    "small_yacht_2",
+    "small_yacht_3",
+    "small_yacht_4",
+    "small_yacht_5",
+    "small_yacht_6",
+    "small_yacht_7",
+    "small_yacht_8",
+    "small_yacht_9"
+  ],
+  "source": "import_staging\\small_yacht\\scene.gltf",
+  "uvDensity": [
+    2.5869052410125732,
+    0.2960412800312042,
+    0.2795758843421936,
+    0.08770639449357986,
+    1.8778802156448364,
+    0.39597272872924805,
+    0.46707138419151306,
+    39.35204315185547,
+    2.6224050521850586,
+    0.3181171417236328
+  ],
+  "vessel": {
+    "centerOfMassY": 0.7,
+    "draft": 0.38,
+    "forward": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "helmEye": [
+      -1.55,
+      2.1,
+      -0.62
+    ],
+    "mass": 5500.0,
+    "propeller": [
+      -4.6,
+      0.1,
+      0.0
+    ],
+    "thrust": 22000.0
+  },
+  "windFoliage": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ]
+}

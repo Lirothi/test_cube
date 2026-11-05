@@ -43,6 +43,77 @@ namespace physics
         float halfHeight = 0.5f;      // Along its own y. Capsule: the straight part, the caps on top; Cylinder: the whole of it
     };
 
+    // mesh.json "vessel": the asset is a powered boat (physics/PhysicsVessel.cpp, docs/play_mode_plan.md). A placed copy is a Dynamic body on the water that a helm can steer. Points are in the mesh's
+    // model space at scale 1. The numbers are a 10 m, 5.5 t runabout's, and every one of them is the asset's.
+    struct VesselSettings
+    {
+        Math::float3 forward = Math::float3(1.0f, 0.0f, 0.0f); // the bow's way
+        Math::float3 propeller = Math::float3(-4.6f, 0.1f, 0.0f); // where the thrust pushes and the rudder turns
+        Math::float3 helmEye = Math::float3(-2.0f, 1.85f, -0.55f); // the helmsman's eyes
+        float mass = 5500.0f;       // kg
+        float centerOfMassY = 0.7f; // m over the mesh's origin: low, or it rolls over. Along and across it stands over the water's lift, so the boat lies level
+        float draft = 0.38f;        // m over the mesh's origin: where still water stands on it. What sets Jolt's buoyancy factor
+        float reserveLift = 2.0f;   // of the weight, the most its volume lifts: the collision hull is a convex lump with the cabin in it, 9 times the weight of the yacht, and a real hull ends at its deck. Past it a bow driven into a crest flies off
+        float thrust = 22000.0f;    // N, full ahead
+        float reverseShare = 0.4f;  // of the thrust, full astern
+        float throttleRate = 1.0f;  // 1/s
+        float rudderDeg = 30.0f;    // hard over
+        float rudderRate = 70.0f;   // deg/s
+        float rudderForce = 120.0f; // N across the stern per (m/s)2 of water past it, per sine of the rudder's angle
+        float wash = 6.0f;          // m/s past the rudder from the propeller at full throttle: what steers a boat that hardly moves
+        float surgeDrag = 110.0f;   // N per (m/s)2 along the hull
+        float swayDrag = 1800.0f;   // N per (m/s)2 across it
+        float swayLinear = 800.0f;  // N per m/s
+        float swayLever = 1.2f;     // m aft of the centre of mass, where that force acts: the keel's. A hull then turns into its own drift and holds a course on waves that would slew it
+        float yawDrag = 430000.0f;  // N m per (rad/s)2
+        float yawLinear = 20000.0f; // N m per rad/s
+        float heaveDamping = 3.0f;  // 1/s, against the water's own rise and fall
+        float pitchDamping = 4.0f;  // 1/s, against the surface's own tilting: a long hull's ends push through the water. Under-damped it resonates with a sea met at speed and stands on its stern
+        float rollDamping = 3.0f;   // 1/s
+        float rollStiffness = 50000.0f; // N m per radian off the surface: the form stability of hard chines and a wide transom, which a convex lump of hull cut by a plane does not have
+        float bank = 2.2f;          // degrees of lean into a turn per m/s2 of the turn
+        float maxBank = 22.0f;      // degrees
+        // Over the hump and onto the plane.
+        float humpSpeed = 5.0f;     // m/s: the bow's highest and the drag's bump. A Froude number of 0.5 for a 10 m hull
+        float planeSpeed = 10.0f;   // m/s: it is up
+        float humpDrag = 6000.0f;   // N, on top of surgeDrag at the hump: too little throttle stays under it
+        float humpTrim = 100000.0f; // N m of bow up at the hump
+        float planeTrim = 40000.0f; // N m of bow up on the plane
+        float planingLift = 0.3f;   // how much of its weight the speed carries on the plane, against what the volume carries: the hull rises, and has less of itself in the water to drag
+        // The waves.
+        float waveForce = 1.0f;     // the surface's slope pushes the hull down it (Froude-Krylov): 1 = physics, 0 = none. A swell surfs it, and a slope that differs at the bow and the stern yaws it
+        float slam = 1500.0f;       // N per (m/s)2 of a part of the hull falling into the water faster than it rises
+        float slamMax = 0.4f;       // of the weight, the most a part of the hull takes
+        float cameraDistance = 15.0f; // m
+        float cameraHeight = 2.5f;  // m over the mesh's origin
+        // m, the sun's VSM clipmap's finest level while the eye rides this hull (0 = the level's own, vsm.clipmapBaseExtent, 8 by default). What is lit near that eye is a metre or two off and rocks
+        // against the light; 8 m is 7.8 mm a texel there, 8 pixels of a 1440p frame, and the edge's teeth crawl over the deck as it rocks: the flicker the owner saw inside the yacht. The clipmap
+        // for the whole world changes the picture (a closed room +3.5 of 255), so it is the helm's alone.
+        float helmShadowExtent = 2.0f;
+        // m/s: faster than this the hull leaves the GI probes' rays. They stand in the world, and it flies through them: a probe is inside it, out of it and behind it from one update to the next, and
+        // the cockpit's bounce jumped 25-37 % a frame at 16 m/s. 0 = never leaves. Below it the hull lights itself as anything else does.
+        float giProbeSpeed = 2.0f;
+    };
+
+    // What the helm says this frame: -1 full astern .. 1 full ahead, -1 hard to port .. 1 hard to starboard.
+    struct VesselInput
+    {
+        float throttle = 0.0f;
+        float rudder = 0.0f;
+    };
+
+    // Where the helm and the hull have got to.
+    struct VesselState
+    {
+        float throttle = 0.0f;
+        float rudder = 0.0f;
+        float speed = 0.0f;     // m/s along the hull
+        float immersion = 0.0f; // 1 = as deep as it floats at rest
+        float bite = 0.0f;      // the propeller's share in the water: 0 = out of it, the engine races
+        float impact = 0.0f;    // the last slam, as a share of the weight, fading
+        float waterHeight = 0.0f; // of the surface under it
+    };
+
     // mesh.json / level object "collision" block (physics/CollisionJson.h). Every field has an automatic value, so an asset
     // nobody wrote anything for still collides. It reaches the object through ResolveMeshAsset, as "buoyancy" does.
     struct CollisionSettings

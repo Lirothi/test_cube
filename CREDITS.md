@@ -242,3 +242,16 @@ Model License:
 If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
 This work is based on "The Bathroom (Free)" (https://sketchfab.com/3d-models/the-bathroom-free-d5e5035dda434b8d9beaa7271f1c85fc) by Evan (https://sketchfab.com/Evanz) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
 
+## small_yacht
+Model Information:
+* title:	Small Yacht
+* source:	https://sketchfab.com/3d-models/small-yacht-09a9fc4a0061464fba1bc3ba76848869
+* author:	Miguelangelo Rosario (https://sketchfab.com/miguelangelo2k)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Small Yacht" (https://sketchfab.com/3d-models/small-yacht-09a9fc4a0061464fba1bc3ba76848869) by Miguelangelo Rosario (https://sketchfab.com/miguelangelo2k) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+

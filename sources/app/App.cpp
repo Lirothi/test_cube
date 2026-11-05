@@ -429,6 +429,8 @@ namespace
         if (setting == "physics.killY") { physics::GameSettings().killY = value; return true; }
         if (setting == "physics.angularDamping") { physics::GameSettings().angularDamping = std::max(value, 0.0f); return true; }
         if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
+        // The boats (docs/play_mode_plan.md): every vessel in the world, transient. An asset's own numbers are its mesh.json "vessel".
+        if (setting.rfind("vessel.", 0) == 0 && scene.Physics().TuneVessels(setting.substr(7), value)) { return true; }
         // The player (docs/play_mode_plan.md): its numbers by one table, and what a script says in place of the keys.
         if (setting.rfind("player.", 0) == 0)
         {
@@ -444,6 +446,11 @@ namespace
             if (key == "testJump") { player.testJump = value != 0.0f; return true; }
             if (key == "testCrouch") { player.testCrouch = value != 0.0f; return true; }
             if (key == "testSprint") { player.testSprint = value != 0.0f; return true; }
+            if (key == "testInteract") { player.testInteract = value != 0.0f; return true; }
+            if (key == "testView") { player.testView = value != 0.0f; return true; }
+            if (key == "testThrottle") { player.testThrottle = std::clamp(value, -1.0f, 1.0f); return true; }
+            if (key == "testRudder") { player.testRudder = std::clamp(value, -1.0f, 1.0f); return true; }
+            if (key == "testOrbit") { player.testOrbit = value; return true; }
         }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
@@ -2254,6 +2261,13 @@ namespace
                               player.exists ? "true" : "false", player.possessed ? "true" : "false", physics::PlayerModeName(player.mode),
                               player.onGround ? "true" : "false", player.crouched ? "true" : "false", player.speed, player.feet.x, player.feet.y, player.feet.z);
                 out += playerItem;
+                const physics::HelmState& helm = scene_.Physics().GetHelm();
+                char helmItem[400];
+                std::snprintf(helmItem, sizeof(helmItem),
+                              ",\"helm\":{\"exists\":%s,\"speed\":%.3f,\"throttle\":%.3f,\"rudder\":%.3f,\"immersion\":%.3f,\"bite\":%.3f,\"impact\":%.3f,\"waterHeight\":%.3f,\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"starboardY\":%.4f}",
+                              helm.exists ? "true" : "false", helm.vessel.speed, helm.vessel.throttle, helm.vessel.rudder, helm.vessel.immersion, helm.vessel.bite, helm.vessel.impact, helm.vessel.waterHeight,
+                              helm.position.x, helm.position.y, helm.position.z, helm.forward.x, helm.forward.y, helm.forward.z, helm.starboardY);
+                out += helmItem;
                 // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.
                 char uiItem[96];
                 std::snprintf(uiItem, sizeof(uiItem), ",\"ui\":{\"wantsKeyboard\":%s,\"wantsMouse\":%s,\"typing\":%s}",

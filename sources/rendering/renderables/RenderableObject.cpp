@@ -569,6 +569,8 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
     TC_CHECK_GAME_PARKED_OR_SYNC("RenderableObject::SyncSceneState");
     renderPos_ = pos_;
     const bool resetMotionHistory = reason != SceneObjectSyncReason::Frame || resetMotionOnSync_;
+    // A body put back by Stop: a cut, no motion vector, but it DID move, and the cull's cross-check and the caster table must hear of it. A load or a spawn does not: Rebuild does the full upload then.
+    const bool putBack = reason == SceneObjectSyncReason::Frame && resetMotionOnSync_;
     resetMotionOnSync_ = false;
 
     if (!prevModelMatrixValid_)
@@ -590,7 +592,9 @@ void RenderableObject::SyncSceneState(SceneObjectSyncReason reason)
 
     if (resetMotionHistory)
     {
+        const bool moved = putBack && modelMatrixChangedThisTick_;
         ResetMotionHistory();
+        modelMatrixChangedThisTick_ = moved;
     }
     else if (!modelMatrixChangedThisTick_)
     {

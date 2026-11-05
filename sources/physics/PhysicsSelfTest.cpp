@@ -5,6 +5,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <random>
 #include <thread>
@@ -890,6 +891,296 @@ namespace physics
             detail = "factor 1.1 settles at y " + std::to_string(floatY) + " (moving " + std::to_string(floatRate * 60.0f) + " m/s); factor 0.8 at y " + std::to_string(sinkY);
             if (floatY < -0.5f || floatY > 0.5f || floatRate * 60.0f > 0.05f) { return Verdict::Fail; }
             return sinkY < -3.0f ? Verdict::Pass : Verdict::Fail; // the arm that must come out wrong
+        }
+
+        // --------------------------------------------------------------------------------------------------------- vessel
+        // A boat on the water, through the functions the world calls. On still water: it floats at its draft and level; full ahead climbs over the hump and planes, too little throttle stays under
+        // it; it slows by itself; a rudder turns it to its own side; a boat lying still answers no rudder and one on its propeller's wash does; going astern it turns the other way. On waves: it
+        // rides a long swell up and down and along its slope; a slope pushes it; a sea at an angle yaws it; at full speed into steep waves it slams and stays on its keel. The arms that must come
+        // out wrong: no rudder keeps the course, a propeller out of the water pushes nothing, nothing in the water pushes nothing, the weight up top capsizes it, a boat that cannot see the waves
+        // does not ride them, no wave force pushes nothing and yaws nothing, no slam slams nothing.
+        struct TestBoat
+        {
+            TestWorld world{ 1 };
+            VesselSettings settings;
+            VesselState state;
+            VesselWater water;
+            JPH::BodyID body;
+            float factor = 1.0f;
+            float time = 0.0f;
+            std::function<float(float, float, float)> sea = [](float, float, float) { return 0.0f; };
+
+            explicit TestBoat(const VesselSettings& boat, JPH::QuatArg rotation = JPH::Quat::sIdentity(), float y = 0.0f) : settings(boat)
+            {
+                // Flat under, the keel at the origin, its upper works up to 2.7 m: the small_yacht's size and no more of it.
+                JPH::Array<JPH::Vec3> corners;
+                for (const float cx : { -5.0f, 5.0f })
+                {
+                    for (const float cy : { 0.0f, 2.7f })
+                    {
+                        for (const float cz : { -1.17f, 1.17f }) { corners.push_back(JPH::Vec3(cx, cy, cz)); }
+                    }
+                }
+                JPH::ConvexHullShapeSettings hull(corners, 0.0f);
+                hull.SetEmbedded();
+                const JPH::RefConst<JPH::Shape> shape = hull.Create().Get();
+                std::string error;
+                const JPH::RefConst<JPH::Shape> floating = MakeVesselShape(*shape, settings, Math::float3(1.0f, 1.0f, 1.0f), factor, error);
+                JPH::BodyCreationSettings creation(floating.GetPtr(), JPH::Vec3(0.0f, y, 0.0f), rotation, JPH::EMotionType::Dynamic, layers::kMoving);
+                SetVesselBody(creation, settings);
+                body = world.system.GetBodyInterface().CreateAndAddBody(creation, JPH::EActivation::Activate);
+            }
+            template <typename OnStep>
+            void Run(float seconds, float throttle, float rudder, OnStep&& onStep)
+            {
+                constexpr float kStep = 1.0f / 60.0f;
+                const Math::float3 one(1.0f, 1.0f, 1.0f);
+                JPH::BodyInterface& bodies = world.system.GetBodyInterface();
+                const int steps = static_cast<int>(seconds * 60.0f + 0.5f);
+                for (int i = 0; i < steps; ++i)
+                {
+                    const std::function<float(float, float)> height = [this](float x, float z) { return sea(x, z, time); };
+                    MeasureVesselWater(water, height, bodies.GetPosition(body), bodies.GetCenterOfMassPosition(body), bodies.GetRotation(body), settings, one, 5.0f, 1.17f, water.valid ? kStep : 0.0f);
+                    {
+                        JPH::BodyLockWrite lock(world.system.GetBodyLockInterface(), body);
+                        PushVessel(lock.GetBody(), settings, one, state, VesselInput{ throttle, rudder }, water, factor, world.system.GetGravity(), kStep);
+                    }
+                    world.Step(1);
+                    time += kStep;
+                    onStep();
+                }
+            }
+            void Run(float seconds, float throttle, float rudder) { Run(seconds, throttle, rudder, []() {}); }
+            JPH::Quat Rotation() const { return world.system.GetBodyInterface().GetRotation(body); }
+            JPH::Vec3 Forward() const { return (Rotation() * ToJolt(settings.forward)).Normalized(); }
+            JPH::Vec3 Position() const { return world.system.GetBodyInterface().GetPosition(body); }
+            float UpY() const { return (Rotation() * JPH::Vec3::sAxisY()).GetY(); }
+            float Speed() const { return world.system.GetBodyInterface().GetLinearVelocity(body).Dot(Forward()); }
+            float HeadingDeg() const { const JPH::Vec3 f = Forward(); return JPH::RadiansToDegrees(std::atan2(f.GetX(), f.GetZ())); }
+            float BowUpDeg() const { return JPH::RadiansToDegrees(std::asin(std::clamp(Forward().GetY(), -1.0f, 1.0f))); }
+            float RollDeg() const { return JPH::RadiansToDegrees(std::asin(std::clamp((Rotation() * JPH::Vec3::sAxisY()).Cross(Forward()).GetY(), -1.0f, 1.0f))); }
+            float YawRateDeg() const { return JPH::RadiansToDegrees(world.system.GetBodyInterface().GetAngularVelocity(body).GetY()); }
+        };
+
+        Verdict GateVessel(std::string& detail)
+        {
+            const VesselSettings base;
+            std::string failures;
+            const auto expect = [&failures](bool ok, const std::string& what) { if (!ok) { failures += " [" + what + "]"; } };
+            const auto num = [](float value) { return std::to_string(value); };
+            const auto turned = [](float degrees) // a heading crosses 180
+            {
+                while (degrees > 180.0f) { degrees -= 360.0f; }
+                while (degrees < -180.0f) { degrees += 360.0f; }
+                return degrees;
+            };
+
+            // ---- still water
+            TestBoat cruise(base, JPH::Quat::sIdentity(), 0.5f); // dropped in
+            cruise.Run(30.0f, 0.0f, 0.0f);
+            const float restY = cruise.Position().GetY();
+            const float restUp = cruise.UpY();
+            expect(std::fabs(restY + base.draft) < 0.02f, "the draft");
+            expect(restUp > 0.9995f, "level at rest");
+
+            float humpBow = 0.0f;
+            float toPlane = -1.0f;
+            float ran = 0.0f;
+            cruise.Run(60.0f, 1.0f, 0.0f, [&]()
+            {
+                ran += 1.0f / 60.0f;
+                humpBow = std::max(humpBow, cruise.BowUpDeg());
+                if (toPlane < 0.0f && cruise.Speed() >= base.planeSpeed) { toPlane = ran; }
+            });
+            const float top = cruise.Speed();
+            const float wantedTop = std::sqrt(base.thrust * (1.0f + base.planingLift) / base.surgeDrag);
+            const float riseOnPlane = cruise.Position().GetY() + base.draft;
+            const float planeBow = cruise.BowUpDeg();
+            expect(std::fabs(top - wantedTop) < 0.08f * wantedTop, "the top speed");
+            expect(std::fabs(cruise.HeadingDeg() - 90.0f) < 0.5f, "no rudder keeps the course");
+            expect(toPlane > 0.0f && toPlane < 20.0f, "it gets onto the plane");
+            expect(planeBow > 0.5f && humpBow > planeBow + 1.0f, "the bow is highest at the hump");
+            expect(riseOnPlane > 0.03f, "the speed lifts the hull");
+            cruise.Run(20.0f, 0.0f, 0.0f);
+            const float coasted = cruise.Speed();
+            expect(coasted > 0.0f && coasted < 3.0f, "it slows by itself");
+
+            TestBoat under(base, JPH::Quat::sIdentity(), -base.draft);
+            under.Run(40.0f, 0.2f, 0.0f);
+            const float underHump = under.Speed();
+            expect(underHump < base.humpSpeed, "too little throttle stays under the hump");
+
+            const auto turn = [&base, &turned](float rudder)
+            {
+                TestBoat boat(base, JPH::Quat::sIdentity(), -base.draft);
+                boat.Run(25.0f, 1.0f, 0.0f);
+                const float from = boat.HeadingDeg();
+                boat.Run(4.0f, 1.0f, rudder);
+                return std::make_tuple(turned(boat.HeadingDeg() - from), boat.RollDeg(), boat.UpY(), boat.Speed());
+            };
+            const auto [starboard, starboardRoll, starboardUp, starboardSpeed] = turn(1.0f);
+            const auto [port, portRoll, portUp, portSpeed] = turn(-1.0f);
+            expect(starboard > 30.0f, "hard to starboard turns to starboard");
+            expect(port < -30.0f && std::fabs(starboard + port) < 0.1f * starboard, "hard to port the same way round");
+            expect(starboardRoll < 0.0f && portRoll > 0.0f && starboardUp > 0.8f && portUp > 0.8f, "leans into the turn, on its keel"); // into a turn to starboard its starboard side goes down
+            (void)portSpeed;
+
+            TestBoat still(base, JPH::Quat::sIdentity(), -base.draft);
+            still.Run(5.0f, 0.0f, 1.0f);
+            const float stillTurn = still.HeadingDeg() - 90.0f;
+            expect(std::fabs(stillTurn) < 0.5f, "a boat lying still answers no rudder");
+            still.Run(3.0f, 0.2f, 1.0f);
+            const float washTurn = still.HeadingDeg() - 90.0f;
+            const float washSpeed = still.Speed();
+            expect(washTurn > 5.0f && washSpeed < 5.0f, "on its propeller's wash it does");
+
+            TestBoat astern(base, JPH::Quat::sIdentity(), -base.draft);
+            astern.Run(30.0f, -1.0f, 0.0f);
+            const float back = astern.Speed();
+            const float wantedBack = -std::sqrt(base.thrust * base.reverseShare / base.surgeDrag);
+            expect(std::fabs(back - wantedBack) < 0.07f * std::fabs(wantedBack), "the speed astern");
+            const float fromAstern = astern.HeadingDeg();
+            astern.Run(3.0f, -1.0f, 1.0f);
+            const float asternTurn = turned(astern.HeadingDeg() - fromAstern);
+            expect(asternTurn < -5.0f, "going astern it turns the other way");
+
+            VesselSettings dryScrew = base;
+            dryScrew.propeller.y = 2.0f;
+            TestBoat dry(dryScrew, JPH::Quat::sIdentity(), -base.draft);
+            dry.Run(10.0f, 1.0f, 0.0f);
+            const float drySpeed = dry.Speed();
+            expect(std::fabs(drySpeed) < 0.05f, "a propeller out of the water pushes nothing");
+
+            TestBoat aloft(base, JPH::Quat::sIdentity(), 50.0f);
+            aloft.world.system.SetGravity(JPH::Vec3::sZero());
+            aloft.Run(2.0f, 1.0f, 1.0f);
+            const float aloftSpeed = aloft.Speed();
+            const float aloftTurn = aloft.YawRateDeg();
+            expect(aloftSpeed == 0.0f && aloftTurn == 0.0f, "no water, no push");
+
+            const JPH::Quat heeled = JPH::Quat::sRotation(JPH::Vec3::sAxisX(), JPH::DegreesToRadians(20.0f));
+            TestBoat righting(base, heeled, -base.draft);
+            righting.Run(15.0f, 0.0f, 0.0f);
+            const float rightedUp = righting.UpY();
+            expect(rightedUp > 0.9995f, "it rights itself from 20 degrees");
+            VesselSettings topHeavy = base;
+            topHeavy.centerOfMassY = 2.6f;
+            topHeavy.rollStiffness = 0.0f;
+            TestBoat capsized(topHeavy, heeled, -base.draft);
+            capsized.Run(15.0f, 0.0f, 0.0f);
+            const float capsizedUp = capsized.UpY();
+            expect(capsizedUp < 0.9f, "the weight up top capsizes it");
+
+            // ---- a long swell along the hull: 60 m, 0.6 m high either way. Deep water's speed.
+            constexpr float kTwoPi = 6.2831853f;
+            const auto swell = [kTwoPi](float wavelength, float amplitude, float directionX, float directionZ)
+            {
+                const float k = kTwoPi / wavelength;
+                const float omega = std::sqrt(9.81f * k);
+                return [=](float x, float z, float t) { return amplitude * std::sin(k * (x * directionX + z * directionZ) - omega * t); };
+            };
+            const auto ride = [&base](const std::function<float(float, float, float)>& sea, bool blind)
+            {
+                TestBoat boat(base, JPH::Quat::sIdentity(), -base.draft);
+                if (!blind) { boat.sea = sea; }
+                boat.Run(15.0f, 0.0f, 0.0f, []() {});
+                float low = 1.0e6f, high = -1.0e6f, worstFollow = 0.0f, worstPitch = 0.0f;
+                boat.Run(25.0f, 0.0f, 0.0f, [&]()
+                {
+                    const float y = boat.Position().GetY();
+                    low = std::min(low, y);
+                    high = std::max(high, y);
+                    worstFollow = std::max(worstFollow, std::fabs(y + base.draft - boat.water.height));
+                    const float slope = JPH::RadiansToDegrees(std::atan((boat.water.stations[2].height - boat.water.stations[0].height) / (boat.water.stations[2].offset - boat.water.stations[0].offset)));
+                    worstPitch = std::max(worstPitch, std::fabs(boat.BowUpDeg() - slope));
+                });
+                return std::make_tuple(high - low, worstFollow, worstPitch);
+            };
+            const auto longSwell = swell(60.0f, 0.6f, 1.0f, 0.0f);
+            const auto [heave, follow, pitchLag] = ride(longSwell, false);
+            const auto [blindHeave, blindFollow, blindPitch] = ride(longSwell, true);
+            (void)blindFollow; (void)blindPitch;
+            expect(heave > 0.95f, "it rides the swell up and down");
+            expect(follow < 0.25f, "and stays at its draft on it");
+            expect(pitchLag < 2.5f, "and along its slope");
+            expect(blindHeave < 0.05f, "a boat that cannot see the waves does not ride them");
+
+            // ---- a swell on its beam pushes it about, and a short sea at an angle yaws it. Its hull's own drag along its tilted axes moves it too, so without the slope's force it moves less, not not at all.
+            const auto drift = [&base, &swell](float waveForce, bool blind)
+            {
+                VesselSettings settings = base;
+                settings.waveForce = waveForce;
+                TestBoat boat(settings, JPH::Quat::sIdentity(), -base.draft);
+                if (!blind) { boat.sea = swell(40.0f, 0.6f, 0.0f, 1.0f); }
+                boat.Run(10.0f, 0.0f, 0.0f);
+                float low = 1.0e6f, high = -1.0e6f;
+                boat.Run(20.0f, 0.0f, 0.0f, [&]()
+                {
+                    const float z = boat.Position().GetZ();
+                    low = std::min(low, z);
+                    high = std::max(high, z);
+                });
+                return high - low;
+            };
+            const float pushed = drift(1.0f, false);
+            const float unpushed = drift(0.0f, false);
+            const float stillWaterDrift = drift(1.0f, true);
+            expect(pushed > 1.3f * unpushed, "a slope pushes it");
+            expect(stillWaterDrift < 0.001f, "still water pushes nothing");
+
+            const auto yawed = [&base, &swell](bool blind)
+            {
+                TestBoat boat(base, JPH::Quat::sIdentity(), -base.draft);
+                if (!blind) { boat.sea = swell(15.0f, 0.4f, 0.7071f, 0.7071f); }
+                float low = 1.0e6f, high = -1.0e6f;
+                boat.Run(30.0f, 0.0f, 0.0f, [&]()
+                {
+                    const float heading = boat.HeadingDeg();
+                    low = std::min(low, heading);
+                    high = std::max(high, heading);
+                });
+                return high - low;
+            };
+            const float yawSwing = yawed(false);
+            const float noYawSwing = yawed(true);
+            expect(yawSwing > 0.5f, "a sea at an angle yaws it");
+            expect(noYawSwing < 0.01f, "still water yaws nothing");
+
+            // ---- full speed into a steep sea, the worst of it. 30 m, 0.7 m either way.
+            const auto headSea = [&base, &swell](float slam)
+            {
+                VesselSettings settings = base;
+                settings.slam = slam;
+                TestBoat boat(settings, JPH::Quat::sIdentity(), -base.draft);
+                boat.sea = swell(30.0f, 0.7f, -1.0f, 0.0f);
+                float lowestUp = 1.0f, bumpiest = 0.0f, biggestBow = 0.0f, speedSum = 0.0f;
+                int frames = 0;
+                boat.Run(40.0f, 1.0f, 0.0f, [&]()
+                {
+                    lowestUp = std::min(lowestUp, boat.UpY());
+                    bumpiest = std::max(bumpiest, boat.state.impact);
+                    biggestBow = std::max(biggestBow, std::fabs(boat.BowUpDeg()));
+                    speedSum += boat.Speed();
+                    ++frames;
+                });
+                return std::make_tuple(lowestUp, bumpiest, biggestBow, speedSum / static_cast<float>(frames));
+            };
+            const auto [seaUp, seaSlam, seaBow, seaSpeed] = headSea(base.slam);
+            const auto [calmUp, noSlam, calmBow, calmSpeed] = headSea(0.0f);
+            (void)calmUp; (void)calmBow; (void)calmSpeed;
+            expect(seaUp > 0.8f && seaBow < 35.0f, "into a steep sea it stays on its keel");
+            expect(seaSlam > 0.05f, "it slams");
+            expect(noSlam == 0.0f, "no slam slams nothing");
+            expect(seaSpeed > 6.0f && seaSpeed < top, "the sea costs it speed");
+
+            detail = "factor " + num(cruise.factor) + ", at rest y " + num(restY) + " (draft " + num(base.draft) + "), top " + num(top) + " m/s (wanted " + num(wantedTop) + "), on the plane after " + num(toPlane) +
+                " s, risen " + num(riseOnPlane) + " m, bow up " + num(planeBow) + " deg, at the hump " + num(humpBow) + ", coasted to " + num(coasted) + ", a fifth of the throttle " + num(underHump) +
+                " m/s; 4 s hard over " + num(starboard) + " / " + num(port) + " deg, roll " + num(starboardRoll) + " deg, speed " + num(starboardSpeed) + "; lying still " + num(stillTurn) + " deg, on the wash " + num(washTurn) +
+                " deg at " + num(washSpeed) + " m/s; astern " + num(back) + " m/s, turning " + num(asternTurn) + " deg; dry propeller " + num(drySpeed) + " m/s; righted up.y " + num(rightedUp) + ", top-heavy " + num(capsizedUp) +
+                "; swell: heave " + num(heave) + " m (blind " + num(blindHeave) + "), off its draft by " + num(follow) + " m, off the slope by " + num(pitchLag) + " deg; on the beam " + num(pushed) + " / " + num(unpushed) +
+                " m, at an angle " + num(yawSwing) + " / " + num(noYawSwing) + " deg; head sea: up.y " + num(seaUp) + ", bow " + num(seaBow) + " deg, slam " + num(seaSlam) + " of the weight, " + num(seaSpeed) + " m/s" +
+                (failures.empty() ? "" : "; WRONG:" + failures);
+            return failures.empty() ? Verdict::Pass : Verdict::Fail;
         }
 
         // ------------------------------------------------------------------------------------------------------- kinematic
@@ -1883,6 +2174,33 @@ namespace physics
                     return finish(Verdict::Fail);
                 }
             }
+            // The helm's road through the world: who is near a hull (its rectangle, not a circle of its length), taking it, the numbers by name, and a boat gone with its helm held.
+            {
+                auto boat = std::make_unique<GateBody>();
+                boat->SetCollisionSettings(customBox(Math::float3(5.0f, 1.35f, 1.17f)));
+                boat->SetVesselSettings(std::make_shared<VesselSettings>());
+                boat->SetBuoyant(true);
+                boat->SetPhysicsMotion(Motion::Dynamic);
+                World world;
+                frame(world, 1.0f / 60.0f);
+                const Stats made = world.GetStats();
+                const bool beside = world.FindVessel(Math::float3(0.0f, 0.0f, 3.5f), 3.0f) == boat.get();
+                const bool past = world.FindVessel(Math::float3(0.0f, 0.0f, 4.5f), 3.0f) == nullptr;
+                const bool taken = world.SetHelm(boat.get()) && world.GetHelm().exists;
+                world.SetHelmInput(VesselInput{ 1.0f, 1.0f });
+                frame(world, 1.0f / 60.0f);
+                const bool tuned = world.TuneVessels("thrust", 1000.0f) && !world.TuneVessels("nonsense", 1.0f);
+                boat.reset();
+                frame(world, 1.0f / 60.0f);
+                const bool gone = !world.GetHelm().exists && !world.SetHelm(nullptr);
+                report += "helm: floating " + std::to_string(made.floatingBodies) + ", beside " + std::to_string(beside) + ", past " + std::to_string(past) + ", taken " + std::to_string(taken) +
+                    ", tuned " + std::to_string(tuned) + ", gone " + std::to_string(gone) + "; ";
+                if (made.floatingBodies != 1 || !beside || !past || !taken || !tuned || !gone)
+                {
+                    detail = report;
+                    return finish(Verdict::Fail);
+                }
+            }
             detail = report;
             return finish(Verdict::Pass);
         }
@@ -1902,6 +2220,7 @@ namespace physics
             { "walk", &GateWalk },
             { "player", &GatePlayer },
             { "water", &GateWater },
+            { "vessel", &GateVessel },
             { "kinematic", &GateKinematic },
             { "autoshape", &GateAutoShape },
             { "custom", &GateCustom },

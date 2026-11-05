@@ -464,6 +464,15 @@ namespace SceneObjectFactory
             if (o.contains("mass") && o["mass"].is_number()) { collision.mass = o["mass"].get<float>(); }
             mesh.SetCollisionSettings(std::move(collision));
             physics::Motion motion = physics::Motion::Static;
+            // A boat is a boat wherever it is put (docs/play_mode_plan.md): a copy of a "vessel" asset floats and moves unless the object says otherwise.
+            if (o.contains("vessel") && o["vessel"].is_object())
+            {
+                auto vessel = std::make_shared<physics::VesselSettings>();
+                physics::ReadVesselSettings(o["vessel"], *vessel);
+                mesh.SetVesselSettings(std::move(vessel));
+                motion = physics::Motion::Dynamic;
+                if (!o.contains("buoyant")) { mesh.SetBuoyant(true); }
+            }
             if (o.contains("physics") && o["physics"].is_string()) { physics::MotionFromName(o["physics"].get<std::string>(), motion); }
             mesh.SetPhysicsMotion(motion);
         }

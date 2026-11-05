@@ -13,6 +13,7 @@
 #include "editor/scene/EditorSceneDocument.h"
 #include "editor/ui/EditorLightDirection.h"
 #include "ocean/BuoyancyJson.h"
+#include "physics/CollisionJson.h"
 #include "rendering/core/ExposureMetering.h"
 #include "rendering/core/PhotographicSettings.h"
 #include "rendering/core/Renderer.h"
@@ -1106,6 +1107,12 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawRestPoseSection();
     }
 
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Vessel"))
+    {
+        DrawVesselSection();
+    }
+
     // Ray tracing: how much of the light a cutout card (an alpha-tested slot: a leaf, a frond) stops for the VISIBILITY
     // rays -- the sky visibility, the GI, the fog (rt_geometry.hlsli RtVisibilityTransmittance). Absent = 1, every card
     // solid: a door or a curtain with an alpha test must block as a wall does. The palms take 0.8.
@@ -1615,6 +1622,34 @@ void MeshEditorPanel::DrawBuoyancySection(int& hoveredPontoonThisFrame)
         else { doc_["buoyancy"] = block; }
     }
     ImGui::TextDisabled("Applies to placed instances on Save.");
+}
+
+// mesh.json "vessel": is this asset a boat, and what kind (docs/play_mode_plan.md). Saved with the rest; a placed copy takes it at its next spawn, a running Play with --set vessel.*.
+void MeshEditorPanel::DrawVesselSection()
+{
+    bool isVessel = doc_.contains("vessel") && doc_["vessel"].is_object();
+    if (ImGui::Checkbox("This is a powered boat", &isVessel))
+    {
+        if (isVessel) { doc_["vessel"] = nlohmann::json::object(); }
+        else { doc_.erase("vessel"); }
+    }
+    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("A copy floats and moves in Play, and E takes its helm: W S throttle, A D rudder."); }
+    if (!isVessel) { return; }
+    nlohmann::json& block = doc_["vessel"];
+    physics::VesselSettings settings;
+    physics::ReadVesselSettings(block, settings);
+    const auto drawPoint = [&block](const char* label, const char* key, Math::float3 value)
+    {
+        if (ImGui::DragFloat3(label, &value.x, 0.01f)) { block[key] = physics::WriteVec3(value); }
+    };
+    drawPoint("Bow's way", "forward", settings.forward);
+    drawPoint("Propeller (m)", "propeller", settings.propeller);
+    drawPoint("Helmsman's eyes (m)", "helmEye", settings.helmEye);
+    for (const physics::VesselKey& key : physics::VesselKeys())
+    {
+        float value = settings.*(key.member);
+        if (ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, "%.3f")) { block[key.key] = value; }
+    }
 }
 
 void MeshEditorPanel::DrawRestPoseSection()

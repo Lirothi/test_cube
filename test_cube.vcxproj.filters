@@ -582,6 +582,12 @@
     <ClCompile Include="sources/ocean/BuoyancyLayout.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
+    <ClCompile Include="sources/physics/PhysicsVessel.cpp">
+      <Filter>sources\physics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/game/VesselCamera.cpp">
+      <Filter>sources\app\game</Filter>
+    </ClCompile>
     <ClCompile Include="sources/physics/PhysicsCharacter.cpp">
       <Filter>sources\physics</Filter>
     </ClCompile>
@@ -1098,6 +1104,9 @@
       <Filter>sources\editor\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/PlayerStartJson.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/VesselCamera.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/camera/Camera.h">

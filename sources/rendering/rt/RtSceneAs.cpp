@@ -295,6 +295,7 @@ void RtSceneAs::Build(Renderer* renderer, RenderGraphPassContext ctx,
                 entry.cutoutTransparency = static_cast<uint32_t>((1.0f - cutoutOpacity) * 255.0f + 0.5f);
                 // One shadow bit per caster: transmissive when its cutouts let light through, else solid.
                 entry.mask = rt::kInstanceMaskAll & ~rt::kInstanceMaskShadow;
+                if (gb && gb->LeavesGiProbes()) { entry.mask &= ~rt::kInstanceMaskGiProbe; }
                 if (desc.castsShadow)
                 {
                     entry.mask |= entry.cutoutTransparency != 0u ? rt::kInstanceMaskShadowTransmissive

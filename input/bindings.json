@@ -32,6 +32,8 @@
     { "name": "PossessEject", "keys": ["F8"] },
     { "name": "FreeMouse", "keys": ["Shift","F1"], "allKeys": true },
     { "name": "KeepSimulation", "keys": ["K"] },
+    { "name": "Interact", "keys": ["E"] },
+    { "name": "ToggleView", "keys": ["V"] },
     { "name": "SetDlssQualityOff", "keys": ["Ctrl", "1"], "allKeys": true },
     { "name": "SetDlssQualityMaxPerformance", "keys": ["Ctrl", "2"], "allKeys": true },
     { "name": "SetDlssQualityBalanced", "keys": ["Ctrl", "3"], "allKeys": true },

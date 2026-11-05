@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <DirectXMath.h>
@@ -163,6 +164,12 @@ public:
     physics::Motion GetPhysicsMotion() const { return physicsMotion_; }
     void SetCollisionSettings(physics::CollisionSettings settings);
     const physics::CollisionSettings& GetCollisionSettings() const { return collisionSettings_; }
+    // A boat under way: the GI probes' rays pass through it (rt::kInstanceMaskGiProbe). The game half says, the render half's TLAS reads: a frame either way is nothing, the probes average it.
+    void SetLeavesGiProbes(bool leaves) { leavesGiProbes_.store(leaves, std::memory_order_relaxed); }
+    bool LeavesGiProbes() const { return leavesGiProbes_.load(std::memory_order_relaxed); }
+    // mesh.json "vessel": a powered boat. Null = not one.
+    void SetVesselSettings(std::shared_ptr<const physics::VesselSettings> settings) { vesselSettings_ = std::move(settings); }
+    const physics::VesselSettings* GetVesselSettings() const { return vesselSettings_.get(); }
     std::uint32_t GetCollisionRevision() const { return collisionRevision_; }
     // The geometry an automatic pontoon layout analyses (StaticMesh: its .mesh.bin). Empty = none.
     virtual const std::string& GetGeometryPath() const
@@ -451,6 +458,8 @@ private:
     buoyancy::Settings buoyancySettings_;
     physics::Motion physicsMotion_ = physics::Motion::None;
     std::uint32_t collisionRevision_ = 0;
+    std::shared_ptr<const physics::VesselSettings> vesselSettings_;
+    std::atomic<bool> leavesGiProbes_{ false };
     physics::CollisionSettings collisionSettings_;
     bool resetMotionOnSync_ = false;
     bool transformDirty_ = true;

@@ -31,6 +31,7 @@
 #include "core/threading/ThreadRole.h"
 #include "ocean/OceanReadback.h"
 #include "ocean/OceanRenderable.h"
+#include "physics/CollisionJson.h"
 #include "physics/PhysicsWorld.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/debug/DebugDraw.h"
@@ -283,6 +284,13 @@ namespace physics
             float rolling = -1.0f;     // collision.rollingResistance; < 0 = the knob
             float rollingRadius = 0.1f;
             float velocityY = 0.0f;    // ApplyRollingResistance's memory
+            std::unique_ptr<VesselSettings> vessel; // mesh.json "vessel": a powered boat, its own copy for --set vessel.*
+            VesselState vesselState;   // the step's while one runs
+            VesselWater water;         // the step's while one runs
+            float halfLength = 0.0f;
+            float halfBeam = 0.0f;
+            JPH::Vec3 shownPosition = JPH::Vec3::sZero(); // as the last Display drew it, and the game's alone: who is near a boat asks every frame and must not wait for a step
+            JPH::Vec3 shownForward = JPH::Vec3::sAxisX();
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -291,6 +299,11 @@ namespace physics
         std::vector<Entry*> awake;       // Dynamic bodies between waking and their last pose
         std::vector<Entry*> kinematics;
         std::vector<Entry*> floaters;
+        std::vector<Entry*> vessels;
+        Entry* helm = nullptr;
+        VesselInput helmInput;      // the game's
+        VesselInput stepHelmInput;  // taken for the steps where they start: the step's thread owns this
+        HelmState helmShown;        // as the last Display drew it: nothing here is the step's
         const OceanRenderable* ocean = nullptr;
         std::unique_ptr<PlayerBody> player;
         bool playerWanted = false;
@@ -501,6 +514,16 @@ namespace physics
             {
                 floaters.erase(std::remove(floaters.begin(), floaters.end(), &entry), floaters.end());
                 entry.floats = false;
+            }
+            if (entry.vessel)
+            {
+                vessels.erase(std::remove(vessels.begin(), vessels.end(), &entry), vessels.end());
+                if (helm == &entry)
+                {
+                    helm = nullptr;
+                    helmShown = HelmState{};
+                }
+                entry.vessel.reset();
             }
             if (entry.kinematic)
             {
@@ -738,6 +761,7 @@ namespace physics
                 Entry& entry = *w.entry;
                 RenderableObject& object = *entry.object;
                 const BuiltShape& built_ = shapes.find(w.key)->second;
+                const VesselSettings* vesselSettings = object.GetPhysicsMotion() == Motion::Dynamic && object.IsBuoyant() ? object.GetVesselSettings() : nullptr;
                 entry.motion = object.GetPhysicsMotion();
                 entry.shapeKey = w.key;
                 entry.scale = object.GetScale();
@@ -746,11 +770,22 @@ namespace physics
                 if (!built_.shape) { continue; } // nothing solid in it: only leaves
 
                 std::string error;
-                const JPH::RefConst<JPH::Shape> scaled = InstanceOf(w, built_, entry.scale, error);
+                JPH::RefConst<JPH::Shape> scaled = InstanceOf(w, built_, entry.scale, error);
                 if (!scaled)
                 {
                     LOG_WARNING(logging::LogCategory::Physics, "physics: scale of '{}': {}", object.GetGeometryPath(), error);
                     continue;
+                }
+                float vesselFactor = 1.0f;
+                if (vesselSettings)
+                {
+                    const JPH::RefConst<JPH::Shape> boat = MakeVesselShape(*scaled, *vesselSettings, entry.scale, vesselFactor, error);
+                    if (boat) { scaled = boat; }
+                    else
+                    {
+                        LOG_WARNING(logging::LogCategory::Physics, "physics: '{}' is no boat: {}", object.GetGeometryPath(), error);
+                        vesselSettings = nullptr;
+                    }
                 }
                 const Pose pose = AuthoredPose(object);
                 entry.rest = pose;
@@ -797,6 +832,7 @@ namespace physics
                         const float largest = std::max({ built_.boundsMax.x - built_.boundsMin.x, built_.boundsMax.z - built_.boundsMin.z, 0.05f });
                         entry.floatSpan = 0.5f * largest * std::max(std::fabs(entry.scale.x), std::fabs(entry.scale.z));
                     }
+                    if (vesselSettings) { SetVesselBody(creation, *vesselSettings); }
                 }
                 JPH::Body* body = bodies.CreateBody(creation);
                 if (!body)
@@ -805,7 +841,23 @@ namespace physics
                     continue;
                 }
                 entry.body = body->GetID();
-                if (entry.floats) { floaters.push_back(&entry); }
+                if (vesselSettings)
+                {
+                    entry.vessel = std::make_unique<VesselSettings>(*vesselSettings);
+                    entry.vesselState = VesselState{};
+                    entry.water = VesselWater{};
+                    entry.floatFactor = vesselFactor;
+                    const JPH::Vec3 along = ToJolt(vesselSettings->forward).Normalized();
+                    const JPH::Vec3 half = scaled->GetLocalBounds().GetExtent(); // the shape's own: a custom shape's bounds above are its parts' spheres
+                    entry.halfLength = std::fabs(along.GetX()) * half.GetX() + std::fabs(along.GetZ()) * half.GetZ();
+                    entry.halfBeam = std::fabs(along.GetZ()) * half.GetX() + std::fabs(along.GetX()) * half.GetZ();
+                    entry.shownPosition = pose.position;
+                    entry.shownForward = pose.rotation * along;
+                    vessels.push_back(&entry);
+                    LOG_INFO(logging::LogCategory::Physics, "physics: '{}' is a boat: {:.0f} kg, hull volume {:.1f} m3, {:.2f} m3 under still water (buoyancy factor {:.2f}), {:.1f} x {:.1f} m",
+                        object.GetGeometryPath(), vesselSettings->mass, scaled->GetVolume(), scaled->GetVolume() / vesselFactor, vesselFactor, 2.0f * entry.halfLength, 2.0f * entry.halfBeam);
+                }
+                else if (entry.floats) { floaters.push_back(&entry); }
                 const JPH::uint index = entry.body.GetIndex();
                 if (index >= byBodyIndex.size()) { byBodyIndex.resize(index + 1, nullptr); }
                 byBodyIndex[index] = &entry;
@@ -959,6 +1011,14 @@ namespace physics
                 entry.kinematicValid = false;
                 entry.fellOut = false;
                 ClearOffset(entry);
+                if (entry.vessel)
+                {
+                    entry.object->SetLeavesGiProbes(false);
+                    entry.vesselState = VesselState{};
+                    entry.water = VesselWater{};
+                    entry.shownPosition = entry.rest.position;
+                    entry.shownForward = entry.rest.rotation * ToJolt(entry.vessel->forward).Normalized();
+                }
             }
             stats.fellOut = 0;
             LOG_INFO(logging::LogCategory::Physics, "physics: stopped, the bodies are back where the level put them");
@@ -991,8 +1051,9 @@ namespace physics
 
         // The bodies in the water: Jolt's impulse model over the surface under each, the plane through three heights so a slope tilts
         // it. The same surface the boats and the renderer's vertices read (OceanReadback).
-        void SampleWater()
+        void SampleWater(float elapsed)
         {
+            SampleVesselWater(elapsed);
             water.clear();
             if (floaters.empty() || !ocean || !ocean->IsVisibleGame()) { return; }
             const OceanReadback& readback = ocean->GetReadback();
@@ -1009,6 +1070,73 @@ namespace physics
                 const float hx = height(centre.GetX() + span, centre.GetZ());
                 const float hz = height(centre.GetX(), centre.GetZ() + span);
                 water.push_back(WaterSample{ entry->body, JPH::Vec3(-(hx - h0) / span, 1.0f, -(hz - h0) / span).Normalized(), h0, entry->floatFactor });
+            }
+        }
+
+        void SampleVesselWater(float elapsed)
+        {
+            if (vessels.empty()) { return; }
+            const bool sea = ocean && ocean->IsVisibleGame();
+            const OceanReadback* readback = sea ? &ocean->GetReadback() : nullptr;
+            const bool waves = sea && readback->HasSurface();
+            const float level = sea ? ocean->GetWaterLevel() : 0.0f;
+            const std::function<float(float, float)> height = [readback, waves, level](float x, float z) { return waves ? readback->SampleHeight(x, z) : level; };
+            JPH::BodyInterface& bodies = system->GetBodyInterface();
+            for (Entry* entry : vessels)
+            {
+                if (!sea || entry->fellOut)
+                {
+                    entry->water.valid = false; // a push wakes it, and under the world it would sink for ever
+                    continue;
+                }
+                MeasureVesselWater(entry->water, height, bodies.GetPosition(entry->body), bodies.GetCenterOfMassPosition(entry->body), bodies.GetRotation(entry->body),
+                    *entry->vessel, entry->scale, entry->halfLength, entry->halfBeam, elapsed);
+            }
+        }
+
+        void PushVessels(float step)
+        {
+            if (vessels.empty()) { return; }
+            const JPH::BodyLockInterface& locks = system->GetBodyLockInterface();
+            const JPH::Vec3 gravity = system->GetGravity();
+            for (Entry* entry : vessels)
+            {
+                if (!entry->water.valid) { continue; }
+                system->GetBodyInterface().ActivateBody(entry->body); // Body's own impulses wake nothing
+                JPH::BodyLockWrite lock(locks, entry->body);
+                if (!lock.Succeeded()) { continue; }
+                PushVessel(lock.GetBody(), *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : VesselInput{}, entry->water, entry->floatFactor, gravity, step);
+            }
+        }
+
+        // Where the frame draws the boats, for whoever asks about them on the game's side.
+        void ShowVessels(float alpha)
+        {
+            for (Entry* entry : vessels)
+            {
+                entry->shownPosition = entry->previous.position + (entry->current.position - entry->previous.position) * alpha;
+                const JPH::Quat rotation = entry->previous.rotation.SLERP(entry->current.rotation, alpha).Normalized();
+                const JPH::Vec3 forward = (rotation * ToJolt(entry->vessel->forward)).Normalized();
+                entry->shownForward = forward;
+                // With a margin, so a boat crawling at the limit does not go in and out of them.
+                const float probeSpeed = entry->vessel->giProbeSpeed;
+                const float speed = std::fabs(entry->vesselState.speed);
+                if (probeSpeed > 0.0f && speed > probeSpeed) { entry->object->SetLeavesGiProbes(true); }
+                else if (probeSpeed <= 0.0f || speed < 0.7f * probeSpeed) { entry->object->SetLeavesGiProbes(false); }
+                if (entry != helm) { continue; }
+                helmShown.exists = true;
+                helmShown.object = entry->object;
+                helmShown.settings = entry->vessel.get();
+                helmShown.position = FromJolt(entry->shownPosition);
+                helmShown.rotation = FromJolt(rotation);
+                helmShown.forward = FromJolt(forward);
+                helmShown.scale = entry->scale;
+                const JPH::Vec3 up = rotation * JPH::Vec3::sAxisY();
+                helmShown.starboardY = up.Cross(forward).GetY();
+                helmShown.upY = up.GetY();
+                helmShown.halfLength = entry->halfLength;
+                helmShown.halfBeam = entry->halfBeam;
+                helmShown.vessel = entry->vesselState;
             }
         }
 
@@ -1183,6 +1311,7 @@ namespace physics
                 if (i > 0)
                 {
                     PushWater(batch.step); // the first step's went in where the steps were started: it may wake a body
+                    PushVessels(batch.step);
                     if (i == 1)
                     {
                         // The first step took the boats there. Left alone they would go on at that speed, N times as far: at 20 fps they left the world.
@@ -1217,6 +1346,7 @@ namespace physics
         void Display(float alpha)
         {
             poseOwed = false;
+            ShowVessels(alpha);
             if (awake.empty()) { return; }
             for (size_t i = 0; i < awake.size();)
             {
@@ -1259,7 +1389,9 @@ namespace physics
             Drain();
             if (!system || !simulating) { return; }
             const bool kinematicMoved = MoveKinematics(step);
+            stepHelmInput = helmInput;
             PushWater(step);
+            PushVessels(step);
             if (!kinematicMoved && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { return; }
             PrepareBatch(steps, step);
             stepInFlight = true;
@@ -1301,7 +1433,7 @@ namespace physics
                 stepsOwed = steps;
                 stepOwedSeconds = step;
                 poseOwed = true;
-                SampleWater();
+                SampleWater(static_cast<float>(steps) * step);
                 if (settings.kickInTick) { KickOwed(); }
                 return;
             }
@@ -1311,8 +1443,10 @@ namespace physics
                 {
                     accumulator -= stepSeconds;
                     const bool kinematicMoved = MoveKinematics(step);
-                    SampleWater();
+                    SampleWater(step);
+                    stepHelmInput = helmInput;
                     PushWater(step);
+                    PushVessels(step);
                     if (!kinematicMoved && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { continue; }
                     PrepareBatch(1, step);
                     RunBatch();
@@ -1443,6 +1577,66 @@ namespace physics
         m.playerInput = PlayerInput{};
     }
 
+    RenderableObject* World::FindVessel(const Math::float3& point, float reach) const
+    {
+        const Impl& m = *impl_;
+        RenderableObject* best = nullptr;
+        float bestDistance = reach;
+        for (const Impl::Entry* entry : m.vessels)
+        {
+            // To the rectangle of its hull on the water, not to its middle: a boat is long.
+            const float dx = point.x - entry->shownPosition.GetX();
+            const float dz = point.z - entry->shownPosition.GetZ();
+            const float fx = entry->shownForward.GetX();
+            const float fz = entry->shownForward.GetZ();
+            const float pastEnds = std::max(std::fabs(dx * fx + dz * fz) - entry->halfLength, 0.0f);
+            const float pastSides = std::max(std::fabs(dx * fz - dz * fx) - entry->halfBeam, 0.0f);
+            const float distance = std::sqrt(pastEnds * pastEnds + pastSides * pastSides);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                best = entry->object;
+            }
+        }
+        return best;
+    }
+
+    bool World::SetHelm(RenderableObject* vessel)
+    {
+        Impl& m = *impl_;
+        m.Join();
+        m.helm = nullptr;
+        m.helmInput = VesselInput{};
+        m.stepHelmInput = VesselInput{};
+        m.helmShown = HelmState{};
+        if (!vessel) { return false; }
+        for (Impl::Entry* entry : m.vessels)
+        {
+            if (entry->object != vessel) { continue; }
+            m.helm = entry;
+            m.ShowVessels(1.0f);
+            return true;
+        }
+        return false;
+    }
+
+    void World::SetHelmInput(const VesselInput& input) { impl_->helmInput = input; }
+
+    const HelmState& World::GetHelm() const { return impl_->helmShown; }
+
+    bool World::TuneVessels(const std::string& key, float value)
+    {
+        Impl& m = *impl_;
+        for (const VesselKey& entry : VesselKeys())
+        {
+            if (key != entry.key) { continue; }
+            m.Join();
+            for (Impl::Entry* vessel : m.vessels) { vessel->vessel.get()->*(entry.member) = std::clamp(value, entry.lo, entry.hi); }
+            return true;
+        }
+        return false;
+    }
+
     void World::SetPlayerPossessed(bool possessed)
     {
         impl_->playerPossessed = possessed;
@@ -1507,7 +1701,7 @@ namespace physics
         stats.simulating = m.simulating;
         stats.worldExists = m.system != nullptr;
         if (m.system) { stats.activeBodies = m.system->GetNumActiveBodies(JPH::EBodyType::RigidBody); }
-        stats.floatingBodies = static_cast<std::uint32_t>(m.floaters.size());
+        stats.floatingBodies = static_cast<std::uint32_t>(m.floaters.size() + m.vessels.size());
         stats.bytes = JoltBytes();
         return stats;
     }

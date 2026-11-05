@@ -22,6 +22,9 @@ namespace rt {
 // the solid casters first with an any-hit query and the transmissive ones for the nearest surface only if nothing solid
 // is in the way (rt_geometry.hlsli RtVisibilityTransmittance).
 inline constexpr uint32_t kInstanceMaskAll = 0xFFu;
+// The GI probes' own rays (ddgi_trace_cs.hlsl, kRtMaskGiProbe). Everything carries it but a boat under way (RenderableObject::SetLeavesGiProbes): probes stand in the world, and a hull that flies through
+// them is inside one, out of it and behind it from one update to the next.
+inline constexpr uint32_t kInstanceMaskGiProbe = 0x01u;
 inline constexpr uint32_t kInstanceMaskShadowSolid = 0x02u;
 inline constexpr uint32_t kInstanceMaskShadowTransmissive = 0x04u;
 inline constexpr uint32_t kInstanceMaskShadow = kInstanceMaskShadowSolid | kInstanceMaskShadowTransmissive;

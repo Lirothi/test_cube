@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "app/game/PlayerStart.h"
+#include "app/game/VesselCamera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
 #include "rendering/shadows/LocalShadowCache.h"
@@ -153,6 +154,7 @@ public:
     // The collision world and the rigid bodies (docs/physics_plan.md).
     physics::World& Physics() { return physics_; }
     const physics::World& Physics() const { return physics_; }
+    game::VesselCamera& VesselCameraRef() { return vesselCamera_; }
     // The Player Start the level loaded with, for a build without the editor; with one, the document is its truth (it moves).
     void SetLevelPlayerStart(std::optional<game::PlayerStart> start) { levelPlayerStart_ = std::move(start); }
     const std::optional<game::PlayerStart>& LevelPlayerStart() const { return levelPlayerStart_; }
@@ -470,6 +472,7 @@ private:
     vfx::WindState windState_{}; // W1: global wind, advanced each Tick from the ocean's shared clock
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
     std::optional<game::PlayerStart> levelPlayerStart_;
+    game::VesselCamera vesselCamera_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
 
     DirectionalLight dirLight_;

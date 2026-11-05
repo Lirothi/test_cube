@@ -26,6 +26,7 @@ public:
     void ToggleFreeMouse() { mouseFree_ = !mouseFree_; }
     // Once a frame, before Scene::Tick: the mouse and the keys. `uiWantsCursor`: a window is open that wants the mouse.
     void Tick(InputManager& input, Scene& scene, float deltaTime, bool uiWantsCursor, bool uiCapturingMouse);
+    bool AtHelm() const { return playing_ && atHelm_; }
     // After a level load: the session goes on from the new level's start, or ends if it was the editor's (returns false, nothing restored: the camera is the new level's).
     bool OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start);
     void SetStatus(std::string status, double untilSeconds);
@@ -34,6 +35,11 @@ public:
 
 private:
     void PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start);
+    // A boat (docs/play_mode_plan.md): E within reach of its hull takes the helm, E leaves it over the side.
+    void TakeHelm(Scene& scene, RenderableObject* vessel);
+    void LeaveHelm(Scene& scene, bool overTheSide);
+    void TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime);
+    void HoldHelmShadows(float extent); // <= 0 = gives the level's back
 
     PlayerController controller_;
     physics::PlayerSettings settingsBefore_;
@@ -49,4 +55,8 @@ private:
     bool mouseTaken_ = false;
     bool justSpawned_ = false; // the body comes in this frame's Tick: till then "no body" does not mean no world
     bool stopOnLevelChange_ = true;
+    bool atHelm_ = false;
+    bool vesselInReach_ = false; // for the HUD's line
+    bool helmShadowsHeld_ = false;
+    float helmShadowsBefore_ = 0.0f;
 };

@@ -2207,9 +2207,15 @@ void Scene::Sync(Renderer* renderer)
     // G2: the camera. The render half takes the game camera's pose (and a cut, by its revision); the game camera's own
     // matrices are refreshed for the pose about to render -- the gizmo, picking and the HUD read them next frame, as
     // they read the frame's CalcMatrices before.
+    physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
+    if (vesselCamera_.Active())
+    {
+        // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
+        const OceanRenderable* ocean = FindOceanRenderable();
+        vesselCamera_.Apply(camera_, physics_.GetHelm(), ocean ? ocean->GetWaterLevel() : -1.0e6f);
+    }
     renderCameraCut_ |= renderCamera_.TakePose(camera_);
     if (renderer) { camera_.CalcMatrices(renderer); }
-    physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
     // G4: every object's transform, bounds and move flag (SyncSceneState -- the step PostTick used to run), its
     // material params and the render-facing animation of emitters, spinners and the ocean, and its switches.
     {

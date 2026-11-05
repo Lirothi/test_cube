@@ -112,6 +112,7 @@ bool RtAlphaCandidatePasses(StructuredBuffer<GeometryInfo> geomBuf, SamplerState
 static const uint kRtMaskShadowSolid = 0x02u;
 static const uint kRtMaskShadowTransmissive = 0x04u;
 static const uint kRtMaskShadow = kRtMaskShadowSolid | kRtMaskShadowTransmissive;
+static const uint kRtMaskGiProbe = 0x01u; // the GI probes' own rays: all but a boat under way (rt::kInstanceMaskGiProbe)
 
 // A VISIBILITY ray ("is anything in the way") -- every RT ray that is not a reflection's: the sky visibility, the GI's
 // shadow and sky rays, a reflection hit's shadow rays. It sees the GEOMETRY, a leaf card as a solid card, no alpha test

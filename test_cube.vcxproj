@@ -379,6 +379,8 @@
     <ClCompile Include="sources/ocean/OceanBuoyancy.cpp" />
     <ClCompile Include="sources/physics/JoltRuntime.cpp" />
     <ClCompile Include="sources/physics/PhysicsCharacter.cpp" />
+    <ClCompile Include="sources/physics/PhysicsVessel.cpp" />
+    <ClCompile Include="sources/app/game/VesselCamera.cpp" />
     <ClCompile Include="sources/physics/PhysicsShapes.cpp" />
     <ClCompile Include="sources/physics/PhysicsWorld.cpp" />
     <ClCompile Include="sources/physics/PhysicsSelfTest.cpp" />
@@ -588,6 +590,7 @@
     <ClInclude Include="sources/editor/scene/EditorPlayerStart.h" />
     <ClInclude Include="sources/app/game/PlayerStartJson.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
+    <ClInclude Include="sources/app/game/VesselCamera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
     <ClInclude Include="sources/rendering/lighting/Astronomy.h" />
     <ClInclude Include="sources/app/levels/JsonLevel.h" />
