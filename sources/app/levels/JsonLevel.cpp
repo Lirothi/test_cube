@@ -1,3 +1,4 @@
+#include "app/game/PlayerStartJson.h"
 #include "app/levels/JsonLevel.h"
 
 #include "core/diagnostics/BootProfile.h"
@@ -485,6 +486,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         scene.SetColorPipeline(color);
     }
 
+    ctx.scene.SetLevelPlayerStart(std::nullopt);
     std::optional<json> freeCameraStart;
     if (j.contains("objects") && j["objects"].is_array())
     {
@@ -518,6 +520,29 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
                 if (enabled)
                 {
                     freeCameraStart = o;
+                }
+                continue;
+            }
+
+            // The Player Start: no runtime object either, a place the play session starts from. The editor's document holds it, and a build without the editor takes it from the Scene.
+            if (type == game::kPlayerStartType)
+            {
+#if WITH_EDITOR
+                if (ctx.editorDocument)
+                {
+                    const EditorObjectId startId = ctx.editorDocument->ReadOrAllocateObjectId(o);
+                    ctx.editorDocument->AddObjectFromJson(startId, o);
+                }
+#endif
+                if (enabled && !ctx.scene.LevelPlayerStart())
+                {
+                    const float3 rotationDeg = ToFloat3(o.value("rotationDeg", json::array()), float3(0.0f, 0.0f, 0.0f));
+                    game::PlayerStart start;
+                    start.feet = ToFloat3(o.value("position", json::array()), float3(0.0f, 0.0f, 0.0f));
+                    start.pitchRad = rotationDeg.x * DEG2RAD;
+                    start.yawRad = rotationDeg.y * DEG2RAD;
+                    game::ReadPlayerKeys(o, start);
+                    ctx.scene.SetLevelPlayerStart(std::move(start));
                 }
                 continue;
             }

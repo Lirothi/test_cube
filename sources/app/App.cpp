@@ -1,3 +1,4 @@
+#include "app/game/PlayerStart.h"
 #include "app/App.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "rendering/core/MemoryReport.h"    // the memory line in the session log
@@ -73,6 +74,7 @@ bool g_bootLogWindow = false;
 bool g_bootMemoryWindow = false;
 std::string g_bootDevTab;
 bool g_bootEditor = false;
+bool g_bootPlay = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
 std::string g_bootImportItem;
@@ -412,7 +414,6 @@ namespace
         if (setting == "frame.rhiThread") { threading::g_rhiThreadEnabled = value != 0.0f; return true; }
         // The physics world (docs/physics_plan.md): game-side knobs, no render copy.
         if (setting == "physics.enabled") { physics::GameSettings().enabled = value != 0.0f; return true; }
-        if (setting == "physics.simulate") { physics::GameSettings().simulate = value != 0.0f; return true; }
         if (setting == "physics.debug") { physics::GameSettings().debug = static_cast<int>(value); return true; }
         if (setting == "physics.debugRadius") { physics::GameSettings().debugRadius = std::max(value, 1.0f); return true; }
         if (setting == "physics.stepHz") { physics::GameSettings().stepHz = std::clamp(value, 10.0f, 480.0f); return true; }
@@ -428,13 +429,22 @@ namespace
         if (setting == "physics.killY") { physics::GameSettings().killY = value; return true; }
         if (setting == "physics.angularDamping") { physics::GameSettings().angularDamping = std::max(value, 0.0f); return true; }
         if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
-        if (setting == "physics.walk") { physics::GameSettings().walk = value != 0.0f; return true; }
-        if (setting == "physics.walkSpeed") { physics::GameSettings().walkSpeed = std::max(value, 0.0f); return true; }
-        if (setting == "physics.walkSprint") { physics::GameSettings().walkSprint = std::max(value, 1.0f); return true; }
-        if (setting == "physics.eyeHeight") { physics::GameSettings().eyeHeight = std::max(value, 0.1f); return true; }
-        if (setting == "physics.walkMaxDepth") { physics::GameSettings().walkMaxDepth = std::max(value, 0.0f); return true; }
-        if (setting == "physics.walkTestX") { physics::GameSettings().walkTestX = value; return true; }
-        if (setting == "physics.walkTestZ") { physics::GameSettings().walkTestZ = value; return true; }
+        // The player (docs/play_mode_plan.md): its numbers by one table, and what a script says in place of the keys.
+        if (setting.rfind("player.", 0) == 0)
+        {
+            physics::PlayerSettings& player = physics::GameSettings().player;
+            const std::string_view key = std::string_view(setting).substr(7);
+            if (const game::PlayerKey* entry = game::FindPlayerKey(key))
+            {
+                player.*(entry->member) = std::clamp(value, entry->lo, entry->hi);
+                return true;
+            }
+            if (key == "testMoveX") { player.testMoveX = std::clamp(value, -1.0f, 1.0f); return true; }
+            if (key == "testMoveZ") { player.testMoveZ = std::clamp(value, -1.0f, 1.0f); return true; }
+            if (key == "testJump") { player.testJump = value != 0.0f; return true; }
+            if (key == "testCrouch") { player.testCrouch = value != 0.0f; return true; }
+            if (key == "testSprint") { player.testSprint = value != 0.0f; return true; }
+        }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
         if (setting == "wind.freeze") { vfx::g_windFreeze_game = value != 0.0f; return true; }
@@ -1822,6 +1832,8 @@ LRESULT CALLBACK App::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lPa
         }
         break;
     }
+    case WM_SYSCHAR:
+        return 0; // Alt+P is ours (Play): DefWindowProc looks for a menu with that letter, finds none, and beeps. Alt+F4 does not come through here
     case WM_ERASEBKGND:
         if (app && app->loadingScreenVisible_)
         {
@@ -2227,14 +2239,26 @@ namespace
                 std::snprintf(physicsItem, sizeof(physicsItem),
                               ",\"physics\":{\"world\":%s,\"simulating\":%s,\"objects\":%u,\"static\":%u,\"kinematic\":%u,\"dynamic\":%u,"
                               "\"active\":%u,\"floating\":%u,\"shapes\":%u,\"meshShapes\":%u,\"hullShapes\":%u,\"primitiveShapes\":%u,\"shapeTriangles\":%llu,\"bytes\":%llu,\"stepsLastFrame\":%u,\"stepsTotal\":%llu,"
-                              "\"stepMs\":%.3f,\"stepMsEma\":%.3f,\"lastBuildMs\":%.1f,\"walking\":%s,\"onGround\":%s,\"fellOut\":%u,\"handOversHeld\":%llu,\"stepWaits\":%llu,\"stepErrors\":%llu}",
+                              "\"stepMs\":%.3f,\"stepMsEma\":%.3f,\"lastBuildMs\":%.1f,\"fellOut\":%u,\"handOversHeld\":%llu,\"stepWaits\":%llu,\"stepErrors\":%llu}",
                               ps.worldExists ? "true" : "false", ps.simulating ? "true" : "false", ps.objects, ps.staticBodies, ps.kinematicBodies, ps.dynamicBodies,
                               ps.activeBodies, ps.floatingBodies, ps.shapes, ps.meshShapes, ps.hullShapes, ps.primitiveShapes, static_cast<unsigned long long>(ps.shapeTriangles),
                               static_cast<unsigned long long>(ps.bytes), ps.stepsLastFrame,
                               static_cast<unsigned long long>(ps.stepsTotal), ps.stepMs, ps.stepMsEma, ps.lastBuildMs,
-                              ps.walking ? "true" : "false", ps.walkOnGround ? "true" : "false", ps.fellOut,
+                              ps.fellOut,
                               static_cast<unsigned long long>(ps.handOversHeld), static_cast<unsigned long long>(ps.stepWaits), static_cast<unsigned long long>(ps.stepErrors));
                 out += physicsItem;
+                const physics::PlayerState player = scene_.Physics().GetPlayerState();
+                char playerItem[256];
+                std::snprintf(playerItem, sizeof(playerItem),
+                              ",\"player\":{\"exists\":%s,\"possessed\":%s,\"mode\":\"%s\",\"onGround\":%s,\"crouched\":%s,\"speed\":%.3f,\"feet\":[%.3f,%.3f,%.3f]}",
+                              player.exists ? "true" : "false", player.possessed ? "true" : "false", physics::PlayerModeName(player.mode),
+                              player.onGround ? "true" : "false", player.crouched ? "true" : "false", player.speed, player.feet.x, player.feet.y, player.feet.z);
+                out += playerItem;
+                // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.
+                char uiItem[96];
+                std::snprintf(uiItem, sizeof(uiItem), ",\"ui\":{\"wantsKeyboard\":%s,\"wantsMouse\":%s,\"typing\":%s}",
+                              renderer_.ImGuiWantsKeyboard() ? "true" : "false", renderer_.ImGuiWantsMouse() ? "true" : "false", renderer_.ImGuiWantsTextInput() ? "true" : "false");
+                out += uiItem;
             }
             // Plan S10e: the VSM page pool's load and the dynamic-resolution bias it drives (a kFrameCount-old frame).
             {
@@ -2670,6 +2694,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
 #if WITH_EDITOR
                 appController_.OnLevelChangeRequestCompleted(*pendingLevel, levelLoaded, renderer, scene, levelManager);
 #endif
+                if (levelLoaded) { appController_.OnLevelLoaded(renderer, scene, input); }
             }
         };
         const auto closeUi = [&]()

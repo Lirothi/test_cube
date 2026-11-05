@@ -36,6 +36,7 @@
 #include "editor/commands/EditorCommandStack.h"
 #include "editor/commands/RenameObjectCommand.h"
 #include "editor/scene/EditorZone.h"
+#include "editor/scene/EditorPlayerStart.h"
 #include "editor/commands/SetBuoyantCommand.h"
 #include "editor/commands/SetCastShadowCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
@@ -531,6 +532,31 @@ namespace
         std::string& outStatus)
     {
         return BuildKeepSimulationCommand(actionCtx.editor, targets.empty() ? nullptr : &targets, outStatus);
+    }
+
+    // ------------------------------------------------------------------ placePlayerStart
+
+    // One per level: a second call moves it, as the place a play session starts from is one place.
+    std::unique_ptr<EditorCommand> BuildPlacePlayerStart(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        (void)targets;
+        EditorContext& ctx = actionCtx.editor;
+        EditorObject placed = editorplayerstart::BuildObject(ctx.scene);
+        if (intent.params.contains("at")) { placed.transform.position = Vec3Or(intent.params, "at", placed.transform.position); }
+        if (intent.params.contains("yawDeg")) { placed.transform.rotationDeg.y = NumberOr(intent.params, "yawDeg", placed.transform.rotationDeg.y); }
+        const Math::float3 at = placed.transform.position;
+        char where[96];
+        std::snprintf(where, sizeof(where), "at %.2f %.2f %.2f, yaw %.1f", at.x, at.y, at.z, placed.transform.rotationDeg.y);
+        if (const EditorObject* existing = editorplayerstart::Find(ctx.document))
+        {
+            outStatus = std::string("Moved the Player Start ") + where;
+            return std::make_unique<TransformObjectCommand>(existing->id, existing->transform, placed.transform);
+        }
+        outStatus = std::string("Placed a Player Start ") + where;
+        return std::make_unique<CreateDocumentObjectCommand>(std::move(placed));
     }
 
     // ------------------------------------------------------------------ setOnAt
@@ -3789,7 +3815,7 @@ EditorActionRegistry::EditorActionRegistry()
 
     actions_.push_back({
         "keepSimulation",
-        "UE's Keep Simulation Changes: the poses the dynamic bodies have reached become the transforms of the matching objects (of every moved one with no target), one undo entry. Turn the simulation on first (set_settings physics.simulate:1).",
+        "UE's Keep Simulation Changes: the poses the dynamic bodies have reached become the transforms of the matching objects (of every moved one with no target), one undo entry. Only while the level plays (the tool play): in the editor nothing moves.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
         {},
@@ -3798,6 +3824,19 @@ EditorActionRegistry::EditorActionRegistry()
         nullptr, // refinePreview
         false,   // takesDestinationAsset
         true,    // wholeLevelIsFine
+    });
+
+    actions_.push_back({
+        "placePlayerStart",
+        "Put the level's Player Start: where the player stands when the level plays, its feet at the point, facing the yaw. "
+        "A level has one: a second call moves it. Without one, Play starts from the camera.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::None,
+        {
+            { "at", EditorParamKind::Vec3, false, "where the feet stand. Omit to use the ground the camera is looking at" },
+            { "yawDeg", EditorParamKind::Number, false, "which way it faces, in degrees. Omit to face as the camera does" },
+        },
+        &BuildPlacePlayerStart,
     });
 
     actions_.push_back({

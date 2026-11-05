@@ -35,7 +35,7 @@ namespace
 
     bool IsDocumentOnlyObject(std::string_view type)
     {
-        return type == "freeCameraStart";
+        return type == "freeCameraStart" || type == "playerStart";
     }
 
     std::string CopyName(const std::string& name, std::string_view type)

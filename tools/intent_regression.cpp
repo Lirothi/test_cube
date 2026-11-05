@@ -30,6 +30,7 @@
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
+#include "editor/scene/EditorPlayerStart.h"
 #include "editor/EditorContext.h"
 #include "editor/EditorExtensionRegistry.h"
 #include "assets/AssetImporter.h"
@@ -944,6 +945,65 @@ void TestPhysicsRoad(const EditorActionContext& actionCtx)
 
     const std::optional<json> ray = call(5, "physics_raycast", { { "origin", { 0.0, 100.0, 0.0 } }, { "direction", { 0.0, -1.0, 0.0 } } });
     Check(!(*ray)["result"]["isError"].get<bool>(), "physics_raycast answers: " + text(ray));
+
+    // The level's Player Start: one per level, one undo entry each, out of the document again by undo (docs/play_mode_plan.md).
+    {
+        const auto placeStart = [](double x)
+        {
+            return json{ { "action", "placePlayerStart" }, { "params", { { "at", { x, 2.0, 3.0 } }, { "yawDeg", 90.0 } } } };
+        };
+        const std::optional<json> placedStart = call(20, "run_action", { { "command", placeStart(1.0) } });
+        Check(!(*placedStart)["result"]["isError"].get<bool>(), "placePlayerStart runs: " + text(placedStart));
+        const std::size_t historyAfterFirst = stack.HistorySize(); // read here: a push first drops what the undo above left to redo
+        const EditorObject* start = editorplayerstart::Find(ctx.document);
+        Check(start && start->transform.position.x == 1.0f && start->transform.rotationDeg.y == 90.0f, "and the document has it where it was told");
+        const std::optional<json> movedStart = call(21, "run_action", { { "command", placeStart(4.0) } });
+        Check(!(*movedStart)["result"]["isError"].get<bool>() && stack.HistorySize() == historyAfterFirst + 1, "a second call runs too, one more entry: " + text(movedStart));
+        std::size_t starts = 0;
+        for (const EditorObject& object : ctx.document.Objects()) { starts += object.type == game::kPlayerStartType ? 1u : 0u; }
+        Check(starts == 1 && editorplayerstart::Find(ctx.document)->transform.position.x == 4.0f, "and moves the one there is");
+        game::PlayerStart read;
+        ctx.document.Find(editorplayerstart::Find(ctx.document)->id)->properties["jumpSpeed"] = 7.0f;
+        editorplayerstart::FromObject(*editorplayerstart::Find(ctx.document), read);
+        physics::PlayerSettings tuned;
+        game::ApplyPlayerKeys(read, tuned);
+        Check(tuned.jumpSpeed == 7.0f && tuned.walkSpeed == physics::PlayerSettings{}.walkSpeed, "a level's key reaches the player, and only that key");
+        ctx.document.Find(editorplayerstart::Find(ctx.document)->id)->properties.erase("jumpSpeed");
+        call(22, "undo", json::object());
+        call(23, "undo", json::object());
+        Check(editorplayerstart::Find(ctx.document) == nullptr, "two undos and it is gone");
+    }
+
+    // play and stop, and what a session forbids.
+    {
+        const std::optional<json> noHost = call(24, "play", json::object());
+        Check((*noHost)["result"]["isError"].get<bool>(), "without an app play says so: " + text(noHost));
+
+        struct FakePlayHost final : editormcp::PlayHost
+        {
+            bool playing = false;
+            bool fromCamera = false;
+            bool Playing() const override { return playing; }
+            void Request(bool play, bool camera) override { playing = play; fromCamera = camera; }
+        } playHost;
+        editormcp::SetPlayHost(&playHost);
+        const std::optional<json> played = call(25, "play", { { "fromCamera", true } });
+        Check(!(*played)["result"]["isError"].get<bool>() && playHost.playing && playHost.fromCamera, "play asks the host: " + text(played));
+        for (const char* tool : { "undo", "save_level", "import_asset" })
+        {
+            const std::optional<json> refused2 = call(26, tool, json::object());
+            Check((*refused2)["result"]["isError"].get<bool>() && text(refused2).find("playing") != std::string::npos, std::string(tool) + " is refused while it plays: " + text(refused2));
+        }
+        const std::optional<json> edit = call(27, "run_action", { { "command", makeDynamic } });
+        Check((*edit)["result"]["isError"].get<bool>() && text(edit).find("playing") != std::string::npos, "an edit is refused while it plays: " + text(edit));
+        const std::optional<json> keepInPlay = call(28, "run_action", { { "command", keep } });
+        Check(text(keepInPlay).find("playing") == std::string::npos, "keepSimulation is not: " + text(keepInPlay));
+        const std::optional<json> reading = call(29, "get_camera", json::object());
+        Check(!(*reading)["result"]["isError"].get<bool>(), "and neither is a look");
+        const std::optional<json> stopped = call(30, "stop", json::object());
+        Check(!(*stopped)["result"]["isError"].get<bool>() && !playHost.playing, "stop asks the host: " + text(stopped));
+        editormcp::SetPlayHost(nullptr);
+    }
 
     // place carries a hand-made shape per item, as it does the motion: the live road of Mesh Editor > Collision's Custom shapes.
     const json shape = { { "shape", "custom" }, { "shapes", json::array({ { { "type", "sphere" }, { "center", { 0.0, 1.0, 0.0 } }, { "radius", 0.5 } } }) } };

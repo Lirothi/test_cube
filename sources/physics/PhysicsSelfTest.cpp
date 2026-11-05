@@ -513,22 +513,26 @@ namespace physics
             {
                 TestWorld world(1);
                 addStatic(world, JPH::Vec3(0.0f, -1.0f, 0.0f), JPH::Vec3(100.0f, 1.0f, 100.0f));
-                WalkingCharacter walker(world.system, JPH::Vec3(0.0f, 0.0f, 0.0f));
+                PlayerSettings tuning;
+                tuning.walkSpeed = 1.6f;
+                PlayerBody walker(world.system, JPH::Vec3(0.0f, 0.0f, 0.0f), tuning);
                 const float dt = 1.0f / fps;
-                const auto walk = [&](float seconds, JPH::Vec3Arg velocity)
+                const auto walk = [&](float seconds, float along)
                 {
-                    for (int i = 0; i < static_cast<int>(seconds * fps); ++i) { walker.Update(dt, velocity, false, true, world.temp); }
+                    PlayerInput input;
+                    input.move = Math::float3(along, 0.0f, 0.0f);
+                    for (int i = 0; i < static_cast<int>(seconds * fps); ++i) { walker.Update(dt, input, tuning, kNoWater, world.temp); }
                 };
-                walk(0.5f, JPH::Vec3::sZero()); // settles
+                walk(0.5f, 0.0f); // settles
                 const float start = walker.Feet().GetX();
-                walk(2.0f, JPH::Vec3(1.6f, 0.0f, 0.0f));
+                walk(2.0f, 1.0f);
                 const float walked = walker.Feet().GetX() - start;
-                detail += std::to_string(fps) + " fps walked " + std::to_string(walked) + " m of 3.2; ";
-                if (std::fabs(walked - 3.2f) > 0.1f) { return Verdict::Fail; }
+                detail += std::to_string(fps) + " fps walked " + std::to_string(walked) + " m of 3.14 (3.2 less the run-up); ";
+                if (std::fabs(walked - 3.14f) > 0.1f) { return Verdict::Fail; }
 
                 // A kerb: 20 cm, in the way along z.
                 addStatic(world, JPH::Vec3(walker.Feet().GetX() + 1.5f, 0.1f, 0.0f), JPH::Vec3(0.5f, 0.1f, 5.0f));
-                walk(1.0f, JPH::Vec3(1.6f, 0.0f, 0.0f));
+                walk(1.0f, 1.0f);
                 const float onKerb = walker.Feet().GetY();
                 detail += "on the kerb at y " + std::to_string(onKerb) + "; ";
                 if (onKerb < 0.15f) { return Verdict::Fail; }
@@ -536,13 +540,13 @@ namespace physics
                 // A wall: 3 m high.
                 const float wallX = walker.Feet().GetX() + 2.0f;
                 addStatic(world, JPH::Vec3(wallX + 0.25f, 1.5f, 0.0f), JPH::Vec3(0.25f, 1.5f, 20.0f));
-                walk(4.0f, JPH::Vec3(1.6f, 0.0f, 0.0f));
+                walk(4.0f, 1.0f);
                 const float stopped = walker.Feet().GetX();
                 detail += "wall at " + std::to_string(wallX) + " stopped it at " + std::to_string(stopped) + "; ";
                 if (stopped > wallX - 0.25f || stopped < wallX - 0.45f) { return Verdict::Fail; }
             }
 
-            // A box on the floor, pushed when the world runs and left alone when it does not.
+            // A box on the floor, pushed when it is walked at and left alone when it is not.
             for (const bool push : { false, true })
             {
                 TestWorld world(1);
@@ -556,15 +560,301 @@ namespace physics
                 crateSettings.mOverrideMassProperties = JPH::EOverrideMassProperties::CalculateInertia;
                 crateSettings.mMassPropertiesOverride.mMass = 20.0f;
                 const JPH::BodyID crate = world.system.GetBodyInterface().CreateAndAddBody(crateSettings, JPH::EActivation::Activate);
-                WalkingCharacter walker(world.system, JPH::Vec3(0.0f, 0.0f, 0.0f));
+                PlayerSettings tuning;
+                tuning.walkSpeed = 1.6f;
+                PlayerBody walker(world.system, JPH::Vec3(0.0f, 0.0f, 0.0f), tuning);
+                PlayerInput input;
+                input.move = Math::float3(push ? 1.0f : 0.0f, 0.0f, 0.0f);
                 for (int i = 0; i < 180; ++i)
                 {
-                    walker.Update(1.0f / 60.0f, JPH::Vec3(1.6f, 0.0f, 0.0f), false, push, world.temp);
+                    walker.Update(1.0f / 60.0f, input, tuning, kNoWater, world.temp);
                     world.Step(1);
                 }
                 const float x = world.system.GetBodyInterface().GetCenterOfMassPosition(crate).GetX();
                 detail += std::string(push ? "pushed" : "not pushing") + ": the box at x " + std::to_string(x) + "; ";
                 if (push ? x < 1.7f : std::fabs(x - 1.5f) > 0.02f) { return Verdict::Fail; }
+            }
+            return Verdict::Pass;
+        }
+
+        // ----------------------------------------------------------------------------------------------------------- player
+        // The controller's movement, UE's formulas, at 60 and 300 frames a second: the run-up and the stop, the jump and what must not jump, the air, the crouch and the
+        // ceiling that holds it down, the slopes, the water, a floor that moves. Each thing it allows has its other side that must be refused.
+        Verdict GatePlayer(std::string& detail)
+        {
+            const auto addBox = [](TestWorld& world, JPH::Vec3Arg centre, JPH::Vec3Arg half, JPH::QuatArg rotation)
+            {
+                JPH::BoxShapeSettings settings(half);
+                settings.SetEmbedded();
+                JPH::BodyCreationSettings body(settings.Create().Get().GetPtr(), centre, rotation, JPH::EMotionType::Static, layers::kNonMoving);
+                world.system.GetBodyInterface().CreateAndAddBody(body, JPH::EActivation::DontActivate);
+            };
+            const auto addFloor = [&](TestWorld& world) { addBox(world, JPH::Vec3(0.0f, -1.0f, 0.0f), JPH::Vec3(100.0f, 1.0f, 100.0f), JPH::Quat::sIdentity()); };
+            const auto fail = [&detail](const std::string& what) { detail += what; return Verdict::Fail; };
+            const auto number = [](float value) { char text[32]; std::snprintf(text, sizeof(text), "%.3f", value); return std::string(text); };
+
+            for (const int fps : { 60, 300 })
+            {
+                const float dt = 1.0f / fps;
+                const PlayerSettings tuning;
+                const float gravity = 9.81f;
+                PlayerInput forward;
+                forward.move = Math::float3(1.0f, 0.0f, 0.0f);
+                const auto run = [&](PlayerBody& body, TestWorld& world, float seconds, const PlayerInput& input, float water = kNoWater)
+                {
+                    for (int i = 0; i < static_cast<int>(seconds * fps); ++i) { body.Update(dt, input, tuning, water, world.temp); }
+                };
+                detail += std::to_string(fps) + " fps: ";
+
+                // The run-up takes speed / acceleration, the stop friction and braking together.
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    run(body, world, 0.3f, PlayerInput{});
+                    float t = 0.0f;
+                    while (body.HorizontalSpeed() < 0.95f * tuning.walkSpeed && t < 2.0f)
+                    {
+                        body.Update(dt, forward, tuning, kNoWater, world.temp);
+                        t += dt;
+                    }
+                    const float expected = 0.95f * tuning.walkSpeed / tuning.acceleration;
+                    detail += "95 % of the walk in " + number(t) + " s (" + number(expected) + "); ";
+                    if (std::fabs(t - expected) > 0.05f) { return fail("the run-up is wrong"); }
+                    run(body, world, 1.0f, forward);
+                    if (std::fabs(body.HorizontalSpeed() - tuning.walkSpeed) > 0.05f) { return fail("the walk's speed is " + number(body.HorizontalSpeed())); }
+                    PlayerInput sprint = forward;
+                    sprint.sprint = true;
+                    run(body, world, 1.0f, sprint);
+                    if (std::fabs(body.HorizontalSpeed() - tuning.sprintSpeed) > 0.05f) { return fail("the sprint's speed is " + number(body.HorizontalSpeed())); }
+                    run(body, world, 1.0f, forward);
+                    if (std::fabs(body.HorizontalSpeed() - tuning.walkSpeed) > 0.05f) { return fail("back from the sprint the speed is " + number(body.HorizontalSpeed())); }
+                    const float from = body.Feet().GetX();
+                    run(body, world, 1.0f, PlayerInput{});
+                    const float stop = body.Feet().GetX() - from;
+                    detail += "stops in " + number(stop) + " m (0.20); ";
+                    if (body.HorizontalSpeed() != 0.0f || std::fabs(stop - 0.20f) > 0.06f) { return fail("the stop is wrong"); }
+                    // A turn at full speed goes round by friction, it does not stop and start.
+                    run(body, world, 1.0f, forward);
+                    PlayerInput back;
+                    back.move = Math::float3(-1.0f, 0.0f, 0.0f);
+                    run(body, world, 1.0f, back);
+                    if (std::fabs(body.HorizontalSpeed() - tuning.walkSpeed) > 0.05f) { return fail("after the turn the speed is " + number(body.HorizontalSpeed())); }
+                }
+
+                // The jump: its height, one per press, and no more in the air.
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    run(body, world, 0.3f, PlayerInput{});
+                    if (!body.OnGround()) { return fail("it should stand on the floor"); }
+                    PlayerInput press;
+                    press.jump = true;
+                    const auto apex = [&](const PlayerInput& first, float seconds, bool pressAtTheTop)
+                    {
+                        float top = 0.0f;
+                        body.Update(dt, first, tuning, kNoWater, world.temp);
+                        const float upFor = tuning.jumpSpeed / gravity;
+                        bool pressed = false;
+                        for (float t = dt; t < seconds; t += dt)
+                        {
+                            const bool now = pressAtTheTop && !pressed && t > upFor;
+                            pressed = pressed || now;
+                            body.Update(dt, now ? press : PlayerInput{}, tuning, kNoWater, world.temp);
+                            top = std::max(top, body.Feet().GetY());
+                        }
+                        return top;
+                    };
+                    const float height = apex(press, 1.2f, false);
+                    const float expected = tuning.jumpSpeed * tuning.jumpSpeed / (2.0f * gravity);
+                    detail += "jumps " + number(height) + " m (" + number(expected) + "); ";
+                    if (std::fabs(height - expected) > 0.07f) { return fail("the jump is wrong"); }
+                    if (!body.OnGround()) { return fail("it should have landed"); }
+                    run(body, world, 0.3f, PlayerInput{});
+                    const float again = apex(press, 1.2f, true);
+                    if (again > height + 0.02f) { return fail("a press in the air jumped again, to " + number(again)); }
+                    run(body, world, 0.3f, PlayerInput{});
+                    const float held = apex(PlayerInput{}, 0.5f, false);
+                    if (held > 0.02f) { return fail("no press, no jump: " + number(held)); }
+                }
+
+                // A press just before landing still jumps; a press long before does not.
+                for (const float early : { 0.05f, 0.4f })
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    PlayerBody body(world.system, JPH::Vec3(0.0f, 2.0f, 0.0f), tuning);
+                    const float fall = std::sqrt(2.0f * 2.0f / gravity);
+                    PlayerInput press;
+                    press.jump = true;
+                    int pressFrame = static_cast<int>((fall - early) * fps);
+                    float top = 0.0f;
+                    bool landed = false;
+                    for (int i = 0; i < static_cast<int>((fall + 0.5f) * fps); ++i)
+                    {
+                        body.Update(dt, i == pressFrame ? press : PlayerInput{}, tuning, kNoWater, world.temp);
+                        landed = landed || body.Feet().GetY() < 0.02f;
+                        if (landed) { top = std::max(top, body.Feet().GetY()); }
+                    }
+                    const bool jumped = top > 0.3f;
+                    if (jumped != (early < 0.1f)) { return fail("a press " + number(early) + " s before landing " + (jumped ? "jumped" : "did not jump")); }
+                }
+
+                // A press just after walking off an edge still jumps; a press long after does not.
+                for (const float late : { 0.05f, 0.3f })
+                {
+                    TestWorld world(1);
+                    addBox(world, JPH::Vec3(-10.0f, -5.0f, 0.0f), JPH::Vec3(10.0f, 5.0f, 10.0f), JPH::Quat::sIdentity());
+                    PlayerBody body(world.system, JPH::Vec3(-1.0f, 0.0f, 0.0f), tuning);
+                    run(body, world, 0.3f, PlayerInput{});
+                    float t = 0.0f;
+                    while (body.Feet().GetY() > -0.6f && t < 3.0f && body.OnGround()) // past Jolt's 50 cm of sticking
+                    {
+                        body.Update(dt, forward, tuning, kNoWater, world.temp);
+                        t += dt;
+                    }
+                    if (body.OnGround()) { return fail("it should have walked off the edge"); }
+                    run(body, world, late, forward);
+                    const float y = body.Feet().GetY();
+                    PlayerInput press = forward;
+                    press.jump = true;
+                    body.Update(dt, press, tuning, kNoWater, world.temp);
+                    run(body, world, 0.05f, forward);
+                    const bool jumped = body.Feet().GetY() > y;
+                    if (jumped != (late < 0.1f)) { return fail("a press " + number(late) + " s after the edge " + (jumped ? "jumped" : "did not jump")); }
+                }
+
+                // The air: a share of the acceleration, and what it took off with stays.
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    PlayerBody body(world.system, JPH::Vec3(0.0f, 20.0f, 0.0f), tuning);
+                    run(body, world, 0.3f, forward);
+                    const float expected = tuning.acceleration * tuning.airControl * 0.3f;
+                    if (std::fabs(body.HorizontalSpeed() - expected) > 0.15f) { return fail("in the air, 0.3 s of the keys give " + number(body.HorizontalSpeed()) + " m/s, not " + number(expected)); }
+                    run(body, world, 0.3f, PlayerInput{});
+                    if (std::fabs(body.HorizontalSpeed() - expected) > 0.15f) { return fail("nothing in the air should slow it: " + number(body.HorizontalSpeed())); }
+                }
+
+                // A jump into a wall: the speed the wall took does not carry over its top.
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    addBox(world, JPH::Vec3(3.0f, 0.25f, 0.0f), JPH::Vec3(1.0f, 0.75f, 10.0f), JPH::Quat::sIdentity()); // a top at 1.0 m: a jump of 0.9 does not clear it
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    run(body, world, 1.0f, forward);
+                    if (body.Feet().GetX() > 1.8f || body.HorizontalSpeed() > 0.2f) { return fail("the wall should have stopped it, at x " + number(body.Feet().GetX()) + ", " + number(body.HorizontalSpeed()) + " m/s"); }
+                }
+
+                // The ceiling: too low to walk under, crouched it fits, and under it nothing gets up.
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    addBox(world, JPH::Vec3(4.0f, 2.4f, 0.0f), JPH::Vec3(2.0f, 1.0f, 10.0f), JPH::Quat::sIdentity()); // from x 2 to 6, its underside at 1.4 m
+                    PlayerBody standing(world.system, JPH::Vec3::sZero(), tuning);
+                    run(standing, world, 2.0f, forward);
+                    if (standing.Feet().GetX() > 1.8f) { return fail("a standing capsule walked under a 1.4 m ceiling, to x " + number(standing.Feet().GetX())); }
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    PlayerInput crouch = forward;
+                    crouch.crouch = true;
+                    run(body, world, 0.5f, PlayerInput{});
+                    run(body, world, 0.2f, crouch);
+                    if (!body.Crouched() || std::fabs(body.HorizontalSpeed() - tuning.crouchSpeed) > 0.05f) { return fail("crouched it walks at " + number(body.HorizontalSpeed())); }
+                    if (body.Eye(tuning).GetY() > tuning.crouchEyeHeight + 0.2f) { return fail("the eye should come down, it is at " + number(body.Eye(tuning).GetY())); }
+                    run(body, world, 1.5f, crouch);
+                    if (body.Feet().GetX() < 2.5f) { return fail("crouched it should go under, it stands at x " + number(body.Feet().GetX())); }
+                    run(body, world, 0.2f, forward); // let go of the key under the ceiling
+                    if (!body.Crouched() || body.Feet().GetX() > 5.5f) { return fail("under the ceiling it must stay down"); }
+                    run(body, world, 2.0f, forward); // and out
+                    if (body.Crouched() || body.Feet().GetX() < 6.0f) { return fail("out from under it should stand up, x " + number(body.Feet().GetX())); }
+                    if (std::fabs(body.Eye(tuning).GetY() - tuning.eyeHeight) > 0.02f) { return fail("the eye should be back up, at " + number(body.Eye(tuning).GetY())); }
+                }
+
+                // Stairs up to the step height, not over; a slope up to the limit, not over.
+                for (const float step : { 0.3f, 0.6f })
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    addBox(world, JPH::Vec3(12.0f, step * 0.5f, 0.0f), JPH::Vec3(10.0f, step * 0.5f, 10.0f), JPH::Quat::sIdentity()); // long enough not to walk off its far side
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    run(body, world, 2.0f, forward);
+                    const bool up = body.Feet().GetY() > step - 0.05f;
+                    if (up != (step < tuning.stepHeight)) { return fail("a step of " + number(step) + " m " + (up ? "was climbed" : "was not climbed")); }
+                }
+                for (const float degrees : { 30.0f, 60.0f })
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    const float radians = JPH::DegreesToRadians(degrees);
+                    const JPH::Vec3 along(std::cos(radians), std::sin(radians), 0.0f);
+                    const JPH::Vec3 normal(-std::sin(radians), std::cos(radians), 0.0f);
+                    addBox(world, JPH::Vec3(3.0f, 0.0f, 0.0f) + 10.0f * along - 0.5f * normal, JPH::Vec3(10.0f, 0.5f, 10.0f), JPH::Quat::sRotation(JPH::Vec3::sAxisZ(), radians));
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    run(body, world, 3.0f, forward);
+                    const bool up = body.Feet().GetY() > 1.5f;
+                    if (up != (degrees < tuning.maxSlopeDeg)) { return fail("a slope of " + number(degrees) + " degrees " + (up ? "was climbed" : "was not climbed") + ", y " + number(body.Feet().GetY())); }
+                    if (degrees < tuning.maxSlopeDeg && body.HorizontalSpeed() < 0.9f * tuning.walkSpeed) { return fail("a walkable slope must not eat the speed: " + number(body.HorizontalSpeed())); }
+                }
+
+                // The water: over the depth it floats, the eye just over the surface; under it the feet stay on the bottom.
+                {
+                    TestWorld world(1);
+                    addFloor(world);
+                    PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                    run(body, world, 0.3f, PlayerInput{}, 0.5f);
+                    if (body.Mode() != PlayerMode::Walking || body.Feet().GetY() > 0.02f) { return fail("in 0.5 m of water it should walk on the bottom"); }
+                    const float water = 2.0f;
+                    run(body, world, 4.0f, PlayerInput{}, water);
+                    const float eye = body.Eye(tuning).GetY();
+                    detail += "swims with the eye at " + number(eye) + "; ";
+                    if (body.Mode() != PlayerMode::Swimming || eye < water || eye > water + 0.3f) { return fail("in 2 m of water it should float, the eye over the surface"); }
+                    run(body, world, 2.0f, forward, water);
+                    if (std::fabs(body.HorizontalSpeed() - tuning.swimSpeed) > 0.05f) { return fail("it swims at " + number(body.HorizontalSpeed())); }
+                    const float y = body.Feet().GetY();
+                    PlayerInput press;
+                    press.jump = true;
+                    body.Update(dt, press, tuning, water, world.temp);
+                    run(body, world, 0.2f, PlayerInput{}, water);
+                    if (body.Feet().GetY() > y + 0.15f) { return fail("a jump out of deep water"); }
+                }
+            }
+
+            // A floor that moves: it rides, and takes off at the floor's speed. At the world's own 60 Hz.
+            {
+                TestWorld world(1);
+                JPH::BoxShapeSettings platform(JPH::Vec3(20.0f, 0.5f, 20.0f));
+                platform.SetEmbedded();
+                JPH::BodyCreationSettings platformBody(platform.Create().Get().GetPtr(), JPH::Vec3(0.0f, -0.5f, 0.0f), JPH::Quat::sIdentity(), JPH::EMotionType::Kinematic, layers::kMoving);
+                const JPH::BodyID id = world.system.GetBodyInterface().CreateAndAddBody(platformBody, JPH::EActivation::Activate);
+                const PlayerSettings tuning;
+                PlayerBody body(world.system, JPH::Vec3::sZero(), tuning);
+                const float dt = 1.0f / 60.0f;
+                const float speed = 1.0f;
+                float x = 0.0f;
+                const auto ride = [&](int frames, const PlayerInput& input)
+                {
+                    for (int i = 0; i < frames; ++i)
+                    {
+                        x += speed * dt;
+                        world.system.GetBodyInterface().MoveKinematic(id, JPH::Vec3(x, -0.5f, 0.0f), JPH::Quat::sIdentity(), dt);
+                        body.Update(dt, input, tuning, kNoWater, world.temp);
+                        world.Step(1);
+                    }
+                };
+                ride(30, PlayerInput{});
+                const float before = body.Feet().GetX();
+                ride(120, PlayerInput{});
+                const float rode = body.Feet().GetX() - before;
+                detail += "rode " + number(rode) + " m of 2 on a moving floor; ";
+                if (std::fabs(rode - 2.0f) > 0.1f) { return fail("it should ride the floor"); }
+                PlayerInput press;
+                press.jump = true;
+                ride(1, press);
+                const float takeOff = body.Feet().GetX();
+                ride(20, PlayerInput{});
+                const float carried = body.Feet().GetX() - takeOff;
+                if (body.OnGround() || std::fabs(carried - speed * 20.0f * dt) > 0.1f) { return fail("off a moving floor it should keep the floor's speed: " + number(carried)); }
             }
             return Verdict::Pass;
         }
@@ -1558,6 +1848,7 @@ namespace physics
             { "determinism", &GateDeterminism },
             { "scale", &GateScale },
             { "walk", &GateWalk },
+            { "player", &GatePlayer },
             { "water", &GateWater },
             { "kinematic", &GateKinematic },
             { "autoshape", &GateAutoShape },

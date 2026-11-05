@@ -42,6 +42,8 @@ public:
     // same reason. False (and the window left as it was) when no tab has that label.
     bool OpenTab(const std::string& label);
     bool IsLogWindowOpen() const { return logWindow_.IsOpen(); }
+    // A window of ours is on screen, and it wants the mouse: the play session lets it go.
+    bool AnyWindowOpen() const { return open_ || logWindow_.IsOpen() || oceanControlsWindow_.IsOpen() || textureDebugViewer_.IsOpen(); }
     void ToggleLogWindow() { logWindow_.ToggleOpen(); }
 
     // Tabs edit scene settings live, including shadows and atmosphere previews.

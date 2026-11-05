@@ -156,7 +156,7 @@ namespace
 
     bool IsCameraType(const std::string& type)
     {
-        return type == "camera" || type == "freeCameraStart";
+        return type == "camera" || type == "freeCameraStart" || type == "playerStart";
     }
 
     bool IsMeshType(const std::string& type)

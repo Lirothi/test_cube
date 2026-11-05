@@ -52,9 +52,10 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     const bool uiCapturingKeyboard = renderer.ImGuiWantsKeyboard();
     const bool uiCapturingInput = uiCapturingMouse || uiCapturingKeyboard;
     const bool toggleDeveloperWindow =
-        input.WasActionPressed("ToggleDeveloperPanel") ||
+        (input.WasActionPressed("ToggleDeveloperPanel") ||
         input.WasActionPressed("ToggleBindings") ||
-        ImGui::IsKeyPressed(ImGuiKey_F1, false);
+        ImGui::IsKeyPressed(ImGuiKey_F1, false)) &&
+        !(playSession_.Playing() && input.IsKeyDown(VK_SHIFT)); // Shift+F1 is the mouse's in Play
 #if WITH_EDITOR
     const bool toggleLevelEditor = ImGui::IsKeyPressed(ImGuiKey_F2, false);
 #endif
@@ -70,7 +71,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         developerWindow_.ToggleOpen();
     }
 #if WITH_EDITOR
-    if (toggleLevelEditor)
+    if (toggleLevelEditor && !playSession_.Playing()) // in Play it stops the session (TickPlay), and that opens the editor
     {
         editorController_.ToggleOpen();
     }
@@ -247,48 +248,141 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #endif
 
 #if WITH_EDITOR
-    // The editor edits the level as authored: opening it stops the simulation, and the bodies go back. Simulate is its own choice
-    // from there (docs/physics_plan.md Q4); closing it does not start anything.
-    {
-        static bool editorWasOpen = false;
-        const bool editorOpen = editorController_.IsOpen();
-        if (editorOpen && !editorWasOpen) { physics::GameSettings().simulate = false; }
-        editorWasOpen = editorOpen;
-    }
+    TickPlay(input, renderer, scene, levelManager, toggleLevelEditor);
+#else
+    TickPlay(input, renderer, scene, levelManager, false);
 #endif
-    // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
-    bool allowCameraInput = !uiCapturingInput;
+
+    // No window of ours on screen, and ImGui still holds the keyboard: a panel that closed leaves its focus behind (F2, Play), and App::WndProc gives every letter to whoever holds it.
+    // A held right button clears it for the free camera (ImGuiLayer), which is why it went unseen; Play has no right button to hold, and WASD never reached the player.
+    {
+        ImGuiIO& io = ImGui::GetIO();
 #if WITH_EDITOR
-    if (allowCameraInput && editorController_.IsOpen())
-    {
-        allowCameraInput = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
-    }
+        const bool panelsOpen = editorController_.IsOpen() || developerWindow_.AnyWindowOpen();
+#else
+        const bool panelsOpen = developerWindow_.AnyWindowOpen();
 #endif
-    if (allowCameraInput)
-    {
-        // physics.walk: the free camera's keys and look as they are, but what they would have moved is an intent on the ground; the
-        // world puts the camera on the capsule's eye in Scene::Tick.
-        Camera& camera = scene.CameraRef();
-        const Math::float3 before = camera.GetPosition();
-        camera.UpdateFromInput(input, deltaTime);
-        const physics::Settings& physicsSettings = physics::GameSettings();
-        if (physicsSettings.walk)
+        if (!panelsOpen && io.WantCaptureKeyboard)
         {
-            const Math::float3 moved = camera.GetPosition() - before;
-            camera.SetPosition(before);
-            const float length = std::sqrt(moved.x * moved.x + moved.z * moved.z);
-            const float speed = physicsSettings.walkSpeed * (input.IsActionDown("Sprint") ? physicsSettings.walkSprint : 1.0f);
-            const Math::float3 velocity = length > 1.0e-6f ? Math::float3(moved.x / length * speed, 0.0f, moved.z / length * speed) : Math::float3(0.0f, 0.0f, 0.0f);
-            scene.Physics().SetWalkIntent(velocity, input.GetActionAxis("MoveY") > 0.0f);
+            ImGui::SetWindowFocus(nullptr);
+            io.WantCaptureKeyboard = false;
+        }
+    }
+
+    // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
+    if (playSession_.Playing())
+    {
+        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen(), uiCapturingMouse);
+    }
+    else
+    {
+        bool allowCameraInput = !uiCapturingInput;
+#if WITH_EDITOR
+        if (allowCameraInput && editorController_.IsOpen())
+        {
+            allowCameraInput = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
+        }
+#endif
+        if (allowCameraInput)
+        {
+            scene.CameraRef().UpdateFromInput(input, deltaTime);
+        }
+        else if (input.IsMouseCaptured())
+        {
+            input.SetMouseCapture(false);
+        }
+    }
+
+    ScheduleHudBuild(renderer, scene);
+}
+
+void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, bool editorKeyPressed)
+{
+    const bool typing = renderer.ImGuiWantsTextInput();
+    // Through ImGui as well: a panel with the keyboard's focus keeps a letter from InputManager (App::WndProc).
+    const bool escape = !typing && (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || input.WasActionPressed("StopPlay"));
+    const bool eject = !typing && input.WasActionPressed("PossessEject");
+    const bool freeMouse = !typing && input.WasActionPressed("FreeMouse");
+#if WITH_EDITOR
+    // The editor's world stands: only a session runs it. The panels go with the start and come back with the stop.
+    using PlayRequest = EditorController::PlayRequest;
+    PlayRequest request = editorController_.ConsumePlayRequest();
+    if (!typing && ((ImGui::IsKeyPressed(ImGuiKey_P, false) && ImGui::GetIO().KeyAlt) || input.WasActionPressed("Play")))
+    {
+        request = PlayRequest{ PlayRequest::Kind::Play, false, true };
+    }
+    const bool fromBoot = g_bootPlay;
+    if (fromBoot)
+    {
+        g_bootPlay = false;
+        request = PlayRequest{ PlayRequest::Kind::Play, g_camOverride, false }; // --cam-pos names where to start; a script does not take the owner's mouse
+    }
+    if (!playSession_.Playing())
+    {
+        if (request.kind == PlayRequest::Kind::Play)
+        {
+            game::PlayerStart start;
+            const bool hasStart = !request.fromCamera && editorController_.FindPlayerStart(start);
+            editorOpenBeforePlay_ = editorController_.IsOpen();
+            editorController_.SetOpen(false);
+            playSession_.Begin(renderer, scene, input, hasStart ? &start : nullptr, request.takeMouse, !fromBoot);
+        }
+    }
+    else if (request.kind == PlayRequest::Kind::Stop || escape || editorKeyPressed || editorController_.IsOpen()) // open by F2 or Developer Controls' checkbox: opening it stops the session
+    {
+        const bool editorAsked = editorKeyPressed || editorController_.IsOpen();
+        playSession_.End(renderer, scene, input);
+        editorController_.SetOpen(editorOpenBeforePlay_ || editorAsked);
+    }
+    else
+    {
+        if (eject) { playSession_.TogglePossess(scene); }
+        if (freeMouse) { playSession_.ToggleFreeMouse(); }
+        if (!typing && input.WasActionPressed("KeepSimulation"))
+        {
+            playSession_.SetStatus(editorController_.KeepSimulation(renderer, scene, levelManager), ImGui::GetTime() + 4.0);
+        }
+    }
+    editorController_.SetPlaying(playSession_.Playing());
+    physics::GameSettings().simulate = playSession_.Playing();
+#else
+    // The game: the world always runs, and there is no Stop. The camera is free until --play or F8: every shot and measurement of a Release build stands on that.
+    (void)levelManager;
+    (void)editorKeyPressed;
+    physics::GameSettings().simulate = true;
+    if (!playSession_.Playing())
+    {
+        if (g_bootPlay || eject)
+        {
+            const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+            const bool fromCamera = g_bootPlay && g_camOverride;
+            playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, eject, false);
+            g_bootPlay = false;
         }
     }
     else
     {
-        if (input.IsMouseCaptured()) { input.SetMouseCapture(false); }
-        scene.Physics().SetWalkIntent(Math::float3(0.0f, 0.0f, 0.0f), false);
+        if (eject) { playSession_.TogglePossess(scene); }
+        if (escape || freeMouse) { playSession_.ToggleFreeMouse(); }
     }
+#endif
+    hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
+}
 
-    ScheduleHudBuild(renderer, scene);
+void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input)
+{
+#if WITH_EDITOR
+    game::PlayerStart start;
+    const bool hasStart = editorController_.FindPlayerStart(start);
+    if (!playSession_.OnLevelLoaded(renderer, scene, input, hasStart ? &start : nullptr))
+    {
+        editorController_.SetOpen(editorOpenBeforePlay_);
+        editorController_.SetPlaying(false);
+    }
+#else
+    const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
+    playSession_.OnLevelLoaded(renderer, scene, input, start ? &*start : nullptr);
+#endif
 }
 
 void AppController::BuildHud(Renderer& renderer, const Scene& scene)
@@ -337,6 +431,10 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     {
         const int minutes = static_cast<int>(hudTimeOfDayHours_ * 60.0f) % (24 * 60);
         line(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), L"Time: %02d:%02d", minutes / 60, minutes % 60);
+    }
+    if (!hudPlayLine_.empty())
+    {
+        line(8, 8 + 32 + 18 + 18, 16.0f, float4(0.6f, 1, 0.6f, 1), L"%ls", hudPlayLine_.c_str());
     }
 
     //tb->AddTextfShadow(8, 8 + 32 + 32, 32.0f, float4(1, 1, 1, 0.99f), true, L"A quick brown fox 1234567890 ABCDEEFG");

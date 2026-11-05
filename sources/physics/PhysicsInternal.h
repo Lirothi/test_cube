@@ -2,6 +2,8 @@
 
 // Jolt's headers, for sources/physics/*.cpp only: everything else talks to physics/PhysicsWorld.h. Those files are compiled with
 // the library's defines and /arch:AVX2 (test_cube.vcxproj, third_party/jolt_defines.props).
+#include "physics/PhysicsWorld.h" // PlayerSettings, PlayerInput: what PlayerBody takes
+
 #include <Jolt/Jolt.h>
 
 #include <Jolt/Core/Factory.h>
@@ -130,21 +132,39 @@ namespace physics
 
     // PhysicsCharacter.cpp: a capsule on the ground, UE's walking mode. Not a body: collision queries only, pushing bodies by
     // impulses as it goes (Jolt's CharacterVirtual). `Feet` is its origin.
-    class WalkingCharacter
+    // A height no water reaches: no water here.
+    inline constexpr float kNoWater = -1.0e30f;
+
+    // The player's capsule and UE's character movement over it. Its origin is at the feet.
+    class PlayerBody
     {
     public:
-        WalkingCharacter(JPH::PhysicsSystem& system, JPH::Vec3Arg feet);
-        ~WalkingCharacter();
-        void Update(float dt, JPH::Vec3Arg desiredVelocity, bool jump, bool canPushBodies, JPH::TempAllocator& temp);
+        PlayerBody(JPH::PhysicsSystem& system, JPH::Vec3Arg feet, const PlayerSettings& settings);
+        ~PlayerBody();
+        void Update(float dt, const PlayerInput& input, const PlayerSettings& settings, float waterHeight, JPH::TempAllocator& temp);
         JPH::Vec3 Feet() const;
-        void SetFeet(JPH::Vec3Arg feet);
-        bool OnGround() const;
+        void SetFeet(JPH::Vec3Arg feet); // a teleport: the speed goes too
+        JPH::Vec3 Eye(const PlayerSettings& settings) const;
+        PlayerMode Mode() const;
+        bool OnGround() const { return onGround_; }
+        bool Crouched() const { return crouched_; }
+        float HorizontalSpeed() const;
 
     private:
-        class Listener;
         JPH::PhysicsSystem& system_;
-        std::unique_ptr<Listener> listener_;
         JPH::Ref<JPH::CharacterVirtual> character_;
+        JPH::RefConst<JPH::Shape> standing_;
+        JPH::RefConst<JPH::Shape> crouching_;
+        JPH::Vec3 horizontal_ = JPH::Vec3::sZero(); // along the ground, over whatever it stands on
+        JPH::Vec3 lastGroundFlat_ = JPH::Vec3::sZero();
+        float vertical_ = 0.0f;
+        float sinceGround_ = 1.0f;
+        float sinceJumpPress_ = 1.0f;
+        float eyeFeetY_ = 0.0f;   // the feet as the eye follows them: a step up eases in, the capsule does not wait
+        float crouchShare_ = 0.0f; // 0 standing, 1 crouched: the eye's
+        bool onGround_ = false;
+        bool crouched_ = false;
+        bool swimming_ = false;
     };
 
     // The conversions. Numbers cross as they are, no change of handedness (docs/physics_plan.md 3.3, gate `pose`).

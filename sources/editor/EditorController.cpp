@@ -41,6 +41,7 @@
 #include "editor/EditorFraming.h"
 #include "editor/commands/CreateDocumentObjectCommand.h"
 #include "editor/scene/EditorZone.h"
+#include "editor/scene/EditorPlayerStart.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
@@ -2714,6 +2715,26 @@ void EditorController::OnLevelChangeRequestCompleted(const LevelChangeRequest& r
     }
 }
 
+bool EditorController::FindPlayerStart(game::PlayerStart& out) const
+{
+    const EditorObject* object = editorplayerstart::Find(document_);
+    if (!object) { return false; }
+    editorplayerstart::FromObject(*object, out);
+    return true;
+}
+
+std::string EditorController::KeepSimulation(Renderer& renderer, Scene& scene, LevelManager& levelManager)
+{
+    EditorContext ctx{ renderer, scene, levelManager, document_, selection_ };
+    const std::vector<EditorObjectId> only = selection_.Ordered();
+    std::string status;
+    auto keep = only.empty() ? nullptr : BuildKeepSimulationCommand(ctx, &only, status);
+    // Nothing in the selection moved -- it is whatever was last touched, often the Player Start itself: then what is meant is everything that did.
+    if (!keep) { keep = BuildKeepSimulationCommand(ctx, nullptr, status); }
+    if (keep) { commandStack_.Execute(ctx, std::move(keep)); }
+    return status;
+}
+
 bool EditorController::McpLevelHost::Save(std::string& outText)
 {
     EditorSceneDocument& document = owner_.document_;
@@ -3135,6 +3156,7 @@ void EditorController::Draw(
             editormcp::SetImportHost(&mcpImportHost_);
             mcpLevelHost_.levelManager = &levelManager;
             editormcp::SetLevelHost(&mcpLevelHost_);
+            editormcp::SetPlayHost(&mcpPlayHost_);
             editormcp::SetThumbnailHost(&mcpThumbnailHost_);
             mcpImportHost_.Tick();
             mcpThumbnailHost_.Tick(renderer, scene);
@@ -3891,6 +3913,14 @@ void EditorController::Draw(
             }
             if (ImGui::BeginMenu("Create"))
             {
+                if (ImGui::MenuItem("Player Start"))
+                {
+                    commandStack_.Execute(ctx, std::make_unique<CreateDocumentObjectCommand>(editorplayerstart::BuildObject(scene)));
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("Where Play starts: its feet where the camera looks, facing as it faces. Without one Play starts from the camera.");
+                }
                 if (ImGui::BeginMenu("Camera"))
                 {
                     if (ImGui::MenuItem("Free Camera Start"))
@@ -4090,32 +4120,10 @@ void EditorController::Draw(
                 }
                 ImGui::EndMenu();
             }
-            // UE's Simulate and Keep Simulation Changes (docs/physics_plan.md). The bodies' poses are render offsets: Stop puts
-            // everything back, and a Save in between writes the level as authored.
+            // Only what is looked at. The world runs in Play, and Keep is K there: the level stands still while it is edited (docs/play_mode_plan.md).
             if (ImGui::BeginMenu("Physics"))
             {
                 physics::Settings& settings = physics::GameSettings();
-                ImGui::MenuItem("Simulate", nullptr, &settings.simulate);
-                if (ImGui::IsItemHovered())
-                {
-                    ImGui::SetTooltip("The dynamic bodies fall and collide. Off (Stop) puts them back where the level has them.");
-                }
-                std::string keepStatus;
-                if (ImGui::MenuItem("Keep Selected", nullptr, false, settings.simulate && !selection_.Ordered().empty()))
-                {
-                    const std::vector<EditorObjectId> only = selection_.Ordered();
-                    if (auto keep = BuildKeepSimulationCommand(ctx, &only, keepStatus)) { commandStack_.Execute(ctx, std::move(keep)); }
-                }
-                if (ImGui::MenuItem("Keep All", nullptr, false, settings.simulate))
-                {
-                    if (auto keep = BuildKeepSimulationCommand(ctx, nullptr, keepStatus)) { commandStack_.Execute(ctx, std::move(keep)); }
-                }
-                ImGui::Separator();
-                ImGui::MenuItem("Walk", nullptr, &settings.walk);
-                if (ImGui::IsItemHovered())
-                {
-                    ImGui::SetTooltip("The camera stands on a capsule on the ground: the same keys, gravity and walls.");
-                }
                 bool showShapes = settings.debug != 0;
                 if (ImGui::MenuItem("Show Collision", nullptr, &showShapes)) { settings.debug = showShapes ? 1 : 0; }
                 ImGui::EndMenu();
@@ -4155,6 +4163,23 @@ void EditorController::Draw(
                 ImGui::EndMenu();
             }
             ImGui::EndMenuBar();
+        }
+
+        // UE's Play: Alt+P here or with the panels closed. The panels go, the world runs, Esc stops it and everything is back as it was. Under the menu bar and not in it: this
+        // panel is narrow, and the bar is cut off before its end.
+        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.16f, 0.47f, 0.22f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.60f, 0.30f, 1.0f));
+        if (ImGui::Button("Play")) { playRequest_ = PlayRequest{ PlayRequest::Kind::Play, false, true }; }
+        ImGui::PopStyleColor(2);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Alt+P. From the level's Player Start, from the camera without one.\nWASD, the mouse, Space, Shift, C. Esc stops; F8 ejects; K keeps the bodies' poses; Shift+F1 frees the mouse.");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Play From Camera")) { playRequest_ = PlayRequest{ PlayRequest::Kind::Play, true, true }; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("UE's Play From Here: the player falls from where the camera stands, Player Start or not.");
         }
 
         if (requestOpenLevelDialog || requestSaveLevelAsDialog)
@@ -4426,6 +4451,7 @@ void EditorController::Draw(
     editormcp::SetImportHost(&mcpImportHost_);
     mcpLevelHost_.levelManager = &levelManager;
     editormcp::SetLevelHost(&mcpLevelHost_);
+    editormcp::SetPlayHost(&mcpPlayHost_);
     editormcp::SetThumbnailHost(&mcpThumbnailHost_);
     mcpImportHost_.Tick();
     mcpThumbnailHost_.Tick(ctx.renderer, ctx.scene);

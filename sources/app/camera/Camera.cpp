@@ -5,21 +5,13 @@
 #include <algorithm>
 #include <cmath>
 
-void Camera::UpdateFromInput(InputManager& input, float dt) {
-    // Toggle camera rotation via the action
-    const bool lookHeld = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
-    if (lookHeld) {
-        if (!input.IsMouseCaptured()) {
-            input.SetMouseCapture(true);
-        }
-        // Scale already includes sensitivity/invert
-        lookOwedYaw_ += input.GetActionAxis("LookX");
-        lookOwedPitch_ += input.GetActionAxis("LookY");
-    } else {
-        if (input.IsMouseCaptured()) {
-            input.SetMouseCapture(false);
-        }
-    }
+void Camera::AddLookInput(InputManager& input) {
+    // Scale already includes sensitivity/invert
+    lookOwedYaw_ += input.GetActionAxis("LookX");
+    lookOwedPitch_ += input.GetActionAxis("LookY");
+}
+
+void Camera::TakeOwedLook(float dt) {
     // Mouse smoothing (g_cameraMouseSmoothingMs). The raw input arrives as whole counts per frame, and at a few hundred
     // frames a second against the mouse's own polling a steady hand gives 3, 5, 2, 6 counts in a row -- a turn that
     // stutters from frame to frame (owner, 2026-10-27, recording a video: "unpleasant jerks when turning the camera").
@@ -40,6 +32,24 @@ void Camera::UpdateFromInput(InputManager& input, float dt) {
         AddYaw(yaw);
         AddPitch(pitch);
     }
+}
+
+void Camera::UpdateFromInput(InputManager& input, float dt, bool mouseLook) {
+    // Toggle camera rotation via the action
+    const bool lookHeld = input.IsActionDown("LookToggle") && !input.IsKeyDown(VK_MENU);
+    if (mouseLook) {
+        AddLookInput(input); // the capture is the session's
+    } else if (lookHeld) {
+        if (!input.IsMouseCaptured()) {
+            input.SetMouseCapture(true);
+        }
+        AddLookInput(input);
+    } else {
+        if (input.IsMouseCaptured()) {
+            input.SetMouseCapture(false);
+        }
+    }
+    TakeOwedLook(dt);
 
     // Adjust movement speed with the mouse wheel
     const int wheel = input.MouseWheelDelta();

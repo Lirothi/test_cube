@@ -116,6 +116,17 @@ namespace editormcp
     };
     void SetLevelHost(LevelHost* host);
 
+    // play / stop, and what they forbid. The session is the app's (docs/play_mode_plan.md): the editor hands the request over at this frame's end. A host without one (the gate)
+    // refuses. Frame thread only.
+    class PlayHost
+    {
+    public:
+        virtual ~PlayHost() = default;
+        virtual bool Playing() const = 0;
+        virtual void Request(bool play, bool fromCamera) = 0;
+    };
+    void SetPlayHost(PlayHost* host);
+
     // The running app's own knobs, for set_settings / get_readouts: the `--set` name table (App.cpp
     // ApplySweepValue) and what the renderer measured. App registers it -- it owns both -- and a
     // host without one (the gate) answers those tools with a refusal. Frame thread only.

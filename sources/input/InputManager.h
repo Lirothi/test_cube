@@ -49,6 +49,8 @@ public:
     // Mouse capture (confine + cursor)
     void SetMouseCapture(bool capture);
     bool IsMouseCaptured() const { return mouseCaptured_; }
+    // Whether the person is at this window. Capture confines the cursor for the whole desktop: a window in the background has no business taking it.
+    bool WindowIsForeground() const { return GetForegroundWindow() == hwnd_; }
 
 private:
     void HandleRawInput_(HRAWINPUT hRaw);

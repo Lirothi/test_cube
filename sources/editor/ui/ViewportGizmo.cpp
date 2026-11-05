@@ -33,6 +33,7 @@
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "editor/scene/EditorZone.h"
+#include "editor/scene/EditorPlayerStart.h"
 #include "rendering/debug/DebugDraw.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "imgui.h"
@@ -777,6 +778,15 @@ void ViewportGizmo::Update(EditorContext& ctx,
                     drawWorldIcon(Math::float3(pos.x, pos.y + 6.0f, pos.z), obj.id, 0, 2, tint);
                     continue;
                 }
+                if (obj.type == game::kPlayerStartType)
+                {
+                    const auto& feet = obj.transform.position;
+                    const ImU32 tint = !obj.enabled ? IM_COL32(150, 150, 150, 170)
+                        : ctx.selection.Contains(obj.id) ? IM_COL32(255, 200, 40, 255)
+                                                       : IM_COL32(90, 255, 115, 255);
+                    drawWorldIcon(Math::float3(feet.x, feet.y + 1.0f, feet.z), obj.id, 1, 2, tint); // inside the capsule the debug draw puts round it
+                    continue;
+                }
                 if (obj.type != "freeCameraStart")
                 {
                     continue;
@@ -907,6 +917,11 @@ void ViewportGizmo::Update(EditorContext& ctx,
             // The type first: a Zone holds a string and two vectors, and in Debug (_ITERATOR_DEBUG_LEVEL 2) every one of
             // them allocates its iterator proxy even empty -- built for each of wind_test's 1564 objects every frame, this
             // loop was 3.76 of ViewportGizmo::Update's 4.25 ms on a level without a single zone (2026-11-03).
+            if (object.type == game::kPlayerStartType)
+            {
+                editorplayerstart::Draw(*dd, object, ctx.selection.Contains(object.id));
+                continue;
+            }
             if (object.type != editorzone::kTypeName)
             {
                 continue;

@@ -38,7 +38,7 @@ namespace
 
     bool IsDocumentOnlyObject(const EditorObject& object)
     {
-        return object.type == "freeCameraStart";
+        return object.type == "freeCameraStart" || object.type == "playerStart";
     }
 }
 

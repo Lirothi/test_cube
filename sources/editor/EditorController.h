@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "app/game/PlayerStart.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/AssetThumbnailCache.h"
 #include "editor/commands/EditorCommandStack.h"
@@ -74,6 +75,25 @@ public:
         toggleLogWindowRequested_ = false;
         return requested;
     }
+
+    // The play session (docs/play_mode_plan.md) is AppController's: it puts this editor away and gives it back. The Play buttons and MCP ask here, and it takes the request after Draw.
+    struct PlayRequest
+    {
+        enum class Kind { None, Play, Stop } kind = Kind::None;
+        bool fromCamera = false;
+        bool takeMouse = true;
+    };
+    PlayRequest ConsumePlayRequest()
+    {
+        const PlayRequest request = playRequest_;
+        playRequest_ = PlayRequest{};
+        return request;
+    }
+    void SetPlaying(bool playing) { playing_ = playing; }
+    // The level's Player Start as the document has it now. False = none: Play starts from the camera.
+    bool FindPlayerStart(game::PlayerStart& out) const;
+    // K in Play, UE's Keep Simulation Changes: the selection's bodies if any of them moved, else every body that moved, one undo entry. What happened, for the HUD.
+    std::string KeepSimulation(Renderer& renderer, Scene& scene, LevelManager& levelManager);
 
 private:
     enum class LevelFileDialogMode
@@ -248,6 +268,25 @@ private:
         EditorController& owner_;
     };
     McpLevelHost mcpLevelHost_{ *this };
+
+    // play / stop: the session's own host for MCP. Registered next to the import host every frame.
+    class McpPlayHost final : public editormcp::PlayHost
+    {
+    public:
+        explicit McpPlayHost(EditorController& owner) : owner_(owner) {}
+        ~McpPlayHost() override { editormcp::SetPlayHost(nullptr); }
+        bool Playing() const override { return owner_.playing_; }
+        void Request(bool play, bool fromCamera) override
+        {
+            owner_.playRequest_ = PlayRequest{ play ? PlayRequest::Kind::Play : PlayRequest::Kind::Stop, fromCamera, false }; // a script does not take the owner's mouse
+        }
+
+    private:
+        EditorController& owner_;
+    };
+    McpPlayHost mcpPlayHost_{ *this };
+    PlayRequest playRequest_;
+    bool playing_ = false;
 
     // thumbnails: the MCP door's view of the thumbnail cache. The Content Browser drives the cache only while it
     // draws -- and it usually sits behind the Command Bar's tab -- so a queued asset is driven here, every frame,

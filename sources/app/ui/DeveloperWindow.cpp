@@ -1,3 +1,4 @@
+#include "app/game/PlayerStart.h"
 #include "app/ui/DeveloperWindow.h"
 
 #include <algorithm>
@@ -3445,8 +3446,6 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 physics::Settings& settings = physics::GameSettings();
                 ImGui::Checkbox("World", &settings.enabled);
                 if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Off: no bodies, no shapes, no cost; every object back where the level has it. The A/B."); }
-                ImGui::Checkbox("Simulate", &settings.simulate);
-                ImGui::Checkbox("Walk", &settings.walk);
                 bool showShapes = settings.debug != 0;
                 if (ImGui::Checkbox("Show collision", &showShapes)) { settings.debug = showShapes ? 1 : 0; }
                 ImGui::DragFloat("Show radius (m)", &settings.debugRadius, 1.0f, 1.0f, 1000.0f, "%.0f");
@@ -3464,6 +3463,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::Text("%u meshes of %llu triangles, %u hulls, %u primitive; the last batch built in %.1f ms", ps.meshShapes, static_cast<unsigned long long>(ps.shapeTriangles),
                     ps.hullShapes, ps.primitiveShapes, ps.lastBuildMs);
                 ImGui::Text("%.1f MB held", static_cast<double>(ps.bytes) / (1024.0 * 1024.0));
+                ImGui::SeparatorText("The player");
+                const physics::PlayerState player = scene.Physics().GetPlayerState();
+                if (player.exists)
+                {
+                    ImGui::Text("%s%s, %.2f m/s; the feet at %.2f %.2f %.2f", physics::PlayerModeName(player.mode), player.crouched ? ", crouched" : "", player.speed, player.feet.x, player.feet.y, player.feet.z);
+                }
+                else
+                {
+                    ImGui::TextDisabled(ps.simulating ? "No body: the camera is free. F8 takes one." : "The world stands while the level is edited. Play (Alt+P) runs it.");
+                }
+                for (const game::PlayerKey& key : game::PlayerKeys())
+                {
+                    ImGui::DragFloat(key.label, &(settings.player.*(key.member)), key.speed, key.lo, key.hi, key.format);
+                }
+                ImGui::TextDisabled("Height, crouched height and radius are read when the body is made. A level's Player Start says its own at Play, and what is set here during Play ends with it.");
             }
 
             if (activeTab_ == Tab::Tessy)

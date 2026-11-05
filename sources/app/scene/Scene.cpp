@@ -1735,7 +1735,7 @@ void Scene::TickPhysics(float deltaTime)
     physics_.SetCamera(camera_.GetPosition());
     physics_.Tick(deltaTime);
     Math::float3 eye;
-    if (physics_.WalkEye(eye)) { camera_.SetPosition(eye); } // physics.walk: the hand-over takes this frame's pose
+    if (physics_.PlayerEye(eye)) { camera_.SetPosition(eye); } // the player: the hand-over takes this frame's pose
 }
 
 void Scene::TickNightLamps(float deltaTime)

@@ -2,6 +2,7 @@
 
 #include "app/GraphicsSettings.h"
 #include "app/ui/DeveloperWindow.h"
+#include "app/game/PlaySession.h"
 #include "app/scene/SceneFrameData.h"
 #include "core/task/TaskSystem.h"
 #if WITH_EDITOR
@@ -26,6 +27,8 @@ public:
     // Shutdown, the GPU idle, before Renderer::Shutdown: the UI's own GPU textures go while the device is there.
     void ReleaseGpuResources(Renderer& renderer);
     void Tick(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, float deltaTime);
+    // After a level load: the play session goes on from the new level's Player Start, or ends if it was the editor's.
+    void OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input);
     void BuildHud(Renderer& renderer, const Scene& scene);
     void WaitForHudBuild();
     // Game thread plan G6: the HUD's lines (formatted by the build task, the game half's) into the render half's text
@@ -47,6 +50,8 @@ public:
 
 private:
     void ScheduleHudBuild(Renderer& renderer, const Scene& scene);
+    // The play session's keys and requests (docs/play_mode_plan.md), and what it says to the world this frame.
+    void TickPlay(InputManager& input, Renderer& renderer, Scene& scene, LevelManager& levelManager, bool editorKeyPressed);
 
     SceneRenderSettings settings_{};
     GraphicsSettingsManager graphicsSettings_;
@@ -63,6 +68,9 @@ private:
         std::wstring text;
     };
     std::vector<HudLine> hudLines_; // G6: the build task's output, published at the hand-over
+    PlaySession playSession_;
+    bool editorOpenBeforePlay_ = false;
+    std::wstring hudPlayLine_; // written in Tick, before the build is scheduled
     DeveloperWindow developerWindow_;
 #if WITH_EDITOR
     EditorController editorController_;

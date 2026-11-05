@@ -358,6 +358,7 @@ namespace editormcp
         ImportHost* g_importHost = nullptr; // frame thread only, like every document tool
         RuntimeHost* g_runtimeHost = nullptr; // the same
         LevelHost* g_levelHost = nullptr; // the same
+        PlayHost* g_playHost = nullptr; // the same
         ThumbnailHost* g_thumbnailHost = nullptr; // the same
         // Game thread plan G6: calls that read the RENDER half (get_readouts: the exposure, the lights' shadows, VSM,
         // Tessy) run at the hand-over (ServiceHandOver from App's Sync), where both halves may be read.
@@ -383,6 +384,11 @@ namespace editormcp
     void SetThumbnailHost(ThumbnailHost* host)
     {
         g_thumbnailHost = host;
+    }
+
+    void SetPlayHost(PlayHost* host)
+    {
+        g_playHost = host;
     }
 
     void SetLevelHost(LevelHost* host)
@@ -667,6 +673,26 @@ namespace editormcp
                     json::array({ "name" })) },
             },
             {
+                { "name", "play" },
+                { "description",
+                  "Start the play session, as the editor's Play does (UE's Play In Editor): the panels go, the world "
+                  "simulates, the player stands at the level's Player Start, or falls from the camera without one. The "
+                  "person's mouse stays theirs: drive the player with set_settings player.testMoveX / testMoveZ (-1..1, the "
+                  "world's axes) / testJump / testCrouch / testSprint, read get_readouts' block `player`. While it plays the "
+                  "level cannot be edited: run_action (but keepSimulation), undo, save_level and import_asset are refused. Reading, "
+                  "screenshots and set_settings work; open_level ends the session. It starts at this frame's end." },
+                { "inputSchema", ObjectSchema({
+                    { "fromCamera", { { "type", "boolean" },
+                        { "description", "start from the camera even with a Player Start (default false)" } } } }) },
+            },
+            {
+                { "name", "stop" },
+                { "description",
+                  "Stop the play session: every body back where the level has it, the camera where it stood, the panels as "
+                  "they were. Nothing of it is in the level, unless keepSimulation was asked for." },
+                { "inputSchema", ObjectSchema() },
+            },
+            {
                 { "name", "save_level" },
                 { "description",
                   "Save the open level to its file, exactly as Ctrl+S writes it (the editor's own "
@@ -792,6 +818,38 @@ namespace editormcp
         outRecord = CallRecord{};
         outRecord.title = name;
         EditorContext& ctx = actionCtx.editor;
+
+        if (name == "play" || name == "stop")
+        {
+            if (!g_playHost)
+            {
+                return Error("There is no running app here to play in.");
+            }
+            const bool play = name == "play";
+            ToolResult result;
+            if (play == g_playHost->Playing())
+            {
+                result.text = play ? "Already playing." : "Not playing.";
+                return result;
+            }
+            g_playHost->Request(play, arguments.is_object() && arguments.value("fromCamera", false));
+            result.text = play ? "Playing from this frame's end. get_readouts: block player." : "Stopped at this frame's end: the bodies and the camera back.";
+            outRecord.verdict = result.text;
+            outRecord.show = true;
+            return result;
+        }
+        // A session runs on the level as it stands: an edit under it is a level nobody meant, and Stop would keep half of it.
+        if (g_playHost && g_playHost->Playing())
+        {
+            const json command = (arguments.is_object() && arguments.contains("command")) ? arguments["command"] : arguments;
+            const bool keep = name == "run_action" && command.is_object() && command.value("action", std::string()) == "keepSimulation";
+            if (!keep && (name == "run_action" || name == "undo" || name == "save_level" || name == "import_asset"))
+            {
+                outRecord.failed = true;
+                outRecord.verdict = "refused: the level is playing";
+                return Error("The level is playing: call stop first. Only keepSimulation edits it from here.");
+            }
+        }
 
         if (name == "editor_guide")
         {

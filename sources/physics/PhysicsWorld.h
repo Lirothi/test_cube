@@ -31,11 +31,63 @@ namespace physics
     void Unregister(RenderableObject* object);
     void NotifyChanged(RenderableObjectBase* object);
 
+    // The player's body and how it moves: UE's UCharacterMovementComponent, its formulas and numbers in metres (docs/play_mode_plan.md). --set / MCP player.*, a level's
+    // Player Start may say its own (app/game/PlayerStart.h). height, crouchHeight and radius are read when the body is made, the rest every frame.
+    struct PlayerSettings
+    {
+        float walkSpeed = 4.0f;       // m/s
+        float sprintSpeed = 6.4f;     // m/s, Shift
+        float crouchSpeed = 2.0f;     // m/s, UE's half of the walk
+        float swimSpeed = 2.0f;       // m/s
+        float acceleration = 20.48f;  // m/s2, UE's MaxAcceleration 2048 cm/s2
+        float braking = 20.48f;       // m/s2, UE's BrakingDecelerationWalking
+        float friction = 8.0f;        // 1/s, UE's GroundFriction
+        float airControl = 0.35f;     // the share of the acceleration in the air: UE's first person template; its component's default is 0.05
+        float jumpSpeed = 4.2f;       // m/s, UE's JumpZVelocity 420 cm/s: 0.9 m up
+        float height = 1.8f;          // m, the capsule
+        float crouchHeight = 1.1f;    // m
+        float radius = 0.3f;          // m
+        float eyeHeight = 1.65f;      // m over the feet
+        float crouchEyeHeight = 0.95f; // m over the feet
+        float stepHeight = 0.4f;      // m: a ledge this high is walked up
+        float maxSlopeDeg = 50.0f;    // a slope steeper than this is a wall
+        float swimDepth = 1.3f;       // water deeper than this over the feet floats the body: the eye just over the surface, no more walking on the bottom
+        // A script has no keyboard (MCP, the gates' live road): what the keys would say. testMoveX / Z in the world's axes, length up to 1.
+        float testMoveX = 0.0f;
+        float testMoveZ = 0.0f;
+        bool testJump = false;        // one press, cleared when taken
+        bool testCrouch = false;
+        bool testSprint = false;
+    };
+
+    // What the keys say this frame.
+    struct PlayerInput
+    {
+        Math::float3 move;   // on the ground, in the world's axes, length up to 1
+        bool jump = false;   // pressed this frame
+        bool crouch = false; // held
+        bool sprint = false; // held
+    };
+
+    enum class PlayerMode : std::uint8_t { Walking, Falling, Swimming };
+    const char* PlayerModeName(PlayerMode mode);
+
+    struct PlayerState
+    {
+        bool exists = false;
+        bool possessed = false;   // false: F8, the body stands and the camera is free
+        bool onGround = false;
+        bool crouched = false;
+        PlayerMode mode = PlayerMode::Falling;
+        float speed = 0.0f;       // m/s, along the ground
+        Math::float3 feet;
+    };
+
     // --set / MCP physics.*. Not render knobs: only the game half reads them.
     struct Settings
     {
         bool enabled = true;     // physics.enabled: 0 = no world at all, the A/B
-        bool simulate = true;    // physics.simulate: the shipped game runs; opening the editor turns it off (AppController)
+        bool simulate = true;    // The world runs. NOT a knob: the play session says, every frame (AppController); the editor's world stands, a build without the editor always runs
         int debug = 0;           // physics.debug: 1 = the collision shapes as lines
         float debugRadius = 40.0f; // physics.debugRadius: triangles farther than this from the camera are not drawn
         float stepHz = 60.0f;    // physics.stepHz
@@ -53,13 +105,7 @@ namespace physics
         float killY = -200.0f;   // physics.killY: UE's KillZ, a body below this falls asleep and Keep leaves it
         float angularDamping = 1.0f; // physics.angularDamping, 1/s: a Dynamic body whose asset does not say
         float rollingResistance = 0.2f; // physics.rollingResistance: the sine of the slope a Dynamic body whose asset does not say still rests on (11.5 degrees)
-        bool walk = false;       // physics.walk: the camera stands on a capsule on the ground
-        float walkSpeed = 1.6f;  // physics.walkSpeed, m/s
-        float walkSprint = 2.5f; // physics.walkSprint: Sprint's multiple
-        float eyeHeight = 1.65f; // physics.eyeHeight, m over the feet
-        float walkMaxDepth = 1.3f; // physics.walkMaxDepth: water deeper than this stops the walk, m
-        float walkTestX = 0.0f;  // physics.walkTestX / Z, m/s: walks without a key, for a script (MCP has no keyboard)
-        float walkTestZ = 0.0f;
+        PlayerSettings player;   // player.*
     };
     Settings& GameSettings();
 
@@ -96,8 +142,6 @@ namespace physics
         std::uint64_t stepErrors = 0;   // steps that ran out of room: contacts or pairs left out, bodies fall through
         bool simulating = false;
         bool worldExists = false;
-        bool walking = false;
-        bool walkOnGround = false;
     };
 
     // One simulated object's pose as authored values: what Keep writes.
@@ -128,12 +172,18 @@ namespace physics
         void LoadFinished();
         // The eye for physics.debug and for the character.
         void SetCamera(const Math::float3& position) { camera_ = position; }
-        // The water for the "buoyant" Dynamic bodies and the walk's depth. Null = none.
+        // The water for the "buoyant" Dynamic bodies and the player's swim. Null = none.
         void SetOcean(const OceanRenderable* ocean);
-        // physics.walk: the input of this frame (m/s on the ground, a jump), and where the eye stands after this frame's Tick.
-        // False = not walking, the camera is free.
-        void SetWalkIntent(const Math::float3& velocity, bool jump);
-        bool WalkEye(Math::float3& out) const;
+        // The player: a body from `feet` on, falling if there is nothing under them; below physics.killY it comes back there. A world gone (physics.enabled:0) brings it back with
+        // the world. On the frame's clock, in Tick: it is the camera, and a camera moves every frame.
+        void SpawnPlayer(const Math::float3& feet);
+        void RemovePlayer();
+        // False = F8: the body stands where it is, takes no keys, and PlayerEye says nothing.
+        void SetPlayerPossessed(bool possessed);
+        void SetPlayerInput(const PlayerInput& input);
+        // Where the eye stands after this frame's Tick. False = no player, or not possessed: the camera is free.
+        bool PlayerEye(Math::float3& out) const;
+        PlayerState GetPlayerState() const;
 
         bool RayCast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out) const;
 

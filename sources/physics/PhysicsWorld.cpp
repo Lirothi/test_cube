@@ -292,12 +292,13 @@ namespace physics
         std::vector<Entry*> kinematics;
         std::vector<Entry*> floaters;
         const OceanRenderable* ocean = nullptr;
-        std::unique_ptr<WalkingCharacter> character;
-        Math::float3 walkIntent;
-        bool walkJump = false;
-        Math::float3 walkEye;
-        float walkEyeFeetY = 0.0f;
-        bool walkEyeValid = false;
+        std::unique_ptr<PlayerBody> player;
+        bool playerWanted = false;
+        bool playerPossessed = true;
+        Math::float3 playerSpawn;
+        PlayerInput playerInput;
+        Math::float3 playerEye;
+        bool playerEyeValid = false;
         std::unordered_set<RenderableObjectBase*> dirty;
         std::vector<Event> eventScratch;
         JPH::BodyIDVector activeScratch;
@@ -438,8 +439,8 @@ namespace physics
             poseOwed = false;
             stepsOwed = 0;
             lines.reset();
-            character.reset();
-            walkEyeValid = false;
+            player.reset(); // playerWanted stays: the world's return brings it back
+            playerEyeValid = false;
             floaters.clear();
             for (auto& [key, entry] : entries)
             {
@@ -1024,60 +1025,49 @@ namespace physics
             }
         }
 
-        // physics.walk. On the frame's own clock, not the fixed step: it is the camera, and a camera moves every frame.
-        void TickCharacter(float deltaTime, const Math::float3& camera)
+        // The player. On the frame's own clock, not the fixed step: it is the camera, and a camera moves every frame.
+        void TickPlayer(float deltaTime)
         {
+            if (!playerWanted && !player) { return; }
+            Join(); // a character's queries and pushes must not meet a step
+            if (!playerWanted)
+            {
+                player.reset();
+                playerEyeValid = false;
+                return;
+            }
             Settings& settings = GameSettings();
-            if (settings.walk || character) { Join(); } // a character's queries and pushes must not meet a step
-            if (!settings.walk)
+            PlayerSettings& tuning = settings.player;
+            if (!player)
             {
-                character.reset();
-                walkEyeValid = false;
-                return;
-            }
-            if (!character)
-            {
-                RayHit ground;
-                const Math::float3 above(camera.x, camera.y + 0.5f, camera.z);
-                if (!Cast(above, Math::float3(0.0f, -1.0f, 0.0f), 1000.0f, ground))
-                {
-                    LOG_WARNING(logging::LogCategory::Physics, "physics.walk: no ground under the camera, staying free");
-                    settings.walk = false;
-                    return;
-                }
                 MEM_SCOPE(MemTag::Physics);
-                character = std::make_unique<WalkingCharacter>(*system, ToJolt(ground.point));
-                walkEyeFeetY = ground.point.y;
-                LOG_INFO(logging::LogCategory::Physics, "physics.walk: on the ground at {:.2f} {:.2f} {:.2f}", ground.point.x, ground.point.y, ground.point.z);
+                player = std::make_unique<PlayerBody>(*system, ToJolt(playerSpawn), tuning);
+                LOG_INFO(logging::LogCategory::Physics, "player: a body at {:.2f} {:.2f} {:.2f}", playerSpawn.x, playerSpawn.y, playerSpawn.z);
             }
-            const float dt = std::clamp(deltaTime, 1.0e-4f, 1.0f / 30.0f);
-            const JPH::Vec3 before = character->Feet();
-            const bool hasWater = ocean && ocean->IsVisibleGame();
-            const float level = hasWater ? ocean->GetWaterLevel() : 0.0f;
-            character->Update(dt, ToJolt(walkIntent) + JPH::Vec3(settings.walkTestX, 0.0f, settings.walkTestZ), walkJump, simulating, *temp);
-            walkJump = false;
-            JPH::Vec3 feet = character->Feet();
-            // The sea: down to the chest, then it stops as a wall does. Deeper already (the camera came down over the lagoon): only out.
-            if (hasWater && level - feet.GetY() > settings.walkMaxDepth && feet.GetY() < before.GetY()) // no margin: past 200 fps a frame's sinking fits in any, and it adds up
+            PlayerInput input = playerPossessed ? playerInput : PlayerInput{};
+            playerInput.jump = false;
+            input.move = input.move + Math::float3(tuning.testMoveX, 0.0f, tuning.testMoveZ);
+            input.jump = input.jump || tuning.testJump;
+            input.crouch = input.crouch || tuning.testCrouch;
+            input.sprint = input.sprint || tuning.testSprint;
+            tuning.testJump = false;
+
+            float water = kNoWater;
+            if (ocean && ocean->IsVisibleGame())
             {
-                character->SetFeet(before);
-                feet = before;
+                const OceanReadback& readback = ocean->GetReadback();
+                const JPH::Vec3 feet = player->Feet();
+                water = readback.HasSurface() ? readback.SampleHeight(feet.GetX(), feet.GetZ()) : ocean->GetWaterLevel();
             }
+            player->Update(std::clamp(deltaTime, 1.0e-4f, 1.0f / 30.0f), input, tuning, water, *temp);
             // UE's KillZ, for the one thing nothing else stops: no ground and no water under it.
-            if (feet.GetY() < settings.killY)
+            if (player->Feet().GetY() < settings.killY)
             {
-                LOG_WARNING(logging::LogCategory::Physics, "physics.walk: fell out of the world at {:.1f} {:.1f}, the camera is free again", feet.GetX(), feet.GetZ());
-                settings.walk = false;
-                character.reset();
-                walkEyeValid = false;
-                return;
+                LOG_WARNING(logging::LogCategory::Physics, "player: fell out of the world at {:.1f} {:.1f}, back at the start", player->Feet().GetX(), player->Feet().GetZ());
+                player->SetFeet(ToJolt(playerSpawn));
             }
-            // A step up eases in for the eye, not for the capsule (down and level follow at once).
-            const float tau = 0.08f;
-            if (feet.GetY() > walkEyeFeetY) { walkEyeFeetY += (feet.GetY() - walkEyeFeetY) * (1.0f - std::exp(-dt / tau)); }
-            else { walkEyeFeetY = feet.GetY(); }
-            walkEye = Math::float3(feet.GetX(), walkEyeFeetY + settings.eyeHeight, feet.GetZ());
-            walkEyeValid = true;
+            playerEye = FromJolt(player->Eye(tuning));
+            playerEyeValid = playerPossessed;
         }
 
         bool Cast(const Math::float3& origin, const Math::float3& unitDirection, float maxDistance, RayHit& out)
@@ -1374,7 +1364,7 @@ namespace physics
         if (!settings.enabled || !m.system) { return; }
         m.SetSimulating(settings.simulate);
         // These two read the world, and a step about to start would make them wait for all of it.
-        m.TickCharacter(deltaTime, camera_);
+        m.TickPlayer(deltaTime);
         m.DrawDebug(camera_);
         if (m.simulating) { m.Simulate(deltaTime); }
     }
@@ -1409,9 +1399,9 @@ namespace physics
         m.Drain();
         if (!m.system) { return; }
         m.Join();
-        // The walk stands on the level that left: its capsule goes, and the next Tick puts a new one on the ground under this level's camera.
-        m.character.reset();
-        m.walkEyeValid = false;
+        // The player stands on the level that left: its capsule goes, and the play session says where the next one starts (AppController::OnLevelLoaded).
+        m.player.reset();
+        m.playerEyeValid = false;
         // What the level that left held. What stays is what a reload would build again.
         m.EvictUnusedShapes();
         if (m.layoutChanged)
@@ -1431,17 +1421,61 @@ namespace physics
 
     void World::SetOcean(const OceanRenderable* ocean) { impl_->ocean = ocean; }
 
-    void World::SetWalkIntent(const Math::float3& velocity, bool jump)
+    void World::SpawnPlayer(const Math::float3& feet)
     {
-        impl_->walkIntent = velocity;
-        impl_->walkJump = impl_->walkJump || jump;
+        Impl& m = *impl_;
+        m.Join();
+        m.player.reset();
+        m.playerWanted = true;
+        m.playerPossessed = true;
+        m.playerSpawn = feet;
+        m.playerEyeValid = false;
+        m.playerInput = PlayerInput{};
     }
 
-    bool World::WalkEye(Math::float3& out) const
+    void World::RemovePlayer()
     {
-        if (!impl_->walkEyeValid) { return false; }
-        out = impl_->walkEye;
+        Impl& m = *impl_;
+        m.Join();
+        m.player.reset();
+        m.playerWanted = false;
+        m.playerEyeValid = false;
+        m.playerInput = PlayerInput{};
+    }
+
+    void World::SetPlayerPossessed(bool possessed)
+    {
+        impl_->playerPossessed = possessed;
+        impl_->playerEyeValid = impl_->playerEyeValid && possessed;
+    }
+
+    void World::SetPlayerInput(const PlayerInput& input)
+    {
+        const bool jump = impl_->playerInput.jump || input.jump; // a press stays until a Tick has taken it
+        impl_->playerInput = input;
+        impl_->playerInput.jump = jump;
+    }
+
+    bool World::PlayerEye(Math::float3& out) const
+    {
+        if (!impl_->playerEyeValid) { return false; }
+        out = impl_->playerEye;
         return true;
+    }
+
+    PlayerState World::GetPlayerState() const
+    {
+        const Impl& m = *impl_;
+        PlayerState state;
+        if (!m.player) { return state; }
+        state.exists = true;
+        state.possessed = m.playerPossessed;
+        state.onGround = m.player->OnGround();
+        state.crouched = m.player->Crouched();
+        state.mode = m.player->Mode();
+        state.speed = m.player->HorizontalSpeed();
+        state.feet = FromJolt(m.player->Feet());
+        return state;
     }
 
     void World::CollectSimulatedPoses(std::vector<SimulatedPose>& out) const
@@ -1475,8 +1509,6 @@ namespace physics
         if (m.system) { stats.activeBodies = m.system->GetNumActiveBodies(JPH::EBodyType::RigidBody); }
         stats.floatingBodies = static_cast<std::uint32_t>(m.floaters.size());
         stats.bytes = JoltBytes();
-        stats.walking = m.character != nullptr;
-        stats.walkOnGround = m.character && m.character->OnGround();
         return stats;
     }
 

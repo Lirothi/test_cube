@@ -1008,6 +1008,10 @@ int WINAPI WinMain(
         if (std::strstr(lpCmdLine, "--editor")) {
             g_bootEditor = true;
         }
+        // "--play": boot into the play session (docs/play_mode_plan.md). With the editor in the build the world stands until then; without it the world runs and the camera is free until then.
+        if (std::strstr(lpCmdLine, "--play")) {
+            g_bootPlay = true;
+        }
         // "--edit-mesh=<path>": open the Mesh Editor on that asset at boot (implies --editor).
         if (const char* flag = std::strstr(lpCmdLine, "--edit-mesh=")) {
             const char* value = flag + std::strlen("--edit-mesh=");

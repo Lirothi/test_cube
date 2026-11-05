@@ -1,5 +1,6 @@
 from pathlib import Path
 import subprocess
+import time
 import tempfile
 
 from PIL import Image
@@ -42,6 +43,16 @@ def rasterize(browser: Path, source: Path, output: Path, profile: Path) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    # Edge hands the job to a process of its own and returns before the file is there (2 s on a machine where it is already running).
+    deadline = time.monotonic() + 30.0
+    last_size = -1
+    while time.monotonic() < deadline:
+        size = output.stat().st_size if output.exists() else 0
+        if size > 0 and size == last_size:
+            return
+        last_size = size
+        time.sleep(0.25)
+    raise RuntimeError(f"The browser wrote no {output.name} in 30 s")
 
 
 def main() -> None:

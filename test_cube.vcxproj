@@ -316,6 +316,10 @@
     <ClCompile Include="sources/app/ui/LogWindow.cpp" />
     <ClCompile Include="sources/app/ui/MemoryTab.cpp" />
     <ClCompile Include="sources/ocean/OceanControlsWindow.cpp" />
+    <ClCompile Include="sources/app/game/PlayerStart.cpp" />
+    <ClCompile Include="sources/app/game/PlayerController.cpp" />
+    <ClCompile Include="sources/app/game/PlaySession.cpp" />
+    <ClCompile Include="sources/editor/scene/EditorPlayerStart.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
     <ClCompile Include="sources/rendering/lighting/Astronomy.cpp" />
@@ -578,6 +582,11 @@
     <ClInclude Include="sources/app/ui/LogWindow.h" />
     <ClInclude Include="sources/app/ui/MemoryTab.h" />
     <ClInclude Include="sources/ocean/OceanControlsWindow.h" />
+    <ClInclude Include="sources/app/game/PlayerStart.h" />
+    <ClInclude Include="sources/app/game/PlayerController.h" />
+    <ClInclude Include="sources/app/game/PlaySession.h" />
+    <ClInclude Include="sources/editor/scene/EditorPlayerStart.h" />
+    <ClInclude Include="sources/app/game/PlayerStartJson.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />
     <ClInclude Include="sources/rendering/lighting/DirectionalLight.h" />
     <ClInclude Include="sources/rendering/lighting/Astronomy.h" />

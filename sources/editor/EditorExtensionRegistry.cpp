@@ -1,3 +1,5 @@
+#include "editor/commands/EditObjectPropertiesCommand.h"
+#include "editor/scene/EditorPlayerStart.h"
 #include "editor/EditorExtensionRegistry.h"
 #if WITH_EDITOR
 
@@ -1016,6 +1018,49 @@ namespace
         }
     };
 
+    // Where it stands is the transform above. What the player is like is here, in the level: a row never touched stays out of the file (docs/play_mode_plan.md).
+    class PlayerStartPropertyDrawer final : public IEditorPropertyDrawer
+    {
+    public:
+        std::string_view Type() const override { return game::kPlayerStartType; }
+
+        void Draw(EditorContext& ctx,
+            EditorCommandStack& commandStack,
+            const AssetRegistry& registry,
+            EditorObject& obj) const override
+        {
+            (void)registry;
+
+            if (ImGui::Button("Where the camera looks"))
+            {
+                commandStack.Execute(ctx, std::make_unique<TransformObjectCommand>(
+                    obj.id, obj.transform, editorplayerstart::BuildObject(ctx.scene).transform));
+            }
+            ImGui::SeparatorText("The player");
+            const physics::PlayerSettings defaults;
+            for (const game::PlayerKey& key : game::PlayerKeys())
+            {
+                float value = obj.properties.value(key.key, defaults.*(key.member));
+                const bool edited = ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, key.format);
+                if (ImGui::IsItemActivated()) { before_ = obj.properties; }
+                if (edited) { obj.properties[key.key] = value; }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    commandStack.Execute(ctx, std::make_unique<EditObjectPropertiesCommand>(obj.id, before_, obj.properties, "Edit Player Start"));
+                }
+            }
+            if (ImGui::Button("Back to the defaults"))
+            {
+                nlohmann::json after = obj.properties;
+                for (const game::PlayerKey& key : game::PlayerKeys()) { after.erase(key.key); }
+                commandStack.Execute(ctx, std::make_unique<EditObjectPropertiesCommand>(obj.id, obj.properties, std::move(after), "Edit Player Start"));
+            }
+        }
+
+    private:
+        mutable nlohmann::json before_; // what a drag started from: one undo entry for all of it
+    };
+
     class FreeCameraStartPropertyDrawer final : public IEditorPropertyDrawer
     {
     public:
@@ -1158,6 +1203,7 @@ void EditorExtensionRegistry::RegisterBuiltins(EditorExtensionRegistry& registry
     registry.RegisterPropertyDrawer(std::make_unique<TransparentMeshPropertyDrawer>());
     registry.RegisterPropertyDrawer(std::make_unique<ParticleEmitterPropertyDrawer>());
     registry.RegisterPropertyDrawer(std::make_unique<FreeCameraStartPropertyDrawer>());
+    registry.RegisterPropertyDrawer(std::make_unique<PlayerStartPropertyDrawer>());
 }
 
 #endif // WITH_EDITOR

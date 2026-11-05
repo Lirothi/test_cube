@@ -31,7 +31,11 @@ public:
         view_.zFar = 10000.0f;
     }
 
-    void UpdateFromInput(InputManager& input, float dt);
+    // The free camera. `mouseLook`: the mouse turns it without the button (Play, ejected: the session holds the mouse).
+    void UpdateFromInput(InputManager& input, float dt, bool mouseLook = false);
+    // The look alone, for a camera something else moves (PlayerController): this frame's mouse joins what is owed, and the smoothing pays it.
+    void AddLookInput(InputManager& input);
+    void TakeOwedLook(float dt);
 
     // Camera movement helpers
     void MoveForward(float d)   { MoveRelative(0, 0, d); }
