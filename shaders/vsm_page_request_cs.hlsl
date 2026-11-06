@@ -1,27 +1,19 @@
-// Rung 2 / Step 19b: screen-space page-request pass — mip-aware, local-light scope, reduced res.
-// One thread per DOWN-SAMPLED screen block (1/kRequestDownscale per axis): reconstruct the
-// block-center pixel's world position from camera depth, then for each active LOCAL shadow view
-// (spot light or point-light cube face — NOT the CSM cascades, which stay on Pass_CSM until
-// Step 24) project it into that view's virtual shadow space, pick the mip level from camera
-// distance (dense-near / sparse-far), and mark the single virtual page it needs at that level.
-// Produces the page-request bitfield (1 bit per virtual page across all views × levels); NOTHING
-// consumes it yet (Step 20 allocates physical pages from it).
+// The page request, UE's (VirtualShadowMapPageMarking.usf / .ush): one thread per pixel of a grid every
+// vsm::g_requestDownscale pixels (r.Shadow.Virtual.PageMarkingPixelStride). The pixel's world position marks, for the sun,
+// the one page of the clipmap level its distance picks (MarkClipmap) and, for each local light that reaches it, the one
+// page of the mip its footprint picks (MarkLocalView); each with its neighbours across a page edge within
+// PageDilationBorderSize, by one diagonal dithered over the group. A pixel turned away from the light marks nothing
+// (r.Shadow.Virtual.CullBackfacingPixels). Thread (0, 0) also marks the coarse pages (MarkCoarsePages).
 #pragma pack_matrix(row_major)
 #include "utils.hlsli"
 #include "vsm_addressing.hlsli" // plan S10b: the view layout (VsmLocalView, VSM_CLIPMAP_FIRST / END)
 
 #define VSM_PAGE_REQUEST_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(SRV(t0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
     "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
-// Must match the vsm:: constants in VirtualShadowMap.h; the view counts ARE them (plan S10a, Material.cpp
-// EngineShaderDefines). Plan S10b: local views are [0, VSM_CLIPMAP_FIRST) and [VSM_CLIPMAP_END, numViews).
-static const uint kL0Axis       = 16u;   // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
-static const uint kMaxLevel     = 4u;    // kMaxMipLevel
-static const uint kPagesPerView = 341u;  // kPagesPerView (16²+8²+4²+2²+1)
-// Prefix sum of per-level page counts within a view (kLevelOffset[L] = vsm::LevelPageOffset(L)).
-static const uint kLevelOffset[6] = { 0u, 256u, 320u, 336u, 340u, 341u };
+// Plan S10b: local views are [0, VSM_CLIPMAP_FIRST) and [VSM_CLIPMAP_END, numViews).
 
 cbuffer PageRequestCB : register(b0)
 {
@@ -29,7 +21,7 @@ cbuffer PageRequestCB : register(b0)
     float4x4 invProj;
     float4   camPosWS;
     float4   screen;    // x=w, y=h, z=1/w, w=1/h
-    float4   lodParams; // x=refDist, y=maxLevel, z=downscale, w=directional clipmap blend width
+    float4   lodParams; // x=refDist, y=maxLevel, z=downscale
     // Plan S10e: x = 1 picks a local view's mip by the camera pixel's footprint (VsmLocalMipFromPixel, UE's), y = the lod
     // bias, z = the pixel radius per unit of view depth (min(1 / (W P00), 1 / (H P11)), render resolution), w = 1 tests a
     // receiver against each view's light sphere first (vsm.requestLightCull).
@@ -45,29 +37,54 @@ cbuffer PageRequestCB : register(b0)
     float4   waterPlane;
     // Where the water's marks go (vsm::g_waterCasterMask): x = the caster mask's first word in Request (the bitfield's
     // length, vsm_water_mask_cs.hlsl), y = 0 every water pixel, 1 only under a caster's box, 2 none (the control).
+    // z = the coarse pages' own bitfield in Request: MarkCoarsePages's marks, apart from the pixels' (the setup asks which).
     uint4    waterMask;
+    // The sun's clipmap: x = the resolution LOD bias, the frame's and the dynamic resolution's (GetBiasedClipmapLevel),
+    // y = the first level's absolute number; z / w = PageDilationBorderSize, directional / local.
+    float4   clipLod;
+    // xyz = toward the sun, w = sin of its angular radius (IsBackfaceToDirectionalLight); xyz 0 = no sun.
+    float4   lightToward;
+    // x = 1 culls back-facing pixels; y bit 0 = the sun's coarse pages, bit 1 = the local lights' last mip;
+    // z, w = the sun's coarse levels, as indices (r.Shadow.Virtual.Clipmap.First / LastCoarseLevel).
+    uint4    markFlags;
 };
 
 Texture2D                       DepthT  : register(t0);
 StructuredBuffer<VsmViewData>   Views   : register(t1); // plan S9e: numViews records (the request slot)
+Texture2D                       GB1     : register(t2); // the shading normal
+Texture2D                       GBAux   : register(t3); // the shading model
 RWStructuredBuffer<uint>        Request : register(u0);
 
 // Sets a page's request bit -- read first, the atomic only while the bit is still clear. Every pixel of every light marks
 // its page's whole coarser mip chain, so the coarse levels' few words took one InterlockedOr from nearly every thread:
 // the same address, serialised (the bathroom at night, five candles: 0.55 ms). A read that races the first setter only
 // costs a redundant atomic; nothing is lost.
-void MarkPage(uint page)
+void MarkBit(uint base, uint page)
 {
-    const uint word = page >> 5u;
+    const uint word = base + (page >> 5u);
     const uint bit = 1u << (page & 31u);
     if ((Request[word] & bit) != 0u) { return; }
     uint prev;
     InterlockedOr(Request[word], bit, prev);
 }
+void MarkPage(uint page) { MarkBit(0u, page); }
+void MarkCoarsePage(uint page) { MarkBit(waterMask.z, page); }
 
-// One local view's pages for receiver P: its projection, the mip (the pixel's footprint in ITS texels, plan S10e, or the
-// camera-distance level), and that mip with every coarser one marked.
-void MarkLocalView(uint v, float3 P, bool pixelMip, float pixelRadiusWorld, uint levelByDistance, uint maxLevel)
+// UE's MarkPage: the page under the point, and the neighbours PageDilationBorderSize away on the group's diagonal.
+void MarkDilated(uint v, uint level, uint axis, float2 pageAddress, float2 dilation)
+{
+    const uint2 page = min((uint2)pageAddress, axis - 1u);
+    MarkPage(VsmPageId(v, level, page.x, page.y));
+    if (dilation.x == 0.0f) { return; }
+    const uint2 page2 = min((uint2)max(pageAddress + dilation, 0.0f), axis - 1u);
+    if (any(page2 != page)) { MarkPage(VsmPageId(v, level, page2.x, page2.y)); }
+    const uint2 page3 = min((uint2)max(pageAddress - dilation, 0.0f), axis - 1u);
+    if (any(page3 != page)) { MarkPage(VsmPageId(v, level, page3.x, page3.y)); }
+}
+
+// One local view's page for receiver P: its projection and the mip (the pixel's footprint in ITS texels, plan S10e, or the
+// camera-distance level). One mip: what else a sampler may reach for is the last one, MarkCoarsePages's.
+void MarkLocalView(uint v, float3 P, bool pixelMip, float pixelRadiusWorld, uint levelByDistance, uint maxLevel, float2 ditherSign)
 {
     const VsmViewData view = Views[v];
     if (view.params.x < 0.5f) { return; } // inactive view slot
@@ -79,18 +96,10 @@ void MarkLocalView(uint v, float3 P, bool pixelMip, float pixelRadiusWorld, uint
     const uint level = pixelMip ? VsmLocalMipFromPixel(pixelRadiusWorld, view.params.w, clip.w, localMip.y + view.mip.x)
                                 : levelByDistance;
 
-    // Shadow UV (D3D clip -> UV, y flipped). Mark the selected level AND all coarser levels (a
-    // mip chain): the sampler may pick a slightly different level per pixel, so keeping the
-    // coarser pages resident gives it something to fall back to (no distance pop-in). Coarser
-    // levels have very few pages (level 4 = 1/view), so the extra requests are cheap.
-    float2 suv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-    for (uint L = level; L <= maxLevel; ++L)
-    {
-        uint axisL = kL0Axis >> L;
-        uint pageX = min((uint)(suv.x * axisL), axisL - 1u);
-        uint pageY = min((uint)(suv.y * axisL), axisL - 1u);
-        MarkPage(v * kPagesPerView + kLevelOffset[L] + pageY * axisL + pageX);
-    }
+    // Shadow UV (D3D clip -> UV, y flipped).
+    const float2 suv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
+    const uint axis = VSM_L0_AXIS >> level;
+    MarkDilated(v, level, axis, suv * (float)axis, clipLod.w * ditherSign);
 }
 
 // Plan S10e (UE marks a pixel's pages only for the lights its light-grid cell holds): beyond the light's reach nothing
@@ -101,66 +110,85 @@ bool OutsideLight(float4 cull, float3 P)
     return cull.w >= 0.0f && dot(toP, toP) > cull.w * cull.w;
 }
 
-// --- Directional clipmap (Step 24d): views [VSM_CLIPMAP_FIRST, VSM_CLIPMAP_END) are camera-centered ortho
-// levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain). Mark
-// the finest containing level and, inside its transition band, the next coarser level too. A
-// zero blend width preserves the old exact-one-page request path. ---
-void MarkClipmap(float3 P, uint count, bool water)
+// The sun (UE MarkPageDirectional, GetBiasedClipmapLevel): the level is the point's distance to the camera, biased by the
+// resolution, and nothing else; the levels are nested, so the page exists. Past the last level nothing is marked.
+void MarkClipmap(float3 P, uint count, bool water, float2 ditherSign)
 {
-    const float clipBlendWidth = clamp(lodParams.w, 0.0f, 0.5f);
-    const uint clipEnd = min(count, VSM_CLIPMAP_END);
-    for (uint cv = VSM_CLIPMAP_FIRST; cv < clipEnd; ++cv)
+    const float distCm = length(P - camPosWS.xyz) * 100.0f;
+    const int level = (int)floor(log2(max(distCm, 1e-4f)) + clipLod.x);
+    const uint index = (uint)max(0, level - (int)clipLod.y);
+    if (index >= VSM_NUM_CLIPMAP_LEVELS) { return; }
+    const uint cv = VSM_CLIPMAP_FIRST + index;
+    if (cv >= count || Views[cv].params.x < 0.5f) { return; }
+    const float4 cclip = mul(float4(P, 1.0f), Views[cv].viewProj);
+    const float3 cndc = cclip.xyz / cclip.w;
+    if (any(abs(cndc.xy) > 1.0f) || cndc.z < 0.0f || cndc.z > 1.0f) { return; }
+    const float2 pageAddress = float2(0.5f * cndc.x + 0.5f, 0.5f - 0.5f * cndc.y) * (float)VSM_CLIPMAP_AXIS;
+    // The water: no caster's box touches this point's sixteenth of the level, so nothing can shadow it on any level. It
+    // stays unmarked and reads lit, which it is.
+    if (water && waterMask.y != 0u)
     {
-        if (Views[cv].params.x < 0.5f) { continue; }
-        float4 cclip = mul(float4(P, 1.0f), Views[cv].viewProj);
-        if (cclip.w <= 0.0f) { continue; }
-        float3 cndc = cclip.xyz / cclip.w;
-        if (cndc.x < -1.0f || cndc.x > 1.0f || cndc.y < -1.0f || cndc.y > 1.0f) { continue; } // outside this level
-        if (cndc.z < 0.0f || cndc.z > 1.0f) { continue; }
-        float2 csuv = float2(0.5f * cndc.x + 0.5f, 0.5f - 0.5f * cndc.y);
-        uint axis0 = kL0Axis; // clipmap levels use only level 0 (the level IS the LOD)
-        uint cpx = min((uint)(csuv.x * axis0), axis0 - 1u);
-        uint cpy = min((uint)(csuv.y * axis0), axis0 - 1u);
-        // The water: no caster's box touches this page, so nothing can shadow this point on any level. It stays unmarked
-        // and reads lit, which it is. A page some opaque pixel asked for stays resident, and reads lit too.
-        if (water && waterMask.y != 0u)
-        {
-            if (waterMask.y == 2u) { return; }
-            const uint maskWord = waterMask.x + (cv - VSM_CLIPMAP_FIRST) * 8u + (cpy >> 1u);
-            if ((Request[maskWord] & (1u << (cpx + (cpy & 1u) * 16u))) == 0u) { return; }
-        }
-        MarkPage(cv * kPagesPerView + kLevelOffset[0] + cpy * axis0 + cpx);
+        if (waterMask.y == 2u) { return; }
+        const uint2 cell = min((uint2)pageAddress, VSM_CLIPMAP_AXIS - 1u) >> 3u;
+        const uint maskWord = waterMask.x + index * 8u + (cell.y >> 1u);
+        if ((Request[maskWord] & (1u << (cell.x + (cell.y & 1u) * 16u))) == 0u) { return; }
+    }
+    MarkDilated(cv, 0u, VSM_CLIPMAP_AXIS, pageAddress, clipLod.z * ditherSign);
+}
 
-        // The sampler blends by the fine level's square-edge coordinate. Request the parent page
-        // only in that same band, so width 0 has zero residency/raster cost and a narrow band adds
-        // only the coarse pages that can actually receive a second PCF sample.
-        if (clipBlendWidth > 0.0f && cv + 1u < clipEnd && Views[cv + 1u].params.x >= 0.5f)
+// UE's MarkCoarsePages. The coarse levels' pages round the camera, whatever the frame's pixels ask for, so anything that
+// reads the sun's shadow off the receivers -- the fog's air -- has data; and each local view's last mip.
+void MarkCoarsePages(uint count)
+{
+    if ((markFlags.y & 1u) != 0u)
+    {
+        for (uint index = 0u; index < VSM_NUM_CLIPMAP_LEVELS; ++index)
         {
-            const float edge = max(abs(cndc.x), abs(cndc.y));
-            if (edge > 1.0f - clipBlendWidth)
+            if (!((index >= markFlags.z && index <= markFlags.w) || index + 1u == VSM_NUM_CLIPMAP_LEVELS)) { continue; }
+            const uint cv = VSM_CLIPMAP_FIRST + index;
+            if (cv >= count || Views[cv].params.x < 0.5f) { continue; }
+            const float2 ndc = mul(float4(camPosWS.xyz, 1.0f), Views[cv].viewProj).xy;
+            const float2 pageAddress = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y) * (float)VSM_CLIPMAP_AXIS;
+            // Page addresses round down, so the four round the point.
+            const int2 lo = clamp((int2)floor(pageAddress - 0.5f), 0, (int)VSM_CLIPMAP_AXIS - 1);
+            const int2 hi = clamp((int2)ceil(pageAddress - 0.5f), 0, (int)VSM_CLIPMAP_AXIS - 1);
+            MarkCoarsePage(VsmPageId(cv, 0u, (uint)lo.x, (uint)lo.y));
+            MarkCoarsePage(VsmPageId(cv, 0u, (uint)lo.x, (uint)hi.y));
+            MarkCoarsePage(VsmPageId(cv, 0u, (uint)hi.x, (uint)lo.y));
+            MarkCoarsePage(VsmPageId(cv, 0u, (uint)hi.x, (uint)hi.y));
+        }
+    }
+    if ((markFlags.y & 2u) != 0u)
+    {
+        [loop] for (uint s = 0u; s < VSM_VIEW_CEILING; ++s)
+        {
+            if (s >= gSpotLights) { break; }
+            const uint v = (s < VSM_PREFIX_SPOTS) ? s : VSM_CLIPMAP_END + (s - VSM_PREFIX_SPOTS);
+            if (v < count && Views[v].params.x >= 0.5f) { MarkCoarsePage(VsmPageId(v, VSM_MAX_LEVEL, 0u, 0u)); }
+        }
+        const uint prefix = (VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS) / 6u;
+        [loop] for (uint q = 0u; q < VSM_VIEW_CEILING / 6u; ++q)
+        {
+            if (q >= gPointLights) { break; }
+            const uint first = (q < prefix) ? VSM_PREFIX_SPOTS + 6u * q : gPointExtraView + 6u * (q - prefix);
+            for (uint face = 0u; face < 6u; ++face)
             {
-                float4 pclip = mul(float4(P, 1.0f), Views[cv + 1u].viewProj);
-                if (pclip.w > 0.0f)
-                {
-                    float3 pndc = pclip.xyz / pclip.w;
-                    if (all(abs(pndc.xy) <= 1.0f) && pndc.z >= 0.0f && pndc.z <= 1.0f)
-                    {
-                        float2 puv = float2(0.5f * pndc.x + 0.5f, 0.5f - 0.5f * pndc.y);
-                        uint ppx = min((uint)(puv.x * (float)kL0Axis), kL0Axis - 1u);
-                        uint ppy = min((uint)(puv.y * (float)kL0Axis), kL0Axis - 1u);
-                        MarkPage((cv + 1u) * kPagesPerView + kLevelOffset[0] + ppy * kL0Axis + ppx);
-                    }
-                }
+                const uint v = first + face;
+                if (v < count && Views[v].params.x >= 0.5f) { MarkCoarsePage(VsmPageId(v, VSM_MAX_LEVEL, 0u, 0u)); }
             }
         }
-        break; // finest containing clipmap level only
     }
 }
 
 [numthreads(8, 8, 1)]
 [RootSignature(VSM_PAGE_REQUEST_RS)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
+void CSMain(uint3 dtid : SV_DispatchThreadID, uint gi : SV_GroupIndex)
 {
+    const uint count = min(numViews, VSM_VIEW_CEILING);
+    if (all(dtid.xy == 0u)) { MarkCoarsePages(count); }
+
+    // UE: one diagonal is enough, as long as some pixel near the edge dithers across it.
+    const float2 ditherSign = float2((gi & 1u) != 0u ? 1.0f : -1.0f, (gi & 2u) != 0u ? 1.0f : -1.0f);
     const uint w = (uint)screen.x;
     const uint h = (uint)screen.y;
     const uint ds = max((uint)lodParams.z, 1u);
@@ -172,7 +200,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const float2 uv = (float2(px) + 0.5f) * screen.zw;
     const float z = DepthT.Load(int3(int2(px), 0)).r;
     const bool geometry = z > kEpsilon; // reverse-Z: 0 = far/cleared, the background
-    const uint count = min(numViews, VSM_VIEW_CEILING);
 
     // The water's surface (ocean_surface_common.hlsli OceanSunShadow samples the clipmap there): where this pixel's
     // view ray meets the ocean's plane before the opaque surface -- or the background -- its sun pages are marked too.
@@ -192,7 +219,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 const float3 toP = ReconstructPosWS(uv, z, invProj, invView) - camPosWS.xyz;
                 inFront = dot(toW, toW) < dot(toP, toP);
             }
-            if (inFront) { MarkClipmap(Pw, count, true); }
+            if (inFront) { MarkClipmap(Pw, count, true, ditherSign); }
         }
     }
     if (!geometry) { return; }
@@ -202,7 +229,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // Camera-distance mip: farther receivers need coarser shadow texels (screen-pixel world
     // footprint grows with distance). Distance heuristic first; ddx/ddy refinement is future.
     const float refDist  = max(lodParams.x, 1e-3f);
-    const uint  maxLevel = min((uint)lodParams.y, kMaxLevel);
+    const uint  maxLevel = min((uint)lodParams.y, VSM_MAX_LEVEL);
     const float distCam  = length(P - camPosWS.xyz);
     const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
     const uint  levelByDistance = (uint)clamp(rawLevel, 0, (int)maxLevel);
@@ -215,12 +242,17 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const bool pixelMip = localMip.x != 0.0f;
     const float pixelRadiusWorld = dot(P - camPosWS.xyz, invView[2].xyz) * localMip.z;
     const bool lightCull = localMip.w != 0.0f;
+    // A pixel turned away from a light reads nothing from it (UE IsBackfaceToDirectionalLight / IsBackfaceToLocalLight, with
+    // a source radius of 0 for a lamp); a surface that passes light through it (foliage) reads from both sides.
+    const float3 N = GB1.Load(int3(int2(px), 0)).xyz * 2.0f - 1.0f;
+    const bool backfaceCull = markFlags.x != 0u && DecodeShadingModel(GBAux.Load(int3(int2(px), 0)).b) != kShadingModelTwoSidedFoliage;
     [loop] for (uint s = 0; s < VSM_VIEW_CEILING; ++s)
     {
         if (s >= gSpotLights) { break; }
         const uint v = (s < VSM_PREFIX_SPOTS) ? s : VSM_CLIPMAP_END + (s - VSM_PREFIX_SPOTS); // vsm::SpotView
         if (lightCull && OutsideLight(Views[v].cull, P)) { continue; }
-        MarkLocalView(v, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+        if (backfaceCull && Views[v].cull.w >= 0.0f && dot(N, Views[v].cull.xyz - P) < 0.0f) { continue; }
+        MarkLocalView(v, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel, ditherSign);
     }
     const uint prefixPoints = (VSM_CLIPMAP_FIRST - VSM_PREFIX_SPOTS) / 6u;
     [loop] for (uint q = 0; q < VSM_VIEW_CEILING / 6u; ++q)
@@ -231,14 +263,16 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         if (lightCull && cull.w >= 0.0f)
         {
             if (OutsideLight(cull, P)) { continue; }
-            MarkLocalView(first + VsmCubeFace(P - cull.xyz), P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+            if (backfaceCull && dot(N, cull.xyz - P) < 0.0f) { continue; }
+            MarkLocalView(first + VsmCubeFace(P - cull.xyz), P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel, ditherSign);
             continue;
         }
         [loop] for (uint face = 0u; face < 6u; ++face)
         {
-            MarkLocalView(first + face, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel);
+            MarkLocalView(first + face, P, pixelMip, pixelRadiusWorld, levelByDistance, maxLevel, ditherSign);
         }
     }
 
-    MarkClipmap(P, count, false);
+    const bool sunBackface = backfaceCull && dot(N, lightToward.xyz) < -max(abs(lightToward.w), 0.1f);
+    if (!sunBackface) { MarkClipmap(P, count, false, ditherSign); }
 }

@@ -21,7 +21,7 @@ static const uint VSM_INVALID = 0xFFFFFFFFu; // "no owner" sentinel (matches vsm
 #define VSM_PAGE_SETUP_RS \
     "CBV(b0), " \
     "DescriptorTable(SRV(t0, numDescriptors=14, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(UAV(u0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define VSM_MAX_SETUP_GROUPS 64 // matches kMaxMegaGroups in ShadowGpuData::Rebuild
 // Plan S10a: from C++ (Material.cpp EngineShaderDefines) -- render::kMaxShadowLods.
@@ -40,7 +40,7 @@ cbuffer SetupCB : register(b0)
     uint gNumLods;      // render::kMaxShadowLods (stride into gGroupLodMega)
     uint gScatterActive; // 1 = vsm_page_scatter_cs ran this frame (clipmap pages read its output)
     // Single-draw page render: bits to shift the PHYSICAL page index by when packing it into a
-    // visible-list entry (vsm::kPageIdShift = 22). 0 = do NOT pack — the per-page loop path binds a
+    // visible-list entry (vsm::kPageIdShift = 21). 0 = do NOT pack — the per-page loop path binds a
     // per-page root CBV and the entry is a bare caster id. Never shift by 0: `id | (p << 0)` would
     // corrupt the low bits, which is why both writers branch instead of relying on a shift.
     uint gPageIdShift;
@@ -78,6 +78,9 @@ cbuffer SetupCB : register(b0)
     // 224 of every page slot). Identical across levels, which is what keeps the clipmap blend
     // band consistent; the per-level rigid gate above it only decides CACHING. w = 0 disables.
     float4 gWindFade;
+    // The coarse pages' bitfield in Request; 0 = they take every invalidation (vsm::g_coarseCacheDynamic).
+    uint gCoarseBase;
+    uint3 _padCoarse;
     // NOTE: the per-(group,lod) mega ranges and the per-group LOD override used to live HERE, as CB
     // arrays sized VSM_MAX_SETUP_GROUPS. That is what capped the whole shadow path at 64 mesh-groups
     // — a CB array cannot be sized by gNumGroups. Both are SRVs now (t9/t10), sized by the real group
@@ -142,6 +145,8 @@ RWByteAddressBuffer      PageArgCount    : register(u4); // byte 0 = appended ar
 // kTessyDivert, u6 unless kTessyCount (both always in pass B).
 RWStructuredBuffer<uint4> TessyRuns      : register(u5);
 RWByteAddressBuffer       TessyStats     : register(u6);
+RWStructuredBuffer<uint>  Request        : register(u7); // this frame's marks (read), vsm_page_request_cs.hlsl
+RWStructuredBuffer<uint>  PageDetail     : register(u8); // read: bit 1 = what the page is asked for as changed (vsm_page_bounds_cs.hlsl)
 
 static const uint kTessyDivert = 1u;
 static const uint kTessyCount = 2u;
@@ -249,16 +254,21 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const bool isLocalView = !VsmIsClipmapView(view); // plan S10b: locals sit on both sides of the clipmap
     const uint clipLevel = isLocalView ? 0u : (view - VSM_CLIPMAP_FIRST);
     const uint4 viewBits = Views[view].bits;
+    // UE's r.Shadow.Virtual.MarkCoarsePagesDirectional / Local 2, bForceCacheDynamicCoarse (VirtualShadowMapPhysicalPageManagement.usf:323):
+    // a page asked for only as a coarse page takes no invalidation from what moves -- not the wind, not a boat. These pages are
+    // tens of metres to kilometres across, so nearly every frame something moves in one, and what reads them only wants a rough answer.
+    const uint ownerBit = 1u << (owner & 31u);
+    const bool coarseOnly = gCoarseBase != 0u && (Request[gCoarseBase + (owner >> 5u)] & ownerBit) != 0u && (Request[owner >> 5u] & ownerBit) == 0u;
     const bool distantView = (viewBits.x & VSM_VIEW_DISTANT) != 0u; // plan S10d: rigid, redrawn by the round robin
     const bool distantDue = (viewBits.x & VSM_VIEW_DISTANT_UPDATE) != 0u;
     // render::g_localShadowWindRange (the atlases' rule): a local light whose reach stays past it draws its casters rigid
     // and its pages take no wind dirt -- they cache; every other invalidation stands (unlike a distant light's).
     const bool windRigidView = (viewBits.x & VSM_VIEW_WIND_RIGID) != 0u;
-    const bool windHere = (gWindDirtyMaxLevel != 0u) && !distantView && !windRigidView &&
+    const bool windHere = (gWindDirtyMaxLevel != 0u) && !distantView && !windRigidView && !coarseOnly &&
                           (isLocalView || clipLevel < gWindDirtyMaxLevel);
     if (lane == 0u && gPassB == 0u)
     {
-        const float a = (float)(VSM_L0_AXIS >> level);
+        const float a = (float)VsmViewAxis(view, level);
         const float cx = -1.0f + (2.0f * px + 1.0f) / a;
         const float cy =  1.0f - (2.0f * py + 1.0f) / a;
         const float4x4 S = float4x4(a, 0, 0, 0,
@@ -371,9 +381,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     const bool viewDirty = (viewBits.x & VSM_VIEW_DIRTY) != 0u;
     // S5b.2, pass B: the verdict pass A wrote, read back through the same UAV (never rewritten).
     // Plan S10d: a distant light's page takes no caster invalidation -- the round robin redraws it instead.
-    const bool invalidated = distantView ? distantDue : dynamicOverlap;
+    const bool invalidated = distantView ? distantDue : (dynamicOverlap && !coarseOnly);
     const bool dirty = (gPassB != 0u) ? (PerPageDirty[p] != 0u)
-                                      : (isNew || invalidated || (gForceAll != 0u) || windHere || viewDirty);
+                                      : (isNew || invalidated || (gForceAll != 0u) || windHere || viewDirty || (PageDetail[p] & 2u) != 0u);
     if (lane == 0u && gPassB == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
     if (!dirty)
     {

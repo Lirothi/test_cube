@@ -37,8 +37,8 @@
 
 #define VSM_SCATTER_RS \
     "CBV(b0), " \
-    "DescriptorTable(SRV(t0, numDescriptors=9, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
-    "DescriptorTable(UAV(u0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(SRV(t0, numDescriptors=10, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), " \
+    "DescriptorTable(UAV(u0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #define KMAX_SHADOW_LODS TC_MAX_SHADOW_LODS // render::kMaxShadowLods (plan S10a); the per-group LOD bucket count
 
@@ -56,6 +56,12 @@ cbuffer ScatterCB : register(b0)
     // S5b.2: x = the HZB test is on, y = last frame's pyramid + PrevPageTable are valid (a render
     // with a build happened last frame, same level), z = DeferredPairs capacity, w unused.
     uint4 gHzbParams;
+    // UE's r.Shadow.Virtual.CoarsePagePixelThresholdStatic / Dynamic: an instance under this many texels stays out of a page only the coarse
+    // marks asked for. gCoarseBase = their bitfield in Request; 0 = no such pages (vsm::g_coarseCacheDynamic).
+    uint  gCoarseBase;
+    float gCoarsePixelsStatic;
+    float gCoarsePixelsDynamic;
+    uint  _pad1;
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };
@@ -76,21 +82,25 @@ StructuredBuffer<uint4>        PerGroup    : register(t4);
 StructuredBuffer<uint>         CasterLod   : register(t5);
 // S5b.2: the page table as it stood during LAST frame's render (snapshot before this frame's
 // allocation) and the pool pyramid built then. Placeholders when the test is off (never read).
-StructuredBuffer<uint>         PrevPageTable : register(t6);
+StructuredBuffer<uint>         PhysOwnerPrev : register(t6); // physical -> last frame's owner: was this page this virtual page then?
 Texture2D<float>               VsmHzbPrev    : register(t7);
 // Plan S9e: every VSM view (the render slot, same indexing as the setup's): viewProj (an inactive view's is ZERO, which
 // the perspective path rejects on its own -- maxW <= 0 -- and its pages are not resident either), prevViewProj = LAST
 // frame's (the pyramid's pages were drawn with it), bits.y = the view's own shadow LOD from the tier curve -- only the
 // lower bound for FLOOR casters: the per-caster LOD below can only push COARSER past it, never finer.
 StructuredBuffer<VsmViewData>  Views         : register(t8);
+// A clipmap level is 16384 page-table entries and a caster the island's size overlaps all of them: what it can draw into
+// is the rect the level has pages in (vsm_page_bounds_cs.hlsl), per level two words.
+StructuredBuffer<uint>         LevelBounds   : register(t9);
 
 RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) count, doubles as the cursor
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // per (page, slot) caster id
 RWStructuredBuffer<uint> PageScatterDyn  : register(u2); // per page: a dynamic caster landed here
 RWStructuredBuffer<uint2> DeferredPairs  : register(u3); // S5b.2: (leading caster slot, virtual page id)
 RWStructuredBuffer<uint>  HzbCounters    : register(u4); // S5b.2: [0] pairs deferred, [2] past the capacity
+RWStructuredBuffer<uint>  Request        : register(u5); // this frame's marks (read)
 
-static const uint kHzbMip0 = VSM_POOL_PAGES_AXIS * VSM_PAGE_SIZE / 2u; // 2048: the pyramid is half the pool
+static const uint2 kHzbMip0 = uint2(VSM_POOL_PAGES_X, VSM_POOL_PAGES_Y) * VSM_PAGE_SIZE / 2u; // the pyramid is half the pool
 static const float4x4 kIdentity = float4x4(1, 0, 0, 0,
                                            0, 1, 0, 0,
                                            0, 0, 1, 0,
@@ -109,19 +119,19 @@ static const float4x4 kFlipZ = float4x4(1, 0, 0, 0,
 // projection only scales and offsets xy, so its rect is that one remapped, not a second cull.
 bool HiddenInPageLastFrame(uint pPrev, uint level, uint px, uint py, HzbFrustumCull prev)
 {
-    const float a = (float)(VSM_L0_AXIS >> level);
+    const float a = (float)VSM_CLIPMAP_AXIS; // clipmap pages only
     const float2 centre = float2(-1.0f + (2.0f * px + 1.0f) / a, 1.0f - (2.0f * py + 1.0f) / a);
     const float3 mn = float3((prev.rectMin.xy - centre) * a, prev.rectMin.z);
     const float3 mx = float3((prev.rectMax.xy - centre) * a, prev.rectMax.z);
-    const int ox = (int)((pPrev % VSM_POOL_PAGES_AXIS) * VSM_PAGE_SIZE);
-    const int oy = (int)((pPrev / VSM_POOL_PAGES_AXIS) * VSM_PAGE_SIZE);
+    const int ox = (int)((pPrev % VSM_POOL_PAGES_X) * VSM_PAGE_SIZE);
+    const int oy = (int)((pPrev / VSM_POOL_PAGES_X) * VSM_PAGE_SIZE);
     const HzbScreenRect rect = HzbGetScreenRect(int4(ox, oy, ox + (int)VSM_PAGE_SIZE, oy + (int)VSM_PAGE_SIZE), mn, mx, 4);
     // A caster whose footprint in this page is under 8x8 pool texels is not worth the 16 loads:
     // hiding it saves a draw that rasterises almost nothing, and at the coarse clipmap levels --
     // where most resident pairs live -- every caster is that small. Conservative: drawn in A.
     const int2 span = rect.pixels.zw - rect.pixels.xy + 1;
     if (span.x * span.y < 64) { return false; }
-    return !HzbIsVisible(VsmHzbPrev, uint2(kHzbMip0, kHzbMip0), rect);
+    return !HzbIsVisible(VsmHzbPrev, kHzbMip0, rect);
 }
 
 // Project an AABB to an NDC rect. Ortho (clipmap) views map the 8 corners AFFINELY, so the min/max
@@ -218,6 +228,7 @@ groupshared float3 gsCtr[kScatterThreads];                // the AABB, for a loc
 groupshared float3 gsExt[kScatterThreads];
 groupshared float3 gsPrevMin[kScatterThreads];            // S5b.2: last frame's clip rect of the caster in the level
 groupshared float3 gsPrevMax[kScatterThreads];
+groupshared float  gsRadiusPx[kScatterThreads];           // the caster's size in the view's mip 0 texels (UE CalcClipSpaceRadiusEstimate)
 
 static const uint kWhoLocal   = 1u << 16;
 static const uint kWhoDynamic = 1u << 17;
@@ -269,12 +280,21 @@ uint ScatterSetup(uint3 dtid, uint gi)
     for (uint L = 0u; L < mipCount; ++L)
     {
         // NDC -> this level's page grid. y flips (NDC +y is up, page rows run down).
-        const uint axisI = VSM_L0_AXIS >> L;
+        const uint axisI = VsmViewAxis(view, L);
         const float axis = (float)axisI;
-        const uint px0 = (uint)clamp((int)floor((lo.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
-        const uint px1 = (uint)clamp((int)floor((hi.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
-        const uint py0 = (uint)clamp((int)floor((0.5f - hi.y * 0.5f) * axis), 0, (int)axisI - 1);
-        const uint py1 = (uint)clamp((int)floor((0.5f - lo.y * 0.5f) * axis), 0, (int)axisI - 1);
+        uint px0 = (uint)clamp((int)floor((lo.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
+        uint px1 = (uint)clamp((int)floor((hi.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
+        uint py0 = (uint)clamp((int)floor((0.5f - hi.y * 0.5f) * axis), 0, (int)axisI - 1);
+        uint py1 = (uint)clamp((int)floor((0.5f - lo.y * 0.5f) * axis), 0, (int)axisI - 1);
+        if (!isLocal)
+        {
+            const uint boundsMin = LevelBounds[target * 2u], boundsMax = LevelBounds[target * 2u + 1u];
+            px0 = max(px0, boundsMin & 0xFFFFu);
+            py0 = max(py0, boundsMin >> 16u);
+            px1 = min(px1, boundsMax & 0xFFFFu);
+            py1 = min(py1, boundsMax >> 16u);
+            if (px0 > px1 || py0 > py1) { return 0u; }
+        }
         const uint w = px1 - px0 + 1u, h = py1 - py0 + 1u;
         gsRect[gi * kScatterMips + L] = uint2(px0 | (py0 << 16), w | (h << 16));
         pages += w * h;
@@ -285,6 +305,19 @@ uint ScatterSetup(uint3 dtid, uint gi)
                       Views[view].bits.y); // this view's own tier-curve LOD
     gsCtr[gi] = ctr;
     gsExt[gi] = ext;
+    float radiusPx = 1e30f;
+    if (gCoarseBase != 0u)
+    {
+        if (!isLocal)
+        {
+            radiusPx = length(ext) * Views[view].params.w * VSM_CLIPMAP_VIRTUAL_RES;
+        }
+        else if (Views[view].cull.w >= 0.0f)
+        {
+            radiusPx = length(ext) * Views[view].params.w / max(length(ctr - Views[view].cull.xyz), 1e-3f) * VSM_VIRTUAL_RES;
+        }
+    }
+    gsRadiusPx[gi] = radiusPx;
     return pages;
 }
 
@@ -300,6 +333,13 @@ void ScatterResidentPage(uint t, uint4 who, uint L, uint pxi, uint py, uint page
     const bool isDynamic = (who.z & kWhoDynamic) != 0u;
     const uint targetLod = who.w;
 
+    // UE's IsDetailGeometry: not worth drawing into a page that holds a good part of the world for those who read it roughly.
+    if (gsRadiusPx[t] / (float)(1u << L) < (isDynamic ? gCoarsePixelsDynamic : gCoarsePixelsStatic))
+    {
+        const uint pageBit = 1u << (pageId & 31u);
+        if ((Request[gCoarseBase + (pageId >> 5u)] & pageBit) != 0u && (Request[pageId >> 5u] & pageBit) == 0u) { return; }
+    }
+
     // Residency first: the exact test is only worth building for a page that exists.
     if (isLocal && !BoxInPagePlanes(Views[view].viewProj, L, pxi, py, gsCtr[t], gsExt[t])) { return; }
     const uint p = entry & 0x0000FFFFu;            // physical page index
@@ -309,12 +349,12 @@ void ScatterResidentPage(uint t, uint4 who, uint L, uint pxi, uint py, uint page
     // dirties the page: whether its shadow moved is exactly what pass B decides.
     if ((who.z & kWhoPrev) != 0u)
     {
-        const uint prevEntry = PrevPageTable[pageId];
         HzbFrustumCull prevCull = (HzbFrustumCull)0;
         prevCull.rectMin = gsPrevMin[t];
         prevCull.rectMax = gsPrevMax[t];
-        if ((prevEntry & 0x80000000u) != 0u &&
-            HiddenInPageLastFrame(prevEntry & 0x0000FFFFu, L, pxi, py, prevCull))
+        // This physical page held this virtual page last frame: its pyramid region is the page's own. A page mapped since
+        // was somebody else's then, and is drawn in pass A. (It was a copy of the whole page table a frame.)
+        if (PhysOwnerPrev[p] == pageId && HiddenInPageLastFrame(p, L, pxi, py, prevCull))
         {
             uint idx;
             InterlockedAdd(HzbCounters[0], 1u, idx);

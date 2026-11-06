@@ -138,15 +138,13 @@ enum class GraphicsControl
     VsmRefDistance,
     VsmRequestDownscale,
     VsmLru,
-    VsmClipmapBaseExtent,
-    VsmClipmapBlend,
-    VsmClipmapBlendWidth,
+    VsmClipmapFirstLevel,
+    VsmResolutionLodBiasDirectional,
     VsmSmrtEnabled,
     VsmSmrtRays,
     VsmSmrtSamples,
     VsmSmrtTemporal,
     VsmSmrtAdaptive,
-    VsmSmrtMargin,
     VsmSmrtSunAngle,
     VsmSmrtTexelDither,
     VsmSmrtRayLength,
@@ -168,7 +166,7 @@ enum class GraphicsControl
     TessySdsm,                    // Tessy: the SDSM sun partitions draw clusters
     TessyLod,                     // Tessy N7: the cluster DAG's cut
     TessyLodPixelError,           // Tessy N7: the camera's DAG cut threshold (pixels)
-    VsmWindAnimateMaxLevel,
+    VsmWindRange,
     StreamingEnabled,             // Streaming (texture streaming A3)
     StreamingPoolSizeMB,
     StreamingMipBias,

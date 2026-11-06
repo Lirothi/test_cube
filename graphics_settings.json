@@ -153,10 +153,8 @@
     },
     "vsm": {
       "biasNearestTier": false,
-      "clipmapBaseExtent": 2.0,
-      "clipmapBlend": true,
-      "clipmapBlendWidth": 0.11999999731779099,
       "clipmapDepthBias": 0.00019999999494757503,
+      "clipmapFirstLevel": 6,
       "clipmapNormalBias": 1.0,
       "depthBiasDecay": 1.0,
       "depthBiasFloorTexels": 0.0,
@@ -166,17 +164,17 @@
       "lodRefDistance": 5.0,
       "lruFrames": 1000,
       "pageCaching": true,
-      "requestDownscale": 4,
+      "requestDownscale": 2,
       "residentOnly": true,
+      "resolutionLodBiasDirectional": 0.0,
       "shadowLodBias": 1,
       "shadowTiersPerLod": 2,
       "singleDraw": true,
       "smrtAdaptiveAfterRays": 1,
-      "smrtLevelMargin": 1.0,
-      "smrtRayCount": 7,
+      "smrtRayCount": 8,
       "smrtRayLengthScale": 1.5,
-      "smrtSamplesPerRay": 8,
-      "smrtSunAngleDeg": 0.30000001192092896,
+      "smrtSamplesPerRay": 4,
+      "smrtSunAngleDeg": 0.5,
       "smrtTemporalDither": true,
       "smrtTexelDither": 2.0,
       "tessy": true,
@@ -187,7 +185,7 @@
       "tessyLodPixelError": 2.0,
       "tessyRaster": true,
       "tessySdsm": true,
-      "windAnimateBelowLevel": 6
+      "windRange": 64.0
     }
   },
   "skyVis": {

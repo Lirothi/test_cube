@@ -95,6 +95,7 @@ COMPUTE_ENTRIES = [
     ("vsm_page_request_cs.hlsl", "CSMain"),
     ("vsm_page_request_clear_cs.hlsl", "CSMain"),
     ("vsm_water_mask_cs.hlsl", "CSMain"),
+    ("vsm_page_bounds_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_init_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_map_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_touch_cs.hlsl", "CSMain"),

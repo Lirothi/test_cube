@@ -13,7 +13,8 @@
 // The list is [available, most recently requested first ... least recently last | empty], so allocate's pop from the end
 // takes the empty pages first and then the least recently requested cached ones: LRU under pressure, nothing thrown away
 // while there is room. FreeCount = the list's length (UE's "available" count, the dynamic-resolution load's free pages).
-// One group: the pool is <= 1024 pages (VirtualShadowMap.cpp static_assert), sorted in groupshared by a bitonic sort.
+// One group of 1024 threads, each handling two pages of the 2048 (t and t + 1024), sorted in groupshared by a bitonic sort:
+// the comparators of a step are disjoint pairs, so one thread may run two of them.
 #include "vsm_page_alloc_common.hlsli"
 
 #define VSM_PAGE_ALLOC_FREELIST_RS \
@@ -28,22 +29,19 @@ RWStructuredBuffer<uint> AllocCounters : register(u4); // VSM_CNT_FREE = list le
 RWStructuredBuffer<uint> PerPageDirty  : register(u5); // the last render's verdict per page (read; 1 = it was redrawn)
 
 #define VSM_FREELIST_THREADS 1024
-// Sort key, above the page index's 10 bits: the age of an available page (1 .. gLruThreshold - 1, ascending = most
+#define VSM_FREELIST_PAGES 2048 // kPoolPageCount
+static const uint kPageBits = 11u;
+static const uint kPageMask = 0x7FFu;
+// Sort key, above the page index's 11 bits: the age of an available page (1 .. gLruThreshold - 1, ascending = most
 // recently requested first), then every empty page, then the pages in use (past the list's end).
 static const uint kKeyEmpty = 0xFFFFEu;
 static const uint kKeyInUse = 0xFFFFFu;
 
-groupshared uint gsKey[VSM_FREELIST_THREADS];
+groupshared uint gsKey[VSM_FREELIST_PAGES];
 groupshared uint gsListed;
 
-[numthreads(VSM_FREELIST_THREADS, 1, 1)]
-[RootSignature(VSM_PAGE_ALLOC_FREELIST_RS)]
-void CSMain(uint3 gtid : SV_GroupThreadID)
+uint PageKey(uint p)
 {
-    const uint p = gtid.x;
-    if (p == 0u) { gsListed = 0u; }
-    GroupMemoryBarrierWithGroupSync();
-
     uint key = kKeyInUse;
     if (p < gNumPages)
     {
@@ -79,26 +77,43 @@ void CSMain(uint3 gtid : SV_GroupThreadID)
             InterlockedAdd(gsListed, 1u, slot);
         }
     }
-    gsKey[p] = (key << 10u) | (p & 0x3FFu);
+    return (key << kPageBits) | (p & kPageMask);
+}
+
+[numthreads(VSM_FREELIST_THREADS, 1, 1)]
+[RootSignature(VSM_PAGE_ALLOC_FREELIST_RS)]
+void CSMain(uint3 gtid : SV_GroupThreadID)
+{
+    const uint t = gtid.x;
+    if (t == 0u) { gsListed = 0u; }
+    GroupMemoryBarrierWithGroupSync();
+
+    const uint pages[2] = { t, t + VSM_FREELIST_THREADS };
+    gsKey[pages[0]] = PageKey(pages[0]);
+    gsKey[pages[1]] = PageKey(pages[1]);
     GroupMemoryBarrierWithGroupSync();
 
     // Bitonic sort, ascending. Literal bounds: every thread runs every step (the barriers need it).
     [loop]
-    for (uint k = 2u; k <= VSM_FREELIST_THREADS; k <<= 1u)
+    for (uint k = 2u; k <= VSM_FREELIST_PAGES; k <<= 1u)
     {
         [loop]
         for (uint j = k >> 1u; j > 0u; j >>= 1u)
         {
-            const uint q = p ^ j;
-            if (q > p)
+            [unroll] for (uint h = 0u; h < 2u; ++h)
             {
-                const uint a = gsKey[p];
-                const uint b = gsKey[q];
-                const bool ascending = (p & k) == 0u;
-                if ((a > b) == ascending)
+                const uint p = pages[h];
+                const uint q = p ^ j;
+                if (q > p)
                 {
-                    gsKey[p] = b;
-                    gsKey[q] = a;
+                    const uint a = gsKey[p];
+                    const uint b = gsKey[q];
+                    const bool ascending = (p & k) == 0u;
+                    if ((a > b) == ascending)
+                    {
+                        gsKey[p] = b;
+                        gsKey[q] = a;
+                    }
                 }
             }
             GroupMemoryBarrierWithGroupSync();
@@ -106,6 +121,7 @@ void CSMain(uint3 gtid : SV_GroupThreadID)
     }
 
     const uint listed = gsListed;
-    if (p < listed) { FreeList[p] = gsKey[p] & 0x3FFu; }
-    if (p == 0u) { AllocCounters[VSM_CNT_FREE] = listed; }
+    if (pages[0] < listed) { FreeList[pages[0]] = gsKey[pages[0]] & kPageMask; }
+    if (pages[1] < listed) { FreeList[pages[1]] = gsKey[pages[1]] & kPageMask; }
+    if (t == 0u) { AllocCounters[VSM_CNT_FREE] = listed; }
 }

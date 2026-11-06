@@ -23,13 +23,14 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
         return o;
     }
     // Pool cell (gx,gy) -> NDC rect under the full-pool viewport. NDC y is up; pool row 0 is the top.
-    const uint  gx   = iid % VSM_POOL_PAGES_AXIS;
-    const uint  gy   = iid / VSM_POOL_PAGES_AXIS;
-    const float axis = (float)VSM_POOL_PAGES_AXIS;
-    const float x0 = (float)gx        / axis * 2.0 - 1.0;
-    const float x1 = (float)(gx + 1u) / axis * 2.0 - 1.0;
-    const float y0 = 1.0 - (float)gy        / axis * 2.0; // top edge
-    const float y1 = 1.0 - (float)(gy + 1u) / axis * 2.0; // bottom edge
+    const uint  gx   = iid % VSM_POOL_PAGES_X;
+    const uint  gy   = iid / VSM_POOL_PAGES_X;
+    const float axisX = (float)VSM_POOL_PAGES_X;
+    const float axisY = (float)VSM_POOL_PAGES_Y;
+    const float x0 = (float)gx        / axisX * 2.0 - 1.0;
+    const float x1 = (float)(gx + 1u) / axisX * 2.0 - 1.0;
+    const float y0 = 1.0 - (float)gy        / axisY * 2.0; // top edge
+    const float y1 = 1.0 - (float)(gy + 1u) / axisY * 2.0; // bottom edge
     // Triangle strip over 4 verts: (x0,y0),(x1,y0),(x0,y1),(x1,y1).
     float2 pos;
     pos.x = (vid & 1u) ? x1 : x0;

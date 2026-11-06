@@ -12,11 +12,10 @@ RWStructuredBuffer<uint> PageTable     : register(u0); // [gNumEntries] virtual 
 RWStructuredBuffer<uint> PhysOwner     : register(u1); // [gNumPages] physical page -> virtual owner / VSM_INVALID
 RWStructuredBuffer<uint> PhysLastFrame : register(u2); // [gNumPages] physical page -> last requested frame
 
-[numthreads(8, 8, 1)]
+[numthreads(64, 1, 1)]
 [RootSignature(VSM_PAGE_ALLOC_INIT_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
-    if (dtid.y != 0u) { return; }
     const uint i = dtid.x;
     if (i < gNumEntries) { PageTable[i] = 0u; }
     if (i < gNumPages)   { PhysOwner[i] = VSM_INVALID; PhysLastFrame[i] = 0u; }

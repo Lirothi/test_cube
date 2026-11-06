@@ -1,7 +1,7 @@
 // Rung 2 VSM virtual-page addressing shared by the request / setup / sampling shaders. Mirrors
-// the vsm:: constants in VirtualShadowMap.h. A virtual page id is view*kPagesPerView + the
+// the vsm:: constants in VirtualShadowMap.h. A virtual page id is VsmViewBase(view) + the
 // per-mip-level offset + py*axis + px; a resident page maps (via the page table) to a physical
-// page in the pool (VSM_POOL_PAGES_AXIS² pages of VSM_PAGE_SIZE² texels).
+// page in the pool (VSM_POOL_PAGES_X x VSM_POOL_PAGES_Y pages of VSM_PAGE_SIZE² texels).
 #ifndef VSM_ADDRESSING_HLSLI
 #define VSM_ADDRESSING_HLSLI
 
@@ -59,15 +59,23 @@ struct VsmViewData
 static const uint VSM_RESIDENT_BIT_C = 0x80000000u; // mapped at THIS level (render + legacy sample)
 static const uint VSM_ANY_LOD_BIT    = 0x40000000u; // resolvable here or at a coarser clipmap level
 static const uint VSM_LOD_SHIFT      = 16u;
-static const uint VSM_LOD_MASK       = 0x000F0000u; // 4 bits: offsets 0..15 (10 clipmap levels)
+static const uint VSM_LOD_MASK       = 0x001F0000u; // 5 bits: offsets 0..16 (17 clipmap levels)
 static const uint VSM_PHYS_MASK_C    = 0x0000FFFFu;
 
-static const float VSM_VIRTUAL_RES = 2048.0f;  // kVirtualRes — texels per clipmap level edge (for texel-scaled bias)
+// A LOCAL view (a spot, a point face): 2048 texels at mip 0, five mips.
+static const float VSM_VIRTUAL_RES = 2048.0f;  // kVirtualRes — texels per local view edge (for texel-scaled bias)
 static const uint VSM_L0_AXIS        = 16u;  // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
 static const uint VSM_MAX_LEVEL      = 4u;   // kMaxMipLevel
 static const uint VSM_PAGES_PER_VIEW = 341u; // kPagesPerView (16²+8²+4²+2²+1)
 static const uint VSM_LEVEL_OFFSET[6] = { 0u, 256u, 320u, 336u, 340u, 341u };
-static const uint VSM_POOL_PAGES_AXIS = 32u; // kPoolPagesPerAxis (kPoolTexels / kPageSize)
+// A clipmap LEVEL: UE's 16384 texels (VSM_VIRTUAL_MAX_RESOLUTION_XY), 128 x 128 pages, no mips: the level IS the LOD.
+static const float VSM_CLIPMAP_VIRTUAL_RES = 16384.0f; // kClipmapVirtualRes
+static const uint VSM_CLIPMAP_AXIS   = 128u;   // kClipmapPagesAxis
+static const uint VSM_CLIPMAP_PAGES  = 16384u; // kClipmapPages
+// The pool: UE's layout, its row a power of two (VirtualShadowMapArray.cpp:1006-1044).
+static const uint VSM_POOL_PAGES_X    = 128u;  // kPoolPagesX
+static const uint VSM_POOL_PAGES_Y    = 16u;   // kPoolPagesY
+static const uint VSM_POOL_PAGES      = 2048u; // kPoolPageCount
 static const uint VSM_PAGE_SIZE       = 128u;
 
 // Distance-based mip select (mirrors vsm_page_request_cs): coarser level with camera distance.
@@ -99,19 +107,47 @@ uint VsmCubeFace(float3 d)
     return (d.z >= 0.0f) ? 4u : 5u;
 }
 
+// The page table: [prefix local views | clipmap levels | the other local views], so the first id of a view is arithmetic
+// (vsm::ViewBase mirrors it). THE one place that knows.
+uint VsmClipmapBase() { return VSM_CLIPMAP_FIRST * VSM_PAGES_PER_VIEW; }
+uint VsmExtraBase() { return VsmClipmapBase() + VSM_NUM_CLIPMAP_LEVELS * VSM_CLIPMAP_PAGES; }
+uint VsmViewBase(uint view)
+{
+    if (view < VSM_CLIPMAP_FIRST) { return view * VSM_PAGES_PER_VIEW; }
+    if (view < VSM_CLIPMAP_END) { return VsmClipmapBase() + (view - VSM_CLIPMAP_FIRST) * VSM_CLIPMAP_PAGES; }
+    return VsmExtraBase() + (view - VSM_CLIPMAP_END) * VSM_PAGES_PER_VIEW;
+}
+// Pages per axis of a view at a mip.
+uint VsmViewAxis(uint view, uint level) { return VsmIsClipmapView(view) ? VSM_CLIPMAP_AXIS : (VSM_L0_AXIS >> level); }
+
 // (view, level, px, py) -> virtual page id.
 uint VsmPageId(uint view, uint level, uint px, uint py)
 {
+    if (VsmIsClipmapView(view)) { return VsmViewBase(view) + py * VSM_CLIPMAP_AXIS + px; }
     uint axis = VSM_L0_AXIS >> level;
-    return view * VSM_PAGES_PER_VIEW + VSM_LEVEL_OFFSET[level] + py * axis + px;
+    return VsmViewBase(view) + VSM_LEVEL_OFFSET[level] + py * axis + px;
+}
+
+// Virtual page id -> its view.
+uint VsmViewOfPage(uint pageId)
+{
+    if (pageId < VsmClipmapBase()) { return pageId / VSM_PAGES_PER_VIEW; }
+    if (pageId < VsmExtraBase()) { return VSM_CLIPMAP_FIRST + (pageId - VsmClipmapBase()) / VSM_CLIPMAP_PAGES; }
+    return VSM_CLIPMAP_END + (pageId - VsmExtraBase()) / VSM_PAGES_PER_VIEW;
 }
 
 // Virtual page id -> (view, level, px, py).
 void VsmDecodePage(uint pageId, out uint view, out uint level, out uint px, out uint py)
 {
-    view = pageId / VSM_PAGES_PER_VIEW;
-    uint inView = pageId - view * VSM_PAGES_PER_VIEW;
+    view = VsmViewOfPage(pageId);
+    uint inView = pageId - VsmViewBase(view);
     level = 0u;
+    if (VsmIsClipmapView(view))
+    {
+        px = inView % VSM_CLIPMAP_AXIS;
+        py = inView / VSM_CLIPMAP_AXIS;
+        return;
+    }
     [unroll] for (uint L = 0u; L < 5u; ++L)
     {
         if (inView >= VSM_LEVEL_OFFSET[L] && inView < VSM_LEVEL_OFFSET[L + 1u]) { level = L; }

@@ -58,11 +58,8 @@ struct VsmSmrtParams
     // r.Shadow.Virtual.SMRT.TexelDitherScaleDirectional (UE default 2.0), in TEXELS of the level
     // being sampled. Hides the resolution staircase; too high leaks light near contacts.
     float texelDitherScale;
-    // Fraction of a clipmap level's square within which a receiver is accepted. 1.0 = the finest
-    // level that contains it at all (the single-tap rule); 0.5 = UE's arrangement, where the level
-    // covers twice the radius its selection tests. A margin costs a LEVEL OF SHADOW RESOLUTION,
-    // which is why this is a knob and not a constant.
-    float levelMargin;
+    // The clipmap's ResolutionLodBias (vsm::g_clipmapFrameBias), for the dither's scale.
+    float clipResBias;
     // Rotates the per-pixel sample set once per frame (UE's View.StateFrameIndex). 0 = off, which
     // is what a single-frame comparison wants; non-zero pays off only through a temporal pass.
     uint frameIndex;
@@ -80,7 +77,7 @@ VsmSmrtParams VsmSmrtParamsOff()
     p.extrapolateMaxSlope = 0.0f;
     p.sourceRadius = 0.0f;
     p.texelDitherScale = 0.0f;
-    p.levelMargin = 1.0f;
+    p.clipResBias = 0.0f;
     p.frameIndex = 0u;
     p.adaptiveRayCount = 0u;
     return p;
@@ -158,39 +155,24 @@ struct VsmSmrtResult
     float hitDepth;
 };
 
-// UE's FSMRTClipmapRayState. It is a STATE rather than plain parameters for exactly one reason:
-// a ray that walks out of the clipmap level it started in must CONTINUE IN THE COARSER ONE, and
-// the level it ends up in has to persist across the march.
-//
-// HOW OURS DIFFERS FROM UE'S, AND WHY. UE keep one depth space for the whole march: they sample the
-// coarser level and convert the depth back into the starting level's range with a scale/bias pair
-// (`Result.Depth = (physDepth - DepthLevelBias) / DepthLevelScale`, SampleVirtualShadowMapClipmap).
-// That works because their level-to-level relation is a clean power of two in BOTH the UV scale and
-// the depth range.
-//
-// Here each clipmap level is a separate view with its OWN camera-centred, texel-snapped matrix, so
-// the ray is RE-PROJECTED into the new level instead: recompute this sample point through that
-// level's `clipVP` and carry on. It costs one extra matrix multiply on a level change (rare -- only
-// at a page edge) and it does not depend on the two levels' depth ranges staying in an exact ratio,
-// which is an invariant our matrices are built to satisfy but nothing in the shader could check.
-//
-// The price is that the depth HISTORY is in the old level's units the moment we cross, so it must
-// be dropped -- which is what UE's `bResetExtrapolation` flag exists for, used here for the whole
-// history rather than just the slope.
+// UE's FSMRTClipmapRayState: the ray stays in the level its receiver landed on for the whole march, and a sample whose page
+// is not mapped there is read from the coarser level that holds it, its depth brought back into this level's range
+// (SampleVirtualShadowMapClipmap's DepthLevelScale / Bias). So the samples next to the receiver read the receiver's own level
+// however far up the march went.
 struct VsmSmrtRayState
 {
     uint   level;             // clipmap LEVEL index; the view slot is VSM_CLIPMAP_FIRST + level
-    float3 originWS;          // the ray's start, in world space -- kept so it can be re-projected
-    float3 vecWS;             // full ray vector (direction * length), likewise
+    float3 originWS;          // the ray's start, in world space -- a fallback sample is projected into its own level
+    float3 vecWS;             // full ray vector (direction * length)
     float  rayLength;
     float  extrapolateMaxSlopeWS; // world-unit clamp; converted to this level's NDC in SetLevel
-    // Cached projection of the ray into the CURRENT level. Rebuilt by VsmSmrtSetLevel.
+    // The projection of the ray into its level.
     float3 startUVZ;
     float3 stepUVZ;
     float  extrapolateSlope;  // the above, in this level's NDC per unit ray parameter
 };
 
-// (Re)project the ray into `level` and cache the per-level terms.
+// Project the ray into `level`.
 void VsmSmrtSetLevel(inout VsmSmrtRayState st, uint level,
                      float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS])
 {
@@ -226,9 +208,8 @@ bool VsmSmrtLoadDepth(uint view, float2 uv, StructuredBuffer<uint> PageTable, Te
     lodOffset = 0u;
     if (any(uv < 0.0f) || any(uv > 1.0f)) { return false; } // ray left this level
 
-    // Clipmap views live at page level 0 (the clipmap LEVEL is the LOD), same as VsmSampleNDC's
-    // distCam=0 start.
-    const uint axis = VSM_L0_AXIS;
+    // Clipmap views have no mips: the clipmap LEVEL is the LOD.
+    const uint axis = VSM_CLIPMAP_AXIS;
     const uint px = min((uint)(uv.x * (float)axis), axis - 1u);
     const uint py = min((uint)(uv.y * (float)axis), axis - 1u);
     const uint entry = PageTable[VsmPageId(view, 0u, px, py)];
@@ -241,8 +222,8 @@ bool VsmSmrtLoadDepth(uint view, float2 uv, StructuredBuffer<uint> PageTable, Te
     if ((entry & VSM_RESIDENT_BIT_C) == 0u) { return false; }
 
     const uint phys = entry & VSM_PHYS_MASK_C;
-    const float gx = (float)(phys % VSM_POOL_PAGES_AXIS);
-    const float gy = (float)(phys / VSM_POOL_PAGES_AXIS);
+    const float gx = (float)(phys % VSM_POOL_PAGES_X);
+    const float gy = (float)(phys / VSM_POOL_PAGES_X);
     const float2 uvInPage = saturate(uv * (float)axis - float2(px, py));
     // Clamped INSIDE the page, so a read can never wander into the neighbouring page's physical
     // texels -- the same guarantee the PCF path gets from its pmin/pmax clamp.
@@ -253,14 +234,11 @@ bool VsmSmrtLoadDepth(uint view, float2 uv, StructuredBuffer<uint> PageTable, Te
     return true;
 }
 
-// UE's SMRTFindSample, plus the level-crossing search their SampleVirtualShadowMapClipmap does
-// internally. `resetExtrapolation` is UE's FSMRTSample.bResetExtrapolation.
+// UE's SMRTFindSample, plus the fallback their SampleVirtualShadowMapClipmap does internally.
 VsmSmrtSample VsmSmrtFindSample(inout VsmSmrtRayState st, float sampleTime,
                                 float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
-                                StructuredBuffer<uint> PageTable, Texture2D Pool,
-                                out bool resetExtrapolation)
+                                StructuredBuffer<uint> PageTable, Texture2D Pool)
 {
-    resetExtrapolation = false;
     const float3 sampleUVZ = st.startUVZ + st.stepUVZ * sampleTime;
 
     VsmSmrtSample s;
@@ -280,17 +258,10 @@ VsmSmrtSample VsmSmrtFindSample(inout VsmSmrtRayState st, float sampleTime,
     }
 
     // The chain's fast path: the page exists in this level but is not mapped, and the propagate
-    // pass already worked out which coarser level owns it. Start the walk there instead of at
-    // level+1. When the ray left the level entirely there is no entry to consult and hintOffset is
-    // 0, which starts the walk at the next level -- the general case, and the one our ray hits
-    // most, because our clipmap level for a receiver is the TIGHTEST square containing it.
+    // pass already worked out which coarser level owns it. When the ray left the level there is no
+    // entry to consult and hintOffset is 0, which starts the walk at the next level.
     const uint firstStep = max(hintOffset, 1u);
 
-    // LEVEL CROSSING. The ray walked off this level's UV range, or onto a page that is not
-    // resident. Rather than dropping the sample -- which is what makes a long ray silently stop
-    // finding occluders near the level edge -- continue in a COARSER level, which covers the same
-    // world position and, being coarser, is far more likely to be resident.
-    //
     // Bounded by a compile-time constant, and only ever walks OUTWARD: a finer level cannot contain
     // a point this one does not.
     [loop] for (uint L = st.level + firstStep; L < VSM_NUM_CLIPMAP_LEVELS; ++L)
@@ -309,20 +280,14 @@ VsmSmrtSample VsmSmrtFindSample(inout VsmSmrtRayState st, float sampleTime,
             continue;
         }
 
-        // Adopt this level for the REST of the march, not just this sample: the ray is leaving the
-        // finer level for good, and re-testing it every step would cost a projection per sample to
-        // rediscover the same answer.
-        VsmSmrtSetLevel(st, L, clipVP);
-        resetExtrapolation = true;
+        // UE's DepthLevelScale / Bias: every level's depth is z = a_L dot(P, light) + b_L with a_L halving per level (its
+        // range is proportional to its radius), so z in this ray's level is (z_L - b_L) 2^(L - level) + b_level.
         s.valid = true;
-        s.sampleDepth = dl;
-        s.referenceDepth = ndc.z;              // this level's Z space, matching sampleDepth
-        s.extrapolateSlope = st.extrapolateSlope;
+        s.sampleDepth = (dl - clipVP[L]._43) * exp2((float)L - (float)st.level) + clipVP[st.level]._43;
         return s;
     }
 
-    // Nothing resident at any level: invalid, and the march skips it. referenceDepth stays in the
-    // old level's space, which is harmless because an invalid sample updates no history.
+    // Nothing resident at any level: invalid, and the march skips it.
     return s;
 }
 
@@ -366,25 +331,8 @@ VsmSmrtResult VsmSmrtRayCast(inout VsmSmrtRayState st, int numSteps, float stepO
         const float tRaw = timeScale * (float)i + timeBias;
         const float sampleTime = (i == steps) ? 0.0f : (tRaw * tRaw); // UE's Pow2
 
-        bool resetExtrapolation = false;
-        const VsmSmrtSample s = VsmSmrtFindSample(st, sampleTime, clipVP, PageTable, Pool,
-                                                  resetExtrapolation);
+        const VsmSmrtSample s = VsmSmrtFindSample(st, sampleTime, clipVP, PageTable, Pool);
         const float referenceDepth = s.referenceDepth;
-
-        // The ray changed clipmap level, so every accumulated quantity is expressed in a depth
-        // space that no longer exists. UE only reset the SLOPE here, because their level fallback
-        // converts the sampled depth back into the starting level's range and their history stays
-        // valid; ours re-projects instead (see VsmSmrtRayState), so the history has to go too.
-        // Dropping prevReferenceDepth matters most: leaving it would compute the next step's
-        // CompareTolerance across the discontinuity, producing one enormous tolerance and a
-        // spurious hit right at the level boundary.
-        if (resetExtrapolation)
-        {
-            depthHistory = kDepthHistoryNotSet;
-            depthHistoryTime = -1.0f;
-            depthSlope = 0.0f;
-            prevReferenceDepth = -1.0f;
-        }
 
         if (!s.valid) { continue; }
 

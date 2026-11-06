@@ -51,7 +51,7 @@ groupshared float gs5[2][2];
 [RootSignature(VSM_HZB_BUILD_RS)]
 void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID)
 {
-    const uint page = gid.y * VSM_POOL_PAGES_AXIS + gid.x;
+    const uint page = gid.y * VSM_POOL_PAGES_X + gid.x;
     const bool resident = PhysOwner[page] != VSM_INVALID;
     // Uniform per group, so the barriers below are reached by every thread or by none.
     if (gFull == 0u && (!resident || PerPageDirty[page] == 0u)) { return; }

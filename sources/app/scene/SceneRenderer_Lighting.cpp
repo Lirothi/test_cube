@@ -413,17 +413,15 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     }
     // Both of these are NDC values that mean a WORLD distance, so both must be divided by the
     // level's depth range -- see vsm::ClipmapRangeMultiple(). `vsmDepthBias` is authored against
-    // the historical range (6x the extent), so it is rescaled to keep that meaning when
-    // ZRangeScale moves; the floor is authored in TEXELS and converted with the same multiple.
+    // the historical range and resolution (vsm::ClipmapDepthBiasNdc); the floor is authored in TEXELS
+    // and converted with the same multiple.
     // Leaving a hardcoded 6 here is what made ZRangeScale 10 -> 50 detach shadows from casters.
     const float clipRangeMul = vsm::ClipmapRangeMultiple();
-    constants.vsmDepthBias =
-        vsm::g_clipmapDepthBias * (vsm::kClipmapRangeMultipleRef / clipRangeMul);
+    constants.vsmDepthBias = vsm::ClipmapDepthBiasNdc();
     constants.clipmapDepthBiasDecay = vsm::g_clipmapDepthBiasDecay;
     constants.clipmapDepthBiasFloorNdc =
-        vsm::g_clipmapDepthBiasFloorTexels / (clipRangeMul * (float)vsm::kVirtualRes);
-    constants.clipmapBlendWidth = vsm::ClipmapBlendWidth();
-    constants.clipmapBaseExtent = vsm::g_clipmapBaseExtent;
+        vsm::g_clipmapDepthBiasFloorTexels / (clipRangeMul * (float)vsm::kClipmapVirtualRes);
+    constants.clipmapFirstLevel = static_cast<float>(vsm::g_clipmapFirstLevel);
     // P16.16: UE divide their CVar by 1000 before it reaches the shader
     // (GetNormalBiasForShader, VirtualShadowMapArray.cpp:561). Same here, so the authored
     // number stays directly comparable to `r.Shadow.Virtual.NormalBias`.
@@ -437,7 +435,7 @@ void SceneRenderer::FillLightingConstants(Renderer* renderer, const Camera& came
     constants.smrtSourceRadius =
         std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f);
     constants.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale;
-    constants.smrtLevelMargin = vsm::g_smrtLevelMargin;
+    constants.smrtClipResBias = vsm::g_clipmapFrameBias;
     // 0 is the reserved "no temporal rotation" value, so the phase runs 1..64.
     constants.smrtFrameIndex = frame_->smrtFrameIndex;
     constants.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount;

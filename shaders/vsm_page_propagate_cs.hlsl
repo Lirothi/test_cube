@@ -29,9 +29,10 @@
 
 #define VSM_PAGE_PROPAGATE_RS \
     "CBV(b0), " \
-    "DescriptorTable(UAV(u0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 RWStructuredBuffer<uint> PageTable : register(u0);
+RWStructuredBuffer<uint> LevelBounds : register(u1); // vsm_page_bounds_cs.hlsl: per level, two words
 
 cbuffer VsmPropagateCB : register(b0)
 {
@@ -74,12 +75,10 @@ bool VsmPageFromLS(uint level, float2 ls, out uint2 page)
     return true;
 }
 
-[numthreads(8, 8, 1)]
+[numthreads(64, 1, 1)]
 [RootSignature(VSM_PAGE_PROPAGATE_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
-    if (dtid.y != 0u) { return; }
-
     const uint pagesPerLevel = gPagesPerAxis * gPagesPerAxis;
     const uint i = dtid.x;
     if (i >= gNumClipLevels * pagesPerLevel) { return; }
@@ -107,6 +106,10 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
         uint2 coarsePage;
         if (!VsmPageFromLS(coarse, ls, coarsePage)) { continue; }
+        // A level has pages in a small rect round the camera, and most pages of a finer level lie outside it.
+        const uint boundsMin = LevelBounds[coarse * 2u], boundsMax = LevelBounds[coarse * 2u + 1u];
+        if (coarsePage.x < (boundsMin & 0xFFFFu) || coarsePage.y < (boundsMin >> 16u) ||
+            coarsePage.x > (boundsMax & 0xFFFFu) || coarsePage.y > (boundsMax >> 16u)) { continue; }
 
         const uint coarseSlot = VsmPageId(VSM_CLIPMAP_FIRST + coarse, 0u, coarsePage.x, coarsePage.y);
         const uint coarseEntry = PageTable[coarseSlot];
@@ -121,7 +124,6 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         break;
     }
 
-    // Unconditional: 0 when nothing serves this page, which is what clears a stale pointer left by
-    // a previous frame.
-    PageTable[slot] = result;
+    // 0 when nothing serves this page, which is what clears a stale pointer left by a previous frame.
+    if (PageTable[slot] != result) { PageTable[slot] = result; }
 }

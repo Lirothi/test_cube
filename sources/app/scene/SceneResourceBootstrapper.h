@@ -54,18 +54,17 @@ struct SceneLightingCBHandles
     Material::CBFieldHandle lightPreExposure;        // the light target is pre-exposed (lighting_cb.hlsli)
     Material::CBFieldHandle useVsm;           // Step 24f: directional clipmap sampling
     Material::CBFieldHandle vsmDepthBias;
-    Material::CBFieldHandle clipmapBaseExtent;
     Material::CBFieldHandle clipmapNormalBias;
     Material::CBFieldHandle clipmapDepthBiasDecay;    // per-level depth-bias shaping (see VsmClipmapShadow)
     Material::CBFieldHandle clipmapDepthBiasFloorNdc;
-    Material::CBFieldHandle clipmapBlendWidth;
+    Material::CBFieldHandle clipmapFirstLevel;
     Material::CBFieldHandle smrtRayCount;             // SMRT, docs/vsm_smrt_plan.md
     Material::CBFieldHandle smrtSamplesPerRay;
     Material::CBFieldHandle smrtRayLengthScale;
     Material::CBFieldHandle smrtExtrapolateMaxSlope;
     Material::CBFieldHandle smrtSourceRadius;
     Material::CBFieldHandle smrtTexelDitherScale;
-    Material::CBFieldHandle smrtLevelMargin;
+    Material::CBFieldHandle smrtClipResBias;
     Material::CBFieldHandle smrtFrameIndex;
     Material::CBFieldHandle smrtAdaptiveRayCount;
     Material::CBFieldHandle smrtScreenRayLength;
@@ -719,11 +718,10 @@ struct LightingPassConstants
     float lightPreExposure = 1.0f;                // render::g_preExposure: the light target is pre-exposed
     uint32_t useVsm = 0;                          // Step 24f: 1 = sample the directional VSM clipmap
     float vsmDepthBias = 0.0f;
-    float clipmapBaseExtent = 0.0f;               // finest clipmap level's world extent
     float clipmapNormalBias = 0.0f;               // receiver normal offset, UE units (P16.16)
     float clipmapDepthBiasDecay = 1.0f;           // bias(L) = max(vsmDepthBias * decay^L, floorNdc)
     float clipmapDepthBiasFloorNdc = 0.0f;        // already converted texels -> NDC on the CPU
-    float clipmapBlendWidth = 0.0f;               // outer level fraction blended into parent; 0 = off
+    float clipmapFirstLevel = 6.0f;               // level 0's absolute number
     // SMRT (docs/vsm_smrt_plan.md). MIRRORS lighting_cs.hlsl's block of the same names -- these
     // four sit together in both places, and the 16-byte rule is what decides where the pad goes.
     uint32_t smrtRayCount = 0;                    // 0 = single-tap SampleCmp path (default)
@@ -732,7 +730,7 @@ struct LightingPassConstants
     float smrtExtrapolateMaxSlope = 0.05f;  // UE's 5.0 is CENTIMETRES; ours is metres
     float smrtSourceRadius = 0.0f;          // sin of the light's angular radius (Step 3)
     float smrtTexelDitherScale = 2.0f;
-    float smrtLevelMargin = 1.0f;
+    float smrtClipResBias = 0.0f;                 // the clipmap's resolution LOD bias, for the dither
     uint32_t smrtFrameIndex = 0;            // 0 = temporal dither off; else the frame phase
     uint32_t smrtAdaptiveRayCount = 1;
     float smrtScreenRayLength = 0.015f;

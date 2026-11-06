@@ -515,11 +515,14 @@ void SceneRenderer::DecideFrame(Renderer* renderer, const SceneFrameData& frame)
         // on (any sun animation: the dev window, --scene-stress-sky, time of day).
         const std::uint32_t lightVersion = frame.dirLight ? frame.dirLight->GetTransformVersion() : 0u;
         const DirectX::XMFLOAT4 waterPlane = VsmWaterPlane(frame); // the water's pages are requested by its plane
-        const std::array<float, 10> requestKey = {
+        vsm::g_clipmapFrameBias = vsm::ClipmapLodBias(frame.mainView->invProj.m, static_cast<float>(renderer->GetRenderWidth()));
+        const std::array<float, 15> requestKey = {
             vsm::g_localMipFromPixel ? 1.0f : 0.0f, vsm::LocalMipBias(), vsm::LocalRefDist(),
             static_cast<float>(vsm::g_requestDownscale), static_cast<float>(renderer->GetRenderWidth()),
             static_cast<float>(renderer->GetRenderHeight()), vsm::g_requestLightCull ? 1.0f : 0.0f,
-            waterPlane.x, waterPlane.y, static_cast<float>(vsm::g_waterCasterMask) };
+            waterPlane.x, waterPlane.y, static_cast<float>(vsm::g_waterCasterMask),
+            vsm::g_clipmapFrameBias, static_cast<float>(vsm::g_clipmapFirstLevel), vsm::g_pageDilation,
+            vsm::g_cullBackfacingPixels ? 1.0f : 0.0f, static_cast<float>(vsm::g_markCoarsePages) + (vsm::g_coarseCacheDynamic ? 4.0f : 0.0f) };
         const bool viewStill = vsmHasRendered_ && lightVersion == vsmLastLightVersion_ &&
             std::memcmp(&frame.mainView->view, &vsmLastView_, sizeof(mat4)) == 0 &&
             requestKey == vsmLastRequestKey_;

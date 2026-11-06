@@ -162,7 +162,6 @@ namespace
         case GraphicsControl::IndirectGBuffer:
         case GraphicsControl::GbufferHzb:
         case GraphicsControl::ShadowLodBiasNearTier:
-        case GraphicsControl::VsmClipmapBlend:
         case GraphicsControl::VsmSmrtEnabled:
         case GraphicsControl::VsmSmrtTemporal:
         case GraphicsControl::VsmResidentOnly:
@@ -3056,29 +3055,17 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "Before that it is taken back only when the pool has no empty page left,\n"
                                       "least recently requested first.");
 
-                GRAPHICS_CONTROL(VsmClipmapBaseExtent, "vsmClipmapBaseExtent",
-                    ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent_game,
-                                       1.0f, 200.0f, "%.1f", ImGuiSliderFlags_Logarithmic));
+                GRAPHICS_CONTROL(VsmClipmapFirstLevel, "vsmClipmapFirstLevel",
+                    ImGui::SliderInt("Clipmap first level", &vsm::g_clipmapFirstLevel_game, 0, 16));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("The SIDE of the finest level's square, centred on the camera (level i = base*2^i, a texel = side / 2048).\n"
-                                      "Smaller = sharper near shadows but less far coverage; larger = the reverse. Halve it and\n"
-                                      "\"Wind animate below level\" takes one more to keep the wind's reach in metres.");
-                GRAPHICS_CONTROL(VsmClipmapBlend, "vsmClipmapBlend",
-                    ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled_game));
+                    ImGui::SetTooltip("UE's r.Shadow.Virtual.Clipmap.FirstLevel, 6. Level L is 2^(L+3) cm across, 16384 texels: the\n"
+                                      "finest texel a shadow can have. What a pixel asks for is its distance, not this.");
+                GRAPHICS_CONTROL(VsmResolutionLodBiasDirectional, "vsmResolutionLodBiasDirectional",
+                    ImGui::SliderFloat("Resolution LOD bias (sun)", &vsm::g_resolutionLodBiasDirectional_game, -4.0f, 4.0f, "%.2f"));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Hard performance A/B switch. OFF sends width 0 to both the page requester\n"
-                                      "and samplers: no new parent requests and no second PCF sample. Parent pages\n"
-                                      "requested before the switch age out after the configured LRU frame count.");
-                ImGui::BeginDisabled(!vsm::g_clipmapBlendEnabled_game);
-                GRAPHICS_CONTROL(VsmClipmapBlendWidth, "vsmClipmapBlendWidth",
-                    ImGui::SliderFloat("Clipmap blend width", &vsm::g_clipmapBlendWidth_game,
-                                       0.0f, 0.30f, "%.3f"));
-                ImGui::EndDisabled();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Outer fraction of each fine clip level blended into the next coarser level.\n"
-                                      "Hides caster-LOD silhouette changes at clip boundaries. 0 is a strict off\n"
-                                      "switch: no parent page requests and no second 3x3 PCF sample. Non-zero\n"
-                                      "costs the extra sample only inside this transition band.");
+                    ImGui::SetTooltip("UE's r.Shadow.Virtual.ResolutionLodBiasDirectional: 0 at High, -1.5 at Epic. On top of the bias\n"
+                                      "the render resolution asks for: -1 doubles the shadow's resolution and costs up to 4x the pages.\n"
+                                      "Now %.2f in all.", vsm::g_clipmapFrameBias);
                 // ---- SMRT (docs/vsm_smrt_plan.md) --------------------------------------------
                 // Marches a ray from the receiver toward the light through the clipmap instead of
                 // taking one biased comparison. Directional clipmap only, so it sits with the
@@ -3156,18 +3143,6 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "or two rays; only penumbrae need the full count. 0 disables it.\n\n"
                                       "Measured at 7 rays: Pass_Lighting 0.861 -> 0.425 ms, a 2.0x saving for\n"
                                       "0.23%% of pixels changed. Compute only -- glass always shoots them all.");
-
-                GRAPHICS_CONTROL(VsmSmrtMargin, "vsmSmrtMargin",
-                    ImGui::SliderFloat("SMRT level margin", &vsm::g_smrtLevelMargin_game,
-                                       0.25f, 1.0f, "%.2f"));
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Fraction of a clipmap level square within which a receiver is accepted.\n"
-                                      "1.0 = the finest level that contains it at all -- the sharpest data there is.\n"
-                                      "Lower values mirror UE, whose level covers twice the radius its selection\n"
-                                      "tests, giving a marched ray room before it leaves the level.\n\n"
-                                      "A margin is bought with A LEVEL OF SHADOW RESOLUTION: at 0.5 the coarse\n"
-                                      "level pages show through as rectangular slabs and palm fronds lose their\n"
-                                      "leaflets. Measured as unnecessary here, hence the 1.0 default.");
 
                 GRAPHICS_CONTROL(VsmSmrtSunAngle, "vsmSmrtSunAngle",
                     ImGui::SliderFloat("SMRT sun angle (deg)",
@@ -3308,29 +3283,21 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 GRAPHICS_CONTROL(VsmPageCaching, "vsmPageCaching",
                     ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching_game));
                 {
-                    int windLvl = static_cast<int>(vsm::g_windAnimateMaxLevel_game);
-                    if (GRAPHICS_CONTROL_WIDTH(VsmWindAnimateMaxLevel,
-                        "vsmWindAnimateMaxLevel", 105.0f,
-                        ImGui::SliderInt("Wind animate below level", &windLvl, 0,
-                                         static_cast<int>(vsm::kNumClipmapLevels))))
-                    {
-                        vsm::g_windAnimateMaxLevel_game = static_cast<std::uint32_t>(windLvl);
-                    }
+                    GRAPHICS_CONTROL_WIDTH(VsmWindRange, "vsmWindRange", 105.0f,
+                        ImGui::SliderFloat("Wind range (m)", &vsm::g_windRange_game, 0.0f, 512.0f, "%.0f"));
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Clipmap levels BELOW this sway in the shadow map and re-render every\n"
-                                          "frame while wind blows; levels at/above draw their casters RIGID, so\n"
-                                          "the page cache can keep them (a cached page and a fresh render agree\n"
-                                          "exactly). Level extent doubles per step from the clipmap base extent,\n"
-                                          "so 2 = sway within ~2x base extent of the camera. Locals always sway.\n"
-                                          "Max = everything sways (the old behavior; cache gains nothing in wind).");
+                        ImGui::SetTooltip("Shadows within this distance of the camera sway and their pages re-render every frame while\n"
+                                          "the wind blows; past it the casters draw RIGID, so the page cache can keep them (a cached\n"
+                                          "page and a fresh render agree exactly). Locals always sway. Now the first %u levels.",
+                                          vsm::ClipmapWindLevels());
                 }
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("Skips re-rendering pages whose content did not change. Two rules make the\n"
-                                      "cached content valid: (1) wind past 'wind animate below level' renders\n"
+                                      "cached content valid: (1) wind past the 'wind range' renders\n"
                                       "RIGID, so a swaying grove caches its far levels (-0.33 ms Pass_VsmPageRender\n"
                                       "in the wind_test grove, neutral on demo.json); (2) any view whose MATRIX\n"
-                                      "changed re-renders wholesale - a page id has no scroll offset, so a moved\n"
-                                      "clipmap/sun/spot would otherwise serve depth for the wrong world rect.\n"
+                                      "changed re-renders wholesale - a local page id has no scroll offset, so a moved\n"
+                                      "sun/spot would otherwise serve depth for the wrong world rect (a clipmap level's pages move).\n"
                                       "Net effect: parked camera + settled lights cache fully; motion redraws\n"
                                       "exactly what it invalidates (the cost of the uncached path, no worse).");
                 if (ImGui::IsItemHovered())
@@ -3346,7 +3313,7 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 ImGui::EndDisabled();
                 ImGui::Separator();
                 ImGui::TextDisabled("Pool: %u pages (%ux%u). refDist=%.1f downscale=%u lru=%u",
-                    vsm::kPoolPageCount, vsm::kPoolTexels, vsm::kPoolTexels,
+                    vsm::kPoolPageCount, vsm::kPoolTexelsX, vsm::kPoolTexelsY,
                     vsm::g_refDist_game, vsm::g_requestDownscale_game, vsm::g_lruThreshold_game);
 
                 // --- Live page stats + physical-pool residency grid (kFrameCount-old snapshot). ---
@@ -3385,12 +3352,13 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     {
                         ImGui::Spacing();
                         ImGui::TextDisabled("Physical pool %ux%u pages \xE2\x80\x94 colour = owning shadow view:",
-                            vsm::kPoolPagesPerAxis, vsm::kPoolPagesPerAxis);
+                            vsm::kPoolPagesX, vsm::kPoolPagesY);
                         ImDrawList* dl = ImGui::GetWindowDrawList();
                         const ImVec2 origin = ImGui::GetCursorScreenPos();
-                        const int   axis = static_cast<int>(vsm::kPoolPagesPerAxis);
-                        const float cell = 9.0f, gap = 1.0f, pitch = cell + gap;
-                        for (int py = 0; py < axis; ++py)
+                        const int   axis = static_cast<int>(vsm::kPoolPagesX);
+                        const int   rows = static_cast<int>(vsm::kPoolPagesY);
+                        const float cell = 3.0f, gap = 1.0f, pitch = cell + gap;
+                        for (int py = 0; py < rows; ++py)
                         {
                             for (int px = 0; px < axis; ++px)
                             {
@@ -3402,31 +3370,30 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                 }
                                 else
                                 {
-                                    const std::uint32_t view = owner / vsm::kPagesPerView;
+                                    const std::uint32_t view = vsm::ViewOfPage(owner);
                                     const bool clip = vsm::IsClipmapView(view); // directional clipmap
                                     const std::uint32_t views = std::max(vsm::MaxVirtualViews(), 1u);
                                     const float hue = static_cast<float>(view % views) / static_cast<float>(views);
                                     col = ImColor::HSV(hue, clip ? 0.85f : 0.55f, clip ? 1.0f : 0.85f);
                                 }
                                 const ImVec2 a(origin.x + px * pitch, origin.y + py * pitch);
-                                dl->AddRectFilled(a, ImVec2(a.x + cell, a.y + cell), col, 1.5f);
+                                dl->AddRectFilled(a, ImVec2(a.x + cell, a.y + cell), col);
                             }
                         }
-                        const float gridPx = axis * pitch;
-                        ImGui::Dummy(ImVec2(gridPx, gridPx));
+                        ImGui::Dummy(ImVec2(axis * pitch, rows * pitch));
                         if (ImGui::IsItemHovered())
                         {
                             const ImVec2 m = ImGui::GetIO().MousePos;
                             const int cx = static_cast<int>((m.x - origin.x) / pitch);
                             const int cy = static_cast<int>((m.y - origin.y) / pitch);
-                            if (cx >= 0 && cx < axis && cy >= 0 && cy < axis)
+                            if (cx >= 0 && cx < axis && cy >= 0 && cy < rows)
                             {
                                 const std::uint32_t owner = owners[static_cast<size_t>(cy) * axis + cx];
                                 if (owner == 0xFFFFFFFFu)
                                     ImGui::SetTooltip("phys #%d (%d,%d): free", cy * axis + cx, cx, cy);
                                 else
                                 {
-                                    const std::uint32_t view = owner / vsm::kPagesPerView;
+                                    const std::uint32_t view = vsm::ViewOfPage(owner);
                                     // Plan S10b: [prefix spots | prefix faces | clipmap | more spots | more faces].
                                     const std::uint32_t moreSpotsEnd = vsm::SpotView(render::ShadowSpotCapacity() - 1u) + 1u;
                                     const char* kind = vsm::IsClipmapView(view) ? "directional clipmap"

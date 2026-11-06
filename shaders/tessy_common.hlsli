@@ -22,7 +22,7 @@ struct TessyCluster
 static const uint kTessyMeshletMaxVerts = 64u; // Mesh::kMeshletMaxVerts
 static const uint kTessyMeshletMaxTris  = 128u; // Mesh::kClusterMaxTris
 
-// TessyVisible: one uint4 per surviving (caster, cluster) on a page -- {caster id | page << 22, the cluster's index
+// TessyVisible: one uint4 per surviving (caster, cluster) on a page -- {caster id | page << 21, the cluster's index
 // (the VS path) or ONE of its meshlets' (the mesh shader path: the cull appends a record per meshlet), the mesh's base
 // vertex in the mega VB, the mesh shader's culls (below; the cull pass copies tessy.msCull in)}. A record whose .x is
 // kTessyDeadRecord draws nothing: tessy_ms_args_cs fills the mesh shader dispatch's last row past the count with it.

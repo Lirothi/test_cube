@@ -77,14 +77,13 @@ cbuffer PerFrame : register(b0)
     // CSM cascades. clipmapViewProj[i] = clipmap level i's camera-centered ortho viewProj.
     uint useVsm;
     float vsmDepthBias;
-    float clipmapBaseExtent;  // finest clipmap level's world extent (level i = base * 2^i)
     // P16.16: UE units (their `r.Shadow.Virtual.NormalBias`, default 0.5). See VsmClipmapShadow.
     float clipmapNormalBias;
     // Per-level shaping of vsmDepthBias (see VsmClipmapShadow): bias(L) = max(bias * decay^L, floor).
     // decay 1 + floor 0 = the legacy constant-in-texels bias. Floor arrives already converted to NDC.
     float clipmapDepthBiasDecay;
     float clipmapDepthBiasFloorNdc;
-    float clipmapBlendWidth; // outer fraction of a fine level blended into its parent; 0 = off
+    float clipmapFirstLevel; // level 0's absolute number (r.Shadow.Virtual.Clipmap.FirstLevel)
     // SMRT (docs/vsm_smrt_plan.md). smrtRayCount 0 = the single-tap SampleCmp path, unchanged.
     // MIRRORS LightingPassConstants; the four sit together in both so the 16-byte rows line up.
     uint smrtRayCount;
@@ -93,7 +92,7 @@ cbuffer PerFrame : register(b0)
     float smrtExtrapolateMaxSlope;
     float smrtSourceRadius;      // Step 3: sin of the light's angular radius
     float smrtTexelDitherScale;
-    float smrtLevelMargin;
+    float smrtClipResBias;   // the clipmap's ResolutionLodBias, for the dither
     uint smrtFrameIndex;   // 0 = no temporal rotation of the sample set
     uint smrtAdaptiveRayCount;
     float smrtScreenRayLength;   // multiple of view depth; 0 = no screen trace

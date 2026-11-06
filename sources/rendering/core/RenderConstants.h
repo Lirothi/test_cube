@@ -30,15 +30,15 @@ inline constexpr unsigned kConstantBufferAlignment = 256u;
 //
 // Local-light shadow plan S9 (docs/local_light_shadows_plan.md): VSM addresses a cull view as `its view + 4`, so the
 // layout is a fixed prefix followed by the extra local views (S9e: as many as the capacity below holds):
-//   [4 cascades | 8 spots | 24 point faces | 12 clipmap levels | S - 8 more spots | 6 (P - 4) more faces]
+//   [4 cascades | 8 spots | 24 point faces | 17 clipmap levels | S - 8 more spots | 6 (P - 4) more faces]
 // A spot slot / point face index maps to its cull slot ONLY through ShadowViewSpotSlot /
 // ShadowViewPointFaceSlot below.
 inline constexpr unsigned kShadowViewCascades = 4;
 inline constexpr unsigned kShadowViewVsmSpots = 8;       // the layout's prefix spots
 inline constexpr unsigned kShadowViewVsmPoints = 4;      // ... and prefix point lights: 24 cube faces
-inline constexpr unsigned kShadowViewClipmapLevels = 12; // VSM's directional clipmap (Step 24e)
+inline constexpr unsigned kShadowViewClipmapLevels = 17; // VSM's directional clipmap: UE's levels 6..22 (r.Shadow.Virtual.Clipmap.First / LastLevel)
 inline constexpr unsigned kVsmShadowViews = kShadowViewCascades + kShadowViewVsmSpots + 6u * kShadowViewVsmPoints
-                                          + kShadowViewClipmapLevels; // 48: the fixed prefix
+                                          + kShadowViewClipmapLevels; // 53: the fixed prefix
 // Local-light plan S9e: the shadowed spots / points have NO fixed count -- UE has none (ShadowSetup.cpp:6411-6482, every
 // visible movable light with a fade above 1/256; its budget is texels and cache, not a number of lights). The layout
 // past the prefix is sized by a CAPACITY, [prefix | S - 8 more spots | 6 (P - 4) more faces], which
@@ -52,7 +52,7 @@ inline constexpr unsigned kShadowPointsInitial = 16;
 inline constexpr unsigned kShadowSpotsCeiling = 1024;
 inline constexpr unsigned kShadowPointsCeiling = 512;
 inline constexpr unsigned kShadowViewCeiling = kVsmShadowViews + (kShadowSpotsCeiling - kShadowViewVsmSpots)
-                                             + 6u * (kShadowPointsCeiling - kShadowViewVsmPoints); // 4112
+                                             + 6u * (kShadowPointsCeiling - kShadowViewVsmPoints); // 4117
 inline unsigned g_shadowSpotCapacity = kShadowSpotsInitial;
 inline unsigned g_shadowPointCapacity = kShadowPointsInitial;
 inline unsigned ShadowSpotCapacity() { return g_shadowSpotCapacity; }

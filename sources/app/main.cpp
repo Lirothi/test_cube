@@ -882,7 +882,7 @@ int WINAPI WinMain(
             vfx::g_windFrozenTime_game = (*p == '=') ? static_cast<float>(std::atof(p + 1)) : 0.0f;
         }
         // Temporary VSM perf harness (see App.h). "--profdump=<path>" dumps profiler rows + exits.
-        // "--vsm-extent=<f>" / "--vsm-refdist=<f>" pre-set the runtime VSM tunables for a sweep;
+        // "--vsm-refdist=<f>" pre-sets the runtime VSM tunable for a sweep;
         // "--vsm-resident" flips g_residentIterOnly on. All read the globals in VirtualShadowMap.h.
         if (const char* flag = std::strstr(lpCmdLine, "--profdump=")) {
             const char* p = flag + std::strlen("--profdump=");
@@ -1186,20 +1186,11 @@ int WINAPI WinMain(
             }
         }
         // "--set=...": parsed once, above the scene-stress branch (ParseFixedSettingsArg).
-        if (const char* flag = std::strstr(lpCmdLine, "--vsm-extent=")) {
-            vsm::g_clipmapBaseExtent_game = (float)std::atof(flag + std::strlen("--vsm-extent="));
-        }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-refdist=")) {
             vsm::g_refDist_game = (float)std::atof(flag + std::strlen("--vsm-refdist="));
         }
         if (const char* flag = std::strstr(lpCmdLine, "--vsm-normalbias=")) {
             vsm::g_clipmapNormalBias_game = (float)std::atof(flag + std::strlen("--vsm-normalbias="));
-        }
-        if (const char* flag = std::strstr(lpCmdLine, "--vsm-clipblend=")) {
-            const float width = std::clamp(
-                (float)std::atof(flag + std::strlen("--vsm-clipblend=")), 0.0f, 0.5f);
-            vsm::g_clipmapBlendEnabled_game = width > 0.0f;
-            if (width > 0.0f) { vsm::g_clipmapBlendWidth_game = width; }
         }
         if (std::strstr(lpCmdLine, "--vsm-resident")) {
             vsm::g_residentIterOnly_game = true;

@@ -198,7 +198,7 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade, uint2 p
         smrt.extrapolateMaxSlope = smrtExtrapolateMaxSlope;
         smrt.sourceRadius = smrtSourceRadius;
         smrt.texelDitherScale = smrtTexelDitherScale;
-        smrt.levelMargin = smrtLevelMargin;
+        smrt.clipResBias = smrtClipResBias;
         smrt.frameIndex = smrtFrameIndex;
         smrt.adaptiveRayCount = smrtAdaptiveRayCount;
         // `sunDirWS` is the direction the light TRAVELS; SMRT marches TOWARDS the light.
@@ -222,7 +222,7 @@ float SampleSunShadow(float3 P, float3 N, float ndl, out int outCascade, uint2 p
         }
 
         const float vsmShadow = VsmClipmapShadow(P, N, camPosWS, clipmapNormalBias, vsmDepthBias,
-                                clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
+                                clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapFirstLevel,
                                 invProj._11, clipmapUvNormal, dirToLight, smrt, rayStartOffset,
                                 clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
         return ApplyContactShadow(vsmShadow, P, N, dirToLight, ndl, pixel, camPosWS,

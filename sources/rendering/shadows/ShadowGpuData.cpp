@@ -1930,7 +1930,9 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsReadSrv(UINT f) const
 
 int ShadowGpuData::ClipmapTierShift()
 {
-    return static_cast<int>(std::lround(std::log2(std::max(vsm::g_clipmapBaseExtent, 1.0f) / 8.0f)));
+    // Level 0's receivers lie within 2^(first + 1 - bias) cm of the camera (vsm_page_request_cs.hlsl MarkClipmap).
+    const float outerM = std::exp2(static_cast<float>(vsm::g_clipmapFirstLevel + 1) - vsm::g_clipmapFrameBias) * 0.01f;
+    return static_cast<int>(std::lround(std::log2(outerM / 4.0f)));
 }
 
 void ShadowGpuData::Rebuild(Renderer* renderer,
@@ -2290,7 +2292,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
         constexpr std::uint32_t kClipmapBegin = render::ShadowViewClipmapSlot(0u);
-        // The tier curve means metres: tier 0 is the 8 m square. Levels finer than that share it, whatever the base.
+        // The tier curve means metres: tier 0 holds receivers within 4 m. Levels finer than that share it.
         const int tierShift = builtClipmapTierShift_;
         for (std::uint32_t v = 0; v < maxViews; ++v)
         {

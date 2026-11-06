@@ -23,7 +23,7 @@ float ForwardSunShadow(float3 Pws, float3 Nws, float NdotL, uint smrtRays,
         smrt.extrapolateMaxSlope = GLASS_VIEW(smrtParams).w;
         smrt.sourceRadius = GLASS_VIEW(smrtParams2).x;
         smrt.texelDitherScale = GLASS_VIEW(smrtParams2).y;
-        smrt.levelMargin = GLASS_VIEW(smrtParams2).z;
+        smrt.clipResBias = GLASS_VIEW(smrtParams2).z;
         smrt.frameIndex = (uint)GLASS_VIEW(smrtParams2).w;
         smrt.adaptiveRayCount = 0u; // pixel shader: no wave-op early out (see VSM_SMRT_COMPUTE)
         return VsmClipmapShadow(Pws, Nws, GLASS_VIEW(camPosSky).xyz, GLASS_VIEW(clipmapParams).y,

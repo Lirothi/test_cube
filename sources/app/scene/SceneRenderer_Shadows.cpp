@@ -158,8 +158,18 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
     cb.screen = DirectX::XMFLOAT4(static_cast<float>(rw), static_cast<float>(rh),
                                   rw ? 1.0f / rw : 0.0f, rh ? 1.0f / rh : 0.0f);
     cb.lodParams = DirectX::XMFLOAT4(vsm::LocalRefDist(), static_cast<float>(vsm::kMaxMipLevel), // S10e: dynamic res
-                                     static_cast<float>(vsm::g_requestDownscale),
-                                     vsm::ClipmapBlendWidth());
+                                     static_cast<float>(vsm::g_requestDownscale), 0.0f);
+    // The sun's clipmap, UE's marking (vsm_page_request_cs.hlsl).
+    cb.clipLod = DirectX::XMFLOAT4(vsm::g_clipmapFrameBias + vsm::g_dynamicLodBias, static_cast<float>(vsm::g_clipmapFirstLevel),
+                                   vsm::g_pageDilation, vsm::g_pageDilation);
+    if (frame_->dirLight)
+    {
+        const float3 sun = frame_->dirLight->GetDirection();
+        cb.lightToward = DirectX::XMFLOAT4(-sun.x, -sun.y, -sun.z, std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f));
+    }
+    cb.markFlags = DirectX::XMUINT4(vsm::g_cullBackfacingPixels ? 1u : 0u, static_cast<std::uint32_t>(vsm::g_markCoarsePages),
+                                    static_cast<std::uint32_t>(std::max(vsm::kFirstCoarseLevel - vsm::g_clipmapFirstLevel, 0)),
+                                    static_cast<std::uint32_t>(std::max(vsm::kLastCoarseLevel - vsm::g_clipmapFirstLevel, 0)));
     cb.localMip = vsm::LocalMipParams(mv.invProj.m, static_cast<float>(rw), static_cast<float>(rh)); // S10e: UE's mip
     cb.localMip.w = vsm::g_requestLightCull ? 1.0f : 0.0f; // S10e: test the receiver against the light's sphere
 
@@ -182,7 +192,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         // The base point moves camera depth to SRV (the G-buffer leaves it in DEPTH_WRITE) and
         // the request buffer to UAV, in one marker.
         renderer->EmitPoint(t.cl, pts.base);
-        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, views.data(), cb.numViews, pts, D.depthSRV, rw, rh, frame_->shadowGpu);
+        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, views.data(), cb.numViews, pts, D.depthSRV, D.gbSRV[1], D.gbAuxSRV, rw, rh, frame_->shadowGpu);
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.
         frame_->vsm->RecordPageAllocate(renderer, t.cl, pts, frame_->clipmapSquares);

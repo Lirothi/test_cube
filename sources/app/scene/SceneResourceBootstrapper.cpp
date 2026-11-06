@@ -60,18 +60,17 @@ void SceneLightingCBHandles::Populate(Material* material)
     lightPreExposure = material->ComputeCB0FieldHandle("lightPreExposure");
     useVsm = material->ComputeCB0FieldHandle("useVsm");
     vsmDepthBias = material->ComputeCB0FieldHandle("vsmDepthBias");
-    clipmapBaseExtent = material->ComputeCB0FieldHandle("clipmapBaseExtent");
     clipmapNormalBias = material->ComputeCB0FieldHandle("clipmapNormalBias");
     clipmapDepthBiasDecay = material->ComputeCB0FieldHandle("clipmapDepthBiasDecay");
     clipmapDepthBiasFloorNdc = material->ComputeCB0FieldHandle("clipmapDepthBiasFloorNdc");
-    clipmapBlendWidth = material->ComputeCB0FieldHandle("clipmapBlendWidth");
+    clipmapFirstLevel = material->ComputeCB0FieldHandle("clipmapFirstLevel");
     smrtRayCount = material->ComputeCB0FieldHandle("smrtRayCount");
     smrtSamplesPerRay = material->ComputeCB0FieldHandle("smrtSamplesPerRay");
     smrtRayLengthScale = material->ComputeCB0FieldHandle("smrtRayLengthScale");
     smrtExtrapolateMaxSlope = material->ComputeCB0FieldHandle("smrtExtrapolateMaxSlope");
     smrtSourceRadius = material->ComputeCB0FieldHandle("smrtSourceRadius");
     smrtTexelDitherScale = material->ComputeCB0FieldHandle("smrtTexelDitherScale");
-    smrtLevelMargin = material->ComputeCB0FieldHandle("smrtLevelMargin");
+    smrtClipResBias = material->ComputeCB0FieldHandle("smrtClipResBias");
     smrtFrameIndex = material->ComputeCB0FieldHandle("smrtFrameIndex");
     smrtAdaptiveRayCount = material->ComputeCB0FieldHandle("smrtAdaptiveRayCount");
     smrtScreenRayLength = material->ComputeCB0FieldHandle("smrtScreenRayLength");
@@ -126,7 +125,7 @@ void SceneLightingCBHandles::Populate(Material* material)
         { "smrtExtrapolateMaxSlope", &smrtExtrapolateMaxSlope },
         { "smrtSourceRadius", &smrtSourceRadius },
         { "smrtTexelDitherScale", &smrtTexelDitherScale },
-        { "smrtLevelMargin", &smrtLevelMargin },
+        { "smrtClipResBias", &smrtClipResBias },
         { "smrtFrameIndex", &smrtFrameIndex },
         { "smrtAdaptiveRayCount", &smrtAdaptiveRayCount },
         { "smrtScreenRayLength", &smrtScreenRayLength },
@@ -1703,18 +1702,17 @@ void SceneResourceBootstrapper::WriteLightingConstants(const LightingPassConstan
     matLighting_->UpdateCBField(handles.lightPreExposure, data.lightPreExposure, dest);
     matLighting_->UpdateCBField(handles.useVsm, data.useVsm, dest);
     matLighting_->UpdateCBField(handles.vsmDepthBias, data.vsmDepthBias, dest);
-    matLighting_->UpdateCBField(handles.clipmapBaseExtent, data.clipmapBaseExtent, dest);
     matLighting_->UpdateCBField(handles.clipmapNormalBias, data.clipmapNormalBias, dest);
     matLighting_->UpdateCBField(handles.clipmapDepthBiasDecay, data.clipmapDepthBiasDecay, dest);
     matLighting_->UpdateCBField(handles.clipmapDepthBiasFloorNdc, data.clipmapDepthBiasFloorNdc, dest);
-    matLighting_->UpdateCBField(handles.clipmapBlendWidth, data.clipmapBlendWidth, dest);
+    matLighting_->UpdateCBField(handles.clipmapFirstLevel, data.clipmapFirstLevel, dest);
     matLighting_->UpdateCBField(handles.smrtRayCount, data.smrtRayCount, dest);
     matLighting_->UpdateCBField(handles.smrtSamplesPerRay, data.smrtSamplesPerRay, dest);
     matLighting_->UpdateCBField(handles.smrtRayLengthScale, data.smrtRayLengthScale, dest);
     matLighting_->UpdateCBField(handles.smrtExtrapolateMaxSlope, data.smrtExtrapolateMaxSlope, dest);
     matLighting_->UpdateCBField(handles.smrtSourceRadius, data.smrtSourceRadius, dest);
     matLighting_->UpdateCBField(handles.smrtTexelDitherScale, data.smrtTexelDitherScale, dest);
-    matLighting_->UpdateCBField(handles.smrtLevelMargin, data.smrtLevelMargin, dest);
+    matLighting_->UpdateCBField(handles.smrtClipResBias, data.smrtClipResBias, dest);
     matLighting_->UpdateCBField(handles.smrtFrameIndex, data.smrtFrameIndex, dest);
     matLighting_->UpdateCBField(handles.smrtAdaptiveRayCount, data.smrtAdaptiveRayCount, dest);
     matLighting_->UpdateCBField(handles.smrtScreenRayLength, data.smrtScreenRayLength, dest);

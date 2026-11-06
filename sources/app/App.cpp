@@ -546,12 +546,18 @@ namespace
         if (setting == "vsm.clipmapDepthBiasDecay") { vsm::g_clipmapDepthBiasDecay_game = std::clamp(value, 0.01f, 1.0f); return true; }
         if (setting == "vsm.clipmapDepthBiasFloor") { vsm::g_clipmapDepthBiasFloorTexels_game = std::max(0.0f, value); return true; }
         if (setting == "vsm.clipmapNormalBias") { vsm::g_clipmapNormalBias_game = value; return true; }
-        if (setting == "vsm.clipmapBaseExtent") { vsm::g_clipmapBaseExtent_game = std::max(0.1f, value); return true; }
+        if (setting == "vsm.clipmapFirstLevel") { vsm::g_clipmapFirstLevel_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
+        if (setting == "vsm.resolutionLodBiasDirectional") { vsm::g_resolutionLodBiasDirectional_game = std::clamp(value, -4.0f, 4.0f); return true; }
+        if (setting == "vsm.clipmapPan") { vsm::g_clipmapPan_game = value != 0.0f; return true; }
+        if (setting == "vsm.cullBackfacingPixels") { vsm::g_cullBackfacingPixels_game = value != 0.0f; return true; }
+        if (setting == "vsm.pageDilation") { vsm::g_pageDilation_game = std::clamp(value, 0.0f, 0.5f); return true; }
+        if (setting == "vsm.markCoarsePages") { vsm::g_markCoarsePages_game = std::clamp(static_cast<int>(value), 0, 3); return true; }
+        if (setting == "vsm.coarseCacheDynamic") { vsm::g_coarseCacheDynamic_game = value != 0.0f; return true; }
+        if (setting == "vsm.coarsePagePixelsStatic") { vsm::g_coarsePagePixelsStatic_game = std::max(0.0f, value); return true; }
+        if (setting == "vsm.coarsePagePixelsDynamic") { vsm::g_coarsePagePixelsDynamic_game = std::max(0.0f, value); return true; }
         // r.Shadow.Virtual.Clipmap.ZRangeScale: reach up-sun as a multiple of the level radius.
         // 10 reproduces the old `extent * 5`; UE ship 1000.
         if (setting == "vsm.clipmapZRangeScale") { vsm::g_clipmapZRangeScale_game = std::max(1.0f, value); return true; }
-        if (setting == "vsm.clipmapBlend") { vsm::g_clipmapBlendEnabled_game = value != 0.0f; return true; }
-        if (setting == "vsm.clipmapBlendWidth") { vsm::g_clipmapBlendWidth_game = std::clamp(value, 0.0f, 0.5f); return true; }
         // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap SampleCmp path -- the A/B arm.
         if (setting == "vsm.smrtRayCount") { vsm::g_smrtRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxRays); return true; }
         if (setting == "vsm.smrtSamplesPerRay") { vsm::g_smrtSamplesPerRay_game = (std::uint32_t)std::clamp(value, 1.0f, (float)vsm::kSmrtMaxSamplesPerRay); return true; }
@@ -559,7 +565,6 @@ namespace
         if (setting == "vsm.smrtExtrapolateMaxSlope") { vsm::g_smrtExtrapolateMaxSlope_game = std::max(0.0f, value); return true; }
         if (setting == "vsm.smrtSourceAngleDeg") { vsm::g_smrtSourceAngleDeg_game = std::clamp(value, 0.0f, 45.0f); return true; }
         if (setting == "vsm.smrtTexelDitherScale") { vsm::g_smrtTexelDitherScale_game = std::clamp(value, 0.0f, 8.0f); return true; }
-        if (setting == "vsm.smrtLevelMargin") { vsm::g_smrtLevelMargin_game = std::clamp(value, 0.25f, 1.0f); return true; }
         if (setting == "vsm.smrtTemporalDither") { vsm::g_smrtTemporalDither_game = value != 0.0f; return true; }
         if (setting == "vsm.smrtAdaptiveRayCount") { vsm::g_smrtAdaptiveRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "vsm.smrtScreenRayLength") { vsm::g_smrtScreenRayLength_game = std::clamp(value, 0.0f, 0.5f); return true; }
@@ -607,7 +612,7 @@ namespace
         if (setting == "tessy.vsmCameraCut") { tessy::g_vsmCameraCut_game = value != 0.0f; return true; } // VSM clipmap pages: the same
         if (setting == "tessy.clusterCull") { tessy::g_clusterCull_game = value != 0.0f; return true; } // clusters holding no sample
         if (setting == "tessy.msCull") { tessy::g_vsmMsCull_game = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
-        if (setting == "vsm.windMaxLevel") { vsm::g_windAnimateMaxLevel_game = (std::uint32_t)std::max(0.0f, value); return true; }
+        if (setting == "vsm.windRange") { vsm::g_windRange_game = std::max(0.0f, value); return true; }
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod_game = value != 0.0f; return true; }
         if (setting == "vsm.hzbCull")      { vsm::g_hzbCull_game = value != 0.0f; return true; } // occlusion plan S5b.2
         if (setting == "vsm.shadowLodBiasNearTier") { render::g_shadowLodBiasNearTier_game = value != 0.0f; return true; }

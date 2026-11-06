@@ -30,7 +30,9 @@ cbuffer VsmAllocCB : register(b0)
     // ...or for >= this many frames when the last render found it dirty (0 = off): the setup redraws every dirty resident
     // page, so a page nobody asks for would be redrawn every frame under wind for all of gLruThreshold.
     uint gRedrawUnrequestedFrames;
-    uint3 _padAlloc;
+    uint gCoarseBase;    // the coarse pages' bitfield in the request buffer (vsm_page_request_cs.hlsl MarkCoarsePages)
+    uint gCoarseCache;   // vsm::g_coarseCacheDynamic: a page asked for only as a coarse one is a kind of its own
+    uint _padAlloc;
 };
 
 // Is virtual page `page` set in the request bitfield?

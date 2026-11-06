@@ -7,6 +7,10 @@
 //   pass 1 -- a moving page: owned under its new view, its entry written there (resident, as the allocate pass writes
 //             it), and its last-frame owner moved along, so the page cache sees it as cached, not new.
 // The page table is updated only for pages that move; every other view keeps its pages, entries and cache untouched.
+//
+// A clipmap level's pan goes the same way (UE's VSM_NEXT_FLAG_KEEP_PAGE, PageAddressOffset: VirtualShadowMapCacheManager.cpp:297-303).
+// A level's centre snaps to multiples of its radius, 32 pages, so its texel grid keeps its world place: a page keeps
+// its depth and only changes its address. bits.z of a panned level holds the move, kPanNone otherwise; a page that leaves the grid goes.
 #include "vsm_page_alloc_common.hlsli"
 
 #define VSM_PAGE_ALLOC_REMAP_RS \
@@ -16,6 +20,8 @@
 
 static const uint kRemapKeep = 0xFFFFFFFFu;
 static const uint kRemapDrop = 0xFFFFFFFEu;
+static const uint kPanNone = 0u;    // bits.z: not panned
+static const uint kPanFlag = 1u << 31u; // bits.z: (signed 15-bit dx + 16384) | (dy + 16384) << 15 | flag
 
 cbuffer VsmRemapCB : register(b0)
 {
@@ -41,8 +47,31 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 
     const uint owner = PhysOwner[p];
     if (owner == VSM_INVALID) { return; }
-    const uint view = owner / VSM_PAGES_PER_VIEW;
+    const uint view = VsmViewOfPage(owner);
     if (view >= gRemapNumViews) { return; }
+    if (VsmIsClipmapView(view))
+    {
+        const uint pan = Views[view].bits.z;
+        if ((pan & kPanFlag) == 0u) { return; }
+        if (gRemapPass == 0u)
+        {
+            PageTable[owner] = 0u; // every old entry first, so no move can land on a page not moved yet
+            return;
+        }
+        const uint inLevel = owner - VsmViewBase(view);
+        const int x = (int)(inLevel % VSM_CLIPMAP_AXIS) + (int)(pan & 0x7FFFu) - 16384;
+        const int y = (int)(inLevel / VSM_CLIPMAP_AXIS) + (int)((pan >> 15u) & 0x7FFFu) - 16384;
+        if (x < 0 || y < 0 || x >= (int)VSM_CLIPMAP_AXIS || y >= (int)VSM_CLIPMAP_AXIS)
+        {
+            PhysOwner[p] = VSM_INVALID; // left the grid: the free-list pass hands it out again
+            return;
+        }
+        const uint moved = VsmViewBase(view) + (uint)y * VSM_CLIPMAP_AXIS + (uint)x;
+        PhysOwner[p] = moved;
+        PageTable[moved] = VSM_RESIDENT_BIT | VSM_ANY_LOD_BIT | (p & VSM_PHYS_MASK);
+        if (PhysOwnerPrev[p] == owner) { PhysOwnerPrev[p] = moved; }
+        return;
+    }
     const uint remap = Views[view].bits.w;
     if (remap == kRemapKeep) { return; }
 
@@ -53,7 +82,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         return;
     }
     if (remap == kRemapDrop || remap >= gRemapNumViews) { return; }
-    const uint moved = remap * VSM_PAGES_PER_VIEW + (owner - view * VSM_PAGES_PER_VIEW);
+    const uint moved = VsmViewBase(remap) + (owner - VsmViewBase(view));
     PhysOwner[p] = moved;
     PageTable[moved] = VSM_RESIDENT_BIT | VSM_ANY_LOD_BIT | (p & VSM_PHYS_MASK);
     if (PhysOwnerPrev[p] == owner) { PhysOwnerPrev[p] = moved; }

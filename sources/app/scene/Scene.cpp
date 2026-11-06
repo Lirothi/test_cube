@@ -1105,15 +1105,17 @@ void Scene::UpdateCascades(const Camera& camera, Renderer* renderer)
 
 void Scene::UpdateClipmap(const Camera& camera)
 {
-    // Step 24d: N camera-centered nested ortho shadow views along the sun — the directional clipmap
-    // VSM mode uses instead of CSM cascades. Level i covers extent E0*2^i (E0 = the finest,
-    // runtime-tunable g_clipmapBaseExtent), texel-snapped in the fixed light frame for stability
-    // (mirrors the cascade snap). Consumed only in VSM mode; add-dormant until 24e/24f render+sample.
+    // UE's FVirtualShadowMapClipmap: N camera-centred nested ortho views along the sun. Level L must cover a radius of 2^(L+1) cm
+    // and is twice that either way, so whatever the snap leaves, the camera's own circle stays in it. Its centre snaps to whole radii
+    // in the fixed light frame (a radius is 32 pages: the page grid keeps its world place and the pages move with it, PlanClipmapPan),
+    // along the sun it stays put while the camera is inside the depth range. The matrix is written out instead of LookAtLH: a
+    // dot with the centre would round differently at every snap and read as a change in depth.
     const float3 sunDirWS = renderSun_.GetDirection();
     const float3 fwd = sunDirWS.Normalized();
     if (fwd.Dot(fwd) < 1e-8f) // no valid sun direction -> reject-all views
     {
         clipmapSquares_ = {}; // no sun -> no squares; the fallback chain skips every level
+        clipmapZValid_ = false;
         for (auto& v : clipmapViews_)
         {
             v.frustum = Frustum{};
@@ -1133,50 +1135,44 @@ void Scene::UpdateClipmap(const Camera& camera)
     right = right.Normalized();
     const float3 trueUp = fwd.Cross(right);
 
-    const float tileRes = static_cast<float>(vsm::kVirtualRes); // texels per clipmap level edge
-    const float baseExtent = std::max(1.0f, vsm::g_clipmapBaseExtent);
     const float3 camPos = camera.GetPosition();
+    const float camX = camPos.Dot(right);
+    const float camY = camPos.Dot(trueUp);
+    const float camZ = camPos.Dot(fwd);
+    const bool sunMoved = !clipmapZValid_ || std::memcmp(&clipmapZSun_, &fwd, sizeof(fwd)) != 0;
+    clipmapZSun_ = fwd;
+    clipmapZValid_ = true;
 
     for (size_t i = 0; i < clipmapViews_.size(); ++i)
     {
-        const float extent = baseExtent * static_cast<float>(1u << static_cast<unsigned>(i)); // E0*2^i
-        const float radius = 0.5f * extent;
-        const float unitsPerTexel = extent / tileRes;
+        const float radius = std::ldexp(1.0f, vsm::g_clipmapFirstLevel + static_cast<int>(i) + 1) * 0.01f; // 2^(L+1) cm
+        const float halfSide = 2.0f * radius;
+        const float zRadius = radius * vsm::g_clipmapZRangeScale;
+        const float snapX = std::round(camX / radius);
+        const float snapY = std::round(camY / radius);
+        float& centreZ = clipmapZ_[i];
+        if (sunMoved || std::abs(camZ - centreZ) + radius > 0.9f * zRadius) { centreZ = camZ; }
+        const float centreX = snapX * radius;
+        const float centreY = snapY * radius;
+        const float3 center = right * centreX + trueUp * centreY + fwd * centreZ;
 
-        // Texel-snap the level center (= camera) in the FIXED light frame, so shadow texels pin to
-        // world cells as the camera moves (no swim) — same stabilization as the cascades.
-        float3 center = camPos;
-        const float cx = center.Dot(right);
-        const float cy = center.Dot(trueUp);
-        center = center
-            + right  * (std::floor(cx / unitsPerTexel) * unitsPerTexel - cx)
-            + trueUp * (std::floor(cy / unitsPerTexel) * unitsPerTexel - cy);
-
-        // PER-LEVEL depth range that scales with the level extent (Step 24f): proportionally larger
-        // for coarse far levels, so a SINGLE NDC depth bias works at every level. depthUp = caster
-        // reach up-sun (well above the level's ground); depthDown = receivers.
-        // Reach up-sun is radius * g_clipmapZRangeScale, the same shape as UE's
-        // r.Shadow.Virtual.Clipmap.ZRangeScale. It used to be `extent * 5` = radius * 10, which is
-        // UE's stated MINIMUM and left the finest levels reaching 40 m -- short enough to clip the
-        // top off a tall caster and delete the shadow it casts. (The original "tight range for D16
-        // precision" reasoning died when the page pool became D32_FLOAT; see VirtualShadowMap.cpp.)
-        const float depthUp = radius * vsm::g_clipmapZRangeScale;
-        const float depthDown = extent * 1.0f;
-        const float originDist = depthUp + 1.0f;
-        const mat4 lightView = mat4::LookAtLH(center - sunDirWS * originDist, center, up);
-        const float2 centerLS = (lightView * float4(center, 1)).xy(); // ~(0,0): center is the target
-        const float minX = centerLS.x - radius, maxX = centerLS.x + radius;
-        const float minY = centerLS.y - radius, maxY = centerLS.y + radius;
-        const float nearLS = 1.0f;
-        const float farLS = originDist + depthDown;
+        mat4 lightView = mat4::Identity();
+        lightView.m._11 = right.x;  lightView.m._12 = trueUp.x;  lightView.m._13 = fwd.x;
+        lightView.m._21 = right.y;  lightView.m._22 = trueUp.y;  lightView.m._23 = fwd.y;
+        lightView.m._31 = right.z;  lightView.m._32 = trueUp.z;  lightView.m._33 = fwd.z;
+        lightView.m._41 = -centreX; lightView.m._42 = -centreY;  lightView.m._43 = -centreZ;
+        const float minX = -halfSide, maxX = halfSide;
+        const float minY = -halfSide, maxY = halfSide;
+        const float nearLS = -zRadius;
+        const float farLS = zRadius;
 
         const mat4 lightProj = mat4::OrthoOffCenterLH(minX, maxX, minY, maxY, nearLS, farLS);
-        // For the LOD fallback chain: this level's square in the FIXED light frame. `center` is
-        // already texel-snapped in that frame just above, so the value stored here is exactly the
-        // one the page mapping must agree with.
-        clipmapSquares_.level[i].centreX = center.Dot(right);
-        clipmapSquares_.level[i].centreY = center.Dot(trueUp);
-        clipmapSquares_.level[i].extent = extent;
+        // For the LOD fallback chain: this level's square in the FIXED light frame.
+        clipmapSquares_.level[i].centreX = centreX;
+        clipmapSquares_.level[i].centreY = centreY;
+        clipmapSquares_.level[i].extent = 2.0f * halfSide;
+        clipmapSquares_.snapX[i] = static_cast<std::int32_t>(snapX);
+        clipmapSquares_.snapY[i] = static_cast<std::int32_t>(snapY);
         clipmapSquares_.count = static_cast<std::uint32_t>(i + 1);
 
         SceneView& v = clipmapViews_[i];

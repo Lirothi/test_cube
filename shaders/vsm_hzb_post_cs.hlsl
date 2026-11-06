@@ -49,7 +49,7 @@ RWStructuredBuffer<uint> PageGroupCountB : register(u0); // per (page, virtual g
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // the shared per-page slices
 RWStructuredBuffer<uint> HzbCounters     : register(u2); // [0] deferred pairs, [1] drawn in B, [2] overflow
 
-static const uint kHzbMip0 = VSM_POOL_PAGES_AXIS * VSM_PAGE_SIZE / 2u; // 2048
+static const uint2 kHzbMip0 = uint2(VSM_POOL_PAGES_X, VSM_POOL_PAGES_Y) * VSM_PAGE_SIZE / 2u; // half the pool
 
 static const float4x4 kIdentity = float4x4(1, 0, 0, 0,
                                            0, 1, 0, 0,
@@ -64,7 +64,7 @@ static const float4x4 kFlipZ = float4x4(1, 0, 0, 0,
 // The page's off-center projection, built exactly like the setup / scatter passes build it.
 float4x4 PageWorldToClip(float4x4 vp, uint level, uint px, uint py)
 {
-    const float a = (float)(VSM_L0_AXIS >> level);
+    const float a = (float)VSM_CLIPMAP_AXIS; // clipmap pages only (the scatter defers no local pair)
     const float cx = -1.0f + (2.0f * px + 1.0f) / a;
     const float cy =  1.0f - (2.0f * py + 1.0f) / a;
     const float4x4 S = float4x4(a, 0, 0, 0,
@@ -105,11 +105,11 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (!cur.isVisible) { return; }
     if (!cur.crossesNearPlane)
     {
-        const int ox = (int)((p % VSM_POOL_PAGES_AXIS) * VSM_PAGE_SIZE);
-        const int oy = (int)((p / VSM_POOL_PAGES_AXIS) * VSM_PAGE_SIZE);
+        const int ox = (int)((p % VSM_POOL_PAGES_X) * VSM_PAGE_SIZE);
+        const int oy = (int)((p / VSM_POOL_PAGES_X) * VSM_PAGE_SIZE);
         const HzbScreenRect rect = HzbGetScreenRect(int4(ox, oy, ox + (int)VSM_PAGE_SIZE, oy + (int)VSM_PAGE_SIZE),
                                                     cur.rectMin, cur.rectMax, 4);
-        if (!HzbIsVisible(VsmHzb, uint2(kHzbMip0, kHzbMip0), rect)) { return; }
+        if (!HzbIsVisible(VsmHzb, kHzbMip0, rect)) { return; }
     }
 
     // Visible after all: every slot of the object into pass B, the scatter's bucket arithmetic.

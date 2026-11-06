@@ -90,9 +90,9 @@ StructuredBuffer<float4>            DagSpheres      : register(t9); // N7e: per 
 static const uint kVgLods = 4u; // render::kMaxShadowLods: virtual group = mesh group * 4 + LOD
 
 RWStructuredBuffer<uint4> TessyRuns       : register(u0); // {page, first list entry, casters, virtual group}
-RWStructuredBuffer<uint>  PageVisibleList : register(u1); // caster id | page << 22
+RWStructuredBuffer<uint>  PageVisibleList : register(u1); // caster id | page << 21
 RWByteAddressBuffer       PageProj        : register(u2); // 256 bytes per page (the setup's off-center projection + wind)
-RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page << 22, cluster / meshlet, base vertex, MS culls}
+RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page << 21, cluster / meshlet, base vertex, MS culls}
 // Byte layout (VirtualShadowMap::TessyStats): [0..15] the draw's D3D12_DRAW_ARGUMENTS {384, clusters, 0, 0},
 // [16] runs the setup appended, [20..32] the setup's pair counts, [36] clusters tested, [40] their triangles drawn,
 // [44] clusters past TessyVisible's capacity, [48] runs past TessyRuns', [52]/[56] the validator's misses / worst (um), [60]/[64] the growth needed / given (cm),
@@ -101,7 +101,7 @@ RWStructuredBuffer<uint4> TessyVisible    : register(u3); // {caster id | page <
 // clusters that held no texel centre of their page (gRectCull).
 RWByteAddressBuffer       TessyStats      : register(u4);
 
-static const uint kCasterMask = (1u << 22) - 1u; // vsm::kPageIdShift
+static const uint kCasterMask = (1u << 21) - 1u; // vsm::kPageIdShift
 static const float kPageTexels = 128.0f;         // vsm::kPageSize
 
 // N7c: the run's casters' thresholds -- each caster's object-space error at which a DAG level becomes coarse enough,

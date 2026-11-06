@@ -37127,6 +37127,27 @@
         5.720000743865967
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "id": 2775,
+      "name": "PlayerStart",
+      "position": [
+        31.315025329589844,
+        2.3101232051849365,
+        69.6780776977539
+      ],
+      "rotationDeg": [
+        0.0,
+        47.727882385253906,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "playerStart"
     }
   ],
   "ocean": {
@@ -40058,7 +40079,7 @@
         0.03322261571884155
       ],
       "lightShaftBloomMaxBrightness": 0.5,
-      "lightShaftBloomScale": 0.3499999940395355,
+      "lightShaftBloomScale": 0.20000000298023224,
       "lightShaftBloomThreshold": 0.7,
       "lightShaftBloomTint": [
         1.0,
@@ -40077,7 +40098,7 @@
       "sunTemperatureK": 6500.0,
       "useSunTemperature": true
     },
-    "time": 18.1299991607666,
+    "time": 18.0,
     "timeScale": 60.0,
     "twilight": {
       "lightHandOverDeg": 3.0,

@@ -38,10 +38,9 @@ namespace vsm
     // world -> shadow UVZ and return its TRANSPOSE INVERSE, which is how a plane transforms.
     //
     // ONE matrix serves every clipmap level. The shader only uses the ratio
-    // `-planeUV.xy / planeUV.z`, and for our levels the UV scale goes as 1/extent while the depth
-    // scale goes as 1/(6*extent), so the extent cancels out of the ratio. `ClipmapUvNormalMatrixIsUniform`
-    // is the guard on that: it holds only while every level's depth range stays proportional to its
-    // extent, which is what `Scene::UpdateClipmap` builds today (depthUp 5E + depthDown 1E).
+    // `-planeUV.xy / planeUV.z`, and for our levels the UV scale goes as 1/side while the depth
+    // scale goes as 1/(500*side), so the side cancels out of the ratio, as long as every level's depth range stays
+    // proportional to its radius, which is what `Scene::UpdateClipmap` builds (UE's, +-ZRangeScale radii).
     inline Math::mat4 CalcClipmapUvNormalMatrix(const Math::mat4& viewProj)
     {
         // Row-vector convention, matching the shaders: [x y z 1] * M. UE's ScaleAndBias is the same
@@ -80,16 +79,25 @@ namespace vsm
     }
     inline constexpr std::uint32_t kPagesPerView = LevelPageOffset(kNumMipLevels);   // 341 = 256+64+16+4+1
 
-    inline constexpr std::uint32_t kPoolTexels = 4096;                               // physical pool edge (~64 MB @ D32)
-    inline constexpr std::uint32_t kPoolPagesPerAxis = kPoolTexels / kPageSize;      // 32
-    inline constexpr std::uint32_t kPoolPageCount = kPoolPagesPerAxis * kPoolPagesPerAxis; // 1024
+    // A clipmap LEVEL is UE's: 16384 texels (VSM_VIRTUAL_MAX_RESOLUTION_XY), 128 x 128 pages, no mips -- the level is the LOD.
+    inline constexpr std::uint32_t kClipmapVirtualRes = 16384;
+    inline constexpr std::uint32_t kClipmapPagesAxis = kClipmapVirtualRes / kPageSize; // 128
+    inline constexpr std::uint32_t kClipmapPages = kClipmapPagesAxis * kClipmapPagesAxis; // 16384
+
+    // The pool: UE's at r.Shadow.Virtual.MaxPhysicalPages 2048 (ShadowQuality 2, High), its rows as wide as a texture goes
+    // (VirtualShadowMapArray.cpp:1006-1044). 134 MB at D32.
+    inline constexpr std::uint32_t kPoolPagesX = 128;
+    inline constexpr std::uint32_t kPoolPagesY = 16;
+    inline constexpr std::uint32_t kPoolPageCount = kPoolPagesX * kPoolPagesY;       // 2048
+    inline constexpr std::uint32_t kPoolTexelsX = kPoolPagesX * kPageSize;           // 16384
+    inline constexpr std::uint32_t kPoolTexelsY = kPoolPagesY * kPageSize;           // 2048
 
     // Single-draw page render: the per-instance visible-list entry carries the physical page index in
     // its high bits so ONE ExecuteIndirect can serve every page (the VS reads that page's projection
     // from pageProj_ instead of a per-page root CBV). Low kPageIdShift bits = caster slot id, high
     // bits = page. MUST match `kPageIdShift` in shadow_indirect_csm.hlsl's VSM_PAGE permutation, and
     // the setup/scatter CBs pass it as gPageIdShift (0 = "don't pack", the per-page loop path).
-    inline constexpr std::uint32_t kPageIdShift = 22u;
+    inline constexpr std::uint32_t kPageIdShift = 21u; // 2M casters, 2048 pages
     static_assert(kPoolPageCount <= (1u << (32u - kPageIdShift)), "page id must fit above kPageIdShift");
 
     // Step 19b: LOCAL lights only — spots + point-light cube faces, NO CSM cascades (directional
@@ -107,15 +115,13 @@ namespace vsm
     inline std::uint32_t MaxLocalVirtualViews() { return render::ShadowSpotCapacity() + 6u * render::ShadowPointCapacity(); }
 
     // Step 24d/24e: directional clipmap — N nested camera-centered ortho levels, appended as VSM
-    // views AFTER the 32 local ones (each a full view of kPagesPerView pages). Step 24e adds them to
+    // views AFTER the 32 local ones (each a view of kClipmapPages pages). Step 24e adds them to
     // the Rung-0 cull too, so the cull layout is [4 cascade | 32 local | N clipmap] and the setup's
     // rung0View = view + kNumCascades maps a clipmap VSM view straight to its cull slot. Hence
     // render::MaxShadowViews() == kNumCascades + MaxVirtualViews().
-    // 12 levels since 2026-11-06 (10 from 2026-08-28, 8 before): the two more at the near end, with the base at 2 m where it
-    // was 8 -- the coarsest level's side is g_clipmapBaseExtent*2^11 = 4096 m as it was, for +682 page
-    // table entries and two more cull/scatter views; the physical pool is untouched (far levels
-    // are coarse and resident pages stay demand-driven).
-    inline constexpr std::uint32_t kNumClipmapLevels = render::kShadowViewClipmapLevels; // 12
+    // UE's levels 6..22: level L must cover a radius of 2^(L+1) cm and is 4 radii across, so the first is 5.12 m and the last
+    // 167 km. Which level a pixel asks for is its distance (vsm_page_request_cs.hlsl), so a level's pages stay few.
+    inline constexpr std::uint32_t kNumClipmapLevels = render::kShadowViewClipmapLevels; // 17
 
     // The square each clipmap level covers in the FIXED light frame Scene::UpdateClipmap snaps
     // every level in (its `right` / `trueUp` axes are shared by all levels, which is the whole
@@ -133,6 +139,9 @@ namespace vsm
     {
         std::uint32_t count = 0;
         std::array<ClipmapLevelSquare, kNumClipmapLevels> level{};
+        // A level's centre in whole radii along the light frame's axes: what moved since last frame moves its pages (PlanClipmapPan).
+        std::array<std::int32_t, kNumClipmapLevels> snapX{};
+        std::array<std::int32_t, kNumClipmapLevels> snapY{};
     };
     // Plan S9e: every VSM view at the current capacity (138 at 32 / 16); VirtualShadowMap sizes its page table, request
     // bits and per-view records by it at EnsureResources and keeps that count (ViewCount) until it is re-created.
@@ -148,10 +157,29 @@ namespace vsm
     static_assert(ClipmapView(0u) + kNumCascades == render::ShadowViewClipmapSlot(0u) &&
                   LocalView(kClipmapFirstView) == ClipmapView(kNumClipmapLevels),
                   "VSM view = cull slot - cascades: [prefix spots | prefix faces | clipmap | more spots | more faces]");
-    // The page table / request bits of `views` views (341 x 138 = 47058 entries, 188 KB, at the initial capacity).
-    constexpr std::uint32_t PageTableEntries(std::uint32_t views) { return kPagesPerView * views; }
+    // The page table: [prefix local views | clipmap levels | the other local views], so a view's first entry is arithmetic.
+    // vsm_addressing.hlsli VsmViewBase / VsmViewOfPage mirror these.
+    constexpr std::uint32_t ViewBase(std::uint32_t view)
+    {
+        return view < kClipmapFirstView ? view * kPagesPerView
+             : view < kClipmapFirstView + kNumClipmapLevels ? kClipmapFirstView * kPagesPerView + (view - kClipmapFirstView) * kClipmapPages
+             : kClipmapFirstView * kPagesPerView + kNumClipmapLevels * kClipmapPages + (view - kClipmapFirstView - kNumClipmapLevels) * kPagesPerView;
+    }
+    constexpr std::uint32_t ViewOfPage(std::uint32_t page)
+    {
+        const std::uint32_t clipmapBase = kClipmapFirstView * kPagesPerView;
+        const std::uint32_t extraBase = clipmapBase + kNumClipmapLevels * kClipmapPages;
+        return page < clipmapBase ? page / kPagesPerView
+             : page < extraBase ? kClipmapFirstView + (page - clipmapBase) / kClipmapPages
+             : kClipmapFirstView + kNumClipmapLevels + (page - extraBase) / kPagesPerView;
+    }
+    // The page table / request bits of `views` views (319 789 entries, 1.3 MB, at the initial capacity).
+    constexpr std::uint32_t PageTableEntries(std::uint32_t views)
+    {
+        return views > kNumClipmapLevels ? (views - kNumClipmapLevels) * kPagesPerView + kNumClipmapLevels * kClipmapPages : 0u;
+    }
     constexpr std::uint32_t RequestWords(std::uint32_t views) { return (PageTableEntries(views) + 31u) / 32u; }
-    // The water's caster mask behind the bitfield (vsm_water_mask_cs.hlsl): one bit per (clipmap level, page). 8 words a level: the
+    // The water's caster mask behind the bitfield (vsm_water_mask_cs.hlsl): one bit per (clipmap level, 16th of its side). 8 words a level: the
     // shaders' literal. The margin (m, round every box) is the wave's: the marks take the plane, the water samples the displaced surface.
     inline constexpr std::uint32_t kWaterMaskWordsPerLevel = kVirtualPagesL0Axis * kVirtualPagesL0Axis / 32u;
     static_assert(kWaterMaskWordsPerLevel == 8u, "vsm_water_mask_cs.hlsl and vsm_page_request_cs.hlsl index 8 words a level");
@@ -184,12 +212,12 @@ namespace vsm
     inline constexpr std::uint32_t kPageResidentBit = 0x80000000u;
     inline constexpr std::uint32_t kPagePhysicalMask = 0x0000FFFFu;
 
-    // Step 19: the page-request set is a bitfield (1 bit per virtual page) -- RequestWords above (1471 uints at 138 views).
+    // Step 19: the page-request set is a bitfield (1 bit per virtual page) -- RequestWords above.
 
-    // Step 19b perf: run the request pass at 1/kRequestDownscale per axis. Lower = denser screen
+    // r.Shadow.Virtual.PageMarkingPixelStrideX / Y: the request pass at 1/kRequestDownscale per axis. Lower = denser screen
     // sampling = better page coverage (fewer "missed" pages that show as a resident/lit
     // checkerboard when the sampler needs a page the sub-sampled request never marked).
-    inline constexpr std::uint32_t kRequestDownscale = 4;
+    inline constexpr std::uint32_t kRequestDownscale = 2;
 
     // Step 19b level selection: level = clamp(log2(distCamera / kLodRefDist), 0, kMaxMipLevel).
     // Receivers within ~kLodRefDist of the camera use the finest level; each doubling of distance
@@ -318,11 +346,57 @@ namespace vsm
     inline std::uint32_t g_requestDownscale = kRequestDownscale;
     inline std::uint32_t g_requestDownscale_game = kRequestDownscale;
     inline const bool g_requestDownscale_knob = ::knob::Register(g_requestDownscale_game, g_requestDownscale, "vsm::g_requestDownscale");
-    // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
-    // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
-    inline float         g_clipmapBaseExtent = 2.0f;
-    inline float         g_clipmapBaseExtent_game = 2.0f;
-    inline const bool g_clipmapBaseExtent_knob = ::knob::Register(g_clipmapBaseExtent_game, g_clipmapBaseExtent, "vsm::g_clipmapBaseExtent");
+    // r.Shadow.Virtual.Clipmap.FirstLevel: level i's absolute number is this + i; it must cover a radius of 2^(number + 1) cm.
+    inline int           g_clipmapFirstLevel = 6;
+    inline int           g_clipmapFirstLevel_game = 6;
+    inline const bool g_clipmapFirstLevel_knob = ::knob::Register(g_clipmapFirstLevel_game, g_clipmapFirstLevel, "vsm::g_clipmapFirstLevel");
+    // r.Shadow.Virtual.ResolutionLodBiasDirectional: 0 at ShadowQuality 2 (High), -1.5 at Epic, on top of the bias the render
+    // resolution asks for (below). Biased coarser, a pixel asks for a coarser level: fewer pages, softer shadows.
+    inline float         g_resolutionLodBiasDirectional = 0.0f;
+    inline float         g_resolutionLodBiasDirectional_game = 0.0f;
+    inline const bool g_resolutionLodBiasDirectional_knob = ::knob::Register(g_resolutionLodBiasDirectional_game, g_resolutionLodBiasDirectional, "vsm::g_resolutionLodBiasDirectional");
+    // UE's FVirtualShadowMapClipmap: a level's page table is 16384 texels whatever the frame, so the level a pixel needs is
+    // its distance biased by log2 of how many texels a screen pixel spans. The render width: a cheaper DLSS mode asks for
+    // coarser pages. The 0.5 is UE's: a level is twice the radius it must cover.
+    inline float ClipmapLodBias(const DirectX::XMFLOAT4X4& invProj, float renderWidth)
+    {
+        const float lodScale = 0.5f * std::abs(invProj._11) * static_cast<float>(kClipmapVirtualRes) / std::max(renderWidth, 1.0f);
+        return std::max(0.0f, g_resolutionLodBiasDirectional + std::log2(std::max(lodScale, 1e-6f)));
+    }
+    // This frame's (SceneRenderer::DecideFrame), render half. DLSS Balanced at 2560 wide is 2.46.
+    inline float g_clipmapFrameBias = 2.46f;
+    // UE keeps a level's pages when its centre snaps (VSM_NEXT_FLAG_KEEP_PAGE): they move by 32 pages a radius. 0 = the whole
+    // level redraws (the A/B). `--set vsm.clipmapPan`.
+    inline bool          g_clipmapPan = true;
+    inline bool          g_clipmapPan_game = true;
+    inline const bool g_clipmapPan_knob = ::knob::Register(g_clipmapPan_game, g_clipmapPan, "vsm::g_clipmapPan");
+    // r.Shadow.Virtual.CullBackfacingPixels: a pixel turned away from a light asks for no page of it. `--set vsm.cullBackfacingPixels`.
+    inline bool          g_cullBackfacingPixels = true;
+    inline bool          g_cullBackfacingPixels_game = true;
+    inline const bool g_cullBackfacingPixels_knob = ::knob::Register(g_cullBackfacingPixels_game, g_cullBackfacingPixels, "vsm::g_cullBackfacingPixels");
+    // r.Shadow.Virtual.PageDilationBorderSizeDirectional / Local, in pages: a pixel this near a page's edge asks for the neighbour too. `--set vsm.pageDilation`.
+    inline float         g_pageDilation = 0.05f;
+    inline float         g_pageDilation_game = 0.05f;
+    inline const bool g_pageDilation_knob = ::knob::Register(g_pageDilation_game, g_pageDilation, "vsm::g_pageDilation");
+    // r.Shadow.Virtual.MarkCoarsePagesDirectional / Local: bit 0 = the sun's four pages round the camera on the coarse levels and on the
+    // last one (what the air reads), bit 1 = each local view's last mip. `--set vsm.markCoarsePages`.
+    inline int           g_markCoarsePages = 3;
+    inline int           g_markCoarsePages_game = 3;
+    inline const bool g_markCoarsePages_knob = ::knob::Register(g_markCoarsePages_game, g_markCoarsePages, "vsm::g_markCoarsePages");
+    // ...at 2, UE's value at every quality: a page asked for only as a coarse one takes no invalidation from what moves. `--set vsm.coarseCacheDynamic`.
+    inline bool          g_coarseCacheDynamic = true;
+    inline bool          g_coarseCacheDynamic_game = true;
+    inline const bool g_coarseCacheDynamic_knob = ::knob::Register(g_coarseCacheDynamic_game, g_coarseCacheDynamic, "vsm::g_coarseCacheDynamic");
+    // r.Shadow.Virtual.CoarsePagePixelThresholdStatic / Dynamic: an instance under this many texels stays out of such a page. `--set vsm.coarsePagePixelsStatic`, `vsm.coarsePagePixelsDynamic`.
+    inline float         g_coarsePagePixelsStatic = 1.0f;
+    inline float         g_coarsePagePixelsStatic_game = 1.0f;
+    inline const bool g_coarsePagePixelsStatic_knob = ::knob::Register(g_coarsePagePixelsStatic_game, g_coarsePagePixelsStatic, "vsm::g_coarsePagePixelsStatic");
+    inline float         g_coarsePagePixelsDynamic = 16.0f;
+    inline float         g_coarsePagePixelsDynamic_game = 16.0f;
+    inline const bool g_coarsePagePixelsDynamic_knob = ::knob::Register(g_coarsePagePixelsDynamic_game, g_coarsePagePixelsDynamic, "vsm::g_coarsePagePixelsDynamic");
+    // r.Shadow.Virtual.Clipmap.FirstCoarseLevel / LastCoarseLevel, absolute.
+    inline constexpr int kFirstCoarseLevel = 15;
+    inline constexpr int kLastCoarseLevel = 18;
     // [r.Shadow.Virtual.Clipmap.ZRangeScale, UE default 1000] A clipmap level's reach UP-SUN as a
     // multiple of its RADIUS -- same shape as UE's, so the number is directly comparable to theirs.
     //
@@ -331,7 +405,7 @@ namespace vsm
     // invalidations"). At the finest level that is 40 m of reach: a caster taller than that has its
     // top CLIPPED by the level's near plane, and the piece of shadow that top casts simply vanishes.
     // Measured on a 100-unit pole -- the shadow stopped dead partway down the frame under VSM while
-    // CSM drew it in full. Raising g_clipmapBaseExtent "fixed" it only by making every near shadow
+    // CSM drew it in full. Raising the base "fixed" it only by making every near shadow
     // proportionally coarser.
     //
     // Kept PROPORTIONAL rather than floored at an absolute distance: the per-level NDC depth bias
@@ -364,29 +438,13 @@ namespace vsm
     inline float         g_clipmapZRangeScale_game = 1000.0f;
     inline const bool g_clipmapZRangeScale_knob = ::knob::Register(g_clipmapZRangeScale_game, g_clipmapZRangeScale, "vsm::g_clipmapZRangeScale");
 
-    // A clipmap level's depth range as a MULTIPLE OF ITS EXTENT:
-    //     depthUp = radius * ZRangeScale = extent * ZRangeScale/2,  depthDown = extent * 1
+    // A clipmap level's depth range as a MULTIPLE OF ITS SIDE: +-radius * ZRangeScale over a side of 4 radii.
     // Every NDC quantity that is really a WORLD distance has to be divided by this, or changing the
     // range silently rescales it. That is exactly what went wrong when ZRangeScale went 10 -> 50: a
     // hardcoded `6` (the old 5E + 1E) stayed behind in the depth-bias conversion, so the same NDC
     // bias became 4.3x more world distance and shadows visibly detached from their casters.
-    // At the historical ZRangeScale = 10 this returns 6, so the old numbers are preserved exactly.
-    inline float ClipmapRangeMultiple() { return g_clipmapZRangeScale * 0.5f + 1.0f; }
+    inline float ClipmapRangeMultiple() { return g_clipmapZRangeScale * 0.5f; }
     inline constexpr float kClipmapRangeMultipleRef = 6.0f; // what the authored biases were tuned at
-    // Fraction of a directional clipmap level's half-extent used to cross-fade its shadow factor
-    // into the next coarser level. 0 is a strict kill switch: no parent page requests and no second
-    // PCF sample. 0.12 blends the outer 12% of each nested square and hides caster-LOD silhouette
-    // changes without coarsening the finest level near the camera.
-    inline bool          g_clipmapBlendEnabled = true;
-    inline bool          g_clipmapBlendEnabled_game = true;
-    inline const bool g_clipmapBlendEnabled_knob = ::knob::Register(g_clipmapBlendEnabled_game, g_clipmapBlendEnabled, "vsm::g_clipmapBlendEnabled");
-    inline float         g_clipmapBlendWidth = 0.12f;
-    inline float         g_clipmapBlendWidth_game = 0.12f;
-    inline const bool g_clipmapBlendWidth_knob = ::knob::Register(g_clipmapBlendWidth_game, g_clipmapBlendWidth, "vsm::g_clipmapBlendWidth");
-    inline float ClipmapBlendWidth()
-    {
-        return g_clipmapBlendEnabled ? std::clamp(g_clipmapBlendWidth, 0.0f, 0.5f) : 0.0f;
-    }
 
     // Step 24f: directional-clipmap NDC depth bias (against shadow acne). Tunable at the visual gate.
     // A level's NDC range is 6x its extent, so a constant NDC value is a constant bias in TEXELS
@@ -408,12 +466,20 @@ namespace vsm
     // thin far shadows); 0.5 = a constant WORLD-size bias (the near value everywhere). The floor is
     // authored in TEXELS of the landed level. Both are inert at the 0-bias default; they shape the
     // constant if one is ever brought back.
+    // What the single tap takes (the air, a tap on a forward surface; a march has its own tolerance): the number means so many TEXELS, as it
+    // did when a level was 6 sides deep and 2048 texels across, and a texel is an eighth of that now. Left at the old texel it was 20 of
+    // today's, 3 m on the coarse level the air reads: a closed room's air saw past its ceiling to the sun (2026-11-06: 17.8 of 255, SDSM 0.42).
+    inline float ClipmapDepthBiasNdc();
     inline float         g_clipmapDepthBiasDecay = 1.0f;
     inline float         g_clipmapDepthBiasDecay_game = 1.0f;
     inline const bool g_clipmapDepthBiasDecay_knob = ::knob::Register(g_clipmapDepthBiasDecay_game, g_clipmapDepthBiasDecay, "vsm::g_clipmapDepthBiasDecay");
     inline float         g_clipmapDepthBiasFloorTexels = 0.0f;
     inline float         g_clipmapDepthBiasFloorTexels_game = 0.0f;
     inline const bool g_clipmapDepthBiasFloorTexels_knob = ::knob::Register(g_clipmapDepthBiasFloorTexels_game, g_clipmapDepthBiasFloorTexels, "vsm::g_clipmapDepthBiasFloorTexels");
+    inline float ClipmapDepthBiasNdc()
+    {
+        return g_clipmapDepthBias * (kClipmapRangeMultipleRef / ClipmapRangeMultiple()) * (static_cast<float>(kVirtualRes) / static_cast<float>(kClipmapVirtualRes));
+    }
     // Step 24f / P16.16: directional-clipmap normal offset. UNITS ARE UNREAL'S, so the number here
     // is directly comparable to `r.Shadow.Virtual.NormalBias` (their default 0.5): the shader
     // divides by 1000 and multiplies by distance-to-camera * tan(hFov/2), i.e. it is referred to the
@@ -438,12 +504,13 @@ namespace vsm
     // silently truncated on the GPU, which would make the knob lie about what it is doing.
     inline constexpr std::uint32_t kSmrtMaxRays = 16u;
     inline constexpr std::uint32_t kSmrtMaxSamplesPerRay = 32u;
-    inline std::uint32_t g_smrtRayCount = 7u;
-    inline std::uint32_t g_smrtRayCount_game = 7u;
+    // UE's r.Shadow.Virtual.SMRT.RayCountDirectional at ShadowQuality 2 (High).
+    inline std::uint32_t g_smrtRayCount = 8u;
+    inline std::uint32_t g_smrtRayCount_game = 8u;
     inline const bool g_smrtRayCount_knob = ::knob::Register(g_smrtRayCount_game, g_smrtRayCount, "vsm::g_smrtRayCount");
-    // UE's r.Shadow.Virtual.SMRT.SamplesPerRayDirectional (their default 8).
-    inline std::uint32_t g_smrtSamplesPerRay = 8u;
-    inline std::uint32_t g_smrtSamplesPerRay_game = 8u;
+    // UE's r.Shadow.Virtual.SMRT.SamplesPerRayDirectional at ShadowQuality 2 (High).
+    inline std::uint32_t g_smrtSamplesPerRay = 4u;
+    inline std::uint32_t g_smrtSamplesPerRay_game = 4u;
     inline const bool g_smrtSamplesPerRay_knob = ::knob::Register(g_smrtSamplesPerRay_game, g_smrtSamplesPerRay, "vsm::g_smrtSamplesPerRay");
     // UE's r.Shadow.Virtual.SMRT.RayLengthScaleDirectional (their default 1.5), scaled by distance
     // to camera. Dimensionless, so it transfers from their centimetres unchanged. Their own
@@ -480,16 +547,6 @@ namespace vsm
     inline float         g_smrtTexelDitherScale = 2.0f;
     inline float         g_smrtTexelDitherScale_game = 2.0f;
     inline const bool g_smrtTexelDitherScale_knob = ::knob::Register(g_smrtTexelDitherScale_game, g_smrtTexelDitherScale, "vsm::g_smrtTexelDitherScale");
-    // Fraction of a clipmap level's square within which a receiver is accepted, SMRT only.
-    // 1.0 = the finest level that contains it at all, which is the single-tap rule and keeps the
-    // sharpest level available. 0.5 mirrors UE, whose level covers twice the radius its selection
-    // tests (VirtualShadowMapClipmap.cpp:349) -- but a margin is bought with A LEVEL OF SHADOW
-    // RESOLUTION, and on fine geometry like palm fronds that reads as blocky slabs where there
-    // were leaflets. Default 1.0: the theory the margin was added for (rays running out of level)
-    // was disproven by instrumenting the march, so it has to earn its place on looks alone.
-    inline float         g_smrtLevelMargin = 1.0f;
-    inline float         g_smrtLevelMargin_game = 1.0f;
-    inline const bool g_smrtLevelMargin_knob = ::knob::Register(g_smrtLevelMargin_game, g_smrtLevelMargin, "vsm::g_smrtLevelMargin");
     // TEMPORAL DITHER. Rotates the whole per-pixel sample set once per frame, the way UE feed
     // View.StateFrameIndex into their blue-noise lookup. On its own it makes a still frame NOISIER;
     // it pays off through the temporal pass, which sees a different set each frame and averages
@@ -667,13 +724,20 @@ inline const bool g_scatterLocalViews_knob = ::knob::Register(g_scatterLocalView
     inline bool g_pageCaching = true;
     inline bool g_pageCaching_game = true;
     inline const bool g_pageCaching_knob = ::knob::Register(g_pageCaching_game, g_pageCaching, "vsm::g_pageCaching");
-// Wind page-cache range (Unreal's per-level WPO disable, transcribed): clipmap levels BELOW
-// this animate wind (and re-render every frame while it blows); levels at/above render their
-// casters RIGID and can cache. Locals always animate. Only matters with g_pageCaching on —
-// without caching every page redraws anyway. --set=vsm.windMaxLevel; >= level count = all.
-inline std::uint32_t g_windAnimateMaxLevel = 6; // a level NUMBER: at a base of 2 m this is the 64 m square
-inline std::uint32_t g_windAnimateMaxLevel_game = 6;
-inline const bool g_windAnimateMaxLevel_knob = ::knob::Register(g_windAnimateMaxLevel_game, g_windAnimateMaxLevel, "vsm::g_windAnimateMaxLevel");
+// Wind page-cache range (Unreal's per-level WPO disable): the clipmap levels the pixels within this many metres of the camera
+// ask for animate wind (and re-render every frame while it blows); the levels past them render their casters RIGID and can
+// cache. Locals always animate. Only matters with g_pageCaching on -- without caching every page redraws anyway.
+// --set=vsm.windRange; 0 = nothing sways.
+inline float g_windRange = 64.0f;
+inline float g_windRange_game = 64.0f;
+inline const bool g_windRange_knob = ::knob::Register(g_windRange_game, g_windRange, "vsm::g_windRange");
+// A level number means a distance only through the resolution's bias: this frame's first rigid level.
+inline std::uint32_t ClipmapWindLevels()
+{
+    if (g_windRange <= 0.0f) { return 0u; }
+    const int level = static_cast<int>(std::floor(std::log2(g_windRange * 100.0f) + g_clipmapFrameBias)) - g_clipmapFirstLevel + 1;
+    return static_cast<std::uint32_t>(std::clamp(level, 0, static_cast<int>(kNumClipmapLevels)));
+}
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
     // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
@@ -721,7 +785,7 @@ inline const bool g_windAnimateMaxLevel_knob = ::knob::Register(g_windAnimateMax
         DirectX::XMFLOAT4X4 invProj;
         DirectX::XMFLOAT4   camPosWS;   // xyz
         DirectX::XMFLOAT4   screen;     // x=w, y=h, z=1/w, w=1/h
-        DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale, w=clipmap blend width
+        DirectX::XMFLOAT4   lodParams;  // x=refDist, y=maxLevel, z=downscale
         DirectX::XMFLOAT4   localMip;   // plan S10e: x = pixel-footprint mip on, y = lod bias, z = pixel radius / depth
         std::uint32_t       numViews;
         // Plan S9e (cost without a limit): the request walks LIGHTS, not views -- the shadowed spots (their views
@@ -736,6 +800,11 @@ inline const bool g_windAnimateMaxLevel_knob = ::knob::Register(g_windAnimateMax
         DirectX::XMFLOAT4   waterPlane{ 0.0f, 0.0f, 0.0f, 0.0f };
         // x = the caster mask's first word in the request buffer, y = g_waterCasterMask as this frame takes it.
         DirectX::XMUINT4    waterMask{ 0u, 0u, 0u, 0u };
+        // x = the resolution LOD bias with the dynamic resolution's, y = level 0's absolute number, z / w = the page dilation, sun / lamps.
+        DirectX::XMFLOAT4   clipLod{ 0.0f, 0.0f, 0.0f, 0.0f };
+        DirectX::XMFLOAT4   lightToward{ 0.0f, 0.0f, 0.0f, 0.0f }; // xyz = toward the sun, w = sin of its angular radius
+        // x = 1 culls back-facing pixels; y = g_markCoarsePages; z, w = the sun's coarse levels, as indices.
+        DirectX::XMUINT4    markFlags{ 0u, 0u, 0u, 0u };
     };
 }
 
@@ -770,15 +839,12 @@ public:
     // by the AddPass2 builder — the record bodies emit EmitPoint markers and name no states.
     struct PageRequestPoints {
         std::uint32_t base = 0;            // camera depth SRV + request buffer UAV
-        // S5b.2: the page table as it stood during last frame's render is copied aside BEFORE
-        // this frame's allocation rewrites it -- the scatter finds last frame's physical page
-        // of a virtual page there (Unreal's PrevBuffers.PageTable).
-        bool hzbSnapshot = false;
-        std::uint32_t snapshotCopy = 0;    // pageTable -> COPY_SOURCE, prevPageTable -> COPY_DEST
         std::uint32_t alloc = 0;           // the six alloc buffers -> UAV
         // Plan S10e: the alloc counters into this frame's readback slot, every frame (dynamic resolution).
         bool remap = false;                // S10c: this frame moves pages between views (PlanViewRemap)
         std::vector<std::uint32_t> viewRemap; // ...per OLD view: keep / drop / new view (filled only when `remap`)
+        bool pan = false;                  // this frame some clipmap levels' centres snapped (PlanClipmapPan)
+        std::array<std::uint32_t, vsm::kNumClipmapLevels> clipmapPan{}; // ...per level, how their pages move (bits.z)
         bool counters = false;
         std::uint32_t countersCopy = 0;    // counters -> COPY_SOURCE
         std::uint32_t countersRestore = 0; // ...and back to UAV
@@ -925,7 +991,8 @@ public:
     void RecordPageRequest(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                            const vsm::PageRequestConstants& constants,
                            const vsm::ViewProjEntry* views, std::uint32_t viewCount, const PageRequestPoints& pts,
-                           D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH, const ShadowGpuData* shadowGpu);
+                           D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, D3D12_CPU_DESCRIPTOR_HANDLE gb1Srv, D3D12_CPU_DESCRIPTOR_HANDLE gbAuxSrv,
+                           UINT screenW, UINT screenH, const ShadowGpuData* shadowGpu);
 
     // Step 20: consume the request bitfield produced by RecordPageRequest (same command list,
     // right after it) and turn it into physical-page assignments with cross-frame caching: touch
@@ -995,6 +1062,9 @@ public:
     bool ViewOwnersPending() const { return nextViewOwners_ != appliedViewOwners_; }
     // Builder (main thread), before PrepareRequestPass, only on a frame the pool updates. `frame` = the renderer's.
     void PlanViewRemap(std::uint64_t frame);
+    // Which clipmap levels' centres snapped since the pool's pages were made: UE's pan, their pages move with them
+    // (VSM_NEXT_FLAG_KEEP_PAGE; vsm_page_alloc_remap_cs.hlsl), and the level's matrix change dirties nothing.
+    void PlanClipmapPan(const vsm::ClipmapSquares* squares);
     // moved = views moved (to a light's new view, a return or a parking spot); dropped = views freed for an arrival or
     // because their parked light did not come back in time (expired) or could not vouch for them (stale).
     struct RemapStats
@@ -1035,18 +1105,20 @@ public:
     const DebugStats& Stats() const { return stats_; }
 
     // Physical-page ownership snapshot for the dev-window pool grid: kPoolPageCount entries, each
-    // 0xFFFFFFFF (free) or the owning virtual-page id (view = id / vsm::kPagesPerView). Same
+    // 0xFFFFFFFF (free) or the owning virtual-page id (view = vsm::ViewOfPage(id)). Same
     // kFrameCount-old snapshot as Stats(); empty until the first sample.
     const std::vector<std::uint32_t>& PhysOwnerSnapshot() const { return physOwnerSnapshot_; }
 
 private:
-    GpuResource pagePool_;   // R32_TYPELESS depth atlas (kPoolTexels²) — D32, see EnsureResources
+    GpuResource pagePool_;   // R32_TYPELESS depth atlas (kPoolTexelsX x kPoolTexelsY) — D32, see EnsureResources
     GpuResource pageTable_;  // StructuredBuffer<uint>[PageTableEntries(views_)]
     // Plan S9e: the view count everything below was sized for (see ViewCount), and its derived sizes.
     std::uint32_t views_ = 0;
     std::uint32_t PageTableEntries() const { return vsm::PageTableEntries(views_); }
     std::uint32_t RequestWords() const { return vsm::RequestWords(views_); }
-    std::uint32_t RequestBufferWords() const { return RequestWords() + vsm::kWaterMaskWords; } // + the water's caster mask
+    // [the pixels' marks | the water's caster mask | the coarse pages' marks]
+    std::uint32_t CoarseRequestBase() const { return RequestWords() + vsm::kWaterMaskWords; }
+    std::uint32_t RequestBufferWords() const { return CoarseRequestBase() + RequestWords(); }
     // Plan S9e: the per-view records (vsm::ViewGpuData), an UPLOAD ring of kFrameCount x 2 slots of views_ records -- slot
     // f * 2 the request pass's, f * 2 + 1 the render pass's -- persistently mapped, one SRV per slot. The CPU writes a slot
     // only in the frame that owns it (BeginFrame waited on its fence); viewDataHigh_ = how many records a slot's last write
@@ -1083,12 +1155,17 @@ private:
     GpuResource freeList_;      // [kPoolPageCount] free physical indices (rebuilt per frame)
     GpuResource needsRender_;   // [kPoolPageCount] pages allocated this frame (Step 22 input)
     GpuResource allocCounters_; // [4] free / needs / fail / resident
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> allocUavHeap_; // the 5 alloc-state UAVs
+    GpuResource levelBounds_;   // [kNumClipmapLevels * 2] the rect each level has pages in (vsm_page_bounds_cs.hlsl)
+    GpuResource pageDetail_;    // [kPoolPageCount] what each page is asked for as (ditto)
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> allocUavHeap_; // the alloc-state UAVs + the bounds' SRV
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE physLastFrameUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE freeListUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE needsRenderUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE allocCountersUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE levelBoundsUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE levelBoundsSrv_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE pageDetailUav_{};
     bool allocInitialized_ = false; // one-shot page-table/owner init done
 
     void EnsureShaderResources(Renderer* renderer); // lazily create all VSM compute PSOs
@@ -1099,6 +1176,7 @@ private:
     std::shared_ptr<Material> allocTouchMat_;        // vsm_page_alloc_touch_cs.hlsl
     std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl
     std::shared_ptr<Material> allocMapMat_;          // vsm_page_alloc_map_cs.hlsl
+    std::shared_ptr<Material> allocBoundsMat_;       // vsm_page_bounds_cs.hlsl
     std::shared_ptr<Material> allocPropagateMat_;    // vsm_page_propagate_cs.hlsl (clipmap LOD fallback)
     std::shared_ptr<Material> pageSetupMat_;         // vsm_page_setup_cs.hlsl (Step 22)
     std::shared_ptr<Material> pageScatterMat_;       // vsm_page_scatter_cs.hlsl (spatial scatter cull)
@@ -1183,12 +1261,11 @@ private:
     const char* tessyMsLoggedReason_ = nullptr;
     void EnsureTessyResources(Renderer* renderer);
     // ---- Occlusion plan S5b.2: the light-space two-pass HZB occlusion of the clipmap pages ----
-    // The pool pyramid: R32_FLOAT at half the pool, 7 mips (2048 -> 32), i.e. a self-contained
+    // The pool pyramid: R32_FLOAT at half the pool, 7 mips (8192 x 1024 -> 128 x 16), i.e. a self-contained
     // 64 -> 1 chain per 128-texel page, storing 1 - z with a min reduction (vsm_hzb_build_cs.hlsl).
     // Persistent like the pool: a cached page's region still describes its cached depth.
     static constexpr std::uint32_t kHzbMips = 7;
     GpuResource vsmHzb_;
-    GpuResource prevPageTable_;   // the page table during last frame's render (snapshot before alloc)
     GpuResource deferredPairs_;   // uint2[deferredCap_]: (leading caster slot, virtual page id)
     GpuResource hzbCounters_;     // uint[4]: deferred, drawn in B, overflow, pad
     GpuResource pageGroupCountB_; // pass B's per (page, virtual group) counts (shape of pageGroupCount_)
@@ -1197,7 +1274,6 @@ private:
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> hzbHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE hzbSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE hzbMipUav_[kHzbMips]{};
-    D3D12_CPU_DESCRIPTOR_HANDLE prevPageTableSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE deferredPairsUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE deferredPairsSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE hzbCountersUav_{};
@@ -1272,6 +1348,12 @@ private:
     std::vector<std::uint32_t> viewRemap_;
     bool remapPending_ = false;
     bool prevVpRemapPending_ = false;
+    // PlanClipmapPan: this frame's moves, and each level's centre the pool's pages were made for.
+    bool panPending_ = false;
+    std::array<std::uint32_t, vsm::kNumClipmapLevels> clipmapPan_{};
+    std::array<std::int32_t, vsm::kNumClipmapLevels> panSnapX_{};
+    std::array<std::int32_t, vsm::kNumClipmapLevels> panSnapY_{};
+    bool panSnapValid_ = false;
     // Per view: the light whose pages it parks (kNoViewOwner = none) and since which frame; parkedStale_ = a render since
     // could have changed them unseen (PrepareRenderPass), so the next plan frees every parked view.
     ViewOwners parkedOwners_;

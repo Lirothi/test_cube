@@ -163,14 +163,12 @@ namespace
         float vsmLodRefDistance = vsm::kLodRefDist;
         std::uint32_t vsmRequestDownscale = vsm::kRequestDownscale;
         std::uint32_t vsmLruFrames = vsm::kLruFrameThreshold;
-        float vsmClipmapBaseExtent = 2.0f;
-        bool vsmClipmapBlend = true;
-        float vsmClipmapBlendWidth = 0.12f;
-        std::uint32_t smrtRayCount = 7u;
-        std::uint32_t smrtSamplesPerRay = 8u;
+        int vsmClipmapFirstLevel = 6;
+        float vsmResolutionLodBiasDirectional = 0.0f;
+        std::uint32_t smrtRayCount = 8u;
+        std::uint32_t smrtSamplesPerRay = 4u;
         bool smrtTemporalDither = true;
         std::uint32_t smrtAdaptiveRayCount = 1u;
-        float smrtLevelMargin = 1.0f;
         float smrtSunAngleDeg = 0.5357f;
         float smrtTexelDitherScale = 2.0f;
         float smrtRayLengthScale = 1.5f;
@@ -192,7 +190,7 @@ namespace
         bool tessySdsm = true;    // Tessy (tessy::g_sdsm_game): the SDSM sun partitions; on by default (owner, 2026-10-30)
         bool tessyLod = false;    // Tessy N7 (tessy::g_lod_game): the cluster DAG's cut (camera, lamp atlases, VSM pages)
         float tessyLodPixelError = 1.0f; // Tessy N7 (tessy::g_lodPixelError_game): the camera's DAG cut threshold, screen pixels
-        std::uint32_t vsmWindAnimateMaxLevel = 6u;
+        float vsmWindRange = 64.0f;
     };
 
     const char* DlssModeName(sl::DLSSMode mode)
@@ -419,12 +417,11 @@ namespace
         s.vsmLodRefDistance = std::clamp(finite(s.vsmLodRefDistance, vsm::kLodRefDist), 1.0f, 40.0f);
         s.vsmRequestDownscale = std::clamp(s.vsmRequestDownscale, 1u, 8u);
         s.vsmLruFrames = std::clamp(s.vsmLruFrames, 1u, vsm::kMaxLruFrames);
-        s.vsmClipmapBaseExtent = std::clamp(finite(s.vsmClipmapBaseExtent, 2.0f), 1.0f, 200.0f);
-        s.vsmClipmapBlendWidth = std::clamp(finite(s.vsmClipmapBlendWidth, 0.12f), 0.0f, 0.30f);
+        s.vsmClipmapFirstLevel = std::clamp(s.vsmClipmapFirstLevel, 0, 16);
+        s.vsmResolutionLodBiasDirectional = std::clamp(finite(s.vsmResolutionLodBiasDirectional, 0.0f), -4.0f, 4.0f);
         s.smrtRayCount = std::min(s.smrtRayCount, vsm::kSmrtMaxRays);
         s.smrtSamplesPerRay = std::clamp(s.smrtSamplesPerRay, 1u, vsm::kSmrtMaxSamplesPerRay);
         s.smrtAdaptiveRayCount = std::min(s.smrtAdaptiveRayCount, 8u);
-        s.smrtLevelMargin = std::clamp(finite(s.smrtLevelMargin, 1.0f), 0.25f, 1.0f);
         s.smrtSunAngleDeg = std::clamp(finite(s.smrtSunAngleDeg, 0.5357f), 0.0f, 8.0f);
         s.smrtTexelDitherScale = std::clamp(finite(s.smrtTexelDitherScale, 2.0f), 0.0f, 4.0f);
         s.smrtRayLengthScale = std::clamp(finite(s.smrtRayLengthScale, 1.5f), 0.0f, 4.0f);
@@ -434,7 +431,7 @@ namespace
         s.vsmClipmapNormalBias = std::clamp(finite(s.vsmClipmapNormalBias, 1.0f), 0.0f, 4.0f);
         s.vsmLocalLateralTexels = std::clamp(finite(s.vsmLocalLateralTexels, 1.5f), 0.0f, 4.0f);
         s.vsmLocalDepthPushTexels = std::clamp(finite(s.vsmLocalDepthPushTexels, 0.5f), 0.0f, 4.0f);
-        s.vsmWindAnimateMaxLevel = std::min(s.vsmWindAnimateMaxLevel, vsm::kNumClipmapLevels);
+        s.vsmWindRange = std::clamp(finite(s.vsmWindRange, 64.0f), 0.0f, 4096.0f);
 
         s.csm.maxDistance = std::clamp(finite(s.csm.maxDistance, 300.0f), 20.0f, 1000.0f);
         for (float& split : s.csm.sliceDistances)
@@ -586,14 +583,12 @@ namespace
         s.vsmLodRefDistance = vsm::g_refDist_game;
         s.vsmRequestDownscale = vsm::g_requestDownscale_game;
         s.vsmLruFrames = vsm::g_lruThreshold_game;
-        s.vsmClipmapBaseExtent = vsm::g_clipmapBaseExtent_game;
-        s.vsmClipmapBlend = vsm::g_clipmapBlendEnabled_game;
-        s.vsmClipmapBlendWidth = vsm::g_clipmapBlendWidth_game;
+        s.vsmClipmapFirstLevel = vsm::g_clipmapFirstLevel_game;
+        s.vsmResolutionLodBiasDirectional = vsm::g_resolutionLodBiasDirectional_game;
         s.smrtRayCount = vsm::g_smrtRayCount_game;
         s.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay_game;
         s.smrtTemporalDither = vsm::g_smrtTemporalDither_game;
         s.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount_game;
-        s.smrtLevelMargin = vsm::g_smrtLevelMargin_game;
         s.smrtSunAngleDeg = vsm::g_smrtSourceAngleDeg_game;
         s.smrtTexelDitherScale = vsm::g_smrtTexelDitherScale_game;
         s.smrtRayLengthScale = vsm::g_smrtRayLengthScale_game;
@@ -607,7 +602,7 @@ namespace
         s.vsmSingleDraw = vsm::g_pageDrawSingle_game;
         s.vsmHzbCull = vsm::g_hzbCull_game;
         s.vsmPageCaching = vsm::g_pageCaching_game;
-        s.vsmWindAnimateMaxLevel = vsm::g_windAnimateMaxLevel_game;
+        s.vsmWindRange = vsm::g_windRange_game;
         s.tessyEnabled = tessy::g_enabled_game;
         s.tessyVsm = tessy::g_vsm_game;
         s.tessyRaster = tessy::g_vsmMeshShader_game;
@@ -787,14 +782,12 @@ namespace
         vsm::g_refDist_game = s.vsmLodRefDistance;
         vsm::g_requestDownscale_game = s.vsmRequestDownscale;
         vsm::g_lruThreshold_game = s.vsmLruFrames;
-        vsm::g_clipmapBaseExtent_game = s.vsmClipmapBaseExtent;
-        vsm::g_clipmapBlendEnabled_game = s.vsmClipmapBlend;
-        vsm::g_clipmapBlendWidth_game = s.vsmClipmapBlendWidth;
+        vsm::g_clipmapFirstLevel_game = s.vsmClipmapFirstLevel;
+        vsm::g_resolutionLodBiasDirectional_game = s.vsmResolutionLodBiasDirectional;
         vsm::g_smrtRayCount_game = s.smrtRayCount;
         vsm::g_smrtSamplesPerRay_game = s.smrtSamplesPerRay;
         vsm::g_smrtTemporalDither_game = s.smrtTemporalDither;
         vsm::g_smrtAdaptiveRayCount_game = s.smrtAdaptiveRayCount;
-        vsm::g_smrtLevelMargin_game = s.smrtLevelMargin;
         vsm::g_smrtSourceAngleDeg_game = s.smrtSunAngleDeg;
         vsm::g_smrtTexelDitherScale_game = s.smrtTexelDitherScale;
         vsm::g_smrtRayLengthScale_game = s.smrtRayLengthScale;
@@ -816,7 +809,7 @@ namespace
         tessy::g_sdsm_game = s.tessySdsm;
         tessy::g_lod_game = s.tessyLod;
         tessy::g_lodPixelError_game = s.tessyLodPixelError;
-        vsm::g_windAnimateMaxLevel_game = s.vsmWindAnimateMaxLevel;
+        vsm::g_windRange_game = s.vsmWindRange;
     }
 
     void ApplyAll(const GraphicsSettingsSnapshot& s, Renderer& renderer, Scene& scene,
@@ -1019,14 +1012,12 @@ namespace
                     { "lodRefDistance", s.vsmLodRefDistance },
                     { "requestDownscale", s.vsmRequestDownscale },
                     { "lruFrames", s.vsmLruFrames },
-                    { "clipmapBaseExtent", s.vsmClipmapBaseExtent },
-                    { "clipmapBlend", s.vsmClipmapBlend },
-                    { "clipmapBlendWidth", s.vsmClipmapBlendWidth },
+                    { "clipmapFirstLevel", s.vsmClipmapFirstLevel },
+                    { "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional },
                     { "smrtRayCount", s.smrtRayCount },
                     { "smrtSamplesPerRay", s.smrtSamplesPerRay },
                     { "smrtTemporalDither", s.smrtTemporalDither },
                     { "smrtAdaptiveAfterRays", s.smrtAdaptiveRayCount },
-                    { "smrtLevelMargin", s.smrtLevelMargin },
                     { "smrtSunAngleDeg", s.smrtSunAngleDeg },
                     { "smrtTexelDither", s.smrtTexelDitherScale },
                     { "smrtRayLengthScale", s.smrtRayLengthScale },
@@ -1040,7 +1031,7 @@ namespace
                     { "singleDraw", s.vsmSingleDraw },
                     { "hzbCull", s.vsmHzbCull },
                     { "pageCaching", s.vsmPageCaching },
-                    { "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel },
+                    { "windRange", s.vsmWindRange },
                     { "tessyEnabled", s.tessyEnabled },
                     { "tessy", s.tessyVsm },
                     { "tessyRaster", s.tessyRaster },
@@ -1257,14 +1248,12 @@ namespace
         Read(vsmSettings, "lodRefDistance", s.vsmLodRefDistance);
         Read(vsmSettings, "requestDownscale", s.vsmRequestDownscale);
         Read(vsmSettings, "lruFrames", s.vsmLruFrames);
-        Read(vsmSettings, "clipmapBaseExtent", s.vsmClipmapBaseExtent);
-        Read(vsmSettings, "clipmapBlend", s.vsmClipmapBlend);
-        Read(vsmSettings, "clipmapBlendWidth", s.vsmClipmapBlendWidth);
+        Read(vsmSettings, "clipmapFirstLevel", s.vsmClipmapFirstLevel);
+        Read(vsmSettings, "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional);
         Read(vsmSettings, "smrtRayCount", s.smrtRayCount);
         Read(vsmSettings, "smrtSamplesPerRay", s.smrtSamplesPerRay);
         Read(vsmSettings, "smrtTemporalDither", s.smrtTemporalDither);
         Read(vsmSettings, "smrtAdaptiveAfterRays", s.smrtAdaptiveRayCount);
-        Read(vsmSettings, "smrtLevelMargin", s.smrtLevelMargin);
         Read(vsmSettings, "smrtSunAngleDeg", s.smrtSunAngleDeg);
         Read(vsmSettings, "smrtTexelDither", s.smrtTexelDitherScale);
         Read(vsmSettings, "smrtRayLengthScale", s.smrtRayLengthScale);
@@ -1278,7 +1267,7 @@ namespace
         Read(vsmSettings, "singleDraw", s.vsmSingleDraw);
         Read(vsmSettings, "hzbCull", s.vsmHzbCull);
         Read(vsmSettings, "pageCaching", s.vsmPageCaching);
-        Read(vsmSettings, "windAnimateBelowLevel", s.vsmWindAnimateMaxLevel);
+        Read(vsmSettings, "windRange", s.vsmWindRange);
         Read(vsmSettings, "tessyEnabled", s.tessyEnabled);
         Read(vsmSettings, "tessy", s.tessyVsm);
         Read(vsmSettings, "tessyRaster", s.tessyRaster);
@@ -1610,15 +1599,13 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmRefDistance:                 current.vsmLodRefDistance = defaults.vsmLodRefDistance; break;
     case GraphicsControl::VsmRequestDownscale:            current.vsmRequestDownscale = defaults.vsmRequestDownscale; break;
     case GraphicsControl::VsmLru:                         current.vsmLruFrames = defaults.vsmLruFrames; break;
-    case GraphicsControl::VsmClipmapBaseExtent:           current.vsmClipmapBaseExtent = defaults.vsmClipmapBaseExtent; break;
-    case GraphicsControl::VsmClipmapBlend:                current.vsmClipmapBlend = defaults.vsmClipmapBlend; break;
-    case GraphicsControl::VsmClipmapBlendWidth:           current.vsmClipmapBlendWidth = defaults.vsmClipmapBlendWidth; break;
+    case GraphicsControl::VsmClipmapFirstLevel:           current.vsmClipmapFirstLevel = defaults.vsmClipmapFirstLevel; break;
+    case GraphicsControl::VsmResolutionLodBiasDirectional: current.vsmResolutionLodBiasDirectional = defaults.vsmResolutionLodBiasDirectional; break;
     case GraphicsControl::VsmSmrtEnabled:
     case GraphicsControl::VsmSmrtRays:                    current.smrtRayCount = defaults.smrtRayCount; break;
     case GraphicsControl::VsmSmrtSamples:                 current.smrtSamplesPerRay = defaults.smrtSamplesPerRay; break;
     case GraphicsControl::VsmSmrtTemporal:                current.smrtTemporalDither = defaults.smrtTemporalDither; break;
     case GraphicsControl::VsmSmrtAdaptive:                current.smrtAdaptiveRayCount = defaults.smrtAdaptiveRayCount; break;
-    case GraphicsControl::VsmSmrtMargin:                  current.smrtLevelMargin = defaults.smrtLevelMargin; break;
     case GraphicsControl::VsmSmrtSunAngle:                current.smrtSunAngleDeg = defaults.smrtSunAngleDeg; break;
     case GraphicsControl::VsmSmrtTexelDither:             current.smrtTexelDitherScale = defaults.smrtTexelDitherScale; break;
     case GraphicsControl::VsmSmrtRayLength:               current.smrtRayLengthScale = defaults.smrtRayLengthScale; break;
@@ -1632,7 +1619,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmSingleDraw:                  current.vsmSingleDraw = defaults.vsmSingleDraw; break;
     case GraphicsControl::VsmHzbCull:                     current.vsmHzbCull = defaults.vsmHzbCull; break;
     case GraphicsControl::VsmPageCaching:                 current.vsmPageCaching = defaults.vsmPageCaching; break;
-    case GraphicsControl::VsmWindAnimateMaxLevel:         current.vsmWindAnimateMaxLevel = defaults.vsmWindAnimateMaxLevel; break;
+    case GraphicsControl::VsmWindRange:                   current.vsmWindRange = defaults.vsmWindRange; break;
     case GraphicsControl::TessyEnabled:                   current.tessyEnabled = defaults.tessyEnabled; break;
     case GraphicsControl::TessyVsm:                       current.tessyVsm = defaults.tessyVsm; break;
     case GraphicsControl::TessyRaster:                    current.tessyRaster = defaults.tessyRaster; break;

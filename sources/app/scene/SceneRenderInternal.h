@@ -195,14 +195,14 @@ namespace scene_internal
         float4 lightCounts;
         mat4   lightViewProj[4];
         float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
-        float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (texels), z = depthBias (NDC)
+        float4 clipmapParams;         // Step 24f: x = the first level's number, y = normalBias, z = depthBias (NDC)
         mat4   clipmapViewProj[vsm::kNumClipmapLevels]; // Step 24f: directional clipmap level viewProjs
         mat4   clipmapUvNormal;       // P16.16: receiver-plane transform, mirrors lighting_cs
         float4 preExposureParams;     // P16.1: x = pre-exposure, yzw reserved
         float4 csmFilterMode;         // S8: x = kernel, y = receiver bias, z = sharpen, w = over-blur
         float4 csmFilterParams;       // w = receiver normal bias in texels
         float4 smrtParams;            // SMRT: x = rayCount, y = samplesPerRay, z = lengthScale, w = maxSlope
-        float4 smrtParams2;           // x = source radius (sin), y = texel dither scale
+        float4 smrtParams2;           // x = source radius (sin), y = texel dither scale, z = the clipmap's resolution LOD bias
         // Volumetric fog plan A5 (APPENDED at the tail, same rule as above): the volume's lookup
         // parameters and the analytic medium, so glass and particles sit in the air the sand is in.
         float4 fogVolumeParams;       // (on, far view depth, 1/preExposure, slice count)
@@ -425,19 +425,19 @@ namespace scene_internal
         // Step 21: VSM sampling for glass — on when the gate is on and the pool is allocated.
         const bool vsmOn = render::VsmActive() && frame.vsm && frame.vsm->IsAllocated();
         // .z = the depth-bias floor, texels -> NDC (same conversion as the lighting CB: a level's
-        // depth range is 6x its extent, virtual res 2048, both scale with the extent).
+        // depth range is 500x its side, virtual res 16384, both scale with the side). .w = level 0's number.
         vc.vsmParams = float4(vsmOn ? 1.0f : 0.0f, vsm::LocalRefDist(), // plan S10e: the dynamic-resolution bias
-                              vsm::g_clipmapDepthBiasFloorTexels / (vsm::ClipmapRangeMultiple() * (float)vsm::kVirtualRes),
-                              vsm::ClipmapBlendWidth());
+                              vsm::g_clipmapDepthBiasFloorTexels / (vsm::ClipmapRangeMultiple() * (float)vsm::kClipmapVirtualRes),
+                              static_cast<float>(vsm::g_clipmapFirstLevel));
         // Step 24f: directional clipmap for glass (matches lighting_cs). Same tunables + level viewProjs.
         // .y carries the SAME scaled value the lighting CB gets (UE divide by 1000 on the CPU);
         // .w = the per-level depth-bias decay (see VsmClipmapShadow).
-        vc.clipmapParams = float4(vsm::g_clipmapBaseExtent, vsm::g_clipmapNormalBias * 0.001f,
-                                  vsm::g_clipmapDepthBias, vsm::g_clipmapDepthBiasDecay);
+        vc.clipmapParams = float4(static_cast<float>(vsm::g_clipmapFirstLevel), vsm::g_clipmapNormalBias * 0.001f,
+                                  vsm::ClipmapDepthBiasNdc(), vsm::g_clipmapDepthBiasDecay);
         vc.smrtParams = float4((float)vsm::g_smrtRayCount, (float)vsm::g_smrtSamplesPerRay,
                                vsm::g_smrtRayLengthScale, vsm::g_smrtExtrapolateMaxSlope);
         vc.smrtParams2 = float4(std::sin(0.5f * vsm::g_smrtSourceAngleDeg * 3.14159265f / 180.0f),
-                                vsm::g_smrtTexelDitherScale, vsm::g_smrtLevelMargin,
+                                vsm::g_smrtTexelDitherScale, vsm::g_clipmapFrameBias,
                                 (float)frame.smrtFrameIndex);
         // S15: non-zero makes glass overwrite the cascade fields of CsmParams from the partition
         // buffer, exactly as lighting_cb.hlsli's MakeCsmParams does. Glass MUST agree with the

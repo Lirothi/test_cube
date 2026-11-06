@@ -41,7 +41,7 @@ cbuffer GlassView : register(b1)
     float4 lightCounts;           // x = point lights, y = spot lights, z = traced reflections, w = sky reflection enabled
     float4x4 lightViewProj[4];
     float4 vsmParams;             // x = useVsm, y = refDist, z = depth-bias floor, w = clip blend width
-    float4 clipmapParams;         // Step 24f: x = baseExtent, y = normalBias (UE units), z = depthBias (NDC), w = depth-bias decay/level
+    float4 clipmapParams;         // Step 24f: x = the first level's number, y = normalBias (UE units), z = depthBias (NDC), w = depth-bias decay/level
     float4x4 clipmapViewProj[VSM_NUM_CLIPMAP_LEVELS]; // Step 24f: directional clipmap level viewProjs
     float4x4 clipmapUvNormal;     // P16.16: receiver-plane transform, must match lighting_cs
     // P16.1: x = the pre-exposure every writer of scene colour applies. Glass writes in the
@@ -58,7 +58,7 @@ cbuffer GlassView : register(b1)
     // Glass samples the SAME clipmap lighting_cs does, so it has to get the same numbers or a
     // window shades against a differently-sampled shadow than the ground under it.
     float4 smrtParams;
-    float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = margin, w = frame
+    float4 smrtParams2;           // x = source radius (sin), y = texel dither, z = the clipmap's resolution LOD bias, w = frame
     // Volumetric fog plan A5 (APPENDED at the tail, same rule as above): the volume's lookup
     // parameters and the analytic medium (PackHeightFog), so glass and particles sit in the
     // air the sand is in.

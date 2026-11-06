@@ -13,27 +13,14 @@ static const uint VSM_SAMPLE_RESIDENT_BIT = VSM_RESIDENT_BIT_C; // see vsm_addre
 static const uint VSM_SAMPLE_PHYS_MASK    = VSM_PHYS_MASK_C;
 
 // P16.16. UE clamp the receiver-plane bias to `abs(100 * ShadowViewToClipMatrix._33)` -- a hundred
-// world units expressed in the level's own NDC. Ours is already NDC, and a clipmap level's depth
-// range is 6x its extent, so the equivalent bound is a fixed slice of that range. It exists only to
-// stop a near-grazing receiver, where the plane gradient diverges, from flinging its shadow away;
-// it should never bind on anything shaded normally.
+// world units expressed in the level's own NDC. It exists only to stop a near-grazing receiver,
+// where the plane gradient diverges, from flinging its shadow away; with the gradient clamped below
+// it does not bind on a page's texels.
 static const float VSM_MAX_SLOPE_BIAS_NDC = 0.01f;
 // UE's clamp on the gradient itself (ComputeDepthSlopeDirectionalUV): "Clamp to avoid excessive
-// degenerate slope biases causing flickering lit pixels". THEIR NUMBER IS 0.05 AND IT DOES NOT
-// TRANSFER -- it is expressed in a depth range that is not ours. UE's clipmap level spans
-// `ZRangeScale` (1000) times its radius; ours spans 6x its extent, i.e. 12x its radius. Our NDC
-// per world unit is therefore ~83x theirs and so are our gradients: for flat ground under this
-// level's 28-degree sun the real gradient is tan(theta)/6 = 0.31, which their 0.05 would crush
-// SIXFOLD -- measured, and it produced less bias than the flat constant it replaced.
-//
-// So the bound is derived by UNIT CONVERSION instead of copied: their 0.05 in a 1000r depth range
-// equals 0.05 * (1000/12) = 4.17 in our 12r range -- the SAME world-space clamp UE runs with. The
-// earlier 1.34 ("past 83 degrees nothing is worth defending") was tighter than UE for no reason a
-// low sun tolerates: a dune's terminator belt lives at 83-90 degrees off the light and its per-texel
-// depth spans run to metres there, so the gradient must be allowed to say so. (Raising the clamp
-// alone did NOT fix the low-sun stair banding -- the sign bug at the slope-bias application below
-// did; the clamp is kept at UE's value because it is the correct conversion of their bound.)
-static const float VSM_MAX_DEPTH_SLOPE_UV = 4.17f;
+// degenerate slope biases causing flickering lit pixels". Their number: a level's depth range and
+// its side are UE's now (2000 radii against 4), so a gradient means what it means there.
+static const float VSM_MAX_DEPTH_SLOPE_UV = 0.05f;
 
 // Sample a resident/virtual page given the receiver's light-space NDC + full-view shadow UV.
 // Starts at the distance-selected mip level and walks to COARSER levels until it finds a resident
@@ -69,26 +56,27 @@ static const float VSM_MAX_DEPTH_SLOPE_UV = 4.17f;
 float VsmSampleNDCFrom(uint view, uint startLevel, float3 ndc, float2 uv, float depthBias, float2 depthSlopeUV,
                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
-    const float invPoolAxis = 1.0f / (float)VSM_POOL_PAGES_AXIS;
-    const float texel = 1.0f / (float)(VSM_POOL_PAGES_AXIS * VSM_PAGE_SIZE); // 1/4096
+    const float2 invPool = 1.0f / float2((float)VSM_POOL_PAGES_X, (float)VSM_POOL_PAGES_Y);
+    const float2 texel = invPool / (float)VSM_PAGE_SIZE;
+    const uint lastLevel = VsmIsClipmapView(view) ? 0u : VSM_MAX_LEVEL; // a clipmap level has no mips
 
-    for (uint level = startLevel; level <= VSM_MAX_LEVEL; ++level)
+    for (uint level = startLevel; level <= lastLevel; ++level)
     {
-        const uint axis = VSM_L0_AXIS >> level;
+        const uint axis = VsmViewAxis(view, level);
         const uint px = min((uint)(uv.x * axis), axis - 1u);
         const uint py = min((uint)(uv.y * axis), axis - 1u);
         const uint entry = PageTable[VsmPageId(view, level, px, py)];
         if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { continue; } // try a coarser level
 
         const uint phys = entry & VSM_SAMPLE_PHYS_MASK;
-        const float gx = (float)(phys % VSM_POOL_PAGES_AXIS);
-        const float gy = (float)(phys / VSM_POOL_PAGES_AXIS);
+        const float gx = (float)(phys % VSM_POOL_PAGES_X);
+        const float gy = (float)(phys / VSM_POOL_PAGES_X);
         const float2 uvInPage = saturate(uv * axis - float2(px, py)); // position within the page [0,1]
-        const float2 poolUV = (float2(gx, gy) + uvInPage) * invPoolAxis;
+        const float2 poolUV = (float2(gx, gy) + uvInPage) * invPool;
 
         // 3x3 PCF, one pool texel, clamped to this page's pool region (no neighbour bleed).
-        const float2 pmin = float2(gx, gy) * invPoolAxis + 0.5f * texel;
-        const float2 pmax = (float2(gx, gy) + 1.0f) * invPoolAxis - 0.5f * texel;
+        const float2 pmin = float2(gx, gy) * invPool + 0.5f * texel;
+        const float2 pmax = (float2(gx, gy) + 1.0f) * invPool - 0.5f * texel;
 
         // The receiver-plane bias is built in THIS level's units: `levelDims` is how many texels
         // the view spans at the level that actually turned out to be resident, which is where the
@@ -265,11 +253,10 @@ uint VsmPointSampledLevel(uint firstView, uint startLevel, float3 P, float3 ligh
     return VsmResidentLevel(view, uv, startLevel, PageTable);
 }
 
-// Directional clipmap (Step 24f): the receiver picks the FINEST level whose ortho extent contains it
-// (levels ordered finest->coarsest in slots [VSM_CLIPMAP_FIRST, +VSM_NUM_CLIPMAP_LEVELS)); the
-// clipmap LEVEL is the LOD, so we sample page-level 0 (distCam 0 forces VsmSampleNDC's start level 0).
-// `clipVP[i]` = clipmap level i's camera-centered ortho viewProj (built CPU-side, texel-snapped).
-// Not resident / outside every level -> lit (1.0). Mirrors VsmSpotShadow but with level selection.
+// Directional clipmap, UE's GetMappedClipmap: the receiver starts at the level its distance picks with no bias (the most
+// detailed one it is guaranteed a page-table entry for), and takes the first level there that has a page; the clipmap
+// LEVEL is the LOD, so page-level 0. `clipVP[i]` = clipmap level i's viewProj. `clipFirstLevel` = level 0's absolute number.
+// Not resident / outside every level -> lit (1.0).
 // P16.16 -- P = un-offset receiver, N = the SHADING normal (which is what UE use here too:
 // `GetEstimatedGeoWorldNormal` sits beside their projection marked "not currently used").
 //
@@ -288,8 +275,8 @@ uint VsmPointSampledLevel(uint firstView, uint startLevel, float3 P, float3 ligh
 //    build `TranslatedWorldToShadowUVNormalMatrix`. ONE matrix serves every level: the gradient it
 //    produces is a ratio of xy to z, and both scale with the level's extent, so the extent cancels.
 //    (`CalcClipmapUvNormalMatrix` on the CPU asserts that proportionality holds.)
-// Constant depth bias per level: `depthBias` is NDC, and a level's NDC range is 6x its extent, so
-// a constant NDC value is a constant bias in TEXELS (ndc * 6 * 2048) whose WORLD size doubles per
+// Constant depth bias per level: `depthBias` is NDC, and a level's NDC range is 500x its extent, so
+// a constant NDC value is a constant bias in TEXELS whose WORLD size doubles per
 // level -- which is what detaches thin far shadows when the base value is raised. `depthBiasDecay`
 // shrinks it per level (0.5 = a constant WORLD-size bias instead) and `depthBiasFloorNdc` is a
 // per-level lower bound (authored in texels on the CPU). With the D32 pool (2026-08-21) the
@@ -305,11 +292,10 @@ uint VsmPointSampledLevel(uint firstView, uint startLevel, float3 P, float3 ligh
 // camera depth buffer, which is exactly how UE structure it (VirtualShadowMapProjection.usf
 // computes SMRTRayOffset and hands it to TraceDirectional). 0 = no screen trace.
 //
-// `resident` says whether any level had a page there. The request marks pages under RECEIVERS only, the finest level
-// holding each, so a point that is no receiver -- the air -- may have a page at no level at all, and its "lit" is then
-// an unknown, not an answer.
+// `resident` says whether any level had a page there. The request marks pages under RECEIVERS only, so a point that is no
+// receiver -- the air -- may have a page at no level at all, and its "lit" is then an unknown, not an answer.
 float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
-                       float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
+                       float depthBiasDecay, float depthBiasFloorNdc, float clipFirstLevel,
                        float tanHalfFovX, float4x4 uvNormalMatrix, float3 dirToLight,
                        VsmSmrtParams smrt, float rayStartOffset,
                        float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
@@ -330,49 +316,29 @@ float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBi
     const float2 depthSlopeUV = clamp(-planeUV.xy / planeZ,
                                       -VSM_MAX_DEPTH_SLOPE_UV, VSM_MAX_DEPTH_SLOPE_UV);
 
-    for (uint i = 0u; i < VSM_NUM_CLIPMAP_LEVELS; ++i)
+    // The level is the distance, with no bias: the request's bias marks a coarser level for the same point, and the
+    // unmapped entries between point there (vsm_page_propagate_cs.hlsl), so a page is at most one more projection away.
+    const int unbiasedLevel = (int)floor(log2(max(dist * 100.0f, 1e-4f)));
+    uint i = (uint)max(0, unbiasedLevel - (int)clipFirstLevel);
+    [loop] while (i < VSM_NUM_CLIPMAP_LEVELS)
     {
-        float4 clip = mul(float4(Poff, 1.0f), clipVP[i]);
-        if (clip.w <= 0.0f) { continue; }
-        float3 ndc = clip.xyz / clip.w;
-        // LEVEL ACCEPTANCE MARGIN -- the reason a marched ray was never able to march.
-        //
-        // UE keep TWO different radii per clipmap level: `GetLevelRadius(L) = 2^(L+1)` is what the
-        // level must COVER and is what their level selection tests against, while the level's ortho
-        // projection is built with `HalfLevelDim = 2.0 * RawLevelRadius`
-        // (VirtualShadowMapClipmap.cpp:349). Their own comment says it outright: "the actual clipmap
-        // dimensions will be larger". So every receiver sits at worst HALFWAY out in its level's
-        // square, and a ray of 1.5x distance-to-camera still has somewhere to go.
-        //
-        // Ours used one quantity for both: accept the finest level whose square contains the
-        // receiver AT ALL. A receiver can then sit hard against the edge with zero margin, and the
-        // very first sample above it lands outside the level -- which is why samplesPerRay 1 and 32
-        // produced identical images.
-        //
-        // Applied only when SMRT is marching. The single-tap path samples one texel at the receiver
-        // and wants the FINEST level it can get; giving it this margin would cost it a level of
-        // shadow resolution to buy room no single tap uses.
-        const float acceptEdge = (smrt.rayCount > 0u) ? smrt.levelMargin : 1.0f;
-        if (any(abs(ndc.xy) > acceptEdge) || ndc.z < 0.0f || ndc.z > 1.0f) { continue; } // outside
+        const float4 clip = mul(float4(Poff, 1.0f), clipVP[i]);
+        const float3 ndc = clip.xyz / clip.w;
+        if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { ++i; continue; } // outside
         const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-        // Residency pre-check: if this level's page isn't resident (a level-boundary strip the
-        // sub-sampled request missed), fall through to the NEXT, coarser clipmap level — which covers
-        // the same spot and is resident there — instead of returning lit. Kills the bright seam.
-        const uint px = min((uint)(uv.x * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
-        const uint py = min((uint)(uv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
+        const uint px = min((uint)(uv.x * (float)VSM_CLIPMAP_AXIS), VSM_CLIPMAP_AXIS - 1u);
+        const uint py = min((uint)(uv.y * (float)VSM_CLIPMAP_AXIS), VSM_CLIPMAP_AXIS - 1u);
         const uint entry = PageTable[VsmPageId(VSM_CLIPMAP_FIRST + i, 0u, px, py)];
-        if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { continue; } // not resident -> coarser level
+        if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u)
+        {
+            i += max((entry & VSM_LOD_MASK) >> VSM_LOD_SHIFT, 1u); // the propagate's pointer, or the next level
+            continue;
+        }
         resident = true;
         // ---- SMRT ----------------------------------------------------------------------------
         // Marches this level instead of taking one biased comparison. Returns before the constant
         // depth bias is even computed: the march's own CompareTolerance is what replaces it, and
         // leaving the constant in would put both biases on the same sample.
-        //
-        // The cross-level BLEND below is deliberately skipped here, and on this path it is not
-        // needed: it exists because a single tap has no way to continue past a level's edge, and
-        // the march does exactly that instead -- it walks INTO the coarser level and keeps going
-        // (VsmSmrtFindSample). Blending two independent marches would be a third thing that is
-        // neither, and would double the cost to hide a seam that is no longer there.
         if (smrt.rayCount > 0u)
         {
             // The ray is held in WORLD space and projected per level, because it may cross into a
@@ -390,17 +356,11 @@ float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBi
             // average, which is the trade UE make with View.StateFrameIndex.
             const float2 pixelHash = frac(VsmSmrtHash2(P) + VsmSmrtR2(smrt.frameIndex));
 
-            // Dither in TEXELS of this level, converted to UV. `levelTexels` is the level's full
-            // virtual resolution, which is what a "texel" means for a clipmap level.
             // UE: `DitherScale = (0.5 / CalcLevelDimsTexels(0)) * TexelDitherScale *
-            // DistanceFromViewOrigin / exp2(ClipmapLevel - ResolutionLodBias)`. Their distance term
-            // over 2^level is ~constant BECAUSE their level is chosen as log2(distance), so what
-            // survives is half a texel of the sampled level times the scale. The 0.5 is theirs and
-            // is not decoration -- omitting it ran the dither at TWICE UE's amplitude, which on a
-            // one-ray march is twice the noise for nothing. Their own note: "0.5 is arbitrary but
-            // makes it consistent with the previous dither scale cvar".
-            const float levelTexels = (float)(VSM_L0_AXIS * VSM_PAGE_SIZE);
-            const float ditherUV = 0.5f * smrt.texelDitherScale / levelTexels;
+            // DistanceFromViewOrigin / exp2(ClipmapLevel - ResolutionLodBias)`, in centimetres: half a
+            // texel of the sampled level times the scale, 1-2 x that across the distances that level holds.
+            const float ditherUV = (0.5f / VSM_CLIPMAP_VIRTUAL_RES) * smrt.texelDitherScale * (dist * 100.0f) /
+                                   exp2(clipFirstLevel + (float)i - smrt.clipResBias);
 
             // Bounded by a LITERAL -- the CB count can only end the loop early. See the caps in
             // vsm_smrt.hlsli for why a CB-driven loop bound is a device-hang generator.
@@ -427,8 +387,7 @@ float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBi
                 st.stepUVZ = float3(0.0f, 0.0f, 0.0f);
                 st.extrapolateSlope = 0.0f;
                 // Built per ray, not once: each ray has its own direction, so its projection into
-                // the level differs. The march also MUTATES this state (it can change level), so
-                // ray r+1 must not inherit where ray r ended up.
+                // the level differs.
                 VsmSmrtSetLevel(st, i, clipVP);
 
                 // Texel dither on the ray's start, with the receiver-plane bias that offset earns
@@ -490,54 +449,20 @@ float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBi
         // Bias of the level we LANDED on (matches how the receiver-plane bias scales: a residency
         // fallback to a coarser level uses that level's own values).
         const float levelDepthBias = max(depthBias * pow(depthBiasDecay, (float)i), depthBiasFloorNdc);
-        const float fineShadow = VsmSampleNDC(VSM_CLIPMAP_FIRST + i, ndc, uv, 0.0f, 1.0f,
-                                              levelDepthBias, depthSlopeUV, PageTable, Pool, cmp);
-
-        // Blend visibility, not depth: each level may contain a deliberately different caster mesh
-        // LOD, so there is no meaningful way to interpolate the stored depths themselves. Width 0
-        // exits before any parent projection/table lookup/sample and keeps the old texture-sampling cost.
-        const float blendWidth = clamp(clipBlendWidth, 0.0f, 0.5f);
-        if (blendWidth <= 0.0f || i + 1u >= VSM_NUM_CLIPMAP_LEVELS) { return fineShadow; }
-        const float edge = max(abs(ndc.x), abs(ndc.y));
-        const float blendStart = 1.0f - blendWidth;
-        if (edge <= blendStart) { return fineShadow; }
-
-        // Project independently: every clip level has its own texel-snapped centre and depth range,
-        // so parent NDC is close to ndc/2 but intentionally not assumed to be exactly that.
-        float4 parentClip = mul(float4(Poff, 1.0f), clipVP[i + 1u]);
-        if (parentClip.w <= 0.0f) { return fineShadow; }
-        float3 parentNdc = parentClip.xyz / parentClip.w;
-        if (any(abs(parentNdc.xy) > 1.0f) || parentNdc.z < 0.0f || parentNdc.z > 1.0f)
-        {
-            return fineShadow;
-        }
-        const float2 parentUv = float2(0.5f * parentNdc.x + 0.5f, 0.5f - 0.5f * parentNdc.y);
-        const uint parentPx = min((uint)(parentUv.x * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
-        const uint parentPy = min((uint)(parentUv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
-        const uint parentEntry = PageTable[VsmPageId(VSM_CLIPMAP_FIRST + i + 1u, 0u,
-                                                     parentPx, parentPy)];
-        if ((parentEntry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { return fineShadow; }
-
-        const float parentDepthBias = max(depthBias * pow(depthBiasDecay, (float)(i + 1u)),
-                                          depthBiasFloorNdc);
-        const float parentShadow = VsmSampleNDC(VSM_CLIPMAP_FIRST + i + 1u, parentNdc, parentUv,
-                                                0.0f, 1.0f, parentDepthBias, depthSlopeUV,
-                                                PageTable, Pool, cmp);
-        const float blend = smoothstep(blendStart, 1.0f, edge);
-        return lerp(fineShadow, parentShadow, blend);
+        return VsmSampleNDC(VSM_CLIPMAP_FIRST + i, ndc, uv, 0.0f, 1.0f, levelDepthBias, depthSlopeUV, PageTable, Pool, cmp);
     }
     return 1.0f; // outside all clipmap levels
 }
 
 float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
-                       float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
+                       float depthBiasDecay, float depthBiasFloorNdc, float clipFirstLevel,
                        float tanHalfFovX, float4x4 uvNormalMatrix, float3 dirToLight,
                        VsmSmrtParams smrt, float rayStartOffset,
                        float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
                        StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
 {
     bool resident;
-    return VsmClipmapShadowResident(P, N, camPos, normalBias, depthBias, depthBiasDecay, depthBiasFloorNdc, clipBlendWidth,
+    return VsmClipmapShadowResident(P, N, camPos, normalBias, depthBias, depthBiasDecay, depthBiasFloorNdc, clipFirstLevel,
                                     tanHalfFovX, uvNormalMatrix, dirToLight, smrt, rayStartOffset, clipVP, PageTable, Pool, cmp,
                                     resident);
 }

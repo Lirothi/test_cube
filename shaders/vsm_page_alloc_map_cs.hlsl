@@ -1,4 +1,4 @@
-// Rung 2 / Step 20, pass 3 (allocate): one thread per virtual page. For a page requested this
+// Rung 2 / Step 20, pass 3 (allocate): one thread per WORD of the request bitfield (see the touch pass). For a page requested this
 // frame that is NOT resident, pop a free physical page from the free list (atomic decrement of
 // FreeCount) and map it: write the page-table entry, claim the physical page's owner + last-frame,
 // and append the physical page to the needs-render list (Step 22 will rasterize casters into it).
@@ -21,15 +21,8 @@ RWStructuredBuffer<uint> FreeList      : register(u4); // free physical indices 
 RWStructuredBuffer<uint> NeedsRender   : register(u5); // physical pages to render this frame (append)
 RWStructuredBuffer<uint> AllocCounters : register(u6); // FREE (pop) / NEEDS / FAIL
 
-[numthreads(8, 8, 1)]
-[RootSignature(VSM_PAGE_ALLOC_MAP_RS)]
-void CSMain(uint3 dtid : SV_DispatchThreadID)
+void MapPage(uint i)
 {
-    if (dtid.y != 0u) { return; }
-    const uint i = dtid.x;
-    if (i >= gNumEntries) { return; }
-    if (!VsmRequested(Request, i)) { return; }
-
     const uint entry = PageTable[i];
     if ((entry & VSM_RESIDENT_BIT) != 0u) { return; } // already resident (touched)
 
@@ -62,4 +55,19 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     uint nr;
     InterlockedAdd(AllocCounters[VSM_CNT_NEEDS], 1u, nr);
     if (nr < gNumPages) { NeedsRender[nr] = phys; }
+}
+
+[numthreads(64, 1, 1)]
+[RootSignature(VSM_PAGE_ALLOC_MAP_RS)]
+void CSMain(uint3 dtid : SV_DispatchThreadID)
+{
+    const uint word = dtid.x;
+    if (word >= (gNumEntries + 31u) / 32u) { return; }
+    uint bits = Request[word] | Request[gCoarseBase + word];
+    while (bits != 0u)
+    {
+        const uint i = word * 32u + firstbitlow(bits);
+        bits &= bits - 1u;
+        MapPage(i);
+    }
 }

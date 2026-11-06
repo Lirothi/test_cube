@@ -53,8 +53,8 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
     {
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        rd.Width = vsm::kPoolTexels;
-        rd.Height = vsm::kPoolTexels;
+        rd.Width = vsm::kPoolTexelsX;
+        rd.Height = vsm::kPoolTexelsY;
         rd.DepthOrArraySize = 1;
         rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT_R32_TYPELESS;
@@ -201,8 +201,8 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
     char buf[192];
     std::snprintf(buf, sizeof(buf),
         "[VSM] allocated: pool %ux%u D32 (%u pages), %u views, page table %u entries (%.2f MB pool).\n",
-        vsm::kPoolTexels, vsm::kPoolTexels, vsm::kPoolPageCount, views_, PageTableEntries(),
-        (static_cast<double>(vsm::kPoolTexels) * vsm::kPoolTexels * 4.0) / (1024.0 * 1024.0));
+        vsm::kPoolTexelsX, vsm::kPoolTexelsY, vsm::kPoolPageCount, views_, PageTableEntries(),
+        (static_cast<double>(vsm::kPoolTexelsX) * vsm::kPoolTexelsY * 4.0) / (1024.0 * 1024.0));
     logging::WriteRaw(logging::LogLevel::Info, logging::LogCategory::RenderShadow, buf);
 }
 
@@ -346,6 +346,8 @@ void VirtualShadowMap::ReleaseResources()
     freeList_.Reset();
     needsRender_.Reset();
     allocCounters_.Reset();
+    levelBounds_.Reset();
+    pageDetail_.Reset();
     allocUavHeap_.Reset();
     allocInitialized_ = false; // fresh alloc buffers need the one-shot page-table/owner init again
 
@@ -356,7 +358,6 @@ void VirtualShadowMap::ReleaseResources()
     cachedRung0Args_ = nullptr;
     // S5b.2: the pool pyramid and the pass-B set go with the pool.
     vsmHzb_.Reset();
-    prevPageTable_.Reset();
     deferredPairs_.Reset();
     hzbCounters_.Reset();
     pageGroupCountB_.Reset();
@@ -374,7 +375,7 @@ void VirtualShadowMap::ReleaseResources()
         tessyReadbackFrame_[i] = 0;
     }
     hzbHeap_.Reset();
-    hzbSrv_ = prevPageTableSrv_ = deferredPairsUav_ = deferredPairsSrv_ = hzbCountersUav_ = {};
+    hzbSrv_ = deferredPairsUav_ = deferredPairsSrv_ = hzbCountersUav_ = {};
     pageGroupCountBUav_ = pageGroupCountBSrv_ = pageDrawArgsBUav_ = pageArgCountBUav_ = {};
     for (UINT m = 0; m < kHzbMips; ++m) { hzbMipUav_[m] = {}; }
     deferredCap_ = 0;
@@ -418,7 +419,7 @@ void VirtualShadowMap::ReleaseResources()
     // Zero the cached CPU descriptor handles (their heaps are gone) so nothing stale is bound.
     poolDsv_ = poolSrv_ = pageTableSrv_ = pageTableUav_ = {};
     requestUav_ = {};
-    physOwnerUav_ = physLastFrameUav_ = freeListUav_ = needsRenderUav_ = allocCountersUav_ = {};
+    physOwnerUav_ = physLastFrameUav_ = freeListUav_ = needsRenderUav_ = allocCountersUav_ = levelBoundsUav_ = levelBoundsSrv_ = pageDetailUav_ = {};
     physOwnerSrv_ = rung0ArgsSrv_ = pageDrawArgsUav_ = pageProjUav_ = {};
     physOwnerPrevUav_ = {}; // S10c
     // S10c: the pool is gone, so is every view's light (a fresh pool starts with nothing to remap). Plan S9e: and the
@@ -435,6 +436,8 @@ void VirtualShadowMap::ReleaseResources()
     parkedStale_ = false;
     remapPending_ = false;
     prevVpRemapPending_ = false;
+    panPending_ = false;
+    panSnapValid_ = false;
     distantMask_.clear(); // S10d
     distantUpdate_.clear();
     distantLights_.clear();
@@ -457,10 +460,12 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     freeList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     needsRender_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     allocCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    if (!physOwner_ || !physLastFrame_ || !freeList_ || !needsRender_ || !allocCounters_)
+    levelBounds_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kNumClipmapLevels * 2u, L"VSM.LevelBounds"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    pageDetail_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageDetail"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    if (!physOwner_ || !physLastFrame_ || !freeList_ || !needsRender_ || !allocCounters_ || !levelBounds_ || !pageDetail_)
     {
         physOwner_.Reset(); physLastFrame_.Reset(); freeList_.Reset();
-        needsRender_.Reset(); allocCounters_.Reset();
+        needsRender_.Reset(); allocCounters_.Reset(); levelBounds_.Reset(); pageDetail_.Reset();
         return;
     }
     // Plan S10e: one readback slot of the counters per frame in flight, persistently mapped (dynamic resolution).
@@ -484,10 +489,10 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
         }
     }
 
-    // One non-shader-visible heap for the 5 alloc-state UAVs (staged into the frame heap per
-    // dispatch alongside the existing pageTable/request UAVs).
+    // One non-shader-visible heap for the alloc-state UAVs (staged into the frame heap per
+    // dispatch alongside the existing pageTable/request UAVs) and the level bounds' SRV.
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
-    hd.NumDescriptors = 5;
+    hd.NumDescriptors = 8;
     hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.AllocUavHeap", IID_PPV_ARGS(allocUavHeap_.GetAddressOf()))) || !allocUavHeap_)
@@ -514,6 +519,18 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     freeListUav_      = makeUav(freeList_.Get(),      vsm::kPoolPageCount, 2);
     needsRenderUav_   = makeUav(needsRender_.Get(),   vsm::kPoolPageCount, 3);
     allocCountersUav_ = makeUav(allocCounters_.Get(), 4u,                  4);
+    levelBoundsUav_   = makeUav(levelBounds_.Get(), vsm::kNumClipmapLevels * 2u, 5);
+    pageDetailUav_    = makeUav(pageDetail_.Get(), vsm::kPoolPageCount, 7);
+    levelBoundsSrv_   = D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + static_cast<SIZE_T>(6u) * incr };
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
+        sd.Format = DXGI_FORMAT_UNKNOWN;
+        sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Buffer.NumElements = vsm::kNumClipmapLevels * 2u;
+        sd.Buffer.StructureByteStride = sizeof(std::uint32_t);
+        dev->CreateShaderResourceView(levelBounds_.Get(), &sd, levelBoundsSrv_);
+    }
 }
 
 void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
@@ -553,6 +570,7 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
     allocTouchMat_ = makeCompute(L"shaders/vsm_page_alloc_touch_cs.hlsl");
     allocFreeMat_  = makeCompute(L"shaders/vsm_page_alloc_freelist_cs.hlsl");
     allocMapMat_   = makeCompute(L"shaders/vsm_page_alloc_map_cs.hlsl");
+    allocBoundsMat_ = makeCompute(L"shaders/vsm_page_bounds_cs.hlsl");
     allocPropagateMat_ = makeCompute(L"shaders/vsm_page_propagate_cs.hlsl");
     allocRemapMat_ = makeCompute(L"shaders/vsm_page_alloc_remap_cs.hlsl"); // S10c (optional: without it moved lights re-render)
     pageSetupMat_  = makeCompute(L"shaders/vsm_page_setup_cs.hlsl");
@@ -627,35 +645,24 @@ VirtualShadowMap::PageRequestPoints VirtualShadowMap::PrepareRequestPass(
     PageRequestPoints pts;
     pts.base = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    // S5b.2: last frame's mapping, copied aside before the allocation rewrites the table. Only
-    // the knob and the buffer gate it -- whether the pyramid may be tested against is decided
-    // by the render pass; a snapshot nobody reads is 55 KB.
-    pts.hzbSnapshot = vsm::g_hzbCull && prevPageTable_ && pageTable_;
-    if (pts.hzbSnapshot)
-    {
-        ctx.NextPoint();
-        pts.snapshotCopy = ctx.usePoint ? *ctx.usePoint : 0u;
-        ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-        ctx.Use(prevPageTable_.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
-    }
     ctx.NextPoint();
     pts.alloc = ctx.usePoint ? *ctx.usePoint : 0u;
-    if (pts.hzbSnapshot) { ctx.Use(prevPageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE); }
     ctx.Use(pageTable_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(physLastFrame_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(freeList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(needsRender_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(allocCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(levelBounds_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(pageDetail_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     // The free list reads the last render's per-page verdict (a page redrawn for nobody goes).
     if (perPageDirty_) { ctx.Use(perPageDirty_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
     // Plan S10c: the page remap moves last frame's owners too (the render pass declares it back to a read).
     pts.remap = remapPending_;
-    if (pts.remap)
-    {
-        pts.viewRemap = viewRemap_;
-        ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    }
+    pts.pan = panPending_;
+    pts.clipmapPan = clipmapPan_;
+    if (pts.remap) { pts.viewRemap = viewRemap_; }
+    if (pts.remap || pts.pan) { ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); }
     // Plan S10e: the counters into this frame's readback slot after the allocation, every frame, and back.
     pts.counters = ctx.renderer && ctx.renderer->GetCurrentFrameIndex() < render::kFrameCount &&
                    countersReadback_[ctx.renderer->GetCurrentFrameIndex()] != nullptr;
@@ -716,7 +723,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
     d.forceAll = (!d.caching || cacheWarmup_ ||
                   shadowGpu->ConsumeCasterLodsChanged()) ? 1u : 0u;
     d.windDirtyMaxLevel = windAnimating
-        ? std::min(vsm::g_windAnimateMaxLevel, vsm::kNumClipmapLevels) : 0u;
+        ? vsm::ClipmapWindLevels() : 0u;
 
     d.useMega = shadowGpu->MegaReady() &&
                 shadowGpu->MegaVertexBuffer() && shadowGpu->MegaIndexBuffer();
@@ -734,6 +741,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
                       pageScatterClearMat_ && pageScatterClearMat_->GetPipelineState() &&
                       pageGroupCountUav_.ptr != 0 && pageScatterDynUav_.ptr != 0 &&
                       pageGroupCountSrv_.ptr != 0 && pageScatterDynSrv_.ptr != 0 &&
+                      allocBoundsMat_ && allocBoundsMat_->GetPipelineState() && levelBoundsSrv_.ptr != 0 &&
                       shadowGpu->PerGroupSrv().ptr != 0;
     d.scatterLocals = d.scatterActive && vsm::g_scatterLocalViews;
 
@@ -741,17 +749,17 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::ComputePageRenderDecisio
     // draw (pass B is one more ExecuteIndirect over the B args), both PSOs and the whole B set.
     d.hzb = vsm::g_hzbCull && d.scatterActive && d.singleDraw &&
             hzbBuildMat_ && hzbBuildMat_->GetPipelineState() && hzbPostMat_ && hzbPostMat_->GetPipelineState() &&
-            vsmHzb_ && prevPageTable_ && deferredPairs_ && hzbCounters_ && pageGroupCountB_ && pageDrawArgsB_ &&
+            vsmHzb_ && deferredPairs_ && hzbCounters_ && pageGroupCountB_ && pageDrawArgsB_ &&
             (!d.compactArgs || pageArgCountB_) && hzbSrv_.ptr != 0 && hzbMipUav_[kHzbMips - 1].ptr != 0 &&
-            prevPageTableSrv_.ptr != 0 && deferredPairsUav_.ptr != 0 && deferredPairsSrv_.ptr != 0 &&
+            deferredPairsUav_.ptr != 0 && deferredPairsSrv_.ptr != 0 &&
             hzbCountersUav_.ptr != 0 && pageGroupCountBUav_.ptr != 0 && pageGroupCountBSrv_.ptr != 0 &&
             pageDrawArgsBUav_.ptr != 0 && (!d.compactArgs || pageArgCountBUav_.ptr != 0) &&
             groupsBSized_(shadowGpu) && deferredCap_ > 0 && poolSrv_.ptr != 0 &&
             perPageDirtySrv_.ptr != 0 && physOwnerSrv_.ptr != 0;
     // The pyramid describes the pool iff the last render also built it (no render slipped
     // through without a build) and no level switch voided it. The prev matrices are the ones
-    // that render used (prevViewVp_), and the prev page table its mapping (the snapshot).
-    d.hzbPrevValid = d.hzb && !hzbInvalidate_ && prevViewVpValid_ && lastRenderFrame_ != 0 &&
+    // that render used (prevViewVp_), and PhysOwnerPrev says which page was whose then (only the page cache refreshes it).
+    d.hzbPrevValid = d.hzb && d.caching && !hzbInvalidate_ && prevViewVpValid_ && lastRenderFrame_ != 0 &&
                      hzbLastBuildFrame_ == lastRenderFrame_;
     d.hzbFull = d.hzb && (hzbInvalidate_ || hzbLastBuildFrame_ == 0);
 
@@ -890,7 +898,7 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
         if (vsm::g_hzbCull && !d.hzb)
         {
             reason = !d.scatterActive ? 1 : !d.singleDraw ? 2 : (!hzbBuildMat_ || !hzbPostMat_) ? 3
-                   : !vsmHzb_ ? 4 : (!deferredPairs_ || !hzbCounters_ || !prevPageTable_) ? 5
+                   : !vsmHzb_ ? 4 : (!deferredPairs_ || !hzbCounters_) ? 5
                    : (!pageGroupCountB_ || !pageDrawArgsB_) ? 6 : !groupsBSized_(shadowGpu) ? 7
                    : (hzbSrv_.ptr == 0 || deferredPairsUav_.ptr == 0 || pageGroupCountBUav_.ptr == 0) ? 8 : 9;
         }
@@ -930,7 +938,6 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
         // The scatter reads last frame's pyramid + mapping and writes the deferred list, the
         // counters and (via the clear) pass B's counts; the pyramid's canonical is NPS already.
         ctx.Use(vsmHzb_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        ctx.Use(prevPageTable_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         ctx.Use(deferredPairs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(hzbCounters_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         ctx.Use(pageGroupCountB_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -938,6 +945,9 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
     ctx.Use(shadowGpu->IndirectArgsBuffer(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     ctx.Use(physOwner_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_COPY_SOURCE);
     ctx.Use(physOwnerPrev_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(levelBounds_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    ctx.Use(requestBuffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS); // the scatter and the setup ask which pages a pixel marked
+    ctx.Use(pageDetail_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(pageDrawArgs_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(pageProj_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(pageVisibleList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -1054,8 +1064,8 @@ void VirtualShadowMap::EnsureFrameResources(Renderer* renderer, ShadowGpuData* s
 
 void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const vsm::PageRequestConstants& constants, const vsm::ViewProjEntry* views, std::uint32_t viewCount,
-    const PageRequestPoints& pts, D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH,
-    const ShadowGpuData* shadowGpu)
+    const PageRequestPoints& pts, D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, D3D12_CPU_DESCRIPTOR_HANDLE gb1Srv,
+    D3D12_CPU_DESCRIPTOR_HANDLE gbAuxSrv, UINT screenW, UINT screenH, const ShadowGpuData* shadowGpu)
 {
     if (!renderer || !cl || !IsAllocated() || !views) { return; }
     const UINT f = renderer->GetCurrentFrameIndex();
@@ -1066,7 +1076,7 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
     // can bail, so the remap never reads a slot kFrameCount frames old.
     viewCount = std::min(viewCount, views_);
     const bool remap = pts.remap && pts.viewRemap.size() >= views_;
-    const D3D12_CPU_DESCRIPTOR_HANDLE viewsSrv = WriteViewData(f * 2u, remap ? views_ : viewCount,
+    const D3D12_CPU_DESCRIPTOR_HANDLE viewsSrv = WriteViewData(f * 2u, (remap || pts.pan) ? views_ : viewCount,
         [&](std::uint32_t i, vsm::ViewGpuData& r)
         {
             if (i < viewCount)
@@ -1077,6 +1087,7 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
                 r.mip = views[i].mip;
             }
             if (remap) { r.bits.w = pts.viewRemap[i]; }
+            if (pts.pan && vsm::IsClipmapView(i)) { r.bits.z = pts.clipmapPan[i - vsm::kClipmapFirstView]; }
         });
     if (viewsSrv.ptr == 0 || depthSrv.ptr == 0 || screenW == 0 || screenH == 0) { return; }
     // Creation happens in EnsureFrameResources, before the graph runs (barrier plan step 4).
@@ -1129,7 +1140,7 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
             waterMode = 0u;
         }
     }
-    cb.waterMask = DirectX::XMUINT4(RequestWords(), waterMode, 0u, 0u);
+    cb.waterMask = DirectX::XMUINT4(RequestWords(), waterMode, CoarseRequestBase(), 0u);
 
     // Mark: one thread per DOWN-SAMPLED screen block (reduced res) -> project the block-center
     // pixel into each active local shadow view -> mark its mip page. The downscale comes from the
@@ -1141,7 +1152,7 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
     const UINT reqH = (screenH + ds - 1u) / ds;
     RecordComputeDispatch(renderer, cl, pageRequestMat_.get(), static_cast<UINT>(sizeof(vsm::PageRequestConstants)),
         [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); },
-        { depthSrv, viewsSrv },
+        { depthSrv, viewsSrv, gb1Srv, gbAuxSrv },
         { requestUav_ },
         noSampler,
         reqW, reqH,
@@ -1162,23 +1173,16 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
     const std::uint32_t numPages = vsm::kPoolPageCount;
     const std::uint32_t curFrame = static_cast<std::uint32_t>(renderer->GetTotalFrameNumber());
 
-    // S5b.2: the page table as it stood during last frame's render, before this frame's
-    // allocation touches it (declared by PrepareRequestPass under the same gate).
-    if (pts.hzbSnapshot && prevPageTable_)
-    {
-        renderer->EmitPoint(cl, pts.snapshotCopy);
-        cl->CopyBufferRegion(prevPageTable_.Get(), 0, pageTable_.Get(), 0,
-                             static_cast<UINT64>(PageTableEntries()) * sizeof(std::uint32_t));
-    }
     // pass-flow S3c: the six alloc buffers' barriers (whatever this frame actually needs) come
     // from the compiled alloc point, emitted wholesale.
     renderer->EmitPoint(cl, pts.alloc);
 
     // Plan S10c: lights that changed view take their pages along (PlanViewRemap), before the touch pass reads the table:
     // pass 0 clears the moving entries and frees what an arrival would collide with, pass 1 re-owns and re-enters.
-    // Plan S9e: the remap rides this frame's request slot (bits.w of every view, RecordPageRequest wrote it).
+    // Plan S9e: the remap rides this frame's request slot (bits.w of every view, RecordPageRequest wrote it); the clipmap's
+    // pan the same (bits.z).
     const UINT frameSlot = renderer->GetCurrentFrameIndex();
-    if (pts.remap && allocRemapMat_ && frameSlot < render::kFrameCount && viewDataSrv_[frameSlot * 2u].ptr != 0)
+    if ((pts.remap || pts.pan) && allocRemapMat_ && frameSlot < render::kFrameCount && viewDataSrv_[frameSlot * 2u].ptr != 0)
     {
         struct RemapCB { std::uint32_t numPages, pass, numViews, pad0; };
         for (std::uint32_t pass = 0; pass < 2u; ++pass)
@@ -1199,12 +1203,12 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         }
     }
 
-    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold, redrawUnrequestedFrames, pad[3]; };
+    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold, redrawUnrequestedFrames, coarseBase, coarseCache, pad; };
     // The last render's per-page verdict (the free list frees what was redrawn for nobody); without it, that rule is off.
     const bool dirtyKnown = perPageDirty_ && perPageDirtyUav_.ptr != 0;
     auto writeCB = [&](std::uint8_t* dst)
     {
-        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold, dirtyKnown ? vsm::g_redrawUnrequestedFrames : 0u, {} };
+        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold, dirtyKnown ? vsm::g_redrawUnrequestedFrames : 0u, CoarseRequestBase(), vsm::g_coarseCacheDynamic ? 1u : 0u, 0u };
         std::memcpy(dst, &c, sizeof(c));
     };
     const UINT cbSize = static_cast<UINT>(sizeof(AllocCB));
@@ -1218,26 +1222,29 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
             {},
             { pageTableUav_, physOwnerUav_, physLastFrameUav_ },
             noSampler,
-            numEntries, 1,
+            ((numEntries + 63u) / 64u) * kComputeDispatchGroupSize, 1, // the helper divides by 8; the shader's group is 64 x 1
             pageTable_.Get());
         renderer->UAVBarrier(cl, physOwner_.Get());
         renderer->UAVBarrier(cl, physLastFrame_.Get());
         allocInitialized_ = true;
     }
 
+    // Touch and allocate go by the WORDS of the bitfield (the helper divides by 8; their group is 64 x 1).
+    const std::uint32_t wordThreads = ((numEntries + 31u) / 32u + 63u) / 64u * kComputeDispatchGroupSize;
+
     // Pass 1 (touch): keep resident+requested pages alive (LRU) + reset this frame's counters.
     RecordComputeDispatch(renderer, cl, allocTouchMat_.get(), cbSize, writeCB,
         {},
         { requestUav_, pageTableUav_, physLastFrameUav_, allocCountersUav_ },
         noSampler,
-        numEntries, 1,
+        wordThreads, 1,
         physLastFrame_.Get());
     renderer->UAVBarrier(cl, allocCounters_.Get());
 
     // Pass 2 (build free list): UE's available list -- free the pages older than the LRU age, then list the empty
     // pages and the cached ones nobody asked for this frame in the order pass 3 takes them (empty first, then least
-    // recently requested). ONE group of 1024 threads sorts the whole pool in groupshared.
-    static_assert(vsm::kPoolPageCount <= 1024u, "vsm_page_alloc_freelist_cs.hlsl sorts the pool in one 1024-thread group");
+    // recently requested). ONE group of 1024 threads sorts the whole pool in groupshared, two pages a thread.
+    static_assert(vsm::kPoolPageCount == 2048u, "vsm_page_alloc_freelist_cs.hlsl and vsm_page_bounds_cs.hlsl walk the pool as 1024 threads x 2");
     RecordComputeDispatch(renderer, cl, allocFreeMat_.get(), cbSize, writeCB,
         {},
         { physOwnerUav_, physLastFrameUav_, pageTableUav_, freeListUav_, allocCountersUav_,
@@ -1255,8 +1262,21 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         {},
         { requestUav_, pageTableUav_, physOwnerUav_, physLastFrameUav_, freeListUav_, needsRenderUav_, allocCountersUav_ },
         noSampler,
-        numEntries, 1,
+        wordThreads, 1,
         needsRender_.Get());
+    renderer->UAVBarrier(cl, physOwner_.Get());
+
+    // The rect each clipmap level has pages in, after this frame's mappings: the propagate below and the scatter walk inside it.
+    if (allocBoundsMat_)
+    {
+        RecordComputeDispatch(renderer, cl, allocBoundsMat_.get(), cbSize, writeCB,
+            {},
+            { physOwnerUav_, levelBoundsUav_, requestUav_, pageDetailUav_ },
+            noSampler,
+            1, 1,
+            levelBounds_.Get());
+        renderer->UAVBarrier(cl, pageDetail_.Get());
+    }
 
     // Pass 4 (propagate): give every UNMAPPED clipmap page a pointer to the nearest mapped page of
     // a coarser level. Must run AFTER pass 3, or it would miss this frame's new mappings, and it
@@ -1266,7 +1286,7 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
     // Gated on SMRT being ON. Nothing else reads the fallback bit -- every existing consumer tests
     // "mapped here" (bit 31), which these entries never set -- so with SMRT off this dispatch would
     // be pure cost for output nobody reads.
-    if (vsm::g_smrtRayCount > 0u && allocPropagateMat_ && squares && squares->count > 0)
+    if (vsm::g_smrtRayCount > 0u && allocPropagateMat_ && allocBoundsMat_ && squares && squares->count > 0)
     {
         renderer->UAVBarrier(cl, pageTable_.Get());
 
@@ -1282,21 +1302,20 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         {
             PropagateCB c{};
             c.numClipLevels = squares->count;
-            c.pagesPerAxis = vsm::kVirtualPagesL0Axis;
+            c.pagesPerAxis = vsm::kClipmapPagesAxis;
             for (std::uint32_t l = 0; l < squares->count && l < vsm::kNumClipmapLevels; ++l)
             {
                 c.level[l] = squares->level[l];
             }
             std::memcpy(dst, &c, sizeof(c));
         };
-        const std::uint32_t propagateThreads =
-            squares->count * vsm::kVirtualPagesL0Axis * vsm::kVirtualPagesL0Axis;
+        const std::uint32_t propagateThreads = squares->count * vsm::kClipmapPages;
         RecordComputeDispatch(renderer, cl, allocPropagateMat_.get(),
             static_cast<UINT>(sizeof(PropagateCB)), writePropagateCB,
             {},
-            { pageTableUav_ },
+            { pageTableUav_, levelBoundsUav_ },
             noSampler,
-            propagateThreads, 1,
+            (propagateThreads + 63u) / 64u * kComputeDispatchGroupSize, 1, // the helper divides by 8; the shader's group is 64 x 1
             pageTable_.Get());
     }
 
@@ -1317,6 +1336,31 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
 
     // Step 20 debug: sample the request bitfield + alloc counters a few frames later.
     RecordDebugReadback(renderer, cl, pts);
+}
+
+void VirtualShadowMap::PlanClipmapPan(const vsm::ClipmapSquares* squares)
+{
+    panPending_ = false;
+    clipmapPan_.fill(0u);
+    if (!squares || squares->count != vsm::kNumClipmapLevels) { panSnapValid_ = false; return; }
+    const bool canPan = vsm::g_clipmapPan && IsAllocated() && allocRemapMat_ && allocRemapMat_->GetPipelineState() &&
+                        physOwnerPrev_ && physOwnerPrevUav_.ptr != 0;
+    for (std::uint32_t l = 0; l < vsm::kNumClipmapLevels; ++l)
+    {
+        const int s = squares->snapX[l] - panSnapX_[l];
+        const int t = squares->snapY[l] - panSnapY_[l];
+        if (panSnapValid_ && canPan && (s != 0 || t != 0))
+        {
+            // A radius is a quarter of the side: 32 pages. The light frame's y runs against the page rows.
+            const int dx = std::clamp(-s * static_cast<int>(vsm::kClipmapPagesAxis / 4u), -16383, 16383);
+            const int dy = std::clamp(t * static_cast<int>(vsm::kClipmapPagesAxis / 4u), -16383, 16383);
+            clipmapPan_[l] = (1u << 31u) | static_cast<std::uint32_t>(dx + 16384) | (static_cast<std::uint32_t>(dy + 16384) << 15u);
+            panPending_ = true;
+        }
+        panSnapX_[l] = squares->snapX[l];
+        panSnapY_[l] = squares->snapY[l];
+    }
+    panSnapValid_ = true;
 }
 
 void VirtualShadowMap::PlanViewRemap(std::uint64_t frame)
@@ -1944,7 +1988,6 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
     ID3D12Device* dev = renderer->GetDevice();
     constexpr std::uint32_t kLods = render::kMaxShadowLods;
     constexpr std::uint32_t argUints = sizeof(D3D12_DRAW_INDEXED_ARGUMENTS) / 4;
-    const std::uint32_t hzbMip0 = vsm::kPoolTexels / 2u;
 
     bool rebuildHeap = !hzbHeap_;
     if (!vsmHzb_)
@@ -1953,8 +1996,8 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
         heap.Type = D3D12_HEAP_TYPE_DEFAULT;
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        rd.Width = hzbMip0;
-        rd.Height = hzbMip0;
+        rd.Width = vsm::kPoolTexelsX / 2u;
+        rd.Height = vsm::kPoolTexelsY / 2u;
         rd.DepthOrArraySize = 1;
         rd.MipLevels = static_cast<UINT16>(kHzbMips);
         rd.Format = DXGI_FORMAT_R32_FLOAT;
@@ -1969,12 +2012,6 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
         }
         vsmHzb_.DeclareCreated(renderer->Declarations(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, L"VSM.Hzb");
         hzbInvalidate_ = true; // fresh texture: full build before anything trusts it
-        rebuildHeap = true;
-    }
-    if (!prevPageTable_)
-    {
-        prevPageTable_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, PageTableEntries(), L"VSM.PrevPageTable"),
-                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, nullptr);
         rebuildHeap = true;
     }
     const std::uint32_t wantCap = std::max<std::uint32_t>(1024u, 8u * (casters > 0u ? casters : 1u));
@@ -2006,7 +2043,7 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
         rebuildHeap = true;
     }
-    if (!vsmHzb_ || !prevPageTable_ || !deferredPairs_ || !hzbCounters_ || !pageGroupCountB_ || !pageDrawArgsB_ || !pageArgCountB_) { return; }
+    if (!vsmHzb_ || !deferredPairs_ || !hzbCounters_ || !pageGroupCountB_ || !pageDrawArgsB_ || !pageArgCountB_) { return; }
 
     if (!hzbReadback_[0])
     {
@@ -2033,7 +2070,7 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
     if (!hzbHeap_)
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd{};
-        hd.NumDescriptors = 16; // hzb SRV + 7 mip UAVs + prevPageTable SRV + pairs UAV/SRV + counters UAV + countsB UAV/SRV + argsB UAV + argCountB UAV
+        hd.NumDescriptors = 16; // hzb SRV + 7 mip UAVs + a free slot + pairs UAV/SRV + counters UAV + countsB UAV/SRV + argsB UAV + argCountB UAV
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         if (FAILED(gpu::CreateDescriptorHeap(dev, &hd, MemTag::ShadowVsm, L"VSM.HzbHeap", IID_PPV_ARGS(hzbHeap_.GetAddressOf()))) || !hzbHeap_)
@@ -2047,7 +2084,6 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
     auto slot = [&](UINT i) { return D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + static_cast<SIZE_T>(i) * incr }; };
     hzbSrv_ = slot(0);
     for (UINT m = 0; m < kHzbMips; ++m) { hzbMipUav_[m] = slot(1 + m); }
-    prevPageTableSrv_ = slot(8);
     deferredPairsUav_ = slot(9);
     deferredPairsSrv_ = slot(10);
     hzbCountersUav_ = slot(11);
@@ -2100,7 +2136,6 @@ void VirtualShadowMap::EnsureHzbResources(Renderer* renderer, std::uint32_t grou
         ud.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_RAW;
         dev->CreateUnorderedAccessView(res, nullptr, &ud, h);
     };
-    structuredSrv(prevPageTable_.Get(), PageTableEntries(), sizeof(std::uint32_t), prevPageTableSrv_);
     structuredUav(deferredPairs_.Get(), deferredCap_, 2u * sizeof(std::uint32_t), deferredPairsUav_);
     structuredSrv(deferredPairs_.Get(), deferredCap_, 2u * sizeof(std::uint32_t), deferredPairsSrv_);
     structuredUav(hzbCounters_.Get(), 4u, sizeof(std::uint32_t), hzbCountersUav_);
@@ -2282,9 +2317,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     const std::uint32_t activeCasters = shadowGpu->ActiveCasterCount();
 
     // Per-view "matrix changed" bits for the page cache (gViewDirtyMask; see the setup CB
-    // comment). A cached page's id carries no scroll offset, so any view movement makes its
-    // content stand for the wrong world rect with the owner id unchanged — the only honest
-    // answer until pages scroll is to re-render that whole view. Bit-exact compare on purpose:
+    // comment). A local view's page id carries no scroll offset, so any view movement makes its
+    // content stand for the wrong world rect with the owner id unchanged: the whole view redraws. A clipmap level's pages
+    // scroll (PlanClipmapPan), so a matrix that moved only by its pan is no change. Bit-exact compare on purpose:
     // a static camera rebuilds bit-identical matrices, so a parked frame caches fully.
     // Plan S9e: the per-view flags land in the render slot's bits.x (VSM_VIEW_*), one record per view.
     viewCount = std::min(viewCount, views_);
@@ -2306,15 +2341,26 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         }
         prevVpRemapPending_ = false;
     }
-    const std::vector<DirectX::XMFLOAT4X4> prevVp = prevViewVp_;
+    std::vector<DirectX::XMFLOAT4X4> prevVp = prevViewVp_;
     {
         for (std::uint32_t v = 0; v < viewCount; ++v)
         {
             // Plan S10c: a parked view keeps its light's matrix -- the compare against the empty slot's zero would dirty
             // (clear) its pages, and the matrix is what its light is checked against when it comes back.
             if (IsViewParked(v)) { continue; }
-            const bool changed = !prevViewVpValid_ ||
+            bool changed = !prevViewVpValid_ ||
                 std::memcmp(&prevViewVp_[v], &views[v].viewProj, sizeof(DirectX::XMFLOAT4X4)) != 0;
+            if (changed && prevViewVpValid_ && vsm::IsClipmapView(v) && clipmapPan_[v - vsm::kClipmapFirstView] != 0u)
+            {
+                DirectX::XMFLOAT4X4 before = prevViewVp_[v];
+                before._41 = views[v].viewProj._41;
+                before._42 = views[v].viewProj._42;
+                if (std::memcmp(&before, &views[v].viewProj, sizeof(DirectX::XMFLOAT4X4)) == 0)
+                {
+                    changed = false;
+                    prevVp[v] = views[v].viewProj; // the page's content did not move, its address did: the prev-pyramid test takes the new one
+                }
+            }
             if (changed) { viewDirty[v] = 1u; }
             prevViewVp_[v] = views[v].viewProj;
             // render::g_localShadowWindRange: a light that crossed the range redraws its pages once in the new mode.
@@ -2341,7 +2387,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             };
             r.viewProj = views[v].viewProj;
             r.prevViewProj = prevVp[v];
-            r.bits.x = (viewDirty[v] ? vsm::kViewDirty : 0u) |
+            r.params = views[v].params; // the scatter sizes a caster in the view's texels by the projection's scale
+            r.cull = views[v].cull;
+            r.bits.x =(viewDirty[v] ? vsm::kViewDirty : 0u) |
                        (maskBit(dec.distantMask) ? vsm::kViewDistant : 0u) |
                        (maskBit(dec.distantUpdate) ? vsm::kViewDistantUpdate : 0u) |
                        (views[v].mip.y != 0.0f ? vsm::kViewWindRigid : 0u);
@@ -2491,6 +2539,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             std::uint32_t _pad0[2];
             // S5b.2: (on, prevValid, deferred capacity, 0). Mirrors gHzbParams.
             DirectX::XMUINT4 hzbParams{ 0u, 0u, 0u, 0u };
+            std::uint32_t coarseBase = 0; // mirrors gCoarseBase
+            float coarsePixelsStatic = 0.0f;
+            float coarsePixelsDynamic = 0.0f;
+            std::uint32_t pad1 = 0;
         };
         RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
             [&](std::uint8_t* dst)
@@ -2506,13 +2558,16 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 c.numLocalViews = scatterLocals ? scatterLocalViews : 0u;
                 c.perInstanceLod = vsm::g_perInstanceCasterLod ? 1u : 0u;
                 c.hzbParams = DirectX::XMUINT4(dec.hzb ? 1u : 0u, dec.hzbPrevValid ? 1u : 0u, deferredCap_, 0u);
+                c.coarseBase = vsm::g_coarseCacheDynamic ? CoarseRequestBase() : 0u;
+                c.coarsePixelsStatic = vsm::g_coarsePagePixelsStatic;
+                c.coarsePixelsDynamic = vsm::g_coarsePagePixelsDynamic;
                 std::memcpy(dst, &c, sizeof(c));
             },
             { boundsSrv, casterGroupSrv, casterMetaSrv, pageTableSrv_, perGroupSrv,
               shadowGpu->CasterLodSrv(f),
-              dec.hzb ? prevPageTableSrv_ : pageTableSrv_, dec.hzb ? hzbSrv_ : poolSrv_, viewsSrv },
+              dec.hzb ? physOwnerPrevSrv_ : pageTableSrv_, dec.hzb ? hzbSrv_ : poolSrv_, viewsSrv, levelBoundsSrv_ },
             { pageGroupCountUav_, pageVisibleListUav_, pageScatterDynUav_,
-              dec.hzb ? deferredPairsUav_ : pageScatterDynUav_, dec.hzb ? hzbCountersUav_ : pageScatterDynUav_ },
+              dec.hzb ? deferredPairsUav_ : pageScatterDynUav_, dec.hzb ? hzbCountersUav_ : pageScatterDynUav_, requestUav_ },
             D3D12_GPU_DESCRIPTOR_HANDLE{},
             // y now spans clipmap levels AND local views: RecordComputeDispatch rounds up to its
             // 8-thread groups, so 10 + 32 = 42 becomes 6 groups. Plan S10b: only the local views up to the last
@@ -2544,6 +2599,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4 wind0{ 0.0f, 0.0f, 1.0f, 0.0f }; // time, prevTime, dirX, dirZ
         DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 1.0f }; // swayAmp, swayFreq, gustMul, prevGustMul
         DirectX::XMFLOAT4 windFade{ 0.0f, 0.0f, 0.0f, 0.0f }; // camPos.xyz + fade end (0 = off); mirrors gWindFade
+        std::uint32_t coarseBase = 0; // mirrors gCoarseBase
+        std::uint32_t padCoarse[3]{};
         // The per-(group,lod) mega ranges and the per-group LOD override used to sit here as arrays
         // sized kMaxMegaGroups -- the thing that capped the shadow path at 64 groups. They are SRVs
         // now (t9/t10), sized by the real group count; plan S9e moved the per-view matrices, LODs and bits
@@ -2568,16 +2625,14 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
             cb.windDirtyMaxLevel = dec.windDirtyMaxLevel;
+            cb.coarseBase = vsm::g_coarseCacheDynamic ? CoarseRequestBase() : 0u;
             // World-distance sway falloff (see gWindFade in the setup shader): reaches zero at
-            // the outer extent of the last SWAYING level, so the rigid levels beyond pick up
-            // exactly where the falloff ends and the clipmap blend band sees one geometry.
+            // the wind's range, so the rigid levels beyond pick up exactly where the falloff ends.
             // Off (w=0) when calm, when everything is rigid, or when everything sways (old mode).
             if (dec.windDirtyMaxLevel > 0 && dec.windDirtyMaxLevel < vsm::kNumClipmapLevels)
             {
                 const DirectX::XMFLOAT3& cp = shadowGpu->LastCameraPos();
-                const float fadeEnd = vsm::g_clipmapBaseExtent *
-                    static_cast<float>(1u << (dec.windDirtyMaxLevel - 1u));
-                cb.windFade = DirectX::XMFLOAT4(cp.x, cp.y, cp.z, fadeEnd);
+                cb.windFade = DirectX::XMFLOAT4(cp.x, cp.y, cp.z, vsm::g_windRange);
             }
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
@@ -2621,7 +2676,7 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         // under the same rule (gTessy's bits say which the shader touches).
         { pageDrawArgsUav_, pageProjUav_, pageVisibleListUav_, perPageDirtyUav_,
           pageArgCountUav_.ptr != 0 ? pageArgCountUav_ : perPageDirtyUav_,
-          dec.tessy ? tessyRunsUav_ : perPageDirtyUav_, dec.tessyStats ? tessyStatsUav_ : perPageDirtyUav_ },
+          dec.tessy ? tessyRunsUav_ : perPageDirtyUav_, dec.tessyStats ? tessyStatsUav_ : perPageDirtyUav_, requestUav_, pageDetailUav_ },
         D3D12_GPU_DESCRIPTOR_HANDLE{},
         vsm::kPoolPageCount, 1,
         pageDrawArgs_.Get());
@@ -2728,9 +2783,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     {
         // One instance per pool page under a full-pool viewport; the VS emits a z=1.0 cell quad for a
         // dirty page (PerPageDirty) and a clipped degenerate for a clean one. Overwrites only dirty cells.
-        const float poolTexels = static_cast<float>(vsm::kPoolTexels);
-        D3D12_VIEWPORT fullVp{ 0.0f, 0.0f, poolTexels, poolTexels, 0.0f, 1.0f };
-        D3D12_RECT fullSc{ 0, 0, static_cast<LONG>(vsm::kPoolTexels), static_cast<LONG>(vsm::kPoolTexels) };
+        D3D12_VIEWPORT fullVp{ 0.0f, 0.0f, static_cast<float>(vsm::kPoolTexelsX), static_cast<float>(vsm::kPoolTexelsY), 0.0f, 1.0f };
+        D3D12_RECT fullSc{ 0, 0, static_cast<LONG>(vsm::kPoolTexelsX), static_cast<LONG>(vsm::kPoolTexelsY) };
         cl->RSSetViewports(1, &fullVp);
         cl->RSSetScissorRects(1, &fullSc);
         auto clearHandle = renderer->GetRenderContextPool()->Acquire();
@@ -2811,8 +2865,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     // So there is nothing left to shave in the shaders, the sampler, or the clear: the cost is the raw
     // rasterization of thin alpha-card foliage into the pages (triangle setup + quad coverage + depth),
     // multiplied by how many pages each caster overlaps. The ONLY levers that move it are reducing
-    // geometry x pages: coarser caster LOD (render::g_shadowLodBias, ~-28% at max) and a larger
-    // vsm::g_clipmapBaseExtent (fewer, coarser pages). Do not spend time on a "cheaper masked shader".
+    // geometry x pages: coarser caster LOD (render::g_shadowLodBias, ~-28% at max) and a coarser
+    // resolution LOD bias (fewer, coarser pages). Do not spend time on a "cheaper masked shader".
     (singleDraw ? pageMat : indirectMat)->Bind(cl, ctx, false);
     cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
@@ -2850,9 +2904,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         // Free and clean pages carry InstanceCount = 0, written by the setup CS THIS frame, so they
         // cost nothing AND cannot be stale — which is exactly what removes the g_residentIterOnly
         // blink: there is no longer any CPU-side skip for a kFrameCount-old snapshot to get wrong.
-        const float poolTexels = static_cast<float>(vsm::kPoolTexels);
-        D3D12_VIEWPORT vp{ 0.0f, 0.0f, poolTexels, poolTexels, 0.0f, 1.0f };
-        D3D12_RECT     sc{ 0, 0, static_cast<LONG>(vsm::kPoolTexels), static_cast<LONG>(vsm::kPoolTexels) };
+        D3D12_VIEWPORT vp{ 0.0f, 0.0f, static_cast<float>(vsm::kPoolTexelsX), static_cast<float>(vsm::kPoolTexelsY), 0.0f, 1.0f };
+        D3D12_RECT     sc{ 0, 0, static_cast<LONG>(vsm::kPoolTexelsX), static_cast<LONG>(vsm::kPoolTexelsY) };
         cl->RSSetViewports(1, &vp);
         cl->RSSetScissorRects(1, &sc);
         // With compaction the counter caps the walk at the records actually appended (a few hundred
@@ -2921,8 +2974,8 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
     for (std::uint32_t p = 0; p < vsm::kPoolPageCount; ++p)
     {
         if (residentSet && residentSet[p] == 0xFFFFFFFFu) { continue; } // free page (stale snapshot) -> skip
-        const UINT gx = p % vsm::kPoolPagesPerAxis;
-        const UINT gy = p / vsm::kPoolPagesPerAxis;
+        const UINT gx = p % vsm::kPoolPagesX;
+        const UINT gy = p / vsm::kPoolPagesX;
         const float ox = static_cast<float>(gx * vsm::kPageSize);
         const float oy = static_cast<float>(gy * vsm::kPageSize);
         D3D12_VIEWPORT vp{ ox, oy, static_cast<float>(vsm::kPageSize), static_cast<float>(vsm::kPageSize), 0.0f, 1.0f };
@@ -3011,7 +3064,7 @@ void VirtualShadowMap::RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandL
                                                           hzbMipUav_[4], hzbMipUav_[5], hzbMipUav_[6] }).gpu;
             rc.samplerTable[0] = noSampler;
             hzbBuildMat_->Bind(cl, rc);
-            cl->Dispatch(vsm::kPoolPagesPerAxis, vsm::kPoolPagesPerAxis, 1); // numthreads(16,16,1) = one page
+            cl->Dispatch(vsm::kPoolPagesX, vsm::kPoolPagesY, 1); // numthreads(16,16,1) = one page
             renderer->UAVBarrier(cl, vsmHzb_.Get());
         }
     }
@@ -3067,7 +3120,7 @@ void VirtualShadowMap::RecordHzbPassB(Renderer* renderer, ID3D12GraphicsCommandL
               pageGroupCountSrv_, shadowGpu->PerGroupSrv(), pageScatterDynSrv_,
               shadowGpu->GroupLodMegaSrv(), shadowGpu->GroupLodOverrideSrv(f), pageGroupCountBSrv_, viewsSrv, physOwnerSrv_ },
             { pageDrawArgsBUav_, perPageDirtyUav_, perPageDirtyUav_, perPageDirtyUav_,
-              dec.compactArgs ? pageArgCountBUav_ : perPageDirtyUav_, perPageDirtyUav_, perPageDirtyUav_ },
+              dec.compactArgs ? pageArgCountBUav_ : perPageDirtyUav_, perPageDirtyUav_, perPageDirtyUav_, requestUav_, pageDetailUav_ },
             noSampler,
             vsm::kPoolPageCount, 1,
             pageDrawArgsB_.Get());
@@ -3120,14 +3173,19 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
 
     auto isSet = [&](std::uint32_t page) { return (words[page >> 5u] & (1u << (page & 31u))) != 0u; };
 
-    // Total requested pages + a per-mip-level histogram across all local views (confirms mip
-    // selection: far receivers should populate the coarse levels). Each view occupies
-    // kPagesPerView contiguous bits, laid out level 0..kMaxMipLevel via LevelPageOffset.
+    // Total requested pages + a per-mip-level histogram across all views (confirms mip
+    // selection: far receivers should populate the coarse levels). A local view occupies
+    // kPagesPerView contiguous bits, laid out level 0..kMaxMipLevel via LevelPageOffset; a clipmap level has no mips (L0).
     std::uint32_t total = 0;
     std::uint32_t perLevel[vsm::kNumMipLevels] = {};
     for (std::uint32_t v = 0; v < views_; ++v)
     {
-        const std::uint32_t viewBase = v * vsm::kPagesPerView;
+        const std::uint32_t viewBase = vsm::ViewBase(v);
+        if (vsm::IsClipmapView(v))
+        {
+            for (std::uint32_t p = 0; p < vsm::kClipmapPages; ++p) { if (isSet(viewBase + p)) { ++perLevel[0]; ++total; } }
+            continue;
+        }
         for (std::uint32_t lvl = 0; lvl < vsm::kNumMipLevels; ++lvl)
         {
             const std::uint32_t base = viewBase + vsm::LevelPageOffset(lvl);
@@ -3141,7 +3199,7 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     std::uint32_t perSpot[8] = {};
     for (std::uint32_t v = 0; v < 8; ++v)
     {
-        const std::uint32_t viewBase = v * vsm::kPagesPerView;
+        const std::uint32_t viewBase = vsm::ViewBase(v);
         for (std::uint32_t p = 0; p < vsm::kPagesPerView; ++p) { if (isSet(viewBase + p)) { ++perSpot[v]; } }
     }
 
@@ -3170,7 +3228,7 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     for (std::uint32_t l = 0; l < vsm::kNumMipLevels; ++l) { stats_.perLevel[l] = perLevel[l]; }
 
     // File log — every sample (no DBWIN throttle), logs/vsm_pages.log. The per-view residency
-    // breakdown comes from the physOwner snapshot (owner id / kPagesPerView = view), which is what
+    // breakdown comes from the physOwner snapshot (ViewOfPage(owner id) = view), which is what
     // the round-trip perf investigation needs: WHICH views' resident sets grew
     // (docs/bug_shadow_lod_bias_perf.md §4). Truncated on the first sample of a run.
     if (vsm::g_logPageStats)
@@ -3182,7 +3240,7 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
             const std::uint32_t o = physOwnerSnapshot_[p];
             if (o == 0xFFFFFFFFu) { continue; } // VSM_INVALID = free
             ++ownersTotal;
-            const std::uint32_t v = o / vsm::kPagesPerView;
+            const std::uint32_t v = vsm::ViewOfPage(o);
             if (vsm::IsClipmapView(v)) { ++ownersClip[v - vsm::kClipmapFirstView]; }
             else if (v < views_) { ++ownersLocal; }
         }

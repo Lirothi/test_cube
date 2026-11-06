@@ -382,6 +382,10 @@ private:
     // separate from SceneView because it is expressed in the SHARED light frame, which no single
     // level's view matrix carries (each level's own view is centred on itself).
     vsm::ClipmapSquares clipmapSquares_{};
+    // Each level's centre along the sun, kept while the camera stays inside its depth range, and the sun it was taken for (UpdateClipmap).
+    std::array<float, vsm::kNumClipmapLevels> clipmapZ_{};
+    float3 clipmapZSun_{};
+    bool clipmapZValid_ = false;
     // Local-light plan S9e: sized to the view capacity (render::ShadowSpotCapacity / 6 x ShadowPointCapacity), resized only
     // by ReconcileShadowMode's capacity growth at GPU idle.
     std::vector<SceneView> spotShadowViews_ = std::vector<SceneView>(render::kShadowSpotsInitial);

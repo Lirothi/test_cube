@@ -470,7 +470,7 @@ public:
     // Part of the same snapshot: it changes the per-view LOD table, so a change needs the same
     // GPU-idle rebuild. Without this the toggle is inert at runtime and reads as a no-op knob.
     bool BuiltShadowLodBiasNearTier() const { return builtShadowLodBiasNearTier_; }
-    // So is this: the clipmap's tier curve means metres (tier 0 is the 8 m square), so a level's tier moves with vsm::g_clipmapBaseExtent, by whole doublings.
+    // So is this: the clipmap's tier curve means metres (tier 0 holds receivers within 4 m), and what a level holds is its number less the resolution's bias.
     int BuiltClipmapTierShift() const { return builtClipmapTierShift_; }
     static int ClipmapTierShift();
     // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed EVERY FRAME in

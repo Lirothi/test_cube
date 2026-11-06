@@ -349,9 +349,9 @@ TessyVertex TessyFetch(uint vid, uint iid)
 #endif
 
 // MUST match vsm::kPageIdShift in VirtualShadowMap.h (the CPU side asserts the page fits above it).
-static const uint  kPageIdShift = 22u;
+static const uint  kPageIdShift = 21u;
 static const uint  kCasterMask  = (1u << kPageIdShift) - 1u;
-static const float kPoolAxis    = (float)VSM_POOL_PAGES_AXIS;
+static const float2 kPoolPages  = float2((float)VSM_POOL_PAGES_X, (float)VSM_POOL_PAGES_Y);
 
 // One page's 256-byte pageProj_ slot, viewed as 16 float4s: rows 0..3 = the off-center viewProj the
 // setup CS built (vsm_page_setup_cs.hlsl stores pm[0..3] at bytes 0/16/32/48), elements 12 and 13 =
@@ -375,11 +375,11 @@ float4x4 LoadPageVP(uint page, out float4 w0, out float4 w1, out float4 w2)
 // footprint — and therefore dz/dpixel and every depth-bias term — is unchanged.
 void PagePlace(uint page, float4 hLocal, out float4 H, out float4 CD)
 {
-    const float s  = 1.0f / kPoolAxis;                    // half a cell in NDC
-    const float gx = (float)(page % VSM_POOL_PAGES_AXIS); // same split as the CPU loop's viewport
-    const float gy = (float)(page / VSM_POOL_PAGES_AXIS);
-    H.x = hLocal.x * s + hLocal.w * (-1.0f + (2.0f * gx + 1.0f) * s);
-    H.y = hLocal.y * s + hLocal.w * ( 1.0f - (2.0f * gy + 1.0f) * s); // NDC +y up, pool row 0 is top
+    const float2 s = 1.0f / kPoolPages;                   // half a cell in NDC, per axis
+    const float gx = (float)(page % VSM_POOL_PAGES_X);    // same split as the CPU loop's viewport
+    const float gy = (float)(page / VSM_POOL_PAGES_X);
+    H.x = hLocal.x * s.x + hLocal.w * (-1.0f + (2.0f * gx + 1.0f) * s.x);
+    H.y = hLocal.y * s.y + hLocal.w * ( 1.0f - (2.0f * gy + 1.0f) * s.y); // NDC +y up, pool row 0 is top
     H.z = hLocal.z;
     H.w = hLocal.w;
     CD  = float4(hLocal.w + hLocal.x, hLocal.w - hLocal.x,
@@ -731,7 +731,7 @@ struct TessyMsPrimitive
 
 groupshared uint gsTessyOutside[64]; // per meshlet vertex: bit i = outside page border i (CD[i] < 0), bit 4 = w <= 0
 groupshared float2 gsTessyPx[64];    // per meshlet vertex: its page-local pixel position (x right, y down)
-static const float kTessyPageTexels = VSM_VIRTUAL_RES / (float)VSM_L0_AXIS; // a page's edge in texels (128)
+static const float kTessyPageTexels = (float)VSM_PAGE_SIZE; // a page's edge in texels (128)
 // The small-triangle cull's margin: the rasterizer snaps to 1/256 px and computes the pool position in its own float
 // math (~0.002 px at a 16k pool); 1/64 px keeps the cull conservative.
 static const float kTessyPxMargin = 1.0f / 64.0f;
