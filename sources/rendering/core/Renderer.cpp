@@ -9,6 +9,7 @@
 #include "rendering/core/RendererInvariantFailure.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/CommandListBindState.h"
+#include "rendering/core/DeviceRemovalWatch.h"
 #include "rendering/core/GpuAlloc.h"
 #include "core/Helpers.h"
 #include <cassert>
@@ -109,6 +110,7 @@ void Renderer::Shutdown()
         WaitForPreviousFrame(); // your full-synchronization helper :contentReference[oaicite:2]{index=2}
     }
     rhi_.SetThreaded(false); // G10b: the RHI thread is joined; anything after this runs inline
+    render::StopDeviceRemovalWatch();
 
 #if PROF_GPU_ENABLED
     Profiler::Get().ShutdownGpu();
@@ -345,6 +347,8 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
 
     // --- Fence + event ---
     frameScheduler_.InitFence(GetDevice());
+    render::StartDeviceRemovalWatch(GetDevice(), GraphicsDevice::GbvEnabled() || render::g_deviceRemovalCheck);
+    gpu::SetCreationExcludesSubmission(GraphicsDevice::GbvEnabled());
 
     // --- Frame resources ---
     {
@@ -485,7 +489,14 @@ uint64_t Renderer::GetDeferredTargetsGeneration() const { return s_deferredTarge
 static Renderer* s_reportRenderer = nullptr;
 static void ReportOnTerminate()
 {
-    if (s_reportRenderer) { s_reportRenderer->ReportDeviceRemovalOnce(); }
+    if (s_reportRenderer && s_reportRenderer->GetDevice())
+    {
+        s_reportRenderer->ReportDeviceRemovalOnce();
+        if (FAILED(s_reportRenderer->GetDevice()->GetDeviceRemovedReason()))
+        {
+            render::WaitDeviceRemovalWatch(1000);
+        }
+    }
     // The process is going down without unwinding; the RAII log session never runs, so this is
     // the emergency path: DBWIN + unbuffered append, no writer thread, one attempt.
     logging::EmergencyWrite(logging::LogLevel::Fatal, logging::LogCategory::Render,
@@ -750,6 +761,10 @@ void Renderer::BeginFrame() {
         rhi_.SetThreaded(threading::g_rhiThreadEnabled);
     }
     rhi_.WaitFor(prevSubmit_);
+    if ((GraphicsDevice::GbvEnabled() || render::g_deviceRemovalCheck) && totalFrameNumber_ <= 64 && (totalFrameNumber_ & (totalFrameNumber_ - 1)) == 0)
+    {
+        render::RefreshDeviceRemovalWatch();
+    }
 
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);

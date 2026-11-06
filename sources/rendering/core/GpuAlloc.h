@@ -36,6 +36,23 @@ enum class MemPool : std::uint8_t
     Count
 };
 
+// Under GBV a creation and a submission exclude each other. GBV's layer submits command lists of its own from inside a
+// resource's creation, on the creating thread; with a submission of ours in the driver at that moment NVIDIA's driver
+// fails it and the device is removed (AGENTS.md, "GPU-Based Validation"). The wrappers below take this as readers and
+// whoever submits as the writer (RhiQueue). Off, the normal run: no lock is touched.
+void SetCreationExcludesSubmission(bool on);
+class SubmissionScope
+{
+public:
+    SubmissionScope();
+    ~SubmissionScope();
+    SubmissionScope(const SubmissionScope&) = delete;
+    SubmissionScope& operator=(const SubmissionScope&) = delete;
+
+private:
+    bool held_ = false;
+};
+
 // The D3D12 calls, plus owner and name. `name` may be null (the object stays unnamed, the census
 // says "(unnamed)"); when given it is also set as the object's debug name.
 HRESULT CreateCommittedResource(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* heapProps,

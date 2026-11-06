@@ -693,6 +693,9 @@
     <ClCompile Include="sources/rendering/core/GpuAlloc.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
+    <ClCompile Include="sources/rendering/core/DeviceRemovalWatch.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
     <ClCompile Include="sources/rendering/core/MemGates.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
@@ -1422,6 +1425,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/GpuAlloc.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/DeviceRemovalWatch.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/MemGates.h">

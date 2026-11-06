@@ -3,6 +3,7 @@
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "rendering/core/MemoryReport.h"    // the memory line in the session log
 #include "rendering/core/DlssHandler.h"     // --set dlss.preset (g_dlssPresetOverride)
+#include "rendering/core/GpuAlloc.h"        // gpu::SetCreationExcludesSubmission
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
 #include "core/diagnostics/BootProfile.h"
@@ -20,6 +21,7 @@
 #include <climits>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <optional> // the main thread's "Whole Cycle" held across the loop's turn (render thread, plan G8)
 #include <thread>
@@ -412,6 +414,7 @@ namespace
         if (setting == "frame.oneFrameThreadLag") { threading::g_oneFrameThreadLag = value != 0.0f; return true; }
         // G10b, UE's r.RHIThread.Enable: the frame's submission and Present on a thread of their own (next BeginFrame).
         if (setting == "frame.rhiThread") { threading::g_rhiThreadEnabled = value != 0.0f; return true; }
+        if (setting == "frame.gbvCreationExcludesSubmission") { gpu::SetCreationExcludesSubmission(value != 0.0f && GraphicsDevice::GbvEnabled()); return true; }
         // The physics world (docs/physics_plan.md): game-side knobs, no render copy.
         if (setting == "physics.enabled") { physics::GameSettings().enabled = value != 0.0f; return true; }
         if (setting == "physics.debug") { physics::GameSettings().debug = static_cast<int>(value); return true; }
@@ -3027,19 +3030,17 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
         };
 
-        // GBV submits from the thread that records: with the RHI thread its device was removed (0x887A0005, no breadcrumbs)
-        // seconds after it patched a pipeline on first bind while lists were going to the queues. The same order of
-        // submission either way, so nothing a GBV run validates moves. `--set=frame.rhiThread:1` below = the A/B.
-        if (GraphicsDevice::GbvEnabled() && threading::g_rhiThreadEnabled)
+        // main read the flag before the settings file set the knob.
+        if (std::strstr(GetCommandLineA(), "--no-async-compute"))
         {
-            threading::g_rhiThreadEnabled = false;
-            LOG_INFO(logging::LogCategory::RenderRhi, "frame.rhiThread off under GBV (it loses the device when a pipeline patches)");
+            render::g_noAsyncCompute_game = true;
         }
         // --set's threading knobs take effect from the first frame (the rest of --set waits for the first frame, in
         // afterFrame): "--set=frame.renderThread:0" is one thread from the start, not after a threaded first frame.
         for (const auto& kv : g_fixedSettings)
         {
-            if (kv.first == "frame.renderThread" || kv.first == "frame.oneFrameThreadLag" || kv.first == "frame.rhiThread")
+            if (kv.first == "frame.renderThread" || kv.first == "frame.oneFrameThreadLag" || kv.first == "frame.rhiThread" ||
+                kv.first == "frame.gbvCreationExcludesSubmission")
             {
                 ApplySweepValue(scene, appController_.SettingsRef(), kv.first, kv.second);
             }

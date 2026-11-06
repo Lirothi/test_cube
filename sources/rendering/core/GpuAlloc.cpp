@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <string>
 
 #include "core/logging/Log.h"
@@ -272,7 +273,44 @@ std::uint64_t QueryBytes(D3D12_QUERY_HEAP_TYPE type)
     default: return sizeof(std::uint64_t);
     }
 }
+
+std::atomic<bool> g_creationExcludesSubmission{ false };
+std::shared_mutex g_creationVsSubmission;
+
+// Held around the D3D12 call alone: a creation never nests one, and the census's own lock stays out of it.
+class CreationScope
+{
+public:
+    CreationScope() : held_(g_creationExcludesSubmission.load(std::memory_order_acquire))
+    {
+        if (held_) { g_creationVsSubmission.lock_shared(); }
+    }
+    ~CreationScope()
+    {
+        if (held_) { g_creationVsSubmission.unlock_shared(); }
+    }
+    CreationScope(const CreationScope&) = delete;
+    CreationScope& operator=(const CreationScope&) = delete;
+
+private:
+    bool held_;
+};
 } // namespace
+
+void SetCreationExcludesSubmission(bool on)
+{
+    g_creationExcludesSubmission.store(on, std::memory_order_release);
+}
+
+SubmissionScope::SubmissionScope() : held_(g_creationExcludesSubmission.load(std::memory_order_acquire))
+{
+    if (held_) { g_creationVsSubmission.lock(); }
+}
+
+SubmissionScope::~SubmissionScope()
+{
+    if (held_) { g_creationVsSubmission.unlock(); }
+}
 
 HRESULT CreateCommittedResource(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* heapProps,
                                 D3D12_HEAP_FLAGS heapFlags, const D3D12_RESOURCE_DESC* desc,
@@ -280,7 +318,11 @@ HRESULT CreateCommittedResource(ID3D12Device* device, const D3D12_HEAP_PROPERTIE
                                 MemTag tag, const wchar_t* name, REFIID riid, void** out)
 {
     if (device == nullptr) { return E_INVALIDARG; }
-    const HRESULT hr = device->CreateCommittedResource(heapProps, heapFlags, desc, initialState, clearValue, riid, out);
+    HRESULT hr = S_OK;
+    {
+        const CreationScope creating;
+        hr = device->CreateCommittedResource(heapProps, heapFlags, desc, initialState, clearValue, riid, out);
+    }
     if (SUCCEEDED(hr) && out != nullptr && heapProps != nullptr && desc != nullptr)
     {
         TrackResource(device, AsResource(*out, riid), *heapProps, *desc, tag, name);
@@ -293,7 +335,11 @@ HRESULT CreateCommittedTexture(ID3D12Device* device, const D3D12_HEAP_PROPERTIES
                                D3D12_RESOURCE_STATES initialState, const D3D12_CLEAR_VALUE* clearValue,
                                MemTag tag, const wchar_t* name, ID3D12Resource** out)
 {
-    const HRESULT hr = render::CreateCommittedTexture(device, heapProps, heapFlags, desc, initialState, clearValue, out);
+    HRESULT hr = S_OK;
+    {
+        const CreationScope creating;
+        hr = render::CreateCommittedTexture(device, heapProps, heapFlags, desc, initialState, clearValue, out);
+    }
     if (SUCCEEDED(hr) && out != nullptr && *out != nullptr)
     {
         TrackResource(device, *out, heapProps, desc, tag, name);
@@ -305,7 +351,11 @@ HRESULT CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_D
                              MemTag tag, const wchar_t* name, REFIID riid, void** out)
 {
     if (device == nullptr || desc == nullptr) { return E_INVALIDARG; }
-    const HRESULT hr = device->CreateDescriptorHeap(desc, riid, out);
+    HRESULT hr = S_OK;
+    {
+        const CreationScope creating;
+        hr = device->CreateDescriptorHeap(desc, riid, out);
+    }
     if (SUCCEEDED(hr) && out != nullptr && *out != nullptr)
     {
         Record r;
@@ -330,7 +380,11 @@ HRESULT CreateQueryHeap(ID3D12Device* device, const D3D12_QUERY_HEAP_DESC* desc,
                         MemTag tag, const wchar_t* name, REFIID riid, void** out)
 {
     if (device == nullptr || desc == nullptr) { return E_INVALIDARG; }
-    const HRESULT hr = device->CreateQueryHeap(desc, riid, out);
+    HRESULT hr = S_OK;
+    {
+        const CreationScope creating;
+        hr = device->CreateQueryHeap(desc, riid, out);
+    }
     if (SUCCEEDED(hr) && out != nullptr && *out != nullptr)
     {
         Record r;

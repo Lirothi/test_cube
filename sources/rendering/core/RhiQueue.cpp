@@ -6,6 +6,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "core/threading/ThreadRole.h"
+#include "rendering/core/GpuAlloc.h"
 
 RhiQueue::RhiQueue()
 {
@@ -50,6 +51,7 @@ RhiQueue::Ticket RhiQueue::Run(Op op)
         Ticket ticket;
         ~Done() { completed.store(ticket, std::memory_order_release); }
     } done{ completed_, ticket };
+    const gpu::SubmissionScope submitting;
     op();
     return ticket;
 }
@@ -192,6 +194,7 @@ void RhiQueue::Main()
             CPU_SCOPE(ProfilerScopes::kRhiThreadOp);
             try
             {
+                const gpu::SubmissionScope submitting;
                 item.op();
             }
             catch (...)
