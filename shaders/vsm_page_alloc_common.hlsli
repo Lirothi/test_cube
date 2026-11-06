@@ -32,8 +32,13 @@ cbuffer VsmAllocCB : register(b0)
     uint gRedrawUnrequestedFrames;
     uint gCoarseBase;    // the coarse pages' bitfield in the request buffer (vsm_page_request_cs.hlsl MarkCoarsePages)
     uint gCoarseCache;   // vsm::g_coarseCacheDynamic: a page asked for only as a coarse one is a kind of its own
-    uint _padAlloc;
+    uint gSummaryBase;   // the summary in the request buffer: a bit per word of the bitfields (vsm_page_request_cs.hlsl MarkBit)
+    uint gNumViews;      // the views the page table holds
+    uint3 _padAlloc;
 };
+
+// The summary's words: what touch and allocate walk, one thread a word. The bits of a word of it name the bitfields' words with marks.
+uint VsmSummaryWords() { return (((gNumEntries + 31u) / 32u) + 31u) / 32u; }
 
 // Is virtual page `page` set in the request bitfield?
 bool VsmRequested(RWStructuredBuffer<uint> req, uint page)

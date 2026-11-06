@@ -639,9 +639,16 @@ namespace
         const nlohmann::json* flickerHz = number("flickerHz");
         // The light's own multiplier by day (Scene::TickNightLamps): 1 = none, 0 = dark by day.
         const nlohmann::json* dayBrightness = number("dayBrightness");
-        if (!lumens && !scale && !radius && !hasColor && !hasShadows && !flicker && !flickerHz && !dayBrightness)
+        // UE's Source Radius (m): how big the light is for VSM's rays.
+        const nlohmann::json* sourceRadius = number("sourceRadius");
+        if (!lumens && !scale && !radius && !hasColor && !hasShadows && !flicker && !flickerHz && !dayBrightness && !sourceRadius)
         {
-            outStatus = "setLight needs lumens, scale, radius, color, shadows, flicker and/or dayBrightness";
+            outStatus = "setLight needs lumens, scale, radius, color, shadows, flicker, dayBrightness and/or sourceRadius";
+            return nullptr;
+        }
+        if (sourceRadius && sourceRadius->get<float>() < 0.0f)
+        {
+            outStatus = "setLight: sourceRadius is a size in metres, 0 or more";
             return nullptr;
         }
         if (dayBrightness && dayBrightness->get<float>() < 0.0f)
@@ -684,6 +691,7 @@ namespace
             }
             if (hasShadows) { after["shadowsEnabled"] = shadowsIt->get<bool>(); }
             if (dayBrightness) { after["dayBrightness"] = dayBrightness->get<float>(); }
+            if (sourceRadius) { after["sourceRadius"] = sourceRadius->get<float>(); }
             if ((flicker || flickerHz) && light->type == "pointLight")
             {
                 nlohmann::json f = after.value("flicker", nlohmann::json::object());
@@ -723,6 +731,7 @@ namespace
         if (flicker) { outStatus += " flicker " + text(*flicker); }
         if (flickerHz) { outStatus += " at " + text(*flickerHz) + " Hz"; }
         if (dayBrightness) { outStatus += " by day x" + text(*dayBrightness); }
+        if (sourceRadius) { outStatus += " source radius " + text(*sourceRadius) + " m"; }
         if (unchanged > 0) { outStatus += " (" + std::to_string(unchanged) + " already so)"; }
         if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not lights)"; }
         return FoldIntoOneEntry(std::move(commands), "Set " + std::to_string(count) + " Lights");
@@ -3864,7 +3873,8 @@ EditorActionRegistry::EditorActionRegistry()
         "bulb ~800 -- or scale, a multiplier of each light's own brightness: 0.5 = half), how far a point light reaches "
         "(radius in metres; a spot's range), its colour, whether it casts shadows, a point light's flicker (a "
         "candle ~0.15 at ~3 Hz; 0 = steady), and dayBrightness, the light's own multiplier by day (1 = none, 0 = dark "
-        "by day; it fades out as the night comes in). Anything left out stays. Lights are reached by name or group "
+        "by day; it fades out as the night comes in), and sourceRadius, how big the light is for VSM's rays (m; 0 = a hard "
+        "edge). Anything left out stays. Lights are reached by name or group "
         "(\"Bathroom Candles\"), or through the selection (target scope \"selected\").",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
@@ -3877,6 +3887,7 @@ EditorActionRegistry::EditorActionRegistry()
             { "flicker", EditorParamKind::Number, false, "point lights: +/- this share of the flux, 0..1 (a candle ~0.15)" },
             { "flickerHz", EditorParamKind::Number, false, "point lights: the flicker's base frequency (a candle ~3)" },
             { "dayBrightness", EditorParamKind::Number, false, "the light's own multiplier by day, 1 = none, 0 = dark by day" },
+            { "sourceRadius", EditorParamKind::Number, false, "metres, how big the light is for VSM's rays: a candle ~0.01; 0 = a hard edge" },
         },
         &BuildSetLight,
         false,   // filterFromSelection

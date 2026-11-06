@@ -53,20 +53,18 @@ namespace vsm
         return Math::mat4::Inverse(Math::mat4::Transpose(viewProj * uvScaleBias));
     }
 
-    // Step 19b: LOCAL-light virtual res (spot lights + point-light cube faces). The Step-18/19
-    // first cut used kVirtualRes=8192 at a single (finest) level, which over-subscribed the pool
-    // ~56× (~57k requested pages vs 1024). 2048² is ~4× the old spot/point maps' texel count and,
-    // combined with the mip pyramid below (per-pixel level selection), keeps the request set
-    // within the pool. Directional shadows stay on the existing CSM (Pass_CSM) until Step 24 gives
-    // them a clipmap with its own resolution.
-    inline constexpr std::uint32_t kVirtualRes = 2048;                               // finest-level virtual res per local view
-    inline constexpr std::uint32_t kVirtualPagesL0Axis = kVirtualRes / kPageSize;    // 16 (level-0 pages per axis)
+    // A LOCAL view (a spot, a point face) is UE's: 16384 texels at mip 0 (VSM_VIRTUAL_MAX_RESOLUTION_XY), and the mip a pixel asks for is
+    // its footprint, one texel to a pixel: the size only says how near a lamp that stops being able to hold.
+    inline constexpr std::uint32_t kVirtualRes = 16384;                              // finest-level virtual res per local view
+    inline constexpr std::uint32_t kVirtualPagesL0Axis = kVirtualRes / kPageSize;    // 128 (level-0 pages per axis)
 
     // Mip pyramid: level L has (kVirtualRes>>L)/kPageSize pages per axis, down to 1×1. Each pixel
     // marks exactly ONE page, at the level whose shadow-texel density ≈ its screen-pixel density,
     // so far receivers request coarse (few) pages instead of finest-level ones — the 57k→pool fix.
-    inline constexpr std::uint32_t kNumMipLevels = 5;                                // 16,8,4,2,1 for 2048²
-    inline constexpr std::uint32_t kMaxMipLevel = kNumMipLevels - 1;                 // 4
+    inline constexpr std::uint32_t kNumMipLevels = 8;                                // 128 .. 1 pages across (UE's VSM_MAX_MIP_LEVELS)
+    inline constexpr std::uint32_t kMaxMipLevel = kNumMipLevels - 1;                 // 7
+    // vsm_addressing.hlsli VSM_DISTANCE_MARK_SHIFT: the camera-distance law (vsm.localMipFromPixel 0, the A/B) was written for mip 0 = 2048.
+    inline constexpr std::uint32_t kDistanceMarkShift = 3u;
 
     inline constexpr std::uint32_t LevelPagesPerAxis(std::uint32_t level) { return kVirtualPagesL0Axis >> level; }
     inline constexpr std::uint32_t LevelPageCount(std::uint32_t level) { return LevelPagesPerAxis(level) * LevelPagesPerAxis(level); }
@@ -77,7 +75,7 @@ namespace vsm
         for (std::uint32_t l = 0; l < level; ++l) { sum += LevelPageCount(l); }
         return sum;
     }
-    inline constexpr std::uint32_t kPagesPerView = LevelPageOffset(kNumMipLevels);   // 341 = 256+64+16+4+1
+    inline constexpr std::uint32_t kPagesPerView = LevelPageOffset(kNumMipLevels);   // 21845 = 128^2 + 64^2 + ... + 1
 
     // A clipmap LEVEL is UE's: 16384 texels (VSM_VIRTUAL_MAX_RESOLUTION_XY), 128 x 128 pages, no mips -- the level is the LOD.
     inline constexpr std::uint32_t kClipmapVirtualRes = 16384;
@@ -173,15 +171,25 @@ namespace vsm
              : page < extraBase ? kClipmapFirstView + (page - clipmapBase) / kClipmapPages
              : kClipmapFirstView + kNumClipmapLevels + (page - extraBase) / kPagesPerView;
     }
-    // The page table / request bits of `views` views (319 789 entries, 1.3 MB, at the initial capacity).
+    // The page table / request bits of `views` views (3.07 M entries, 12 MB, at the initial capacity; 17.8 M, 71 MB, at 128 + 32 shadowed lights).
     constexpr std::uint32_t PageTableEntries(std::uint32_t views)
     {
         return views > kNumClipmapLevels ? (views - kNumClipmapLevels) * kPagesPerView + kNumClipmapLevels * kClipmapPages : 0u;
     }
     constexpr std::uint32_t RequestWords(std::uint32_t views) { return (PageTableEntries(views) + 31u) / 32u; }
+    // A bit per word of the bitfields (vsm_page_request_cs.hlsl MarkBit): what the walks and the next frame's clear go by.
+    constexpr std::uint32_t RequestSummaryWords(std::uint32_t views) { return (RequestWords(views) + 31u) / 32u; }
+    // A two-dimensional dispatch's row, for what is longer than 65535 groups of 64 reach (the page table's and the request's first clear;
+    // vsm_addressing.hlsli VSM_CLEAR_ROW_THREADS).
+    inline constexpr std::uint32_t kClearRowGroups = 4096u;
+    static_assert(kClearRowGroups * 64u == 262144u, "vsm_addressing.hlsli VSM_CLEAR_ROW_THREADS");
+    // Where each view has pages (vsm_page_bounds_cs.hlsl): four words per (view, mip), one entry more per view for its page count.
+    inline constexpr std::uint32_t kBoundsEntriesPerView = kNumMipLevels + 1u;
+    constexpr std::uint32_t LevelBoundsWords(std::uint32_t views) { return views * kBoundsEntriesPerView * 4u; }
     // The water's caster mask behind the bitfield (vsm_water_mask_cs.hlsl): one bit per (clipmap level, 16th of its side). 8 words a level: the
     // shaders' literal. The margin (m, round every box) is the wave's: the marks take the plane, the water samples the displaced surface.
-    inline constexpr std::uint32_t kWaterMaskWordsPerLevel = kVirtualPagesL0Axis * kVirtualPagesL0Axis / 32u;
+    inline constexpr std::uint32_t kWaterMaskAxis = 16u;
+    inline constexpr std::uint32_t kWaterMaskWordsPerLevel = kWaterMaskAxis * kWaterMaskAxis / 32u;
     static_assert(kWaterMaskWordsPerLevel == 8u, "vsm_water_mask_cs.hlsl and vsm_page_request_cs.hlsl index 8 words a level");
     inline constexpr std::uint32_t kWaterMaskWords = kNumClipmapLevels * kWaterMaskWordsPerLevel;
     inline constexpr float kWaterMaskMargin = 2.0f;
@@ -478,7 +486,7 @@ namespace vsm
     inline const bool g_clipmapDepthBiasFloorTexels_knob = ::knob::Register(g_clipmapDepthBiasFloorTexels_game, g_clipmapDepthBiasFloorTexels, "vsm::g_clipmapDepthBiasFloorTexels");
     inline float ClipmapDepthBiasNdc()
     {
-        return g_clipmapDepthBias * (kClipmapRangeMultipleRef / ClipmapRangeMultiple()) * (static_cast<float>(kVirtualRes) / static_cast<float>(kClipmapVirtualRes));
+        return g_clipmapDepthBias * (kClipmapRangeMultipleRef / ClipmapRangeMultiple()) * (2048.0f / static_cast<float>(kClipmapVirtualRes));
     }
     // Step 24f / P16.16: directional-clipmap normal offset. UNITS ARE UNREAL'S, so the number here
     // is directly comparable to `r.Shadow.Virtual.NormalBias` (their default 0.5): the shader
@@ -512,6 +520,33 @@ namespace vsm
     inline std::uint32_t g_smrtSamplesPerRay = 4u;
     inline std::uint32_t g_smrtSamplesPerRay_game = 4u;
     inline const bool g_smrtSamplesPerRay_knob = ::knob::Register(g_smrtSamplesPerRay_game, g_smrtSamplesPerRay, "vsm::g_smrtSamplesPerRay");
+    // The lamps' rays, UE's TraceLocalLight (vsm_smrt_local.hlsli), at ShadowQuality 2 (High): r.Shadow.Virtual.SMRT.RayCountLocal,
+    // SamplesPerRayLocal. Rays 0 = the 3 x 3 PCF of one mip, the A/B. Steps are for a light with a source radius: without one a ray is one sample.
+    inline std::uint32_t g_localSmrtRayCount = 4u;
+    inline std::uint32_t g_localSmrtRayCount_game = 4u;
+    inline const bool g_localSmrtRayCount_knob = ::knob::Register(g_localSmrtRayCount_game, g_localSmrtRayCount, "vsm::g_localSmrtRayCount");
+    inline std::uint32_t g_localSmrtSamplesPerRay = 4u;
+    inline std::uint32_t g_localSmrtSamplesPerRay_game = 4u;
+    inline const bool g_localSmrtSamplesPerRay_knob = ::knob::Register(g_localSmrtSamplesPerRay_game, g_localSmrtSamplesPerRay, "vsm::g_localSmrtSamplesPerRay");
+    // r.Shadow.Virtual.SMRT.TexelDitherScaleLocal, ExtrapolateMaxSlopeLocal, MaxSlopeBiasLocal, MaxRayAngleFromLight (radians): UE's defaults.
+    inline float g_localSmrtTexelDitherScale = 2.0f;
+    inline float g_localSmrtTexelDitherScale_game = 2.0f;
+    inline const bool g_localSmrtTexelDitherScale_knob = ::knob::Register(g_localSmrtTexelDitherScale_game, g_localSmrtTexelDitherScale, "vsm::g_localSmrtTexelDitherScale");
+    inline float g_localSmrtExtrapolateMaxSlope = 0.05f;
+    inline float g_localSmrtExtrapolateMaxSlope_game = 0.05f;
+    inline const bool g_localSmrtExtrapolateMaxSlope_knob = ::knob::Register(g_localSmrtExtrapolateMaxSlope_game, g_localSmrtExtrapolateMaxSlope, "vsm::g_localSmrtExtrapolateMaxSlope");
+    inline float g_localSmrtMaxSlopeBias = 50.0f;
+    inline float g_localSmrtMaxSlopeBias_game = 50.0f;
+    inline const bool g_localSmrtMaxSlopeBias_knob = ::knob::Register(g_localSmrtMaxSlopeBias_game, g_localSmrtMaxSlopeBias, "vsm::g_localSmrtMaxSlopeBias");
+    inline float g_localSmrtMaxRayAngle = 0.03f;
+    inline float g_localSmrtMaxRayAngle_game = 0.03f;
+    inline const bool g_localSmrtMaxRayAngle_knob = ::knob::Register(g_localSmrtMaxRayAngle_game, g_localSmrtMaxRayAngle, "vsm::g_localSmrtMaxRayAngle");
+    // The light passes' CB, as vsm::LocalMipParams.
+    inline DirectX::XMFLOAT4 LocalSmrtShape()
+    {
+        return DirectX::XMFLOAT4(g_localSmrtTexelDitherScale, g_localSmrtExtrapolateMaxSlope, g_localSmrtMaxSlopeBias,
+                                 1.0f / std::tan(std::max(g_localSmrtMaxRayAngle, 1e-4f)));
+    }
     // UE's r.Shadow.Virtual.SMRT.RayLengthScaleDirectional (their default 1.5), scaled by distance
     // to camera. Dimensionless, so it transfers from their centimetres unchanged. Their own
     // warning, and it is the knob that replaces the depth bias as the thing to tune: "Too high
@@ -1116,9 +1151,11 @@ private:
     std::uint32_t views_ = 0;
     std::uint32_t PageTableEntries() const { return vsm::PageTableEntries(views_); }
     std::uint32_t RequestWords() const { return vsm::RequestWords(views_); }
-    // [the pixels' marks | the water's caster mask | the coarse pages' marks]
+    // [the pixels' marks | the water's caster mask | the coarse pages' marks | the summary of both]
     std::uint32_t CoarseRequestBase() const { return RequestWords() + vsm::kWaterMaskWords; }
-    std::uint32_t RequestBufferWords() const { return CoarseRequestBase() + RequestWords(); }
+    std::uint32_t SummaryRequestBase() const { return CoarseRequestBase() + RequestWords(); }
+    std::uint32_t SummaryWords() const { return vsm::RequestSummaryWords(views_); }
+    std::uint32_t RequestBufferWords() const { return SummaryRequestBase() + SummaryWords(); }
     // Plan S9e: the per-view records (vsm::ViewGpuData), an UPLOAD ring of kFrameCount x 2 slots of views_ records -- slot
     // f * 2 the request pass's, f * 2 + 1 the render pass's -- persistently mapped, one SRV per slot. The CPU writes a slot
     // only in the frame that owns it (BeginFrame waited on its fence); viewDataHigh_ = how many records a slot's last write
@@ -1155,7 +1192,7 @@ private:
     GpuResource freeList_;      // [kPoolPageCount] free physical indices (rebuilt per frame)
     GpuResource needsRender_;   // [kPoolPageCount] pages allocated this frame (Step 22 input)
     GpuResource allocCounters_; // [4] free / needs / fail / resident
-    GpuResource levelBounds_;   // [kNumClipmapLevels * 2] the rect each level has pages in (vsm_page_bounds_cs.hlsl)
+    GpuResource levelBounds_;   // vsm::LevelBoundsWords: the rect each (view, mip) has pages in (vsm_page_bounds_cs.hlsl)
     GpuResource pageDetail_;    // [kPoolPageCount] what each page is asked for as (ditto)
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> allocUavHeap_; // the alloc-state UAVs + the bounds' SRV
     D3D12_CPU_DESCRIPTOR_HANDLE physOwnerUav_{};
@@ -1167,6 +1204,7 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE levelBoundsSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE pageDetailUav_{};
     bool allocInitialized_ = false; // one-shot page-table/owner init done
+    bool requestCleared_ = false;   // the request buffer's first clear, whole: the frames after it go by the summary
 
     void EnsureShaderResources(Renderer* renderer); // lazily create all VSM compute PSOs
     std::shared_ptr<Material> pageRequestClearMat_;  // vsm_page_request_clear_cs.hlsl

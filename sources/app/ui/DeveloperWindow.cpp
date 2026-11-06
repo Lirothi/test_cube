@@ -3099,6 +3099,22 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "more rays; measured on wind_test it moves shadow coverage by 0.56pp,\n"
                                       "i.e. the shadow stays where it was.");
 
+                // The lamps' own (vsm_smrt_local.hlsli): they do not hang on the sun's switch above.
+                int localSmrtRays = static_cast<int>(vsm::g_localSmrtRayCount_game);
+                if (GRAPHICS_CONTROL(VsmLocalSmrtRays, "vsmLocalSmrtRays",
+                    ImGui::SliderInt("Lamps' SMRT rays", &localSmrtRays, 0, static_cast<int>(vsm::kSmrtMaxRays))))
+                    vsm::g_localSmrtRayCount_game = static_cast<std::uint32_t>(localSmrtRays);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Rays per pixel and lamp, UE's r.Shadow.Virtual.SMRT.RayCountLocal (4 on High).\n"
+                                      "0 = a 3 x 3 PCF of one mip instead. Cost lands in Pass_PointLights / Pass_SpotLights.");
+                int localSmrtSteps = static_cast<int>(vsm::g_localSmrtSamplesPerRay_game);
+                if (GRAPHICS_CONTROL(VsmLocalSmrtSamples, "vsmLocalSmrtSamples",
+                    ImGui::SliderInt("Lamps' SMRT samples/ray", &localSmrtSteps, 0, static_cast<int>(vsm::kSmrtMaxSamplesPerRay))))
+                    vsm::g_localSmrtSamplesPerRay_game = static_cast<std::uint32_t>(localSmrtSteps);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Steps along each ray, UE's SamplesPerRayLocal (4 on High). Only a light with a Source Radius\n"
+                                      "takes them: without one a ray is one sample at the receiver, moved by the dither.");
+
                 ImGui::BeginDisabled(!smrtOn);
                 int smrtRays = static_cast<int>(vsm::g_smrtRayCount_game);
                 if (GRAPHICS_CONTROL(VsmSmrtRays, "vsmSmrtRays",
@@ -3343,9 +3359,9 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                             vstats.fail);
                     else
                         ImGui::TextDisabled("Alloc fails: 0");
-                    ImGui::Text("Request LOD  L0=%u  L1=%u  L2=%u  L3=%u  L4=%u",
-                        vstats.perLevel[0], vstats.perLevel[1], vstats.perLevel[2],
-                        vstats.perLevel[3], vstats.perLevel[4]);
+                    ImGui::Text("Request LOD  L0=%u  L1=%u  L2=%u  L3=%u  L4=%u  L5=%u  L6=%u  L7=%u",
+                        vstats.perLevel[0], vstats.perLevel[1], vstats.perLevel[2], vstats.perLevel[3],
+                        vstats.perLevel[4], vstats.perLevel[5], vstats.perLevel[6], vstats.perLevel[7]);
 
                     const std::vector<std::uint32_t>& owners = scene.Vsm().PhysOwnerSnapshot();
                     if (owners.size() == vsm::kPoolPageCount)

@@ -143,6 +143,8 @@ enum class GraphicsControl
     VsmSmrtEnabled,
     VsmSmrtRays,
     VsmSmrtSamples,
+    VsmLocalSmrtRays,
+    VsmLocalSmrtSamples,
     VsmSmrtTemporal,
     VsmSmrtAdaptive,
     VsmSmrtSunAngle,

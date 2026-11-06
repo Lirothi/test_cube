@@ -242,7 +242,7 @@ float FogSpotShadow(SpotLightData light, float3 P, float3 toL, float distToLight
         const uint  lvl        = VsmSelectLevel(length(P - camPosWS), fogLocalParams.w, VSM_MAX_LEVEL);
         const float cosOuter   = max(light.directionCosOuter.w, 1e-3f);
         const float tanOuter   = sqrt(saturate(1.0f - cosOuter * cosOuter)) / cosOuter;
-        const float texelWorld = (2.0f * distToLight * tanOuter / VSM_VIRTUAL_RES) * exp2((float)lvl);
+        const float texelWorld = (2.0f * distToLight * tanOuter / VSM_VIRTUAL_RES) * exp2((float)(min(lvl, 4u) + VSM_DISTANCE_MARK_SHIFT));
         const float3 Pv = P + toL * (texelWorld * 2.0f);
         return VsmSpotShadow((uint)light.shadowParams4.z, light.viewProj, Pv, camPosWS, fogLocalParams.w, 0.0f, // S9e: its view
                              VsmPageTable, VsmPool, gSmpLinear);
@@ -277,7 +277,7 @@ float FogPointShadow(PointLightData light, float3 P, float3 toL, float distToLig
     if (fogLocal.z != 0u)
     {
         const uint  lvl        = VsmSelectLevel(length(P - camPosWS), fogLocalParams.w, VSM_MAX_LEVEL);
-        const float texelWorld = (2.0f * distToLight / VSM_VIRTUAL_RES) * exp2((float)lvl);
+        const float texelWorld = (2.0f * distToLight / VSM_VIRTUAL_RES) * exp2((float)(min(lvl, 4u) + VSM_DISTANCE_MARK_SHIFT));
         const float3 Pv = P + toL * (texelWorld * 2.0f);
         return VsmPointShadow((uint)light.shadowParams4.z, Pv, light.position, light.shadowParams.z, // S9e: first view
                               light.shadowParams.w, camPosWS, fogLocalParams.w, 0.0f,

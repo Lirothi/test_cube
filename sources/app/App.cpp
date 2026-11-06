@@ -561,6 +561,12 @@ namespace
         // SMRT (docs/vsm_smrt_plan.md). rayCount 0 = the single-tap SampleCmp path -- the A/B arm.
         if (setting == "vsm.smrtRayCount") { vsm::g_smrtRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxRays); return true; }
         if (setting == "vsm.smrtSamplesPerRay") { vsm::g_smrtSamplesPerRay_game = (std::uint32_t)std::clamp(value, 1.0f, (float)vsm::kSmrtMaxSamplesPerRay); return true; }
+        if (setting == "vsm.localSmrtRayCount") { vsm::g_localSmrtRayCount_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxRays); return true; }
+        if (setting == "vsm.localSmrtSamplesPerRay") { vsm::g_localSmrtSamplesPerRay_game = (std::uint32_t)std::clamp(value, 0.0f, (float)vsm::kSmrtMaxSamplesPerRay); return true; }
+        if (setting == "vsm.localSmrtTexelDitherScale") { vsm::g_localSmrtTexelDitherScale_game = std::clamp(value, 0.0f, 8.0f); return true; }
+        if (setting == "vsm.localSmrtExtrapolateMaxSlope") { vsm::g_localSmrtExtrapolateMaxSlope_game = std::max(0.0f, value); return true; }
+        if (setting == "vsm.localSmrtMaxSlopeBias") { vsm::g_localSmrtMaxSlopeBias_game = std::max(0.0f, value); return true; }
+        if (setting == "vsm.localSmrtMaxRayAngle") { vsm::g_localSmrtMaxRayAngle_game = std::clamp(value, 0.001f, 1.5f); return true; }
         if (setting == "vsm.smrtRayLengthScale") { vsm::g_smrtRayLengthScale_game = std::max(0.0f, value); return true; }
         if (setting == "vsm.smrtExtrapolateMaxSlope") { vsm::g_smrtExtrapolateMaxSlope_game = std::max(0.0f, value); return true; }
         if (setting == "vsm.smrtSourceAngleDeg") { vsm::g_smrtSourceAngleDeg_game = std::clamp(value, 0.0f, 45.0f); return true; }
@@ -3021,6 +3027,14 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             }
         };
 
+        // GBV submits from the thread that records: with the RHI thread its device was removed (0x887A0005, no breadcrumbs)
+        // seconds after it patched a pipeline on first bind while lists were going to the queues. The same order of
+        // submission either way, so nothing a GBV run validates moves. `--set=frame.rhiThread:1` below = the A/B.
+        if (GraphicsDevice::GbvEnabled() && threading::g_rhiThreadEnabled)
+        {
+            threading::g_rhiThreadEnabled = false;
+            LOG_INFO(logging::LogCategory::RenderRhi, "frame.rhiThread off under GBV (it loses the device when a pipeline patches)");
+        }
         // --set's threading knobs take effect from the first frame (the rest of --set waits for the first frame, in
         // afterFrame): "--set=frame.renderThread:0" is one thread from the start, not after a threaded first frame.
         for (const auto& kv : g_fixedSettings)

@@ -32,7 +32,7 @@
     "DescriptorTable(UAV(u0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 RWStructuredBuffer<uint> PageTable : register(u0);
-RWStructuredBuffer<uint> LevelBounds : register(u1); // vsm_page_bounds_cs.hlsl: per level, two words
+RWStructuredBuffer<uint> LevelBounds : register(u1); // vsm_page_bounds_cs.hlsl
 
 cbuffer VsmPropagateCB : register(b0)
 {
@@ -107,9 +107,9 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         uint2 coarsePage;
         if (!VsmPageFromLS(coarse, ls, coarsePage)) { continue; }
         // A level has pages in a small rect round the camera, and most pages of a finer level lie outside it.
-        const uint boundsMin = LevelBounds[coarse * 2u], boundsMax = LevelBounds[coarse * 2u + 1u];
-        if (coarsePage.x < (boundsMin & 0xFFFFu) || coarsePage.y < (boundsMin >> 16u) ||
-            coarsePage.x > (boundsMax & 0xFFFFu) || coarsePage.y > (boundsMax >> 16u)) { continue; }
+        const uint bounds = VsmBoundsIndex(VSM_CLIPMAP_FIRST + coarse, 0u);
+        if (coarsePage.x < LevelBounds[bounds] || coarsePage.y < LevelBounds[bounds + 1u] ||
+            coarsePage.x > LevelBounds[bounds + 2u] || coarsePage.y > LevelBounds[bounds + 3u]) { continue; }
 
         const uint coarseSlot = VsmPageId(VSM_CLIPMAP_FIRST + coarse, 0u, coarsePage.x, coarsePage.y);
         const uint coarseEntry = PageTable[coarseSlot];

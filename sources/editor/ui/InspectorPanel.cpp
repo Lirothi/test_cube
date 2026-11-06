@@ -2174,6 +2174,10 @@ namespace
                           "lifts off its caster's foot. With shadow.localBiasTexel:0 they are UE's own: the lookup "
                           "moves toward the light by 0.02 x 512/Res x 2 x Shadow Bias of the distance, times "
                           "1 + 3 x Slope Bias x (1 - N.L).");
+            dragF("Source Radius", "sourceRadius", 0.0f, 0.002f, 0.0f, 10.0f, "%.3f");
+            InspectorHelp("UE's Source Radius, in metres: how big the light is for VSM's rays, so how fast its penumbra widens with the "
+                          "distance from the caster (a candle ~0.01, a bulb ~0.03). 0, UE's default, is a hard edge the rays' dither softens "
+                          "by a pixel. Read by VSM alone: no other shadow mode has rays, and the shading has no area light.");
             dragF("Shadow Sharpen", "shadowSharpen", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("UE's Shadow Sharpen: narrows the filtered penumbra -- the 29-tap disc's result is "
                           "stretched about its middle by 7 x this + 1. 0 = UE's soft edge.");
@@ -2264,6 +2268,10 @@ namespace
                           "With shadow.localBiasTexel:0 they are UE's own: the map is written pushed away from the "
                           "light by 15.36/Res metres x 2 x Shadow Bias, plus that x 3 x Slope Bias on steep "
                           "surfaces.");
+            dragF("Source Radius", "sourceRadius", 0.0f, 0.002f, 0.0f, 10.0f, "%.3f");
+            InspectorHelp("UE's Source Radius, in metres: how big the light is for VSM's rays, so how fast its penumbra widens with the "
+                          "distance from the caster (a candle ~0.01, a bulb ~0.03). 0, UE's default, is a hard edge the rays' dither softens "
+                          "by a pixel. Read by VSM alone: no other shadow mode has rays, and the shading has no area light.");
             dragF("Shadow Sharpen", "shadowSharpen", 0.0f, 0.01f, 0.0f, 1.0f, "%.2f");
             InspectorHelp("UE's Shadow Sharpen: narrows the filtered penumbra -- the 6x6 tent's result is stretched "
                           "about its middle by 7 x this + 1. 0 = UE's soft edge.");

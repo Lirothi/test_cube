@@ -23,7 +23,7 @@
 // the FULL [-1,1] rect instead of producing a wrapped one. Conservative, and conservative is always
 // safe here (a page may draw a caster it turns out not to touch; the rasterizer discards it).
 // Locals also use the whole mip PYRAMID (a pixel marks one page at its own level), unlike clipmap
-// views where the level IS the LOD and only mip 0 exists — so a local view walks all 5 levels.
+// views where the level IS the LOD and only mip 0 exists -- so a local view walks all its mips, each inside the rect it has pages in.
 //
 // Occlusion plan S5b.2 (light-space two-pass HZB occlusion, Unreal's r.Shadow.Virtual.NonNanite
 // .UseHZB): a clipmap (caster, page) pair is also tested against LAST frame's pool pyramid at the
@@ -89,8 +89,8 @@ Texture2D<float>               VsmHzbPrev    : register(t7);
 // frame's (the pyramid's pages were drawn with it), bits.y = the view's own shadow LOD from the tier curve -- only the
 // lower bound for FLOOR casters: the per-caster LOD below can only push COARSER past it, never finer.
 StructuredBuffer<VsmViewData>  Views         : register(t8);
-// A clipmap level is 16384 page-table entries and a caster the island's size overlaps all of them: what it can draw into
-// is the rect the level has pages in (vsm_page_bounds_cs.hlsl), per level two words.
+// A clipmap level is 16384 page-table entries, a local view 21845, and a caster the island's size (or across a lamp's plane) overlaps all of
+// them: what it can draw into is the rect the view has pages in at that mip (vsm_page_bounds_cs.hlsl, VsmBoundsIndex).
 StructuredBuffer<uint>         LevelBounds   : register(t9);
 
 RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) count, doubles as the cursor
@@ -259,6 +259,19 @@ uint ScatterSetup(uint3 dtid, uint gi)
     // receiver pixel marks whichever level matches its density, so every level can be resident.
     const uint mipCount = isLocal ? kScatterMips : 1u;
 
+    // A local view with no page, or a caster past the light's reach: every ray from the light to a receiver it reaches stays inside that
+    // sphere, so such a caster shadows nothing anybody reads.
+    if (isLocal)
+    {
+        if (LevelBounds[VsmBoundsIndex(view, VSM_BOUNDS_ANY)] == 0u) { return 0u; }
+        const float4 reach = Views[view].cull;
+        if (reach.w >= 0.0f)
+        {
+            const float3 outside = max(abs(reach.xyz - ctr) - ext, 0.0f);
+            if (dot(outside, outside) > reach.w * reach.w) { return 0u; }
+        }
+    }
+
     float2 lo, hi;
     bool straddles;
     if (!ProjectAabbNdc(Views[view].viewProj, ctr, ext, isLocal, lo, hi, straddles)) { return 0u; }
@@ -286,19 +299,21 @@ uint ScatterSetup(uint3 dtid, uint gi)
         uint px1 = (uint)clamp((int)floor((hi.x * 0.5f + 0.5f) * axis), 0, (int)axisI - 1);
         uint py0 = (uint)clamp((int)floor((0.5f - hi.y * 0.5f) * axis), 0, (int)axisI - 1);
         uint py1 = (uint)clamp((int)floor((0.5f - lo.y * 0.5f) * axis), 0, (int)axisI - 1);
-        if (!isLocal)
+        const uint bounds = VsmBoundsIndex(view, L);
+        px0 = max(px0, LevelBounds[bounds]);
+        py0 = max(py0, LevelBounds[bounds + 1u]);
+        px1 = min(px1, LevelBounds[bounds + 2u]);
+        py1 = min(py1, LevelBounds[bounds + 3u]);
+        if (px0 > px1 || py0 > py1)
         {
-            const uint boundsMin = LevelBounds[target * 2u], boundsMax = LevelBounds[target * 2u + 1u];
-            px0 = max(px0, boundsMin & 0xFFFFu);
-            py0 = max(py0, boundsMin >> 16u);
-            px1 = min(px1, boundsMax & 0xFFFFu);
-            py1 = min(py1, boundsMax >> 16u);
-            if (px0 > px1 || py0 > py1) { return 0u; }
+            gsRect[gi * kScatterMips + L] = uint2(0u, 0u); // no area: the walk below passes it
+            continue;
         }
         const uint w = px1 - px0 + 1u, h = py1 - py0 + 1u;
         gsRect[gi * kScatterMips + L] = uint2(px0 | (py0 << 16), w | (h << 16));
         pages += w * h;
     }
+    if (pages == 0u) { return 0u; }
     gsWho[gi] = uint4(c, view,
                       slots | (isLocal ? kWhoLocal : 0u) | ((meta & 1u) != 0u ? kWhoDynamic : 0u) |
                           (prevTest ? kWhoPrev : 0u) | (mipCount << kWhoMipShift),

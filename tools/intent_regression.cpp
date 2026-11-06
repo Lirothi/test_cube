@@ -1975,6 +1975,21 @@ void TestSetLightRetunes(const EditorActionContext& actionCtx)
     flickStack.Undo(ctx);
     Check(property(920, "flicker").is_null(), "undo takes the flicker away");
 
+    // UE's Source Radius: how big the light is for VSM's rays. On point and spot alike, in the object's own key, and a negative one refused.
+    const EditorIntentPreview sized = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Light"]},"params":{"sourceRadius":0.02}})");
+    EditorCommandStack sizedStack;
+    status.clear();
+    Check(ExecuteIntent(actionCtx, sizedStack, sized, status) && status.find("source radius") != std::string::npos,
+          "setLight sourceRadius runs and says so: " + status);
+    Check(property(920, "sourceRadius").is_number() && property(921, "sourceRadius").is_number(), "both lights carry the source radius");
+    sizedStack.Undo(ctx);
+    Check(property(920, "sourceRadius").is_null(), "undo takes the source radius away");
+    const EditorIntentPreview negative = preview(
+        R"({"kind":"command","action":"setLight","target":{"filter":["Light"]},"params":{"sourceRadius":-1}})");
+    status.clear();
+    Check(!ExecuteIntent(actionCtx, sizedStack, negative, status), "a negative source radius is refused: " + status);
+
     // The values a light already has: said so, not "Changed ... -- failed".
     const EditorIntentPreview same = preview(
         R"({"kind":"command","action":"setLight","target":{"filter":["Porch"]},"params":{"radius":6}})");

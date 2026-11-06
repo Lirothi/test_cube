@@ -35,6 +35,9 @@ struct SpotLightDesc {
     float        shadowSlopeBias = 0.5f;
     // Plan S2: UE's ShadowSharpen (LightComponent.cpp:468, 0): narrows the filtered penumbra, x (7 x this + 1).
     float        shadowSharpen = 0.0f;
+    // UE's SourceRadius (0), metres: how big the light is for VSM's rays (vsm_smrt_local.hlsli), so how fast its penumbra widens with the distance
+    // from the caster. Only the rays read it: there is no area light in the shading, and no other shadow mode has rays.
+    float        sourceRadius = 0.0f;
 };
 
 class SpotLight {

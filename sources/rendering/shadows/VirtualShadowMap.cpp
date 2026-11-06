@@ -4,6 +4,7 @@
 #include "rendering/core/TextureCreate.h"
 #include "rendering/core/GpuAlloc.h"
 
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -350,6 +351,7 @@ void VirtualShadowMap::ReleaseResources()
     pageDetail_.Reset();
     allocUavHeap_.Reset();
     allocInitialized_ = false; // fresh alloc buffers need the one-shot page-table/owner init again
+    requestCleared_ = false;   // and a fresh request buffer its first clear
 
     pageProj_.Reset();
     pageDrawArgs_.Reset();
@@ -460,7 +462,7 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     freeList_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.FreeList"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     needsRender_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.NeedsRender"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     allocCounters_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, 4u, L"VSM.AllocCounters"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
-    levelBounds_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kNumClipmapLevels * 2u, L"VSM.LevelBounds"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
+    levelBounds_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::LevelBoundsWords(views_), L"VSM.LevelBounds"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     pageDetail_.Attach(renderer->Declarations(), CreateUavUintBuffer(dev, vsm::kPoolPageCount, L"VSM.PageDetail"), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr);
     if (!physOwner_ || !physLastFrame_ || !freeList_ || !needsRender_ || !allocCounters_ || !levelBounds_ || !pageDetail_)
     {
@@ -519,7 +521,7 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
     freeListUav_      = makeUav(freeList_.Get(),      vsm::kPoolPageCount, 2);
     needsRenderUav_   = makeUav(needsRender_.Get(),   vsm::kPoolPageCount, 3);
     allocCountersUav_ = makeUav(allocCounters_.Get(), 4u,                  4);
-    levelBoundsUav_   = makeUav(levelBounds_.Get(), vsm::kNumClipmapLevels * 2u, 5);
+    levelBoundsUav_   = makeUav(levelBounds_.Get(), vsm::LevelBoundsWords(views_), 5);
     pageDetailUav_    = makeUav(pageDetail_.Get(), vsm::kPoolPageCount, 7);
     levelBoundsSrv_   = D3D12_CPU_DESCRIPTOR_HANDLE{ base.ptr + static_cast<SIZE_T>(6u) * incr };
     {
@@ -527,7 +529,7 @@ void VirtualShadowMap::EnsureAllocResources(Renderer* renderer)
         sd.Format = DXGI_FORMAT_UNKNOWN;
         sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sd.Buffer.NumElements = vsm::kNumClipmapLevels * 2u;
+        sd.Buffer.NumElements = vsm::LevelBoundsWords(views_);
         sd.Buffer.StructureByteStride = sizeof(std::uint32_t);
         dev->CreateShaderResourceView(levelBounds_.Get(), &sd, levelBoundsSrv_);
     }
@@ -1099,16 +1101,25 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
     // the base point, emitted by the pass body's marker before this is called.
 
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
-    const std::uint32_t requestWords = RequestBufferWords();
 
-    // Clear the bitfield and the water's mask behind it.
-    RecordComputeDispatch(renderer, cl, pageRequestClearMat_.get(), sizeof(std::uint32_t) * 4,
-        [requestWords](std::uint8_t* dst) { std::uint32_t v[4] = { requestWords, 0u, 0u, 0u }; std::memcpy(dst, v, sizeof(v)); },
-        {},
-        { requestUav_ },
-        noSampler,
-        requestWords, 1,
-        requestBuffer_.Get());
+    // Clear last frame's marks by their summary, and the water's mask behind the bitfield; the buffer's first frame, all of it, in rows.
+    {
+        struct ClearCB { std::uint32_t fullWords, summaryBase, summaryWords, coarseBase, waterBase, waterWords, pad0, pad1; };
+        const std::uint32_t bufferWords = RequestBufferWords();
+        const ClearCB clear{ requestCleared_ ? 0u : bufferWords, SummaryRequestBase(), SummaryWords(), CoarseRequestBase(), RequestWords(), vsm::kWaterMaskWords, 0u, 0u };
+        const std::uint32_t rowThreads = vsm::kClearRowGroups * 64u;
+        const UINT clearWidth = requestCleared_ ? (std::max(SummaryWords(), vsm::kWaterMaskWords) + 63u) / 64u * kComputeDispatchGroupSize // the helper divides by 8
+                                                : vsm::kClearRowGroups * kComputeDispatchGroupSize;
+        const UINT clearHeight = requestCleared_ ? 1u : (bufferWords + rowThreads - 1u) / rowThreads * kComputeDispatchGroupSize;
+        RecordComputeDispatch(renderer, cl, pageRequestClearMat_.get(), static_cast<UINT>(sizeof(ClearCB)),
+            [&clear](std::uint8_t* dst) { std::memcpy(dst, &clear, sizeof(clear)); },
+            {},
+            { requestUav_ },
+            noSampler,
+            clearWidth, clearHeight,
+            requestBuffer_.Get());
+        requestCleared_ = true;
+    }
 
     // The water's marks go only where a caster can shadow them: the mask behind the bitfield, this frame's boxes against
     // this frame's levels. The unified bounds are in their read state from Main_ShadowCull on (the page render reads them
@@ -1140,7 +1151,7 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
             waterMode = 0u;
         }
     }
-    cb.waterMask = DirectX::XMUINT4(RequestWords(), waterMode, CoarseRequestBase(), 0u);
+    cb.waterMask = DirectX::XMUINT4(RequestWords(), waterMode, CoarseRequestBase(), SummaryRequestBase());
 
     // Mark: one thread per DOWN-SAMPLED screen block (reduced res) -> project the block-center
     // pixel into each active local shadow view -> mark its mip page. The downscale comes from the
@@ -1203,12 +1214,13 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         }
     }
 
-    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold, redrawUnrequestedFrames, coarseBase, coarseCache, pad; };
+    struct AllocCB { std::uint32_t numEntries, numPages, curFrame, lruThreshold, redrawUnrequestedFrames, coarseBase, coarseCache, summaryBase, numViews, pad0, pad1, pad2; };
     // The last render's per-page verdict (the free list frees what was redrawn for nobody); without it, that rule is off.
     const bool dirtyKnown = perPageDirty_ && perPageDirtyUav_.ptr != 0;
     auto writeCB = [&](std::uint8_t* dst)
     {
-        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold, dirtyKnown ? vsm::g_redrawUnrequestedFrames : 0u, CoarseRequestBase(), vsm::g_coarseCacheDynamic ? 1u : 0u, 0u };
+        AllocCB c{ numEntries, numPages, curFrame, vsm::g_lruThreshold, dirtyKnown ? vsm::g_redrawUnrequestedFrames : 0u, CoarseRequestBase(), vsm::g_coarseCacheDynamic ? 1u : 0u,
+                   SummaryRequestBase(), views_, 0u, 0u, 0u };
         std::memcpy(dst, &c, sizeof(c));
     };
     const UINT cbSize = static_cast<UINT>(sizeof(AllocCB));
@@ -1222,15 +1234,16 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
             {},
             { pageTableUav_, physOwnerUav_, physLastFrameUav_ },
             noSampler,
-            ((numEntries + 63u) / 64u) * kComputeDispatchGroupSize, 1, // the helper divides by 8; the shader's group is 64 x 1
+            vsm::kClearRowGroups * kComputeDispatchGroupSize, // the helper divides by 8; the shader's group is 64 x 1, its rows VSM_CLEAR_ROW_THREADS
+            (numEntries + vsm::kClearRowGroups * 64u - 1u) / (vsm::kClearRowGroups * 64u) * kComputeDispatchGroupSize,
             pageTable_.Get());
         renderer->UAVBarrier(cl, physOwner_.Get());
         renderer->UAVBarrier(cl, physLastFrame_.Get());
         allocInitialized_ = true;
     }
 
-    // Touch and allocate go by the WORDS of the bitfield (the helper divides by 8; their group is 64 x 1).
-    const std::uint32_t wordThreads = ((numEntries + 31u) / 32u + 63u) / 64u * kComputeDispatchGroupSize;
+    // Touch and allocate go by the words of the request's summary (the helper divides by 8; their group is 64 x 1).
+    const std::uint32_t wordThreads = (SummaryWords() + 63u) / 64u * kComputeDispatchGroupSize;
 
     // Pass 1 (touch): keep resident+requested pages alive (LRU) + reset this frame's counters.
     RecordComputeDispatch(renderer, cl, allocTouchMat_.get(), cbSize, writeCB,
@@ -1266,7 +1279,7 @@ void VirtualShadowMap::RecordPageAllocate(Renderer* renderer, ID3D12GraphicsComm
         needsRender_.Get());
     renderer->UAVBarrier(cl, physOwner_.Get());
 
-    // The rect each clipmap level has pages in, after this frame's mappings: the propagate below and the scatter walk inside it.
+    // The rect each (view, mip) has pages in, after this frame's mappings: the propagate below and the scatter walk inside it.
     if (allocBoundsMat_)
     {
         RecordComputeDispatch(renderer, cl, allocBoundsMat_.get(), cbSize, writeCB,
@@ -1568,7 +1581,7 @@ void VirtualShadowMap::PlanDistantLights(const vsm::ViewProjEntry* views, std::u
         else
         {
             const float nearDist = std::max(std::sqrt(dx * dx + dy * dy + dz * dz) - s.w, 1e-3f);
-            const float level = std::floor(std::log2(nearDist / std::max(vsm::LocalRefDist(), 1e-3f)));
+            const float level = std::floor(std::log2(nearDist / std::max(vsm::LocalRefDist(), 1e-3f))) + static_cast<float>(vsm::kDistanceMarkShift);
             mip = static_cast<std::uint32_t>(std::clamp(level, 0.0f, static_cast<float>(vsm::kMaxMipLevel)));
         }
         if (mip < vsm::kMaxMipLevel) { continue; }
@@ -1703,13 +1716,14 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
     const UINT64 reqBytes   = static_cast<UINT64>(RequestWords()) * sizeof(std::uint32_t);
     const UINT64 cntBytes   = 4ull * sizeof(std::uint32_t);
     const UINT64 ownerBytes = static_cast<UINT64>(vsm::kPoolPageCount) * sizeof(std::uint32_t); // physOwner snapshot (dev grid)
+    const UINT64 summaryBytes = static_cast<UINT64>(SummaryWords()) * sizeof(std::uint32_t);
     if (!debugReadback_)
     {
         D3D12_HEAP_PROPERTIES rb{};
         rb.Type = D3D12_HEAP_TYPE_READBACK;
         D3D12_RESOURCE_DESC rd{};
         rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        rd.Width = reqBytes + cntBytes + ownerBytes;
+        rd.Width = reqBytes + cntBytes + ownerBytes + summaryBytes;
         rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR; rd.Flags = D3D12_RESOURCE_FLAG_NONE;
@@ -1727,6 +1741,8 @@ void VirtualShadowMap::RecordDebugReadback(Renderer* renderer, ID3D12GraphicsCom
     {
         cl->CopyBufferRegion(debugReadback_.Get(), reqBytes + cntBytes, physOwner_.Get(), 0, ownerBytes);
     }
+    cl->CopyBufferRegion(debugReadback_.Get(), reqBytes + cntBytes + ownerBytes, requestBuffer_.Get(),
+                         static_cast<UINT64>(SummaryRequestBase()) * sizeof(std::uint32_t), summaryBytes);
 
     // Step 7 prerequisite (D2's frame epilogue): return these to their CANONICAL states instead
     // of parking them in COPY_SOURCE — a one-frame parked state is exactly what a static
@@ -3160,7 +3176,8 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     const size_t reqBytes   = static_cast<size_t>(RequestWords()) * sizeof(std::uint32_t);
     const size_t cntBytes   = 4 * sizeof(std::uint32_t);
     const size_t ownerBytes = static_cast<size_t>(vsm::kPoolPageCount) * sizeof(std::uint32_t);
-    D3D12_RANGE readRange{ 0, reqBytes + cntBytes + ownerBytes };
+    const size_t summaryBytes = static_cast<size_t>(SummaryWords()) * sizeof(std::uint32_t);
+    D3D12_RANGE readRange{ 0, reqBytes + cntBytes + ownerBytes + summaryBytes };
     void* mapped = nullptr;
     if (FAILED(debugReadback_->Map(0, &readRange, &mapped)) || !mapped)
     {
@@ -3171,36 +3188,35 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     const auto* counters = reinterpret_cast<const std::uint32_t*>(
         static_cast<const std::uint8_t*>(mapped) + reqBytes);
 
-    auto isSet = [&](std::uint32_t page) { return (words[page >> 5u] & (1u << (page & 31u))) != 0u; };
-
     // Total requested pages + a per-mip-level histogram across all views (confirms mip
-    // selection: far receivers should populate the coarse levels). A local view occupies
-    // kPagesPerView contiguous bits, laid out level 0..kMaxMipLevel via LevelPageOffset; a clipmap level has no mips (L0).
+    // selection: far receivers should populate the coarse levels), by the summary: millions of bits a sample would be a hitch of its own.
+    // A local view occupies kPagesPerView contiguous bits, laid out level 0..kMaxMipLevel via LevelPageOffset; a clipmap level has no mips (L0).
+    // Per-view request counts for the 8 spot views (slots 0..7): spots with 0 pages are the ones
+    // whose receivers the request never covers (starved -> no VSM shadow).
     std::uint32_t total = 0;
     std::uint32_t perLevel[vsm::kNumMipLevels] = {};
-    for (std::uint32_t v = 0; v < views_; ++v)
-    {
-        const std::uint32_t viewBase = vsm::ViewBase(v);
-        if (vsm::IsClipmapView(v))
-        {
-            for (std::uint32_t p = 0; p < vsm::kClipmapPages; ++p) { if (isSet(viewBase + p)) { ++perLevel[0]; ++total; } }
-            continue;
-        }
-        for (std::uint32_t lvl = 0; lvl < vsm::kNumMipLevels; ++lvl)
-        {
-            const std::uint32_t base = viewBase + vsm::LevelPageOffset(lvl);
-            const std::uint32_t n = vsm::LevelPageCount(lvl);
-            for (std::uint32_t p = 0; p < n; ++p) { if (isSet(base + p)) { ++perLevel[lvl]; ++total; } }
-        }
-    }
-
-    // Per-view request counts for the 8 spot views (slots 0..7) — spots with 0 pages are the ones
-    // whose receivers the request never covers (starved -> no VSM shadow).
     std::uint32_t perSpot[8] = {};
-    for (std::uint32_t v = 0; v < 8; ++v)
+    const auto* summary = reinterpret_cast<const std::uint32_t*>(static_cast<const std::uint8_t*>(mapped) + reqBytes + cntBytes + ownerBytes);
+    for (std::uint32_t s = 0; s < SummaryWords(); ++s)
     {
-        const std::uint32_t viewBase = vsm::ViewBase(v);
-        for (std::uint32_t p = 0; p < vsm::kPagesPerView; ++p) { if (isSet(viewBase + p)) { ++perSpot[v]; } }
+        for (std::uint32_t summaryBits = summary[s]; summaryBits != 0u; summaryBits &= summaryBits - 1u)
+        {
+            const std::uint32_t word = s * 32u + static_cast<std::uint32_t>(std::countr_zero(summaryBits));
+            for (std::uint32_t bits = words[word]; bits != 0u; bits &= bits - 1u)
+            {
+                const std::uint32_t page = word * 32u + static_cast<std::uint32_t>(std::countr_zero(bits));
+                const std::uint32_t v = vsm::ViewOfPage(page);
+                std::uint32_t level = 0u;
+                if (!vsm::IsClipmapView(v))
+                {
+                    const std::uint32_t inView = page - vsm::ViewBase(v);
+                    while (level < vsm::kMaxMipLevel && inView >= vsm::LevelPageOffset(level + 1u)) { ++level; }
+                }
+                ++perLevel[level];
+                ++total;
+                if (v < 8u) { ++perSpot[v]; }
+            }
+        }
     }
 
     // Alloc counters (VSM_CNT_*): resident = carried-over survivors + newly allocated this frame.
@@ -3245,10 +3261,10 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
             else if (v < views_) { ++ownersLocal; }
         }
         diag::WriteArtifactf("vsm_pages.log", diag::ArtifactMode::PerRunTruncate,
-            "frame=%llu bias=%d req=%u (L0=%u L1=%u L2=%u L3=%u L4=%u) resident=%u new=%u fail=%u"
+            "frame=%llu bias=%d req=%u (L0=%u L1=%u L2=%u L3=%u L4=%u L5=%u L6=%u L7=%u) resident=%u new=%u fail=%u"
             " | owners: total=%u local=%u clip=[%u %u %u %u %u %u %u %u]\n",
             static_cast<unsigned long long>(debugReadbackFrame_), render::g_shadowLodBias,
-            total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
+            total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4], perLevel[5], perLevel[6], perLevel[7],
             resident, newAlloc, failCount,
             ownersTotal, ownersLocal,
             ownersClip[0], ownersClip[1], ownersClip[2], ownersClip[3],
@@ -3262,8 +3278,8 @@ void VirtualShadowMap::PollPageRequestDebug(Renderer* renderer)
     {
         char buf[384];
         std::snprintf(buf, sizeof(buf),
-            "[VSM] request %u (L0=%u L1=%u L2=%u L3=%u L4=%u) | resident=%u new=%u fail=%u | spots[%u %u %u %u %u %u %u %u] (pool=%u).\n",
-            total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4],
+            "[VSM] request %u (L0=%u L1=%u L2=%u L3=%u L4=%u L5=%u L6=%u L7=%u) | resident=%u new=%u fail=%u | spots[%u %u %u %u %u %u %u %u] (pool=%u).\n",
+            total, perLevel[0], perLevel[1], perLevel[2], perLevel[3], perLevel[4], perLevel[5], perLevel[6], perLevel[7],
             resident, newAlloc, failCount,
             perSpot[0], perSpot[1], perSpot[2], perSpot[3], perSpot[4], perSpot[5], perSpot[6], perSpot[7],
             vsm::kPoolPageCount);

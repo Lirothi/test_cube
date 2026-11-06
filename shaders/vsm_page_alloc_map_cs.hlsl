@@ -1,4 +1,4 @@
-// Rung 2 / Step 20, pass 3 (allocate): one thread per WORD of the request bitfield (see the touch pass). For a page requested this
+// Rung 2 / Step 20, pass 3 (allocate): one thread per word of the request's summary (see the touch pass). For a page requested this
 // frame that is NOT resident, pop a free physical page from the free list (atomic decrement of
 // FreeCount) and map it: write the page-table entry, claim the physical page's owner + last-frame,
 // and append the physical page to the needs-render list (Step 22 will rasterize casters into it).
@@ -61,13 +61,19 @@ void MapPage(uint i)
 [RootSignature(VSM_PAGE_ALLOC_MAP_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
-    const uint word = dtid.x;
-    if (word >= (gNumEntries + 31u) / 32u) { return; }
-    uint bits = Request[word] | Request[gCoarseBase + word];
-    while (bits != 0u)
+    const uint t = dtid.x;
+    if (t >= VsmSummaryWords()) { return; }
+    uint summary = Request[gSummaryBase + t];
+    while (summary != 0u)
     {
-        const uint i = word * 32u + firstbitlow(bits);
-        bits &= bits - 1u;
-        MapPage(i);
+        const uint word = t * 32u + firstbitlow(summary);
+        summary &= summary - 1u;
+        uint bits = Request[word] | Request[gCoarseBase + word];
+        while (bits != 0u)
+        {
+            const uint i = word * 32u + firstbitlow(bits);
+            bits &= bits - 1u;
+            MapPage(i);
+        }
     }
 }

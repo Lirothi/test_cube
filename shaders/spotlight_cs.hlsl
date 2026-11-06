@@ -14,7 +14,8 @@
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli"
-#include "vsm_sample.hlsli"
+#define VSM_SMRT_COMPUTE 1 // a compute pass: its wave ops mean what UE's adaptive ray count assumes
+#include "vsm_smrt_local.hlsli"
 #include "contact_shadow.hlsli"
 #include "local_shadow_bias.hlsli"
 #include "local_shadow_filter.hlsli" // plan S2: UE's spot filter
@@ -32,7 +33,8 @@ struct SpotLightData
     float4 shadowAtlas;        // S9: its square in its atlas page, page UV: xy = corner, z = size, w = page
     float4 shadowParams4;      // S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias);
                                // S4: y = 1 / (f - n) when the atlas holds the LINEAR depth, 0 = perspective;
-                               // S9e: z = its VSM view (vsm::SpotView of its slot)
+                               // S9e: z = its VSM view (vsm::SpotView of its slot);
+                               // w = UE's SourceRadius (m), for VSM's rays
 };
 
 Texture2D GB0 : register(t0);
@@ -97,6 +99,11 @@ cbuffer SpotLightFrame : register(b0)
     // footprint (0 = by camera distance), y = the lod bias (ResolutionLodBiasLocal + dynamic resolution), z = the
     // pixel radius per unit of view depth (min(1 / (W P00), 1 / (H P11)) at the render resolution).
     float4 vsmLocalMip;
+    // UE's TraceLocalLight (vsm_smrt_local.hlsli). x = rays (0 = the 3 x 3 PCF of one mip, the A/B), y = samples per ray, z = AdaptiveRayCount, w = the frame's index.
+    float4 vsmSmrtCounts;
+    // x = TexelDitherScaleLocal, y = ExtrapolateMaxSlopeLocal, z = MaxSlopeBiasLocal, w = 1 / tan(MaxRayAngleFromLight).
+    float4 vsmSmrtShape;
+    float  vsmSmrtNormalBias; // r.Shadow.Virtual.NormalBias / 1000
 };
 ContactShadowParams MakeContactParams()
 {
@@ -196,7 +203,16 @@ float ComputeSpotShadowMap(const SpotLightData light, float3 P, float3 N, float3
         }
         else
         {
-            reqLevel = VsmSelectLevel(length(P - camPosWS), vsmRefDist, VSM_MAX_LEVEL);
+            reqLevel = VsmSelectMarkLevel(length(P - camPosWS), vsmRefDist);
+        }
+        // UE's: rays, not a filter. `vsm.localSmrtRayCount:0` = the 3 x 3 PCF below, the A/B.
+        if (vsmSmrtCounts.x >= 1.0f)
+        {
+            const VsmLocalSmrtParams prm = VsmLocalSmrtMake(vsmSmrtCounts, vsmSmrtShape, vsmSmrtNormalBias, invProj._11, vsmLocalMip.z);
+            return VsmLocalTraceShadow(prm, false, VsmSpotProj(view, light.viewProj, light.positionRange.xyz), 0u, 0.0f, 0.0f,
+                                       light.positionRange.xyz, light.shadowParams4.w,
+                                       P + Ng * VsmLocalNormalBias(prm, length(P - camPosWS)), Ng, dot(P - camPosWS, invView[2].xyz),
+                                       vsmLocalMip.y + light.shadowParams4.x, reqLevel, VsmPageTable, VsmPool);
         }
         const uint  lvl        = texelFix ? VsmSpotSampledLevel(view, reqLevel, light.viewProj, P, VsmPageTable) : reqLevel;
         const float3 Nb        = texelFix ? Ng : N;

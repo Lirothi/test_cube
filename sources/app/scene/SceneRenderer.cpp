@@ -224,7 +224,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                 spotCPU[i].shadowParams4 = Math::float4(vsm::LocalMovingMipBias(lm.GetSpotMobility(i)), // S10e
                     render::SpotShadowLinearDepth() ? 1.0f / std::max(light.GetShadowFar() - light.GetShadowNear(), 1.0e-4f)
                                                     : 0.0f, // S4: the linear depth's scale, BuildSpotShadowViewCB's
-                    spotSlot >= 0 ? static_cast<float>(vsm::SpotView(static_cast<std::uint32_t>(spotSlot))) : 0.0f, 0.0f);
+                    spotSlot >= 0 ? static_cast<float>(vsm::SpotView(static_cast<std::uint32_t>(spotSlot))) : 0.0f, desc.sourceRadius);
                 // Plan S2: the filter's inputs (local_shadow_filter.hlsli). UE's soft transition for a spot is
                 // 1/SpotLightTransitionScale (60) x 2 x ShadowBias of its normalised depth (ShadowRendering.cpp:2059-2075),
                 // which spans the light's range: the ramp is that many METRES here, (f - n) / 60 at the default bias.
@@ -313,7 +313,7 @@ void SceneRenderer::EnsureFrameResources(Renderer* renderer)
                     render::PointShadowLinearDepth() ? 1.0f / std::max(pointShadowFar - pointShadowNear, 1.0e-4f)
                                                      : 0.0f, // S4: the faces' linear depth scale, BuildPointShadowViewCB's
                     pointSlot >= 0 ? static_cast<float>(vsm::PointFaceView(static_cast<std::uint32_t>(pointSlot) * 6u)) : 0.0f,
-                    0.0f);
+                    desc.sourceRadius);
                 if ((frame_->pointLightOccluded && i < frame_->pointLightOccluded->size() && (*frame_->pointLightOccluded)[i]) ||
                     desc.luminousFluxLm <= 0.0f)
                 {

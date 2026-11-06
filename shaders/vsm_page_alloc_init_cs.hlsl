@@ -16,7 +16,7 @@ RWStructuredBuffer<uint> PhysLastFrame : register(u2); // [gNumPages] physical p
 [RootSignature(VSM_PAGE_ALLOC_INIT_RS)]
 void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
-    const uint i = dtid.x;
+    const uint i = dtid.x + dtid.y * VSM_CLEAR_ROW_THREADS; // in rows: past 65535 groups of 64 at full capacity
     if (i < gNumEntries) { PageTable[i] = 0u; }
     if (i < gNumPages)   { PhysOwner[i] = VSM_INVALID; PhysLastFrame[i] = 0u; }
 }

@@ -38,6 +38,7 @@ cbuffer PageRequestCB : register(b0)
     // Where the water's marks go (vsm::g_waterCasterMask): x = the caster mask's first word in Request (the bitfield's
     // length, vsm_water_mask_cs.hlsl), y = 0 every water pixel, 1 only under a caster's box, 2 none (the control).
     // z = the coarse pages' own bitfield in Request: MarkCoarsePages's marks, apart from the pixels' (the setup asks which).
+    // w = the summary in Request: a bit per WORD of those bitfields, what the walks and the next frame's clear go by.
     uint4    waterMask;
     // The sun's clipmap: x = the resolution LOD bias, the frame's and the dynamic resolution's (GetBiasedClipmapLevel),
     // y = the first level's absolute number; z / w = PageDilationBorderSize, directional / local.
@@ -58,14 +59,21 @@ RWStructuredBuffer<uint>        Request : register(u0);
 // Sets a page's request bit -- read first, the atomic only while the bit is still clear. Every pixel of every light marks
 // its page's whole coarser mip chain, so the coarse levels' few words took one InterlockedOr from nearly every thread:
 // the same address, serialised (the bathroom at night, five candles: 0.55 ms). A read that races the first setter only
-// costs a redundant atomic; nothing is lost.
+// costs a redundant atomic; nothing is lost. The word's first bit also goes into the summary: a table of millions of entries
+// holds a few hundred marks, and everything that walks them goes by it.
 void MarkBit(uint base, uint page)
 {
-    const uint word = base + (page >> 5u);
+    const uint pageWord = page >> 5u;
+    const uint word = base + pageWord;
     const uint bit = 1u << (page & 31u);
     if ((Request[word] & bit) != 0u) { return; }
     uint prev;
     InterlockedOr(Request[word], bit, prev);
+    if (prev == 0u)
+    {
+        uint prevSummary;
+        InterlockedOr(Request[waterMask.w + (pageWord >> 5u)], 1u << (pageWord & 31u), prevSummary);
+    }
 }
 void MarkPage(uint page) { MarkBit(0u, page); }
 void MarkCoarsePage(uint page) { MarkBit(waterMask.z, page); }
@@ -231,8 +239,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID, uint gi : SV_GroupIndex)
     const float refDist  = max(lodParams.x, 1e-3f);
     const uint  maxLevel = min((uint)lodParams.y, VSM_MAX_LEVEL);
     const float distCam  = length(P - camPosWS.xyz);
-    const int   rawLevel = (int)floor(log2(max(distCam, 1e-3f) / refDist));
-    const uint  levelByDistance = (uint)clamp(rawLevel, 0, (int)maxLevel);
+    const uint  levelByDistance = min(VsmSelectMarkLevel(distCam, refDist), maxLevel);
 
     // --- Local lights: per view, a projection + a mip chain. Plan S9e: walked per LIGHT (a point's six faces share its
     // sphere: one distance test, then only the face P's direction falls in -- VsmCubeFace, the sampler's rule), bounded

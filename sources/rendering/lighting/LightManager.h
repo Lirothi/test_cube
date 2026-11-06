@@ -47,7 +47,7 @@ public:
         // Plan S10e: x = the light's VSM mip bias on top of the frame's (vsm::LocalMovingMipBias: UE's
         // ResolutionLodBiasLocalMoving by the light's mobility). Plan S4: y = 1 / (f - n) when its faces hold the
         // LINEAR depth (render::PointShadowLinearDepth; n = shadowParams.z), 0 = perspective. Plan S9e: z = the VSM view
-        // of its +X face (vsm::PointFaceView of slot * 6; the other five follow). w reserved. Same mirrors.
+        // of its +X face (vsm::PointFaceView of slot * 6; the other five follow). w = UE's SourceRadius (m), for VSM's rays. Same mirrors.
         Math::float4 shadowParams4;
     };
 
@@ -71,7 +71,7 @@ public:
         // Plan S10e: x = the light's VSM mip bias on top of the frame's (UE's moving bias, see PointLightGpu).
         // Plan S4: y = 1 / (f - n) when its atlas square holds the LINEAR depth (w - n) / (f - n)
         // (render::SpotShadowLinearDepth; n = shadowParams3.x, both the projection's own), 0 = the perspective NDC
-        // depth. Plan S9e: z = its VSM view (vsm::SpotView of its slot). w reserved. Same mirrors.
+        // depth. Plan S9e: z = its VSM view (vsm::SpotView of its slot). w = UE's SourceRadius (m), for VSM's rays. Same mirrors.
         Math::float4 shadowParams4;
     };
 

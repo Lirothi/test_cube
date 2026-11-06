@@ -2169,6 +2169,12 @@
     <None Include="shaders\vsm_smrt.hlsli">
       <Filter>shaders</Filter>
     </None>
+    <None Include="shaders\vsm_smrt_local.hlsli">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\vsm_smrt_march.hlsli">
+      <Filter>shaders</Filter>
+    </None>
     <None Include="textures\ocean\ContactFoam.png">
       <Filter>textures\ocean</Filter>
     </None>

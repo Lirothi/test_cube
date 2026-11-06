@@ -411,7 +411,7 @@ float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBi
                         - covered);
                 st.startUVZ.z -= slopeBias;
 
-                const VsmSmrtResult hit = VsmSmrtRayCast(st, (int)smrt.samplesPerRay, 0.0f,
+                const VsmSmrtResult hit = VsmSmrtRayCast(st, (int)max(smrt.samplesPerRay, 1u), 0.0f,
                                                          clipVP, PageTable, Pool);
                 if (!hit.validHit) { ++rayMissCount; }
 

@@ -52,7 +52,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         const float2 hi = ctr + r;
         if (hi.x < -1.0f || lo.x > 1.0f || hi.y < -1.0f || lo.y > 1.0f) { break; } // outside this level, and the finer ones
         // NDC -> the level's page grid, y flipped: vsm_page_scatter_cs's rect.
-        const int axis = (int)VSM_L0_AXIS;
+        const int axis = (int)VSM_WATER_MASK_AXIS;
         const uint px0 = (uint)clamp((int)floor((lo.x * 0.5f + 0.5f) * axis), 0, axis - 1);
         const uint px1 = (uint)clamp((int)floor((hi.x * 0.5f + 0.5f) * axis), 0, axis - 1);
         const uint py0 = (uint)clamp((int)floor((0.5f - hi.y * 0.5f) * axis), 0, axis - 1);

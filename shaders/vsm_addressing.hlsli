@@ -62,12 +62,12 @@ static const uint VSM_LOD_SHIFT      = 16u;
 static const uint VSM_LOD_MASK       = 0x001F0000u; // 5 bits: offsets 0..16 (17 clipmap levels)
 static const uint VSM_PHYS_MASK_C    = 0x0000FFFFu;
 
-// A LOCAL view (a spot, a point face): 2048 texels at mip 0, five mips.
-static const float VSM_VIRTUAL_RES = 2048.0f;  // kVirtualRes — texels per local view edge (for texel-scaled bias)
-static const uint VSM_L0_AXIS        = 16u;  // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
-static const uint VSM_MAX_LEVEL      = 4u;   // kMaxMipLevel
-static const uint VSM_PAGES_PER_VIEW = 341u; // kPagesPerView (16²+8²+4²+2²+1)
-static const uint VSM_LEVEL_OFFSET[6] = { 0u, 256u, 320u, 336u, 340u, 341u };
+// A LOCAL view (a spot, a point face): UE's 16384 texels at mip 0 (VSM_VIRTUAL_MAX_RESOLUTION_XY), eight mips.
+static const float VSM_VIRTUAL_RES = 16384.0f; // kVirtualRes -- texels per local view edge (for texel-scaled bias)
+static const uint VSM_L0_AXIS        = 128u;   // kVirtualPagesL0Axis (kVirtualRes / kPageSize)
+static const uint VSM_MAX_LEVEL      = 7u;     // kMaxMipLevel
+static const uint VSM_PAGES_PER_VIEW = 21845u; // kPagesPerView (128^2 + 64^2 + ... + 1)
+static const uint VSM_LEVEL_OFFSET[9] = { 0u, 16384u, 20480u, 21504u, 21760u, 21824u, 21840u, 21844u, 21845u };
 // A clipmap LEVEL: UE's 16384 texels (VSM_VIRTUAL_MAX_RESOLUTION_XY), 128 x 128 pages, no mips: the level IS the LOD.
 static const float VSM_CLIPMAP_VIRTUAL_RES = 16384.0f; // kClipmapVirtualRes
 static const uint VSM_CLIPMAP_AXIS   = 128u;   // kClipmapPagesAxis
@@ -77,12 +77,30 @@ static const uint VSM_POOL_PAGES_X    = 128u;  // kPoolPagesX
 static const uint VSM_POOL_PAGES_Y    = 16u;   // kPoolPagesY
 static const uint VSM_POOL_PAGES      = 2048u; // kPoolPageCount
 static const uint VSM_PAGE_SIZE       = 128u;
+// The water's caster mask: a level's sixteenth a bit (vsm_water_mask_cs.hlsl); 8 words a level. vsm::kWaterMaskAxis.
+static const uint VSM_WATER_MASK_AXIS = 16u;
+// One row of a two-dimensional dispatch that clears something longer than 65535 groups of 64 reach. vsm::kClearRowGroups x 64.
+static const uint VSM_CLEAR_ROW_THREADS = 262144u;
 
-// Distance-based mip select (mirrors vsm_page_request_cs): coarser level with camera distance.
+// Where a view has pages (vsm_page_bounds_cs.hlsl): per (view, mip) four words, [min x, min y, max x, max y] (nothing mapped: min past max);
+// and per view one entry more, its first word not 0 when the view has a page. A clipmap level has its mip 0. vsm::LevelBoundsWords.
+static const uint VSM_BOUNDS_ENTRIES_PER_VIEW = VSM_MAX_LEVEL + 2u;
+static const uint VSM_BOUNDS_ANY = VSM_MAX_LEVEL + 1u;
+uint VsmBoundsIndex(uint view, uint mip) { return (view * VSM_BOUNDS_ENTRIES_PER_VIEW + mip) * 4u; }
+
+// Where a READ starts by the camera's distance (the fog, glass: no pixel footprint to go by): it walks to coarser mips from there, so
+// starting finer than anyone asked costs table reads and nothing else.
 uint VsmSelectLevel(float distCam, float refDist, uint maxLevel)
 {
     int raw = (int)floor(log2(max(distCam, 1e-3f) / max(refDist, 1e-3f)));
     return (uint)clamp(raw, 0, (int)maxLevel);
+}
+// The same distance as a MARK (vsm.localMipFromPixel 0, the A/B): the law was written for 2048 texels at mip 0, which is mip 3 now.
+static const uint VSM_DISTANCE_MARK_SHIFT = 3u; // vsm::kDistanceMarkShift
+uint VsmSelectMarkLevel(float distCam, float refDist)
+{
+    const int raw = (int)floor(log2(max(distCam, 1e-3f) / max(refDist, 1e-3f))) + (int)VSM_DISTANCE_MARK_SHIFT;
+    return (uint)clamp(raw, 0, (int)VSM_MAX_LEVEL);
 }
 
 // Local-light plan S10e: UE's local-light mip (VirtualShadowMapProjectionCommon.ush:96-118, VirtualShadowMapDefinitions.h
@@ -148,7 +166,7 @@ void VsmDecodePage(uint pageId, out uint view, out uint level, out uint px, out 
         py = inView / VSM_CLIPMAP_AXIS;
         return;
     }
-    [unroll] for (uint L = 0u; L < 5u; ++L)
+    [unroll] for (uint L = 0u; L <= VSM_MAX_LEVEL; ++L)
     {
         if (inView >= VSM_LEVEL_OFFSET[L] && inView < VSM_LEVEL_OFFSET[L + 1u]) { level = L; }
     }

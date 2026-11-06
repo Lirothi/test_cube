@@ -164,6 +164,9 @@ void ScenePointLightCBHandles::Populate(Material* material)
     localDepthPushTexels = material->ComputeCB0FieldHandle("localDepthPushTexels");
     vsmTexelBias = material->ComputeCB0FieldHandle("vsmTexelBias");
     vsmLocalMip = material->ComputeCB0FieldHandle("vsmLocalMip");
+    vsmSmrtCounts = material->ComputeCB0FieldHandle("vsmSmrtCounts");
+    vsmSmrtShape = material->ComputeCB0FieldHandle("vsmSmrtShape");
+    vsmSmrtNormalBias = material->ComputeCB0FieldHandle("vsmSmrtNormalBias");
     viewProj = material->ComputeCB0FieldHandle("viewProj");
     projMatrix = material->ComputeCB0FieldHandle("projMatrix");
     contactShadowLength = material->ComputeCB0FieldHandle("contactShadowLength");
@@ -202,6 +205,9 @@ void SceneSpotLightCBHandles::Populate(Material* material)
     localDepthPushTexels = material->ComputeCB0FieldHandle("localDepthPushTexels");
     vsmTexelBias = material->ComputeCB0FieldHandle("vsmTexelBias");
     vsmLocalMip = material->ComputeCB0FieldHandle("vsmLocalMip");
+    vsmSmrtCounts = material->ComputeCB0FieldHandle("vsmSmrtCounts");
+    vsmSmrtShape = material->ComputeCB0FieldHandle("vsmSmrtShape");
+    vsmSmrtNormalBias = material->ComputeCB0FieldHandle("vsmSmrtNormalBias");
     viewProj = material->ComputeCB0FieldHandle("viewProj");
     projMatrix = material->ComputeCB0FieldHandle("projMatrix");
     contactShadowLength = material->ComputeCB0FieldHandle("contactShadowLength");
@@ -1779,6 +1785,9 @@ void SceneResourceBootstrapper::WritePointLightConstants(const PointLightPassCon
     matPointLightCS_->UpdateCBField(handles.localDepthPushTexels, data.localDepthPushTexels, dest);
     matPointLightCS_->UpdateCBField(handles.vsmTexelBias, data.vsmTexelBias, dest);
     matPointLightCS_->UpdateCBField(handles.vsmLocalMip, data.vsmLocalMip, dest);
+    matPointLightCS_->UpdateCBField(handles.vsmSmrtCounts, data.vsmSmrtCounts, dest);
+    matPointLightCS_->UpdateCBField(handles.vsmSmrtShape, data.vsmSmrtShape, dest);
+    matPointLightCS_->UpdateCBField(handles.vsmSmrtNormalBias, data.vsmSmrtNormalBias, dest);
     matPointLightCS_->UpdateCBField(handles.viewProj, data.viewProj, dest);
     matPointLightCS_->UpdateCBField(handles.projMatrix, data.projMatrix, dest);
     matPointLightCS_->UpdateCBField(handles.contactShadowLength, data.contactShadowLength, dest);
@@ -1817,6 +1826,9 @@ void SceneResourceBootstrapper::WriteSpotLightConstants(const SpotLightPassConst
     matSpotLightCS_->UpdateCBField(handles.localDepthPushTexels, data.localDepthPushTexels, dest);
     matSpotLightCS_->UpdateCBField(handles.vsmTexelBias, data.vsmTexelBias, dest);
     matSpotLightCS_->UpdateCBField(handles.vsmLocalMip, data.vsmLocalMip, dest);
+    matSpotLightCS_->UpdateCBField(handles.vsmSmrtCounts, data.vsmSmrtCounts, dest);
+    matSpotLightCS_->UpdateCBField(handles.vsmSmrtShape, data.vsmSmrtShape, dest);
+    matSpotLightCS_->UpdateCBField(handles.vsmSmrtNormalBias, data.vsmSmrtNormalBias, dest);
     matSpotLightCS_->UpdateCBField(handles.viewProj, data.viewProj, dest);
     matSpotLightCS_->UpdateCBField(handles.projMatrix, data.projMatrix, dest);
     matSpotLightCS_->UpdateCBField(handles.contactShadowLength, data.contactShadowLength, dest);

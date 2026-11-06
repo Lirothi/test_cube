@@ -191,7 +191,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
         d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
         d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-        d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
+        d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
         points[i].SetDesc(d);
     }
     else if (env.type == "spotLight")
@@ -216,7 +216,7 @@ void EnvironmentRuntime::Apply(EditorContext& ctx, const EditorObject& env)
         d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
         d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
         d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-        d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
+        d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
         d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
         spots[i].SetDesc(d);
     }
@@ -551,7 +551,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
             d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
             d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-            d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
+            d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
             d.nearPlane = JF(p, "shadowNear", d.nearPlane); // local-light shadows S8
             lm.SpotLights().push_back({});
             lm.SpotLights().back().SetDesc(d);
@@ -571,7 +571,7 @@ void EnvironmentRuntime::RebuildLights(EditorContext& ctx)
             d.onAt = LampSwitchFromName(p.value("onAt", std::string())); // plan L
             d.dayBrightness = std::max(JF(p, "dayBrightness", d.dayBrightness), 0.0f);
             d.shadowBias = JF(p, "shadowBias", d.shadowBias);           // local-light shadows S1 (UE's)
-            d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen);
+            d.shadowSlopeBias = JF(p, "shadowSlopeBias", d.shadowSlopeBias); d.shadowSharpen = JF(p, "shadowSharpen", d.shadowSharpen); d.sourceRadius = std::max(JF(p, "sourceRadius", d.sourceRadius), 0.0f);
             lm.PointLights().push_back({});
             lm.PointLights().back().SetDesc(d);
         }

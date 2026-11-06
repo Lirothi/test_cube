@@ -936,6 +936,10 @@ void SceneRenderer::Pass_SpotLights(Renderer* renderer, RenderGraphPassContext c
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
         constants.vsmTexelBias = vsm::g_localTexelBias ? 1u : 0u; // plan S10b
         constants.vsmLocalMip = float4(vsm::LocalMipParams(constants.invProj.m, width, height)); // plan S10e: the request's mip
+        constants.vsmSmrtCounts = float4(static_cast<float>(vsm::g_localSmrtRayCount), static_cast<float>(vsm::g_localSmrtSamplesPerRay),
+                                         static_cast<float>(vsm::g_smrtAdaptiveRayCount), static_cast<float>(frame_->smrtFrameIndex));
+        constants.vsmSmrtShape = float4(vsm::LocalSmrtShape());
+        constants.vsmSmrtNormalBias = vsm::g_clipmapNormalBias * 0.001f;
         render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
                                        camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
         constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();
@@ -1009,6 +1013,10 @@ void SceneRenderer::Pass_PointLights(Renderer* renderer, RenderGraphPassContext 
         constants.localDepthPushTexels = vsm::g_localDepthPushTexels;
         constants.vsmTexelBias = vsm::g_localTexelBias ? 1u : 0u; // plan S10b
         constants.vsmLocalMip = float4(vsm::LocalMipParams(constants.invProj.m, width, height)); // plan S10e: the request's mip
+        constants.vsmSmrtCounts = float4(static_cast<float>(vsm::g_localSmrtRayCount), static_cast<float>(vsm::g_localSmrtSamplesPerRay),
+                                         static_cast<float>(vsm::g_smrtAdaptiveRayCount), static_cast<float>(frame_->smrtFrameIndex));
+        constants.vsmSmrtShape = float4(vsm::LocalSmrtShape());
+        constants.vsmSmrtNormalBias = vsm::g_clipmapNormalBias * 0.001f;
         render::contact::FillConstants(constants, camera.GetViewMatrix() * camera.GetProjMatrix(),
                                        camera.GetProjMatrix(), renderer->GetTotalFrameNumber());
         constants.contactShadowLocalMode = render::contact::EffectiveLocalMode();

@@ -167,6 +167,8 @@ namespace
         float vsmResolutionLodBiasDirectional = 0.0f;
         std::uint32_t smrtRayCount = 8u;
         std::uint32_t smrtSamplesPerRay = 4u;
+        std::uint32_t localSmrtRayCount = 4u;
+        std::uint32_t localSmrtSamplesPerRay = 4u;
         bool smrtTemporalDither = true;
         std::uint32_t smrtAdaptiveRayCount = 1u;
         float smrtSunAngleDeg = 0.5357f;
@@ -421,6 +423,8 @@ namespace
         s.vsmResolutionLodBiasDirectional = std::clamp(finite(s.vsmResolutionLodBiasDirectional, 0.0f), -4.0f, 4.0f);
         s.smrtRayCount = std::min(s.smrtRayCount, vsm::kSmrtMaxRays);
         s.smrtSamplesPerRay = std::clamp(s.smrtSamplesPerRay, 1u, vsm::kSmrtMaxSamplesPerRay);
+        s.localSmrtRayCount = std::min(s.localSmrtRayCount, vsm::kSmrtMaxRays);
+        s.localSmrtSamplesPerRay = std::min(s.localSmrtSamplesPerRay, vsm::kSmrtMaxSamplesPerRay);
         s.smrtAdaptiveRayCount = std::min(s.smrtAdaptiveRayCount, 8u);
         s.smrtSunAngleDeg = std::clamp(finite(s.smrtSunAngleDeg, 0.5357f), 0.0f, 8.0f);
         s.smrtTexelDitherScale = std::clamp(finite(s.smrtTexelDitherScale, 2.0f), 0.0f, 4.0f);
@@ -587,6 +591,8 @@ namespace
         s.vsmResolutionLodBiasDirectional = vsm::g_resolutionLodBiasDirectional_game;
         s.smrtRayCount = vsm::g_smrtRayCount_game;
         s.smrtSamplesPerRay = vsm::g_smrtSamplesPerRay_game;
+        s.localSmrtRayCount = vsm::g_localSmrtRayCount_game;
+        s.localSmrtSamplesPerRay = vsm::g_localSmrtSamplesPerRay_game;
         s.smrtTemporalDither = vsm::g_smrtTemporalDither_game;
         s.smrtAdaptiveRayCount = vsm::g_smrtAdaptiveRayCount_game;
         s.smrtSunAngleDeg = vsm::g_smrtSourceAngleDeg_game;
@@ -786,6 +792,8 @@ namespace
         vsm::g_resolutionLodBiasDirectional_game = s.vsmResolutionLodBiasDirectional;
         vsm::g_smrtRayCount_game = s.smrtRayCount;
         vsm::g_smrtSamplesPerRay_game = s.smrtSamplesPerRay;
+        vsm::g_localSmrtRayCount_game = s.localSmrtRayCount;
+        vsm::g_localSmrtSamplesPerRay_game = s.localSmrtSamplesPerRay;
         vsm::g_smrtTemporalDither_game = s.smrtTemporalDither;
         vsm::g_smrtAdaptiveRayCount_game = s.smrtAdaptiveRayCount;
         vsm::g_smrtSourceAngleDeg_game = s.smrtSunAngleDeg;
@@ -1016,6 +1024,8 @@ namespace
                     { "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional },
                     { "smrtRayCount", s.smrtRayCount },
                     { "smrtSamplesPerRay", s.smrtSamplesPerRay },
+                    { "localSmrtRayCount", s.localSmrtRayCount },
+                    { "localSmrtSamplesPerRay", s.localSmrtSamplesPerRay },
                     { "smrtTemporalDither", s.smrtTemporalDither },
                     { "smrtAdaptiveAfterRays", s.smrtAdaptiveRayCount },
                     { "smrtSunAngleDeg", s.smrtSunAngleDeg },
@@ -1252,6 +1262,8 @@ namespace
         Read(vsmSettings, "resolutionLodBiasDirectional", s.vsmResolutionLodBiasDirectional);
         Read(vsmSettings, "smrtRayCount", s.smrtRayCount);
         Read(vsmSettings, "smrtSamplesPerRay", s.smrtSamplesPerRay);
+        Read(vsmSettings, "localSmrtRayCount", s.localSmrtRayCount);
+        Read(vsmSettings, "localSmrtSamplesPerRay", s.localSmrtSamplesPerRay);
         Read(vsmSettings, "smrtTemporalDither", s.smrtTemporalDither);
         Read(vsmSettings, "smrtAdaptiveAfterRays", s.smrtAdaptiveRayCount);
         Read(vsmSettings, "smrtSunAngleDeg", s.smrtSunAngleDeg);
@@ -1604,6 +1616,8 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::VsmSmrtEnabled:
     case GraphicsControl::VsmSmrtRays:                    current.smrtRayCount = defaults.smrtRayCount; break;
     case GraphicsControl::VsmSmrtSamples:                 current.smrtSamplesPerRay = defaults.smrtSamplesPerRay; break;
+    case GraphicsControl::VsmLocalSmrtRays:               current.localSmrtRayCount = defaults.localSmrtRayCount; break;
+    case GraphicsControl::VsmLocalSmrtSamples:            current.localSmrtSamplesPerRay = defaults.localSmrtSamplesPerRay; break;
     case GraphicsControl::VsmSmrtTemporal:                current.smrtTemporalDither = defaults.smrtTemporalDither; break;
     case GraphicsControl::VsmSmrtAdaptive:                current.smrtAdaptiveRayCount = defaults.smrtAdaptiveRayCount; break;
     case GraphicsControl::VsmSmrtSunAngle:                current.smrtSunAngleDeg = defaults.smrtSunAngleDeg; break;

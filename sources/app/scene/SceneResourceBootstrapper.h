@@ -120,6 +120,7 @@ struct ScenePointLightCBHandles
     Material::CBFieldHandle localDepthPushTexels;
     Material::CBFieldHandle vsmTexelBias;                  // plan S10b
     Material::CBFieldHandle vsmLocalMip;                   // plan S10e
+    Material::CBFieldHandle vsmSmrtCounts, vsmSmrtShape, vsmSmrtNormalBias; // UE's TraceLocalLight
     Material::CBFieldHandle viewProj, projMatrix;          // contact shadows (S12)
     Material::CBFieldHandle contactShadowLength, contactShadowIntensity, contactShadowSteps,
                             contactShadowLengthInWS, contactShadowNormalOffset,
@@ -146,6 +147,7 @@ struct SceneSpotLightCBHandles
     Material::CBFieldHandle localDepthPushTexels;
     Material::CBFieldHandle vsmTexelBias;                  // plan S10b
     Material::CBFieldHandle vsmLocalMip;                   // plan S10e
+    Material::CBFieldHandle vsmSmrtCounts, vsmSmrtShape, vsmSmrtNormalBias; // UE's TraceLocalLight
     Material::CBFieldHandle viewProj, projMatrix;          // contact shadows (S12)
     Material::CBFieldHandle contactShadowLength, contactShadowIntensity, contactShadowSteps,
                             contactShadowLengthInWS, contactShadowNormalOffset,
@@ -800,6 +802,9 @@ struct PointLightPassConstants
     float localDepthPushTexels = 0.5f;
     uint32_t vsmTexelBias = 1;          // plan S10b: vsm::g_localTexelBias
     float4 vsmLocalMip{};               // plan S10e: vsm::LocalMipParams
+    float4 vsmSmrtCounts{};             // UE's TraceLocalLight: rays, samples per ray, adaptive, the frame's index
+    float4 vsmSmrtShape{};              // vsm::LocalSmrtShape
+    float vsmSmrtNormalBias = 0.0f;     // r.Shadow.Virtual.NormalBias / 1000
     // Contact shadows (S12). Same member names as LightingPassConstants -- one shader function
     // and one CPU writer (render::contact::FillConstants) serve every light pass.
     mat4 viewProj{};
@@ -837,6 +842,9 @@ struct SpotLightPassConstants
     float localDepthPushTexels = 0.5f;
     uint32_t vsmTexelBias = 1;          // plan S10b: vsm::g_localTexelBias
     float4 vsmLocalMip{};               // plan S10e: vsm::LocalMipParams
+    float4 vsmSmrtCounts{};             // UE's TraceLocalLight: rays, samples per ray, adaptive, the frame's index
+    float4 vsmSmrtShape{};              // vsm::LocalSmrtShape
+    float vsmSmrtNormalBias = 0.0f;     // r.Shadow.Virtual.NormalBias / 1000
     // Contact shadows (S12). Same member names as LightingPassConstants -- one shader function
     // and one CPU writer (render::contact::FillConstants) serve every light pass.
     mat4 viewProj{};

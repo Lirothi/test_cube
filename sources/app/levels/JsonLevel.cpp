@@ -331,6 +331,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.shadowBias = sl.value("shadowBias", desc.shadowBias);           // local-light shadows S1 (UE's)
             desc.shadowSlopeBias = sl.value("shadowSlopeBias", desc.shadowSlopeBias);
             desc.shadowSharpen = sl.value("shadowSharpen", desc.shadowSharpen); // S2
+            desc.sourceRadius = std::max(sl.value("sourceRadius", desc.sourceRadius), 0.0f);
             desc.nearPlane = sl.value("shadowNear", desc.nearPlane);           // S8: the shadow projection's near
             lightManager.SpotLights().push_back({});
             lightManager.SpotLights().back().SetDesc(desc);
@@ -361,6 +362,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             desc.shadowBias = pl.value("shadowBias", desc.shadowBias);           // local-light shadows S1 (UE's)
             desc.shadowSlopeBias = pl.value("shadowSlopeBias", desc.shadowSlopeBias);
             desc.shadowSharpen = pl.value("shadowSharpen", desc.shadowSharpen); // S2
+            desc.sourceRadius = std::max(pl.value("sourceRadius", desc.sourceRadius), 0.0f);
             lightManager.PointLights().push_back({});
             lightManager.PointLights().back().SetDesc(desc);
         }
