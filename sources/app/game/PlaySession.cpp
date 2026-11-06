@@ -11,7 +11,6 @@
 #include "core/logging/Log.h"
 #include "input/InputManager.h"
 #include "rendering/core/Renderer.h"
-#include "rendering/shadows/VirtualShadowMap.h"
 
 void PlaySession::PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start)
 {
@@ -68,21 +67,6 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     LOG_INFO(logging::LogCategory::App, "play: stopped, the camera back where it stood");
 }
 
-void PlaySession::HoldHelmShadows(float extent)
-{
-    if (extent > 0.0f)
-    {
-        if (!helmShadowsHeld_) { helmShadowsBefore_ = vsm::g_clipmapBaseExtent_game; }
-        helmShadowsHeld_ = true;
-        vsm::g_clipmapBaseExtent_game = extent;
-    }
-    else if (helmShadowsHeld_)
-    {
-        helmShadowsHeld_ = false;
-        vsm::g_clipmapBaseExtent_game = helmShadowsBefore_;
-    }
-}
-
 void PlaySession::TakeHelm(Scene& scene, RenderableObject* vessel)
 {
     physics::World& world = scene.Physics();
@@ -99,7 +83,6 @@ void PlaySession::LeaveHelm(Scene& scene, bool overTheSide)
 {
     if (!atHelm_) { return; }
     atHelm_ = false;
-    HoldHelmShadows(0.0f);
     physics::World& world = scene.Physics();
     const physics::HelmState helm = world.GetHelm(); // SetHelm clears it
     world.SetHelm(nullptr);
@@ -126,7 +109,6 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     if (!helm.exists) // gone with its level, or physics.enabled:0
     {
         atHelm_ = false;
-        HoldHelmShadows(0.0f);
         scene.VesselCameraRef().End();
         return;
     }
@@ -153,7 +135,6 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         view.ToggleView();
         camera.ResetHistory();
     }
-    HoldHelmShadows(view.GetView() == game::VesselCamera::View::Helm && helm.settings ? helm.settings->helmShadowExtent : 0.0f);
     const bool scriptLeave = std::exchange(tuning.testInteract, false);
     if (scriptLeave || (controls && input.WasActionPressed("Interact"))) { LeaveHelm(scene, true); }
 }
@@ -217,7 +198,6 @@ bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& 
     if (!playing_) { return true; }
     atHelm_ = false; // the boat went with the level
     vesselInReach_ = false;
-    HoldHelmShadows(0.0f);
     scene.Physics().SetHelm(nullptr);
     scene.VesselCameraRef().End();
     if (stopOnLevelChange_)

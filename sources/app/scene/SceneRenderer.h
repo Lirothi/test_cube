@@ -814,7 +814,7 @@ private:
     // Local-light plan S10e: what the page request depends on besides the view -- the mip select (mode, biases, refDist,
     // the render resolution the pixel footprint is taken at). A change is not "still": the pages would stay the old
     // select's while the samplers read with the new one.
-    std::array<float, 9> vsmLastRequestKey_{};
+    std::array<float, 10> vsmLastRequestKey_{};
     bool vsmHasRendered_ = false;
     std::uint32_t vsmStillFrames_ = 0;
     // FrameDecisions::sunShadowsOff last frame (the change is logged once), and whether the VSM update

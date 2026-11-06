@@ -1569,13 +1569,15 @@ void Scene::ReconcileShadowLodCurve(Renderer* renderer)
 {
     // The shadow LOD bias and tier stride pick the caster LOD rasterized into each shadow view.
     // The geometry lives in the consolidated mega buffer built at load, so a curve change needs a
-    // GPU-idle rebuild. Cheap to poll; only rebuilds on an actual slider/sweep change.
+    // GPU-idle rebuild. Cheap to poll; only rebuilds on an actual slider/sweep change. The clipmap's base moves the same
+    // tiers, at each whole doubling (a drag of its slider rebuilds at those and nowhere between).
     // (Chunked-terrain LOD needs NO rebuild anywhere: its per-chunk camera tiers travel through a
     // per-frame CB override — see ShadowGpuData::RefreshChunkGroupLods.)
     if (!renderer) { return; }
     if (shadowGpu_.BuiltShadowLod() == render::g_shadowLodBias &&
         shadowGpu_.BuiltShadowLodTierStride() == render::ShadowLodTierStride() &&
-        shadowGpu_.BuiltShadowLodBiasNearTier() == render::g_shadowLodBiasNearTier) { return; }
+        shadowGpu_.BuiltShadowLodBiasNearTier() == render::g_shadowLodBiasNearTier &&
+        shadowGpu_.BuiltClipmapTierShift() == ShadowGpuData::ClipmapTierShift()) { return; }
     RebuildShadowCasters(*renderer);
 }
 

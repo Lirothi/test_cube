@@ -1928,6 +1928,11 @@ D3D12_CPU_DESCRIPTOR_HANDLE ShadowGpuData::BoundsReadSrv(UINT f) const
     return u.ptr != 0 ? u : bounds_.Srv(f);
 }
 
+int ShadowGpuData::ClipmapTierShift()
+{
+    return static_cast<int>(std::lround(std::log2(std::max(vsm::g_clipmapBaseExtent, 1.0f) / 8.0f)));
+}
+
 void ShadowGpuData::Rebuild(Renderer* renderer,
     const std::vector<std::unique_ptr<RenderableObjectBase>>& objects, bool sameGeometry)
 {
@@ -1944,6 +1949,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     builtShadowLod_ = render::g_shadowLodBias;
     builtShadowLodBiasNearTier_ = render::g_shadowLodBiasNearTier;
     builtShadowLodTierStride_ = render::ShadowLodTierStride();
+    builtClipmapTierShift_ = ClipmapTierShift();
 
     size_t casterCount = 0;
     for (const auto& obj : objects)
@@ -2284,12 +2290,14 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         constexpr std::uint32_t kCasc = vsm::kNumCascades;                       // [0, 4)
         constexpr std::uint32_t kClipmapBegin = render::ShadowViewClipmapSlot(0u);
+        // The tier curve means metres: tier 0 is the 8 m square. Levels finer than that share it, whatever the base.
+        const int tierShift = builtClipmapTierShift_;
         for (std::uint32_t v = 0; v < maxViews; ++v)
         {
             std::uint32_t tier;
             if (v < kCasc)                       { tier = v; }                  // CSM cascade index (near->far)
             else if (v < kClipmapBegin)          { tier = 0u; }                 // local light -> near tier
-            else if (v < render::kVsmShadowViews) { tier = v - kClipmapBegin; } // VSM clipmap level (near->far)
+            else if (v < render::kVsmShadowViews) { tier = static_cast<std::uint32_t>(std::max(static_cast<int>(v - kClipmapBegin) + tierShift, 0)); } // VSM clipmap level (near->far)
             else                                 { tier = 0u; }                 // S9: the atlas modes' extra locals
             // The bias is a shift of the TIER curve, and a local light has no tier -- it is pinned
             // at 0 and then biased anyway, which is how a spot ended up rasterizing its casters two

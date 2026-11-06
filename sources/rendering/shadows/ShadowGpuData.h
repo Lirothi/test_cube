@@ -470,6 +470,9 @@ public:
     // Part of the same snapshot: it changes the per-view LOD table, so a change needs the same
     // GPU-idle rebuild. Without this the toggle is inert at runtime and reads as a no-op knob.
     bool BuiltShadowLodBiasNearTier() const { return builtShadowLodBiasNearTier_; }
+    // So is this: the clipmap's tier curve means metres (tier 0 is the 8 m square), so a level's tier moves with vsm::g_clipmapBaseExtent, by whole doublings.
+    int BuiltClipmapTierShift() const { return builtClipmapTierShift_; }
+    static int ClipmapTierShift();
     // Chunked-terrain LOD: per-group ABSOLUTE LOD override (-1 = none), refreshed EVERY FRAME in
     // UpdateForFrame from each chunked object's ChunkCameraLods() — the camera tier per chunk. No
     // rebuild involved: the mega buffer holds every LOD and gGroupLodMega carries every (group,lod)
@@ -1211,6 +1214,7 @@ private:
     int builtShadowLod_ = 0; // render::g_shadowLodBias snapshot the caster geometry was built with
     bool builtShadowLodBiasNearTier_ = false; // render::g_shadowLodBiasNearTier snapshot
     int builtShadowLodTierStride_ = 1; // normalized render::g_shadowLodTierStride snapshot
+    int builtClipmapTierShift_ = 0; // ClipmapTierShift() snapshot
     std::uint32_t numStaticGroups_ = 0; // count of static submesh groups (the rest are GI, always LOD0)
 
     std::vector<render::ShadowViewFrustum> cpuViewFrustums_; // CPU mirror (validation)

@@ -182,7 +182,7 @@ void SceneRenderer::Pass_VsmPageRequest(Renderer* renderer, RenderGraphPassConte
         // The base point moves camera depth to SRV (the G-buffer leaves it in DEPTH_WRITE) and
         // the request buffer to UAV, in one marker.
         renderer->EmitPoint(t.cl, pts.base);
-        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, views.data(), cb.numViews, pts, D.depthSRV, rw, rh);
+        frame_->vsm->RecordPageRequest(renderer, t.cl, cb, views.data(), cb.numViews, pts, D.depthSRV, rw, rh, frame_->shadowGpu);
         // Step 20: allocate physical pages for the just-marked requests (same CL — request buffer
         // stays UAV between them). Add-dormant: nothing samples/renders the pages yet.
         frame_->vsm->RecordPageAllocate(renderer, t.cl, pts, frame_->clipmapSquares);

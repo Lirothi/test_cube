@@ -39,7 +39,6 @@ private:
     void TakeHelm(Scene& scene, RenderableObject* vessel);
     void LeaveHelm(Scene& scene, bool overTheSide);
     void TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime);
-    void HoldHelmShadows(float extent); // <= 0 = gives the level's back
 
     PlayerController controller_;
     physics::PlayerSettings settingsBefore_;
@@ -57,6 +56,4 @@ private:
     bool stopOnLevelChange_ = true;
     bool atHelm_ = false;
     bool vesselInReach_ = false; // for the HUD's line
-    bool helmShadowsHeld_ = false;
-    float helmShadowsBefore_ = 0.0f;
 };

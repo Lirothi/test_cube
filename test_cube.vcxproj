@@ -930,6 +930,7 @@
     <None Include="shaders\vsm_page_clear.hlsl" />
     <None Include="shaders\vsm_page_request_clear_cs.hlsl" />
     <None Include="shaders\vsm_page_request_cs.hlsl" />
+    <None Include="shaders\vsm_water_mask_cs.hlsl" />
     <None Include="shaders\fog_common.hlsli" />
     <None Include="shaders\glass_view_cb.hlsli" />
     <None Include="shaders\forward_sun_shadow.hlsli" />

@@ -304,13 +304,19 @@ uint VsmPointSampledLevel(uint firstView, uint startLevel, float3 P, float3 ligh
 // the screen-space trace (vsm_screen_ray.hlsli). Computed by the CALLER because it needs the
 // camera depth buffer, which is exactly how UE structure it (VirtualShadowMapProjection.usf
 // computes SMRTRayOffset and hands it to TraceDirectional). 0 = no screen trace.
-float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
+//
+// `resident` says whether any level had a page there. The request marks pages under RECEIVERS only, the finest level
+// holding each, so a point that is no receiver -- the air -- may have a page at no level at all, and its "lit" is then
+// an unknown, not an answer.
+float VsmClipmapShadowResident(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
                        float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
                        float tanHalfFovX, float4x4 uvNormalMatrix, float3 dirToLight,
                        VsmSmrtParams smrt, float rayStartOffset,
                        float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
-                       StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+                       StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp,
+                       out bool resident)
 {
+    resident = false;
     const float dist = length(P - camPos);
     // 0.0002 m is UE's 0.02 cm floor converted; their world is centimetres, the dimensionless
     // NormalBias factor transfers unchanged.
@@ -356,6 +362,7 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
         const uint py = min((uint)(uv.y * (float)VSM_L0_AXIS), VSM_L0_AXIS - 1u);
         const uint entry = PageTable[VsmPageId(VSM_CLIPMAP_FIRST + i, 0u, px, py)];
         if ((entry & VSM_SAMPLE_RESIDENT_BIT) == 0u) { continue; } // not resident -> coarser level
+        resident = true;
         // ---- SMRT ----------------------------------------------------------------------------
         // Marches this level instead of taking one biased comparison. Returns before the constant
         // depth bias is even computed: the march's own CompareTolerance is what replaces it, and
@@ -520,6 +527,19 @@ float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, floa
         return lerp(fineShadow, parentShadow, blend);
     }
     return 1.0f; // outside all clipmap levels
+}
+
+float VsmClipmapShadow(float3 P, float3 N, float3 camPos, float normalBias, float depthBias,
+                       float depthBiasDecay, float depthBiasFloorNdc, float clipBlendWidth,
+                       float tanHalfFovX, float4x4 uvNormalMatrix, float3 dirToLight,
+                       VsmSmrtParams smrt, float rayStartOffset,
+                       float4x4 clipVP[VSM_NUM_CLIPMAP_LEVELS],
+                       StructuredBuffer<uint> PageTable, Texture2D Pool, SamplerComparisonState cmp)
+{
+    bool resident;
+    return VsmClipmapShadowResident(P, N, camPos, normalBias, depthBias, depthBiasDecay, depthBiasFloorNdc, clipBlendWidth,
+                                    tanHalfFovX, uvNormalMatrix, dirToLight, smrt, rayStartOffset, clipVP, PageTable, Pool, cmp,
+                                    resident);
 }
 
 #endif // VSM_SAMPLE_HLSLI

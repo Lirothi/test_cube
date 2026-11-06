@@ -94,6 +94,7 @@ COMPUTE_ENTRIES = [
     ("light_shafts_cs.hlsl", "CSApply"),
     ("vsm_page_request_cs.hlsl", "CSMain"),
     ("vsm_page_request_clear_cs.hlsl", "CSMain"),
+    ("vsm_water_mask_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_init_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_map_cs.hlsl", "CSMain"),
     ("vsm_page_alloc_touch_cs.hlsl", "CSMain"),
@@ -169,19 +170,19 @@ GRAPHICS_ENTRIES = [
     ("occlusion_query.hlsl", "ps_6_0", "PSMain", [], ""),
     # Occlusion plan S4: the indirect G-buffer (plus the editor object-id permutation Debug builds).
     ("gbuffer_indirect.hlsl", "vs_6_0", "VSMain", [], ""),
-    ("gbuffer_indirect.hlsl", "ps_6_0", "PSMain", [], ""),
-    ("gbuffer_indirect.hlsl", "ps_6_0", "PSMain", ["EDITOR_OBJECT_ID=1"], "editor-id"),
+    ("gbuffer_indirect.hlsl", "ps_6_1", "PSMain", [], ""),
+    ("gbuffer_indirect.hlsl", "ps_6_1", "PSMain", ["EDITOR_OBJECT_ID=1"], "editor-id"),
     # Texture streaming plan A6: the GBUFFER_BINDLESS permutations of every G-buffer shader and of
     # the masked shadow depth (SM 6.6: ResourceDescriptorHeap[]). One define selects each.
     ("gbuffer.hlsl", "vs_6_6", "VSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
     ("gbuffer.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
-    ("gbuffer.hlsl", "ps_6_0", "PSMain", [], "tables"),
+    ("gbuffer.hlsl", "ps_6_1", "PSMain", [], "tables"),
     ("gbuffer_inst.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
-    ("gbuffer_inst.hlsl", "ps_6_0", "PSMain", [], "tables"),
+    ("gbuffer_inst.hlsl", "ps_6_1", "PSMain", [], "tables"),
     ("gbuffer_instcb.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
     ("gbuffer_instcb.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1", "INSTCB_SLOT_PARAMS=1"], "bindless-slot"),
-    ("gbuffer_instcb.hlsl", "ps_6_0", "PSMain", [], "tables"),
-    ("gbuffer_instcb.hlsl", "ps_6_0", "PSMain", ["INSTCB_SLOT_PARAMS=1"], "tables-slot"),
+    ("gbuffer_instcb.hlsl", "ps_6_1", "PSMain", [], "tables"),
+    ("gbuffer_instcb.hlsl", "ps_6_1", "PSMain", ["INSTCB_SLOT_PARAMS=1"], "tables-slot"),
     ("gbuffer_indirect.hlsl", "vs_6_6", "VSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
     ("gbuffer_indirect.hlsl", "ps_6_6", "PSMain", ["GBUFFER_BINDLESS=1"], "bindless"),
     # Tessy N5: the camera G-buffer's mesh shader twin of a merged run (the run's own defines on top).

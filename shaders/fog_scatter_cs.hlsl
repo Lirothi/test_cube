@@ -80,7 +80,7 @@ static const uint kFogJitterOn = 2u;
 static const uint kFogConservativeDepth = 4u;
 static const uint kFogTemporalOn = 8u;
 static const uint kFogDepthConstraint = 32u; // FogApplyDepthConstraint (bit 4 = the distant sky ambient)
-static const uint kFogSunRtFallback = 64u;   // FogSunShadow: SDSM, the TLAS bound -- air outside every partition traces the sun
+static const uint kFogSunRtFallback = 64u;   // FogSunShadow: SDSM or VSM, the TLAS bound -- air outside every partition, or in no resident page, traces the sun
 // R3 low-discrepancy sequence (Roberts): the extra cell offsets of a history-miss supersample.
 static const float3 kFogR3 = float3(0.8191725134f, 0.6710436067f, 0.5497004779f);
 
@@ -181,16 +181,22 @@ float FogSunShadow(float3 P)
         ? CloudShadowTransmittance(P, cloudShadowViewProj, cloudShadowParams.y, CloudShadowMap, gSmpLinearClamp)
         : 1.0f;
     const float3 dirToLight = normalize(-sunDirWS);
+    float lit;
+    bool covered;
     if (useVsm != 0u)
     {
         VsmSmrtParams smrt = (VsmSmrtParams)0; // rayCount 0 = the single-tap SampleCmp path
-        return cloud * VsmClipmapShadow(P, dirToLight, camPosWS, clipmapNormalBias, vsmDepthBias,
-                                        clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
-                                        invProj._11, clipmapUvNormal, dirToLight, smrt, 0.0f,
-                                        clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear);
+        lit = VsmClipmapShadowResident(P, dirToLight, camPosWS, clipmapNormalBias, vsmDepthBias,
+                                       clipmapDepthBiasDecay, clipmapDepthBiasFloorNdc, clipmapBlendWidth,
+                                       invProj._11, clipmapUvNormal, dirToLight, smrt, 0.0f,
+                                       clipmapViewProj, VsmPageTable, VsmPool, gSmpLinear, covered);
     }
-    int cascade;
-    float lit = CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, dirToLight, 1.0f, cascade);
+    else
+    {
+        int cascade;
+        lit = CsmSampleShadow(MakeCsmParams(), ShadowAtlas, gSmpLinear, gSmpPoint, P, dirToLight, 1.0f, cascade);
+        covered = cascade != kCsmNoCascade;
+    }
 #if FOG_SKY_OCCLUSION
     // SDSM fits each partition's box to the SURFACES the camera sees, so the AIR between the camera and those surfaces
     // need not lie in any box -- and a point outside every box falls through CsmSampleChain to "lit". The surfaces never
@@ -199,7 +205,10 @@ float FogSunShadow(float3 P)
     // whose maps cover the whole frustum, were dark there). Such a point asks the TLAS the fog already traces for the sky:
     // one ray to the sun, the shadow casters (a tree's leaf card lets 1 - its opacity through, fogDepthParams.z:
     // rt.meshOpacity -- rt_geometry.hlsli RtVisibilityTransmittance).
-    if (cascade == kCsmNoCascade && (fogFlags & kFogSunRtFallback) != 0u)
+    // VSM the same: the page request marks pages under RECEIVERS, the finest level holding each, so air the camera sees
+    // through may have a page at no level (VsmClipmapShadowResident). At `vsm.clipmapBaseExtent` 8 a room's surfaces happen
+    // to cover its air; at 2 the closed bathroom's air glowed with the sun (2026-11-06).
+    if (!covered && (fogFlags & kFogSunRtFallback) != 0u)
     {
         RayDesc ray;
         ray.Origin = P;

@@ -785,7 +785,8 @@ struct SceneRenderSettings
     // Under SDSM the air outside every partition box (in front of the nearest surface, beyond the farthest) traces the
     // sun on the TLAS the fog's sky visibility binds (fog_scatter_cs.hlsl FogSunShadow) instead of falling through to
     // "lit": SDSM's boxes hold the receivers, never the air -- a closed tent's air glowed with the sun through its roof.
-    // false = the frame before 2026-10-27, the A/B (`--set fog.sunRtFallback:0`).
+    // VSM's air in no resident page the same since 2026-11-06 (a small `vsm.clipmapBaseExtent` left a closed room's air with none).
+    // false = no trace, the A/B (`--set fog.sunRtFallback:0`).
     bool fogSunRtFallback = true;
     // Interior lighting plan D: the GI probe volume (DDGI over RayQuery, rendering/lighting/DdgiVolume.h):
     // 32x16x32 probes `giSpacing` m apart around the camera, 1 / `giUpdateDivisor` of them tracing 64

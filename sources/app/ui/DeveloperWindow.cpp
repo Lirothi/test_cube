@@ -3058,10 +3058,11 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
 
                 GRAPHICS_CONTROL(VsmClipmapBaseExtent, "vsmClipmapBaseExtent",
                     ImGui::SliderFloat("Clipmap base extent", &vsm::g_clipmapBaseExtent_game,
-                                       4.0f, 200.0f, "%.1f"));
+                                       1.0f, 200.0f, "%.1f", ImGuiSliderFlags_Logarithmic));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Step 24f directional clipmap: finest level's world extent (level i = base*2^i).\n"
-                                      "Smaller = sharper near shadows but less far coverage; larger = the reverse.");
+                    ImGui::SetTooltip("The SIDE of the finest level's square, centred on the camera (level i = base*2^i, a texel = side / 2048).\n"
+                                      "Smaller = sharper near shadows but less far coverage; larger = the reverse. Halve it and\n"
+                                      "\"Wind animate below level\" takes one more to keep the wind's reach in metres.");
                 GRAPHICS_CONTROL(VsmClipmapBlend, "vsmClipmapBlend",
                     ImGui::Checkbox("Clipmap level blend", &vsm::g_clipmapBlendEnabled_game));
                 if (ImGui::IsItemHovered())

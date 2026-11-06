@@ -62,7 +62,6 @@ namespace physics
             { "slamMax", "Slam limit (of the weight)", &S::slamMax, 0.01f, 0.0f, 10.0f },
             { "cameraDistance", "Chase camera distance (m)", &S::cameraDistance, 0.1f, 1.0f, 500.0f },
             { "cameraHeight", "Chase camera height (m)", &S::cameraHeight, 0.05f, -10.0f, 100.0f },
-            { "helmShadowExtent", "Sun shadow near the helm (m, 0 = the level's)", &S::helmShadowExtent, 0.05f, 0.0f, 64.0f },
             { "giProbeSpeed", "Out of the GI probes past (m/s, 0 = never)", &S::giProbeSpeed, 0.05f, 0.0f, 100.0f },
         };
         return keys;

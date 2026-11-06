@@ -111,11 +111,11 @@ namespace vsm
     // the Rung-0 cull too, so the cull layout is [4 cascade | 32 local | N clipmap] and the setup's
     // rung0View = view + kNumCascades maps a clipmap VSM view straight to its cull slot. Hence
     // render::MaxShadowViews() == kNumCascades + MaxVirtualViews().
-    // 10 levels (was 8, 2026-08-28): the coarsest level's half-extent is g_clipmapBaseExtent*2^9
-    // = ~6.1 km at the default 12 m base, so directional shadows reach 4x farther for +682 page
+    // 12 levels since 2026-11-06 (10 from 2026-08-28, 8 before): the two more at the near end, with the base at 2 m where it
+    // was 8 -- the coarsest level's side is g_clipmapBaseExtent*2^11 = 4096 m as it was, for +682 page
     // table entries and two more cull/scatter views; the physical pool is untouched (far levels
     // are coarse and resident pages stay demand-driven).
-    inline constexpr std::uint32_t kNumClipmapLevels = render::kShadowViewClipmapLevels; // 10
+    inline constexpr std::uint32_t kNumClipmapLevels = render::kShadowViewClipmapLevels; // 12
 
     // The square each clipmap level covers in the FIXED light frame Scene::UpdateClipmap snaps
     // every level in (its `right` / `trueUp` axes are shared by all levels, which is the whole
@@ -151,6 +151,12 @@ namespace vsm
     // The page table / request bits of `views` views (341 x 138 = 47058 entries, 188 KB, at the initial capacity).
     constexpr std::uint32_t PageTableEntries(std::uint32_t views) { return kPagesPerView * views; }
     constexpr std::uint32_t RequestWords(std::uint32_t views) { return (PageTableEntries(views) + 31u) / 32u; }
+    // The water's caster mask behind the bitfield (vsm_water_mask_cs.hlsl): one bit per (clipmap level, page). 8 words a level: the
+    // shaders' literal. The margin (m, round every box) is the wave's: the marks take the plane, the water samples the displaced surface.
+    inline constexpr std::uint32_t kWaterMaskWordsPerLevel = kVirtualPagesL0Axis * kVirtualPagesL0Axis / 32u;
+    static_assert(kWaterMaskWordsPerLevel == 8u, "vsm_water_mask_cs.hlsl and vsm_page_request_cs.hlsl index 8 words a level");
+    inline constexpr std::uint32_t kWaterMaskWords = kNumClipmapLevels * kWaterMaskWordsPerLevel;
+    inline constexpr float kWaterMaskMargin = 2.0f;
 
     // Caster MESH-GROUPS the GPU-driven shadow path can address at once, across the whole level: one
     // per (mesh, submesh), so submesh splits — material slots, and terrain chunking's spatial tiles —
@@ -237,6 +243,12 @@ namespace vsm
     inline bool  g_requestLightCull = true;
     inline bool  g_requestLightCull_game = true;
     inline const bool g_requestLightCull_knob = ::knob::Register(g_requestLightCull_game, g_requestLightCull, "vsm::g_requestLightCull");
+    // Where the water's marks go (`--set vsm.waterCasterMask`, vsm_water_mask_cs.hlsl): 1 = only on pages a caster's box
+    // touches, the rest of the sea draws no empty pages; 0 = every water pixel (before); 2 = none (the control: the shadows
+    // on the water go, past what the opaque scene happens to keep resident).
+    inline int   g_waterCasterMask = 1;
+    inline int   g_waterCasterMask_game = 1;
+    inline const bool g_waterCasterMask_knob = ::knob::Register(g_waterCasterMask_game, g_waterCasterMask, "vsm::g_waterCasterMask");
     // Plan S10c: a light whose shadow slot changes takes its pages to the new view (UE's per-light cache) instead of
     // re-rendering them. `--set vsm.lightPageRemap:0|1`.
     inline bool  g_lightPageRemap = true;
@@ -308,8 +320,8 @@ namespace vsm
     inline const bool g_requestDownscale_knob = ::knob::Register(g_requestDownscale_game, g_requestDownscale, "vsm::g_requestDownscale");
     // Step 24d: finest directional-clipmap level's world extent (level i covers g_clipmapBaseExtent
     // * 2^i). Tunable for the 24f visual sign-off; only feeds the per-frame view build (no realloc).
-    inline float         g_clipmapBaseExtent = 8.0f;
-    inline float         g_clipmapBaseExtent_game = 8.0f;
+    inline float         g_clipmapBaseExtent = 2.0f;
+    inline float         g_clipmapBaseExtent_game = 2.0f;
     inline const bool g_clipmapBaseExtent_knob = ::knob::Register(g_clipmapBaseExtent_game, g_clipmapBaseExtent, "vsm::g_clipmapBaseExtent");
     // [r.Shadow.Virtual.Clipmap.ZRangeScale, UE default 1000] A clipmap level's reach UP-SUN as a
     // multiple of its RADIUS -- same shape as UE's, so the number is directly comparable to theirs.
@@ -659,8 +671,8 @@ inline const bool g_scatterLocalViews_knob = ::knob::Register(g_scatterLocalView
 // this animate wind (and re-render every frame while it blows); levels at/above render their
 // casters RIGID and can cache. Locals always animate. Only matters with g_pageCaching on —
 // without caching every page redraws anyway. --set=vsm.windMaxLevel; >= level count = all.
-inline std::uint32_t g_windAnimateMaxLevel = 4;
-inline std::uint32_t g_windAnimateMaxLevel_game = 4;
+inline std::uint32_t g_windAnimateMaxLevel = 6; // a level NUMBER: at a base of 2 m this is the 64 m square
+inline std::uint32_t g_windAnimateMaxLevel_game = 6;
 inline const bool g_windAnimateMaxLevel_knob = ::knob::Register(g_windAnimateMaxLevel_game, g_windAnimateMaxLevel, "vsm::g_windAnimateMaxLevel");
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
@@ -722,6 +734,8 @@ inline const bool g_windAnimateMaxLevel_knob = ::knob::Register(g_windAnimateMax
         // saw: x = 1 when the water draws this frame, y = its height (m). Its pages are marked where the view ray
         // meets that plane before the opaque surface.
         DirectX::XMFLOAT4   waterPlane{ 0.0f, 0.0f, 0.0f, 0.0f };
+        // x = the caster mask's first word in the request buffer, y = g_waterCasterMask as this frame takes it.
+        DirectX::XMUINT4    waterMask{ 0u, 0u, 0u, 0u };
     };
 }
 
@@ -911,7 +925,7 @@ public:
     void RecordPageRequest(Renderer* renderer, ID3D12GraphicsCommandList* cl,
                            const vsm::PageRequestConstants& constants,
                            const vsm::ViewProjEntry* views, std::uint32_t viewCount, const PageRequestPoints& pts,
-                           D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH);
+                           D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH, const ShadowGpuData* shadowGpu);
 
     // Step 20: consume the request bitfield produced by RecordPageRequest (same command list,
     // right after it) and turn it into physical-page assignments with cross-frame caching: touch
@@ -1032,6 +1046,7 @@ private:
     std::uint32_t views_ = 0;
     std::uint32_t PageTableEntries() const { return vsm::PageTableEntries(views_); }
     std::uint32_t RequestWords() const { return vsm::RequestWords(views_); }
+    std::uint32_t RequestBufferWords() const { return RequestWords() + vsm::kWaterMaskWords; } // + the water's caster mask
     // Plan S9e: the per-view records (vsm::ViewGpuData), an UPLOAD ring of kFrameCount x 2 slots of views_ records -- slot
     // f * 2 the request pass's, f * 2 + 1 the render pass's -- persistently mapped, one SRV per slot. The CPU writes a slot
     // only in the frame that owns it (BeginFrame waited on its fence); viewDataHigh_ = how many records a slot's last write
@@ -1079,6 +1094,7 @@ private:
     void EnsureShaderResources(Renderer* renderer); // lazily create all VSM compute PSOs
     std::shared_ptr<Material> pageRequestClearMat_;  // vsm_page_request_clear_cs.hlsl
     std::shared_ptr<Material> pageRequestMat_;       // vsm_page_request_cs.hlsl
+    std::shared_ptr<Material> waterMaskMat_;         // vsm_water_mask_cs.hlsl
     std::shared_ptr<Material> allocInitMat_;         // vsm_page_alloc_init_cs.hlsl
     std::shared_ptr<Material> allocTouchMat_;        // vsm_page_alloc_touch_cs.hlsl
     std::shared_ptr<Material> allocFreeMat_;         // vsm_page_alloc_freelist_cs.hlsl

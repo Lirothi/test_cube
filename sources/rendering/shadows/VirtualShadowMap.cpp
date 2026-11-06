@@ -105,7 +105,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
     {
         D3D12_RESOURCE_DESC bd{};
         bd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        bd.Width = static_cast<UINT64>(RequestWords()) * sizeof(std::uint32_t);
+        bd.Width = static_cast<UINT64>(RequestBufferWords()) * sizeof(std::uint32_t);
         bd.Height = 1;
         bd.DepthOrArraySize = 1;
         bd.MipLevels = 1;
@@ -188,7 +188,7 @@ void VirtualShadowMap::EnsureResources(Renderer* renderer)
         rqUd.Format = DXGI_FORMAT_UNKNOWN;
         rqUd.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
         rqUd.Buffer.FirstElement = 0;
-        rqUd.Buffer.NumElements = RequestWords();
+        rqUd.Buffer.NumElements = RequestBufferWords();
         rqUd.Buffer.StructureByteStride = sizeof(std::uint32_t);
         dev->CreateUnorderedAccessView(requestBuffer_.Get(), nullptr, &rqUd, requestUav_);
     }
@@ -534,6 +534,12 @@ void VirtualShadowMap::EnsureShaderResources(Renderer* renderer)
         cd.shaderFile = L"shaders/vsm_page_request_cs.hlsl";
         cd.csEntry = "CSMain";
         pageRequestMat_ = mm->GetOrCreateCompute(renderer, cd);
+    }
+    {
+        Material::ComputeDesc cd{};
+        cd.shaderFile = L"shaders/vsm_water_mask_cs.hlsl";
+        cd.csEntry = "CSMain";
+        waterMaskMat_ = mm->GetOrCreateCompute(renderer, cd); // optional: without it every water pixel marks
     }
     // Step 20: page-allocation compute PSOs.
     auto makeCompute = [&](const wchar_t* file)
@@ -1048,7 +1054,8 @@ void VirtualShadowMap::EnsureFrameResources(Renderer* renderer, ShadowGpuData* s
 
 void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     const vsm::PageRequestConstants& constants, const vsm::ViewProjEntry* views, std::uint32_t viewCount,
-    const PageRequestPoints& pts, D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH)
+    const PageRequestPoints& pts, D3D12_CPU_DESCRIPTOR_HANDLE depthSrv, UINT screenW, UINT screenH,
+    const ShadowGpuData* shadowGpu)
 {
     if (!renderer || !cl || !IsAllocated() || !views) { return; }
     const UINT f = renderer->GetCurrentFrameIndex();
@@ -1081,9 +1088,9 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
     // the base point, emitted by the pass body's marker before this is called.
 
     const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
-    const std::uint32_t requestWords = RequestWords();
+    const std::uint32_t requestWords = RequestBufferWords();
 
-    // Clear the bitfield.
+    // Clear the bitfield and the water's mask behind it.
     RecordComputeDispatch(renderer, cl, pageRequestClearMat_.get(), sizeof(std::uint32_t) * 4,
         [requestWords](std::uint8_t* dst) { std::uint32_t v[4] = { requestWords, 0u, 0u, 0u }; std::memcpy(dst, v, sizeof(v)); },
         {},
@@ -1091,6 +1098,38 @@ void VirtualShadowMap::RecordPageRequest(Renderer* renderer, ID3D12GraphicsComma
         noSampler,
         requestWords, 1,
         requestBuffer_.Get());
+
+    // The water's marks go only where a caster can shadow them: the mask behind the bitfield, this frame's boxes against
+    // this frame's levels. The unified bounds are in their read state from Main_ShadowCull on (the page render reads them
+    // the same way). No mask to read: every water pixel marks, as before.
+    std::uint32_t waterMode = static_cast<std::uint32_t>(std::clamp(vsm::g_waterCasterMask, 0, 2));
+    if (constants.waterPlane.x != 0.0f && waterMode == 1u)
+    {
+        const D3D12_CPU_DESCRIPTOR_HANDLE boundsSrv = shadowGpu ? shadowGpu->UnifiedBoundsSrv(f) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        const D3D12_CPU_DESCRIPTOR_HANDLE metaSrv = shadowGpu ? shadowGpu->CasterMetaSrv(f) : D3D12_CPU_DESCRIPTOR_HANDLE{};
+        const std::uint32_t casters = shadowGpu ? shadowGpu->ActiveCasterCount() : 0u;
+        if (waterMaskMat_ && waterMaskMat_->GetPipelineState() && boundsSrv.ptr != 0 && metaSrv.ptr != 0)
+        {
+            struct WaterMaskCB { std::uint32_t numCasters, numViews, maskBase; float margin; };
+            const WaterMaskCB maskCb{ casters, viewCount, RequestWords(), vsm::kWaterMaskMargin };
+            if (casters > 0u)
+            {
+                GPU_SCOPE(cl, ProfilerScopes::kVsmWaterMask);
+                RecordComputeDispatch(renderer, cl, waterMaskMat_.get(), static_cast<UINT>(sizeof(WaterMaskCB)),
+                    [&maskCb](std::uint8_t* dst) { std::memcpy(dst, &maskCb, sizeof(maskCb)); },
+                    { boundsSrv, metaSrv, viewsSrv },
+                    { requestUav_ },
+                    noSampler,
+                    ((casters + 63u) / 64u) * kComputeDispatchGroupSize, 1, // the helper divides by 8; the shader's group is 64 x 1
+                    requestBuffer_.Get());
+            }
+        }
+        else
+        {
+            waterMode = 0u;
+        }
+    }
+    cb.waterMask = DirectX::XMUINT4(RequestWords(), waterMode, 0u, 0u);
 
     // Mark: one thread per DOWN-SAMPLED screen block (reduced res) -> project the block-center
     // pixel into each active local shadow view -> mark its mip page. The downscale comes from the

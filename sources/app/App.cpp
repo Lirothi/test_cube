@@ -759,6 +759,7 @@ namespace
         // Plan S10e: UE's local-light mip by the pixel footprint (0 = by camera distance) and its bias.
         if (setting == "vsm.localMipFromPixel") { vsm::g_localMipFromPixel_game = value != 0.0f; return true; }
         if (setting == "vsm.requestLightCull") { vsm::g_requestLightCull_game = value != 0.0f; return true; }
+        if (setting == "vsm.waterCasterMask") { vsm::g_waterCasterMask_game = static_cast<int>(value); return true; }
         if (setting == "vsm.lightPageRemap") { vsm::g_lightPageRemap_game = value != 0.0f; return true; } // S10c
         if (setting == "vsm.maxLightAge") // S10c: UE r.Shadow.Virtual.Cache.MaxLightAgeSinceLastRequest
         {

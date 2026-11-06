@@ -86,10 +86,6 @@ namespace physics
         float slamMax = 0.4f;       // of the weight, the most a part of the hull takes
         float cameraDistance = 15.0f; // m
         float cameraHeight = 2.5f;  // m over the mesh's origin
-        // m, the sun's VSM clipmap's finest level while the eye rides this hull (0 = the level's own, vsm.clipmapBaseExtent, 8 by default). What is lit near that eye is a metre or two off and rocks
-        // against the light; 8 m is 7.8 mm a texel there, 8 pixels of a 1440p frame, and the edge's teeth crawl over the deck as it rocks: the flicker the owner saw inside the yacht. The clipmap
-        // for the whole world changes the picture (a closed room +3.5 of 255), so it is the helm's alone.
-        float helmShadowExtent = 2.0f;
         // m/s: faster than this the hull leaves the GI probes' rays. They stand in the world, and it flies through them: a probe is inside it, out of it and behind it from one update to the next, and
         // the cockpit's bounce jumped 25-37 % a frame at 16 m/s. 0 = never leaves. Below it the hull lights itself as anything else does.
         float giProbeSpeed = 2.0f;

@@ -163,7 +163,7 @@ namespace
         float vsmLodRefDistance = vsm::kLodRefDist;
         std::uint32_t vsmRequestDownscale = vsm::kRequestDownscale;
         std::uint32_t vsmLruFrames = vsm::kLruFrameThreshold;
-        float vsmClipmapBaseExtent = 8.0f;
+        float vsmClipmapBaseExtent = 2.0f;
         bool vsmClipmapBlend = true;
         float vsmClipmapBlendWidth = 0.12f;
         std::uint32_t smrtRayCount = 7u;
@@ -192,7 +192,7 @@ namespace
         bool tessySdsm = true;    // Tessy (tessy::g_sdsm_game): the SDSM sun partitions; on by default (owner, 2026-10-30)
         bool tessyLod = false;    // Tessy N7 (tessy::g_lod_game): the cluster DAG's cut (camera, lamp atlases, VSM pages)
         float tessyLodPixelError = 1.0f; // Tessy N7 (tessy::g_lodPixelError_game): the camera's DAG cut threshold, screen pixels
-        std::uint32_t vsmWindAnimateMaxLevel = 4u;
+        std::uint32_t vsmWindAnimateMaxLevel = 6u;
     };
 
     const char* DlssModeName(sl::DLSSMode mode)
@@ -419,7 +419,7 @@ namespace
         s.vsmLodRefDistance = std::clamp(finite(s.vsmLodRefDistance, vsm::kLodRefDist), 1.0f, 40.0f);
         s.vsmRequestDownscale = std::clamp(s.vsmRequestDownscale, 1u, 8u);
         s.vsmLruFrames = std::clamp(s.vsmLruFrames, 1u, vsm::kMaxLruFrames);
-        s.vsmClipmapBaseExtent = std::clamp(finite(s.vsmClipmapBaseExtent, 8.0f), 4.0f, 200.0f);
+        s.vsmClipmapBaseExtent = std::clamp(finite(s.vsmClipmapBaseExtent, 2.0f), 1.0f, 200.0f);
         s.vsmClipmapBlendWidth = std::clamp(finite(s.vsmClipmapBlendWidth, 0.12f), 0.0f, 0.30f);
         s.smrtRayCount = std::min(s.smrtRayCount, vsm::kSmrtMaxRays);
         s.smrtSamplesPerRay = std::clamp(s.smrtSamplesPerRay, 1u, vsm::kSmrtMaxSamplesPerRay);

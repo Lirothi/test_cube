@@ -43,6 +43,9 @@ cbuffer PageRequestCB : register(b0)
     // The ocean's surface (x = 1 when it draws, y = its height): the forward water samples the clipmap there, and the
     // camera depth this pass reads is the opaque scene's (the water draws later).
     float4   waterPlane;
+    // Where the water's marks go (vsm::g_waterCasterMask): x = the caster mask's first word in Request (the bitfield's
+    // length, vsm_water_mask_cs.hlsl), y = 0 every water pixel, 1 only under a caster's box, 2 none (the control).
+    uint4    waterMask;
 };
 
 Texture2D                       DepthT  : register(t0);
@@ -102,7 +105,7 @@ bool OutsideLight(float4 cull, float3 P)
 // levels ordered finest -> coarsest by extent. The LEVELS are the LOD (not a mip chain). Mark
 // the finest containing level and, inside its transition band, the next coarser level too. A
 // zero blend width preserves the old exact-one-page request path. ---
-void MarkClipmap(float3 P, uint count)
+void MarkClipmap(float3 P, uint count, bool water)
 {
     const float clipBlendWidth = clamp(lodParams.w, 0.0f, 0.5f);
     const uint clipEnd = min(count, VSM_CLIPMAP_END);
@@ -118,6 +121,14 @@ void MarkClipmap(float3 P, uint count)
         uint axis0 = kL0Axis; // clipmap levels use only level 0 (the level IS the LOD)
         uint cpx = min((uint)(csuv.x * axis0), axis0 - 1u);
         uint cpy = min((uint)(csuv.y * axis0), axis0 - 1u);
+        // The water: no caster's box touches this page, so nothing can shadow this point on any level. It stays unmarked
+        // and reads lit, which it is. A page some opaque pixel asked for stays resident, and reads lit too.
+        if (water && waterMask.y != 0u)
+        {
+            if (waterMask.y == 2u) { return; }
+            const uint maskWord = waterMask.x + (cv - VSM_CLIPMAP_FIRST) * 8u + (cpy >> 1u);
+            if ((Request[maskWord] & (1u << (cpx + (cpy & 1u) * 16u))) == 0u) { return; }
+        }
         MarkPage(cv * kPagesPerView + kLevelOffset[0] + cpy * axis0 + cpx);
 
         // The sampler blends by the fine level's square-edge coordinate. Request the parent page
@@ -181,7 +192,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                 const float3 toP = ReconstructPosWS(uv, z, invProj, invView) - camPosWS.xyz;
                 inFront = dot(toW, toW) < dot(toP, toP);
             }
-            if (inFront) { MarkClipmap(Pw, count); }
+            if (inFront) { MarkClipmap(Pw, count, true); }
         }
     }
     if (!geometry) { return; }
@@ -229,5 +240,5 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         }
     }
 
-    MarkClipmap(P, count);
+    MarkClipmap(P, count, false);
 }

@@ -131,6 +131,7 @@ const Profiler::ScopeNameKey kPassVisTest = Profiler::RegisterTraceLiteral(L"Pas
 const Profiler::ScopeNameKey kGBufferIndirect = Profiler::RegisterTraceLiteral(L"GBuffer_Indirect");
 const Profiler::ScopeNameKey kGBufferTessy = Profiler::RegisterTraceLiteral(L"GBuffer_Indirect.Tessy");
 const Profiler::ScopeNameKey kTessyCameraCull = Profiler::RegisterTraceLiteral(L"ShadowCull.TessyCamera");
+const Profiler::ScopeNameKey kVsmWaterMask = Profiler::RegisterTraceLiteral(L"VsmPageRequest.WaterMask");
 const Profiler::ScopeNameKey kTessyCameraPost = Profiler::RegisterTraceLiteral(L"CamCullPost.TessyCamera");
 const Profiler::ScopeNameKey kTessySunCull = Profiler::RegisterTraceLiteral(L"SdsmCull.TessySun");
 const Profiler::ScopeNameKey kTessySunDraw = Profiler::RegisterTraceLiteral(L"SdsmShadow.TessySun");

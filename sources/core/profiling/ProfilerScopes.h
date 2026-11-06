@@ -146,6 +146,7 @@ extern const Profiler::ScopeNameKey kPassVisTest;          // occlusion plan S3b
 extern const Profiler::ScopeNameKey kGBufferIndirect;      // occlusion plan S4 (CPU record + GPU)
 extern const Profiler::ScopeNameKey kGBufferTessy;         // Tessy N5: the camera's clusters inside GBuffer_Indirect
 extern const Profiler::ScopeNameKey kTessyCameraCull;      // Tessy N5 / the cluster view: the camera row's cluster cull
+extern const Profiler::ScopeNameKey kVsmWaterMask;         // the page request's mask: which clipmap pages a caster's box touches
 extern const Profiler::ScopeNameKey kTessyCameraPost;      // Tessy N5: the deferred camera clusters' retest (pass B)
 extern const Profiler::ScopeNameKey kTessySunCull;         // tessy.sdsm: the SDSM partitions' cluster cull (Main_SdsmCull)
 extern const Profiler::ScopeNameKey kTessySunDraw;         // tessy.sdsm: a partition's cluster draw (Main_SdsmShadow)
