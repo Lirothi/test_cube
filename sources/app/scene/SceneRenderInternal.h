@@ -240,6 +240,7 @@ namespace scene_internal
         const UINT sizeBytes = static_cast<UINT>((sizeof(T) + (kAlign - 1)) & ~(kAlign - 1));
         auto alloc = renderer->GetFrameResource()->AllocDynamic(sizeBytes, kAlign);
         std::memcpy(alloc.cpu, &data, sizeof(T));
+        renderer->GetFrameResource()->NoteFilled(alloc); // --upload-ring-check
         return alloc.gpu;
     }
 

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <chrono>
@@ -18,9 +19,12 @@
 #include <fstream>
 #include <DirectXPackedVector.h> // P8C-2o: the kernel is FP16 on disk
 #include <memory>
+#include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
 
+#include "rendering/core/GpuAlloc.h" // --upload-ring-check's readback of the RT constants
 #include "rendering/core/RenderConstants.h"
 
 #include "app/camera/Camera.h"
@@ -216,6 +220,155 @@ constexpr UINT kRtSlotPayloadSkySrv = 47;
 constexpr UINT kRtSlotSkyVisResolve = 48;
 constexpr UINT kRtSlotSkyVisGlass = 49;
 
+// --upload-ring-check: the RT reflection dispatches' constants AS THE GPU READ THEM -- copied right after each
+// dispatch in its own list into a readback, compared with what the CPU wrote once the slot comes round again (its
+// fence passed in BeginFrame). GBV once reported these dispatches reading descriptor indices 117 and 1 where the CPU
+// had written 12302 and 12311 (id=939 / id=940, 2026-11-07): this says whether the GPU saw other bytes or the layer
+// reported something the constants never held.
+enum RtCbKind : int { kRtCbTrace = 0, kRtCbResolve = 1, kRtCbGlass = 2, kRtCbKinds = 3 };
+struct RtCbGpuProbe
+{
+    std::mutex lock;
+    ComPtr<ID3D12Resource> readback;
+    const std::uint8_t* mapped = nullptr;
+    RtReflectConstants written[render::kFrameCount][kRtCbKinds] = {};
+    std::uint64_t frame[render::kFrameCount][kRtCbKinds] = {};
+    bool pending[render::kFrameCount][kRtCbKinds] = {};
+    std::uint64_t matched = 0;
+    std::uint64_t differed = 0;
+};
+RtCbGpuProbe g_rtCbProbe;
+constexpr UINT kRtCbStride = 512u;
+static_assert(sizeof(RtReflectConstants) <= kRtCbStride, "a probe slot holds one RtReflectConstants");
+
+UINT64 RtCbProbeOffset(UINT frameIndex, RtCbKind kind)
+{
+    return (static_cast<UINT64>(frameIndex) * kRtCbKinds + static_cast<UINT64>(kind)) * kRtCbStride;
+}
+
+// The copy into (frameIndex, kind) is done (its slot's fence passed): compare it with what the CPU wrote. Lock held.
+void CompareRtCbProbe(UINT frameIndex, RtCbKind kind)
+{
+    static const char* const kNames[kRtCbKinds] = { "RTTrace", "RTResolve", "GlassReflections" };
+    if (!g_rtCbProbe.pending[frameIndex][kind] || !g_rtCbProbe.mapped)
+    {
+        return;
+    }
+    g_rtCbProbe.pending[frameIndex][kind] = false;
+    const std::uint8_t* seen = g_rtCbProbe.mapped + RtCbProbeOffset(frameIndex, kind);
+    const auto* wrote = reinterpret_cast<const std::uint8_t*>(&g_rtCbProbe.written[frameIndex][kind]);
+    if (std::memcmp(seen, wrote, sizeof(RtReflectConstants)) == 0)
+    {
+        ++g_rtCbProbe.matched;
+        return;
+    }
+    ++g_rtCbProbe.differed;
+    std::string words;
+    int differ = 0;
+    for (std::size_t w = 0; w + 4u <= sizeof(RtReflectConstants); w += 4u)
+    {
+        std::uint32_t a = 0u;
+        std::uint32_t b = 0u;
+        std::memcpy(&a, wrote + w, 4u);
+        std::memcpy(&b, seen + w, 4u);
+        if (a != b && differ++ < 12)
+        {
+            char text[48];
+            std::snprintf(text, sizeof(text), " +%zu:%08x->%08x", w, a, b);
+            words += text;
+        }
+    }
+    LOG_ERROR(logging::LogCategory::RenderRhi,
+              "rt constants: frame {} {} -- the GPU read other bytes than the CPU wrote ({} words differ):{}",
+              g_rtCbProbe.frame[frameIndex][kind], kNames[kind], differ, words);
+}
+
+// render::g_uploadRingCheckShutdownHook, at Renderer::Shutdown with the GPU idle: the last copies, the verdict, the
+// readback released (it must not outlive the device: the exit report would count it alive).
+void ShutdownRtCbProbe()
+{
+    std::lock_guard<std::mutex> lock(g_rtCbProbe.lock);
+    for (UINT f = 0; f < render::kFrameCount; ++f)
+    {
+        for (int k = 0; k < kRtCbKinds; ++k)
+        {
+            CompareRtCbProbe(f, static_cast<RtCbKind>(k));
+        }
+    }
+    if (g_rtCbProbe.differed != 0u)
+    {
+        LOG_ERROR(logging::LogCategory::RenderRhi, "rt constants as the GPU read them: {} matched, {} differed",
+                  g_rtCbProbe.matched, g_rtCbProbe.differed);
+    }
+    else
+    {
+        LOG_INFO(logging::LogCategory::RenderRhi, "rt constants as the GPU read them: {} matched, {} differed",
+                 g_rtCbProbe.matched, g_rtCbProbe.differed);
+    }
+    if (g_rtCbProbe.readback)
+    {
+        g_rtCbProbe.readback->Unmap(0, nullptr);
+        g_rtCbProbe.mapped = nullptr;
+        g_rtCbProbe.readback.Reset();
+    }
+}
+
+void ProbeRtConstantsOnGpu(Renderer* renderer, ID3D12GraphicsCommandList* cl, UINT frameIndex, RtCbKind kind,
+                           const FrameResource::DynamicAlloc& cb, const RtReflectConstants& c)
+{
+    if (!render::g_rtConstantsProbe || cb.resource == nullptr || frameIndex >= render::kFrameCount)
+    {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_rtCbProbe.lock);
+    const UINT64 at = RtCbProbeOffset(frameIndex, kind);
+    // The slot came round: BeginFrame waited for its fence, so the copy recorded kFrameCount frames ago is done.
+    CompareRtCbProbe(frameIndex, kind);
+    if (!g_rtCbProbe.readback)
+    {
+        D3D12_HEAP_PROPERTIES hp{};
+        hp.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC rd{};
+        rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        rd.Width = static_cast<UINT64>(render::kFrameCount) * kRtCbKinds * kRtCbStride;
+        rd.Height = 1;
+        rd.DepthOrArraySize = 1;
+        rd.MipLevels = 1;
+        rd.SampleDesc = { 1, 0 };
+        rd.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(gpu::CreateCommittedResource(renderer->GetDevice(), &hp, D3D12_HEAP_FLAG_NONE, &rd,
+                                                D3D12_RESOURCE_STATE_COPY_DEST, nullptr, MemTag::Reflect,
+                                                L"Diag.RtConstantsReadback",
+                                                IID_PPV_ARGS(g_rtCbProbe.readback.ReleaseAndGetAddressOf()))))
+        {
+            return;
+        }
+        void* p = nullptr;
+        if (FAILED(g_rtCbProbe.readback->Map(0, nullptr, &p)))
+        {
+            g_rtCbProbe.readback.Reset();
+            return;
+        }
+        g_rtCbProbe.mapped = static_cast<const std::uint8_t*>(p);
+        render::g_uploadRingCheckShutdownHook = &ShutdownRtCbProbe;
+    }
+    cl->CopyBufferRegion(g_rtCbProbe.readback.Get(), at, cb.resource, cb.offset, sizeof(RtReflectConstants));
+    g_rtCbProbe.written[frameIndex][kind] = c;
+    g_rtCbProbe.frame[frameIndex][kind] = renderer->GetTotalFrameNumber();
+    g_rtCbProbe.pending[frameIndex][kind] = true;
+    if (render::g_uploadRingCheckSelftest && kind == kRtCbResolve && renderer->GetTotalFrameNumber() == 3u)
+    {
+        // --upload-ring-check=selftest, end to end: a word the shader never reads (the last pad) changed behind the
+        // copy's back. The GPU's copy must differ from what was written, and the seal must see the filled block move.
+        auto* pad = reinterpret_cast<std::uint32_t*>(static_cast<std::uint8_t*>(cb.cpu) +
+                                                     offsetof(RtReflectConstants, rtPad7));
+        *pad ^= 0xFFFFFFFFu;
+        LOG_INFO(logging::LogCategory::RenderRhi,
+                 "rt constants self-test: frame 3's RTResolve pad changed after the copy was recorded; the GPU's copy "
+                 "and the seal must both report it");
+    }
+}
+
 } // namespace
 
 // Gather-then-shade split, GATHER phase (async-compute prep). Traversal + the full hit shading
@@ -326,6 +479,7 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
+        renderer->GetFrameResource()->NoteFilled(cb); // --upload-ring-check
 
         // Bespoke bindless dispatch (binds the persistent heap, not the frame heap).
         ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
@@ -339,6 +493,7 @@ void SceneRenderer::Pass_RTTrace(Renderer* renderer, RenderGraphPassContext ctx,
         {
             t.cl->Dispatch(gx, gy, 1);
         }
+        ProbeRtConstantsOnGpu(renderer, t.cl, frameIndex, kRtCbTrace, cb, c); // --upload-ring-check
         // No UAV barrier here: the resolve declares the payload pair NON_PIXEL_SHADER_RESOURCE,
         // and the compiled UAV->NPS transition at its point is the write/read sync.
 
@@ -572,6 +727,7 @@ void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ct
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
+        renderer->GetFrameResource()->NoteFilled(cb); // --upload-ring-check
 
         ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
         t.cl->SetDescriptorHeaps(1, heaps);
@@ -584,6 +740,7 @@ void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ct
         {
             t.cl->Dispatch(gx, gy, 1);
         }
+        ProbeRtConstantsOnGpu(renderer, t.cl, frameIndex, kRtCbResolve, cb, c); // --upload-ring-check
         renderer->UAVBarrier(t.cl, D.reflection.Get()); // reflection -> consumed by the blur pass
 
         // Restore the frame heap: this pass shares its command list with the
@@ -751,6 +908,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
 
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(RtReflectConstants), render::kConstantBufferAlignment);
         std::memcpy(cb.cpu, &c, sizeof(c));
+        renderer->GetFrameResource()->NoteFilled(cb); // --upload-ring-check
 
         ID3D12DescriptorHeap* heaps[] = { rtAs_.Bindless().Heap() };
         t.cl->SetDescriptorHeaps(1, heaps);
@@ -763,6 +921,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         {
             t.cl->Dispatch(gx, gy, 1);
         }
+        ProbeRtConstantsOnGpu(renderer, t.cl, frameIndex, kRtCbGlass, cb, c); // --upload-ring-check
         renderer->UAVBarrier(t.cl, D.glassReflection.Get());
         renderer->BindDescriptorHeaps(t.cl); // restore the frame heap
     } while (false);

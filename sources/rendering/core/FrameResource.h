@@ -13,6 +13,29 @@
 
 using Microsoft::WRL::ComPtr;
 
+namespace render {
+// `--upload-ring-check`: every frame's upload ring is sealed when its recording ends and compared again before the
+// queue takes the frame, after ExecuteCommandLists and once the GPU has finished the slot (FrameResource::SealUpload /
+// VerifyUpload). A byte that moved in between was written by code that no longer owned it -- a constant buffer the GPU
+// then reads as someone else's (GBV: a descriptor index of the wrong type). Set at boot, never changed.
+// The frame's descriptor ring is sealed with it (DescriptorAllocator::SealForCheck): a table staged before the slot's
+// next reset is reported. `--upload-ring-check=selftest` writes into a filled and into a sealed canary on frame 3, takes
+// a descriptor after the seal and flips the RT resolve's unread pad after its GPU copy was recorded
+// (SceneRenderer_Reflections.cpp); every one of them must be reported.
+inline bool g_uploadRingCheck = false;
+inline bool g_uploadRingCheckSelftest = false;
+// The RT reflection dispatches' constants copied by the GPU right after each dispatch and compared with what the CPU
+// wrote (SceneRenderer_Reflections.cpp ProbeRtConstantsOnGpu). On with the ring check; `--upload-ring-check=gpu` is
+// this alone -- three copies a frame, without the ring check's call stack per allocation, which moves the timing.
+inline bool g_rtConstantsProbe = false;
+// A part of the check that holds GPU objects (the RT constants' readback, SceneRenderer_Reflections.cpp) hands its
+// release and its verdict here; ShutdownUploadRingCheck runs it.
+inline void (*g_uploadRingCheckShutdownHook)() = nullptr;
+// At Renderer::Shutdown, the GPU idle: the hook, then the verdict
+// `upload ring check: N checks, M bytes moved, K allocations after a seal`.
+void ShutdownUploadRingCheck();
+} // namespace render
+
 class FrameResource {
 public:
     struct DynamicAlloc {
@@ -20,6 +43,7 @@ public:
         D3D12_GPU_VIRTUAL_ADDRESS gpu = 0;
         UINT size = 0;
         UINT offset = 0; // offset within the resource
+        ID3D12Resource* resource = nullptr; // the upload buffer `offset` is in (a copy source for diagnostics)
     };
 
     // Initialize or reinitialize the frame upload buffer (persistent MAP)
@@ -31,6 +55,15 @@ public:
     // Thread-safe linear allocation from the frame upload buffer.
 // align must be a power of two (defaults to 16).
     DynamicAlloc AllocDynamic(UINT size, UINT align = 16);
+
+    // render::g_uploadRingCheck: seal what the frame wrote (its recording has ended), then compare it again; a
+    // difference is logged with the allocation it landed in, the code that made that allocation (and the one that
+    // held the same bytes a frame before in this slot), the old and the new words. Returns the bytes that moved.
+    void SealUpload(std::uint64_t frame);
+    std::size_t VerifyUpload(const char* when);
+    // render::g_uploadRingCheck: the caller has filled `a` -- from here on its bytes are final. The seal compares them
+    // (a write between the fill and the end of the recording, which the seal's own copy would take in as the truth).
+    void NoteFilled(const DynamicAlloc& a);
 
     void ResetCommandAllocators(ID3D12Device* dev) {
         commandAllocPools_.ResetAll(dev);
@@ -295,4 +328,26 @@ private:
     };
     std::vector<UploadChunk_> extraUploads_;
     std::mutex uploadGrowMtx_;
+
+    // ==== render::g_uploadRingCheck ====
+    static constexpr int kCheckCallers_ = 6;
+    struct CheckAlloc_ {
+        UINT region = 0; // 0 = the main ring, n = extraUploads_[n - 1]
+        UINT offset = 0;
+        UINT size = 0;
+        void* callers[kCheckCallers_] = {};
+    };
+    void NoteAlloc_(UINT region, UINT offset, UINT size);
+    std::mutex checkMtx_;
+    std::vector<CheckAlloc_> checkAllocs_;     // this epoch of the slot
+    std::vector<CheckAlloc_> checkAllocsPrev_; // the one before (kFrameCount frames back)
+    std::vector<std::vector<std::uint8_t>> checkSnap_; // [region] = its bytes when sealed
+    struct CheckFilled_ {
+        const std::uint8_t* cpu = nullptr;
+        std::vector<std::uint8_t> bytes;
+        void* callers[kCheckCallers_] = {};
+    };
+    std::vector<CheckFilled_> checkFilled_; // NoteFilled since the reset
+    std::uint64_t checkFrame_ = 0;
+    bool checkSealed_ = false;
 };

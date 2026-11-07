@@ -687,6 +687,14 @@ int WINAPI WinMain(
         render::g_deviceRemovalCheck_game = true;
     }
 
+    // "--upload-ring-check[=selftest]": every frame's upload ring sealed at the end of its recording and compared
+    // before the queue, after ExecuteCommandLists and when the GPU is done (FrameResource.h). Set before the renderer.
+    if (lpCmdLine && std::strstr(lpCmdLine, "--upload-ring-check")) {
+        render::g_rtConstantsProbe = true;
+        render::g_uploadRingCheck = std::strstr(lpCmdLine, "--upload-ring-check=gpu") == nullptr;
+        render::g_uploadRingCheckSelftest = std::strstr(lpCmdLine, "--upload-ring-check=selftest") != nullptr;
+    }
+
     // Async-compute plan step 7: "--dump-barriers" writes every compiled barrier once, for a
     // before/after diff of the barrier compile itself.
     if (lpCmdLine && std::strstr(lpCmdLine, "--dump-barriers")) {

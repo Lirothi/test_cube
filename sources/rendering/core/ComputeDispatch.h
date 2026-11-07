@@ -38,6 +38,7 @@ inline void RecordComputeDispatch(
     {
         auto cb = renderer->GetFrameResource()->AllocDynamic(cbSizeBytes, render::kConstantBufferAlignment);
         std::forward<WriteCBFn>(writeConstants)(static_cast<uint8_t*>(cb.cpu));
+        renderer->GetFrameResource()->NoteFilled(cb); // --upload-ring-check
         rc.cbv[0] = cb.gpu;
     }
     if (srvTable.size() > 0)

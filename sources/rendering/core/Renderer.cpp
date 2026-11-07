@@ -111,6 +111,7 @@ void Renderer::Shutdown()
     }
     rhi_.SetThreaded(false); // G10b: the RHI thread is joined; anything after this runs inline
     render::StopDeviceRemovalWatch();
+    render::ShutdownUploadRingCheck(); // --upload-ring-check: its readback released, its verdict logged
 
 #if PROF_GPU_ENABLED
     Profiler::Get().ShutdownGpu();
@@ -349,6 +350,11 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
     frameScheduler_.InitFence(GetDevice());
     render::StartDeviceRemovalWatch(GetDevice(), GraphicsDevice::GbvEnabled() || render::g_deviceRemovalCheck);
     gpu::SetCreationExcludesSubmission(GraphicsDevice::GbvEnabled());
+    if (render::g_uploadRingCheck || render::g_rtConstantsProbe) {
+        LOG_INFO(logging::LogCategory::RenderRhi, "upload ring check: {}{}",
+                 render::g_uploadRingCheck ? "on" : "the RT constants' GPU copies only",
+                 render::g_uploadRingCheckSelftest ? " (self-test: writes into frame 3's filled and sealed canaries)" : "");
+    }
 
     // --- Frame resources ---
     {
@@ -768,6 +774,9 @@ void Renderer::BeginFrame() {
 
     // Wait for the GPU using its back buffer fence value
     WaitForFrame(currentFrameIndex_);
+    if (render::g_uploadRingCheck) {
+        frameScheduler_.GetFrameResource(currentFrameIndex_)->VerifyUpload("while the GPU had it");
+    }
 
     // GPU pipeline statistics: freeze how many queries the slot just recorded handed out, publish
     // the slot this frame reuses -- its fence is what WaitForFrame just passed, so its resolves
@@ -1775,6 +1784,9 @@ void Renderer::ExecuteTimelineAndPresent() {
     // Recorded here, after the epilogue (its GPU scope where it always was); the submit only executes it.
     submit.emptyCompute = render::g_asyncEmptySubmit ? RecordEmptyComputeWork() : nullptr;
     lastPresentedIndex_ = submit.frameIndex; // the buffer handed to Present (screenshots flush the road first)
+    if (render::g_uploadRingCheck) {
+        GetFrameResource()->SealUpload(totalFrameNumber_); // the frame's recording has ended: what it wrote is final
+    }
     prevSubmit_ = lastSubmit_;
     lastSubmit_ = rhi_.Run([this, submit]() { SubmitFrame_(submit); });
     currentFrameIndex_ = rhi_.Threaded() ? submit.predictedNext : swapchain_.CurrentBackBufferIndex();
@@ -1783,6 +1795,10 @@ void Renderer::ExecuteTimelineAndPresent() {
 
 void Renderer::SubmitFrame_(const FrameSubmit& submit)
 {
+    FrameResource* ringChecked = render::g_uploadRingCheck ? frameScheduler_.GetFrameResource(submit.frameIndex) : nullptr;
+    if (ringChecked) {
+        ringChecked->VerifyUpload("before the queue took it");
+    }
     {
         CPU_SCOPE(ProfilerScopes::kService3);
         // Step 3's ordering probe: make the graphics queue wait for LAST frame's compute signal
@@ -1873,6 +1889,9 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
                 if (render::g_submitEdgeCount < render::kSubmitEdgeRing) { ++render::g_submitEdgeCount; }
             }
         }
+    }
+    if (ringChecked) {
+        ringChecked->VerifyUpload("during ExecuteCommandLists");
     }
 
     // Step 2's proof device: a deliberately EMPTY compute submission, so the two-queue frame fence
