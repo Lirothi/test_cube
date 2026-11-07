@@ -1105,6 +1105,53 @@ namespace
         drag("Wind alignment", render.windAlignment, 0.005f, 0.0f, 1.0f);
         drag("UV warp strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
 
+        ImGui::SeparatorText("Boat wake");
+        // ocean/OceanWake: the field of every boat's hull pressure, deep-water dispersion, only while a boat is in the world.
+        if (ImGui::Checkbox("Boat wake enabled", &render.wakeEnabled))
+        {
+            changed = true;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The waves a boat's hull throws (ocean/OceanWake): its pressure moving over deep water.\n"
+                              "Runs only while a boat is in the world; off, or no boat, costs nothing.");
+        }
+        drag("Wake strength", render.wakeStrength, 0.01f, 0.0f, 4.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The hull's pressure: 1 = the head of water its draft stands for (physics).");
+        }
+        drag("Wake height", render.wakeDisplacement, 0.01f, 0.0f, 2.0f);
+        drag("Wake slope", render.wakeNormal, 0.01f, 0.0f, 3.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The field's slope in the water's normal: 1 = its true slope.");
+        }
+        drag("Wake damping (1/s)", render.wakeDamping, 0.02f, 0.0f, 20.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("At the field's shortest wave (2 texels), falling as k^2 to the longer ones.");
+        }
+        drag("Wake breaking (1/s)", render.wakeBreaking, 0.05f, 0.0f, 20.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("A long wave in the shallows (depth under a twentieth of its length) runs down at up to this rate:\n"
+                              "the surf zone a beach takes it in (Crest's Attenuation In Shallows, 2/s). 0 = none: the\n"
+                              "waterline reflects it whole.");
+        }
+        drag("Wake texel (m)", render.wakeTexel, 0.01f, 0.25f, 2.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("512 texels make the window round the camera: 0.5 m = 256 m. A change restarts the field.");
+        }
+        {
+            bool wakeDebug = ocean::g_wakeDebugView_game != 0;
+            if (ImGui::Checkbox("Wake debug view (height)", &wakeDebug))
+            {
+                ocean::g_wakeDebugView_game = wakeDebug ? 1 : 0;
+            }
+        }
+
         ImGui::SeparatorText("Shore and surf");
         // surf sim injection: mode-independent (docs/ocean_surf_sim_plan.md).
         if (ImGui::Checkbox("Surf sim enabled", &render.surfSimEnabled))

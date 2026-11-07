@@ -19,7 +19,7 @@ namespace game
         void End() { active_ = false; }
         void ToggleView() { view_ = view_ == View::Chase ? View::Helm : View::Chase; orbitYaw_ = 0.0f; orbitPitch_ = 0.0f; }
         // Once a frame, before the hand-over: the mouse this frame (radians) and the frame's clock.
-        void Tick(float lookYaw, float lookPitch, float speed, float scriptOrbit, float deltaTime);
+        void Tick(float lookYaw, float lookPitch, float speed, float scriptOrbit, float scriptOrbitPitch, float deltaTime);
         // At the hand-over.
         void Apply(Camera& camera, const physics::HelmState& helm, float waterLevel);
 

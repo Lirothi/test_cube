@@ -255,13 +255,18 @@ Layout AutoLayout(const std::vector<Math::float3>& positions,
     return out;
 }
 
+namespace { void ForgetFootprints(const std::string& geometryPath); }
+
 void ForgetGeometry(const std::string& geometryPath)
 {
-    std::lock_guard<std::mutex> lock(g_cacheMutex);
-    for (auto it = g_cache.begin(); it != g_cache.end();)
     {
-        it = (geometryPath.empty() || it->first.first == geometryPath) ? g_cache.erase(it) : std::next(it);
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        for (auto it = g_cache.begin(); it != g_cache.end();)
+        {
+            it = (geometryPath.empty() || it->first.first == geometryPath) ? g_cache.erase(it) : std::next(it);
+        }
     }
+    ForgetFootprints(geometryPath);
 }
 
 Layout Resolve(const Settings& settings, const std::string& geometryPath)
@@ -339,5 +344,165 @@ Layout Resolve(const Settings& settings, const std::string& geometryPath)
         std::max(out.hullHeight * kDefaultDraftOfHull, 0.02f);
     out.waterline = out.keel + out.draft;
     return out;
+}
+
+namespace
+{
+    struct FootprintKey
+    {
+        std::string path;
+        int fx = 0;
+        int fz = 0;
+        int waterline = 0;
+        bool operator<(const FootprintKey& o) const
+        {
+            if (path != o.path) { return path < o.path; }
+            if (fx != o.fx) { return fx < o.fx; }
+            if (fz != o.fz) { return fz < o.fz; }
+            return waterline < o.waterline;
+        }
+    };
+    std::mutex g_footprintMutex;
+    std::map<FootprintKey, std::shared_ptr<const HullFootprint>> g_footprints;
+
+    // A re-bake keeps the path: the next copy must take the new hull (the old pointer lives on in whoever holds it).
+    void ForgetFootprints(const std::string& geometryPath)
+    {
+        std::lock_guard<std::mutex> lock(g_footprintMutex);
+        for (auto it = g_footprints.begin(); it != g_footprints.end();)
+        {
+            it = (geometryPath.empty() || it->first.path == geometryPath) ? g_footprints.erase(it) : std::next(it);
+        }
+    }
+
+    HullFootprint BuildFootprint(const std::vector<Math::float3>& positions, const std::vector<std::uint32_t>& indices,
+        Math::float2 forward, float waterlineY)
+    {
+        HullFootprint out;
+        const float ux = forward.x, uz = forward.y;
+        const auto toU = [&](const Math::float3& p) { return p.x * ux + p.z * uz; };
+        const auto toV = [&](const Math::float3& p) { return -p.x * uz + p.z * ux; };
+        float u0 = std::numeric_limits<float>::max(), u1 = std::numeric_limits<float>::lowest();
+        float v0 = u0, v1 = u1;
+        for (const std::uint32_t i : indices)
+        {
+            u0 = std::min(u0, toU(positions[i])); u1 = std::max(u1, toU(positions[i]));
+            v0 = std::min(v0, toV(positions[i])); v1 = std::max(v1, toV(positions[i]));
+        }
+        if (!(u1 > u0) || !(v1 > v0)) { return out; }
+        const int nu = kHullFootprintAlong;
+        const int nv = kHullFootprintAcross;
+        const float cellU = (u1 - u0) / static_cast<float>(nu);
+        const float cellV = (v1 - v0) / static_cast<float>(nv);
+        std::vector<float> bottom(static_cast<size_t>(nu) * nv, std::numeric_limits<float>::max());
+        const auto mark = [&](int i, int j, float y)
+        {
+            if (i < 0 || j < 0 || i >= nu || j >= nv) { return; }
+            float& b = bottom[static_cast<size_t>(j) * nu + i];
+            b = std::min(b, y);
+        };
+        // The underside as AutoLayout rasterises it: every triangle's plan view (cell centres inside it take the
+        // interpolated height) and every vertex into its own cell, so a wall seen edge-on still registers.
+        const size_t triCount = indices.size() / 3;
+        for (size_t t = 0; t < triCount; ++t)
+        {
+            const Math::float3& a = positions[indices[t * 3 + 0]];
+            const Math::float3& b = positions[indices[t * 3 + 1]];
+            const Math::float3& c = positions[indices[t * 3 + 2]];
+            const float au = (toU(a) - u0) / cellU, av = (toV(a) - v0) / cellV;
+            const float bu = (toU(b) - u0) / cellU, bv = (toV(b) - v0) / cellV;
+            const float cu = (toU(c) - u0) / cellU, cv = (toV(c) - v0) / cellV;
+            mark(static_cast<int>(au), static_cast<int>(av), a.y);
+            mark(static_cast<int>(bu), static_cast<int>(bv), b.y);
+            mark(static_cast<int>(cu), static_cast<int>(cv), c.y);
+            const float area = (bu - au) * (cv - av) - (bv - av) * (cu - au);
+            if (std::abs(area) < 1e-8f) { continue; }
+            const int i0 = std::max(0, static_cast<int>(std::floor(std::min({ au, bu, cu }))));
+            const int i1 = std::min(nu - 1, static_cast<int>(std::ceil(std::max({ au, bu, cu }))));
+            const int j0 = std::max(0, static_cast<int>(std::floor(std::min({ av, bv, cv }))));
+            const int j1 = std::min(nv - 1, static_cast<int>(std::ceil(std::max({ av, bv, cv }))));
+            for (int j = j0; j <= j1; ++j)
+            {
+                for (int i = i0; i <= i1; ++i)
+                {
+                    const float pu = static_cast<float>(i) + 0.5f, pv = static_cast<float>(j) + 0.5f;
+                    const float w0 = ((bu - pu) * (cv - pv) - (bv - pv) * (cu - pu)) / area;
+                    const float w1 = ((cu - pu) * (av - pv) - (cv - pv) * (au - pu)) / area;
+                    const float w2 = 1.0f - w0 - w1;
+                    if (w0 < 0.0f || w1 < 0.0f || w2 < 0.0f) { continue; }
+                    mark(i, j, w0 * a.y + w1 * b.y + w2 * c.y);
+                }
+            }
+        }
+
+        std::vector<float> depth(bottom.size(), 0.0f);
+        for (size_t k = 0; k < bottom.size(); ++k)
+        {
+            depth[k] = bottom[k] < waterlineY ? waterlineY - bottom[k] : 0.0f;
+        }
+        // One binomial pass (1 2 1 x 1 2 1): the hull's edge becomes a two-cell ramp, a step in pressure being a step
+        // the spectral solver answers with ripples at its shortest wave.
+        out.depth.assign(depth.size(), 0.0f);
+        for (int j = 0; j < nv; ++j)
+        {
+            for (int i = 0; i < nu; ++i)
+            {
+                float sum = 0.0f;
+                float weight = 0.0f;
+                for (int dj = -1; dj <= 1; ++dj)
+                {
+                    for (int di = -1; di <= 1; ++di)
+                    {
+                        const int ii = i + di, jj = j + dj;
+                        const float w = static_cast<float>((di == 0 ? 2 : 1) * (dj == 0 ? 2 : 1));
+                        weight += w;
+                        if (ii < 0 || jj < 0 || ii >= nu || jj >= nv) { continue; }
+                        sum += w * depth[static_cast<size_t>(jj) * nu + ii];
+                    }
+                }
+                const float d = sum / weight;
+                out.depth[static_cast<size_t>(j) * nu + i] = d;
+                out.maxDepth = std::max(out.maxDepth, d);
+            }
+        }
+        out.along = nu;
+        out.across = nv;
+        out.u0 = u0;
+        out.v0 = v0;
+        out.cellU = cellU;
+        out.cellV = cellV;
+        return out;
+    }
+}
+
+std::shared_ptr<const HullFootprint> ResolveFootprint(const std::string& geometryPath, Math::float2 forward,
+    float waterlineY)
+{
+    const float length = std::sqrt(forward.x * forward.x + forward.y * forward.y);
+    if (geometryPath.empty() || !(length > 1e-6f)) { return nullptr; }
+    forward = Math::float2(forward.x / length, forward.y / length);
+    FootprintKey key{ geometryPath, static_cast<int>(std::lround(forward.x * 1000.0f)),
+                      static_cast<int>(std::lround(forward.y * 1000.0f)), static_cast<int>(std::lround(waterlineY * 1000.0f)) };
+    std::lock_guard<std::mutex> lock(g_footprintMutex);
+    const auto it = g_footprints.find(key);
+    if (it != g_footprints.end()) { return it->second; }
+    std::vector<Math::float3> positions;
+    std::vector<std::uint32_t> indices;
+    std::shared_ptr<const HullFootprint> footprint;
+    if (LoadGeometry(geometryPath, positions, indices))
+    {
+        auto built = std::make_shared<HullFootprint>(BuildFootprint(positions, indices, forward, waterlineY));
+        LOG_INFO(logging::LogCategory::Ocean,
+            "wake: {} -> hull footprint {:.2f} x {:.2f} m, {} x {} cells, deepest {:.3f} m under the waterline {:.3f}",
+            geometryPath, built->cellU * built->along, built->cellV * built->across, built->along, built->across,
+            built->maxDepth, waterlineY);
+        if (built->Valid()) { footprint = std::move(built); }
+    }
+    else
+    {
+        LOG_WARNING(logging::LogCategory::Ocean, "wake: no CPU geometry for '{}' -- the boat makes no wake", geometryPath);
+    }
+    g_footprints.emplace(std::move(key), footprint);
+    return footprint;
 }
 }

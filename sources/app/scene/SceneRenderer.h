@@ -207,6 +207,7 @@ private:
         // without it the transparent pass would read maps the compute queue is still writing.
         size_t pObjectCompute = kNone; // prologue -> transparent (cross-queue)
         size_t pWetness = kNone;   // prologue -> reflection source
+        size_t pWake = kNone;      // prologue -> ocean readback (the wake's free height is copied this frame)
         size_t pShoreDepth = kNone;// prologue -> shadow cull
         size_t pShadow = kNone;    // shadows  -> lighting (mtDep)
         size_t pSpotShadow = kNone;// shadows  -> spot lights (mtDep)

@@ -27,6 +27,7 @@
 #include "rendering/core/RenderStats.h"     // occlusion plan S0: draw/primitive totals in the readout
 #include "core/diagnostics/ArtifactWriter.h" // S7: headless cascade readout dump
 #include "core/diagnostics/BootProfile.h"    // game thread plan G10d: the level load's phases
+#include "ocean/BuoyancyLayout.h" // the boats' hull footprints, for their wake
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanRenderable.h"
 #include "core/task/TaskSystem.h"
@@ -2206,6 +2207,29 @@ void Scene::Sync(Renderer* renderer)
     // matrices are refreshed for the pose about to render -- the gizmo, picking and the HUD read them next frame, as
     // they read the frame's CalcMatrices before.
     physics_.SyncPoses(); // what the step found while this thread waited for the frame before; the loop below takes them
+    // The boats' wake on the water (ocean/OceanWake): every hull as this frame draws it, with its footprint (resolved from
+    // its geometry once a shape, then a cache hit), to the ocean's render half -- parked here.
+    if (OceanRenderable* ocean = FindOceanRenderable())
+    {
+        physics_.CollectHulls(vesselHulls_);
+        std::vector<ocean::WakeHull> hulls;
+        hulls.reserve(vesselHulls_.size());
+        for (const physics::VesselHull& vessel : vesselHulls_)
+        {
+            ocean::WakeHull hull;
+            hull.position = Math::float2(vessel.position.x, vessel.position.z);
+            hull.forward = Math::float2(vessel.forward.x, vessel.forward.z);
+            hull.scale = 0.5f * (vessel.scale.x + vessel.scale.z);
+            // The asset's waterline: VesselSettings::draft is where still water stands on the mesh, over its origin.
+            hull.footprint = buoyancy::ResolveFootprint(vessel.object->GetGeometryPath(),
+                Math::float2(vessel.settings->forward.x, vessel.settings->forward.z), vessel.settings->draft);
+            if (hull.footprint)
+            {
+                hulls.push_back(std::move(hull));
+            }
+        }
+        ocean->SetWakeHulls(std::move(hulls));
+    }
     if (vesselCamera_.Active())
     {
         // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.

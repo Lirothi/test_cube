@@ -460,7 +460,14 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             if (!frame_->ocean) { return {}; }
             return frame_->ocean->BuildSurfSimPass(ctx);
         });
-    gb.pWetness = rg.AddPass2(RenderPass::Main_ShoreWetness, { pSurfSim },
+    // A boat's wake (ocean/OceanWake): the field of the hulls' pressure, only while a boat is in the world. Ocean, small,
+    // its own two textures and an upload buffer -- the same group, after the surf sim.
+    const size_t pWake = gb.pWake = rg.AddPass2(RenderPass::Main_OceanWake, { pSurfSim },
+        [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            if (!frame_->ocean) { return {}; }
+            return frame_->ocean->BuildWakePass(ctx);
+        });
+    gb.pWetness = rg.AddPass2(RenderPass::Main_ShoreWetness, { pWake },
         [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->ocean) { return {}; }
             return frame_->ocean->BuildWetnessPass(ctx);
@@ -2281,7 +2288,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
     // SDSM): Pass_PrologueClear, then nothing for a median 0.69 ms until Pass_OceanReadback / Pass_ShadowCull, the sim
     // itself only 114 us of it; the rest is two queue hand-overs. Main_Transparent waits for the sim anyway (the ocean
     // samples its maps), so the copy rides that wait, and the CPU reads it no later (the same frame fence).
-    rg.AddPass2(RenderPass::Main_OceanReadback, { gb.pObjectCompute, gb.pShoreDepth, gb.pCompose },
+    rg.AddPass2(RenderPass::Main_OceanReadback, { gb.pObjectCompute, gb.pShoreDepth, gb.pCompose, gb.pWake },
         [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             if (!frame_->ocean) { return {}; }
             return frame_->ocean->BuildReadbackPass(ctx);

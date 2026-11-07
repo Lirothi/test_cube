@@ -32,6 +32,9 @@ struct RenderGraphPassContext;
 // was pushed to -- the fixed-point inverse X = P - D.xz(X), `samplingIterations` steps. Not
 // reproduced: the depth-buffer damping the shader falls back to outside the 500 m shore window
 // (full amplitude out there) and the surf sim's height (off by default).
+//
+// A boat's wake (OceanWake) rides along: its FREE height -- the field plus the hulls' own head, so a hull at rest does
+// not float in its own hollow -- copied with the cascades, sampled where the vertex shader adds the wake's height.
 class OceanReadback
 {
 public:
@@ -76,8 +79,11 @@ public:
 
     // World y of the water surface at world (x, z). Before the first copy lands: the flat level.
     // Reads the adopted slot IN PLACE (no copy): BuildPass never lands a copy in the adopted slot,
-    // so it stays intact until Poll adopts a newer one.
-    float SampleHeight(float x, float z) const;
+    // so it stays intact until Poll adopts a newer one. `wakeShare` scales the boats' wake in it (a
+    // boat under way leaves out the wake it makes itself: PhysicsWorld).
+    float SampleHeight(float x, float z, float wakeShare = 1.0f) const;
+    // The adopted copy carries a wake.
+    bool HasWake() const { return HasSurface() && wake_.z > 0.0f; }
     // False before the first copy lands and while readbackCascades is None.
     bool HasSurface() const { return adoptedFrame_ != 0; }
     // The frame the adopted copy was taken on; changes exactly when a new copy is adopted.
@@ -87,9 +93,10 @@ public:
     std::uint32_t LatencyFrames() const { return latency_; }
 
 private:
-    Math::float3 Displacement(float baseX, float baseZ) const;
+    Math::float3 Displacement(float baseX, float baseZ, float wakeShare) const;
     Math::float3 SampleCascade(std::uint32_t cascade, float u, float v) const;
     float SampleShoreDepth(float u, float v) const;
+    float SampleWake(float u, float v) const;
     bool EnsureBuffer(Renderer* renderer, ID3D12Resource* displacement, ID3D12Resource* shore,
         std::uint32_t cascades);
     // Forget the adopted surface; copies in flight are marked to be freed, never adopted. Their
@@ -104,6 +111,7 @@ private:
         bool hasShore = false;
         bool discard = false;    // recorded before DropSurface: free it when it lands, do not adopt
         ShoreParams shore;
+        Math::float4 wake{};     // the wake's window as the copy saw it (GetWakeParams): z = 0 -> no wake copied
     };
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer_; // render::kFrameCount slots
@@ -111,6 +119,7 @@ private:
     UINT64 slotBytes_ = 0;
     std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> cascadeFootprint_{};
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT shoreFootprint_{};
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT wakeFootprint_{}; // R16F, OceanWake::kResolution square: room in every slot
     // BuildPass' copy as its body records it, read here rather than captured (~150 B of capture was a heap
     // allocation per copy). Written by the builder, read by the body in the same frame's graph run.
     struct CopyPass
@@ -119,11 +128,13 @@ private:
         UINT64 base = 0;
         std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> cascadeFp{};
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT shoreFp{};
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT wakeFp{};
         std::array<UINT, 2> subresource{};
         std::uint32_t cascades = 0;
         bool copyShore = false;
         ID3D12Resource* displacement = nullptr;
         ID3D12Resource* shore = nullptr;
+        ID3D12Resource* wake = nullptr; // null: no wake this copy
         std::uint32_t copyPoint = 0, restorePoint = 0;
     };
     CopyPass copyPass_;
@@ -142,6 +153,7 @@ private:
     SurfaceParams surface_;
     UINT adoptedSlot_ = 0;
     ShoreParams shore_;
+    Math::float4 wake_{};                                    // the adopted slot's wake window (z = 0: none)
     std::vector<std::uint16_t> shoreTexels_;                 // D16 unorm, width * height
     bool hasShore_ = false;
     std::uint64_t adoptedFrame_ = 0;

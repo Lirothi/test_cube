@@ -39,7 +39,7 @@ namespace game
         pull_ = 0.0f;
     }
 
-    void VesselCamera::Tick(float lookYaw, float lookPitch, float speed, float scriptOrbit, float deltaTime)
+    void VesselCamera::Tick(float lookYaw, float lookPitch, float speed, float scriptOrbit, float scriptOrbitPitch, float deltaTime)
     {
         dt_ = deltaTime;
         if (lookYaw != 0.0f || lookPitch != 0.0f) { sinceLook_ = 0.0f; }
@@ -50,6 +50,11 @@ namespace game
         if (scriptOrbit != 0.0f)
         {
             orbitYaw_ = scriptOrbit;
+            sinceLook_ = 0.0f;
+        }
+        if (scriptOrbitPitch != 0.0f)
+        {
+            orbitPitch_ = std::clamp(scriptOrbitPitch, -1.2f, 1.2f);
             sinceLook_ = 0.0f;
         }
         if (view_ == View::Chase && sinceLook_ > kReturnAfter && std::fabs(speed) > kMinUnderWay)

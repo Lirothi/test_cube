@@ -128,7 +128,8 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     order.rudder += tuning.testRudder;
     world.SetHelmInput(order);
     game::VesselCamera& view = scene.VesselCameraRef();
-    view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, tuning.testOrbit, deltaTime);
+    view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, tuning.testOrbit,
+              tuning.testOrbitPitch, deltaTime);
     const bool scriptView = std::exchange(tuning.testView, false);
     if (scriptView || (controls && input.WasActionPressed("ToggleView")))
     {

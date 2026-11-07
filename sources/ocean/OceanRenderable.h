@@ -12,6 +12,7 @@
 #include "ocean/OceanReadback.h"
 #include "ocean/OceanSimulation.h"
 #include "ocean/OceanSurfSim.h" // surf sim injection (docs/ocean_surf_sim_plan.md)
+#include "ocean/OceanWake.h"
 #include "ocean/OceanWetness.h"
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
@@ -85,6 +86,17 @@ inline bool g_surfSimForce = false;
 inline bool g_surfSimForce_game = false;
 inline const bool g_surfSimForce_knob = ::knob::Register(g_surfSimForce_game, g_surfSimForce, "ocean::g_surfSimForce");
 
+// `--set ocean.wakeDebug:1`: the water tinted by the boat wake's height (red up, blue down, opaque), to read the wave
+// pattern and not the glints. Not serialized; rides wakeParams2.z.
+inline int g_wakeDebugView = 0;
+inline int g_wakeDebugView_game = 0;
+inline const bool g_wakeDebugView_knob = ::knob::Register(g_wakeDebugView_game, g_wakeDebugView, "ocean::g_wakeDebugView");
+// `--set ocean.wakeShore:0`: the wake ignores the coast -- deep water everywhere, the island no barrier (the A/B of
+// 2026-11-07's depths and land). Transient.
+inline int g_wakeShore = 1;
+inline int g_wakeShore_game = 1;
+inline const bool g_wakeShore_knob = ::knob::Register(g_wakeShore_game, g_wakeShore, "ocean::g_wakeShore");
+
 
 // "--ocean-vs-depth-probe": A/B experiment, OFF. Replaces the world-space shore SDF with a
 // screen-space probe of the depth buffer, taken in the VERTEX shader, as the thing that decides
@@ -128,6 +140,9 @@ public:
     // SceneRenderer calls this as the pass builder. Empty return = the sim is off this frame.
     std::function<void(RenderGraphPassContext)> BuildSurfSimPass(RenderGraphPassContext& ctx);
     std::function<void(RenderGraphPassContext)> BuildWetnessPass(RenderGraphPassContext& ctx);
+    // A boat's wake (ocean/OceanWake): Main_OceanWake's builder, and the hulls Scene::Sync hands over (render half parked).
+    std::function<void(RenderGraphPassContext)> BuildWakePass(RenderGraphPassContext& ctx);
+    void SetWakeHulls(std::vector<ocean::WakeHull> hulls);
     // Main_OceanReadback's builder: the surface to the CPU, only on a frame someone asked for it.
     std::function<void(RenderGraphPassContext)> BuildReadbackPass(RenderGraphPassContext& ctx)
     {
@@ -287,6 +302,11 @@ private:
     Math::float4 GetShoreWetnessParams() const;
     Math::float4 GetShoreWetnessParams2() const;
     bool SurfSimActive() const;            // surf sim injection: config flag OR the boot force
+    bool WakeEnabled() const;
+    Math::float4 GetWakeParams() const;  // xy: window centre, z: 1 / half extent (0 = no field), w: displacement scale
+    Math::float4 GetWakeParams2() const; // x: texel world size, y: normal strength, z: debug view
+    // The wake's free height for OceanReadback when frame `frame` stepped it (and the surface reads it), else null.
+    ID3D12Resource* GetWakeFreeHeightResource(std::uint64_t frame) const;
     Math::float4 GetShoreSwashParams() const;
     Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;
@@ -326,6 +346,8 @@ private:
     Scene* scene_ = nullptr;
     OceanSimulation* simulation_ = nullptr;
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
+    std::unique_ptr<OceanWake> wake_;
+    bool wakeHasHulls_ = false; // the last hand-over had a boat: the field's resources are made only then
     std::unique_ptr<OceanWetness> wetness_;
     OceanReadback readback_;
 

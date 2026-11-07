@@ -196,6 +196,7 @@ const Profiler::ScopeNameKey kOceanSurface = Profiler::RegisterTraceLiteral(L"Oc
 const Profiler::ScopeNameKey kTransparentDriver = Profiler::RegisterTraceLiteral(L"Transparent.Driver");
 const Profiler::ScopeNameKey kOceanRender = Profiler::RegisterTraceLiteral(L"OceanRenderable::RecordCompute");
 const Profiler::ScopeNameKey kOceanSurfSim = Profiler::RegisterTraceLiteral(L"Ocean.SurfSim");
+const Profiler::ScopeNameKey kOceanWake = Profiler::RegisterTraceLiteral(L"Ocean.Wake");
 const Profiler::ScopeNameKey kPrepareTransparentBuckets = Profiler::RegisterTraceLiteral(L"Scene::PrepareTransparentBuckets");
 const Profiler::ScopeNameKey kAddPass = Profiler::RegisterTraceLiteral(L"RenderGraph::AddPass");
 const Profiler::ScopeNameKey kPrepareViews = Profiler::RegisterTraceLiteral(L"Scene::PrepareViews");

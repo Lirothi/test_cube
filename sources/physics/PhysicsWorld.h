@@ -63,6 +63,7 @@ namespace physics
         float testThrottle = 0.0f;    // what W and S say at the helm
         float testRudder = 0.0f;      // what A and D say
         float testOrbit = 0.0f;       // radians about the boat: a script's shot from the side, held while it is not 0
+        float testOrbitPitch = 0.0f;  // radians the chase camera looks further down: a script's shot from above (the wake's pattern), held while it is not 0
     };
 
     // What the keys say this frame.
@@ -92,6 +93,19 @@ namespace physics
         float halfLength = 0.0f;
         float halfBeam = 0.0f;
         VesselState vessel;
+    };
+
+    // A boat as the frame draws it (World::CollectHulls): what its wake on the water starts from.
+    struct VesselHull
+    {
+        RenderableObject* object = nullptr;
+        const VesselSettings* settings = nullptr;
+        Math::float3 position;  // the mesh's origin
+        Math::float3 forward;   // the bow's way, world, unit
+        Math::float3 up;        // the deck's up, world, unit
+        Math::float3 scale;
+        float speed = 0.0f;     // m/s along the hull, as the frame shows it
+        bool atHelm = false;
     };
 
     struct PlayerState
@@ -211,6 +225,9 @@ namespace physics
         bool SetHelm(RenderableObject* vessel);
         void SetHelmInput(const VesselInput& input);
         const HelmState& GetHelm() const;
+        // Every boat as the last Display drew it -- the game's alone, never waits for a step (Scene::Sync hands them to
+        // the ocean's wake).
+        void CollectHulls(std::vector<VesselHull>& out) const;
         // --set / MCP vessel.<key>: on every boat in the world, transient. False = no such key.
         bool TuneVessels(const std::string& key, float value);
 

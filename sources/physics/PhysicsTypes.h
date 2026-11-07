@@ -108,6 +108,8 @@ namespace physics
         float bite = 0.0f;      // the propeller's share in the water: 0 = out of it, the engine races
         float impact = 0.0f;    // the last slam, as a share of the weight, fading
         float waterHeight = 0.0f; // of the surface under it
+        float buoyancyLead = 0.0f; // m the centre of buoyancy stands ahead of the centre of mass along the hull: aft of it (< 0) the water lifts the stern, the bow comes down
+        float trimTorque = 0.0f;   // N m of bow up the hump and the plane ask for this step
     };
 
     // mesh.json / level object "collision" block (physics/CollisionJson.h). Every field has an automatic value, so an asset

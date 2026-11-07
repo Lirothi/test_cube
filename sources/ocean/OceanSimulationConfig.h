@@ -140,6 +140,17 @@ struct OceanRenderConfig
     float surfSimCelerityFloor = 0.4f;   // m, min depth for wave speed - bore march vs shore compression
     float surfSimBreakOnset = 0.5f;      // fraction of the breaker criterion where foam starts (cap width lever)
     float surfSimWaveDamping = 0.08f;    // 1/s open-water settle
+    // A boat's wake (ocean/OceanWake): the field of each hull's pressure moving over deep water. Runs only while a boat is in
+    // the world; OFF = no dispatch, nothing read.
+    bool wakeEnabled = true;
+    float wakeStrength = 1.0f;     // the hull's pressure: 1 = the head of water its draft stands for (physics)
+    float wakeDisplacement = 1.0f; // the field's height in the surface's vertices (0..2)
+    float wakeNormal = 1.0f;       // the field's slope in the surface's normal (1 = the true slope, 0..3)
+    float wakeDamping = 1.5f;      // 1/s at the field's shortest wave, as k^2 to the longer ones
+    float wakeBreaking = 2.0f;     // 1/s (Crest's rate): a long wave in the shallows, d < wavelength / 20, runs down at it
+                                   // as d goes to 0 -- the surf zone a beach takes it in; 0 = none, the waterline
+                                   // reflects it whole (0..20)
+    float wakeTexel = 0.5f;        // m a texel; 512 make the window round the camera (0.25..2)
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

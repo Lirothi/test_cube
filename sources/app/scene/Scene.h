@@ -478,6 +478,7 @@ private:
     std::optional<game::PlayerStart> levelPlayerStart_;
     game::VesselCamera vesselCamera_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
+    std::vector<physics::VesselHull> vesselHulls_; // Sync's scratch: the boats as this frame draws them, for their wake
 
     DirectionalLight dirLight_;
     TimeOfDay timeOfDay_{};    // T2: owns dirLight_ when the level has a `timeOfDay` section

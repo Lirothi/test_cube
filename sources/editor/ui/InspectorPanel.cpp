@@ -3919,6 +3919,40 @@ namespace
                     renderDrag("UV Warp Strength", render.windUvWarpStrength, 0.005f, 0.0f, 5.0f);
                 }
 
+                if (ImGui::CollapsingHeader("Boat wake", ImGuiTreeNodeFlags_DefaultOpen))
+                {
+                    // ocean/OceanWake: every boat's hull pressure moving over deep water; only while a boat is in the world.
+                    bool wakeEnabled = render.wakeEnabled;
+                    if (ImGui::Checkbox("Boat Wake Enabled", &wakeEnabled))
+                    {
+                        OceanRenderConfig afterRender = render;
+                        afterRender.wakeEnabled = wakeEnabled;
+                        nlohmann::json after = withField("render", OceanRenderConfigJson::ToJson(afterRender));
+                        executeChange(std::move(after), "Set Ocean Boat Wake Enabled");
+                    }
+                    const auto wakeTip = [](const char* text)
+                    {
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("%s", text);
+                        }
+                    };
+                    renderDrag("Wake Strength", render.wakeStrength, 0.01f, 0.0f, 4.0f);
+                    wakeTip("The hull's pressure: 1 = the head of water its draft stands for (physics).");
+                    renderDrag("Wake Height", render.wakeDisplacement, 0.01f, 0.0f, 2.0f);
+                    wakeTip("The field's height in the water's vertices.");
+                    renderDrag("Wake Slope", render.wakeNormal, 0.01f, 0.0f, 3.0f);
+                    wakeTip("The field's slope in the water's normal: 1 = its true slope.");
+                    renderDrag("Wake Damping (1/s)", render.wakeDamping, 0.02f, 0.0f, 20.0f);
+                    wakeTip("At the field's shortest wave (2 texels), falling as k^2 to the longer ones.");
+                    renderDrag("Wake Breaking (1/s)", render.wakeBreaking, 0.05f, 0.0f, 20.0f);
+                    wakeTip("A long wave in the shallows (depth under a twentieth of its length) runs down at up to this rate: "
+                            "the surf zone a beach takes it in (Crest's Attenuation In Shallows, 2/s). 0 = none: the "
+                            "waterline reflects it whole.");
+                    renderDrag("Wake Texel (m)", render.wakeTexel, 0.01f, 0.25f, 2.0f);
+                    wakeTip("512 texels make the window round the camera: 0.5 m = 256 m. A change restarts the field.");
+                }
+
                 if (ImGui::CollapsingHeader("Shore and surf", ImGuiTreeNodeFlags_DefaultOpen))
                 {
                     // surf sim injection: mode-independent (docs/ocean_surf_sim_plan.md).

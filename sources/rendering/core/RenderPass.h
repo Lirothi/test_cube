@@ -37,6 +37,7 @@ enum class RenderPass : uint16_t {
     Main_GpuInstanceCompute,
     Main_ObjectCompute,   // ocean sim + particles: consumed by Main_Transparent, whole-frame slack
     Main_SurfSim,
+    Main_OceanWake, // a boat's wake on the water (ocean/OceanWake): only while a boat is in the world
     Main_ShoreWetness,
     Main_TerrainDepth,
     Main_OceanReadback, // the first 1-2 FFT cascades + shore map -> the CPU (buoyancy); only when asked
@@ -168,6 +169,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_GpuInstanceCompute: return L"GpuInstanceCompute";
     case RenderPass::Main_ObjectCompute: return L"ObjectCompute";
     case RenderPass::Main_SurfSim: return L"SurfSim";
+    case RenderPass::Main_OceanWake: return L"OceanWake";
     case RenderPass::Main_ShoreWetness: return L"ShoreWetness";
     case RenderPass::Main_TerrainDepth: return L"TerrainDepth";
     case RenderPass::Main_OceanReadback: return L"OceanReadback";

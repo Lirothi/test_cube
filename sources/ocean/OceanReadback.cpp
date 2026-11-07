@@ -11,6 +11,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanWake.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/Renderer.h"
@@ -50,6 +51,22 @@ namespace
         alignas(16) float v[4];
         _mm_store_ps(v, _mm_cvtph_ps(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(texel))));
         return Math::float3(v[0], v[1], v[2]);
+    }
+
+    // One R16F texel -> float.
+    float FetchHalf(const std::uint8_t* texel)
+    {
+        std::uint16_t bits = 0;
+        std::memcpy(&bits, texel, sizeof(bits));
+        return _mm_cvtss_f32(_mm_cvtph_ps(_mm_cvtsi32_si128(bits)));
+    }
+
+    // ocean_surface_surf_sim.hlsli WakeWindowEdgeFade: smoothstep over the window's last 2 .. 32 texels of 512.
+    float WakeEdgeFade(float u, float v)
+    {
+        const float edge = std::min(std::min(u, 1.0f - u), std::min(v, 1.0f - v));
+        const float t = std::clamp((edge - 2.0f / 512.0f) / (30.0f / 512.0f), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
     }
 }
 
@@ -99,6 +116,23 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
         shoreFootprint_.Offset = offset;
         offset += AlignUp(shoreBytes, kPlacement);
     }
+    // The boats' wake: room in every slot whether a boat is in the world or not, so the first boat never reallocates.
+    {
+        D3D12_RESOURCE_DESC wd{};
+        wd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        wd.Width = OceanWake::kResolution;
+        wd.Height = OceanWake::kResolution;
+        wd.DepthOrArraySize = 1;
+        wd.MipLevels = 1;
+        wd.Format = DXGI_FORMAT_R16_FLOAT;
+        wd.SampleDesc.Count = 1;
+        wd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        wd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        UINT64 wakeBytes = 0;
+        device->GetCopyableFootprints(&wd, 0u, 1u, 0u, &wakeFootprint_, nullptr, nullptr, &wakeBytes);
+        wakeFootprint_.Offset = offset;
+        offset += AlignUp(wakeBytes, kPlacement);
+    }
     slotBytes_ = AlignUp(offset, kPlacement);
 
     D3D12_HEAP_PROPERTIES heap{};
@@ -127,8 +161,9 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
     layoutShoreW_ = shoreW;
     layoutShoreH_ = shoreH;
     LOG_INFO(logging::LogCategory::Ocean,
-        "ocean readback: ring {} x {:.2f} MB (2 cascades {}^2 RGBA16F + shore {}x{} D16), persistently mapped",
-        render::kFrameCount, static_cast<double>(slotBytes_) / (1024.0 * 1024.0), resolution, shoreW, shoreH);
+        "ocean readback: ring {} x {:.2f} MB (2 cascades {}^2 RGBA16F + shore {}x{} D16 + wake {}^2 R16F), persistently mapped",
+        render::kFrameCount, static_cast<double>(slotBytes_) / (1024.0 * 1024.0), resolution, shoreW, shoreH,
+        OceanWake::kResolution);
     return true;
 }
 
@@ -204,6 +239,9 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
         slot.shore.height = layoutShoreH_;
         shoreQueued_ = true;
     }
+    // The boats' wake, when this frame stepped it (Main_OceanWake is a prerequisite of this pass).
+    ID3D12Resource* wake = ocean.GetWakeFreeHeightResource(renderer->GetTotalFrameNumber());
+    slot.wake = wake ? ocean.GetWakeParams() : Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
 
     // Slice 2c of the displacement array is cascade c's (Dx, Dy, Dz, dDz/dx); mip 0.
     const D3D12_RESOURCE_DESC dd = displacement->GetDesc();
@@ -214,6 +252,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     const std::uint32_t copyPoint = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(displacement, D3D12_RESOURCE_STATE_COPY_SOURCE);
     if (copyShore) { ctx.Use(shore, D3D12_RESOURCE_STATE_COPY_SOURCE); }
+    if (wake) { ctx.Use(wake, D3D12_RESOURCE_STATE_COPY_SOURCE); }
     ctx.NextPoint();
     const std::uint32_t restorePoint = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(displacement, OceanSimulation::kSimMapReadState);
@@ -221,9 +260,10 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     {
         ctx.Use(shore, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
+    if (wake) { ctx.Use(wake, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); } // the wake's own state: its pass writes it next
 
     copyPass_ = CopyPass{buffer_.Get(), static_cast<UINT64>(slotIndex) * slotBytes_, cascadeFootprint_, shoreFootprint_,
-                         subresource, cascades, copyShore, displacement, shore, copyPoint, restorePoint};
+                         wakeFootprint_, subresource, cascades, copyShore, displacement, shore, wake, copyPoint, restorePoint};
     return [this](RenderGraphPassContext pass)
     {
         const CopyPass& p = copyPass_;
@@ -253,6 +293,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
             };
             for (std::uint32_t c = 0; c < p.cascades; ++c) { copy(p.displacement, p.subresource[c], p.cascadeFp[c]); }
             if (p.copyShore) { copy(p.shore, 0u, p.shoreFp); }
+            if (p.wake) { copy(p.wake, 0u, p.wakeFp); }
             pass.renderer->EmitPoint(cl, p.restorePoint);
         }
         pass.EndCL(token);
@@ -341,6 +382,11 @@ void OceanReadback::Poll(Renderer* renderer, const OceanRenderable& ocean)
         if (i == newest)
         {
             surface_ = slot.surface;
+            if (wake_.z <= 0.0f && slot.wake.z > 0.0f)
+            {
+                LOG_INFO(logging::LogCategory::Ocean, "ocean readback: the boats' wake rides the surface");
+            }
+            wake_ = slot.wake;
             adoptedSlot_ = ready[i];
             latency_ = static_cast<std::uint32_t>(now - slot.frame);
             if (adoptedFrame_ == 0)
@@ -399,7 +445,28 @@ float OceanReadback::SampleShoreDepth(float u, float v) const
     return a + (b - a) * ty;
 }
 
-Math::float3 OceanReadback::Displacement(float baseX, float baseZ) const
+float OceanReadback::SampleWake(float u, float v) const
+{
+    // LinearClampSampler over the R16F field, read in the adopted slot in place.
+    const std::int32_t n = static_cast<std::int32_t>(wakeFootprint_.Footprint.Width);
+    if (n <= 0 || !mapped_) { return 0.0f; }
+    const std::uint8_t* base = mapped_ + static_cast<size_t>(adoptedSlot_) * slotBytes_ + wakeFootprint_.Offset;
+    const size_t pitch = wakeFootprint_.Footprint.RowPitch;
+    const float x = u * n - 0.5f, y = v * n - 0.5f;
+    const float fx = std::floor(x), fy = std::floor(y);
+    const float tx = x - fx, ty = y - fy;
+    const auto clampI = [n](float i) { return std::clamp(static_cast<std::int32_t>(i), 0, n - 1); };
+    const std::int32_t x0 = clampI(fx), x1 = clampI(fx + 1.0f), y0 = clampI(fy), y1 = clampI(fy + 1.0f);
+    const auto fetch = [&](std::int32_t ix, std::int32_t iy)
+    {
+        return FetchHalf(base + static_cast<size_t>(iy) * pitch + static_cast<size_t>(ix) * sizeof(std::uint16_t));
+    };
+    const float a = fetch(x0, y0) + (fetch(x1, y0) - fetch(x0, y0)) * tx;
+    const float b = fetch(x0, y1) + (fetch(x1, y1) - fetch(x0, y1)) * tx;
+    return a + (b - a) * ty;
+}
+
+Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeShare) const
 {
     const SurfaceParams& s = surface_;
     // The weights and the warp measure from the camera the copy's frame rendered with.
@@ -428,6 +495,7 @@ Math::float3 OceanReadback::Displacement(float baseX, float baseZ) const
         }
     }
 
+    float wakeFade = 1.0f; // the VS's simDisplacementFade: the wake goes out over the last 15 cm of water
     if (hasShore_)
     {
         const Math::float4& view = shore_.view;
@@ -448,22 +516,35 @@ Math::float3 OceanReadback::Displacement(float baseX, float baseZ) const
                 d.y *= vertical;
                 d.x *= horizontal;
                 d.z *= horizontal;
+                wakeFade = std::clamp(waterDepth / 0.15f, 0.0f, 1.0f);
             }
+        }
+    }
+
+    // The boats' wake, as the VS adds it: after the shore damping, at the warped coordinates, its window's edge faded.
+    if (wakeShare > 0.0f && wake_.z > 0.0f)
+    {
+        const float wu = (uvX - wake_.x) * (wake_.z * 0.5f) + 0.5f;
+        const float wv = (uvZ - wake_.y) * (wake_.z * 0.5f) + 0.5f;
+        if (wu >= 0.0f && wu <= 1.0f && wv >= 0.0f && wv <= 1.0f)
+        {
+            d.y += SampleWake(wu, wv) * wake_.w * wakeFade * WakeEdgeFade(wu, wv) * wakeShare;
         }
     }
     return d;
 }
 
-float OceanReadback::SampleHeight(float x, float z) const
+float OceanReadback::SampleHeight(float x, float z, float wakeShare) const
 {
     if (!HasSurface()) { return surface_.waterLevel; }
-    // The surface point over (x, z) was pushed there from some grid point X: X + D.xz(X) = (x, z).
+    // The surface point over (x, z) was pushed there from some grid point X: X + D.xz(X) = (x, z). The wake moves only
+    // y, so it stays out of the iteration.
     float bx = x, bz = z;
     for (std::uint32_t i = 0; i < surface_.iterations; ++i)
     {
-        const Math::float3 d = Displacement(bx, bz);
+        const Math::float3 d = Displacement(bx, bz, 0.0f);
         bx = x - d.x;
         bz = z - d.z;
     }
-    return surface_.waterLevel + Displacement(bx, bz).y;
+    return surface_.waterLevel + Displacement(bx, bz, wakeShare).y;
 }

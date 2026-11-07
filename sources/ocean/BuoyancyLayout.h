@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -73,4 +74,29 @@ namespace buoyancy
     // cache is keyed by PATH, and a re-bake keeps the path: without this the next instance would
     // float on the old hull until a restart.
     void ForgetGeometry(const std::string& geometryPath);
+
+    // The hull's pressure on the water at rest (ocean/OceanWake: a boat's wake is the wave field of this pressure moving):
+    // the plan view, along `forward` (model XZ, unit), of how deep the hull's underside stands under the model-space
+    // waterline `waterlineY`, on a fixed grid over the hull's extent, blurred one cell so the pressure has no step for the
+    // wave solver to ring on. 0 where the hull is out of the water (a cabin, a mast). Model-space metres; an instance's
+    // scale multiplies both the plan and the depth. Cached per (path, forward, waterline) and handed out by pointer, so
+    // every copy of a boat shares one.
+    // The grid every footprint is built on: fine enough that a 10 m hull's bow is several cells (16 cm along, 10 cm across
+    // on the small yacht), far finer than the wake solver's texel, so the solver sees the hull's shape and not the grid's.
+    constexpr int kHullFootprintAlong = 64;
+    constexpr int kHullFootprintAcross = 24;
+    struct HullFootprint
+    {
+        int along = 0;          // cells along `forward`
+        int across = 0;         // cells across it
+        float u0 = 0.0f;        // model metres along `forward` of the first cell's edge
+        float v0 = 0.0f;        // the same across: v = -x * forward.z + z * forward.x
+        float cellU = 0.0f;     // metres a cell, along
+        float cellV = 0.0f;     // across
+        float maxDepth = 0.0f;  // the deepest cell, metres
+        std::vector<float> depth; // `across` rows of `along` cells, metres under the waterline
+        bool Valid() const { return maxDepth > 0.0f && !depth.empty(); }
+    };
+    std::shared_ptr<const HullFootprint> ResolveFootprint(const std::string& geometryPath, Math::float2 forward,
+        float waterlineY);
 }

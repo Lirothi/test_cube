@@ -12,7 +12,7 @@
 // ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
 // rather than sRGB). The C++ table stages the same 26 entries for both surfaces; t22-t25, s4 and the
 // transparent pass's GlassView CB (b1) are the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=26, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=27, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -102,6 +102,10 @@ cbuffer OceanCB : register(b0)
     float4x4 cloudShadowViewProj;
     float4 cloudShadowParams;          // x: on, as the share by the light's height (0 = off), y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
     float4 sunShapeParams;             // x: the light's angular RADIUS (rad, UE's half apex) for the sphere-light glint (OceanSunSpecular), y: its soft radius (UE SoftSourceRadius), zw: reserved
+    // A boat's wake (ocean/OceanWake, t26): xy window centre, z 1 / half extent (0 = no field this frame), w the height's
+    // scale in the vertices; wakeParams2 x texel metres, y the slope's scale in the normal (1 = true), z debug view.
+    float4 wakeParams;
+    float4 wakeParams2;
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -134,6 +138,7 @@ Texture2D<float2> ShoreSdfTexture : register(t14);
 // foam field (r: coverage).
 Texture2D<float2> SurfSimWaveTex : register(t16);
 Texture2D<float> SurfSimFoamTex : register(t17);
+Texture2D<float4> WakeTex : register(t26); // the boat wake's field: x height (m), y vertical velocity
 RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
@@ -251,6 +256,37 @@ float SurfSimWindowEdgeFade(float2 simUV)
     const float2 edgeUV = min(simUV, 1.0f - simUV);
     const float edgeTexels = min(edgeUV.x, edgeUV.y) * kResolution;
     return smoothstep(0.5f, kFadeTexels, edgeTexels);
+}
+
+// The boat wake (ocean/OceanWake). Its window (512 texels round the camera) absorbs over its outer eighth; the fade only
+// hides the last texels, where the absorber has already taken the field to nothing.
+float2 WakeUV(float2 xz)
+{
+    return (xz - wakeParams.xy) * (wakeParams.z * 0.5f) + 0.5f;
+}
+float WakeWindowEdgeFade(float2 wakeUV)
+{
+    const float2 edgeUV = min(wakeUV, 1.0f - wakeUV);
+    return smoothstep(2.0f / 512.0f, 32.0f / 512.0f, min(edgeUV.x, edgeUV.y));
+}
+// The wake's slope (dh/dx, dh/dz) at `xz` by central differences a texel apart; 0 off its window or with no field.
+float2 WakeSlope(float2 xz)
+{
+    if (wakeParams.z <= 0.0f || wakeParams2.y <= 0.0f)
+    {
+        return float2(0.0f, 0.0f);
+    }
+    const float2 uv = WakeUV(xz);
+    if (any(uv < 0.0f) || any(uv > 1.0f))
+    {
+        return float2(0.0f, 0.0f);
+    }
+    const float du = wakeParams.z * 0.5f * wakeParams2.x; // one texel in uv
+    const float hxp = WakeTex.SampleLevel(LinearClampSampler, uv + float2(du, 0.0f), 0).x;
+    const float hxm = WakeTex.SampleLevel(LinearClampSampler, uv - float2(du, 0.0f), 0).x;
+    const float hzp = WakeTex.SampleLevel(LinearClampSampler, uv + float2(0.0f, du), 0).x;
+    const float hzm = WakeTex.SampleLevel(LinearClampSampler, uv - float2(0.0f, du), 0).x;
+    return float2(hxp - hxm, hzp - hzm) * (0.5f / wakeParams2.x) * wakeParams2.y * WakeWindowEdgeFade(uv);
 }
 
 static const uint kGradientMaxKeys = 8u;
@@ -424,6 +460,17 @@ VSOutput VSMain(VSInput input)
             const float simHeight = SurfSimWaveTex.SampleLevel(LinearClampSampler, simUV, 0).x;
             displacement.y += simHeight * surfSimParams2.w * simDisplacementFade *
                 SurfSimWindowEdgeFade(simUV);
+        }
+    }
+    // A boat's wake (ocean/OceanWake): its height rides the surface the same way, over the FFT's -- linear waves add.
+    [branch]
+    if (wakeParams.z > 0.0f && wakeParams.w > 0.0f)
+    {
+        const float2 wakeUV = WakeUV(worldUV);
+        if (all(wakeUV >= 0.0f) && all(wakeUV <= 1.0f))
+        {
+            displacement.y += WakeTex.SampleLevel(LinearClampSampler, wakeUV, 0).x * wakeParams.w *
+                simDisplacementFade * WakeWindowEdgeFade(wakeUV);
         }
     }
 
@@ -979,6 +1026,10 @@ PSOut PSMain(VSOutput input)
     DerivativesSet deriv = SampleDerivatives(input.baseXZ, weights, cascadesCount, normalSamplingParams.y);
     float4 activeCascades = ActiveCascadesMask(cascadesCount);
     float4 combinedDerivatives = CombineDerivatives(deriv, normalWeights);
+    // A boat's wake: its slope joins the FFT's, which NormalFromCombinedDerivatives scales by kNormalScale -- divided out
+    // here, so wakeNormal 1 is the field's true slope. Faded on the beach as its height is in the VS.
+    const float2 wakeSlope = WakeSlope(input.baseXZ) * saturate(max(shorePixelDepth, 0.0f) / 0.15f);
+    combinedDerivatives.xy += wakeSlope / kNormalScale;
     float3 normal = NormalFromCombinedDerivatives(combinedDerivatives);
     //return float4(normal, 1);
     // The REFLECTION's normal (LightingInput::reflectionNormal): the same derivatives `w` mips coarser
@@ -991,7 +1042,8 @@ PSOut PSMain(VSOutput input)
         reflectionDeriv = SampleDerivatives(input.baseXZ, weights, cascadesCount,
                                             normalSamplingParams.y + normalSamplingParams.w);
     }
-    const float3 reflectionNormal = NormalFromCombinedDerivatives(CombineDerivatives(reflectionDeriv, normalWeights));
+    const float3 reflectionNormal = NormalFromCombinedDerivatives(
+        CombineDerivatives(reflectionDeriv, normalWeights) + float4(wakeSlope / kNormalScale, 0.0f, 0.0f));
 
     float3 viewDir = normalize(clipMapViewer.xyz - input.worldPos);
     float3 lightDir = normalize(sunDirAmbient.xyz);
@@ -1139,6 +1191,19 @@ PSOut PSMain(VSOutput input)
         }
         outColor.rgb = lerp(outColor.rgb, debugColor, debugWeight);
         gb.reflectionWeight *= 1.0f - debugWeight;
+    }
+    // `--set ocean.wakeDebug:1`: the boat wake's height, opaque (red up, blue down, 0.25 m to full) -- the wave pattern
+    // to read the Kelvin angle off, without the glints.
+    [branch]
+    if (wakeParams2.z > 0.5f && wakeParams.z > 0.0f)
+    {
+        const float2 wakeUV = WakeUV(input.baseXZ);
+        if (all(wakeUV >= 0.0f) && all(wakeUV <= 1.0f))
+        {
+            const float h = WakeTex.SampleLevel(LinearClampSampler, wakeUV, 0).x;
+            outColor.rgb = float3(saturate(h * 4.0f), 0.08f, saturate(-h * 4.0f));
+            gb.reflectionWeight = 0.0f;
+        }
     }
 
     float2 currUv = ClipToUV(input.positionNDC);

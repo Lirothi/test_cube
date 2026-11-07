@@ -169,6 +169,7 @@ namespace physics
         const JPH::Vec3 hullAxis = ToJolt(settings.forward).Normalized();
         const JPH::Vec3 forward = rotation * hullAxis;
         const JPH::Vec3 starboard = up.Cross(forward);
+        state.buoyancyLead = submergedVolume > 0.0f ? centerOfBuoyancy.Dot(forward) : 0.0f;
 
         // What holds the heave, the pitch and the roll down: the water's mass going with the hull, far more than the air's. Against the water's own rise and tilting, or a boat lags behind every swell
         // and shoulders through it. On the velocities themselves, so no setting can make it unstable, and before this step's impulses: after them it takes a share of the buoyancy too, and the boat
@@ -232,7 +233,14 @@ namespace physics
         body.AddImpulse(starboard * (swayForce * wet * dt), centre - forward * (settings.swayLever * scale.x));
         body.AddImpulse(JPH::Vec3::sAxisY() * (settings.planingLift * planing * weight * wet * dt));
         const float yawTorque = -(settings.yawDrag * std::fabs(yawRate) + settings.yawLinear) * yawRate;
-        const float trimTorque = settings.humpTrim * rising * (1.0f - planing) + settings.planeTrim * planing;
+        // The trim is the water's push on the fore part of the bottom -- a planing hull's pressure lies under it -- so it takes the bow's own immersion: a bow lifted out of the water has nothing
+        // under it to push. As a torque on a hull wet anywhere it lifted the bow on and on: under the hump at part throttle the small_yacht stood on its stern (2026-11-07, +3 degrees a second
+        // to 75: once the bow is out, the water's righting moment is no more than the hump's 100 kN m). Now the bow rises until it leaves the water, ~6 degrees on the small_yacht.
+        const VesselStation& bowStation = water.stations[2];
+        const JPH::RVec3 bowKeel = body.GetPosition() + rotation * (hullAxis * bowStation.offset);
+        const float bowWet = std::clamp((bowStation.height - static_cast<float>(bowKeel.GetY())) / std::max(settings.draft * scale.y, 0.01f), 0.0f, 1.0f);
+        const float trimTorque = (settings.humpTrim * rising * (1.0f - planing) + settings.planeTrim * planing) * bowWet;
+        state.trimTorque = trimTorque;
         // The hull lies along the surface, and leans into a turn by what the turn asks. A roll is its starboard side rising.
         const float roll = std::asin(std::clamp(starboard.GetY(), -1.0f, 1.0f));
         const float lean = JPH::DegreesToRadians(std::clamp(settings.bank * u * yawRate, -settings.maxBank, settings.maxBank));

@@ -454,6 +454,7 @@ namespace
             if (key == "testThrottle") { player.testThrottle = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testRudder") { player.testRudder = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testOrbit") { player.testOrbit = value; return true; }
+            if (key == "testOrbitPitch") { player.testOrbitPitch = value; return true; }
         }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
@@ -1569,6 +1570,34 @@ namespace
             }
             return true;
         }
+        // A boat's wake (ocean/OceanWake): the preset's knobs, and the debug view (the height, opaque).
+        if (setting == "ocean.wakeDebug")
+        {
+            ocean::g_wakeDebugView_game = std::clamp(static_cast<int>(std::lround(value)), 0, 1);
+            return true;
+        }
+        if (setting == "ocean.wakeShore")
+        {
+            ocean::g_wakeShore_game = value != 0.0f ? 1 : 0;
+            return true;
+        }
+        if (setting.rfind("ocean.wake", 0) == 0)
+        {
+            OceanRenderable* ocean = scene.FindOceanRenderable();
+            OceanSimulation* sim = ocean ? ocean->GetSimulation() : nullptr;
+            if (!sim) { return true; }
+            OceanRenderConfig cfg = sim->GetRenderConfig();
+            if (setting == "ocean.wakeEnabled") { cfg.wakeEnabled = value != 0.0f; }
+            else if (setting == "ocean.wakeStrength") { cfg.wakeStrength = std::clamp(value, 0.0f, 4.0f); }
+            else if (setting == "ocean.wakeDisplacement") { cfg.wakeDisplacement = std::clamp(value, 0.0f, 2.0f); }
+            else if (setting == "ocean.wakeNormal") { cfg.wakeNormal = std::clamp(value, 0.0f, 3.0f); }
+            else if (setting == "ocean.wakeDamping") { cfg.wakeDamping = std::clamp(value, 0.0f, 20.0f); }
+            else if (setting == "ocean.wakeBreaking") { cfg.wakeBreaking = std::clamp(value, 0.0f, 20.0f); }
+            else if (setting == "ocean.wakeTexel") { cfg.wakeTexel = std::clamp(value, 0.25f, 2.0f); }
+            else { return false; }
+            sim->SetRenderConfig(cfg);
+            return true;
+        }
         // The water body's floor under a low sun (OceanRenderConfig::lowSunBodyLight), for a headless
         // sweep at a sunset elevation.
         if (setting == "ocean.lowSunBodyLight")
@@ -2277,12 +2306,33 @@ namespace
                               player.onGround ? "true" : "false", player.crouched ? "true" : "false", player.speed, player.feet.x, player.feet.y, player.feet.z);
                 out += playerItem;
                 const physics::HelmState& helm = scene_.Physics().GetHelm();
-                char helmItem[400];
+                char helmItem[480];
                 std::snprintf(helmItem, sizeof(helmItem),
-                              ",\"helm\":{\"exists\":%s,\"speed\":%.3f,\"throttle\":%.3f,\"rudder\":%.3f,\"immersion\":%.3f,\"bite\":%.3f,\"impact\":%.3f,\"waterHeight\":%.3f,\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"starboardY\":%.4f}",
+                              ",\"helm\":{\"exists\":%s,\"speed\":%.3f,\"throttle\":%.3f,\"rudder\":%.3f,\"immersion\":%.3f,\"bite\":%.3f,\"impact\":%.3f,\"waterHeight\":%.3f,\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"starboardY\":%.4f,\"buoyancyLead\":%.3f,\"trimTorque\":%.0f}",
                               helm.exists ? "true" : "false", helm.vessel.speed, helm.vessel.throttle, helm.vessel.rudder, helm.vessel.immersion, helm.vessel.bite, helm.vessel.impact, helm.vessel.waterHeight,
-                              helm.position.x, helm.position.y, helm.position.z, helm.forward.x, helm.forward.y, helm.forward.z, helm.starboardY);
+                              helm.position.x, helm.position.y, helm.position.z, helm.forward.x, helm.forward.y, helm.forward.z, helm.starboardY,
+                              helm.vessel.buoyancyLead, helm.vessel.trimTorque);
                 out += helmItem;
+                // Every boat as the frame draws it: one that nobody steers rocks in another's wake (OceanWake -> OceanReadback).
+                {
+                    std::vector<physics::VesselHull> boats;
+                    scene_.Physics().CollectHulls(boats);
+                    out += ",\"vessels\":[";
+                    for (size_t i = 0; i < boats.size(); ++i)
+                    {
+                        const physics::VesselHull& b = boats[i];
+                        const float starboardY = b.up.z * b.forward.x - b.up.x * b.forward.z; // (up x forward).y
+                        const float pitchDeg = std::asin(std::clamp(b.forward.y, -1.0f, 1.0f)) * 57.2957795f;
+                        const float rollDeg = std::atan2(starboardY, b.up.y) * 57.2957795f;
+                        char boatItem[256];
+                        std::snprintf(boatItem, sizeof(boatItem),
+                                      "%s{\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s}",
+                                      i > 0 ? "," : "", b.position.x, b.position.y, b.position.z, b.forward.x, b.forward.y, b.forward.z,
+                                      pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false");
+                        out += boatItem;
+                    }
+                    out += "]";
+                }
                 // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.
                 char uiItem[96];
                 std::snprintf(uiItem, sizeof(uiItem), ",\"ui\":{\"wantsKeyboard\":%s,\"wantsMouse\":%s,\"typing\":%s}",

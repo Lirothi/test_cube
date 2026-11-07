@@ -576,6 +576,9 @@
     <ClCompile Include="sources/ocean/OceanSurfSim.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
+    <ClCompile Include="sources/ocean/OceanWake.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
     <ClCompile Include="sources/ocean/OceanWetness.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
@@ -1295,6 +1298,9 @@
     <ClInclude Include="sources/ocean/OceanSurfSim.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
+    <ClInclude Include="sources/ocean/OceanWake.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
     <ClInclude Include="sources/ocean/OceanWetness.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
@@ -1791,6 +1797,9 @@
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ocean_surf_sim_cs.hlsl">
+      <Filter>shaders</Filter>
+    </None>
+    <None Include="shaders\ocean_wake_cs.hlsl">
       <Filter>shaders</Filter>
     </None>
     <None Include="shaders\ocean_foam_simulation.hlsl">

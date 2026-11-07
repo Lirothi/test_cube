@@ -1010,6 +1010,15 @@ namespace physics
             const float underHump = under.Speed();
             expect(underHump < base.humpSpeed, "too little throttle stays under the hump");
 
+            // Under the hump at part throttle, with more trim than the box's water can hold (2.5 x the asset's): the bow comes up only until it leaves the water. The trim is the water's push
+            // on the fore part of the bottom, and a bow in the air has none under it; as a torque on a hull wet anywhere it stood the small_yacht on its stern at 0.35 throttle (2026-11-07).
+            VesselSettings heavyTrim = base;
+            heavyTrim.humpTrim = 2.5f * base.humpTrim;
+            TestBoat trimmed(heavyTrim, JPH::Quat::sIdentity(), -base.draft);
+            float worstTrim = 0.0f;
+            trimmed.Run(30.0f, 0.35f, 0.0f, [&]() { worstTrim = std::max(worstTrim, trimmed.BowUpDeg()); });
+            expect(worstTrim < 12.0f && trimmed.UpY() > 0.9f, "a bow out of the water takes no more trim (" + num(worstTrim) + " deg)");
+
             const auto turn = [&base, &turned](float rudder)
             {
                 TestBoat boat(base, JPH::Quat::sIdentity(), -base.draft);

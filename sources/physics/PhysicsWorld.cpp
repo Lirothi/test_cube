@@ -291,6 +291,8 @@ namespace physics
             float halfBeam = 0.0f;
             JPH::Vec3 shownPosition = JPH::Vec3::sZero(); // as the last Display drew it, and the game's alone: who is near a boat asks every frame and must not wait for a step
             JPH::Vec3 shownForward = JPH::Vec3::sAxisX();
+            JPH::Vec3 shownUp = JPH::Vec3::sAxisY();
+            float shownSpeed = 0.0f; // vesselState's speed as Display saw it: the game's alone
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -853,6 +855,7 @@ namespace physics
                     entry.halfBeam = std::fabs(along.GetZ()) * half.GetX() + std::fabs(along.GetX()) * half.GetZ();
                     entry.shownPosition = pose.position;
                     entry.shownForward = pose.rotation * along;
+                    entry.shownUp = pose.rotation * JPH::Vec3::sAxisY();
                     vessels.push_back(&entry);
                     LOG_INFO(logging::LogCategory::Physics, "physics: '{}' is a boat: {:.0f} kg, hull volume {:.1f} m3, {:.2f} m3 under still water (buoyancy factor {:.2f}), {:.1f} x {:.1f} m",
                         object.GetGeometryPath(), vesselSettings->mass, scaled->GetVolume(), scaled->GetVolume() / vesselFactor, vesselFactor, 2.0f * entry.halfLength, 2.0f * entry.halfBeam);
@@ -1018,6 +1021,8 @@ namespace physics
                     entry.water = VesselWater{};
                     entry.shownPosition = entry.rest.position;
                     entry.shownForward = entry.rest.rotation * ToJolt(entry.vessel->forward).Normalized();
+                    entry.shownUp = entry.rest.rotation * JPH::Vec3::sAxisY();
+                    entry.shownSpeed = 0.0f;
                 }
             }
             stats.fellOut = 0;
@@ -1080,7 +1085,6 @@ namespace physics
             const OceanReadback* readback = sea ? &ocean->GetReadback() : nullptr;
             const bool waves = sea && readback->HasSurface();
             const float level = sea ? ocean->GetWaterLevel() : 0.0f;
-            const std::function<float(float, float)> height = [readback, waves, level](float x, float z) { return waves ? readback->SampleHeight(x, z) : level; };
             JPH::BodyInterface& bodies = system->GetBodyInterface();
             for (Entry* entry : vessels)
             {
@@ -1089,6 +1093,15 @@ namespace physics
                     entry->water.valid = false; // a push wakes it, and under the world it would sink for ever
                     continue;
                 }
+                // The boats' wake (OceanWake), as the free height: a boat lying still does not float in its own hollow and
+                // rocks in another's wake. Under way it leaves the wake out -- its own bow wave and stern trough are what the
+                // hump, the planing and their trim already stand for, and taken twice they would trim it twice -- and so
+                // another boat's too, the price of one field for all of them. Read here, between the steps (no step runs).
+                const float speed = std::fabs(entry->vesselState.speed);
+                const float t = std::clamp((speed - 1.0f) / 2.0f, 0.0f, 1.0f);
+                const float wakeShare = 1.0f - t * t * (3.0f - 2.0f * t);
+                const std::function<float(float, float)> height = [readback, waves, level, wakeShare](float x, float z)
+                    { return waves ? readback->SampleHeight(x, z, wakeShare) : level; };
                 MeasureVesselWater(entry->water, height, bodies.GetPosition(entry->body), bodies.GetCenterOfMassPosition(entry->body), bodies.GetRotation(entry->body),
                     *entry->vessel, entry->scale, entry->halfLength, entry->halfBeam, elapsed);
             }
@@ -1118,6 +1131,8 @@ namespace physics
                 const JPH::Quat rotation = entry->previous.rotation.SLERP(entry->current.rotation, alpha).Normalized();
                 const JPH::Vec3 forward = (rotation * ToJolt(entry->vessel->forward)).Normalized();
                 entry->shownForward = forward;
+                entry->shownUp = rotation * JPH::Vec3::sAxisY();
+                entry->shownSpeed = entry->vesselState.speed;
                 // With a margin, so a boat crawling at the limit does not go in and out of them.
                 const float probeSpeed = entry->vessel->giProbeSpeed;
                 const float speed = std::fabs(entry->vesselState.speed);
@@ -1623,6 +1638,25 @@ namespace physics
     void World::SetHelmInput(const VesselInput& input) { impl_->helmInput = input; }
 
     const HelmState& World::GetHelm() const { return impl_->helmShown; }
+
+    void World::CollectHulls(std::vector<VesselHull>& out) const
+    {
+        out.clear();
+        for (const Impl::Entry* entry : impl_->vessels)
+        {
+            if (!entry->object || !entry->vessel) { continue; }
+            VesselHull hull;
+            hull.object = entry->object;
+            hull.settings = entry->vessel.get();
+            hull.position = FromJolt(entry->shownPosition);
+            hull.forward = FromJolt(entry->shownForward);
+            hull.up = FromJolt(entry->shownUp);
+            hull.scale = entry->scale;
+            hull.speed = entry->shownSpeed;
+            hull.atHelm = entry == impl_->helm;
+            out.push_back(hull);
+        }
+    }
 
     bool World::TuneVessels(const std::string& key, float value)
     {
