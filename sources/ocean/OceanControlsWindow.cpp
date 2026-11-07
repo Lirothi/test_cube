@@ -1144,11 +1144,51 @@ namespace
         {
             ImGui::SetTooltip("512 texels make the window round the camera: 0.5 m = 256 m. A change restarts the field.");
         }
+        drag("Wake foam", render.wakeFoam, 0.01f, 0.0f, 2.0f);
+        if (ImGui::IsItemHovered())
         {
-            bool wakeDebug = ocean::g_wakeDebugView_game != 0;
-            if (ImGui::Checkbox("Wake debug view (height)", &wakeDebug))
+            ImGui::SetTooltip("The wake's foam on the surface: the white water and trail behind a hull, the steep crests. 0 = none.");
+        }
+        drag("Wake foam fade (1/s)", render.wakeFoamFade, 0.005f, 0.02f, 5.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How fast the lace a trail dissolves into runs down: 0.1 = some 20 s.");
+        }
+        drag("Wake foam fade dense", render.wakeFoamFadeDense, 0.02f, 0.0f, 10.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("1/s per unit of foam on top of the fade: dense white water runs down fast, so a trail is\n"
+                              "solid only just behind the transom (a breaking crest's stage A, seconds).");
+        }
+        drag("Wake white water", render.wakeWashFoam, 0.05f, 0.0f, 20.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The foam a moving hull leaves where it arrives and, above all, where its transom leaves the water:\n"
+                              "foam a metre of head change under it lays down, past 1 m/s of change.");
+        }
+        drag("Wake crest foam", render.wakeCrestFoam, 0.01f, 0.0f, 5.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Crest's Wave Foam Strength: foam where the wake's crests pinch past the coverage below.");
+        }
+        drag("Wake crest coverage", render.wakeCrestCoverage, 0.005f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Crest's Wave Foam Coverage: a crest whose surface pinches to det J under this breaks.\n"
+                              "0.55 = a Gerstner wave at the Stokes limit (a k 0.44); higher = gentler crests foam too.");
+        }
+        drag("Wake churn", render.wakeChurn, 0.01f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The churned white water's relief: lumps of a decimetre or two the sun lights on one side and grey\n"
+                              "cavities between them, boiling. 0 = a smooth white sheet.");
+        }
+        {
+            static const char* kWakeViews[] = { "Off", "Height", "Foam" };
+            int wakeDebug = std::clamp(ocean::g_wakeDebugView_game, 0, 2);
+            if (ImGui::Combo("Wake debug view", &wakeDebug, kWakeViews, 3))
             {
-                ocean::g_wakeDebugView_game = wakeDebug ? 1 : 0;
+                ocean::g_wakeDebugView_game = wakeDebug;
             }
         }
 

@@ -65,6 +65,11 @@ public:
         float strength = 1.0f;     // the hull's pressure: 1 = the head of water its draft stands for
         float damping = 1.5f;      // 1/s at the field's shortest wave (2 texels), falling as k^2 to the longer ones
         float breaking = 2.0f;     // 1/s a long wave in the shallows (d < wavelength / 20) runs down at; 0 = none
+        float foamFade = 0.1f;     // 1/s the foam's lace runs down at
+        float foamFadeDense = 1.5f; // 1/s per unit of foam on top: dense white water runs down fast
+        float washFoam = 4.0f;     // foam a metre of head change under a moving hull leaves (the white water, its trail)
+        float crestFoam = 1.0f;    // Crest's Wave Foam Strength (the steep crests)
+        float crestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks
         float texel = 0.5f;        // metres a texel: 512 of them make the window
     };
 
@@ -102,6 +107,9 @@ public:
     Math::float4 GetWindowParams() const;
     // The field (x: height, y: vertical velocity), pixel-readable after the pass.
     D3D12_CPU_DESCRIPTOR_HANDLE GetSrv() const;
+    // The foam (RGBA16F: x 0..2, 1 and over fresh white water; yz the way it was laid times it), pixel-readable after the
+    // pass: this frame's of the two.
+    D3D12_CPU_DESCRIPTOR_HANDLE GetFoamSrv() const;
     // The free height (R16F, left as an unordered-access target) when frame `frame`'s pass wrote it (the renderer's
     // total frame number), else null: what OceanReadback copies for the buoyancy.
     ID3D12Resource* GetFreeHeightResource(std::uint64_t frame) const
@@ -123,8 +131,10 @@ private:
     GpuResource work_;   // x,y: h + i v in space, then their spectrum; z,w: the hull's pressure, then its spectrum
     GpuResource field_;  // the stepped spectrum at 1 and 3 m, then the field in space: x height, y vertical velocity,
                          // z the free height, w the head
-    GpuResource spec_;   // the stepped spectrum at 9 m and in deep water
+    GpuResource spec_;   // the stepped spectrum at 7.5 m and in deep water
     GpuResource free_;   // the free height, R16F: the readback's copy
+    GpuResource jac_;    // the free height's Jacobian terms (crest foam): spectrum, then space
+    GpuResource foam_[2]; // RGBA16F, in turn: last step's and this step's (x foam, yz the way it was laid times it)
     Microsoft::WRL::ComPtr<ID3D12Resource> footprints_; // upload heap, persistently mapped: kMaxFootprints grids
     float* footprintsMapped_ = nullptr;
     std::uint32_t footprintFloats_ = 0;  // floats a slot
@@ -138,6 +148,10 @@ private:
     D3D12_CPU_DESCRIPTOR_HANDLE specUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE specFftUav_{};
     D3D12_CPU_DESCRIPTOR_HANDLE freeUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE jacUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE jacFftUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE foamUav_[2]{};
+    D3D12_CPU_DESCRIPTOR_HANDLE foamSrv_[2]{};
     D3D12_CPU_DESCRIPTOR_HANDLE fieldSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE footprintsSrv_{};
     D3D12_CPU_DESCRIPTOR_HANDLE shoreNullSrv_{}; // a type-correct null Texture2D<float> for a frame without a shore map
@@ -160,6 +174,8 @@ private:
     bool everSimulated_ = false;
     bool active_ = false;
     std::uint64_t ranFrame_ = 0; // the renderer's total frame number whose graph recorded the pass
+    std::uint32_t foamNext_ = 0; // which of foam_ this step writes (and the surface reads)
+    std::vector<Math::float2> lastHullPositions_; // last step's, to tell a hull's own motion from a jump
 
     // BuildPass' decisions for its record body (read, not captured: std::function keeps 48 bytes inline).
     struct HullGpu
@@ -181,6 +197,8 @@ private:
         HullGpu hulls[kMaxHulls]{};
         ShoreWindow shore{};
         bool hasShore = false;
+        bool wash = false;         // the hulls moved as boats do this step: no new or jumped one
+        std::uint32_t foamNext = 0;
         std::uint32_t uavPoint = 0;
     };
     RecordPass record_;

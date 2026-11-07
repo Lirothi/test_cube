@@ -55,6 +55,12 @@ inline const bool g_sunShadow_knob = ::knob::Register(g_sunShadow_game, g_sunSha
 inline int g_sunShadowRays = 1;
 inline int g_sunShadowRays_game = 1;
 inline const bool g_sunShadowRays_knob = ::knob::Register(g_sunShadowRays_game, g_sunShadowRays, "ocean::g_sunShadowRays");
+// `ocean.sunShadowColumn` (transient): the taps the water's BODY averages its sun shadow over, down the column a view ray
+// scatters in (OceanBodyShadow, 0..8); 0 = the surface point's shadow, the A/B.
+inline int g_sunShadowColumn = 8;
+inline int g_sunShadowColumn_game = 8;
+inline const bool g_sunShadowColumn_knob =
+    ::knob::Register(g_sunShadowColumn_game, g_sunShadowColumn, "ocean::g_sunShadowColumn");
 
 // "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
 // Boot-only and a VARIANT for the same reason as above — the views need per-pixel intermediates
@@ -304,7 +310,8 @@ private:
     bool SurfSimActive() const;            // surf sim injection: config flag OR the boot force
     bool WakeEnabled() const;
     Math::float4 GetWakeParams() const;  // xy: window centre, z: 1 / half extent (0 = no field), w: displacement scale
-    Math::float4 GetWakeParams2() const; // x: texel world size, y: normal strength, z: debug view
+    Math::float4 GetWakeParams2() const; // x: texel world size, y: normal strength, z: debug view, w: foam
+    Math::float4 GetWakeParams3() const; // x: the white water's relief (wakeChurn), yzw reserved
     // The wake's free height for OceanReadback when frame `frame` stepped it (and the surface reads it), else null.
     ID3D12Resource* GetWakeFreeHeightResource(std::uint64_t frame) const;
     Math::float4 GetShoreSwashParams() const;

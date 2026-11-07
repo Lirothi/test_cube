@@ -298,6 +298,8 @@ public:
             sunShapeParamsHandle_ = material->ComputeCBFieldHandle(0, "sunShapeParams");
             wakeParamsHandle_ = material->ComputeCBFieldHandle(0, "wakeParams");
             wakeParams2Handle_ = material->ComputeCBFieldHandle(0, "wakeParams2");
+            wakeParams3Handle_ = material->ComputeCBFieldHandle(0, "wakeParams3");
+            bodyShadowParamsHandle_ = material->ComputeCBFieldHandle(0, "bodyShadowParams");
             fogParams0Handle_ = material->ComputeCBFieldHandle(0, "fogParams0");
             fogParams1Handle_ = material->ComputeCBFieldHandle(0, "fogParams1");
             fogParams2Handle_ = material->ComputeCBFieldHandle(0, "fogParams2");
@@ -377,6 +379,8 @@ public:
             sunShapeParamsHandle_ = {};
             wakeParamsHandle_ = {};
             wakeParams2Handle_ = {};
+            wakeParams3Handle_ = {};
+            bodyShadowParamsHandle_ = {};
             fogParams0Handle_ = {};
             fogParams1Handle_ = {};
             fogParams2Handle_ = {};
@@ -468,6 +472,9 @@ public:
         UpdateUniform(owner, sunShapeParamsHandle_, material, owner_.GetSunShapeParams(), cbData);
         UpdateUniform(owner, wakeParamsHandle_, material, owner_.GetWakeParams(), cbData);
         UpdateUniform(owner, wakeParams2Handle_, material, owner_.GetWakeParams2(), cbData);
+        UpdateUniform(owner, wakeParams3Handle_, material, owner_.GetWakeParams3(), cbData);
+        UpdateUniform(owner, bodyShadowParamsHandle_, material,
+                      Math::float4(static_cast<float>(std::clamp(ocean::g_sunShadowColumn, 0, 8)), 0.0f, 0.0f, 0.0f), cbData);
         UpdateUniform(owner, fogParams0Handle_, material, owner_.GetFogParams0(), cbData);
         UpdateUniform(owner, fogParams1Handle_, material, owner_.GetFogParams1(), cbData);
         UpdateUniform(owner, fogParams2Handle_, material, owner_.GetFogParams2(), cbData);
@@ -567,6 +574,8 @@ private:
     Material::CBFieldHandle sunShapeParamsHandle_{};
     Material::CBFieldHandle wakeParamsHandle_{};
     Material::CBFieldHandle wakeParams2Handle_{};
+    Material::CBFieldHandle wakeParams3Handle_{};
+    Material::CBFieldHandle bodyShadowParamsHandle_{};
     Material::CBFieldHandle skyParamsHandle_{};
     Material::CBFieldHandle deepScatterColorHandle_{};
     Material::CBFieldHandle sssColorHandle_{};
@@ -914,7 +923,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
     // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
     // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 27> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 28> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -1057,6 +1066,8 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // under wakeParams.z, which is 0 on every other frame -- the fallback keeps the slot readable then.
     const bool wakeRead = GetWakeParams().z > 0.0f;
     pushSrv(wakeRead && wake_->GetSrv().ptr != 0 ? wake_->GetSrv() : fallbackSrv);
+    // t27: its foam, this frame's of the two (the same frames, the same gate).
+    pushSrv(wakeRead && wake_->GetFoamSrv().ptr != 0 ? wake_->GetFoamSrv() : fallbackSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
@@ -1258,6 +1269,11 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWakePass(Rende
     tuning.strength = std::clamp(render.wakeStrength, 0.0f, 4.0f);
     tuning.damping = std::clamp(render.wakeDamping, 0.0f, 20.0f);
     tuning.breaking = std::clamp(render.wakeBreaking, 0.0f, 20.0f);
+    tuning.foamFade = std::clamp(render.wakeFoamFade, 0.02f, 5.0f);
+    tuning.foamFadeDense = std::clamp(render.wakeFoamFadeDense, 0.0f, 10.0f);
+    tuning.washFoam = std::clamp(render.wakeWashFoam, 0.0f, 20.0f);
+    tuning.crestFoam = std::clamp(render.wakeCrestFoam, 0.0f, 5.0f);
+    tuning.crestCoverage = std::clamp(render.wakeCrestCoverage, 0.0f, 1.0f);
     tuning.texel = std::clamp(render.wakeTexel, 0.25f, 2.0f);
     // The coast: the surf sim's window onto the shore depth map. On a frame that re-renders it (after this pass in the
     // graph) the field is held, as the surf sim skips.
@@ -1298,7 +1314,12 @@ Math::float4 OceanRenderable::GetWakeParams2() const
 {
     const float texel = wake_ ? wake_->GetWindowParams().w : 0.5f;
     return Math::float4(texel, std::clamp(GetRenderConfig().wakeNormal, 0.0f, 3.0f),
-                        static_cast<float>(ocean::g_wakeDebugView), 0.0f);
+                        static_cast<float>(ocean::g_wakeDebugView), std::clamp(GetRenderConfig().wakeFoam, 0.0f, 2.0f));
+}
+
+Math::float4 OceanRenderable::GetWakeParams3() const
+{
+    return Math::float4(std::clamp(GetRenderConfig().wakeChurn, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
 }
 
 void OceanRenderable::OnMaterialHotReload(Renderer* renderer)

@@ -151,6 +151,13 @@ struct OceanRenderConfig
                                    // as d goes to 0 -- the surf zone a beach takes it in; 0 = none, the waterline
                                    // reflects it whole (0..20)
     float wakeTexel = 0.5f;        // m a texel; 512 make the window round the camera (0.25..2)
+    float wakeFoam = 1.0f;         // the wake's foam on the surface (0 = none, 0..2)
+    float wakeFoamFade = 0.1f;     // 1/s the wake's foam lace runs down at (0.02..5)
+    float wakeFoamFadeDense = 1.5f; // 1/s per unit of foam on top: dense white water runs down fast (0..10)
+    float wakeWashFoam = 4.0f;     // the white water a moving hull leaves, a metre of head change under it (0..20)
+    float wakeCrestFoam = 1.0f;    // Crest's Wave Foam Strength on the wake's steep crests (0..5)
+    float wakeCrestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks (0.55 = the Stokes limit, 0..1)
+    float wakeChurn = 1.0f;        // the churned white water's relief: lumps and grey cavities (0 = a smooth sheet, 0..1)
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

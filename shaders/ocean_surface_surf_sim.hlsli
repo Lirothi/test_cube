@@ -12,7 +12,7 @@
 // ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
 // rather than sRGB). The C++ table stages the same 26 entries for both surfaces; t22-t25, s4 and the
 // transparent pass's GlassView CB (b1) are the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=27, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=28, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -102,10 +102,16 @@ cbuffer OceanCB : register(b0)
     float4x4 cloudShadowViewProj;
     float4 cloudShadowParams;          // x: on, as the share by the light's height (0 = off), y: far depth km, z: how much of the shadow the water body takes (cloud.oceanBodyShadow), w: low-sun body light (SunBodyEntry's floor, ocean preset lowSunBodyLight)
     float4 sunShapeParams;             // x: the light's angular RADIUS (rad, UE's half apex) for the sphere-light glint (OceanSunSpecular), y: its soft radius (UE SoftSourceRadius), zw: reserved
-    // A boat's wake (ocean/OceanWake, t26): xy window centre, z 1 / half extent (0 = no field this frame), w the height's
-    // scale in the vertices; wakeParams2 x texel metres, y the slope's scale in the normal (1 = true), z debug view.
+    // A boat's wake (ocean/OceanWake, t26, its foam t27): xy window centre, z 1 / half extent (0 = no field this frame), w
+    // the height's scale in the vertices; wakeParams2 x texel metres, y the slope's scale in the normal (1 = true), z debug
+    // view (1 the height, 2 the foam), w the foam's strength (0 = none); wakeParams3 x the white water's relief (WakeChurn,
+    // 0 = a smooth sheet), yzw reserved.
     float4 wakeParams;
     float4 wakeParams2;
+    float4 wakeParams3;
+    // OceanBodyShadow: x the taps along the column a view ray scatters in (0 = the surface point's shadow, as before
+    // 2026-11-07), yzw reserved.
+    float4 bodyShadowParams;
 };
 
 Texture2DArray<float4> DisplacementDerivatives : register(t0);
@@ -139,6 +145,7 @@ Texture2D<float2> ShoreSdfTexture : register(t14);
 Texture2D<float2> SurfSimWaveTex : register(t16);
 Texture2D<float> SurfSimFoamTex : register(t17);
 Texture2D<float4> WakeTex : register(t26); // the boat wake's field: x height (m), y vertical velocity
+Texture2D<float4> WakeFoamTex : register(t27); // its foam: x 0..2 (1 and over fresh white water), yz the way it was laid times x
 RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
@@ -190,6 +197,7 @@ struct FoamInput
 struct FoamData
 {
     float2 coverage;
+    float aeration; // a boat wake's bubbles under the surface: the underwater foam's colour, not faded with distance
     float3 normal;
     float3 albedo;
 };
@@ -634,10 +642,147 @@ float SurfSimFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
     return saturate(coverage * SurfSimWindowEdgeFade(simUV) * surfSimParams3.x);
 }
 
+// The wake foam's noise in a frame turned to `angle` and stretched along it (`stretch` times longer than wide).
+float WakeFoamNoise(float2 baseXZ, float2 baseDx, float2 baseDy, float angle, float stretch, float4 params)
+{
+    float s, c;
+    sincos(angle, s, c);
+    const float2 along = float2(c, s);
+    const float2 across = float2(-s, c);
+    const float2 p = float2(dot(baseXZ, along) / stretch, dot(baseXZ, across));
+    const float2 pdx = float2(dot(baseDx, along) / stretch, dot(baseDx, across));
+    const float2 pdy = float2(dot(baseDy, along) / stretch, dot(baseDy, across));
+    return ShoreFoamDissipationFactor(ContactFoamTex, AnisotropicWrapSampler, p, pdx, pdy, simulationParams.z, params);
+}
+
+// What the wake's foam gives a pixel (WakeFoamCoverage).
+struct WakeFoamSample
+{
+    float coverage; // the share of the pixel the foam covers
+    float aeration; // the bubbles under it: the underwater foam's colour (FoamData.aeration)
+    float churn;    // how much of it is churned white water, 0..1 -- the relief WakeChurnHeight gives it
+};
+
+// A boat's wake foam (ocean/OceanWake): the white water and trail a moving hull leaves, the steep crests. The field is
+// smooth at its 0.5 m texels; its value is read as the SHARE of the water the foam covers, not as an opacity: a pixel is
+// foam where the value exceeds a lace -- two counter-drifting octaves of the contact foam's noise folded into ridges, 0 on
+// the network of their mid-contours -- so 1 and over covers the water, 0.3 leaves the network's lines, the lace a
+// dissolving trail is in the photographs (it was a solid sheet while the value was 1, owner: "the trail is incredibly
+// dense"). The lace is drawn out into streaks along the way the foam was laid (the field's yz), as a trail's foam is:
+// the noise of the two nearest of 8 fixed directions, blended -- one frame turned with the way would shear across the
+// window wherever the way bends. Where nothing says which way (the crests' foam) it stays round. A finer, round octave
+// moves the lace's threshold a little: foam tears at every scale, and the 1.8 m cells alone cut it into smooth blobs
+// where the photographs show torn edges and filaments.
+// The AERATION is the bubbles a trail leaves under the surface, the lighter turquoise scar that outlasts the white, seen
+// from a drone as well as from the boat (FoamData.aeration).
+WakeFoamSample WakeFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
+{
+    WakeFoamSample result;
+    result.coverage = 0.0f;
+    result.aeration = 0.0f;
+    result.churn = 0.0f;
+    [branch]
+    if (wakeParams.z <= 0.0f || wakeParams2.w <= 0.0f)
+    {
+        return result;
+    }
+    const float2 wakeUV = WakeUV(baseXZ);
+    if (any(wakeUV < 0.0f) || any(wakeUV > 1.0f))
+    {
+        return result;
+    }
+    const float4 laid = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0);
+    const float foam = laid.x;
+    if (foam <= 1e-3f)
+    {
+        return result;
+    }
+    const float kPatch = 1.8f;       // m: the lace's cells
+    const float kFinePatch = 0.45f;  // m: the torn edges' octave
+    const float kFineAmount = 0.5f;  // how far it moves the threshold (the noise's +-0.26 -> +-0.13 of coverage)
+    const float kDriftSpeed = 0.12f; // m/s, the surf sim's
+    const float kContrast = 1.3f;
+    const float kSoftness = 0.12f;   // the lace's edge, in coverage
+    const float kStretch = 3.5f;     // a streak this many times longer than wide
+    const float kBins = 8.0f;        // directions over half a turn (a streak has no head)
+    const float4 params = float4(kPatch, kDriftSpeed, 1.0f, kContrast);
+    float field = ShoreFoamDissipationFactor(
+        ContactFoamTex, AnisotropicWrapSampler, baseXZ, baseDx, baseDy, simulationParams.z, params);
+    const float wayLength = length(laid.yz);
+    const float laidOneWay = saturate(wayLength / foam);
+    [branch]
+    if (laidOneWay > 0.05f)
+    {
+        const float kPi = 3.14159265f;
+        float angle = atan2(laid.z, laid.y);
+        angle = angle < 0.0f ? angle + kPi : angle;          // 0..pi
+        const float bin = angle * (kBins / kPi);
+        const float bin0 = floor(bin);
+        const float t = bin - bin0;
+        const float a0 = bin0 * (kPi / kBins);
+        const float a1 = (bin0 + 1.0f) * (kPi / kBins);
+        const float streaks = lerp(WakeFoamNoise(baseXZ, baseDx, baseDy, a0, kStretch, params),
+                                   WakeFoamNoise(baseXZ + 37.1f, baseDx, baseDy, a1, kStretch, params), t);
+        field = lerp(field, streaks, laidOneWay);
+    }
+    const float fine = ShoreFoamDissipationFactor(ContactFoamTex, AnisotropicWrapSampler, baseXZ + 19.7f, baseDx, baseDy,
+        simulationParams.z, float4(kFinePatch, kDriftSpeed * 1.7f, 1.0f, kContrast));
+    const float lace = abs(field * 2.0f - 1.0f) + (fine - 0.5f) * kFineAmount; // 0 on the network, 1 between its lines
+    const float coverage = saturate((foam - lace) / kSoftness + 0.5f) * saturate(foam * 4.0f);
+    const float edge = WakeWindowEdgeFade(wakeUV) * wakeParams2.w;
+    result.coverage = saturate(coverage * edge);
+    // The aeration goes with the foam, linearly: sqrt(foam) lifted the trace the field's spreading leaves round the lace
+    // (a few hundredths) into a milky halo wider than the trail (owner: "what is this whitish halo round the foam?").
+    result.aeration = saturate(foam * 2.0f) * 0.4f * edge;
+    // Churned where it is fresh white water (1 and over); the lace of a dissolving trail is a flat film.
+    result.churn = smoothstep(0.4f, 1.2f, foam) * result.coverage;
+    return result;
+}
+
+// The churned white water's relief (2026-11-07, photographs of a prop wash: bright lumps of a decimetre or two with grey
+// crevices between them, not a smooth white sheet): two octaves of the contact foam's noise, 0.7 m and 0.3 m, boiling
+// (drifting against each other on the ocean's clock), folded into ridges as the lace is -- the crevices run along the
+// noise's mid-contours, a connected network, not the isolated grey spots the noise's own minima made -- as a height
+// field: x the height 0..1, yz its slope per metre (forward differences one footprint apart). A pixel wider than an
+// octave reads its mips, which average it out: far white water keeps a mean grey and loses the relief, as it should.
+float ChurnRidge(float n)
+{
+    return abs(n * 2.0f - 1.0f);
+}
+
+float3 WakeChurnHeight(float2 p, float2 dx, float2 dy)
+{
+    const float t = simulationParams.z;
+    const float kScaleA = 0.7f;
+    const float kScaleB = 0.3f;
+    const float kWeightA = 0.6f;
+    const float kGain = 2.5f; // the folded noise's narrow range stretched to most of 0..1
+    const float e = max(max(length(dx), length(dy)), 0.03f); // m
+    const float2 pa = (p + float2(0.21f, -0.13f) * t) * (1.0f / kScaleA);
+    const float2 pb = (p + float2(-0.17f, 0.24f) * t) * (1.0f / kScaleB) + 5.31f;
+    const float2 dxa = dx * (1.0f / kScaleA);
+    const float2 dya = dy * (1.0f / kScaleA);
+    const float2 dxb = dx * (1.0f / kScaleB);
+    const float2 dyb = dy * (1.0f / kScaleB);
+    const float ea = e / kScaleA;
+    const float eb = e / kScaleB;
+    const float a0 = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pa, dxa, dya).r);
+    const float ax = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pa + float2(ea, 0.0f), dxa, dya).r);
+    const float az = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pa + float2(0.0f, ea), dxa, dya).r);
+    const float b0 = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pb, dxb, dyb).r);
+    const float bx = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pb + float2(eb, 0.0f), dxb, dyb).r);
+    const float bz = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pb + float2(0.0f, eb), dxb, dyb).r);
+    const float h = kWeightA * a0 + (1.0f - kWeightA) * b0;
+    const float2 slope = float2(kWeightA * (ax - a0) + (1.0f - kWeightA) * (bx - b0),
+                                kWeightA * (az - a0) + (1.0f - kWeightA) * (bz - b0)) * (kGain / e);
+    return float3(saturate(h * kGain), slope);
+}
+
 FoamData GetFoamData(FoamInput input, uint cascadesCount)
 {
     FoamData data;
     data.coverage = float2(0.0f, 0.0f);
+    data.aeration = 0.0f;
     data.normal = input.normal;
     data.albedo = float3(1.0f, 1.0f, 1.0f);
 
@@ -653,6 +798,11 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
 
     float deepFoam = DeepFoam(input.worldUV, input.viewDir, input.normal, input.time);
     data.coverage = Coverage(turbulence, mixWeights, input.worldUV, deepFoam, bias);
+    // A boat's wake foam joins the whitecaps (their albedo): it is white water on open sea, not the shore's. Its
+    // aeration joins the underwater foam.
+    const WakeFoamSample wakeFoam = WakeFoamCoverage(input.worldUV, input.worldUVdx, input.worldUVdy);
+    data.coverage.x = saturate(data.coverage.x + wakeFoam.coverage);
+    data.aeration = wakeFoam.aeration;
 
     float contactCoverage = 0.0f;
     if (foamParams2.y > 0.0f)
@@ -674,6 +824,18 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     // in the distance without DLSS.
     float2 uv = input.worldUV * 1.0f;
     data.albedo = FoamAlbedoTex.SampleGrad(AnisotropicWrapSampler, uv, input.worldUVdx, input.worldUVdy).rgb;
+    // The wake's churned white water: its lumps tilt the foam's normal (the sun lights their faces, a low sun leaves their
+    // backs grey) and its cavities are darker (in the lumps' shadow, seeing less sky) -- by the wake's share of the foam.
+    [branch]
+    if (wakeFoam.churn > 1e-3f && wakeParams3.x > 0.0f)
+    {
+        const float3 churn = WakeChurnHeight(input.worldUV, input.worldUVdx, input.worldUVdy);
+        const float w = wakeFoam.churn * saturate(wakeParams3.x) * saturate(wakeFoam.coverage / max(data.coverage.x, 1e-3f));
+        // 30 % under the first cut (owner, 2026-11-07: "take the normal down 30 %"): 15 cm lumps, crevices at 0.65.
+        const float kRelief = 0.105f; // m: the lumps' height
+        data.normal = normalize(data.normal - float3(churn.y, 0.0f, churn.z) * (kRelief * w));
+        data.albedo *= lerp(1.0f, lerp(0.755f, 1.0f, smoothstep(0.0f, 0.5f, churn.x)), w);
+    }
     // The shore strip wears the SHORE foam albedo (same asset and sliders as the modern
     // surface), blended in by its share of the total coverage so simulated whitecap foam
     // keeps its own look.
@@ -840,6 +1002,137 @@ float3 RefractionCoords(float refractionStrength, float4 positionNDC, float view
     return float3(refractedUV, depthSample);
 }
 
+// The sun's shadow from geometry on the water's BODY (2026-11-07, the yacht's shadow on the open sea: a navy hole the
+// shape of the hull, at a low sun a black band 15 m long). The light the body sends back is scattered all down the
+// column a view ray crosses -- the model's own 1 - exp(-fogDensity d), a ten-metre column at wind_test's 0.1 / m -- and
+// a caster shades only the part of it inside its shadow volume, which goes down along the REFRACTED sun: a hull's is a
+// slanted prism as wide as the hull, a view ray passes through it for a metre or two. So the shadow is averaged over the
+// column: `bodyShadowParams.x` taps evenly down its first 1.5 / fogDensity metres (78 % of the scatter), each weighted by
+// the exponential's integral over its own step and traced back up its refracted sun ray to the surface -- the taps lie
+// on a straight track across the water -- and read there, where the water's own pages are; the deeper tail takes their
+// mean (a tap of its own 14 m down drew a second, offset copy of the hull's shadow). A shallow column (the background's
+// distance through the water) is averaged over what it holds; the sea floor seen through it keeps its own shadow.
+// 0 taps = the surface point's shadow, as before.
+// Deterministic on purpose: the water is barely accumulated over frames (it moves, and DLSS is told so), and per-pixel
+// jittered taps came out as a fixed grid over the shadow.
+// Under VSM a tap is cheap: the level the water's own pixels request at its distance (the frame's bias in), one
+// hardware-filtered comparison, lit where that level has no page -- the water marks a page only where a caster can
+// shadow it (vsm_water_mask_cs), so no page there is no shadow. The page entries are all read first and the
+// comparisons all issued after: the ocean's pixel shader is too heavy to hide a fetch, and a tap whose comparison waited
+// on its own entry cost the column 0.013 ms a tap whatever else was cut. The full read (ForwardSunShadow: a walk to the
+// coarser levels, a 3x3 PCF) cost eight taps 0.24 ms of Ocean.Surface; Legacy and SDSM still take it.
+static const uint kOceanColumnTaps = 8u;
+
+// The clipmap view and the page (bits 0-7 x, 8-15 y; ~0 = outside the level) a tap at q reads, and its NDC.
+uint OceanColumnPage(float3 q, out float3 ndc, out uint level)
+{
+    const float distCm = max(length(q - GLASS_VIEW(camPosSky).xyz) * 100.0f, 1e-4f);
+    level = (uint)clamp((int)floor(log2(distCm) + GLASS_VIEW(smrtParams2).z) - (int)GLASS_VIEW(vsmParams).w,
+                        0, (int)VSM_NUM_CLIPMAP_LEVELS - 1);
+    const float4 clip = mul(float4(q, 1.0f), GLASS_VIEW(clipmapViewProj)[level]);
+    ndc = clip.xyz / clip.w;
+    if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { return 0xFFFFFFFFu; }
+    const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
+    const uint px = min((uint)(uv.x * (float)VSM_CLIPMAP_AXIS), VSM_CLIPMAP_AXIS - 1u);
+    const uint py = min((uint)(uv.y * (float)VSM_CLIPMAP_AXIS), VSM_CLIPMAP_AXIS - 1u);
+    return (py << 8) | px;
+}
+
+uint OceanColumnEntry(uint page, uint level)
+{
+    return page == 0xFFFFFFFFu ? 0u
+         : VsmPageTable[VsmPageId(VSM_CLIPMAP_FIRST + level, 0u, page & 0xFFu, (page >> 8) & 0xFFu)];
+}
+
+float OceanBodyShadow(float3 surfacePos, float3 viewDir, float column, float surfaceShadow)
+{
+    const uint taps = min((uint)bodyShadowParams.x, kOceanColumnTaps);
+    [branch] if (taps == 0u || sunShapeParams.z < 0.5f)
+    {
+        return surfaceShadow;
+    }
+    const float sigma = max(refractionParams.w, 1e-3f);
+    column = max(column, 0.0f);
+    [branch] if (1.0f - exp(-sigma * column) < 1e-3f)
+    {
+        return surfaceShadow;
+    }
+    const float kEta = 1.0f / 1.333f;
+    const float3 up = float3(0.0f, 1.0f, 0.0f);
+    const float3 viewDown = refract(-viewDir, up, kEta);
+    const float3 sunDown = refract(normalize(sunDirAmbient.xyz), up, kEta);
+    const float sunSlope = 1.0f / max(-sunDown.y, 0.05f);
+    const float reach = min(column, 1.5f / sigma);
+    const float step = reach / taps;
+    // Where the tap at s lands on the surface: down the view ray, back up its sun ray -- a straight line on the water.
+    float3 track = viewDown + sunDown * (viewDown.y * sunSlope);
+    track.y = 0.0f;
+    const float stepShare = exp(-sigma * step); // the exponential's weight a step further down
+    const float firstWeight = (1.0f - stepShare) / (1.0f - exp(-sigma * reach));
+    [branch] if (GLASS_VIEW(vsmParams).x == 0.0f)
+    {
+        const float NdotL = saturate(-normalize(sunDirAmbient.xyz).y);
+        float weight = firstWeight;
+        float sum = 0.0f;
+        for (uint k = 0u; k < taps; ++k)
+        {
+            sum += weight * ForwardSunShadow(surfacePos + track * ((k + 0.5f) * step), up, NdotL, 0u, ShadowAtlas,
+                                             VsmPageTable, VsmPool, SdsmPartitions, ShadowCompareSampler, LinearClampSampler);
+            weight *= stepShare;
+        }
+        return sum;
+    }
+    // Every entry first.
+    uint entries[kOceanColumnTaps];
+    uint resident = 0u;
+    [unroll] for (uint k = 0u; k < kOceanColumnTaps; ++k)
+    {
+        float3 ndc;
+        uint level;
+        const uint page = OceanColumnPage(surfacePos + track * ((k + 0.5f) * step), ndc, level);
+        entries[k] = k < taps ? OceanColumnEntry(page, level) : 0u;
+        resident |= entries[k];
+    }
+    // No page under any tap and the surface lit: no caster near the track -- most of the open sea stops here.
+    [branch] if (surfaceShadow > 0.999f && (resident & VSM_SAMPLE_RESIDENT_BIT) == 0u)
+    {
+        return surfaceShadow;
+    }
+    // The flat water's receiver-plane slope over a texel, as the full read biases its taps -- one plane for every tap.
+    const float4 planeUV = mul(float4(0.0f, 1.0f, 0.0f, -surfacePos.y), GLASS_VIEW(clipmapUvNormal));
+    const float2 slope = clamp(-planeUV.xy / ((abs(planeUV.z) < 1e-8f) ? 1e-8f : planeUV.z),
+                               -VSM_MAX_DEPTH_SLOPE_UV, VSM_MAX_DEPTH_SLOPE_UV);
+    const float slopeBias = min(2.0f * (abs(slope.x) + abs(slope.y)) / (float)(VSM_CLIPMAP_AXIS * VSM_PAGE_SIZE),
+                                VSM_MAX_SLOPE_BIAS_NDC);
+    const float2 invPool = 1.0f / float2((float)VSM_POOL_PAGES_X, (float)VSM_POOL_PAGES_Y);
+    const float2 texel = invPool / (float)VSM_PAGE_SIZE;
+    // Then every comparison.
+    float weight = firstWeight;
+    float sum = 0.0f;
+    [unroll] for (uint t = 0u; t < kOceanColumnTaps; ++t)
+    {
+        float3 ndc;
+        uint level;
+        const uint page = OceanColumnPage(surfacePos + track * ((t + 0.5f) * step), ndc, level);
+        float lit = 1.0f;
+        if ((entries[t] & VSM_SAMPLE_RESIDENT_BIT) != 0u)
+        {
+            const uint phys = entries[t] & VSM_SAMPLE_PHYS_MASK;
+            const float2 pool = float2((float)(phys % VSM_POOL_PAGES_X), (float)(phys / VSM_POOL_PAGES_X));
+            const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
+            const float2 inPage = saturate(uv * VSM_CLIPMAP_AXIS - float2(page & 0xFFu, (page >> 8) & 0xFFu));
+            const float2 poolUV = clamp((pool + inPage) * invPool, pool * invPool + 0.5f * texel,
+                                        (pool + 1.0f) * invPool - 0.5f * texel);
+            const float bias = max(GLASS_VIEW(clipmapParams).z * pow(GLASS_VIEW(clipmapParams).w, (float)level),
+                                   GLASS_VIEW(vsmParams).z) + slopeBias;
+            lit = VsmPool.SampleCmpLevelZero(ShadowCompareSampler, poolUV, ndc.z - bias);
+        }
+        sum += t < taps ? weight * lit : 0.0f;
+        weight *= stepShare;
+    }
+    return sum;
+}
+
 float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, float3 foamColor)
 {
     float depthScale = 0.0f;
@@ -866,10 +1159,13 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     // sides and undersides add light -- light our cube does not yet carry (its undersides are lit
     // by the distant sky only), so a body that followed the sun as the land does went too dark
     // (owner, 2026-09-12: "вода не так реагирует на тень, как плотная геометрия").
-    // A shadow from GEOMETRY is taken whole: the shadow volume of a palm or a hull goes on down into the water
-    // along the sun, so the column a view ray scatters in is shaded as the surface is (no lit cloud sides here).
+    // A shadow from GEOMETRY shades the column the view ray scatters in where the caster's shadow volume crosses it
+    // (OceanBodyShadow): a hull's is a slanted prism a view ray passes through for a metre or two of a ten-metre column.
+    float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
+    float3 backgroundPositionWS = PositionWsFromDepth(refractionCoords.z, refractionCoords.xy);
+    float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
     const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z))
-                           * li.mainLight.geometryShadow;
+                           * OceanBodyShadow(li.positionWS, li.viewDir, backgroundDistance, li.mainLight.geometryShadow);
     const float3 skyFill = SkyFillRadiance(li.normal);
     // The sun's share scaled by how much of it gets INTO the water at its height (SunBodyEntry):
     // a low sun lights the sea through its reflection and its sky, not through a glowing body.
@@ -888,7 +1184,6 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     
     //return color;
 
-    float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
     // P16.1: this is a copy of SCENE COLOUR, already pre-exposed. The surface multiplies its
     // whole result by the factor at the end, so an already-scaled input has to be brought back
     // first -- otherwise the refracted part gets it twice, which is what left the near water
@@ -898,8 +1193,6 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
 
     //return backgroundColor;
 
-    float3 backgroundPositionWS = PositionWsFromDepth(refractionCoords.z, refractionCoords.xy);
-    float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
     color = ColorThroughWater(backgroundColor, color, backgroundDistance, -backgroundPositionWS.y);
 
     //return color;
@@ -907,7 +1200,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     float underwaterFoamVisibility = 20.0f / (20.0f + li.viewDist);
     float3 tint = AbsorptionTint(0.8f);
     float3 underwaterFoamColor = foamColor * tint * tint;
-    color = lerp(color, underwaterFoamColor, foamData.coverage.y * underwaterFoamVisibility);
+    color = lerp(color, underwaterFoamColor, max(foamData.coverage.y * underwaterFoamVisibility, foamData.aeration));
     return color;
 }
 
@@ -1200,8 +1493,16 @@ PSOut PSMain(VSOutput input)
         const float2 wakeUV = WakeUV(input.baseXZ);
         if (all(wakeUV >= 0.0f) && all(wakeUV <= 1.0f))
         {
-            const float h = WakeTex.SampleLevel(LinearClampSampler, wakeUV, 0).x;
-            outColor.rgb = float3(saturate(h * 4.0f), 0.08f, saturate(-h * 4.0f));
+            if (wakeParams2.z > 1.5f) // 2: the foam field, white on dark (1 = fresh white water), the tear not applied
+            {
+                const float f = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0).x;
+                outColor.rgb = float3(saturate(f), saturate(f), saturate(f) * 0.8f + 0.08f);
+            }
+            else
+            {
+                const float h = WakeTex.SampleLevel(LinearClampSampler, wakeUV, 0).x;
+                outColor.rgb = float3(saturate(h * 4.0f), 0.08f, saturate(-h * 4.0f));
+            }
             gb.reflectionWeight = 0.0f;
         }
     }

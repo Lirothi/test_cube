@@ -3951,6 +3951,24 @@ namespace
                             "waterline reflects it whole.");
                     renderDrag("Wake Texel (m)", render.wakeTexel, 0.01f, 0.25f, 2.0f);
                     wakeTip("512 texels make the window round the camera: 0.5 m = 256 m. A change restarts the field.");
+                    renderDrag("Wake Foam", render.wakeFoam, 0.01f, 0.0f, 2.0f);
+                    wakeTip("The wake's foam on the surface: the white water and trail behind a hull, the steep crests. 0 = none.");
+                    renderDrag("Wake Foam Fade (1/s)", render.wakeFoamFade, 0.005f, 0.02f, 5.0f);
+                    wakeTip("How fast the lace a trail dissolves into runs down: 0.1 = some 20 s.");
+                    renderDrag("Wake Foam Fade Dense", render.wakeFoamFadeDense, 0.02f, 0.0f, 10.0f);
+                    wakeTip("1/s per unit of foam on top of the fade: dense white water runs down fast, so a trail is solid "
+                            "only just behind the transom (a breaking crest's stage A, seconds).");
+                    renderDrag("Wake White Water", render.wakeWashFoam, 0.05f, 0.0f, 20.0f);
+                    wakeTip("The foam a moving hull leaves where it arrives and, above all, where its transom leaves the water: "
+                            "foam a metre of head change under it lays down, past 1 m/s of change.");
+                    renderDrag("Wake Crest Foam", render.wakeCrestFoam, 0.01f, 0.0f, 5.0f);
+                    wakeTip("Crest's Wave Foam Strength: foam where the wake's crests pinch past the coverage below.");
+                    renderDrag("Wake Crest Coverage", render.wakeCrestCoverage, 0.005f, 0.0f, 1.0f);
+                    wakeTip("Crest's Wave Foam Coverage: a crest whose surface pinches to det J under this breaks. "
+                            "0.55 = a Gerstner wave at the Stokes limit (a k 0.44); higher = gentler crests foam too.");
+                    renderDrag("Wake Churn", render.wakeChurn, 0.01f, 0.0f, 1.0f);
+                    wakeTip("The churned white water's relief: lumps of a decimetre or two the sun lights on one side and "
+                            "grey cavities between them, boiling. 0 = a smooth white sheet.");
                 }
 
                 if (ImGui::CollapsingHeader("Shore and surf", ImGuiTreeNodeFlags_DefaultOpen))

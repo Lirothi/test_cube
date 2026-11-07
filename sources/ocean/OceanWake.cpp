@@ -29,10 +29,12 @@ struct WakeCB
     float gravity; float dampingK2; float strength; std::uint32_t hullCount;
     float edgeTexels; float edgeRate; std::uint32_t shoreValid; float shoreCamHeight;
     float shoreCenterX; float shoreCenterZ; float shoreInvExtent; float shoreZNear;
-    float shoreZFar; float breakRate; float pad1; float pad2;
+    float shoreZFar; float breakRate; float foamFade; float foamDiffusion;
+    float washStrength; float washThreshold; float crestStrength; float crestCoverage;
+    float foamFadeDense; float pad1; float pad2; float pad3;
     float hulls[16 * 3 * 4];
 };
-static_assert(sizeof(WakeCB) == 96 + 16 * 3 * 16, "WakeCB mirrors the shader's cbuffer");
+static_assert(sizeof(WakeCB) == 128 + 16 * 3 * 16, "WakeCB mirrors the shader's cbuffer");
 
 constexpr float kGravity = 9.81f;
 // The absorber: 1/8 of the window, 6/s at the border. A wave crossing it at a few m/s is gone long before it could wrap
@@ -40,6 +42,13 @@ constexpr float kGravity = 9.81f;
 constexpr float kEdgeShare = 0.125f;
 constexpr float kEdgeRate = 6.0f;
 constexpr float kPi = 3.14159265358979f;
+// The foam spreads as nu = 0.3 m2/s (a trail 2-3 m wider after 10 s); stable while nu dt / texel^2 stays under 1/4, which
+// the step's 1/20 s cap keeps at any texel the knob allows (0.06 at 0.5 m, 0.24 at 0.25 m).
+constexpr float kFoamDiffusion = 0.3f;
+// A hull's head changing slower than this (m/s) leaves no white water: a boat drifting or idling stays clean.
+constexpr float kWashThreshold = 1.0f;
+// A hull that moved more than this in one step (m/s) jumped (placed, put back, teleported): it leaves no white water.
+constexpr float kWashJumpSpeed = 40.0f;
 }
 
 void OceanWake::EnsureResources(Renderer* renderer)
@@ -74,10 +83,15 @@ void OceanWake::EnsureResources(Renderer* renderer)
     create(work_, L"Ocean.WakeWork");
     create(field_, L"Ocean.WakeField");
     create(spec_, L"Ocean.WakeSpectrum");
+    create(jac_, L"Ocean.WakeJacobian");
     // The free height: what the CPU floats things on -- centimetres over metres, half precision is plenty, and the
     // readback ring carries a quarter of the bytes.
     texDesc.Format = DXGI_FORMAT_R16_FLOAT;
     create(free_, L"Ocean.WakeFreeHeight");
+    // The foam: x 0..2, yz the way it was laid times it (the surface's streaks).
+    texDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    create(foam_[0], L"Ocean.WakeFoam0");
+    create(foam_[1], L"Ocean.WakeFoam1");
 
     // The footprints: written by the CPU once per new hull shape, read by Pack -- an upload buffer, never in a state the
     // graph tracks (GENERIC_READ for its whole life).
@@ -105,7 +119,7 @@ void OceanWake::EnsureResources(Renderer* renderer)
     }
 
     D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
-    heapDesc.NumDescriptors = 10u;
+    heapDesc.NumDescriptors = 16u;
     heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
     ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ocean, L"Ocean.WakeHeap", IID_PPV_ARGS(&descriptorHeap_)));
@@ -136,6 +150,17 @@ void OceanWake::EnsureResources(Renderer* renderer)
     device->CreateUnorderedAccessView(spec_.Get(), nullptr, &arrayDesc, specFftUav_);
     freeUav_ = next();
     device->CreateUnorderedAccessView(free_.Get(), nullptr, nullptr, freeUav_);
+    jacUav_ = next();
+    device->CreateUnorderedAccessView(jac_.Get(), nullptr, nullptr, jacUav_);
+    jacFftUav_ = next();
+    device->CreateUnorderedAccessView(jac_.Get(), nullptr, &arrayDesc, jacFftUav_);
+    for (std::uint32_t i = 0; i < 2u; ++i)
+    {
+        foamUav_[i] = next();
+        device->CreateUnorderedAccessView(foam_[i].Get(), nullptr, nullptr, foamUav_[i]);
+        foamSrv_[i] = next();
+        device->CreateShaderResourceView(foam_[i].Get(), nullptr, foamSrv_[i]);
+    }
     shoreNullSrv_ = next();
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC nullDesc{};
@@ -315,6 +340,22 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
     r.texel = texel_;
     r.tuning = tuning;
     everSimulated_ = true;
+    // White water only from hulls moving as boats move: one placed, put back by Stop or teleported changes the head under
+    // it in a step, and would leave a patch of foam where it stood.
+    r.wash = elapsed > 0.0f && !r.clear && lastHullPositions_.size() == r.hullCount;
+    for (std::uint32_t i = 0; r.wash && i < r.hullCount; ++i)
+    {
+        const float dx = r.hulls[i].posX - lastHullPositions_[i].x;
+        const float dz = r.hulls[i].posZ - lastHullPositions_[i].y;
+        r.wash = dx * dx + dz * dz <= (kWashJumpSpeed * elapsed) * (kWashJumpSpeed * elapsed);
+    }
+    lastHullPositions_.resize(r.hullCount);
+    for (std::uint32_t i = 0; i < r.hullCount; ++i)
+    {
+        lastHullPositions_[i] = Math::float2(r.hulls[i].posX, r.hulls[i].posZ);
+    }
+    foamNext_ ^= 1u;
+    r.foamNext = foamNext_;
 
     // ---- declarations, from the same decisions ----
     ctx.NextPoint();
@@ -323,12 +364,16 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
     ctx.Use(field_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(spec_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     ctx.Use(free_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(jac_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(foam_[0].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.Use(foam_[1].Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     if (r.hasShore)
     {
         ctx.Use(r.shore.resource, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     ctx.NextPoint();
     ctx.Use(field_.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    ctx.Use(foam_[r.foamNext].Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
 
     ranFrame_ = ctx.renderer ? ctx.renderer->GetTotalFrameNumber() : 0u;
     record_ = r;
@@ -367,6 +412,13 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             cb.shoreZNear = rec.shore.zNear;
             cb.shoreZFar = rec.shore.zFar;
             cb.breakRate = rec.hasShore ? rec.tuning.breaking : 0.0f;
+            cb.foamFade = rec.tuning.foamFade;
+            cb.foamFadeDense = rec.tuning.foamFadeDense;
+            cb.foamDiffusion = kFoamDiffusion * rec.dt / (rec.texel * rec.texel);
+            cb.washStrength = rec.wash ? rec.tuning.washFoam : 0.0f;
+            cb.washThreshold = kWashThreshold;
+            cb.crestStrength = rec.tuning.crestFoam;
+            cb.crestCoverage = rec.tuning.crestCoverage;
             static_assert(sizeof(HullGpu) == 12 * sizeof(float), "three float4 a hull");
             std::memcpy(cb.hulls, rec.hulls, sizeof(HullGpu) * rec.hullCount);
 
@@ -374,10 +426,13 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             const auto writeCb = [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); };
             const D3D12_CPU_DESCRIPTOR_HANDLE shoreSrv = rec.hasShore ? rec.shore.srv : shoreNullSrv_;
             const auto srvs = { footprintsSrv_, shoreSrv };
-            const auto uavs = { workUav_, fieldUav_, specUav_, freeUav_ };
+            const auto uavs = { workUav_, fieldUav_, specUav_, freeUav_, jacUav_, foamUav_[rec.foamNext ^ 1u],
+                                foamUav_[rec.foamNext] };
+            ID3D12Resource* const foamNext = foam_[rec.foamNext].Get();
 
             RecordComputeDispatch(renderer, cl, packMaterial_.get(), static_cast<UINT>(sizeof(WakeCB)), writeCb,
                 srvs, uavs, noSampler, kResolution, kResolution, work_.Get());
+            renderer->UAVBarrier(cl, foamNext); // Compose adds to what Pack wrote
 
             const auto fft = [&](D3D12_CPU_DESCRIPTOR_HANDLE target, ID3D12Resource* resource, std::uint32_t inverse)
             {
@@ -398,15 +453,18 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             RecordComputeDispatch(renderer, cl, stepMaterial_.get(), static_cast<UINT>(sizeof(WakeCB)), writeCb,
                 srvs, uavs, noSampler, kResolution, kResolution, field_.Get());
             renderer->UAVBarrier(cl, spec_.Get());
+            renderer->UAVBarrier(cl, jac_.Get());
 
             fft(fieldFftUav_, field_.Get(), 1u);
             fft(specFftUav_, spec_.Get(), 1u);
+            fft(jacFftUav_, jac_.Get(), 1u);
 
-            // Compose reads and writes only its own texel of the field: no barrier between its read and its write.
+            // Compose reads and writes only its own texel of the field and of the foam: no barrier between a read and its
+            // write.
             RecordComputeDispatch(renderer, cl, composeMaterial_.get(), static_cast<UINT>(sizeof(WakeCB)), writeCb,
                 srvs, uavs, noSampler, kResolution, kResolution, field_.Get());
 
-            renderer->EmitPoint(cl, rec.uavPoint + 1u); // the field to pixel-readable for the surface
+            renderer->EmitPoint(cl, rec.uavPoint + 1u); // the field and the foam to pixel-readable for the surface
         }
         c.EndCL(t);
     };
@@ -421,4 +479,9 @@ Math::float4 OceanWake::GetWindowParams() const
 D3D12_CPU_DESCRIPTOR_HANDLE OceanWake::GetSrv() const
 {
     return created_ ? fieldSrv_ : D3D12_CPU_DESCRIPTOR_HANDLE{};
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE OceanWake::GetFoamSrv() const
+{
+    return created_ ? foamSrv_[foamNext_] : D3D12_CPU_DESCRIPTOR_HANDLE{};
 }

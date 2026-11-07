@@ -524,6 +524,13 @@ namespace OceanRenderConfigJson
         render.wakeDamping = std::clamp(ReadFloat(object, "wakeDamping", render.wakeDamping), 0.0f, 20.0f);
         render.wakeBreaking = std::clamp(ReadFloat(object, "wakeBreaking", render.wakeBreaking), 0.0f, 20.0f);
         render.wakeTexel = std::clamp(ReadFloat(object, "wakeTexel", render.wakeTexel), 0.25f, 2.0f);
+        render.wakeFoam = std::clamp(ReadFloat(object, "wakeFoam", render.wakeFoam), 0.0f, 2.0f);
+        render.wakeFoamFade = std::clamp(ReadFloat(object, "wakeFoamFade", render.wakeFoamFade), 0.02f, 5.0f);
+        render.wakeFoamFadeDense = std::clamp(ReadFloat(object, "wakeFoamFadeDense", render.wakeFoamFadeDense), 0.0f, 10.0f);
+        render.wakeWashFoam = std::clamp(ReadFloat(object, "wakeWashFoam", render.wakeWashFoam), 0.0f, 20.0f);
+        render.wakeCrestFoam = std::clamp(ReadFloat(object, "wakeCrestFoam", render.wakeCrestFoam), 0.0f, 5.0f);
+        render.wakeCrestCoverage = std::clamp(ReadFloat(object, "wakeCrestCoverage", render.wakeCrestCoverage), 0.0f, 1.0f);
+        render.wakeChurn = std::clamp(ReadFloat(object, "wakeChurn", render.wakeChurn), 0.0f, 1.0f);
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
         render.causticsScale = std::max(
@@ -731,6 +738,13 @@ namespace OceanRenderConfigJson
         out["wakeDamping"] = render.wakeDamping;
         out["wakeBreaking"] = render.wakeBreaking;
         out["wakeTexel"] = render.wakeTexel;
+        out["wakeFoam"] = render.wakeFoam;
+        out["wakeFoamFade"] = render.wakeFoamFade;
+        out["wakeFoamFadeDense"] = render.wakeFoamFadeDense;
+        out["wakeWashFoam"] = render.wakeWashFoam;
+        out["wakeCrestFoam"] = render.wakeCrestFoam;
+        out["wakeCrestCoverage"] = render.wakeCrestCoverage;
+        out["wakeChurn"] = render.wakeChurn;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;
         out["causticsSpeed"] = render.causticsSpeed;

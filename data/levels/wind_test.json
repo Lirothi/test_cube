@@ -37148,6 +37148,29 @@
         1.0
       ],
       "type": "playerStart"
+    },
+    {
+      "enabled": true,
+      "group": "Small Yacht",
+      "id": 2895,
+      "mesh": "models/small_yacht/small_yacht.mesh.json",
+      "name": "small_yacht 001",
+      "position": [
+        52.657222747802734,
+        0.0,
+        115.44654083251953
+      ],
+      "rotationDeg": [
+        0.0,
+        -65.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -37338,6 +37361,19 @@
       "underwaterFoamParallax": 1.600000023841858,
       "underwaterRefractionStrength": 0.75,
       "viewAlignmentStrength": 0.800000011920929,
+      "wakeBreaking": 2.0,
+      "wakeCrestCoverage": 0.550000011920929,
+      "wakeCrestFoam": 1.0,
+      "wakeDamping": 1.5,
+      "wakeDisplacement": 1.0,
+      "wakeEnabled": true,
+      "wakeFoam": 1.0,
+      "wakeFoamFade": 0.10000000149011612,
+      "wakeFoamFadeDense": 1.5,
+      "wakeNormal": 1.0,
+      "wakeStrength": 1.0,
+      "wakeTexel": 0.5,
+      "wakeWashFoam": 4.0,
       "wavesScale": 1.0,
       "windAlignment": 0.5,
       "windSpeed": 12.0,

@@ -6,14 +6,20 @@
 //   Step:    every Fourier mode of (h, v) turned through omega * dt about the equilibrium the pressure sets (h = -head:
 //            the water under a hull at rest sinks by its draft), damped as k^2 -- once for each of four depths,
 //            omega^2 = g k tanh(k d), d = 0.3, 1.5, 7.5 m and deep, two depths to a texture (xy, zw): 0.3 and 1.5 m into Field
-//            itself (its last state is in Work by then), 9 m and deep into Spec.
+//            itself (its last state is in Work by then), 7.5 m and deep into Spec. And the free height's Jacobian terms
+//            into Jac (a third inverse FFT), for the crest foam.
 //   Compose: each texel takes the two depths its own water lies between (the shore depth map, log-interpolated) -- the
 //            spectrum has one depth for the whole window, the water does not: a wave slows over the shallows -- and land
 //            holds the field at 0, so a wave meets the coast instead of crossing the island. It reads and writes its
 //            own texel of Field only. It also writes the FREE height, h + head (0 under a hull at rest), for the CPU's
 //            copy (the buoyancy).
+// The FOAM (2026-11-07, owner: "both" -- white water at the hull and its trail, foam on the steep crests) is a field of its
+// own in the same window, two textures in turn (Pack reads last step's moved by the re-anchor, which one texture could not
+// give it): Pack moves, spreads and runs it down and lays the white water a moving hull leaves, where the head under it
+// changes (its bow arriving, its transom leaving); Compose adds Crest's wave foam where the displaced surface pinches.
+// The surface tears it per pixel as it does the surf sim's (ocean_surface_surf_sim.hlsli WakeFoamCoverage).
 // The window is square, world-axis-aligned, no v flip: worldXZ = centre + (coord + 0.5 - N/2) * texel.
-#define OCEAN_WAKE_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=4, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), StaticSampler(s0, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
+#define OCEAN_WAKE_RS "CBV(b0), DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), StaticSampler(s0, filter=FILTER_MIN_MAG_LINEAR_MIP_POINT, addressU=TEXTURE_ADDRESS_CLAMP, addressV=TEXTURE_ADDRESS_CLAMP)"
 
 #define MAX_HULLS 16
 
@@ -46,8 +52,18 @@ cbuffer WakeCB : register(b0)
 
     float ShoreZFar;
     float BreakRate;      // 1/s: a long wave in the shallows (d < wavelength / 20) runs down at it as d goes to 0; 0 = none
+    float FoamFade;       // 1/s the foam runs down at
+    float FoamDiffusion;  // nu dt / texel^2: the foam's spreading a step (a 4-neighbour Laplacian)
+
+    float WashStrength;   // foam a metre of head change under a moving hull leaves (0 on a step that may not wash)
+    float WashThreshold;  // m/s of head change below which a hull leaves no white water
+    float CrestStrength;  // Crest's Wave Foam Strength: 5 dt x this x saturate(coverage - det J) a step
+    float CrestCoverage;  // Crest's Wave Foam Coverage (0.55: det J of a Gerstner wave at the Stokes limit, a k = 0.44)
+
+    float FoamFadeDense;  // 1/s per unit of foam: dense white water runs down fast, the lace it leaves slowly
     float Pad1;
     float Pad2;
+    float Pad3;
 
     // Per hull, three float4: (posX, posZ, fwdX, fwdZ), (scale, u0, v0, 1/cellU), (1/cellV, along, across, offset).
     float4 Hulls[MAX_HULLS * 3];
@@ -62,9 +78,12 @@ Texture2D<float> ShoreDepthTex : register(t1);     // the ocean's shore depth ma
 SamplerState ClampSampler : register(s0);
 RWTexture2D<float4> Work : register(u0);
 RWTexture2D<float4> Field : register(u1);  // x height, y vertical velocity, z free height (h + head), w head;
-                                           // between Step and Compose: depths 1 and 3 m, (h + iv) each
-RWTexture2D<float4> Spec : register(u2);   // 9 m and deep
+                                           // between Step and Compose: depths 0.3 and 1.5 m, (h + iv) each
+RWTexture2D<float4> Spec : register(u2);   // 7.5 m and deep
 RWTexture2D<float> Free : register(u3);    // the free height alone, for the CPU's copy (R16F)
+RWTexture2D<float4> Jac : register(u4);    // the free height's Jacobian terms: xy k_x^2/|k| + i k_z^2/|k|, z k_x k_z/|k|
+RWTexture2D<float4> FoamPrev : register(u5); // last step's foam (RGBA16F: x the foam, yz the way it was laid times it)
+RWTexture2D<float4> FoamNext : register(u6); // this step's, which the surface reads
 
 float2 WorldOf(uint2 coord)
 {
@@ -98,10 +117,11 @@ float FootprintAt(uint offset, uint along, uint across, float gu, float gv)
     return sum;
 }
 
-// Metres of water head the hulls press down at `xz`.
-float HullPressure(float2 xz)
+// Metres of water head the hulls press down at `xz`, and the way the hulls pressing there head (weighted by their head).
+float HullPressure(float2 xz, out float2 way)
 {
     float head = 0.0f;
+    way = float2(0.0f, 0.0f);
     for (uint h = 0; h < HullCount; ++h)
     {
         const float4 a = Hulls[h * 3u + 0u];
@@ -116,9 +136,17 @@ float HullPressure(float2 xz)
         {
             continue;
         }
-        head += FootprintAt((uint)c.w, (uint)c.y, (uint)c.z, gu, gv) * b.x;
+        const float d = FootprintAt((uint)c.w, (uint)c.y, (uint)c.z, gu, gv) * b.x;
+        head += d;
+        way += d * a.zw;
     }
     return head * Strength;
+}
+
+float HullPressure(float2 xz)
+{
+    float2 way;
+    return HullPressure(xz, way);
 }
 
 // Metres of water at `world` from the shore depth map (the surf sim's WaterDepthAt): deep off the map, on its far plane
@@ -151,13 +179,25 @@ void Pack(uint3 id : SV_DispatchThreadID)
     {
         return;
     }
+    float2 way;
+    const float head = HullPressure(WorldOf(id.xy), way);
     float2 hv = float2(0.0f, 0.0f);
+    float headBefore = head;
+    float4 foam = float4(0.0f, 0.0f, 0.0f, 0.0f); // x the foam, yz the way it was laid times it (its streaks' direction)
     if (Clear == 0u)
     {
         const int2 src = int2(id.xy) + int2(ShiftX, ShiftY);
         if (all(src >= 0) && all(src < (int)Resolution))
         {
-            hv = Field[uint2(src)].xy;
+            const float4 last = Field[uint2(src)];
+            hv = last.xy;
+            headBefore = last.w;
+            // The foam spreads (nu dt / texel^2 of the 4-neighbour Laplacian, its neighbours clamped to the window).
+            const int hi = (int)Resolution - 1;
+            const float4 f = FoamPrev[uint2(src)];
+            const float4 around = FoamPrev[uint2(clamp(src + int2(1, 0), 0, hi))] + FoamPrev[uint2(clamp(src - int2(1, 0), 0, hi))] +
+                                  FoamPrev[uint2(clamp(src + int2(0, 1), 0, hi))] + FoamPrev[uint2(clamp(src - int2(0, 1), 0, hi))];
+            foam = f + FoamDiffusion * (around - 4.0f * f);
         }
     }
     // The absorber: the spectrum is periodic, so what reaches the border must be gone before it wraps round. A rate,
@@ -165,11 +205,33 @@ void Pack(uint3 id : SV_DispatchThreadID)
     const float edge = (float)min(min(id.x, id.y), min(Resolution - 1u - id.x, Resolution - 1u - id.y));
     const float inside = saturate(edge / EdgeTexels);
     hv *= exp(-EdgeRate * DeltaTime * (1.0f - inside) * (1.0f - inside));
+    // The white water a moving hull leaves: the head under it changing faster than WashThreshold -- its bow arriving, and
+    // above all its transom leaving, where the water closes in behind it. A texel the whole hull passes over takes twice
+    // the depth under it, less the threshold over the time it took: the trail is the hull's width, whitest on its keel.
+    // Two stages, as a breaking crest's foam has (whitecap stage A, seconds; the residual patch, tens of seconds): the
+    // denser the white water, the faster it goes -- a trail is solid only just behind the transom and dissolves into
+    // the lace that lingers.
+    // The way it was laid rides with it (yz, times the foam), so the surface draws the trail's streaks along the hull's
+    // path, through a turn too.
+    foam *= exp(-(FoamFade + FoamFadeDense * max(foam.x, 0.0f)) * DeltaTime);
+    if (DeltaTime > 0.0f)
+    {
+        const float wash = WashStrength * max(abs(head - headBefore) - WashThreshold * DeltaTime, 0.0f);
+        const float wayLength = length(way);
+        foam.x += wash;
+        foam.yz += wayLength > 1e-6f ? wash * (way / wayLength) : float2(0.0f, 0.0f);
+    }
     if (edge < 2.0f || any(!isfinite(hv))) // Crest's NaN guard: one bad value would spread over the whole spectrum
     {
         hv = float2(0.0f, 0.0f);
     }
-    Work[id.xy] = float4(hv, HullPressure(WorldOf(id.xy)), 0.0f);
+    if (edge < 2.0f || any(!isfinite(foam)))
+    {
+        foam = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+    Work[id.xy] = float4(hv, head, 0.0f);
+    // Over 2 the white water is scaled down whole, its way with it.
+    FoamNext[id.xy] = foam.x > 2.0f ? foam * (2.0f / foam.x) : max(foam, float4(0.0f, -2.0f, -2.0f, 0.0f));
 }
 
 // One mode turned through omega * dt about the equilibrium; returns h' + i v' as one complex number.
@@ -228,6 +290,15 @@ void Step(uint3 id : SV_DispatchThreadID)
     const float2 z3 = Turn(h, v, head, deep, decay);
     Field[n] = float4(z0, z1) * scale;
     Spec[n] = float4(z2, z3) * scale;
+    // The Jacobian of the free height's choppy displacement (Tessendorf's D = i k / |k| F with lambda 1: a Gerstner wave's
+    // particle paths, crowding into its crests), for Compose's crest foam: J = I - [[jxx, jxz], [jxz, jzz]] with
+    // j_ab = k_a k_b / |k| F. The free height, so a hull at rest wears no ring of foam round its own hollow.
+    const float2 F = h + head;
+    const float invK = kl > 1e-6f ? 1.0f / kl : 0.0f;
+    const float2 jxx = F * (k.x * k.x * invK);
+    const float2 jzz = F * (k.y * k.y * invK);
+    const float2 jxz = F * (k.x * k.y * invK);
+    Jac[n] = float4(jxx.x - jzz.y, jxx.y + jzz.x, jxz) * scale; // two real fields as one complex: jxx + i jzz
 }
 
 [numthreads(8, 8, 1)]
@@ -274,4 +345,14 @@ void Compose(uint3 id : SV_DispatchThreadID)
     }
     Field[id.xy] = float4(hv, hv.x + head, head);
     Free[id.xy] = hv.x + head;
+
+    // Crest's wave foam (UpdateFoam.compute:95-102): where the displaced surface pinches, det J under the coverage --
+    // 0.55 is a Gerstner wave at the Stokes limit, a k = 0.44 -- the crest breaks. Land holds none.
+    const float4 j = Jac[id.xy];
+    const float det = (1.0f - j.x) * (1.0f - j.y) - j.z * j.z;
+    // The crest's foam keeps the way the trail's was laid (it adds none: away from a hull nothing says which way).
+    float4 foam = FoamNext[id.xy];
+    foam.x += 5.0f * DeltaTime * CrestStrength * saturate(CrestCoverage - det);
+    foam *= saturate(depth / 0.1f);
+    FoamNext[id.xy] = all(isfinite(foam)) ? (foam.x > 2.0f ? foam * (2.0f / foam.x) : foam) : float4(0.0f, 0.0f, 0.0f, 0.0f);
 }

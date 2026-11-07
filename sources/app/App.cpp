@@ -1517,6 +1517,7 @@ namespace
         // The sun's shadow from geometry on the water (OceanSunShadow): 0 = off (the A/B); its VSM SMRT rays, 0 = one tap.
         if (setting == "ocean.sunShadow") { ocean::g_sunShadow_game = value != 0.0f; return true; }
         if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
+        if (setting == "ocean.sunShadowColumn") { ocean::g_sunShadowColumn_game = std::clamp(static_cast<int>(value), 0, 8); return true; }
         // The water reflection's normal filter in mips (SceneRenderSettings::waterReflectionNormalFilter); 0 = the shading normal.
         if (setting == "ocean.reflectionNormalFilter") { renderSettings.waterReflectionNormalFilter = std::clamp(value, 0.0f, 4.0f); return true; }
         // The water reflection's prefilter (water_composite_cs): sigma across the columns in render px, 0 = off.
@@ -1573,7 +1574,7 @@ namespace
         // A boat's wake (ocean/OceanWake): the preset's knobs, and the debug view (the height, opaque).
         if (setting == "ocean.wakeDebug")
         {
-            ocean::g_wakeDebugView_game = std::clamp(static_cast<int>(std::lround(value)), 0, 1);
+            ocean::g_wakeDebugView_game = std::clamp(static_cast<int>(std::lround(value)), 0, 2);
             return true;
         }
         if (setting == "ocean.wakeShore")
@@ -1594,6 +1595,13 @@ namespace
             else if (setting == "ocean.wakeDamping") { cfg.wakeDamping = std::clamp(value, 0.0f, 20.0f); }
             else if (setting == "ocean.wakeBreaking") { cfg.wakeBreaking = std::clamp(value, 0.0f, 20.0f); }
             else if (setting == "ocean.wakeTexel") { cfg.wakeTexel = std::clamp(value, 0.25f, 2.0f); }
+            else if (setting == "ocean.wakeFoam") { cfg.wakeFoam = std::clamp(value, 0.0f, 2.0f); }
+            else if (setting == "ocean.wakeFoamFade") { cfg.wakeFoamFade = std::clamp(value, 0.02f, 5.0f); }
+            else if (setting == "ocean.wakeFoamFadeDense") { cfg.wakeFoamFadeDense = std::clamp(value, 0.0f, 10.0f); }
+            else if (setting == "ocean.wakeWashFoam") { cfg.wakeWashFoam = std::clamp(value, 0.0f, 20.0f); }
+            else if (setting == "ocean.wakeCrestFoam") { cfg.wakeCrestFoam = std::clamp(value, 0.0f, 5.0f); }
+            else if (setting == "ocean.wakeCrestCoverage") { cfg.wakeCrestCoverage = std::clamp(value, 0.0f, 1.0f); }
+            else if (setting == "ocean.wakeChurn") { cfg.wakeChurn = std::clamp(value, 0.0f, 1.0f); }
             else { return false; }
             sim->SetRenderConfig(cfg);
             return true;
