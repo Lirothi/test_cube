@@ -547,9 +547,11 @@ constexpr UINT kSkyVisSlotCountHistory = 51;
 Math::float4 SceneRenderer::SkyVisShaderParams() const
 {
     const SceneRenderSettings& s = frame_->settings;
-    // w: skyVis.debug 2 -- lighting shows the sky visibility alone, a gray (the estimator's noise without textures).
-    return Math::float4(decisions_.skyVisTraced ? 1.0f : 0.0f, std::clamp(s.skyVisDiffuse, 0.0f, 1.0f),
-                        std::clamp(s.skyVisSpecular, 0.0f, 1.0f), s.skyVisDebug == 2u ? 2.0f : 0.0f);
+    // w: skyVis.debug 2 -- lighting shows the sky visibility alone, a gray (the estimator's noise without textures);
+    // 3 -- the same at one times it.
+    return Math::float4(SkyVisApplied() ? 1.0f : 0.0f, std::clamp(s.skyVisDiffuse, 0.0f, 1.0f),
+                        std::clamp(s.skyVisSpecular, 0.0f, 1.0f),
+                        s.skyVisDebug >= 2u ? static_cast<float>(s.skyVisDebug) : 0.0f);
 }
 
 void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, const Camera& camera,
@@ -717,8 +719,8 @@ void SceneRenderer::Pass_RTResolve(Renderer* renderer, RenderGraphPassContext ct
         c.payloadRadianceIndex = rtAs_.Bindless().SceneIndex(frameIndex, 11);
         c.payloadUvIndex = rtAs_.Bindless().SceneIndex(frameIndex, 12);
         c.payloadSkyIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotPayloadSkySrv);
-        // The off-screen hit's sky, occluded by the reflector's sky visibility when it was traced this frame.
-        if (decisions_.skyVisTraced && D.skyVisSRV.ptr != 0)
+        // The off-screen hit's sky, occluded by the reflector's sky visibility when it was traced (or its fallback ran).
+        if (SkyVisApplied() && D.skyVisSRV.ptr != 0)
         {
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kRtSlotSkyVisResolve, D.skyVisSRV);
             c.skyVisIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotSkyVisResolve);
@@ -899,7 +901,7 @@ void SceneRenderer::Pass_GlassReflections(Renderer* renderer, RenderGraphPassCon
         c.pointLightIndex = rtAs_.Bindless().SceneIndex(frameIndex, B + 7);
         c.pointCount = havePoints ? pointCount : 0u;
         // An off-screen hit's sky, occluded as the resolve does (the glass lends the opaque surface's visibility).
-        if (decisions_.skyVisTraced && D.skyVisSRV.ptr != 0)
+        if (SkyVisApplied() && D.skyVisSRV.ptr != 0)
         {
             rtAs_.Bindless().WriteSceneDescriptor(frameIndex, kRtSlotSkyVisGlass, D.skyVisSRV);
             c.skyVisIndex = rtAs_.Bindless().SceneIndex(frameIndex, kRtSlotSkyVisGlass);

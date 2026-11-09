@@ -2150,6 +2150,57 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   resets them with the probes. The filter's depth/normal weights stay `--set` only.
 - A/B it with the exposure PINNED (`exposure.autoExposure:0` after metering): the metering brightens the whole
   frame to make up for the darker shade, which reads as "the sky got brighter".
+- **Without RT: the sky from above** (`skyVis.fallback`, default 1; 2026-11-09, owner with skyVis and GI off for the frame
+  time, the island at 18:00, cam 88.11 4.35 61.76: "why is everything so pale without skyVis -- make it look right too, but
+  the skyVis frame must not get worse"). Off, the sky lit every point as if it saw all of it: 95 % of the difference to the
+  RT frame was the sky DIFFUSE (crowns +23 of 255, trunks and the camp +32, the sand under the palms +24; the sky specular
+  7 %, the fog's air 2.5 %), and GTAO's sky walk at 25 m (`gtao.skyIntensity`, 0 in wind_test) closed 15 % of it -- from the
+  screen it cannot see the crown over a trunk. Now, on a frame the RT trace does not run (skyVis off, or no RT hardware),
+  `Main_SkyVisFallback` writes the SAME target the trace writes -- UE DFAO's bent normal, .w the depth -- so lighting,
+  compose, glass, the RT resolve and the night camera's open-sky share read it unchanged (`SkyVisApplied()`). What it
+  traces against is the world from above (`app/scene/SkyOcclusionMap`, `shaders/sky_occlusion_cs.hlsl`): the casters drawn
+  top-down and bottom-up and the terrain top-down (D16, 4 depth texels a map texel, +-500 m of height, CPU `RenderShadow`
+  at LOD 2, Pass_ShoreDepth's road; `Main_SkyOcclusionMap`), reduced into levels of 1 and 4 map texels (1 m and 4 m by
+  default) of (coverage, coverage x top, coverage x bottom, ground) (`Main_SkyOcclusionReduce`; premultiplied, so a
+  bilinear read halves a slab's coverage instead of inventing one at half its height). A texel is a slab of air from its bottom to its top that passes 1 - coverage straight
+  down; 12 cosine directions (the same at every pixel: no noise, no history) march 8 quadratic steps out to
+  `skyVis.maxDistance`, losing exp(-sigma x the length inside a slab) and ending under the ground. Measured on the owner's
+  view, the exposure pinned to the RT frame's: pixels over 8 levels off the RT frame 29.4 % -> 8.8 %, crowns +23 -> +3.5,
+  trunks +32 -> +5, the shaded sand +24 -> +3; the grove at 15:00 [34, 3.5, 68] 6.5 % of the gap left. Cost: the pass
+  0.056 ms, the frame +0.075 ms (the RT trace +0.24 ms over that); a redraw 0.37 ms GPU + 0.45 ms of recording, on a 16 m
+  snap step of the camera, a change of the caster set, or a static caster moved (an editor drag; at most every 30 frames,
+  never for physics, buoyant or animated movers). With the RT trace on the fallback never runs: the RT frame with
+  `skyVis.fallback` 1 / 0 differs by 0.39-0.41 % of pixels, the same arm twice 0.37 % (wind at one clock, clouds off).
+  THE LIMIT: from above it sees a crown, a roof or a rock, not a wall under a roof (hidden from above by the roof, from below
+  by the ceiling) -- a room's horizontal directions see the open sky: the bathroom by day (cam -24.90 1.35 89.34, 15:00)
+  meters 1.15 stops brighter than with RT, at the RT frame's exposure +55 of 255 over it (without the fallback +179, white),
+  its cabinet's side walls lit blue; the tent likewise. Not the fog's air (`skyVis.fogRays`
+  stays RT-only) and not GI. Knobs: Developer Controls > GI "Without RT: sky from above" (graphics_settings.json
+  `skyVis.fallback`), `--set skyVis.fallbackStart` (0.5 m: nearer, no slab -- the receiver's own texel is one; against the
+  RT frame 1 m 12.8 %, 0.5 m 8.8 %, 0 7.9 % with more self-shadowing of objects), `skyVis.fallbackOpacity` (1; 0.8 was
+  worse everywhere). `skyVis.debug:3` = the visibility at one times it (2 is four times). Debug with skyVis off asserted
+  on every frame before this: the volumetric fog's mtDep list held `fogTracesSky ? pBuildAS : -1` (Release dropped the -1
+  silently); a run-time list now, and an index past the graph names its pass as a Fatal before the assert.
+  **Its size and its edge** (same evening, owner: "at the texture's edge the transition shows strongly -- blur it, and a
+  setting for the texture's resolution and the texel's size in the world"). The first cut covered 256 m, and the back of
+  the grove from the owner's view (120-160 m off) lay outside it: a pale band behind the palms where the march left the map
+  and the open sky came in at once. `skyVis.fallbackResolution` (the map's texels a side, a power of two 64-1024, default
+  512) and `skyVis.fallbackTexel` (m, 0.125-4, default 1) -- the map covers their product, 512 m now (26 MB: 3 x 8 MB of
+  D16, the levels 2 MB); Developer Controls > GI "Map resolution" / "Map texel", graphics_settings.json `skyVis.*`, `--set`.
+  The texel only redraws; the resolution re-creates the textures at a GPU-idle point before PrepareViews
+  (`Scene::ReconcileSkyOcclusion` -> `SkyOcclusionMap::Resize`, which also frees them while the map is not wanted -- the
+  RT trace on). And the edge fades (`skyVis.fallbackFade`, "Edge fade", default 0.25): the occlusion gives way to the open
+  sky with the horizontal distance from the CAMERA, over that share of the radius the map traces in full whatever the
+  camera's place in its snap cell (half the width, less half a snap step and the reach: 233 m at the default; 175 -> 233 m)
+  -- a gradient round the camera instead of the map's square in the world. Pixels over 8 levels off the RT frame, owner's
+  view / [-75, 28, 40] toward [10, 0, 90] / 110 m up: 256 m hard 6.2 / 7.3 / 2.8 %, 512 m hard 5.0 / 4.6 / 2.6 %, 512 m and
+  0.25 4.7 / 4.5 / 2.5 % (0.5, fading from 116 m, brought part of the band back: 5.7 %). 256 x 2 m covers the same 512 m
+  for 6.5 MB and matches outdoors (5.0 / 5.1 / 2.5 %), but spreads a roof: the bathroom by day +89 of 255 over the RT frame
+  against +52 at 1 m; 0.5 m keeps less of a crown's column (the grove 34 % of pixels off the RT frame, 1 m 17 %). The
+  height was +-100 m round the camera: from 110 m up nothing was in the map (10.3 % off the RT frame, the fallback off
+  10.5 %); +-500 m costs the depth 1.5 cm a step. Cost: a redraw ~0.39 ms GPU at 256 and 512 alike (the casters' draws),
+  the reduce 0.016 ms, the trace 0.055 ms. GBV (`SkyOcclusionMap,SkyOcclusionReduce,SkyVisFallback,Skybox` + the Skybox
+  self-test, `--sweep=skyVis.fallbackResolution:512,256,1024,64` in one Debug process): clean, nothing alive at exit.
 
 ## RT Reflections -- Glossy by the GGX Lobe
 

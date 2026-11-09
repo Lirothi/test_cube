@@ -471,6 +471,12 @@
     <ClCompile Include="sources/app/scene/SceneRenderer_Gi.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/scene/SceneRenderer_SkyOcclusion.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/scene/SkyOcclusionMap.cpp">
+      <Filter>sources\app\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp">
       <Filter>sources\app\scene</Filter>
     </ClCompile>
@@ -1173,6 +1179,9 @@
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/scene/SceneView.h">
+      <Filter>sources\app\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/scene/SkyOcclusionMap.h">
       <Filter>sources\app\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/Systems.h">

@@ -339,6 +339,8 @@
     <ClCompile Include="sources/app/scene/SceneRenderer_Lighting.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Reflections.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Gi.cpp" />
+    <ClCompile Include="sources/app/scene/SceneRenderer_SkyOcclusion.cpp" />
+    <ClCompile Include="sources/app/scene/SkyOcclusionMap.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderer_Post.cpp" />
     <ClCompile Include="sources/rendering/post/BloomRenderer.cpp" />
     <ClCompile Include="sources/app/scene/SceneRenderQueue.cpp" />
@@ -612,6 +614,7 @@
     <ClInclude Include="sources/app/scene/SceneRenderQueue.h" />
     <ClInclude Include="sources/app/scene/SceneResourceBootstrapper.h" />
     <ClInclude Include="sources/app/scene/SceneView.h" />
+    <ClInclude Include="sources/app/scene/SkyOcclusionMap.h" />
     <ClInclude Include="sources/app/Systems.h" />
     <ClInclude Include="sources/core/Helpers.h" />
     <ClInclude Include="sources/core/StringMatch.h" />

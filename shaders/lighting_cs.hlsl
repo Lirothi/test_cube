@@ -658,9 +658,10 @@ void CSMain(uint3 dispatchThreadId : SV_DispatchThreadID)
     }
     // skyVis.debug:2: the sky visibility alone (plan S, before the AO combine), a gray four times it, so a quarter of
     // the sky is white -- how its estimator's noise is measured in the dim places it shows, without textures or light.
+    // skyVis.debug:3: the same at one times it (white = the open sky) -- to compare two estimators where the sky is open.
     if (skyVisParams.w > 1.5f)
     {
-        color = (4.0f * skyVisibility / max(lightPreExposure, 1.0e-12f)).xxx;
+        color = ((skyVisParams.w > 2.5f ? 1.0f : 4.0f) * skyVisibility / max(lightPreExposure, 1.0e-12f)).xxx;
         skySpecular = 0.0f.xxx;
     }
     LightTarget[dispatchThreadId.xy] = float4((color * exposure + skySpecular) * lightPreExposure, 1.0);

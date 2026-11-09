@@ -18,6 +18,7 @@
 #include "app/levels/JsonLevel.h"
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SkyOcclusionMap.h" // the sky-from-above map's ranges and coverage
 #include "core/profiling/ProfilerScopes.h"
 #if WITH_EDITOR
 #include "editor/EditorController.h"
@@ -1941,6 +1942,57 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "up (default 2; the fog's history averages them). 0 = the air sees the open sky\n"
                                       "everywhere -- a tunnel's air glows blue from the fog's start distance on.\n"
                                       "2 rays +0.01-0.02 ms, 4 rays up to +0.05 ms; no measurable frame-to-frame noise.");
+                ImGui::EndDisabled();
+                GRAPHICS_CONTROL(SkyVisFallback, "skyVisFallback",
+                    ImGui::Checkbox("Without RT: sky from above", &settings.skyVisFallback));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("With the sky visibility above off (or no RT hardware): the same occlusion from the\n"
+                                      "world drawn from above around the camera -- crowns, roofs and rocks as slabs over the\n"
+                                      "ground (SkyOcclusionMap, sky_occlusion_cs.hlsl). No rays, no history; it sees a\n"
+                                      "crown or a roof, not walls. Off = the open sky everywhere without the trace.\n"
+                                      "Never runs while the RT sky visibility does.");
+                ImGui::BeginDisabled(!settings.skyVisFallback);
+                {
+                    static const char* kResolutionLabels[] = { "64", "128", "256", "512", "1024" };
+                    int resolutionIndex = 0;
+                    for (std::uint32_t r = SkyOcclusionMap::kMinResolution;
+                         r < SkyOcclusionMap::ClampResolution(settings.skyVisFallbackResolution); r *= 2u)
+                    {
+                        ++resolutionIndex;
+                    }
+                    if (GRAPHICS_CONTROL(SkyVisFallbackResolution, "skyVisFallbackResolution",
+                            ImGui::Combo("Map resolution", &resolutionIndex, kResolutionLabels, IM_ARRAYSIZE(kResolutionLabels))))
+                    {
+                        settings.skyVisFallbackResolution = SkyOcclusionMap::kMinResolution << std::clamp(resolutionIndex, 0, 4);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The occlusion map's texels a side (default 512). The three depth renders under it are\n"
+                                      "4x that a side (D16): 256 = 6.5 MB, 512 = 26 MB, 1024 = 104 MB. A change re-creates\n"
+                                      "the textures (one GPU wait). With the texel below it sets how far the map reaches.");
+                GRAPHICS_CONTROL(SkyVisFallbackTexel, "skyVisFallbackTexel",
+                    ImGui::SliderFloat("Map texel", &settings.skyVisFallbackTexel, SkyOcclusionMap::kMinTexel,
+                                       SkyOcclusionMap::kMaxTexel, "%.3f m", ImGuiSliderFlags_Logarithmic));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The world size of one texel of the occlusion map (default 1 m). Coarser reaches\n"
+                                      "farther and blurs a crown's edge; finer keeps it and reaches less. A change redraws\n"
+                                      "the map.");
+                GRAPHICS_CONTROL(SkyVisFallbackFade, "skyVisFallbackFade",
+                    ImGui::SliderFloat("Edge fade", &settings.skyVisFallbackFade, 0.0f, 1.0f, "%.2f"));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How softly the occlusion gives way to the open sky toward the map's edge: the share\n"
+                                      "of the radius the map traces in full over which it fades, around the camera\n"
+                                      "(default 0.25). 0 = a hard edge.");
+                {
+                    SkyOcclusionMap::Placement p;
+                    p.texel = SkyOcclusionMap::ClampTexel(settings.skyVisFallbackTexel);
+                    const std::uint32_t resolution = SkyOcclusionMap::ClampResolution(settings.skyVisFallbackResolution);
+                    p.halfExtent = 0.5f * static_cast<float>(resolution) * p.texel;
+                    const float end = SkyOcclusionMap::FullRadius(p, std::max(settings.skyVisMaxDistance, 0.5f));
+                    const float start = end * (1.0f - std::clamp(settings.skyVisFallbackFade, 0.0f, 1.0f));
+                    ImGui::TextDisabled("Covers %.0f m around the camera; full to %.0f m, open sky from %.0f m; %.1f MB",
+                                        2.0f * p.halfExtent, start, end, SkyOcclusionMap::MegabytesAt(resolution));
+                }
                 ImGui::EndDisabled();
 
                 ImGui::SeparatorText("Debug view");

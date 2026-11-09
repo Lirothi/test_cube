@@ -101,6 +101,9 @@ private:
         // read (skyVisParams.x). The body writes the target on every path (traced, or cleared to the
         // open sky when the TLAS is not ready), so "registered" is enough for them to read it.
         bool skyVisTraced = false;
+        // ...or, the trace not running, its fallback from above wrote the same target (skyVis.fallback; Main_SkyVisFallback
+        // registered). Lighting, compose, glass and the RT resolve read the target on either (SkyVisApplied).
+        bool skyVisFallback = false;
         bool gi = false;               // plan D: the GI probe volume is wanted (setting + RT hardware)
         // ...and lighting reads it this frame: its resources exist and some generation was traced
         // (the passes may skip a frame -- the TLAS not ready -- and the atlases still hold the last one).
@@ -209,6 +212,7 @@ private:
         size_t pWetness = kNone;   // prologue -> reflection source
         size_t pWake = kNone;      // prologue -> ocean readback (the wake's free height is copied this frame)
         size_t pShoreDepth = kNone;// prologue -> shadow cull
+        size_t pSkyOcclusion = kNone; // prologue -> the sky visibility's fallback (the world from above, reduced)
         size_t pShadow = kNone;    // shadows  -> lighting (mtDep)
         size_t pSpotShadow = kNone;// shadows  -> spot lights (mtDep)
         size_t pPointShadow = kNone;
@@ -538,8 +542,19 @@ private:
         uint32_t pointRestore = 0u;
     };
     void Pass_SkyVis(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const SkyVisChain& chain);
+    // Plan S's fallback without RT (SceneRenderer_SkyOcclusion.cpp, SkyOcclusionMap): the world drawn from above
+    // (`point` = the three depths -> DEPTH_WRITE; the casters' own states register on the point after it), its
+    // reduction (`point` depths readable + near level UAV, `pointFar` near readable + far UAV, `pointRest` far
+    // readable), and the trace into the sky visibility's target (`point` target -> UAV, `pointRest` back at rest).
+    void Pass_SkyOcclusionMap(Renderer* r, RenderGraphPassContext ctx, SkyOcclusionMap& map, std::uint32_t point);
+    void Pass_SkyOcclusionReduce(Renderer* r, RenderGraphPassContext ctx, const SkyOcclusionMap& map,
+                                 std::uint32_t point, std::uint32_t pointFar, std::uint32_t pointRest);
+    void Pass_SkyVisFallback(Renderer* r, RenderGraphPassContext ctx, const Camera& camera, const SkyOcclusionMap& map,
+                             std::uint32_t point, std::uint32_t pointRest);
     // lighting_cb.hlsli / compose_cs.hlsl `skyVisParams`: x 1 = applied this frame, y diffuse, z specular strength.
     Math::float4 SkyVisShaderParams() const;
+    // The sky visibility's target holds this frame's answer: traced (plan S) or from above (its fallback).
+    bool SkyVisApplied() const { return decisions_.skyVisTraced || decisions_.skyVisFallback; }
     // Interior lighting plan D: the GI probe volume (SceneRenderer_Gi.cpp). Both passes take the frame
     // the builder placed; `point` declares the writes as UAV, `pointRestore` hands them back at rest.
     // The update blends only what the trace wrote THIS frame (giTraced_, set by the trace's body).

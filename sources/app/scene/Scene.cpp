@@ -1562,6 +1562,27 @@ void Scene::RebuildShadowMegaBuffer(Renderer& renderer)
     uploads.SubmitAndWait(&renderer);
 }
 
+bool Scene::SkyOcclusionWanted(const Renderer* renderer) const
+{
+    // Wanted while the RT sky visibility is not traced -- the setting off, or no RT hardware (SceneRenderer::DecideFrame's
+    // decisions_.skyVis, less its AS-failure term: a frame whose AS failed has no map yet and keeps the open sky).
+    const SceneRenderSettings& rs = frameData_.settings;
+    return rs.skyVisFallback && !(rs.skyVisEnabled && renderer && renderer->IsRaytracingSupported());
+}
+
+void Scene::ReconcileSkyOcclusion(Renderer* renderer)
+{
+    // The sky-from-above map (plan S's fallback): its textures follow skyVis.fallbackResolution and go when it is not
+    // wanted -- freed or re-made here, with the GPU idle, never from the frame (the frames in flight read the levels).
+    // Made where it is first wanted (PrepareViews: a creation needs no wait).
+    if (!renderer || !skyOcclusion_.Built()) { return; }
+    const bool wanted = SkyOcclusionWanted(renderer);
+    const std::uint32_t want = wanted ? SkyOcclusionMap::ClampResolution(frameData_.settings.skyVisFallbackResolution) : 0u;
+    if (want == skyOcclusion_.Resolution()) { return; }
+    renderer->WaitForPreviousFrame(); // nothing in flight reads the textures re-made below
+    skyOcclusion_.Resize(renderer, want);
+}
+
 void Scene::ReconcileShadowLodCurve(Renderer* renderer)
 {
     // The shadow LOD bias and tier stride pick the caster LOD rasterized into each shadow view.
@@ -2276,6 +2297,13 @@ void Scene::Sync(Renderer* renderer)
                 if (index >= objects_.size() || !objects_[index]) { return; }
                 objects_[index]->SyncSceneState(SceneObjectSyncReason::Frame);
                 objects_[index]->SyncSwitchesToRender();
+                // The sky occlusion map's (SkyOcclusionMap): a static caster moved (an editor drag) -- not a mover
+                // that animates or rides a render offset (physics, buoyancy), which would redraw it every frame.
+                if (const RenderableObject* ro = objects_[index]->AsRenderableObject();
+                    ro && ro->MovedThisFrame() && !ro->HasRenderOffset() && !ro->IsDynamicCaster())
+                {
+                    staticCasterMoved_.store(true, std::memory_order_relaxed);
+                }
             }, 64);
     }
     if (renderStaticSetVersion_ != staticSetVersion_) { ApplyStaticSetToRender(); }
@@ -2612,6 +2640,17 @@ void Scene::PrepareViews(Renderer* renderer)
         }
         oceanSimulation->UpdateShoreView(renderCamera_);
         shoreViewPtr = &oceanSimulation->GetShoreDepthView();
+    }
+    // Plan S's fallback without RT: the world from above, wanted while the RT sky visibility is not traced
+    // (SkyOcclusionWanted). Its resources are made here, before the graph; re-sized or freed by ReconcileSkyOcclusion.
+    {
+        const SceneRenderSettings& rs = frameData_.settings;
+        const bool skyOccWanted = SkyOcclusionWanted(renderer);
+        if (skyOccWanted) { skyOcclusion_.Prepare(renderer, rs.skyVisFallbackResolution); }
+        skyOcclusion_.Update(renderCamera_.GetPosition(), renderStaticSetVersion_,
+                             staticCasterMoved_.exchange(false, std::memory_order_relaxed), skyOccWanted,
+                             rs.skyVisFallbackTexel);
+        frameData_.skyOcclusion = (skyOccWanted && skyOcclusion_.Ready()) ? &skyOcclusion_ : nullptr;
     }
     UpdateCascades(renderCamera_, renderer);
     UpdateClipmap(renderCamera_); // Step 24d: directional clipmap views (consumed only in VSM mode)
@@ -2970,6 +3009,12 @@ void Scene::PrepareViews(Renderer* renderer)
         if (shoreViewPtr)
         {
             enqueueView(*shoreViewPtr);
+        }
+        if (frameData_.skyOcclusion && skyOcclusion_.DrawThisFrame())
+        {
+            // Only on a frame that draws the map: the rest of the time its views have no work.
+            enqueueView(skyOcclusion_.ObjectsView());
+            enqueueView(skyOcclusion_.TerrainView());
         }
         if (oceanSimulation && oceanSimulation->ShouldBuildShoreSdf())
         {
@@ -3580,6 +3625,7 @@ void Scene::Render(Renderer* renderer) {
 
     ReconcileShadowMode(renderer); // Step 24b: apply a pending Legacy<->VSM switch (GPU-idle free/alloc)
     ReconcileShadowLodCurve(renderer); // apply pending shadow-LOD curve changes (GPU-idle caster rebuild)
+    ReconcileSkyOcclusion(renderer);   // the sky-from-above map's size, or freeing it (GPU idle)
 
     if (renderer->ConsumeMaterialHotReloadFlag())
     {
@@ -3883,6 +3929,7 @@ void Scene::Clear()
     vesselSpray_.Clear(); // its emitters are objects_ below
     objects_.clear();
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
+    skyOcclusion_.Invalidate(); // ...and its world from above is the old level's
 #if WITH_EDITOR
     objectIds_.clear();
     selectedEditorObjectIds_.clear();

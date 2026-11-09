@@ -164,6 +164,9 @@ extern const Profiler::ScopeNameKey kPassBuildAS;
 extern const Profiler::ScopeNameKey kPassReflectionSource;
 extern const Profiler::ScopeNameKey kPassRTTrace;
 extern const Profiler::ScopeNameKey kPassSkyVis; // plan S: the RT sky visibility
+extern const Profiler::ScopeNameKey kPassSkyOcclusionMap;    // plan S's fallback: the world drawn from above
+extern const Profiler::ScopeNameKey kPassSkyOcclusionReduce; // ...reduced into its two levels
+extern const Profiler::ScopeNameKey kPassSkyVisFallback;     // ...and traced into the sky visibility
 extern const Profiler::ScopeNameKey kPassGiTrace;  // plan D: the GI probe volume's rays
 extern const Profiler::ScopeNameKey kPassGiUpdate; // plan D: ...blended into its atlases
 extern const Profiler::ScopeNameKey kPassGiTraceFar;  // plan D: the far cascade's rays (GPU, inside Main_GiTrace)

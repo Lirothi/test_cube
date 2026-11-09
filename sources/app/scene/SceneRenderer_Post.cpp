@@ -205,7 +205,7 @@ void SceneRenderer::Pass_ExposureMetering(Renderer* renderer, RenderGraphPassCon
         // dispatches binding identically, as the shader's own header promises.
         // t1: the traced sky visibility for the open-sky share; untraced, the scene stands in (the
         // table is positional and declared whole) and the build is told not to read it.
-        const bool skyVisValid = decisions_.skyVisTraced && D.skyVisSRV.ptr != 0;
+        const bool skyVisValid = SkyVisApplied() && D.skyVisSRV.ptr != 0; // traced, or its fallback from above
         const D3D12_CPU_DESCRIPTOR_HANDLE openSkySrv = skyVisValid ? D.skyVisSRV : D.sceneSRV;
         RecordComputeDispatch(renderer, t.cl, clearMat.get(),
             { D.sceneSRV, openSkySrv }, { metering.HistogramUav() }, samplerTable,

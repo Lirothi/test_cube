@@ -123,6 +123,11 @@ enum class RenderPass : uint16_t {
     // Interior lighting plan D: the GI probe volume -- trace its rays, then blend them into the atlases -> lighting.
     Main_GiTrace,
     Main_GiUpdate,
+    // Plan S's fallback without RT (SkyOcclusionMap): the world drawn from above when the camera moved a snap step, its
+    // reduction into the two levels, and the trace through them into the sky visibility's target -> lighting, compose.
+    Main_SkyOcclusionMap,
+    Main_SkyOcclusionReduce,
+    Main_SkyVisFallback,
     Main_Count,
 
     Epilogue_Overlay = Main_Count,
@@ -225,6 +230,9 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_SkyVis: return L"SkyVis";
     case RenderPass::Main_GiTrace: return L"GiTrace";
     case RenderPass::Main_GiUpdate: return L"GiUpdate";
+    case RenderPass::Main_SkyOcclusionMap: return L"SkyOcclusionMap";
+    case RenderPass::Main_SkyOcclusionReduce: return L"SkyOcclusionReduce";
+    case RenderPass::Main_SkyVisFallback: return L"SkyVisFallback";
     case RenderPass::Epilogue_Overlay: return L"Overlay";
     case RenderPass::GBuffer_Driver: return L"GBuffer.Driver";
     case RenderPass::GBuffer_OpaqueSimple: return L"GBuffer.OpaqueSimple";

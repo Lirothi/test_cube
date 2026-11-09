@@ -190,6 +190,10 @@ enum class GraphicsControl
     SkyVisSpecular,
     SkyVisFilter,
     SkyVisFogRays,                // ...and the volumetric fog's (SceneRenderSettings::skyVisFogRays)
+    SkyVisFallback,               // ...without the trace, from above (SceneRenderSettings::skyVisFallback)
+    SkyVisFallbackResolution,     // ...its map's texels a side
+    SkyVisFallbackTexel,          // ...and the world size of one (m)
+    SkyVisFallbackFade,           // ...and its edge's fade (share of the radius it traces in full)
 };
 
 // Persists project-wide graphics quality. Scene-authored look settings (GTAO, height fog, bloom,

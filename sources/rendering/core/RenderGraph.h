@@ -602,6 +602,18 @@ public:
             RenderQueue::Graphics);
     }
 
+    // ...and both lists built at run time: an mtDep that exists only on some frames (the volumetric fog's edge to the
+    // AS build, only while the air traces the sky). A kNone in a braced list is an index past the graph.
+    size_t AddPass2(RenderPass name,
+        const DependencyList& prereqs,
+        const DependencyList& mtDeps,
+        std::initializer_list<ResourceStateDecl> declares,
+        BuildFn builder)
+    {
+        return AddPass2Internal(name, prereqs, mtDeps, declares, std::move(builder),
+            RenderQueue::Graphics);
+    }
+
     // --- Async-compute step 4 (D1): the same two overloads, with an explicit QUEUE ---
     //
     // Separate overloads rather than a defaulted trailing parameter: `builder` is the last argument
@@ -1740,6 +1752,23 @@ private:
 
         Pass& p = passes_[newIndex];
         p.name = name;
+#ifndef NDEBUG
+        // CopyRange's assert says only THAT an index is out of range (a kNone handed on as a prereq, typically): name
+        // the pass and the index first, as a Fatal the session log keeps (AGENTS.md: Fatal before an assert).
+        const auto checkRange = [name](const auto& range, const char* kind) {
+            for (size_t value : range) {
+                if (value >= MaxPasses) {
+                    char msg[224];
+                    std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' was given %s %zu, past the graph's "
+                                  "%zu passes (a kNone index handed on?)", RenderPassToWString(name).data(), kind,
+                                  value, MaxPasses);
+                    RendererInvariantFailure(msg);
+                }
+            }
+        };
+        checkRange(prereqs, "prereq");
+        checkRange(deps, "mtDep");
+#endif
         if (!CopyRange(p.prereqs, prereqs) || !CopyRange(p.mtDeps, deps)) {
             char msg[192];
             std::snprintf(msg, sizeof(msg), "RenderGraph::AddPass: pass '%ls' has more dependencies than "

@@ -3,6 +3,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <atomic>
 #include <vector>
 #include <wrl/client.h>
 #include <cstdint>
@@ -23,6 +24,7 @@
 #include "app/scene/SceneRenderConfig.h"
 #include "app/scene/SceneRenderQueue.h"
 #include "app/scene/SceneView.h"
+#include "app/scene/SkyOcclusionMap.h"
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/SceneRenderer.h"
 #include "core/task/TaskSystem.h" // viewTasks_
@@ -320,6 +322,10 @@ private:
     static constexpr int kCascades = SceneFrameData::kCascades;
 
     void ReconcileShadowMode(Renderer* renderer); // Step 24b: GPU-idle Legacy<->VSM<->SDSM resource switch
+    // Plan S's fallback without RT: wanted this frame (the setting on, the RT trace not), and its textures' size / freeing
+    // at the GPU-idle point before PrepareViews (skyVis.fallbackResolution).
+    bool SkyOcclusionWanted(const Renderer* renderer) const;
+    void ReconcileSkyOcclusion(Renderer* renderer);
     void UpdateSdsmFrameParams(Renderer* renderer); // S15: the analysis CB + this frame's SDSM gate
     // GPU-idle rebuild of the shadow caster data + consolidated mega VB/IB (the body shared by the
     // editor caster-set refresh and shadow-LOD curve changes). Waits for the GPU, so call sparingly.
@@ -408,6 +414,10 @@ private:
     ShadowGpuData shadowGpu_{};
     // Local-light plan S7: the atlas spot / point lights' cache of their static casters (pool + entries).
     render::LocalShadowCache localShadowCache_{};
+    // Plan S's fallback without RT (skyVis.fallback): the world from above, drawn when the camera moved a snap step.
+    SkyOcclusionMap skyOcclusion_{};
+    // ...and a static caster moved since it last asked (the object sync's ParallelFor sets it, PrepareViews takes it).
+    std::atomic<bool> staticCasterMoved_{ false };
     // Plan S9e: the local views' light bounds + UE hull handed to UpdateViewFrustums each frame (by slot; null = none),
     // MaxShadowViews() + 1 of each (resized with the capacity).
     std::vector<render::LocalViewCull> localViewCull_ = std::vector<render::LocalViewCull>(render::MaxShadowViews() + 1u);

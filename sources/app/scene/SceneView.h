@@ -14,6 +14,7 @@ struct SceneView
         Camera,
         Shadow,
         ShoreDepth,
+        SkyOcclusion, // plan S's fallback without RT: the world from above (SkyOcclusionMap)
     };
 
     mat4 view = mat4::Identity();

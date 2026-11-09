@@ -116,6 +116,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "app/diagnostics/RtAudit.h"     // G9: --rt-audit
 #include "rendering/core/VisibilityStats.h" // occlusion plan S0
 #include "app/scene/SceneObjectFactory.h"   // occlusion plan S0: scene.replicate spawns through the factory
+#include "app/scene/SkyOcclusionMap.h"      // skyVis.fallbackResolution / fallbackTexel: the map's own ranges
 #include <fstream>
 #include "rendering/shadows/ShadowSettings.h"
 #include "rendering/shadows/TessySettings.h" // --set=tessy.*
@@ -952,9 +953,16 @@ namespace
         if (setting == "skyVis.filterFirst") { renderSettings.skyVisFilterFirst = value != 0.0f; return true; }
         if (setting == "skyVis.filterDepth") { renderSettings.skyVisFilterDepth = std::clamp(value, 1.0e-4f, 1.0f); return true; }
         if (setting == "skyVis.filterNormalPower") { renderSettings.skyVisFilterNormalPower = std::clamp(value, 0.0f, 128.0f); return true; }
-        if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 2.0f)); return true; }
+        if (setting == "skyVis.debug") { renderSettings.skyVisDebug = static_cast<uint32_t>(std::clamp(value, 0.0f, 3.0f)); return true; }
         if (setting == "skyVis.sampling") { renderSettings.skyVisSampling = value >= 0.5f ? 1u : 0u; return true; }
         if (setting == "skyVis.filterRadius") { renderSettings.skyVisFilterRadius = static_cast<uint32_t>(std::clamp(value, 1.0f, 4.0f)); return true; }
+        // Plan S's fallback without RT (SkyOcclusionMap): 0 = the open sky without the trace, the A/B.
+        if (setting == "skyVis.fallback") { renderSettings.skyVisFallback = value != 0.0f; return true; }
+        if (setting == "skyVis.fallbackOpacity") { renderSettings.skyVisFallbackOpacity = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "skyVis.fallbackStart") { renderSettings.skyVisFallbackStart = std::clamp(value, 0.0f, 4.0f); return true; }
+        if (setting == "skyVis.fallbackResolution") { renderSettings.skyVisFallbackResolution = SkyOcclusionMap::ClampResolution(static_cast<uint32_t>(std::clamp(value, 1.0f, 4096.0f))); return true; }
+        if (setting == "skyVis.fallbackTexel") { renderSettings.skyVisFallbackTexel = SkyOcclusionMap::ClampTexel(value); return true; }
+        if (setting == "skyVis.fallbackFade") { renderSettings.skyVisFallbackFade = std::clamp(value, 0.0f, 1.0f); return true; }
         if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }        if (setting == "skyVis.fogRays") { renderSettings.skyVisFogRays = static_cast<uint32_t>(std::clamp(value, 0.0f, 8.0f)); return true; }
         // Project-wide like fog.gridPixels (the level's fog keys are the medium): UE's GridCenterOffsetFromDepthBuffer.
         if (setting == "fog.depthOffset") { renderSettings.fogDepthOffset = std::clamp(value, -1.0f, 4.0f); return true; }

@@ -11,6 +11,7 @@
 
 #include "app/scene/SceneFrameData.h"
 #include "app/scene/Scene.h"
+#include "app/scene/SkyOcclusionMap.h" // skyVis.fallbackResolution / fallbackTexel ranges
 #include "rendering/core/Renderer.h"
 #include "rendering/streaming/StreamingSettings.h" // A3: streaming.* globals
 #include "rendering/core/VisibilityStats.h"
@@ -75,6 +76,10 @@ namespace
         float skyVisSpecular = 1.0f;
         bool skyVisFilter = true;
         std::uint32_t skyVisFogRays = 2u;
+        bool skyVisFallback = true; // ...and without the trace, from above (SceneRenderSettings::skyVisFallback)
+        std::uint32_t skyVisFallbackResolution = 512u; // its map (SceneRenderSettings::skyVisFallbackResolution)
+        float skyVisFallbackTexel = 1.0f;
+        float skyVisFallbackFade = 0.25f;
 
         bool dlssEnabled = false;
         sl::DLSSMode dlssMode = sl::DLSSMode::eBalanced;
@@ -413,6 +418,9 @@ namespace
         s.skyVisDiffuse = std::clamp(finite(s.skyVisDiffuse, 1.0f), 0.0f, 1.0f);
         s.skyVisSpecular = std::clamp(finite(s.skyVisSpecular, 1.0f), 0.0f, 1.0f);
         s.skyVisFogRays = std::min(s.skyVisFogRays, 8u);
+        s.skyVisFallbackResolution = SkyOcclusionMap::ClampResolution(s.skyVisFallbackResolution);
+        s.skyVisFallbackTexel = SkyOcclusionMap::ClampTexel(s.skyVisFallbackTexel);
+        s.skyVisFallbackFade = std::clamp(finite(s.skyVisFallbackFade, 0.25f), 0.0f, 1.0f);
 
         s.shadowLodBias = std::clamp(s.shadowLodBias, -2, 3);
         s.shadowLodTierStride = std::clamp(s.shadowLodTierStride, 1, 8);
@@ -507,6 +515,10 @@ namespace
         s.skyVisSpecular = settings.skyVisSpecular;
         s.skyVisFilter = settings.skyVisFilter;
         s.skyVisFogRays = settings.skyVisFogRays;
+        s.skyVisFallback = settings.skyVisFallback;
+        s.skyVisFallbackResolution = settings.skyVisFallbackResolution;
+        s.skyVisFallbackTexel = settings.skyVisFallbackTexel;
+        s.skyVisFallbackFade = settings.skyVisFallbackFade;
         s.dlssEnabled = renderer.IsDlssRequestedActive();
         s.dlssMode = renderer.GetDlssMode();
         s.renderScale = renderer.GetRenderResolutionScale();
@@ -696,6 +708,10 @@ namespace
         settings.skyVisSpecular = s.skyVisSpecular;
         settings.skyVisFilter = s.skyVisFilter;
         settings.skyVisFogRays = s.skyVisFogRays;
+        settings.skyVisFallback = s.skyVisFallback;
+        settings.skyVisFallbackResolution = s.skyVisFallbackResolution; // re-made at Scene::ReconcileSkyOcclusion
+        settings.skyVisFallbackTexel = s.skyVisFallbackTexel;
+        settings.skyVisFallbackFade = s.skyVisFallbackFade;
     }
 
     void ApplyReflections(const GraphicsSettingsSnapshot& s, Renderer& renderer, SceneRenderSettings& settings)
@@ -895,7 +911,11 @@ namespace
                 { "diffuse", s.skyVisDiffuse },
                 { "specular", s.skyVisSpecular },
                 { "spatialFilter", s.skyVisFilter },
-                { "fogRays", s.skyVisFogRays }
+                { "fogRays", s.skyVisFogRays },
+                { "fallback", s.skyVisFallback },
+                { "fallbackResolution", s.skyVisFallbackResolution },
+                { "fallbackTexel", s.skyVisFallbackTexel },
+                { "fallbackFade", s.skyVisFallbackFade }
             } },
             { "visibility", {
                 { "chunkMask", s.visibilityChunkMask },
@@ -1113,6 +1133,10 @@ namespace
         Read(skyVis, "specular", s.skyVisSpecular);
         Read(skyVis, "spatialFilter", s.skyVisFilter);
         Read(skyVis, "fogRays", s.skyVisFogRays);
+        Read(skyVis, "fallback", s.skyVisFallback);
+        Read(skyVis, "fallbackResolution", s.skyVisFallbackResolution);
+        Read(skyVis, "fallbackTexel", s.skyVisFallbackTexel);
+        Read(skyVis, "fallbackFade", s.skyVisFallbackFade);
         Read(visibility, "chunkMask", s.visibilityChunkMask);
         Read(visibility, "occlusionMethod", s.occlusionMethod);
         Read(visibility, "queryLatency", s.occlusionQueryLatency);
@@ -1605,6 +1629,10 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::SkyVisSpecular:                 current.skyVisSpecular = defaults.skyVisSpecular; break;
     case GraphicsControl::SkyVisFilter:                   current.skyVisFilter = defaults.skyVisFilter; break;
     case GraphicsControl::SkyVisFogRays:                  current.skyVisFogRays = defaults.skyVisFogRays; break;
+    case GraphicsControl::SkyVisFallback:                 current.skyVisFallback = defaults.skyVisFallback; break;
+    case GraphicsControl::SkyVisFallbackResolution:       current.skyVisFallbackResolution = defaults.skyVisFallbackResolution; break;
+    case GraphicsControl::SkyVisFallbackTexel:            current.skyVisFallbackTexel = defaults.skyVisFallbackTexel; break;
+    case GraphicsControl::SkyVisFallbackFade:             current.skyVisFallbackFade = defaults.skyVisFallbackFade; break;
     case GraphicsControl::ShadowLodBias:                  current.shadowLodBias = defaults.shadowLodBias; break;
     case GraphicsControl::ShadowLodBiasNearTier:          current.shadowLodBiasNearTier = defaults.shadowLodBiasNearTier; break;
     case GraphicsControl::ShadowLodTierStride:            current.shadowLodTierStride = defaults.shadowLodTierStride; break;
@@ -1696,7 +1724,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
         ApplyStreaming(current);
     }
     else if (value >= static_cast<unsigned>(GraphicsControl::GiEnabled) &&
-             value <= static_cast<unsigned>(GraphicsControl::SkyVisFogRays))
+             value <= static_cast<unsigned>(GraphicsControl::SkyVisFallbackFade))
     {
         ApplyGi(current, settings);
     }

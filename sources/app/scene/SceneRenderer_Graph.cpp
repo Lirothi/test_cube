@@ -45,6 +45,7 @@
 #include "vfx/WindState.h"
 
 #include "app/scene/SceneRenderInternal.h"
+#include "app/scene/SkyOcclusionMap.h" // plan S's fallback without RT
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: the query plan the pass draws
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b: the tester Main_VisTest runs
 using namespace scene_internal;
@@ -548,6 +549,51 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             return [this, renderer, shoreView, pts](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassShoreDepth);
                 Pass_ShoreDepth(renderer, c, shoreView, pts);
+            };
+        });
+
+    // Plan S's fallback without RT (SkyOcclusionMap): the world drawn from above -- the casters top-down and bottom-up,
+    // the terrain top-down -- on a frame the camera moved a snap step or the caster set changed, then reduced into the
+    // two levels Main_SkyVisFallback marches. Pass_CSM's shape: the depths' point, then the casters' own (a GPU-instanced
+    // caster's instance buffer, which its RecordShadow asks for by name). Empty on every other frame.
+    const size_t pSkyOccDraw = rg.AddPass2(RenderPass::Main_SkyOcclusionMap, { pGiCompute },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            SkyOcclusionMap* map = frame_->skyOcclusion;
+            if (!map || !map->DrawThisFrame()) { return {}; }
+            const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(map->TopDepth(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            ctx.Use(map->BottomDepth(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            ctx.Use(map->TerrainDepth(), D3D12_RESOURCE_STATE_DEPTH_WRITE);
+            ctx.NextPoint();
+            PrepareOpaqueDrawStates(ctx, &map->ObjectsView(), 1, /*indirect=*/false);
+            PrepareOpaqueDrawStates(ctx, &map->TerrainView(), 1, /*indirect=*/false);
+            map->MarkDrawRegistered();
+            return [this, renderer, map, point](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyOcclusionMap);
+                Pass_SkyOcclusionMap(renderer, c, *map, point);
+            };
+        });
+    gb.pSkyOcclusion = rg.AddPass2(RenderPass::Main_SkyOcclusionReduce, { pSkyOccDraw },
+        [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            SkyOcclusionMap* map = frame_->skyOcclusion;
+            if (!map || !map->DrawRegistered()) { return {}; }
+            const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(map->TopDepth(), SkyOcclusionMap::kDepthRest);
+            ctx.Use(map->BottomDepth(), SkyOcclusionMap::kDepthRest);
+            ctx.Use(map->TerrainDepth(), SkyOcclusionMap::kDepthRest);
+            ctx.Use(map->NearLevel(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            const std::uint32_t pointFar = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(map->NearLevel(), SkyOcclusionMap::kLevelRest);
+            ctx.Use(map->FarLevel(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            ctx.NextPoint();
+            const std::uint32_t pointRest = ctx.usePoint ? *ctx.usePoint : 0u;
+            ctx.Use(map->FarLevel(), SkyOcclusionMap::kLevelRest);
+            // Cross-frame state, committed in the builder: from here the levels hold this placement.
+            map->MarkReduced();
+            return [this, renderer, map, point, pointFar, pointRest](RenderGraphPassContext c) {
+                CPU_SCOPE(ProfilerScopes::kPassSkyOcclusionReduce);
+                Pass_SkyOcclusionReduce(renderer, c, *map, point, pointFar, pointRest);
             };
         });
 
@@ -1407,6 +1453,36 @@ void SceneRenderer::BuildGBufferAndAo(Renderer* renderer, GraphBuild& gb)
     if (!decisions_.skyVis || gb.pBuildAS == static_cast<size_t>(-1))
     {
         skyVisHistoryFrames_ = 0u; // off this frame: whatever the history holds is stale when it returns
+        // ...and WITHOUT the trace, its fallback (skyVis.fallback): the same bent normal into the same target, marched
+        // through the world seen from above (SkyOcclusionMap). The RT frame never comes here, so it does not move.
+        if (!decisions_.skyVis && frame_->skyOcclusion)
+        {
+            gb.pSkyVis = rg.AddPass2(RenderPass::Main_SkyVisFallback, { gb.pGbufDone, gb.pSkyOcclusion },
+                [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+                    const auto& D = renderer->GetDeferredForFrame();
+                    SkyOcclusionMap* map = frame_->skyOcclusion;
+                    if (!map || !map->Valid() || !map->TraceMaterial() || D.skyVisUAV.ptr == 0 ||
+                        D.skyVisSRV.ptr == 0 || D.gbSRV[1].ptr == 0 || D.depthSRV.ptr == 0)
+                    {
+                        return {};
+                    }
+                    decisions_.skyVisFallback = true;
+                    const std::uint32_t point = ctx.usePoint ? *ctx.usePoint : 0u;
+                    // NON_PIXEL for depth/gb1, as GTAO and the RT trace leave them (D7).
+                    ctx.Use(D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    ctx.Use(map->NearLevel(), SkyOcclusionMap::kLevelRest);
+                    ctx.Use(map->FarLevel(), SkyOcclusionMap::kLevelRest);
+                    ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+                    ctx.NextPoint();
+                    const std::uint32_t pointRest = ctx.usePoint ? *ctx.usePoint : 0u;
+                    ctx.Use(D.skyVis.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                    return [this, renderer, map, point, pointRest](RenderGraphPassContext c) {
+                        CPU_SCOPE(ProfilerScopes::kPassSkyVisFallback);
+                        Pass_SkyVisFallback(renderer, c, *frame_->camera, *map, point, pointRest);
+                    };
+                });
+        }
     }
     else
     {
@@ -1610,9 +1686,14 @@ void SceneRenderer::BuildLighting(Renderer* renderer, GraphBuild& gb)
         // mtDep makes the cross-queue edge to the async build an explicit fence (the body checks the TLAS is there).
         const bool fogTracesSky = decisions_.fogSkyVis && gb.pBuildAS != static_cast<size_t>(-1);
         if (fogTracesSky) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogPrereqs, gb.pBuildAS); }
-        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs,
-                              /*mtDeps=*/{ gb.pShadow, gb.pSpotShadow, fogTracesSky ? gb.pBuildAS : static_cast<size_t>(-1) },
-                              {}, fogBuilder);
+        // A run-time list too: the AS edge only when the air traces the sky. It was `fogTracesSky ? pBuildAS : -1` in a
+        // braced list, and the -1 is past the graph -- Release dropped it silently, Debug asserted on every frame with
+        // the RT sky visibility off (2026-11-09, the owner's settings: skyVis and GI off).
+        RenderGraph<kMainRenderGraphPassCount>::DependencyList fogMtDeps;
+        if (gb.pShadow != GraphBuild::kNone) { fogMtDeps.push_back(gb.pShadow); }
+        if (gb.pSpotShadow != GraphBuild::kNone) { fogMtDeps.push_back(gb.pSpotShadow); }
+        if (fogTracesSky) { RenderGraph<kMainRenderGraphPassCount>::PushDependency(fogMtDeps, gb.pBuildAS); }
+        gb.pFog = rg.AddPass2(RenderPass::Main_VolumetricFog, fogPrereqs, fogMtDeps, {}, fogBuilder);
     }
 
     auto lightBuilder = [this, renderer](RenderGraphPassContext& ctx)

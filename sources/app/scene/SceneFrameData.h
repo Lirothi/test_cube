@@ -25,6 +25,7 @@ class OceanRenderable;
 class RenderableObjectBase;
 class Skybox;
 class ShadowGpuData;
+class SkyOcclusionMap;
 class VirtualShadowMap;
 class SdsmShadows;
 namespace vfx { struct WindState; } // W3: global wind, read when building the gbuffer per-view CB
@@ -764,6 +765,32 @@ struct SceneRenderSettings
     // sees (fog_scatter_cs.hlsl FogSkyVisibility, UE VolumetricFog.usf:713-735), `skyVisFogRays` per cell sample per
     // frame out to skyVisMaxDistance, averaged by the fog's own history. 0 = the open sky in the air, the frame before.
     uint32_t skyVisFogRays = 2u;
+    // WITHOUT the RT trace (skyVis off, or no RT hardware): the same bent normal from the world seen from above
+    // (SkyOcclusionMap, sky_occlusion_cs.hlsl) -- crowns, roofs, rocks as slabs of air over the ground, out to
+    // skyVisMaxDistance. Off = the open sky everywhere, the frame before 2026-11-09 (owner, the island at 18:00 with
+    // skyVis off: "why is everything so pale"). With the RT trace on it never runs, so that frame does not move.
+    bool skyVisFallback = true;
+    // A slab's coverage -> its opacity: straight down through it passes 1 - coverage x this (--set only).
+    float skyVisFallbackOpacity = 1.0f;
+    // Nearer than this (m) a direction meets no slab: there the receiver's own texel is a slab around it (a trunk's
+    // column, a tent's), which GTAO's contact radius answers instead (--set only). Against the RT frame on the owner's
+    // island view at 18:00 (pixels over 8 levels from it): 1 m 12.8 %, 0.5 m 8.8 %, 0 9.0 / 7.9 % -- 0.5 the nearest
+    // that keeps a margin over the 1 m texel's own column.
+    float skyVisFallbackStart = 0.5f;
+    // The map's size: its occlusion level's texels a side (a power of two, 64-1024; the depth renders are 4x that, the far
+    // level a quarter) and the world size of one of those texels (m). It covers resolution x texel metres around the
+    // camera: 512 x 1 m = 512 m, 26 MB (3 x 8 MB of depth). 256 m (the first cut) left the back of wind_test's grove
+    // outside it from the owner's view at 18:00 -- a pale band behind the palms. A coarser texel reaches farther and
+    // spreads a roof's or a crown's edge (2 m: the bathroom by day +89 of 255 over the RT frame, 1 m +52); a finer one
+    // keeps it and reaches less (0.5 m: the grove 34 % of pixels off the RT frame, 1 m 17 %). A resolution change re-creates the textures (Scene::ReconcileSkyOcclusion, GPU idle).
+    uint32_t skyVisFallbackResolution = 512u;
+    float skyVisFallbackTexel = 1.0f;
+    // Its edge: the occlusion fades out with the horizontal distance from the camera over this share of the radius the
+    // map traces in full (half its width, less half a snap step and the reach), the open sky beyond -- a gradient around
+    // the camera instead of the map's square in the world (owner, 2026-11-09: "at the texture's edge the transition shows
+    // strongly"). 0 = the hard edge. At the default 512 m map 0.25 fades from 175 to 233 m, past wind_test's island
+    // from anywhere on it; 0.5 (from 116 m) brought a paler band back to the back of the grove from the owner's view.
+    float skyVisFallbackFade = 0.25f;
     // The visibility rays -- the sky visibility, the GI's probe, shadow and sky rays, the fog's sky and sun -- take a
     // cutout card (an alpha-tested slot: a leaf, a frond) at its MESH's opacity (mesh.json "rtCutoutOpacity", the palms
     // 0.8; absent = solid): a ray that hits one carries 1 - opacity on and goes no further (rt_geometry.hlsli
@@ -1091,6 +1118,9 @@ struct SceneFrameData
     // Water in the level, or null. The deferred lighting pass reads its caustics settings, clock
     // and flipbook; no ocean simply means no caustics.
     OceanRenderable* ocean = nullptr;
+    // Plan S's fallback without RT (skyVis.fallback): the world from above, or null -- non-null only on a frame the
+    // fallback is wanted (the setting on, the RT sky visibility not) and its resources were built.
+    SkyOcclusionMap* skyOcclusion = nullptr;
 
     CascadeData cascades{};
     // The editor selection, SORTED ASCENDING, owned by Scene -- a pointer rather than a copied
