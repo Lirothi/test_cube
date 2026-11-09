@@ -137,6 +137,14 @@ static const float kSkyVisSeedFrames = 0.85f / 0.15f;
 // 2 (HALF_HISTORY_FILL_KERNEL_SIZE); a camera flying backwards at 60 fps brings ~3 half-resolution rows of floor in
 // under the bottom edge a frame (3.8 m/s, 2.3 m up), and the rows past the reach of the search would start raw.
 static const int kSkyVisSeedRadius = 4;
+// ...searched NEAR FIRST (seedEnabled 2, skyVis.seedNearFirst; 2026-11-09, the owner's GPU pass): the 5x5 round the
+// texel -- UE's own reach -- and the ring out to kSkyVisSeedRadius only when that holds nothing kept. Every tap is a
+// history reprojection (the velocity, four corners, four counts), and the texels that lose their history standing
+// still -- a frond's edge flipping under the DLSS jitter, scattered over a grove -- held their waves for 80 of them:
+// the seed was 0.11 of the accumulate's 0.17 ms on the owner's 18:00 view. A band the camera flying backwards brings in
+// still reaches out to 4 (nothing kept within 2 of its deeper rows). Where both rings hold history the seed is the
+// nearer one's: the outer ring weighed 3-15 % of the inner's each (sigma 1.5).
+static const int kSkyVisSeedNearRadius = 2;
 
 // The spatial gather's reach in half-resolution texels: the loops' literal bound, `filterRadius` (skyVis.filterRadius,
 // 1-4) only shortens them.
@@ -339,28 +347,41 @@ void CSAccumulate(uint3 dtid : SV_DispatchThreadID)
             // (above), so the seed comes from what the gather calls the same surface:
             // UE's exp2(-1000 x relative depth step) rejects the next row of a floor seen at 30 degrees.
             float4 acc = 0.0f.xxxx;
+            // Two rings (kSkyVisSeedNearRadius): the near one, then the rest only if the near held nothing. seedEnabled
+            // 1 = one ring out to kSkyVisSeedRadius, the search before.
+            const int nearReach = seedEnabled >= 2u ? kSkyVisSeedNearRadius : kSkyVisSeedRadius;
             [loop]
-            for (int y = -kSkyVisSeedRadius; y <= kSkyVisSeedRadius; ++y)
+            for (int ringPass = 0; ringPass < 2; ++ringPass)
             {
+                const int innerRing = ringPass == 0 ? 1 : nearReach + 1;
+                const int outerRing = ringPass == 0 ? nearReach : kSkyVisSeedRadius;
+                if (ringPass == 1 && (acc.w > 1.0e-4f || innerRing > outerRing)) { break; }
                 [loop]
-                for (int x = -kSkyVisSeedRadius; x <= kSkyVisSeedRadius; ++x)
+                for (int y = -outerRing; y <= outerRing; ++y)
                 {
-                    const int2 p = int2(dtid.xy) + int2(x, y);
-                    if ((x == 0 && y == 0) || any(p < 0) || p.x >= int(outWidth) || p.y >= int(outHeight)) { continue; }
-                    const float2 uvP = (float2(p) + 0.5f) / float2(outWidth, outHeight);
-                    const float zP = depthT.SampleLevel(gSmpPoint, uvP, 0).r;
-                    if (zP <= 1.0e-6f) { continue; }
-                    const float wDepth = saturate(1.0f - (abs(zP - z) / z) / max(filterDepthTolerance, 1.0e-4f));
-                    if (wDepth <= 0.0f) { continue; }
-                    const float3 PP = ReconstructPosWS(uvP, zP, invProj, invView);
-                    const float3 NP = normalize(gb1.SampleLevel(gSmpPoint, uvP, 0).rgb * 2.0f - 1.0f);
-                    float unusedCount;
-                    const float4 hP = SkyVisHistoryAt(velocity, history, counts, uvP, PP, NP, dot(PP - camPos, viewForward),
-                                                      unusedCount);
-                    if (hP.w <= 1.0e-4f) { continue; }
-                    const float w = exp(-float(x * x + y * y) * (1.0f / (2.0f * 1.5f * 1.5f))) * wDepth *
-                                    SkyVisNormalWeight(N, NP);
-                    acc += float4(hP.xyz / hP.w * w, w); // the corners that are this neighbour's surface, renormalised
+                    [loop]
+                    for (int x = -outerRing; x <= outerRing; ++x)
+                    {
+                        const int2 p = int2(dtid.xy) + int2(x, y);
+                        if (max(abs(x), abs(y)) < innerRing || any(p < 0) || p.x >= int(outWidth) || p.y >= int(outHeight))
+                        {
+                            continue;
+                        }
+                        const float2 uvP = (float2(p) + 0.5f) / float2(outWidth, outHeight);
+                        const float zP = depthT.SampleLevel(gSmpPoint, uvP, 0).r;
+                        if (zP <= 1.0e-6f) { continue; }
+                        const float wDepth = saturate(1.0f - (abs(zP - z) / z) / max(filterDepthTolerance, 1.0e-4f));
+                        if (wDepth <= 0.0f) { continue; }
+                        const float3 PP = ReconstructPosWS(uvP, zP, invProj, invView);
+                        const float3 NP = normalize(gb1.SampleLevel(gSmpPoint, uvP, 0).rgb * 2.0f - 1.0f);
+                        float unusedCount;
+                        const float4 hP = SkyVisHistoryAt(velocity, history, counts, uvP, PP, NP,
+                                                          dot(PP - camPos, viewForward), unusedCount);
+                        if (hP.w <= 1.0e-4f) { continue; }
+                        const float w = exp(-float(x * x + y * y) * (1.0f / (2.0f * 1.5f * 1.5f))) * wDepth *
+                                        SkyVisNormalWeight(N, NP);
+                        acc += float4(hP.xyz / hP.w * w, w); // the corners that are this neighbour's surface, renormalised
+                    }
                 }
             }
             if (acc.w > 1.0e-4f)

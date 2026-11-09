@@ -164,6 +164,8 @@ extern const Profiler::ScopeNameKey kPassBuildAS;
 extern const Profiler::ScopeNameKey kPassReflectionSource;
 extern const Profiler::ScopeNameKey kPassRTTrace;
 extern const Profiler::ScopeNameKey kPassSkyVis; // plan S: the RT sky visibility
+extern const Profiler::ScopeNameKey kSkyVisTrace;      // ...its rays (GPU, inside Pass_SkyVis)
+extern const Profiler::ScopeNameKey kSkyVisAccumulate; // ...its spatial step and history (GPU, inside Pass_SkyVis)
 extern const Profiler::ScopeNameKey kPassSkyOcclusionMap;    // plan S's fallback: the world drawn from above
 extern const Profiler::ScopeNameKey kPassSkyOcclusionReduce; // ...reduced into its two levels
 extern const Profiler::ScopeNameKey kPassSkyVisFallback;     // ...and traced into the sky visibility

@@ -761,6 +761,9 @@ struct SceneRenderSettings
     // A texel without history is seeded from the neighbours that kept theirs (UE DFAO FilterHistoryPS). Off = it
     // starts from its own few rays, the behaviour before 2026-10-26 -- kept for the A/B (`--set skyVis.seed:0`).
     bool skyVisSeed = true;
+    // ...searched near first (rt_sky_visibility_cs.hlsl kSkyVisSeedNearRadius): the 5x5, the ring out to 9x9 only when
+    // that holds nothing. `--set skyVis.seedNearFirst:0` = the one 9x9 search, the A/B (transient).
+    bool skyVisSeedNearFirst = true;
     // ...and the AIR's: the volumetric fog's sky term times the share of UE's 45-degree cone straight up that a cell
     // sees (fog_scatter_cs.hlsl FogSkyVisibility, UE VolumetricFog.usf:713-735), `skyVisFogRays` per cell sample per
     // frame out to skyVisMaxDistance, averaged by the fog's own history. 0 = the open sky in the air, the frame before.

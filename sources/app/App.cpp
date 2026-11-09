@@ -963,6 +963,7 @@ namespace
         if (setting == "skyVis.fallbackResolution") { renderSettings.skyVisFallbackResolution = SkyOcclusionMap::ClampResolution(static_cast<uint32_t>(std::clamp(value, 1.0f, 4096.0f))); return true; }
         if (setting == "skyVis.fallbackTexel") { renderSettings.skyVisFallbackTexel = SkyOcclusionMap::ClampTexel(value); return true; }
         if (setting == "skyVis.fallbackFade") { renderSettings.skyVisFallbackFade = std::clamp(value, 0.0f, 1.0f); return true; }
+        if (setting == "skyVis.seedNearFirst") { renderSettings.skyVisSeedNearFirst = value != 0.0f; return true; }
         if (setting == "skyVis.seed") { renderSettings.skyVisSeed = value != 0.0f; return true; }        if (setting == "skyVis.fogRays") { renderSettings.skyVisFogRays = static_cast<uint32_t>(std::clamp(value, 0.0f, 8.0f)); return true; }
         // Project-wide like fog.gridPixels (the level's fog keys are the medium): UE's GridCenterOffsetFromDepthBuffer.
         if (setting == "fog.depthOffset") { renderSettings.fogDepthOffset = std::clamp(value, -1.0f, 4.0f); return true; }

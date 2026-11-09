@@ -617,7 +617,7 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             c.historyWeight = std::clamp(s.skyVisHistory, 0.0f, 0.995f);
             c.historyValid = chain.historyValid ? 1u : 0u;
             // A texel without history is seeded from the neighbours the spatial step would call the same surface.
-            c.seedEnabled = s.skyVisSeed ? 1u : 0u;
+            c.seedEnabled = s.skyVisSeed ? (s.skyVisSeedNearFirst ? 2u : 1u) : 0u; // 2 = near first
             c.filterEnabled = s.skyVisFilter ? 1u : 0u;
             c.filterDepthTolerance = std::max(s.skyVisFilterDepth, 1.0e-4f);
             c.filterNormalPower = std::max(s.skyVisFilterNormalPower, 0.0f);
@@ -636,13 +636,19 @@ void SceneRenderer::Pass_SkyVis(Renderer* renderer, RenderGraphPassContext ctx, 
             t.cl->SetComputeRootSignature(material->GetRootSignature());
             t.cl->SetPipelineState(material->GetPipelineState());
             t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
-            t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            {
+                GPU_SCOPE(t.cl, ProfilerScopes::kSkyVisTrace);
+                t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            }
 
             renderer->EmitPoint(t.cl, chain.pointFilter); // this frame's rays -> NON_PIXEL
             t.cl->SetComputeRootSignature(accumulateMaterial->GetRootSignature());
             t.cl->SetPipelineState(accumulateMaterial->GetPipelineState());
             t.cl->SetComputeRootConstantBufferView(0, cb.gpu);
-            t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            {
+                GPU_SCOPE(t.cl, ProfilerScopes::kSkyVisAccumulate);
+                t.cl->Dispatch((c.outWidth + 7u) / 8u, (c.outHeight + 7u) / 8u, 1);
+            }
             renderer->EmitPoint(t.cl, chain.pointAccum); // the accumulation and its counts -> NON_PIXEL
             if (!s.skyVisFilterFirst)
             {

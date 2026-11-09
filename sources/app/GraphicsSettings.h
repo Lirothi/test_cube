@@ -200,6 +200,8 @@ enum class GraphicsControl
     SkyVisSpecular,
     SkyVisFilter,
     SkyVisFogRays,                // ...and the volumetric fog's (SceneRenderSettings::skyVisFogRays)
+    SkyVisFilterRadius,           // ...its spatial step's reach (SceneRenderSettings::skyVisFilterRadius)
+    SkyVisSeed,                   // ...and the seed of a texel without history (SceneRenderSettings::skyVisSeed)
     SkyVisFallback,               // ...without the trace, from above (SceneRenderSettings::skyVisFallback)
     SkyVisFallbackResolution,     // ...its map's texels a side
     SkyVisFallbackTexel,          // ...and the world size of one (m)

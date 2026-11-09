@@ -2026,6 +2026,25 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                       "(default on; 9x9 half-resolution texels, skyVis.filterRadius).\n"
                                       "Off = the rays accumulated as they are, grainier.");
                 {
+                    int filterRadius = static_cast<int>(std::clamp(settings.skyVisFilterRadius, 1u, 4u));
+                    if (GRAPHICS_CONTROL(SkyVisFilterRadius, "skyVisFilterRadius",
+                            ImGui::SliderInt("Filter radius", &filterRadius, 1, 4)))
+                    {
+                        settings.skyVisFilterRadius = static_cast<std::uint32_t>(filterRadius);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The spatial filter's reach in half-resolution texels (default 4 = 9x9). On the\n"
+                                      "owner's 18:00 view 3 saves ~0.025 ms, 2 ~0.05; a tunnel's visibility grain median\n"
+                                      "2.3 / 3.1 / 4.7 %% at 4 / 3 / 2.");
+                GRAPHICS_CONTROL(SkyVisSeed, "skyVisSeed",
+                    ImGui::Checkbox("Seed texels without history", &settings.skyVisSeed));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A texel that lost its history (uncovered, come in over the edge, a frond's edge under\n"
+                                      "the jitter) starts from its neighbours' histories (UE DFAO), 5x5 first, 9x9 if those\n"
+                                      "hold none (default on). Off: -0.04 ms on the 18:00 view, and the rows a camera flying\n"
+                                      "backwards brings in start from their own eight rays: a band of grain.");
+                {
                     int fogRays = static_cast<int>(std::min(settings.skyVisFogRays, 8u));
                     if (GRAPHICS_CONTROL(SkyVisFogRays, "skyVisFogRays", ImGui::SliderInt("Fog rays", &fogRays, 0, 8)))
                     {

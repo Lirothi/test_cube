@@ -2145,9 +2145,23 @@ added. Needs RT hardware (`decisions_.skyVis` also builds the TLAS); off = the o
   0.995, p90 3.1 / 1.45 / 0.98 %; the floor 1.4 / 0.64 / 0.33 %; 16 rays at 0.98 only 0.94-1.18 % (+0.1-0.27 ms).
   Free. A moving camera is unaffected (a rejected texel counts from zero); a surface whose sky a MOVED object changes
   follows it over up to 199 frames instead of 49. The settings file's `skyVis.history` overrides it (GI tab "History").
-- Developer Controls > GI "Sky visibility": on/off, rays, history, reach, diffuse, specular, spatial filter --
-  persisted in graphics_settings.json `skyVis` (`--set=skyVis.*` the same knobs, transient); "Reset GI to defaults"
-  resets them with the probes. The filter's depth/normal weights stay `--set` only.
+- Developer Controls > GI "Sky visibility": on/off, rays, history, reach, diffuse, specular, spatial filter, its radius,
+  the seed -- persisted in graphics_settings.json `skyVis` (`--set=skyVis.*` the same knobs, transient); "Reset GI to
+  defaults" resets them with the probes. The filter's depth/normal weights stay `--set` only.
+- **Where its time goes, and the seed searched near first** (2026-11-09, the owner's GPU pass on his 18:00 view, cam
+  37.93 4.63 71.59, a grove of fronds; GPU sub-scopes `SkyVis.Trace` / `SkyVis.Accumulate`, alternated in one process):
+  the trace 0.31 ms (8 rays, two any-hit queries each; 6 rays 0.23), the accumulate 0.17 -- of which the SEED 0.11:
+  standing still, texels on the fronds' edges lose their history under the DLSS jitter every frame, and a texel to seed
+  reprojected the history of each of 80 neighbours (velocity, four corners, four counts) while its wave's 63 other
+  lanes waited. Now it searches the 5x5 first (UE's own reach, HALF_HISTORY_FILL_KERNEL_SIZE 2) and the ring out to 9x9
+  only when that holds nothing kept -- the rows a camera flying backwards brings in still reach 4. The accumulate 0.17 ->
+  0.115 ms; the still frame the same (the 18:00 view 1.0-1.4 % of pixels over 8 levels either way, the same arm twice
+  1.0 %; the bathroom by day within its own drift). `--set skyVis.seedNearFirst:0` = the one 9x9 search (transient).
+  The filter's radius (4 / 3 / 2: ~0.025 ms a step) and the seed (off: -0.04 ms, the flying band) are in the UI.
+  Tried and DROPPED, each measured against the same arm: the visibility query asking both masks at once (an any-hit
+  over solid and transmissive, the solids alone only after a cutout) -- the trace 0.32 -> 0.34 ms, the fog -0.01, GI the
+  same; and the group's 16x16 tile of rays and normals in groupshared for the 9x9 gather and the seed -- the seed got
+  cheaper, the gather slower than the texture cache's (0.061 -> 0.108 ms without the seed): the sum the same.
 - A/B it with the exposure PINNED (`exposure.autoExposure:0` after metering): the metering brightens the whole
   frame to make up for the darker shade, which reads as "the sky got brighter".
 - **Without RT: the sky from above** (`skyVis.fallback`, default 1; 2026-11-09, owner with skyVis and GI off for the frame
