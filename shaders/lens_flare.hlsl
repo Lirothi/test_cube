@@ -74,24 +74,20 @@ struct VSOut
 static const uint kFlareQuadsPerInstance = 4u;
 static const uint kFlareVertsPerInstance = 6u * kFlareQuadsPerInstance;
 
-[RootSignature(LENS_FLARE_RS)]
-VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
+// One tile of the scatter -- its colour, where its splat is centred (the guard band's shrunk position) and whether it
+// clears the gate. The VS's and the MS's, one function.
+struct FlareTile
 {
-    // P8C-3: FOUR QUADS PER INSTANCE, which is UE's GLensFlareQuadsPerInstance = 4. Drawing one
-    // quad per instance meant four times their instance count for the same splat -- the only place
-    // in the whole flare comparison where they were ahead of us. 24 vertices an instance, the low
-    // bits pick the corner and the high bits the quad.
-    const uint quad = vid / 6u;
-    const uint v = vid % 6u;
-    const uint tileIndex = iid * kFlareQuadsPerInstance + quad;
-    // The last instance is partial whenever the tile count is not a multiple of four; those quads
-    // collapse to zero size below rather than reading outside the grid.
+    float3 color; // already through the gate's masks, before kernelAreaInverse
+    float2 pos;
+    bool   alive;
+};
+
+FlareTile FlareTileAt(uint tileIndex)
+{
+    // The last instance is partial whenever the tile count is not a multiple of four (the VS), or of a mesh group
+    // (the MS); those tiles collapse rather than reading outside the grid.
     const bool inGrid = tileIndex < (tileCount.x * tileCount.y);
-
-    // Triangle A: 0 left-top, 1 right-top, 2 left-bottom; B: 3 right-bottom, 4 left-bottom,
-    // 5 right-top -- UE's own corner decode, verbatim.
-    const float2 corner = float2((float)(v % 2u), (v > 1u && v < 5u) ? 1.0f : 0.0f);
-
     const uint safeIndex = inGrid ? tileIndex : 0u;
     const float2 tile = float2((float)(safeIndex % tileCount.x), (float)(safeIndex / tileCount.x));
 
@@ -123,17 +119,86 @@ VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     // physical (thousands of times the sky around it) the disc is what clears it, so the ghost is the
     // disc defocused through the iris -- the bokeh shape -- and not the sky's bright zone.
     const float lum = color.r + color.g + color.b;
-    const float alive = (lum < threshold || !inGrid) ? 0.0f : 1.0f;
+    FlareTile t;
+    t.color = color;
+    t.pos = pos;
+    t.alive = !(lum < threshold || !inGrid);
+    return t;
+}
 
+// A corner of the splat (0..1 each way) off its centre, in the flare target's clip space.
+float2 FlareCornerDelta(float2 corner)
+{
     const float2 cornerDelta = corner - 0.5f;
-    pos += float2(2.0f * cornerDelta.x * kernelSizePx / flareRTSize.x,
-                  -2.0f * cornerDelta.y * kernelSizePx / flareRTSize.y) * alive;
+    return float2(2.0f * cornerDelta.x * kernelSizePx / flareRTSize.x, -2.0f * cornerDelta.y * kernelSizePx / flareRTSize.y);
+}
 
+[RootSignature(LENS_FLARE_RS)]
+VSOut VSMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
+{
+    // P8C-3: FOUR QUADS PER INSTANCE, which is UE's GLensFlareQuadsPerInstance = 4. Drawing one
+    // quad per instance meant four times their instance count for the same splat -- the only place
+    // in the whole flare comparison where they were ahead of us. 24 vertices an instance, the low
+    // bits pick the corner and the high bits the quad.
+    const uint quad = vid / 6u;
+    const uint v = vid % 6u;
+    const uint tileIndex = iid * kFlareQuadsPerInstance + quad;
+
+    // Triangle A: 0 left-top, 1 right-top, 2 left-bottom; B: 3 right-bottom, 4 left-bottom,
+    // 5 right-top -- UE's own corner decode, verbatim.
+    const float2 corner = float2((float)(v % 2u), (v > 1u && v < 5u) ? 1.0f : 0.0f);
+
+    const FlareTile t = FlareTileAt(tileIndex);
     VSOut o;
-    o.position = float4(pos, 0.0f, 1.0f);
+    o.position = float4(t.pos + FlareCornerDelta(corner) * (t.alive ? 1.0f : 0.0f), 0.0f, 1.0f);
     o.uv = corner;
-    o.color = color * kernelAreaInverse;
+    o.color = t.color * kernelAreaInverse;
     return o;
+}
+
+// The scatter as a MESH shader (bloom.ghostMeshShader, 2026-11-09): the VS above runs six vertices for every tile of the
+// grid -- 1.4 M a frame at 1440p, each reading its tile's four taps again -- to collapse all but the few bright ones. A
+// group here takes kFlareMsTiles tiles, a thread each: one read of the tile, and only the tiles over the gate emit their
+// quad, packed in tile order (the same order the VS draws them in, so the additive blend sums in the same order). No
+// branch and no early return around SetMeshOutputCounts (DXC's ms_6_6 duplicates the call into both arms and fails).
+static const uint kFlareMsTiles = 32u;
+groupshared uint gsFlareAlive[kFlareMsTiles];
+
+[NumThreads(32, 1, 1)]
+[OutputTopology("triangle")]
+[RootSignature(LENS_FLARE_RS)]
+void MSMain(uint3 gid : SV_GroupID, uint lane : SV_GroupIndex,
+            out vertices VSOut verts[kFlareMsTiles * 4u],
+            out indices uint3 tris[kFlareMsTiles * 2u])
+{
+    const FlareTile t = FlareTileAt(gid.x * kFlareMsTiles + lane);
+    gsFlareAlive[lane] = t.alive ? 1u : 0u;
+    GroupMemoryBarrierWithGroupSync();
+    uint count = 0u;
+    uint slot = 0u;
+    [unroll]
+    for (uint k = 0u; k < kFlareMsTiles; ++k)
+    {
+        const uint a = gsFlareAlive[k];
+        count += a;
+        slot += select(k < lane, a, 0u);
+    }
+    SetMeshOutputCounts(count * 4u, count * 2u);
+    if (t.alive)
+    {
+        [unroll]
+        for (uint c = 0u; c < 4u; ++c)
+        {
+            const float2 corner = float2((float)(c & 1u), (float)(c >> 1u)); // 0 LT, 1 RT, 2 LB, 3 RB
+            VSOut o;
+            o.position = float4(t.pos + FlareCornerDelta(corner), 0.0f, 1.0f);
+            o.uv = corner;
+            o.color = t.color * kernelAreaInverse;
+            verts[slot * 4u + c] = o;
+        }
+        tris[slot * 2u] = uint3(slot * 4u + 0u, slot * 4u + 1u, slot * 4u + 2u);
+        tris[slot * 2u + 1u] = uint3(slot * 4u + 3u, slot * 4u + 2u, slot * 4u + 1u);
+    }
 }
 
 [RootSignature(LENS_FLARE_RS)]

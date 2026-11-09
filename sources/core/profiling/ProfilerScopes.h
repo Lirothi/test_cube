@@ -166,6 +166,13 @@ extern const Profiler::ScopeNameKey kPassRTTrace;
 extern const Profiler::ScopeNameKey kPassSkyVis; // plan S: the RT sky visibility
 extern const Profiler::ScopeNameKey kSkyVisTrace;      // ...its rays (GPU, inside Pass_SkyVis)
 extern const Profiler::ScopeNameKey kSkyVisAccumulate; // ...its spatial step and history (GPU, inside Pass_SkyVis)
+extern const Profiler::ScopeNameKey kBloomConvFlares;   // the FFT bloom's steps (GPU, inside Pass_BloomConv): the flares' build
+extern const Profiler::ScopeNameKey kBloomConvSetup;    // ...the scene into the grid
+extern const Profiler::ScopeNameKey kBloomConvForward;  // ...its transform
+extern const Profiler::ScopeNameKey kBloomConvMultiply; // ...times the kernel's spectrum
+extern const Profiler::ScopeNameKey kBloomConvInverse;  // ...back
+extern const Profiler::ScopeNameKey kBloomConvResolve;  // ...into the bloom target
+extern const Profiler::ScopeNameKey kBloomConvComposite; // ...the flares and the sun glare onto it
 extern const Profiler::ScopeNameKey kPassSkyOcclusionMap;    // plan S's fallback: the world drawn from above
 extern const Profiler::ScopeNameKey kPassSkyOcclusionReduce; // ...reduced into its two levels
 extern const Profiler::ScopeNameKey kPassSkyVisFallback;     // ...and traced into the sky visibility

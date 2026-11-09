@@ -791,6 +791,17 @@ void SceneResourceBootstrapper::EnsureMaterials(Renderer* renderer)
         rt.DestBlendAlpha = D3D12_BLEND_ONE;
         rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
         matLensFlare_ = mm->GetOrCreateGraphics(renderer, gd);
+        // bloom.ghostMeshShader: the same scatter as a mesh shader (lens_flare.hlsl MSMain), only the bright tiles' quads.
+        if (renderer->SupportsMeshShaders())
+        {
+            gd.msEntry = "MSMain";
+            matLensFlareMs_ = mm->GetOrCreateGraphics(renderer, gd);
+            if (!matLensFlareMs_ || !matLensFlareMs_->GetPipelineState())
+            {
+                LOG_WARNING(logging::LogCategory::Render, "lens flare: the mesh shader scatter's PSO failed; the vertex shader's draws every tile");
+                matLensFlareMs_.reset();
+            }
+        }
     }
 
     if (!matDebugPreviewCS_)
@@ -1352,6 +1363,9 @@ void BloomFftHandles::Populate(Material* material)
     isVertical = material->ComputeCB0FieldHandle("isVertical");
     isInverse = material->ComputeCB0FieldHandle("isInverse");
     mode = material->ComputeCB0FieldHandle("mode");
+    lineCount = material->ComputeCB0FieldHandle("lineCount");
+    loadLimit = material->ComputeCB0FieldHandle("loadLimit");
+    writeLimit = material->ComputeCB0FieldHandle("writeLimit");
 }
 
 UINT SceneResourceBootstrapper::GetBloomFftCBSizeBytes() const
@@ -1477,6 +1491,9 @@ void SceneResourceBootstrapper::WriteBloomFftConstants(const BloomFftConstants& 
     matBloomFftCS_->UpdateCBField(bloomFftHandles_.isVertical, d.isVertical, dest);
     matBloomFftCS_->UpdateCBField(bloomFftHandles_.isInverse, d.isInverse, dest);
     matBloomFftCS_->UpdateCBField(bloomFftHandles_.mode, d.mode, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.lineCount, d.lineCount, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.loadLimit, d.loadLimit, dest);
+    matBloomFftCS_->UpdateCBField(bloomFftHandles_.writeLimit, d.writeLimit, dest);
 }
 
 void SceneResourceBootstrapper::WriteBloomConvConstants(const BloomConvConstants& d, uint8_t* dest) const

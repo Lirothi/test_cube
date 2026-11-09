@@ -1106,16 +1106,28 @@ void BloomRenderer::FlaresBuild(Renderer* renderer, ID3D12GraphicsCommandList* c
         const auto flareSamplers = std::array{ *SamplerManager::LinearClamp() };
         rc.samplerTable[0] = renderer->GetSamplerManager()->GetTable(renderer, flareSamplers);
 
-        flareMaterial->Bind(cl, rc);
-        cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-        // P8C-3: four quads an instance, UE's GLensFlareQuadsPerInstance. Mirrored in
-        // lens_flare.hlsl's kFlareQuadsPerInstance -- the vertex shader decodes the quad out of
-        // the high bits of SV_VertexID and collapses the partial last instance to zero size.
-        constexpr UINT kFlareQuadsPerInstance = 4u;
         const UINT tiles = D.lensFlareWidth * D.lensFlareHeight;
-        const UINT instances = (tiles + kFlareQuadsPerInstance - 1u) / kFlareQuadsPerInstance;
-        cl->DrawInstanced(6u * kFlareQuadsPerInstance, instances, 0, 0);
-        render::g_renderStats.AddDraw(6u * kFlareQuadsPerInstance, instances);
+        // bloom.ghostMeshShader: the bright tiles' quads only (lens_flare.hlsl MSMain, kFlareMsTiles a group).
+        Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList6> cl6;
+        auto flareMs = resources_->GetLensFlareMsMaterial();
+        if (bloom::g_ghostMeshShader && flareMs && flareMs->GetPipelineState() &&
+            SUCCEEDED(cl->QueryInterface(IID_PPV_ARGS(&cl6))) && flareMs->Bind(cl, rc))
+        {
+            constexpr UINT kFlareMsTiles = 32u;
+            cl6->DispatchMesh((tiles + kFlareMsTiles - 1u) / kFlareMsTiles, 1u, 1u);
+        }
+        else
+        {
+            flareMaterial->Bind(cl, rc);
+            cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            // P8C-3: four quads an instance, UE's GLensFlareQuadsPerInstance. Mirrored in
+            // lens_flare.hlsl's kFlareQuadsPerInstance -- the vertex shader decodes the quad out of
+            // the high bits of SV_VertexID and collapses the partial last instance to zero size.
+            constexpr UINT kFlareQuadsPerInstance = 4u;
+            const UINT instances = (tiles + kFlareQuadsPerInstance - 1u) / kFlareQuadsPerInstance;
+            cl->DrawInstanced(6u * kFlareQuadsPerInstance, instances, 0, 0);
+            render::g_renderStats.AddDraw(6u * kFlareQuadsPerInstance, instances);
+        }
     }
     renderer->EmitPoint(cl, pts.flareRead);
 }
@@ -1728,14 +1740,29 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
         convDispatchTo(c, gridUav, D.bloomUpMipUAV[0], w, h, barrierRes);
     };
 
-    // One thread per element PAIR, one group per scan line -- the shape bloom_fft_cs declares.
-    // The multiply and accumulate modes reuse the row shape: one group per ROW (isVertical = 0).
+    // One thread per element PAIR -- the shape bloom_fft_cs declares (kBloomFftThreads a group). A transform
+    // (mode 0) packs as many lines a group as fill it; the multiply (mode 1) is one group per ROW; the fused
+    // columns (mode 3) as many column pairs as fill it.
+    constexpr UINT kFftThreads = 1024u; // bloom_fft_cs.hlsl BLOOM_FFT_MAX_LENGTH / 2
     const auto fftDispatch = [&](const BloomFftConstants& c,
                                  D3D12_CPU_DESCRIPTOR_HANDLE srcUav,
                                  D3D12_CPU_DESCRIPTOR_HANDLE kernelUav,
                                  D3D12_CPU_DESCRIPTOR_HANDLE dstUav,
                                  ID3D12Resource* barrierRes) {
-        const UINT lines = (c.isVertical != 0u) ? grid.x : grid.y;
+        UINT lines = grid.y; // mode 1
+        if (c.mode == 0u)
+        {
+            const UINT length = (c.isVertical != 0u) ? grid.y : grid.x;
+            const UINT all = (c.isVertical != 0u) ? grid.x : grid.y;
+            const UINT count = (c.lineCount != 0u) ? std::min(c.lineCount, all) : all;
+            const UINT perGroup = std::max(kFftThreads / std::max(length / 2u, 1u), 1u);
+            lines = (count + perGroup - 1u) / perGroup;
+        }
+        else if (c.mode == 3u)
+        {
+            const UINT perGroup = std::max(kFftThreads / std::max(grid.y, 1u), 1u);
+            lines = (grid.x / 2u + perGroup - 1u) / perGroup;
+        }
         RecordComputeDispatch(renderer, cl, fftMaterial.get(), fftCb,
             [&](uint8_t* dest) { resources_->WriteBloomFftConstants(c, dest); },
             {},
@@ -1753,6 +1780,7 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     if (flaresGhosts_ || flaresStreak_)
     {
         CPU_SCOPE(ProfilerScopes::kBloomRecFlares);
+        GPU_SCOPE(cl, ProfilerScopes::kBloomConvFlares);
         FlaresBuild(renderer, cl, hdrSource, conv, pts);
     }
 
@@ -1797,6 +1825,7 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     // ---- frame: pack -> forward -> multiply -> inverse -> resolve ----
     CPU_SCOPE(ProfilerScopes::kBloomRecFft);
     {
+        GPU_SCOPE(cl, ProfilerScopes::kBloomConvSetup);
         BloomConvConstants s = conv;
         s.convStage = 0u;
         s.sourceSize = uint2{ renderer->GetWidth(), renderer->GetHeight() };
@@ -1805,22 +1834,63 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
 
     BloomFftConstants f{};
     f.transformSize = grid;
-    f.isVertical = 0u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
-    f.isVertical = 1u;
-    fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
-    // P8C-2: the Hermitian spectral multiply, on the COMPLETE forward spectrum.
-    f.mode = 1u;
-    f.isVertical = 0u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
-    f.mode = 0u;
-    f.isInverse = 1u;
-    f.isVertical = 1u;
-    fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
-    f.isVertical = 0u;
-    fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
+    // bloom.convFftFused (bloom_fft_cs.hlsl, THE FRAME'S ORDER): the image fills the grid's top-left, so only its rows
+    // are transformed forward and back; the columns go forward, through the multiply and back in one dispatch -- which
+    // holds a column pair in LDS, so a column may be at most kFftThreads long.
+    if (bloom::g_fftFused && grid.y <= kFftThreads)
+    {
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kBloomConvForward);
+            f.isVertical = 0u;
+            f.lineCount = image.y;
+            fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
+        }
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kBloomConvMultiply);
+            BloomFftConstants c = f;
+            c.mode = 3u;
+            c.lineCount = 0u;
+            c.loadLimit = image.y;  // the rows the forward pass left: zero
+            c.writeLimit = image.y; // the rows the inverse row pass reads
+            fftDispatch(c, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
+        }
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kBloomConvInverse);
+            f.isInverse = 1u;
+            f.isVertical = 0u;
+            f.lineCount = image.y;
+            fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
+        }
+    }
+    else
+    {
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kBloomConvForward);
+            f.isVertical = 0u;
+            fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
+            f.isVertical = 1u;
+            fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
+        }
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kBloomConvMultiply);
+            // P8C-2: the Hermitian spectral multiply, on the COMPLETE forward spectrum.
+            f.mode = 1u;
+            f.isVertical = 0u;
+            fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
+        }
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kBloomConvInverse);
+            f.mode = 0u;
+            f.isInverse = 1u;
+            f.isVertical = 1u;
+            fftDispatch(f, D.bloomFftBUAV, D.bloomFftKernelUAV, D.bloomFftAUAV, D.bloomFftA);
+            f.isVertical = 0u;
+            fftDispatch(f, D.bloomFftAUAV, D.bloomFftKernelUAV, D.bloomFftBUAV, D.bloomFftB);
+        }
+    }
 
     {
+        GPU_SCOPE(cl, ProfilerScopes::kBloomConvResolve);
         BloomConvConstants r = conv;
         r.convStage = 2u;
         r.sourceSize = uint2{ D.bloomWidth, D.bloomHeight };
@@ -1828,12 +1898,15 @@ void BloomRenderer::Convolve(Renderer* renderer, ID3D12GraphicsCommandList* cl,
     }
 
     // ---- P8C-2h/l: the flare composites, additive onto the freshly written mip 0 ----
-    if (flaresGhosts_ || flaresStreak_)
     {
-        CPU_SCOPE(ProfilerScopes::kBloomRecFlares);
-        FlaresComposite(renderer, cl, hdrSource, conv);
+        GPU_SCOPE(cl, ProfilerScopes::kBloomConvComposite);
+        if (flaresGhosts_ || flaresStreak_)
+        {
+            CPU_SCOPE(ProfilerScopes::kBloomRecFlares);
+            FlaresComposite(renderer, cl, hdrSource, conv);
+        }
+        SunGlareComposite(renderer, cl, hdrSource);
     }
-    SunGlareComposite(renderer, cl, hdrSource);
     // ...and all of them back to shader-readable for the tone curve, in one marker.
     renderer->EmitPoint(cl, pts.read);
 }

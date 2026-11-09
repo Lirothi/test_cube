@@ -567,14 +567,16 @@ struct BloomFftConstants
     uint2 transformSize{ 1u, 1u };
     uint32_t isVertical = 0u;
     uint32_t isInverse = 0u;
-    // 0 = transform, 1 = Hermitian spectral multiply, 2 = accumulate. See bloom_fft_cs.hlsl.
+    // 0 = one axis, 1 = Hermitian spectral multiply, 3 = the columns fused (forward, multiply, inverse). See bloom_fft_cs.hlsl.
     uint32_t mode = 0u;
-    uint32_t pad0 = 0u, pad1 = 0u, pad2 = 0u;
+    uint32_t lineCount = 0u;  // mode 0: the lines transformed, from the first (0 = all)
+    uint32_t loadLimit = 0u;  // elements of a line at/after this read as zero (0 = none)
+    uint32_t writeLimit = 0u; // elements of a line at/after this are not written (0 = all)
 };
 
 struct BloomFftHandles
 {
-    Material::CBFieldHandle transformSize, isVertical, isInverse, mode;
+    Material::CBFieldHandle transformSize, isVertical, isInverse, mode, lineCount, loadLimit, writeLimit;
     void Populate(Material* material);
 };
 
@@ -1152,6 +1154,7 @@ public:
     std::shared_ptr<Material> GetFogApplyMaterial() const { return matFogApply_; }
     UINT GetFogApplyCBSizeBytes() const;
     std::shared_ptr<Material> GetLensFlareMaterial() const { return matLensFlare_; }
+    std::shared_ptr<Material> GetLensFlareMsMaterial() const { return matLensFlareMs_; } // null without mesh shaders
     UINT GetLensFlareCBSizeBytes() const;
     void WriteLensFlareConstants(const LensFlareConstants& data, uint8_t* dest) const;
     UINT GetSsrTemporalCBSizeBytes() const;
@@ -1275,6 +1278,7 @@ private:
     std::shared_ptr<Material> matBloomConvCS_;
     std::shared_ptr<Material> matFogApply_;   // B6.1: the one fog application (fog_apply.hlsl)
     std::shared_ptr<Material> matLensFlare_;
+    std::shared_ptr<Material> matLensFlareMs_; // lens_flare.hlsl MSMain (bloom.ghostMeshShader)
     std::shared_ptr<Material> matDebugPreviewCS_;
     std::shared_ptr<Material> matSSR_;
     std::shared_ptr<Material> matWaterComposite_; // ocean G-buffer plan S4 (water_composite_cs.hlsl)

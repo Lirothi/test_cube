@@ -106,6 +106,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
+#include "rendering/post/BloomRenderer.h" // --set=bloom.convFftFused
 #include "rendering/streaming/StreamingSettings.h" // --set=streaming.* (texture streaming A2)
 #include "rendering/meshes/LodSelect.h" // --sweep=vsm.shadowLod* (docs/bug_shadow_lod_bias_perf.md)
 #include "rendering/debug/LodDebugView.h" // --set=lod.debug (LOD selection debug view)
@@ -1394,6 +1395,8 @@ namespace
         if (setting == "bloom.kernelTintB") { scene.BloomRef().convKernelTint[2] = value; return true; }
         if (setting == "bloom.convSize") { scene.BloomRef().convSize = value; return true; }
         if (setting == "bloom.convPercent") { scene.BloomRef().convPercent = value; return true; }
+        if (setting == "bloom.convFftFused") { bloom::g_fftFused_game = value != 0.0f; return true; } // the FFT's fused frame order
+        if (setting == "bloom.ghostMeshShader") { bloom::g_ghostMeshShader_game = value != 0.0f; return true; } // the ghosts' MS scatter
         if (setting == "bloom.convBeforeUpscale") { scene.BloomRef().convBeforeUpscale = value != 0.0f; return true; }
         if (setting == "bloom.convTemporalWeight") { scene.BloomRef().convTemporalWeight = std::clamp(value, 0.01f, 1.0f); return true; }
         if (setting == "bloom.convTemporalSunReject") { scene.BloomRef().convTemporalSunReject = value != 0.0f; return true; }

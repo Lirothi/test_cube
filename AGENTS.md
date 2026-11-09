@@ -359,6 +359,25 @@ twilight tints; `daySkyBrightness` 1):
   (transient). The time stepped 0.02 h per MCP call at the owner's position: the streak gone, the still frame identical.
   The moon is not covered (dimmer; not seen trailing). GBV (`Tonemap,Skybox` + the Skybox self-test, `--time-speed=600`):
   clean.
+- **What the FFT bloom costs, and its order** (2026-11-09, the owner's GPU pass on his 18:00 view, cam 37.93 4.63 71.59;
+  GPU sub-scopes `BloomConv.Flares / Setup / Forward / Multiply / Inverse / Resolve / Composite` inside Pass_BloomConv, which
+  is inside Pass_Tonemap). It was 0.26-0.28 ms: the transform 0.15, the ghosts' scatter 0.065. (1) `bloom_fft_cs.hlsl`: a
+  group is 1024 threads and holds one line of up to 2048 -- a 1024 row used half of it, a 512 column a quarter, at every one
+  of its barriers; a group now transforms as many lines as fill it. (2) `bloom.convFftFused` (1; 0 = the separate passes,
+  the A/B): the image fills the grid's top-left (640 x 360 of 1024 x 512 at 1440p), so the rows go forward and back over the
+  image's rows only (the pad's are zero, read as zero by the column pass, `loadLimit`), and the columns go forward, through
+  the multiply and back in ONE dispatch (mode 3), a column pair x, N - x a group -- the multiply needs the spectrum at -k,
+  which is the partner column's, in the same LDS now; only the image's rows are written back (`writeLimit`). The fused
+  columns keep the spectrum in fp32 where the separate passes rounded it to the grid's fp16: the bloom target's window mean
+  moved 0.06 % (DLSS off, the temporal input at weight 1, the same arm twice 0.00-0.02 %). Needs a column of at most 1024
+  (two in LDS), else the separate passes. (3) `bloom.ghostMeshShader` (1; 0 = the vertex shader): the bokeh scatter ran six
+  vertices for every tile of the quarter-res grid -- 1.4 M a frame, each reading its tile's four taps again -- to collapse
+  all but the few bright ones; `lens_flare.hlsl MSMain` takes 32 tiles a group, reads each once and emits only the bright
+  ones' quads, in tile order (the VS's order: the same additive sums). Window mean with ghosts x250 (`bloom.ghostIntensity
+  0.5`): 0.05 % from the VS's. Without a mesh shader tier the VS. Measured (alternated twice): Flares 0.065 -> 0.017, the
+  transform 0.12 -> 0.075, Pass_BloomConv 0.26-0.28 -> 0.145 ms, the GPU frame -0.15. Left: the setup 0.02, the composite
+  0.016, the resolve 0.011. GBV (`Tonemap,Skybox` + the Skybox self-test, `bloom.ghostThreshold:0.5` so the mesh shader
+  emits): clean.
 - **The water** (UE's ocean, Lumen reflections) in UE's LINEAR viewport, not a scene capture (below): our body was half as
   bright and bluer. wind_test's `ocean.render.deepScatterColor` (0, 0.0127, 0.040) -> (0.0013, 0.055, 0.12), fitted by
   least squares over -3 .. -18 degrees (the body is linear in it): those rows within 1-6 %, G/B and R/B matched. Still

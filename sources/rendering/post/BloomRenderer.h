@@ -31,6 +31,24 @@
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/RenderGraph.h"
 #include "rendering/core/UploadBatch.h"
+#include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
+
+namespace bloom
+{
+// The FFT's frame order (bloom_fft_cs.hlsl, THE FRAME'S ORDER): the rows forward and back over the image's rows only, the
+// columns forward, times the kernel's spectrum and back in one dispatch, a column pair a time. 0 = the separate passes over
+// the whole grid (rows, columns, multiply, columns, rows) -- the A/B, the same convolution to float rounding.
+// --set=bloom.convFftFused
+inline bool g_fftFused = true;
+inline bool g_fftFused_game = true;
+inline const bool g_fftFused_knob = ::knob::Register(g_fftFused_game, g_fftFused, "bloom::g_fftFused");
+// The ghosts' bokeh scatter as a mesh shader (lens_flare.hlsl MSMain): a group of 32 tiles emits the quads of the bright ones
+// only, where the vertex shader runs six vertices for every tile of the grid to collapse the dark ones. The same quads in
+// the same order. 0 = the vertex shader (the A/B; also the path without a mesh shader tier). --set=bloom.ghostMeshShader
+inline bool g_ghostMeshShader = true;
+inline bool g_ghostMeshShader_game = true;
+inline const bool g_ghostMeshShader_knob = ::knob::Register(g_ghostMeshShader_game, g_ghostMeshShader, "bloom::g_ghostMeshShader");
+}
 
 class Renderer;
 
