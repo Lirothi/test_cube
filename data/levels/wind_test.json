@@ -37171,6 +37171,31 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "buoyant": false,
+      "enabled": true,
+      "group": "Small Yacht",
+      "id": 3015,
+      "mesh": "models/small_yacht/small_yacht.mesh.json",
+      "name": "small_yacht 001 Copy",
+      "physics": "static",
+      "position": [
+        58.25723648071289,
+        -0.7999997735023499,
+        115.4465560913086
+      ],
+      "rotationDeg": [
+        0.0,
+        -65.0,
+        0.0
+      ],
+      "scale": [
+        1.0000001192092896,
+        1.0,
+        1.0000001192092896
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -37325,6 +37350,23 @@
       "shoreWetnessWetTime": 0.75,
       "skyScatterStrength": 0.3499999940395355,
       "specularStrength": 1.0,
+      "sprayColor": [
+        0.949999988079071,
+        0.949999988079071,
+        0.949999988079071,
+        1.0
+      ],
+      "sprayEnabled": true,
+      "sprayFoamLight": 1.0,
+      "sprayForward": 0.10000000149011612,
+      "sprayForwardScatter": 0.25,
+      "sprayMist": 1.0,
+      "sprayOpacity": 1.0,
+      "sprayOut": 0.4000000059604645,
+      "sprayRate": 0.699999988079071,
+      "spraySideFoam": 1.0,
+      "spraySlam": 1.0,
+      "sprayUp": 0.20000000298023224,
       "sssColor": [
         0.13333334028720856,
         0.9411764740943909,
@@ -37362,6 +37404,7 @@
       "underwaterRefractionStrength": 0.75,
       "viewAlignmentStrength": 0.800000011920929,
       "wakeBreaking": 2.0,
+      "wakeChurn": 0.5,
       "wakeCrestCoverage": 0.550000011920929,
       "wakeCrestFoam": 1.0,
       "wakeDamping": 1.5,
