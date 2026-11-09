@@ -694,7 +694,19 @@ SkyEnvironmentOverlay VolumetricCloud::MakeEnvironmentOverlay(Renderer* renderer
     if (!dirty && frame >= captureFrame_ + kCaptureIntervalFrames)
     {
         const float dx = probeXZ.x - captureProbeXZ_.x, dz = probeXZ.y - captureProbeXZ_.y;
-        dirty = (dx * dx + dz * dz) > kCaptureMoveMetres * kCaptureMoveMetres || in.windTime != captureWindTime_;
+        // render::g_cloudCaptureTexels: the clouds' drift since the capture, in the cube's texels where they move fastest
+        // (straight overhead at the layer's bottom). Any jump of the clock backwards re-captures.
+        bool clockMoved = in.windTime != captureWindTime_;
+        const float texels = render::g_cloudCaptureTexels;
+        if (texels > 0.0f && in.windTime > captureWindTime_)
+        {
+            constexpr float kCubeTexelRadians = 1.5707963f / 128.0f; // SkyAtmosphere's 128-texel environment
+            const float speed = std::max(s.windKmH, 0.0f) / 3.6f;      // m/s
+            const float height = std::max(s.layerBottomKm * 1000.0f - std::max(in.cameraPos.y, 0.0f), 100.0f);
+            const float driftTexels = (in.windTime - captureWindTime_) * speed / height / kCubeTexelRadians;
+            clockMoved = driftTexels >= texels;
+        }
+        dirty = (dx * dx + dz * dz) > kCaptureMoveMetres * kCaptureMoveMetres || clockMoved;
     }
     if (dirty)
     {

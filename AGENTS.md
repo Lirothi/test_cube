@@ -378,6 +378,19 @@ twilight tints; `daySkyBrightness` 1):
   transform 0.12 -> 0.075, Pass_BloomConv 0.26-0.28 -> 0.145 ms, the GPU frame -0.15. Left: the setup 0.02, the composite
   0.016, the resolve 0.011. GBV (`Tonemap,Skybox` + the Skybox self-test, `bloom.ghostThreshold:0.5` so the mesh shader
   emits): clean.
+- **The clouds in the sky's cube are re-captured by how far they drifted** (2026-11-09, the same pass). A capture
+  (`VolumetricCloud::MakeEnvironmentOverlay` -> `SkyAtmosphere::BuildEnvironment`) rebuilds the whole environment -- the
+  sky picture, the clouds marched into all 8 mips (`SkyEnvironment.CloudCapture` 0.25-0.32 ms), the 9 probe mips --
+  0.35-0.4 ms, and it ran every 4 frames while the wind's clock moved: 50 times a second at 200 fps. Clouds drift: fastest
+  straight overhead at the layer's bottom, windKmH / 3.6 / height rad/s against the 128-texel cube's 0.70 degrees -- on
+  wind_test (15 km/h, 0.6 km) a texel in 1.8 s. `cloud.captureTexels` (0.5; graphics_settings.json `cloudTrace`
+  captureTexels, Developer Controls > Sky "Cloud capture step"; 0 = every 4 frames, the A/B): re-captured once they could
+  have drifted that far (~0.9 s here); the probe moving 10 m, a setting, the noise or the distant light still re-capture at
+  once, the clock going back too. GPU frame (alternated twice) 4.47-4.51 -> 4.37-4.41 ms. Checked by stepping the wind's
+  clock by hand (scratchpad-style `cloudlag.py`, the water's reflection masked, against the 4-frame rule at the same
+  steps): 0.5 at the floor at 50 ms and 2 s steps; the control 16 texels (no capture in 20 s) 1.01 % of the water's pixels
+  over 8 levels against 0.24 %. What is left of the clouds: the view trace 0.18-0.21 ms (it traces behind near geometry on
+  purpose, the rim it fixed), the shadow map 0.06 (`cloudShadow.updateFrames`).
 - **The water** (UE's ocean, Lumen reflections) in UE's LINEAR viewport, not a scene capture (below): our body was half as
   bright and bluer. wind_test's `ocean.render.deepScatterColor` (0, 0.0127, 0.040) -> (0.0013, 0.055, 0.12), fitted by
   least squares over -3 .. -18 degrees (the body is linear in it): those rows within 1-6 %, G/B and R/B matched. Still

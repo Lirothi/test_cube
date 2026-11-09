@@ -65,6 +65,7 @@ enum class GraphicsControl
     CloudShadowBilinearWeather,
     CloudShadowDetailMean,
     CloudTraceMode,
+    CloudCaptureTexels,
     LodEnabled,                   // LOD ...
     LodUeScreenSize,              // UE's per-mesh screen sizes (render::g_lodUeScreenSize) ...
     LodPixelError,

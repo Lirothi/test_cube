@@ -491,6 +491,7 @@ namespace
         if (setting == "cloudShadow.detailMean")      { render::g_cloudShadowDetailMean_game = value != 0.0f; return true; }
         // The view trace's resolutions (project-wide, graphics_settings.json "cloudTrace"), UE's
         // r.VolumetricRenderTarget.Mode numbers: 1 half-res trace (ours), 0 quarter-res (UE's default).
+        if (setting == "cloud.captureTexels") { render::g_cloudCaptureTexels_game = render::SanitizeCloudCaptureTexels(value); return true; }
         if (setting == "cloudTrace.mode") { render::g_cloudTraceMode_game = render::SanitizeCloudTraceMode(static_cast<std::uint32_t>(std::max(value, 0.0f))); return true; }
         render::CameraExposureSettings& e = scene.CameraExposureRef();
         render::ColorPipelineSettings& c = scene.ColorPipelineRef();

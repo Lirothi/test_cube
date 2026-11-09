@@ -276,6 +276,19 @@ inline std::uint32_t g_cloudTraceMode_game = 1u;
 inline const bool g_cloudTraceMode_knob = ::knob::Register(g_cloudTraceMode_game, g_cloudTraceMode, "render::g_cloudTraceMode");
 inline std::uint32_t SanitizeCloudTraceMode(std::uint32_t mode) { return mode == 0u ? 0u : 1u; }
 
+// HOW OFTEN THE CLOUDS ARE RE-CAPTURED INTO THE SKY'S CUBE (VolumetricCloud::MakeEnvironmentOverlay; graphics_settings.json
+// "cloudTrace" captureTexels, Developer Controls > Sky, `--set=cloud.captureTexels`). A capture rebuilds the whole
+// environment -- the sky, the clouds marched into every mip, the lighting probes -- 0.35-0.4 ms on wind_test, and it used
+// to run every 4 frames while the wind's clock moved: 50 times a second at 200 fps. The clouds drift with the wind: the
+// fastest they cross the 128-texel cube is straight overhead at the layer's bottom, windKmH / 3.6 / that height radians a
+// second against a texel's 90 / 128 degrees -- on wind_test (15 km/h, 600 m) one texel in 1.8 s. Re-captured once they
+// could have moved this many texels (the probe moving 10 m or anything in the key still re-captures at once). 0 = every
+// kCaptureIntervalFrames frames while the clock moves, as before (the A/B).
+inline float g_cloudCaptureTexels = 0.5f;
+inline float g_cloudCaptureTexels_game = 0.5f;
+inline const bool g_cloudCaptureTexels_knob = ::knob::Register(g_cloudCaptureTexels_game, g_cloudCaptureTexels, "render::g_cloudCaptureTexels");
+inline float SanitizeCloudCaptureTexels(float texels) { return texels > 0.0f ? (texels < 16.0f ? texels : 16.0f) : 0.0f; }
+
 // Cheap density for the MAP's march only (the view, its self-shadow and the capture keep the full
 // model), same file / tab / --set family. Each drops texture taps from every map sample:
 //   bilinearWeather: the macro variation's field in one bilinear tap instead of the view's 4-tap

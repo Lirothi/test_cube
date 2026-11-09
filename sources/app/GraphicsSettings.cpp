@@ -52,6 +52,7 @@ namespace
         bool cloudShadowBilinearWeather = true;     // the map's march: 1 macro-variation tap instead of the view's 4
         bool cloudShadowDetailMean = false;         // the map's march: erosion by its mean, no fetch (VolumetricCloudSettings.h: not worth it)
         std::uint32_t cloudTraceMode = 1u;          // UE r.VolumetricRenderTarget.Mode: 1 half-res trace (ours), 0 quarter-res (UE's default)
+        float cloudCaptureTexels = 0.5f;            // the clouds' drift (cube texels) before the sky's cube re-captures them; 0 = every 4 frames
         // Texture streaming A3 (UE r.Streaming.*)
         bool streamingEnabled = true;
         int streamingPoolSizeMB = -1;   // -1 = 70 % of dedicated VRAM, 0 = unlimited
@@ -345,6 +346,7 @@ namespace
         s.mouseSmoothingMs = std::clamp(finite(s.mouseSmoothingMs, 0.0f), 0.0f, kCameraMouseSmoothingMaxMs);
         s.cloudShadowUpdateFrames = render::SanitizeCloudShadowUpdateFrames(s.cloudShadowUpdateFrames);
         s.cloudTraceMode = render::SanitizeCloudTraceMode(s.cloudTraceMode);
+        s.cloudCaptureTexels = render::SanitizeCloudCaptureTexels(finite(s.cloudCaptureTexels, 0.5f));
         s.occlusionMethod = std::clamp(s.occlusionMethod, 0, 2);
         s.occlusionQueryLatency = std::clamp(
             s.occlusionQueryLatency, 1, static_cast<int>(vis::kOcclusionBufferedFrames));
@@ -514,6 +516,7 @@ namespace
         s.cloudShadowBilinearWeather = render::g_cloudShadowBilinearWeather_game;
         s.cloudShadowDetailMean = render::g_cloudShadowDetailMean_game;
         s.cloudTraceMode = render::g_cloudTraceMode_game;
+        s.cloudCaptureTexels = render::g_cloudCaptureTexels_game;
         s.streamingEnabled = streaming::g_enabled_game;
         s.streamingPoolSizeMB = streaming::g_poolSizeMB_game;
         s.streamingMipBias = streaming::g_mipBias_game;
@@ -711,6 +714,7 @@ namespace
         render::g_cloudShadowBilinearWeather_game = s.cloudShadowBilinearWeather;
         render::g_cloudShadowDetailMean_game = s.cloudShadowDetailMean;
         render::g_cloudTraceMode_game = render::SanitizeCloudTraceMode(s.cloudTraceMode); // the renderer recreates at the frame boundary
+        render::g_cloudCaptureTexels_game = render::SanitizeCloudCaptureTexels(s.cloudCaptureTexels);
     }
 
     void ApplyStreaming(const GraphicsSettingsSnapshot& s)
@@ -920,7 +924,8 @@ namespace
                 { "detailMean", s.cloudShadowDetailMean }
             } },
             { "cloudTrace", {
-                { "mode", s.cloudTraceMode }
+                { "mode", s.cloudTraceMode },
+                { "captureTexels", s.cloudCaptureTexels }
             } },
             { "performance", {
                 { "asyncCompute", s.asyncCompute },
@@ -1159,6 +1164,7 @@ namespace
         Read(cloudShadow, "detailMean", s.cloudShadowDetailMean);
         const json& cloudTrace = Section(root, "cloudTrace");
         Read(cloudTrace, "mode", s.cloudTraceMode);
+        Read(cloudTrace, "captureTexels", s.cloudCaptureTexels);
         Read(performance, "asyncCompute", s.asyncCompute);
         Read(performance, "gpuDrivenGBuffer", s.indirectGBuffer);
         Read(performance, "gbufferHzbCull", s.gbufferHzbCull);
@@ -1676,6 +1682,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::CloudShadowBilinearWeather:     current.cloudShadowBilinearWeather = defaults.cloudShadowBilinearWeather; break;
     case GraphicsControl::CloudShadowDetailMean:          current.cloudShadowDetailMean = defaults.cloudShadowDetailMean; break;
     case GraphicsControl::CloudTraceMode:                 current.cloudTraceMode = defaults.cloudTraceMode; break;
+    case GraphicsControl::CloudCaptureTexels:             current.cloudCaptureTexels = defaults.cloudCaptureTexels; break;
     case GraphicsControl::StreamingEnabled:               current.streamingEnabled = defaults.streamingEnabled; break;
     case GraphicsControl::StreamingPoolSizeMB:            current.streamingPoolSizeMB = defaults.streamingPoolSizeMB; break;
     case GraphicsControl::StreamingMipBias:               current.streamingMipBias = defaults.streamingMipBias; break;
@@ -1774,7 +1781,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     {
         ApplyFog(current);
     }
-    else if (value <= static_cast<unsigned>(GraphicsControl::CloudTraceMode))
+    else if (value <= static_cast<unsigned>(GraphicsControl::CloudCaptureTexels))
     {
         ApplySky(current);
     }

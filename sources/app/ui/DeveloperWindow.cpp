@@ -1498,6 +1498,19 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                         "res, then upsampled bilaterally by depth over the scene. A quarter of the rays and of "
                         "the rebuild, half the detail per axis. Recreates the cloud targets. "
                         "--set=cloudTrace.mode:1|0");
+                {
+                    float captureTexels = render::g_cloudCaptureTexels_game;
+                    if (GRAPHICS_CONTROL_WIDTH(CloudCaptureTexels, "cloudCaptureTexels", 105.0f,
+                            ImGui::SliderFloat("Cloud capture step (texels)", &captureTexels, 0.0f, 4.0f, "%.2f")))
+                    {
+                        render::g_cloudCaptureTexels_game = render::SanitizeCloudCaptureTexels(captureTexels);
+                    }
+                }
+                DevHelp("How far the clouds may drift, in texels of the sky's 128-texel cube where they move fastest "
+                        "(straight overhead at the layer's bottom), before the cube re-captures them -- the sky, the "
+                        "clouds in every mip and the lighting probes, ~0.35-0.4 ms a rebuild on wind_test. At 15 km/h "
+                        "and a 600 m base 0.5 is ~0.9 s. Moving 10 m or changing a cloud setting re-captures at once. "
+                        "0 = every 4 frames while the wind's clock moves (as before). --set=cloud.captureTexels");
 
                 // Project-wide (graphics_settings.json), unlike the level-authored look above: a
                 // performance switch, UE's cvar role. The readout under it is what the last frame
