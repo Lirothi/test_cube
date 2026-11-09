@@ -39,17 +39,17 @@ float DdgiTransmittance(RaytracingAccelerationStructure tlas, float3 origin, flo
     return RtVisibilityTransmittance(tlas, ray, kDdgiMaskShadow, meshOpacity);
 }
 
-[numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + the 64 blended
+[numthreads(96, 1, 1)] // kDdgiRays: the 32 fixed rays (one wave) + up to 64 blended (gi.rays)
 [RootSignature(DDGI_TRACE_RS)]
 void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
 {
     const uint probeIndex = gid.x * max(schedule.x, 1u) + schedule.y;
-    if (gid.x >= schedule.z || probeIndex >= kDdgiProbeCount || gi >= kDdgiRays)
+    if (gid.x >= schedule.z || probeIndex >= kDdgiProbeCount || gi >= kDdgiFixedRays + DdgiBlendRayCount())
     {
         return;
     }
     RWTexture2D<float4> rays = ResourceDescriptorHeap[rayUavIndex];
-    const uint2 rayTexel = uint2(gi, gid.x);
+    const uint2 rayTexel = uint2(gi, probeIndex); // the probe's own row (ddgi_common.hlsli kDdgiRays)
     const DdgiVolumeDesc volume = DdgiVolumeFromConstants();
     const int3 cell = DdgiCellOfSlot(DdgiSlotFromIndex(probeIndex), volume.base);
     // From where the probe stands (ddgi_update_cs relocates it): its offset while the slot was traced for this cell
@@ -58,6 +58,29 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     const uint4 ownState = probeState[DdgiStateIndex(probeIndex)];
     const bool placed = all(int3(asint(ownState.x), asint(ownState.y), asint(ownState.z)) == cell) &&
                         (ownState.w >> 8) == volume.generation && (ownState.w & kDdgiStateValid) != 0u;
+    // What this update traces (ddgi_update_cs reads the same state and knows which). The FIXED rays only on their
+    // turn (DdgiFixedRaysDue): their directions never change, so while the probe stands where it stood their answers
+    // in its row hold -- unless it is new to the cell or the generation, or its last update moved it. The BLENDED rays
+    // not for a probe its last update found inside geometry: it lights nothing (lighting and the infinite bounce skip
+    // it), and its fixed rays go on classifying it -- RTXGI's ProbeTraceRGS. Under the island and the sea floor that is
+    // a good share of the far cascade (64 x 32 x 64 m round the camera, 12 m of it below the eye at 2 m spacing).
+    // A probe no pixel reads (ddgi_usage_cs.hlsl) sleeps through all but one turn in gi.sleepPeriod, and on that one
+    // traces its fixed rays as well (its turns need not meet DdgiFixedRaysDue's).
+    const bool steady = placed && (ownState.w & kDdgiStateMoved) == 0u;
+    StructuredBuffer<uint> usage = ResourceDescriptorHeap[usageIndex];
+    const bool idle = sleepPeriod > 1u && steady && DdgiProbeIdle(usage[probeIndex]); // no stamps are written at 1
+    if (DdgiProbeSleeps(probeIndex, idle))
+    {
+        return; // the whole group: ddgi_update_cs skips the same probe
+    }
+    if (gi < kDdgiFixedRays)
+    {
+        if (steady && !idle && !DdgiFixedRaysDue(probeIndex)) { return; }
+    }
+    else if (placed && (ownState.w & kDdgiStateInactive) != 0u && (traceFlags & kDdgiTraceSkipInactive) != 0u)
+    {
+        return;
+    }
     const float3 origin = float3(cell) * volume.spacing +
                           (placed ? asfloat(probeState[DdgiOffsetIndex(probeIndex)].xyz) : 0.0f.xxx);
     const float3 dir = DdgiRayDirection(gi);
@@ -144,8 +167,9 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     {
         irradiance += lightRgb * (sunNdotL * DdgiTransmittance(tlas, shadowOrigin, L, 1.0e4f));
     }
-    // The lamps in reach, each with its shadow ray (a candle behind a wall lights nothing here).
-    if (spotCount > 0u)
+    // The lamps in reach, each with its shadow ray (a candle behind a wall lights nothing here); gi.lights:0 = none.
+    const bool lamps = (traceFlags & kDdgiTraceLights) != 0u;
+    if (lamps && spotCount > 0u)
     {
         StructuredBuffer<SpotLightData> spots = ResourceDescriptorHeap[spotLightIndex];
         for (uint si = 0u; si < spotCount; ++si)
@@ -157,7 +181,7 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
             irradiance += rad * (ndl * DdgiTransmittance(tlas, shadowOrigin, sl, max(sdist - 0.04f, 0.0f)));
         }
     }
-    if (pointCount > 0u)
+    if (lamps && pointCount > 0u)
     {
         StructuredBuffer<PointLightData> points = ResourceDescriptorHeap[pointLightIndex];
         for (uint pi = 0u; pi < pointCount; ++pi)
@@ -171,20 +195,25 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
     }
     float3 radiance = diffuse * kInvPi * irradiance;
 
-    // The sky at the hit, seen through one cosine ray (plan S's reach): the probe's 64 blended rays and its
-    // hysteresis average it, as SkyVis averages its four over frames.
+    // The sky at the hit, seen through one cosine ray (plan S's reach): the probe's blended rays and its
+    // hysteresis average it, as SkyVis averages its four over frames. gi.skyRay:0 = the open sky at every hit, no ray
+    // (a crown's underside then sends back the whole sky's light).
     if (skyIrradianceIndex != 0u)
     {
-        const uint seed = RtWangHash(probeIndex * 9781u + gi * 6271u + schedule.w * 26699u);
-        const float u1 = float(seed & 0xFFFFu) * (1.0f / 65536.0f);
-        const float u2 = float(seed >> 16) * (1.0f / 65536.0f);
-        const float3 up = abs(N.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
-        const float3 T = normalize(cross(up, N));
-        const float3 B = cross(N, T);
-        const float r = sqrt(u1);
-        const float phi = 2.0f * kPi * u2;
-        const float3 skyDir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(saturate(1.0f - u1)));
-        const float skyThrough = DdgiTransmittance(tlas, shadowOrigin, skyDir, skyRayDistance);
+        float skyThrough = 1.0f;
+        if ((traceFlags & kDdgiTraceSkyRay) != 0u)
+        {
+            const uint seed = RtWangHash(probeIndex * 9781u + gi * 6271u + schedule.w * 26699u);
+            const float u1 = float(seed & 0xFFFFu) * (1.0f / 65536.0f);
+            const float u2 = float(seed >> 16) * (1.0f / 65536.0f);
+            const float3 up = abs(N.z) < 0.999f ? float3(0.0f, 0.0f, 1.0f) : float3(1.0f, 0.0f, 0.0f);
+            const float3 T = normalize(cross(up, N));
+            const float3 B = cross(N, T);
+            const float r = sqrt(u1);
+            const float phi = 2.0f * kPi * u2;
+            const float3 skyDir = normalize(T * (r * cos(phi)) + B * (r * sin(phi)) + N * sqrt(saturate(1.0f - u1)));
+            skyThrough = DdgiTransmittance(tlas, shadowOrigin, skyDir, skyRayDistance);
+        }
         if (skyThrough > 0.0f)
         {
             TextureCube skyIrradiance = ResourceDescriptorHeap[skyIrradianceIndex];
@@ -202,7 +231,8 @@ void CSMain(uint3 gid : SV_GroupID, uint gi : SV_GroupIndex)
         Texture2D irradianceAtlas = ResourceDescriptorHeap[irradianceIndex];
         Texture2D depthAtlas = ResourceDescriptorHeap[depthIndex];
         float w;
-        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, probeState, gSmp, volume, P, N, -dir, 1.0f, w);
+        const float3 bounce = DdgiIrradiance(irradianceAtlas, depthAtlas, probeState, gSmp, volume, P, N, -dir, 1.0f, w,
+                                             (traceFlags & kDdgiTraceBounceVisibility) != 0u);
         radiance += diffuse * bounce * w;
     }
     rays[rayTexel] = float4(radiance * cardShare, t);

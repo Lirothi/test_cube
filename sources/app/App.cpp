@@ -976,6 +976,13 @@ namespace
         if (setting == "gi.intensity") { renderSettings.giIntensity = std::clamp(value, 0.0f, 16.0f); return true; }
         if (setting == "gi.rayDistance") { renderSettings.giRayDistance = std::clamp(value, 1.0f, 1000.0f); return true; }
         if (setting == "gi.infiniteBounce") { renderSettings.giInfiniteBounce = value != 0.0f; return true; }
+        if (setting == "gi.rays") { renderSettings.giRays = static_cast<uint32_t>(std::clamp(value, 16.0f, 64.0f)); return true; }
+        if (setting == "gi.fixedRayPeriod") { renderSettings.giFixedRayPeriod = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
+        if (setting == "gi.skyRay") { renderSettings.giSkyRay = value != 0.0f; return true; }
+        if (setting == "gi.lights") { renderSettings.giLights = value != 0.0f; return true; }
+        if (setting == "gi.bounceVisibility") { renderSettings.giBounceVisibility = value != 0.0f; return true; }
+        if (setting == "gi.skipInactive") { renderSettings.giSkipInactive = value != 0.0f; return true; }
+        if (setting == "gi.sleepPeriod") { renderSettings.giSleepPeriod = static_cast<uint32_t>(std::clamp(value, 1.0f, 64.0f)); return true; }
         if (setting == "gi.twoSidedSheets") { renderSettings.giTwoSidedSheets = value != 0.0f; return true; }
         if (setting == "gi.far") { renderSettings.giFarCascade = value != 0.0f; return true; }
         if (setting == "gi.farSpacing") { renderSettings.giFarSpacing = std::clamp(value, 0.5f, 8.0f); return true; }

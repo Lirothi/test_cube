@@ -844,6 +844,25 @@ struct SceneRenderSettings
     // from 35 m up, +0.02-0.04 on the grove (its rays end on geometry anyway).
     float giRayDistance = 200.0f;
     bool giInfiniteBounce = true;
+    // The trace's price (ddgi_trace_cs.hlsl; Developer Controls > GI "Trace cost", graphics_settings.json gi.*). The
+    // blended rays a probe traces an update (16-64, a multiple of 16): fewer = a noisier estimate the hysteresis
+    // averages longer. A probe's 32 FIXED rays (its classification and relocation; their directions never change) every
+    // `giFixedRayPeriod`-th update -- in between their last answers in its row hold, and a probe new to its cell or
+    // moved traces them at once. A hit's sky through a ray (`giSkyRay`; off = the open sky at every hit), the lamps
+    // (`giLights`), and the infinite bounce's Chebyshev visibility (`giBounceVisibility`; off = the probes round the hit
+    // blend without their depth moments: 8 reads a hit less, a bounce of a bounce that may leak through a wall).
+    uint32_t giRays = 64u;
+    uint32_t giFixedRayPeriod = 4u;
+    bool giSkyRay = true;
+    bool giLights = true;
+    bool giBounceVisibility = true;
+    // A probe its last update found inside geometry traces only its fixed rays and blends nothing (RTXGI; nothing reads
+    // it). `--set gi.skipInactive:0` = it traces and blends as any other, the A/B (transient).
+    bool giSkipInactive = true;
+    // A probe no pixel has read for 32 frames (ddgi_usage_cs.hlsl stamps the 8 round every 4th pixel each way) -- behind
+    // the camera, under the ground, up in the air -- updates one turn in this many; 1 = every turn (before). The steady
+    // picture does not move, only how fast a probe the camera turns to has followed a change of the light.
+    uint32_t giSleepPeriod = 4u;
     // A probe ray that meets a two-sided material (MaterialData::doubleSided) from behind met its other face, not the
     // inside of a solid (ddgi_trace_cs.hlsl). 0 = every opaque back face is a solid's inside, the behaviour before.
     bool giTwoSidedSheets = true;

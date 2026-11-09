@@ -12,7 +12,7 @@
 // and the probe's relocation from the same rays (DdgiRelocate); a probe that moved starts over next update.
 #define DDGI_UPDATE_RS \
     "CBV(b0)," \
-    "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=2, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 #pragma pack_matrix(row_major)
@@ -20,15 +20,20 @@
 #include "ddgi_constants.hlsli"
 
 Texture2D<float4> Rays : register(t0);                 // (radiance, signed hit distance) per ray, a row per probe
+StructuredBuffer<uint> ProbeUsage : register(t1);      // the frame each probe slot was last read by a pixel (ddgi_usage_cs)
 RWTexture2D<float4> IrradianceAtlas : register(u0);
 RWTexture2D<float2> DepthAtlas : register(u1);
 RWStructuredBuffer<uint4> ProbeState : register(u2);  // per slot: (cell xyz, generation << 8 | flags), (offset xyz, 0)
 
 static const float kDdgiDepthSharpness = 50.0f; // RTXGI probeDistanceExponent
-// The weight one update puts into a depth texel on average: the cos^n lobe is 2 pi / (n + 1) of the sphere's 4 pi.
-static const float kDdgiDepthExpectedWeight = float(kDdgiBlendRays) / (2.0f * (kDdgiDepthSharpness + 1.0f));
-// RTXGI's probeNumRays: what its visibility (14x14 depth texels, cos^50 lobes) is tuned for. With kDdgiBlendRays the
-// depth keeps a texel's samples over its memory the same: 1 - h_depth = (1 - h) x kDdgiBlendRays / this.
+// Below this cosine a ray's cos^50 weight is under 6e-7 of a texel's (0.75^50): not computed. Each depth texel took
+// a pow over every blended ray; most of them lie outside its narrow lobe.
+static const float kDdgiDepthMinCosine = 0.75f;
+// The weight one update puts into a depth texel on average: the cos^n lobe is 2 pi / (n + 1) of the sphere's 4 pi,
+// times the blended rays (DdgiBlendRayCount).
+static const float kDdgiDepthLobeShare = 1.0f / (2.0f * (kDdgiDepthSharpness + 1.0f));
+// RTXGI's probeNumRays: what its visibility (14x14 depth texels, cos^50 lobes) is tuned for. With the blended rays the
+// depth keeps a texel's samples over its memory the same: 1 - h_depth = (1 - h) x blended rays / this.
 static const float kDdgiRtxgiRays = 256.0f;
 // RTXGI's probeIrradianceThreshold: a large lighting change lowers the hysteresis by 0.75 for that update, so a probe
 // follows a light switched off or a clock jumped from noon to night in a few updates instead of hundreds (at 0.98 a
@@ -124,14 +129,27 @@ void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_
     // Traced for this cell in this generation before: its offset holds (the trace started this update's rays there).
     const bool placed = all(int3(asint(previousState.x), asint(previousState.y), asint(previousState.z)) == cell) &&
                         (previousState.w >> 8) == uint(volumeBase.w) && (previousState.w & kDdgiStateValid) != 0u;
+    // A probe no pixel reads sleeps through this turn (ddgi_constants.hlsli DdgiProbeSleeps): the trace traced nothing
+    // for it, and nothing about it changes. Uniform across the group, before any barrier.
+    const bool steady = placed && (previousState.w & kDdgiStateMoved) == 0u;
+    if (DdgiProbeSleeps(probeIndex, steady && DdgiProbeIdle(ProbeUsage[probeIndex])))
+    {
+        return;
+    }
     const float3 previousOffset = placed ? asfloat(ProbeState[DdgiOffsetIndex(probeIndex)].xyz) : 0.0f.xxx;
-    // A probe new to its cell, or one the last update moved, starts over: what it held was seen from elsewhere.
+    // A probe new to its cell, or one the last update moved (or brought back out of geometry, below), starts over:
+    // what it held was seen from elsewhere.
     const bool fresh = !placed || (previousState.w & kDdgiStateMoved) != 0u;
+    // Its last update found it inside geometry, so the trace skipped its blended rays (ddgi_trace_cs): only the fixed
+    // rays' classification runs, its atlases keep what they hold, and nothing reads them.
+    const bool wasInactive = placed && (previousState.w & kDdgiStateInactive) != 0u &&
+                             (traceFlags & kDdgiTraceSkipInactive) != 0u;
+    const uint rayCount = kDdgiFixedRays + DdgiBlendRayCount();
 
     if (gi == 0u) { sBackfaces = 0u; }
-    if (gi < kDdgiRays)
+    if (gi < rayCount)
     {
-        sRay[gi] = Rays[uint2(gi, gid.x)];
+        sRay[gi] = Rays[uint2(gi, probeIndex)]; // the probe's own row (ddgi_common.hlsli kDdgiRays)
         sDir[gi] = DdgiRayDirection(gi);
     }
     const uint2 tile = DdgiTile(slot);
@@ -155,19 +173,24 @@ void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_
         InterlockedAdd(sBackfaces, 1u);
     }
 
+    const float blendRays = float(DdgiBlendRayCount());
     const float irradianceHysteresis = fresh ? 0.0f : saturate(volumeParams.y);
     // The distances move only with geometry, so they can afford RTXGI's sample density at a quarter of its rays:
-    // 0.995 at the volume's 0.98 (a door moved settles its visibility in ~200 updates instead of ~50).
-    const float depthHysteresis = fresh ? 0.0f
-                                        : 1.0f - (1.0f - saturate(volumeParams.y)) * float(kDdgiBlendRays) / kDdgiRtxgiRays;
+    // 0.995 at the volume's 0.98 and 64 rays (a door moved settles its visibility in ~200 updates instead of ~50).
+    const float depthHysteresis = fresh ? 0.0f : 1.0f - (1.0f - saturate(volumeParams.y)) * blendRays / kDdgiRtxgiRays;
+    if (!wasInactive)
     {
         const float3 texelDir = DdgiTexelDirection(depthSource, kDdgiDepthInterior);
         float3 acc = 0.0f.xxx;
-        for (uint r = kDdgiFixedRays; r < kDdgiRays; ++r)
+        for (uint r = kDdgiFixedRays; r < rayCount; ++r)
         {
-            const float w = pow(saturate(dot(texelDir, sDir[r])), kDdgiDepthSharpness);
-            const float d = min(abs(sRay[r].w), volumeParams.w);
-            acc += float3(w * d, w * d * d, w);
+            const float c = dot(texelDir, sDir[r]);
+            if (c > kDdgiDepthMinCosine)
+            {
+                const float w = pow(c, kDdgiDepthSharpness);
+                const float d = min(abs(sRay[r].w), volumeParams.w);
+                acc += float3(w * d, w * d * d, w);
+            }
         }
         const float2 result = acc.z > 1.0e-6f ? acc.xy / acc.z : previousDepth;
         // The update enters by its weight: a cos^50 lobe holds 1 / (2 * 51) of the sphere, so 64 rays put 0.63 of
@@ -177,17 +200,17 @@ void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_
         // Chebyshev visibility of a probe beside the corner cabinet's wall had walked its bounce +-10 % an update
         // (8.9 % frame to frame, candles steady; 1.3 % with the depth frozen). Weighted, and at depthHysteresis:
         // the largest step of a frame 10 -> 2.7-4 %, the 99th percentile 6-7.6 -> 1.7-2 %.
-        const float rate = fresh ? 1.0f : saturate((1.0f - depthHysteresis) * acc.z / kDdgiDepthExpectedWeight);
+        const float rate = fresh ? 1.0f : saturate((1.0f - depthHysteresis) * acc.z / (blendRays * kDdgiDepthLobeShare));
         DepthAtlas[depthOrigin + gtid.xy] = lerp(previousDepth, result, rate);
     }
     // This update's irradiance estimate per texel, blended as E^(1/5) (ddgi_common.hlsli kDdgiIrradianceGamma): the
     // previous value is stored that way.
     float3 result = previousIrradiance;
-    if (irradianceThread)
+    if (irradianceThread && !wasInactive)
     {
         const float3 texelDir = DdgiTexelDirection(irradianceSource, kDdgiIrrInterior);
         float4 acc = 0.0f.xxxx;
-        for (uint r = kDdgiFixedRays; r < kDdgiRays; ++r)
+        for (uint r = kDdgiFixedRays; r < rayCount; ++r)
         {
             const float w = saturate(dot(texelDir, sDir[r]));
             acc += float4(sRay[r].rgb * w, w);
@@ -206,7 +229,7 @@ void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_
     // light going out moves no geometry, so the distances keep their own hysteresis.
     float hysteresis = irradianceHysteresis;
     uint changeFlags = 0u; // the run of large changes this update leaves for the next (bits 2-3 count, bit 4 up)
-    if (!fresh)
+    if (!fresh && !wasInactive)
     {
         float previousMean = 0.0f;
         float newMean = 0.0f;
@@ -235,7 +258,7 @@ void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_
         }
     }
 
-    if (irradianceThread)
+    if (irradianceThread && !wasInactive)
     {
         IrradianceAtlas[irradianceOrigin + gtid.xy] = float4(lerp(result, previousIrradiance, hysteresis), 1.0f);
     }
@@ -247,8 +270,12 @@ void CSMain(uint3 gid : SV_GroupID, uint3 gtid : SV_GroupThreadID, uint gi : SV_
         const float3 offset = movesSoFar < kDdgiMaxMoves ? DdgiRelocate(previousOffset, volumeParams.x) : previousOffset;
         const bool moved = any(offset != previousOffset);
         const uint moves = movesSoFar + (moved ? 1u : 0u);
-        const uint flags = kDdgiStateValid | (sBackfaces * 4u > kDdgiFixedRays ? kDdgiStateInactive : 0u) | changeFlags |
-                           (moved ? kDdgiStateMoved : 0u) | (moves << kDdgiStateMovesShift);
+        const bool inactive = sBackfaces * 4u > kDdgiFixedRays;
+        // Out of geometry again (a door moved, a palm swayed): its atlases are as old as its last active update and
+        // this update traced no blended rays for it, so the next one starts it over -- the moved flag's meaning.
+        const bool restart = moved || (wasInactive && !inactive);
+        const uint flags = kDdgiStateValid | (inactive ? kDdgiStateInactive : 0u) | changeFlags |
+                           (restart ? kDdgiStateMoved : 0u) | (moves << kDdgiStateMovesShift);
         ProbeState[DdgiStateIndex(probeIndex)] =
             uint4(asuint(cell.x), asuint(cell.y), asuint(cell.z), (uint(volumeBase.w) << 8) | flags);
         ProbeState[DdgiOffsetIndex(probeIndex)] = uint4(asuint(offset), 0u);

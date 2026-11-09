@@ -22,10 +22,10 @@ uint32_t HashU32(uint32_t s)
 }
 float Unit(uint32_t h) { return float(h & 0xFFFFFFu) * (1.0f / 16777216.0f); }
 
-// Debug names per cascade: heap, rays, irradiance, depth, probe state.
-constexpr const wchar_t* kNames[2][5] = {
-    { L"Ddgi.Heap", L"Ddgi.Rays", L"Ddgi.Irradiance", L"Ddgi.Depth", L"Ddgi.ProbeState" },
-    { L"DdgiFar.Heap", L"DdgiFar.Rays", L"DdgiFar.Irradiance", L"DdgiFar.Depth", L"DdgiFar.ProbeState" },
+// Debug names per cascade: heap, rays, irradiance, depth, probe state, usage stamps.
+constexpr const wchar_t* kNames[2][6] = {
+    { L"Ddgi.Heap", L"Ddgi.Rays", L"Ddgi.Irradiance", L"Ddgi.Depth", L"Ddgi.ProbeState", L"Ddgi.Usage" },
+    { L"DdgiFar.Heap", L"DdgiFar.Rays", L"DdgiFar.Irradiance", L"DdgiFar.Depth", L"DdgiFar.ProbeState", L"DdgiFar.Usage" },
 };
 } // namespace
 
@@ -38,10 +38,12 @@ void DdgiVolume::Reset()
     irradiance_.Reset();
     depth_.Reset();
     state_.Reset();
+    usage_.Reset();
     heap_.Reset();
     handles_ = {};
     traceMaterial_.reset();
     updateMaterial_.reset();
+    usageMaterial_.reset();
     ready_ = false;
     failed_ = false;
     spacing_ = 0.0f;
@@ -99,7 +101,8 @@ void DdgiVolume::Prepare(Renderer* renderer)
         device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, uav);
         return true;
     };
-    // The ray buffer holds every probe's row, so any divisor (down to 1) fits.
+    // The ray buffer holds a row per probe slot, so any divisor (down to 1) fits, and a probe's fixed rays from an earlier
+    // update stay in its row for the updates that do not trace them (gi.fixedRayPeriod).
     if (!makeTexture(rays_, kRaysPerProbe, kProbeCount, DXGI_FORMAT_R16G16B16A16_FLOAT, kNames[cascade_][1], handles_[0], handles_[1]) ||
         !makeTexture(irradiance_, kAtlasTilesX * kIrradianceTile, kAtlasTilesY * kIrradianceTile,
                      DXGI_FORMAT_R16G16B16A16_FLOAT, kNames[cascade_][2], handles_[2], handles_[3]) ||
@@ -109,14 +112,13 @@ void DdgiVolume::Prepare(Renderer* renderer)
         fail("texture");
         return;
     }
-    {
-        // Two uint4 per probe (ddgi_common.hlsli DdgiStateIndex / DdgiOffsetIndex): the cell, generation and flags;
-        // the relocation offset.
-        constexpr UINT kStride = 16;
-        constexpr UINT kElements = kProbeCount * 2u;
+    // A structured buffer with an SRV and a UAV. A buffer is created in COMMON whatever it is asked for (GBV id=1328); it
+    // rests in kRestState from its first use (SdsmShadows' rule). Zeroed at creation: no probe valid, none read.
+    const auto makeBuffer = [&](GpuResource& out, UINT elements, UINT stride, const wchar_t* name,
+                                D3D12_CPU_DESCRIPTOR_HANDLE srv, D3D12_CPU_DESCRIPTOR_HANDLE uav) -> bool {
         D3D12_RESOURCE_DESC desc{};
         desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-        desc.Width = UINT64(kElements) * kStride;
+        desc.Width = UINT64(elements) * stride;
         desc.Height = 1;
         desc.DepthOrArraySize = 1;
         desc.MipLevels = 1;
@@ -126,28 +128,38 @@ void DdgiVolume::Prepare(Renderer* renderer)
         D3D12_HEAP_PROPERTIES hp{};
         hp.Type = D3D12_HEAP_TYPE_DEFAULT;
         Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-        // A buffer is created in COMMON whatever it is asked for (GBV id=1328); it rests in kRestState
-        // from its first use (SdsmShadows' rule).
         if (FAILED(gpu::CreateCommittedResource(device, &hp, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON,
-                                                nullptr, MemTag::Gi, kNames[cascade_][4], IID_PPV_ARGS(&resource))))
+                                                nullptr, MemTag::Gi, name, IID_PPV_ARGS(&resource))))
         {
-            fail("probe state buffer");
-            return;
+            return false;
         }
-        state_.Attach(renderer->Declarations(), resource, D3D12_RESOURCE_STATE_COMMON, kRestState, kNames[cascade_][4]);
+        out.Attach(renderer->Declarations(), resource, D3D12_RESOURCE_STATE_COMMON, kRestState, name);
         D3D12_SHADER_RESOURCE_VIEW_DESC sd{};
         sd.Format = DXGI_FORMAT_UNKNOWN;
         sd.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
         sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        sd.Buffer.NumElements = kElements;
-        sd.Buffer.StructureByteStride = kStride;
-        device->CreateShaderResourceView(resource.Get(), &sd, handles_[6]);
+        sd.Buffer.NumElements = elements;
+        sd.Buffer.StructureByteStride = stride;
+        device->CreateShaderResourceView(resource.Get(), &sd, srv);
         D3D12_UNORDERED_ACCESS_VIEW_DESC ud{};
         ud.Format = DXGI_FORMAT_UNKNOWN;
         ud.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-        ud.Buffer.NumElements = kElements;
-        ud.Buffer.StructureByteStride = kStride;
-        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, handles_[7]);
+        ud.Buffer.NumElements = elements;
+        ud.Buffer.StructureByteStride = stride;
+        device->CreateUnorderedAccessView(resource.Get(), nullptr, &ud, uav);
+        return true;
+    };
+    // Two uint4 per probe (ddgi_common.hlsli DdgiStateIndex / DdgiOffsetIndex): the cell, generation and flags; the
+    // relocation offset. And a uint per probe: the frame a pixel last read it (ddgi_usage_cs.hlsl).
+    if (!makeBuffer(state_, kProbeCount * 2u, 16u, kNames[cascade_][4], handles_[6], handles_[7]))
+    {
+        fail("probe state buffer");
+        return;
+    }
+    if (!makeBuffer(usage_, kProbeCount, 4u, kNames[cascade_][5], handles_[8], handles_[9]))
+    {
+        fail("probe usage buffer");
+        return;
     }
 
     Material::ComputeDesc cd{};
@@ -156,7 +168,10 @@ void DdgiVolume::Prepare(Renderer* renderer)
     traceMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
     cd.shaderFile = L"shaders/ddgi_update_cs.hlsl";
     updateMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
-    if (!traceMaterial_ || !traceMaterial_->GetPipelineState() || !updateMaterial_ || !updateMaterial_->GetPipelineState())
+    cd.shaderFile = L"shaders/ddgi_usage_cs.hlsl";
+    usageMaterial_ = renderer->GetMaterialManager()->GetOrCreateCompute(renderer, cd);
+    if (!traceMaterial_ || !traceMaterial_->GetPipelineState() || !updateMaterial_ || !updateMaterial_->GetPipelineState() ||
+        !usageMaterial_ || !usageMaterial_->GetPipelineState())
     {
         fail("PSO");
         return;
@@ -192,6 +207,7 @@ DdgiVolume::Frame DdgiVolume::BeginFrame(const Math::float3& cameraPos, float sp
     f.divisor = std::clamp(divisor, 1u, 64u);
     f.phase = frameCounter_ % f.divisor;
     f.probes = (kProbeCount + f.divisor - 1u) / f.divisor;
+    f.updateIndex = frameCounter_ / f.divisor;
     f.seed = HashU32(frameCounter_ * 2654435761u + 17u);
 
     // A uniformly random rotation (Shoemake's quaternion), so successive updates of a probe sample

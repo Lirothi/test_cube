@@ -29,8 +29,9 @@ public:
     static constexpr int kDimX = 32, kDimY = 16, kDimZ = 32; // mirrors ddgi_common.hlsli kDdgiDims
     static constexpr uint32_t kProbeCount = uint32_t(kDimX) * kDimY * kDimZ;
     // ddgi_common.hlsli kDdgiRays: RTXGI's 32 FIXED rays (the classification's, never rotated, not blended)
-    // + the 64 rotated each update that light the probe.
-    static constexpr uint32_t kRaysPerProbe = 32 + 64;
+    // + up to 64 rotated each update that light the probe (gi.rays). A probe's row of the ray buffer is its own.
+    static constexpr uint32_t kMaxBlendRays = 64;
+    static constexpr uint32_t kRaysPerProbe = 32 + kMaxBlendRays;
     static constexpr uint32_t kIrradianceTile = 6 + 2;     // octahedral interior + border
     static constexpr uint32_t kDepthTile = 14 + 2;
     static constexpr uint32_t kAtlasTilesX = uint32_t(kDimX) * kDimY;
@@ -50,6 +51,7 @@ public:
         uint32_t phase = 0;            // ...those whose slot index is phase mod divisor
         uint32_t probes = 0;           // = kProbeCount / divisor (rounded up)
         uint32_t seed = 0;             // per-frame random seed (the sky rays)
+        uint32_t updateIndex = 0;      // frames / divisor: a probe sees it rise by one per update (its fixed rays' turn)
         Math::mat4 rayRotation;        // this update's random rotation of the ray set
     };
 
@@ -76,11 +78,15 @@ public:
 
     Material* TraceMaterial() const { return traceMaterial_.get(); }
     Material* UpdateMaterial() const { return updateMaterial_.get(); }
+    // ddgi_usage_cs.hlsl: stamps the probes the screen reads (gi.sleepPeriod), both cascades in one dispatch.
+    Material* UsageMaterial() const { return usageMaterial_.get(); }
 
     ID3D12Resource* Rays() const { return rays_.Get(); }
     ID3D12Resource* Irradiance() const { return irradiance_.Get(); }
     ID3D12Resource* Depth() const { return depth_.Get(); }
     ID3D12Resource* State() const { return state_.Get(); }
+    // A uint per probe slot: the frame stamp a pixel last read it at (0 at creation: idle).
+    ID3D12Resource* Usage() const { return usage_.Get(); }
     D3D12_CPU_DESCRIPTOR_HANDLE RaysSrv() const { return handles_[0]; }
     D3D12_CPU_DESCRIPTOR_HANDLE RaysUav() const { return handles_[1]; }
     D3D12_CPU_DESCRIPTOR_HANDLE IrradianceSrv() const { return handles_[2]; }
@@ -89,6 +95,8 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE DepthUav() const { return handles_[5]; }
     D3D12_CPU_DESCRIPTOR_HANDLE StateSrv() const { return handles_[6]; }
     D3D12_CPU_DESCRIPTOR_HANDLE StateUav() const { return handles_[7]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE UsageSrv() const { return handles_[8]; }
+    D3D12_CPU_DESCRIPTOR_HANDLE UsageUav() const { return handles_[9]; }
 
 private:
     uint32_t cascade_ = 0;
@@ -96,10 +104,12 @@ private:
     GpuResource irradiance_;
     GpuResource depth_;
     GpuResource state_;
+    GpuResource usage_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> heap_;
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 8> handles_{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 10> handles_{};
     std::shared_ptr<Material> traceMaterial_;
     std::shared_ptr<Material> updateMaterial_;
+    std::shared_ptr<Material> usageMaterial_;
     bool ready_ = false;
     bool failed_ = false;
 

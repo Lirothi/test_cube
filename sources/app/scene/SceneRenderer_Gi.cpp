@@ -10,6 +10,7 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
+#include "rendering/core/ComputeDispatch.h"
 #include "rendering/core/RenderContext.h"
 #include "rendering/core/RenderContextPool.h"
 #include "rendering/core/RenderGraph.h"
@@ -33,18 +34,41 @@ struct DdgiConstants
     uint32_t tlasIndex = 0;   uint32_t geomInfoIndex = 0;   uint32_t rayUavIndex = 0;        uint32_t irradianceIndex = 0;
     uint32_t depthIndex = 0;  uint32_t stateIndex = 0;      uint32_t skyIrradianceIndex = 0; uint32_t spotLightIndex = 0;
     uint32_t spotCount = 0;   uint32_t pointLightIndex = 0; uint32_t pointCount = 0;         uint32_t twoSidedSheets = 1;
-    uint32_t bounceOn = 0;    float skyRayDistance = 15.0f; uint32_t meshOpacity = 1;        uint32_t pad1 = 0;
+    uint32_t bounceOn = 0;    float skyRayDistance = 15.0f; uint32_t meshOpacity = 1;        uint32_t traceFlags = 0;
+    uint32_t blendRays = 64;  uint32_t fixedRayPeriod = 1;  uint32_t updateIndex = 0;        uint32_t usageIndex = 0;
+    uint32_t frameStamp = 0;  uint32_t sleepPeriod = 1;     uint32_t pad1 = 0;               uint32_t pad2 = 0;
 };
-static_assert(sizeof(DdgiConstants) == 64 + 9 * 16, "DdgiConstants mirrors ddgi_constants.hlsli");
+static_assert(sizeof(DdgiConstants) == 64 + 11 * 16, "DdgiConstants mirrors ddgi_constants.hlsli");
 
-// Bindless scene slots of the trace (BindlessTable kScenePerFrame = 52): reflections own 0-12 and 46-49, the debug
-// view 13-16, the glass dispatch 17-25, the sky visibility 26-31 and 40-41. Per cascade: rays,
-// irradiance, depth, state -- the near one 33-36, the far one 42-45; the rest is shared.
+// Mirrors `cbuffer DdgiUsageCB` in shaders/ddgi_usage_cs.hlsl.
+struct DdgiUsageConstants
+{
+    Math::mat4 invView;
+    Math::mat4 invProj;
+    Math::float4 cameraPos;
+    int32_t nearBase[4] = { 0, 0, 0, 0 };
+    Math::float4 nearParams;
+    int32_t farBase[4] = { 0, 0, 0, 0 };
+    Math::float4 farParams;
+    uint32_t grid[4] = { 0, 0, 0, 0 };
+    uint32_t stamp[4] = { 0, 0, 0, 0 };
+};
+static_assert(sizeof(DdgiUsageConstants) == 2 * 64 + 7 * 16, "DdgiUsageConstants mirrors ddgi_usage_cs.hlsl");
+// ddgi_constants.hlsli kDdgiTrace*: what a probe ray's hit is lit by.
+constexpr uint32_t kGiTraceSkyRay = 1u;
+constexpr uint32_t kGiTraceLights = 2u;
+constexpr uint32_t kGiTraceBounceVisibility = 4u;
+constexpr uint32_t kGiTraceSkipInactive = 8u;
+
+// Bindless scene slots of the trace (BindlessTable kScenePerFrame = 56): reflections own 0-12 and 46-49, the debug
+// view 13-16, the glass dispatch 17-25, the sky visibility 26-31, 40-41 and 50-53. Per cascade: rays,
+// irradiance, depth, state -- the near one 33-36, the far one 42-45 -- and the usage stamps 54 / 55; the rest is shared.
 constexpr UINT kGiSlotTlas = 32;
 constexpr UINT kGiSlotRays[2] = { 33, 42 };
 constexpr UINT kGiSlotIrradiance[2] = { 34, 43 };
 constexpr UINT kGiSlotDepth[2] = { 35, 44 };
 constexpr UINT kGiSlotState[2] = { 36, 45 };
+constexpr UINT kGiSlotUsage[2] = { 54, 55 };
 constexpr UINT kGiSlotSkyIrradiance = 37;
 constexpr UINT kGiSlotSpots = 38;
 constexpr UINT kGiSlotPoints = 39;
@@ -52,8 +76,8 @@ constexpr UINT kGiSlotPoints = 39;
 // one cell alone (0.5 m) is a seam a walk across makes visible.
 constexpr float kGiNearFadeMetres = 2.0f;
 
-// The part both passes share: where the volume stands, which probes, the rays' rotation.
-DdgiConstants MakeVolumeConstants(const DdgiVolume::Frame& f, const SceneRenderSettings& s)
+// The part both passes share: where the volume stands, which probes, the rays' rotation, which of them sleep.
+DdgiConstants MakeVolumeConstants(const DdgiVolume::Frame& f, const SceneRenderSettings& s, uint32_t stamp)
 {
     DdgiConstants c{};
     c.rayRotation = f.rayRotation;
@@ -71,6 +95,14 @@ DdgiConstants MakeVolumeConstants(const DdgiVolume::Frame& f, const SceneRenderS
     c.schedule[1] = f.phase;
     c.schedule[2] = f.probes;
     c.schedule[3] = f.seed;
+    // The trace and the update must agree on these (which rays exist, which fixed rays were traced).
+    c.blendRays = std::clamp((s.giRays + 15u) / 16u * 16u, 16u, DdgiVolume::kMaxBlendRays);
+    c.fixedRayPeriod = std::clamp(s.giFixedRayPeriod, 1u, 64u);
+    c.updateIndex = f.updateIndex;
+    c.frameStamp = stamp;
+    c.sleepPeriod = std::clamp(s.giSleepPeriod, 1u, 64u);
+    c.traceFlags =(s.giSkyRay ? kGiTraceSkyRay : 0u) | (s.giLights ? kGiTraceLights : 0u) |
+                   (s.giBounceVisibility ? kGiTraceBounceVisibility : 0u) | (s.giSkipInactive ? kGiTraceSkipInactive : 0u);
     return c;
 }
 } // namespace
@@ -111,6 +143,8 @@ void SceneRenderer::BuildGi(Renderer* renderer, GraphBuild& gb)
         // At least twice the near spacing, or the far cascade is the near one again.
         chain.frame[1] = ddgi_[1].BeginFrame(cameraPos, std::max(s.giFarSpacing, 2.0f * s.giSpacing), s.giFarDivisor);
     }
+    // The usage stamps' clock (ddgi_usage_cs.hlsl), one for both cascades.
+    chain.stamp = static_cast<uint32_t>(renderer->GetTotalFrameNumber());
 
     // The trace: on the DIRECT queue, after Pass_BuildAS -- the TLAS and the bindless table are
     // undeclared reads, and the body decides from FrameReady, which the BuildAS recording sets (the
@@ -128,14 +162,32 @@ void SceneRenderer::BuildGi(Renderer* renderer, GraphBuild& gb)
     const size_t pTrace = rg.AddPass2(RenderPass::Main_GiTrace, tracePrereqs, { gb.pBuildAS }, {},
         [this, renderer, chain](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
             GiChain c = chain;
+            const auto& D = renderer->GetDeferredForFrame();
+            // The usage stamps first (ddgi_usage_cs.hlsl): the screen's depth and normals, NON_PIXEL as GTAO and the RT
+            // passes leave them (D7). Without them the stamps are not written and every placed probe reads idle.
+            // Only while probes may sleep: at gi.sleepPeriod 1 nothing reads the stamps (the trace's idle needs > 1).
+            c.stampUsage = frame_->settings.giSleepPeriod > 1u && ddgi_[0].UsageMaterial() && D.depthSRV.ptr != 0 &&
+                           D.gbSRV[1].ptr != 0 && D.depth.Get() && D.gb1.Get();
             ctx.NextPoint();
             c.point = ctx.usePoint ? *ctx.usePoint : 0u;
+            if (c.stampUsage)
+            {
+                ctx.Use(D.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                ctx.Use(D.gb1.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            }
             for (uint32_t k = 0u; k < c.cascades; ++k)
             {
                 ctx.Use(ddgi_[k].Rays(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 ctx.Use(ddgi_[k].Irradiance(), DdgiVolume::kRestState); // the infinite bounce reads last frame's
                 ctx.Use(ddgi_[k].Depth(), DdgiVolume::kRestState);
                 ctx.Use(ddgi_[k].State(), DdgiVolume::kRestState);
+                ctx.Use(ddgi_[k].Usage(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            }
+            ctx.NextPoint();
+            c.pointStamped = ctx.usePoint ? *ctx.usePoint : 0u;
+            for (uint32_t k = 0u; k < c.cascades; ++k)
+            {
+                ctx.Use(ddgi_[k].Usage(), DdgiVolume::kRestState); // the trace and the update read the stamps
             }
             ctx.NextPoint();
             c.pointRestore = ctx.usePoint ? *ctx.usePoint : 0u;
@@ -157,6 +209,7 @@ void SceneRenderer::BuildGi(Renderer* renderer, GraphBuild& gb)
             for (uint32_t k = 0u; k < c.cascades; ++k)
             {
                 ctx.Use(ddgi_[k].Rays(), DdgiVolume::kRestState);
+                ctx.Use(ddgi_[k].Usage(), DdgiVolume::kRestState);
                 ctx.Use(ddgi_[k].Irradiance(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 ctx.Use(ddgi_[k].Depth(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
                 ctx.Use(ddgi_[k].State(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -180,7 +233,42 @@ void SceneRenderer::Pass_GiTrace(Renderer* renderer, RenderGraphPassContext ctx,
 {
     auto t = ctx.BeginCL();
     SetCommandListName(t.cl, ctx.pass);
-    renderer->EmitPoint(t.cl, chain.point); // rays -> UAV
+    renderer->EmitPoint(t.cl, chain.point); // rays, usage -> UAV; depth, GB1 readable
+
+    // Which probes the screen reads this frame (ddgi_usage_cs.hlsl): a quarter-resolution sample of the depth, both
+    // cascades at once. The trace and the update below read the stamps (gi.sleepPeriod).
+    if (chain.stampUsage && frame_->camera)
+    {
+        GPU_SCOPE(t.cl, ProfilerScopes::kPassGiUsage);
+        renderer->BindDescriptorHeaps(t.cl);
+        const auto& D = renderer->GetDeferredForFrame();
+        const Camera& camera = *frame_->camera;
+        DdgiUsageConstants u{};
+        u.invView = camera.GetInvViewMatrix();
+        u.invProj = camera.GetInvProjMatrix(); // jittered, as the depth it reads
+        const Math::float3 eye = camera.GetPosition();
+        u.cameraPos = Math::float4(eye.x, eye.y, eye.z, 0.0f);
+        for (int a = 0; a < 3; ++a)
+        {
+            u.nearBase[a] = chain.frame[0].baseCell[a];
+            u.farBase[a] = chain.frame[chain.cascades > 1u ? 1 : 0].baseCell[a];
+        }
+        u.nearParams = Math::float4(chain.frame[0].spacing, 1.0f, 0.0f, 0.0f);
+        u.farParams = Math::float4(chain.frame[chain.cascades > 1u ? 1 : 0].spacing, chain.cascades > 1u ? 1.0f : 0.0f,
+                                   0.0f, 0.0f);
+        const uint32_t w = std::max(1u, renderer->GetRenderWidth());
+        const uint32_t h = std::max(1u, renderer->GetRenderHeight());
+        u.grid[0] = (w + 3u) / 4u;
+        u.grid[1] = (h + 3u) / 4u;
+        u.grid[2] = chain.stamp & 3u;        // this frame's pixel of each 4x4 block: all 16 in 16 frames
+        u.grid[3] = (chain.stamp >> 2) & 3u;
+        u.stamp[0] = chain.stamp;
+        const D3D12_CPU_DESCRIPTOR_HANDLE farUav = ddgi_[chain.cascades > 1u ? 1 : 0].UsageUav();
+        RecordComputeDispatch(renderer, t.cl, ddgi_[0].UsageMaterial(), static_cast<UINT>(sizeof(u)),
+                              [&u](std::uint8_t* dest) { std::memcpy(dest, &u, sizeof(u)); },
+                              { D.depthSRV, D.gbSRV[1] }, { ddgi_[0].UsageUav(), farUav }, {}, u.grid[0], u.grid[1]);
+    }
+    renderer->EmitPoint(t.cl, chain.pointStamped); // usage -> readable
 
     Material* material = ddgi_[0].TraceMaterial();
     const UINT frameIndex = renderer->GetCurrentFrameIndex();
@@ -198,6 +286,7 @@ void SceneRenderer::Pass_GiTrace(Renderer* renderer, RenderGraphPassContext ctx,
             bindless.WriteSceneDescriptor(frameIndex, kGiSlotIrradiance[k], ddgi_[k].IrradianceSrv());
             bindless.WriteSceneDescriptor(frameIndex, kGiSlotDepth[k], ddgi_[k].DepthSrv());
             bindless.WriteSceneDescriptor(frameIndex, kGiSlotState[k], ddgi_[k].StateSrv());
+            bindless.WriteSceneDescriptor(frameIndex, kGiSlotUsage[k], ddgi_[k].UsageSrv());
         }
         Skybox* skybox = frame_->skybox;
         const bool haveSkyIrradiance = skybox && skybox->HasIbl();
@@ -223,7 +312,8 @@ void SceneRenderer::Pass_GiTrace(Renderer* renderer, RenderGraphPassContext ctx,
         for (uint32_t k = 0u; k < chain.cascades; ++k)
         {
             GPU_SCOPE(t.cl, k == 0u ? ProfilerScopes::kPassGiTrace : ProfilerScopes::kPassGiTraceFar);
-            DdgiConstants c = MakeVolumeConstants(chain.frame[k], s);
+            DdgiConstants c = MakeVolumeConstants(chain.frame[k], s, chain.stamp);
+            c.usageIndex = bindless.SceneIndex(frameIndex, kGiSlotUsage[k]);
             c.sunDirWS = dl.GetDirection();
             c.ambientIntensity = dl.GetAmbient();
             c.lightRgb = dl.GetEffectiveColor(); // lighting_cs's lightRgb: the sun (or the moon) with its intensity
@@ -269,13 +359,13 @@ void SceneRenderer::Pass_GiUpdate(Renderer* renderer, RenderGraphPassContext ctx
         {
             GPU_SCOPE(t.cl, k == 0u ? ProfilerScopes::kPassGiUpdate : ProfilerScopes::kPassGiUpdateFar);
             DdgiVolume& volume = ddgi_[k];
-            const DdgiConstants c = MakeVolumeConstants(chain.frame[k], frame_->settings);
+            const DdgiConstants c = MakeVolumeConstants(chain.frame[k], frame_->settings, chain.stamp);
             auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(DdgiConstants), render::kConstantBufferAlignment);
             std::memcpy(cb.cpu, &c, sizeof(c));
             auto h = renderer->GetRenderContextPool()->Acquire();
             RenderContext& rc = h.ref();
             rc.cbv[0] = cb.gpu;
-            rc.srvTable[0] = renderer->StageSrvUavTable({ volume.RaysSrv() }).gpu;
+            rc.srvTable[0] = renderer->StageSrvUavTable({ volume.RaysSrv(), volume.UsageSrv() }).gpu;
             rc.uavTable[0] = renderer->StageSrvUavTable({ volume.IrradianceUav(), volume.DepthUav(), volume.StateUav() }).gpu;
             if (material->Bind(t.cl, rc))
             {

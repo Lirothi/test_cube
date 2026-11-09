@@ -2566,7 +2566,7 @@ over 8 clean shots 3 frames apart). The divisor does not change that noise, only
   point; `gi.debug:2` the probes' relocation and classification (below). `gi.enabled:0` = the frame before it.
   Developer Controls > GI: on/off, spacing, hysteresis, intensity -- persisted in graphics_settings.json `gi`,
   which overrides the compiled defaults at boot (a `--set gi.*` still wins, it is applied after) -- and the debug
-  view (not persisted). `gi.divisor`, `gi.rayDistance`, `gi.infiniteBounce` stay --set / MCP only.
+  view (not persisted). The trace's price is persisted too since 2026-11-09 ("Trace cost", below).
 - A black patch WITH probes around it is albedo, not a hole: the_bathroom_free's dark wood (cabinet, wainscot, floor)
   measured albedo x AO ~0.07 under a bounce ~1/16 of the candle-lit wallpaper -- check `gi.debug` before blaming GI.
 - A/B a look with the exposure pinned to the metered value (`exposure.autoExposure:0;exposure.manualEv100:<adapted
@@ -2580,6 +2580,39 @@ over 8 clean shots 3 frames apart). The divisor does not change that noise, only
   at 40. The confirmation is what keeps 0.98's calm: taken at once, the 4x test pulsed a probe under the
   bathroom's countertop that sees the lit room through a few rays (+50..+89 % for 4-24 frames, 12 % frame to frame
   on the cabinet); confirmed, 0.05 % -- as before it.
+- **What the trace pays for, and the probes nobody looks at** (2026-11-09, owner on the heaviest view, cam 37.93 4.63
+  71.59 at 18:00, both cascades, the editor closed, wind frozen, alternated twice: "go through the frame's top consumers,
+  GI first, optimise the code, and give knobs for the perf"). Before: trace 0.28 + 0.13 (far), update 0.07 + 0.065,
+  lighting's sampling ~0.09 ms. Inside the trace the infinite bounce's lookup at each hit was 28 % (`gi.infiniteBounce:0`
+  0.20 / 0.10), the sky ray at a hit 0.04 / 0.02, the bounce's Chebyshev visibility 0.03 / 0.02, the 200 m reach 0.02 /
+  0.02 against 30 m, the lamps nothing at 18:00. Three changes with the same picture, one A/B each:
+  (1) **a probe inside geometry traces only its fixed rays and blends nothing** (RTXGI ProbeTraceRGS; lighting and the
+  bounce never read it): `gi.skipInactive:0` = before (transient). Coming back out (a door, a palm) it starts over (the
+  moved flag): its atlases are as old as its last active update. ~-0.02 near, the far update -0.02.
+  (2) **the 32 fixed rays every `gi.fixedRayPeriod`-th update** (4): their directions never change, so their answers hold
+  in the probe's row while it stands where it stood -- the ray buffer's row is now the probe's own (`probeIndex`, not the
+  dispatch group's), and a probe new to its cell, moved, or on its turn traces them. -0.03 / -0.02.
+  (3) **probes no pixel reads sleep** (`gi.sleepPeriod`, 4): `ddgi_usage_cs.hlsl`, at the head of Main_GiTrace, stamps the
+  8 probes round every 4th pixel each way (another of its 4x4 block each frame: all in 16 frames), both cascades, with the
+  frame number (`Ddgi.Usage`, a uint a slot); a probe unstamped for 32 frames (behind the camera, under the ground, in the
+  air) updates one turn in 4, staggered by a hash, and on that turn traces its fixed rays too. The trace and the update ask
+  the same function (`DdgiProbeSleeps`) with the same stamp, so they skip the same probes. Trace 0.25 / 0.12 -> 0.10 /
+  0.05, update 0.075 / 0.055 -> 0.039 / 0.027, the stamping 0.024: the GI passes 0.50 -> 0.24 ms (8: 0.20), GPU frame
+  5.0 -> 4.69. The picture standing still is the same (the 18:00 view 1.17-1.23 % of pixels over 8 levels against the same
+  arm twice 1.22 %; the bathroom by day within its own drift); turned 180 degrees 4 s after the clock moved 18:00 -> 17:30,
+  2 s later 1.75 % of pixels off the settled frame against 1.04 % without sleep (right after the turn both ~11 %: DLSS).
+  `gi.sleepPeriod:1` = every turn, and no stamping pass.
+  The rest are knobs with a price in the picture (Developer Controls > GI "Trace cost", graphics_settings.json `gi.*`,
+  `--set gi.*`): update divisor / far divisor (4 / 4; 8 halves the trace and the update, the light follows twice as
+  slowly), rays per probe (`gi.rays` 16-64, 64; 32 = -0.13 ms trace, -0.04 update, and the bathroom by day 4 levels
+  DARKER -- a noisier estimate averages low as E^(1/5)), ray reach (200 m), infinite bounce, its visibility
+  (`gi.bounceVisibility`; off LEAKS: the bathroom by day +12 levels), the sky ray at hits (`gi.skyRay`; off: every hit sees
+  the open sky -- the bathroom washes out, +109 levels), the lamps at hits (`gi.lights`). Outdoors the last three move
+  the 18:00 view 0-3 levels. Tried and left: skipping the update's cos^50 weights under 0.75 (kept: free, but the
+  update is not ALU-bound -- no measurable change); `pow(e, 2.5)` and the atlas sizes as constants in DdgiIrradiance (the
+  same). GBV (`GiTrace,GiUpdate,Lighting,Skybox` + the Skybox self-test, `--sweep` over every knob above): clean.
+  MEASURING IT: `gi.*` survives `reset_settings` -- a `gi.far:0` arm left the far cascade off for every later one (its
+  rows then read the last EMA, `uses 0` in `get_profile`); name every gi knob in each arm's base.
 
 ## Local-Light Shadow Near -- 1 cm in Every Mode
 

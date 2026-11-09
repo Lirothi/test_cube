@@ -158,6 +158,7 @@ const Profiler::ScopeNameKey kPassGiTrace = Profiler::RegisterTraceLiteral(L"Pas
 const Profiler::ScopeNameKey kPassGiUpdate = Profiler::RegisterTraceLiteral(L"Pass_GiUpdate");
 const Profiler::ScopeNameKey kPassGiTraceFar = Profiler::RegisterTraceLiteral(L"Pass_GiTraceFar");
 const Profiler::ScopeNameKey kPassGiUpdateFar = Profiler::RegisterTraceLiteral(L"Pass_GiUpdateFar");
+const Profiler::ScopeNameKey kPassGiUsage = Profiler::RegisterTraceLiteral(L"Pass_GiUsage");
 const Profiler::ScopeNameKey kPassRTResolve = Profiler::RegisterTraceLiteral(L"Pass_RTResolve");
 const Profiler::ScopeNameKey kPassReflectionTemporal = Profiler::RegisterTraceLiteral(L"Pass_Reflection.Temporal");
 const Profiler::ScopeNameKey kWaterReflectionTemporal = Profiler::RegisterTraceLiteral(L"WaterReflection.Temporal");

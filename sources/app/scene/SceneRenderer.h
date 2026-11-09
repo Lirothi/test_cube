@@ -562,7 +562,10 @@ private:
     {
         DdgiVolume::Frame frame[2];   // per cascade (kGiCascades)
         uint32_t cascades = 1u;       // 1 = the near one only, 2 = with the far one
+        uint32_t stamp = 0u;          // this frame's usage stamp (ddgi_usage_cs.hlsl; gi.sleepPeriod)
+        bool stampUsage = false;      // the trace pass stamps the probes the screen reads (its inputs exist)
         uint32_t point = 0u;
+        uint32_t pointStamped = 0u;   // the usage stamps written: readable for the trace and the update
         uint32_t pointRestore = 0u;
     };
     void BuildGi(Renderer* r, GraphBuild& gb);

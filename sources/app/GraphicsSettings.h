@@ -182,6 +182,16 @@ enum class GraphicsControl
     GiIntensity,
     GiFar,                        // the far cascade (SceneRenderSettings::giFarCascade)
     GiFarSpacing,
+    GiDivisor,                    // the trace's price (SceneRenderSettings::giUpdateDivisor ... giSleepPeriod)
+    GiFarDivisor,
+    GiRays,
+    GiFixedRayPeriod,
+    GiSleepPeriod,
+    GiRayDistance,
+    GiInfiniteBounce,
+    GiBounceVisibility,
+    GiSkyRay,
+    GiLights,
     SkyVisEnabled,                // the RT sky visibility (SceneRenderSettings::skyVis*), on the GI tab
     SkyVisRays,
     SkyVisHistory,

@@ -67,6 +67,17 @@ namespace
         float giIntensity = 1.0f;
         bool giFar = true;
         float giFarSpacing = 2.0f;
+        // ...the trace's price (SceneRenderSettings::giUpdateDivisor ... giSleepPeriod, the same defaults).
+        std::uint32_t giDivisor = 4u;
+        std::uint32_t giFarDivisor = 4u;
+        std::uint32_t giRays = 64u;
+        std::uint32_t giFixedRayPeriod = 4u;
+        std::uint32_t giSleepPeriod = 4u;
+        float giRayDistance = 200.0f;
+        bool giInfiniteBounce = true;
+        bool giBounceVisibility = true;
+        bool giSkyRay = true;
+        bool giLights = true;
         // The RT sky visibility (SceneRenderSettings::skyVis*, the same defaults), on the GI tab.
         bool skyVisEnabled = true;
         std::uint32_t skyVisRays = 8u;
@@ -411,6 +422,12 @@ namespace
         s.giHysteresis = std::clamp(finite(s.giHysteresis, 0.98f), 0.0f, 0.99f);
         s.giIntensity = std::clamp(finite(s.giIntensity, 1.0f), 0.0f, 16.0f);
         s.giFarSpacing = std::clamp(finite(s.giFarSpacing, 2.0f), 0.5f, 8.0f);
+        s.giDivisor = std::clamp(s.giDivisor, 1u, 64u);
+        s.giFarDivisor = std::clamp(s.giFarDivisor, 1u, 64u);
+        s.giRays = std::clamp((s.giRays + 15u) / 16u * 16u, 16u, 64u);
+        s.giFixedRayPeriod = std::clamp(s.giFixedRayPeriod, 1u, 64u);
+        s.giSleepPeriod = std::clamp(s.giSleepPeriod, 1u, 64u);
+        s.giRayDistance = std::clamp(finite(s.giRayDistance, 200.0f), 1.0f, 1000.0f);
         // --set skyVis.*'s own ranges (App.cpp ApplySweepValue).
         s.skyVisRays = std::clamp(s.skyVisRays, 1u, 16u);
         s.skyVisHistory = std::clamp(finite(s.skyVisHistory, 0.995f), 0.0f, 0.995f);
@@ -507,6 +524,16 @@ namespace
         s.giIntensity = settings.giIntensity;
         s.giFar = settings.giFarCascade;
         s.giFarSpacing = settings.giFarSpacing;
+        s.giDivisor = settings.giUpdateDivisor;
+        s.giFarDivisor = settings.giFarDivisor;
+        s.giRays = settings.giRays;
+        s.giFixedRayPeriod = settings.giFixedRayPeriod;
+        s.giSleepPeriod = settings.giSleepPeriod;
+        s.giRayDistance = settings.giRayDistance;
+        s.giInfiniteBounce = settings.giInfiniteBounce;
+        s.giBounceVisibility = settings.giBounceVisibility;
+        s.giSkyRay = settings.giSkyRay;
+        s.giLights = settings.giLights;
         s.skyVisEnabled = settings.skyVisEnabled;
         s.skyVisRays = settings.skyVisRays;
         s.skyVisHistory = settings.skyVisHistory;
@@ -700,6 +727,16 @@ namespace
         settings.giIntensity = s.giIntensity;
         settings.giFarCascade = s.giFar;
         settings.giFarSpacing = s.giFarSpacing;
+        settings.giUpdateDivisor = s.giDivisor;
+        settings.giFarDivisor = s.giFarDivisor;
+        settings.giRays = s.giRays;
+        settings.giFixedRayPeriod = s.giFixedRayPeriod;
+        settings.giSleepPeriod = s.giSleepPeriod;
+        settings.giRayDistance = s.giRayDistance;
+        settings.giInfiniteBounce = s.giInfiniteBounce;
+        settings.giBounceVisibility = s.giBounceVisibility;
+        settings.giSkyRay = s.giSkyRay;
+        settings.giLights = s.giLights;
         settings.skyVisEnabled = s.skyVisEnabled;
         settings.skyVisRays = s.skyVisRays;
         settings.skyVisHistory = s.skyVisHistory;
@@ -901,7 +938,17 @@ namespace
                 { "hysteresis", s.giHysteresis },
                 { "intensity", s.giIntensity },
                 { "farCascade", s.giFar },
-                { "farSpacing", s.giFarSpacing }
+                { "farSpacing", s.giFarSpacing },
+                { "divisor", s.giDivisor },
+                { "farDivisor", s.giFarDivisor },
+                { "rays", s.giRays },
+                { "fixedRayPeriod", s.giFixedRayPeriod },
+                { "sleepPeriod", s.giSleepPeriod },
+                { "rayDistance", s.giRayDistance },
+                { "infiniteBounce", s.giInfiniteBounce },
+                { "bounceVisibility", s.giBounceVisibility },
+                { "skyRay", s.giSkyRay },
+                { "lights", s.giLights }
             } },
             { "skyVis", {
                 { "enabled", s.skyVisEnabled },
@@ -1124,6 +1171,16 @@ namespace
         Read(gi, "intensity", s.giIntensity);
         Read(gi, "farCascade", s.giFar);
         Read(gi, "farSpacing", s.giFarSpacing);
+        Read(gi, "divisor", s.giDivisor);
+        Read(gi, "farDivisor", s.giFarDivisor);
+        Read(gi, "rays", s.giRays);
+        Read(gi, "fixedRayPeriod", s.giFixedRayPeriod);
+        Read(gi, "sleepPeriod", s.giSleepPeriod);
+        Read(gi, "rayDistance", s.giRayDistance);
+        Read(gi, "infiniteBounce", s.giInfiniteBounce);
+        Read(gi, "bounceVisibility", s.giBounceVisibility);
+        Read(gi, "skyRay", s.giSkyRay);
+        Read(gi, "lights", s.giLights);
         const json& skyVis = Section(root, "skyVis");
         Read(skyVis, "enabled", s.skyVisEnabled);
         Read(skyVis, "rays", s.skyVisRays);
@@ -1621,6 +1678,16 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
     case GraphicsControl::GiIntensity:                    current.giIntensity = defaults.giIntensity; break;
     case GraphicsControl::GiFar:                          current.giFar = defaults.giFar; break;
     case GraphicsControl::GiFarSpacing:                   current.giFarSpacing = defaults.giFarSpacing; break;
+    case GraphicsControl::GiDivisor:                      current.giDivisor = defaults.giDivisor; break;
+    case GraphicsControl::GiFarDivisor:                   current.giFarDivisor = defaults.giFarDivisor; break;
+    case GraphicsControl::GiRays:                         current.giRays = defaults.giRays; break;
+    case GraphicsControl::GiFixedRayPeriod:               current.giFixedRayPeriod = defaults.giFixedRayPeriod; break;
+    case GraphicsControl::GiSleepPeriod:                  current.giSleepPeriod = defaults.giSleepPeriod; break;
+    case GraphicsControl::GiRayDistance:                  current.giRayDistance = defaults.giRayDistance; break;
+    case GraphicsControl::GiInfiniteBounce:               current.giInfiniteBounce = defaults.giInfiniteBounce; break;
+    case GraphicsControl::GiBounceVisibility:             current.giBounceVisibility = defaults.giBounceVisibility; break;
+    case GraphicsControl::GiSkyRay:                       current.giSkyRay = defaults.giSkyRay; break;
+    case GraphicsControl::GiLights:                       current.giLights = defaults.giLights; break;
     case GraphicsControl::SkyVisEnabled:                  current.skyVisEnabled = defaults.skyVisEnabled; break;
     case GraphicsControl::SkyVisRays:                     current.skyVisRays = defaults.skyVisRays; break;
     case GraphicsControl::SkyVisHistory:                  current.skyVisHistory = defaults.skyVisHistory; break;

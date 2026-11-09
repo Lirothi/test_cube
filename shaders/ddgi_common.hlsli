@@ -22,6 +22,9 @@ static const uint kDdgiProbeCount = 32u * 16u * 32u;
 // the_bathroom_free's corner cabinet saw a quarter of them on back faces now and then and dropped out of the
 // interpolation for one update: its patch of the cabinet +6 % for exactly 4 frames, a "shadow flicker" (2026-10-24).
 static const uint kDdgiFixedRays = 32u;
+// The most blended rays an update traces (`gi.rays`, the constants' blendRays: 16-64, a multiple of 16), and the
+// row a probe owns in the ray buffer: [fixed | blended], kDdgiRays wide, one row per probe slot (not per dispatch
+// group: a probe's fixed rays from an earlier update stay in its row for the updates that do not trace them).
 static const uint kDdgiBlendRays = 64u;
 static const uint kDdgiRays = kDdgiFixedRays + kDdgiBlendRays; // per probe per update; mirrors DdgiVolume::kRaysPerProbe
 static const uint kDdgiIrrInterior = 6u;              // octahedral texels per side, + a 1-texel border each
@@ -171,15 +174,22 @@ float2 DdgiAtlasUv(uint3 slot, float3 dir, uint n, float2 invAtlasSize)
     const float2 tileOrigin = float2(DdgiTile(slot) * (n + 2u));
     return (tileOrigin + 1.0f + (DdgiOctEncode(dir) * 0.5f + 0.5f) * float(n)) * invAtlasSize;
 }
+// The atlases' sizes (DdgiVolume::Prepare: x tiles over i and j, y over k), so a reader needs no GetDimensions.
+static const float2 kDdgiInvIrradianceAtlas =
+    1.0f / float2(kDdgiDims.x * kDdgiDims.y * int(kDdgiIrrInterior + 2u), kDdgiDims.z * int(kDdgiIrrInterior + 2u));
+static const float2 kDdgiInvDepthAtlas =
+    1.0f / float2(kDdgiDims.x * kDdgiDims.y * int(kDdgiDepthInterior + 2u), kDdgiDims.z * int(kDdgiDepthInterior + 2u));
 
 // RTXGI DDGIGetVolumeIrradiance (Irradiance.hlsl), with the self-shadow bias of DDGIGetSurfaceBias
 // (normal 0.2 / view 0.8 of 0.3 x 0.75 spacing). `weight` = how much of the volume this point is in:
 // 1 inside, 0 at and beyond its last plane of probes, ramping over the outer `fadeCells` (the caller
 // fades the bounce with it, or hands it to the far cascade -- lighting_cs), and 0
 // when no usable probe surrounds it. P the surface, N its normal, V toward the camera (or the ray's
-// origin, for the trace's infinite bounce).
+// origin, for the trace's infinite bounce). `visibility` false skips the Chebyshev test against the probes' depth
+// moments (8 depth reads): the trace's infinite bounce under `gi.bounceVisibility:0`, a bounce of a bounce.
 float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<uint4> state, SamplerState linearClamp,
-                      DdgiVolumeDesc v, float3 P, float3 N, float3 V, float fadeCells, out float weight)
+                      DdgiVolumeDesc v, float3 P, float3 N, float3 V, float fadeCells, out float weight,
+                      bool visibility = true)
 {
     weight = 0.0f;
     const float3 biased = P + (N * 0.2f + V * 0.8f) * (0.75f * v.spacing * 0.3f);
@@ -188,12 +198,8 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
     // Trilinear needs both planes of every axis inside the volume.
     if (any(cell0 < v.base) || any(cell0 + 1 > v.base + kDdgiDims - 1)) { return 0.0f.xxx; }
     const float3 alpha = g - float3(cell0);
-
-    uint irrW, irrH, depW, depH;
-    irradiance.GetDimensions(irrW, irrH);
-    depth.GetDimensions(depW, depH);
-    const float2 invIrr = 1.0f / float2(irrW, irrH);
-    const float2 invDep = 1.0f / float2(depW, depH);
+    const float2 invIrr = kDdgiInvIrradianceAtlas;
+    const float2 invDep = kDdgiInvDepthAtlas;
 
     float3 sum = 0.0f.xxx;
     float wsum = 0.0f;
@@ -213,16 +219,19 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
         float w = DdgiSquare((dot(toProbe, N) + 1.0f) * 0.5f) + 0.2f;
 
         // Chebyshev visibility against the probe's mean and mean-square distance in this direction.
-        const float3 probeToBiased = biased - probePos;
-        const float dist = length(probeToBiased);
-        const float2 moments = depth.SampleLevel(linearClamp, DdgiAtlasUv(slot, probeToBiased / max(dist, 1.0e-6f),
-                                                                          kDdgiDepthInterior, invDep), 0).rg;
-        if (dist > moments.x)
+        if (visibility)
         {
-            const float variance = abs(DdgiSquare(moments.x) - moments.y);
-            const float d = dist - moments.x;
-            const float chebyshev = variance / (variance + d * d);
-            w *= max(chebyshev * chebyshev * chebyshev, 0.0f);
+            const float3 probeToBiased = biased - probePos;
+            const float dist = length(probeToBiased);
+            const float2 moments = depth.SampleLevel(linearClamp, DdgiAtlasUv(slot, probeToBiased / max(dist, 1.0e-6f),
+                                                                              kDdgiDepthInterior, invDep), 0).rg;
+            if (dist > moments.x)
+            {
+                const float variance = abs(DdgiSquare(moments.x) - moments.y);
+                const float d = dist - moments.x;
+                const float chebyshev = variance / (variance + d * d);
+                w *= max(chebyshev * chebyshev * chebyshev, 0.0f);
+            }
         }
         w = max(1.0e-6f, w);
         // RTXGI: crush tiny weights so a nearly-occluded probe does not leak.
@@ -231,8 +240,10 @@ float3 DdgiIrradiance(Texture2D irradiance, Texture2D depth, StructuredBuffer<ui
         w *= trilinear;
 
         // RTXGI: decode the atlas's E^(1/5) only to E^(1/2), so the probes blend as sRGB-ish values; squared below.
-        const float3 encoded = irradiance.SampleLevel(linearClamp, DdgiAtlasUv(slot, N, kDdgiIrrInterior, invIrr), 0).rgb;
-        sum += w * pow(max(encoded, 0.0f.xxx), kDdgiIrradianceGamma * 0.5f);
+        // e^2.5 as e * e * sqrt(e): one square root a channel instead of pow's log and exp.
+        const float3 encoded = max(irradiance.SampleLevel(linearClamp, DdgiAtlasUv(slot, N, kDdgiIrrInterior, invIrr), 0).rgb,
+                                   0.0f.xxx);
+        sum += w * (encoded * encoded * sqrt(encoded));
         wsum += w;
     }
     if (wsum <= 0.0f) { return 0.0f.xxx; }

@@ -1881,6 +1881,101 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                                     16.0f * std::max(settings.giFarSpacing, 2.0f * settings.giSpacing),
                                     32.0f * std::max(settings.giFarSpacing, 2.0f * settings.giSpacing));
                 ImGui::EndDisabled();
+
+                // The trace's price (SceneRenderSettings::giUpdateDivisor ... giSleepPeriod). Costs measured on the
+                // owner's 18:00 view (cam 37.93 4.63 71.59) with both cascades; what each costs the picture in a
+                // closed room is the bathroom by day.
+                ImGui::SeparatorText("Trace cost");
+                {
+                    int divisor = static_cast<int>(std::clamp(settings.giUpdateDivisor, 1u, 16u));
+                    if (GRAPHICS_CONTROL(GiDivisor, "giDivisor", ImGui::SliderInt("Update divisor", &divisor, 1, 16)))
+                    {
+                        settings.giUpdateDivisor = static_cast<std::uint32_t>(divisor);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("1 / this many of the near probes trace and blend a frame (default 4). The cost\n"
+                                      "follows it: 8 halves the trace and the update; the light then follows a change\n"
+                                      "twice as slowly. The noise stays (the hysteresis sets it).");
+                {
+                    int farDivisor = static_cast<int>(std::clamp(settings.giFarDivisor, 1u, 16u));
+                    if (GRAPHICS_CONTROL(GiFarDivisor, "giFarDivisor",
+                            ImGui::SliderInt("Far update divisor", &farDivisor, 1, 16)))
+                    {
+                        settings.giFarDivisor = static_cast<std::uint32_t>(farDivisor);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The same for the far cascade (default 4).");
+                {
+                    int sleep = static_cast<int>(std::clamp(settings.giSleepPeriod, 1u, 16u));
+                    if (GRAPHICS_CONTROL(GiSleepPeriod, "giSleepPeriod", ImGui::SliderInt("Unseen probes sleep", &sleep, 1, 16)))
+                    {
+                        settings.giSleepPeriod = static_cast<std::uint32_t>(sleep);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A probe no pixel has read for 32 frames (behind the camera, under the ground, in\n"
+                                      "the air) updates one turn in this many (default 4; 1 = every turn). On the 18:00\n"
+                                      "view the GI passes 0.50 -> 0.24 ms at 4, 0.20 at 8. The picture standing still is\n"
+                                      "the same; a region the camera turns to has followed a change of the light more\n"
+                                      "slowly (2 s after a turn: 1.75 %% of pixels off its settled frame against 1.0 %%).");
+                {
+                    int rays = static_cast<int>(std::clamp(settings.giRays, 16u, 64u));
+                    if (GRAPHICS_CONTROL(GiRays, "giRays", ImGui::SliderInt("Rays per probe", &rays, 16, 64)))
+                    {
+                        settings.giRays = static_cast<std::uint32_t>((rays + 8) / 16 * 16);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("The blended rays a probe traces an update (default 64; steps of 16). 32 halves the\n"
+                                      "trace (-0.13 ms) and cuts the update by a third; a probe's estimate is noisier and,\n"
+                                      "blended as E^(1/5), lower: the bathroom by day 4 levels darker. Outdoors no change.");
+                {
+                    int fixedPeriod = static_cast<int>(std::clamp(settings.giFixedRayPeriod, 1u, 16u));
+                    if (GRAPHICS_CONTROL(GiFixedRayPeriod, "giFixedRayPeriod",
+                            ImGui::SliderInt("Classification every", &fixedPeriod, 1, 16)))
+                    {
+                        settings.giFixedRayPeriod = static_cast<std::uint32_t>(fixedPeriod);
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A probe's 32 fixed rays (inside geometry? where to relocate?) every this many of its\n"
+                                      "updates (default 4; 1 = every one). Their directions never change, so their answers\n"
+                                      "hold while the probe stands where it stood; a probe new to its cell or moved traces\n"
+                                      "them at once. Moving geometry is re-classified that much later.");
+                GRAPHICS_CONTROL(GiRayDistance, "giRayDistance",
+                    ImGui::SliderFloat("Ray reach", &settings.giRayDistance, 10.0f, 400.0f, "%.0f m",
+                                       ImGuiSliderFlags_Logarithmic));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("How far a probe ray looks for geometry (default 200 m, UE's Lumen). 30 m: -0.04 ms\n"
+                                      "here, and a probe more than that over the ground never sees it (a box 45 m up took\n"
+                                      "0.7 of UE's light on its shaded faces).");
+                GRAPHICS_CONTROL(GiInfiniteBounce, "giInfiniteBounce",
+                    ImGui::Checkbox("Infinite bounce", &settings.giInfiniteBounce));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A probe ray's hit also takes the volume's own last light (a bounce of a bounce).\n"
+                                      "Off: -0.08 / -0.04 ms (near / far trace), and rooms lit by bounce alone darker.");
+                ImGui::BeginDisabled(!settings.giInfiniteBounce);
+                GRAPHICS_CONTROL(GiBounceVisibility, "giBounceVisibility",
+                    ImGui::Checkbox("...with visibility", &settings.giBounceVisibility));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("That bounce weighs the probes round the hit by their depth moments, as lighting\n"
+                                      "does. Off: -0.03 / -0.02 ms, and it LEAKS through walls: the bathroom by day 12\n"
+                                      "levels brighter. Outdoors no visible change.");
+                ImGui::EndDisabled();
+                GRAPHICS_CONTROL(GiSkyRay, "giSkyRay",
+                    ImGui::Checkbox("Sky ray at hits", &settings.giSkyRay));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("A hit's sky light through one ray of visibility (default on). Off: -0.04 / -0.02 ms,\n"
+                                      "every hit sees the open sky -- a room's walls send its light back in: the bathroom\n"
+                                      "by day washes out. Outdoors under the crowns +3 levels.");
+                GRAPHICS_CONTROL(GiLights, "giLights",
+                    ImGui::Checkbox("Lamps at hits", &settings.giLights));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Spot and point lights light the probes' hits, each with a shadow ray (default on).\n"
+                                      "Off = their bounce goes: the candle-lit bathroom keeps only their direct light.\n"
+                                      "Costs nothing while no lamp is lit; with the Lamps group on, every hit walks them.");
                 ImGui::EndDisabled();
 
                 // Plan S: the RT sky visibility (SceneRenderSettings::skyVis*). Its own system -- the sky's fill and
