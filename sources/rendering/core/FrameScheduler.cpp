@@ -203,7 +203,25 @@ bool FrameScheduler::IsFrameComplete(UINT frameIndex) const
     return true;
 }
 
-void FrameScheduler::SignalFrame(ID3D12CommandQueue* direct, ID3D12CommandQueue* compute, UINT frameIndex)
+bool FrameScheduler::IsFrameNumberComplete(std::uint64_t frameNumber) const
+{
+    if (!fence_) { return false; }
+    const UINT64 direct = fence_->GetCompletedValue();
+    const UINT64 compute = computeFence_ ? computeFence_->GetCompletedValue() : UINT64_MAX;
+    // Frames signal in order with rising values, so any signalled frame at or after this one that both queues passed says
+    // this one is done too.
+    for (UINT i = 0; i < render::kFrameCount; ++i)
+    {
+        const std::uint64_t frame = signalledFrame_[i].load(std::memory_order_acquire);
+        if (frame == 0 || frame < frameNumber) { continue; }
+        const UINT64 value = signalledValue_[i].load(std::memory_order_relaxed);
+        if (value != 0 && direct >= value && compute >= value) { return true; }
+    }
+    return false;
+}
+
+void FrameScheduler::SignalFrame(ID3D12CommandQueue* direct, ID3D12CommandQueue* compute, UINT frameIndex,
+    std::uint64_t frameNumber)
 {
     // ONE value on BOTH fences. The compute queue is signalled every frame whether or not anything
     // was submitted to it: a Signal on an idle queue completes immediately, and paying that
@@ -221,6 +239,8 @@ void FrameScheduler::SignalFrame(ID3D12CommandQueue* direct, ID3D12CommandQueue*
         ThrowIfFailed(computeFence_->Signal(v));
     }
     frameFenceValues_[frameIndex] = v;
+    signalledValue_[frameIndex].store(v, std::memory_order_relaxed);
+    signalledFrame_[frameIndex].store(frameNumber, std::memory_order_release);
 }
 
 void FrameScheduler::WaitForGpuIdle(ID3D12CommandQueue* direct, ID3D12CommandQueue* compute)
@@ -290,6 +310,8 @@ void FrameScheduler::ResetFrameState(ID3D12Device* device)
             frameResources_[i].reset();
         }
         frameFenceValues_[i] = 0;
+        signalledValue_[i].store(0, std::memory_order_relaxed);
+        signalledFrame_[i].store(0, std::memory_order_release);
     }
     nextFenceValue_ = 1;
     nextCrossGraphics_ = 1;

@@ -946,6 +946,19 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   `readbackCascades`; **`None` = everything floats on a flat surface**, and both shipped presets say
   None) plus the shore depth map, copied to a readback ring and read the first frame the fence says
   it is done -- never waited on. Its `SampleHeight` is the vertex shader's surface term for term.
+- **"Done" is asked by the copy's frame NUMBER** (`Renderer::IsFrameNumberComplete`, FrameScheduler keeps the number
+  each slot's fence value was signalled for; 2026-11-09, owner: "the boat in the lagoon rocks like mad after the load
+  and calms once I fly to it"). It asked by the frame SLOT, and under the RHI thread a frame's submission -- its
+  `SignalFrame` -- runs after the hand-over that polls it, so the slot still held the fence of the frame three before,
+  long done: a copy was adopted one frame after it was recorded, before the GPU had run it. The shore map is copied
+  once a re-render, so the CPU kept that slot's old bytes (zeros at load) until the camera crossed a snap step: every
+  floater in the lagoon rode the open sea's waves. Measured from the owner's 18:00 view (cam 37.93 4.63 71.59, the
+  fishing boat 77 m off; `get_readouts` `floaters` / `oceanReadback`, scratchpad-style `floater_far.py`): heave sd
+  0.17-0.33 -> 0.03-0.06 m, tilt up to 27-40 -> 5-10 degrees at load, the same after a fly-in and back, the shore read
+  under each boat (the lagoon floor's 1.45 m); with `frame.renderThread:0` the same. The surf measurement above was
+  taken before this. A shore re-render on a frame that copies nothing (no request) is also owed its copy now (re-armed
+  before the request check). Anything else that reads a GPU copy without waiting: by frame number, never by slot --
+  `Renderer::WaitForFrameSlot` (the occlusion's `vis.queryLatency:1`) now waits for the last frame's submission first.
 - **The surf sim's wave too** (2026-11-09, owner: "the surf sim's wave does not affect the buoyancy"): its height field
   (`OceanSurfSim`, RG16F 512^2, the shore's breakers) is copied with the cascades on the frames its pass handed it over
   (`OceanSurfSim::GetWaveResource(frame)`, `OceanRenderable::GetSurfSimWaveResource`) and added where the vertex shader adds

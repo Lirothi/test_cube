@@ -513,6 +513,10 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
             bool opened = false;
             if (pts.drawDepth)
             {
+                LOG_DEBUG(logging::LogCategory::Ocean, "shore depth: rendered (centre {:.2f} {:.2f}, {} objects)",
+                    oceanSim->GetShoreViewCenter().x, oceanSim->GetShoreViewCenter().y,
+                    oceanSim->GetShoreDepthView().queue.VisibleBuckets()[BucketIndex(SceneRenderQueue::BucketType::OpaqueSimple)].size() +
+                    oceanSim->GetShoreDepthView().queue.VisibleBuckets()[BucketIndex(SceneRenderQueue::BucketType::OpaqueComplex)].size());
                 pts.depthWrite = ctx.usePoint ? *ctx.usePoint : 0u;
                 ctx.Use(shoreDepth, D3D12_RESOURCE_STATE_DEPTH_WRITE);
                 ctx.NextPoint();

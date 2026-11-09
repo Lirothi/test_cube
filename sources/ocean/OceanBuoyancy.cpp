@@ -390,6 +390,31 @@ void OceanBuoyancy::Tick(OceanRenderable* ocean, Renderer& renderer, float delta
     }
 }
 
+void OceanBuoyancy::Readouts(const OceanRenderable* ocean, std::vector<Readout>& out) const
+{
+    out.clear();
+    if (!ocean || ocean != lastOcean_) { return; }
+    const OceanReadback& readback = ocean->GetReadback();
+    for (const auto& [object, body] : bodies_) // keys never dereferenced
+    {
+        (void)object;
+        if (!body.valid) { continue; }
+        Readout r;
+        r.geometry = body.geometry;
+        r.center = body.comRest;
+        r.heave = body.heave;
+        r.heaveVelocity = body.heaveVelocity;
+        r.tiltDeg = body.tilt.Length() * 57.2957795f;
+        r.water = readback.HasSurface() ? readback.SampleHeight(body.comRest.x, body.comRest.z) : ocean->GetWaterLevel();
+        r.shore = readback.ShoreAt(body.comRest.x, body.comRest.z, r.waterDepth, r.damping);
+        out.push_back(std::move(r));
+    }
+    std::sort(out.begin(), out.end(), [](const Readout& a, const Readout& b)
+    {
+        return a.center.x != b.center.x ? a.center.x < b.center.x : a.center.z < b.center.z;
+    });
+}
+
 bool OceanBuoyancy::GetWorldPontoons(const RenderableObject* object, std::vector<Math::float4>& out) const
 {
     out.clear();

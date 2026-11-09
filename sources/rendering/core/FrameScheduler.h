@@ -1,6 +1,7 @@
 #pragma once
 
 #include <d3d12.h>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <wrl/client.h>
@@ -35,11 +36,17 @@ public:
     void WaitForFrame(UINT frameIndex);
     // Signals BOTH queues for a frame slot with the same next global value. `compute` may be null
     // (device refused a compute queue) — then only the direct half is signalled and the compute
-    // half counts as already complete.
-    void SignalFrame(ID3D12CommandQueue* direct, ID3D12CommandQueue* compute, UINT frameIndex);
+    // half counts as already complete. `frameNumber` is the frame's Renderer::GetTotalFrameNumber.
+    void SignalFrame(ID3D12CommandQueue* direct, ID3D12CommandQueue* compute, UINT frameIndex, std::uint64_t frameNumber);
     // Has the GPU finished this slot on BOTH queues? Non-blocking; the Debug assert in
     // Renderer::BeginFrame uses it to catch a per-frame ring being reused before both fences.
+    // NOT a question about the frame recording in that slot now: until its submission signals (on the RHI thread, after
+    // the hand-over) the slot still answers for the frame kFrameCount before it -- ask IsFrameNumberComplete.
     bool IsFrameComplete(UINT frameIndex) const;
+    // Has the GPU finished the frame of this number (Renderer::GetTotalFrameNumber while it recorded) on BOTH queues?
+    // Non-blocking, any thread; false for a frame not yet submitted. A readback asked by its slot instead was read
+    // before the GPU had written it (OceanReadback, 2026-11-09: the shore map copied once a re-render, read as zeros).
+    bool IsFrameNumberComplete(std::uint64_t frameNumber) const;
     // Full synchronization: signal and wait, on BOTH queues (resize / level switch / shutdown).
     // Every idle path in the engine funnels through Renderer::WaitForPreviousFrame into this, so
     // this one function is what makes ~50 call sites queue-correct.
@@ -91,6 +98,10 @@ private:
     HANDLE computeFenceEvent_ = nullptr;
     UINT64 nextFenceValue_ = 1;                  // global increment, shared by both fences
     UINT64 frameFenceValues_[render::kFrameCount] = {};  // last signal value for each frame
+    // The same signals by frame NUMBER, for IsFrameNumberComplete on other threads: the value is stored before the number
+    // (release), so a number read (acquire) never pairs with an older frame's value.
+    std::atomic<std::uint64_t> signalledFrame_[render::kFrameCount] = {};
+    std::atomic<UINT64> signalledValue_[render::kFrameCount] = {};
 
     // Step 2: the cross-queue edge fence (see SignalCrossQueue). Separate from the frame fences so
     // a mid-frame edge cannot perturb frame pacing, and so its counter stays readable in a capture.

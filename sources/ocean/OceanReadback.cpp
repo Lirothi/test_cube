@@ -191,19 +191,20 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
 std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraphPassContext& ctx,
     const OceanRenderable& ocean)
 {
+    Renderer* renderer = ctx.renderer;
+    const OceanSimulation* sim = ocean.GetSimulation();
+    // A re-rendered shore map is owed a copy even on a frame that copies nothing (no request, the rate limit below):
+    // re-armed before either, or a re-render on a frame nobody asked lost its copy until the next one.
+    if (sim && sim->ShouldRenderShoreDepth()) { shoreQueued_ = false; }
     if (!requested_) { return {}; }
     requested_ = false;
 
-    Renderer* renderer = ctx.renderer;
-    const OceanSimulation* sim = ocean.GetSimulation();
     if (!renderer || !sim) { return {}; }
     ID3D12Resource* displacement = sim->GetDisplacementResource();
     const std::uint32_t cascades = CascadesWanted(*sim);
     if (!displacement || cascades == 0u) { return {}; }
     ID3D12Resource* shore = sim->GetShoreDepthResource();
     if (shore && sim->GetShoreDepthSrv().ptr == 0) { shore = nullptr; }
-    // A re-rendered shore map is owed a copy even on a frame the rate limit below skips.
-    if (sim->ShouldRenderShoreDepth()) { shoreQueued_ = false; }
 
     // At most 30 copies a second, whatever the frame rate: a swell with a period of seconds is fully
     // described at 30 Hz, and between copies every pontoon carries its height forward at its own
@@ -242,9 +243,8 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     lastCopy_ = now;
 
     Slot& slot = slots_[slotIndex];
-    slot.frame = renderer->GetTotalFrameNumber();
+    slot.frame = renderer->GetTotalFrameNumber(); // whose fence says the copy has landed
     slot.discard = false;
-    slot.frameSlot = renderer->GetCurrentFrameIndex(); // whose fence says the copy has landed
     SurfaceParams& s = slot.surface;
     s.lengthScales = sim->GetLengthScales();
     const Math::float4 viewer = ocean.GetClipMapViewer();
@@ -271,6 +271,8 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
         slot.shore.width = layoutShoreW_;
         slot.shore.height = layoutShoreH_;
         shoreQueued_ = true;
+        LOG_DEBUG(logging::LogCategory::Ocean, "ocean readback: shore map copied (centre {:.2f} {:.2f}, re-rendered this frame: {})",
+            slot.shore.view.x, slot.shore.view.y, sim->ShouldRenderShoreDepth() ? "yes" : "no");
     }
     // The boats' wake, when this frame stepped it (Main_OceanWake is a prerequisite of this pass).
     ID3D12Resource* wake = ocean.GetWakeFreeHeightResource(renderer->GetTotalFrameNumber());
@@ -386,9 +388,13 @@ void OceanReadback::Poll(Renderer* renderer, const OceanRenderable& ocean)
     size_t count = 0;
     for (UINT f = 0; f < render::kFrameCount; ++f)
     {
-        // The fence of the FRAME that recorded the copy. Once a later frame reuses that frame slot the
-        // answer is about the later frame -- conservative (a finished copy may wait for it), never early.
-        if (slots_[f].frame != 0 && renderer->IsFrameSlotComplete(slots_[f].frameSlot)) { ready[count++] = f; }
+        // The frame that recorded the copy, by its NUMBER. Asked by its frame slot (until 2026-11-09), the answer under
+        // the RHI thread was the fence of the frame kFrameCount before -- the copy's own frame reaches the queues after
+        // the hand-over that polls it -- so a copy was "done" one frame after it was recorded, before the GPU had run
+        // it: the shore map, copied once a re-render, read as zeros (every floater in the lagoon on the open sea's
+        // waves until the camera crossed a snap step: owner, the fishing boat 77 m off at load), and the cascades a
+        // slot's older bytes while the GPU wrote them.
+        if (slots_[f].frame != 0 && renderer->IsFrameNumberComplete(slots_[f].frame)) { ready[count++] = f; }
     }
     if (count == 0) { return; }
     std::sort(ready.begin(), ready.begin() + static_cast<std::ptrdiff_t>(count),
@@ -425,6 +431,8 @@ void OceanReadback::Poll(Renderer* renderer, const OceanRenderable& ocean)
             }
             shore_ = slot.shore;
             hasShore_ = true;
+            LOG_DEBUG(logging::LogCategory::Ocean, "ocean readback: shore map adopted (centre {:.2f} {:.2f}, copied on frame {})",
+                shore_.view.x, shore_.view.y, slot.frame);
         }
         if (i == newest)
         {
@@ -539,6 +547,30 @@ float OceanReadback::SampleSurf(float u, float v) const
     return a + (b - a) * ty;
 }
 
+bool OceanReadback::ShoreDamping(float uvX, float uvZ, float& waterDepth, float& vertical, float& horizontal) const
+{
+    if (!hasShore_) { return false; }
+    const Math::float4& view = shore_.view;
+    const float su = (uvX - view.x) * view.w + 0.5f;
+    const float sv = 0.5f - (uvZ - view.y) * view.w;
+    if (!(su >= 0.0f && su <= 1.0f && sv >= 0.0f && sv <= 1.0f)) { return false; }
+    const float depthSample = SampleShoreDepth(su, sv);
+    if (depthSample <= 0.0f) { return false; }
+    const float viewDepth = shore_.depthRange.x + (shore_.depthRange.y - shore_.depthRange.x) * depthSample;
+    waterDepth = -(view.z - viewDepth);
+    const float depthFade = std::clamp(waterDepth / std::max(shore_.damp.z, 0.01f), 0.0f, 1.0f);
+    vertical = (1.0f - std::clamp(shore_.damp.x, 0.0f, 1.0f)) + std::clamp(shore_.damp.x, 0.0f, 1.0f) * depthFade;
+    horizontal = (1.0f - std::clamp(shore_.damp.y, 0.0f, 1.0f)) + std::clamp(shore_.damp.y, 0.0f, 1.0f) * depthFade;
+    return true;
+}
+
+bool OceanReadback::ShoreAt(float x, float z, float& waterDepth, float& vertical) const
+{
+    float horizontal = 1.0f;
+    vertical = 1.0f;
+    return ShoreDamping(x, z, waterDepth, vertical, horizontal);
+}
+
 Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeShare, bool heights) const
 {
     const SurfaceParams& s = surface_;
@@ -569,28 +601,14 @@ Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeSha
     }
 
     float wakeFade = 1.0f; // the VS's simDisplacementFade: the wake and the surf go out over the last 15 cm of water
-    if (hasShore_)
     {
-        const Math::float4& view = shore_.view;
-        const float su = (uvX - view.x) * view.w + 0.5f;
-        const float sv = 0.5f - (uvZ - view.y) * view.w;
-        if (su >= 0.0f && su <= 1.0f && sv >= 0.0f && sv <= 1.0f)
+        float waterDepth = 0.0f, vertical = 1.0f, horizontal = 1.0f;
+        if (ShoreDamping(uvX, uvZ, waterDepth, vertical, horizontal))
         {
-            const float depthSample = SampleShoreDepth(su, sv);
-            if (depthSample > 0.0f)
-            {
-                const float viewDepth = shore_.depthRange.x + (shore_.depthRange.y - shore_.depthRange.x) * depthSample;
-                const float waterDepth = -(view.z - viewDepth);
-                const float depthFade = std::clamp(waterDepth / std::max(shore_.damp.z, 0.01f), 0.0f, 1.0f);
-                const float vertical = (1.0f - std::clamp(shore_.damp.x, 0.0f, 1.0f)) +
-                    std::clamp(shore_.damp.x, 0.0f, 1.0f) * depthFade;
-                const float horizontal = (1.0f - std::clamp(shore_.damp.y, 0.0f, 1.0f)) +
-                    std::clamp(shore_.damp.y, 0.0f, 1.0f) * depthFade;
-                d.y *= vertical;
-                d.x *= horizontal;
-                d.z *= horizontal;
-                wakeFade = std::clamp(waterDepth / 0.15f, 0.0f, 1.0f);
-            }
+            d.y *= vertical;
+            d.x *= horizontal;
+            d.z *= horizontal;
+            wakeFade = std::clamp(waterDepth / 0.15f, 0.0f, 1.0f);
         }
     }
 

@@ -93,8 +93,15 @@ public:
     const SurfaceParams& Surface() const { return surface_; }
     // Frames between the adopted copy's frame and the frame that adopted it.
     std::uint32_t LatencyFrames() const { return latency_; }
+    // Diagnostics (get_readouts "floaters"): what the CPU's shore copy says at world (x, z) -- the water depth and the
+    // vertical damping the surface takes there. False with no copy, outside its window, or where it holds nothing.
+    bool ShoreAt(float x, float z, float& waterDepth, float& vertical) const;
+    bool HasShore() const { return hasShore_; }
+    const ShoreParams& Shore() const { return shore_; }
 
 private:
+    // The shore map's damping at the (warped) surface point, as the VS takes it; false where the VS takes none from the map.
+    bool ShoreDamping(float uvX, float uvZ, float& waterDepth, float& vertical, float& horizontal) const;
     // `heights`: add the terms that move only y (the wake, the surf) -- the fixed-point iteration leaves them out.
     Math::float3 Displacement(float baseX, float baseZ, float wakeShare, bool heights) const;
     Math::float3 SampleCascade(std::uint32_t cascade, float u, float v) const;
@@ -109,8 +116,7 @@ private:
 
     struct Slot
     {
-        std::uint64_t frame = 0; // 0 = nothing pending
-        UINT frameSlot = 0;      // the renderer frame slot that recorded the copy (its fence)
+        std::uint64_t frame = 0; // the frame number that recorded the copy (its fence: IsFrameNumberComplete); 0 = nothing pending
         SurfaceParams surface;
         bool hasShore = false;
         bool discard = false;    // recorded before DropSurface: free it when it lands, do not adopt

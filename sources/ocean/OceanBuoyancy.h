@@ -51,6 +51,20 @@ public:
     bool GetWorldPontoons(const RenderableObject* object, std::vector<Math::float4>& out) const;
     size_t BodyCount() const { return bodies_.size(); }
 
+    // get_readouts "floaters": every body as it stands, and what the CPU's copy of the water says under its centre.
+    struct Readout
+    {
+        std::string geometry;
+        Math::float3 center;   // the centre of mass at rest, world
+        float heave = 0.0f;    // m above rest
+        float heaveVelocity = 0.0f;
+        float tiltDeg = 0.0f;  // pitch and roll together
+        float water = 0.0f;    // the adopted surface's height there
+        bool shore = false;    // the shore copy holds that point
+        float waterDepth = 0.0f, damping = 1.0f;
+    };
+    void Readouts(const OceanRenderable* ocean, std::vector<Readout>& out) const;
+
 private:
     struct Body
     {

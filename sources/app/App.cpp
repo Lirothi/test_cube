@@ -101,6 +101,8 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 
 #include "app/levels/JsonLevel.h"
 #include "rendering/lighting/Skybox.h" // --sweep=light.skyIntensity
+#include "ocean/OceanBuoyancy.h"    // get_readouts "floaters"
+#include "ocean/OceanReadback.h"
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
@@ -2417,6 +2419,36 @@ namespace
                                   spray.Boats(), spray.Rate(), spray.SheetRate(), spray.Bursts(), spray.SheetAlive(), spray.SheetCapacity(),
                                   spray.MistAlive(), spray.MistCapacity(), static_cast<unsigned long long>(spray.HullEntries()));
                     out += sprayItem;
+                }
+                // The objects OceanBuoyancy floats (not the physics world's boats) and the water the CPU reads under them.
+                {
+                    OceanRenderable* ocean = scene_.FindOceanRenderable();
+                    std::vector<OceanBuoyancy::Readout> floaters;
+                    scene_.Buoyancy().Readouts(ocean, floaters);
+                    if (ocean)
+                    {
+                        const OceanReadback& readback = ocean->GetReadback();
+                        const OceanReadback::ShoreParams& shore = readback.Shore();
+                        char shoreItem[200];
+                        std::snprintf(shoreItem, sizeof(shoreItem),
+                                      ",\"oceanReadback\":{\"surface\":%s,\"adoptedFrame\":%llu,\"shore\":%s,\"shoreCenter\":[%.2f,%.2f],\"shoreExtent\":%.1f}",
+                                      readback.HasSurface() ? "true" : "false", static_cast<unsigned long long>(readback.AdoptedFrame()),
+                                      readback.HasShore() ? "true" : "false", shore.view.x, shore.view.y,
+                                      shore.view.w > 0.0f ? 1.0f / shore.view.w : 0.0f);
+                        out += shoreItem;
+                    }
+                    out += ",\"floaters\":[";
+                    for (size_t i = 0; i < floaters.size(); ++i)
+                    {
+                        const OceanBuoyancy::Readout& f = floaters[i];
+                        char floatItem[400];
+                        std::snprintf(floatItem, sizeof(floatItem),
+                                      "%s{\"geometry\":\"%s\",\"center\":[%.3f,%.3f,%.3f],\"heave\":%.4f,\"heaveVelocity\":%.4f,\"tiltDeg\":%.3f,\"water\":%.4f,\"shore\":%s,\"waterDepth\":%.3f,\"damping\":%.3f}",
+                                      i > 0 ? "," : "", f.geometry.c_str(), f.center.x, f.center.y, f.center.z, f.heave, f.heaveVelocity, f.tiltDeg,
+                                      f.water, f.shore ? "true" : "false", f.waterDepth, f.damping);
+                        out += floatItem;
+                    }
+                    out += "]";
                 }
                 // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.
                 char uiItem[96];

@@ -443,10 +443,10 @@ void Renderer::WaitForFrame(UINT frameIndex) {
     frameScheduler_.WaitForFrame(frameIndex);
 }
 
-void Renderer::SignalFrame(UINT frameIndex) {
+void Renderer::SignalFrame(UINT frameIndex, std::uint64_t frameNumber) {
     // Step 2: both queues, one value. GetComputeQueue() is null when the device refused one, which
     // FrameScheduler handles by advancing the compute fence from the CPU instead.
-    frameScheduler_.SignalFrame(GetCommandQueue(), GetComputeQueue(), frameIndex);
+    frameScheduler_.SignalFrame(GetCommandQueue(), GetComputeQueue(), frameIndex, frameNumber);
 }
 
 void Renderer::RefreshCurrentFrameCaches() {
@@ -1939,7 +1939,7 @@ void Renderer::SubmitFrame_(const FrameSubmit& submit)
             throw;
         }
     }
-    SignalFrame(submit.frameIndex);
+    SignalFrame(submit.frameIndex, submit.totalFrame);
     // G10a: the slot ExecuteTimelineAndPresent predicted for the next frame is the swapchain's (an RHI thread's next
     // frame records into it before this Present runs).
     const UINT actualNext = swapchain_.CurrentBackBufferIndex();

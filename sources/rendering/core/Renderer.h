@@ -474,10 +474,14 @@ public:
     void WaitForPreviousFrame();       // full synchronization (used during resize/destruction)
     // Occlusion plan S3a: block until one frame SLOT's fence has passed -- the wait a query
     // latency below kFrameCount costs (UE's Map blocks the same way). Not the full idle above.
-    void WaitForFrameSlot(UINT frameIndex) { WaitForFrame(frameIndex); }
-    // The non-blocking half: has the GPU finished the frame last submitted in this slot? A reader
-    // that can use ANY finished copy (the ocean readback) asks this instead of waiting.
-    bool IsFrameSlotComplete(UINT frameIndex) const { return frameScheduler_.IsFrameComplete(frameIndex); }
+    // The last frame handed over first reaches the queues: under the RHI thread the slot of the frame before this one
+    // still holds the fence of the frame kFrameCount before it until its submission runs (BeginFrame waits only for
+    // the frame before that one), and the wait would return at once on a frame the GPU had not been given.
+    void WaitForFrameSlot(UINT frameIndex) { rhi_.WaitFor(lastSubmit_); WaitForFrame(frameIndex); }
+    // The non-blocking half: has the GPU finished the frame of this NUMBER (GetTotalFrameNumber while it recorded)? A
+    // reader that can use ANY finished copy (the ocean readback) asks this instead of waiting. By number, never by slot:
+    // under the RHI thread a slot answers for the frame kFrameCount before until its own submission signals.
+    bool IsFrameNumberComplete(std::uint64_t frameNumber) const { return frameScheduler_.IsFrameNumberComplete(frameNumber); }
     // Main/window thread: coalesce notifications; apply before recycling the next frame slot.
     void OnResize(UINT width, UINT height);
 
@@ -954,7 +958,7 @@ private:
     void CreateSwapChainAndRTVs(UINT width, UINT height);
     void CreateDepthResources(UINT width, UINT height);
     void WaitForFrame(UINT frameIndex);   // wait for a specific frame (by that frame's fence value)
-    void SignalFrame(UINT frameIndex);    // signal the fence for a frame
+    void SignalFrame(UINT frameIndex, std::uint64_t frameNumber); // signal the fence for a frame
     void RefreshCurrentFrameCaches();
     // Async-compute step 1: the one-shot COMPUTE-lane probe (see render::g_computeLaneProbe).
     // Runs at the end of the first BeginFrame that has frame resources, then never again.
