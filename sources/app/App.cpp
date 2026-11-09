@@ -629,6 +629,8 @@ namespace
         if (setting == "tessy.clusterCull") { tessy::g_clusterCull_game = value != 0.0f; return true; } // clusters holding no sample
         if (setting == "tessy.msCull") { tessy::g_vsmMsCull_game = static_cast<unsigned>(std::clamp(value, 0.0f, 1.0f)); return true; }
         if (setting == "vsm.windRange") { vsm::g_windRange_game = std::max(0.0f, value); return true; }
+        if (setting == "vsm.windPageMarks") { vsm::g_windPageMarks_game = value != 0.0f; return true; } // the wind's pages: marked only
+        if (setting == "vsm.windSliceTexels") { vsm::g_windSliceTexels_game = std::max(0.0f, value); return true; } // the wind's levels in slices
         if (setting == "vsm.perInstanceCasterLod") { vsm::g_perInstanceCasterLod_game = value != 0.0f; return true; }
         if (setting == "vsm.hzbCull")      { vsm::g_hzbCull_game = value != 0.0f; return true; } // occlusion plan S5b.2
         if (setting == "vsm.shadowLodBiasNearTier") { render::g_shadowLodBiasNearTier_game = value != 0.0f; return true; }

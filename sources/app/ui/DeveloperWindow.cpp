@@ -3463,29 +3463,39 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 }
                 ImGui::TextDisabled("Tessy (cluster geometry): its switches and counters are in the Tessy tab.");
                 GRAPHICS_CONTROL(VsmPageCaching, "vsmPageCaching",
-                    ImGui::Checkbox("Page cache (experimental)", &vsm::g_pageCaching_game));
+                    ImGui::Checkbox("Page cache", &vsm::g_pageCaching_game));
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Skips re-rendering pages whose content did not change. Two rules make the\n"
+                                      "cached content valid: (1) wind past the 'wind range' renders\n"
+                                      "RIGID, so a swaying grove caches its far levels; (2) any view whose MATRIX\n"
+                                      "changed re-renders wholesale - a local page id has no scroll offset, so a moved\n"
+                                      "sun/spot would otherwise serve depth for the wrong world rect (a clipmap level's pages move).\n"
+                                      "Net effect: parked camera + settled lights cache fully; motion redraws\n"
+                                      "exactly what it invalidates. Off = every resident page every frame.");
                 {
                     GRAPHICS_CONTROL_WIDTH(VsmWindRange, "vsmWindRange", 105.0f,
                         ImGui::SliderFloat("Wind range (m)", &vsm::g_windRange_game, 0.0f, 512.0f, "%.0f"));
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Shadows within this distance of the camera sway and their pages re-render every frame while\n"
-                                          "the wind blows; past it the casters draw RIGID, so the page cache can keep them (a cached\n"
-                                          "page and a fresh render agree exactly). Locals always sway. Now the first %u levels.",
+                        ImGui::SetTooltip("Shadows within this distance of the camera sway; past it the casters draw RIGID, so the\n"
+                                          "page cache can keep them (a cached page and a fresh render agree exactly). Its levels:\n"
+                                          "now the first %u. The cost is the swaying casters' pages redrawn every frame.",
                                           vsm::ClipmapWindLevels());
                 }
+                ImGui::Checkbox("Wind redraws only swaying pages", &vsm::g_windPageMarks_game);
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Skips re-rendering pages whose content did not change. Two rules make the\n"
-                                      "cached content valid: (1) wind past the 'wind range' renders\n"
-                                      "RIGID, so a swaying grove caches its far levels (-0.33 ms Pass_VsmPageRender\n"
-                                      "in the wind_test grove, neutral on demo.json); (2) any view whose MATRIX\n"
-                                      "changed re-renders wholesale - a local page id has no scroll offset, so a moved\n"
-                                      "sun/spot would otherwise serve depth for the wrong world rect (a clipmap level's pages move).\n"
-                                      "Net effect: parked camera + settled lights cache fully; motion redraws\n"
-                                      "exactly what it invalidates (the cost of the uncached path, no worse).");
+                    ImGui::SetTooltip("ON: of the wind range's levels, only the pages a swaying caster lies on (within the wind\n"
+                                      "range of the camera, this frame or last) re-render, and none while the wind is frozen and\n"
+                                      "the camera still -- UE's per-instance WPO invalidation. The same picture: a page with nothing\n"
+                                      "swaying draws the same depth. OFF = every page of those levels every frame (the A/B).\n"
+                                      "--set=vsm.windPageMarks:0|1");
+                ImGui::SetNextItemWidth(105.0f);
+                ImGui::SliderFloat("Wind pose step (texels)", &vsm::g_windSliceTexels_game, 0.0f, 4.0f, "%.2f");
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("ON: re-render only new / dynamic-overlapping pages; cached pages keep their\n"
-                                      "depth. Measured no avg gain + worse spikes on this scene (cull-bound + dynamic\n"
-                                      "teapots + gated clear slower than the hardware clear). Kept for a future coarse-skip.");
+                    ImGui::SetTooltip("A clipmap level takes the wind's pose (and redraws its swaying pages) only once the fastest\n"
+                                      "swaying vertex could have moved this many of its texels since the last time -- a bound from\n"
+                                      "the sway's own formula. Near levels (fine texels) take every frame; a level of 8 cm texels\n"
+                                      "a few times a second. A shadow lags its tree by at most this many of its own texels.\n"
+                                      "0 = every level every frame. --set=vsm.windSliceTexels");
 
                 ImGui::Checkbox("Log page stats to debug output", &vsm::g_logPageStats_game);
                 if (ImGui::IsItemHovered())

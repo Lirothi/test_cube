@@ -34,7 +34,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
 {
     const uint c = dtid.x;
     if (c >= gNumCasters) { return; }
-    if ((CasterMeta[c] >> 1u) == 0u) { return; } // a continuation slot: its object was handled by its first slot
+    if ((CasterMeta[c] >> VSM_CASTER_META_SLOT_SHIFT) == 0u) { return; } // a continuation slot: its object was handled by its first slot
     const CasterBounds b = Bounds[c];
     if (b.halfExtents.w != 0.0f) { return; } // UE Cast Shadow off: no page takes it
     const float3 ext = b.halfExtents.xyz + gMargin;

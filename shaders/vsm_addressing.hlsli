@@ -31,6 +31,11 @@ static const uint VSM_VIEW_DIRTY          = 1u; // bits.x: the view's matrix cha
 static const uint VSM_VIEW_DISTANT        = 2u; // plan S10d: a distant light's view (rigid, round-robin redraw)
 static const uint VSM_VIEW_DISTANT_UPDATE = 4u; // ...the round robin redraws it this frame
 static const uint VSM_VIEW_WIND_RIGID     = 8u; // render::g_localShadowWindRange: a local light past it -- no sway, no wind dirt
+// The per-caster meta word (ShadowGpuData::kCasterMeta*): bit 0 = dynamic, bit 1 = the object sways in the wind, bits 2.. =
+// the object's slot count, on its first slot only (0 = a continuation slot).
+static const uint VSM_CASTER_META_DYNAMIC    = 1u;
+static const uint VSM_CASTER_META_WIND       = 2u;
+static const uint VSM_CASTER_META_SLOT_SHIFT = 2u;
 struct VsmViewData
 {
     row_major float4x4 viewProj;     // this frame's

@@ -456,6 +456,15 @@ public:
     // last frame" gate (the VSM still-frame skip, the VSM per-page cache) would freeze its shadow
     // while the gbuffer tree keeps swaying. Those gates must consult this too.
     bool HasWindCasters() const { return hasWindCasters_; }
+    // How far and how fast a swaying caster's vertex can stand off / move from its rest pose under this wind: wind.hlsli
+    // WindOffset's terms at their maxima (the bend, the leaf streaming, the flutter, the grove's +25 % amplitude and -20 %
+    // stiffness; the gust at the top of its envelope and its own drift), over every swaying caster (Rebuild), times 1.5 for
+    // the arc's re-normalisation. Metres and metres a second; 0 without one. vsm.windSliceTexels reads them.
+    float WindOffsetBound(float swayAmp, float gustMax) const { return 1.5f * windOffsetK_ * swayAmp * gustMax; }
+    float WindSpeedBound(float swayAmp, float swayFreq, float gustMax, float gustRate) const
+    {
+        return 1.5f * windSpeedK_ * swayAmp * gustMax * swayFreq + WindOffsetBound(swayAmp, 1.0f) * gustRate;
+    }
     // A GPU-idle editor rebuild can replace masked-material SRVs without moving any caster.
     // Preserve that content-change signal through the next UpdateForFrame so VSM does not keep
     // cached pages rendered with the old alpha mask.
@@ -498,6 +507,11 @@ public:
     // reads as dynamic, which is what lets the page cache dirty only ITS pages (Step 4 of
     // docs/vsm_page_caching_plan.md) instead of forcing the whole pool.
     D3D12_CPU_DESCRIPTOR_HANDLE CasterMetaSrv(UINT frameIndex) const;
+    // The meta word's layout (vsm_addressing.hlsli VSM_CASTER_META_*): bit 0 = dynamic, bit 1 = the object sways in the
+    // wind (its pages are the only ones the wind dirties), bits 2.. = the object's slot count, on its first slot only.
+    static constexpr std::uint32_t kCasterMetaDynamic = 1u;
+    static constexpr std::uint32_t kCasterMetaWind = 2u;
+    static constexpr std::uint32_t kCasterMetaSlotShift = 2u;
     // Per-group {visible-list base, index count, start index, 0}. The VSM scatter cull reads .x as
     // the group's global base inside every page's visible-list slice.
     D3D12_CPU_DESCRIPTOR_HANDLE PerGroupSrv() const;
@@ -1098,6 +1112,9 @@ private:
     std::uint32_t maskedGroupCount_ = 0; // every masked group, cap or not
     UINT groupMaskRegion_ = 0;
     bool hasWindCasters_ = false; // W5: any caster with windStrength > 0 (see HasWindCasters)
+    float windSpeedK_ = 0.0f;     // WindSpeedBound's / WindOffsetBound's per-caster factors, the largest (Rebuild)
+    float windOffsetK_ = 0.0f;
+    void NoteWindCaster(float windStrength, float trunkStiff);
 
     std::uint32_t count_ = 0;            // live caster count (TOTAL: static + folded GI instances)
     std::uint32_t staticCount_ = 0;      // CPU static casters (id range [0, staticCount_)); GI ids follow

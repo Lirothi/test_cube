@@ -113,7 +113,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     }
 
     // Visible after all: every slot of the object into pass B, the scatter's bucket arithmetic.
-    const uint slots = CasterMeta[c] >> 1;
+    const uint slots = CasterMeta[c] >> VSM_CASTER_META_SLOT_SHIFT;
     const uint targetLod = Views[view].bits.y;         // the scatter's, by the same view
     const uint numVg = gNumGroups * KMAX_SHADOW_LODS;
     const uint pageBase = p * gNumCasters * KMAX_SHADOW_LODS;

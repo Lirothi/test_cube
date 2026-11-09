@@ -61,7 +61,15 @@ cbuffer ScatterCB : register(b0)
     uint  gCoarseBase;
     float gCoarsePixelsStatic;
     float gCoarsePixelsDynamic;
-    uint  _pad1;
+    // The wind's page marks (vsm.windPageMarks): a caster that sways marks its pages for the setup's wind dirt only where the
+    // shadow VS sways it -- a vertex's sway fades to 0 at gWindReach (m) from the camera in xz (shadow_indirect_csm.hlsl
+    // WindOffset's w2), so a box wholly past it, this frame and last, draws the same rigid pose both frames. 0 = no marks
+    // (the wind holds still: the same clock and gusts, the camera where it was).
+    float gWindReach;
+    float4 gWindCams;   // xy = this frame's camera xz, zw = last frame's (the fade's centre): a local view's
+    // A clipmap level's (vsm.windSliceTexels): xy = the camera its pose was taken at, zw = the one at its take before -- a
+    // level redraws its swaying pages only when it takes a pose, and then from the last one to this.
+    float4 gWindLevelCams[TC_VSM_CLIPMAP_LEVELS];
 };
 
 struct CasterBounds { float4 center; float4 halfExtents; };
@@ -95,7 +103,7 @@ StructuredBuffer<uint>         LevelBounds   : register(t9);
 
 RWStructuredBuffer<uint> PageGroupCount  : register(u0); // per (page, group) count, doubles as the cursor
 RWStructuredBuffer<uint> PageVisibleList : register(u1); // per (page, slot) caster id
-RWStructuredBuffer<uint> PageScatterDyn  : register(u2); // per page: a dynamic caster landed here
+RWStructuredBuffer<uint> PageScatterDyn  : register(u2); // per page: bit 0 a dynamic caster landed here, bit 1 a swaying one
 RWStructuredBuffer<uint2> DeferredPairs  : register(u3); // S5b.2: (leading caster slot, virtual page id)
 RWStructuredBuffer<uint>  HzbCounters    : register(u4); // S5b.2: [0] pairs deferred, [2] past the capacity
 RWStructuredBuffer<uint>  Request        : register(u5); // this frame's marks (read)
@@ -233,7 +241,24 @@ groupshared float  gsRadiusPx[kScatterThreads];           // the caster's size i
 static const uint kWhoLocal   = 1u << 16;
 static const uint kWhoDynamic = 1u << 17;
 static const uint kWhoPrev    = 1u << 18; // S5b.2's test applies
+static const uint kWhoWind    = 1u << 19; // it sways where it lies (gWindReach): its pages take the wind's dirt
 static const uint kWhoMipShift = 20u;     // mip count in bits 20-23
+
+// The page flags a pair leaves (PageScatterDyn): an OR, since a dynamic and a swaying caster may land on one page at once.
+void MarkPageFlags(uint p, uint who)
+{
+    const uint flags = ((who & kWhoDynamic) != 0u ? 1u : 0u) | ((who & kWhoWind) != 0u ? 2u : 0u);
+    if (flags != 0u) { InterlockedOr(PageScatterDyn[p], flags); }
+}
+
+// Is any point of the box's xz rect nearer than the reach to either camera xz (the pose drawn now, the pose drawn before)?
+bool SwaysNearCamera(float3 ctr, float3 ext, float4 cams)
+{
+    const float2 dNow  = max(abs(cams.xy - ctr.xz) - ext.xz, 0.0f);
+    const float2 dPrev = max(abs(cams.zw - ctr.xz) - ext.xz, 0.0f);
+    const float r2 = gWindReach * gWindReach;
+    return dot(dNow, dNow) < r2 || dot(dPrev, dPrev) < r2;
+}
 
 // This thread's (object, target): its rects into groupshared; returns how many pages they hold (0 = nothing to do).
 uint ScatterSetup(uint3 dtid, uint gi)
@@ -243,7 +268,7 @@ uint ScatterSetup(uint3 dtid, uint gi)
     if (c >= gNumCasters || target >= gNumLevels + gNumLocalViews) { return 0u; }
 
     const uint meta = CasterMeta[c];
-    const uint slots = meta >> 1;
+    const uint slots = meta >> VSM_CASTER_META_SLOT_SHIFT;
     if (slots == 0u) { return 0u; }     // continuation slot: its object was handled by its first slot
 
     const CasterBounds b = Bounds[c];
@@ -314,9 +339,11 @@ uint ScatterSetup(uint3 dtid, uint gi)
         pages += w * h;
     }
     if (pages == 0u) { return 0u; }
+    const bool sways = (meta & VSM_CASTER_META_WIND) != 0u && gWindReach > 0.0f &&
+                       SwaysNearCamera(ctr, ext, isLocal ? gWindCams : gWindLevelCams[target]);
     gsWho[gi] = uint4(c, view,
-                      slots | (isLocal ? kWhoLocal : 0u) | ((meta & 1u) != 0u ? kWhoDynamic : 0u) |
-                          (prevTest ? kWhoPrev : 0u) | (mipCount << kWhoMipShift),
+                      slots | (isLocal ? kWhoLocal : 0u) | ((meta & VSM_CASTER_META_DYNAMIC) != 0u ? kWhoDynamic : 0u) |
+                          (sways ? kWhoWind : 0u) | (prevTest ? kWhoPrev : 0u) | (mipCount << kWhoMipShift),
                       Views[view].bits.y); // this view's own tier-curve LOD
     gsCtr[gi] = ctr;
     gsExt[gi] = ext;
@@ -376,7 +403,7 @@ void ScatterResidentPage(uint t, uint4 who, uint L, uint pxi, uint py, uint page
             if (idx < gHzbParams.z)
             {
                 DeferredPairs[idx] = uint2(c, pageId);
-                if (isDynamic) { PageScatterDyn[p] = 1u; }
+                MarkPageFlags(p, who.z);
                 return;
             }
             // Past the capacity: drawn in pass A as if visible (conservative).
@@ -413,7 +440,7 @@ void ScatterResidentPage(uint t, uint4 who, uint L, uint pxi, uint py, uint page
         PageVisibleList[p * gNumCasters * KMAX_SHADOW_LODS + bucketBase + rank] =
             (gPageIdShift != 0u) ? (vid | (p << gPageIdShift)) : vid;
     }
-    if (isDynamic) { PageScatterDyn[p] = 1u; }
+    MarkPageFlags(p, who.z);
 }
 
 [numthreads(8, 8, 1)]

@@ -773,6 +773,21 @@ inline std::uint32_t ClipmapWindLevels()
     const int level = static_cast<int>(std::floor(std::log2(g_windRange * 100.0f) + g_clipmapFrameBias)) - g_clipmapFirstLevel + 1;
     return static_cast<std::uint32_t>(std::clamp(level, 0, static_cast<int>(kNumClipmapLevels)));
 }
+// Of the wind's levels, redraw only the pages a swaying caster lies on and sways in (the scatter's marks, UE's per-instance
+// WPO invalidation; a vertex's sway fades to 0 at g_windRange from the camera), and none while the wind holds still. A page
+// with nothing swaying draws the same depth whatever the wind does. --set=vsm.windPageMarks; 0 = every page in those levels
+// every frame, as before (the A/B).
+inline bool g_windPageMarks = true;
+inline bool g_windPageMarks_game = true;
+inline const bool g_windPageMarks_knob = ::knob::Register(g_windPageMarks_game, g_windPageMarks, "vsm::g_windPageMarks");
+// The wind's levels in time slices: a clipmap level takes the wind's pose (its clock, gusts and the camera the sway fades
+// round) only once the fastest swaying vertex could have moved this many of the level's texels since it last took it
+// (ShadowGpuData::WindSpeedBound, WindOffsetBound for the fade's camera), and redraws its swaying pages only then. A near
+// level whose texel the sway crosses every frame takes it every frame; a level of 8 cm texels, a few times a second. What a
+// page shows lags the tree by at most that many of its own texels. 0 = every level every frame. --set=vsm.windSliceTexels
+inline float g_windSliceTexels = 2.0f;
+inline float g_windSliceTexels_game = 2.0f;
+inline const bool g_windSliceTexels_knob = ::knob::Register(g_windSliceTexels_game, g_windSliceTexels, "vsm::g_windSliceTexels");
 
     // Periodically log the VSM page stats to DBWIN ("[VSM] request ... | resident=..."). DEFAULT OFF
     // — it spams a captured stress/dev run. The on-screen dev-window "VSM" tab always shows the live
@@ -907,6 +922,19 @@ public:
         std::uint32_t forceAll = 1u;
         // Clipmap levels below this wind-animate and wind-dirty; 0 = calm. See gWindDirtyMaxLevel.
         std::uint32_t windDirtyMaxLevel = 0u;
+        // vsm.windPageMarks (gWindPageMarks): 1 = of those levels' pages the wind redraws only those a swaying caster marked
+        // in the scatter; `windReach` = where the shadow VS's sway ends round the camera (m, the fade's end; huge when it
+        // does not fade, 0 = the wind holds still: nothing marks), `windCams` = (camera x, z) this frame and last.
+        std::uint32_t windPageMarks = 0u;
+        float windReach = 0.0f;
+        float windCams[4] = {};
+        float windFadeCam[3] = {}; // the fade's centre this frame (gWindFade.xyz): the same camera the marks were made for
+        // vsm.windSliceTexels: the clipmap levels that take the wind's pose this frame (bit per level; the others keep the
+        // pose they took last), and per level the pose its pages are drawn with -- (time, prevTime, dirX, dirZ), (amp, freq,
+        // gust, prevGust), (the fade's camera, its end) -- and the cameras its marks look round: (now, at its last take).
+        std::uint32_t windTickMask = ~0u;
+        DirectX::XMFLOAT4 windLevelPose[vsm::kNumClipmapLevels * 3] = {};
+        DirectX::XMFLOAT4 windLevelCams[vsm::kNumClipmapLevels] = {};
         // Plan S10d: the views of distant lights, and of those the round robin redraws this frame (bit per view, 32 per
         // word; empty when there are none).
         std::vector<std::uint32_t> distantMask;
@@ -1295,6 +1323,20 @@ private:
     const char* tessyMsOffReason_ = "";
     float tessyLodKeyLast_ = 0.0f; // N7c: the DAG cut as last frame took it (its texels, 0 = off; a change flushes the cache)
     bool tessyLodCamCutLast_ = false; // ...and whether the clipmap pages took the camera's cut (a change flushes it too)
+    // vsm.windPageMarks' cross-frame state (PrepareRenderPass): last frame's camera xz (the fade's centre), the wind it drew
+    // (time, direction, amplitude, frequency, gust), and the levels / reach it swayed -- a change of those redraws every page
+    // once, since a page drawn swaying keeps that pose until something dirties it.
+    bool windPrevValid_ = false;
+    float windPrevCam_[2] = {};
+    float windPrevState_[6] = {};
+    std::uint32_t windPrevLevels_ = 0u;
+    float windPrevReach_ = 0.0f;
+    float windPrevSlice_ = 0.0f;
+    // vsm.windSliceTexels: per clipmap level, the slice of the wind's clock it last took, the pose it took then and the
+    // camera xz it took it at (and the one before).
+    std::int64_t windLevelSlice_[vsm::kNumClipmapLevels] = {};
+    DirectX::XMFLOAT4 windLevelPose_[vsm::kNumClipmapLevels * 3] = {};
+    float windLevelCam_[vsm::kNumClipmapLevels][4] = {};
     const char* tessyLoggedReason_ = nullptr;         // the reason last logged (an event per change)
     const char* tessyMsLoggedReason_ = nullptr;
     void EnsureTessyResources(Renderer* renderer);

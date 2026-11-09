@@ -80,7 +80,15 @@ cbuffer SetupCB : register(b0)
     float4 gWindFade;
     // The coarse pages' bitfield in Request; 0 = they take every invalidation (vsm::g_coarseCacheDynamic).
     uint gCoarseBase;
-    uint3 _padCoarse;
+    // vsm.windPageMarks: 1 = the wind dirties only the pages a swaying caster marked (PageScatterDyn bit 1: it lies there and
+    // sways, this frame or last -- UE's per-instance WPO invalidation); 0 = every page in the wind's levels, as before.
+    uint gWindPageMarks;
+    // vsm.windSliceTexels: bit per clipmap level -- it takes the wind's pose this frame (its swaying pages may redraw); the
+    // other wind levels keep the pose they took last, which their pages are drawn with: gWindLevelPose[3 L ..] = the wind0,
+    // wind1 and fade rows above as that level took them. A local view takes the live ones every frame.
+    uint gWindTickMask;
+    uint _padCoarse;
+    float4 gWindLevelPose[TC_VSM_CLIPMAP_LEVELS * 3];
     // NOTE: the per-(group,lod) mega ranges and the per-group LOD override used to live HERE, as CB
     // arrays sized VSM_MAX_SETUP_GROUPS. That is what capped the whole shadow path at 64 mesh-groups
     // — a CB array cannot be sized by gNumGroups. Both are SRVs now (t9/t10), sized by the real group
@@ -94,11 +102,11 @@ ByteAddressBuffer              Rung0Args     : register(t1); // D3D12_DRAW_INDEX
 StructuredBuffer<CasterBounds> Bounds        : register(t2); // per-caster world AABB (the unified buffer)
 StructuredBuffer<uint>         CasterGroup   : register(t3); // per-caster mesh-group id
 StructuredBuffer<uint>         PhysOwnerPrev : register(t4); // physical page -> last frame's owner (new-page detect)
-StructuredBuffer<uint>         CasterMeta    : register(t5); // per-caster: bit0=dynamic, bits1+=object slot count on its FIRST slot (0 on continuation slots)
+StructuredBuffer<uint>         CasterMeta    : register(t5); // per-caster: VSM_CASTER_META_* (dynamic, wind, the slot count on the FIRST slot)
 // Spatial scatter cull outputs (directional clipmap pages only — local views still cull here):
 StructuredBuffer<uint>         PageGroupCount : register(t6); // per (page, group) instance count
 StructuredBuffer<uint4>        PerGroup       : register(t7); // .x = group's global base in a page slice
-StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: a dynamic caster landed here
+StructuredBuffer<uint>         PageScatterDyn : register(t8); // per page: bit 0 a dynamic caster landed here, bit 1 a swaying one
 // Per-group geometry tables, sized by the REAL group count (CB arrays capped at 64 until the cap
 // removal). A descriptor table is POSITIONAL: t9/t10 must be the 10th and 11th handles the CPU
 // stages, in this order.
@@ -283,13 +291,15 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         PageProj.Store4(po + 48u, asuint(pm[3]));
         // W5: the wind tail of the shadow PerView CB. Bytes 64..192 (viewProjNoJitter /
         // prevViewProjNoJitter) stay unwritten — the depth-only shadow VS never reads them.
-        PageProj.Store4(po + 192u, asuint(gWind0));
+        // A clipmap level draws the pose it last took (vsm.windSliceTexels), every page of it the same one.
+        const uint poseRow = clipLevel * 3u;
+        PageProj.Store4(po + 192u, asuint(isLocalView ? gWind0 : gWindLevelPose[poseRow]));
         // Rigid beyond the wind range: zero the sway amplitude THIS page's casters see, so
         // far clipmap levels draw un-swayed geometry that a cached page can keep bit-stable.
-        float4 wind1 = gWind1;
+        float4 wind1 = isLocalView ? gWind1 : gWindLevelPose[poseRow + 1u];
         if (!windHere) { wind1.x = 0.0f; }
         PageProj.Store4(po + 208u, asuint(wind1));
-        PageProj.Store4(po + 224u, asuint(gWindFade)); // (camPos, fade end) -> shadow VS w2
+        PageProj.Store4(po + 224u, asuint(isLocalView ? gWindFade : gWindLevelPose[poseRow + 2u])); // (camPos, fade end) -> shadow VS w2
     }
 
     // The page's 6 frustum planes from pm (columns; clip = mul(world, pm)). Positive-vertex test is
@@ -340,9 +350,12 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     uint perGroupCount[VSM_MAX_SETUP_GROUPS];
     const uint numLocalGroups = min(gNumGroups, (uint)VSM_MAX_SETUP_GROUPS);
     bool dynamicOverlap = false;
+    bool windOverlap = false;
     if (scattered)
     {
-        dynamicOverlap = (PageScatterDyn[p] != 0u);
+        const uint flags = PageScatterDyn[p];
+        dynamicOverlap = (flags & 1u) != 0u;
+        windOverlap = (flags & 2u) != 0u;
     }
     else
     {
@@ -354,7 +367,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
         for (uint c = 0u; c < gNumCasters; )
         {
             const uint meta = CasterMeta[c];
-            uint n = meta >> 1;
+            uint n = meta >> VSM_CASTER_META_SLOT_SHIFT;
             if (n == 0u) { n = 1u; } // safety: a continuation slot can't lead the loop by construction
             CasterBounds b = Bounds[c];
             // halfExtents.w = 1: Cast Shadow off (ShadowGpuData::FillBounds) -- in the table for the camera only.
@@ -367,7 +380,8 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
                     uint g = CasterGroup[c + s];
                     if (g < numLocalGroups) { perGroupCount[g] += 1u; }
                 }
-                if ((meta & 1u) != 0u) { dynamicOverlap = true; }
+                if ((meta & VSM_CASTER_META_DYNAMIC) != 0u) { dynamicOverlap = true; }
+                if ((meta & VSM_CASTER_META_WIND) != 0u) { windOverlap = true; } // no reach test here: the fallback stays conservative
             }
             c += n;
         }
@@ -382,8 +396,13 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     // S5b.2, pass B: the verdict pass A wrote, read back through the same UAV (never rewritten).
     // Plan S10d: a distant light's page takes no caster invalidation -- the round robin redraws it instead.
     const bool invalidated = distantView ? distantDue : (dynamicOverlap && !coarseOnly);
+    // A page that sways nothing draws the same depth whatever the wind does: windHere still decides how its casters are
+    // drawn (the amplitude above), the marks decide whether it is redrawn.
+    // ...and only when its level takes the wind's pose this frame (vsm.windSliceTexels).
+    const bool windTakes = isLocalView || ((gWindTickMask >> clipLevel) & 1u) != 0u;
+    const bool windDirty = windHere && windTakes && (gWindPageMarks == 0u || windOverlap);
     const bool dirty = (gPassB != 0u) ? (PerPageDirty[p] != 0u)
-                                      : (isNew || invalidated || (gForceAll != 0u) || windHere || viewDirty || (PageDetail[p] & 2u) != 0u);
+                                      : (isNew || invalidated || (gForceAll != 0u) || windDirty || viewDirty || (PageDetail[p] & 2u) != 0u);
     if (lane == 0u && gPassB == 0u) { PerPageDirty[p] = dirty ? 1u : 0u; }
     if (!dirty)
     {
@@ -558,7 +577,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID)
     if (scattered) { return; }
     for (uint c2 = 0u; c2 < gNumCasters; )
     {
-        uint n2 = CasterMeta[c2] >> 1;
+        uint n2 = CasterMeta[c2] >> VSM_CASTER_META_SLOT_SHIFT;
         if (n2 == 0u) { n2 = 1u; }
         CasterBounds b = Bounds[c2];
         if (PageIntersects(planes, b.center.xyz, b.halfExtents.xyz))

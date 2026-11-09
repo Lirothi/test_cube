@@ -338,6 +338,19 @@ void ShadowGpuData::FillInstanceSlot(const RenderableObjectBase* obj, size_t ord
     FillInstance(obj, out);
 }
 
+// wind.hlsli WindOffset, term by term, per unit of swayAmp x gust (the offset) and of swayAmp x gust x swayFreq (the speed):
+// amp = swayAmp x windStrength x (1 + kWindGroveAmp 0.25); the stiffness at its grove low (1 - kWindGroveStiff 0.2, floor
+// 0.05); the bend (kWindBendSteady 1 + kWindBendOsc 0.55 x |osc| 1.5) x WindBendProfile <= 1 / stiffness, its rate 0.55 x
+// d osc / dp <= 0.55 x 2.15; the leaf streaming <= kWindFoliageStream 0.9 x the bend (the leaf share <= 1); the flutter
+// kWindFlutterAmp 0.15 x 1.12 at the rate kWindFlutterRate 2.7 x 1.65.
+void ShadowGpuData::NoteWindCaster(float windStrength, float trunkStiff)
+{
+    const float amp = std::max(windStrength, 0.0f) * 1.25f;
+    const float stiffInv = 1.0f / std::max(trunkStiff * 0.8f, 0.05f);
+    windOffsetK_ = std::max(windOffsetK_, amp * (1.825f * (stiffInv + 0.9f) + 0.168f));
+    windSpeedK_ = std::max(windSpeedK_, amp * (0.55f * 2.15f * (stiffInv + 0.9f) + 0.15f * 2.7f * 1.65f));
+}
+
 void ShadowGpuData::FillBounds(const RenderableObjectBase* obj, render::CasterBounds& out)
 {
     std::memset(&out, 0, sizeof(out));
@@ -2005,6 +2018,8 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     maskedAlbedoSrvs_.fill({});
     maskedAlbedoCount_ = 0;
     hasWindCasters_ = false; // W5: recomputed below over the static set + the folded GI objects
+    windSpeedK_ = 0.0f;
+    windOffsetK_ = 0.0f;
     bool maskedOverflow = false;
     std::uint32_t nextGroup = 0;
     std::uint32_t chunkedMeshes = 0; // meshes whose submeshes are spatial chunks (independent casters)
@@ -2075,7 +2090,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         // W5: a wind caster animates in the VERTEX shader — its transform never changes, so the
         // mover-based "nothing changed" tests would freeze its shadow. Remember that we have one.
         // Only a mesh that CASTS: grass with its shadow switched off must not keep VSM redrawing for the wind.
-        if (inst.windStrength > 0.0f && obj->CastsShadow()) { hasWindCasters_ = true; }
+        if (inst.windStrength > 0.0f && obj->CastsShadow())
+        {
+            hasWindCasters_ = true;
+            NoteWindCaster(inst.windStrength, inst.windTrunkStiff);
+        }
         const std::uint32_t dyn = obj->IsDynamicCaster() ? 1u : 0u;
         const bool chunked = mesh && mesh->IsChunkedSubmeshes();
         // S4: the object draws through the indirect G-buffer when EVERY submesh's slot has the
@@ -2177,7 +2196,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
         }
         if (const GBufferRenderable* giGb = obj->AsGBufferRenderable())
         {
-            if (giGb->CurrentDrawParams().windStrength > 0.0f) { hasWindCasters_ = true; } // W5
+            if (giGb->CurrentDrawParams().windStrength > 0.0f) // W5
+            {
+                hasWindCasters_ = true;
+                NoteWindCaster(giGb->CurrentDrawParams().windStrength, giGb->GetWindTrunkStiffness());
+            }
         }
         giCasters_.push_back(gc);
         giGroupMesh.push_back(mesh);
@@ -2239,7 +2262,11 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
             : ((casterSub[i] == 0u && mesh)
                 ? static_cast<std::uint32_t>(std::max<size_t>(mesh->GetSubmeshCount(), 1u))
                 : 0u);
-        casterMeta[i] = (slots << 1) | (staticDynamic[i] & 1u);
+        // Only a caster that casts can dirty a page by its sway (a Cast Shadow off one is in no page's list).
+        const bool windy = i < casterWindy_.size() && casterWindy_[i] != 0u &&
+                           i < cpuBounds_.size() && cpuBounds_[i].halfExtents.w == 0.0f; // FillBounds: w 1 = Cast Shadow off
+        casterMeta[i] = (slots << kCasterMetaSlotShift) | (windy ? kCasterMetaWind : 0u) |
+                        ((staticDynamic[i] & 1u) != 0u ? kCasterMetaDynamic : 0u);
         if (g < numMeshGroups_) { ++groupCount[g]; }
     }
     // perGroup_ carries LOD0 ranges + the visible-list base. Only its base (.x) is read at draw time
@@ -2268,7 +2295,7 @@ void ShadowGpuData::Rebuild(Renderer* renderer,
     {
         const std::uint32_t g = staticGroups + static_cast<std::uint32_t>(j);
         const GiCaster& gc = giCasters_[j];
-        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; casterMeta[gc.giBase + c] = (1u << 1) | 1u; } // each GI instance: own 1-slot object, dynamic
+        for (std::uint32_t c = 0; c < gc.count; ++c) { casterGroupId[gc.giBase + c] = g; casterMeta[gc.giBase + c] = (1u << kCasterMetaSlotShift) | kCasterMetaDynamic; } // each GI instance: own 1-slot object, dynamic
         groupCount[g] = gc.count;
         groupIndexCount[g] = giGroupIndexCount[j];
     }

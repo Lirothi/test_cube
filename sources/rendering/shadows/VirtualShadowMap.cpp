@@ -865,6 +865,103 @@ VirtualShadowMap::PageRenderDecisions VirtualShadowMap::PrepareRenderPass(
         tessyLast_ = d.tessy;
         tessyMsLast_ = d.tessyMs;
     }
+    // vsm.windPageMarks: which of the wind's pages the wind redraws. The shadow VS sways a vertex by the camera's xz distance,
+    // to 0 at the fade's end (writeSetupCB's windFade: g_windRange while some levels are rigid, no fade when none is), so a
+    // swaying caster wholly past it this frame AND last draws one rigid pose in both: its pages keep. While nothing in the
+    // sway moves (the wind's clock, direction, amplitude, frequency and gust, and the camera) no page needs the wind at all.
+    {
+        const DirectX::XMFLOAT3& cam = shadowGpu->LastCameraPos();
+        const bool fades = d.windDirtyMaxLevel > 0u && d.windDirtyMaxLevel < vsm::kNumClipmapLevels;
+        const float reach = d.windDirtyMaxLevel == 0u ? 0.0f : (fades ? vsm::g_windRange : 1.0e30f);
+        float state[6] = {};
+        if (wind)
+        {
+            const float s[6] = { wind->time, wind->windDirXZ.x, wind->windDirXZ.y, wind->swayAmplitude, wind->swayFrequency,
+                                 wind->gustMul };
+            std::memcpy(state, s, sizeof(state));
+        }
+        if (!windPrevValid_) { windPrevCam_[0] = cam.x; windPrevCam_[1] = cam.z; }
+        const float sliceTexels = std::max(vsm::g_windSliceTexels, 0.0f);
+        // A page drawn swaying keeps that pose until something dirties it: when the levels that sway, the fade or the slices
+        // change, every page once (the wind starting or stopping, a new resolution's bias, a vsm.windRange edit).
+        const bool reset = !windPrevValid_ || d.windDirtyMaxLevel != windPrevLevels_ || reach != windPrevReach_ ||
+                           sliceTexels != windPrevSlice_;
+        if (windPrevValid_ && reset) { d.forceAll = 1u; }
+        const bool still = windPrevValid_ && std::memcmp(state, windPrevState_, sizeof(state)) == 0 &&
+                           cam.x == windPrevCam_[0] && cam.z == windPrevCam_[1];
+        d.windPageMarks = vsm::g_windPageMarks ? 1u : 0u;
+        d.windReach = (d.windPageMarks != 0u && still) ? 0.0f : reach;
+        d.windCams[0] = cam.x;
+        d.windCams[1] = cam.z;
+        d.windCams[2] = windPrevCam_[0];
+        d.windCams[3] = windPrevCam_[1];
+        d.windFadeCam[0] = cam.x;
+        d.windFadeCam[1] = cam.y;
+        d.windFadeCam[2] = cam.z;
+
+        // vsm.windSliceTexels: each wind level takes the wind's pose when its fastest vertex could have moved that many of the
+        // level's texels since it last took it -- by the wind's own clock (so a held wind takes none) -- or when the camera
+        // the sway fades round has moved the fade by as much (3 x the offset over the reach a metre: smoothstep's slope).
+        // Where the step is shorter than a frame the slice changes every frame: such a level takes every pose.
+        const DirectX::XMFLOAT4 live0(wind ? wind->time : 0.0f, wind ? wind->prevTime : 0.0f,
+                                      wind ? wind->windDirXZ.x : 0.0f, wind ? wind->windDirXZ.y : 0.0f);
+        const DirectX::XMFLOAT4 live1(wind ? wind->swayAmplitude : 0.0f, wind ? wind->swayFrequency : 0.0f,
+                                      wind ? wind->gustMul : 1.0f, wind ? wind->prevGustMul : 1.0f);
+        const DirectX::XMFLOAT4 liveFade(cam.x, cam.y, cam.z, fades ? vsm::g_windRange : 0.0f);
+        float speed = 0.0f, offset = 0.0f;
+        if (wind && d.windDirtyMaxLevel != 0u)
+        {
+            const float gustAmp = std::max(wind->gustAmplitude, 0.0f);
+            // GustNoise's rate: smoothstep' 1.5 x 0.5 x 2 pi x the three layers' weighted frequencies (0.993 x gustFrequencyHz).
+            const float gustRate = gustAmp * 0.75f * 6.2831853f * 0.993f * std::max(wind->gustFrequencyHz, 0.0f);
+            speed = shadowGpu->WindSpeedBound(wind->swayAmplitude, wind->swayFrequency, 1.0f + gustAmp, gustRate);
+            offset = shadowGpu->WindOffsetBound(wind->swayAmplitude, 1.0f + gustAmp);
+        }
+        d.windTickMask = 0u;
+        for (std::uint32_t L = 0; L < vsm::kNumClipmapLevels; ++L)
+        {
+            bool take = reset || L >= d.windDirtyMaxLevel || sliceTexels <= 0.0f || speed <= 0.0f;
+            std::int64_t slice = windLevelSlice_[L];
+            if (!take)
+            {
+                // The level's texel: 4 radii of 2^(level + 1) cm over the clipmap's 16384 texels.
+                const float texel = std::ldexp(1.0f, static_cast<int>(vsm::g_clipmapFirstLevel + L) + 3) /
+                                    static_cast<float>(vsm::kClipmapVirtualRes) * 0.01f;
+                const float budget = sliceTexels * texel;
+                slice = static_cast<std::int64_t>(std::floor(static_cast<double>(live0.x) * speed / budget));
+                const float camDx = cam.x - windLevelCam_[L][0], camDz = cam.z - windLevelCam_[L][1];
+                const float camLimit = (fades && offset > 0.0f) ? budget * vsm::g_windRange / (3.0f * offset) : 1.0e30f;
+                const DirectX::XMFLOAT4& held1 = windLevelPose_[L * 3 + 1];
+                const DirectX::XMFLOAT4& held0 = windLevelPose_[L * 3];
+                take = slice != windLevelSlice_[L] || camDx * camDx + camDz * camDz > camLimit * camLimit ||
+                       held1.x != live1.x || held1.y != live1.y || held0.z != live0.z || held0.w != live0.w;
+            }
+            if (take)
+            {
+                d.windTickMask |= 1u << L;
+                windLevelSlice_[L] = slice;
+                windLevelCam_[L][2] = reset ? cam.x : windLevelCam_[L][0];
+                windLevelCam_[L][3] = reset ? cam.z : windLevelCam_[L][1];
+                windLevelCam_[L][0] = cam.x;
+                windLevelCam_[L][1] = cam.z;
+                windLevelPose_[L * 3] = live0;
+                windLevelPose_[L * 3 + 1] = live1;
+                windLevelPose_[L * 3 + 2] = liveFade;
+            }
+            d.windLevelPose[L * 3] = windLevelPose_[L * 3];
+            d.windLevelPose[L * 3 + 1] = windLevelPose_[L * 3 + 1];
+            d.windLevelPose[L * 3 + 2] = windLevelPose_[L * 3 + 2];
+            d.windLevelCams[L] = DirectX::XMFLOAT4(windLevelCam_[L][0], windLevelCam_[L][1], windLevelCam_[L][2], windLevelCam_[L][3]);
+        }
+
+        windPrevValid_ = true;
+        windPrevCam_[0] = cam.x;
+        windPrevCam_[1] = cam.z;
+        std::memcpy(windPrevState_, state, sizeof(state));
+        windPrevLevels_ = d.windDirtyMaxLevel;
+        windPrevReach_ = reach;
+        windPrevSlice_ = sliceTexels;
+    }
     // An event per change of the verdict: whether tessy.vsm draws clusters, and if not, why.
     {
         const char* verdict = d.tessy ? "on" : !tessy::g_enabled ? "off (tessy.enabled 0)"
@@ -2558,8 +2655,11 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             std::uint32_t coarseBase = 0; // mirrors gCoarseBase
             float coarsePixelsStatic = 0.0f;
             float coarsePixelsDynamic = 0.0f;
-            std::uint32_t pad1 = 0;
+            float windReach = 0.0f;                         // mirrors gWindReach (vsm.windPageMarks)
+            DirectX::XMFLOAT4 windCams{ 0.0f, 0.0f, 0.0f, 0.0f }; // mirrors gWindCams
+            DirectX::XMFLOAT4 windLevelCams[vsm::kNumClipmapLevels]{}; // mirrors gWindLevelCams
         };
+        static_assert(sizeof(ScatterCB) == 80 + 16 * vsm::kNumClipmapLevels, "ScatterCB mirrors vsm_page_scatter_cs.hlsl's cbuffer");
         RecordComputeDispatch(renderer, cl, pageScatterMat_.get(), static_cast<UINT>(sizeof(ScatterCB)),
             [&](std::uint8_t* dst)
             {
@@ -2577,6 +2677,9 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
                 c.coarseBase = vsm::g_coarseCacheDynamic ? CoarseRequestBase() : 0u;
                 c.coarsePixelsStatic = vsm::g_coarsePagePixelsStatic;
                 c.coarsePixelsDynamic = vsm::g_coarsePagePixelsDynamic;
+                c.windReach = dec.windReach;
+                c.windCams = DirectX::XMFLOAT4(dec.windCams[0], dec.windCams[1], dec.windCams[2], dec.windCams[3]);
+                std::memcpy(c.windLevelCams, dec.windLevelCams, sizeof(c.windLevelCams));
                 std::memcpy(dst, &c, sizeof(c));
             },
             { boundsSrv, casterGroupSrv, casterMetaSrv, pageTableSrv_, perGroupSrv,
@@ -2616,7 +2719,10 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
         DirectX::XMFLOAT4 wind1{ 0.0f, 0.0f, 1.0f, 1.0f }; // swayAmp, swayFreq, gustMul, prevGustMul
         DirectX::XMFLOAT4 windFade{ 0.0f, 0.0f, 0.0f, 0.0f }; // camPos.xyz + fade end (0 = off); mirrors gWindFade
         std::uint32_t coarseBase = 0; // mirrors gCoarseBase
-        std::uint32_t padCoarse[3]{};
+        std::uint32_t windPageMarks = 0; // mirrors gWindPageMarks
+        std::uint32_t windTickMask = ~0u; // mirrors gWindTickMask
+        std::uint32_t padCoarse = 0;
+        DirectX::XMFLOAT4 windLevelPose[vsm::kNumClipmapLevels * 3]{}; // mirrors gWindLevelPose
         // The per-(group,lod) mega ranges and the per-group LOD override used to sit here as arrays
         // sized kMaxMegaGroups -- the thing that capped the shadow path at 64 groups. They are SRVs
         // now (t9/t10), sized by the real group count; plan S9e moved the per-view matrices, LODs and bits
@@ -2641,14 +2747,17 @@ void VirtualShadowMap::RecordPageRender(Renderer* renderer, ID3D12GraphicsComman
             cb.numCasters = activeCasters; // static + GI when GI folding is active, else static only
             cb.forceAll = forceAll;        // page cache: 1 = mark every resident page dirty this frame
             cb.windDirtyMaxLevel = dec.windDirtyMaxLevel;
+            cb.windPageMarks = dec.windPageMarks;
+            cb.windTickMask = dec.windTickMask;
+            std::memcpy(cb.windLevelPose, dec.windLevelPose, sizeof(cb.windLevelPose));
             cb.coarseBase = vsm::g_coarseCacheDynamic ? CoarseRequestBase() : 0u;
             // World-distance sway falloff (see gWindFade in the setup shader): reaches zero at
             // the wind's range, so the rigid levels beyond pick up exactly where the falloff ends.
             // Off (w=0) when calm, when everything is rigid, or when everything sways (old mode).
             if (dec.windDirtyMaxLevel > 0 && dec.windDirtyMaxLevel < vsm::kNumClipmapLevels)
             {
-                const DirectX::XMFLOAT3& cp = shadowGpu->LastCameraPos();
-                cb.windFade = DirectX::XMFLOAT4(cp.x, cp.y, cp.z, vsm::g_windRange);
+                // The camera the scatter's wind marks were made for (PrepareRenderPass), so the two cannot disagree.
+                cb.windFade = DirectX::XMFLOAT4(dec.windFadeCam[0], dec.windFadeCam[1], dec.windFadeCam[2], vsm::g_windRange);
             }
             cb.megaActive = useMega ? 1u : 0u; // per-view LOD: mega on = absolute mega start, off = lod-relative
             cb.numLods = kLods;
