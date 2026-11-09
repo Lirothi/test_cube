@@ -103,6 +103,18 @@ inline const bool g_wakeDebugView_knob = ::knob::Register(g_wakeDebugView_game, 
 inline int g_wakeShore = 1;
 inline int g_wakeShore_game = 1;
 inline const bool g_wakeShore_knob = ::knob::Register(g_wakeShore_game, g_wakeShore, "ocean::g_wakeShore");
+// How often the boats' wake field steps (OceanWake::BuildPass, 2026-11-10, owner: "limit it to 30 Hz"): at most this many
+// times a second, each step's dt the time since the last (eWave's step turns every mode exactly at any dt; the foam's
+// diffusion stays stable to the 1/20 s cap). Between steps the surface carries the height on by the field's vertical
+// velocity, h + v tau (wakeParams3.y = tau), so its waves still move at the frame rate. 0 = a step every frame.
+// --set=ocean.wakeHz, the Ocean window.
+inline float g_wakeStepHz = 30.0f;
+inline float g_wakeStepHz_game = 30.0f;
+inline const bool g_wakeStepHz_knob = ::knob::Register(g_wakeStepHz_game, g_wakeStepHz, "ocean::g_wakeStepHz");
+// The A/B of that carrying on: 0 = the surface shows each step as it stands until the next (--set=ocean.wakeExtrapolate).
+inline bool g_wakeExtrapolate = true;
+inline bool g_wakeExtrapolate_game = true;
+inline const bool g_wakeExtrapolate_knob = ::knob::Register(g_wakeExtrapolate_game, g_wakeExtrapolate, "ocean::g_wakeExtrapolate");
 
 
 // "--ocean-vs-depth-probe": A/B experiment, OFF. Replaces the world-space shore SDF with a
@@ -314,7 +326,7 @@ private:
     bool WakeEnabled() const;
     Math::float4 GetWakeParams() const;  // xy: window centre, z: 1 / half extent (0 = no field), w: displacement scale
     Math::float4 GetWakeParams2() const; // x: texel world size, y: normal strength, z: debug view, w: foam
-    Math::float4 GetWakeParams3() const; // x: the white water's relief (wakeChurn), yzw reserved
+    Math::float4 GetWakeParams3() const; // x: the white water's relief (wakeChurn), y: seconds since the field's step, zw reserved
     // The wake's free height for OceanReadback when frame `frame` stepped it (and the surface reads it), else null.
     ID3D12Resource* GetWakeFreeHeightResource(std::uint64_t frame) const;
     // The surf sim's height for OceanReadback when frame `frame` handed it over and the surface displaces by it, else null.

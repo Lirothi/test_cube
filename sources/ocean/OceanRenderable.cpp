@@ -1411,7 +1411,8 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWakePass(Rende
         shore.srv = simulation_->GetShoreDepthSrv();
         shore.resource = simulation_->GetShoreDepthResource();
     }
-    return wake_->BuildPass(ctx, renderElapsedTime_, tuning, useShore ? &shore : nullptr, hold);
+    const float stepInterval = ocean::g_wakeStepHz > 0.0f ? 1.0f / std::min(ocean::g_wakeStepHz, 1000.0f) : 0.0f;
+    return wake_->BuildPass(ctx, renderElapsedTime_, tuning, useShore ? &shore : nullptr, hold, stepInterval);
 }
 
 ID3D12Resource* OceanRenderable::GetWakeFreeHeightResource(std::uint64_t frame) const
@@ -1445,7 +1446,9 @@ Math::float4 OceanRenderable::GetWakeParams2() const
 
 Math::float4 OceanRenderable::GetWakeParams3() const
 {
-    return Math::float4(std::clamp(GetRenderConfig().wakeChurn, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f);
+    // y: seconds since the field's step (ocean::g_wakeStepHz) -- the surface carries the height on by the velocity that far.
+    const float sinceStep = wake_ && ocean::g_wakeExtrapolate ? wake_->SecondsSinceStep(renderElapsedTime_) : 0.0f;
+    return Math::float4(std::clamp(GetRenderConfig().wakeChurn, 0.0f, 1.0f), sinceStep, 0.0f, 0.0f);
 }
 
 void OceanRenderable::OnMaterialHotReload(Renderer* renderer)

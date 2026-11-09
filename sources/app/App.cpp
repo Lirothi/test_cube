@@ -1642,6 +1642,16 @@ namespace
             ocean::g_wakeShore_game = value != 0.0f ? 1 : 0;
             return true;
         }
+        if (setting == "ocean.wakeHz")
+        {
+            ocean::g_wakeStepHz_game = std::max(value, 0.0f);
+            return true;
+        }
+        if (setting == "ocean.wakeExtrapolate")
+        {
+            ocean::g_wakeExtrapolate_game = value != 0.0f;
+            return true;
+        }
         if (setting.rfind("ocean.wake", 0) == 0)
         {
             OceanRenderable* ocean = scene.FindOceanRenderable();

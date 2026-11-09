@@ -1191,6 +1191,13 @@ namespace
                 ocean::g_wakeDebugView_game = wakeDebug;
             }
         }
+        ImGui::SliderFloat("Wake steps a second", &ocean::g_wakeStepHz_game, 0.0f, 120.0f, "%.0f");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("How often the wake field steps (project-wide, not saved). Between steps the surface carries\n"
+                              "its height on by the field's vertical velocity, so its waves still move every frame.\n"
+                              "0 = a step every frame. --set=ocean.wakeHz");
+        }
 
         ImGui::SeparatorText("Boat spray");
         // vfx/VesselSpray: lit drops off a planing hull's chines, every boat's; and the white water along its sides.

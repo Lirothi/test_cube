@@ -105,7 +105,8 @@ cbuffer OceanCB : register(b0)
     // A boat's wake (ocean/OceanWake, t26, its foam t27): xy window centre, z 1 / half extent (0 = no field this frame), w
     // the height's scale in the vertices; wakeParams2 x texel metres, y the slope's scale in the normal (1 = true), z debug
     // view (1 the height, 2 the foam), w the foam's strength (0 = none); wakeParams3 x the white water's relief (WakeChurn,
-    // 0 = a smooth sheet), yzw reserved.
+    // 0 = a smooth sheet), y seconds since the field's step (ocean.wakeHz: WakeHeight carries the height on by the
+    // field's vertical velocity), zw reserved.
     float4 wakeParams;
     float4 wakeParams2;
     float4 wakeParams3;
@@ -301,6 +302,14 @@ float WakeWindowEdgeFade(float2 wakeUV)
     const float2 edgeUV = min(wakeUV, 1.0f - wakeUV);
     return smoothstep(2.0f / 512.0f, 32.0f / 512.0f, min(edgeUV.x, edgeUV.y));
 }
+// The wake's height at `uv` NOW: the field steps at most ocean.wakeHz times a second (OceanWake), and between steps the
+// height goes on by the field's vertical velocity, h + v tau (tau = wakeParams3.y, under 1/20 s). Linear in the field, so
+// one bilinear tap of both is the bilinear tap of the sum.
+float WakeHeight(float2 uv)
+{
+    const float2 hv = WakeTex.SampleLevel(LinearClampSampler, uv, 0).xy;
+    return hv.x + hv.y * wakeParams3.y;
+}
 // The wake's slope (dh/dx, dh/dz) at `xz` by central differences a texel apart; 0 off its window or with no field.
 float2 WakeSlope(float2 xz)
 {
@@ -314,10 +323,10 @@ float2 WakeSlope(float2 xz)
         return float2(0.0f, 0.0f);
     }
     const float du = wakeParams.z * 0.5f * wakeParams2.x; // one texel in uv
-    const float hxp = WakeTex.SampleLevel(LinearClampSampler, uv + float2(du, 0.0f), 0).x;
-    const float hxm = WakeTex.SampleLevel(LinearClampSampler, uv - float2(du, 0.0f), 0).x;
-    const float hzp = WakeTex.SampleLevel(LinearClampSampler, uv + float2(0.0f, du), 0).x;
-    const float hzm = WakeTex.SampleLevel(LinearClampSampler, uv - float2(0.0f, du), 0).x;
+    const float hxp = WakeHeight(uv + float2(du, 0.0f));
+    const float hxm = WakeHeight(uv - float2(du, 0.0f));
+    const float hzp = WakeHeight(uv + float2(0.0f, du));
+    const float hzm = WakeHeight(uv - float2(0.0f, du));
     return float2(hxp - hxm, hzp - hzm) * (0.5f / wakeParams2.x) * wakeParams2.y * WakeWindowEdgeFade(uv);
 }
 
@@ -501,8 +510,7 @@ VSOutput VSMain(VSInput input)
         const float2 wakeUV = WakeUV(worldUV);
         if (all(wakeUV >= 0.0f) && all(wakeUV <= 1.0f))
         {
-            displacement.y += WakeTex.SampleLevel(LinearClampSampler, wakeUV, 0).x * wakeParams.w *
-                simDisplacementFade * WakeWindowEdgeFade(wakeUV);
+            displacement.y += WakeHeight(wakeUV) * wakeParams.w * simDisplacementFade * WakeWindowEdgeFade(wakeUV);
         }
     }
 

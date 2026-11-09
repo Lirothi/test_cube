@@ -27,6 +27,7 @@
 //
 // OFF (no boat in the world, or none for kLingerSeconds) records no dispatch and the surface does not read the field.
 
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -104,8 +105,10 @@ public:
 
     // `shore` null = deep water everywhere; `hold` = this frame the shore maps are re-rendered after this pass, so it
     // must not read them: the field is handed over as it stands (a step of no time), and nothing crosses the coast.
+    // `stepInterval` (s, ocean::g_wakeStepHz): a frame closer than this to the last step does not step -- no pass, the field and
+    // its time kept; 0 = every frame.
     std::function<void(RenderGraphPassContext)> BuildPass(RenderGraphPassContext& ctx, float timeSeconds,
-        const Tuning& tuning, const ShoreWindow* shore, bool hold);
+        const Tuning& tuning, const ShoreWindow* shore, bool hold, float stepInterval);
 
     // xy: window centre (world XZ), z: 1 / half extent, w: texel world size.
     Math::float4 GetWindowParams() const;
@@ -116,9 +119,17 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetFoamSrv() const;
     // The free height (R16F, left as an unordered-access target) when frame `frame`'s pass wrote it (the renderer's
     // total frame number), else null: what OceanReadback copies for the buoyancy.
+    // Not only a frame that stepped (ocean::g_wakeStepHz): between steps the texture holds the last one, which is what the
+    // field is -- a copy waiting for a step lost the boats their wake on every copy the 30 Hz rhythms did not line up.
     ID3D12Resource* GetFreeHeightResource(std::uint64_t frame) const
     {
-        return frame != 0 && ranFrame_ == frame ? free_.Get() : nullptr;
+        return frame != 0 && everSimulated_ ? free_.Get() : nullptr;
+    }
+    // ocean::g_wakeStepHz: how long ago (s, on the ocean's clock) the field was last stepped -- the surface carries the height
+    // on by the vertical velocity this far (wakeParams3.y). 0 before a step and on a held clock.
+    float SecondsSinceStep(float now) const
+    {
+        return stepTime_ >= 0.0f ? std::clamp(now - stepTime_, 0.0f, kMaxStep) : 0.0f;
     }
 
     static constexpr std::uint32_t kResolution = 512u;
@@ -170,7 +181,8 @@ private:
     int pendingShiftX_ = 0;
     int pendingShiftY_ = 0;
     float texel_ = 0.5f;
-    float previousTime_ = -1.0f;
+    float previousTime_ = -1.0f; // the ocean clock the field stands at (its last step)
+    float stepTime_ = -1.0f;     // the same, for SecondsSinceStep (-1 = never stepped)
     float lastHullTime_ = -1.0e9f;
     bool hasCenter_ = false;
     bool needsClear_ = true;

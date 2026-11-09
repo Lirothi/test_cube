@@ -267,19 +267,13 @@ std::uint32_t OceanWake::FootprintSlot(const std::shared_ptr<const buoyancy::Hul
 }
 
 std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPassContext& ctx, float timeSeconds,
-    const Tuning& tuning, const ShoreWindow* shore, bool hold)
+    const Tuning& tuning, const ShoreWindow* shore, bool hold, float stepInterval)
 {
     if (!created_ || !packMaterial_ || !stepMaterial_ || !composeMaterial_ || !fftMaterial_)
     {
         active_ = false;
         return {};
     }
-
-    // ---- decisions, once ----
-    // A frame that re-renders the shore maps hands the field over as it stands: a step of no time turns no mode, so the
-    // coast it cannot read this frame holds anything that already met it.
-    const float elapsed = previousTime_ >= 0.0f && !hold ? std::clamp(timeSeconds - previousTime_, 0.0f, kMaxStep) : 0.0f;
-    previousTime_ = timeSeconds;
 
     RecordPass r{};
     r.hasShore = !hold && shore && shore->srv.ptr != 0 && shore->resource != nullptr && shore->invExtent > 0.0f;
@@ -334,8 +328,25 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             hasCenter_ = false;
             LOG_INFO(logging::LogCategory::Ocean, "wake: no boat for {:.0f} s -- the field is let go", kLingerSeconds);
         }
+        previousTime_ = timeSeconds;
+        stepTime_ = -1.0f;
         return {};
     }
+
+    // ---- the step, at most every stepInterval (ocean::g_wakeStepHz) ----
+    // A frame closer than that to the last step records nothing: the field, its foam, its window and the time it stands at
+    // are kept, and the surface carries its height on by the vertical velocity (SecondsSinceStep). A new or cleared field
+    // steps at once. A frame that re-renders the shore maps cannot read them: it hands the field over as it stands -- no
+    // step, its time kept for the next one (a cleared field on such a frame steps by no time, as it always did).
+    const bool fresh = needsClear_ || !everSimulated_ || previousTime_ < 0.0f;
+    const bool due = timeSeconds < previousTime_ || timeSeconds - previousTime_ >= stepInterval;
+    if (!fresh && (hold || !due))
+    {
+        return {};
+    }
+    const float elapsed = !fresh && !hold ? std::clamp(timeSeconds - previousTime_, 0.0f, kMaxStep) : 0.0f;
+    previousTime_ = timeSeconds;
+    stepTime_ = timeSeconds;
 
     r.shiftX = pendingShiftX_;
     r.shiftY = pendingShiftY_;
