@@ -148,6 +148,10 @@ public:
     // turning it off puts the object straight back where the level placed it.
     void SetBuoyant(bool buoyant);
     bool IsBuoyant() const { return buoyant_; }
+    // mesh.json "waterMask": the ocean's surface is not drawn inside the convex hull of this mesh (ocean/WaterMask.h, a
+    // registry: SetWaterMask (un)registers).
+    void SetWaterMask(bool mask);
+    bool IsWaterMask() const { return waterMask_; }
     void SetBuoyancySettings(buoyancy::Settings settings)
     {
         buoyancySettings_ = std::move(settings);
@@ -454,6 +458,7 @@ private:
     Math::mat4 renderOffset_;
     bool hasRenderOffset_ = false;
     bool buoyant_ = false;
+    bool waterMask_ = false;
     std::uint32_t buoyancyRevision_ = 0;
     buoyancy::Settings buoyancySettings_;
     physics::Motion physicsMotion_ = physics::Motion::None;

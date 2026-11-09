@@ -53,6 +53,10 @@ struct WakeHull
     Math::float2 forward = Math::float2(1.0f, 0.0f);  // world XZ of the bow's way, unit
     float scale = 1.0f;                               // the instance's scale (uniform)
     std::shared_ptr<const buoyancy::HullFootprint> footprint;
+    // The white water along a planing hull's sides (vfx/VesselSpray::SideFoamOf): a line a side, world (x0, z0, x1, z1),
+    // moving with the hull just outside its waterline, and the foam a second it lays (0 = none).
+    Math::float4 splash[2] = { Math::float4(0.0f, 0.0f, 0.0f, 0.0f), Math::float4(0.0f, 0.0f, 0.0f, 0.0f) };
+    float splashRate = 0.0f;
 };
 }
 
@@ -195,6 +199,9 @@ private:
         Tuning tuning{};
         std::uint32_t hullCount = 0;
         HullGpu hulls[kMaxHulls]{};
+        std::uint32_t splashCount = 0;
+        Math::float4 splashes[kMaxHulls * 2]{};
+        float splashRates[kMaxHulls * 2]{};
         ShoreWindow shore{};
         bool hasShore = false;
         bool wash = false;         // the hulls moved as boats do this step: no new or jumped one

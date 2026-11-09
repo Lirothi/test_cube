@@ -1,0 +1,32 @@
+{
+  "_comment": "A planing hull's spray sheet: clumps of drops and torn filaments (textures/particles/spray_drops.png, a 4x4 atlas laid along the velocity). vfx/VesselSpray drives position, segment, direction, speeds and rate every frame, and the albedo (the colour keys' rgb) and forwardScatter from the ocean preset's spray knobs (OceanRenderConfig::sprayColor, sprayForwardScatter); these are the rest. Lit: the colour keys are an albedo under the sun and the air.",
+  "maxParticles": 2048,
+  "spawnRate": 0.0,
+  "lifetime": [0.4, 1.0],
+  "coneAngleDeg": 30.0,
+  "speed": [1.0, 2.0],
+  "gravity": 9.81,
+  "drag": 0.3,
+  "rotation": [0.0, 0.0],
+  "spin": [0.0, 0.0],
+  "size": [0.5, 1.1],
+  "texture": "textures/particles/spray_drops.png",
+  "flipCols": 4,
+  "flipRows": 4,
+  "flipRandomStart": true,
+  "lit": true,
+  "forwardScatter": 0.25,
+  "phaseG": 0.75,
+  "litFlat": 1.0,
+  "velocityStretch": 0.06,
+  "additive": false,
+  "sort": false,
+  "softFade": 0.15,
+  "colorKeys": [
+    [0.95, 0.95, 0.95, 0.85],
+    [0.95, 0.95, 0.95, 0.7],
+    [0.95, 0.95, 0.95, 0.4],
+    [0.95, 0.95, 0.95, 0.0]
+  ],
+  "windInfluence": 0.2
+}

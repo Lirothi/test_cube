@@ -293,6 +293,9 @@ namespace physics
             JPH::Vec3 shownForward = JPH::Vec3::sAxisX();
             JPH::Vec3 shownUp = JPH::Vec3::sAxisY();
             float shownSpeed = 0.0f; // vesselState's speed as Display saw it: the game's alone
+            float shownImpact = 0.0f; // and its last slam (a share of the weight, fading): the spray's burst
+            float shownImmersion = 0.0f; // how deep it sits (1 = at rest): no spray off a hull in the air
+            float shownWaterHeight = 0.0f; // the surface under it: where its spray leaves and falls back to
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -1023,6 +1026,9 @@ namespace physics
                     entry.shownForward = entry.rest.rotation * ToJolt(entry.vessel->forward).Normalized();
                     entry.shownUp = entry.rest.rotation * JPH::Vec3::sAxisY();
                     entry.shownSpeed = 0.0f;
+                    entry.shownImpact = 0.0f;
+                    entry.shownImmersion = 0.0f;
+                    entry.shownWaterHeight = 0.0f;
                 }
             }
             stats.fellOut = 0;
@@ -1133,6 +1139,9 @@ namespace physics
                 entry->shownForward = forward;
                 entry->shownUp = rotation * JPH::Vec3::sAxisY();
                 entry->shownSpeed = entry->vesselState.speed;
+                entry->shownImpact = entry->vesselState.impact;
+                entry->shownImmersion = entry->vesselState.immersion;
+                entry->shownWaterHeight = entry->vesselState.waterHeight;
                 // With a margin, so a boat crawling at the limit does not go in and out of them.
                 const float probeSpeed = entry->vessel->giProbeSpeed;
                 const float speed = std::fabs(entry->vesselState.speed);
@@ -1653,6 +1662,9 @@ namespace physics
             hull.up = FromJolt(entry->shownUp);
             hull.scale = entry->scale;
             hull.speed = entry->shownSpeed;
+            hull.impact = entry->shownImpact;
+            hull.immersion = entry->shownImmersion;
+            hull.waterHeight = entry->shownWaterHeight;
             hull.atHelm = entry == impl_->helm;
             out.push_back(hull);
         }

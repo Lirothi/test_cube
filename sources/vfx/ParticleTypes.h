@@ -3,11 +3,18 @@
 #include <string>
 
 #include "core/math/Math.h"
+#include "core/threading/Knob.h"
 
 namespace vfx
 {
 // Debug: freeze every particle sim (Tick accumulation and GPU dispatches stop; state persists).
 inline bool g_freeze = false;
+
+// A/B, transient (`--set particles.airFromFog:1`): a lit particle takes the air's light from the height fog's colour, as
+// before 2026-11-09, instead of the sky's irradiance cube (DrawParams.skyIrradianceScale).
+inline bool g_litAirFromFog = false;
+inline bool g_litAirFromFog_game = false;
+inline const bool g_litAirFromFog_knob = ::knob::Register(g_litAirFromFog_game, g_litAirFromFog, "vfx::g_litAirFromFog");
 
 // Debug: throttled alive-count readback log to DBWIN ("[vfx] ..."), ~1 line/sec per emitter.
 // Cheap (4-byte copy per frame into a readback ring); the E1 verification instrument.
@@ -35,9 +42,17 @@ struct alignas(16) GpuEmitterParams
     // W8 wind drift. windAccelXZ is ALREADY the finished acceleration in m/s^2 (the emitter folds
     // its own windInfluence into the scene's gust-modulated wind push), so the CS just integrates it
     // — no wind parameters or per-emitter authoring leak into the shader.
-    float windAccelXZ[2]; float _padW[2];        // 80
+    // killBelowY: a FALLING particle under it dies (a spray drop back in the sea); -1e30 = never.
+    float windAccelXZ[2]; float killBelowY; float _padW;   // 80
+    // A segment emitter: particles are born anywhere on emitterPos .. emitterPos + lineVec (0 = a point).
+    float lineVec[3]; float _padL;                         // 96
+    // The emitter's own motion (m/s): a particle born a fraction u into the frame starts where the emitter was then
+    // and has already flown the rest of it -- a fast emitter lays a sheet, not one clump a frame.
+    float emitterVel[3]; float _padE;                      // 112
+    // Added to every particle's birth velocity (m/s, world): what the carrier gives it (a hull's way).
+    float baseVel[3]; float _padB;                         // 128
 };
-static_assert(sizeof(GpuEmitterParams) == 96, "GpuEmitterParams must match the HLSL cbuffer");
+static_assert(sizeof(GpuEmitterParams) == 144, "GpuEmitterParams must match the HLSL cbuffer");
 
 // Per-emitter draw constants — mirrors `DrawParams` (b2) in shaders/particles.hlsl (E2).
 struct alignas(16) GpuEmitterDrawParams
@@ -51,9 +66,14 @@ struct alignas(16) GpuEmitterDrawParams
     // apply the factor themselves. It took the trailing pad slot, so the layout is unchanged.
     uint32_t maxParticles; float softFadeDist; float depthOcclude; float preExposure; // 96
     // P16.7: the luminance the authored colour MEANS, in cd/m2. See EmitterDesc.
-    float luminanceCdM2; float _pad[3];                                           // 112
+    // lit: 1 = the colour is an ALBEDO lit by the frame's light and the air (EmitterDesc::lit), 0 = luminanceCdM2.
+    float luminanceCdM2; float lit; float forwardScatter; float phaseG;           // 112
+    // skyIrradianceScale: lit, the scale of the sky's irradiance cube (t5) -- the air's light on a drop, as lighting_cs
+    // fills an opaque surface; 0 = no cube (or the A/B): the height fog's colour then.
+    // litFlat: lit, the shading normal from the sprite's sphere (0) to the world's up (1, the water foam's light).
+    float velocityStretch; float skyIrradianceScale; float litFlat; float _pad;   // 128
 };
-static_assert(sizeof(GpuEmitterDrawParams) == 128, "GpuEmitterDrawParams must match HLSL");
+static_assert(sizeof(GpuEmitterDrawParams) == 144, "GpuEmitterDrawParams must match HLSL");
 
 // CPU-side emitter description. E1 consumes the sim fields; size/color/flipbook/blend/texture
 // are stored now (one JSON schema) and consumed by the E2 renderer / E3 presets.
@@ -75,6 +95,14 @@ struct EmitterDesc
     // should not, and only the author knows which this is. Default 0 keeps every existing emitter
     // byte-identical, so enabling wind on a level cannot silently disturb its effects.
     float windInfluence = 0.0f;
+    // A segment emitter (world metres from the emitter's position to the other end; 0 = a point).
+    Math::float3 lineOffset = Math::float3(0.0f, 0.0f, 0.0f);
+    // A falling particle under this height dies (spray back in the sea); the default never.
+    float killBelowY = -1.0e30f;
+    // Runtime only (a carrier sets them every frame, VesselSpray): the emitter's own motion and what it adds to a
+    // particle's birth velocity, m/s world.
+    Math::float3 emitterVelocity = Math::float3(0.0f, 0.0f, 0.0f);
+    Math::float3 baseVelocity = Math::float3(0.0f, 0.0f, 0.0f);
     float rotMin = 0.0f;               // initial billboard roll, radians
     float rotMax = 6.2831853f;
     float spinMin = -1.0f;             // roll speed, rad/s
@@ -96,6 +124,19 @@ struct EmitterDesc
     // reference is the same one the sky uses, so a flame set to 20000 reads as a flame against a
     // 16000 lx sky and still reads as one at night.
     float luminanceCdM2 = 3000.0f;
+    // LIT particles (water spray, dust): the colour keys are an ALBEDO lit by the frame's directional light and the sky's
+    // fill (the irradiance cube lighting_cs reads), so they follow the hour and go dark at night; luminanceCdM2 is not
+    // used. The sun's part is the water foam's wrapped Lambert (0.2 + 0.8 N.L, LitFoamColor), (1 - forwardScatter) of it,
+    // plus forwardScatter x Henyey-Greenstein(phaseG): water drops scatter forward, spray against the sun glows.
+    // litFlat: the shading normal, from the sphere the sprite stands for (0) to the world's up (1) -- lit as a level
+    // sheet of foam on the water, the wake's own light, so spray and the white water it falls into are one white.
+    bool lit = false;
+    float forwardScatter = 0.5f;
+    float phaseG = 0.7f;
+    float litFlat = 0.0f;
+    // Stretched along the velocity seen across the view: the quad is size + |v| x this (seconds) long, no roll
+    // (0 = a round billboard, as before). A fast drop reads as a streak.
+    float velocityStretch = 0.0f;
     Math::float4 colorKeys[4] = {      // colorOverLife gradient (RGBA; A drives fade)
         Math::float4(1.0f, 1.0f, 1.0f, 1.0f),
         Math::float4(1.0f, 1.0f, 1.0f, 1.0f),

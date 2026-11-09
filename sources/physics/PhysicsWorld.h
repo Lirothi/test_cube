@@ -105,6 +105,9 @@ namespace physics
         Math::float3 up;        // the deck's up, world, unit
         Math::float3 scale;
         float speed = 0.0f;     // m/s along the hull, as the frame shows it
+        float impact = 0.0f;    // its last slam into a wave, a share of its weight, fading (VesselState::impact)
+        float immersion = 0.0f; // how deep it sits, 1 = as deep as at rest, 0 = in the air (VesselState::immersion)
+        float waterHeight = 0.0f; // the surface under it (VesselState::waterHeight)
         bool atHelm = false;
     };
 
@@ -279,6 +282,13 @@ namespace physics
     };
     SolidBox FitSolidBox(const std::vector<Math::float3>& points);
     SolidBox MeasureSolidBox(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots);
+
+    // The convex hull of a mesh asset's LOD 0 (every slot) as the planes of its faces in the model's space -- xyz the outward
+    // normal, w the constant: a point is inside where dot(n, p) + w <= 0 for every plane -- and their box. At most
+    // `maxPlanes`: the hull's tolerance grows (from 5 mm) until it fits. The water mask's (ocean/WaterMask). False if the
+    // geometry cannot be read or has no volume.
+    bool ConvexHullPlanes(const std::string& geometryPath, std::size_t maxPlanes, std::vector<Math::float4>& planes,
+                          Math::float3& boxMin, Math::float3& boxMax);
 
     // The gates (docs/physics_plan.md section 5), no window and no scene: `name` empty = all of them. Each logs
     // `physics gate: <name> PASS|FAIL|SKIP ...`; returns the number that failed. --physics-gate and intent_regression run this.

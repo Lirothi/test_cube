@@ -14,6 +14,7 @@
 #include "ocean/OceanSurfSim.h" // surf sim injection (docs/ocean_surf_sim_plan.md)
 #include "ocean/OceanWake.h"
 #include "ocean/OceanWetness.h"
+#include "ocean/WaterMask.h"
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
 
 class Camera;
@@ -55,12 +56,11 @@ inline const bool g_sunShadow_knob = ::knob::Register(g_sunShadow_game, g_sunSha
 inline int g_sunShadowRays = 1;
 inline int g_sunShadowRays_game = 1;
 inline const bool g_sunShadowRays_knob = ::knob::Register(g_sunShadowRays_game, g_sunShadowRays, "ocean::g_sunShadowRays");
-// `ocean.sunShadowColumn` (transient): the taps the water's BODY averages its sun shadow over, down the column a view ray
-// scatters in (OceanBodyShadow, 0..8); 0 = the surface point's shadow, the A/B.
-inline int g_sunShadowColumn = 8;
-inline int g_sunShadowColumn_game = 8;
-inline const bool g_sunShadowColumn_knob =
-    ::knob::Register(g_sunShadowColumn_game, g_sunShadowColumn, "ocean::g_sunShadowColumn");
+// `ocean.sunShadowBody` (transient, 0..1): how much of the geometric sun shadow the water's BODY takes (the light it
+// scatters back); 1 = all of it, as the glint and the foam do. The surface point's shadow, sharp.
+inline float g_sunShadowBody = 0.5f;
+inline float g_sunShadowBody_game = 0.5f;
+inline const bool g_sunShadowBody_knob = ::knob::Register(g_sunShadowBody_game, g_sunShadowBody, "ocean::g_sunShadowBody");
 
 // "--ocean-foam-debug": compile the contact-foam diagnostic views into the ocean surface shader.
 // Boot-only and a VARIANT for the same reason as above — the views need per-pixel intermediates
@@ -149,6 +149,8 @@ public:
     // A boat's wake (ocean/OceanWake): Main_OceanWake's builder, and the hulls Scene::Sync hands over (render half parked).
     std::function<void(RenderGraphPassContext)> BuildWakePass(RenderGraphPassContext& ctx);
     void SetWakeHulls(std::vector<ocean::WakeHull> hulls);
+    // The hulls the surface is not drawn inside (ocean/WaterMask.h), as Scene::Sync collects them (render half parked).
+    void SetWaterMasks(std::vector<ocean::WaterMaskInstance> masks) { waterMasks_ = std::move(masks); }
     // Main_OceanReadback's builder: the surface to the CPU, only on a frame someone asked for it.
     std::function<void(RenderGraphPassContext)> BuildReadbackPass(RenderGraphPassContext& ctx)
     {
@@ -355,6 +357,7 @@ private:
     std::unique_ptr<OceanSurfSim> surfSim_; // surf sim injection
     std::unique_ptr<OceanWake> wake_;
     bool wakeHasHulls_ = false; // the last hand-over had a boat: the field's resources are made only then
+    std::vector<ocean::WaterMaskInstance> waterMasks_; // this frame's, from Scene::Sync
     std::unique_ptr<OceanWetness> wetness_;
     OceanReadback readback_;
 

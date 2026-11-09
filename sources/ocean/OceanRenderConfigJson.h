@@ -531,6 +531,25 @@ namespace OceanRenderConfigJson
         render.wakeCrestFoam = std::clamp(ReadFloat(object, "wakeCrestFoam", render.wakeCrestFoam), 0.0f, 5.0f);
         render.wakeCrestCoverage = std::clamp(ReadFloat(object, "wakeCrestCoverage", render.wakeCrestCoverage), 0.0f, 1.0f);
         render.wakeChurn = std::clamp(ReadFloat(object, "wakeChurn", render.wakeChurn), 0.0f, 1.0f);
+        // A boat's spray (vfx/VesselSpray).
+        {
+            const auto it = object.find("sprayEnabled");
+            if (it != object.end() && it->is_boolean())
+            {
+                render.sprayEnabled = it->get<bool>();
+            }
+        }
+        render.sprayRate = std::clamp(ReadFloat(object, "sprayRate", render.sprayRate), 0.0f, 1.0f);
+        render.sprayMist = std::clamp(ReadFloat(object, "sprayMist", render.sprayMist), 0.0f, 4.0f);
+        render.sprayOut = std::clamp(ReadFloat(object, "sprayOut", render.sprayOut), 0.0f, 2.0f);
+        render.sprayUp = std::clamp(ReadFloat(object, "sprayUp", render.sprayUp), 0.0f, 2.0f);
+        render.sprayForward = std::clamp(ReadFloat(object, "sprayForward", render.sprayForward), -1.0f, 1.0f);
+        render.spraySlam = std::clamp(ReadFloat(object, "spraySlam", render.spraySlam), 0.0f, 4.0f);
+        render.sprayColor = ReadFloat4(object, "sprayColor", render.sprayColor);
+        render.sprayForwardScatter = std::clamp(ReadFloat(object, "sprayForwardScatter", render.sprayForwardScatter), 0.0f, 1.0f);
+        render.spraySideFoam = std::clamp(ReadFloat(object, "spraySideFoam", render.spraySideFoam), 0.0f, 4.0f);
+        render.sprayOpacity = std::clamp(ReadFloat(object, "sprayOpacity", render.sprayOpacity), 0.0f, 3.0f);
+        render.sprayFoamLight = std::clamp(ReadFloat(object, "sprayFoamLight", render.sprayFoamLight), 0.0f, 1.0f);
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
         render.causticsScale = std::max(
@@ -745,6 +764,18 @@ namespace OceanRenderConfigJson
         out["wakeCrestFoam"] = render.wakeCrestFoam;
         out["wakeCrestCoverage"] = render.wakeCrestCoverage;
         out["wakeChurn"] = render.wakeChurn;
+        out["sprayEnabled"] = render.sprayEnabled;
+        out["sprayRate"] = render.sprayRate;
+        out["sprayMist"] = render.sprayMist;
+        out["sprayOut"] = render.sprayOut;
+        out["sprayUp"] = render.sprayUp;
+        out["sprayForward"] = render.sprayForward;
+        out["spraySlam"] = render.spraySlam;
+        out["sprayColor"] = WriteFloat4(render.sprayColor);
+        out["sprayForwardScatter"] = render.sprayForwardScatter;
+        out["spraySideFoam"] = render.spraySideFoam;
+        out["sprayOpacity"] = render.sprayOpacity;
+        out["sprayFoamLight"] = render.sprayFoamLight;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;
         out["causticsSpeed"] = render.causticsSpeed;

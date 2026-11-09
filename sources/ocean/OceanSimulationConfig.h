@@ -158,6 +158,20 @@ struct OceanRenderConfig
     float wakeCrestFoam = 1.0f;    // Crest's Wave Foam Strength on the wake's steep crests (0..5)
     float wakeCrestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks (0.55 = the Stokes limit, 0..1)
     float wakeChurn = 1.0f;        // the churned white water's relief: lumps and grey cavities (0 = a smooth sheet, 0..1)
+    // A boat's spray (vfx/VesselSpray): lit drops off a planing hull's chines, every boat's; and the white water the hull
+    // lays along its sides into the wake's foam.
+    bool sprayEnabled = true;
+    float sprayRate = 0.7f;        // of what the presets can keep alive (0..1)
+    float sprayMist = 1.0f;        // the mist's share of that (0..4)
+    float sprayOut = 0.4f;         // a drop's speed outward, a share of the hull's (earth frame, 0..2)
+    float sprayUp = 0.2f;          // and upward (0..2)
+    float sprayForward = 0.1f;     // and along the hull's way (-1..1)
+    float spraySlam = 1.0f;        // the burst a slam into a wave throws (1 = the presets' numbers, 0 = none, 0..4)
+    Math::float4 sprayColor = Math::float4(0.95f, 0.95f, 0.95f, 1.0f); // the drops' albedo (x foamTint), under the sun and the sky
+    float sprayFoamLight = 1.0f;   // lit as a level sheet of the water's foam (1) or as spheres facing every way (0) (0..1)
+    float sprayForwardScatter = 0.25f; // the sun's share in the forward lobe (glows against the sun); the rest is diffuse (0..1)
+    float sprayOpacity = 1.0f;     // times the presets' alpha keys (each key at most 1): the water shows through less (0..3)
+    float spraySideFoam = 1.0f;    // the white water along the hull's sides: about this much foam on a texel it passes (0..4)
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

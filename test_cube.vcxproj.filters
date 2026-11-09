@@ -579,6 +579,9 @@
     <ClCompile Include="sources/ocean/OceanWake.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
+    <ClCompile Include="sources/ocean/WaterMask.cpp">
+      <Filter>sources\ocean</Filter>
+    </ClCompile>
     <ClCompile Include="sources/ocean/OceanWetness.cpp">
       <Filter>sources\ocean</Filter>
     </ClCompile>
@@ -616,6 +619,9 @@
       <Filter>sources\vfx</Filter>
     </ClCompile>
     <ClCompile Include="sources/vfx/ParticlePresets.cpp">
+      <Filter>sources\vfx</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/vfx/VesselSpray.cpp">
       <Filter>sources\vfx</Filter>
     </ClCompile>
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp">
@@ -1301,6 +1307,9 @@
     <ClInclude Include="sources/ocean/OceanWake.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
+    <ClInclude Include="sources/ocean/WaterMask.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
     <ClInclude Include="sources/ocean/OceanWetness.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
@@ -1332,6 +1341,9 @@
       <Filter>sources\vfx</Filter>
     </ClInclude>
     <ClInclude Include="sources/vfx/ParticlePresets.h">
+      <Filter>sources\vfx</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/vfx/VesselSpray.h">
       <Filter>sources\vfx</Filter>
     </ClInclude>
     <ClInclude Include="sources/vfx/ParticleTypes.h">

@@ -29,10 +29,14 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint h = Pcg(slot * 0x9E3779B9u ^ spawnSeed ^ (dtid.x * 0x85EBCA6Bu));
 
     Particle p;
-    p.pos = emitterPos;
-    p.age = 0.0;
-    p.vel = RandCone(h, normalize(coneDir), coneHalfAngleRad) * RandRange(h, speedMin, speedMax);
+    p.vel = RandCone(h, normalize(coneDir), coneHalfAngleRad) * RandRange(h, speedMin, speedMax) + baseVel;
     p.life = max(RandRange(h, lifeMin, lifeMax), 1e-3);
+    // Anywhere on the segment, and born a share of the frame ago: where the emitter was then, flown since -- a fast
+    // emitter lays its particles along its path instead of one clump a frame.
+    const float along = Rand01(h);
+    const float before = Rand01(h) * dt;
+    p.pos = emitterPos + lineVec * along - emitterVel * before + p.vel * before;
+    p.age = min(before, 0.999 * p.life);
     p.rot = RandRange(h, rotMin, rotMax);
     p.spin = RandRange(h, spinMin, spinMax);
     p.seed = h;

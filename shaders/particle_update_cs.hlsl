@@ -13,7 +13,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
     if (p.age < 0.0) { return; } // dead slot
 
     p.age += dt;
-    if (p.age >= p.life)
+    // A falling particle under the kill plane (a spray drop back in the sea) is done.
+    if (p.age >= p.life || (p.pos.y < killBelowY && p.vel.y < 0.0))
     {
         p.age = -1.0;
         gParticles[slot] = p;

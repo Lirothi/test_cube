@@ -505,6 +505,12 @@ inline const bool g_fogDebugView_knob = ::knob::Register(g_fogDebugView_game, g_
 // SkyAtmosphere.usf:1466; ours leaves it out of the light), raw cd/m2; w = 1 while the procedural sky has one. Set by
 // the scene renderer once a frame before any pass packs the fog. A few frames old: it is rebuilt only as the sun moves.
 inline float4 g_fogDistantSkyLight{};
+// The sky's diffuse irradiance cube this frame (Skybox::IrradianceSrv, E / pi: the same fill lighting_cs gives opaque
+// surfaces -- the sky by day, the moon's sky, the night sky and Ultra Dynamic Sky's layer by night) and its scale
+// (lighting_cs skyIrradianceScale), for forward draws without lighting constants of their own (lit particles: the air's
+// light on a drop). The descriptor's ptr, 0 = none. Set by the scene renderer once a frame, before the forward passes.
+inline std::uint64_t g_skyIrradianceSrv = 0u;
+inline float g_skyIrradianceScale = 0.0f;
 // A/B, transient (--set fog.skyAlongView:1): the fog coloured by the sky along the view again, as before 2026-10-31.
 inline bool g_fogSkyAlongView = false;
 inline bool g_fogSkyAlongView_game = false;

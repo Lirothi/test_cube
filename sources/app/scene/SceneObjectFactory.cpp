@@ -429,6 +429,11 @@ namespace SceneObjectFactory
         {
             mesh.SetRtCutoutOpacity(o["rtCutoutOpacity"].get<float>());
         }
+        // The water kept out of its convex hull (ocean/WaterMask.h): the asset's mesh.json "waterMask", absent = off.
+        if (o.contains("waterMask") && o["waterMask"].is_boolean())
+        {
+            mesh.SetWaterMask(o["waterMask"].get<bool>());
+        }
         // Buoyancy: "buoyant" is the per-OBJECT switch (the Inspector's checkbox, absent = off);
         // "buoyancy" says where and how it floats and normally comes from the asset's mesh.json,
         // folded in by ResolveMeshAsset like every other asset key. See ocean/BuoyancyLayout.h.

@@ -12,7 +12,7 @@
 // ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
 // rather than sRGB). The C++ table stages the same 26 entries for both surfaces; t22-t25, s4 and the
 // transparent pass's GlassView CB (b1) are the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), DescriptorTable(SRV(t0, numDescriptors=28, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=28, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -109,8 +109,7 @@ cbuffer OceanCB : register(b0)
     float4 wakeParams;
     float4 wakeParams2;
     float4 wakeParams3;
-    // OceanBodyShadow: x the taps along the column a view ray scatters in (0 = the surface point's shadow, as before
-    // 2026-11-07), yzw reserved.
+    // x how much of the geometric sun shadow the water's BODY takes (ocean.sunShadowBody, 1 = all, as the glint), yzw reserved.
     float4 bodyShadowParams;
 };
 
@@ -151,6 +150,44 @@ SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
 SamplerState PointSampler : register(s2);
 SamplerState AnisotropicWrapSampler : register(s3);
+
+// The hulls the surface is not drawn inside (ocean/WaterMask.h, mesh.json "waterMask"; OceanRenderable fills it every
+// frame): per hull three rows of its world-to-model transform (the model's x y z = dot(row.xyz, world) + row.w), the box
+// of its planes in the model's space with asuint(.w) = the first plane, the plane count; then the planes -- xyz the
+// outward normal, inside where dot(n, p) + w <= 0. The convex hull of the mesh, so the water standing in an open cockpit
+// (under the sea's level) is inside and the sea round the hull never is.
+#define WATER_MASK_MAX_HULLS 4
+#define WATER_MASK_MAX_PLANES 512
+cbuffer WaterMaskCB : register(b2)
+{
+    uint4 waterMaskCount; // x hulls this frame
+    float4 waterMaskHull[WATER_MASK_MAX_HULLS * 5];
+    float4 waterMaskPlanes[WATER_MASK_MAX_PLANES];
+};
+
+bool InsideWaterMask(float3 worldPos)
+{
+    for (uint h = 0u; h < min(waterMaskCount.x, (uint)WATER_MASK_MAX_HULLS); ++h)
+    {
+        const float4 r0 = waterMaskHull[h * 5u + 0u];
+        const float4 r1 = waterMaskHull[h * 5u + 1u];
+        const float4 r2 = waterMaskHull[h * 5u + 2u];
+        const float3 p = float3(dot(r0.xyz, worldPos) + r0.w, dot(r1.xyz, worldPos) + r1.w, dot(r2.xyz, worldPos) + r2.w);
+        const float4 boxMin = waterMaskHull[h * 5u + 3u];
+        const float4 boxMax = waterMaskHull[h * 5u + 4u];
+        if (any(p < boxMin.xyz) || any(p > boxMax.xyz)) { continue; }
+        const uint first = asuint(boxMin.w);
+        const uint count = asuint(boxMax.w);
+        bool inside = true;
+        for (uint i = 0u; i < count && inside; ++i)
+        {
+            const float4 plane = waterMaskPlanes[min(first + i, (uint)WATER_MASK_MAX_PLANES - 1u)];
+            inside = dot(plane.xyz, p) + plane.w <= 0.0f;
+        }
+        if (inside) { return true; }
+    }
+    return false;
+}
 
 struct VSInput
 {
@@ -831,10 +868,11 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     {
         const float3 churn = WakeChurnHeight(input.worldUV, input.worldUVdx, input.worldUVdy);
         const float w = wakeFoam.churn * saturate(wakeParams3.x) * saturate(wakeFoam.coverage / max(data.coverage.x, 1e-3f));
-        // 30 % under the first cut (owner, 2026-11-07: "take the normal down 30 %"): 15 cm lumps, crevices at 0.65.
-        const float kRelief = 0.105f; // m: the lumps' height
+        // 30 % under the first cut twice (owner, 2026-11-07: "take the normal down 30 %"; 2026-11-09: "another 30 %"): the
+        // first cut's 15 cm lumps and crevices at 0.65 -> 10.5 cm / 0.755 -> 7.35 cm / 0.8285.
+        const float kRelief = 0.0735f; // m: the lumps' height
         data.normal = normalize(data.normal - float3(churn.y, 0.0f, churn.z) * (kRelief * w));
-        data.albedo *= lerp(1.0f, lerp(0.755f, 1.0f, smoothstep(0.0f, 0.5f, churn.x)), w);
+        data.albedo *= lerp(1.0f, lerp(0.8285f, 1.0f, smoothstep(0.0f, 0.5f, churn.x)), w);
     }
     // The shore strip wears the SHORE foam albedo (same asset and sliders as the modern
     // surface), blended in by its share of the total coverage so simulated whitecap foam
@@ -1002,137 +1040,6 @@ float3 RefractionCoords(float refractionStrength, float4 positionNDC, float view
     return float3(refractedUV, depthSample);
 }
 
-// The sun's shadow from geometry on the water's BODY (2026-11-07, the yacht's shadow on the open sea: a navy hole the
-// shape of the hull, at a low sun a black band 15 m long). The light the body sends back is scattered all down the
-// column a view ray crosses -- the model's own 1 - exp(-fogDensity d), a ten-metre column at wind_test's 0.1 / m -- and
-// a caster shades only the part of it inside its shadow volume, which goes down along the REFRACTED sun: a hull's is a
-// slanted prism as wide as the hull, a view ray passes through it for a metre or two. So the shadow is averaged over the
-// column: `bodyShadowParams.x` taps evenly down its first 1.5 / fogDensity metres (78 % of the scatter), each weighted by
-// the exponential's integral over its own step and traced back up its refracted sun ray to the surface -- the taps lie
-// on a straight track across the water -- and read there, where the water's own pages are; the deeper tail takes their
-// mean (a tap of its own 14 m down drew a second, offset copy of the hull's shadow). A shallow column (the background's
-// distance through the water) is averaged over what it holds; the sea floor seen through it keeps its own shadow.
-// 0 taps = the surface point's shadow, as before.
-// Deterministic on purpose: the water is barely accumulated over frames (it moves, and DLSS is told so), and per-pixel
-// jittered taps came out as a fixed grid over the shadow.
-// Under VSM a tap is cheap: the level the water's own pixels request at its distance (the frame's bias in), one
-// hardware-filtered comparison, lit where that level has no page -- the water marks a page only where a caster can
-// shadow it (vsm_water_mask_cs), so no page there is no shadow. The page entries are all read first and the
-// comparisons all issued after: the ocean's pixel shader is too heavy to hide a fetch, and a tap whose comparison waited
-// on its own entry cost the column 0.013 ms a tap whatever else was cut. The full read (ForwardSunShadow: a walk to the
-// coarser levels, a 3x3 PCF) cost eight taps 0.24 ms of Ocean.Surface; Legacy and SDSM still take it.
-static const uint kOceanColumnTaps = 8u;
-
-// The clipmap view and the page (bits 0-7 x, 8-15 y; ~0 = outside the level) a tap at q reads, and its NDC.
-uint OceanColumnPage(float3 q, out float3 ndc, out uint level)
-{
-    const float distCm = max(length(q - GLASS_VIEW(camPosSky).xyz) * 100.0f, 1e-4f);
-    level = (uint)clamp((int)floor(log2(distCm) + GLASS_VIEW(smrtParams2).z) - (int)GLASS_VIEW(vsmParams).w,
-                        0, (int)VSM_NUM_CLIPMAP_LEVELS - 1);
-    const float4 clip = mul(float4(q, 1.0f), GLASS_VIEW(clipmapViewProj)[level]);
-    ndc = clip.xyz / clip.w;
-    if (any(abs(ndc.xy) > 1.0f) || ndc.z < 0.0f || ndc.z > 1.0f) { return 0xFFFFFFFFu; }
-    const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-    const uint px = min((uint)(uv.x * (float)VSM_CLIPMAP_AXIS), VSM_CLIPMAP_AXIS - 1u);
-    const uint py = min((uint)(uv.y * (float)VSM_CLIPMAP_AXIS), VSM_CLIPMAP_AXIS - 1u);
-    return (py << 8) | px;
-}
-
-uint OceanColumnEntry(uint page, uint level)
-{
-    return page == 0xFFFFFFFFu ? 0u
-         : VsmPageTable[VsmPageId(VSM_CLIPMAP_FIRST + level, 0u, page & 0xFFu, (page >> 8) & 0xFFu)];
-}
-
-float OceanBodyShadow(float3 surfacePos, float3 viewDir, float column, float surfaceShadow)
-{
-    const uint taps = min((uint)bodyShadowParams.x, kOceanColumnTaps);
-    [branch] if (taps == 0u || sunShapeParams.z < 0.5f)
-    {
-        return surfaceShadow;
-    }
-    const float sigma = max(refractionParams.w, 1e-3f);
-    column = max(column, 0.0f);
-    [branch] if (1.0f - exp(-sigma * column) < 1e-3f)
-    {
-        return surfaceShadow;
-    }
-    const float kEta = 1.0f / 1.333f;
-    const float3 up = float3(0.0f, 1.0f, 0.0f);
-    const float3 viewDown = refract(-viewDir, up, kEta);
-    const float3 sunDown = refract(normalize(sunDirAmbient.xyz), up, kEta);
-    const float sunSlope = 1.0f / max(-sunDown.y, 0.05f);
-    const float reach = min(column, 1.5f / sigma);
-    const float step = reach / taps;
-    // Where the tap at s lands on the surface: down the view ray, back up its sun ray -- a straight line on the water.
-    float3 track = viewDown + sunDown * (viewDown.y * sunSlope);
-    track.y = 0.0f;
-    const float stepShare = exp(-sigma * step); // the exponential's weight a step further down
-    const float firstWeight = (1.0f - stepShare) / (1.0f - exp(-sigma * reach));
-    [branch] if (GLASS_VIEW(vsmParams).x == 0.0f)
-    {
-        const float NdotL = saturate(-normalize(sunDirAmbient.xyz).y);
-        float weight = firstWeight;
-        float sum = 0.0f;
-        for (uint k = 0u; k < taps; ++k)
-        {
-            sum += weight * ForwardSunShadow(surfacePos + track * ((k + 0.5f) * step), up, NdotL, 0u, ShadowAtlas,
-                                             VsmPageTable, VsmPool, SdsmPartitions, ShadowCompareSampler, LinearClampSampler);
-            weight *= stepShare;
-        }
-        return sum;
-    }
-    // Every entry first.
-    uint entries[kOceanColumnTaps];
-    uint resident = 0u;
-    [unroll] for (uint k = 0u; k < kOceanColumnTaps; ++k)
-    {
-        float3 ndc;
-        uint level;
-        const uint page = OceanColumnPage(surfacePos + track * ((k + 0.5f) * step), ndc, level);
-        entries[k] = k < taps ? OceanColumnEntry(page, level) : 0u;
-        resident |= entries[k];
-    }
-    // No page under any tap and the surface lit: no caster near the track -- most of the open sea stops here.
-    [branch] if (surfaceShadow > 0.999f && (resident & VSM_SAMPLE_RESIDENT_BIT) == 0u)
-    {
-        return surfaceShadow;
-    }
-    // The flat water's receiver-plane slope over a texel, as the full read biases its taps -- one plane for every tap.
-    const float4 planeUV = mul(float4(0.0f, 1.0f, 0.0f, -surfacePos.y), GLASS_VIEW(clipmapUvNormal));
-    const float2 slope = clamp(-planeUV.xy / ((abs(planeUV.z) < 1e-8f) ? 1e-8f : planeUV.z),
-                               -VSM_MAX_DEPTH_SLOPE_UV, VSM_MAX_DEPTH_SLOPE_UV);
-    const float slopeBias = min(2.0f * (abs(slope.x) + abs(slope.y)) / (float)(VSM_CLIPMAP_AXIS * VSM_PAGE_SIZE),
-                                VSM_MAX_SLOPE_BIAS_NDC);
-    const float2 invPool = 1.0f / float2((float)VSM_POOL_PAGES_X, (float)VSM_POOL_PAGES_Y);
-    const float2 texel = invPool / (float)VSM_PAGE_SIZE;
-    // Then every comparison.
-    float weight = firstWeight;
-    float sum = 0.0f;
-    [unroll] for (uint t = 0u; t < kOceanColumnTaps; ++t)
-    {
-        float3 ndc;
-        uint level;
-        const uint page = OceanColumnPage(surfacePos + track * ((t + 0.5f) * step), ndc, level);
-        float lit = 1.0f;
-        if ((entries[t] & VSM_SAMPLE_RESIDENT_BIT) != 0u)
-        {
-            const uint phys = entries[t] & VSM_SAMPLE_PHYS_MASK;
-            const float2 pool = float2((float)(phys % VSM_POOL_PAGES_X), (float)(phys / VSM_POOL_PAGES_X));
-            const float2 uv = float2(0.5f * ndc.x + 0.5f, 0.5f - 0.5f * ndc.y);
-            const float2 inPage = saturate(uv * VSM_CLIPMAP_AXIS - float2(page & 0xFFu, (page >> 8) & 0xFFu));
-            const float2 poolUV = clamp((pool + inPage) * invPool, pool * invPool + 0.5f * texel,
-                                        (pool + 1.0f) * invPool - 0.5f * texel);
-            const float bias = max(GLASS_VIEW(clipmapParams).z * pow(GLASS_VIEW(clipmapParams).w, (float)level),
-                                   GLASS_VIEW(vsmParams).z) + slopeBias;
-            lit = VsmPool.SampleCmpLevelZero(ShadowCompareSampler, poolUV, ndc.z - bias);
-        }
-        sum += t < taps ? weight * lit : 0.0f;
-        weight *= stepShare;
-    }
-    return sum;
-}
-
 float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, float3 foamColor)
 {
     float depthScale = 0.0f;
@@ -1159,13 +1066,12 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     // sides and undersides add light -- light our cube does not yet carry (its undersides are lit
     // by the distant sky only), so a body that followed the sun as the land does went too dark
     // (owner, 2026-09-12: "вода не так реагирует на тень, как плотная геометрия").
-    // A shadow from GEOMETRY shades the column the view ray scatters in where the caster's shadow volume crosses it
-    // (OceanBodyShadow): a hull's is a slanted prism a view ray passes through for a metre or two of a ten-metre column.
-    float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
-    float3 backgroundPositionWS = PositionWsFromDepth(refractionCoords.z, refractionCoords.xy);
-    float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
+    // A shadow from GEOMETRY is the surface point's, sharp, and the body takes `bodyShadowParams.x` of it (ocean.sunShadowBody):
+    // taken whole, a hull's shadow on the open sea was a navy hole -- the shaded water is still lit by the lit water round
+    // it, which this single-scattering body does not carry. Averaged down the column instead (2026-11-07) it came out as a
+    // stack of offset silhouettes (owner, 2026-11-08: "several silhouettes instead of a sharp shadow, looks bad").
     const float bodyShadow = lerp(1.0f, li.mainLight.shadowAttenuation, saturate(cloudShadowParams.z))
-                           * OceanBodyShadow(li.positionWS, li.viewDir, backgroundDistance, li.mainLight.geometryShadow);
+                           * lerp(1.0f, li.mainLight.geometryShadow, saturate(bodyShadowParams.x));
     const float3 skyFill = SkyFillRadiance(li.normal);
     // The sun's share scaled by how much of it gets INTO the water at its height (SunBodyEntry):
     // a low sun lights the sea through its reflection and its sky, not through a glowing body.
@@ -1184,6 +1090,7 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
     
     //return color;
 
+    float3 refractionCoords = RefractionCoords(refractionParams.x, li.positionNDC, li.viewDepth, li.normal);
     // P16.1: this is a copy of SCENE COLOUR, already pre-exposed. The surface multiplies its
     // whole result by the factor at the end, so an already-scaled input has to be brought back
     // first -- otherwise the refracted part gets it twice, which is what left the near water
@@ -1193,6 +1100,8 @@ float3 Refraction(const LightingInput li, const FoamData foamData, float2 sss, f
 
     //return backgroundColor;
 
+    float3 backgroundPositionWS = PositionWsFromDepth(refractionCoords.z, refractionCoords.xy);
+    float backgroundDistance = length(backgroundPositionWS - li.cameraPos) - li.viewDist;
     color = ColorThroughWater(backgroundColor, color, backgroundDistance, -backgroundPositionWS.y);
 
     //return color;
@@ -1297,6 +1206,13 @@ struct PSOut
 [RootSignature(OCEAN_SURFACE_RS)]
 PSOut PSMain(VSOutput input)
 {
+    // The water a marked hull keeps out (WaterMaskCB): not drawn there, the hull's own floor and walls show. The depth was
+    // written already ([earlydepthstencil]: the stamp UAV below must not run for a hidden pixel): what draws after the
+    // ocean and tests depth there meets the water's height, not the floor's.
+    [branch] if (waterMaskCount.x > 0u && InsideWaterMask(input.worldPos))
+    {
+        discard;
+    }
     uint cascadesCount = max((uint)simulationParams.w, 1u);
 
     float3 baseWorld = float3(input.baseXZ.x, 0.0f, input.baseXZ.y);

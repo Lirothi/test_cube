@@ -1192,6 +1192,71 @@ namespace
             }
         }
 
+        ImGui::SeparatorText("Boat spray");
+        // vfx/VesselSpray: lit drops off a planing hull's chines, every boat's; and the white water along its sides.
+        if (ImGui::Checkbox("Boat spray enabled", &render.sprayEnabled))
+        {
+            changed = true;
+        }
+        drag("Spray amount", render.sprayRate, 0.01f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("A share of what the presets can keep alive, at full speed (from 12 m/s; none under 3).");
+        }
+        drag("Spray mist", render.sprayMist, 0.01f, 0.0f, 4.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The mist's share of the amount: soft puffs that hang and drift on the wind.");
+        }
+        drag("Spray outward", render.sprayOut, 0.005f, 0.0f, 2.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("A drop's speed outward, a share of the hull's (the earth's frame).");
+        }
+        drag("Spray upward", render.sprayUp, 0.005f, 0.0f, 2.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("A drop's speed upward, a share of the hull's: how high the sheet flies.");
+        }
+        drag("Spray forward", render.sprayForward, 0.005f, -1.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("A drop's speed along the hull's way, a share of the hull's.");
+        }
+        drag("Spray slam", render.spraySlam, 0.01f, 0.0f, 4.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The burst a slam into a wave throws (1 = the presets' numbers, 0 = none).");
+        }
+        drawColor("Spray colour", render.sprayColor);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The drops' albedo under the sun and the sky's light (white water: a light grey, neutral).");
+        }
+        drag("Spray foam light", render.sprayFoamLight, 0.01f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("1 = the drops are lit as a level sheet of the water's foam, the same white as the trail;\n"
+                              "0 = as spheres: their sides take a low sun, the sea under them takes their sky.");
+        }
+        drag("Spray opacity", render.sprayOpacity, 0.01f, 0.0f, 3.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Times the drops' alpha (each at most 1): higher = less of the water shows through, whiter spray.");
+        }
+        drag("Spray forward scatter", render.sprayForwardScatter, 0.005f, 0.0f, 1.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The sun's share in the forward lobe: spray against the sun glows, the rest of it is diffuse.\n"
+                              "Higher = darker spray with the sun behind the camera, brighter against it.");
+        }
+        drag("Spray side foam", render.spraySideFoam, 0.01f, 0.0f, 4.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The white water a planing hull lays along its sides into the wake's foam, from the spray's root to\n"
+                              "the stern, moving with the hull: about this much foam on the water it passes (1 = white). 0 = none.");
+        }
+
         ImGui::SeparatorText("Shore and surf");
         // surf sim injection: mode-independent (docs/ocean_surf_sim_plan.md).
         if (ImGui::Checkbox("Surf sim enabled", &render.surfSimEnabled))

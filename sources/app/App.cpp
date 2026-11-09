@@ -31,6 +31,7 @@
 #include <timeapi.h> // timeBeginPeriod: the frame cap's sleep granularity (see App::Run)
 #include <wrl/client.h>
 #include "vfx/WindState.h" // --shot-count phase series steps the frozen wind clock (g_windStep)
+#include "vfx/ParticleTypes.h" // --set=particles.airFromFog
 
 // Boot-level override; see App.h. Set by main.cpp from "--level=<path>".
 std::string g_bootLevelPath;
@@ -1517,7 +1518,38 @@ namespace
         // The sun's shadow from geometry on the water (OceanSunShadow): 0 = off (the A/B); its VSM SMRT rays, 0 = one tap.
         if (setting == "ocean.sunShadow") { ocean::g_sunShadow_game = value != 0.0f; return true; }
         if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
-        if (setting == "ocean.sunShadowColumn") { ocean::g_sunShadowColumn_game = std::clamp(static_cast<int>(value), 0, 8); return true; }
+        if (setting == "ocean.sunShadowBody") { ocean::g_sunShadowBody_game = std::clamp(value, 0.0f, 1.0f); return true; }
+        // The water kept out of the marked hulls (ocean/WaterMask.h): 0 = drawn inside them, the A/B.
+        if (setting == "ocean.waterMask") { ocean::g_waterMask_game = value != 0.0f; return true; }
+        // The boats' spray (vfx/VesselSpray): the ocean preset's knobs (OceanRenderConfig::spray*, the Ocean window and the
+        // Inspector's "Boat spray") -- on/off, how much (a share of what the presets can keep alive), the shares of the
+        // hull's speed a drop leaves with, the drops' albedo and forward lobe, the white water along the hulls' sides.
+        // A lit particle's air: the fog's colour as before 2026-11-09 (the A/B), 0 = the sky's distant light.
+        if (setting == "particles.airFromFog") { vfx::g_litAirFromFog_game = value != 0.0f; return true; }
+        if (setting.rfind("spray.", 0) == 0)
+        {
+            OceanRenderable* ocean = scene.FindOceanRenderable();
+            OceanSimulation* sim = ocean ? ocean->GetSimulation() : nullptr;
+            if (!sim) { return true; }
+            OceanRenderConfig cfg = sim->GetRenderConfig();
+            if (setting == "spray.enabled") { cfg.sprayEnabled = value != 0.0f; }
+            else if (setting == "spray.rate") { cfg.sprayRate = std::clamp(value, 0.0f, 1.0f); }
+            else if (setting == "spray.mist") { cfg.sprayMist = std::clamp(value, 0.0f, 4.0f); }
+            else if (setting == "spray.out") { cfg.sprayOut = std::clamp(value, 0.0f, 2.0f); }
+            else if (setting == "spray.up") { cfg.sprayUp = std::clamp(value, 0.0f, 2.0f); }
+            else if (setting == "spray.forward") { cfg.sprayForward = std::clamp(value, -1.0f, 1.0f); }
+            else if (setting == "spray.slam") { cfg.spraySlam = std::clamp(value, 0.0f, 4.0f); }
+            else if (setting == "spray.colorR") { cfg.sprayColor.x = std::clamp(value, 0.0f, 1.0f); }
+            else if (setting == "spray.colorG") { cfg.sprayColor.y = std::clamp(value, 0.0f, 1.0f); }
+            else if (setting == "spray.colorB") { cfg.sprayColor.z = std::clamp(value, 0.0f, 1.0f); }
+            else if (setting == "spray.forwardScatter") { cfg.sprayForwardScatter = std::clamp(value, 0.0f, 1.0f); }
+            else if (setting == "spray.sideFoam") { cfg.spraySideFoam = std::clamp(value, 0.0f, 4.0f); }
+            else if (setting == "spray.opacity") { cfg.sprayOpacity = std::clamp(value, 0.0f, 3.0f); }
+            else if (setting == "spray.foamLight") { cfg.sprayFoamLight = std::clamp(value, 0.0f, 1.0f); }
+            else { return false; }
+            sim->SetRenderConfig(cfg);
+            return true;
+        }
         // The water reflection's normal filter in mips (SceneRenderSettings::waterReflectionNormalFilter); 0 = the shading normal.
         if (setting == "ocean.reflectionNormalFilter") { renderSettings.waterReflectionNormalFilter = std::clamp(value, 0.0f, 4.0f); return true; }
         // The water reflection's prefilter (water_composite_cs): sigma across the columns in render px, 0 = off.
@@ -2340,6 +2372,16 @@ namespace
                         out += boatItem;
                     }
                     out += "]";
+                }
+                // The boats' spray (vfx/VesselSpray): boats with emitters, drops a second thrown now, slam bursts so far.
+                {
+                    const vfx::VesselSpray& spray = scene_.VesselSprayRef();
+                    char sprayItem[256];
+                    std::snprintf(sprayItem, sizeof(sprayItem),
+                                  ",\"spray\":{\"boats\":%zu,\"rate\":%.1f,\"sheetRate\":%.1f,\"bursts\":%d,\"sheetAlive\":%u,\"sheetCapacity\":%u,\"mistAlive\":%u,\"mistCapacity\":%u}",
+                                  spray.Boats(), spray.Rate(), spray.SheetRate(), spray.Bursts(), spray.SheetAlive(), spray.SheetCapacity(),
+                                  spray.MistAlive(), spray.MistCapacity());
+                    out += sprayItem;
                 }
                 // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.
                 char uiItem[96];

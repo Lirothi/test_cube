@@ -1,0 +1,31 @@
+{
+  "_comment": "A planing hull's spray mist: soft lit puffs (textures/particles/spray_mist.png, 2x2) that hang and drift on the wind. vfx/VesselSpray drives position, segment, direction, speeds and rate every frame, and the albedo (the colour keys' rgb) and forwardScatter from the ocean preset's spray knobs (OceanRenderConfig::sprayColor, sprayForwardScatter).",
+  "maxParticles": 256,
+  "spawnRate": 0.0,
+  "lifetime": [1.5, 3.0],
+  "coneAngleDeg": 60.0,
+  "speed": [0.5, 1.0],
+  "gravity": 0.3,
+  "drag": 1.8,
+  "rotation": [0.0, 6.2831853],
+  "spin": [-0.3, 0.3],
+  "size": [0.6, 2.4],
+  "texture": "textures/particles/spray_mist.png",
+  "flipCols": 2,
+  "flipRows": 2,
+  "flipRandomStart": true,
+  "lit": true,
+  "forwardScatter": 0.25,
+  "phaseG": 0.6,
+  "litFlat": 1.0,
+  "additive": false,
+  "sort": false,
+  "softFade": 0.6,
+  "colorKeys": [
+    [0.95, 0.95, 0.95, 0.0],
+    [0.95, 0.95, 0.95, 0.07],
+    [0.95, 0.95, 0.95, 0.04],
+    [0.95, 0.95, 0.95, 0.0]
+  ],
+  "windInfluence": 1.5
+}

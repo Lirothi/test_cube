@@ -19,7 +19,10 @@ cbuffer EmitterParams : register(b1)
     float lifeMin;      float lifeMax;  float speedMin; float speedMax;
     float gravity;      float drag;     float rotMin;   float rotMax;
     float spinMin;      float spinMax;  uint maxParticles; uint frameSeed;
-    float2 windAccelXZ; float2 _padW;   // W8: finished m/s^2 drift (0 = this emitter ignores wind)
+    float2 windAccelXZ; float killBelowY; float _padW; // W8: finished m/s^2 drift; a FALLING particle under killBelowY dies
+    float3 lineVec;     float _padL;    // a segment emitter: born on emitterPos .. emitterPos + lineVec
+    float3 emitterVel;  float _padE;    // the emitter's own motion: a birth u into the frame starts where it was then
+    float3 baseVel;     float _padB;    // added to every birth velocity (the carrier's)
 };
 
 // Both CS share one root signature: b0 = spawn-batch constants (unused by update), b1 = emitter

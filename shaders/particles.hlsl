@@ -35,7 +35,13 @@ cbuffer DrawParams : register(b2)
     // scaling never reaches it and it applies the same factor itself. 1.0 = not pre-exposed.
     uint maxParticles; float softFadeDist; float depthOcclude; float preExposure;
     // P16.7: what the authored colour MEANS, in cd/m2. See ParticleTypes.h.
-    float luminanceCdM2; float3 _dpPad;
+    // lit: the colour is an ALBEDO lit by the frame's light and the air (vfx::EmitterDesc::lit); forwardScatter of the
+    // sun's part goes through Henyey-Greenstein(phaseG), the rest a wrapped Lambert on the sphere the sprite stands for.
+    float luminanceCdM2; float lit; float forwardScatter; float phaseG;
+    // velocityStretch: the quad is size + |v across the view| x this (s) long, along that velocity, no roll.
+    // skyIrradianceScale: lit, the scale of the sky's irradiance cube (t5); 0 = none (the fog's colour).
+    // litFlat: lit, the shading normal from the sprite's sphere (0) to the world's up (1: lit as the water's foam).
+    float velocityStretch; float skyIrradianceScale; float litFlat; float _dpPad;
 };
 
 StructuredBuffer<Particle> gParticles : register(t0);
@@ -43,12 +49,13 @@ Texture2D gSprite : register(t1);
 Texture2D gSceneDepth : register(t2); // E2b: depthCopy (reversed-Z NDC), soft-particle fade
 StructuredBuffer<uint> gSorted : register(t3); // E2c: back-to-front slot order (alpha emitters)
 Texture3D<float4> gFogVolume : register(t4);   // plan A5: the integrated froxel volume (gated by fogVolumeParams.x)
+TextureCube gSkyIrradiance : register(t5);     // lit: the sky's irradiance (E / pi), lighting_cs's (gated by skyIrradianceScale)
 SamplerState gSmp : register(s0);
 
 #define PARTICLES_RS \
     "CBV(b1)," \
     "CBV(b2)," \
-    "DescriptorTable(SRV(t0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 #ifndef PARTICLE_SORTED
@@ -70,6 +77,9 @@ struct VSOut
     float2 uvB : TEXCOORD1;   // frame B sub-uv (frameBlend)
     float2 disc : TEXCOORD2;  // quad-local [-1..1] for the procedural sprite fallback
     float blendF : TEXCOORD3;
+    float3 axisX : TEXCOORD4; // lit: the quad's world axes, for the normal of the sphere the sprite stands for
+    float3 axisY : TEXCOORD5;
+    float3 toEye : TEXCOORD6; // lit: from the particle to the camera, unit
 };
 
 float4 ColorOverLife(float t)
@@ -118,12 +128,34 @@ VSOut VSMain(uint vid : SV_VertexID)
     float2 c = corners[corner];
 
     const float size = lerp(sizeStart, sizeEnd, t) * 0.5;
-    const float cs = cos(p.rot);
-    const float sn = sin(p.rot);
-    const float2 lc = float2(c.x * cs - c.y * sn, c.x * sn + c.y * cs) * size;
+    const float3 toEye = normalize(camPosSky.xyz - p.pos);
+    float3 axisX;
+    float3 axisY;
+    float2 lc;
+    // The velocity seen across the view: a stretched quad lies along it, as long as the particle flies in
+    // velocityStretch seconds plus its size; a particle flying at the eye stays round.
+    const float3 across = p.vel - toEye * dot(p.vel, toEye);
+    const float acrossLen = length(across);
+    if (velocityStretch > 0.0 && acrossLen > 1.0e-3)
+    {
+        axisY = across / acrossLen;
+        axisX = normalize(cross(axisY, toEye));
+        lc = float2(c.x * size, c.y * (size + 0.5 * acrossLen * velocityStretch));
+    }
+    else
+    {
+        const float cs = cos(p.rot);
+        const float sn = sin(p.rot);
+        axisX = rightWS * cs + upWS * sn;
+        axisY = upWS * cs - rightWS * sn;
+        lc = c * size;
+    }
 
-    const float3 wpos = p.pos + rightWS * lc.x + upWS * lc.y;
+    const float3 wpos = p.pos + axisX * lc.x + axisY * lc.y;
     o.H = mul(float4(wpos, 1.0), viewProj);
+    o.axisX = axisX;
+    o.axisY = axisY;
+    o.toEye = toEye;
 
     o.color = ColorOverLife(t);
     o.disc = c;
@@ -194,6 +226,38 @@ float4 PSMain(VSOut i) : SV_Target0
     // the analytic medium beyond its far plane is not applied here (particles live near the camera,
     // and the sky lookup it needs is not bound to this pass).
     float3 fogged = c.rgb * luminanceCdM2;
+    if (lit > 0.5)
+    {
+        // The frame's directional light (the sun or the moon, lux) on a cloud of drops: the water foam's wrapped Lambert
+        // (ocean LitFoamColor: 0.2 + 0.8 N.L) and a forward lobe (Henyey-Greenstein): water drops send the light on, so
+        // spray against the sun glows. The air's light is the sky's fill at the normal, as the foam takes it (x 1 + 0.3
+        // (1 - N.y)) -- the irradiance cube lighting_cs fills an opaque surface from (the sky by day; the moon's sky, the
+        // night sky and Ultra Dynamic Sky's layer by night) --, else the height fog's colour (UE's fog inscatter), else
+        // the level's ambient share of the sun. The normal goes from the sphere the sprite stands for to the world's up
+        // by litFlat: at 1 the spray is lit as a level sheet of foam, the white water it falls into (2026-11-09, owner:
+        // "the trail is white white and the particles react to the light much more" -- as spheres a low warm sun took
+        // their sides and the sea under them took their sky: at 18:00 B/R 0.78 against the trail's 0.87, 23 levels
+        // darker). The fog's colour came first until that day (owner: "the spray is bluish"): it carries the
+        // atmosphere's HeightFogContribution (UDS's 2 by day) and the fog's own floor. The atmosphere's distant sky
+        // light alone was tried: it has no night in it (black spray).
+        const float3 lightTravel = normalize(sunDirAmbient.xyz);
+        const float3 sunE = sunColorExposure.xyz * sunColorExposure.w;
+        const float r2 = saturate(dot(i.disc, i.disc));
+        const float3 sphereN = normalize(i.axisX * i.disc.x + i.axisY * i.disc.y + i.toEye * sqrt(1.0 - r2));
+        const float3 N = normalize(lerp(sphereN, float3(0.0, 1.0, 0.0), saturate(litFlat)) + float3(0.0, 1.0e-4, 0.0));
+        const float wrap = 0.2 + 0.8 * saturate(dot(N, -lightTravel));
+        const float g = phaseG;
+        const float denom = max(1.0 + g * g - 2.0 * g * dot(lightTravel, i.toEye), 1.0e-4);
+        const float hg = (1.0 - g * g) / (4.0 * 3.14159265 * denom * sqrt(denom));
+        // As a sphere the forward lobe takes its share from the diffuse (one drop's phase function); as the foam the diffuse
+        // is the foam's whole and the lobe the light a sheet of drops passes on, which the foam on the water cannot.
+        const float diffuseShare = lerp(1.0 - forwardScatter, 1.0, saturate(litFlat));
+        const float3 sun = sunE * (diffuseShare * wrap * (1.0 / 3.14159265) + forwardScatter * hg);
+        const float3 air = skyIrradianceScale > 0.0
+            ? gSkyIrradiance.SampleLevel(gSmp, N, 0.0).rgb * skyIrradianceScale * (1.0 + 0.3 * (1.0 - N.y))
+            : (fogInscatter.w > 0.5 ? fogInscatter.rgb : sunE * sunDirAmbient.w);
+        fogged = c.rgb * (sun + air);
+    }
     {
         const float viewDepth = max(ViewZFromNdc(i.H.z), 1.0e-4f);
         const float2 fogUv = i.H.xy * screenSizeInv.zw;

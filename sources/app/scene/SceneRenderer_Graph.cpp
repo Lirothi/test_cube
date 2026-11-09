@@ -251,6 +251,11 @@ void SceneRenderer::BuildPrologue(Renderer* renderer, GraphBuild& gb)
         const float f = std::max(frame_->settings.skyAtmosphere.skyLuminanceFactor, 0.0f);
         g_fogDistantSkyLight = skyAtmosphere_.DistantSkyLight(distant)
             ? float4(distant[0] * f, distant[1] * f, distant[2] * f, 1.0f) : float4(0.0f, 0.0f, 0.0f, 0.0f);
+        // The sky's fill for the lit particles: lighting_cs's own cube and scale.
+        const Skybox* sky = frame_->skybox;
+        const bool fill = sky && sky->HasIbl() && frame_->dirLight;
+        g_skyIrradianceSrv = fill ? static_cast<std::uint64_t>(sky->IrradianceSrv().ptr) : 0u;
+        g_skyIrradianceScale = fill ? std::max(sky->GetExposure() * frame_->dirLight->GetSkyFillIntensity(), 0.0f) : 0.0f;
     }
     // UE's DistantHeightFog: the analytic fog at infinity in the sky's capture, so the probes -- the water's sky
     // reflection above all -- see the haze the frame shows (UE: the fog off, the far sea turns from the haze's grey to the

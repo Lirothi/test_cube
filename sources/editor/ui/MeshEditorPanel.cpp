@@ -1113,6 +1113,26 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawVesselSection();
     }
 
+    // The water kept out (ocean/WaterMask.h): the ocean's surface is not drawn inside this mesh's convex hull -- an open
+    // boat's cockpit under the sea's level stays dry.
+    ImGui::Spacing();
+    if (ImGui::CollapsingHeader("Water"))
+    {
+        bool mask = doc_.value("waterMask", false);
+        if (ImGui::Checkbox("Keeps the water out", &mask))
+        {
+            if (mask) { doc_["waterMask"] = true; }
+            else { doc_.erase("waterMask"); } // absent == off
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The ocean's surface is not drawn inside this mesh's convex hull (LOD 0, every slot): the water\n"
+                              "standing in an open boat's cockpit under the sea's level is gone, from outside and from the helm.\n"
+                              "The hull bridges every opening, so the sea round the mesh is never inside it. Applies to\n"
+                              "placed instances on Save.");
+        }
+    }
+
     // Ray tracing: how much of the light a cutout card (an alpha-tested slot: a leaf, a frond) stops for the VISIBILITY
     // rays -- the sky visibility, the GI, the fog (rt_geometry.hlsli RtVisibilityTransmittance). Absent = 1, every card
     // solid: a door or a curtain with an alpha test must block as a wall does. The palms take 0.8.

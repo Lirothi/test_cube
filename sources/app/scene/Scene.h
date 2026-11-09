@@ -31,6 +31,7 @@
 #include "rendering/visibility/OcclusionQueries.h"
 #include "rendering/visibility/HzbOcclusionTester.h" // occlusion plan S3b
 #include "vfx/WindState.h"
+#include "vfx/VesselSpray.h"
 #include "ocean/OceanBuoyancy.h"
 #include "physics/PhysicsWorld.h"
 #include "app/scene/TimeOfDay.h"
@@ -155,6 +156,7 @@ public:
     physics::World& Physics() { return physics_; }
     const physics::World& Physics() const { return physics_; }
     game::VesselCamera& VesselCameraRef() { return vesselCamera_; }
+    const vfx::VesselSpray& VesselSprayRef() const { return vesselSpray_; } // readouts (written at Sync)
     // The Player Start the level loaded with, for a build without the editor; with one, the document is its truth (it moves).
     void SetLevelPlayerStart(std::optional<game::PlayerStart> start) { levelPlayerStart_ = std::move(start); }
     const std::optional<game::PlayerStart>& LevelPlayerStart() const { return levelPlayerStart_; }
@@ -479,6 +481,7 @@ private:
     game::VesselCamera vesselCamera_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
     std::vector<physics::VesselHull> vesselHulls_; // Sync's scratch: the boats as this frame draws them, for their wake
+    vfx::VesselSpray vesselSpray_; // the boats' spray: runtime emitters in objects_, driven at Sync
 
     DirectionalLight dirLight_;
     TimeOfDay timeOfDay_{};    // T2: owns dirLight_ when the level has a `timeOfDay` section

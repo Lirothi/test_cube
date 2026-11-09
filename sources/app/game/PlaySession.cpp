@@ -102,7 +102,7 @@ void PlaySession::LeaveHelm(Scene& scene, bool overTheSide)
     camera.ResetHistory();
 }
 
-void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime)
+void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, float deltaTime, bool pressTaken)
 {
     physics::World& world = scene.Physics();
     const physics::HelmState& helm = world.GetHelm();
@@ -137,7 +137,7 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         camera.ResetHistory();
     }
     const bool scriptLeave = std::exchange(tuning.testInteract, false);
-    if (scriptLeave || (controls && input.WasActionPressed("Interact"))) { LeaveHelm(scene, true); }
+    if (scriptLeave || (controls && !pressTaken && input.WasActionPressed("Interact"))) { LeaveHelm(scene, true); }
 }
 
 void PlaySession::TogglePossess(Scene& scene)
@@ -176,7 +176,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
         TakeHelm(scene, vessel);
         if (atHelm_)
         {
-            TickHelm(input, scene, controls, deltaTime);
+            TickHelm(input, scene, controls, deltaTime, true);
             return;
         }
     }

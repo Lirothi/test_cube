@@ -61,12 +61,14 @@ cbuffer WakeCB : register(b0)
     float CrestCoverage;  // Crest's Wave Foam Coverage (0.55: det J of a Gerstner wave at the Stokes limit, a k = 0.44)
 
     float FoamFadeDense;  // 1/s per unit of foam: dense white water runs down fast, the lace it leaves slowly
-    float Pad1;
-    float Pad2;
+    uint  SplashCount;    // the boats' white water lines along their sides this step (vfx/VesselSpray), two a boat
+    float SplashHalfWidth; // m: the white water lies within it of a line, thickest on it
     float Pad3;
 
     // Per hull, three float4: (posX, posZ, fwdX, fwdZ), (scale, u0, v0, 1/cellU), (1/cellV, along, across, offset).
     float4 Hulls[MAX_HULLS * 3];
+    float4 Splashes[MAX_HULLS * 2];   // (x0, z0, x1, z1) world: along a hull's side, outside its waterline
+    float4 SplashRates[MAX_HULLS / 2]; // foam a second on each line, four a float4
 };
 
 // The four depths the spectrum steps at (m); the last is deep water (tanh = 1). A texel deeper than kDeepFrom takes it alone.
@@ -220,6 +222,19 @@ void Pack(uint3 id : SV_DispatchThreadID)
         const float wayLength = length(way);
         foam.x += wash;
         foam.yz += wayLength > 1e-6f ? wash * (way / wayLength) : float2(0.0f, 0.0f);
+        // The white water along a planing hull's sides (vfx/VesselSpray): lines that move with the hull, laid along them.
+        const float2 p = WorldOf(id.xy);
+        for (uint s = 0u; s < SplashCount; ++s)
+        {
+            const float2 a = Splashes[s].xy;
+            const float2 ab = Splashes[s].zw - a;
+            const float abLength2 = dot(ab, ab);
+            const float t = abLength2 > 1e-6f ? saturate(dot(p - a, ab) / abLength2) : 0.0f;
+            const float near = saturate(1.0f - length(p - (a + ab * t)) / max(SplashHalfWidth, 1e-3f));
+            const float laid = SplashRates[s >> 2u][s & 3u] * DeltaTime * near * near;
+            foam.x += laid;
+            foam.yz += abLength2 > 1e-6f ? laid * (ab * rsqrt(abLength2)) : float2(0.0f, 0.0f);
+        }
     }
     if (edge < 2.0f || any(!isfinite(hv))) // Crest's NaN guard: one bad value would spread over the whole spectrum
     {

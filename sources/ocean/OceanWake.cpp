@@ -31,10 +31,12 @@ struct WakeCB
     float shoreCenterX; float shoreCenterZ; float shoreInvExtent; float shoreZNear;
     float shoreZFar; float breakRate; float foamFade; float foamDiffusion;
     float washStrength; float washThreshold; float crestStrength; float crestCoverage;
-    float foamFadeDense; float pad1; float pad2; float pad3;
+    float foamFadeDense; std::uint32_t splashCount; float splashHalfWidth; float pad3;
     float hulls[16 * 3 * 4];
+    float splashes[32 * 4];  // the white water's lines along the hulls' sides, (x0, z0, x1, z1) world
+    float splashRates[32];   // foam a second on each
 };
-static_assert(sizeof(WakeCB) == 128 + 16 * 3 * 16, "WakeCB mirrors the shader's cbuffer");
+static_assert(sizeof(WakeCB) == 128 + 16 * 3 * 16 + 32 * 16 + 32 * 4, "WakeCB mirrors the shader's cbuffer");
 
 constexpr float kGravity = 9.81f;
 // The absorber: 1/8 of the window, 6/s at the border. A wave crossing it at a few m/s is gone long before it could wrap
@@ -49,6 +51,8 @@ constexpr float kFoamDiffusion = 0.3f;
 constexpr float kWashThreshold = 1.0f;
 // A hull that moved more than this in one step (m/s) jumped (placed, put back, teleported): it leaves no white water.
 constexpr float kWashJumpSpeed = 40.0f;
+// The white water along a hull's side lies within this of its line (m), thickest on it.
+constexpr float kSplashHalfWidth = 0.9f;
 }
 
 void OceanWake::EnsureResources(Renderer* renderer)
@@ -304,6 +308,11 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             continue;
         }
         const buoyancy::HullFootprint& fp = *hull.footprint;
+        for (int side = 0; side < 2 && hull.splashRate > 0.0f; ++side)
+        {
+            r.splashes[r.splashCount] = hull.splash[side];
+            r.splashRates[r.splashCount++] = hull.splashRate;
+        }
         HullGpu& g = r.hulls[r.hullCount++];
         g = HullGpu{ hull.position.x, hull.position.y, hull.forward.x / fl, hull.forward.y / fl,
                      hull.scale, fp.u0, fp.v0, 1.0f / fp.cellU,
@@ -421,6 +430,11 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             cb.crestCoverage = rec.tuning.crestCoverage;
             static_assert(sizeof(HullGpu) == 12 * sizeof(float), "three float4 a hull");
             std::memcpy(cb.hulls, rec.hulls, sizeof(HullGpu) * rec.hullCount);
+            cb.splashCount = rec.splashCount;
+            cb.splashHalfWidth = kSplashHalfWidth;
+            static_assert(sizeof(Math::float4) == 4 * sizeof(float), "a foam line is one float4");
+            std::memcpy(cb.splashes, rec.splashes, sizeof(Math::float4) * rec.splashCount);
+            std::memcpy(cb.splashRates, rec.splashRates, sizeof(float) * rec.splashCount);
 
             const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
             const auto writeCb = [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); };

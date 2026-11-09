@@ -47,6 +47,7 @@
     ],
     "thrust": 22000.0
   },
+  "waterMask": true,
   "windFoliage": [
     0.0,
     0.0,

@@ -8,6 +8,7 @@
 
 #include "app/Systems.h"
 #include "ocean/OceanBuoyancy.h" // SetBuoyant registers the floating objects
+#include "ocean/WaterMask.h" // SetWaterMask registers the hulls the water stays out of
 #include "physics/PhysicsWorld.h" // SetPhysicsMotion registers with the world
 #include "rendering/core/Renderer.h"
 #include "core/Helpers.h"
@@ -82,7 +83,16 @@ void RenderableObject::SetRotationEulerDeg(const Math::float3& eulerDegXYZ)
 RenderableObject::~RenderableObject()
 {
     if (buoyant_) { OceanBuoyancy::Unregister(this); }
+    if (waterMask_) { ocean::watermask::Unregister(this); }
     if (physicsRegistered_) { physics::Unregister(this); }
+}
+
+void RenderableObject::SetWaterMask(bool mask)
+{
+    if (mask == waterMask_) { return; }
+    waterMask_ = mask;
+    if (mask) { ocean::watermask::Register(this); }
+    else { ocean::watermask::Unregister(this); }
 }
 
 void RenderableObject::SetPhysicsMotion(physics::Motion motion)

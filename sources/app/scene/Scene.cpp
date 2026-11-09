@@ -2212,6 +2212,29 @@ void Scene::Sync(Renderer* renderer)
     if (OceanRenderable* ocean = FindOceanRenderable())
     {
         physics_.CollectHulls(vesselHulls_);
+        // Their spray (vfx/VesselSpray): emitters made on a boat's first frame, placed and driven here, before the
+        // objects' SyncSceneState below takes their positions and rates; the white water along the hulls' sides goes to the
+        // wake below.
+        vfx::SprayParams spray;
+        if (const OceanSimulation* sim = ocean->GetSimulation())
+        {
+            const OceanRenderConfig& cfg = sim->GetRenderConfig();
+            spray.enabled = cfg.sprayEnabled;
+            spray.rate = cfg.sprayRate;
+            spray.mist = cfg.sprayMist;
+            spray.out = cfg.sprayOut;
+            spray.up = cfg.sprayUp;
+            spray.forward = cfg.sprayForward;
+            spray.slam = cfg.spraySlam;
+            // Over the water foam's tint: the drops are the same white water (the Inspector's Foam Tint moves both).
+            spray.color = Math::float3(cfg.sprayColor.x * cfg.foamTint.x, cfg.sprayColor.y * cfg.foamTint.y,
+                                       cfg.sprayColor.z * cfg.foamTint.z);
+            spray.foamLight = cfg.sprayFoamLight;
+            spray.forwardScatter = cfg.sprayForwardScatter;
+            spray.sideFoam = cfg.spraySideFoam;
+            spray.opacity = cfg.sprayOpacity;
+        }
+        vesselSpray_.Sync(*this, renderer, vesselHulls_, spray);
         std::vector<ocean::WakeHull> hulls;
         hulls.reserve(vesselHulls_.size());
         for (const physics::VesselHull& vessel : vesselHulls_)
@@ -2223,12 +2246,17 @@ void Scene::Sync(Renderer* renderer)
             // The asset's waterline: VesselSettings::draft is where still water stands on the mesh, over its origin.
             hull.footprint = buoyancy::ResolveFootprint(vessel.object->GetGeometryPath(),
                 Math::float2(vessel.settings->forward.x, vessel.settings->forward.z), vessel.settings->draft);
+            vesselSpray_.SideFoamOf(vessel.object, hull.splash, hull.splashRate);
             if (hull.footprint)
             {
                 hulls.push_back(std::move(hull));
             }
         }
         ocean->SetWakeHulls(std::move(hulls));
+        // The hulls the water stays out of (ocean/WaterMask): every marked mesh at the pose this frame draws it.
+        std::vector<ocean::WaterMaskInstance> masks;
+        if (ocean::g_waterMask_game) { ocean::watermask::Collect(masks); }
+        ocean->SetWaterMasks(std::move(masks));
     }
     if (vesselCamera_.Active())
     {
@@ -3851,6 +3879,7 @@ void Scene::Clear()
     shadowCasterSource_.Clear();
     cameraObjectSource_.Clear();
     renderQueueSourcesValid_ = false;
+    vesselSpray_.Clear(); // its emitters are objects_ below
     objects_.clear();
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
 #if WITH_EDITOR

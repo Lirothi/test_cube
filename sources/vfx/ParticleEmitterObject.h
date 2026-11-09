@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <memory>
 #include <vector>
 #include <wrl/client.h>
@@ -51,6 +52,11 @@ public:
 
     const vfx::EmitterDesc& Desc() const { return desc_; }
     vfx::EmitterDesc& DescRef() { return desc_; } // live tweaks: consumed at the next CB fill
+    // A burst on top of the rate (a hull slamming into a wave, vfx/VesselSpray): spawned with this frame's. At the hand-over
+    // only (the accumulator is the render half's).
+    void AddBurst(float count) { spawnAccum_ = std::min(spawnAccum_ + std::max(count, 0.0f), static_cast<float>(desc_.maxParticles)); }
+    // Particles alive a few frames ago (the dead counter's readback ring, settled), 0 before it has one.
+    uint32_t AliveCount() const;
 
     bool PrepareCompute(RenderGraphPassContext& ctx) override;
     void PrepareRender(RenderGraphPassContext& ctx) override;

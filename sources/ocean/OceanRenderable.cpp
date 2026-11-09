@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <vector>
 
@@ -474,7 +475,7 @@ public:
         UpdateUniform(owner, wakeParams2Handle_, material, owner_.GetWakeParams2(), cbData);
         UpdateUniform(owner, wakeParams3Handle_, material, owner_.GetWakeParams3(), cbData);
         UpdateUniform(owner, bodyShadowParamsHandle_, material,
-                      Math::float4(static_cast<float>(std::clamp(ocean::g_sunShadowColumn, 0, 8)), 0.0f, 0.0f, 0.0f), cbData);
+                      Math::float4(std::clamp(ocean::g_sunShadowBody, 0.0f, 1.0f), 0.0f, 0.0f, 0.0f), cbData);
         UpdateUniform(owner, fogParams0Handle_, material, owner_.GetFogParams0(), cbData);
         UpdateUniform(owner, fogParams1Handle_, material, owner_.GetFogParams1(), cbData);
         UpdateUniform(owner, fogParams2Handle_, material, owner_.GetFogParams2(), cbData);
@@ -1071,6 +1072,54 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
+
+    // b2: the hulls the surface is not drawn inside (ocean/WaterMask.h; shaders/ocean_surface_surf_sim.hlsli WaterMaskCB):
+    // per hull the world-to-model rows (the model's x y z = dot(row.xyz, world) + row.w), the box of its planes in the
+    // model's space with their first index and count in .w, then the planes. Bound every frame, 0 hulls without one.
+    {
+        struct WaterMaskCB
+        {
+            std::uint32_t count[4];
+            float hulls[ocean::kWaterMaskMaxHulls * 5][4];
+            float planes[ocean::kWaterMaskMaxHulls * ocean::kWaterMaskMaxPlanes][4];
+        };
+        static_assert(sizeof(WaterMaskCB) == 16 + ocean::kWaterMaskMaxHulls * 5 * 16 + ocean::kWaterMaskMaxHulls * ocean::kWaterMaskMaxPlanes * 16,
+                      "WaterMaskCB must match the HLSL cbuffer");
+        auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(WaterMaskCB), render::kConstantBufferAlignment);
+        WaterMaskCB& m = *reinterpret_cast<WaterMaskCB*>(cb.cpu);
+        std::memset(&m, 0, sizeof(m.count));
+        std::uint32_t hulls = 0;
+        std::uint32_t planes = 0;
+        for (const ocean::WaterMaskInstance& mask : waterMasks_)
+        {
+            if (hulls >= ocean::kWaterMaskMaxHulls || !mask.hull) { break; }
+            const std::uint32_t count = static_cast<std::uint32_t>(std::min<std::size_t>(mask.hull->planes.size(), ocean::kWaterMaskMaxPlanes));
+            if (planes + count > ocean::kWaterMaskMaxHulls * ocean::kWaterMaskMaxPlanes) { break; }
+            const auto& inv = mask.worldToModel.m;
+            for (int row = 0; row < 3; ++row)
+            {
+                m.hulls[hulls * 5 + row][0] = inv.m[0][row];
+                m.hulls[hulls * 5 + row][1] = inv.m[1][row];
+                m.hulls[hulls * 5 + row][2] = inv.m[2][row];
+                m.hulls[hulls * 5 + row][3] = inv.m[3][row];
+            }
+            float* boxMin = m.hulls[hulls * 5 + 3];
+            float* boxMax = m.hulls[hulls * 5 + 4];
+            boxMin[0] = mask.hull->boxMin.x; boxMin[1] = mask.hull->boxMin.y; boxMin[2] = mask.hull->boxMin.z;
+            boxMax[0] = mask.hull->boxMax.x; boxMax[1] = mask.hull->boxMax.y; boxMax[2] = mask.hull->boxMax.z;
+            std::memcpy(&boxMin[3], &planes, sizeof(float)); // asuint in the shader
+            std::memcpy(&boxMax[3], &count, sizeof(float));
+            for (std::uint32_t i = 0; i < count; ++i)
+            {
+                const Math::float4& p = mask.hull->planes[i];
+                m.planes[planes + i][0] = p.x; m.planes[planes + i][1] = p.y; m.planes[planes + i][2] = p.z; m.planes[planes + i][3] = p.w;
+            }
+            planes += count;
+            ++hulls;
+        }
+        m.count[0] = hulls;
+        ctx.cbv[2] = cb.gpu;
+    }
 
     if (wetness_ && wetness_->IsReady())
     {

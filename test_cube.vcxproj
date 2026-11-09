@@ -375,6 +375,7 @@
     <ClCompile Include="sources/ocean/OceanSimulation.cpp" />
     <ClCompile Include="sources/ocean/OceanSurfSim.cpp" />
     <ClCompile Include="sources/ocean/OceanWake.cpp" />
+    <ClCompile Include="sources/ocean/WaterMask.cpp" />
     <ClCompile Include="sources/ocean/OceanWetness.cpp" />
     <ClCompile Include="sources/ocean/BuoyancyLayout.cpp" />
     <ClCompile Include="sources/ocean/OceanBuoyancy.cpp" />
@@ -388,6 +389,7 @@
     <ClCompile Include="sources/ocean/OceanReadback.cpp" />
     <ClCompile Include="sources/vfx/ParticleEmitterObject.cpp" />
     <ClCompile Include="sources/vfx/ParticlePresets.cpp" />
+    <ClCompile Include="sources/vfx/VesselSpray.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationInputs.cpp" />
     <ClCompile Include="sources/ocean/OceanSimulationSettings.cpp" />
     <ClCompile Include="sources/ocean/OceanSpectrum.cpp" />
@@ -655,6 +657,7 @@
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
     <ClInclude Include="sources/ocean/OceanSurfSim.h" />
     <ClInclude Include="sources/ocean/OceanWake.h" />
+    <ClInclude Include="sources/ocean/WaterMask.h" />
     <ClInclude Include="sources/ocean/OceanWetness.h" />
     <ClInclude Include="sources/ocean/BuoyancyJson.h" />
     <ClInclude Include="sources/ocean/BuoyancyLayout.h" />
@@ -666,6 +669,7 @@
     <ClInclude Include="sources/ocean/OceanReadback.h" />
     <ClInclude Include="sources/vfx/ParticleEmitterObject.h" />
     <ClInclude Include="sources/vfx/ParticlePresets.h" />
+    <ClInclude Include="sources/vfx/VesselSpray.h" />
     <ClInclude Include="sources/vfx/ParticleTypes.h" />
     <ClInclude Include="sources/vfx/WindState.h" />
     <ClInclude Include="sources/ocean/OceanSimulationInputs.h" />

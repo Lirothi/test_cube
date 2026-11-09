@@ -68,6 +68,13 @@ void ApplyEmitterJson(const nlohmann::json& j, EmitterDesc& d)
     d.flipbookFps = j.value("flipFps", d.flipbookFps);
     d.flipbookRandomStart = j.value("flipRandomStart", d.flipbookRandomStart);
     d.frameBlend = j.value("frameBlend", d.frameBlend);
+    d.lit = j.value("lit", d.lit);
+    d.forwardScatter = j.value("forwardScatter", d.forwardScatter);
+    d.phaseG = j.value("phaseG", d.phaseG);
+    d.litFlat = j.value("litFlat", d.litFlat);
+    d.velocityStretch = j.value("velocityStretch", d.velocityStretch);
+    d.lineOffset = ReadF3(j, "lineOffset", d.lineOffset);
+    d.killBelowY = j.value("killBelowY", d.killBelowY);
     if (const auto it = j.find("colorKeys"); it != j.end() && it->is_array())
     {
         for (size_t k = 0; k < 4 && k < it->size(); ++k)

@@ -13,6 +13,7 @@
 #include <Windows.h>
 
 #include "app/camera/Camera.h"
+#include "app/scene/SceneFrameData.h" // g_skyIrradianceSrv / Scale
 #include "core/Helpers.h"
 #include "core/math/Math.h"
 #include "materials/Material.h"
@@ -271,6 +272,13 @@ void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
     }
 }
 
+uint32_t ParticleEmitterObject::AliveCount() const
+{
+    if (!readbackPtr_ || !vfx::g_debugAliveLog || frameCounter_ <= kReadbackSlots) { return 0u; }
+    const uint32_t dead = readbackPtr_[(frameCounter_ + 1u) % kReadbackSlots]; // the oldest slot: retired
+    return dead <= desc_.maxParticles ? desc_.maxParticles - dead : 0u;
+}
+
 void ParticleEmitterObject::Tick(float dt)
 {
     pendingDt_ += dt;
@@ -289,11 +297,24 @@ void ParticleEmitterObject::SyncSceneState(SceneObjectSyncReason reason)
     const float windAccel = std::abs(desc_.windInfluence) *
         std::sqrt(vfx::g_windDriftXZ.x * vfx::g_windDriftXZ.x +
                   vfx::g_windDriftXZ.y * vfx::g_windDriftXZ.y);
-    const float travel = desc_.speedMax * desc_.lifetimeMax +
+    const float baseSpeed = std::sqrt(desc_.baseVelocity.x * desc_.baseVelocity.x + desc_.baseVelocity.y * desc_.baseVelocity.y +
+                                      desc_.baseVelocity.z * desc_.baseVelocity.z);
+    const float travel = (desc_.speedMax + baseSpeed) * desc_.lifetimeMax +
         0.5f * (std::abs(desc_.gravity) + windAccel) * desc_.lifetimeMax * desc_.lifetimeMax;
-    const float r = travel + std::max(desc_.sizeStart, desc_.sizeEnd);
-    worldBounds_ = AABB(Math::float3(pos.x - r, pos.y - r, pos.z - r),
-                        Math::float3(pos.x + r, pos.y + r, pos.z + r));
+    const float stretch = desc_.velocityStretch * (desc_.speedMax + baseSpeed);
+    const float r = travel + std::max(desc_.sizeStart, desc_.sizeEnd) + stretch;
+    // A segment emitter: the box round both ends. The particles of a moving one were born where it stood up to a
+    // lifetime ago -- what its own speed says it has passed is in `travel` only if it is the base velocity, so add it.
+    const Math::float3 end = pos + desc_.lineOffset;
+    const Math::float3 trail = desc_.emitterVelocity * (-desc_.lifetimeMax);
+    const Math::float3 lo(std::min({ pos.x, end.x, pos.x + trail.x, end.x + trail.x }),
+                          std::min({ pos.y, end.y, pos.y + trail.y, end.y + trail.y }),
+                          std::min({ pos.z, end.z, pos.z + trail.z, end.z + trail.z }));
+    const Math::float3 hi(std::max({ pos.x, end.x, pos.x + trail.x, end.x + trail.x }),
+                          std::max({ pos.y, end.y, pos.y + trail.y, end.y + trail.y }),
+                          std::max({ pos.z, end.z, pos.z + trail.z, end.z + trail.z }));
+    worldBounds_ = AABB(Math::float3(lo.x - r, lo.y - r, lo.z - r),
+                        Math::float3(hi.x + r, hi.y + r, hi.z + r));
 
     if (vfx::g_freeze)
     {
@@ -332,6 +353,10 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     // integrates one finished acceleration and knows nothing about wind parameters.
     prm.windAccelXZ[0] = vfx::g_windDriftXZ.x * desc_.windInfluence;
     prm.windAccelXZ[1] = vfx::g_windDriftXZ.y * desc_.windInfluence;
+    prm.killBelowY = desc_.killBelowY;
+    prm.lineVec[0] = desc_.lineOffset.x; prm.lineVec[1] = desc_.lineOffset.y; prm.lineVec[2] = desc_.lineOffset.z;
+    prm.emitterVel[0] = desc_.emitterVelocity.x; prm.emitterVel[1] = desc_.emitterVelocity.y; prm.emitterVel[2] = desc_.emitterVelocity.z;
+    prm.baseVel[0] = desc_.baseVelocity.x; prm.baseVel[1] = desc_.baseVelocity.y; prm.baseVel[2] = desc_.baseVelocity.z;
     prm.frameSeed = HashU32(frameCounter_ * 0x9E3779B9u ^ desc_.seed * 0x85EBCA6Bu);
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(prm), render::kConstantBufferAlignment);
@@ -491,6 +516,17 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     dp.softFadeDist = desc_.softFade;
     dp.preExposure = render::g_preExposure; // P16.1, see ParticleTypes.h
     dp.luminanceCdM2 = desc_.luminanceCdM2; // P16.7
+    dp.lit = desc_.lit ? 1.0f : 0.0f;
+    dp.forwardScatter = std::clamp(desc_.forwardScatter, 0.0f, 1.0f);
+    dp.phaseG = std::clamp(desc_.phaseG, -0.95f, 0.95f);
+    dp.litFlat = std::clamp(desc_.litFlat, 0.0f, 1.0f);
+    dp.velocityStretch = std::max(desc_.velocityStretch, 0.0f);
+    // The air's light on a lit particle: the sky's irradiance cube (t5) and its scale, as lighting_cs fills an opaque
+    // surface; without one (or under the A/B) 0: the shader takes the fog's colour.
+    const bool skyFill = g_skyIrradianceSrv != 0u && !vfx::g_litAirFromFog;
+    dp.skyIrradianceScale = skyFill ? g_skyIrradianceScale : 0.0f;
+    D3D12_CPU_DESCRIPTOR_HANDLE skyIrradiance{};
+    skyIrradiance.ptr = static_cast<SIZE_T>(g_skyIrradianceSrv);
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(dp), render::kConstantBufferAlignment);
     std::memcpy(cb.cpu, &dp, sizeof(dp));
@@ -513,7 +549,10 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
           (sortEnabled_ && sorted_) ? sortedSrv_ : particlesSrv_,
           // t4: the volumetric fog's integrated volume (plan A5), PS-readable every frame by the
           // transparent pass's declaration; the shader gates on fogVolumeParams.x.
-          D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : particlesSrv_ }).gpu;
+          D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : particlesSrv_,
+          // t5: the sky's irradiance cube (Pass_Transparent declares the sky's cubes for every stage); self-aliased and
+          // unread (skyIrradianceScale 0) without one.
+          skyFill ? skyIrradiance : particlesSrv_ }).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     drawMaterial_->Bind(cl, ctx, false);
