@@ -117,6 +117,9 @@ extern bool g_bootMemoryWindow;
 // "--dev-tab=<label>": open Developer Controls on that tab at boot ("gi", "lod", ... case-insensitive), for the
 // same reason; an unknown label logs a warning naming the tabs.
 extern std::string g_bootDevTab;
+// "--mcp-port=<n>": this process serves the editor's MCP on that port instead of editor_state.json's mcpPort (8128) -- a
+// script's editor beside the owner's, which holds 8128. 0 = editor_state's.
+extern int g_bootMcpPort;
 // "--editor": open the Level Editor at boot, for the same reason g_bootLogWindow exists --
 // so a headless --shot can capture a panel that otherwise needs a keypress to appear.
 // WITH_EDITOR only; ignored elsewhere.

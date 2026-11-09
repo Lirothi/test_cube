@@ -15,6 +15,8 @@
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/DirectionalLight.h"
+#include "core/Helpers.h" // ThrowIfFailed
+#include "rendering/core/GpuAlloc.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "core/logging/Log.h"
@@ -924,7 +926,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
     // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
     // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 28> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 29> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -1069,55 +1071,31 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     pushSrv(wakeRead && wake_->GetSrv().ptr != 0 ? wake_->GetSrv() : fallbackSrv);
     // t27: its foam, this frame's of the two (the same frames, the same gate).
     pushSrv(wakeRead && wake_->GetFoamSrv().ptr != 0 ? wake_->GetFoamSrv() : fallbackSrv);
+    // t28: the water masks' columns (read only under WaterMaskCB's hull count); before the first mask the inert dummy BUFFER.
+    pushSrv(waterMaskSrv_.ptr != 0 ? waterMaskSrv_ : renderer->VsmDummyBufferSrv());
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
 
     // b2: the hulls the surface is not drawn inside (ocean/WaterMask.h; shaders/ocean_surface_surf_sim.hlsli WaterMaskCB):
-    // per hull the world-to-model rows (the model's x y z = dot(row.xyz, world) + row.w), the box of its planes in the
-    // model's space with their first index and count in .w, then the planes. Bound every frame, 0 hulls without one.
+    // per hull the world-to-model rows (the model's x y z = dot(row.xyz, world) + row.w), its grid (origin x z, 1 / cell,
+    // its first cell in t28) and its span (the mesh's lowest and highest y, nx, nz). Bound every frame, 0 hulls without one.
     {
         struct WaterMaskCB
         {
             std::uint32_t count[4];
             float hulls[ocean::kWaterMaskMaxHulls * 5][4];
-            float planes[ocean::kWaterMaskMaxHulls * ocean::kWaterMaskMaxPlanes][4];
         };
-        static_assert(sizeof(WaterMaskCB) == 16 + ocean::kWaterMaskMaxHulls * 5 * 16 + ocean::kWaterMaskMaxHulls * ocean::kWaterMaskMaxPlanes * 16,
-                      "WaterMaskCB must match the HLSL cbuffer");
+        static_assert(sizeof(WaterMaskCB) == 16 + ocean::kWaterMaskMaxHulls * 5 * 16, "WaterMaskCB must match the HLSL cbuffer");
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(WaterMaskCB), render::kConstantBufferAlignment);
         WaterMaskCB& m = *reinterpret_cast<WaterMaskCB*>(cb.cpu);
         std::memset(&m, 0, sizeof(m.count));
-        std::uint32_t hulls = 0;
-        std::uint32_t planes = 0;
-        for (const ocean::WaterMaskInstance& mask : waterMasks_)
-        {
-            if (hulls >= ocean::kWaterMaskMaxHulls || !mask.hull) { break; }
-            const std::uint32_t count = static_cast<std::uint32_t>(std::min<std::size_t>(mask.hull->planes.size(), ocean::kWaterMaskMaxPlanes));
-            if (planes + count > ocean::kWaterMaskMaxHulls * ocean::kWaterMaskMaxPlanes) { break; }
-            const auto& inv = mask.worldToModel.m;
-            for (int row = 0; row < 3; ++row)
-            {
-                m.hulls[hulls * 5 + row][0] = inv.m[0][row];
-                m.hulls[hulls * 5 + row][1] = inv.m[1][row];
-                m.hulls[hulls * 5 + row][2] = inv.m[2][row];
-                m.hulls[hulls * 5 + row][3] = inv.m[3][row];
-            }
-            float* boxMin = m.hulls[hulls * 5 + 3];
-            float* boxMax = m.hulls[hulls * 5 + 4];
-            boxMin[0] = mask.hull->boxMin.x; boxMin[1] = mask.hull->boxMin.y; boxMin[2] = mask.hull->boxMin.z;
-            boxMax[0] = mask.hull->boxMax.x; boxMax[1] = mask.hull->boxMax.y; boxMax[2] = mask.hull->boxMax.z;
-            std::memcpy(&boxMin[3], &planes, sizeof(float)); // asuint in the shader
-            std::memcpy(&boxMax[3], &count, sizeof(float));
-            for (std::uint32_t i = 0; i < count; ++i)
-            {
-                const Math::float4& p = mask.hull->planes[i];
-                m.planes[planes + i][0] = p.x; m.planes[planes + i][1] = p.y; m.planes[planes + i][2] = p.z; m.planes[planes + i][3] = p.w;
-            }
-            planes += count;
-            ++hulls;
-        }
+        // This frame's hulls as EnsureWaterMaskColumns packed them (ocean::g_waterMaskFrame, the particles read the same).
+        const ocean::WaterMaskFrame& frame = ocean::g_waterMaskFrame;
+        const std::uint32_t hulls = ocean::g_waterMask != 0 && waterMaskSrv_.ptr != 0 ? frame.hulls : 0u;
+        std::memcpy(m.hulls, frame.rows, sizeof(float) * 4u * 5u * hulls);
         m.count[0] = hulls;
+        m.count[1] = static_cast<std::uint32_t>(ocean::g_waterMask); // 2 = paint instead of discard
         ctx.cbv[2] = cb.gpu;
     }
 
@@ -1291,6 +1269,98 @@ void OceanRenderable::EnsureSimulationResources(Renderer* renderer)
         wetness_->EnsureResources(renderer);
         wetness_->TickWindow(viewerXZ_);
     }
+    // The water masks' columns (made with the first marked hull, never on a level without one) and this frame's hulls.
+    EnsureWaterMaskColumns(renderer);
+}
+
+void OceanRenderable::EnsureWaterMaskColumns(Renderer* renderer)
+{
+    ocean::WaterMaskFrame& frame = ocean::g_waterMaskFrame;
+    frame.hulls = 0;
+    if (waterMasks_.empty())
+    {
+        frame.columnsSrv = waterMaskSrv_.ptr;
+        return;
+    }
+    if (!waterMaskColumns_)
+    {
+        ID3D12Device* device = renderer->GetDevice();
+        // An upload buffer: written by the CPU once per field, read by the surface's pixel shader -- never in a state the
+        // graph tracks (GENERIC_READ for its whole life), as the wake's footprints.
+        D3D12_HEAP_PROPERTIES upload{};
+        upload.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Width = static_cast<UINT64>(ocean::kWaterMaskMaxCells) * sizeof(Math::float4);
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        ThrowIfFailed(gpu::CreateCommittedResource(device, &upload, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::Ocean, L"Ocean.WaterMaskColumns", IID_PPV_ARGS(&waterMaskColumns_)));
+        void* mapped = nullptr;
+        const D3D12_RANGE none{ 0, 0 };
+        ThrowIfFailed(waterMaskColumns_->Map(0, &none, &mapped));
+        waterMaskMapped_ = static_cast<Math::float4*>(mapped);
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.NumDescriptors = 1u;
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ocean, L"Ocean.WaterMaskHeap", IID_PPV_ARGS(&waterMaskHeap_)));
+        waterMaskSrv_ = waterMaskHeap_->GetCPUDescriptorHandleForHeapStart();
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Buffer.NumElements = ocean::kWaterMaskMaxCells;
+        srvDesc.Buffer.StructureByteStride = sizeof(Math::float4);
+        device->CreateShaderResourceView(waterMaskColumns_.Get(), &srvDesc, waterMaskSrv_);
+        LOG_INFO(logging::LogCategory::Ocean, "water mask: {} cells of room for the hulls' columns ({:.1f} MB)",
+                 ocean::kWaterMaskMaxCells, static_cast<double>(desc.Width) / (1024.0 * 1024.0));
+    }
+    for (const ocean::WaterMaskInstance& mask : waterMasks_)
+    {
+        if (!mask.field || waterMaskFirst_.count(mask.field.get()) != 0u) { continue; }
+        const std::uint32_t cells = static_cast<std::uint32_t>(mask.field->columns.size());
+        if (waterMaskUsed_ + cells > ocean::kWaterMaskMaxCells)
+        {
+            LOG_WARNING_ONCE(logging::LogCategory::Ocean, "water mask: no room for more hull shapes -- the rest keep no water out");
+            continue;
+        }
+        std::memcpy(waterMaskMapped_ + waterMaskUsed_, mask.field->columns.data(), cells * sizeof(Math::float4));
+        waterMaskFirst_.emplace(mask.field.get(), waterMaskUsed_);
+        waterMaskKeep_.push_back(mask.field);
+        waterMaskUsed_ += cells;
+    }
+
+    // This frame's hulls, as every reader takes them (ocean::WaterMaskFrame): the surface's WaterMaskCB, the particles.
+    frame.columnsSrv = waterMaskSrv_.ptr;
+    for (const ocean::WaterMaskInstance& mask : waterMasks_)
+    {
+        if (frame.hulls >= ocean::kWaterMaskMaxHulls) { break; }
+        const auto first = mask.field ? waterMaskFirst_.find(mask.field.get()) : waterMaskFirst_.end();
+        if (first == waterMaskFirst_.end()) { continue; }
+        const ocean::WaterMaskField& field = *mask.field;
+        float (*rows)[4] = &frame.rows[frame.hulls * 5];
+        const auto& inv = mask.worldToModel.m;
+        for (int row = 0; row < 3; ++row)
+        {
+            rows[row][0] = inv.m[0][row];
+            rows[row][1] = inv.m[1][row];
+            rows[row][2] = inv.m[2][row];
+            rows[row][3] = inv.m[3][row];
+        }
+        rows[3][0] = field.originX;
+        rows[3][1] = field.originZ;
+        rows[3][2] = 1.0f / field.cell;
+        std::memcpy(&rows[3][3], &first->second, sizeof(float)); // asuint in the shaders
+        rows[4][0] = field.minY;
+        rows[4][1] = field.maxY;
+        std::memcpy(&rows[4][2], &field.nx, sizeof(float));
+        std::memcpy(&rows[4][3], &field.nz, sizeof(float));
+        ++frame.hulls;
+    }
 }
 
 void OceanRenderable::SetWakeHulls(std::vector<ocean::WakeHull> hulls)
@@ -1347,6 +1417,13 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWakePass(Rende
 ID3D12Resource* OceanRenderable::GetWakeFreeHeightResource(std::uint64_t frame) const
 {
     return WakeEnabled() && wake_->IsReady() && GetWakeParams().z > 0.0f ? wake_->GetFreeHeightResource(frame) : nullptr;
+}
+
+ID3D12Resource* OceanRenderable::GetSurfSimWaveResource(std::uint64_t frame) const
+{
+    // The surface reads the sim's height only while it is ready, simulated and its displacement is on (GetSurfSimParams2().w).
+    if (!surfSim_ || !SurfSimActive() || !surfSim_->IsReady() || !surfSim_->HasSimulated()) { return nullptr; }
+    return GetSurfSimParams().z > 0.0f && GetSurfSimParams2().w > 0.0f ? surfSim_->GetWaveResource(frame) : nullptr;
 }
 
 Math::float4 OceanRenderable::GetWakeParams() const

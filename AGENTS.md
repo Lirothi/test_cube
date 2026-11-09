@@ -883,7 +883,10 @@ frame-to-frame flicker and the ghosts' DLSS ringing were found (2026-10-15). `se
 - Each edit is one undo entry and shows in the command bar's transcript under **claude**.
 - Only while the editor is open with a level; calls wait up to 60 s for a frame, then fail.
 - Browser requests are refused (`Origin`/`Host` must be this machine), so a web page cannot
-  drive it. A second editor cannot bind the port and says so in its panel.
+  drive it. A second editor cannot bind the port and says so in its panel -- and a SCRIPT that waits for the port then talks to
+whatever holds it (2026-11-09: a check's reset_settings / set_settings / set_camera went to the owner's open editor;
+withdrawn there, his frames were not served in 60 s). A script's own editor takes `--mcp-port=<n>` (App.h
+g_bootMcpPort; scratchpad `mcp.py` reads MCP_PORT) and checks that port is free BEFORE launching.
 - Toggle and status: command bar settings → "Claude Code (MCP)". `mcpEnabled` / `mcpPort` live in
   `editor_state.json` → `levelEditor.intentModel`.
 - The gate covers the protocol without a socket (`TestMcpDrivesTheSameRoad`); for a live check,
@@ -918,7 +921,10 @@ photographed; `--edit-mesh=<models/x/x.mesh.json>` does the same for the Mesh Ed
 `--edit-mesh=<models/x/x.mesh.json>#buoyancy` opens it with the Buoyancy section expanded.
 `--inspect=<environment type>[#<group>]` (implies `--editor`) selects the level's environment object of that type and
 scrolls the Inspector to the group by its JSON key -- `timeOfDay#fog` (the fog curve), `timeOfDay#lamps`,
-`postProcess#heightFog`; the log says `--inspect: selected '<name>', group <key>`.
+`postProcess#heightFog`; the log says `--inspect: selected '<name>', group <key>`. Not an environment type: the level
+object of that NAME, quoted when it has a space (`--inspect="small_yacht 001#end"`; a script passes the command line as
+one string -- a Python list quotes the switch's name with it), any group scrolling to the Inspector's end, where the
+type's own rows are (Physics, Buoyancy); the log says `--inspect: selected object '<name>'`.
 
 **Registering a panel is not the same as drawing one.** `EditorController::Draw` ends with a
 hardcoded list of `drawPanel("<id>")` calls; a panel missing from it exists, toggles from the
@@ -940,6 +946,16 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
   `readbackCascades`; **`None` = everything floats on a flat surface**, and both shipped presets say
   None) plus the shore depth map, copied to a readback ring and read the first frame the fence says
   it is done -- never waited on. Its `SampleHeight` is the vertex shader's surface term for term.
+- **The surf sim's wave too** (2026-11-09, owner: "the surf sim's wave does not affect the buoyancy"): its height field
+  (`OceanSurfSim`, RG16F 512^2, the shore's breakers) is copied with the cascades on the frames its pass handed it over
+  (`OceanSurfSim::GetWaveResource(frame)`, `OceanRenderable::GetSurfSimWaveResource`) and added where the vertex shader adds
+  it: after the shore damping, at the warped coordinates, x `surfSimDisplacement`, its window's edge faded. A frame whose
+  surf pass did not run (a shore map re-rendered) puts the copy off, at most 4 frames running -- adopted without the
+  surf it dropped the breakers from under a hull for 1/30 s. +1 MB a ring slot (3 x 3.0 MB now), `Pass_OceanReadback`
+  +0.025-0.03 ms a copy (0.12-0.15 with it, 0.105-0.12 without). Measured in Play (scratchpad-style `surf_buoyancy.py`,
+  wind_test's yacht by the shore, 30 s an arm, alternated twice): `--set ocean.surfDisplacement:1` heave sd 0.144 / 0.058 m,
+  pitch 1.98 / 0.81, roll 4.99 / 1.21 degrees; `:0` (the sim runs, the water does not rise by it -- the A/B, transient)
+  0.038 / 0.017 m, 0.45 / 0.27, 1.18 / 0.83 (the boat drifting out to deeper water between the pairs).
 - Cost, measured (Release, ~340 fps, 5 boats / 30 automatic pontoons): GPU `Pass_OceanReadback` 41 us
   per copy, but copies are capped at 30 a second -> ~3 us per frame averaged (every other frame at
   60 fps); CPU `Scene::TickBuoyancy` median 5 us (heights are re-sampled only when a copy lands). The
@@ -951,7 +967,7 @@ split into bins, one pontoon per bin with radius sqrt(area/pi)). Mesh Editor > B
 
 UE's Play In Editor (2026-11-05, owner: "the physics should not simulate just in the editor"; `docs/play_mode_plan.md`, `sources/app/game`). In a build with the editor (Debug, Release_Editor) the world STANDS, panels open or closed, and nothing but a session changes that: `physics::Settings::simulate` is no knob any more, AppController says it every frame (`physics.simulate` answers `unknown setting`). A build without the editor (Release) always runs, and its camera is free until `--play` or F8: every shot and measurement of a Release build stands on that.
 
-- **No copy of the world.** All a session changes is render offsets (below, "The pose is a render offset") and the camera, which `PlaySession` puts back, so Stop leaves the document and the level as they were. `K` (UE's Keep Simulation Changes, `keepSimulation`) is the one thing that writes: the selection's bodies if any of them moved, else every body that did, one undo entry.
+- **No copy of the world.** All a session changes is render offsets (below, "The pose is a render offset") and the camera, which `PlaySession` puts back, so Stop leaves the document and the level as they were. Checked 2026-11-09 (owner: "put the yacht back where it was before it sailed off"; scratchpad-style `yacht_stop.py`): wind_test's yacht after 72 m at the helm, and after drifting without it, is at its authored (52.657, 0, 115.447) after Stop, a frame of it the same as before Play (`physics::World::SetSimulating(false)`: every Dynamic and kinematic body to `entry.rest`, its offset cleared). What a person sees jump is the HEIGHT: a vessel stands in the editor where it is placed, and wind_test's yacht is placed at y 0 where it floats ~0.38 lower (its draft): it hangs over the water before Play and after Stop, and drops into it in Play. The owner's yacht that "did not come back" had been KEPT: the HUD said "K keep" beside the helm's keys and read as an anchor for the session; Keep wrote its pose into the level, so Stop put it there. The HUD says "K write the poses to the level" now, Keep's status "Wrote the pose of N objects into the level (unsaved; Ctrl+Z after Stop undoes it)", the Play button's tooltip "Not an anchor". `K` (UE's Keep Simulation Changes, `keepSimulation`) is the one thing that writes: the selection's bodies if any of them moved, else every body that did, one undo entry.
 - **Keys** (`input/bindings.json`): Alt+P or Level Editor > Play (from the level's Player Start, from the camera without one), Play From Camera; in Play WASD and the mouse, Shift, C or Ctrl (held), Space; Esc or F2 stops (F2 and Developer Controls' checkbox open the editor, and opening it stops the session); F8 ejects and possesses (the body stands and lives, the camera flies, UE's Possess / Eject; `GenerateFont` moved to Ctrl+F8); Shift+F1 or losing the focus frees the mouse, a click takes it back. Release: F8 starts, Esc frees the mouse. The HUD's line under `Time:` says the mode and the keys.
 - **Player Start**: level object `{"type": "playerStart", "position": [the FEET], "rotationDeg": [pitch, yaw, 0], ...}`, a document object with no renderable as `freeCameraStart` and the zones are. Create > Player Start or MCP `placePlayerStart {at, yawDeg}` (a second call moves the one there is); always on screen as a capsule of the player's size, an arrow from the eye and its icon (`art/editor/viewport_icons/player_start.svg`, `tools/build_editor_icons.py`). The numbers of `physics::PlayerSettings` are optional keys of this object, edited in the Inspector, in one table (`game::PlayerKeys`) with `--set player.<key>` and Developer Controls > Physics: walkSpeed 4, sprintSpeed 6.4, crouchSpeed 2, swimSpeed 2, acceleration 20.48, braking 20.48, friction 8, airControl 0.35, jumpSpeed 4.2, height 1.8, crouchHeight 1.1, radius 0.3, eyeHeight 1.65, crouchEyeHeight 0.95, stepHeight 0.4, maxSlopeDeg 50, swimDepth 1.3. A session starts from the values as they stand plus the level's keys, and gives them back at its end.
 - **The controller**: `PlayerController` (the keys and the mouse) over `physics::PlayerBody` (`PhysicsCharacter.cpp`: Jolt's `CharacterVirtual` and UE's `CalcVelocity` / `ApplyVelocityBraking`, CharacterMovementComponent.cpp:3863, :4377, in metres, on the frame's clock). Run-up, stop and turn are UE's; a jump press counts 0.1 s before landing and 0.1 s after an edge, once; in the air a share of the acceleration and no braking; a crouch cannot stand up under a ceiling (`SetShape` refuses, it asks every frame); a step up eases in for the eye only; on a moving floor it rides and takes off at the floor's speed; deeper than swimDepth it floats with the eye over the swell (`OceanReadback`, the height under the feet), and there is no diving: under water has no render of its own. Jolt leaves the velocity it is given alone (UE: "make velocity reflect actual move"), so what a wall stopped is taken out by hand -- only what was really stopped: a walkable slope also moves less along the ground than asked, and taking that out would crawl, worse the higher the frame rate. Under `physics.killY` it comes back at the start. Not there: a body others hit (no `mInnerBodyShape`: it pushes, a falling coconut passes through), pause, arms in the frame, head bob, footsteps.
@@ -962,7 +978,7 @@ UE's Play In Editor (2026-11-05, owner: "the physics should not simulate just in
 
 ## Boats -- a Hull on the Waves, a Helm in Play
 
-A mesh.json `"vessel"` block makes the asset a powered boat (2026-11-05, owner: "import small_yacht, check the render, make a control model on our water", then "a really cool one that takes the waves into account"; `physics/PhysicsVessel.cpp`, `physics::VesselSettings`, one key table `VesselKeys()` in `CollisionJson.h` for the file, Mesh Editor > Vessel and `--set vessel.<key>`, transient, on every boat in the world). A copy is Dynamic and buoyant unless the object says otherwise; the Inspector's body row says "a vessel" instead of lying "Static". In Play, within 3 m of its hull (the rectangle, `World::FindVessel`, no wait for a step), **E** takes the helm: W S throttle, A D rudder, the mouse orbits, **V** the helmsman's eyes, E leaves over the side. A boat with nobody at the helm floats with its engine off. A key's press is READ, not consumed (`WasActionPressed`): the frame whose E takes the helm must not read it again as leave -- until 2026-11-09 it did (`TickHelm` right after `TakeHelm`), so the real key took the helm and dropped the player over the side in one frame (owner: "E throws me into the water beside it"); the scripts' `player.testInteract` is cleared at the take and never showed it. Scratchpad-style `helm_keys.py` presses the real E (window messages, a desktop of its own): take, leave, take, three frames apart in the log.
+A mesh.json `"vessel"` block makes the asset a powered boat (2026-11-05, owner: "import small_yacht, check the render, make a control model on our water", then "a really cool one that takes the waves into account"; `physics/PhysicsVessel.cpp`, `physics::VesselSettings`, one key table `VesselKeys()` in `CollisionJson.h` for the file, Mesh Editor > Vessel and `--set vessel.<key>`, transient, on every boat in the world). A copy is Dynamic and buoyant unless the object says otherwise -- the document writes "physics" / "buoyant" only where they differ from THAT default (`SetPhysicsCommand::VesselAsset`, `DocumentMotion`, `SetBuoyantCommand::DocumentBuoyant`). The Inspector shows the Body row on a boat too (2026-11-09, owner: "I don't see the body field"; it was hidden for vessels): Dynamic = a boat, still in the editor, floating by its hull in Play; Static + Floats = no helm, rocks on the waves in the editor too (OceanBuoyancy's kinematic floater: the selection's outline 1.6-1.8x its pixels moved in 1.2 s, as Dynamic 0.05, the DLSS floor); None = a mesh. A Dynamic floater's buoyancy line says the physics world floats it, not pontoons (it said "no pontoons could be placed"). In Play, within 3 m of its hull (the rectangle, `World::FindVessel`, no wait for a step), **E** takes the helm: W S throttle, A D rudder, the mouse orbits, **V** the helmsman's eyes, E leaves over the side. A boat with nobody at the helm floats with its engine off. A key's press is READ, not consumed (`WasActionPressed`): the frame whose E takes the helm must not read it again as leave -- until 2026-11-09 it did (`TickHelm` right after `TakeHelm`), so the real key took the helm and dropped the player over the side in one frame (owner: "E throws me into the water beside it"); the scripts' `player.testInteract` is cleared at the take and never showed it. Scratchpad-style `helm_keys.py` presses the real E (window messages, a desktop of its own): take, leave, take, three frames apart in the log.
 
 - **The water under it** (`MeasureVesselWater`, game side, where the steps are counted): nine heights over the hull and one over the propeller. The least-squares plane is what Jolt's exact volume cuts the hull with, so a wave shorter than the hull lifts it no more than a real one does; three stations along it say what one plane cannot. The rates are followed (tau 0.08 s), not differenced: heights land from readbacks at 30 Hz. `ocean.windForce` moves it live: 0.6 (wind_test) is a 1 m sea, 2 is 5-6 m.
 - **The step** (`PushVessel`, on the step's thread between Jolt's updates, the first of a batch where it is kicked): Buoyancy: `MakeVesselShape` moves the centre of mass over the centre of buoyancy at `draft` and down to `centerOfMassY`, so it lies level by construction, and the factor is total / under-draft volume; capped at `reserveLift` (2 x the weight), because the collision hull is a convex lump with the cabin in it (29.6 m3 against 3.25 under still water) and a bow driven into a crest took 9 x its weight and flew 2 m. Thrust at the propeller, by the water standing over the PROPELLER (`bite`): a crest's back lifts it clear, and the boat loses its push and its rudder together. The rudder: a force across the stern by the water past it (own speed + `wash`), at the centre of mass's height: a boat lying still answers no rudder, one on its wash does, astern it turns the other way. The hull: quadratic along, a hump (`humpSpeed`, `humpDrag`, `humpTrim`) and onto the plane (`planeSpeed`, `planingLift`, `planeTrim`): a fifth of the throttle stays under the hump at 3.4 m/s, the bow is 3 degrees up at it and 1.5 on the plane (the gate's box; the small_yacht 2.8 held under the hump at 0.35 throttle, 1.9 on the plane), the hull rises 9 cm. The trim (`humpTrim`, `planeTrim`) is the water's push on the fore part of the bottom, so it takes the bow station's immersion (0 = the bow's keel out of the water, 1 = at the draft): a bow in the air has nothing under it to lift it further. Sideways the force acts `swayLever` aft of the centre: the keel's, without it the sea slewed a full-ahead boat 69 degrees in 30 s (now 9). `rollStiffness` + `bank`, `maxBank`: the form stability a convex lump does not have, and a target lean into a turn; without them the real hull went to 80 degrees in a hard turn (the gate's box did not, it is stiffer: test on the asset). `waveForce`: Froude-Krylov, each station's share of the weight down its slope: a swell surfs it, a slope that differs at the bow and the stern yaws it. `slam`: a station falling into the water faster than it rises takes the water's mass at once (`state.impact`, up to `slamMax` of the weight).
@@ -972,6 +988,17 @@ A mesh.json `"vessel"` block makes the asset a powered boat (2026-11-05, owner: 
 - **A hull at speed flies through the GI probes, and it must leave their rays** (`giProbeSpeed`, 2 m/s, with a margin back at 0.7 of it; `rt::kInstanceMaskGiProbe`, `RenderableObject::SetLeavesGiProbes`). Probes stand in the world: at 16 m/s each is inside the hull, out of it and behind it from one update to the next, and the cockpit's bounce jumped 25-37 % a FRAME (the probe's window mean at the dash: largest step 0.386 -> 0.024, mean second difference 0.0189 -> 0.0021, `gi.enabled:0` 0.0017). Below that speed the hull lights itself as anything else does.
 - **The cockpit's shadows**: at the old 8 m base (3.9 mm a texel, a level's page grid sliding with the camera) every edge there showed stairs that crawled as the hull rocked (owner: "the shadow flickers inside"). At the helm under way, the second difference of the probe's mean, 8 m -> UE's levels (below): the panel 0.0049 -> 0.0002, the wide window 0.0017 -> 0.0008; the left of the dash wanders with the sea (0.0030 -> 0.0015).
 - **MEASURING A FLICKER HERE**: `screenshot {burst}` stalls every frame on its PNG and the hull moves on between them, so a burst reads as a 16 % per-frame flicker that is not there. The pixel probe's history (`debug.probeU/V/Radius` + `get_readouts {history}`, one row a frame, no stall) is the measure, the camera at the helm, whose hull holds still in the frame: scratchpad-style `boat_flicker4.py`. `player.testThrottle / testRudder / testInteract / testView / testOrbit` (radians about the boat) `/ testOrbitPitch` (radians further down, the chase camera's steepest is 74 degrees) say what the keys would, `get_readouts` block `helm`. `--set vessel.cameraDistance:9;vessel.cameraHeight:0.8` for a look at the waterline.
+- **The anchor** (2026-11-09, owner: "make an anchor"; he had taken K, Keep, for one). At the helm **X** drops it straight
+  down from the bow (the stem of the hull's box at the draft, `Entry::bowLocal`), X again weighs it; it holds with nobody at
+  the helm, and Stop weighs it with the session -- the world's, never the level's (`World::ToggleAnchor`, after a Join;
+  `PullAnchor` in PhysicsVessel.cpp, after PushVessel in the step). The rode is slack within `anchorScope` (8 m) of the
+  anchor, past it a spring on the bow along the water (`anchorStiffness` 8000 N/m, `anchorDamping` 6000 N s/m; only pulls):
+  the boat swings bow to it, and a pull stretches it pull / stiffness further. mesh.json vessel keys like the rest (Mesh
+  Editor > Vessel, `--set vessel.anchor*`); `player.testAnchor` = the key for a script; `get_readouts` helm / vessels
+  `anchored`; the HUD says ANCHORED and "X anchor" / "X weigh anchor". Gate `vessel`'s arm: half astern for 60 s, the bow
+  held at 8.54 m (scope + pull / stiffness = 8.55, farthest 9.82 at the first jerk), weighed it goes 343 m. Live (wind_test,
+  scratchpad-style `anchor_live.py`): out past the surf, anchor, over the side -- 4.7 m in 40 s (farthest 7.0), without it
+  53.6 m; after Stop the anchor is up and the yacht at its authored place.
 - **A body put back by Stop did move** (`RenderableObject::SyncSceneState`, `putBack`): `RequestMotionHistoryReset` means no motion vector, and it used to clear `MovedThisFrame` too, so a boat back from 700 m read as "settled" where it had not been culled: `S14 cascade 0: LEAK`, a Fatal and an assert in Debug at Stop. Only a far trip shows it, and only Debug: run a change here through a Debug Play too (Jolt's asserts live there as well).
 - **Gates**: `vessel` (through the functions the world calls, on a box of the yacht's size: still water, the helm, a swell, the beam, a sea at an angle, a head sea; its arms: no rudder keeps the course, a dry propeller pushes nothing, no water pushes nothing, the weight up top capsizes it, a boat that cannot see the waves does not ride them, no slam slams nothing), `world` (the helm's road: near, past, taken, tuned, a boat gone with its helm held).
 - Not there: walking on the deck, an engine's sound. The bow rail's kink seen from the helm is the asset's own: the same at LOD0, `tessy.lod:0`, without DLSS.
@@ -1079,9 +1106,26 @@ objects' SyncSceneState; `Scene::Clear` forgets them with the level.
   (`ObjectCompute,Transparent,Transparent.Water,OceanWake,Skybox` + the Skybox self-test, the Debug editor on a desktop of
   its own, Play, the helm, 40 s at 14-17 m/s, the spray alive; scratchpad-style `gbv_spray2.py`, which presses the
   script's E until the helm is taken -- a press lands in a frame whether the body is there or not): only id=935.
-- Engine pieces any emitter may use (ParticleTypes.h; the JSON keys alike): `lineOffset`, `killBelowY`, `lit` / `forwardScatter`
-  / `phaseG`, `velocityStretch`; runtime only `emitterVelocity` / `baseVelocity` and `ParticleEmitterObject::AddBurst`. The old
-  presets draw the same quad (the roll's two axes, the same arithmetic); every spawn is now spread over its frame.
+- **Drops do not cross the hull in a turn** (2026-11-09, owner: "think what to do with the particles that fly through the boat
+  in turns"). Born in the earth's frame with the hull's way alone, the drops a turn's inside threw were overrun by the bow
+  swinging in and the hull slipping sideways, and the stern skidding out met the drops streaming aft: in a hard turn at
+  12-13 m/s 45 % of the thrown drops entered the hull (straight: 4-9 %). Two things, measured by a counter of their own
+  (`get_readouts` spray `hullEntries`, a running count of drops that entered a hull, each once; scratchpad-style
+  `spray_straight.py`, a steady circle, alternated twice): (1) **the side's push** -- the root moves with the hull, v + w x r
+  (`VesselHull::velocity` / `angularVelocity`, from the step's two poses in `ShowVessels`), and the side moving INTO the water
+  gives its drops that speed outward (`emitterVelocity` = the root's true velocity too): 45 % -> 6-8.5 %; (2) **collision** --
+  `EmitterDesc::collideHulls` (JSON `collideHulls`; VesselSpray sets it), a particle inside a "waterMask" hull's SOLID
+  columns (below, the hull's skin, deck, a cockpit's floor and seats -- not the cockpit's air) dies (`particle_update_cs.hlsl`,
+  `shaders/water_mask_columns.hlsli`, the frame's hulls from `ocean::g_waterMaskFrame` in the emitter CB, the columns at t0
+  of the particle CS's new SRV table), not in its first 0.08 s: the root lies on the skin (the waterline raster, up to a cell
+  inside it), and tested at once a fifth of a straight run's drops died where they were born. `--set spray.sidePush:0` /
+  `particles.collideHulls:0` = before (transient; the entries are counted either way). GBV (`ObjectCompute,Transparent,
+  Transparent.Water,Skybox` + the Skybox self-test, the Debug editor on a desktop of its own, the helm, 40 s, the second half
+  hard over, the drops entering): only id=935.
+- Engine pieces any emitter may use (ParticleTypes.h; the JSON keys alike): `lineOffset`, `killBelowY`, `collideHulls`, `lit` /
+  `forwardScatter` / `phaseG`, `velocityStretch`; runtime only `emitterVelocity` / `baseVelocity` and
+  `ParticleEmitterObject::AddBurst`. The old presets draw the same quad (the roll's two axes, the same arithmetic); every spawn
+  is now spread over its frame.
 - Not there: shadows on the spray (the hull's included), the whisker spray ahead of the root, a turn's outer chine throwing more
   than the inner, spray off a hull at rest in a steep sea other than its slams, drops on the camera.
 
@@ -1089,24 +1133,43 @@ objects' SyncSceneState; `Scene::Clear` forgets them with the level.
 
 2026-11-09 (owner, on a frame where the cockpit stood in the sea: "the water floods the inside of the boat; make a mask for
 marked meshes so the water is not drawn inside them"). A mesh asset with `"waterMask": true` (Mesh Editor > Water "Keeps the
-water out"; `RenderableObject::SetWaterMask`, read by the factory like every folded asset key) has the CONVEX HULL of its LOD 0
-as a volume the ocean's surface is not drawn inside. small_yacht carries it.
+water out"; `RenderableObject::SetWaterMask`, read by the factory like every folded asset key) keeps the ocean's surface out of
+a volume made from its LOD 0: COLUMNS, the mesh rasterized from above. small_yacht carries it.
 
+- **Not its convex hull** (the first cut, the same day; owner on its frame: "your method artefacts, better a mask by
+  rasterization"). A convex hull bridges every concavity: behind the transom it closed a wedge from the swim platform up to
+  the deck, and the sea over the platform ended in a straight edge. Rasterizing that hull into the frame would have drawn the
+  same wedge -- the volume was wrong, not the test; and a screen-space interval (the nearest front face to the farthest back
+  face) masks the water between the platform and the transom seen from the side, so the test stays the water's own point.
+- **The columns** (`ocean/WaterMask.cpp BuildField`, `physics::ReadSolidTriangles`): a grid over the model's xz,
+  `kWaterMaskCellsAlong` (256) cells along its long side (small_yacht: 4 cm, 284 x 88 with the padding, 263 k triangles,
+  built once a geometry when first collected, ~tens of ms, kept for the process). Per cell its rim (the highest surface,
+  each triangle clipped to the cell exactly, so a wall with no top face counts) and, at four points, the lowest and highest
+  surface over each. The rim's openings narrower than `kWaterMaskGap` (1 m) are closed (a grey-scale closing, never below
+  the rim), then a priority flood from outside fills every depression to the height water poured on the boat would stand
+  at before it spilled over its lowest edge. A cell keeps water out from the highest of its four lowest surfaces (a cell the
+  mesh does not cover whole keeps nothing out, so the mask stops inside the skin) up to: in a depression, its level -- the
+  cockpit's air to its gunwale; elsewhere the column all four points share, lifted to a filled neighbour's level (a cell on
+  a cockpit wall half over its floor leaves no band of water along the wall). Without the closing the cockpit drained
+  through its walkthrough to the platform and the water stood in its aft half; taking the cell's whole rim as the top
+  (instead of the column its points share) cut slivers of sea along the waterline beside a spray rail. small_yacht: 11 488
+  cells keep water out, 8 082 of them in filled depressions. A cell is float4 (bottom, the water's top, the SOLID's top, 0):
+  the solid's is the water's but in a filled depression, where it is the cell's own highest surface -- what a particle with
+  `collideHulls` dies in (the boats' spray, below in "A Boat's Spray"), not the cockpit's air.
+- **One packing for every reader**: `OceanRenderable::EnsureWaterMaskColumns`, every frame before the render graph, packs the
+  frame's hulls (5 rows each) and the columns' SRV into `ocean::g_waterMaskFrame`; the surface's b2 copies it (gated by
+  `ocean.waterMask`), the particles' emitter CB too (whatever that switch says: Scene::Sync collects the masks always).
 - **The test is the water's own point**: the surf-sim surface's pixel shader (`ocean_surface_surf_sim.hlsli InsideWaterMask`,
-  at the top of PSMain) takes its world position into each hull's model space and discards it when it is inside every
-  plane -- a box first. For a convex volume that is the camera ray's front/back test without a pass of its own, and it
-  holds wherever the camera is: from above, beside, at the helm inside the hull. The hull bridges every opening (the cockpit
-  gets a lid at the gunwales), so the water standing in the cockpit is inside and the sea round the hull, a convex shape's
-  outside, never is; the water over a submerged swim platform behind the transom is outside and stays, as it should.
-- **The hull**: `physics::ConvexHullPlanes` (Jolt's ConvexHullShape over every LOD 0 vertex, its planes and box moved from the
-  centre of mass to the model's space), the tolerance grown from 5 mm by 1.5x until it fits `kWaterMaskMaxPlanes` (128):
-  small_yacht 98 planes at 57 mm from 163 457 points (a point may lie that far OUTSIDE the plane set, so the volume is a
-  little smaller than the mesh -- never larger), built once a geometry when first collected and kept for the process.
+  at the top of PSMain) takes its world position into each hull's model space, its cell (nearest) and discards it inside
+  that cell's (bottom, top). No view ray, so the same volume holds from above, beside and at the helm inside the hull.
 - **The frame**: `ocean/WaterMask` keeps a registry (no scene walk; the destructor unregisters); `Scene::Sync`, after the
   physics poses, collects every visible marked object with the inverse of the matrix the frame draws it at (its render
-  offset: the waves, the physics) and hands them to the ocean (`OceanRenderable::SetWaterMasks`); the draw fills a root
-  CBV at b2 (`WaterMaskCB`: 4 hulls, 512 planes, 8.5 KB from the upload ring, every frame, 0 hulls without one). The
-  run-up surface does not read it (as it reads no wake). `--set ocean.waterMask:0` = drawn inside, the A/B (transient).
+  offset: the waves, the physics) and hands them to the ocean (`OceanRenderable::SetWaterMasks`). The columns live in an
+  upload buffer (`Ocean.WaterMaskColumns`, `kWaterMaskMaxCells` (2^17) float4 = 2 MB, made with the first mask in
+  `EnsureSimulationResources`), each geometry written once into room no draw has read yet, read at t28 (the surface's table
+  is 29 now); the draw fills b2 (`WaterMaskCB`: 4 hulls of 5 rows -- the transform, the grid, the span), 0 hulls without
+  one. The run-up surface does not read it (as it reads no wake). `--set ocean.waterMask:0` = drawn inside, the A/B;
+  `:2` = the kept-out water painted magenta instead of discarded, to see the volume (transient).
 - **What it does not do**: the depth. The surface is `[earlydepthstencil]` (the wetness stamp UAV must not run for a hidden
   pixel), so a discarded pixel still wrote the water's depth: what draws after the ocean and tests or reads depth there
   meets the water's height, not the floor's -- `fog_apply` fogs those pixels over the camera-to-water distance once more
@@ -1121,6 +1184,12 @@ as a volume the ocean's surface is not drawn inside. small_yacht carries it.
   live): only id=935, twice; once the FIRST frame also reported id=1358 (`Ocean.ShoreDepth` in COPY_SOURCE in the ocean's
   VS) and id=1387 (a particle draw in `Translucent.Simple` whose t0 held `SkyAtmosphere.Transmittance`) -- before any edit,
   not in the two runs after it; see the GBV section's first-frame reports.
+- **Measured, the columns** (the owner's stern view at 18:08, cam 60.51 2.59 113.58, his level's yacht sitting deep in the
+  editor, the wind frozen; scratchpad-style `stern_mask_repro.py`, arms 1 / 0 / 2): the cockpit dry to its walls, the sea
+  over the awash platform behind the transom drawn with no straight edge, nothing outside the hull kept out (with `:2` no
+  magenta on the sea; a few single pixels at the waterline). `Ocean.Surface` in Play 0.055-0.061 vs 0.057-0.061 ms off,
+  0.108-0.111 vs 0.108 from low beside the hull (alternated twice). GBV (`Transparent,Transparent.Water,OceanReadback,
+  SurfSim,Skybox` + the Skybox self-test, the Debug editor on a desktop of its own, the stern view, then Play 30 s): only id=935.
 ## VSM Is UE's High -- the Clipmap, the Pool, the Marks
 
 2026-11-06, owner: "let's match UE's VSM, as they have it on High: as many pages, the same physical layout, the selection heuristic". UE 5.8.2 at `sg.ShadowQuality` 2, read off the owner's running editor and the source; the table with UE's files and lines: `docs/vsm_ue_high_plan.md`.
@@ -1413,6 +1482,13 @@ none inside 1 m (the candles at ~2 m); every model: median 1.2 -> 6.4 m. Cost on
 grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / -0.007 / +0.015 ms, noise. A
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
 each LOD comes in; `LOD_K` = pixels per unit / PixelError).
+**A mesh takes a share of the pixel error**: mesh.json `"lodPixelErrorScale"` (Mesh Editor > LOD "Pixel error scale";
+absent = 1; runtime, no rebake) multiplies the frame's pixel error for this asset -- the discrete LODs' (Mesh::
+GetLodScreenSizes) and the cluster DAG's (ShadowGpuData divides the uploaded cluster and level errors by it, so the
+camera's cut, the VSM pages' and the atlases' agree; a root's FLT_MAX stays). Set on the shared Mesh by every copy
+(RenderableObject::SetLodPixelErrorScale). Under 1 an asset keeps its detail nearer the eye. small_yacht at 2 px (the
+owner's tessy.lodPixelError) from 3.5 m: 0.25 took the camera's triangles 13.7 -> 23.4 k and the hatch's facets away.
+But first look at how the asset was BAKED (below, the DAG's normal weight): the facets were its simplification's.
 
 ## Tessy -- Cluster Geometry (the VSM Pages, the Lamps' Atlases, the Camera; Plan N0-N7)
 
@@ -1537,7 +1613,21 @@ reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (t
   0.157 vs 0.160 ms, cull +0.009-0.012 (262 k vs 263 k triangles); bathroom 0.167-0.168 vs 0.170, cull +0.001-0.004;
   tunnel 0.174 vs 0.170, cull +0.014 (482 k vs 419 k triangles); the far view [-20,30,20] 550 k vs 382 k -- the palms'
   foliage LODs drop whole leaves by hand, the DAG's honest metric does not. The picture moves where LODs differ (grove
-  2.6 %, tunnel 1.8-2.0 %, floor 0.8-1.7 %). Hence `tessy.lod` stays 0 by default.
+  2.6 %, tunnel 1.8-2.0 %, floor 0.8-1.7 %). Hence `tessy.lod` stays 0 by default. A FACETED DAG ON A GLOSSY HULL IS ITS BAKE (2026-11-09, owner at small_yacht's bow hatch:
+"tessy switches clusters very early, the DAG mangles the UVs"): the DAG takes the asset's `lodNormalWeight` (and leaf
+UV weight), and small_yacht's is 0 -- a position-only simplification on ONE shared vertex buffer: a collapse a tenth of
+a millimetre off the surface leaves LOD0's normals interpolated across a triangle twice the size, and at 2 px a
+smooth white hull showed it as wedges of light 3 m from the eye. Rebaked into the scratchpad (`--reimport
+--reimport-out=<scratch> --reimport-manifest=... --reimport-normal-weight=<w>`, models/ untouched) and viewed through
+a scratch level copy: w 0.5 and 1 both smooth where w 0 was faceted, the camera's triangles 13.7 -> 16.3 / 18.9 k on
+that view (the normal error joins the cluster's error: the roots 1.5 m -> 10.6 / 40 m). No UV weight on a surface slot
+exists yet (`foliageUvWeight` is the leaves'); the yacht's artefact was the normals'. small_yacht carries `lodNormalWeight` 0.5
+since (rebaked in place, the bytes the scratch bake was judged on; the old file in
+`D:\Programming\test_cube_backups\mesh_bin_v5_small_yacht_before_normal_weight_2026-11-09`): both bow views smooth, 18.3 /
+16.3 k triangles. Its LOD0, collision and water mask hull are LOD0's and did not move. The Import window's LOD "Normal
+weight" starts at 0.5 since (owner: "make it 0.5 by default"; MCP `import_asset` takes the window's value too): a NEW
+import writes `"lodNormalWeight": 0.5`; an absent key still means 0, the bake the manifest describes, and a bulk
+re-import keeps each asset's own (Mesh Editor > LOD shows the same key).
 - **The camera's cluster records are laid out in the classic draw's order** (`tessy_atlas_cull_cs.hlsl` `kFlagOrdered`,
   2026-10-30, owner at cam -62.12 46.92 136.30: "with the DAG the meshes flicker, the bathroom roof most"). The mesh
   shader draws a run in RECORD order, and the records went where the atomics landed -- new every frame. Two coplanar
@@ -1776,8 +1866,15 @@ panes) stays as it was. A glass slot draws in Main_Translucent through `glass.hl
   landing in front of the glass keeps the straight sample). A pane or a concave face is not bent. **The default
   is solid (`glass.wall` 0.5)**: the owner picked Sketchfab's preview, whose screen-space refraction bends every
   cup like a magnifying block, over what the_bathroom_free models -- hollow tumblers with a 4.3 mm wall (outer
-  and inner surface), `glass.wall:0.004`. 0 = straight through. The only curved glass in the levels is those
-  tumblers; the corner shelf's panes measure the same under every value (0.4 % of pixels, noise). Roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the
+  and inner surface), `glass.wall:0.004`. 0 = straight through. **A material says its own**: `"glassWall"` (m;
+  absent = the frame's glass.wall; Material Editor "Own glass wall"; `MaterialData::glassWall` -> the slot CB's
+  matGlass.z, `glassRefraction.y` = the depth copy bound). small_yacht's windshield (`small_yacht_7`) is a pane, 0
+  (2026-11-09, owner at its bow: "artefacts on the glass"): as the frame's 0.5 m block its wrapped corners (radius
+  under 0.5 m: solid) bent the cockpit like a bottle and its flatter middle read as half a metre of glass, the
+  curvature from the pixel quads jumping between its triangles -- torn, stepped blocks; 0 and 5 mm were both
+  clean there. A window, a windshield, any open sheet of glass is a pane: the shell model is for closed shapes
+  (a cup's far wall). The tumblers keep the frame's; the corner shelf's panes measure the same under every
+  value (0.4 % of pixels, noise). Roughness blurs what is behind (`SampleBehindGlass`, SceneOpaque has one mip). Its reflection is the
   sky's (a slot is not in the glass-reflection G-buffer) -- **occluded by plan S**: the glass has no bent normal of
   its own, so the opaque surface behind it lends its RT sky visibility (t19, `glassSkyVis` = lighting's
   skyVisParams) to the sky fill and the sky reflection (2026-10-24, owner: "why are the transparent objects so

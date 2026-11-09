@@ -11,6 +11,7 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanSurfSim.h"
 #include "ocean/OceanWake.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderGraph.h"
@@ -68,6 +69,32 @@ namespace
         const float t = std::clamp((edge - 2.0f / 512.0f) / (30.0f / 512.0f), 0.0f, 1.0f);
         return t * t * (3.0f - 2.0f * t);
     }
+
+    // ocean_surface_surf_sim.hlsli SurfSimWindowEdgeFade: smoothstep(0.5, 24, the texels to the window's edge).
+    float SurfEdgeFade(float u, float v)
+    {
+        const float edgeTexels = std::min(std::min(u, 1.0f - u), std::min(v, 1.0f - v)) * static_cast<float>(OceanSurfSim::kResolution);
+        const float t = std::clamp((edgeTexels - 0.5f) / (24.0f - 0.5f), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    // A square 2D field's copyable footprint, for a slot's room whether the field exists or not.
+    UINT64 FieldFootprint(ID3D12Device* device, std::uint32_t side, DXGI_FORMAT format, D3D12_PLACED_SUBRESOURCE_FOOTPRINT& out)
+    {
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width = side;
+        desc.Height = side;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+        desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        UINT64 bytes = 0;
+        device->GetCopyableFootprints(&desc, 0u, 1u, 0u, &out, nullptr, nullptr, &bytes);
+        return bytes;
+    }
 }
 
 bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacement, ID3D12Resource* shore,
@@ -116,22 +143,15 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
         shoreFootprint_.Offset = offset;
         offset += AlignUp(shoreBytes, kPlacement);
     }
-    // The boats' wake: room in every slot whether a boat is in the world or not, so the first boat never reallocates.
+    // The boats' wake and the surf sim's wave: room in every slot whether they run or not, so the first boat or the surf
+    // switched on never reallocates.
     {
-        D3D12_RESOURCE_DESC wd{};
-        wd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-        wd.Width = OceanWake::kResolution;
-        wd.Height = OceanWake::kResolution;
-        wd.DepthOrArraySize = 1;
-        wd.MipLevels = 1;
-        wd.Format = DXGI_FORMAT_R16_FLOAT;
-        wd.SampleDesc.Count = 1;
-        wd.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        wd.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        UINT64 wakeBytes = 0;
-        device->GetCopyableFootprints(&wd, 0u, 1u, 0u, &wakeFootprint_, nullptr, nullptr, &wakeBytes);
+        const UINT64 wakeBytes = FieldFootprint(device, OceanWake::kResolution, DXGI_FORMAT_R16_FLOAT, wakeFootprint_);
         wakeFootprint_.Offset = offset;
         offset += AlignUp(wakeBytes, kPlacement);
+        const UINT64 surfBytes = FieldFootprint(device, OceanSurfSim::kResolution, DXGI_FORMAT_R16G16_FLOAT, surfFootprint_);
+        surfFootprint_.Offset = offset;
+        offset += AlignUp(surfBytes, kPlacement);
     }
     slotBytes_ = AlignUp(offset, kPlacement);
 
@@ -161,9 +181,10 @@ bool OceanReadback::EnsureBuffer(Renderer* renderer, ID3D12Resource* displacemen
     layoutShoreW_ = shoreW;
     layoutShoreH_ = shoreH;
     LOG_INFO(logging::LogCategory::Ocean,
-        "ocean readback: ring {} x {:.2f} MB (2 cascades {}^2 RGBA16F + shore {}x{} D16 + wake {}^2 R16F), persistently mapped",
+        "ocean readback: ring {} x {:.2f} MB (2 cascades {}^2 RGBA16F + shore {}x{} D16 + wake {}^2 R16F + surf {}^2 RG16F), "
+        "persistently mapped",
         render::kFrameCount, static_cast<double>(slotBytes_) / (1024.0 * 1024.0), resolution, shoreW, shoreH,
-        OceanWake::kResolution);
+        OceanWake::kResolution, OceanSurfSim::kResolution);
     return true;
 }
 
@@ -194,6 +215,18 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
         return {};
     }
     if (!EnsureBuffer(renderer, displacement, shore, cascades)) { return {}; }
+
+    // The surf sim's wave, when this frame's Main_SurfSim handed it over (a prerequisite through Main_OceanWake). A frame
+    // whose surf pass did not run (a shore map re-rendered) leaves it in no state to copy while the surface still rises by
+    // it: that copy waits a frame -- adopted without the surf, it dropped the breakers from under a hull for 1/30 s.
+    ID3D12Resource* surf = ocean.GetSurfSimWaveResource(renderer->GetTotalFrameNumber());
+    const bool surfShown = ocean.GetSurfSimParams().z > 0.0f && ocean.GetSurfSimParams2().w > 0.0f;
+    if (!surf && surfShown && surfWaits_ < 4u)
+    {
+        ++surfWaits_;
+        return {};
+    }
+    surfWaits_ = 0;
 
     // The ring slot is chosen, not implied by the frame index: with copies spaced out, the ADOPTED
     // copy can stay current for many frames, and SampleHeight reads it in place -- a copy landing in
@@ -242,6 +275,15 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     // The boats' wake, when this frame stepped it (Main_OceanWake is a prerequisite of this pass).
     ID3D12Resource* wake = ocean.GetWakeFreeHeightResource(renderer->GetTotalFrameNumber());
     slot.wake = wake ? ocean.GetWakeParams() : Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    if (surf)
+    {
+        const Math::float4 window = ocean.GetSurfSimParams();
+        slot.surf = Math::float4(window.x, window.y, window.z, ocean.GetSurfSimParams2().w);
+    }
+    else
+    {
+        slot.surf = Math::float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
 
     // Slice 2c of the displacement array is cascade c's (Dx, Dy, Dz, dDz/dx); mip 0.
     const D3D12_RESOURCE_DESC dd = displacement->GetDesc();
@@ -253,6 +295,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     ctx.Use(displacement, D3D12_RESOURCE_STATE_COPY_SOURCE);
     if (copyShore) { ctx.Use(shore, D3D12_RESOURCE_STATE_COPY_SOURCE); }
     if (wake) { ctx.Use(wake, D3D12_RESOURCE_STATE_COPY_SOURCE); }
+    if (surf) { ctx.Use(surf, D3D12_RESOURCE_STATE_COPY_SOURCE); }
     ctx.NextPoint();
     const std::uint32_t restorePoint = ctx.usePoint ? *ctx.usePoint : 0u;
     ctx.Use(displacement, OceanSimulation::kSimMapReadState);
@@ -261,9 +304,12 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
         ctx.Use(shore, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
     if (wake) { ctx.Use(wake, D3D12_RESOURCE_STATE_UNORDERED_ACCESS); } // the wake's own state: its pass writes it next
+    // As Main_SurfSim left it: the surface's vertex shader samples it in Main_Transparent.
+    if (surf) { ctx.Use(surf, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); }
 
     copyPass_ = CopyPass{buffer_.Get(), static_cast<UINT64>(slotIndex) * slotBytes_, cascadeFootprint_, shoreFootprint_,
-                         wakeFootprint_, subresource, cascades, copyShore, displacement, shore, wake, copyPoint, restorePoint};
+                         wakeFootprint_, surfFootprint_, subresource, cascades, copyShore, displacement, shore, wake, surf,
+                         copyPoint, restorePoint};
     return [this](RenderGraphPassContext pass)
     {
         const CopyPass& p = copyPass_;
@@ -294,6 +340,7 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
             for (std::uint32_t c = 0; c < p.cascades; ++c) { copy(p.displacement, p.subresource[c], p.cascadeFp[c]); }
             if (p.copyShore) { copy(p.shore, 0u, p.shoreFp); }
             if (p.wake) { copy(p.wake, 0u, p.wakeFp); }
+            if (p.surf) { copy(p.surf, 0u, p.surfFp); }
             pass.renderer->EmitPoint(cl, p.restorePoint);
         }
         pass.EndCL(token);
@@ -387,6 +434,11 @@ void OceanReadback::Poll(Renderer* renderer, const OceanRenderable& ocean)
                 LOG_INFO(logging::LogCategory::Ocean, "ocean readback: the boats' wake rides the surface");
             }
             wake_ = slot.wake;
+            if (surf_.z <= 0.0f && slot.surf.z > 0.0f)
+            {
+                LOG_INFO(logging::LogCategory::Ocean, "ocean readback: the surf sim's wave rides the surface");
+            }
+            surf_ = slot.surf;
             adoptedSlot_ = ready[i];
             latency_ = static_cast<std::uint32_t>(now - slot.frame);
             if (adoptedFrame_ == 0)
@@ -466,7 +518,28 @@ float OceanReadback::SampleWake(float u, float v) const
     return a + (b - a) * ty;
 }
 
-Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeShare) const
+float OceanReadback::SampleSurf(float u, float v) const
+{
+    // LinearClampSampler over the RG16F field's height (.x), read in the adopted slot in place.
+    const std::int32_t n = static_cast<std::int32_t>(surfFootprint_.Footprint.Width);
+    if (n <= 0 || !mapped_) { return 0.0f; }
+    const std::uint8_t* base = mapped_ + static_cast<size_t>(adoptedSlot_) * slotBytes_ + surfFootprint_.Offset;
+    const size_t pitch = surfFootprint_.Footprint.RowPitch;
+    const float x = u * n - 0.5f, y = v * n - 0.5f;
+    const float fx = std::floor(x), fy = std::floor(y);
+    const float tx = x - fx, ty = y - fy;
+    const auto clampI = [n](float i) { return std::clamp(static_cast<std::int32_t>(i), 0, n - 1); };
+    const std::int32_t x0 = clampI(fx), x1 = clampI(fx + 1.0f), y0 = clampI(fy), y1 = clampI(fy + 1.0f);
+    const auto fetch = [&](std::int32_t ix, std::int32_t iy)
+    {
+        return FetchHalf(base + static_cast<size_t>(iy) * pitch + static_cast<size_t>(ix) * 2u * sizeof(std::uint16_t));
+    };
+    const float a = fetch(x0, y0) + (fetch(x1, y0) - fetch(x0, y0)) * tx;
+    const float b = fetch(x0, y1) + (fetch(x1, y1) - fetch(x0, y1)) * tx;
+    return a + (b - a) * ty;
+}
+
+Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeShare, bool heights) const
 {
     const SurfaceParams& s = surface_;
     // The weights and the warp measure from the camera the copy's frame rendered with.
@@ -495,7 +568,7 @@ Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeSha
         }
     }
 
-    float wakeFade = 1.0f; // the VS's simDisplacementFade: the wake goes out over the last 15 cm of water
+    float wakeFade = 1.0f; // the VS's simDisplacementFade: the wake and the surf go out over the last 15 cm of water
     if (hasShore_)
     {
         const Math::float4& view = shore_.view;
@@ -521,7 +594,18 @@ Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeSha
         }
     }
 
-    // The boats' wake, as the VS adds it: after the shore damping, at the warped coordinates, its window's edge faded.
+    if (!heights) { return d; }
+    // The surf sim's wave, as the VS adds it: after the shore damping, at the warped coordinates, its window's edge faded.
+    if (surf_.z > 0.0f && surf_.w > 0.0f)
+    {
+        const float su = (uvX - surf_.x) * (surf_.z * 0.5f) + 0.5f;
+        const float sv = (uvZ - surf_.y) * (surf_.z * 0.5f) + 0.5f;
+        if (su >= 0.0f && su <= 1.0f && sv >= 0.0f && sv <= 1.0f)
+        {
+            d.y += SampleSurf(su, sv) * surf_.w * wakeFade * SurfEdgeFade(su, sv);
+        }
+    }
+    // The boats' wake, the same way.
     if (wakeShare > 0.0f && wake_.z > 0.0f)
     {
         const float wu = (uvX - wake_.x) * (wake_.z * 0.5f) + 0.5f;
@@ -537,14 +621,14 @@ Math::float3 OceanReadback::Displacement(float baseX, float baseZ, float wakeSha
 float OceanReadback::SampleHeight(float x, float z, float wakeShare) const
 {
     if (!HasSurface()) { return surface_.waterLevel; }
-    // The surface point over (x, z) was pushed there from some grid point X: X + D.xz(X) = (x, z). The wake moves only
-    // y, so it stays out of the iteration.
+    // The surface point over (x, z) was pushed there from some grid point X: X + D.xz(X) = (x, z). The wake and the surf
+    // move only y, so they stay out of the iteration.
     float bx = x, bz = z;
     for (std::uint32_t i = 0; i < surface_.iterations; ++i)
     {
-        const Math::float3 d = Displacement(bx, bz, 0.0f);
+        const Math::float3 d = Displacement(bx, bz, 0.0f, false);
         bx = x - d.x;
         bz = z - d.z;
     }
-    return surface_.waterLevel + Displacement(bx, bz, wakeShare).y;
+    return surface_.waterLevel + Displacement(bx, bz, wakeShare, true).y;
 }

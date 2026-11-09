@@ -1113,8 +1113,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         DrawVesselSection();
     }
 
-    // The water kept out (ocean/WaterMask.h): the ocean's surface is not drawn inside this mesh's convex hull -- an open
-    // boat's cockpit under the sea's level stays dry.
+    // The water kept out (ocean/WaterMask.h): the ocean's surface is not drawn inside this mesh's columns (its LOD 0 seen from
+    // above, depressions filled to their rim) -- an open boat's cockpit under the sea's level stays dry.
     ImGui::Spacing();
     if (ImGui::CollapsingHeader("Water"))
     {
@@ -1126,10 +1126,11 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         }
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("The ocean's surface is not drawn inside this mesh's convex hull (LOD 0, every slot): the water\n"
-                              "standing in an open boat's cockpit under the sea's level is gone, from outside and from the helm.\n"
-                              "The hull bridges every opening, so the sea round the mesh is never inside it. Applies to\n"
-                              "placed instances on Save.");
+            ImGui::SetTooltip("The ocean's surface is not drawn inside this mesh (LOD 0, every slot, seen from above): under its\n"
+                              "skin, and in every depression up to where water poured on it would spill over its lowest edge --\n"
+                              "an open boat's cockpit filled to its gunwale (openings under 1 m, a walkthrough, closed first).\n"
+                              "A swim platform keeps only its own slab: the sea over it stays. From outside and from the helm.\n"
+                              "--set ocean.waterMask:2 paints the kept-out water magenta. Applies to placed instances on Save.");
         }
     }
 
@@ -1339,6 +1340,13 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             ImGui::TextUnformatted(errs.empty() ? "not measured" : errs.c_str());
         }
 
+        // Runtime, not a bake: the pixel error this asset takes, a share of the frame's -- the discrete LODs' and the
+        // cluster DAG's (Mesh::SetLodPixelErrorScale).
+        lodFloat("Pixel error scale", "lodPixelErrorScale", 1.0f, 0.05f, 4.0f, "x%.2f",
+            "This asset's pixel error, a share of the frame's (lod.pixelError for the LODs, tessy.lodPixelError\n"
+            "for the cluster DAG): under 1 it keeps its detail nearer -- a glossy hull shows a collapse in its\n"
+            "shading that the geometric error calls small. Runtime: no rebake; applies to placed copies on Save.");
+
         ImGui::SeparatorText("Every level (LOD1-3)");
         lodFloat("Triangle target", "lodRatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
             "Chain-wide multiplier over the 0.5/0.25/0.12 per-level triangle targets.");
@@ -1350,7 +1358,9 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             "computed for the LOD0 surface around it; a position-only collapse is blind to that and\n"
             "the shading normal stops matching the geometry it is drawn on -- the lighting shifts\n"
             "between levels even where the silhouette holds, and a low sun magnifies it.\n"
-            "Aimed at TERRAIN. ~0.5-1.0 to start; 0 = the old position-only bake, byte for byte.");
+            "Terrain under a low sun and smooth glossy surfaces show it (small_yacht's hull: 0.5).\n"
+            "The Tessy DAG takes it too. A new import starts at 0.5; absent = 0, the old\n"
+            "position-only bake, byte for byte.");
         lodBool("Allow collapses across attribute seams", "lodPermissive", false,
             "meshopt_SimplifyPermissive. WRECKS masked foliage (blades collapse into spikes);\n"
             "fine for solid props with UV seams and real volume.");

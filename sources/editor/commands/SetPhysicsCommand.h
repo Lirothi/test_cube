@@ -22,8 +22,12 @@ public:
     std::string_view HistoryLabel() const override { return "Set Physics"; }
 
     static bool AppliesTo(const EditorObject& obj) { return obj.type == "staticMesh"; }
-    static physics::Motion DocumentMotion(const EditorObject& obj);
+    // `vesselAsset`: a copy of a "vessel" asset defaults to Dynamic (SceneObjectFactory), so for it an absent key means that,
+    // and the document writes only what differs from the asset's default.
+    static physics::Motion DocumentMotion(const EditorObject& obj, bool vesselAsset = false);
     static float DocumentMass(const EditorObject& obj);
+    // Is the placed object a copy of a "vessel" asset (its runtime object carries the asset's vessel block)?
+    static bool VesselAsset(EditorContext& ctx, EditorObjectId id);
 
 private:
     static void Apply(EditorContext& ctx, EditorObjectId id, physics::Motion motion, float mass);

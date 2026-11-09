@@ -44,6 +44,9 @@ inline const bool g_surfSimPokeInterval_knob = ::knob::Register(g_surfSimPokeInt
 class OceanSurfSim
 {
 public:
+    // The fields' side in texels (RG16F wave: height + vertical velocity). Public for OceanReadback's ring.
+    static constexpr UINT kResolution = 512u;
+
     // Lazy-creates the textures/descriptors/materials. Call before the render graph is built and
     // only while the feature is enabled, so OFF never allocates.
     void EnsureResources(Renderer* renderer);
@@ -125,11 +128,16 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE GetWaveSrv() const;
     // S3: the surf foam field, same handoff contract as the wave.
     D3D12_CPU_DESCRIPTOR_HANDLE GetSurfFoamSrv() const;
+    // The height field the pass handed over readable on frame `frame` (both of its paths do), else null: what
+    // OceanReadback copies so a floating object rides the surf too. Left NON_PIXEL | PIXEL_SHADER_RESOURCE.
+    ID3D12Resource* GetWaveResource(std::uint64_t frame) const
+    {
+        return created_ && handedOverFrame_ == frame ? wave_[current_].Get() : nullptr;
+    }
 
 private:
     bool WillRelocate() const { return pendingShiftX_ != 0 || pendingShiftY_ != 0; }
 
-    static constexpr UINT kResolution = 512u;
     static constexpr float kHalfExtent = 250.0f; // 500 m window — the shore-depth precedent
     static constexpr float kTexelWorld = (kHalfExtent * 2.0f) / static_cast<float>(kResolution);
     // Snap step of the window centre, whole texels so Relocate shifts losslessly. 8 texels
@@ -172,6 +180,7 @@ private:
     uint32_t spawnSeed_ = 0x12345u; // xorshift state for candidate placement
     bool created_ = false;
     bool everSimulated_ = false;
+    std::uint64_t handedOverFrame_ = 0; // the frame whose pass left wave_[current_] readable (GetWaveResource)
     bool hasCenter_ = false;
     // First frame after creation runs a full-clear Relocate (shift >= Resolution): committed
     // heaps are NOT guaranteed zeroed — the foam pair held NaN garbage that survived every

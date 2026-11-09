@@ -148,8 +148,8 @@ public:
     // turning it off puts the object straight back where the level placed it.
     void SetBuoyant(bool buoyant);
     bool IsBuoyant() const { return buoyant_; }
-    // mesh.json "waterMask": the ocean's surface is not drawn inside the convex hull of this mesh (ocean/WaterMask.h, a
-    // registry: SetWaterMask (un)registers).
+    // mesh.json "waterMask": the ocean's surface is not drawn inside this mesh's columns (ocean/WaterMask.h, a registry:
+    // SetWaterMask (un)registers).
     void SetWaterMask(bool mask);
     bool IsWaterMask() const { return waterMask_; }
     void SetBuoyancySettings(buoyancy::Settings settings)
@@ -321,6 +321,9 @@ public:
     // on and goes no further (rt_geometry.hlsli RtVisibilityTransmittance). The asset's mesh.json "rtCutoutOpacity" (the
     // palms 0.8); absent = 1, every card solid. Opaque geometry always blocks. Rides the TLAS instance (RtSceneAs).
     void SetRtCutoutOpacity(float v) { rtCutoutOpacity_ = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
+    // mesh.json "lodPixelErrorScale": handed to the mesh (Mesh::SetLodPixelErrorScale) whenever it is set or the mesh
+    // comes; the mesh is the asset's, so every copy agrees.
+    void SetLodPixelErrorScale(float scale);
     float RtCutoutOpacity() const { return rtCutoutOpacity_; }
 
     // Draw identity (no MaterialData at this tier; GBufferRenderable adds textures).
@@ -371,6 +374,7 @@ protected:
     bool castsShadow_ = true; // see SetCastsShadow; the render half's (G4)
     bool gameCastsShadow_ = true;
     float rtCutoutOpacity_ = 1.0f; // see SetRtCutoutOpacity
+    float lodPixelErrorScale_ = 0.0f; // see SetLodPixelErrorScale; 0 = the object never said
 
     template<typename T>
     bool UpdateUniform(const Material::CBFieldHandle& handle, Material* material, const T& value, uint8_t* cbData)

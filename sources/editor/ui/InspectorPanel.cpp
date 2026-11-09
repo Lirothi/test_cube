@@ -4854,6 +4854,12 @@ void InspectorPanel::Draw(EditorContext& ctx,
         ImGui::Separator();
         drawer->Draw(ctx, commandStack, registry, *obj);
     }
+    // ScrollToGroup on an object (--inspect="<name>#end"): its rows have no group anchors, so any group scrolls to the end.
+    if (!scrollToGroup_.empty())
+    {
+        ImGui::SetScrollHereY(1.0f);
+        scrollToGroup_.clear();
+    }
 
     DrawInspectorDropTarget(ctx, commandStack, registry, obj);
     ImGui::End();

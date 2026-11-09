@@ -2,6 +2,7 @@
 #include <d3d12.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <cstdint>
@@ -137,6 +138,12 @@ public:
     // baked deviation projects to `pixelError` pixels at 1080p, 90 degrees. out[0] = 2, levels the mesh
     // lacks = 0. Pure function of the bake and the argument -- safe from any thread.
     void GetLodScreenSizes(float pixelError, float (&out)[render::kLodScreenSizes]) const;
+    // mesh.json "lodPixelErrorScale" (the asset's, RenderableObject::SetLodPixelErrorScale): this mesh takes the frame's
+    // pixel error (lod.pixelError for the discrete LODs, tessy.lodPixelError for the cluster DAG's cut) times this -- under
+    // 1 it keeps its detail nearer the eye (a glossy hull, where a collapse the geometric error calls small shows in the
+    // shading). 1 = the frame's. The DAG's errors are divided by it where ShadowGpuData uploads them.
+    void SetLodPixelErrorScale(float scale) { lodPixelErrorScale_ = std::clamp(scale, 0.05f, 20.0f); }
+    float GetLodPixelErrorScale() const { return lodPixelErrorScale_; }
 
     const std::vector<Submesh>& SubmeshesForLod(UINT lod) const;
     size_t GetSubmeshCount() const { return submeshes_.size(); }
@@ -303,6 +310,7 @@ private:
     UINT  indexCount_ = 0;
     AABB bounds_;
     float boundingSphereRadius_ = 0.0f;
+    float lodPixelErrorScale_ = 1.0f; // see SetLodPixelErrorScale
     float windLeafScale_ = 0.0f; // object-space metres per unit of COLOR_0.b (see GetWindLeafScale)
 
     std::vector<Submesh> submeshes_;  // lod 0 submesh table (>=1 entry; whole buffer by default)

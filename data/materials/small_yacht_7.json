@@ -1,5 +1,6 @@
 {
   "ambientOcclusion": 1.0,
+  "glassWall": 0.0,
   "indirectSpecularScale": 1.0,
   "ior": 1.5,
   "metalRough": [

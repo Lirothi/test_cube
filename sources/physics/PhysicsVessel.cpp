@@ -277,4 +277,19 @@ namespace physics
         }
         if (weight > 0.0f) { state.impact = std::max(state.impact, worstSlam / weight); }
     }
+
+    void PullAnchor(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg bowLocal, JPH::Vec3Arg anchor, float dt)
+    {
+        // Along the water: the rode's lift on the bow is the catenary's business, and a spring that also pulled down would
+        // drag the bow under in a sea.
+        const JPH::RVec3 bow = body.GetPosition() + body.GetRotation() * bowLocal;
+        JPH::Vec3 out(static_cast<float>(bow.GetX()) - anchor.GetX(), 0.0f, static_cast<float>(bow.GetZ()) - anchor.GetZ());
+        const float reach = out.Length();
+        const float stretch = reach - settings.anchorScope;
+        if (stretch <= 0.0f || reach < 1e-4f) { return; }
+        out /= reach;
+        const float running = body.GetPointVelocity(bow).Dot(out); // > 0: the bow runs out along the rode
+        const float tension = std::max(settings.anchorStiffness * stretch + settings.anchorDamping * running, 0.0f); // a rode only pulls
+        if (tension > 0.0f) { body.AddImpulse(out * (-tension * dt), bow); }
+    }
 } // namespace physics

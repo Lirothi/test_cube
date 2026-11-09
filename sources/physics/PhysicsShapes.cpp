@@ -482,39 +482,13 @@ namespace physics
         return out;
     }
 
-    bool ConvexHullPlanes(const std::string& geometryPath, std::size_t maxPlanes, std::vector<Math::float4>& planes,
-                          Math::float3& boxMin, Math::float3& boxMax)
+    bool ReadSolidTriangles(const std::string& geometryPath, std::vector<Math::float3>& positions, std::vector<std::uint32_t>& indices)
     {
-        planes.clear();
         SolidGeometry geometry;
-        if (!ReadSolidGeometry(geometryPath, 0, {}, geometry) || geometry.positions.size() < 4) { return false; }
-        JPH::Array<JPH::Vec3> points;
-        points.reserve(geometry.positions.size());
-        for (const Math::float3& p : geometry.positions) { points.push_back(ToJolt(p)); }
-        // Jolt keeps a hull's points about its centre of mass: its planes and bounds are there, the model's are COM away.
-        for (float tolerance = 0.005f; tolerance < 1.0f; tolerance *= 1.5f)
-        {
-            JPH::ConvexHullShapeSettings settings(points, 0.0f);
-            settings.mHullTolerance = tolerance;
-            settings.SetEmbedded();
-            const JPH::ShapeSettings::ShapeResult result = settings.Create();
-            if (result.HasError()) { return false; }
-            const JPH::ConvexHullShape* hull = static_cast<const JPH::ConvexHullShape*>(result.Get().GetPtr());
-            if (hull->GetPlanes().size() > maxPlanes) { continue; }
-            const JPH::Vec3 com = hull->GetCenterOfMass();
-            for (const JPH::Plane& plane : hull->GetPlanes())
-            {
-                const JPH::Vec3 n = plane.GetNormal();
-                planes.push_back(Math::float4(n.GetX(), n.GetY(), n.GetZ(), plane.GetConstant() - n.Dot(com)));
-            }
-            const JPH::AABox bounds = hull->GetLocalBounds();
-            boxMin = Math::float3(bounds.mMin.GetX() + com.GetX(), bounds.mMin.GetY() + com.GetY(), bounds.mMin.GetZ() + com.GetZ());
-            boxMax = Math::float3(bounds.mMax.GetX() + com.GetX(), bounds.mMax.GetY() + com.GetY(), bounds.mMax.GetZ() + com.GetZ());
-            LOG_INFO(logging::LogCategory::Physics, "convex hull planes: {} -- {} planes at {:.1f} mm tolerance, {} points", geometryPath,
-                     planes.size(), tolerance * 1000.0f, geometry.positions.size());
-            return true;
-        }
-        return false;
+        if (!ReadSolidGeometry(geometryPath, 0, {}, geometry) || geometry.indices.size() < 3) { return false; }
+        positions = std::move(geometry.positions);
+        indices = std::move(geometry.indices);
+        return true;
     }
 
     SolidBox MeasureSolidBox(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots)

@@ -17,6 +17,7 @@
 #include "core/Helpers.h"
 #include "core/math/Math.h"
 #include "materials/Material.h"
+#include "ocean/WaterMask.h" // g_waterMaskFrame: the hulls a collideHulls particle dies in
 #include "vfx/WindState.h" // W8: g_windDriftXZ
 #include "rendering/core/CommandListBindState.h"
 #include "rendering/core/GpuAlloc.h"
@@ -208,7 +209,7 @@ void ParticleEmitterObject::CreateBuffers(Renderer* renderer,
     hp.Type = D3D12_HEAP_TYPE_READBACK;
     D3D12_RESOURCE_DESC rd{};
     rd.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
-    rd.Width = sizeof(uint32_t) * kReadbackSlots;
+    rd.Width = 2u * sizeof(uint32_t) * kReadbackSlots; // per slot the dead count and the hull entries (gDeadCount[0..1])
     rd.Height = 1;
     rd.DepthOrArraySize = 1;
     rd.MipLevels = 1;
@@ -275,8 +276,14 @@ void ParticleEmitterObject::CreateDescriptors(ID3D12Device* device)
 uint32_t ParticleEmitterObject::AliveCount() const
 {
     if (!readbackPtr_ || !vfx::g_debugAliveLog || frameCounter_ <= kReadbackSlots) { return 0u; }
-    const uint32_t dead = readbackPtr_[(frameCounter_ + 1u) % kReadbackSlots]; // the oldest slot: retired
+    const uint32_t dead = readbackPtr_[2u * ((frameCounter_ + 1u) % kReadbackSlots)]; // the oldest slot: retired
     return dead <= desc_.maxParticles ? desc_.maxParticles - dead : 0u;
+}
+
+uint32_t ParticleEmitterObject::HullEntries() const
+{
+    if (!readbackPtr_ || !vfx::g_debugAliveLog || frameCounter_ <= kReadbackSlots) { return 0u; }
+    return readbackPtr_[2u * ((frameCounter_ + 1u) % kReadbackSlots) + 1u];
 }
 
 void ParticleEmitterObject::Tick(float dt)
@@ -358,11 +365,21 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     prm.emitterVel[0] = desc_.emitterVelocity.x; prm.emitterVel[1] = desc_.emitterVelocity.y; prm.emitterVel[2] = desc_.emitterVelocity.z;
     prm.baseVel[0] = desc_.baseVelocity.x; prm.baseVel[1] = desc_.baseVelocity.y; prm.baseVel[2] = desc_.baseVelocity.z;
     prm.frameSeed = HashU32(frameCounter_ * 0x9E3779B9u ^ desc_.seed * 0x85EBCA6Bu);
+    // The hulls a particle of this emitter dies in (EmitterDesc::collideHulls): the frame's, as the ocean packed them.
+    const ocean::WaterMaskFrame& hulls = ocean::g_waterMaskFrame;
+    const bool collide = desc_.collideHulls && hulls.hulls > 0u && hulls.columnsSrv != 0u;
+    prm.hullCount = collide ? hulls.hulls : 0u;
+    prm.hullKill = vfx::g_collideHulls ? 1u : 0u; // 0: the entries only counted (the A/B)
+    if (collide) { std::memcpy(prm.hullRows, hulls.rows, sizeof(float) * 4u * 5u * hulls.hulls); }
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(prm), render::kConstantBufferAlignment);
     std::memcpy(cb.cpu, &prm, sizeof(prm));
 
     auto uavTbl = renderer->StageSrvUavTable({ particlesUav_, deadListUav_, deadCountUav_ });
+    // t0: the columns (an upload buffer, GENERIC_READ for its life: no state to declare); the inert dummy BUFFER without.
+    D3D12_CPU_DESCRIPTOR_HANDLE columns{};
+    columns.ptr = static_cast<SIZE_T>(hulls.columnsSrv);
+    auto srvTbl = renderer->StageSrvUavTable({ collide ? columns : renderer->VsmDummyBufferSrv() });
 
     renderer->Transition(cl, particles_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     renderer->Transition(cl, deadList_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -372,6 +389,7 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     auto& ctx = h.ref();
     ctx.cbv[1] = cb.gpu;
     ctx.uavTable[0] = uavTbl.gpu;
+    ctx.srvTable[0] = srvTbl.gpu;
 
     // Update first (age/integrate/kill), then spawn — new particles render at age 0.
     ctx.constants[0] = { 0u, 0u, 0u, 0u };
@@ -414,16 +432,14 @@ void ParticleEmitterObject::RecordCompute(Renderer* renderer, ID3D12GraphicsComm
     if (vfx::g_debugAliveLog && readbackPtr_)
     {
         renderer->Transition(cl, deadCount_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
-        cl->CopyBufferRegion(readback_.Get(), (frameCounter_ % kReadbackSlots) * sizeof(uint32_t),
-            deadCount_.Get(), 0, sizeof(uint32_t));
+        cl->CopyBufferRegion(readback_.Get(), (frameCounter_ % kReadbackSlots) * 2u * sizeof(uint32_t),
+            deadCount_.Get(), 0, 2u * sizeof(uint32_t));
         renderer->Transition(cl, deadCount_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
         if (logAccum_ >= 1.0f && frameCounter_ > kReadbackSlots)
         {
             logAccum_ = 0.0f;
-            // Oldest ring slot: written kReadbackSlots-1 frames ago — safely retired.
-            const uint32_t dead = readbackPtr_[(frameCounter_ + 1u) % kReadbackSlots];
-            const uint32_t alive = dead <= desc_.maxParticles ? desc_.maxParticles - dead : 0u;
+            const uint32_t alive = AliveCount(); // the oldest ring slot: written kReadbackSlots-1 frames ago, retired
             // Opt-in (vfx::g_debugAliveLog) and once per second per emitter (logAccum_): a
             // sampled counter, so Debug and still behind both gates.
             LOG_DEBUG(logging::LogCategory::Vfx, "emitter alive={}/{} (rate={:.0f}/s)",

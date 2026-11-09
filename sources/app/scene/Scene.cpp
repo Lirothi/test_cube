@@ -2253,9 +2253,10 @@ void Scene::Sync(Renderer* renderer)
             }
         }
         ocean->SetWakeHulls(std::move(hulls));
-        // The hulls the water stays out of (ocean/WaterMask): every marked mesh at the pose this frame draws it.
+        // The hulls the water stays out of (ocean/WaterMask): every marked mesh at the pose this frame draws it. Collected
+        // whatever ocean.waterMask says (the surface's switch): the particles collide with the same columns.
         std::vector<ocean::WaterMaskInstance> masks;
-        if (ocean::g_waterMask_game) { ocean::watermask::Collect(masks); }
+        ocean::watermask::Collect(masks);
         ocean->SetWaterMasks(std::move(masks));
     }
     if (vesselCamera_.Active())

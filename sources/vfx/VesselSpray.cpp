@@ -158,6 +158,7 @@ bool VesselSpray::SideFoamOf(const void* vessel, Math::float4 (&lines)[2], float
 void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physics::VesselHull>& hulls, const SprayParams& params)
 {
     sheetAlive_ = sheetCapacity_ = mistAlive_ = mistCapacity_ = 0u;
+    hullEntries_ = 0u;
     for (Set& set : sets_)
     {
         set.seen = false;
@@ -165,6 +166,8 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
         {
             if (set.sheet[side]) { sheetAlive_ += set.sheet[side]->AliveCount(); sheetCapacity_ += set.sheet[side]->Desc().maxParticles; }
             if (set.mist[side]) { mistAlive_ += set.mist[side]->AliveCount(); mistCapacity_ += set.mist[side]->Desc().maxParticles; }
+            if (set.sheet[side]) { hullEntries_ += set.sheet[side]->HullEntries(); }
+            if (set.mist[side]) { hullEntries_ += set.mist[side]->HullEntries(); }
         }
     }
     rate_ = 0.0f;
@@ -223,6 +226,15 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             Math::float3 b = root.valid ? world(root.u1, root.v1) : hull.position;
             a.y = hull.waterHeight;
             b.y = hull.waterHeight;
+            // The root's own motion: the hull's at its middle, v + w x r -- in a turn the bow swings in and the hull slips
+            // sideways. The side moving INTO the water pushes it out at least that fast: without it the hull ran into the
+            // drops it had just thrown on the turn's inside and they crossed it (owner, 2026-11-09: "particles fly through
+            // the boat in turns"); the side moving away leaves them as they are.
+            const Math::float3 r = (a + b) * 0.5f - hull.position;
+            const Math::float3 w = hull.angularVelocity;
+            const Math::float3 rootVelocity = hull.velocity + Math::float3(w.y * r.z - w.z * r.y, w.z * r.x - w.x * r.z, w.x * r.y - w.y * r.x);
+            const float sideways = rootVelocity.x * outward.x + rootVelocity.z * outward.z;
+            const Math::float3 pushed = Math::float3(outward.x, 0.0f, outward.z) * (vfx::g_spraySidePush_game ? std::max(sideways, 0.0f) : 0.0f);
             // A drop leaves the water the hull pushes aside: outward and up, with a little of the hull's way.
             const float out = std::max(params.out, 0.0f);
             const float rise = std::max(params.up, 0.0f);
@@ -241,9 +253,10 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
                 d.coneDir = dir;
                 d.speedMin = throwSpeed * speedLo;
                 d.speedMax = throwSpeed * speedHi;
-                d.baseVelocity = hullVelocity * params.forward;
-                d.emitterVelocity = hullVelocity;
+                d.baseVelocity = hullVelocity * params.forward + pushed;
+                d.emitterVelocity = rootVelocity; // a birth u into the frame starts where the root was then
                 d.killBelowY = hull.waterHeight;
+                d.collideHulls = true; // a drop that meets a hull (its own, another's) is spent on it (ocean/WaterMask's columns)
                 d.spawnRate = root.valid ? rate * share : 0.0f;
                 // The look: the albedo, the presets' alpha keys times the opacity, the sun's forward share.
                 const float opacity = std::max(params.opacity, 0.0f);

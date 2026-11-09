@@ -413,6 +413,28 @@ void MaterialEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool
             {
                 doc_["ior"] = ior;
             }
+            // The glass under the surface for the refraction: absent = the frame's glass.wall (0.5 m, a solid block:
+            // the cups), 0 = a pane (a windshield, a window: straight through).
+            bool ownWall = doc_.contains("glassWall");
+            if (ImGui::Checkbox("Own glass wall", &ownWall))
+            {
+                if (ownWall) { doc_["glassWall"] = 0.0f; }
+                else { doc_.erase("glassWall"); }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Off: the refraction takes the frame's glass wall (glass.wall, 0.5 m: solid glass, the\n"
+                                  "cups' magnifying block). On: this material's own -- 0 = a pane, straight through\n"
+                                  "(a windshield, a window); a few mm = a hollow shell (a tumbler's wall).");
+            }
+            if (ownWall)
+            {
+                float wall = std::clamp(doc_.value("glassWall", 0.0f), 0.0f, 0.5f);
+                if (ImGui::DragFloat("Glass wall (m)", &wall, 0.001f, 0.0f, 0.5f, "%.3f", ImGuiSliderFlags_AlwaysClamp))
+                {
+                    doc_["glassWall"] = wall;
+                }
+            }
             const std::string map = doc_.value("transmissionMap", std::string{});
             ImGui::TextDisabled("Transmission map: %s", map.empty() ? "none" : map.c_str());
             ImGui::TextDisabled(doc_.value("alphaTest", false)

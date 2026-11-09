@@ -75,6 +75,7 @@ void ApplyEmitterJson(const nlohmann::json& j, EmitterDesc& d)
     d.velocityStretch = j.value("velocityStretch", d.velocityStretch);
     d.lineOffset = ReadF3(j, "lineOffset", d.lineOffset);
     d.killBelowY = j.value("killBelowY", d.killBelowY);
+    d.collideHulls = j.value("collideHulls", d.collideHulls);
     if (const auto it = j.find("colorKeys"); it != j.end() && it->is_array())
     {
         for (size_t k = 0; k < 4 && k < it->size(); ++k)

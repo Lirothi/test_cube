@@ -1225,7 +1225,7 @@ void GBufferRenderable::RenderTranslucent(Renderer* renderer, ID3D12GraphicsComm
         cb.matSurface = Math::float4(p.metalRough.x, p.metalRough.y, md->glassTransmission, p.alphaCutoff);
         cb.matTexFlags = p.texFlags;
         cb.matTexOffsScale = p.texOffsScale;
-        cb.matGlass = Math::float4(md->hasTransmission ? 1.0f : 0.0f, p.mrMultiply, 0.0f, 0.0f);
+        cb.matGlass = Math::float4(md->hasTransmission ? 1.0f : 0.0f, p.mrMultiply, md->glassWall, 0.0f);
         std::memcpy(alloc.cpu, &cb, sizeof(cb));
 
         // The pass's t0..t14 with the slot's normal map at t6, then albedo / MR / transmission at t15..t17,

@@ -16,6 +16,16 @@ inline bool g_litAirFromFog = false;
 inline bool g_litAirFromFog_game = false;
 inline const bool g_litAirFromFog_knob = ::knob::Register(g_litAirFromFog_game, g_litAirFromFog, "vfx::g_litAirFromFog");
 
+// A/B, transient: `--set particles.collideHulls:0` -- no emitter dies in a hull (the entries are still counted, the render
+// half reads it); `--set spray.sidePush:0` -- a boat's spray leaves with no push from the side moving into the water
+// (VesselSpray, the game half). Both as before 2026-11-09.
+inline bool g_collideHulls = true;
+inline bool g_collideHulls_game = true;
+inline const bool g_collideHulls_knob = ::knob::Register(g_collideHulls_game, g_collideHulls, "vfx::g_collideHulls");
+inline bool g_spraySidePush = true;
+inline bool g_spraySidePush_game = true;
+inline const bool g_spraySidePush_knob = ::knob::Register(g_spraySidePush_game, g_spraySidePush, "vfx::g_spraySidePush");
+
 // Debug: throttled alive-count readback log to DBWIN ("[vfx] ..."), ~1 line/sec per emitter.
 // Cheap (4-byte copy per frame into a readback ring); the E1 verification instrument.
 inline bool g_debugAliveLog = true;
@@ -51,8 +61,12 @@ struct alignas(16) GpuEmitterParams
     float emitterVel[3]; float _padE;                      // 112
     // Added to every particle's birth velocity (m/s, world): what the carrier gives it (a hull's way).
     float baseVel[3]; float _padB;                         // 128
+    // EmitterDesc::collideHulls: the frame's hulls (ocean::WaterMaskFrame, 5 rows each); 0 = none. A particle inside one's
+    // solid columns is counted and, under hullKill (particles.collideHulls), dies (shaders/water_mask_columns.hlsli).
+    uint32_t hullCount; uint32_t hullKill; uint32_t _padH[2]; // 144
+    float hullRows[4 * 5][4];                              // 160
 };
-static_assert(sizeof(GpuEmitterParams) == 144, "GpuEmitterParams must match the HLSL cbuffer");
+static_assert(sizeof(GpuEmitterParams) == 480, "GpuEmitterParams must match the HLSL cbuffer");
 
 // Per-emitter draw constants — mirrors `DrawParams` (b2) in shaders/particles.hlsl (E2).
 struct alignas(16) GpuEmitterDrawParams
@@ -99,6 +113,10 @@ struct EmitterDesc
     Math::float3 lineOffset = Math::float3(0.0f, 0.0f, 0.0f);
     // A falling particle under this height dies (spray back in the sea); the default never.
     float killBelowY = -1.0e30f;
+    // A particle that enters a hull marked "waterMask" (its solid columns, ocean/WaterMask.h) dies: spray thrown at a boat
+    // is spent on it instead of crossing it. Off by default (smoke from a lamp on a deck must not die in it); VesselSpray
+    // sets it for its emitters. JSON `collideHulls`.
+    bool collideHulls = false;
     // Runtime only (a carrier sets them every frame, VesselSpray): the emitter's own motion and what it adds to a
     // particle's birth velocity, m/s world.
     Math::float3 emitterVelocity = Math::float3(0.0f, 0.0f, 0.0f);

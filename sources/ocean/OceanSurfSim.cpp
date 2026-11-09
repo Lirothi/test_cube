@@ -297,6 +297,7 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
         // previous frame produced.
         ctx.NextPoint();
         const std::uint32_t readablePoint = ctx.usePoint ? *ctx.usePoint : 0u;
+        if (everSimulated_) { handedOverFrame_ = ctx.renderer->GetTotalFrameNumber(); }
         ctx.Use(wave_[current_].Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         ctx.Use(foam_[current_].Get(),
@@ -317,6 +318,7 @@ std::function<void(RenderGraphPassContext)> OceanSurfSim::BuildPass(
     const uint32_t finalIndex = readIndex ^ (swaps & 1u);
     current_ = finalIndex; // committed before recording: GetWaveSrv is final from here on
     everSimulated_ = true; // the fields are handed over readable from this frame on
+    handedOverFrame_ = ctx.renderer->GetTotalFrameNumber();
 
     // ---- declarations, from the same locals ----
     // Everything is written as a UAV first (spawn, relocate and/or the substep chain); the

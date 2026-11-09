@@ -58,6 +58,9 @@ public:
     uint32_t SheetCapacity() const { return sheetCapacity_; }
     uint32_t MistAlive() const { return mistAlive_; }
     uint32_t MistCapacity() const { return mistCapacity_; }
+    // Drops (sheets and mists) that have entered a hull since their emitters were made (EmitterDesc::collideHulls): a
+    // running count -- its rise a second is what would cross a boat without the collision (particles.collideHulls:0).
+    uint64_t HullEntries() const { return hullEntries_; }
 
 private:
     // One side of a hull's waterline, in the model's metres (u along its forward, v across it): the spray's root on its
@@ -91,5 +94,6 @@ private:
     float sheetRate_ = 0.0f;
     int bursts_ = 0;
     uint32_t sheetAlive_ = 0, sheetCapacity_ = 0, mistAlive_ = 0, mistCapacity_ = 0;
+    uint64_t hullEntries_ = 0;
 };
 } // namespace vfx

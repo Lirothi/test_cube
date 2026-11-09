@@ -71,7 +71,7 @@ cbuffer GlassParams : register(b0)
     float4 matSurface;            // x = metallic, y = roughness, z = transmission factor, w = alpha cutoff (-1 = no split)
     float4 matTexFlags;           // x = useAlbedo, y = useMR, z = useNormal, w = normal strength
     float4 matTexOffsScale;       // UV offset (xy), scale (zw) -- gbuffer_common.hlsli's tfUVp
-    float4 matGlass;              // x = transmission map present, y = mrMultiply, z = unused, w = unused
+    float4 matGlass;              // x = transmission map present, y = mrMultiply, z = the slot's glass wall (m; < 0 = the frame's), w = unused
 };
 
 #include "glass_view_cb.hlsli" // b1: the transparent pass's shared per-view CB (also particles)
@@ -847,10 +847,16 @@ PSOut PSMain(VSOut i)
     // ONE / INV_SRC_ALPHA keeps throughAvg of what the target already holds -- the opaque scene AND any
     // glass drawn behind this one. The tint's colour and the refraction's bend are put on here against
     // the opaque copy: exact where only opaque lies behind, the tint's average where more glass does.
-    // glassRefraction.x: the shell's wall (m), 0 = straight through (the flat transmission before it).
-    if (glassRefraction.x > 0.0f) // uniform: the quad derivatives inside need every lane
+    // The shell's wall (m), 0 = straight through (the flat transmission before it): the material's ("glassWall": a
+    // windshield or a window is a pane, 0) or the frame's glass.wall (glassRefraction.x); glassRefraction.y = 1 while the
+    // depth copy the refraction lands on is bound. As a solid block (the frame's 0.5 m) a windshield's wrapped corners
+    // read as a glass bottle and its flat middle as half a metre of glass, its curvature jumping from triangle to
+    // triangle across the pixel quads: torn, stepped blocks of the cockpit behind it (2026-11-09, owner at small_yacht's
+    // bow).
+    const float glassWall = matGlass.z >= 0.0f ? matGlass.z : glassRefraction.x;
+    if (glassRefraction.y > 0.5f && glassWall > 0.0f) // uniform: the quad derivatives inside need every lane
     {
-        refrUv = GlassRefractedUv(i.posWS, geomN, V, ior, glassRefraction.x, pixelUv, i.posH.z);
+        refrUv = GlassRefractedUv(i.posWS, geomN, V, ior, glassWall, pixelUv, i.posH.z);
     }
     const float3 behind = SampleBehindGlass(refrUv, rough) * invPreExposure;
     const float3 behindHere = SceneOpaque.SampleLevel(LinearSampler, pixelUv, 0).rgb * invPreExposure;

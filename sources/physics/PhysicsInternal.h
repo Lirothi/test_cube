@@ -167,6 +167,9 @@ namespace physics
         const VesselSettings& settings, const Math::float3& scale, float halfLength, float halfBeam, float elapsed);
     // One step on the water: its buoyancy, the helm, the hull and the waves.
     void PushVessel(JPH::Body& body, const VesselSettings& settings, const Math::float3& scale, VesselState& state, const VesselInput& input, const VesselWater& water, float buoyancy, JPH::Vec3Arg gravity, float dt);
+    // The anchor's rode on the bow (`bowLocal`, the body's space), from `anchor` (world; its height not read): nothing within
+    // anchorScope, past it the stretch's spring and the bow's run along it, never a push. One step's impulse.
+    void PullAnchor(JPH::Body& body, const VesselSettings& settings, JPH::Vec3Arg bowLocal, JPH::Vec3Arg anchor, float dt);
 
     // A height no water reaches: no water here.
     inline constexpr float kNoWater = -1.0e30f;

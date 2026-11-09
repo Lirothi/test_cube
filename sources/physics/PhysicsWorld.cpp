@@ -296,6 +296,13 @@ namespace physics
             float shownImpact = 0.0f; // and its last slam (a share of the weight, fading): the spray's burst
             float shownImmersion = 0.0f; // how deep it sits (1 = at rest): no spray off a hull in the air
             float shownWaterHeight = 0.0f; // the surface under it: where its spray leaves and falls back to
+            JPH::Vec3 shownVelocity = JPH::Vec3::sZero(); // the last step's motion of the origin and its turn: the spray's root moves
+            JPH::Vec3 shownAngular = JPH::Vec3::sZero();  // with them, and a drop the side pushes leaves at least as fast
+            // The anchor (ToggleAnchor, after a Join; the step reads them): its rode on the bow, the stem of the hull's box at
+            // the draft in the body's space.
+            bool anchored = false;
+            JPH::Vec3 anchorPoint = JPH::Vec3::sZero();
+            JPH::Vec3 bowLocal = JPH::Vec3::sZero();
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -856,6 +863,9 @@ namespace physics
                     const JPH::Vec3 half = scaled->GetLocalBounds().GetExtent(); // the shape's own: a custom shape's bounds above are its parts' spheres
                     entry.halfLength = std::fabs(along.GetX()) * half.GetX() + std::fabs(along.GetZ()) * half.GetZ();
                     entry.halfBeam = std::fabs(along.GetZ()) * half.GetX() + std::fabs(along.GetX()) * half.GetZ();
+                    const JPH::Vec3 middle = scaled->GetLocalBounds().GetCenter();
+                    entry.bowLocal = JPH::Vec3(middle.GetX(), vesselSettings->draft * entry.scale.y, middle.GetZ()) + JPH::Vec3(along.GetX(), 0.0f, along.GetZ()) * entry.halfLength;
+                    entry.anchored = false;
                     entry.shownPosition = pose.position;
                     entry.shownForward = pose.rotation * along;
                     entry.shownUp = pose.rotation * JPH::Vec3::sAxisY();
@@ -1026,6 +1036,9 @@ namespace physics
                     entry.shownForward = entry.rest.rotation * ToJolt(entry.vessel->forward).Normalized();
                     entry.shownUp = entry.rest.rotation * JPH::Vec3::sAxisY();
                     entry.shownSpeed = 0.0f;
+                    entry.shownVelocity = JPH::Vec3::sZero();
+                    entry.shownAngular = JPH::Vec3::sZero();
+                    entry.anchored = false; // the session's, weighed with it
                     entry.shownImpact = 0.0f;
                     entry.shownImmersion = 0.0f;
                     entry.shownWaterHeight = 0.0f;
@@ -1125,6 +1138,7 @@ namespace physics
                 JPH::BodyLockWrite lock(locks, entry->body);
                 if (!lock.Succeeded()) { continue; }
                 PushVessel(lock.GetBody(), *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : VesselInput{}, entry->water, entry->floatFactor, gravity, step);
+                if (entry->anchored) { PullAnchor(lock.GetBody(), *entry->vessel, entry->bowLocal, entry->anchorPoint, step); }
             }
         }
 
@@ -1139,6 +1153,15 @@ namespace physics
                 entry->shownForward = forward;
                 entry->shownUp = rotation * JPH::Vec3::sAxisY();
                 entry->shownSpeed = entry->vesselState.speed;
+                // The last step's motion, from its two poses (the step's own velocities are the step thread's).
+                const float step = static_cast<float>(StepSeconds());
+                entry->shownVelocity = (entry->current.position - entry->previous.position) / step;
+                JPH::Quat turn = (entry->current.rotation * entry->previous.rotation.Conjugated()).Normalized();
+                if (turn.GetW() < 0.0f) { turn = -turn; }
+                JPH::Vec3 axis = JPH::Vec3::sZero();
+                float angle = 0.0f;
+                turn.GetAxisAngle(axis, angle);
+                entry->shownAngular = angle > 1e-7f ? axis * (angle / step) : JPH::Vec3::sZero();
                 entry->shownImpact = entry->vesselState.impact;
                 entry->shownImmersion = entry->vesselState.immersion;
                 entry->shownWaterHeight = entry->vesselState.waterHeight;
@@ -1160,6 +1183,7 @@ namespace physics
                 helmShown.upY = up.GetY();
                 helmShown.halfLength = entry->halfLength;
                 helmShown.halfBeam = entry->halfBeam;
+                helmShown.anchored = entry->anchored;
                 helmShown.vessel = entry->vesselState;
             }
         }
@@ -1646,6 +1670,33 @@ namespace physics
 
     void World::SetHelmInput(const VesselInput& input) { impl_->helmInput = input; }
 
+    bool World::ToggleAnchor(RenderableObject* vessel)
+    {
+        Impl& m = *impl_;
+        m.Join(); // the step reads the anchor
+        for (Impl::Entry* entry : m.vessels)
+        {
+            if (entry->object != vessel || !m.system) { continue; }
+            if (entry->anchored)
+            {
+                entry->anchored = false;
+                if (entry == m.helm) { m.helmShown.anchored = false; } // the HUD before the next Display
+                LOG_INFO(logging::LogCategory::Physics, "physics: '{}' weighed its anchor", vessel->GetGeometryPath());
+                return false;
+            }
+            // Dropped straight down from the bow, where it is now: the boat lays out its scope as it drifts back.
+            const JPH::BodyInterface& bodies = m.system->GetBodyInterface();
+            const JPH::RVec3 bow = bodies.GetPosition(entry->body) + bodies.GetRotation(entry->body) * entry->bowLocal;
+            entry->anchorPoint = JPH::Vec3(static_cast<float>(bow.GetX()), static_cast<float>(bow.GetY()), static_cast<float>(bow.GetZ()));
+            entry->anchored = true;
+            if (entry == m.helm) { m.helmShown.anchored = true; }
+            LOG_INFO(logging::LogCategory::Physics, "physics: '{}' dropped its anchor at {:.2f} {:.2f}, {:.1f} m of slack", vessel->GetGeometryPath(),
+                     entry->anchorPoint.GetX(), entry->anchorPoint.GetZ(), entry->vessel->anchorScope);
+            return true;
+        }
+        return false;
+    }
+
     const HelmState& World::GetHelm() const { return impl_->helmShown; }
 
     void World::CollectHulls(std::vector<VesselHull>& out) const
@@ -1662,10 +1713,13 @@ namespace physics
             hull.up = FromJolt(entry->shownUp);
             hull.scale = entry->scale;
             hull.speed = entry->shownSpeed;
+            hull.velocity = FromJolt(entry->shownVelocity);
+            hull.angularVelocity = FromJolt(entry->shownAngular);
             hull.impact = entry->shownImpact;
             hull.immersion = entry->shownImmersion;
             hull.waterHeight = entry->shownWaterHeight;
             hull.atHelm = entry == impl_->helm;
+            hull.anchored = entry->anchored;
             out.push_back(hull);
         }
     }

@@ -5,8 +5,9 @@
 #include "editor/scene/EditorSceneDocument.h" // EditorObjectId
 
 // Floats an object on the ocean, or stops it floating: the document's "buoyant" property -- written
-// only while on, so a level that never floated anything saves byte-identical -- and the runtime
-// object's flag, which ocean/OceanBuoyancy picks up (or lets go of) on the next frame. Undoable;
+// only where it differs from the asset's default (off; ON for a copy of a "vessel" asset, which floats
+// unless it says otherwise), so a level that never floated anything saves byte-identical -- and the
+// runtime object's flag, which ocean/OceanBuoyancy picks up (or lets go of) on the next frame. Undoable;
 // Undo restores what the object had before, not the opposite of the request.
 class SetBuoyantCommand : public EditorCommand
 {
@@ -19,6 +20,8 @@ public:
     {
         return buoyant_ ? "Enable Buoyancy" : "Disable Buoyancy";
     }
+    // What the object does now: the document's "buoyant", else the asset's default (a vessel floats).
+    static bool DocumentBuoyant(const EditorObject& obj, bool vesselAsset);
 
 private:
     static void Apply(EditorContext& ctx, EditorObjectId id, bool buoyant);

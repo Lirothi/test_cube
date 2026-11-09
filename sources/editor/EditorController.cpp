@@ -3243,9 +3243,22 @@ void EditorController::Draw(
             g_bootInspect.clear();
             break;
         }
+        // Not an environment type: a level object of that name (the Inspector then scrolls to its end for any group).
+        for (const EditorObject& obj : document_.Objects())
+        {
+            if (g_bootInspect.empty()) { break; }
+            if (obj.name != type) { continue; }
+            selection_.Replace(obj.id);
+            showInspector_ = true;
+            if (anchor != std::string::npos) { inspector_.ScrollToGroup(g_bootInspect.substr(anchor + 1)); }
+            LOG_INFO(logging::LogCategory::Editor, "--inspect: selected object '{}'{}", obj.name,
+                anchor != std::string::npos ? ", scrolled to the end" : "");
+            g_bootInspect.clear();
+            break;
+        }
         if (!g_bootInspect.empty() && ++waited > 600)
         {
-            LOG_WARNING(logging::LogCategory::Editor, "--inspect: the level has no environment object of type '{}'", type);
+            LOG_WARNING(logging::LogCategory::Editor, "--inspect: the level has no environment object of type, nor an object named, '{}'", type);
             g_bootInspect.clear();
         }
     }
@@ -4184,7 +4197,9 @@ void EditorController::Draw(
         ImGui::PopStyleColor(2);
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("Alt+P. From the level's Player Start, from the camera without one.\nWASD, the mouse, Space, Shift, C. Esc stops; F8 ejects; K keeps the bodies' poses; Shift+F1 frees the mouse.");
+            ImGui::SetTooltip("Alt+P. From the level's Player Start, from the camera without one.\nWASD, the mouse, Space, Shift, C. Esc stops; F8 ejects; Shift+F1 frees the mouse.\n"
+                              "K writes the bodies' poses into the LEVEL (UE's Keep Simulation Changes): Stop no longer puts\n"
+                              "them back, Ctrl+Z after Stop does. Not an anchor.");
         }
         ImGui::SameLine();
         if (ImGui::Button("Play From Camera")) { playRequest_ = PlayRequest{ PlayRequest::Kind::Play, true, true }; }

@@ -4985,12 +4985,19 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
             const Mesh::DagSubmesh& ds = dag.submeshes[sOrd];
             const std::uint32_t first = static_cast<std::uint32_t>(tessyClusterCpu_.size());
             const std::uint32_t firstLevel = static_cast<std::uint32_t>(tessyDagLevelCpu_.size());
+            // The asset's share of the frame's pixel error (mesh.json "lodPixelErrorScale"): every cut reads error x K over
+            // the distance, so dividing the errors here is that pixel error times the share -- the camera's, the pages',
+            // the atlases' and the level band's alike, the same factor on a cluster and its parent. A root's FLT_MAX stays.
+            const float errorGain = 1.0f / m->GetLodPixelErrorScale();
+            const auto gained = [errorGain](float e) { return e < FLT_MAX * 0.5f ? e * errorGain : e; };
             for (std::uint32_t k = 0; k < ds.levelCount; ++k)
             {
                 const Mesh::DagLevel& l = dag.levels[ds.firstLevel + k];
+                const float minLod = gained(l.minLodError);
+                const float maxParent = gained(l.maxParentError);
                 std::uint32_t lo, hi;
-                std::memcpy(&lo, &l.minLodError, 4);
-                std::memcpy(&hi, &l.maxParentError, 4);
+                std::memcpy(&lo, &minLod, 4);
+                std::memcpy(&hi, &maxParent, 4);
                 tessyDagLevelCpu_.push_back(DirectX::XMUINT4{ first + (l.firstCluster - ds.firstCluster), l.clusterCount, lo, hi });
             }
             for (std::uint32_t ci = ds.firstCluster; ci < ds.firstCluster + ds.clusterCount; ++ci)
@@ -5022,8 +5029,11 @@ void ShadowGpuData::BuildTessyTables_(const std::unordered_map<const Mesh*, std:
                 }
                 tessyClusterCpu_.push_back(t);
                 static_assert(sizeof(TessyClusterLod) == sizeof(Mesh::ClusterLod), "the mirror of Mesh::ClusterLod");
+                Mesh::ClusterLod scaled = dag.lod[ci];
+                scaled.lodError = gained(scaled.lodError);
+                scaled.parentError = gained(scaled.parentError);
                 TessyClusterLod lod{};
-                std::memcpy(&lod, &dag.lod[ci], sizeof(lod));
+                std::memcpy(&lod, &scaled, sizeof(lod));
                 tessyClusterLodCpu_.push_back(lod);
             }
             tessyDagGroupCpu_[g] = DirectX::XMUINT4{ first, ds.clusterCount, firstLevel, ds.levelCount };

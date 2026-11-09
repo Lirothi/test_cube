@@ -19,9 +19,16 @@ SetPhysicsCommand::SetPhysicsCommand(EditorObjectId id, physics::Motion motion, 
 {
 }
 
-physics::Motion SetPhysicsCommand::DocumentMotion(const EditorObject& obj)
+bool SetPhysicsCommand::VesselAsset(EditorContext& ctx, EditorObjectId id)
 {
-    physics::Motion motion = physics::Motion::Static;
+    const RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
+    const RenderableObject* object = base ? base->AsRenderableObject() : nullptr;
+    return object && object->GetVesselSettings() != nullptr;
+}
+
+physics::Motion SetPhysicsCommand::DocumentMotion(const EditorObject& obj, bool vesselAsset)
+{
+    physics::Motion motion = vesselAsset ? physics::Motion::Dynamic : physics::Motion::Static;
     const auto it = obj.properties.find("physics");
     if (it != obj.properties.end() && it->is_string()) { physics::MotionFromName(it->get<std::string>(), motion); }
     return motion;
@@ -37,7 +44,9 @@ void SetPhysicsCommand::Apply(EditorContext& ctx, EditorObjectId id, physics::Mo
 {
     if (EditorObject* obj = ctx.document.Find(id))
     {
-        if (motion == physics::Motion::Static) { obj->properties.erase("physics"); }
+        // Written only where it differs from the asset's default (a vessel's Dynamic, any other's Static).
+        const physics::Motion assetDefault = VesselAsset(ctx, id) ? physics::Motion::Dynamic : physics::Motion::Static;
+        if (motion == assetDefault) { obj->properties.erase("physics"); }
         else { obj->properties["physics"] = physics::MotionName(motion); }
         if (mass > 0.0f) { obj->properties["mass"] = mass; }
         else { obj->properties.erase("mass"); }
@@ -62,7 +71,7 @@ bool SetPhysicsCommand::Execute(EditorContext& ctx)
 {
     const EditorObject* obj = ctx.document.Find(id_);
     if (!obj) { return false; }
-    beforeMotion_ = DocumentMotion(*obj);
+    beforeMotion_ = DocumentMotion(*obj, VesselAsset(ctx, id_));
     beforeMass_ = DocumentMass(*obj);
     Apply(ctx, id_, motion_, mass_);
     return true;
@@ -100,7 +109,9 @@ std::unique_ptr<EditorCommand> BuildKeepSimulationCommand(EditorContext& ctx, co
         outStatus = "Nothing to keep: no body has moved";
         return nullptr;
     }
-    outStatus = "Kept the pose of " + std::to_string(kept) + (kept == 1 ? " object" : " objects");
+    // Says what it did to the level: it is not this session's, Stop no longer puts these back (Ctrl+Z after Stop does).
+    outStatus = "Wrote the pose of " + std::to_string(kept) + (kept == 1 ? " object" : " objects") +
+                " into the level (unsaved; Ctrl+Z after Stop undoes it)";
     return composite;
 }
 

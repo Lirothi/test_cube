@@ -32,5 +32,28 @@ void main(uint3 dtid : SV_DispatchThreadID)
     p.vel *= max(0.0, 1.0 - drag * dt);
     p.pos += p.vel * dt;
     p.rot += p.spin * dt;
+    // EmitterDesc::collideHulls: a particle that has entered a hull's solid is spent on it (spray thrown at a boat, a boat
+    // turning into the drops it threw). Tested where it now is: it is never drawn inside. Each one is counted once, its
+    // first time in (_pad marks it), into gDeadCount[1] -- the same count whether it dies there or not (the A/B). Not in its
+    // first kHullGrace: a spray's root lies on the hull's skin (the waterline's raster, up to a cell inside it), and taken
+    // at once a fifth of a straight run's drops died where they were born.
+    static const float kHullGrace = 0.08;
+    [branch] if (hullCount > 0u && p.age > kHullGrace && InsideHull(p.pos))
+    {
+        if (asuint(p._pad) == 0u)
+        {
+            InterlockedAdd(gDeadCount[1], 1u);
+            p._pad = asfloat(1u);
+        }
+        if (hullKill != 0u)
+        {
+            p.age = -1.0;
+            gParticles[slot] = p;
+            uint prev;
+            InterlockedAdd(gDeadCount[0], 1u, prev);
+            gDeadList[prev] = slot;
+            return;
+        }
+    }
     gParticles[slot] = p;
 }

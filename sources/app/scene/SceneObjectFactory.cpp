@@ -429,7 +429,13 @@ namespace SceneObjectFactory
         {
             mesh.SetRtCutoutOpacity(o["rtCutoutOpacity"].get<float>());
         }
-        // The water kept out of its convex hull (ocean/WaterMask.h): the asset's mesh.json "waterMask", absent = off.
+        // Its LODs' and cluster DAG's pixel error, a share of the frame's (Mesh::SetLodPixelErrorScale): mesh.json
+        // "lodPixelErrorScale", absent = 1.
+        if (o.contains("lodPixelErrorScale") && o["lodPixelErrorScale"].is_number())
+        {
+            mesh.SetLodPixelErrorScale(o["lodPixelErrorScale"].get<float>());
+        }
+        // The water kept out of it (ocean/WaterMask.h): the asset's mesh.json "waterMask", absent = off.
         if (o.contains("waterMask") && o["waterMask"].is_boolean())
         {
             mesh.SetWaterMask(o["waterMask"].get<bool>());

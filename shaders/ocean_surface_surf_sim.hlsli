@@ -12,7 +12,7 @@
 // ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
 // rather than sRGB). The C++ table stages the same 26 entries for both surfaces; t22-t25, s4 and the
 // transparent pass's GlassView CB (b1) are the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=28, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=29, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -152,39 +152,26 @@ SamplerState PointSampler : register(s2);
 SamplerState AnisotropicWrapSampler : register(s3);
 
 // The hulls the surface is not drawn inside (ocean/WaterMask.h, mesh.json "waterMask"; OceanRenderable fills it every
-// frame): per hull three rows of its world-to-model transform (the model's x y z = dot(row.xyz, world) + row.w), the box
-// of its planes in the model's space with asuint(.w) = the first plane, the plane count; then the planes -- xyz the
-// outward normal, inside where dot(n, p) + w <= 0. The convex hull of the mesh, so the water standing in an open cockpit
-// (under the sea's level) is inside and the sea round the hull never is.
+// frame): COLUMNS, the mesh rasterized from above on a grid in its model's xz, each cell keeping the water out between its
+// bottom (the hull's skin under it) and its top (its rim, a cockpit filled to its lowest edge). Five rows a hull
+// (water_mask_columns.hlsli).
 #define WATER_MASK_MAX_HULLS 4
-#define WATER_MASK_MAX_PLANES 512
 cbuffer WaterMaskCB : register(b2)
 {
-    uint4 waterMaskCount; // x hulls this frame
+    uint4 waterMaskCount; // x hulls this frame, y 1 = discard, 2 = paint the kept-out water magenta (ocean.waterMask:2)
     float4 waterMaskHull[WATER_MASK_MAX_HULLS * 5];
-    float4 waterMaskPlanes[WATER_MASK_MAX_PLANES];
 };
+StructuredBuffer<float4> WaterMaskColumns : register(t28);
+#include "water_mask_columns.hlsli"
 
 bool InsideWaterMask(float3 worldPos)
 {
     for (uint h = 0u; h < min(waterMaskCount.x, (uint)WATER_MASK_MAX_HULLS); ++h)
     {
-        const float4 r0 = waterMaskHull[h * 5u + 0u];
-        const float4 r1 = waterMaskHull[h * 5u + 1u];
-        const float4 r2 = waterMaskHull[h * 5u + 2u];
-        const float3 p = float3(dot(r0.xyz, worldPos) + r0.w, dot(r1.xyz, worldPos) + r1.w, dot(r2.xyz, worldPos) + r2.w);
-        const float4 boxMin = waterMaskHull[h * 5u + 3u];
-        const float4 boxMax = waterMaskHull[h * 5u + 4u];
-        if (any(p < boxMin.xyz) || any(p > boxMax.xyz)) { continue; }
-        const uint first = asuint(boxMin.w);
-        const uint count = asuint(boxMax.w);
-        bool inside = true;
-        for (uint i = 0u; i < count && inside; ++i)
-        {
-            const float4 plane = waterMaskPlanes[min(first + i, (uint)WATER_MASK_MAX_PLANES - 1u)];
-            inside = dot(plane.xyz, p) + plane.w <= 0.0f;
-        }
-        if (inside) { return true; }
+        float y;
+        const float4 column = HullColumnAt(worldPos, waterMaskHull[h * 5u + 0u], waterMaskHull[h * 5u + 1u], waterMaskHull[h * 5u + 2u],
+                                           waterMaskHull[h * 5u + 3u], waterMaskHull[h * 5u + 4u], WaterMaskColumns, y);
+        if (y >= column.x && y <= column.y) { return true; }
     }
     return false;
 }
@@ -1209,7 +1196,8 @@ PSOut PSMain(VSOutput input)
     // The water a marked hull keeps out (WaterMaskCB): not drawn there, the hull's own floor and walls show. The depth was
     // written already ([earlydepthstencil]: the stamp UAV below must not run for a hidden pixel): what draws after the
     // ocean and tests depth there meets the water's height, not the floor's.
-    [branch] if (waterMaskCount.x > 0u && InsideWaterMask(input.worldPos))
+    const bool keptOut = waterMaskCount.x > 0u && InsideWaterMask(input.worldPos);
+    [branch] if (keptOut && waterMaskCount.y != 2u)
     {
         discard;
     }
@@ -1493,7 +1481,8 @@ PSOut PSMain(VSOutput input)
     //outColor = float4(attenuation.xxx, 1.0f);
 
     PSOut o;
-    o.color = outColor;
+    // ocean.waterMask:2: the kept-out water magenta, at three times the water's own brightness (the exposure stays the frame's).
+    o.color = keptOut ? float4(float3(1.0f, 0.0f, 1.0f) * max(dot(outColor.rgb, (1.0f / 3.0f).xxx) * 3.0f, 1e-3f), outColor.a) : outColor;
     o.velocity = motion;
     o.gb0 = OceanGBuffer0(gb);
     o.gb1 = OceanGBuffer1(gb);

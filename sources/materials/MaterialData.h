@@ -162,6 +162,9 @@ public:
     // (surfaceParams), which is a leaf's back-lighting. ior: KHR_materials_ior, 1.5 = glTF's default.
     float         glassTransmission = 1.0f;
     float         glassIor = 1.5f;
+    // The glass under the surface for the refraction (m): 0 = a pane, straight through; < 0 = the frame's glass.wall
+    // (material "glassWall", absent). A windshield is a pane, the bathroom's tumblers take the frame's solid block.
+    float         glassWall = -1.0f;
     bool IsThinTranslucent() const { return shadingModel == ShadingModel::ThinTranslucent; }
     // Glass with no alpha test: no texel of it is opaque, so it takes no opaque path at all.
     bool IsGlassOnly() const { return IsThinTranslucent() && !alphaMask; }

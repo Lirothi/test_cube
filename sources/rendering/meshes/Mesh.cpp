@@ -302,7 +302,7 @@ void Mesh::GetLodScreenSizes(float pixelError, float (&out)[render::kLodScreenSi
     float deviation[render::kLodScreenSizes] = {};
     const UINT count = std::min<UINT>(GetLodCount(), render::kLodScreenSizes);
     for (UINT i = 1; i < count; ++i) { deviation[i] = extraLods_[i - 1u].error; }
-    render::AutoLodScreenSizes(deviation, count, boundingSphereRadius_, pixelError, out);
+    render::AutoLodScreenSizes(deviation, count, boundingSphereRadius_, pixelError * lodPixelErrorScale_, out);
 }
 
 const std::vector<Mesh::Submesh>& Mesh::SubmeshesForLod(UINT lod) const {

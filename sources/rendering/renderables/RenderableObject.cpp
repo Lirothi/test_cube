@@ -636,7 +636,14 @@ void RenderableObject::PostTick(float dt)
 void RenderableObject::SetMesh(std::shared_ptr<Mesh> mesh)
 {
     mesh_ = std::move(mesh);
+    if (mesh_ && lodPixelErrorScale_ > 0.0f) { mesh_->SetLodPixelErrorScale(lodPixelErrorScale_); }
     MarkWorldBoundsDirty();
+}
+
+void RenderableObject::SetLodPixelErrorScale(float scale)
+{
+    lodPixelErrorScale_ = scale > 0.0f ? scale : 1.0f;
+    if (mesh_) { mesh_->SetLodPixelErrorScale(lodPixelErrorScale_); }
 }
 
 void RenderableObject::MarkWorldBoundsDirty()

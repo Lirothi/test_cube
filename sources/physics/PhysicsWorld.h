@@ -60,6 +60,7 @@ namespace physics
         bool testSprint = false;
         bool testInteract = false;    // one press of the helm's key, cleared when taken
         bool testView = false;        // one press of the view's key, cleared when taken
+        bool testAnchor = false;      // one press of the anchor's key at the helm, cleared when taken
         float testThrottle = 0.0f;    // what W and S say at the helm
         float testRudder = 0.0f;      // what A and D say
         float testOrbit = 0.0f;       // radians about the boat: a script's shot from the side, held while it is not 0
@@ -92,6 +93,7 @@ namespace physics
         float upY = 1.0f;        // of its up: with starboardY, its roll whatever its pitch
         float halfLength = 0.0f;
         float halfBeam = 0.0f;
+        bool anchored = false;   // its anchor is down (World::ToggleAnchor)
         VesselState vessel;
     };
 
@@ -105,10 +107,13 @@ namespace physics
         Math::float3 up;        // the deck's up, world, unit
         Math::float3 scale;
         float speed = 0.0f;     // m/s along the hull, as the frame shows it
+        Math::float3 velocity;        // the origin's, m/s, world: the last step's motion (a turn's sway and drift in it)
+        Math::float3 angularVelocity; // rad/s, world: the last step's turn (a point r off the origin moves at v + w x r)
         float impact = 0.0f;    // its last slam into a wave, a share of its weight, fading (VesselState::impact)
         float immersion = 0.0f; // how deep it sits, 1 = as deep as at rest, 0 = in the air (VesselState::immersion)
         float waterHeight = 0.0f; // the surface under it (VesselState::waterHeight)
         bool atHelm = false;
+        bool anchored = false;
     };
 
     struct PlayerState
@@ -227,6 +232,9 @@ namespace physics
         RenderableObject* FindVessel(const Math::float3& point, float reach) const;
         bool SetHelm(RenderableObject* vessel);
         void SetHelmInput(const VesselInput& input);
+        // Drops the boat's anchor under its bow, or weighs it: what it is after (true = down). The world's, not the level's:
+        // Stop weighs every anchor with the rest of the session.
+        bool ToggleAnchor(RenderableObject* vessel);
         const HelmState& GetHelm() const;
         // Every boat as the last Display drew it -- the game's alone, never waits for a step (Scene::Sync hands them to
         // the ocean's wake).
@@ -283,12 +291,9 @@ namespace physics
     SolidBox FitSolidBox(const std::vector<Math::float3>& points);
     SolidBox MeasureSolidBox(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots);
 
-    // The convex hull of a mesh asset's LOD 0 (every slot) as the planes of its faces in the model's space -- xyz the outward
-    // normal, w the constant: a point is inside where dot(n, p) + w <= 0 for every plane -- and their box. At most
-    // `maxPlanes`: the hull's tolerance grows (from 5 mm) until it fits. The water mask's (ocean/WaterMask). False if the
-    // geometry cannot be read or has no volume.
-    bool ConvexHullPlanes(const std::string& geometryPath, std::size_t maxPlanes, std::vector<Math::float4>& planes,
-                          Math::float3& boxMin, Math::float3& boxMax);
+    // A mesh asset's LOD 0 triangles (every slot) in the model's space, only the vertices they use. The water mask's columns
+    // (ocean/WaterMask). False if the geometry cannot be read.
+    bool ReadSolidTriangles(const std::string& geometryPath, std::vector<Math::float3>& positions, std::vector<std::uint32_t>& indices);
 
     // The gates (docs/physics_plan.md section 5), no window and no scene: `name` empty = all of them. Each logs
     // `physics gate: <name> PASS|FAIL|SKIP ...`; returns the number that failed. --physics-gate and intent_regression run this.

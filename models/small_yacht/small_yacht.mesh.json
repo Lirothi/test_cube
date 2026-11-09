@@ -1,6 +1,7 @@
 {
   "bakeScale": 0.0009997622109949589,
   "geometry": "models/small_yacht/small_yacht.mesh.bin",
+  "lodNormalWeight": 0.5,
   "materials": [
     "small_yacht_0",
     "small_yacht_1",

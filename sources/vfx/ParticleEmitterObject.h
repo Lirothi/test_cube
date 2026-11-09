@@ -57,6 +57,9 @@ public:
     void AddBurst(float count) { spawnAccum_ = std::min(spawnAccum_ + std::max(count, 0.0f), static_cast<float>(desc_.maxParticles)); }
     // Particles alive a few frames ago (the dead counter's readback ring, settled), 0 before it has one.
     uint32_t AliveCount() const;
+    // Particles that have entered a hull since the emitter was made (EmitterDesc::collideHulls; counted whether they die
+    // there or not), as of the same retired readback slot.
+    uint32_t HullEntries() const;
 
     bool PrepareCompute(RenderGraphPassContext& ctx) override;
     void PrepareRender(RenderGraphPassContext& ctx) override;

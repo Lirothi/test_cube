@@ -211,7 +211,7 @@ namespace scene_internal
         float4 fogParams1;            // max opacity, sun scatter strength, sun scatter exponent, sun scatter start
         float4 fogParams2;            // sky blur, sky back-scatter, zw reserved
         float4 csmSdsmParams;         // S15: x = active SDSM partitions, 0 = not SDSM mode
-        float4 glassRefraction;       // x = the glass shell's wall (m), 0 = straight through (glass.hlsl)
+        float4 glassRefraction;       // x = the glass shell's wall (m), 0 = straight through (glass.hlsl); y = 1: the depth copy is bound
         float4 glassSkyVis;           // plan S: lighting's skyVisParams, for the glass slots' sky terms
         float4 fogInscatter;          // PackHeightFog's: UE's fog colour, w = 1 = in use (appended at the tail)
         float4 fogSunDirectional;     // PackHeightFog's: the sun lobe's own coloured term / 4 pi (appended at the tail)
@@ -446,10 +446,11 @@ namespace scene_internal
         vc.csmSdsmParams = float4(frame.sdsm ? (float)frame.sdsm->FrameParams().partitions : 0.0f,
                                   0.0f, 0.0f, 0.0f);
         // Glass refraction through a glass shell (glass.hlsl GlassRefractedUv): its wall, and only
-        // with the opaque depth copy it lands on (t18 of a glass material slot).
-        vc.glassRefraction = float4(renderer->GetDeferredForFrame().depthCopySRV.ptr != 0
-                                        ? std::max(frame.settings.glassWallThickness, 0.0f) : 0.0f,
-                                    0.0f, 0.0f, 0.0f);
+        // with the opaque depth copy it lands on (t18 of a glass material slot); y = 1 with the copy, so a
+        // material's own wall ("glassWall") works under any frame's.
+        const bool glassDepthCopy = renderer->GetDeferredForFrame().depthCopySRV.ptr != 0;
+        vc.glassRefraction = float4(glassDepthCopy ? std::max(frame.settings.glassWallThickness, 0.0f) : 0.0f,
+                                    glassDepthCopy ? 1.0f : 0.0f, 0.0f, 0.0f);
         // Plan S: the RT sky visibility occludes a glass slot's sky fill and reflection (t19, the opaque
         // scene's bent normal behind the glass); lighting's own gate and strengths.
         vc.glassSkyVis = skyVisParams;

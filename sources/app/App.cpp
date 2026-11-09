@@ -76,6 +76,7 @@ bool g_hudHidden = false;
 bool g_bootLogWindow = false;
 bool g_bootMemoryWindow = false;
 std::string g_bootDevTab;
+int g_bootMcpPort = 0;
 bool g_bootEditor = false;
 bool g_bootPlay = false;
 std::string g_bootEditMesh;
@@ -452,6 +453,7 @@ namespace
             if (key == "testSprint") { player.testSprint = value != 0.0f; return true; }
             if (key == "testInteract") { player.testInteract = value != 0.0f; return true; }
             if (key == "testView") { player.testView = value != 0.0f; return true; }
+            if (key == "testAnchor") { player.testAnchor = value != 0.0f; return true; }
             if (key == "testThrottle") { player.testThrottle = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testRudder") { player.testRudder = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testOrbit") { player.testOrbit = value; return true; }
@@ -1520,12 +1522,14 @@ namespace
         if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
         if (setting == "ocean.sunShadowBody") { ocean::g_sunShadowBody_game = std::clamp(value, 0.0f, 1.0f); return true; }
         // The water kept out of the marked hulls (ocean/WaterMask.h): 0 = drawn inside them, the A/B.
-        if (setting == "ocean.waterMask") { ocean::g_waterMask_game = value != 0.0f; return true; }
+        if (setting == "ocean.waterMask") { ocean::g_waterMask_game = std::clamp(static_cast<int>(value), 0, 2); return true; }
         // The boats' spray (vfx/VesselSpray): the ocean preset's knobs (OceanRenderConfig::spray*, the Ocean window and the
         // Inspector's "Boat spray") -- on/off, how much (a share of what the presets can keep alive), the shares of the
         // hull's speed a drop leaves with, the drops' albedo and forward lobe, the white water along the hulls' sides.
         // A lit particle's air: the fog's colour as before 2026-11-09 (the A/B), 0 = the sky's distant light.
         if (setting == "particles.airFromFog") { vfx::g_litAirFromFog_game = value != 0.0f; return true; }
+        if (setting == "particles.collideHulls") { vfx::g_collideHulls_game = value != 0.0f; return true; }
+        if (setting == "spray.sidePush") { vfx::g_spraySidePush_game = value != 0.0f; return true; }
         if (setting.rfind("spray.", 0) == 0)
         {
             OceanRenderable* ocean = scene.FindOceanRenderable();
@@ -1636,6 +1640,21 @@ namespace
             else if (setting == "ocean.wakeChurn") { cfg.wakeChurn = std::clamp(value, 0.0f, 1.0f); }
             else { return false; }
             sim->SetRenderConfig(cfg);
+            return true;
+        }
+        // The surf sim's wave height on the surface (OceanRenderConfig::surfSimDisplacement, 0 = the sim runs, the water does
+        // not rise by it): the A/B of what the shore's breakers do to what floats -- OceanReadback adds the same height.
+        if (setting == "ocean.surfDisplacement")
+        {
+            if (OceanRenderable* ocean = scene.FindOceanRenderable())
+            {
+                if (OceanSimulation* sim = ocean->GetSimulation())
+                {
+                    OceanRenderConfig cfg = sim->GetRenderConfig();
+                    cfg.surfSimDisplacement = std::clamp(value, 0.0f, 2.0f);
+                    sim->SetRenderConfig(cfg);
+                }
+            }
             return true;
         }
         // The water body's floor under a low sun (OceanRenderConfig::lowSunBodyLight), for a headless
@@ -2364,11 +2383,11 @@ namespace
                         const float starboardY = b.up.z * b.forward.x - b.up.x * b.forward.z; // (up x forward).y
                         const float pitchDeg = std::asin(std::clamp(b.forward.y, -1.0f, 1.0f)) * 57.2957795f;
                         const float rollDeg = std::atan2(starboardY, b.up.y) * 57.2957795f;
-                        char boatItem[256];
+                        char boatItem[288];
                         std::snprintf(boatItem, sizeof(boatItem),
-                                      "%s{\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s}",
+                                      "%s{\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s,\"anchored\":%s}",
                                       i > 0 ? "," : "", b.position.x, b.position.y, b.position.z, b.forward.x, b.forward.y, b.forward.z,
-                                      pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false");
+                                      pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false", b.anchored ? "true" : "false");
                         out += boatItem;
                     }
                     out += "]";
@@ -2376,11 +2395,11 @@ namespace
                 // The boats' spray (vfx/VesselSpray): boats with emitters, drops a second thrown now, slam bursts so far.
                 {
                     const vfx::VesselSpray& spray = scene_.VesselSprayRef();
-                    char sprayItem[256];
+                    char sprayItem[320];
                     std::snprintf(sprayItem, sizeof(sprayItem),
-                                  ",\"spray\":{\"boats\":%zu,\"rate\":%.1f,\"sheetRate\":%.1f,\"bursts\":%d,\"sheetAlive\":%u,\"sheetCapacity\":%u,\"mistAlive\":%u,\"mistCapacity\":%u}",
+                                  ",\"spray\":{\"boats\":%zu,\"rate\":%.1f,\"sheetRate\":%.1f,\"bursts\":%d,\"sheetAlive\":%u,\"sheetCapacity\":%u,\"mistAlive\":%u,\"mistCapacity\":%u,\"hullEntries\":%llu}",
                                   spray.Boats(), spray.Rate(), spray.SheetRate(), spray.Bursts(), spray.SheetAlive(), spray.SheetCapacity(),
-                                  spray.MistAlive(), spray.MistCapacity());
+                                  spray.MistAlive(), spray.MistCapacity(), static_cast<unsigned long long>(spray.HullEntries()));
                     out += sprayItem;
                 }
                 // Who holds the keys: a key a panel's focus keeps never reaches InputManager (App::WndProc), and a script's posted key cannot tell that from a broken action.

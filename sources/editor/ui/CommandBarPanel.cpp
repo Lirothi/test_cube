@@ -272,9 +272,12 @@ void CommandBarPanel::SetModelSettings(const LlmIntentSettings& settings)
     ApplyMcpSettings(settings);
 }
 
+extern int g_bootMcpPort; // app/App.h: "--mcp-port=<n>", 0 = editor_state's
+
 void CommandBarPanel::ApplyMcpSettings(const LlmIntentSettings& settings)
 {
-    if (mcp_.Running() && (!settings.mcpEnabled || mcp_.Port() != settings.mcpPort))
+    const int port = g_bootMcpPort > 0 ? g_bootMcpPort : settings.mcpPort;
+    if (mcp_.Running() && (!settings.mcpEnabled || mcp_.Port() != port))
     {
         mcp_.Stop();
     }
@@ -286,7 +289,7 @@ void CommandBarPanel::ApplyMcpSettings(const LlmIntentSettings& settings)
     if (!mcp_.Running())
     {
         std::string error;
-        if (mcp_.Start(settings.mcpPort, error))
+        if (mcp_.Start(port, error))
         {
             mcpError_.clear();
         }

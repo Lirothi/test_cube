@@ -792,6 +792,7 @@
     <None Include="graphics_settings.json" />
     <None Include="shaders\axes.hlsl" />
     <None Include="shaders\particle_common.hlsli" />
+    <None Include="shaders\water_mask_columns.hlsli" />
     <None Include="shaders\particle_sort_cs.hlsl" />
     <None Include="shaders\particle_spawn_cs.hlsl" />
     <None Include="shaders\particle_update_cs.hlsl" />

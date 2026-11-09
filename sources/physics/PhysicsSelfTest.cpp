@@ -898,7 +898,7 @@ namespace physics
         // it; it slows by itself; a rudder turns it to its own side; a boat lying still answers no rudder and one on its propeller's wash does; going astern it turns the other way. On waves: it
         // rides a long swell up and down and along its slope; a slope pushes it; a sea at an angle yaws it; at full speed into steep waves it slams and stays on its keel. The arms that must come
         // out wrong: no rudder keeps the course, a propeller out of the water pushes nothing, nothing in the water pushes nothing, the weight up top capsizes it, a boat that cannot see the waves
-        // does not ride them, no wave force pushes nothing and yaws nothing, no slam slams nothing.
+        // does not ride them, no wave force pushes nothing and yaws nothing, no slam slams nothing. At anchor a steady pull is held at the scope; weighed, it carries the boat off.
         struct TestBoat
         {
             TestWorld world{ 1 };
@@ -909,6 +909,10 @@ namespace physics
             float factor = 1.0f;
             float time = 0.0f;
             std::function<float(float, float, float)> sea = [](float, float, float) { return 0.0f; };
+            // The anchor's rode on the stem of the box, at the draft (the world's bowLocal).
+            bool anchored = false;
+            JPH::Vec3 anchorPoint = JPH::Vec3::sZero();
+            JPH::Vec3 bowLocal = JPH::Vec3(5.0f, settings.draft, 0.0f);
 
             explicit TestBoat(const VesselSettings& boat, JPH::QuatArg rotation = JPH::Quat::sIdentity(), float y = 0.0f) : settings(boat)
             {
@@ -944,6 +948,7 @@ namespace physics
                     {
                         JPH::BodyLockWrite lock(world.system.GetBodyLockInterface(), body);
                         PushVessel(lock.GetBody(), settings, one, state, VesselInput{ throttle, rudder }, water, factor, world.system.GetGravity(), kStep);
+                        if (anchored) { PullAnchor(lock.GetBody(), settings, bowLocal, anchorPoint, kStep); }
                     }
                     world.Step(1);
                     time += kStep;
@@ -1182,10 +1187,37 @@ namespace physics
             expect(noSlam == 0.0f, "no slam slams nothing");
             expect(seaSpeed > 6.0f && seaSpeed < top, "the sea costs it speed");
 
+            // ---- the anchor: dropped under the bow, then a steady pull astern (half astern, as a wind on the bow would) -- the
+            // rode lies slack for its scope, takes up, and holds the bow at scope + pull / stiffness, the boat lying to it. The
+            // arm: weighed, the same pull carries it off.
+            const auto lieTo = [&](bool anchored)
+            {
+                TestBoat boat(base, JPH::Quat::sIdentity(), -base.draft);
+                boat.Run(2.0f, 0.0f, 0.0f);
+                boat.anchored = anchored;
+                boat.anchorPoint = boat.Position() + boat.Rotation() * boat.bowLocal;
+                float farthest = 0.0f;
+                const auto reach = [&]()
+                {
+                    const JPH::Vec3 bow = boat.Position() + boat.Rotation() * boat.bowLocal;
+                    return JPH::Vec3(bow.GetX() - boat.anchorPoint.GetX(), 0.0f, bow.GetZ() - boat.anchorPoint.GetZ()).Length();
+                };
+                boat.Run(60.0f, -0.5f, 0.0f, [&]() { farthest = std::max(farthest, reach()); });
+                return std::make_tuple(reach(), farthest);
+            };
+            const auto [anchorReach, anchorFarthest] = lieTo(true);
+            const auto [driftReach, driftFarthest] = lieTo(false);
+            (void)driftFarthest;
+            const float anchorPull = base.thrust * base.reverseShare * 0.5f;
+            const float anchorHold = base.anchorScope + anchorPull / base.anchorStiffness;
+            expect(std::fabs(anchorReach - anchorHold) < 0.5f && anchorFarthest < anchorHold + 4.0f, "the anchor holds it");
+            expect(driftReach > 4.0f * anchorHold, "weighed, it drifts off");
+
             detail = "factor " + num(cruise.factor) + ", at rest y " + num(restY) + " (draft " + num(base.draft) + "), top " + num(top) + " m/s (wanted " + num(wantedTop) + "), on the plane after " + num(toPlane) +
                 " s, risen " + num(riseOnPlane) + " m, bow up " + num(planeBow) + " deg, at the hump " + num(humpBow) + ", coasted to " + num(coasted) + ", a fifth of the throttle " + num(underHump) +
                 " m/s; 4 s hard over " + num(starboard) + " / " + num(port) + " deg, roll " + num(starboardRoll) + " deg, speed " + num(starboardSpeed) + "; lying still " + num(stillTurn) + " deg, on the wash " + num(washTurn) +
                 " deg at " + num(washSpeed) + " m/s; astern " + num(back) + " m/s, turning " + num(asternTurn) + " deg; dry propeller " + num(drySpeed) + " m/s; righted up.y " + num(rightedUp) + ", top-heavy " + num(capsizedUp) +
+                "; anchored the bow at " + num(anchorReach) + " m (held at " + num(anchorHold) + ", farthest " + num(anchorFarthest) + "), weighed " + num(driftReach) + " m" +
                 "; swell: heave " + num(heave) + " m (blind " + num(blindHeave) + "), off its draft by " + num(follow) + " m, off the slope by " + num(pitchLag) + " deg; on the beam " + num(pushed) + " / " + num(unpushed) +
                 " m, at an angle " + num(yawSwing) + " / " + num(noYawSwing) + " deg; head sea: up.y " + num(seaUp) + ", bow " + num(seaBow) + " deg, slam " + num(seaSlam) + " of the weight, " + num(seaSpeed) + " m/s" +
                 (failures.empty() ? "" : "; WRONG:" + failures);

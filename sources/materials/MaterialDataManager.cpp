@@ -32,6 +32,10 @@ namespace
         preset.transmissionPath = widen(p.value("transmissionMap", std::string{}));
         preset.transmission = std::clamp(p.value("transmission", 1.0f), 0.0f, 1.0f);
         preset.ior          = std::clamp(p.value("ior", 1.5f), 1.0f, 3.0f);
+        if (const auto wall = p.find("glassWall"); wall != p.end() && wall->is_number())
+        {
+            preset.glassWall = std::clamp(wall->get<float>(), 0.0f, 0.5f);
+        }
         preset.shaderPath   = widen(p.value("shader", std::string{}));
         preset.normalIsRG   = p.value("normalIsRG", true);
 
@@ -296,6 +300,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreate(Renderer* rendere
     md->shaderOverride = p.shaderPath;
     md->glassTransmission = p.transmission;
     md->glassIor = p.ior;
+    md->glassWall = p.glassWall;
     if (p.hasParams)
     {
         md->hasPresetParams = true;

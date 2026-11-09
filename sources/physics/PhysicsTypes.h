@@ -84,6 +84,12 @@ namespace physics
         float waveForce = 1.0f;     // the surface's slope pushes the hull down it (Froude-Krylov): 1 = physics, 0 = none. A swell surfs it, and a slope that differs at the bow and the stern yaws it
         float slam = 1500.0f;       // N per (m/s)2 of a part of the hull falling into the water faster than it rises
         float slamMax = 0.4f;       // of the weight, the most a part of the hull takes
+        // The anchor (Play's: X at the helm drops it under the bow, again weighs it, Stop weighs it). The rode lies slack within
+        // anchorScope of the anchor; past it it pulls the bow back, a spring with damping -- so the boat swings round the
+        // anchor, bow to it, and full ahead stretches it thrust / stiffness further.
+        float anchorScope = 8.0f;       // m of slack round the anchor
+        float anchorStiffness = 8000.0f; // N per m past the scope
+        float anchorDamping = 6000.0f;  // N per m/s of the bow running out along the rode
         float cameraDistance = 15.0f; // m
         float cameraHeight = 2.5f;  // m over the mesh's origin
         // m/s: faster than this the hull leaves the GI probes' rays. They stand in the world, and it flies through them: a probe is inside it, out of it and behind it from one update to the next, and

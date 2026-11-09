@@ -23,18 +23,37 @@ cbuffer EmitterParams : register(b1)
     float3 lineVec;     float _padL;    // a segment emitter: born on emitterPos .. emitterPos + lineVec
     float3 emitterVel;  float _padE;    // the emitter's own motion: a birth u into the frame starts where it was then
     float3 baseVel;     float _padB;    // added to every birth velocity (the carrier's)
+    uint hullCount;     uint hullKill;  uint2 _padH; // EmitterDesc::collideHulls: the frame's hulls (ocean::WaterMaskFrame), 0 = none;
+                                                     // hullKill 0 = only counted (particles.collideHulls:0, the A/B)
+    float4 hullRows[4 * 5];             // five rows a hull (water_mask_columns.hlsli)
 };
 
 // Both CS share one root signature: b0 = spawn-batch constants (unused by update), b1 = emitter
-// CB, u0..u2 = particles / dead list / dead counter.
+// CB, u0..u2 = particles / dead list / dead counter, t0 = the hulls' columns (read under hullCount).
 #define PARTICLE_CS_RS \
     "RootConstants(num32BitConstants=4, b0)," \
     "CBV(b1)," \
-    "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
+    "DescriptorTable(UAV(u0, numDescriptors=3, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=1, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))"
 
 RWStructuredBuffer<Particle> gParticles : register(u0);
 RWStructuredBuffer<uint>     gDeadList  : register(u1); // stack of dead slot indices
-RWStructuredBuffer<uint>     gDeadCount : register(u2); // [0] = stack size (alive = max - this)
+RWStructuredBuffer<uint>     gDeadCount : register(u2); // [0] = stack size (alive = max - this), [1] = particles that entered a hull
+StructuredBuffer<float4>     gHullColumns : register(t0); // ocean/WaterMask's columns
+#include "water_mask_columns.hlsli"
+
+// Inside a hull's solid (its skin, its deck, a cockpit's floor and seats; not the cockpit's air): a drop is spent on it.
+inline bool InsideHull(float3 pos)
+{
+    for (uint h = 0u; h < min(hullCount, 4u); ++h)
+    {
+        float y;
+        const float4 column = HullColumnAt(pos, hullRows[h * 5u + 0u], hullRows[h * 5u + 1u], hullRows[h * 5u + 2u],
+                                           hullRows[h * 5u + 3u], hullRows[h * 5u + 4u], gHullColumns, y);
+        if (y >= column.x && y <= column.z) { return true; }
+    }
+    return false;
+}
 
 // PCG-style integer hash; float01 maps to [0,1).
 inline uint Pcg(uint v)

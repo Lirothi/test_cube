@@ -1012,6 +1012,10 @@ int WINAPI WinMain(
             while (*end && *end != ' ' && *end != '\t') { ++end; }
             g_bootDevTab.assign(value, end);
         }
+        // "--mcp-port=<n>": serve the editor's MCP on that port (a script's editor beside the owner's, see App.h).
+        if (const char* flag = std::strstr(lpCmdLine, "--mcp-port=")) {
+            g_bootMcpPort = std::atoi(flag + std::strlen("--mcp-port="));
+        }
         // "--editor": open the Level Editor at boot, so a --shot can photograph its panels.
         if (std::strstr(lpCmdLine, "--editor")) {
             g_bootEditor = true;
@@ -1041,11 +1045,22 @@ int WINAPI WinMain(
             g_bootShowImport = true;
             g_bootEditor = true;
         }
-        // "--inspect=<type>[#<group>]": the Inspector on that environment object, scrolled to the group (implies --editor).
+        // "--inspect=<type>[#<group>]": the Inspector on that environment object, scrolled to the group (implies --editor);
+        // or on the level object of that NAME ("--inspect="small_yacht 001#end"", quoted when it holds a space; any group
+        // of an object scrolls to the Inspector's end, where its type's own rows -- Physics, Buoyancy -- are drawn).
         if (const char* flag = std::strstr(lpCmdLine, "--inspect=")) {
             const char* value = flag + std::strlen("--inspect=");
             const char* end = value;
-            while (*end && *end != ' ' && *end != '\t') { ++end; }
+            if (*value == '"')
+            {
+                ++value;
+                end = value;
+                while (*end && *end != '"') { ++end; }
+            }
+            else
+            {
+                while (*end && *end != ' ' && *end != '\t') { ++end; }
+            }
             g_bootInspect.assign(value, end);
             g_bootEditor = g_bootEditor || !g_bootInspect.empty();
         }

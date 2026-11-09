@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "core/math/Math.h"
@@ -316,6 +317,8 @@ private:
     Math::float4 GetWakeParams3() const; // x: the white water's relief (wakeChurn), yzw reserved
     // The wake's free height for OceanReadback when frame `frame` stepped it (and the surface reads it), else null.
     ID3D12Resource* GetWakeFreeHeightResource(std::uint64_t frame) const;
+    // The surf sim's height for OceanReadback when frame `frame` handed it over and the surface displaces by it, else null.
+    ID3D12Resource* GetSurfSimWaveResource(std::uint64_t frame) const;
     Math::float4 GetShoreSwashParams() const;
     Math::float4 GetShoreSamplingParams() const;
     Math::float4 GetSunDirAmbient() const;
@@ -358,6 +361,17 @@ private:
     std::unique_ptr<OceanWake> wake_;
     bool wakeHasHulls_ = false; // the last hand-over had a boat: the field's resources are made only then
     std::vector<ocean::WaterMaskInstance> waterMasks_; // this frame's, from Scene::Sync
+    // The masks' columns on the GPU (t28): an upload buffer of ocean::kWaterMaskMaxCells float4, each field written once,
+    // when first met, into room no draw has read yet; made with the first mask. And this frame's hulls packed into
+    // ocean::g_waterMaskFrame. Every frame, before the render graph (EnsureSimulationResources).
+    void EnsureWaterMaskColumns(Renderer* renderer);
+    Microsoft::WRL::ComPtr<ID3D12Resource> waterMaskColumns_;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> waterMaskHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE waterMaskSrv_{};
+    Math::float4* waterMaskMapped_ = nullptr;
+    std::uint32_t waterMaskUsed_ = 0;                                            // cells written
+    std::unordered_map<const ocean::WaterMaskField*, std::uint32_t> waterMaskFirst_; // a field's first cell
+    std::vector<std::shared_ptr<const ocean::WaterMaskField>> waterMaskKeep_;   // the keys are pointers: never freed and reused
     std::unique_ptr<OceanWetness> wetness_;
     OceanReadback readback_;
 

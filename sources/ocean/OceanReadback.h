@@ -31,10 +31,12 @@ struct RenderGraphPassContext;
 // and -- because the displacement is CHOPPY, a surface point P sits where some other grid point X
 // was pushed to -- the fixed-point inverse X = P - D.xz(X), `samplingIterations` steps. Not
 // reproduced: the depth-buffer damping the shader falls back to outside the 500 m shore window
-// (full amplitude out there) and the surf sim's height (off by default).
+// (full amplitude out there).
 //
 // A boat's wake (OceanWake) rides along: its FREE height -- the field plus the hulls' own head, so a hull at rest does
 // not float in its own hollow -- copied with the cascades, sampled where the vertex shader adds the wake's height.
+// So does the surf sim's wave (OceanSurfSim, the shore's breakers; 2026-11-09, owner: "the surf sim's wave does not move
+// the buoyancy"): its height field, copied on the frames its pass handed it over, added as the vertex shader adds it.
 class OceanReadback
 {
 public:
@@ -93,10 +95,12 @@ public:
     std::uint32_t LatencyFrames() const { return latency_; }
 
 private:
-    Math::float3 Displacement(float baseX, float baseZ, float wakeShare) const;
+    // `heights`: add the terms that move only y (the wake, the surf) -- the fixed-point iteration leaves them out.
+    Math::float3 Displacement(float baseX, float baseZ, float wakeShare, bool heights) const;
     Math::float3 SampleCascade(std::uint32_t cascade, float u, float v) const;
     float SampleShoreDepth(float u, float v) const;
     float SampleWake(float u, float v) const;
+    float SampleSurf(float u, float v) const;
     bool EnsureBuffer(Renderer* renderer, ID3D12Resource* displacement, ID3D12Resource* shore,
         std::uint32_t cascades);
     // Forget the adopted surface; copies in flight are marked to be freed, never adopted. Their
@@ -112,6 +116,7 @@ private:
         bool discard = false;    // recorded before DropSurface: free it when it lands, do not adopt
         ShoreParams shore;
         Math::float4 wake{};     // the wake's window as the copy saw it (GetWakeParams): z = 0 -> no wake copied
+        Math::float4 surf{};     // the surf sim's window xyz (GetSurfSimParams) and its height scale w: z = 0 -> none copied
     };
 
     Microsoft::WRL::ComPtr<ID3D12Resource> buffer_; // render::kFrameCount slots
@@ -120,6 +125,7 @@ private:
     std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> cascadeFootprint_{};
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT shoreFootprint_{};
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT wakeFootprint_{}; // R16F, OceanWake::kResolution square: room in every slot
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT surfFootprint_{}; // RG16F, OceanSurfSim::kResolution square: room in every slot
     // BuildPass' copy as its body records it, read here rather than captured (~150 B of capture was a heap
     // allocation per copy). Written by the builder, read by the body in the same frame's graph run.
     struct CopyPass
@@ -129,12 +135,14 @@ private:
         std::array<D3D12_PLACED_SUBRESOURCE_FOOTPRINT, 2> cascadeFp{};
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT shoreFp{};
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT wakeFp{};
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT surfFp{};
         std::array<UINT, 2> subresource{};
         std::uint32_t cascades = 0;
         bool copyShore = false;
         ID3D12Resource* displacement = nullptr;
         ID3D12Resource* shore = nullptr;
         ID3D12Resource* wake = nullptr; // null: no wake this copy
+        ID3D12Resource* surf = nullptr; // null: no surf this copy
         std::uint32_t copyPoint = 0, restorePoint = 0;
     };
     CopyPass copyPass_;
@@ -147,6 +155,7 @@ private:
     std::vector<std::pair<std::uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>> retired_;
     bool requested_ = false;
     bool shoreQueued_ = false; // the CURRENT shore map is in a slot (re-armed when it re-renders)
+    std::uint32_t surfWaits_ = 0; // copies put off for want of the surf sim's wave this frame (BuildPass), at most 4 in a row
     std::chrono::steady_clock::time_point lastCopy_{};
 
     // The adopted surface: its slot in the ring (the texels are read from there in place).
@@ -154,6 +163,7 @@ private:
     UINT adoptedSlot_ = 0;
     ShoreParams shore_;
     Math::float4 wake_{};                                    // the adopted slot's wake window (z = 0: none)
+    Math::float4 surf_{};                                    // the adopted slot's surf window and scale (z = 0: none)
     std::vector<std::uint16_t> shoreTexels_;                 // D16 unorm, width * height
     bool hasShore_ = false;
     std::uint64_t adoptedFrame_ = 0;

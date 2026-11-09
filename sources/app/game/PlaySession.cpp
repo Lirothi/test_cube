@@ -136,6 +136,13 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         view.ToggleView();
         camera.ResetHistory();
     }
+    // The anchor: down under the bow, or up. It holds the boat when nobody is at the helm too; Stop weighs it.
+    const bool scriptAnchor = std::exchange(tuning.testAnchor, false);
+    if (scriptAnchor || (controls && input.WasActionPressed("Anchor")))
+    {
+        const bool down = world.ToggleAnchor(helm.object);
+        SetStatus(down ? "Anchor down" : "Anchor up", ImGui::GetTime() + 3.0);
+    }
     const bool scriptLeave = std::exchange(tuning.testInteract, false);
     if (scriptLeave || (controls && !pressTaken && input.WasActionPressed("Interact"))) { LeaveHelm(scene, true); }
 }
@@ -228,8 +235,11 @@ std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
     const physics::PlayerState state = scene.Physics().GetPlayerState();
     if (atHelm_)
     {
-        const physics::VesselState& vessel = scene.Physics().GetHelm().vessel;
-        std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: at the helm, %.1f kn, throttle %+.0f %%, rudder %+.0f %%   W S throttle   A D rudder   V view   E leave", vessel.speed * 1.94384f, vessel.throttle * 100.0f, vessel.rudder * 100.0f);
+        const physics::HelmState& helm = scene.Physics().GetHelm();
+        const physics::VesselState& vessel = helm.vessel;
+        std::swprintf(line, sizeof(line) / sizeof(line[0]), L"PLAY: at the helm, %.1f kn, throttle %+.0f %%, rudder %+.0f %%%ls   W S throttle   A D rudder   V view   %ls   E leave",
+                      vessel.speed * 1.94384f, vessel.throttle * 100.0f, vessel.rudder * 100.0f, helm.anchored ? L", ANCHORED" : L"",
+                      helm.anchored ? L"X weigh anchor" : L"X anchor");
     }
     else if (possessed_ && state.exists)
     {
@@ -242,7 +252,10 @@ std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
     std::wstring text = line;
     if (vesselInReach_) { text += L"   E TAKE THE HELM"; }
 #if WITH_EDITOR
-    text += atHelm_ ? L"   Esc stop   K keep   Shift+F1 mouse" : L"   Esc stop   F8 eject   K keep   Shift+F1 mouse";
+    // K is UE's Keep Simulation Changes: it WRITES the poses into the level (an undo entry). "K keep" beside the boat's keys
+    // read as an anchor for this session (owner, 2026-11-09), and the yacht stayed where it was kept after Stop.
+    text += atHelm_ ? L"   Esc stop   K write the poses to the level   Shift+F1 mouse"
+                    : L"   Esc stop   F8 eject   K write the poses to the level   Shift+F1 mouse";
 #else
     text += atHelm_ ? L"   Esc mouse" : L"   Esc mouse   F8 eject";
 #endif

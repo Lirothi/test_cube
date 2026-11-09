@@ -2387,7 +2387,7 @@ bool ImportPanel::LodSettingsNonDefault() const
            meshDialogLod3Ratio_ != 1.0f || meshDialogLod3Error_ != 1.0f ||
            meshDialogInnerRatio_ != 0.5f || meshDialogInnerError_ != 0.15f ||
            meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f ||
-           meshDialogNormalWeight_ != 0.0f;
+           meshDialogNormalWeight_ != 0.5f;
 }
 
 void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
@@ -2611,10 +2611,12 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
                               "vertex keeps the normal computed for the LOD0 surface around it; a\n"
                               "position-only collapse is blind to that, and the shading normal stops\n"
                               "matching the geometry it is drawn on. This costs normal distortion like\n"
-                              "position error instead. Aimed at TERRAIN, where the lighting shift\n"
-                              "between levels shows up long before the silhouette does -- more so\n"
-                              "under a low sun, where a degree of normal error is a large N.L change.\n"
-                              "~0.5-1.0 to start; 0 = the old position-only bake, byte for byte.");
+                              "position error instead. It shows on terrain under a low sun (a degree of\n"
+                              "normal error is a large N.L change) and on smooth glossy surfaces: at 0\n"
+                              "small_yacht's hull showed wedges of light 3 m from the eye. The Tessy DAG\n"
+                              "takes the same weight. Default 0.5 for a new import (the yacht is baked at\n"
+                              "0.5); 0 = the old position-only bake, byte for byte. A bulk re-import keeps\n"
+                              "each asset's own mesh.json value (absent = 0).");
 
         ImGui::Checkbox("Allow collapses across attribute seams", &meshDialogLodPermissive_);
         if (ImGui::IsItemHovered())
@@ -2730,7 +2732,7 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
                 meshDialogInnerError_ = 0.15f;
                 meshDialogFoliageGrow_ = 1.0f;
                 meshDialogUvWeight_ = 0.0f;
-                meshDialogNormalWeight_ = 0.0f;
+                meshDialogNormalWeight_ = 0.5f;
             }
         }
     }

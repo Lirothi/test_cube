@@ -630,17 +630,13 @@ namespace
         static void DrawPhysics(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
         {
             ImGui::SeparatorText("Physics");
-            // A copy of a "vessel" asset is a boat whatever this row would say (SceneObjectFactory): the row would lie.
-            const RenderableObjectBase* placed = ctx.scene.FindEditorObject(obj.id.value);
-            const RenderableObject* renderable = placed ? placed->AsRenderableObject() : nullptr;
-            if (renderable && renderable->GetVesselSettings())
-            {
-                ImGui::TextDisabled("A vessel: it floats and moves in Play, E takes the helm. Mesh Editor > Vessel.");
-                return;
-            }
+            // A copy of a "vessel" asset defaults to Dynamic and floating (SceneObjectFactory) -- a boat -- and takes the
+            // row like any mesh: Static and floating rocks on the waves (the editor too), no helm; Static or None alone is
+            // a mesh. Until 2026-11-09 the row was hidden for a vessel, so a placed yacht could be nothing but a boat.
+            const bool vesselAsset = SetPhysicsCommand::VesselAsset(ctx, obj.id);
             const char* const labels[] = { "None", "Static", "Dynamic" };
             const physics::Motion motions[] = { physics::Motion::None, physics::Motion::Static, physics::Motion::Dynamic };
-            const physics::Motion current = SetPhysicsCommand::DocumentMotion(obj);
+            const physics::Motion current = SetPhysicsCommand::DocumentMotion(obj, vesselAsset);
             float mass = SetPhysicsCommand::DocumentMass(obj);
             int index = current == physics::Motion::None ? 0 : current == physics::Motion::Dynamic ? 2 : 1;
             bool changed = ImGui::Combo("Body", &index, labels, 3);
@@ -670,6 +666,15 @@ namespace
                 }
                 if (composite->Empty()) { composite->Add(std::make_unique<SetPhysicsCommand>(obj.id, motions[index], mass)); }
                 commandStack.Execute(ctx, std::move(composite));
+            }
+            if (vesselAsset)
+            {
+                const bool floats = SetBuoyantCommand::DocumentBuoyant(obj, true);
+                const physics::Motion now = SetPhysicsCommand::DocumentMotion(obj, true);
+                ImGui::TextDisabled("%s", now == physics::Motion::Dynamic && floats
+                    ? "A boat: it floats and moves in Play, E takes the helm (Mesh Editor > Vessel)."
+                    : floats ? "Not a boat: it rocks on the waves (in the editor too), no helm."
+                             : "Not a boat: a mesh, it does not float.");
             }
         }
 
@@ -722,8 +727,8 @@ namespace
             OceanRenderable* ocean = ctx.scene.FindOceanRenderable();
             if (!ocean) { return; }
             ImGui::SeparatorText("Buoyancy");
-            const auto flag = obj.properties.find("buoyant");
-            bool buoyant = flag != obj.properties.end() && flag->is_boolean() && flag->get<bool>();
+            // What it does: the document's "buoyant", else the asset's default -- a vessel floats unless it says false.
+            bool buoyant = SetBuoyantCommand::DocumentBuoyant(obj, SetPhysicsCommand::VesselAsset(ctx, obj.id));
             if (ImGui::Checkbox("Floats on the ocean", &buoyant))
             {
                 // Every selected static mesh, one undo entry.
@@ -755,6 +760,16 @@ namespace
                 return;
             }
             if (!buoyant) { return; }
+            // A DYNAMIC body floats in the physics world, by its shape's own volume (a vessel: its hull), and only in
+            // Play; the pontoons are OceanBuoyancy's, for a Static body. Saying "no pontoons could be placed" lied.
+            const bool vesselAsset = SetPhysicsCommand::VesselAsset(ctx, obj.id);
+            if (SetPhysicsCommand::DocumentMotion(obj, vesselAsset) == physics::Motion::Dynamic)
+            {
+                ImGui::TextDisabled(vesselAsset
+                    ? "Floats as a boat in Play: the physics world's hull. Pontoons are not used."
+                    : "Floats in Play: the physics world, by its body's volume. Pontoons are not used.");
+                return;
+            }
             RenderableObject* object = runtime ? runtime->AsRenderableObject() : nullptr;
             std::vector<Math::float4> pontoons;
             if (object && ctx.scene.Buoyancy().GetWorldPontoons(object, pontoons))

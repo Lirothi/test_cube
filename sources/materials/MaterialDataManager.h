@@ -26,6 +26,9 @@ struct MaterialPreset {
     std::wstring transmissionPath;
     float transmission = 1.0f;
     float ior = 1.5f;
+    // "glassWall" (m): how much glass lies under the surface for the refraction (glass.hlsl GlassRefractedUv) -- 0 = a
+    // pane, straight through (a windshield, a window); absent (< 0) = the frame's glass.wall.
+    float glassWall = -1.0f;
     bool normalIsRG = true;
     ShadingModel shadingModel = ShadingModel::DefaultLit;
     MaterialSurfaceParams surfaceParams;
