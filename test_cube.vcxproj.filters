@@ -1316,6 +1316,9 @@
     <ClInclude Include="sources/ocean/OceanWake.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>
+    <ClInclude Include="sources/ocean/OceanWakeKnobs.h">
+      <Filter>sources\ocean</Filter>
+    </ClInclude>
     <ClInclude Include="sources/ocean/WaterMask.h">
       <Filter>sources\ocean</Filter>
     </ClInclude>

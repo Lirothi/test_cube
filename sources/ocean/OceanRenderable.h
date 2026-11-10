@@ -162,6 +162,8 @@ public:
     // A boat's wake (ocean/OceanWake): Main_OceanWake's builder, and the hulls Scene::Sync hands over (render half parked).
     std::function<void(RenderGraphPassContext)> BuildWakePass(RenderGraphPassContext& ctx);
     void SetWakeHulls(std::vector<ocean::WakeHull> hulls);
+    // Readouts of the wake's bow wave fronts (get_readouts `wake`): fronts alive, points on them, fronts handed to the GPU.
+    void GetWakeFrontReadout(std::uint32_t& fronts, std::uint32_t& points, std::uint32_t& drawn) const;
     // The hulls the surface is not drawn inside (ocean/WaterMask.h), as Scene::Sync collects them (render half parked).
     void SetWaterMasks(std::vector<ocean::WaterMaskInstance> masks) { waterMasks_ = std::move(masks); }
     // Main_OceanReadback's builder: the surface to the CPU, only on a frame someone asked for it.
@@ -326,7 +328,9 @@ private:
     bool WakeEnabled() const;
     Math::float4 GetWakeParams() const;  // xy: window centre, z: 1 / half extent (0 = no field), w: displacement scale
     Math::float4 GetWakeParams2() const; // x: texel world size, y: normal strength, z: debug view, w: foam
-    Math::float4 GetWakeParams3() const; // x: the white water's relief (wakeChurn), y: seconds since the field's step, zw reserved
+    Math::float4 GetWakeParams3() const; // x: the white water's relief (wakeChurn), y: seconds since the field's step,
+                                         // z: the foam texture's tile (m, wakeFoamTile), w: the relief's (m, wakeChurnSize)
+    Math::float4 GetWakeParams4() const; // the wake foam's look: x stretch, y edge softness, z boil m/s, w aeration
     // The wake's free height for OceanReadback when frame `frame` stepped it (and the surface reads it), else null.
     ID3D12Resource* GetWakeFreeHeightResource(std::uint64_t frame) const;
     // The surf sim's height for OceanReadback when frame `frame` handed it over and the surface displaces by it, else null.
@@ -428,6 +432,7 @@ private:
     Texture2D foamTrailTexture_;
     Texture2D shoreFoamBreakupMaskTexture_;
     Texture2D shoreFoamAlbedoTexture_;
+    Texture2D wakeFoamDetailTexture_; // the boat wake's foam (tools/gen_wake_foam.py): R lace, G churn height, BA its slope
     std::unique_ptr<Texture2D> causticsTexture_;
     std::string causticsLoadedPath_;
     bool causticsTextureReady_ = false;

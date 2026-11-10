@@ -37171,31 +37171,6 @@
         1.0
       ],
       "type": "staticMesh"
-    },
-    {
-      "buoyant": false,
-      "enabled": true,
-      "group": "Small Yacht",
-      "id": 3015,
-      "mesh": "models/small_yacht/small_yacht.mesh.json",
-      "name": "small_yacht 001 Copy",
-      "physics": "static",
-      "position": [
-        58.25723648071289,
-        -0.7999997735023499,
-        115.4465560913086
-      ],
-      "rotationDeg": [
-        0.0,
-        -65.0,
-        0.0
-      ],
-      "scale": [
-        1.0000001192092896,
-        1.0,
-        1.0000001192092896
-      ],
-      "type": "staticMesh"
     }
   ],
   "ocean": {
@@ -37364,8 +37339,8 @@
       "sprayOpacity": 1.0,
       "sprayOut": 0.4000000059604645,
       "sprayRate": 0.699999988079071,
-      "spraySideFoam": 1.0,
       "spraySlam": 1.0,
+      "spraySoftFade": 0.4000000059604645,
       "sprayUp": 0.20000000298023224,
       "sssColor": [
         0.13333334028720856,
@@ -37403,16 +37378,34 @@
       "underwaterFoamParallax": 1.600000023841858,
       "underwaterRefractionStrength": 0.75,
       "viewAlignmentStrength": 0.800000011920929,
+      "wakeAeration": 0.4000000059604645,
+      "wakeBowFoam": 1.0,
+      "wakeBowLace": 0.15000000596046448,
+      "wakeBowLife": 2.5,
+      "wakeBowScallop": 0.20000000298023224,
+      "wakeBowSpeedFull": 12.0,
+      "wakeBowSpread": 1.0,
+      "wakeBowThrow": 0.09000000357627869,
+      "wakeBowWiden": 0.25,
+      "wakeBowWidth": 0.8999999761581421,
       "wakeBreaking": 2.0,
       "wakeChurn": 0.5,
+      "wakeChurnSize": 4.0,
       "wakeCrestCoverage": 0.550000011920929,
       "wakeCrestFoam": 1.0,
       "wakeDamping": 1.5,
       "wakeDisplacement": 1.0,
       "wakeEnabled": true,
       "wakeFoam": 1.0,
+      "wakeFoamBoil": 0.05999999865889549,
+      "wakeFoamCap": 0.9300000071525574,
       "wakeFoamFade": 0.10000000149011612,
       "wakeFoamFadeDense": 1.5,
+      "wakeFoamSoftness": 0.14000000059604645,
+      "wakeFoamSpread": 0.30000001192092896,
+      "wakeFoamStretch": 3.5,
+      "wakeFoamTile": 0.75,
+      "wakeFoamTileVary": 0.30000001192092896,
       "wakeNormal": 1.0,
       "wakeStrength": 1.0,
       "wakeTexel": 0.5,

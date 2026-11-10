@@ -12,7 +12,7 @@
 // ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
 // rather than sRGB). The C++ table stages the same 26 entries for both surfaces; t22-t25, s4 and the
 // transparent pass's GlassView CB (b1) are the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=29, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=30, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -106,10 +106,13 @@ cbuffer OceanCB : register(b0)
     // the height's scale in the vertices; wakeParams2 x texel metres, y the slope's scale in the normal (1 = true), z debug
     // view (1 the height, 2 the foam), w the foam's strength (0 = none); wakeParams3 x the white water's relief (WakeChurn,
     // 0 = a smooth sheet), y seconds since the field's step (ocean.wakeHz: WakeHeight carries the height on by the
-    // field's vertical velocity), zw reserved.
+    // field's vertical velocity), z metres of water a tile of the foam's detail texture covers (wakeFoamTile), w the same
+    // for the churned white water's relief (wakeChurnSize).
     float4 wakeParams;
     float4 wakeParams2;
     float4 wakeParams3;
+    float4 wakeParams5;                // x the most of the water the densest wake foam covers (wakeFoamCap), y how far a hexagon's own scale strays from the tile (wakeFoamTileVary: x (1 +- y)), zw reserved
+    float4 wakeParams4;                // the wake foam's look (OceanWakeKnobs.h): x the streaks' stretch, y the lace's edge softness, z the boil's speed (m/s), w the aeration's strength
     // x how much of the geometric sun shadow the water's BODY takes (ocean.sunShadowBody, 1 = all, as the glint), yzw reserved.
     float4 bodyShadowParams;
 };
@@ -145,7 +148,11 @@ Texture2D<float2> ShoreSdfTexture : register(t14);
 Texture2D<float2> SurfSimWaveTex : register(t16);
 Texture2D<float> SurfSimFoamTex : register(t17);
 Texture2D<float4> WakeTex : register(t26); // the boat wake's field: x height (m), y vertical velocity
-Texture2D<float4> WakeFoamTex : register(t27); // its foam: x 0..2 (1 and over fresh white water), yz the way it was laid times x
+Texture2D<float4> WakeFoamTex : register(t27); // its foam: x 0..2 (1 and over fresh white water), yz the way it was laid
+                                               // times x, w the bow waves' breakers as they stand now
+// The wake foam's detail (tools/gen_wake_foam.py, textures/ocean/WakeFoam.png, wakeFoamTile m a tile): R the lace as a gaussianised
+// rank, G the churned white water's height, BA its slope along u and v (0.5 + slope / (2 kWakeFoamSlopeMax)).
+Texture2D<float4> WakeFoamDetailTex : register(t29);
 RWTexture2D<uint> ShoreWetnessStampMap : register(u0);
 SamplerState LinearWrapSampler : register(s0);
 SamplerState LinearClampSampler : register(s1);
@@ -674,17 +681,49 @@ float SurfSimFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
     return saturate(coverage * SurfSimWindowEdgeFade(simUV) * surfSimParams3.x);
 }
 
-// The wake foam's noise in a frame turned to `angle` and stretched along it (`stretch` times longer than wide).
-float WakeFoamNoise(float2 baseXZ, float2 baseDx, float2 baseDy, float angle, float stretch, float4 params)
+// ---- A boat's wake foam (ocean/OceanWake): the white water and trail a moving hull leaves, its bow wave's two arms, the
+// steep crests ----
+// The field is smooth at its 0.5 m texels; its value is read as the SHARE of the water the foam covers, not as an opacity:
+// a pixel is foam where the value's rank exceeds the LACE's there -- WakeFoamDetailTex.r (tools/gen_wake_foam.py): filaments
+// at three scales with rafts of bubbles between them, equalised so a value v covers the share v, stored gaussianised --
+// so 1 and over covers the water and 0.2 leaves the stoutest filaments, the lace a dissolving trail is in the photographs
+// (as an opacity the trail was a solid sheet: owner, "the trail is incredibly dense").
+//
+// NO REPEAT (2026-11-10, owner: "even the tile shows on the trail"): the lace was the contact foam's noise at a 1.8 m
+// tile (its streaks at 6.3 m), the churn's relief the same texture at 0.7 and 0.3 m and the foam's albedo a 1 m tile --
+// three grids on a trail tens of metres long. Now a hex tiling (Mikkelsen 2022, "Practical Real-Time Hex-Tiling"): the
+// water is cut into hexagons (kWakeFoamHexShare of the tile across), each shows its own window of the tile (wakeParams3.z
+// metres of water: OceanRenderConfig::wakeFoamTile, 3 by default; a random offset, drifting
+// its own way: neighbours slide against each other and the foam boils), and a pixel blends the three nearest. The lace
+// is blended as Heitz & Neyret blend (2018): gaussian values, the variance kept, so the blend has the tile's own
+// contrast and the share a value covers stays that value.
+// STREAKS: a window is drawn out wakeParams4.x times along the way the foam at its hexagon was laid (the field's yz), a
+// pure stretch along that way, no turn -- a window turned with the way sheared wherever the way bent, and popped when a
+// hexagon's first foam gave it a way. Round where nothing says which way (the crests' foam).
+// FAR AWAY the texture's mips lose the lace's variance and the cover goes to the value itself (the share): the edge's
+// softness is the variance lost (measured on the tile's mip chain), in the gaussian's units.
+// The AERATION is the bubbles a trail leaves under the surface, the lighter turquoise scar that outlasts the white, seen
+// from a drone as well as from the boat (FoamData.aeration).
+static const float kWakeFoamHexShare = 0.475f; // the hexagons' spacing, a share of the tile (wakeParams3.z m of water)
+static const float kWakeFoamSlopeMax = 160.0f; // tools/gen_wake_foam.py SLOPE_MAX -- MUST MATCH
+// wakeParams4: x a streak this many times longer than wide (3.5), y the lace's edge in the gaussian's units (0.14:
+// 10-90 % over 2.56 of it), z m/s a hexagon's window drifts, each its own way (0.06), w the aeration's strength (0.4).
+
+uint WakeHashU(uint x)
 {
-    float s, c;
-    sincos(angle, s, c);
-    const float2 along = float2(c, s);
-    const float2 across = float2(-s, c);
-    const float2 p = float2(dot(baseXZ, along) / stretch, dot(baseXZ, across));
-    const float2 pdx = float2(dot(baseDx, along) / stretch, dot(baseDx, across));
-    const float2 pdy = float2(dot(baseDy, along) / stretch, dot(baseDy, across));
-    return ShoreFoamDissipationFactor(ContactFoamTex, AnisotropicWrapSampler, p, pdx, pdy, simulationParams.z, params);
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float4 WakeCellRandom(int2 cell)
+{
+    const uint h = WakeHashU((uint)cell.x * 0x9E3779B1u + WakeHashU((uint)cell.y));
+    const uint h2 = WakeHashU(h + 0x68E31DA4u);
+    return float4((float)(h & 0xFFFFu), (float)(h >> 16), (float)(h2 & 0xFFFFu), (float)(h2 >> 16)) * (1.0f / 65536.0f);
 }
 
 // What the wake's foam gives a pixel (WakeFoamCoverage).
@@ -692,27 +731,66 @@ struct WakeFoamSample
 {
     float coverage; // the share of the pixel the foam covers
     float aeration; // the bubbles under it: the underwater foam's colour (FoamData.aeration)
-    float churn;    // how much of it is churned white water, 0..1 -- the relief WakeChurnHeight gives it
+    float churn;    // how much of it is churned white water, 0..1 -- it wears the relief below
+    float height;   // the churned white water's relief, 0..1 (lumps with creases between them)
+    float2 slope;   // its slope, heights per metre along world x and z
 };
 
-// A boat's wake foam (ocean/OceanWake): the white water and trail a moving hull leaves, the steep crests. The field is
-// smooth at its 0.5 m texels; its value is read as the SHARE of the water the foam covers, not as an opacity: a pixel is
-// foam where the value exceeds a lace -- two counter-drifting octaves of the contact foam's noise folded into ridges, 0 on
-// the network of their mid-contours -- so 1 and over covers the water, 0.3 leaves the network's lines, the lace a
-// dissolving trail is in the photographs (it was a solid sheet while the value was 1, owner: "the trail is incredibly
-// dense"). The lace is drawn out into streaks along the way the foam was laid (the field's yz), as a trail's foam is:
-// the noise of the two nearest of 8 fixed directions, blended -- one frame turned with the way would shear across the
-// window wherever the way bends. Where nothing says which way (the crests' foam) it stays round. A finer, round octave
-// moves the lace's threshold a little: foam tears at every scale, and the 1.8 m cells alone cut it into smooth blobs
-// where the photographs show torn edges and filaments.
-// The AERATION is the bubbles a trail leaves under the surface, the lighter turquoise scar that outlasts the white, seen
-// from a drone as well as from the boat (FoamData.aeration).
+// One hexagon's window of the detail texture at this pixel: x the lace (the gaussian's units), y the relief's height,
+// zw its slope (heights per metre, world x z); `lod` the mip the lace is read at. The relief is read only where the
+// pixel wears it (`relief`: fresh white water), at ITS OWN scale (wakeParams3.w m a tile, at least the lace's): at the
+// lace's it was a grain of centimetres, and a slab of solid white water behind a turning hull read as plaster (owner:
+// "this cringe patch with the bump").
+float4 WakeFoamWindow(int2 cell, float2 baseXZ, float2 baseDx, float2 baseDy, bool relief, out float lod)
+{
+    const float tile = max(wakeParams3.z, 0.05f);
+    const float2 cellXZ = float2((float)cell.x + 0.5f * (float)cell.y, 0.8660254f * (float)cell.y) * (tile * kWakeFoamHexShare);
+    const float4 random = WakeCellRandom(cell);
+    // The way the foam at the hexagon was laid: the window is squeezed along it (S = I + squeeze way way^T, symmetric).
+    const float4 laid = WakeFoamTex.SampleLevel(LinearClampSampler, WakeUV(cellXZ), 0);
+    const float wayLength = length(laid.yz);
+    const float2 way = wayLength > 1e-5f ? laid.yz / wayLength : float2(1.0f, 0.0f);
+    const float oneWay = saturate(wayLength / max(laid.x, 1e-4f)) * saturate(laid.x * 8.0f);
+    const float squeeze = 1.0f / lerp(1.0f, max(wakeParams4.x, 1.0f), oneWay) - 1.0f;
+    // Each hexagon draws its window at its own scale, the tile x (1 +- wakeParams5.y) (owner: "not one tiling, +-15 %
+    // for different parts of the tail"): the lace is finer here and coarser there, and no seam -- the blends are the
+    // tiling's own. The relief takes the same factor.
+    const float own = 1.0f + (random.w * 2.0f - 1.0f) * clamp(wakeParams5.y, 0.0f, 0.4f);
+    const float invTile = 1.0f / (tile * own);
+    const float2 local = baseXZ - cellXZ;
+    float s, c;
+    sincos(random.z * 6.2831853f, s, c);
+    // The window's metres: squeezed along the way, drifting.
+    const float2 metres = local + way * (squeeze * dot(way, local)) + float2(c, s) * (wakeParams4.z * simulationParams.z);
+    const float2 metresDx = baseDx + way * (squeeze * dot(way, baseDx));
+    const float2 metresDy = baseDy + way * (squeeze * dot(way, baseDy));
+    const float2 uvDx = metresDx * invTile;
+    const float2 uvDy = metresDy * invTile;
+    const float lace = (WakeFoamDetailTex.SampleGrad(AnisotropicWrapSampler, metres * invTile + random.xy, uvDx, uvDy).r - 0.5f) * 6.0f;
+    lod = log2(max(sqrt(length(uvDx) * length(uvDy)) * 1024.0f, 1.0f));
+    float height = 0.0f;
+    float2 slope = float2(0.0f, 0.0f);
+    [branch]
+    if (relief)
+    {
+        const float invRelief = 1.0f / (max(wakeParams3.w, tile) * own);
+        const float4 t = WakeFoamDetailTex.SampleGrad(AnisotropicWrapSampler, metres * invRelief + random.yx + 0.37f,
+                                                     metresDx * invRelief, metresDy * invRelief);
+        const float2 slopeUv = (t.ba - 0.5f) * (2.0f * kWakeFoamSlopeMax);             // heights per tile, along u and v
+        slope = (slopeUv + way * (squeeze * dot(way, slopeUv))) * invRelief;          // S^T = S: heights per metre, world
+        height = t.g;
+    }
+    return float4(lace, height, slope);
+}
+
 WakeFoamSample WakeFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
 {
     WakeFoamSample result;
     result.coverage = 0.0f;
     result.aeration = 0.0f;
     result.churn = 0.0f;
+    result.height = 0.0f;
+    result.slope = float2(0.0f, 0.0f);
     [branch]
     if (wakeParams.z <= 0.0f || wakeParams2.w <= 0.0f)
     {
@@ -723,91 +801,63 @@ WakeFoamSample WakeFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
     {
         return result;
     }
+    // x the foam that stays (the trail, the lace), w the bow waves' breakers as they stand now (the two arms).
     const float4 laid = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0);
-    const float foam = laid.x;
+    const float foam = laid.x + laid.w;
     if (foam <= 1e-3f)
     {
         return result;
     }
-    const float kPatch = 1.8f;       // m: the lace's cells
-    const float kFinePatch = 0.45f;  // m: the torn edges' octave
-    const float kFineAmount = 0.5f;  // how far it moves the threshold (the noise's +-0.26 -> +-0.13 of coverage)
-    const float kDriftSpeed = 0.12f; // m/s, the surf sim's
-    const float kContrast = 1.3f;
-    const float kSoftness = 0.12f;   // the lace's edge, in coverage
-    const float kStretch = 3.5f;     // a streak this many times longer than wide
-    const float kBins = 8.0f;        // directions over half a turn (a streak has no head)
-    const float4 params = float4(kPatch, kDriftSpeed, 1.0f, kContrast);
-    float field = ShoreFoamDissipationFactor(
-        ContactFoamTex, AnisotropicWrapSampler, baseXZ, baseDx, baseDy, simulationParams.z, params);
-    const float wayLength = length(laid.yz);
-    const float laidOneWay = saturate(wayLength / foam);
-    [branch]
-    if (laidOneWay > 0.05f)
-    {
-        const float kPi = 3.14159265f;
-        float angle = atan2(laid.z, laid.y);
-        angle = angle < 0.0f ? angle + kPi : angle;          // 0..pi
-        const float bin = angle * (kBins / kPi);
-        const float bin0 = floor(bin);
-        const float t = bin - bin0;
-        const float a0 = bin0 * (kPi / kBins);
-        const float a1 = (bin0 + 1.0f) * (kPi / kBins);
-        const float streaks = lerp(WakeFoamNoise(baseXZ, baseDx, baseDy, a0, kStretch, params),
-                                   WakeFoamNoise(baseXZ + 37.1f, baseDx, baseDy, a1, kStretch, params), t);
-        field = lerp(field, streaks, laidOneWay);
-    }
-    const float fine = ShoreFoamDissipationFactor(ContactFoamTex, AnisotropicWrapSampler, baseXZ + 19.7f, baseDx, baseDy,
-        simulationParams.z, float4(kFinePatch, kDriftSpeed * 1.7f, 1.0f, kContrast));
-    const float lace = abs(field * 2.0f - 1.0f) + (fine - 0.5f) * kFineAmount; // 0 on the network, 1 between its lines
-    const float coverage = saturate((foam - lace) / kSoftness + 0.5f) * saturate(foam * 4.0f);
+    // The three hexagons round the pixel and their weights (the triangle grid's barycentrics), sharpened.
+    const float2 skewed = float2(baseXZ.x - 0.57735027f * baseXZ.y, 1.15470054f * baseXZ.y) /
+                          (max(wakeParams3.z, 0.05f) * kWakeFoamHexShare);
+    const int2 base = (int2)floor(skewed);
+    const float2 f = frac(skewed);
+    const float upper = step(1.0f, f.x + f.y); // which of the cell's two triangles
+    const float flip = 2.0f * upper - 1.0f;
+    const float z3 = 1.0f - f.x - f.y;
+    float3 weights = float3(-z3 * flip, upper - f.y * flip, upper - f.x * flip);
+    const int iu = (int)upper;
+    const int2 cell0 = base + int2(iu, iu);
+    const int2 cell1 = base + int2(iu, 1 - iu);
+    const int2 cell2 = base + int2(1 - iu, iu);
+    weights = weights * weights;
+    weights = weights * weights;
+    weights /= weights.x + weights.y + weights.z;
+    // Churned where it is fresh white water (1 and over); the lace of a dissolving trail is a flat film.
+    const float churned = smoothstep(0.4f, 1.2f, foam);
+    const bool relief = churned > 0.0f && wakeParams3.x > 0.0f;
+    float lod0, lod1, lod2;
+    const float4 t0 = WakeFoamWindow(cell0, baseXZ, baseDx, baseDy, relief, lod0);
+    const float4 t1 = WakeFoamWindow(cell1, baseXZ, baseDx, baseDy, relief, lod1);
+    const float4 t2 = WakeFoamWindow(cell2, baseXZ, baseDx, baseDy, relief, lod2);
+    // The lace: gaussian values blended with their variance kept.
+    const float lace = (weights.x * t0.x + weights.y * t1.x + weights.z * t2.x) * rsqrt(dot(weights, weights));
+    // The variance the mips have lost (the tile's own chain: its deviation is 1, 0.93, 0.75, 0.45, 0.18 at mips 0, 2, 4, 6, 8)
+    // is the variance of the foam inside the pixel: it widens the edge, and with all of it lost the cover is the value.
+    const float lod = weights.x * lod0 + weights.y * lod1 + weights.z * lod2;
+    const float kept = saturate(1.0f - pow(lod * (1.0f / 8.5f), 1.6f));
+    const float softness = max(wakeParams4.y, 0.01f);
+    const float spread = sqrt(1.0f - kept * kept + softness * softness);
+    // The value's rank in the gaussian's units (the logistic's inverse), and the normal CDF as a logistic. The densest
+    // foam covers wakeParams5.x of the water at most (wakeFoamCap, 0.93): the clearest few per cent of the lace stay
+    // holes, milky water in them -- froth. Whole (1), fresh white water was a slab of one white.
+    const float share = clamp(foam, 0.002f, min(wakeParams5.x, 0.998f));
+    const float rank = log(share / (1.0f - share)) * (1.0f / 1.702f);
+    const float coverage = 1.0f / (1.0f + exp(-1.702f * (rank - lace) / spread));
     const float edge = WakeWindowEdgeFade(wakeUV) * wakeParams2.w;
     result.coverage = saturate(coverage * edge);
     // The aeration goes with the foam, linearly: sqrt(foam) lifted the trace the field's spreading leaves round the lace
     // (a few hundredths) into a milky halo wider than the trail (owner: "what is this whitish halo round the foam?").
-    result.aeration = saturate(foam * 2.0f) * 0.4f * edge;
-    // Churned where it is fresh white water (1 and over); the lace of a dissolving trail is a flat film.
-    result.churn = smoothstep(0.4f, 1.2f, foam) * result.coverage;
+    result.aeration = saturate(foam * 2.0f) * wakeParams4.w * edge;
+    result.churn = churned * result.coverage;
+    // The churned white water's relief (photographs of a prop wash: boils of half a metre with smaller lumps on them and
+    // grey creases between, not a smooth white sheet), from the same three windows at the relief's own scale: the height
+    // and its slope, baked into the texture -- their mips average a far pixel's to a mean grey and no relief, as it
+    // should be.
+    result.height = weights.x * t0.y + weights.y * t1.y + weights.z * t2.y;
+    result.slope = weights.x * t0.zw + weights.y * t1.zw + weights.z * t2.zw;
     return result;
-}
-
-// The churned white water's relief (2026-11-07, photographs of a prop wash: bright lumps of a decimetre or two with grey
-// crevices between them, not a smooth white sheet): two octaves of the contact foam's noise, 0.7 m and 0.3 m, boiling
-// (drifting against each other on the ocean's clock), folded into ridges as the lace is -- the crevices run along the
-// noise's mid-contours, a connected network, not the isolated grey spots the noise's own minima made -- as a height
-// field: x the height 0..1, yz its slope per metre (forward differences one footprint apart). A pixel wider than an
-// octave reads its mips, which average it out: far white water keeps a mean grey and loses the relief, as it should.
-float ChurnRidge(float n)
-{
-    return abs(n * 2.0f - 1.0f);
-}
-
-float3 WakeChurnHeight(float2 p, float2 dx, float2 dy)
-{
-    const float t = simulationParams.z;
-    const float kScaleA = 0.7f;
-    const float kScaleB = 0.3f;
-    const float kWeightA = 0.6f;
-    const float kGain = 2.5f; // the folded noise's narrow range stretched to most of 0..1
-    const float e = max(max(length(dx), length(dy)), 0.03f); // m
-    const float2 pa = (p + float2(0.21f, -0.13f) * t) * (1.0f / kScaleA);
-    const float2 pb = (p + float2(-0.17f, 0.24f) * t) * (1.0f / kScaleB) + 5.31f;
-    const float2 dxa = dx * (1.0f / kScaleA);
-    const float2 dya = dy * (1.0f / kScaleA);
-    const float2 dxb = dx * (1.0f / kScaleB);
-    const float2 dyb = dy * (1.0f / kScaleB);
-    const float ea = e / kScaleA;
-    const float eb = e / kScaleB;
-    const float a0 = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pa, dxa, dya).r);
-    const float ax = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pa + float2(ea, 0.0f), dxa, dya).r);
-    const float az = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pa + float2(0.0f, ea), dxa, dya).r);
-    const float b0 = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pb, dxb, dyb).r);
-    const float bx = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pb + float2(eb, 0.0f), dxb, dyb).r);
-    const float bz = ChurnRidge(ContactFoamTex.SampleGrad(AnisotropicWrapSampler, pb + float2(0.0f, eb), dxb, dyb).r);
-    const float h = kWeightA * a0 + (1.0f - kWeightA) * b0;
-    const float2 slope = float2(kWeightA * (ax - a0) + (1.0f - kWeightA) * (bx - b0),
-                                kWeightA * (az - a0) + (1.0f - kWeightA) * (bz - b0)) * (kGain / e);
-    return float3(saturate(h * kGain), slope);
 }
 
 FoamData GetFoamData(FoamInput input, uint cascadesCount)
@@ -856,18 +906,20 @@ FoamData GetFoamData(FoamInput input, uint cascadesCount)
     // in the distance without DLSS.
     float2 uv = input.worldUV * 1.0f;
     data.albedo = FoamAlbedoTex.SampleGrad(AnisotropicWrapSampler, uv, input.worldUVdx, input.worldUVdy).rgb;
-    // The wake's churned white water: its lumps tilt the foam's normal (the sun lights their faces, a low sun leaves their
-    // backs grey) and its cavities are darker (in the lumps' shadow, seeing less sky) -- by the wake's share of the foam.
+    // The wake's own white (not the whitecaps' 1 m tile, which showed as a grid on a trail), and its churned white water:
+    // its lumps tilt the foam's normal (the sun lights their faces, a low sun leaves their backs grey) and its creases are
+    // darker (in the lumps' shadow, seeing less sky) -- by the wake's share of the foam.
     [branch]
-    if (wakeFoam.churn > 1e-3f && wakeParams3.x > 0.0f)
+    if (wakeFoam.coverage > 1e-3f)
     {
-        const float3 churn = WakeChurnHeight(input.worldUV, input.worldUVdx, input.worldUVdy);
-        const float w = wakeFoam.churn * saturate(wakeParams3.x) * saturate(wakeFoam.coverage / max(data.coverage.x, 1e-3f));
+        const float wakeShare = saturate(wakeFoam.coverage / max(data.coverage.x, 1e-3f));
+        data.albedo = lerp(data.albedo, float3(1.0f, 1.0f, 1.0f), wakeShare);
+        const float w = wakeFoam.churn * saturate(wakeParams3.x) * wakeShare;
         // 30 % under the first cut twice (owner, 2026-11-07: "take the normal down 30 %"; 2026-11-09: "another 30 %"): the
         // first cut's 15 cm lumps and crevices at 0.65 -> 10.5 cm / 0.755 -> 7.35 cm / 0.8285.
         const float kRelief = 0.0735f; // m: the lumps' height
-        data.normal = normalize(data.normal - float3(churn.y, 0.0f, churn.z) * (kRelief * w));
-        data.albedo *= lerp(1.0f, lerp(0.8285f, 1.0f, smoothstep(0.0f, 0.5f, churn.x)), w);
+        data.normal = normalize(data.normal - float3(wakeFoam.slope.x, 0.0f, wakeFoam.slope.y) * (kRelief * w));
+        data.albedo *= lerp(1.0f, lerp(0.8285f, 1.0f, smoothstep(0.0f, 0.5f, wakeFoam.height)), w);
     }
     // The shore strip wears the SHORE foam albedo (same asset and sliders as the modern
     // surface), blended in by its share of the total coverage so simulated whitecap foam
@@ -1407,7 +1459,8 @@ PSOut PSMain(VSOutput input)
         {
             if (wakeParams2.z > 1.5f) // 2: the foam field, white on dark (1 = fresh white water), the tear not applied
             {
-                const float f = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0).x;
+                const float4 laid = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0);
+                const float f = laid.x + laid.w;
                 outColor.rgb = float3(saturate(f), saturate(f), saturate(f) * 0.8f + 0.08f);
             }
             else

@@ -28,6 +28,7 @@
 // OFF (no boat in the world, or none for kLingerSeconds) records no dispatch and the surface does not read the field.
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -54,10 +55,16 @@ struct WakeHull
     Math::float2 forward = Math::float2(1.0f, 0.0f);  // world XZ of the bow's way, unit
     float scale = 1.0f;                               // the instance's scale (uniform)
     std::shared_ptr<const buoyancy::HullFootprint> footprint;
-    // The white water along a planing hull's sides (vfx/VesselSpray::SideFoamOf): a line a side, world (x0, z0, x1, z1),
-    // moving with the hull just outside its waterline, and the foam a second it lays (0 = none).
-    Math::float4 splash[2] = { Math::float4(0.0f, 0.0f, 0.0f, 0.0f), Math::float4(0.0f, 0.0f, 0.0f, 0.0f) };
-    float splashRate = 0.0f;
+    // The breaking bow wave (vfx/VesselSpray::BowWaveOf), the wake's two foam arms: whose hull (a key across frames, never
+    // followed), where the wave leaves each side of its waterline (world XZ; [0] port, [1] starboard), how much of it
+    // there is by the bow's immersion (0 = the bow in the air .. 1 = in the water; its speed's share is the wake's own:
+    // Tuning::bowSpeedFull), the hull's speed along its way (m/s) and its waterline's length (m): the diverging wave it
+    // throws is about as long.
+    const void* id = nullptr;
+    Math::float2 bowRoot[2] = { Math::float2(0.0f, 0.0f), Math::float2(0.0f, 0.0f) };
+    float bowShare = 0.0f;
+    float speed = 0.0f;
+    float length = 0.0f;
 };
 }
 
@@ -75,6 +82,16 @@ public:
         float washFoam = 4.0f;     // foam a metre of head change under a moving hull leaves (the white water, its trail)
         float crestFoam = 1.0f;    // Crest's Wave Foam Strength (the steep crests)
         float crestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks
+        float bowFoam = 1.0f;      // the breaking bow wave's foam (the two arms): 1 = a fresh front leaves white water
+        float bowSpread = 1.0f;    // how fast its fronts run outward: 1 = the diverging wave's own speed
+        float bowLife = 2.5f;      // s: a front's breaking runs down e-fold in this
+        float bowLace = 0.15f;     // the share of a breaker's foam the water keeps once it has passed
+        float bowThrow = 0.09f;    // s of the hull's speed the chine's sheet carries a front off the waterline at birth
+        float bowWidth = 0.9f;     // m: the breaker band's half width at birth (at least 1.5 texels)
+        float bowWiden = 0.25f;    // m/s it widens
+        float bowScallop = 0.2f;   // a leaving point's wave speed is 1 +- this x a short random walk
+        float bowSpeedFull = 12.0f; // m/s of the hull at which the arms are whole (from kFrontSpeedOn)
+        float foamSpread = 0.3f;   // m2/s the laid foam spreads at
         float texel = 0.5f;        // metres a texel: 512 of them make the window
     };
 
@@ -134,8 +151,18 @@ public:
 
     static constexpr std::uint32_t kResolution = 512u;
 
+    // Readouts (get_readouts `wake`; the game half reads them while the render half steps: atomics): the bow waves'
+    // fronts alive after the last step, the points on them, and how many fronts it handed to the GPU (at most kMaxFronts).
+    std::uint32_t FrontCount() const { return frontsAlive_.load(std::memory_order_relaxed); }
+    std::uint32_t FrontPointCount() const { return frontPoints_.load(std::memory_order_relaxed); }
+    std::uint32_t FrontsDrawn() const { return frontsDrawn_.load(std::memory_order_relaxed); }
+
 private:
     static constexpr std::uint32_t kMaxHulls = 16u;
+    // The breaking bow waves: MAX_FRONTS / MAX_FRONT_POINTS of ocean_wake_cs.hlsl -- MUST MATCH.
+    static constexpr std::uint32_t kMaxFronts = 8u;
+    static constexpr std::uint32_t kMaxFrontPoints = 128u;
+    static constexpr std::uint32_t kFrontPiece = 16u; // points a piece of a front (FRONT_PIECE): each has its own box
     static constexpr std::uint32_t kMaxFootprints = 16u;
     static constexpr float kSnapTexels = 8.0f;
     static constexpr float kLingerSeconds = 30.0f; // a wake outlives its boat this long, then the field is let go
@@ -193,6 +220,57 @@ private:
     std::uint32_t foamNext_ = 0; // which of foam_ this step writes (and the surface reads)
     std::vector<Math::float2> lastHullPositions_; // last step's, to tell a hull's own motion from a jump
 
+    // The breaking bow wave's FRONTS (2026-11-10, owner: "two more trails, as in the aerial photographs"). A planing hull
+    // throws a sheet off each chine and a diverging wave behind it that breaks as it runs outward: from above, two arms
+    // of white water that leave the bow's shoulders and open at some ten degrees, their outer edge sharp and scalloped,
+    // lace behind them. The field's own waves cannot break there (a linear pressure at 0.5 m texels has no chine), so
+    // the breaking is carried by points: one leaves each side of the waterline every kFrontSpacing seconds and runs
+    // outward ACROSS THE WAY THE HULL HEADED THEN, in the world -- thrown fast for a third of a second (the sheet), then
+    // at the diverging wave's own speed -- its breaking running down with its age. The line through a side's points is
+    // that side's front. The foam's Pack draws the breaker ON it every step (the foam texture's w: a band with a sharp
+    // toe outward and a tail behind, not kept -- it is where the front is now) and lays a thinner residue under it into
+    // the foam that stays (the lace between the arms and the trail). Laid whole into the kept foam, every texel a front
+    // had passed stayed white for seconds and the arms and the trail were one solid wedge. Kept in the world, so a turn
+    // leaves the arms on the path the hull took (lines computed from the heading NOW swung off it: the first spray
+    // foam's flaw).
+    struct FrontPoint
+    {
+        Math::float2 position = Math::float2(0.0f, 0.0f); // world XZ
+        Math::float2 outward = Math::float2(1.0f, 0.0f);  // unit: across the hull's way when it left, away from the hull
+        float spread = 0.0f;   // m/s outward for good: the diverging wave's
+        float thrown = 0.0f;   // m/s outward on top at birth, gone in kFrontThrowSeconds: the sheet off the chine
+        float strength = 0.0f; // foam a texel takes as it passes, at birth
+        float age = 0.0f;      // s
+    };
+    struct Front
+    {
+        const void* hull = nullptr;
+        int side = 0;
+        std::vector<FrontPoint> points; // newest first
+        float sinceRelease = 1.0e9f;    // s since a point last left
+        float wobble = 0.0f;            // the scallops: a slow random walk a leaving point takes its speed from
+        std::uint32_t random = 1u;
+        bool seen = false;
+    };
+    struct FrontSource // a hull's side this step
+    {
+        const void* hull = nullptr;
+        int side = 0;
+        Math::float2 root = Math::float2(0.0f, 0.0f);
+        Math::float2 outward = Math::float2(1.0f, 0.0f);
+        float share = 0.0f;
+        float speed = 0.0f;
+        float length = 0.0f;
+    };
+    struct RecordPass;
+    static FrontPoint BirthOf(const FrontSource& source, const Tuning& tuning, float spreadJitter, float throwJitter,
+                              float strengthJitter);
+    void StepFronts(float dt, bool keep, const std::vector<FrontSource>& sources, const Tuning& tuning, RecordPass& r);
+    std::vector<Front> fronts_;
+    std::atomic<std::uint32_t> frontsAlive_{ 0u };
+    std::atomic<std::uint32_t> frontPoints_{ 0u };
+    std::atomic<std::uint32_t> frontsDrawn_{ 0u };
+
     // BuildPass' decisions for its record body (read, not captured: std::function keeps 48 bytes inline).
     struct HullGpu
     {
@@ -211,12 +289,14 @@ private:
         Tuning tuning{};
         std::uint32_t hullCount = 0;
         HullGpu hulls[kMaxHulls]{};
-        std::uint32_t splashCount = 0;
-        Math::float4 splashes[kMaxHulls * 2]{};
-        float splashRates[kMaxHulls * 2]{};
+        std::uint32_t frontCount = 0;
+        Math::float4 frontBounds[kMaxFronts * (kMaxFrontPoints / kFrontPiece)]{}; // a piece's (min x, min z, max x, max z), the band's reach in
+        Math::float4 frontInfo[kMaxFronts]{};    // (points, which side of the line is outward +-1, the residue's rate factor, 0)
+        Math::float4 frontPoints[kMaxFronts * kMaxFrontPoints]{}; // (x, z, the band's foam, half width)
         ShoreWindow shore{};
         bool hasShore = false;
         bool wash = false;         // the hulls moved as boats do this step: no new or jumped one
+        bool frontsLay = false;    // the bow waves' fronts draw and lay foam this step (time passed, the fronts kept)
         std::uint32_t foamNext = 0;
         std::uint32_t uavPoint = 0;
     };

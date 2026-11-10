@@ -11,6 +11,7 @@
     "updateFrames": 16
   },
   "cloudTrace": {
+    "captureTexels": 0.5,
     "mode": 0
   },
   "frame": {
@@ -22,11 +23,21 @@
     "vsync": false
   },
   "gi": {
+    "bounceVisibility": true,
+    "divisor": 4,
     "enabled": true,
     "farCascade": true,
+    "farDivisor": 4,
     "farSpacing": 2.0,
+    "fixedRayPeriod": 4,
     "hysteresis": 0.9800000190734863,
+    "infiniteBounce": true,
     "intensity": 1.0,
+    "lights": true,
+    "rayDistance": 200.0,
+    "rays": 64,
+    "skyRay": true,
+    "sleepPeriod": 4,
     "spacing": 0.5
   },
   "lod": {
@@ -193,10 +204,16 @@
   "skyVis": {
     "diffuse": 1.0,
     "enabled": true,
+    "fallback": true,
+    "fallbackFade": 0.15000000596046448,
+    "fallbackResolution": 512,
+    "fallbackTexel": 1.0,
+    "filterRadius": 4,
     "fogRays": 2,
     "history": 0.9950000047683716,
     "maxDistance": 15.0,
     "rays": 8,
+    "seed": true,
     "spatialFilter": true,
     "specular": 1.0
   },

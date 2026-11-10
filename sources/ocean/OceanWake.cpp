@@ -31,12 +31,13 @@ struct WakeCB
     float shoreCenterX; float shoreCenterZ; float shoreInvExtent; float shoreZNear;
     float shoreZFar; float breakRate; float foamFade; float foamDiffusion;
     float washStrength; float washThreshold; float crestStrength; float crestCoverage;
-    float foamFadeDense; std::uint32_t splashCount; float splashHalfWidth; float pad3;
+    float foamFadeDense; std::uint32_t frontCount; float pad2; float pad3;
     float hulls[16 * 3 * 4];
-    float splashes[32 * 4];  // the white water's lines along the hulls' sides, (x0, z0, x1, z1) world
-    float splashRates[32];   // foam a second on each
+    float frontBounds[8 * 8 * 4];   // the bow waves' fronts, eight pieces each: (min x, min z, max x, max z) world
+    float frontInfo[8 * 4];         // (points, outward side +-1, the residue's rate factor, 0)
+    float frontPoints[8 * 128 * 4]; // (x, z, the band's foam, half width m), newest first
 };
-static_assert(sizeof(WakeCB) == 128 + 16 * 3 * 16 + 32 * 16 + 32 * 4, "WakeCB mirrors the shader's cbuffer");
+static_assert(sizeof(WakeCB) == 128 + 16 * 3 * 16 + 8 * 8 * 16 + 8 * 16 + 8 * 128 * 16, "WakeCB mirrors the shader's cbuffer");
 
 constexpr float kGravity = 9.81f;
 // The absorber: 1/8 of the window, 6/s at the border. A wave crossing it at a few m/s is gone long before it could wrap
@@ -44,15 +45,232 @@ constexpr float kGravity = 9.81f;
 constexpr float kEdgeShare = 0.125f;
 constexpr float kEdgeRate = 6.0f;
 constexpr float kPi = 3.14159265358979f;
-// The foam spreads as nu = 0.3 m2/s (a trail 2-3 m wider after 10 s); stable while nu dt / texel^2 stays under 1/4, which
-// the step's 1/20 s cap keeps at any texel the knob allows (0.06 at 0.5 m, 0.24 at 0.25 m).
-constexpr float kFoamDiffusion = 0.3f;
+// The foam spreads as nu = Tuning::foamSpread m2/s (0.3: a trail 2-3 m wider after 10 s); the 4-neighbour Laplacian is
+// stable while nu dt / texel^2 stays under 1/4 -- capped just under it (0.3 at a 0.5 m texel and the step's 1/20 s cap
+// is 0.06).
+constexpr float kFoamDiffusionCap = 0.24f;
 // A hull's head changing slower than this (m/s) leaves no white water: a boat drifting or idling stays clean.
 constexpr float kWashThreshold = 1.0f;
 // A hull that moved more than this in one step (m/s) jumped (placed, put back, teleported): it leaves no white water.
 constexpr float kWashJumpSpeed = 40.0f;
-// The white water along a hull's side lies within this of its line (m), thickest on it.
-constexpr float kSplashHalfWidth = 0.9f;
+// ---- the breaking bow wave's fronts (OceanWake.h says what they are) ----
+// A point leaves each side this often (s); with the cap on a front's points, the oldest is kFrontMaxAge.
+constexpr float kFrontSpacing = 0.125f;
+constexpr float kFrontMaxAge = 15.5f;
+// The sheet a chine throws: outward speed on top of the wave's at birth, gone e-fold in kFrontThrowSeconds, having
+// carried the front Tuning::bowThrow seconds of the hull's speed outside the waterline (0.09: 1.4 m at 16 m/s, where
+// the spray's replica lands its nearer drops).
+constexpr float kFrontThrowSeconds = 0.35f;
+// The arms come in with the hull's speed: none under this (m/s: a hull pushing the water aside without throwing it),
+// whole from Tuning::bowSpeedFull -- the spray's own gate at its default.
+constexpr float kFrontSpeedOn = 3.0f;
+// The diverging wave's speed outward, m/s: Kelvin's wedge at displacement speeds (tan 19.47 degrees of the hull's),
+// and past Froude ~0.57 the speed of the waves a hull of that length throws most of -- the wedge then narrows as
+// 0.2 / Fr (Rabaud & Moisy 2013), i.e. the arms run out at 0.2 sqrt(g L) whatever the speed: 2 m/s for a 10 m hull,
+// which is where the field's own outer crest runs (ocean.wakeDebug:1 at 15 m/s: 11 m out, 82 m behind).
+constexpr float kFrontKelvin = 0.354f;
+constexpr float kFrontFroude = 0.2f;
+// The breaking band's half width is Tuning::bowWidth at birth (at least 1.5 texels) and widens at Tuning::bowWiden. The
+// shader's profile reaches kFrontToe of it ahead of the line (the breaker's toe, sharp) and kFrontTail behind (MUST
+// MATCH ocean_wake_cs.hlsl).
+constexpr float kFrontToe = 0.6f;
+constexpr float kFrontTail = 1.6f;
+// The band's foam on a fresh front at bowFoam 1 and a planing hull (the wake's units: 1 and over = white). The share
+// of it a texel keeps once the front has passed (the lace behind the arm) is Tuning::bowLace.
+constexpr float kFrontFoam = 1.5f;
+// The scallops: a leaving point's wave speed is 1 +- Tuning::bowScallop times a short random walk (lobes of two or
+// three points). Small by default (0.2): the offset it makes grows with the point's age (0.5 stepped the arms' edges
+// out by metres every 20 m).
+// A hull further than this (m) from where the last step had it is another place, not a step of its way: its fronts go.
+constexpr float kFrontJump = 8.0f;
+
+float NextRandom(std::uint32_t& state) // 0..1, xorshift32
+{
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return static_cast<float>(state & 0xFFFFFFu) * (1.0f / 16777216.0f);
+}
+
+// A point's outward speed now, and how far it runs in the next `dt` (the throw's decay integrated exactly).
+float FrontSpeed(float spread, float thrown, float age)
+{
+    return spread + thrown * std::exp(-age / kFrontThrowSeconds);
+}
+
+float FrontTravel(float spread, float thrown, float age, float dt)
+{
+    return spread * dt + thrown * kFrontThrowSeconds * (std::exp(-age / kFrontThrowSeconds) - std::exp(-(age + dt) / kFrontThrowSeconds));
+}
+}
+
+OceanWake::FrontPoint OceanWake::BirthOf(const FrontSource& source, const Tuning& tuning, float spreadJitter, float throwJitter,
+                                         float strengthJitter)
+{
+    FrontPoint point;
+    point.position = source.root;
+    point.outward = source.outward;
+    const float waveSpeed = std::min(kFrontKelvin * source.speed, kFrontFroude * std::sqrt(kGravity * std::max(source.length, 1.0f)));
+    point.spread = waveSpeed * tuning.bowSpread * spreadJitter;
+    point.thrown = tuning.bowThrow * source.speed / kFrontThrowSeconds * throwJitter;
+    point.strength = kFrontFoam * tuning.bowFoam * source.share * strengthJitter;
+    point.age = 0.0f;
+    return point;
+}
+
+// One step of every front: the points run outward and age, each side seen with a bow wave lets a new one go when it is
+// due, and the fronts are packed for the foam's Pack -- a side's line starts ON the hull (a point made for this step at
+// the root) and runs through its points, newest first.
+void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& sources, const Tuning& tuning, RecordPass& r)
+{
+    if (!keep)
+    {
+        // A cleared field, a hull placed or put back: a line from where it was to where it is would cross the sea.
+        fronts_.clear();
+    }
+    for (Front& front : fronts_)
+    {
+        front.seen = false;
+        for (FrontPoint& point : front.points)
+        {
+            const float travel = FrontTravel(point.spread, point.thrown, point.age, dt);
+            point.position = Math::float2(point.position.x + point.outward.x * travel, point.position.y + point.outward.y * travel);
+            point.age += dt;
+        }
+        while (!front.points.empty() && front.points.back().age > kFrontMaxAge)
+        {
+            front.points.pop_back();
+        }
+    }
+
+    r.frontCount = 0;
+    const float texelFloor = 1.5f * r.texel;
+    const float life = std::max(tuning.bowLife, 0.1f);
+    const auto pack = [&](const FrontPoint& point)
+    {
+        const float halfWidth = std::max(tuning.bowWidth + tuning.bowWiden * point.age, texelFloor);
+        // The breaking runs down with the front's age, and out over its last second (no step where the oldest point goes).
+        const float alive = std::exp(-point.age / life) * std::clamp(kFrontMaxAge - point.age, 0.0f, 1.0f);
+        return Math::float4(point.position.x, point.position.y, std::min(point.strength * alive, 2.0f), halfWidth);
+    };
+    const auto emit = [&](const Front& front, const FrontPoint* head)
+    {
+        const std::uint32_t count = static_cast<std::uint32_t>(std::min<size_t>(front.points.size() + (head ? 1u : 0u), kMaxFrontPoints));
+        if (count < 2u)
+        {
+            return;
+        }
+        if (!(tuning.bowFoam > 0.0f))
+        {
+            return; // no arms asked for: the points run on, the GPU is handed none
+        }
+        if (r.frontCount >= kMaxFronts)
+        {
+            LOG_WARNING_ONCE(logging::LogCategory::Ocean, "wake: more than {} bow wave fronts -- the rest lay no foam", kMaxFronts);
+            return;
+        }
+        Math::float4* out = r.frontPoints + static_cast<size_t>(r.frontCount) * kMaxFrontPoints;
+        std::uint32_t written = 0;
+        if (head)
+        {
+            out[written++] = pack(*head);
+        }
+        for (size_t i = 0; i < front.points.size() && written < count; ++i)
+        {
+            out[written++] = pack(front.points[i]);
+        }
+        // A box a PIECE of kFrontPiece segments (its points and the next piece's first): one box round a whole arm
+        // lying across the axes covered most of the window, and every texel in it walked all its segments.
+        const std::uint32_t pieces = kMaxFrontPoints / kFrontPiece;
+        for (std::uint32_t piece = 0; piece < pieces; ++piece)
+        {
+            Math::float4 box(1.0e9f, 1.0e9f, -1.0e9f, -1.0e9f); // empty: no texel is inside
+            for (std::uint32_t i = piece * kFrontPiece; i < written && i <= (piece + 1u) * kFrontPiece; ++i)
+            {
+                const float reach = out[i].w * kFrontTail;
+                box.x = std::min(box.x, out[i].x - reach);
+                box.y = std::min(box.y, out[i].y - reach);
+                box.z = std::max(box.z, out[i].x + reach);
+                box.w = std::max(box.w, out[i].y + reach);
+            }
+            r.frontBounds[r.frontCount * pieces + piece] = box;
+        }
+        // Which side of the line (walked from the hull aft) is outward: its right for port, its left for starboard --
+        // the side's own, never read off a piece of the line. (Read off its first piece, which has no length on the
+        // step a point leaves, the port arm's toe and tail swapped every eighth of a second: owner, watching it, "the
+        // left edge of the foam jerks to and fro".)
+        const FrontPoint& first = head ? *head : front.points.front();
+        const float turn = front.side == 0 ? -1.0f : 1.0f;
+        // The residue: a texel the band passes at the front's speed lies under (kFrontToe + kFrontTail) / 3 of its half
+        // width of the (1 - d / reach)^2 profile, in half-width / speed seconds: this factor x foam / half width, a
+        // second, leaves it bowLace of the band's foam.
+        const float speed = FrontSpeed(first.spread, 0.0f, 0.0f);
+        const float residue = tuning.bowLace * speed * 3.0f / (kFrontToe + kFrontTail);
+        r.frontInfo[r.frontCount] = Math::float4(static_cast<float>(written), turn, residue, 0.0f);
+        ++r.frontCount;
+    };
+
+    for (const FrontSource& source : sources)
+    {
+        auto it = std::find_if(fronts_.begin(), fronts_.end(),
+                               [&](const Front& f) { return f.hull == source.hull && f.side == source.side; });
+        if (it == fronts_.end())
+        {
+            if (!(source.share > 0.0f))
+            {
+                continue;
+            }
+            Front front;
+            front.hull = source.hull;
+            front.side = source.side;
+            front.random = 0x9E3779B9u * static_cast<std::uint32_t>(fronts_.size() + 1u) + static_cast<std::uint32_t>(source.side) * 7919u + 1u;
+            fronts_.push_back(std::move(front));
+            it = fronts_.end() - 1;
+        }
+        Front& front = *it;
+        front.seen = true;
+        if (!(source.share > 0.0f) || !(dt > 0.0f))
+        {
+            emit(front, nullptr); // no bow wave now: what it threw runs on
+            front.seen = false;   // (emitted; and forgotten below once its last point is gone)
+            continue;
+        }
+        front.sinceRelease += dt;
+        if (front.sinceRelease >= kFrontSpacing)
+        {
+            front.sinceRelease = 0.0f;
+            front.wobble = 0.5f * front.wobble + (NextRandom(front.random) - 0.5f);
+            const float spreadJitter = std::clamp(1.0f + tuning.bowScallop * front.wobble, 0.3f, 1.7f);
+            const float throwJitter = 0.7f + 0.6f * NextRandom(front.random);
+            const float strengthJitter = 0.7f + 0.6f * NextRandom(front.random);
+            front.points.insert(front.points.begin(), BirthOf(source, tuning, spreadJitter, throwJitter, strengthJitter));
+            if (front.points.size() > kMaxFrontPoints - 1u)
+            {
+                front.points.pop_back();
+            }
+        }
+        const FrontPoint head = BirthOf(source, tuning, 1.0f, 1.0f, 1.0f);
+        emit(front, &head);
+    }
+    for (const Front& front : fronts_)
+    {
+        const bool sourced = std::any_of(sources.begin(), sources.end(),
+                                         [&](const FrontSource& s) { return s.hull == front.hull && s.side == front.side; });
+        if (!sourced)
+        {
+            emit(front, nullptr); // its boat is gone: the wave it threw runs on
+        }
+    }
+    fronts_.erase(std::remove_if(fronts_.begin(), fronts_.end(), [](const Front& f) { return !f.seen && f.points.empty(); }),
+                  fronts_.end());
+    std::uint32_t points = 0;
+    for (const Front& front : fronts_)
+    {
+        points += static_cast<std::uint32_t>(front.points.size());
+    }
+    frontsAlive_.store(static_cast<std::uint32_t>(fronts_.size()), std::memory_order_relaxed);
+    frontPoints_.store(points, std::memory_order_relaxed);
+    frontsDrawn_.store(r.frontCount, std::memory_order_relaxed);
 }
 
 void OceanWake::EnsureResources(Renderer* renderer)
@@ -281,6 +499,8 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
     {
         r.shore = *shore;
     }
+    std::vector<FrontSource> frontSources;
+    frontSources.reserve(hulls_.size() * 2u);
     for (const ocean::WakeHull& hull : hulls_)
     {
         if (r.hullCount >= kMaxHulls)
@@ -302,10 +522,22 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             continue;
         }
         const buoyancy::HullFootprint& fp = *hull.footprint;
-        for (int side = 0; side < 2 && hull.splashRate > 0.0f; ++side)
+        for (int side = 0; side < 2 && hull.id; ++side)
         {
-            r.splashes[r.splashCount] = hull.splash[side];
-            r.splashRates[r.splashCount++] = hull.splashRate;
+            // Outward across the hull's way: the footprint's across axis (-fz, fx) is port, [0].
+            const float sign = side == 0 ? 1.0f : -1.0f;
+            FrontSource source;
+            source.hull = hull.id;
+            source.side = side;
+            source.root = hull.bowRoot[side];
+            source.outward = Math::float2(-hull.forward.y / fl * sign, hull.forward.x / fl * sign);
+            source.speed = std::max(hull.speed, 0.0f);
+            // The bow wave's share: the bow in the water (the hull's), and the hull's speed -- none under kFrontSpeedOn, so
+            // a boat at rest or idling keeps no front.
+            source.share = std::clamp(hull.bowShare, 0.0f, 1.0f) *
+                           std::clamp((source.speed - kFrontSpeedOn) / std::max(tuning.bowSpeedFull - kFrontSpeedOn, 0.1f), 0.0f, 1.0f);
+            source.length = hull.length;
+            frontSources.push_back(source);
         }
         HullGpu& g = r.hulls[r.hullCount++];
         g = HullGpu{ hull.position.x, hull.position.y, hull.forward.x / fl, hull.forward.y / fl,
@@ -363,12 +595,18 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
     // White water only from hulls moving as boats move: one placed, put back by Stop or teleported changes the head under
     // it in a step, and would leave a patch of foam where it stood.
     r.wash = elapsed > 0.0f && !r.clear && lastHullPositions_.size() == r.hullCount;
-    for (std::uint32_t i = 0; r.wash && i < r.hullCount; ++i)
+    // The bow waves' fronts are kept over a hitch: a frame that took long moves the hull further than this step's
+    // (capped) time allows, which is no reason to drop fifteen seconds of both arms -- only a hull that is somewhere
+    // else (placed, put back by Stop) is, or a cleared field.
+    bool keepFronts = !r.clear && lastHullPositions_.size() == r.hullCount;
+    for (std::uint32_t i = 0; i < r.hullCount && i < lastHullPositions_.size(); ++i)
     {
         const float dx = r.hulls[i].posX - lastHullPositions_[i].x;
         const float dz = r.hulls[i].posZ - lastHullPositions_[i].y;
-        r.wash = dx * dx + dz * dz <= (kWashJumpSpeed * elapsed) * (kWashJumpSpeed * elapsed);
+        r.wash = r.wash && dx * dx + dz * dz <= (kWashJumpSpeed * elapsed) * (kWashJumpSpeed * elapsed);
+        keepFronts = keepFronts && dx * dx + dz * dz <= kFrontJump * kFrontJump;
     }
+    r.frontsLay = keepFronts && elapsed > 0.0f;
     lastHullPositions_.resize(r.hullCount);
     for (std::uint32_t i = 0; i < r.hullCount; ++i)
     {
@@ -376,6 +614,8 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
     }
     foamNext_ ^= 1u;
     r.foamNext = foamNext_;
+    // The bow waves' fronts, on the field's clock.
+    StepFronts(elapsed, keepFronts, frontSources, tuning, r);
 
     // ---- declarations, from the same decisions ----
     ctx.NextPoint();
@@ -434,18 +674,20 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             cb.breakRate = rec.hasShore ? rec.tuning.breaking : 0.0f;
             cb.foamFade = rec.tuning.foamFade;
             cb.foamFadeDense = rec.tuning.foamFadeDense;
-            cb.foamDiffusion = kFoamDiffusion * rec.dt / (rec.texel * rec.texel);
+            cb.foamDiffusion = std::min(rec.tuning.foamSpread * rec.dt / (rec.texel * rec.texel), kFoamDiffusionCap);
             cb.washStrength = rec.wash ? rec.tuning.washFoam : 0.0f;
             cb.washThreshold = kWashThreshold;
             cb.crestStrength = rec.tuning.crestFoam;
             cb.crestCoverage = rec.tuning.crestCoverage;
             static_assert(sizeof(HullGpu) == 12 * sizeof(float), "three float4 a hull");
             std::memcpy(cb.hulls, rec.hulls, sizeof(HullGpu) * rec.hullCount);
-            cb.splashCount = rec.splashCount;
-            cb.splashHalfWidth = kSplashHalfWidth;
-            static_assert(sizeof(Math::float4) == 4 * sizeof(float), "a foam line is one float4");
-            std::memcpy(cb.splashes, rec.splashes, sizeof(Math::float4) * rec.splashCount);
-            std::memcpy(cb.splashRates, rec.splashRates, sizeof(float) * rec.splashCount);
+            cb.frontCount = rec.frontsLay ? rec.frontCount : 0u;
+            static_assert(sizeof(Math::float4) == 4 * sizeof(float), "a front's point is one float4");
+            static_assert(sizeof(cb.frontBounds) == sizeof(rec.frontBounds) && sizeof(cb.frontInfo) == sizeof(rec.frontInfo) &&
+                          sizeof(cb.frontPoints) == sizeof(rec.frontPoints), "the fronts' record mirrors WakeCB");
+            std::memcpy(cb.frontBounds, rec.frontBounds, sizeof(Math::float4) * (kMaxFrontPoints / kFrontPiece) * rec.frontCount);
+            std::memcpy(cb.frontInfo, rec.frontInfo, sizeof(Math::float4) * rec.frontCount);
+            std::memcpy(cb.frontPoints, rec.frontPoints, sizeof(Math::float4) * kMaxFrontPoints * rec.frontCount);
 
             const D3D12_GPU_DESCRIPTOR_HANDLE noSampler{};
             const auto writeCb = [&cb](std::uint8_t* dst) { std::memcpy(dst, &cb, sizeof(cb)); };

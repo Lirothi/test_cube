@@ -105,6 +105,7 @@ std::vector<std::pair<std::string, float>> g_fixedSettings;
 #include "ocean/OceanReadback.h"
 #include "ocean/OceanRenderable.h"  // --set=ocean.contactFoam
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanWakeKnobs.h" // --set=ocean.wake*
 #include "rendering/shadows/VirtualShadowMap.h" // --set=vsm.clipmap* (dev-window globals, headless)
 #include "rendering/post/BloomRenderer.h" // --set=bloom.convFftFused
 #include "rendering/streaming/StreamingSettings.h" // --set=streaming.* (texture streaming A2)
@@ -1572,7 +1573,6 @@ namespace
             else if (setting == "spray.colorG") { cfg.sprayColor.y = std::clamp(value, 0.0f, 1.0f); }
             else if (setting == "spray.colorB") { cfg.sprayColor.z = std::clamp(value, 0.0f, 1.0f); }
             else if (setting == "spray.forwardScatter") { cfg.sprayForwardScatter = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "spray.sideFoam") { cfg.spraySideFoam = std::clamp(value, 0.0f, 4.0f); }
             else if (setting == "spray.opacity") { cfg.sprayOpacity = std::clamp(value, 0.0f, 3.0f); }
             else if (setting == "spray.softFade") { cfg.spraySoftFade = std::clamp(value, 0.0f, 2.0f); }
             else if (setting == "spray.foamLight") { cfg.sprayFoamLight = std::clamp(value, 0.0f, 1.0f); }
@@ -1660,20 +1660,25 @@ namespace
             OceanSimulation* sim = ocean ? ocean->GetSimulation() : nullptr;
             if (!sim) { return true; }
             OceanRenderConfig cfg = sim->GetRenderConfig();
-            if (setting == "ocean.wakeEnabled") { cfg.wakeEnabled = value != 0.0f; }
+            // The foam and the bow wave's arms: ocean/OceanWakeKnobs.h is their one list.
+            bool tabled = false;
+            for (const ocean::WakeKnob& knob : ocean::WakeKnobs())
+            {
+                if (setting.compare(6, std::string::npos, knob.key) == 0) // past "ocean."
+                {
+                    cfg.*knob.field = std::clamp(value, knob.min, knob.max);
+                    tabled = true;
+                    break;
+                }
+            }
+            if (tabled) {}
+            else if (setting == "ocean.wakeEnabled") { cfg.wakeEnabled = value != 0.0f; }
             else if (setting == "ocean.wakeStrength") { cfg.wakeStrength = std::clamp(value, 0.0f, 4.0f); }
             else if (setting == "ocean.wakeDisplacement") { cfg.wakeDisplacement = std::clamp(value, 0.0f, 2.0f); }
             else if (setting == "ocean.wakeNormal") { cfg.wakeNormal = std::clamp(value, 0.0f, 3.0f); }
             else if (setting == "ocean.wakeDamping") { cfg.wakeDamping = std::clamp(value, 0.0f, 20.0f); }
             else if (setting == "ocean.wakeBreaking") { cfg.wakeBreaking = std::clamp(value, 0.0f, 20.0f); }
             else if (setting == "ocean.wakeTexel") { cfg.wakeTexel = std::clamp(value, 0.25f, 2.0f); }
-            else if (setting == "ocean.wakeFoam") { cfg.wakeFoam = std::clamp(value, 0.0f, 2.0f); }
-            else if (setting == "ocean.wakeFoamFade") { cfg.wakeFoamFade = std::clamp(value, 0.02f, 5.0f); }
-            else if (setting == "ocean.wakeFoamFadeDense") { cfg.wakeFoamFadeDense = std::clamp(value, 0.0f, 10.0f); }
-            else if (setting == "ocean.wakeWashFoam") { cfg.wakeWashFoam = std::clamp(value, 0.0f, 20.0f); }
-            else if (setting == "ocean.wakeCrestFoam") { cfg.wakeCrestFoam = std::clamp(value, 0.0f, 5.0f); }
-            else if (setting == "ocean.wakeCrestCoverage") { cfg.wakeCrestCoverage = std::clamp(value, 0.0f, 1.0f); }
-            else if (setting == "ocean.wakeChurn") { cfg.wakeChurn = std::clamp(value, 0.0f, 1.0f); }
             else { return false; }
             sim->SetRenderConfig(cfg);
             return true;
@@ -2437,6 +2442,15 @@ namespace
                                   spray.Boats(), spray.Rate(), spray.SheetRate(), spray.Bursts(), spray.SheetAlive(), spray.SheetCapacity(),
                                   spray.MistAlive(), spray.MistCapacity(), static_cast<unsigned long long>(spray.HullEntries()));
                     out += sprayItem;
+                }
+                // The wake's bow wave fronts (ocean/OceanWake: the two foam arms a boat): alive, their points, handed to the GPU.
+                if (const OceanRenderable* wakeOcean = scene_.FindOceanRenderable())
+                {
+                    std::uint32_t fronts = 0, points = 0, drawn = 0;
+                    wakeOcean->GetWakeFrontReadout(fronts, points, drawn);
+                    char wakeItem[128];
+                    std::snprintf(wakeItem, sizeof(wakeItem), ",\"wake\":{\"fronts\":%u,\"frontPoints\":%u,\"frontsDrawn\":%u}", fronts, points, drawn);
+                    out += wakeItem;
                 }
                 // The objects OceanBuoyancy floats (not the physics world's boats) and the water the CPU reads under them.
                 {

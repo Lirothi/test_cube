@@ -158,8 +158,30 @@ struct OceanRenderConfig
     float wakeCrestFoam = 1.0f;    // Crest's Wave Foam Strength on the wake's steep crests (0..5)
     float wakeCrestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks (0.55 = the Stokes limit, 0..1)
     float wakeChurn = 1.0f;        // the churned white water's relief: lumps and grey cavities (0 = a smooth sheet, 0..1)
-    // A boat's spray (vfx/VesselSpray): lit drops off a planing hull's chines, every boat's; and the white water the hull
-    // lays along its sides into the wake's foam.
+    float wakeFoamTile = 3.0f;     // m of water a tile of the wake's foam texture covers: the lace's scale (its largest
+                                   // cells a fifth of it); drawn without a repeat (0.2..16)
+    // The breaking bow wave: the wake's two foam arms (OceanWake's fronts), from the bow's shoulders outward.
+    float wakeBowFoam = 1.0f;      // their foam: 1 = a fresh front of a planing hull leaves white water (0 = no arms, 0..4)
+    float wakeBowSpread = 1.0f;    // how fast they run outward: 1 = the diverging wave's own speed, the arms on its crest (0.25..4)
+    float wakeBowLife = 2.5f;      // s: a front's breaking runs down e-fold in this -- the arms' white length (0.2..10)
+    float wakeBowLace = 0.15f;     // the share of a breaker's foam the water keeps once it has passed: the lace between the
+                                   // arms and the trail (0 = clear water there, 1 = a solid wedge, 0..1)
+    float wakeBowThrow = 0.09f;    // s of the hull's speed the chine's sheet carries a front off the waterline at its birth:
+                                   // the arms' shoulder (1.4 m at 16 m/s; 0 = they start on the hull, 0..0.3)
+    float wakeBowWidth = 0.9f;     // m: the breaker band's half width where it leaves the hull (0.3..4)
+    float wakeBowWiden = 0.25f;    // m/s the half width grows as the front runs on (0..2)
+    float wakeBowScallop = 0.2f;   // the outer edge's raggedness: a leaving point's speed is 1 +- this x a short random walk (0..1)
+    float wakeBowSpeedFull = 12.0f; // m/s of the hull at which the arms are whole (they start at 3; 4..30)
+    // The wake foam's look on the surface (ocean_surface_surf_sim.hlsli WakeFoamCoverage) and in its field.
+    float wakeFoamSpread = 0.3f;   // m2/s the laid foam spreads sideways at (a trail 2-3 m wider after 10 s; 0..1)
+    float wakeAeration = 0.4f;     // the bubbles under the foam: the light turquoise scar's strength (0..1)
+    float wakeFoamStretch = 3.5f;  // the lace is drawn out this many times along the way it was laid (1 = round, 1..8)
+    float wakeFoamSoftness = 0.14f; // the lace's edge between foam and water, in the gaussian's units (0.02..1)
+    float wakeFoamBoil = 0.06f;    // m/s the pattern's patches slide against each other (0 = frozen, 0..0.5)
+    float wakeFoamTileVary = 0.15f; // each patch of the pattern (a hexagon of its tiling) is drawn at the tile x (1 +- this) (0..0.4: past it a patch would show its tile twice)
+    float wakeFoamCap = 0.93f;     // the most of the water the densest foam covers: under 1 solid white water keeps holes (0.5..1)
+    float wakeChurnSize = 4.0f;    // m of water a tile of the churn's relief covers, its own scale (at least wakeFoamTile; 0.5..16)
+    // A boat's spray (vfx/VesselSpray): lit drops off a planing hull's chines, every boat's.
     bool sprayEnabled = true;
     float sprayRate = 0.7f;        // of what the presets can keep alive (0..1)
     float sprayMist = 1.0f;        // the mist's share of that (0..4)
@@ -172,7 +194,6 @@ struct OceanRenderConfig
     float sprayForwardScatter = 0.25f; // the sun's share in the forward lobe (glows against the sun); the rest is diffuse (0..1)
     float sprayOpacity = 1.0f;     // times the presets' alpha keys (each key at most 1): the water shows through less (0..3)
     float spraySoftFade = 0.4f;    // m: a drop fades out over this much before the water's surface (the mist over 2.5x it) (0..2)
-    float spraySideFoam = 1.0f;    // the white water along the hull's sides: about this much foam on a texel it passes (0..4)
 
     float shoreVerticalFadeDepth = 1.25f;
     float shoreHorizontalMin = 0.65f;

@@ -37,6 +37,7 @@
 #include "ocean/OceanRenderConfigJson.h"
 #include "ocean/OceanRenderable.h" // ocean::g_shoreRunup_game gates the Shore and surf section
 #include "ocean/OceanSimulation.h"
+#include "ocean/OceanWakeKnobs.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/LightManager.h"
@@ -3951,24 +3952,20 @@ namespace
                             "waterline reflects it whole.");
                     renderDrag("Wake Texel (m)", render.wakeTexel, 0.01f, 0.25f, 2.0f);
                     wakeTip("512 texels make the window round the camera: 0.5 m = 256 m. A change restarts the field.");
-                    renderDrag("Wake Foam", render.wakeFoam, 0.01f, 0.0f, 2.0f);
-                    wakeTip("The wake's foam on the surface: the white water and trail behind a hull, the steep crests. 0 = none.");
-                    renderDrag("Wake Foam Fade (1/s)", render.wakeFoamFade, 0.005f, 0.02f, 5.0f);
-                    wakeTip("How fast the lace a trail dissolves into runs down: 0.1 = some 20 s.");
-                    renderDrag("Wake Foam Fade Dense", render.wakeFoamFadeDense, 0.02f, 0.0f, 10.0f);
-                    wakeTip("1/s per unit of foam on top of the fade: dense white water runs down fast, so a trail is solid "
-                            "only just behind the transom (a breaking crest's stage A, seconds).");
-                    renderDrag("Wake White Water", render.wakeWashFoam, 0.05f, 0.0f, 20.0f);
-                    wakeTip("The foam a moving hull leaves where it arrives and, above all, where its transom leaves the water: "
-                            "foam a metre of head change under it lays down, past 1 m/s of change.");
-                    renderDrag("Wake Crest Foam", render.wakeCrestFoam, 0.01f, 0.0f, 5.0f);
-                    wakeTip("Crest's Wave Foam Strength: foam where the wake's crests pinch past the coverage below.");
-                    renderDrag("Wake Crest Coverage", render.wakeCrestCoverage, 0.005f, 0.0f, 1.0f);
-                    wakeTip("Crest's Wave Foam Coverage: a crest whose surface pinches to det J under this breaks. "
-                            "0.55 = a Gerstner wave at the Stokes limit (a k 0.44); higher = gentler crests foam too.");
-                    renderDrag("Wake Churn", render.wakeChurn, 0.01f, 0.0f, 1.0f);
-                    wakeTip("The churned white water's relief: lumps of a decimetre or two the sun lights on one side and "
-                            "grey cavities between them, boiling. 0 = a smooth white sheet.");
+                    // The foam and the bow wave's arms: one table for both windows, the level's file and `--set`
+                    // (ocean/OceanWakeKnobs.h).
+                    for (const ocean::WakeKnob& knob : ocean::WakeKnobs())
+                    {
+                        if (knob.section)
+                        {
+                            ImGui::SeparatorText(knob.section);
+                        }
+                        renderDrag(knob.label, render.*knob.field, knob.speed, knob.min, knob.max);
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("%s\n\n--set ocean.%s:<%g .. %g>", knob.hint, knob.key, knob.min, knob.max);
+                        }
+                    }
                 }
 
                 if (ImGui::CollapsingHeader("Boat spray", ImGuiTreeNodeFlags_DefaultOpen))
@@ -4012,8 +4009,6 @@ namespace
                     sprayTip("Metres over which a drop fades out before it meets the water's surface (the mist over 2.5x it): no hard line where a sprite crosses the sea. 0 = cut by the water.");
                     renderDrag("Spray Forward Scatter", render.sprayForwardScatter, 0.005f, 0.0f, 1.0f);
                     sprayTip("The sun's share in the forward lobe: spray against the sun glows, the rest of it is diffuse. Higher = darker spray with the sun behind the camera, brighter against it.");
-                    renderDrag("Spray Side Foam", render.spraySideFoam, 0.01f, 0.0f, 4.0f);
-                    sprayTip("The white water a planing hull lays along its sides into the wake's foam, from the spray's root to the stern, moving with the hull: about this much foam on the water it passes (1 = white). 0 = none.");
                 }
 
                 if (ImGui::CollapsingHeader("Shore and surf", ImGuiTreeNodeFlags_DefaultOpen))

@@ -1,5 +1,7 @@
 #include "ocean/OceanControlsWindow.h"
 
+#include "ocean/OceanWakeKnobs.h"
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1144,44 +1146,19 @@ namespace
         {
             ImGui::SetTooltip("512 texels make the window round the camera: 0.5 m = 256 m. A change restarts the field.");
         }
-        drag("Wake foam", render.wakeFoam, 0.01f, 0.0f, 2.0f);
-        if (ImGui::IsItemHovered())
+        // The foam and the bow wave's arms: one table for both windows, the level's file and `--set`
+        // (ocean/OceanWakeKnobs.h).
+        for (const ocean::WakeKnob& knob : ocean::WakeKnobs())
         {
-            ImGui::SetTooltip("The wake's foam on the surface: the white water and trail behind a hull, the steep crests. 0 = none.");
-        }
-        drag("Wake foam fade (1/s)", render.wakeFoamFade, 0.005f, 0.02f, 5.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("How fast the lace a trail dissolves into runs down: 0.1 = some 20 s.");
-        }
-        drag("Wake foam fade dense", render.wakeFoamFadeDense, 0.02f, 0.0f, 10.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("1/s per unit of foam on top of the fade: dense white water runs down fast, so a trail is\n"
-                              "solid only just behind the transom (a breaking crest's stage A, seconds).");
-        }
-        drag("Wake white water", render.wakeWashFoam, 0.05f, 0.0f, 20.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("The foam a moving hull leaves where it arrives and, above all, where its transom leaves the water:\n"
-                              "foam a metre of head change under it lays down, past 1 m/s of change.");
-        }
-        drag("Wake crest foam", render.wakeCrestFoam, 0.01f, 0.0f, 5.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Crest's Wave Foam Strength: foam where the wake's crests pinch past the coverage below.");
-        }
-        drag("Wake crest coverage", render.wakeCrestCoverage, 0.005f, 0.0f, 1.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Crest's Wave Foam Coverage: a crest whose surface pinches to det J under this breaks.\n"
-                              "0.55 = a Gerstner wave at the Stokes limit (a k 0.44); higher = gentler crests foam too.");
-        }
-        drag("Wake churn", render.wakeChurn, 0.01f, 0.0f, 1.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("The churned white water's relief: lumps of a decimetre or two the sun lights on one side and grey\n"
-                              "cavities between them, boiling. 0 = a smooth white sheet.");
+            if (knob.section)
+            {
+                ImGui::SeparatorText(knob.section);
+            }
+            drag(knob.label, render.*knob.field, knob.speed, knob.min, knob.max);
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s\n\n--set ocean.%s:<%g .. %g>", knob.hint, knob.key, knob.min, knob.max);
+            }
         }
         {
             static const char* kWakeViews[] = { "Off", "Height", "Foam" };
@@ -1261,12 +1238,6 @@ namespace
         {
             ImGui::SetTooltip("The sun's share in the forward lobe: spray against the sun glows, the rest of it is diffuse.\n"
                               "Higher = darker spray with the sun behind the camera, brighter against it.");
-        }
-        drag("Spray side foam", render.spraySideFoam, 0.01f, 0.0f, 4.0f);
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("The white water a planing hull lays along its sides into the wake's foam, from the spray's root to\n"
-                              "the stern, moving with the hull: about this much foam on the water it passes (1 = white). 0 = none.");
         }
 
         ImGui::SeparatorText("Shore and surf");

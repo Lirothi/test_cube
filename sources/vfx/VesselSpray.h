@@ -34,7 +34,6 @@ struct SprayParams
     float opacity = 1.0f;         // times the presets' alpha keys (each at most 1)
     float softFade = 0.4f;        // m: the sheet's drops fade out over this before the water's surface, the mist over 2.5x it
     float foamLight = 1.0f;       // lit as a level sheet of the water's foam (1) or as spheres (0): EmitterDesc::litFlat
-    float sideFoam = 1.0f;        // the white water along the hull's sides, foam a texel it passes
 };
 
 class VesselSpray
@@ -43,9 +42,11 @@ public:
     // At the hand-over (Scene::Sync), before the objects' SyncSceneState: places and drives every boat's emitters,
     // making a new boat's on its first frame. The drops leave and die at the water's surface under each hull.
     void Sync(Scene& scene, Renderer* renderer, const std::vector<physics::VesselHull>& hulls, const SprayParams& params);
-    // The white water a boat lays along its sides this frame (the wake's foam), a line a side (x0, z0, x1, z1) and the
-    // foam a second on each: false = none.
-    bool SideFoamOf(const void* vessel, Math::float4 (&lines)[2], float& rate) const;
+    // The breaking bow wave a boat throws this frame (the wake's two foam arms, ocean/OceanWake's fronts): where it
+    // leaves each side of the waterline (world XZ; [0] port, [1] starboard), how much of the bow is in the water (0 =
+    // in the air .. 1 -- the spray's own immersion gate, whatever spray.enabled says; the wake gates by speed itself)
+    // and the waterline's length (m). false = the boat is not known here.
+    bool BowWaveOf(const void* vessel, Math::float2 (&roots)[2], float& share, float& length) const;
     // The level is going: the emitters go with its objects.
     void Clear() { sets_.clear(); }
 
@@ -65,12 +66,12 @@ public:
 
 private:
     // One side of a hull's waterline, in the model's metres (u along its forward, v across it): the spray's root on its
-    // forward part, and how far aft the side runs.
+    // forward part.
     struct Root
     {
         float u0 = 0.0f, v0 = 0.0f; // the root's end at the bow
         float u1 = 0.0f, v1 = 0.0f; // the root's end aft
-        float u2 = 0.0f, v2 = 0.0f; // the side's end at the stern
+        float length = 0.0f;        // the waterline's, stem to stern
         bool valid = false;
     };
     struct Set
@@ -83,8 +84,9 @@ private:
         float lastImpact = 0.0f;      // the slam the last frame showed: a burst on its rise
         float sheetAlpha[4] = {};     // the presets' alpha keys, as made (the opacity scales them every frame)
         float mistAlpha[4] = {};
-        Math::float4 foamLine[2] = {}; // along its sides, outside the waterline (x0, z0, x1, z1)
-        float foamRate = 0.0f;        // foam a second laid there
+        Math::float2 bowRoot[2] = {}; // where the bow wave leaves each side, world XZ
+        float bowShare = 0.0f;        // how much of it there is, 0..1
+        float bowLength = 0.0f;       // the waterline's length, m
         bool seen = false;
     };
     static Root FindRoot(const buoyancy::HullFootprint& footprint, int side);

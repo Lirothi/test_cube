@@ -2234,8 +2234,8 @@ void Scene::Sync(Renderer* renderer)
     {
         physics_.CollectHulls(vesselHulls_);
         // Their spray (vfx/VesselSpray): emitters made on a boat's first frame, placed and driven here, before the
-        // objects' SyncSceneState below takes their positions and rates; the white water along the hulls' sides goes to the
-        // wake below.
+        // objects' SyncSceneState below takes their positions and rates; where each hull's bow wave breaks goes to the
+        // wake below (its foam arms).
         vfx::SprayParams spray;
         if (const OceanSimulation* sim = ocean->GetSimulation())
         {
@@ -2252,7 +2252,6 @@ void Scene::Sync(Renderer* renderer)
                                        cfg.sprayColor.z * cfg.foamTint.z);
             spray.foamLight = cfg.sprayFoamLight;
             spray.forwardScatter = cfg.sprayForwardScatter;
-            spray.sideFoam = cfg.spraySideFoam;
             spray.opacity = cfg.sprayOpacity;
             spray.softFade = cfg.spraySoftFade;
         }
@@ -2268,7 +2267,10 @@ void Scene::Sync(Renderer* renderer)
             // The asset's waterline: VesselSettings::draft is where still water stands on the mesh, over its origin.
             hull.footprint = buoyancy::ResolveFootprint(vessel.object->GetGeometryPath(),
                 Math::float2(vessel.settings->forward.x, vessel.settings->forward.z), vessel.settings->draft);
-            vesselSpray_.SideFoamOf(vessel.object, hull.splash, hull.splashRate);
+            // Its breaking bow wave (the wake's two foam arms): the spray's root on each side and its share.
+            hull.id = vessel.object;
+            hull.speed = vessel.speed;
+            vesselSpray_.BowWaveOf(vessel.object, hull.bowRoot, hull.bowShare, hull.length);
             if (hull.footprint)
             {
                 hulls.push_back(std::move(hull));

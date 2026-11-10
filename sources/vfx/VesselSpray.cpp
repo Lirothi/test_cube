@@ -24,10 +24,9 @@ namespace
     constexpr float kSpraySpeedOn = 3.0f;
     constexpr float kSpraySpeedFull = 12.0f;
     // Where along the waterline the spray leaves: a share of its length aft of the stem (the forward part, where the
-    // spray root of a planing hull meets the chine); and where the side ends, the same share forward of the stern.
+    // spray root of a planing hull meets the chine).
     constexpr float kRootFore = 0.05f;
     constexpr float kRootAft = 0.35f;
-    constexpr float kSideAft = 0.05f;
     // The spray by the hull's immersion: none under the first (in the air), whole from the second (smoothstep).
     constexpr float kSprayWetFrom = 0.02f;
     constexpr float kSprayWetFull = 0.25f;
@@ -36,13 +35,9 @@ namespace
     constexpr float kSlamOn = 0.15f;
     constexpr float kSlamSheet = 250.0f;
     constexpr float kSlamMist = 30.0f;
-    // The white water along a planing hull's sides (the bow wave breaking, the spray falling back beside it): a line a
-    // side from the spray's root to the stern, this far outside the waterline (m), moving with the hull -- so it lays its
-    // foam where the hull went, on a turn too. A texel the line passes lies under it for length / speed seconds; at
-    // `rate` = kSideFoam x sideFoam x speed / length the texel on the line takes kSideFoam x sideFoam of foam (the wake's
-    // units: 1 and over = white), a third of that on average across the line's width (OceanWake's kSplashHalfWidth).
-    constexpr float kSideFoamOut = 0.3f;
-    constexpr float kSideFoam = 2.0f;
+    // The breaking bow wave's fronts (ocean/OceanWake: the wake's two foam arms) leave the waterline at the spray's
+    // root, this far outside it (m).
+    constexpr float kBowRootOut = 0.2f;
 
     Math::float3 Normalized(const Math::float3& v)
     {
@@ -99,11 +94,10 @@ VesselSpray::Root VesselSpray::FindRoot(const buoyancy::HullFootprint& footprint
     };
     const int fore = std::clamp(stem - static_cast<int>(std::lround(kRootFore * length)), stern, stem);
     const int aft = std::clamp(stem - static_cast<int>(std::lround(kRootAft * length)), stern, stem);
-    const int end = std::clamp(stern + static_cast<int>(std::lround(kSideAft * length)), stern, aft);
-    if (!edge(fore, root.v0) || !edge(aft, root.v1) || !edge(end, root.v2)) { return root; }
+    if (!edge(fore, root.v0) || !edge(aft, root.v1)) { return root; }
     root.u0 = footprint.u0 + (static_cast<float>(fore) + 0.5f) * footprint.cellU;
     root.u1 = footprint.u0 + (static_cast<float>(aft) + 0.5f) * footprint.cellU;
-    root.u2 = footprint.u0 + (static_cast<float>(end) + 0.5f) * footprint.cellU;
+    root.length = static_cast<float>(length) * footprint.cellU;
     root.valid = true;
     return root;
 }
@@ -141,17 +135,19 @@ bool VesselSpray::Create(Scene& scene, Renderer* renderer, Set& set)
     return ok;
 }
 
-bool VesselSpray::SideFoamOf(const void* vessel, Math::float4 (&lines)[2], float& rate) const
+bool VesselSpray::BowWaveOf(const void* vessel, Math::float2 (&roots)[2], float& share, float& length) const
 {
     for (const Set& set : sets_)
     {
         if (set.vessel != vessel) { continue; }
-        lines[0] = set.foamLine[0];
-        lines[1] = set.foamLine[1];
-        rate = set.foamRate;
-        return rate > 0.0f;
+        roots[0] = set.bowRoot[0];
+        roots[1] = set.bowRoot[1];
+        share = set.bowShare;
+        length = set.bowLength;
+        return true;
     }
-    rate = 0.0f;
+    share = 0.0f;
+    length = 0.0f;
     return false;
 }
 
@@ -206,8 +202,11 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
         // A hull in the air throws nothing: the spray is water the hull meets (VesselState::immersion, 1 = as deep as at
         // rest; a planing hull sits at a fraction of it, a hull off a crest at 0). Its slam on landing is the burst below.
         const float wet = std::clamp((hull.immersion - kSprayWetFrom) / (kSprayWetFull - kSprayWetFrom), 0.0f, 1.0f);
+        // The bow in the water (the wake's foam arms take it whatever spray.enabled says, and gate by the hull's speed
+        // themselves: OceanRenderConfig::wakeBowSpeedFull).
+        const float bowShare = wet * wet * (3.0f - 2.0f * wet);
         const float share = params.enabled
-            ? std::clamp((speed - kSpraySpeedOn) / (kSpraySpeedFull - kSpraySpeedOn), 0.0f, 1.0f) * wet * wet * (3.0f - 2.0f * wet) : 0.0f;
+            ? std::clamp((speed - kSpraySpeedOn) / (kSpraySpeedFull - kSpraySpeedOn), 0.0f, 1.0f) * bowShare : 0.0f;
         const Math::float3 hullVelocity = forward * speed;
         // A slam: its rise past kSlamOn throws a burst this frame (the physics fades it, so a rise is a new one).
         const float impact = std::max(hull.impact, 0.0f);
@@ -215,7 +214,6 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             ? std::min(impact, 2.0f) * std::max(params.slam, 0.0f) : 0.0f;
         set.lastImpact = impact;
         if (slam > 0.0f) { ++bursts_; }
-        float sideLength = 0.0f;
         for (int side = 0; side < 2; ++side)
         {
             const Root& root = set.side[side];
@@ -280,20 +278,18 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             drive(set.mist[side], set.mistAlpha, mistRate * std::clamp(params.rate * params.mist, 0.0f, 1.0f), 0.2f, 0.5f,
                   Normalized(outward * 0.6f + up * 0.8f), slam * kSlamMist * std::max(params.mist, 0.0f), 2.5f);
             sheetRate_ += set.sheet[side] ? set.sheet[side]->Desc().spawnRate : 0.0f;
-            // The white water along this side: from the spray's root to the stern, outside the waterline, with the hull.
-            const Math::float3 offset = outward * (kSideFoamOut * scale);
-            const Math::float3 fore = (root.valid ? world(root.u0, root.v0) : hull.position) + offset;
-            const Math::float3 aft = (root.valid ? world(root.u2, root.v2) : hull.position) + offset;
-            set.foamLine[side] = Math::float4(fore.x, fore.z, aft.x, aft.z);
-            sideLength += 0.5f * std::sqrt((fore.x - aft.x) * (fore.x - aft.x) + (fore.z - aft.z) * (fore.z - aft.z));
+            // Where this side's breaking bow wave leaves the waterline: the root's fore end, just outside it.
+            const Math::float3 fore = (root.valid ? world(root.u0, root.v0) : hull.position) + outward * (kBowRootOut * scale);
+            set.bowRoot[side] = Math::float2(fore.x, fore.z);
         }
-        const bool sides = set.side[0].valid && set.side[1].valid && sideLength > 0.5f;
-        set.foamRate = sides ? kSideFoam * std::clamp(params.sideFoam, 0.0f, 4.0f) * share * speed / sideLength : 0.0f;
+        const bool sides = set.side[0].valid && set.side[1].valid;
+        set.bowShare = sides ? bowShare : 0.0f;
+        set.bowLength = sides ? set.side[0].length * scale : 0.0f;
     }
     for (Set& set : sets_)
     {
         if (set.seen) { continue; }
-        set.foamRate = 0.0f;
+        set.bowShare = 0.0f;
         for (int side = 0; side < 2; ++side)
         {
             if (set.sheet[side]) { set.sheet[side]->DescRef().spawnRate = 0.0f; }

@@ -660,6 +660,7 @@
     <ClInclude Include="sources/ocean/OceanSimulation.h" />
     <ClInclude Include="sources/ocean/OceanSurfSim.h" />
     <ClInclude Include="sources/ocean/OceanWake.h" />
+    <ClInclude Include="sources/ocean/OceanWakeKnobs.h" />
     <ClInclude Include="sources/ocean/WaterMask.h" />
     <ClInclude Include="sources/ocean/OceanWetness.h" />
     <ClInclude Include="sources/ocean/BuoyancyJson.h" />
