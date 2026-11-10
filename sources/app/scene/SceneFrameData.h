@@ -512,6 +512,14 @@ inline float4 g_fogDistantSkyLight{};
 // light on a drop). The descriptor's ptr, 0 = none. Set by the scene renderer once a frame, before the forward passes.
 inline std::uint64_t g_skyIrradianceSrv = 0u;
 inline float g_skyIrradianceScale = 0.0f;
+// The depth WITH the water in it (Main_Translucent copies it once Main_Transparent has drawn the water), for the
+// particles' soft fade: a spray drop falling into the sea fades out over its softFade instead of being cut by the
+// water's depth test. The descriptor's ptr, 0 = none this frame (the particles keep the opaque depthCopy). Set by the
+// Main_Translucent builder, read by its draws. particles.softWater 0 = the opaque copy, the A/B (--set, transient).
+inline std::uint64_t g_particleDepthWaterSrv = 0u;
+inline bool g_particleSoftWater = true;
+inline bool g_particleSoftWater_game = true;
+inline const bool g_particleSoftWater_knob = ::knob::Register(g_particleSoftWater_game, g_particleSoftWater, "g_particleSoftWater");
 // A/B, transient (--set fog.skyAlongView:1): the fog coloured by the sky along the view again, as before 2026-10-31.
 inline bool g_fogSkyAlongView = false;
 inline bool g_fogSkyAlongView_game = false;

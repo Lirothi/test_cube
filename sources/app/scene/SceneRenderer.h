@@ -651,8 +651,10 @@ private:
         const Camera& camera, const WaterReflectionPoints& pts);
     void Pass_Transparent(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, const SceneView& mainView, const TransparentPoints& pts);
+    // `copyWaterPoint`: the depth (with the water) -> COPY_SOURCE, depthWater -> COPY_DEST; `copyWater` = copy it there.
     void Pass_Translucent(Renderer* r, RenderGraphPassContext ctx,
-        const Camera& camera, const SceneView& mainView, std::uint32_t rebindPoint);
+        const Camera& camera, const SceneView& mainView, std::uint32_t rebindPoint,
+        std::uint32_t copyWaterPoint, bool copyWater);
     void Pass_TransparentFog(Renderer* r, RenderGraphPassContext ctx,
         const Camera& camera, std::uint32_t point);
     void Pass_DebugDraw(Renderer* r, RenderGraphPassContext ctx,

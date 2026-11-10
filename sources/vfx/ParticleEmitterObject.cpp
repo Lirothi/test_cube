@@ -526,6 +526,16 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     // there). Disable the fade if it is somehow unavailable.
     const auto& D = renderer->GetDeferredForFrame();
     const bool haveDepth = D.depthCopy.Get() != nullptr && D.depthCopySRV.ptr != 0;
+    // The depth with the water in it, when Main_Translucent copied it this frame (g_particleDepthWaterSrv): the soft fade
+    // then reaches the sea too -- a drop falling into it fades over softFade instead of being cut by the water's depth.
+    D3D12_CPU_DESCRIPTOR_HANDLE softDepth = D.depthCopySRV;
+    ID3D12Resource* softDepthResource = D.depthCopy.Get();
+    if (g_particleDepthWaterSrv != 0u && D.depthWater.Get() != nullptr &&
+        static_cast<std::uint64_t>(D.depthWaterSRV.ptr) == g_particleDepthWaterSrv)
+    {
+        softDepth = D.depthWaterSRV;
+        softDepthResource = D.depthWater.Get();
+    }
     // depthOcclude drives PS occlusion against the opaque snapshot; the hardware depth test
     // handles the ocean separately. softFade is the fade width; 0 = a hard opaque cutoff.
     dp.depthOcclude = haveDepth ? 1.0f : 0.0f;
@@ -549,7 +559,7 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
 
     if (haveDepth)
     {
-        renderer->Transition(cl, D.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        renderer->Transition(cl, softDepthResource, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 
     auto h = renderer->GetRenderContextPool()->Acquire();
@@ -561,7 +571,7 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     // PSO has no PARTICLE_SORTED define).
     ctx.srvTable[0] = renderer->StageSrvUavTable(
         { particlesSrv_, hasSprite_ ? sprite_.GetSRVCPU() : particlesSrv_,
-          haveDepth ? D.depthCopySRV : particlesSrv_,
+          haveDepth ? softDepth : particlesSrv_,
           (sortEnabled_ && sorted_) ? sortedSrv_ : particlesSrv_,
           // t4: the volumetric fog's integrated volume (plan A5), PS-readable every frame by the
           // transparent pass's declaration; the shader gates on fogVolumeParams.x.

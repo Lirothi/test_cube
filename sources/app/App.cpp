@@ -1553,6 +1553,7 @@ namespace
         // A lit particle's air: the fog's colour as before 2026-11-09 (the A/B), 0 = the sky's distant light.
         if (setting == "particles.airFromFog") { vfx::g_litAirFromFog_game = value != 0.0f; return true; }
         if (setting == "particles.collideHulls") { vfx::g_collideHulls_game = value != 0.0f; return true; }
+        if (setting == "particles.softWater") { g_particleSoftWater_game = value != 0.0f; return true; } // soft fade against the water too
         if (setting == "spray.sidePush") { vfx::g_spraySidePush_game = value != 0.0f; return true; }
         if (setting.rfind("spray.", 0) == 0)
         {
@@ -1573,6 +1574,7 @@ namespace
             else if (setting == "spray.forwardScatter") { cfg.sprayForwardScatter = std::clamp(value, 0.0f, 1.0f); }
             else if (setting == "spray.sideFoam") { cfg.spraySideFoam = std::clamp(value, 0.0f, 4.0f); }
             else if (setting == "spray.opacity") { cfg.sprayOpacity = std::clamp(value, 0.0f, 3.0f); }
+            else if (setting == "spray.softFade") { cfg.spraySoftFade = std::clamp(value, 0.0f, 2.0f); }
             else if (setting == "spray.foamLight") { cfg.sprayFoamLight = std::clamp(value, 0.0f, 1.0f); }
             else { return false; }
             sim->SetRenderConfig(cfg);

@@ -549,6 +549,7 @@ namespace OceanRenderConfigJson
         render.sprayForwardScatter = std::clamp(ReadFloat(object, "sprayForwardScatter", render.sprayForwardScatter), 0.0f, 1.0f);
         render.spraySideFoam = std::clamp(ReadFloat(object, "spraySideFoam", render.spraySideFoam), 0.0f, 4.0f);
         render.sprayOpacity = std::clamp(ReadFloat(object, "sprayOpacity", render.sprayOpacity), 0.0f, 3.0f);
+        render.spraySoftFade = std::clamp(ReadFloat(object, "spraySoftFade", render.spraySoftFade), 0.0f, 2.0f);
         render.sprayFoamLight = std::clamp(ReadFloat(object, "sprayFoamLight", render.sprayFoamLight), 0.0f, 1.0f);
         render.causticsIntensity = std::max(
             0.0f, ReadFloat(object, "causticsIntensity", render.causticsIntensity));
@@ -775,6 +776,7 @@ namespace OceanRenderConfigJson
         out["sprayForwardScatter"] = render.sprayForwardScatter;
         out["spraySideFoam"] = render.spraySideFoam;
         out["sprayOpacity"] = render.sprayOpacity;
+        out["spraySoftFade"] = render.spraySoftFade;
         out["sprayFoamLight"] = render.sprayFoamLight;
         out["causticsIntensity"] = render.causticsIntensity;
         out["causticsScale"] = render.causticsScale;

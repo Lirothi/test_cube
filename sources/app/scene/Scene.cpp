@@ -2254,6 +2254,7 @@ void Scene::Sync(Renderer* renderer)
             spray.forwardScatter = cfg.sprayForwardScatter;
             spray.sideFoam = cfg.spraySideFoam;
             spray.opacity = cfg.sprayOpacity;
+            spray.softFade = cfg.spraySoftFade;
         }
         vesselSpray_.Sync(*this, renderer, vesselHulls_, spray);
         std::vector<ocean::WakeHull> hulls;

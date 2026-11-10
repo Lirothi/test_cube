@@ -61,6 +61,7 @@ public:
 #endif
         GpuResource depth;
         GpuResource depthCopy; // Copy of depth before transparent pass
+        GpuResource depthWater; // ...and after it: the water's depth in (Main_Translucent), the particles' soft fade
         GpuResource light;
         GpuResource scene;
         GpuResource sceneOpaque; // Copy of opaque scene color for refraction
@@ -212,6 +213,7 @@ public:
         D3D12_CPU_DESCRIPTOR_HANDLE depthSRV{};  // Depth(R32F)
         D3D12_CPU_DESCRIPTOR_HANDLE stencilSRV{}; // Stencil(G8)
         D3D12_CPU_DESCRIPTOR_HANDLE depthCopySRV{};
+        D3D12_CPU_DESCRIPTOR_HANDLE depthWaterSRV{};
         D3D12_CPU_DESCRIPTOR_HANDLE lightRTV{}, lightSRV{}, lightUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneRTV{}, sceneSRV{}, sceneUAV{};
         D3D12_CPU_DESCRIPTOR_HANDLE sceneOpaqueSRV{};
@@ -397,7 +399,7 @@ private:
 #endif
         Light, Scene, GlassReflNormal, LensFlare, Count
     };
-    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, SkyVis, SkyVisUAV, SkyVisAccum, SkyVisAccumUAV, SkyVisCount, SkyVisCountUAV, SkyVisRaw, SkyVisRawUAV, ReflectionHistory, ReflectionHistoryUAV,
+    enum class DeferredSrvSlot : UINT { GB0, GB1, GB2, GBVelocity, GBAux, Depth, Stencil, DepthCopy, DepthWater, Light, LightUAV, Scene, SceneUAV, SceneOpaque, Reflection, ReflectionScratch, OceanReflection, Shadow, SpotShadow, PointShadow, ReflectionUAV, ReflectionScratchUAV, OceanReflectionUAV, Tonemap, TonemapUAV, Fxaa, FxaaUAV, DLSSOutput, DLSSOutputUAV, GlassReflNormal, GlassReflDepth, GlassReflection, GlassReflectionUAV, Gtao, GtaoUAV, GtaoFiltered, GtaoFilteredUAV, GtaoHistory, GtaoHistoryUAV, GtaoUpsampled, GtaoUpsampledUAV, SkyVis, SkyVisUAV, SkyVisAccum, SkyVisAccumUAV, SkyVisCount, SkyVisCountUAV, SkyVisRaw, SkyVisRawUAV, ReflectionHistory, ReflectionHistoryUAV,
     // P6C hierarchical depth. One SRV over the whole chain plus one UAV PER MIP: the build writes
     // mip N while reading mip N-1, and this engine's barrier layer transitions whole resources
     // (ALL_SUBRESOURCES), so the chain stays in UNORDERED_ACCESS for the duration of the build and

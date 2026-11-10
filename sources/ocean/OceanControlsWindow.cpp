@@ -1251,6 +1251,11 @@ namespace
         {
             ImGui::SetTooltip("Times the drops' alpha (each at most 1): higher = less of the water shows through, whiter spray.");
         }
+        drag("Spray soft fade", render.spraySoftFade, 0.01f, 0.0f, 2.0f);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Metres over which a drop fades out before it meets the water (the mist over 2.5x it): no hard line\nwhere a sprite crosses the sea. 0 = cut by the water.");
+        }
         drag("Spray forward scatter", render.sprayForwardScatter, 0.005f, 0.0f, 1.0f);
         if (ImGui::IsItemHovered())
         {

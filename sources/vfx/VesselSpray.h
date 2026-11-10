@@ -32,6 +32,7 @@ struct SprayParams
     Math::float3 color = Math::float3(0.95f, 0.95f, 0.95f); // the drops' albedo
     float forwardScatter = 0.25f; // the sun's share in the forward lobe
     float opacity = 1.0f;         // times the presets' alpha keys (each at most 1)
+    float softFade = 0.4f;        // m: the sheet's drops fade out over this before the water's surface, the mist over 2.5x it
     float foamLight = 1.0f;       // lit as a level sheet of the water's foam (1) or as spheres (0): EmitterDesc::litFlat
     float sideFoam = 1.0f;        // the white water along the hull's sides, foam a texel it passes
 };

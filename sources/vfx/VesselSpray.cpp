@@ -245,7 +245,7 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             const Math::float3 direction = slam > 0.0f ? Normalized(outward * out + up * std::max(rise, out))
                                                        : Normalized(outward * out + up * rise);
             auto drive = [&](ParticleEmitterObject* emitter, const float (&alpha)[4], float rate, float speedLo, float speedHi,
-                             const Math::float3& dir, float burst) {
+                             const Math::float3& dir, float burst, float fadeScale) {
                 if (!emitter) { return; }
                 EmitterDesc& d = emitter->DescRef();
                 emitter->SetPosition(a);
@@ -266,6 +266,9 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
                 }
                 d.forwardScatter = std::clamp(params.forwardScatter, 0.0f, 1.0f);
                 d.litFlat = std::clamp(params.foamLight, 0.0f, 1.0f);
+                // The soft fade against the depth WITH the water (g_particleDepthWaterSrv): no hard line where a sprite
+                // crosses the sea. The mist's puffs are ~2.5x the drops.
+                d.softFade = std::max(params.softFade, 0.0f) * fadeScale;
                 if (root.valid && burst > 0.0f) { emitter->AddBurst(burst); }
                 rate_ += d.spawnRate;
             };
@@ -273,9 +276,9 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             const float mistRate = set.mist[side] ? set.mist[side]->Desc().maxParticles / std::max(set.mist[side]->Desc().lifetimeMax, 0.1f) : 0.0f;
             // The presets' capacity over their longest life is the most a side can keep alive: the knob scales under it.
             drive(set.sheet[side], set.sheetAlpha, sheetRate * std::clamp(params.rate, 0.0f, 1.0f), 0.6f, 1.15f, direction,
-                  slam * kSlamSheet);
+                  slam * kSlamSheet, 1.0f);
             drive(set.mist[side], set.mistAlpha, mistRate * std::clamp(params.rate * params.mist, 0.0f, 1.0f), 0.2f, 0.5f,
-                  Normalized(outward * 0.6f + up * 0.8f), slam * kSlamMist * std::max(params.mist, 0.0f));
+                  Normalized(outward * 0.6f + up * 0.8f), slam * kSlamMist * std::max(params.mist, 0.0f), 2.5f);
             sheetRate_ += set.sheet[side] ? set.sheet[side]->Desc().spawnRate : 0.0f;
             // The white water along this side: from the spray's root to the stern, outside the waterline, with the hull.
             const Math::float3 offset = outward * (kSideFoamOut * scale);

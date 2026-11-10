@@ -171,6 +171,7 @@ struct OceanRenderConfig
     float sprayFoamLight = 1.0f;   // lit as a level sheet of the water's foam (1) or as spheres facing every way (0) (0..1)
     float sprayForwardScatter = 0.25f; // the sun's share in the forward lobe (glows against the sun); the rest is diffuse (0..1)
     float sprayOpacity = 1.0f;     // times the presets' alpha keys (each key at most 1): the water shows through less (0..3)
+    float spraySoftFade = 0.4f;    // m: a drop fades out over this much before the water's surface (the mist over 2.5x it) (0..2)
     float spraySideFoam = 1.0f;    // the white water along the hull's sides: about this much foam on a texel it passes (0..4)
 
     float shoreVerticalFadeDepth = 1.25f;

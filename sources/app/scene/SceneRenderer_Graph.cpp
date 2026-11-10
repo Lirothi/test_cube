@@ -2625,9 +2625,23 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
         RenderGraphPassContext& p = ctx;
         const auto& DT = p.renderer->GetDeferredForFrame();
+        // 0. The depth with the water in it (Main_Transparent drew it), copied for the particles' soft fade
+        // (g_particleDepthWaterSrv): a drop falling into the sea fades instead of being cut by the water's depth.
+        // The point is emitted every frame, the copy only when it is wanted.
+        const bool copyWater = g_particleSoftWater && WaterDrawsThisFrame() && DT.depthWater.Get() != nullptr &&
+                               DT.depthWaterSRV.ptr != 0;
+        g_particleDepthWaterSrv = copyWater ? static_cast<std::uint64_t>(DT.depthWaterSRV.ptr) : 0u;
+        const std::uint32_t copyWaterPoint = p.usePoint ? *p.usePoint : 0u;
+        if (copyWater)
+        {
+            p.Use(DT.depth.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE);
+            p.Use(DT.depthWater.Get(), D3D12_RESOURCE_STATE_COPY_DEST);
+        }
+        p.NextPoint();
         // 1. Everything the alpha-blended draws read, plus the forward targets. Nothing flips state
         // inside this pass, so it is one point; the fan-out chunks re-apply the same states per chunk.
         const std::uint32_t rebind = p.usePoint ? *p.usePoint : 0u;
+        if (copyWater) { p.Use(DT.depthWater.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE); }
         if (frame_->skybox) { frame_->skybox->DeclareEnvironment(p, kSrvAll); }
         // Plan S7, the direct read: glass binds the shadow cache pool (t14), at its rest.
         if (ID3D12Resource* pool = LocalShadowPoolResource()) { p.Use(pool, render::LocalShadowCache::kRestState); }
@@ -2657,9 +2671,9 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
                 obj->PrepareRender(p);
             }
         }
-        return [this, renderer, rebind](RenderGraphPassContext c) {
+        return [this, renderer, rebind, copyWaterPoint, copyWater](RenderGraphPassContext c) {
             CPU_SCOPE(ProfilerScopes::kPassTransparent);
-            Pass_Translucent(renderer, c, *frame_->camera, *frame_->mainView, rebind);
+            Pass_Translucent(renderer, c, *frame_->camera, *frame_->mainView, rebind, copyWaterPoint, copyWater);
         };
     });
 

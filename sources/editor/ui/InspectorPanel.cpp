@@ -4008,6 +4008,8 @@ namespace
                              "spheres: their sides take a low sun, the sea under them takes their sky.");
                     renderDrag("Spray Opacity", render.sprayOpacity, 0.01f, 0.0f, 3.0f);
                     sprayTip("Times the drops' alpha (each at most 1): higher = less of the water shows through, whiter spray.");
+                    renderDrag("Spray Soft Fade", render.spraySoftFade, 0.01f, 0.0f, 2.0f);
+                    sprayTip("Metres over which a drop fades out before it meets the water's surface (the mist over 2.5x it): no hard line where a sprite crosses the sea. 0 = cut by the water.");
                     renderDrag("Spray Forward Scatter", render.sprayForwardScatter, 0.005f, 0.0f, 1.0f);
                     sprayTip("The sun's share in the forward lobe: spray against the sun glows, the rest of it is diffuse. Higher = darker spray with the sun behind the camera, brighter against it.");
                     renderDrag("Spray Side Foam", render.spraySideFoam, 0.01f, 0.0f, 4.0f);

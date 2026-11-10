@@ -489,7 +489,8 @@ void SceneRenderer::Pass_Transparent(Renderer* renderer, RenderGraphPassContext 
 // carry fog in their own shaders, exactly as UE translucency does, and drawing them after the fog is
 // what keeps that fog from being applied to them twice.
 void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext ctx,
-    const Camera& camera, const SceneView& mainView, std::uint32_t rebindPoint)
+    const Camera& camera, const SceneView& mainView, std::uint32_t rebindPoint,
+    std::uint32_t copyWaterPoint, bool copyWater)
 {
     const D3D12_GPU_VIRTUAL_ADDRESS viewCB = BuildGlassViewCB(renderer, camera, *frame_, decisions_.fogVolumeParams, decisions_.fogVolumeZParams, decisions_.glassRefl, SkyVisShaderParams());
 
@@ -523,11 +524,18 @@ void SceneRenderer::Pass_Translucent(Renderer* renderer, RenderGraphPassContext 
 
     // The driver owns this pass single barrier point and re-binds the forward targets; the fan-out
     // chunks re-apply the same states per chunk, so one registration covers them.
-    rgTl.AddPass(RenderPass::Translucent_Driver, {}, [renderer, rebindPoint](RenderGraphPassContext sub) {
+    rgTl.AddPass(RenderPass::Translucent_Driver, {}, [renderer, rebindPoint, copyWaterPoint, copyWater](RenderGraphPassContext sub) {
         auto driver = renderer->BeginThreadCommandList(D3D12_COMMAND_LIST_TYPE_DIRECT);
         SetCommandListName(driver.cl, sub.pass);
         {
             GPU_SCOPE(driver.cl, ProfilerScopes::kTransparentDriver);
+            // The depth with the water in it, for the particles' soft fade (g_particleDepthWaterSrv).
+            renderer->EmitPoint(driver.cl, copyWaterPoint);
+            if (copyWater)
+            {
+                const auto& D = renderer->GetDeferredForFrame();
+                driver.cl->CopyResource(D.depthWater.Get(), D.depth.Get());
+            }
             renderer->EmitPoint(driver.cl, rebindPoint);
             renderer->BindSceneColorWithVelocity(driver.cl, Renderer::ClearMode::None, true);
         }

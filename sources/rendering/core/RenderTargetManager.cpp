@@ -432,6 +432,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
             MemTag::FrameGbuffer, L"Depth",
             0.0f, DXGI_FORMAT_UNKNOWN, DeferredSrvSlot::Stencil, &D.stencilSRV, render::kDeferredStencilSrvFormat);
         CreateSrvTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.depth, DeferredSrvSlot::DepthCopy, f, D.depthCopy, D.depthCopySRV, MemTag::FrameGbuffer, L"DepthCopy", formats.depthSrv);
+        CreateSrvTexture(D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, formats.depth, DeferredSrvSlot::DepthWater, f, D.depthWater, D.depthWaterSRV, MemTag::FrameGbuffer, L"DepthWater", formats.depthSrv);
 
         // S3.5: ONE atlas for all frames — created after this loop. The per-frame field is kept
         // because readers (lighting CB, Renderer::BindShadowTarget) index it through Deferred(f).
@@ -933,6 +934,7 @@ void RenderTargetManager::Create(ID3D12Device* dev, const Formats& formats, cons
 #endif
         nameRes(D.depth.Get(), L"Depth", kNps);
         nameRes(D.depthCopy.Get(), L"DepthCopy", kPs);
+        nameRes(D.depthWater.Get(), L"DepthWater", kPs);
         // Legacy shadow atlases: ONE each since local-light shadow plan S5, named where they are created.
         nameRes(D.light.Get(), L"Light", kNps);
         nameRes(D.scene.Get(), L"Scene", kNps);
@@ -1347,6 +1349,7 @@ void RenderTargetManager::Destroy(ResourceDeclarations decls)
 #endif
         collect(D.depth);
         collect(D.depthCopy);
+        collect(D.depthWater);
         collect(D.light);
         collect(D.scene);
         collect(D.sceneOpaque);
