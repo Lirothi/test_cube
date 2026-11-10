@@ -155,6 +155,8 @@ struct OceanRenderConfig
     float wakeFoamFade = 0.1f;     // 1/s the wake's foam lace runs down at (0.02..5)
     float wakeFoamFadeDense = 1.5f; // 1/s per unit of foam on top: dense white water runs down fast (0..10)
     float wakeWashFoam = 4.0f;     // the white water a moving hull leaves, a metre of head change under it (0..20)
+    float wakeWashBow = 0.0f;      // the share of it laid where the hull ARRIVES (a collar round the stem), of what its
+                                   // leaving lays (0 = none: the bow's white water is the arms', 0..1)
     float wakeCrestFoam = 1.0f;    // Crest's Wave Foam Strength on the wake's steep crests (0..5)
     float wakeCrestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks (0.55 = the Stokes limit, 0..1)
     float wakeChurn = 1.0f;        // the churned white water's relief: lumps and grey cavities (0 = a smooth sheet, 0..1)
@@ -172,6 +174,8 @@ struct OceanRenderConfig
     float wakeBowWiden = 0.25f;    // m/s the half width grows as the front runs on (0..2)
     float wakeBowScallop = 0.2f;   // the outer edge's raggedness: a leaving point's speed is 1 +- this x a short random walk (0..1)
     float wakeBowSpeedFull = 12.0f; // m/s of the hull at which the arms are whole (they start at 3; 4..30)
+    float wakeBowFadeIn = 0.3f;    // s: an arm's breaker comes in over this much of its age -- nothing at the hull, whole
+                                   // 5 m along at 16 m/s (0 = whole from the hull, 0..2)
     // The wake foam's look on the surface (ocean_surface_surf_sim.hlsli WakeFoamCoverage) and in its field.
     float wakeFoamSpread = 0.3f;   // m2/s the laid foam spreads sideways at (a trail 2-3 m wider after 10 s; 0..1)
     float wakeAeration = 0.4f;     // the bubbles under the foam: the light turquoise scar's strength (0..1)

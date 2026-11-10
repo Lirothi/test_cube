@@ -1557,7 +1557,7 @@ namespace
         if (setting == "ocean.sunShadowRays") { ocean::g_sunShadowRays_game = std::clamp(static_cast<int>(value), 0, 16); return true; }
         if (setting == "ocean.sunShadowBody") { ocean::g_sunShadowBody_game = std::clamp(value, 0.0f, 1.0f); return true; }
         // The water kept out of the marked hulls (ocean/WaterMask.h): 0 = drawn inside them, the A/B.
-        if (setting == "ocean.waterMask") { ocean::g_waterMask_game = std::clamp(static_cast<int>(value), 0, 2); return true; }
+        if (setting == "ocean.waterMask") { ocean::g_waterMask_game = std::clamp(static_cast<int>(value), 0, 3); return true; }
         // The boats' spray (vfx/VesselSpray): the ocean preset's knobs (OceanRenderConfig::spray*, the Ocean window and the
         // Inspector's "Boat spray") -- on/off, how much (a share of what the presets can keep alive), the shares of the
         // hull's speed a drop leaves with, the drops' albedo and forward lobe, the white water along the hulls' sides.

@@ -1098,8 +1098,9 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         {
             std::uint32_t count[4];
             float hulls[ocean::kWaterMaskMaxHulls * 5][4];
+            Math::float4 bowGates[ocean::kWaterMaskMaxHulls * 2];
         };
-        static_assert(sizeof(WaterMaskCB) == 16 + ocean::kWaterMaskMaxHulls * 5 * 16, "WaterMaskCB must match the HLSL cbuffer");
+        static_assert(sizeof(WaterMaskCB) == 16 + ocean::kWaterMaskMaxHulls * 7 * 16, "WaterMaskCB must match the HLSL cbuffer");
         auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(WaterMaskCB), render::kConstantBufferAlignment);
         WaterMaskCB& m = *reinterpret_cast<WaterMaskCB*>(cb.cpu);
         std::memset(&m, 0, sizeof(m.count));
@@ -1109,6 +1110,10 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         std::memcpy(m.hulls, frame.rows, sizeof(float) * 4u * 5u * hulls);
         m.count[0] = hulls;
         m.count[1] = static_cast<std::uint32_t>(ocean::g_waterMask); // 2 = paint instead of discard
+        // Where each boat's bow wave breakers come in this frame (OceanWake::BowGates).
+        const OceanRenderConfig& wakeRender = GetRenderConfig();
+        m.count[2] = WakeEnabled() && wake_->IsReady() && wakeRender.wakeBowFoam > 0.0f
+            ? wake_->BowGates(m.bowGates, ocean::kWaterMaskMaxHulls, std::clamp(wakeRender.wakeBowFadeIn, 0.0f, 2.0f)) : 0u;
         ctx.cbv[2] = cb.gpu;
     }
 
@@ -1329,7 +1334,7 @@ void OceanRenderable::EnsureWaterMaskColumns(Renderer* renderer)
         srvDesc.Buffer.NumElements = ocean::kWaterMaskMaxCells;
         srvDesc.Buffer.StructureByteStride = sizeof(Math::float4);
         device->CreateShaderResourceView(waterMaskColumns_.Get(), &srvDesc, waterMaskSrv_);
-        LOG_INFO(logging::LogCategory::Ocean, "water mask: {} cells of room for the hulls' columns ({:.1f} MB)",
+        LOG_INFO(logging::LogCategory::Ocean, "water mask: room for {} float4 of the hulls' columns, three a cell ({:.1f} MB)",
                  ocean::kWaterMaskMaxCells, static_cast<double>(desc.Width) / (1024.0 * 1024.0));
     }
     for (const ocean::WaterMaskInstance& mask : waterMasks_)
@@ -1338,7 +1343,8 @@ void OceanRenderable::EnsureWaterMaskColumns(Renderer* renderer)
         const std::uint32_t cells = static_cast<std::uint32_t>(mask.field->columns.size());
         if (waterMaskUsed_ + cells > ocean::kWaterMaskMaxCells)
         {
-            LOG_WARNING_ONCE(logging::LogCategory::Ocean, "water mask: no room for more hull shapes -- the rest keep no water out");
+            LOG_WARNING_ONCE(logging::LogCategory::Ocean, "water mask: no room for more hull shapes ({} of {} float4 used, this one needs {}) -- the rest keep no water out",
+                             waterMaskUsed_, ocean::kWaterMaskMaxCells, cells);
             continue;
         }
         std::memcpy(waterMaskMapped_ + waterMaskUsed_, mask.field->columns.data(), cells * sizeof(Math::float4));
@@ -1411,6 +1417,7 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWakePass(Rende
     tuning.foamFade = std::clamp(render.wakeFoamFade, 0.02f, 5.0f);
     tuning.foamFadeDense = std::clamp(render.wakeFoamFadeDense, 0.0f, 10.0f);
     tuning.washFoam = std::clamp(render.wakeWashFoam, 0.0f, 20.0f);
+    tuning.washBow = std::clamp(render.wakeWashBow, 0.0f, 1.0f);
     tuning.crestFoam = std::clamp(render.wakeCrestFoam, 0.0f, 5.0f);
     tuning.crestCoverage = std::clamp(render.wakeCrestCoverage, 0.0f, 1.0f);
     tuning.bowFoam = std::clamp(render.wakeBowFoam, 0.0f, 4.0f);
@@ -1422,6 +1429,7 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWakePass(Rende
     tuning.bowWiden = std::clamp(render.wakeBowWiden, 0.0f, 2.0f);
     tuning.bowScallop = std::clamp(render.wakeBowScallop, 0.0f, 1.0f);
     tuning.bowSpeedFull = std::clamp(render.wakeBowSpeedFull, 4.0f, 30.0f);
+    tuning.bowFadeIn = std::clamp(render.wakeBowFadeIn, 0.0f, 2.0f);
     tuning.foamSpread = std::clamp(render.wakeFoamSpread, 0.0f, 1.0f);
     tuning.texel = std::clamp(render.wakeTexel, 0.25f, 2.0f);
     // The coast: the surf sim's window onto the shore depth map. On a frame that re-renders it (after this pass in the

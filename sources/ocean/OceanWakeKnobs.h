@@ -24,15 +24,18 @@ struct WakeKnob
     const char* section; // not null: a heading drawn before this knob
 };
 
-inline const std::array<WakeKnob, 25>& WakeKnobs()
+inline const std::array<WakeKnob, 27>& WakeKnobs()
 {
-    static const std::array<WakeKnob, 25> knobs = { {
+    static const std::array<WakeKnob, 27> knobs = { {
         // ---- how much foam, and for how long ----
         { "wakeFoam", &OceanRenderConfig::wakeFoam, 0.0f, 2.0f, 0.01f, "Foam amount",
           "All of the wake's foam on the water at once.\n0 = no foam at all, 1 = as simulated, 2 = twice as dense.",
           "Wake foam: how much, how long" },
         { "wakeWashFoam", &OceanRenderConfig::wakeWashFoam, 0.0f, 20.0f, 0.05f, "Centre trail",
           "The white water the hull leaves straight behind its stern.\nHigher = a whiter centre trail that stays solid longer. 0 = no centre trail.",
+          nullptr },
+        { "wakeWashBow", &OceanRenderConfig::wakeWashBow, 0.0f, 1.0f, 0.005f, "Stem collar",
+          "White water laid where the bow meets the water, as a collar round the stem.\n0 = none (a planing boat's stem is in the air; the arms carry the bow's foam). 1 = as much as behind the stern.\nIt steps forward with the wake's 30 steps a second: at speed it flickers.",
           nullptr },
         { "wakeFoamFadeDense", &OceanRenderConfig::wakeFoamFadeDense, 0.0f, 10.0f, 0.02f, "Solid white fade",
           "How fast solid white water thins out into lace.\nHigher = the solid white patch behind the boat is shorter. 0 = it stays solid as long as the lace lives.",
@@ -89,6 +92,9 @@ inline const std::array<WakeKnob, 25>& WakeKnobs()
           nullptr },
         { "wakeBowLife", &OceanRenderConfig::wakeBowLife, 0.2f, 10.0f, 0.02f, "Arms length (s)",
           "Seconds until an arm's white breaker has faded to about a third.\n2.5 = white for some four boat lengths at full speed. Higher = longer arms.",
+          nullptr },
+        { "wakeBowFadeIn", &OceanRenderConfig::wakeBowFadeIn, 0.0f, 2.0f, 0.005f, "Arms start (s)",
+          "How gradually an arm's white band comes in where it leaves the hull.\n0 = full white right at the hull (a hard white cap beside the bow). 0.3 = it grows over the first 5 m at full speed.\nHigher = the arms start further back.",
           nullptr },
         { "wakeBowWidth", &OceanRenderConfig::wakeBowWidth, 0.3f, 4.0f, 0.01f, "Arms width (m)",
           "Half the width of an arm's white band where it leaves the hull.\nHigher = fatter arms.",

@@ -18,20 +18,23 @@ class RenderableObject;
 // mask by rasterization"). The first cut was the convex hull, and a convex hull bridges every concavity: behind the transom
 // it closed a wedge from the swim platform up to the deck, and the sea over the platform was cut in a straight edge. Now,
 // on a grid over the model's xz (kWaterMaskCellsAlong cells along its long side), each cell keeps water out between
-//   bottom: the LOWEST surface over each of four points of the cell, the highest of the four -- a cell the mesh does not
-//           cover whole keeps no water out, so the mask stops inside the hull's skin;
-//   top:    in a DEPRESSION, the height water poured on the boat would stand at before it spilled over the lowest edge of
-//           its rim (a priority flood from outside over the cells' rims, openings narrower than kWaterMaskGap closed
-//           first): the cockpit to its gunwale, its walkthrough to the platform shut; elsewhere the column all four
-//           points share (the highest surface over each, the lowest of the four), lifted to a filled neighbour's level --
-//           the swim platform keeps only its own slab, open water over it stays, and a cell on the outer skin half over
-//           a spray rail keeps the rail and not the air beside the topside.
+//   bottom: the hull's SKIN -- the lowest surface over each of four samples of the cell, interpolated between samples by
+//           the shader (2026-11-10: one number a cell, the highest of the four, stopped the mask up to a cell inside the
+//           skin, a line of water along the waterline inside a single-skinned hull); a jump of it (a wall under an
+//           overhanging deck, kWaterMaskJump) carried a sample outward. A cell the mesh does not cover whole keeps none;
+//   top:    a quarter of a cell at a time. In a DEPRESSION, the height water poured on the boat would stand at before it
+//           spilled over the lowest edge of its rim (a priority flood from outside over the cells' rims, openings narrower
+//           than kWaterMaskGap closed first): the cockpit to its gunwale, its walkthrough to the platform shut -- carried
+//           on through the open quarters of the cells a wall, a pillar or a rail stands in; elsewhere the quarter's own
+//           highest surface -- the swim platform keeps only its own slab, open water over it stays, and a cell on the
+//           outer skin half over a spray rail keeps the rail and not the air beside the topside.
 // A view ray plays no part: it is the water's point that is tested, so any camera -- outside, at the helm -- sees the
 // same volume, and a shape no convex volume follows (the platform aft of the transom, a flared bow) is kept as it is.
 namespace ocean
 {
-// `--set ocean.waterMask:<0|1|2>` (transient): 0 no water kept out (the A/B), 1 the mask, 2 the kept-out water painted
-// magenta instead of discarded (where the volume is).
+// `--set ocean.waterMask:<0|1|2|3>` (transient): 0 no water kept out (the A/B), 1 the mask, 2 the kept-out water painted
+// magenta instead of discarded (where the volume is), 3 the mask, and the water still drawn over a hull's plan painted
+// red (a leak in the volume, or a wave over the deck).
 inline int g_waterMask = 1;
 inline int g_waterMask_game = 1;
 inline const bool g_waterMask_knob = ::knob::Register(g_waterMask_game, g_waterMask, "ocean::g_waterMask");
@@ -41,7 +44,9 @@ inline const bool g_waterMask_knob = ::knob::Register(g_waterMask_game, g_waterM
 // the cell wherever the mesh touches it at all, +big where it does not -- what a particle is tested against) -- (+big, -big, -big, plan) for
 // none. The solid top is the water's top but in a filled depression, where it is the cell's own highest surface (the
 // cockpit's floor, a seat): a particle (EmitterDesc::collideHulls) dies inside the hull, not in the cockpit's air. A free
-// cell rings the mesh.
+// cell rings the mesh. Behind the nx * nz columns lie, a float4 a cell each, the SKIN under its four samples (sample
+// (si, sk) of a cell at ((si + 0.5) / 2, (sk + 0.5) / 2) of it, component sk * 2 + si; +big for a cell that keeps nothing)
+// and the TOPS of its four quarters (-big): what the water is tested against (water_mask_columns.hlsli).
 struct WaterMaskField
 {
     float originX = 0.0f;
@@ -51,7 +56,7 @@ struct WaterMaskField
     std::uint32_t nz = 0;
     float minY = 0.0f; // the mesh's: the quick reject
     float maxY = 0.0f;
-    std::vector<Math::float4> columns;
+    std::vector<Math::float4> columns; // nx * nz columns, then the skin, then the tops: 3 nx nz
 };
 
 // One a frame: a field and the world-to-model transform its object is drawn at.
@@ -62,12 +67,15 @@ struct WaterMaskInstance
 };
 
 // The hulls a frame (shaders/ocean_surface_surf_sim.hlsli WaterMaskCB), the long side's cells (small_yacht's 10.2 m: 4 cm),
-// the room every field together has on the GPU (OceanRenderable's buffer: 2 MB of float4, five small_yachts), and the
-// widest opening in a rim that is closed before the depressions fill (m: a walkthrough from the cockpit to the platform).
+// the room every field together has on the GPU (OceanRenderable's buffer, in float4: 8 MB, three a cell -- five boats'
+// shapes; wind_test's three take 283 k), the widest opening in a rim that is closed before the depressions fill (m: a
+// walkthrough from the cockpit to the platform), and the step of the lowest surface between two samples (2 cm apart) that
+// is a wall and no slope (m).
 constexpr std::uint32_t kWaterMaskMaxHulls = 4u;
 constexpr std::uint32_t kWaterMaskCellsAlong = 256u;
-constexpr std::uint32_t kWaterMaskMaxCells = 1u << 17;
+constexpr std::uint32_t kWaterMaskMaxCells = 1u << 19;
 constexpr float kWaterMaskGap = 1.0f;
+constexpr float kWaterMaskJump = 0.12f;
 
 // A frame's hulls as the shaders take them (shaders/water_mask_columns.hlsli): 5 rows each -- the world-to-model rows (the
 // model's x y z = dot(row.xyz, world) + row.w), the grid (origin x, origin z, 1 / cell, asuint its first cell), the span

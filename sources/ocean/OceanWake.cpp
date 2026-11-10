@@ -31,7 +31,7 @@ struct WakeCB
     float shoreCenterX; float shoreCenterZ; float shoreInvExtent; float shoreZNear;
     float shoreZFar; float breakRate; float foamFade; float foamDiffusion;
     float washStrength; float washThreshold; float crestStrength; float crestCoverage;
-    float foamFadeDense; std::uint32_t frontCount; float pad2; float pad3;
+    float foamFadeDense; std::uint32_t frontCount; float washBow; float pad3;
     float hulls[16 * 3 * 4];
     float frontBounds[8 * 8 * 4];   // the bow waves' fronts, eight pieces each: (min x, min z, max x, max z) world
     float frontInfo[8 * 4];         // (points, outward side +-1, the residue's rate factor, 0)
@@ -150,6 +150,7 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
     {
         const float halfWidth = std::max(tuning.bowWidth + tuning.bowWiden * point.age, texelFloor);
         // The breaking runs down with the front's age, and out over its last second (no step where the oldest point goes).
+        // (How it comes IN where it leaves the hull is not here: BowGates, the surface's every frame.)
         const float alive = std::exp(-point.age / life) * std::clamp(kFrontMaxAge - point.age, 0.0f, 1.0f);
         return Math::float4(point.position.x, point.position.y, std::min(point.strength * alive, 2.0f), halfWidth);
     };
@@ -206,7 +207,10 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
         // second, leaves it bowLace of the band's foam.
         const float speed = FrontSpeed(first.spread, 0.0f, 0.0f);
         const float residue = tuning.bowLace * speed * 3.0f / (kFrontToe + kFrontTail);
-        r.frontInfo[r.frontCount] = Math::float4(static_cast<float>(written), turn, residue, 0.0f);
+        // The residue comes in along the front's first points as the breaker does over its gate (BowGates): in points,
+        // for a front that still leaves its hull.
+        const float fadePoints = head ? std::max(tuning.bowFadeIn, 0.0f) / kFrontSpacing : 0.0f;
+        r.frontInfo[r.frontCount] = Math::float4(static_cast<float>(written), turn, residue, fadePoints);
         ++r.frontCount;
     };
 
@@ -425,6 +429,37 @@ void OceanWake::EnsureResources(Renderer* renderer)
     created_ = true;
     LOG_INFO(logging::LogCategory::Ocean, "wake: field {} x {}, {} footprint slots, 4 depths", kResolution, kResolution,
              kMaxFootprints);
+}
+
+// The lane beside a hull its gate covers, past the roots (m): an arm is thrown 1.5 m and runs 2 m/s, so within the gate's
+// length it is well inside; another boat's arm crossing the lane further out is left alone.
+constexpr float kBowGateLane = 4.0f;
+
+std::uint32_t OceanWake::BowGates(Math::float4* out, std::uint32_t maxHulls, float fadeInSeconds) const
+{
+    std::uint32_t count = 0;
+    for (const ocean::WakeHull& hull : hulls_)
+    {
+        if (count >= maxHulls)
+        {
+            break;
+        }
+        const float fl = std::sqrt(hull.forward.x * hull.forward.x + hull.forward.y * hull.forward.y);
+        const float length = std::max(hull.speed, 0.0f) * fadeInSeconds;
+        const Math::float2& port = hull.bowRoot[0];
+        const Math::float2& starboard = hull.bowRoot[1];
+        const bool rooted = port.x != 0.0f || port.y != 0.0f || starboard.x != 0.0f || starboard.y != 0.0f;
+        if (!hull.id || !rooted || !(fl > 1e-4f) || !(length > 0.25f))
+        {
+            continue;
+        }
+        const float dx = port.x - starboard.x;
+        const float dz = port.y - starboard.y;
+        out[count * 2u] = Math::float4(0.5f * (port.x + starboard.x), 0.5f * (port.y + starboard.y), hull.forward.x / fl, hull.forward.y / fl);
+        out[count * 2u + 1u] = Math::float4(length, 0.5f * std::sqrt(dx * dx + dz * dz) + kBowGateLane, 0.0f, 0.0f);
+        ++count;
+    }
+    return count;
 }
 
 void OceanWake::SetHulls(std::vector<ocean::WakeHull> hulls)
@@ -677,6 +712,7 @@ std::function<void(RenderGraphPassContext)> OceanWake::BuildPass(RenderGraphPass
             cb.foamDiffusion = std::min(rec.tuning.foamSpread * rec.dt / (rec.texel * rec.texel), kFoamDiffusionCap);
             cb.washStrength = rec.wash ? rec.tuning.washFoam : 0.0f;
             cb.washThreshold = kWashThreshold;
+            cb.washBow = rec.tuning.washBow;
             cb.crestStrength = rec.tuning.crestFoam;
             cb.crestCoverage = rec.tuning.crestCoverage;
             static_assert(sizeof(HullGpu) == 12 * sizeof(float), "three float4 a hull");

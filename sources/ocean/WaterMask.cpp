@@ -137,12 +137,14 @@ namespace watermask
         f.minY = lo.y;
         f.maxY = hi.y;
         const std::size_t cells = static_cast<std::size_t>(f.nx) * f.nz;
-        if (cells > kWaterMaskMaxCells) { return nullptr; }
+        if (cells * 3u > kWaterMaskMaxCells) { return nullptr; } // [columns | the samples' skin | the quarters' tops]
 
         // Per cell its rim (the highest surface, clipped exactly); per quarter of a cell the lowest and the highest surface
         // over its centre (a vertical line through it).
         constexpr int kSamples = 2; // per side of a cell
+        static_assert(kSamples == 2, "a cell's samples are one float4 on the GPU (water_mask_columns.hlsli)");
         std::vector<float> top(cells, -FLT_MAX);
+        std::vector<float> rim(cells * kSamples * kSamples, -FLT_MAX); // the rim of each quarter of a cell
         std::vector<float> low(cells * kSamples * kSamples, FLT_MAX);
         std::vector<float> high(cells * kSamples * kSamples, -FLT_MAX);
         const auto cellOf = [&f](float v, float origin, std::uint32_t n)
@@ -169,9 +171,21 @@ namespace watermask
                 {
                     const float x0 = f.originX + static_cast<float>(i) * f.cell;
                     const std::size_t index = static_cast<std::size_t>(k) * f.nx + static_cast<std::size_t>(i);
-                    const float clipped = ClippedTop(a, b, c, x0, x0 + f.cell, z0, z0 + f.cell);
-                    if (clipped == -FLT_MAX) { continue; }
-                    top[index] = std::max(top[index], clipped);
+                    if (ClippedTop(a, b, c, x0, x0 + f.cell, z0, z0 + f.cell) == -FLT_MAX) { continue; }
+                    // The rim, a quarter of the cell at a time: a wall with no top face raises the quarters it crosses.
+                    const float half = f.cell / kSamples;
+                    for (int sk = 0; sk < kSamples; ++sk)
+                    {
+                        for (int si = 0; si < kSamples; ++si)
+                        {
+                            const float qx = x0 + static_cast<float>(si) * half;
+                            const float qz = z0 + static_cast<float>(sk) * half;
+                            const float clipped = ClippedTop(a, b, c, qx, qx + half, qz, qz + half);
+                            float& quarter = rim[index * kSamples * kSamples + static_cast<std::size_t>(sk) * kSamples + si];
+                            quarter = std::max(quarter, clipped);
+                            top[index] = std::max(top[index], clipped);
+                        }
+                    }
                     if (!flat) { continue; }
                     for (int sk = 0; sk < kSamples; ++sk)
                     {
@@ -261,28 +275,135 @@ namespace watermask
             }
         }
 
-        // The columns. Every sample of a cell must be under the mesh (its lowest surface finite), and the cell keeps water
-        // out from the highest of its samples' lowest surfaces up to
-        //   a cell of a filled depression (its level over its own rim): the level -- the cockpit's air to its edge;
-        //   any other cell: the lowest of its samples' highest surfaces, the column every sample shares -- a cell on the
-        //   hull's outer skin, half over a spray rail outside it, keeps the rail's slab and not the air beside the topside
-        //   (taking the cell's whole rim there cut slivers of sea along the waterline); raised to a filled neighbour's level,
-        //   so a cell on a cockpit's wall, half over its floor, leaves no band of water along the wall.
+        // ---- the columns ----
+        // A cell keeps water out only if every sample of it is under the mesh (a cell on the plan's outline keeps none).
+        //
+        // Its BOTTOM is the hull's skin: the lowest surface over each of its four samples, kept per sample and
+        // interpolated by the surface's shader (water_mask_columns.hlsli HullKeepsWaterOut). It was one number a cell, the
+        // HIGHEST of the four, so the mask stopped up to a cell inside the skin -- unseen in a hull with an inner liner
+        // (small_yacht), a line of water along the waterline INSIDE a single-skinned one (police_boat; owner: "I see
+        // a leak"). Where the lowest surface JUMPS between two samples (kWaterMaskJump: a wall with a deck overhanging the
+        // sea behind it, a transom) the lower side is carried one sample across: the wall stands somewhere between the two,
+        // and a strip of sea cut under an overhang is not seen where a strip of water on a cockpit's floor is.
+        const int subX = static_cast<int>(f.nx) * kSamples;
+        const int subZ = static_cast<int>(f.nz) * kSamples;
+        const auto cellOfSub = [&f](int x, int z)
+        {
+            return static_cast<std::size_t>(z / kSamples) * f.nx + static_cast<std::size_t>(x / kSamples);
+        };
+        const auto subIndex = [&cellOfSub](int x, int z)
+        {
+            return cellOfSub(x, z) * kSamples * kSamples + static_cast<std::size_t>(z % kSamples) * kSamples + static_cast<std::size_t>(x % kSamples);
+        };
+        static constexpr int kStep[4][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+        std::vector<float> skin(low.size(), FLT_MAX);
+        for (int z = 0; z < subZ; ++z)
+        {
+            for (int x = 0; x < subX; ++x)
+            {
+                const std::size_t s = subIndex(x, z);
+                const float own = low[s];
+                if (own == FLT_MAX) { continue; }
+                float carried = own;
+                for (const auto& step : kStep)
+                {
+                    const int qx = x + step[0];
+                    const int qz = z + step[1];
+                    if (qx < 0 || qz < 0 || qx >= subX || qz >= subZ) { continue; }
+                    const float beside = low[subIndex(qx, qz)];
+                    if (beside < own - kWaterMaskJump) { carried = std::min(carried, beside); }
+                }
+                skin[s] = carried;
+            }
+        }
         std::vector<float> bottom(cells, FLT_MAX), shared(cells, -FLT_MAX);
         std::vector<std::uint8_t> depression(cells, 0u);
         for (std::size_t index = 0; index < cells; ++index)
         {
-            float b = -FLT_MAX, h = FLT_MAX;
+            bool covered = true;
+            float b = FLT_MAX, h = FLT_MAX;
             for (int s = 0; s < kSamples * kSamples; ++s)
             {
-                b = std::max(b, low[index * kSamples * kSamples + s]);
+                const float under = skin[index * kSamples * kSamples + s];
+                covered = covered && under != FLT_MAX;
+                b = std::min(b, under);
                 h = std::min(h, high[index * kSamples * kSamples + s]);
             }
-            bottom[index] = b;
+            bottom[index] = covered ? b : FLT_MAX;
             shared[index] = h;
-            depression[index] = b != FLT_MAX && level[index] > top[index] + 0.01f ? 1u : 0u;
+            depression[index] = covered && level[index] > top[index] + 0.01f ? 1u : 0u;
         }
+
+        // Its TOP, a quarter of a cell at a time:
+        //   in a filled depression (its level over its own rim): the level -- the cockpit's air to its edge;
+        //   in a cell that is no depression only for what STANDS in it (a wall, a pillar, a rail over the floor: its rim
+        //   reaches the level): the quarters that lie under the level all over are the same air, when they touch it -- the
+        //   level goes from quarter to quarter, highest first. It used to reach a depression's direct neighbours alone, and
+        //   the cells along a pillar that crosses the floor aslant kept their floor's slab and no air: a stair of water;
+        //   a quarter the level did not enter (the wall itself) beside one it did: the higher of the level and its own
+        //   highest surface, so no band of water lies along the wall;
+        //   any other: its own highest surface -- the swim platform keeps only its slab, a cell on the outer skin half
+        //   over a spray rail keeps the rail and not the air beside the topside.
+        constexpr float kOpen = 0.02f; // a quarter's rim this far under a level is open to it
+        std::vector<float> basin(low.size(), -FLT_MAX);
+        using Seed = std::pair<float, std::uint32_t>; // a level, a quarter (z * subX + x)
+        std::priority_queue<Seed> seeds;              // the highest level first
+        for (int z = 0; z < subZ; ++z)
+        {
+            for (int x = 0; x < subX; ++x)
+            {
+                const std::size_t cellIndex = cellOfSub(x, z);
+                if (!depression[cellIndex]) { continue; }
+                basin[subIndex(x, z)] = level[cellIndex];
+                seeds.emplace(level[cellIndex], static_cast<std::uint32_t>(z * subX + x));
+            }
+        }
+        while (!seeds.empty())
+        {
+            const auto [height, at] = seeds.top();
+            seeds.pop();
+            const int x = static_cast<int>(at % static_cast<std::uint32_t>(subX));
+            const int z = static_cast<int>(at / static_cast<std::uint32_t>(subX));
+            for (const auto& step : kStep)
+            {
+                const int qx = x + step[0];
+                const int qz = z + step[1];
+                if (qx < 0 || qz < 0 || qx >= subX || qz >= subZ) { continue; }
+                const std::size_t s = subIndex(qx, qz);
+                const std::size_t cellIndex = cellOfSub(qx, qz);
+                if (basin[s] != -FLT_MAX || depression[cellIndex] || bottom[cellIndex] == FLT_MAX) { continue; }
+                if (!(top[cellIndex] > height - kOpen) || !(rim[s] < height - kOpen)) { continue; }
+                basin[s] = height;
+                seeds.emplace(height, static_cast<std::uint32_t>(qz * subX + qx));
+            }
+        }
+        std::vector<float> tops(low.size(), -FLT_MAX);
+        for (int z = 0; z < subZ; ++z)
+        {
+            for (int x = 0; x < subX; ++x)
+            {
+                const std::size_t s = subIndex(x, z);
+                if (basin[s] != -FLT_MAX)
+                {
+                    tops[s] = basin[s];
+                    continue;
+                }
+                float own = high[s];
+                for (const auto& step : kStep)
+                {
+                    const int qx = x + step[0];
+                    const int qz = z + step[1];
+                    if (qx < 0 || qz < 0 || qx >= subX || qz >= subZ) { continue; }
+                    own = std::max(own, basin[subIndex(qx, qz)]);
+                }
+                tops[s] = own;
+            }
+        }
+
+        // On the GPU: [a column a cell | its four samples' skin | its four quarters' tops].
         f.columns.assign(cells, Math::float4(FLT_MAX, -FLT_MAX, -FLT_MAX, FLT_MAX));
+        f.columns.resize(cells * 2u, Math::float4(FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX));
+        f.columns.resize(cells * 3u, Math::float4(-FLT_MAX, -FLT_MAX, -FLT_MAX, -FLT_MAX));
         // The plan (the fourth component): the lowest surface over every cell the mesh touches at all, whether or not it
         // keeps water out there. A cell under one sloping sheet (a cockpit's inner wall with nothing beneath it in the
         // mesh), or with a sample the mesh does not cover, has no column -- right for the water, which must stop inside the
@@ -301,28 +422,17 @@ namespace watermask
         for (std::size_t index = 0; index < cells; ++index)
         {
             if (bottom[index] == FLT_MAX) { continue; }
-            float columnTop = shared[index];
+            const float* under = &skin[index * kSamples * kSamples];
+            const float* over = &tops[index * kSamples * kSamples];
+            const float columnTop = std::max(std::max(over[0], over[1]), std::max(over[2], over[3]));
+            if (!(columnTop > bottom[index])) { continue; }
             // The solid: under a filled depression's air, the cell's own highest surface (the floor, a seat).
             const float solidTop = depression[index] ? top[index] : shared[index];
-            if (depression[index])
-            {
-                columnTop = level[index];
-                ++filled;
-            }
-            else
-            {
-                const std::uint32_t i = static_cast<std::uint32_t>(index % f.nx);
-                const std::uint32_t k = static_cast<std::uint32_t>(index / f.nx);
-                const std::size_t next[4] = { i > 0 ? index - 1u : index, i + 1 < f.nx ? index + 1u : index,
-                                              k > 0 ? index - f.nx : index, k + 1 < f.nz ? index + f.nx : index };
-                for (const std::size_t n : next)
-                {
-                    if (depression[n]) { columnTop = std::max(columnTop, level[n]); }
-                }
-            }
-            if (!(columnTop > bottom[index])) { continue; }
             f.columns[index] = Math::float4(bottom[index], columnTop, std::max(solidTop, bottom[index]), f.columns[index].w);
+            f.columns[cells + index] = Math::float4(under[0], under[1], under[2], under[3]);
+            f.columns[cells * 2u + index] = Math::float4(over[0], over[1], over[2], over[3]);
             ++kept;
+            if (depression[index]) { ++filled; }
         }
         LOG_INFO(logging::LogCategory::Ocean,
                  "water mask: {} -- {} x {} cells of {:.1f} cm, {} keep the water out, {} of them in a filled depression, {} in its plan, from {} triangles",

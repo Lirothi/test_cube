@@ -72,7 +72,7 @@ cbuffer WakeCB : register(b0)
 
     float FoamFadeDense;  // 1/s per unit of foam: dense white water runs down fast, the lace it leaves slowly
     uint  FrontCount;     // the breaking bow waves' fronts this step (OceanWake::StepFronts), two a boat
-    float Pad2;
+    float WashBow;        // the share of that foam a head RISING lays (a hull's bow arriving), of what a head falling does
     float Pad3;
 
     // Per hull, three float4: (posX, posZ, fwdX, fwdZ), (scale, u0, v0, 1/cellU), (1/cellV, along, across, offset).
@@ -80,7 +80,8 @@ cbuffer WakeCB : register(b0)
     float4 FrontBounds[MAX_FRONTS * FRONT_PIECES]; // (min x, min z, max x, max z) world of each piece of a front: its
                                         // FRONT_PIECE segments, the band's reach in
     float4 FrontInfo[MAX_FRONTS];       // (points, which side of the line is outward: +1 its left normal, -1 its right,
-                                        // the residue's rate: x foam / half width a second, 0)
+                                        // the residue's rate: x foam / half width a second, the points over which the
+                                        // residue comes in from the hull: 0 = whole from the first)
     float4 FrontPoints[MAX_FRONTS * MAX_FRONT_POINTS]; // (x, z, the band's foam, half width m), newest (on the hull) first
 };
 
@@ -221,9 +222,13 @@ void Pack(uint3 id : SV_DispatchThreadID)
     const float edge = (float)min(min(id.x, id.y), min(Resolution - 1u - id.x, Resolution - 1u - id.y));
     const float inside = saturate(edge / EdgeTexels);
     hv *= exp(-EdgeRate * DeltaTime * (1.0f - inside) * (1.0f - inside));
-    // The white water a moving hull leaves: the head under it changing faster than WashThreshold -- its bow arriving, and
-    // above all its transom leaving, where the water closes in behind it. A texel the whole hull passes over takes twice
-    // the depth under it, less the threshold over the time it took: the trail is the hull's width, whitest on its keel.
+    // The white water a moving hull leaves: the head under it FALLING faster than WashThreshold -- its transom leaving (a
+    // side, in a slide), where the water closes in behind it. A texel the whole hull passes over takes twice the depth
+    // under it, less the threshold over the time it took: the trail is the hull's width, whitest on its keel. The head
+    // RISING (the bow arriving) lays WashBow of that, 0 by default: it used to lay as much, a white collar round the stem
+    // that stood still on the water between two steps of the field and jumped a hull's step forward at each (owner: "the
+    // foam there appears abruptly, it shows even at speed") -- and a planing hull's stem is in the air; the bow's white
+    // water is the arms', which come in along their first seconds.
     // Two stages, as a breaking crest's foam has (whitecap stage A, seconds; the residual patch, tens of seconds): the
     // denser the white water, the faster it goes -- a trail is solid only just behind the transom and dissolves into
     // the lace that lingers.
@@ -233,7 +238,9 @@ void Pack(uint3 id : SV_DispatchThreadID)
     float breaker = 0.0f; // the bow waves' breakers at this texel, this step
     if (DeltaTime > 0.0f)
     {
-        const float wash = WashStrength * max(abs(head - headBefore) - WashThreshold * DeltaTime, 0.0f);
+        const float rise = head - headBefore;
+        const float still = WashThreshold * DeltaTime;
+        const float wash = 2.0f * WashStrength * (max(-rise - still, 0.0f) + WashBow * max(rise - still, 0.0f));
         const float wayLength = length(way);
         foam.x += wash;
         foam.yz += wayLength > 1e-6f ? wash * (way / wayLength) : float2(0.0f, 0.0f);
@@ -286,7 +293,10 @@ void Pack(uint3 id : SV_DispatchThreadID)
                 if (band > best)
                 {
                     best = band;
-                    bestRate = band * info.z / halfWidth;
+                    // The residue comes in along the front's first points (the breaker itself is laid whole: the surface
+                    // lets it in over a gate that rides with the hull, every frame).
+                    const float come = info.w > 0.0f ? smoothstep(0.0f, info.w, (float)i + t - 0.5f) : 1.0f;
+                    bestRate = band * come * info.z / halfWidth;
                     bestWay = way;
                 }
             }

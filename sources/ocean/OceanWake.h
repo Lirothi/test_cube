@@ -80,6 +80,7 @@ public:
         float foamFade = 0.1f;     // 1/s the foam's lace runs down at
         float foamFadeDense = 1.5f; // 1/s per unit of foam on top: dense white water runs down fast
         float washFoam = 4.0f;     // foam a metre of head change under a moving hull leaves (the white water, its trail)
+        float washBow = 0.0f;      // the share of it the hull's ARRIVAL lays (its bow), of what its leaving does
         float crestFoam = 1.0f;    // Crest's Wave Foam Strength (the steep crests)
         float crestCoverage = 0.55f; // Crest's Wave Foam Coverage: det J under it breaks
         float bowFoam = 1.0f;      // the breaking bow wave's foam (the two arms): 1 = a fresh front leaves white water
@@ -91,6 +92,8 @@ public:
         float bowWiden = 0.25f;    // m/s it widens
         float bowScallop = 0.2f;   // a leaving point's wave speed is 1 +- this x a short random walk
         float bowSpeedFull = 12.0f; // m/s of the hull at which the arms are whole (from kFrontSpeedOn)
+        float bowFadeIn = 0.3f;    // s of the hull's speed over which an arm's breaker comes in aft of the roots (0 = whole
+                                   // from the hull): the surface's gate (BowGates), the residue's first points
         float foamSpread = 0.3f;   // m2/s the laid foam spreads at
         float texel = 0.5f;        // metres a texel: 512 of them make the window
     };
@@ -115,6 +118,13 @@ public:
 
     // At Scene::Sync, the render half parked: this frame's hulls.
     void SetHulls(std::vector<ocean::WakeHull> hulls);
+    // Where each hull's breakers come in, THIS frame: the foam's field (and the arms' band in it) steps at most 30 times a
+    // second, a hull at 17 m/s runs 0.56 m between two steps, and anything that starts at the hull and stands on the
+    // water meanwhile jumps forward with each step (owner: "the foam there appears abruptly, it shows even at speed").
+    // So the band is laid whole from the hull, and the surface lets it in over a GATE that rides with the hull: nothing at
+    // the roots' line, all of it `fadeInSeconds` of the hull's speed aft. Two float4 a hull: (the roots' midpoint x z, the
+    // hull's forward x z), (the gate's length m, half the lane it covers m, 0, 0). Returns the hulls written.
+    std::uint32_t BowGates(Math::float4* out, std::uint32_t maxHulls, float fadeInSeconds) const;
     // At the ocean's SyncSceneState: the window follows the camera (whole texels, decided before the graph).
     void TickWindow(Math::float2 cameraXZ, float texel);
     // Something to show: a hull now, or a wake still running down after the last one went.

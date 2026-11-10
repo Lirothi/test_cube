@@ -160,26 +160,69 @@ SamplerState PointSampler : register(s2);
 SamplerState AnisotropicWrapSampler : register(s3);
 
 // The hulls the surface is not drawn inside (ocean/WaterMask.h, mesh.json "waterMask"; OceanRenderable fills it every
-// frame): COLUMNS, the mesh rasterized from above on a grid in its model's xz, each cell keeping the water out between its
-// bottom (the hull's skin under it) and its top (its rim, a cockpit filled to its lowest edge). Five rows a hull
-// (water_mask_columns.hlsli).
+// frame): COLUMNS, the mesh rasterized from above on a grid in its model's xz, each cell keeping the water out between the
+// hull's skin under it (four samples a cell, interpolated) and its top (its rim, a cockpit filled to its lowest edge).
+// Five rows a hull (water_mask_columns.hlsli).
 #define WATER_MASK_MAX_HULLS 4
 cbuffer WaterMaskCB : register(b2)
 {
-    uint4 waterMaskCount; // x hulls this frame, y 1 = discard, 2 = paint the kept-out water magenta (ocean.waterMask:2)
+    uint4 waterMaskCount; // x hulls this frame, y 1 = discard, 2 = paint the kept-out water magenta (ocean.waterMask:2),
+                          // 3 = discard, and paint red the water drawn OVER a hull's plan (a leak, a wave over the deck);
+                          // z the boats whose bow wave breakers come in over a gate (wakeBowGate)
     float4 waterMaskHull[WATER_MASK_MAX_HULLS * 5];
+    // OceanWake::BowGates, two a boat: (the bow wave's roots' midpoint x z, the hull's forward x z), (the gate's length m,
+    // half its lane m, 0, 0).
+    float4 wakeBowGate[WATER_MASK_MAX_HULLS * 2];
 };
 StructuredBuffer<float4> WaterMaskColumns : register(t28);
 #include "water_mask_columns.hlsli"
+
+// How much of the bow waves' breakers (the foam field's w) the water at a point shows: nothing on the line a boat's arms
+// leave its hull at, all of them a gate's length aft. The field steps at most 30 times a second and stands on the water
+// between two steps while the hull runs on, so a band that started at the hull at full strength (or by its points' age)
+// jumped forward with every step; the gate is this FRAME's hull. Beside the boat's lane and well ahead of it: 1 (another
+// boat's arms).
+float WakeBowGate(float2 xz)
+{
+    float gate = 1.0f;
+    for (uint g = 0u; g < min(waterMaskCount.z, (uint)WATER_MASK_MAX_HULLS); ++g)
+    {
+        const float4 roots = wakeBowGate[g * 2u];
+        const float4 reach = wakeBowGate[g * 2u + 1u];
+        const float2 off = xz - roots.xy;
+        const float aft = -dot(off, roots.zw);
+        const float beside = abs(dot(off, float2(-roots.w, roots.z)));
+        const float come = smoothstep(0.0f, max(reach.x, 1e-3f), aft);
+        const float elsewhere = max(smoothstep(reach.y, reach.y + 2.0f, beside), smoothstep(3.0f, 6.0f, -aft));
+        gate = min(gate, max(come, elsewhere));
+    }
+    return gate;
+}
 
 bool InsideWaterMask(float3 worldPos)
 {
     for (uint h = 0u; h < min(waterMaskCount.x, (uint)WATER_MASK_MAX_HULLS); ++h)
     {
-        float y;
-        const float4 column = HullColumnAt(worldPos, waterMaskHull[h * 5u + 0u], waterMaskHull[h * 5u + 1u], waterMaskHull[h * 5u + 2u],
-                                           waterMaskHull[h * 5u + 3u], waterMaskHull[h * 5u + 4u], WaterMaskColumns, y);
-        if (y >= column.x && y <= column.y) { return true; }
+        if (HullKeepsWaterOut(worldPos, waterMaskHull[h * 5u + 0u], waterMaskHull[h * 5u + 1u], waterMaskHull[h * 5u + 2u],
+                              waterMaskHull[h * 5u + 3u], waterMaskHull[h * 5u + 4u], WaterMaskColumns))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ocean.waterMask:3 -- the point is over a hull's plan and not under its lowest surface there: water drawn here is IN the
+// boat or over its deck.
+bool OverWaterMaskPlan(float3 worldPos)
+{
+    for (uint h = 0u; h < min(waterMaskCount.x, (uint)WATER_MASK_MAX_HULLS); ++h)
+    {
+        if (OverHullPlan(worldPos, waterMaskHull[h * 5u + 0u], waterMaskHull[h * 5u + 1u], waterMaskHull[h * 5u + 2u],
+                         waterMaskHull[h * 5u + 3u], waterMaskHull[h * 5u + 4u], WaterMaskColumns))
+        {
+            return true;
+        }
     }
     return false;
 }
@@ -803,7 +846,7 @@ WakeFoamSample WakeFoamCoverage(float2 baseXZ, float2 baseDx, float2 baseDy)
     }
     // x the foam that stays (the trail, the lace), w the bow waves' breakers as they stand now (the two arms).
     const float4 laid = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0);
-    const float foam = laid.x + laid.w;
+    const float foam = laid.x + laid.w * WakeBowGate(baseXZ);
     if (foam <= 1e-3f)
     {
         return result;
@@ -1257,6 +1300,7 @@ PSOut PSMain(VSOutput input)
     // written already ([earlydepthstencil]: the stamp UAV below must not run for a hidden pixel): what draws after the
     // ocean and tests depth there meets the water's height, not the floor's.
     const bool keptOut = waterMaskCount.x > 0u && InsideWaterMask(input.worldPos);
+    const bool leaked = waterMaskCount.y == 3u && !keptOut && OverWaterMaskPlan(input.worldPos);
     [branch] if (keptOut && waterMaskCount.y != 2u)
     {
         discard;
@@ -1460,7 +1504,7 @@ PSOut PSMain(VSOutput input)
             if (wakeParams2.z > 1.5f) // 2: the foam field, white on dark (1 = fresh white water), the tear not applied
             {
                 const float4 laid = WakeFoamTex.SampleLevel(LinearClampSampler, wakeUV, 0);
-                const float f = laid.x + laid.w;
+                const float f = laid.x + laid.w * WakeBowGate(input.baseXZ);
                 outColor.rgb = float3(saturate(f), saturate(f), saturate(f) * 0.8f + 0.08f);
             }
             else
@@ -1544,6 +1588,8 @@ PSOut PSMain(VSOutput input)
     PSOut o;
     // ocean.waterMask:2: the kept-out water magenta, at three times the water's own brightness (the exposure stays the frame's).
     o.color = keptOut ? float4(float3(1.0f, 0.0f, 1.0f) * max(dot(outColor.rgb, (1.0f / 3.0f).xxx) * 3.0f, 1e-3f), outColor.a) : outColor;
+    // ocean.waterMask:3: the water drawn in or over a hull, red.
+    if (leaked) { o.color = float4(float3(1.0f, 0.0f, 0.0f) * max(dot(outColor.rgb, (1.0f / 3.0f).xxx) * 3.0f, 1e-3f), outColor.a); }
     o.velocity = motion;
     o.gb0 = OceanGBuffer0(gb);
     o.gb1 = OceanGBuffer1(gb);
