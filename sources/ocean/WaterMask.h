@@ -37,7 +37,8 @@ inline int g_waterMask_game = 1;
 inline const bool g_waterMask_knob = ::knob::Register(g_waterMask_game, g_waterMask, "ocean::g_waterMask");
 
 // A mesh's columns in the model's space: cell (i, k) covers x [originX + i cell, + cell), z [originZ + k cell, + cell);
-// columns[k * nx + i] = (bottom, the top of the water it keeps out, the top of its SOLID, 0) -- (+big, -big, -big, 0) for
+// columns[k * nx + i] = (bottom, the top of the water it keeps out, the top of its SOLID, the PLAN: the lowest surface over
+// the cell wherever the mesh touches it at all, +big where it does not -- what a particle is tested against) -- (+big, -big, -big, plan) for
 // none. The solid top is the water's top but in a filled depression, where it is the cell's own highest surface (the
 // cockpit's floor, a seat): a particle (EmitterDesc::collideHulls) dies inside the hull, not in the cockpit's air. A free
 // cell rings the mesh.

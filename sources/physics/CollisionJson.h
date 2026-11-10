@@ -63,6 +63,7 @@ namespace physics
             { "anchorScope", "Anchor's slack (m)", &S::anchorScope, 0.1f, 0.0f, 500.0f },
             { "anchorStiffness", "Anchor rode stiffness (N/m)", &S::anchorStiffness, 50.0f, 0.0f, 10000000.0f },
             { "anchorDamping", "Anchor rode damping (N s/m)", &S::anchorDamping, 50.0f, 0.0f, 10000000.0f },
+            { "sprayScale", "Spray size (1 = small_yacht's)", &S::sprayScale, 0.01f, 0.1f, 4.0f },
             { "cameraDistance", "Chase camera distance (m)", &S::cameraDistance, 0.1f, 1.0f, 500.0f },
             { "cameraHeight", "Chase camera height (m)", &S::cameraHeight, 0.05f, -10.0f, 100.0f },
             { "giProbeSpeed", "Out of the GI probes past (m/s, 0 = never)", &S::giProbeSpeed, 0.05f, 0.0f, 100.0f },

@@ -90,6 +90,10 @@ namespace physics
         float anchorScope = 8.0f;       // m of slack round the anchor
         float anchorStiffness = 8000.0f; // N per m past the scope
         float anchorDamping = 6000.0f;  // N per m/s of the bow running out along the rode
+        // The spray's size against small_yacht's, whose hull the presets were made for (vfx/VesselSpray): the drops' and
+        // the mist's sprites times it, their throw times its root (a model's heights go with its size). A 6.7 m runabout
+        // under 10 m sheets was a boat in a cloud.
+        float sprayScale = 1.0f;
         float cameraDistance = 15.0f; // m
         float cameraHeight = 2.5f;  // m over the mesh's origin
         // m/s: faster than this the hull leaves the GI probes' rays. They stand in the world, and it flies through them: a probe is inside it, out of it and behind it from one update to the next, and

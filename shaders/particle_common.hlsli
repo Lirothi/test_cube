@@ -42,15 +42,21 @@ RWStructuredBuffer<uint>     gDeadCount : register(u2); // [0] = stack size (ali
 StructuredBuffer<float4>     gHullColumns : register(t0); // ocean/WaterMask's columns
 #include "water_mask_columns.hlsli"
 
-// Inside a hull's solid (its skin, its deck, a cockpit's floor and seats; not the cockpit's air): a drop is spent on it.
+// In or OVER a hull: a particle over the hull's plan (the columns' .w: every cell the mesh touches) and not under its lowest
+// surface there is spent on the boat, at any height -- inside its solid, in a cockpit's air, and in the air over its deck
+// and its cockpit. Tested inside the columns' spans alone (2026-11-09: the solid; 11-10 morning: the cockpit's air up to
+// its rim), the drops that came over the gunwale ABOVE the rim flew on across both new boats in every turn, and through
+// the cells that keep no water out and so have no span (owner: "I saw particles in both boats"). The centre alone: what
+// a sprite beside the hull draws over it is clipped per pixel where it is drawn (particles.hlsl).
 inline bool InsideHull(float3 pos)
 {
     for (uint h = 0u; h < min(hullCount, 4u); ++h)
     {
-        float y;
-        const float4 column = HullColumnAt(pos, hullRows[h * 5u + 0u], hullRows[h * 5u + 1u], hullRows[h * 5u + 2u],
-                                           hullRows[h * 5u + 3u], hullRows[h * 5u + 4u], gHullColumns, y);
-        if (y >= column.x && y <= column.z) { return true; }
+        if (OverHullPlan(pos, hullRows[h * 5u + 0u], hullRows[h * 5u + 1u], hullRows[h * 5u + 2u], hullRows[h * 5u + 3u],
+                         hullRows[h * 5u + 4u], gHullColumns))
+        {
+            return true;
+        }
     }
     return false;
 }

@@ -403,3 +403,5 @@ import_staging/
 
 # Backup
 bckp/
+# Films rendered out of the running game (AGENTS.md "A FILM IS RENDERED FRAME BY FRAME"): large, not source
+/videos/

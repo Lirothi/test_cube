@@ -84,6 +84,8 @@ private:
         float lastImpact = 0.0f;      // the slam the last frame showed: a burst on its rise
         float sheetAlpha[4] = {};     // the presets' alpha keys, as made (the opacity scales them every frame)
         float mistAlpha[4] = {};
+        float sheetSize[2] = {};      // the presets' sprite sizes at birth and at death (the vessel's sprayScale scales them)
+        float mistSize[2] = {};
         Math::float2 bowRoot[2] = {}; // where the bow wave leaves each side, world XZ
         float bowShare = 0.0f;        // how much of it there is, 0..1
         float bowLength = 0.0f;       // the waterline's length, m

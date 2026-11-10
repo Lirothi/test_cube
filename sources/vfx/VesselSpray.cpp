@@ -131,6 +131,8 @@ bool VesselSpray::Create(Scene& scene, Renderer* renderer, Set& set)
         set.sheetAlpha[k] = set.sheet[0] ? set.sheet[0]->Desc().colorKeys[k].w : 0.0f;
         set.mistAlpha[k] = set.mist[0] ? set.mist[0]->Desc().colorKeys[k].w : 0.0f;
     }
+    if (set.sheet[0]) { set.sheetSize[0] = set.sheet[0]->Desc().sizeStart; set.sheetSize[1] = set.sheet[0]->Desc().sizeEnd; }
+    if (set.mist[0]) { set.mistSize[0] = set.mist[0]->Desc().sizeStart; set.mistSize[1] = set.mist[0]->Desc().sizeEnd; }
     LOG_INFO(logging::LogCategory::Vfx, "vessel spray: emitters for boat {} ({})", sets_.size(), ok ? "made" : "FAILED");
     return ok;
 }
@@ -238,14 +240,18 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             const float rise = std::max(params.up, 0.0f);
             // A slam's frame throws higher and wider: the water a bow drives into is thrown up, not only aside (at least
             // 4 m/s up, the hull at rest in a sea included).
-            const float throwSpeed = slam > 0.0f ? std::max(speed * std::sqrt(out * out + rise * rise), 4.0f) * 1.3f
-                                                 : speed * std::sqrt(out * out + rise * rise);
+            // The boat's own spray size (VesselSettings::sprayScale): the sprites times it, the throw times its root.
+            const float sprayScale = std::clamp(hull.settings->sprayScale, 0.1f, 4.0f);
+            const float throwSpeed = (slam > 0.0f ? std::max(speed * std::sqrt(out * out + rise * rise), 4.0f) * 1.3f
+                                                  : speed * std::sqrt(out * out + rise * rise)) * std::sqrt(sprayScale);
             const Math::float3 direction = slam > 0.0f ? Normalized(outward * out + up * std::max(rise, out))
                                                        : Normalized(outward * out + up * rise);
-            auto drive = [&](ParticleEmitterObject* emitter, const float (&alpha)[4], float rate, float speedLo, float speedHi,
-                             const Math::float3& dir, float burst, float fadeScale) {
+            auto drive = [&](ParticleEmitterObject* emitter, const float (&alpha)[4], const float (&size)[2], float rate,
+                             float speedLo, float speedHi, const Math::float3& dir, float burst, float fadeScale) {
                 if (!emitter) { return; }
                 EmitterDesc& d = emitter->DescRef();
+                d.sizeStart = size[0] * sprayScale;
+                d.sizeEnd = size[1] * sprayScale;
                 emitter->SetPosition(a);
                 d.lineOffset = b - a;
                 d.coneDir = dir;
@@ -273,10 +279,10 @@ void VesselSpray::Sync(Scene& scene, Renderer* renderer, const std::vector<physi
             const float sheetRate = set.sheet[side] ? set.sheet[side]->Desc().maxParticles / std::max(set.sheet[side]->Desc().lifetimeMax, 0.1f) : 0.0f;
             const float mistRate = set.mist[side] ? set.mist[side]->Desc().maxParticles / std::max(set.mist[side]->Desc().lifetimeMax, 0.1f) : 0.0f;
             // The presets' capacity over their longest life is the most a side can keep alive: the knob scales under it.
-            drive(set.sheet[side], set.sheetAlpha, sheetRate * std::clamp(params.rate, 0.0f, 1.0f), 0.6f, 1.15f, direction,
-                  slam * kSlamSheet, 1.0f);
-            drive(set.mist[side], set.mistAlpha, mistRate * std::clamp(params.rate * params.mist, 0.0f, 1.0f), 0.2f, 0.5f,
-                  Normalized(outward * 0.6f + up * 0.8f), slam * kSlamMist * std::max(params.mist, 0.0f), 2.5f);
+            drive(set.sheet[side], set.sheetAlpha, set.sheetSize, sheetRate * std::clamp(params.rate, 0.0f, 1.0f), 0.6f, 1.15f,
+                  direction, slam * kSlamSheet, 1.0f);
+            drive(set.mist[side], set.mistAlpha, set.mistSize, mistRate * std::clamp(params.rate * params.mist, 0.0f, 1.0f),
+                  0.2f, 0.5f, Normalized(outward * 0.6f + up * 0.8f), slam * kSlamMist * std::max(params.mist, 0.0f), 2.5f);
             sheetRate_ += set.sheet[side] ? set.sheet[side]->Desc().spawnRate : 0.0f;
             // Where this side's breaking bow wave leaves the waterline: the root's fore end, just outside it.
             const Math::float3 fore = (root.valid ? world(root.u0, root.v0) : hull.position) + outward * (kBowRootOut * scale);

@@ -22,6 +22,11 @@ inline const bool g_litAirFromFog_knob = ::knob::Register(g_litAirFromFog_game, 
 inline bool g_collideHulls = true;
 inline bool g_collideHulls_game = true;
 inline const bool g_collideHulls_knob = ::knob::Register(g_collideHulls_game, g_collideHulls, "vfx::g_collideHulls");
+// A/B, transient: `--set particles.clipHulls:0` -- a sprite's pixels over a hull are drawn (before 2026-11-10: a sprite
+// beside a boat hung over its gunwale into the cockpit).
+inline bool g_clipHulls = true;
+inline bool g_clipHulls_game = true;
+inline const bool g_clipHulls_knob = ::knob::Register(g_clipHulls_game, g_clipHulls, "vfx::g_clipHulls");
 inline bool g_spraySidePush = true;
 inline bool g_spraySidePush_game = true;
 inline const bool g_spraySidePush_knob = ::knob::Register(g_spraySidePush_game, g_spraySidePush, "vfx::g_spraySidePush");
@@ -61,8 +66,9 @@ struct alignas(16) GpuEmitterParams
     float emitterVel[3]; float _padE;                      // 112
     // Added to every particle's birth velocity (m/s, world): what the carrier gives it (a hull's way).
     float baseVel[3]; float _padB;                         // 128
-    // EmitterDesc::collideHulls: the frame's hulls (ocean::WaterMaskFrame, 5 rows each); 0 = none. A particle inside one's
-    // solid columns is counted and, under hullKill (particles.collideHulls), dies (shaders/water_mask_columns.hlsli).
+    // EmitterDesc::collideHulls: the frame's hulls (ocean::WaterMaskFrame, 5 rows each); 0 = none. A particle in or over one
+    // (over its plan and not under its lowest surface there) is counted and, under hullKill
+    // (particles.collideHulls), dies (shaders/water_mask_columns.hlsli).
     uint32_t hullCount; uint32_t hullKill; uint32_t _padH[2]; // 144
     float hullRows[4 * 5][4];                              // 160
 };
@@ -86,8 +92,12 @@ struct alignas(16) GpuEmitterDrawParams
     // fills an opaque surface; 0 = no cube (or the A/B): the height fog's colour then.
     // litFlat: lit, the shading normal from the sprite's sphere (0) to the world's up (1, the water foam's light).
     float velocityStretch; float skyIrradianceScale; float litFlat; float _pad;   // 128
+    // EmitterDesc::collideHulls: the frame's hulls again (GpuEmitterParams::hullRows), for the pixel shader -- a sprite's
+    // pixel over a hull's plan is not drawn (particles.hlsl PSMain); 0 = none, or particles.clipHulls:0.
+    uint32_t hullCount; uint32_t _hullPad[3];                                     // 144
+    float hullRows[4 * 5][4];                                                     // 160
 };
-static_assert(sizeof(GpuEmitterDrawParams) == 144, "GpuEmitterDrawParams must match HLSL");
+static_assert(sizeof(GpuEmitterDrawParams) == 480, "GpuEmitterDrawParams must match HLSL");
 
 // CPU-side emitter description. E1 consumes the sim fields; size/color/flipbook/blend/texture
 // are stored now (one JSON schema) and consumed by the E2 renderer / E3 presets.

@@ -65,6 +65,7 @@ namespace physics
         float testRudder = 0.0f;      // what A and D say
         float testOrbit = 0.0f;       // radians about the boat: a script's shot from the side, held while it is not 0
         float testOrbitPitch = 0.0f;  // radians the chase camera looks further down: a script's shot from above (the wake's pattern), held while it is not 0
+        bool testFreeCamera = false;  // at the helm the boat's camera stands down: the frame's camera is whatever a script's set_camera says (a film's shots)
     };
 
     // What the keys say this frame.

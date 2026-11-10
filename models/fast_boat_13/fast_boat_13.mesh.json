@@ -1,0 +1,80 @@
+{
+  "geometry": "models/fast_boat_13/fast_boat_13.mesh.bin",
+  "lodNormalWeight": 0.5,
+  "materials": [
+    "fast_boat_13_0",
+    "fast_boat_13_1",
+    "fast_boat_13_2",
+    "fast_boat_13_3",
+    "fast_boat_13_4",
+    "fast_boat_13_5",
+    "fast_boat_13_6",
+    "fast_boat_13_7",
+    "fast_boat_13_8",
+    "fast_boat_13_9",
+    "fast_boat_13_10",
+    "fast_boat_13_11"
+  ],
+  "pivot": "base",
+  "source": "import_staging\\fast_boat_13\\scene.gltf",
+  "uvDensity": [
+    16.80721664428711,
+    2.450765609741211,
+    0.0,
+    0.5639985203742981,
+    0.3364921808242798,
+    0.06310275942087173,
+    0.1314365565776825,
+    1.1822274923324585,
+    0.8808383941650391,
+    0.09259942919015884,
+    0.06310248374938965,
+    0.12620553374290466
+  ],
+  "vessel": {
+    "anchorDamping": 2100.0,
+    "anchorStiffness": 2800.0,
+    "sprayScale": 0.6,
+    "cameraDistance": 8.0,
+    "cameraHeight": 1.6,
+    "centerOfMassY": 0.45,
+    "draft": 0.39,
+    "forward": [
+      1.0,
+      0.0,
+      0.0
+    ],
+    "heaveDamping": 4.0,
+    "helmEye": [
+      0.45,
+      1.3,
+      0.0
+    ],
+    "humpDrag": 2100.0,
+    "humpSpeed": 3.9,
+    "humpTrim": 21000.0,
+    "mass": 1900.0,
+    "maxBank": 18.0,
+    "pitchDamping": 5.5,
+    "planeSpeed": 7.9,
+    "planeTrim": 8600.0,
+    "propeller": [
+      -2.0,
+      0.08,
+      0.0
+    ],
+    "reserveLift": 1.6,
+    "rollDamping": 6.0,
+    "rollStiffness": 36000.0,
+    "rudderForce": 40.0,
+    "slam": 900.0,
+    "surgeDrag": 26.0,
+    "swayDrag": 700.0,
+    "swayLever": 0.75,
+    "swayLinear": 320.0,
+    "thrust": 9000.0,
+    "yawDrag": 57000.0,
+    "yawLinear": 4300.0
+  },
+  "waterMask": true
+}

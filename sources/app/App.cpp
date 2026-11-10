@@ -49,6 +49,11 @@ float g_camFlyYaw = 0.0f;
 // "--set=camera.fly:<m/s>" / MCP set_settings: fly along the camera's own view, negative = backwards, 0 stops --
 // a person flying through a tunnel in a running editor (the camera's heading is its own; --cam-fly's is the world's).
 float g_camFlyForward = 0.0f;
+// `frame.recordDt` (MCP, for a film; 0 = off): the world advances by exactly this many seconds on a frame an MCP
+// screenshot captures and stands on every other frame -- so a script sets the boat's helm and the camera, takes the
+// frame, and the next one is 1/60 s of the world later whatever the PNG cost. A real-time capture drops and doubles
+// frames; a `burst` without this lets the clocks drift apart (the wake fell behind the boat).
+float g_recordDt = 0.0f;
 // "--cam-orbit=<radius>,<deg/s>": circle the start position, looking along the tangent. A
 // straight drift leaves a grove in seconds; a ring keeps crossing it, which is what churns the
 // RT wind-BLAS slots (and what leaked their retired buffers until 2026-09-03).
@@ -415,6 +420,10 @@ namespace
         // Frame pacing (UE r.VSync / t.MaxFPS), so a run can pin them over graphics_settings.json.
         if (setting == "frame.vsync")  { render::g_vsync_game = value != 0.0f; return true; }
         if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
+        // A film, frame by frame (g_recordDt above): seconds of the world a captured frame advances; 0 = real time.
+        if (setting == "frame.recordDt") { g_recordDt = std::clamp(value, 0.0f, 0.1f); return true; }
+        // --no-hud for a running process: 0 hides the HUD's text (a film's frames), 1 shows it.
+        if (setting == "debug.hud") { g_hudHidden = value == 0.0f; return true; }
         // Game thread plan G8: Scene::Render on a thread of its own; the loop takes it at the next frame's start.
         if (setting == "frame.renderThread") { threading::g_renderThreadEnabled = value != 0.0f; return true; }
         // UE's r.OneFrameThreadLag: 0 = the game half waits for each frame right after handing it over.
@@ -463,6 +472,7 @@ namespace
             if (key == "testRudder") { player.testRudder = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testOrbit") { player.testOrbit = value; return true; }
             if (key == "testOrbitPitch") { player.testOrbitPitch = value; return true; }
+            if (key == "testFreeCamera") { player.testFreeCamera = value != 0.0f; return true; }
         }
         // --wind-freeze for a RUNNING process (MCP set_settings): 1 holds the current wind + ocean pose,
         // 0 lets the clock run again. Two looks compared in one editor then see the same waves.
@@ -1554,6 +1564,7 @@ namespace
         // A lit particle's air: the fog's colour as before 2026-11-09 (the A/B), 0 = the sky's distant light.
         if (setting == "particles.airFromFog") { vfx::g_litAirFromFog_game = value != 0.0f; return true; }
         if (setting == "particles.collideHulls") { vfx::g_collideHulls_game = value != 0.0f; return true; }
+        if (setting == "particles.clipHulls") { vfx::g_clipHulls_game = value != 0.0f; return true; } // a sprite's pixels over a hull
         if (setting == "particles.softWater") { g_particleSoftWater_game = value != 0.0f; return true; } // soft fade against the water too
         if (setting == "spray.sidePush") { vfx::g_spraySidePush_game = value != 0.0f; return true; }
         if (setting.rfind("spray.", 0) == 0)
@@ -2816,6 +2827,12 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             lastTime = now;
 
             deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
+#if WITH_EDITOR
+            if (g_recordDt > 0.0f)
+            {
+                deltaTime = editormcp::ScreenshotCapturesThisFrame() ? g_recordDt : 1e-6f;
+            }
+#endif
 
             // "--cam-fly=x,z": drift the camera at a constant world velocity (m/s). The ONLY
             // headless way to exercise motion-dependent paths — window relocations (wetness,

@@ -282,7 +282,21 @@ namespace watermask
             shared[index] = h;
             depression[index] = b != FLT_MAX && level[index] > top[index] + 0.01f ? 1u : 0u;
         }
-        f.columns.assign(cells, Math::float4(FLT_MAX, -FLT_MAX, -FLT_MAX, 0.0f));
+        f.columns.assign(cells, Math::float4(FLT_MAX, -FLT_MAX, -FLT_MAX, FLT_MAX));
+        // The plan (the fourth component): the lowest surface over every cell the mesh touches at all, whether or not it
+        // keeps water out there. A cell under one sloping sheet (a cockpit's inner wall with nothing beneath it in the
+        // mesh), or with a sample the mesh does not cover, has no column -- right for the water, which must stop inside the
+        // skin -- and a particle tested against the columns alone flew on through the cockpit there (police_boat). A thin
+        // part no sample meets (a rail, an aerial) counts from its top.
+        std::size_t plan = 0;
+        for (std::size_t index = 0; index < cells; ++index)
+        {
+            if (top[index] == -FLT_MAX) { continue; }
+            float lowest = FLT_MAX;
+            for (int s = 0; s < kSamples * kSamples; ++s) { lowest = std::min(lowest, low[index * kSamples * kSamples + s]); }
+            f.columns[index].w = lowest != FLT_MAX ? lowest : top[index];
+            ++plan;
+        }
         std::size_t kept = 0, filled = 0;
         for (std::size_t index = 0; index < cells; ++index)
         {
@@ -307,12 +321,12 @@ namespace watermask
                 }
             }
             if (!(columnTop > bottom[index])) { continue; }
-            f.columns[index] = Math::float4(bottom[index], columnTop, std::max(solidTop, bottom[index]), 0.0f);
+            f.columns[index] = Math::float4(bottom[index], columnTop, std::max(solidTop, bottom[index]), f.columns[index].w);
             ++kept;
         }
         LOG_INFO(logging::LogCategory::Ocean,
-                 "water mask: {} -- {} x {} cells of {:.1f} cm, {} keep the water out, {} of them in a filled depression, from {} triangles",
-                 geometryPath, f.nx, f.nz, f.cell * 100.0f, kept, filled, indices.size() / 3u);
+                 "water mask: {} -- {} x {} cells of {:.1f} cm, {} keep the water out, {} of them in a filled depression, {} in its plan, from {} triangles",
+                 geometryPath, f.nx, f.nz, f.cell * 100.0f, kept, filled, plan, indices.size() / 3u);
         return field;
     }
 

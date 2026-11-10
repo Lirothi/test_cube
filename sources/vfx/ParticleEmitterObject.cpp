@@ -553,6 +553,14 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
     dp.skyIrradianceScale = skyFill ? g_skyIrradianceScale : 0.0f;
     D3D12_CPU_DESCRIPTOR_HANDLE skyIrradiance{};
     skyIrradiance.ptr = static_cast<SIZE_T>(g_skyIrradianceSrv);
+    // The hulls no pixel of this emitter is drawn over (EmitterDesc::collideHulls): the frame's, as the ocean packed them
+    // -- the rows the update tested the centres against, and their columns at t6.
+    const ocean::WaterMaskFrame& hulls = ocean::g_waterMaskFrame;
+    const bool clipHulls = desc_.collideHulls && vfx::g_clipHulls && hulls.hulls > 0u && hulls.columnsSrv != 0u;
+    dp.hullCount = clipHulls ? hulls.hulls : 0u;
+    if (clipHulls) { std::memcpy(dp.hullRows, hulls.rows, sizeof(float) * 4u * 5u * hulls.hulls); }
+    D3D12_CPU_DESCRIPTOR_HANDLE hullColumns{};
+    hullColumns.ptr = static_cast<SIZE_T>(hulls.columnsSrv);
 
     auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(dp), render::kConstantBufferAlignment);
     std::memcpy(cb.cpu, &dp, sizeof(dp));
@@ -578,7 +586,9 @@ void ParticleEmitterObject::Render(Renderer* renderer, ID3D12GraphicsCommandList
           D.fogIntegratedSRV.ptr != 0 ? D.fogIntegratedSRV : particlesSrv_,
           // t5: the sky's irradiance cube (Pass_Transparent declares the sky's cubes for every stage); self-aliased and
           // unread (skyIrradianceScale 0) without one.
-          skyFill ? skyIrradiance : particlesSrv_ }).gpu;
+          skyFill ? skyIrradiance : particlesSrv_,
+          // t6: the hulls' columns (an upload buffer, GENERIC_READ for its life); self-aliased and unread without.
+          clipHulls ? hullColumns : particlesSrv_ }).gpu;
     ctx.samplerTable[0] = renderer->GetSamplerManager()->Get(renderer, *SamplerManager::LinearClamp());
 
     drawMaterial_->Bind(cl, ctx, false);

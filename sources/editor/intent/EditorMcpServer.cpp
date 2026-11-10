@@ -1806,6 +1806,13 @@ namespace editormcp
         send(200, "OK", message.is_array() ? replies.dump() : replies[0].dump());
     }
 
+    bool ScreenshotCapturesThisFrame()
+    {
+        ShotRequest& shot = Shot();
+        std::lock_guard<std::mutex> lock(shot.mutex);
+        return shot.pending && !shot.done && shot.framesLeft == 1;
+    }
+
     void ServiceScreenshot(Renderer& renderer, const Camera& camera)
     {
         ShotRequest& shot = Shot();

@@ -37171,6 +37171,52 @@
         1.0
       ],
       "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Boats",
+      "id": 3015,
+      "mesh": "models/fast_boat_13/fast_boat_13.mesh.json",
+      "name": "fast_boat_13 001",
+      "position": [
+        59.96799850463867,
+        -0.38999998569488525,
+        109.83100128173828
+      ],
+      "rotationDeg": [
+        0.0,
+        -65.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "enabled": true,
+      "group": "Boats",
+      "id": 3016,
+      "mesh": "models/police_boat/police_boat.mesh.json",
+      "name": "police_boat 001",
+      "position": [
+        44.257999420166016,
+        -0.7099999785423279,
+        119.91500091552734
+      ],
+      "rotationDeg": [
+        0.0,
+        -65.0,
+        0.0
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "type": "staticMesh"
     }
   ],
   "ocean": {

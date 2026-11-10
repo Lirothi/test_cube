@@ -2283,7 +2283,7 @@ void Scene::Sync(Renderer* renderer)
         ocean::watermask::Collect(masks);
         ocean->SetWaterMasks(std::move(masks));
     }
-    if (vesselCamera_.Active())
+    if (vesselCamera_.Active() && !physics::GameSettings().player.testFreeCamera)
     {
         // The camera of a boat at the helm, from the very pose this frame draws the hull at, and so before the render half takes the camera's.
         const OceanRenderable* ocean = FindOceanRenderable();

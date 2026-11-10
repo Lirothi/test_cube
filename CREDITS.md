@@ -255,3 +255,29 @@ Model License:
 If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
 This work is based on "Small Yacht" (https://sketchfab.com/3d-models/small-yacht-09a9fc4a0061464fba1bc3ba76848869) by Miguelangelo Rosario (https://sketchfab.com/miguelangelo2k) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
 
+## fast_boat_13
+Model Information:
+* title:	Fast Boat 13
+* source:	https://sketchfab.com/3d-models/fast-boat-13-103ea93e5f6f4d8b95af626c08e60421
+* author:	agt14032013 (https://sketchfab.com/agt14032013)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Fast Boat 13" (https://sketchfab.com/3d-models/fast-boat-13-103ea93e5f6f4d8b95af626c08e60421) by agt14032013 (https://sketchfab.com/agt14032013) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+
+## police_boat
+Model Information:
+* title:	Police Boat
+* source:	https://sketchfab.com/3d-models/police-boat-959e50ef12a546d8a203182c4ccef17a
+* author:	agt14032013 (https://sketchfab.com/agt14032013)
+
+Model License:
+* license type:	CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+* requirements:	Author must be credited. Commercial use is allowed.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Police Boat" (https://sketchfab.com/3d-models/police-boat-959e50ef12a546d8a203182c4ccef17a) by agt14032013 (https://sketchfab.com/agt14032013) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
+

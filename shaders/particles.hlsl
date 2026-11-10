@@ -42,6 +42,10 @@ cbuffer DrawParams : register(b2)
     // skyIrradianceScale: lit, the scale of the sky's irradiance cube (t5); 0 = none (the fog's colour).
     // litFlat: lit, the shading normal from the sprite's sphere (0) to the world's up (1: lit as the water's foam).
     float velocityStretch; float skyIrradianceScale; float litFlat; float _dpPad;
+    // EmitterDesc::collideHulls: the frame's hulls (ocean::WaterMaskFrame, five rows each, water_mask_columns.hlsli); a
+    // pixel of a sprite over one's plan is not drawn. 0 = none (or particles.clipHulls:0, the A/B).
+    uint hullCount; uint3 _hullPad;
+    float4 hullRows[4 * 5];
 };
 
 StructuredBuffer<Particle> gParticles : register(t0);
@@ -50,12 +54,14 @@ Texture2D gSceneDepth : register(t2); // E2b: depthCopy (reversed-Z NDC), soft-p
 StructuredBuffer<uint> gSorted : register(t3); // E2c: back-to-front slot order (alpha emitters)
 Texture3D<float4> gFogVolume : register(t4);   // plan A5: the integrated froxel volume (gated by fogVolumeParams.x)
 TextureCube gSkyIrradiance : register(t5);     // lit: the sky's irradiance (E / pi), lighting_cs's (gated by skyIrradianceScale)
+StructuredBuffer<float4> gHullColumns : register(t6); // the hulls' columns (ocean/WaterMask), read under hullCount
 SamplerState gSmp : register(s0);
+#include "water_mask_columns.hlsli"
 
 #define PARTICLES_RS \
     "CBV(b1)," \
     "CBV(b2)," \
-    "DescriptorTable(SRV(t0, numDescriptors=6, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
+    "DescriptorTable(SRV(t0, numDescriptors=7, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE))," \
     "DescriptorTable(Sampler(s0, flags=DESCRIPTORS_VOLATILE))"
 
 #ifndef PARTICLE_SORTED
@@ -80,6 +86,7 @@ struct VSOut
     float3 axisX : TEXCOORD4; // lit: the quad's world axes, for the normal of the sphere the sprite stands for
     float3 axisY : TEXCOORD5;
     float3 toEye : TEXCOORD6; // lit: from the particle to the camera, unit
+    float3 wpos : TEXCOORD7;  // the pixel's place on the quad, world: clipped by the hulls
 };
 
 float4 ColorOverLife(float t)
@@ -153,6 +160,7 @@ VSOut VSMain(uint vid : SV_VertexID)
 
     const float3 wpos = p.pos + axisX * lc.x + axisY * lc.y;
     o.H = mul(float4(wpos, 1.0), viewProj);
+    o.wpos = wpos;
     o.axisX = axisX;
     o.axisY = axisY;
     o.toEye = toEye;
@@ -183,6 +191,20 @@ VSOut VSMain(uint vid : SV_VertexID)
 [RootSignature(PARTICLES_RS)]
 float4 PSMain(VSOut i) : SV_Target0
 {
+    // No pixel of a sprite in or over a boat. A sprite is a quad up to a metre across standing for a clump of drops: one
+    // whose centre flies beside a hull (the update's test lets it live: InsideHull) still laid a part of itself over the
+    // gunwale and into the cockpit, at its centre's depth -- drops inside the boat from the chase camera and from above
+    // (owner, 2026-11-10: "I saw particles in both boats"; with the spray painted magenta it was these, not centres).
+    // The pixel's own place on the quad is tested against the hulls' plan: what is over it is not drawn, at any height.
+    for (uint h = 0u; h < min(hullCount, 4u); ++h)
+    {
+        if (OverHullPlan(i.wpos, hullRows[h * 5u + 0u], hullRows[h * 5u + 1u], hullRows[h * 5u + 2u], hullRows[h * 5u + 3u],
+                         hullRows[h * 5u + 4u], gHullColumns))
+        {
+            discard;
+        }
+    }
+
     float4 tex;
     if (hasTexture != 0u)
     {
