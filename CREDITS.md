@@ -281,3 +281,16 @@ Model License:
 If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
 This work is based on "Police Boat" (https://sketchfab.com/3d-models/police-boat-959e50ef12a546d8a203182c4ccef17a) by agt14032013 (https://sketchfab.com/agt14032013) licensed under CC-BY-4.0 (http://creativecommons.org/licenses/by/4.0/)
 
+## ocean_buoy
+Model Information:
+* title:	Ocean Buoy v.1
+* source:	https://sketchfab.com/3d-models/ocean-buoy-v1-aaefa03d11df434f8ed04f96c7e3f8e2
+* author:	TSB3DMODELS (https://sketchfab.com/TSB3DMODELS)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Ocean Buoy v.1" (https://sketchfab.com/3d-models/ocean-buoy-v1-aaefa03d11df434f8ed04f96c7e3f8e2) by TSB3DMODELS (https://sketchfab.com/TSB3DMODELS) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+

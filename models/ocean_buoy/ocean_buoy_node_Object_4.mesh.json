@@ -1,0 +1,11 @@
+{
+  "bakeScale": 0.009999999776482582,
+  "geometry": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.bin",
+  "lodNormalWeight": 0.5,
+  "material": "ocean_buoy_Object_4_0",
+  "pivot": "base",
+  "source": "import_staging\\ocean_buoy\\scene.gltf#node:Object_4",
+  "uvDensity": [
+    1.2771886587142944
+  ]
+}
