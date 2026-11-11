@@ -37,6 +37,9 @@ public:
     std::wstring HudLine(const Scene& scene, double nowSeconds) const;
     // And the race's under it: the player's laps at a helm, else the bot's. Empty without a course.
     std::wstring RaceHudLine(const Scene& scene) const;
+    // A boat's card (ImGui, the frame's): on foot within a few metres of a boat, what it does -- its top speed, how fast
+    // it gets there, the circle it turns in, its weight and engine -- drawn over it. Takes no mouse and no key.
+    void DrawBoatCard(Scene& scene);
 
 private:
     void PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start);

@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include "app/game/PlayerStart.h"
-#include "app/game/RaceBot.h"
+#include "app/game/Race.h"
 #include "app/game/VesselCamera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"

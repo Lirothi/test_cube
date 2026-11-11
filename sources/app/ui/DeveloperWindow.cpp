@@ -3666,6 +3666,12 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     else { ImGui::DragFloat(key.label, &(bot.*(key.member)), key.speed, key.lo, key.hi, key.format); }
                     if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s\n--set bot.%s (%g .. %g)", key.hint, key.key, key.lo, key.hi); }
                 }
+                game::RaceSettings& race = game::RaceSettingsRef();
+                for (const game::RaceKey& key : game::RaceKeys())
+                {
+                    ImGui::DragFloat(key.label, &(race.*(key.member)), key.speed, key.lo, key.hi, key.format);
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s\n--set race.%s (%g .. %g)", key.hint, key.key, key.lo, key.hi); }
+                }
                 const std::wstring raceLine = scene.RaceRef().HudLine();
                 if (!raceLine.empty()) { ImGui::Text("%ls", raceLine.c_str()); }
                 else { ImGui::TextDisabled(scene.RaceRef().HasTrack() ? "The course is there; no boat runs it." : "No course in Play: mark buoys with a Race gate number (Inspector > Race)."); }

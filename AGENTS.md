@@ -1302,7 +1302,8 @@ a volume made from its LOD 0: COLUMNS, the mesh rasterized from above. small_yac
 
 2026-11-10 (owner: "design a water course, mark it with buoys (ocean_buoy) and write a bot that runs it; part of it along
 the island on wind_test"). `sources/app/game/RaceCourse.h` (what a level says), `RaceTrack.*` (the gates, the line),
-`RaceBot.*` (the helmsman, and `game::Race`, which the Scene owns: `Scene::RaceRef`), `physics::World::SetPilot`.
+`RaceBot.*` (the helmsman), `Race.*` (`game::Race`, the level's race, which the Scene owns: `Scene::RaceRef` -- the next
+section), `VesselStats.*` (what a boat does, from its numbers: the section after), `physics::World::SetPilot`.
 
 - **The course is its marks.** A level object with `"raceGate": N` is a mark (a buoy); two marks with one number are a
   gate, a boat passes between them; the gates are run in the order of their numbers and the last leads back to gate 1,
@@ -1322,22 +1323,25 @@ the island on wind_test"). `sources/app/game/RaceCourse.h` (what a level says), 
   none moves) and the closed C2 cubic spline through them. That spline is cut into points every ~10 m and relaxed
   (Gauss-Seidel on p[i-2] - 4 p[i-1] + 6 p[i] - 4 p[i+1] + p[i+2] = 0: the least bending), one point a gate held ON its
   gate's line inside its window; the line is the spline through the band, sampled every 2 m of its own length, with its
-  curvature. Its speed: `sqrt(bot.lateralAccel / curvature)`, between half the boat's top speed and its top speed
-  (thrust = 0.77 surgeDrag v^2), and no faster than braking at `bot.brakeAccel` still makes the next slow place (a pass
-  backwards, twice round). The log says it at Play: `race: a line of 1440 m, the boat's top speed 17.1 m/s, ... the
+  curvature. Its speed: `sqrt(a / curvature)`, a = `bot.grip` (0.8) of what THIS boat makes across its way in its own
+  tightest turn (`game::StatsOf`: 3.1-4.8 m/s2 for the boats here), between half the boat's top speed and its top speed
+  (thrust = 0.77 surgeDrag v^2), and no faster than braking at `bot.braking` (0.35) of what it loses with the engine off
+  at its top speed still makes the next slow place (a pass backwards, twice round). The log says it at Play: `race: a line of 1440 m, the boat's top speed 17.1 m/s, ... the
   line's slowest place 12.4 m/s`.
 - **The helm** (`RaceBot::Tick`, every frame of a session, on the game's thread: it reads `World::CollectHulls`, the
   frame's poses, and orders through `SetPilot` -- the game's own fields, taken for the steps where the helm's are). Pure
-  pursuit: it aims at the line `bot.lookAhead` s of its speed ahead (`bot.lookAheadMin` 24 m at least: at 12 m a
-  slowed boat wove, rudder from side to side -- its circle is 55 m; and as much further as it is off the line, 80 m
-  at most, so it comes back at a shallow angle instead of across the line and out the other side); the arc
+  pursuit: it aims at the line `bot.lookAhead` s of its speed ahead (at least `bot.lookAheadCircle` 0.43 of the radius
+  of its boat's own circle -- the yacht's 24 m: at 12 m a slowed boat wove, rudder from side to side; and, where the
+  line runs straight, as much further as it is off the line, 80 m at most, so it comes back at a shallow angle instead
+  of across the line and out the other side), the bow pointed inside the aim by the angle its boat slides at in the
+  bend (`bot.slip`, the section after next); the arc
   through the boat and the aim, tangent to the bow, is a curvature; the rudder is `bot.steerGain` x that over the
   tightest the boat turns at this speed, less `bot.yawDamping` x its turn rate. The throttle holds the line's speed
   (the share that holds it, (v / top)^2, + 0.5 a m/s of error; astern to brake), and is full ahead while the rudder is
   hard over at the line's speed. Held (under 0.5 m/s for 3 s with the throttle on): astern for 4 s, the stern swung so
   the bow comes round. THE MARKS ARE SEEN: one of the next two gates' that the bow would brush (ahead within 2.5 s of
   the speed, nearer its way than the half beam + `bot.margin`) is steered round -- on its gate's side when the boat can
-  still get across in the time it has (at `bot.lateralAccel`), else on whichever side is nearer: a gate missed, not a
+  still get across in the time it has (at what its boat makes across its way), else on whichever side is nearer: a gate missed, not a
   buoy hit. "Always toward the middle" asked a boat coming onto the course from outside, already hard over, for a
   tighter turn than it has (the yacht met gate 4's port buoy head on); "always away from the mark" pushed one a little
   wide of a gate round the outside of its mark. The line keeps clear of the marks, the boat is not always on its line. THE LEAD LINE (`game::Race::Sound`, four times a
@@ -1348,7 +1352,7 @@ the island on wind_test"). `sources/app/game/RaceCourse.h` (what a level says), 
   its line does: off a buoy the yacht sat on the east beach till Stop, backing and trying again. A gate counts when the boat crosses its
   line between the marks, a miss when it crosses outside them or runs 30 m past it by the line; nothing counts until it
   has been ON the line (within 12 m and heading along it for 1.5 s: out of its mooring it first crosses the line square
-  on), and until then it runs at the speed of its own circle, sqrt(lateralAccel x its tightest radius) -- from
+  on), and until then it runs at the speed it keeps in its own tightest turn (`VesselStats::turnSpeed`) -- from
   wind_test's mooring the bows point away from the course, so a boat swings 50-80 m wide of the line, to seaward, and
   comes back to it three or four gates on. The lap clock starts at gate 1.
 - **Slower is not safer: these boats steer by their wash.** The rudder's push is (speed + wash x sqrt(throttle))^2, so
@@ -1364,27 +1368,29 @@ the island on wind_test"). `sources/app/game/RaceCourse.h` (what a level says), 
   boat's helm, full ahead, hard over, the last 6 s of 14): small_yacht 13.1 deg/s at 12.8 m/s, police_boat 14.7 at 14.0,
   fast_boat_13 14.8 at 14.1 -- a circle of 55 m for all three, 2.9-3.6 m/s2 across; at 0.45 throttle 53-69 m. The
   speed drops by itself in the turn, and EASING THE THROTTLE WIDENS THE CIRCLE: the rudder's push is (speed + wash)^2.
-  `SteadyTurnRate` (RaceBot.cpp) is that turn from the vessel's own numbers: the rudder's moment against the yaw drag
+  `SteadyTurnRate` (VesselStats.cpp) is that turn from the vessel's own numbers: the rudder's moment against the yaw drag
   AND the keel -- the hull slides, and the water's push on its side (m v w + the rudder's force), acting `swayLever`
   aft, opposes the turn: yawDrag w^2 + (yawLinear + m v swayLever) w = F (lever - swayLever). Without the keel's term it
-  said 26-32 m; with it 12.8 deg/s for the yacht. It scales the rudder's order; the bends' speed is the one knob
-  `bot.lateralAccel` (3.0). Tried and dropped, each a build: steering by the way the boat MOVES instead of by its bow
+  said 26-32 m; with it 12.8 deg/s for the yacht. It scales the rudder's order; the bends' speed is a share of the boat's own
+  (`bot.grip`). Tried and dropped, each a build: steering by the way the boat MOVES instead of by its bow
   (to take out the ~4 m it runs wide of the line round a long bend: the hull slides, bow inside its path) -- the path
   answers the rudder a second after the bow does, and the boat wove from gate to gate with the rudder banging from side
   to side, 12 gates missed; easing the throttle when the deck leans past 26 degrees (for the sea) -- a hull banks in
   every turn, and eased it ran 85 m wide; a bend's speed as a share of the steady turn RATE -- it braked inside the
   bends.
-- **Play.** A boat with `raceBot` starts `bot.startDelay` (3 s) after Play and runs lap after lap. Take its helm (E) and
-  the bot stands down until you leave; at ANY helm **B** hands the boat to the same bot and takes it back
-  (`player.testAutopilot` for a script), and the boat you hold has its own gates and lap clock whoever steers. The HUD's
-  line under the play line: `RACE: lap, gate N of M, the lap's time, last, best, missed` at a helm, else the bot's
-  (`BOT police_boat: racing, 32.1 kn ...`). `get_readouts` block `race` {active, gates, autopilot, atHelm, helm {...},
-  bots [{vessel, state, lap, nextGate, passed, missed, station, length, speed, target, slowest, tightestRadius,
-  crossTrack, lapSeconds, lastLap, bestLap, throttle, rudder, position}]}. `--set bot.<key>` (one table, `game::BotKeys`,
-  also Developer Controls > Physics "Race bots" with a hint each): enabled, pace (0.7 = a bot one can beat),
-  lateralAccel, brakeAccel, lookAhead, lookAheadMin, steerGain, yawDamping, margin, startDelay, debug (the gates --
-  port red, starboard green -- and the bot's line, green where it runs flat out, red where it slows, its aim a yellow
-  mast). Game-side like `physics.*`: they survive `reset_settings`.
+- **Play.** A boat with `raceBot` lies with its engine off until a race puts it on the grid (the next section; until
+  2026-11-11 it set off three seconds after Play and ran lap after lap). Take its helm (E) and the bot stands down until
+  you leave; at ANY helm **B** hands the boat to the same bot and takes it back (`player.testAutopilot` for a script),
+  and the boat you hold has its own gates and lap clock whoever steers. The HUD's line under the play line: at a helm,
+  outside a race, where the start zone is and the lap's times; in one, the place, the lap, the gate, the misses and what
+  they cost. `get_readouts` block `race` (the next section), its `helm` and `bots [{vessel, state, lap, nextGate, passed,
+  missed, station, length, speed, target, slowest, tightestRadius, airborne, depthAhead, shoal, crossTrack, lapSeconds,
+  lastLap, bestLap, throttle, rudder, position}]`. `--set bot.<key>` (one table, `game::BotKeys`, also Developer
+  Controls > Physics "Race bots" with a hint each): enabled, pace (every bot's, on top of its level's), easyPace,
+  mediumPace, grip, braking, lookAhead,
+  lookAheadCircle, lookAheadMin, steerGain, yawDamping, slip, avoidBoats, margin, debug (the gates -- port red,
+  starboard green -- and the bot's line, green where it runs flat out, red where it slows, its aim a yellow mast).
+  Game-side like `physics.*`: they survive `reset_settings`.
 - **wind_test's course** (the group "Race Track", 42 buoys = 21 gates, 1.56 km through their middles; scratchpad-style
   `track_design.py` writes the gates from a list of centres, checks each post's depth against a polar map of the sea
   floor -- `depth_polar.py`, physics rays straight down -- and the radius through every three gates, and draws the map;
@@ -1401,7 +1407,7 @@ the island on wind_test"). `sources/app/game/RaceCourse.h` (what a level says), 
   police_boat and the yacht each brushed gate 5's inside buoy as they came onto the course, were thrown off it and
   missed the next gates; the yacht ended on the south beach. The buoys are `ocean_buoy`'s four colours at scale 2.5 (2.2 m tall), `"buoyant": true` at y -0.3: Static
   floaters, so they rock in the editor too and a boat that hits one stops dead against it (a kinematic body; not
-  violent). police_boat carries the bot.
+  violent). All four boats by the shore carry the bot.
 - **Measured** (2026-11-11, wind_test's 1 m sea, each boat 250 s from its mooring; scratchpad-style `bot_run.py` -- the race's readout
   every 0.25 s, the laps, the misses, the worst cross-track, the path drawn on the depth map -- and `bot_three.py`, the
   three boats in turn): police_boat by its own bot 52 gates in a row and none missed, a lap of 93.1 s (1.53 km of line:
@@ -1424,9 +1430,187 @@ the island on wind_test"). `sources/app/game/RaceCourse.h` (what a level says), 
   16-17 m/s: no assert (Jolt's live in Debug), no Error; a Release `--play` (no editor: the course off the level's
   file) logs `race: 21 gates, 1 boat(s) with a bot` and `a bot at the helm of 'police_boat'`. No shader, pass or GPU
   resource changed: no GBV run.
-- Not there: other boats but for what the lead line meets dead ahead (two bots on one line would run into each
-  other), the sea (flat out over every wave), a start signal, a finish. A boat that does get aground stays aground:
-  the bot backs for 4 s and tries again, for ever.
+- What these measurements were (2026-11-10 / 11): ONE boat at a time, on the bot as it stood then -- every boat's
+  numbers and the bot's law have moved since (the section after next: the heavy police_boat, the slide's angle).
+- Not there: the sea (flat out over every wave). A boat aground backs for 4 s and tries again; in a race the race's
+  limits put it back on the course (the next section), outside one it stays there.
+
+## The Race -- a Start Zone, a Grid, Three Laps, the Results
+
+2026-11-11 (owner: "the start zone is lit somehow -- a translucent plane; drive into it and you and three bots are put on
+the grid, a start timer runs and off we go; three laps; after the finish a window with the statistics"). `game::Race`
+(`sources/app/game/Race.*`, the Scene's: `Scene::RaceRef`), ticked by `PlaySession` before the helm reads its keys.
+
+- **Free -> Countdown -> Racing -> Finished.** Free: the boats lie where they are (a bot's engine is off until a race),
+  and the zone before gate 1 is lit -- `game::StartOf(track)`: 48 m long, the gate's width less 4 m, its middle 32 m
+  before the line; a translucent green sheet on the water with a fence round it and four white marks, the grid
+  (`Race::DebugDraw`, DebugDraw's blended boxes; the editor's selection overlay draws its outline too). A boat with
+  somebody at its helm that drives into it -- having been outside it since the last race -- starts one:
+  `physics::World::PlaceVessel` (a Join, the pose, no speed) puts it on slot 0 (front row, port) and up to three boats
+  that carry `raceBot` on the others, the fastest first (rows 16 m and 40 m before the line, 0.55 of the half width to
+  either side); two boats of one asset are "small_yacht" and "small_yacht 2". Countdown: `race.countdown` (3 s), the
+  player's helm answers nothing (`HoldsHelm`), the frame says 3, 2, 1, GO! (`Race::BigText`, AppController, 160 px).
+  Racing: `race.laps` (3) -- gate 1 crossed once to start the first lap and that many times more. It is the player's
+  race: it ends when they finish (the bots alone: when all have). Finished: the results' window (ImGui: place, boat, time,
+  gap, each lap, best lap, missed gates and what they cost; Enter or Close) -- closing it frees everybody, and the zone
+  waits again once the player's boat has left it. wind_test: four boats carry `raceBot` (the fourth a second
+  `small_yacht` at [36.5, -0.38, 124.9]; owner: "no need to import a fourth one, boats may repeat").
+- **A bot has one of three levels** (owner: "give the bots three levels of difficulty", "and when you spawn them write
+  over each one's head which it has"). A level is a share of the pace the bot can run its boat at: `bot.easyPace` 0.8,
+  `bot.mediumPace` 0.9, hard all of it (`RaceBot::SetDifficulty`; the player's own autopilot is hard). `race.difficulty`
+  says what the next race's bots get: 1 / 2 / 3 = all easy / medium / hard, 0 (the default) = one of each, which boat has
+  which turned by one every race. On the grid and for the race's first 8 s every boat wears who it is (`Race::DrawLabels`,
+  ImGui's foreground list, from AppController beside the results): EASY green, MEDIUM yellow, HARD red, YOU white, the
+  boat's name under it; the results name each bot's level, and `get_readouts` race `standing[].difficulty`. Measured
+  (the four bots, two laps, the second lap): a yacht easy 117.1 s, medium 106.3, hard 99.7-100.9; fast_boat_13 medium
+  102.6, hard 98.7 (its pace on the open leg is the sea's more than its level's); nobody missed a gate at any level.
+- **A missed gate costs by how far from its middle** (owner: "the penalty for a missed gate must scale with the distance
+  to the gate's centre"): `race.missPenalty` (3 s) is a gate missed just outside its mark; the distance from the gate's
+  middle where the boat crossed its line, in half widths of the gate, multiplies it -- `RaceBot::Status::missedWidths`,
+  1 at a mark, `kMissWidthsMost` (5) at the most: 24 m from the middle of a 24 m gate costs 6 s, a turn cut by a mile
+  15 s a gate. "MISSED +3.9 s" on the frame for two seconds, the sum in the HUD's line and in the results.
+- **Its own limits** (owner, on a race of the bots alone whose clock stood at 2018 s -- police_boat had left the course
+  on lap 3 and sat on the island's beach, backing and trying again for ever: "check the bot was not carried off, why so
+  long", "make internal thresholds"). (1) A boat a BOT steers (a bot's, or the player's on autopilot) that has been
+  further than `race.resetOff` (60 m) from its line, or held -- under 1 m/s, or going astern off something -- for
+  `race.resetSeconds` (8; 0 = never) is put back on its line 40 m before its next gate, at rest, and that costs
+  `race.resetPenalty` (10 s): `Race::WatchRacers`, the results say "put back x1 (+10 s)". The player at their own helm
+  is never moved. (2) Once the first boat has finished the race runs `race.finishWindow` (60 s) more: who is still out
+  then did not finish, the player too. (3) A boat that has finished is ticked no more -- engine off, it went on counting
+  gates as it drifted (-443 m off gate 5's middle, in the log). Checked by pinching the thresholds
+  (`race.resetOff:15;race.resetSeconds:1.5`): a yacht 17 m off at gate 3 was put back, ran on and finished, +10 s.
+- **Scripts**: `--set` / MCP `race.<key>` (one table, `game::RaceKeys`, also Developer Controls > Physics), `race.start:1`
+  (a race now: with the player if they hold a helm, the bots alone if not), `race.close:1` (the results away).
+  `get_readouts` `race` {phase, countdown, clock, results, armed, autopilot, atHelm, zone {center, heading, halfLength,
+  halfWidth}, helm, bots [...], standing [{place, vessel, player, finished, finish, time, missed, penalty, resets,
+  progress, laps}]}.
+- **What it costs** (2026-11-11, real time, a race of four bots against the same race with `bot.enabled:0`, alternated
+  twice; scratchpad-style `bots_cpu.py`; profiler rows `Race::Tick` and, inside it, `Race::Sound`): `Race::Tick` 28 us a
+  frame with the bots steering, 26 us without (the gates, the places and the thresholds are most of it: some 6 us a
+  boat); a sounding 23 us (three rays), 16 a second for four bots -- 1 us a frame; the physics step 0.066-0.076 ms
+  against 0.059-0.061 (four boats under way); 310-319 fps either way; `stepWaits` +0 a second.
+- **Checked**: `intent_regression TestRaceCourseAndBot` (the zone before gate 1 and its four slots inside it; a gate
+  crossed between its marks is no miss, 1.3 half widths off costs x1.3, 2.6 x2.6); the three configurations build;
+  `check_logging`, `check_render_knobs`, `check_gpu_alloc`: 0; a Debug `--play --set=race.laps:1;frame.timeScale:2;
+  race.start:1` on a desktop of its own: the bots' race run to its results, no assert, no Error; the whole road as a
+  player through MCP (scratchpad-style `race_run.py`: the helm, the zone, the grid, the countdown, three laps on
+  autopilot, the results' window photographed, closed, the zone armed again). No shader, pass or GPU resource changed.
+- Not there: a start signal's sound, positions shown during the race other than the HUD's line, a reset key for the
+  player's own hands, more than four on the grid, a restart from the results.
+
+## What a Boat Does -- Its Card, the Three Roles, a Bot That Knows Its Boat
+
+2026-11-11 (owner: "which characteristics of a boat affect its handling? try to balance the boats -- one heavier but more
+powerful, another turns better -- and when you walk up to a boat in Play a table of its characteristics is drawn over
+it", then "teach the bot to take the characteristics into account so it drives any boat well"). `game::StatsOf`
+(`sources/app/game/VesselStats.*`): one model, out of the vessel's own numbers, for the card and for the bot.
+
+- **What moves the handling** (mesh.json "vessel"): `thrust` against `surgeDrag` is the top speed (thrust = 0.77
+  surgeDrag v^2: a planing hull is 0.77 in the water); `mass`, `throttleRate` and the hump (`humpDrag`, `humpSpeed`,
+  `planeSpeed`) how fast it gets there; `rudderForce` x (speed + `wash` sqrt(throttle))^2 x sin(`rudderDeg`) is the
+  rudder's push -- with `yawDrag` / `yawLinear` and the keel (`swayDrag`, `swayLinear`, `swayLever`: the water's push on
+  the sliding hull's side, m v w + the rudder's, opposes the turn) its circle; `rudderRate` how fast the helm answers;
+  `mass` against `swayDrag` how far it slides in a bend; `rollStiffness`, `bank`, `maxBank` its lean; `reserveLift`,
+  the dampings and `slam` how it takes a sea; the propeller's depth (`propeller` y) whether it keeps its bite -- and
+  every force of the hull is times its share in the water, so a hull in the air has no keel and no rudder.
+- **The model**: top speed; 0 to 20 kn by integrating the engine's spool and the hump; the tightest steady turn by
+  three balances settled together -- the yaw's (`SteadyTurnRate`), the side's (the slide at which the hull's drag is
+  m v w + the rudder's force) and the way's (the slide takes m s w off the thrust, so the boat slows by itself) --
+  giving the circle, the speed kept in it and the m/s2 across; `SlipAngle` (the angle between bow and way in a bend of
+  a curvature at a speed). `physics::VesselHull::rudderLever` (the propeller aft of the centre of mass) is the
+  engine's. Against the boats themselves (scratchpad-style `boat_measure.py`, `turn_circle.py`): to 20 kn 4.3 s
+  measured / 4.1 the card (small_yacht), 3.3 / 3.2 (fast_boat_13); the circle's radius 53.7 / 56.0 m, 30.4 / 30.1;
+  the heavy boat's 67.0 / 73.2 with its first numbers. `vessels[].stats` in `get_readouts`; scratchpad-style
+  `vessel_model.py` is the same model in Python, for trying numbers before they go into a mesh.json.
+- **The three roles** (written into the two mesh.json; small_yacht is as it was):
+
+  | | weight | thrust | top | 20 kn in | circle | draft | in a sea |
+  |---|---|---|---|---|---|---|---|
+  | small_yacht, the all-rounder | 5.5 t | 22 kN | 31 kn | 4.1 s | 112 m | 0.38 m | out of the water 17-21 % of the open leg |
+  | police_boat, heavy and powerful | 7.5 t | 25.5 kN | 32 kn | 5.6 s | 128 m | 0.71 m | 1-8 %: it ploughs through |
+  | fast_boat_13, light and agile | 1.9 t | 9 kN | 32 kn | 3.1 s | 61 m | 0.39 m | 17-21 %, and it is thrown about (below) |
+
+  police_boat: mass 6500 -> 7500, thrust 27000 -> 25500, rudderForce 135 -> 125, throttleRate 0.45 (it had the
+  default 1), humpDrag 7000 -> 10000, its trims, roll stiffness and slam scaled with the mass. fast_boat_13: surgeDrag
+  26 -> 42 (it was a 41 kn boat that left the water), rudderForce 40 -> 60, throttleRate 1.6, and its propeller 0.2 m
+  deeper (y 0.08 -> -0.12) -- it planed with half of it out
+  (`bite` 0.59: half its thrust and rudder; 0.87-0.92 now). A lap of wind_test's course by their bots (two races of the
+  four at their hardest, the second lap): police_boat 95.2 s, fast_boat_13 98.7, the yachts 99.7-100.9 -- within 6 %.
+  THE LIGHT BOAT'S MINUS IS THE SEA, AND IT IS A REAL ONE (owner: "how is the lightest boat balanced if it is fast and
+  agile?" -- on its card it beat the yacht in every row). Given 30 kn for that (surgeDrag 49: the slowest on a straight)
+  he raced it and lost to every bot: "give it its speed back, it really gets thrown about by the waves". 32.4 kn again.
+  Measured, a lap each alone (scratchpad-style `sea_roll.py` over `turn_trace.py`'s rows), the roll on the open leg:
+  fast_boat_13 sd 14.9 degrees, 50 at the most, past 15 degrees 32 % of the time (near the island 12.3 / 31 / 24 %);
+  small_yacht 8.9 / 34 / 6 %; police_boat 9.1 / 31 / 8 %. A hand at its helm pays for that; a bot does not, much.
+- **The card** (`PlaySession::DrawBoatCard`, ImGui, takes no mouse and no key): on foot in Play, over every boat within
+  16 m of its hull that is in the frame -- its name, length, weight and thrust, and four bars on one scale for every
+  boat, longer = better (top speed, acceleration "20 kn in 5.6 s", handling "a 128 m circle", sea keeping "7.5 t, 0.71 m
+  deep"), "E take the helm" on the one E would take. Sea keeping is half the DRAFT (`VesselStats::draft`, of 0.8 m) and
+  half the WEIGHT (of 8 t): a hull is out of the water -- no keel, no rudder -- when a wave has dropped away by about its
+  draft (the share of the open leg out of the water follows it: 0.71 m 1-11 %, 0.38 and 0.39 m 17-22 % each), and a wave
+  throws a light hull further (the roll above). By the draft alone the light boat's bar was the yacht's, which its helm
+  does not bear out; the weight's own bar is gone (heavier is not better; the weight stands in the card's first line). The first cut looked for the nearest boat alone -- the one behind the player's shoulder -- and drew
+  nothing; white text on a yellow bar could not be read (the value stands beside its bar).
+- **The bot counts on ITS boat** (`RaceBot::EnsureLine` takes `StatsOf` of the hull it holds): a bend's speed is
+  `bot.grip` (0.8) of what the boat makes across its way in its own tightest turn, braking `bot.braking` (0.35) of what
+  it loses with the engine off at its top speed, the rudder's order a share of the tightest it turns at this speed, the
+  join's speed its own turn's, the reach at least `bot.lookAheadCircle` (0.43) of its circle's radius.
+- **It knows how its boat slides** (`bot.slip` 1 = whole, 0 = before). The helm pointed the BOW at its aim, and a hull
+  in a turn goes bow inside its way, so the boat ran outside its line in every bend by its reach times that angle:
+  police_boat (11 degrees in the coast's 140 m bend at 22 kn) 7-9 m, at any speed -- onto the outer marks; a hit spun it
+  and the next gates went too. Now the bow is pointed inside the aim by `SlipAngle` of the bend between here and the aim
+  -- from the LINE's curvature, not from how the boat moves (that lags: steering by the velocity wove). police_boat
+  alone, two laps (scratchpad-style `turn_trace.py`, the mean distance off its line by leg): the slalom 6-9 m -> 2.0,
+  the far turn 10-78 m -> 1.6 (worst 3.6), the leg home 1.9.
+- **It brakes on the straight, not in the bend**: with the rudder asked for much (over 0.25 .. 0.6 of it) the engine is
+  not eased under what holds the line's speed, let alone put astern -- the rudder works by the propeller's wash, and
+  astern at 23 kn took four fifths of its push: police_boat, hard over, went on out of the far turn. And the reach grows
+  with the distance off the line only where the line runs straight (and while coming onto the course): in a bend a far
+  aim asks for LESS rudder than the bend does -- 30-50 m outside the far turn it held 0.4-0.6 of its rudder.
+- **Another boat is steered round only when the bow would reach its stern within two seconds** at the speed the two
+  close at (`bot.avoidBoats` 0 = not at all). It was "ahead within 2.5 s of MY speed and closing at 0.5 m/s": four
+  equal boats on one line threw their rudders over at sterns 40 m off all the way round.
+- **What did NOT work, and the owner's word on it.** With the heavy boat missing gates in the far turn every lap the
+  slalom was mirrored and the turn widened from 110 to 150 m: fewer misses, not none -- "why are you making it easy for
+  the bots? can't they be taught to brake and do some cleverer analysis?" Both went back: the course is the committed
+  one. Slowing does not cure a boat that slides off its line: at 0.8 of the pace the same gates were missed, and the
+  hull is out of the water 20 % of the open leg at 24 kn as at 31 (11 % at 17 kn; police_boat 1-8 % at any) -- the
+  water's forces go as the speed squared, so the path through a change of turn is the same at any speed, a length of
+  the boat's own. What was wrong was the aim, not the speed.
+- **Measured** (2026-11-11, wind_test's 1 m sea, the committed course, `frame.timeScale` 4; scratchpad-style
+  `race_watch.py` -- every miss with its gate and what the boat was doing, each bot's worst distance off its line, its
+  share of the time out of the water near the island and on the open leg, the paths on the map): a race of the player's
+  police_boat on autopilot against three bots, three laps: no gate missed by any of the four, laps 103.1 / 96.5 / 95.1,
+  the yacht 105.7 / 97.7, fast_boat_13 106.9 / 98.6. Races of the four bots alone: police_boat 95.3 a lap and none
+  missed; fast_boat_13 100-103, none; the yachts 100-102. Before the slide's angle: 4-13 gates a race, police_boat
+  30-78 m outside the far turn every lap. What is left: in three races of four ONE boat of the first lap's pack lost
+  1-4 gates at the far turn's entry (a yacht each time: gate 13, 26 kn -> 13 in a second -- it met a boat or a buoy and
+  was spun), and once police_boat left the course on lap 3 and beached (the limits put it back now).
+- Not there: a lane of its own for each boat (they all want one line: the pack rubs on lap 1), the sea in the bot's
+  speed (it cannot buy grip with it; it could pick a line that needs less), a leg of the course tight enough to pay
+  for the light boat's circle, a bot that suffers from its boat's roll as a hand does.
+
+## The World's Clock Runs Faster -- frame.timeScale
+
+2026-11-11 (owner, on six-minute test races: "can you speed the whole simulation of the world and the bots up?").
+`--set` / MCP `frame.timeScale:<x>` (0.1-16, 1 = real time; App.cpp `g_timeScale`): the frame's dt is multiplied, and
+everything of the world goes by that dt -- the ocean's and the wind's clock, the physics' steps, the boats' water, the
+bots, the race's clock, the time of day -- so a three-lap race of five minutes takes 80 s at 4. Capped at 0.1 s as a
+frame's dt always is: a frame too slow for the scale slows the world, it does not jump it. The one reader of the wall
+clock in the world was the cap on the copies of the water's heights (`OceanReadback`, 30 a second): it follows
+(`OceanReadback::SetTimeScale`), or a boat at x8 would get 4 heights a second of ITS time.
+
+- **What a scaled run is**: the game at (frame rate / scale) frames a second. At 240-300 fps and 4 the physics steps
+  once a frame and the heights land 30 times a second of the world, as at 60-75 fps; past frame rate / 15 the physics
+  drops steps (`physics.maxSteps` 4 a frame at 60 Hz). 4 is what the measurements here used.
+- **The same answers**: the four bots' race at 1 and at 4 -- fast_boat_13's laps 109.5 / 102.0 / 103.6 against 108.7 /
+  103.3 / 102.9, the yacht's 108.6 / 101.9 / 103.4 against 112.9 / 102.7 / 103.2, police_boat's 95.3 against 96.1, the
+  misses at the same gates.
+- **It is sticky and nothing resets it** (a `frame.*` switch: `reset_settings` leaves it): a script sets it back to 1
+  in the call that ends its run. The HUD's `Time:` line says `WORLD x4 (frame.timeScale)` while it is not 1, and
+  `get_readouts` carries `timeScale`. A script that times with its own clock (a sleep, `time.time()`) is wrong by the
+  scale: read the race's clock, a lap's seconds, the readouts' own times. A `screenshot` stalls the frame as it does at
+  1 -- the world goes on by at most 0.1 s a frame.
 
 ## VSM Is UE's High -- the Clipmap, the Pool, the Marks
 

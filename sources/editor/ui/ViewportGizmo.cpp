@@ -1014,6 +1014,23 @@ void ViewportGizmo::Update(EditorContext& ctx,
                     dd->AddLine(centre, Math::float3(next.center.x, y, next.center.y), Math::float4(1.0f, 0.9f, 0.3f, 0.85f));
                     if (i == 0) { dd->AddLine(centre, Math::float3(centre.x, y + 8.0f, centre.z), Math::float4(1.0f, 0.9f, 0.3f, 1.0f)); }
                 }
+                // Where a race starts: the zone a boat drives into before gate 1, and the grid's four places in it.
+                const game::RaceStart start = game::StartOf(track);
+                const auto corner = [&](float along, float across) {
+                    const Math::float2 p = start.center + start.along * along + start.starboard * across;
+                    return Math::float3(p.x, y, p.y);
+                };
+                const Math::float4 zone(0.15f, 1.0f, 0.45f, 1.0f);
+                dd->AddLine(corner(start.halfLength, -start.halfWidth), corner(start.halfLength, start.halfWidth), zone);
+                dd->AddLine(corner(start.halfLength, start.halfWidth), corner(-start.halfLength, start.halfWidth), zone);
+                dd->AddLine(corner(-start.halfLength, start.halfWidth), corner(-start.halfLength, -start.halfWidth), zone);
+                dd->AddLine(corner(-start.halfLength, -start.halfWidth), corner(start.halfLength, -start.halfWidth), zone);
+                for (const Math::float2& slot : start.slots)
+                {
+                    const Math::float2 bow = slot + start.along * 5.0f;
+                    const Math::float2 stern = slot - start.along * 5.0f;
+                    dd->AddLine(Math::float3(bow.x, y, bow.y), Math::float3(stern.x, y, stern.y), Math::float4(1.0f, 1.0f, 1.0f, 1.0f));
+                }
             }
         }
     }

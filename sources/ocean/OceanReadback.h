@@ -40,6 +40,10 @@ struct RenderGraphPassContext;
 class OceanReadback
 {
 public:
+    // The world's clock runs this many times faster (frame.timeScale): the cap on the copies -- 30 a second of the
+    // world -- is that many times shorter by the wall clock.
+    static void SetTimeScale(float scale);
+
     // Everything the displacement depends on besides the texels, as it stood the frame the copy
     // was taken (the OceanCB fields of the same names).
     struct SurfaceParams

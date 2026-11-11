@@ -307,6 +307,7 @@ namespace physics
             JPH::Vec3 bowLocal = JPH::Vec3::sZero();
             // A pilot other than the helm (World::SetPilot): pilotInput is the game's, stepPilotInput taken for the steps
             // where they start, as the helm's.
+            float rudderLever = 0.0f; // m the propeller lies aft of the centre of mass, along the hull
             bool piloted = false;
             VesselInput pilotInput;
             VesselInput stepPilotInput;
@@ -872,6 +873,8 @@ namespace physics
                     entry.halfBeam = std::fabs(along.GetZ()) * half.GetX() + std::fabs(along.GetX()) * half.GetZ();
                     const JPH::Vec3 middle = scaled->GetLocalBounds().GetCenter();
                     entry.bowLocal = JPH::Vec3(middle.GetX(), vesselSettings->draft * entry.scale.y, middle.GetZ()) + JPH::Vec3(along.GetX(), 0.0f, along.GetZ()) * entry.halfLength;
+                    const JPH::Vec3 propeller(vesselSettings->propeller.x * entry.scale.x, vesselSettings->propeller.y * entry.scale.y, vesselSettings->propeller.z * entry.scale.z);
+                    entry.rudderLever = (scaled->GetCenterOfMass() - propeller).Dot(along);
                     entry.anchored = false;
                     entry.shownPosition = pose.position;
                     entry.shownForward = pose.rotation * along;
@@ -1702,6 +1705,35 @@ namespace physics
         return false;
     }
 
+    bool World::PlaceVessel(RenderableObject* vessel, const Math::float3& position, float heading)
+    {
+        Impl& m = *impl_;
+        m.Join(); // the step owns the bodies and the entries' poses
+        if (!m.system) { return false; }
+        for (Impl::Entry* entry : m.vessels)
+        {
+            if (entry->object != vessel) { continue; }
+            // About the vertical, by what takes the hull's own bow (its settings' forward) to the heading: a turn of t
+            // takes +z to (sin t, 0, cos t).
+            const JPH::Vec3 bow = ToJolt(entry->vessel->forward).Normalized();
+            const JPH::Quat rotation = JPH::Quat::sRotation(JPH::Vec3::sAxisY(), heading - std::atan2(bow.GetX(), bow.GetZ()));
+            const JPH::Vec3 at(position.x, position.y, position.z);
+            JPH::BodyInterface& bodies = m.system->GetBodyInterface();
+            bodies.SetPositionAndRotation(entry->body, JPH::RVec3(at), rotation, JPH::EActivation::Activate);
+            bodies.SetLinearAndAngularVelocity(entry->body, JPH::Vec3::sZero(), JPH::Vec3::sZero());
+            entry->previous.position = at;
+            entry->previous.rotation = rotation;
+            entry->current = entry->previous;
+            entry->vesselState = VesselState{};
+            entry->water = VesselWater{}; // measured afresh where it is now: the rates it followed were another place's
+            entry->anchored = false;
+            entry->fellOut = false;
+            m.ShowVessels(1.0f);
+            return true;
+        }
+        return false;
+    }
+
     bool World::ToggleAnchor(RenderableObject* vessel)
     {
         Impl& m = *impl_;
@@ -1755,6 +1787,7 @@ namespace physics
             hull.piloted = entry->piloted;
             hull.halfLength = entry->halfLength;
             hull.halfBeam = entry->halfBeam;
+            hull.rudderLever = entry->rudderLever;
             hull.throttle = entry->shownThrottle;
             hull.rudder = entry->shownRudder;
             out.push_back(hull);

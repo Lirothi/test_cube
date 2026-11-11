@@ -72,6 +72,7 @@ private:
     bool editorOpenBeforePlay_ = false;
     std::wstring hudPlayLine_; // written in Tick, before the build is scheduled
     std::wstring hudRaceLine_;
+    std::wstring hudBigText_; // the race's countdown, in the middle of the screen
     DeveloperWindow developerWindow_;
 #if WITH_EDITOR
     EditorController editorController_;

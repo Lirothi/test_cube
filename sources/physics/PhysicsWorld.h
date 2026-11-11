@@ -119,6 +119,7 @@ namespace physics
         bool piloted = false;     // a pilot other than the helm orders it (World::SetPilot)
         float halfLength = 0.0f;  // of the hull's box along its way, m
         float halfBeam = 0.0f;
+        float rudderLever = 0.0f; // m the propeller -- where the rudder pushes -- lies aft of the centre of mass
         float throttle = 0.0f;    // where its engine and rudder have got to (VesselState)
         float rudder = 0.0f;
     };
@@ -242,6 +243,10 @@ namespace physics
         // A pilot other than the helm (game::RaceBot): what it orders this boat, held until told again; null = nobody, the
         // engine off. The helm, while it is this boat's, wins. Stop takes every pilot off. False = no such boat.
         bool SetPilot(RenderableObject* vessel, const VesselInput* input);
+        // Puts a boat somewhere, at rest: its mesh's origin at `position`, its bow heading `heading` (radians from +z toward
+        // +x), level; its anchor weighed, its engine and rudder at nothing. A race's starting grid. The session's alone,
+        // as every pose is: Stop puts it back where the level has it. False = no such boat, or no world.
+        bool PlaceVessel(RenderableObject* vessel, const Math::float3& position, float heading);
         // Drops the boat's anchor under its bow, or weighs it: what it is after (true = down). The world's, not the level's:
         // Stop weighs every anchor with the rest of the session.
         bool ToggleAnchor(RenderableObject* vessel);

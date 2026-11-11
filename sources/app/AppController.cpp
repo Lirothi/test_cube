@@ -252,15 +252,23 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #else
     TickPlay(input, renderer, scene, levelManager, false);
 #endif
+    // A race's results (game::Race): a window of this frame's, the mouse and Enter its own while it is up.
+    if (playSession_.Playing())
+    {
+        scene.RaceRef().DrawResults();
+        scene.RaceRef().DrawLabels(scene.CameraRef()); // on the grid: who is who, a bot's level over its boat
+        playSession_.DrawBoatCard(scene); // on foot beside a boat: what it does
+    }
+    const bool raceResults = playSession_.Playing() && scene.RaceRef().ResultsOpen();
 
     // No window of ours on screen, and ImGui still holds the keyboard: a panel that closed leaves its focus behind (F2, Play), and App::WndProc gives every letter to whoever holds it.
     // A held right button clears it for the free camera (ImGuiLayer), which is why it went unseen; Play has no right button to hold, and WASD never reached the player.
     {
         ImGuiIO& io = ImGui::GetIO();
 #if WITH_EDITOR
-        const bool panelsOpen = editorController_.IsOpen() || developerWindow_.AnyWindowOpen();
+        const bool panelsOpen = editorController_.IsOpen() || developerWindow_.AnyWindowOpen() || raceResults;
 #else
-        const bool panelsOpen = developerWindow_.AnyWindowOpen();
+        const bool panelsOpen = developerWindow_.AnyWindowOpen() || raceResults;
 #endif
         if (!panelsOpen && io.WantCaptureKeyboard)
         {
@@ -272,7 +280,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // Camera input runs here (before Scene::Tick) so Scene itself never touches input.
     if (playSession_.Playing())
     {
-        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen(), uiCapturingMouse);
+        playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen() || raceResults, uiCapturingMouse);
         if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { scene.RaceRef().DebugDraw(*draw); } // bot.debug
     }
     else
@@ -371,6 +379,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
 #endif
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
     hudRaceLine_ = playSession_.RaceHudLine(scene);
+    hudBigText_ = playSession_.Playing() ? scene.RaceRef().BigText() : std::wstring{};
 }
 
 void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input)
@@ -436,7 +445,11 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     if (hudTimeOfDayHours_ >= 0.0f)
     {
         const int minutes = static_cast<int>(hudTimeOfDayHours_ * 60.0f) % (24 * 60);
-        line(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), L"Time: %02d:%02d", minutes / 60, minutes % 60);
+        if (g_timeScale != 1.0f)
+        {
+            line(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), L"Time: %02d:%02d   WORLD x%.3g (frame.timeScale)", minutes / 60, minutes % 60, g_timeScale);
+        }
+        else { line(8, 8 + 32 + 18, 16.0f, float4(1, 1, 1, 0.9f), L"Time: %02d:%02d", minutes / 60, minutes % 60); }
     }
     if (!hudPlayLine_.empty())
     {
@@ -445,6 +458,13 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     if (!hudRaceLine_.empty())
     {
         line(8, 8 + 32 + 18 + 18 + 18, 16.0f, float4(1.0f, 0.9f, 0.5f, 1), L"%ls", hudRaceLine_.c_str());
+    }
+    if (!hudBigText_.empty())
+    {
+        // The race's countdown: in the middle, a third of the way down (a glyph is some 0.55 of its height wide).
+        const float px = 160.0f;
+        const int x = static_cast<int>(renderer.GetWidth() * 0.5f - 0.28f * px * static_cast<float>(hudBigText_.size()));
+        line(x, static_cast<int>(renderer.GetHeight() * 0.25f), px, float4(1.0f, 0.85f, 0.2f, 1), L"%ls", hudBigText_.c_str());
     }
 
     //tb->AddTextfShadow(8, 8 + 32 + 32, 32.0f, float4(1, 1, 1, 0.99f), true, L"A quick brown fox 1234567890 ABCDEEFG");

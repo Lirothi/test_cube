@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <string>
@@ -36,6 +37,25 @@ namespace game
     private:
         std::vector<RaceGate> gates_;
     };
+
+    // Where a race starts: the grid before gate 1. A box on the water that a boat drives into to start a race (it is
+    // lit while it waits), and in it four places, two abreast, bows to the line.
+    struct RaceStart
+    {
+        Math::float2 center;
+        Math::float2 along;     // unit, toward gate 1
+        Math::float2 starboard; // unit
+        float halfLength = 0.0f;
+        float halfWidth = 0.0f;
+        Math::float2 slots[4];  // front port, front starboard, back port, back starboard
+        bool Holds(const Math::float2& point) const
+        {
+            const Math::float2 off = point - center;
+            return std::fabs(off.Dot(along)) <= halfLength && std::fabs(off.Dot(starboard)) <= halfWidth;
+        }
+    };
+    // Of a valid track.
+    RaceStart StartOf(const RaceTrack& track);
 
     // The line one boat runs: through every gate no nearer than `margin` to a mark, as straight as the gates let it be
     // (the offsets inside the gates minimise the bending of the polygon through them), a closed C2 cubic spline through

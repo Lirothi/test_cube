@@ -62,6 +62,8 @@ extern const Profiler::ScopeNameKey kSceneTickObjects;
 extern const Profiler::ScopeNameKey kSceneTickPostObjects;
 extern const Profiler::ScopeNameKey kSceneTickBuoyancy;
 extern const Profiler::ScopeNameKey kSceneTickPhysics;
+extern const Profiler::ScopeNameKey kRaceTick;
+extern const Profiler::ScopeNameKey kRaceSound;
 extern const Profiler::ScopeNameKey kPhysicsStep;
 extern const Profiler::ScopeNameKey kPhysicsSyncPoses;
 extern const Profiler::ScopeNameKey kPhysicsWaitStep;

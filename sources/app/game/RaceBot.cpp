@@ -6,7 +6,6 @@
 #include <cwchar>
 
 #include "core/logging/Log.h"
-#include "rendering/debug/DebugDraw.h"
 #include "rendering/renderables/RenderableObject.h"
 
 namespace game
@@ -26,53 +25,15 @@ namespace game
             return a;
         }
 
-        const char* StateName(RaceBot::State state)
-        {
-            switch (state)
-            {
-            case RaceBot::State::Waiting: return "waiting";
-            case RaceBot::State::Racing: return "racing";
-            case RaceBot::State::Reversing: return "reversing";
-            default: return "idle";
-            }
-        }
+    }
 
-        // "models/police_boat/police_boat.mesh.json" -> "police_boat"
-        std::string VesselName(const RenderableObject* object)
+    const char* RaceBotStateName(unsigned char state)
+    {
+        switch (static_cast<RaceBot::State>(state))
         {
-            if (!object) { return {}; }
-            std::string name = object->GetGeometryPath();
-            const std::size_t slash = name.find_last_of("/\\");
-            if (slash != std::string::npos) { name = name.substr(slash + 1); }
-            const std::size_t dot = name.find('.');
-            if (dot != std::string::npos) { name = name.substr(0, dot); }
-            return name;
-        }
-
-        // The rate (rad/s) a boat turns at in a steady turn, full ahead and hard over, at a speed -- from its own numbers
-        // (PhysicsVessel). The rudder pushes the stern out with F = rudderForce x (speed + wash)^2 x sin(rudderDeg), some
-        // 0.65 of the half length aft of the centre of mass. The hull then slides, and the water's push on its side is
-        // what turns its path: m v w + F, acting swayLever aft -- against the turn. With the yaw drag:
-        //     yawDrag w^2 + (yawLinear + m v swayLever) w = F (lever - swayLever).
-        // Measured (2026-11-10, hard over at full throttle): small_yacht 13.1 deg/s at 12.8 m/s (this gives 12.8),
-        // police_boat 14.7 at 14.0, fast_boat_13 14.8 at 14.1 -- a circle of 55 m for all three. Without the keel's term
-        // it said 26-32 m. The circle hardly depends on the speed: a boat's turn is its own.
-        float SteadyTurnRate(const physics::VesselSettings& boat, float halfLength, float speed)
-        {
-            const float v = std::max(speed, 0.5f);
-            const float flow = v + boat.wash;
-            const float push = boat.rudderForce * flow * flow * std::sin(boat.rudderDeg * 0.0174532925f);
-            const float lever = std::max(0.65f * halfLength - boat.swayLever, 0.2f);
-            const float linear = boat.yawLinear + boat.mass * v * boat.swayLever;
-            const float quadratic = std::max(boat.yawDrag, 1.0f);
-            return (-linear + std::sqrt(linear * linear + 4.0f * quadratic * push * lever)) / (2.0f * quadratic);
-        }
-
-        void FormatLap(float seconds, wchar_t* out, std::size_t size)
-        {
-            if (!(seconds > 0.0f)) { std::swprintf(out, size, L"-:--.-"); return; }
-            const int minutes = static_cast<int>(seconds / 60.0f);
-            std::swprintf(out, size, L"%d:%04.1f", minutes, seconds - 60.0f * static_cast<float>(minutes));
+        case RaceBot::State::Racing: return "racing";
+        case RaceBot::State::Reversing: return "reversing";
+        default: return "idle";
         }
     }
 
@@ -86,16 +47,20 @@ namespace game
     {
         using S = BotSettings;
         static const std::vector<BotKey> keys = {
-            { "enabled", "Bots drive", "Off: a boat that carries a bot floats with its engine off.", &S::enabled, 1.0f, 0.0f, 1.0f, "%.0f" },
+            { "enabled", "Bots drive", "Off: a boat that carries a bot floats with its engine off, in a race too.", &S::enabled, 1.0f, 0.0f, 1.0f, "%.0f" },
             { "pace", "Pace", "The share of its own best speed the bot runs at. 1 = as fast as it can, 0.7 = a bot one can beat.", &S::pace, 0.005f, 0.2f, 1.2f, "%.2f" },
-            { "lateralAccel", "Turn grip (m/s2)", "How fast it takes a bend: its speed there is sqrt(this x the bend's radius). Higher = faster, until the boat runs wide of the gates: flat out and hard over the boats make 2.9-3.6.", &S::lateralAccel, 0.01f, 0.5f, 8.0f, "%.2f" },
-            { "brakeAccel", "Braking (m/s2)", "How late it slows down for a turn: higher = later. Too high and it arrives too fast.", &S::brakeAccel, 0.01f, 0.2f, 6.0f, "%.2f" },
+            { "easyPace", "Easy bot's pace", "The share of the line's speed an EASY bot runs at (a race gives each bot a level: race.difficulty).", &S::easyPace, 0.005f, 0.3f, 1.0f, "%.2f" },
+            { "mediumPace", "Medium bot's pace", "The same for a MEDIUM bot. A hard one runs all of it.", &S::mediumPace, 0.005f, 0.3f, 1.0f, "%.2f" },
+            { "grip", "Turn share", "How much of its boat's own tightest turn (the boat's card: its circle) a bend may ask. Higher = faster through the bends, until the boat runs wide of the gates; a boat that turns better takes them faster by itself.", &S::grip, 0.005f, 0.3f, 1.3f, "%.2f" },
+            { "braking", "Braking share", "How late it slows down for a bend, as a share of what its boat loses with the engine off at its top speed: higher = later. Too high and it arrives too fast.", &S::braking, 0.005f, 0.05f, 1.0f, "%.2f" },
             { "lookAhead", "Look ahead (s)", "How far along the line the helm aims, in seconds of its speed. Short = hugs the line and weaves, long = cuts the corners.", &S::lookAhead, 0.005f, 0.3f, 4.0f, "%.2f" },
-            { "lookAheadMin", "Look ahead, least (m)", "The same at low speed.", &S::lookAheadMin, 0.05f, 3.0f, 60.0f, "%.1f" },
+            { "lookAheadCircle", "Look ahead, least (of its circle)", "At least this share of the radius of the boat's own tightest circle: a boat makes the same path through a change of turn at any speed, a length of its own, so one that turns wider starts its turn earlier. Lower = hugs the line and weaves, higher = cuts the corners.", &S::lookAheadCircle, 0.005f, 0.1f, 1.5f, "%.2f" },
+            { "lookAheadMin", "Look ahead, least (m)", "And never nearer than this, whatever the boat.", &S::lookAheadMin, 0.05f, 3.0f, 60.0f, "%.1f" },
             { "steerGain", "Steering", "How eagerly the rudder goes over for the turn to the aim: 1 = just what the turn needs. Higher = sharper, until it weaves.", &S::steerGain, 0.01f, 0.2f, 8.0f, "%.2f" },
             { "yawDamping", "Steering damping", "Rudder taken back per rad/s the boat already turns. Higher = calmer, slower into a turn.", &S::yawDamping, 0.005f, 0.0f, 3.0f, "%.2f" },
+            { "slip", "Slide allowance", "A hull in a turn slides, bow inside its way. 1 = the bow is pointed inside the aim by the angle its boat's own numbers give for the bend, so its WAY goes to the aim; 0 = the bow at the aim itself: the boat runs outside its line in every bend, a heavy one by metres.", &S::slip, 0.01f, 0.0f, 2.0f, "%.2f" },
+            { "avoidBoats", "Steer round boats", "A boat ahead that the bow would reach within two seconds is steered round, on the side it does not lie on. Off: the bots hold their line whoever is on it.", &S::avoidBoats, 1.0f, 0.0f, 1.0f, "%.0f" },
             { "margin", "Room at a mark (m)", "How far from a buoy the hull's side stays where the line crosses a gate.", &S::margin, 0.02f, 0.0f, 12.0f, "%.1f" },
-            { "startDelay", "Start delay (s)", "After Play, before the engine starts.", &S::startDelay, 0.05f, 0.0f, 60.0f, "%.1f" },
             { "debug", "Draw the course", "The gates (port red, starboard green) and the bot's line: green where it runs flat out, red where it slows.", &S::debug, 1.0f, 0.0f, 1.0f, "%.0f" },
         };
         return keys;
@@ -110,6 +75,16 @@ namespace game
         return nullptr;
     }
 
+    const char* BotDifficultyName(BotDifficulty difficulty)
+    {
+        switch (difficulty)
+        {
+        case BotDifficulty::Easy: return "easy";
+        case BotDifficulty::Medium: return "medium";
+        default: return "hard";
+        }
+    }
+
     void RaceBot::Reset()
     {
         line_.Clear();
@@ -117,6 +92,7 @@ namespace game
         lineMargin_ = -1.0f;
         lineKey_[0] = -1.0f;
         located_ = false;
+        onGrid_ = false;
         joined_ = false;
         joinSeconds_ = 0.0f;
         gateIndex_ = 0;
@@ -128,6 +104,27 @@ namespace game
         stuckSeconds_ = 0.0f;
         reverseSeconds_ = 0.0f;
         airborne_ = 0.0f;
+    }
+
+    void RaceBot::Start()
+    {
+        Reset();
+        onGrid_ = true;
+    }
+
+    void RaceBot::PutBack(float station)
+    {
+        status_.station = station;
+        status_.crossTrack = 0.0f;
+        located_ = true;
+        onGrid_ = false;
+        joined_ = true;
+        joinSeconds_ = 0.0f;
+        gateSideValid_ = false;
+        stuckSeconds_ = 0.0f;
+        reverseSeconds_ = 0.0f;
+        yawRate_ = 0.0f;
+        headingValid_ = false;
     }
 
     void RaceBot::SetSoundings(float ahead, float port, float starboard)
@@ -159,26 +156,32 @@ namespace game
             located_ = false;
             gateSideValid_ = false;
         }
-        // Flat out the thrust meets the hull's drag on the plane: thrust = 0.77 surgeDrag v^2 (PhysicsVessel: planingLift
-        // takes that share of the hull out of the water).
+        // ITS boat's numbers (game::StatsOf, from the vessel's own settings): the top speed, the circle it turns in and
+        // what that asks across its way, what it loses with the engine off. A boat that turns better takes a bend
+        // faster, a heavy one brakes earlier -- nothing here is tuned to one hull.
         const physics::VesselSettings& boat = *hull.settings;
-        topSpeed_ = std::sqrt(std::max(boat.thrust, 1.0f) / std::max(0.77f * boat.surgeDrag, 1.0f));
         halfLength_ = hull.halfLength;
-        const float key[3] = { settings.lateralAccel, settings.brakeAccel, topSpeed_ };
-        if (key[0] == lineKey_[0] && key[1] == lineKey_[1] && key[2] == lineKey_[2]) { return; }
-        for (int i = 0; i < 3; ++i) { lineKey_[i] = key[i]; }
+        rudderLever_ = hull.rudderLever;
+        stats_ = StatsOf(boat, halfLength_, rudderLever_);
+        topSpeed_ = stats_.topSpeed;
+        const float key[4] = { settings.grip, settings.braking, stats_.topSpeed, stats_.turnRadius };
+        if (key[0] == lineKey_[0] && key[1] == lineKey_[1] && key[2] == lineKey_[2] && key[3] == lineKey_[3]) { return; }
+        for (int i = 0; i < 4; ++i) { lineKey_[i] = key[i]; }
         const float top = topSpeed_;
-        // A bend is taken at the speed that asks lateralAccel across the boat's way. Never at a crawl: slower does not
-        // make a boat's circle tighter -- its turn is its own, 55 m for the three here, and with the throttle eased the
-        // rudder has less wash and it is 60-70 m (measured) -- it only gives the helm time to bring the bow round.
-        const float lateral = std::max(settings.lateralAccel, 0.1f);
-        line_.Profile([top, lateral](float curvature) { return std::clamp(std::sqrt(lateral / std::max(curvature, 1e-6f)), 0.5f * top, top); }, settings.brakeAccel);
-        status_.tightestRadius = top / std::max(SteadyTurnRate(boat, halfLength_, top), 1e-4f);
-        LOG_INFO(logging::LogCategory::App, "race: a line of {:.0f} m, the boat's top speed {:.1f} m/s, its tightest turn there {:.0f} m, the line's slowest place {:.1f} m/s",
-                 line_.Length(), top, status_.tightestRadius, line_.SlowestSpeed());
+        // A bend is taken at the speed that asks `grip` of what the boat's own tightest turn makes across its way. Never
+        // at a crawl: slower does not make a boat's circle tighter -- its turn is its own, and with the throttle eased
+        // the rudder has less wash (measured: 55 m flat out, 60-70 m at 0.45) -- it only gives the helm time.
+        const float lateral = std::max(settings.grip * stats_.lateralAccel, 0.3f);
+        line_.Profile([top, lateral](float curvature) { return std::clamp(std::sqrt(lateral / std::max(curvature, 1e-6f)), 0.5f * top, top); },
+                      std::max(settings.braking * stats_.braking, 0.2f));
+        status_.tightestRadius = stats_.turnRadius;
+        LOG_INFO(logging::LogCategory::App,
+                 "race: a line of {:.0f} m for a boat of {:.1f} m/s flat out, {:.1f} s to 20 kn, a circle of {:.0f} m at {:.1f} m/s ({:.1f} m/s2 across); the line's slowest place {:.1f} m/s",
+                 line_.Length(), top, stats_.toPlane, stats_.turnRadius, stats_.turnSpeed, stats_.lateralAccel, line_.SlowestSpeed());
     }
 
-    physics::VesselInput RaceBot::Tick(const RaceTrack& track, const physics::VesselHull& hull, float deltaTime, bool drive)
+    physics::VesselInput RaceBot::Tick(const RaceTrack& track, const physics::VesselHull& hull, float deltaTime, bool drive,
+                                       const std::vector<physics::VesselHull>* others)
     {
         const BotSettings& settings = BotSettingsRef();
         status_.order = physics::VesselInput{};
@@ -216,6 +219,13 @@ namespace game
         {
             status_.station = line_.Nearest(position);
             located_ = true;
+            if (onGrid_) // a race's start: it stands before gate 1, on the course whatever slot of the grid it has
+            {
+                onGrid_ = false;
+                joined_ = true;
+                gateIndex_ = 0;
+                gateSideValid_ = false;
+            }
         }
         else
         {
@@ -271,7 +281,11 @@ namespace game
                 else
                 {
                     ++status_.gatesMissed;
-                    LOG_INFO(logging::LogCategory::App, "race: gate {} missed, {:.1f} m off its middle (half width {:.1f} m)", gate.number, lateral, gate.halfWidth);
+                    // How far from its middle, in its own half widths: 1 at a mark. That is what the penalty goes by.
+                    status_.lastMissWidths = std::clamp(std::fabs(lateral) / std::max(gate.halfWidth, 1.0f), 1.0f, kMissWidthsMost);
+                    status_.missedWidths += status_.lastMissWidths;
+                    LOG_INFO(logging::LogCategory::App, "race: gate {} missed, {:.1f} m off its middle (half width {:.1f} m): x{:.2f} of the penalty", gate.number,
+                             lateral, gate.halfWidth, status_.lastMissWidths);
                 }
                 if (gateIndex_ == 0)
                 {
@@ -284,6 +298,7 @@ namespace game
                                  status_.bestLap, status_.gatesPassed, status_.gatesMissed);
                     }
                     started_ = true;
+                    status_.started = true;
                     status_.lapSeconds = 0.0f;
                 }
                 gateIndex_ = (gateIndex_ + 1) % gates.size();
@@ -297,17 +312,34 @@ namespace game
         // line and out the other side (the start, from its mooring, used to weave through the first six gates). As much
         // further as it is off, 80 m at most: with half of that the yacht came back at 26 kn across the line, brushed
         // a gate's buoy, was thrown inside the course and ran aground on the beach.
-        const float reach = std::max(settings.lookAheadMin, std::fabs(speed) * settings.lookAhead) + std::min(std::fabs(status_.crossTrack), 80.0f);
-        status_.aim = line_.At(status_.station + reach).point;
+        // At least a share of the boat's own circle: the water's forces go as the speed squared, so the path a hull makes
+        // through a change of turn is the same at any speed, a length of its own -- one with a wider circle starts its
+        // turn that much earlier (police_boat, 7.5 t, ran 9-17 m wide through the slalom with the yacht's 24 m).
+        // The extension with the distance off the line only where the line runs straight (and while coming onto the
+        // course): in a bend a far aim asks for LESS rudder than the bend itself does -- police_boat, 30-50 m outside the
+        // far turn, held its rudder at 0.4-0.6 and stayed there.
+        const float bendHere = std::fabs(here.curvature);
+        const float straight = joined_ ? std::clamp(1.0f - 2.0f * bendHere * stats_.turnRadius, 0.0f, 1.0f) : 1.0f;
+        const float reach = std::max({ settings.lookAheadMin, settings.lookAheadCircle * stats_.turnRadius, std::fabs(speed) * settings.lookAhead }) +
+                            std::min(std::fabs(status_.crossTrack), 80.0f) * straight;
+        const RaceLine::Sample ahead = line_.At(status_.station + reach);
+        status_.aim = ahead.point;
         // Off the BOW, not off the way the boat moves. A hull in a turn slides, bow inside its path, so by the bow it runs
         // some 4 m wide of its line round a long bend; steered by its velocity instead (tried, 2026-11-10) it weaves from
         // gate to gate with the rudder banging from side to side -- the path answers the rudder a second after the bow does.
-        const float error = WrapAngle(Heading(status_.aim - position) - heading);
-        float target = line_.At(status_.station + std::max(speed, 0.0f) * 0.5f).speed * settings.pace;
+        // And not AT the aim: inside it, by the angle this boat slides at in the bend between here and there (its own
+        // numbers: game::SlipAngle) -- a hull's way lies outside its bow in a turn, and with the bow on the aim the boat ran
+        // outside its line in every bend by its reach times that angle: police_boat (7.5 t, 11 degrees in the coast's
+        // 140 m bend) 7-9 m, onto the outer marks. From the LINE's bend, not from how the boat moves: that lags.
+        const float bend = 0.5f * (here.curvature + ahead.curvature);
+        const float slide = settings.slip * SlipAngle(*hull.settings, halfLength_, rudderLever_, std::max(std::fabs(speed), 2.0f), bend);
+        const float error = WrapAngle(Heading(status_.aim - position) + (bend > 0.0f ? slide : -slide) - heading);
+        const float level = difficulty_ == BotDifficulty::Easy ? settings.easyPace : (difficulty_ == BotDifficulty::Medium ? settings.mediumPace : 1.0f);
+        float target = line_.At(status_.station + std::max(speed, 0.0f) * 0.5f).speed * settings.pace * level;
         // Coming onto the course (from its mooring, the bow often pointing away from it): at the speed its own circle
         // asks lateralAccel at, so the swing out and back is as tight as the boat makes it -- flat out a light fast hull
         // settled on the line and ran 37 m wide of the next gate; at half speed the yacht took 50 s to come back.
-        if (!joined_) { target = std::min(target, std::sqrt(std::max(settings.lateralAccel, 0.1f) * std::max(status_.tightestRadius, 10.0f))); }
+        if (!joined_) { target = std::min(target, std::max(stats_.turnSpeed, 3.0f)); }
         // The sea: a hull that spends its time in the air is going too fast for it. Out of the water more than a tenth of
         // the last seconds: the pace comes down, slowly; under a twentieth: it comes back.
         // NOT slower for the sea, and not at a crawl when the aim lies far off the bow. Both were tried (2026-11-10: the
@@ -324,18 +356,12 @@ namespace game
             status_.state = State::Idle;
             return status_.order;
         }
-        if (elapsed_ < settings.startDelay)
-        {
-            status_.state = State::Waiting;
-            return status_.order;
-        }
-
         // The turn that brings the bow onto the aim (pure pursuit: an arc through the boat and the aim, tangent to the
         // bow), as a share of the tightest the boat makes at this speed.
         physics::VesselInput order;
         const float arc = 2.0f * (std::fabs(error) < 1.5707963f ? std::sin(error) : (error > 0.0f ? 1.0f : -1.0f)) / std::max(reach, 1.0f);
         const float pace = std::max(std::fabs(speed), 2.0f);
-        const float tightest = SteadyTurnRate(*hull.settings, halfLength_, pace) / pace;
+        const float tightest = SteadyTurnRate(*hull.settings, halfLength_, rudderLever_, pace) / pace;
         order.rudder = settings.steerGain * arc / std::max(tightest, 1e-4f) - settings.yawDamping * yawRate_;
         // The marks are seen. One ahead that the bow would brush -- the line keeps clear of them, the boat is not always
         // on its line: coming onto the course from outside it, thrown by a sea -- is steered round, on the side its
@@ -362,10 +388,30 @@ namespace game
                     const float middle = (gate.center - mark).Dot(starboard) > 0.0f ? 1.0f : -1.0f;
                     const float across = std::max(side * middle + clear, 0.0f);
                     const float seconds = along / std::max(std::fabs(speed), 1.0f);
-                    const bool reachable = across <= 0.5f * settings.lateralAccel * seconds * seconds;
+                    const bool reachable = across <= 0.5f * stats_.lateralAccel * seconds * seconds;
                     const float way = reachable ? middle : (side > 0.0f ? -1.0f : 1.0f);
                     order.rudder += way * 2.5f * (1.0f - std::fabs(side) / clear);
                 }
+            }
+        }
+        // Another boat in its way that the bow is about to reach -- within two seconds at the speed the two close at:
+        // round it, on the side it does not lie on. Not "ahead and a little slower": four equal boats run one line nose
+        // to tail, closing and opening at a metre a second with the sea, and steering round a stern 40 m off threw the
+        // rudder over all the way round the course (lap 1 of a race: three boats off the far turn in the same second).
+        if (others && settings.avoidBoats > 0.5f)
+        {
+            const float2 starboard(forward.y, -forward.x);
+            for (const physics::VesselHull& other : *others)
+            {
+                if (other.object == hull.object) { continue; }
+                const float2 to = float2(other.position.x, other.position.z) - position;
+                const float along = to.Dot(forward);
+                const float side = to.Dot(starboard);
+                const float clear = hull.halfBeam + other.halfBeam + 2.5f;
+                const float closing = speed - float2(other.velocity.x, other.velocity.z).Dot(forward);
+                const float gap = along - halfLength_ - other.halfLength; // bow to stern
+                if (along <= 0.0f || std::fabs(side) >= clear || closing < 0.5f || gap > 2.0f * closing) { continue; }
+                order.rudder += (side > 0.0f ? -1.0f : 1.0f) * 2.0f * (1.0f - std::fabs(side) / clear);
             }
         }
         order.rudder = std::clamp(order.rudder, -1.0f, 1.0f);
@@ -384,11 +430,16 @@ namespace game
                 reverseRudder_ = error > 0.0f ? -1.0f : 1.0f;
             }
         }
+        const float hold = (target / std::max(topSpeed_, 1.0f)) * (target / std::max(topSpeed_, 1.0f));
         if (target >= 0.97f * topSpeed_) { order.throttle = 1.0f; }
-        else
+        else { order.throttle = std::clamp(hold + 0.5f * (target - speed), -0.7f, 1.0f); }
+        // It brakes on the straight, not in the bend: the rudder works by the water past it, the boat's speed AND the
+        // propeller's wash, so with the rudder asked for much the engine is not eased under what holds the line's speed,
+        // let alone put astern -- astern at 23 kn took four fifths of the rudder's push, and police_boat, hard over,
+        // went on out of the far turn. In the bend the slide takes the speed off by itself.
         {
-            const float hold = (target / std::max(topSpeed_, 1.0f)) * (target / std::max(topSpeed_, 1.0f));
-            order.throttle = std::clamp(hold + 0.5f * (target - speed), -0.7f, 1.0f);
+            const float steering = std::clamp((std::fabs(order.rudder) - 0.25f) / 0.35f, 0.0f, 1.0f);
+            order.throttle = std::max(order.throttle, -0.7f + (std::min(hold, 1.0f) + 0.7f) * steering);
         }
         // The rudder hard over and still not enough: the engine's wash past it is what turns the boat (measured: a circle
         // of 55 m full ahead, 60-69 m at 0.45 throttle), so easing the throttle there only runs it wider.
@@ -405,7 +456,7 @@ namespace game
         else
         {
             status_.state = State::Racing;
-            const bool held = order.throttle > 0.4f && std::fabs(speed) < 0.5f && elapsed_ > settings.startDelay + 4.0f;
+            const bool held = order.throttle > 0.4f && std::fabs(speed) < 0.5f && elapsed_ > 4.0f;
             stuckSeconds_ = held ? stuckSeconds_ + deltaTime : 0.0f;
             if (stuckSeconds_ > 3.0f)
             {
@@ -417,261 +468,5 @@ namespace game
         }
         status_.order = order;
         return order;
-    }
-
-    void Race::Begin(const RaceCourse& course)
-    {
-        track_.Clear();
-        bots_.clear();
-        helmBot_.Reset();
-        helmVessel_ = nullptr;
-        helmOrder_ = physics::VesselInput{};
-        autopilot_ = false;
-        helmDriven_ = false;
-        active_ = true;
-        report_.clear();
-        if (!course.marks.empty())
-        {
-            const bool ok = track_.Build(course, report_);
-            if (ok) { LOG_INFO(logging::LogCategory::App, "race: {}, {} boat(s) with a bot", report_, course.bots.size()); }
-            else { LOG_WARNING(logging::LogCategory::App, "race: no course -- {}", report_); }
-        }
-        for (const Math::float3& where : course.bots)
-        {
-            Entry entry;
-            entry.where = where;
-            bots_.push_back(std::move(entry));
-        }
-    }
-
-    void Race::End(physics::World& world)
-    {
-        for (Entry& entry : bots_)
-        {
-            if (entry.vessel && entry.live) { world.SetPilot(entry.vessel, nullptr); }
-        }
-        Forget();
-    }
-
-    void Race::Forget()
-    {
-        bots_.clear();
-        track_.Clear();
-        helmBot_.Reset();
-        helmVessel_ = nullptr;
-        autopilot_ = false;
-        helmDriven_ = false;
-        active_ = false;
-    }
-
-    bool Race::ToggleAutopilot()
-    {
-        if (!helmDriven_ || !track_.Valid()) { return false; }
-        autopilot_ = !autopilot_;
-        if (autopilot_) { helmBot_.Relocate(); }
-        return autopilot_;
-    }
-
-    void Race::Sound(physics::World& world, RaceBot& bot, const physics::VesselHull& hull) const
-    {
-        // Where the bow will be in a couple of seconds, and 40 degrees to either side of that. Straight down from over
-        // the water: the first thing a ray meets -- the sea floor, a beach, another boat's deck -- is what stands there.
-        const Math::float2 forward = Math::float2(hull.forward.x, hull.forward.z).Normalized();
-        const float reach = hull.halfLength + std::max(16.0f, 2.2f * std::fabs(hull.speed));
-        float depth[3];
-        const float bearings[3] = { 0.0f, -0.7f, 0.7f };
-        for (int i = 0; i < 3; ++i)
-        {
-            const float c = std::cos(bearings[i]);
-            const float s = std::sin(bearings[i]);
-            // A turn to starboard by the bearing: (x, z) -> (x cos + z sin, z cos - x sin).
-            const Math::float2 way(forward.x * c + forward.y * s, forward.y * c - forward.x * s);
-            const Math::float3 from(hull.position.x + way.x * reach, hull.waterHeight + 6.0f, hull.position.z + way.y * reach);
-            physics::RayHit hit;
-            const bool met = world.RayCast(from, Math::float3(0.0f, -1.0f, 0.0f), 30.0f, hit) && hit.object != hull.object;
-            depth[i] = met ? hull.waterHeight - hit.point.y : 1.0e3f;
-        }
-        bot.SetSoundings(depth[0], depth[1], depth[2]);
-    }
-
-    void Race::Tick(physics::World& world, float deltaTime)
-    {
-        if (!active_) { return; }
-        std::vector<physics::VesselHull>& hulls = hulls_;
-        world.CollectHulls(hulls);
-        const BotSettings& settings = BotSettingsRef();
-        soundSeconds_ += deltaTime;
-        const bool sound = track_.Valid() && soundSeconds_ >= 0.25f;
-        if (sound) { soundSeconds_ = 0.0f; }
-
-        // The boat the player holds: its gates and laps always, its helm on autopilot.
-        helmDriven_ = false;
-        for (const physics::VesselHull& hull : hulls)
-        {
-            if (!hull.atHelm) { continue; }
-            if (helmVessel_ != hull.object)
-            {
-                helmBot_.Reset();
-                helmVessel_ = hull.object;
-                autopilot_ = false;
-            }
-            helmDriven_ = true;
-            helmWaterHeight_ = hull.waterHeight;
-            if (sound && autopilot_) { Sound(world, helmBot_, hull); }
-            helmOrder_ = helmBot_.Tick(track_, hull, deltaTime, autopilot_);
-        }
-        if (!helmDriven_)
-        {
-            helmVessel_ = nullptr;
-            autopilot_ = false;
-            helmOrder_ = physics::VesselInput{};
-        }
-
-        for (Entry& entry : bots_)
-        {
-            if (!entry.vessel)
-            {
-                entry.vessel = world.FindVessel(entry.where, 2.0f);
-                if (!entry.vessel) { continue; }
-                entry.name = VesselName(entry.vessel);
-                LOG_INFO(logging::LogCategory::App, "race: a bot at the helm of '{}'", entry.name);
-            }
-            entry.live = false;
-            for (const physics::VesselHull& hull : hulls)
-            {
-                if (hull.object != entry.vessel) { continue; }
-                entry.live = true;
-                entry.waterHeight = hull.waterHeight;
-                entry.position = hull.position;
-                if (hull.atHelm) // the player took it: the bot stands down until the helm is free again
-                {
-                    if (!entry.yielded)
-                    {
-                        world.SetPilot(entry.vessel, nullptr);
-                        entry.yielded = true;
-                    }
-                    break;
-                }
-                if (entry.yielded)
-                {
-                    entry.yielded = false;
-                    entry.bot.Relocate();
-                }
-                if (settings.enabled < 0.5f)
-                {
-                    world.SetPilot(entry.vessel, nullptr);
-                    break;
-                }
-                if (sound) { Sound(world, entry.bot, hull); }
-                const physics::VesselInput order = entry.bot.Tick(track_, hull, deltaTime, true);
-                world.SetPilot(entry.vessel, &order);
-                break;
-            }
-            if (!entry.live) { entry.vessel = nullptr; } // gone with its world: looked for again
-        }
-    }
-
-    std::wstring Race::HudLine() const
-    {
-        if (!active_ || !track_.Valid()) { return {}; }
-        wchar_t line[320];
-        wchar_t last[16];
-        wchar_t best[16];
-        wchar_t now[16];
-        const int gates = static_cast<int>(track_.Gates().size());
-        if (helmDriven_)
-        {
-            const RaceBot::Status& s = helmBot_.GetStatus();
-            FormatLap(s.lapSeconds, now, 16);
-            FormatLap(s.lastLap, last, 16);
-            FormatLap(s.bestLap, best, 16);
-            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE: lap %d   gate %d of %d   %ls   last %ls   best %ls   missed %d   %ls", s.lap + 1, s.nextGate, gates,
-                          now, last, best, s.gatesMissed, autopilot_ ? L"AUTOPILOT, B takes the helm back" : L"B autopilot");
-            return line;
-        }
-        for (const Entry& entry : bots_)
-        {
-            if (!entry.live || entry.yielded) { continue; }
-            const RaceBot::Status& s = entry.bot.GetStatus();
-            FormatLap(s.lapSeconds, now, 16);
-            FormatLap(s.lastLap, last, 16);
-            FormatLap(s.bestLap, best, 16);
-            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"BOT %hs: %hs, %.1f kn   lap %d   gate %d of %d   %ls   last %ls   best %ls   missed %d", entry.name.c_str(),
-                          StateName(s.state), s.speed * 1.94384f, s.lap + 1, s.nextGate, gates, now, last, best, s.gatesMissed);
-            return line;
-        }
-        return {};
-    }
-
-    std::string Race::ReadoutJson() const
-    {
-        std::string out = ",\"race\":{";
-        char item[640];
-        std::snprintf(item, sizeof(item), "\"active\":%s,\"gates\":%zu,\"autopilot\":%s,\"atHelm\":%s", active_ ? "true" : "false", track_.Gates().size(),
-                      autopilot_ ? "true" : "false", helmDriven_ ? "true" : "false");
-        out += item;
-        const auto status = [&](const char* name, const RaceBot& bot, const Math::float3& position, bool comma)
-        {
-            const RaceBot::Status& s = bot.GetStatus();
-            std::snprintf(item, sizeof(item),
-                          "%s{\"vessel\":\"%s\",\"state\":\"%s\",\"lap\":%d,\"nextGate\":%d,\"passed\":%d,\"missed\":%d,\"station\":%.1f,\"length\":%.1f,\"speed\":%.2f,"
-                          "\"target\":%.2f,\"slowest\":%.2f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,\"lastLap\":%.2f,\"bestLap\":%.2f,\"throttle\":%.3f,\"rudder\":%.3f,"
-                          "\"position\":[%.2f,%.2f,%.2f]}",
-                          comma ? "," : "", name, StateName(s.state), s.lap, s.nextGate, s.gatesPassed, s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target,
-                          bot.Line().SlowestSpeed(), s.tightestRadius, s.airborne, std::min(s.depthAhead, 999.0f), s.shoal ? "true" : "false", s.crossTrack, s.lapSeconds, s.lastLap, s.bestLap, s.order.throttle, s.order.rudder, position.x, position.y, position.z);
-            out += item;
-        };
-        if (helmDriven_)
-        {
-            out += ",\"helm\":";
-            status(VesselName(helmVessel_).c_str(), helmBot_, Math::float3(0.0f, 0.0f, 0.0f), false);
-        }
-        out += ",\"bots\":[";
-        bool comma = false;
-        for (const Entry& entry : bots_)
-        {
-            if (!entry.live) { continue; }
-            status(entry.name.c_str(), entry.bot, entry.position, comma);
-            comma = true;
-        }
-        out += "]}";
-        return out;
-    }
-
-    void Race::DebugDraw(DebugDrawSystem& draw) const
-    {
-        if (!active_ || !track_.Valid() || BotSettingsRef().debug < 0.5f) { return; }
-        const RaceBot* bot = helmDriven_ ? &helmBot_ : nullptr;
-        float water = helmWaterHeight_;
-        for (const Entry& entry : bots_)
-        {
-            if (bot) { break; }
-            if (entry.live) { bot = &entry.bot; water = entry.waterHeight; }
-        }
-        const float y = water + 0.6f;
-        const Math::float4 port(1.0f, 0.15f, 0.1f, 1.0f);
-        const Math::float4 starboard(0.1f, 1.0f, 0.2f, 1.0f);
-        for (const RaceGate& gate : track_.Gates())
-        {
-            const Math::float3 a(gate.a.x, y, gate.a.y);
-            const Math::float3 b(gate.b.x, y, gate.b.y);
-            draw.AddLine(a, b, Math::float4(1.0f, 1.0f, 1.0f, 0.8f));
-            draw.AddLine(a, Math::float3(a.x, y + 5.0f, a.z), port);
-            draw.AddLine(b, Math::float3(b.x, y + 5.0f, b.z), starboard);
-        }
-        if (!bot || !bot->Line().Valid()) { return; }
-        const RaceLine& line = bot->Line();
-        const std::vector<Math::float2>& points = line.Points();
-        float top = 1.0f;
-        for (std::size_t i = 0; i < points.size(); ++i) { top = std::max(top, line.SpeedAt(i)); }
-        for (std::size_t i = 0; i < points.size(); ++i)
-        {
-            const Math::float2& a = points[i];
-            const Math::float2& b = points[(i + 1) % points.size()];
-            const float fast = std::clamp(line.SpeedAt(i) / top, 0.0f, 1.0f);
-            draw.AddLine(Math::float3(a.x, y, a.y), Math::float3(b.x, y, b.y), Math::float4(1.0f - fast, fast, 0.1f, 1.0f));
-        }
-        const Math::float2 aim = bot->GetStatus().aim;
-        draw.AddLine(Math::float3(aim.x, y, aim.y), Math::float3(aim.x, y + 3.0f, aim.y), Math::float4(1.0f, 1.0f, 0.2f, 1.0f));
     }
 }

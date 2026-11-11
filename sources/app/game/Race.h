@@ -1,0 +1,179 @@
+#pragma once
+
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "app/game/RaceBot.h"
+#include "app/game/RaceTrack.h"
+#include "physics/PhysicsWorld.h"
+
+class DebugDrawSystem;
+class Camera;
+
+// The level's race in a play session (owner, 2026-11-11: "the start zone is lit somehow -- a translucent plane; drive into
+// it and you and three bots are put on the grid, a start timer runs and off we go; three laps; after the finish a window
+// with the statistics"). The Scene owns it (Scene::RaceRef).
+//
+//   Free       the boats lie where they are; the start zone before gate 1 is lit. A boat with somebody at its helm that
+//              drives into it starts a race: it and up to three boats that carry "raceBot" are put on the grid.
+//   Countdown  nobody's helm answers; 3, 2, 1.
+//   Racing     the bots run the course, the player theirs. A racer has finished when it has crossed gate 1 once to start
+//              its first lap and `laps` times more. The race is the player's: it ends when they finish.
+//   Finished   the results are on screen; the bots still out run on to their own finish (90 s at the most). Closing the
+//              window frees everybody; the zone waits again once the player's boat has left it.
+namespace game
+{
+    // --set / MCP race.<key>, Developer Controls > Physics. One table (RaceKeys).
+    struct RaceSettings
+    {
+        float laps = 3.0f;        // of a race
+        float countdown = 3.0f;   // s on the grid before the start
+        float missPenalty = 3.0f; // s added to a racer's time for a gate it went round just outside a mark; times how far from the
+                                  // gate's middle it went by, in half widths of the gate (kMissWidthsMost at the most)
+        float difficulty = 0.0f;  // the bots' level in the next race: 1 easy, 2 medium, 3 hard, 0 = one of each (turned by one every race)
+        float finishWindow = 60.0f; // s the race still runs after the first boat's finish: who is out then did not finish
+        float resetOff = 60.0f;     // m off its line ...
+        float resetSeconds = 8.0f;  // ... or held (aground, against something, astern) for this long: a boat a bot steers is put back on
+                                    // its line, 40 m before its next gate. 0 = never
+        float resetPenalty = 10.0f; // s that costs it
+    };
+    RaceSettings& RaceSettingsRef();
+
+    struct RaceKey
+    {
+        const char* key;
+        const char* label;
+        const char* hint;
+        float RaceSettings::* member;
+        float speed;
+        float lo;
+        float hi;
+        const char* format;
+    };
+    const std::vector<RaceKey>& RaceKeys();
+    const RaceKey* FindRaceKey(std::string_view key);
+
+    class Race
+    {
+    public:
+        enum class Phase : unsigned char { Free, Countdown, Racing, Finished };
+
+        // Play starts (or the session goes on in a new level): the course as the level has it now.
+        void Begin(const RaceCourse& course);
+        // Stop: every pilot off its boat.
+        void End(physics::World& world);
+        // The level is going (Scene::Clear): nothing of it is held any more.
+        void Forget();
+        // Every frame of a session, before the helm reads its keys.
+        void Tick(physics::World& world, float deltaTime);
+        bool HasTrack() const { return track_.Valid(); }
+        const RaceTrack& Track() const { return track_; }
+        Phase GetPhase() const { return phase_; }
+
+        // The player's own boat: B hands its helm to the bot and takes it back.
+        bool ToggleAutopilot();
+        bool Autopilot() const { return autopilot_ && helmDriven_; }
+        const physics::VesselInput& HelmOrder() const { return helmOrder_; }
+        // On the grid, the countdown running: the player's helm answers nothing.
+        bool HoldsHelm() const { return phase_ == Phase::Countdown && playerRaces_; }
+        // Once after the boats were put on the grid: the camera cuts with its boat.
+        bool TakeCameraCut() { return std::exchange(cameraCut_, false); }
+
+        // A script's (race.start, race.close): a race now -- with the player if they hold a helm, the bots alone if not;
+        // the results away.
+        void RequestStart() { startAsked_ = true; }
+        void CloseResults();
+
+        // The HUD: the race's line, and the countdown's number or "GO!" in the middle of the screen.
+        std::wstring HudLine() const;
+        std::wstring BigText() const;
+        // The results (ImGui, the frame's): true while they are on screen. The mouse is theirs meanwhile.
+        bool ResultsOpen() const { return resultsOpen_; }
+        void DrawResults();
+        // On the grid and in the race's first seconds: over every boat who it is -- "YOU", or a bot's level (ImGui).
+        void DrawLabels(const Camera& camera) const;
+        std::string ReadoutJson() const;
+        // The start zone while it waits (always), the gates and a bot's line (bot.debug).
+        void DebugDraw(DebugDrawSystem& draw) const;
+
+    private:
+        struct Entry
+        {
+            Math::float3 where;              // the boat's place in the level
+            RenderableObject* vessel = nullptr;
+            RaceBot bot;
+            bool yielded = false;            // the player holds its helm
+            bool live = false;               // its boat was in the world this frame
+            float waterHeight = 0.0f;
+            Math::float3 position;
+            std::string name;
+        };
+
+        struct Racer
+        {
+            RenderableObject* vessel = nullptr;
+            const RaceBot* bot = nullptr;    // an entry's, or the helm's
+            std::string name;
+            bool player = false;
+            std::vector<float> laps;         // each lap's seconds, the first from the start
+            float lapStart = 0.0f;
+            float finish = -1.0f;            // the race's clock at its finish; < 0 = still out
+            int missed = 0;
+            float missedWidths = 0.0f;       // RaceBot::Status::missedWidths at its finish (or now): x missPenalty = its penalty
+            float lostSeconds = 0.0f;        // it has been off the course or held for this long
+            int difficulty = -1;             // a bot's level (BotDifficulty); -1 = the player
+            int resets = 0;                  // times it was put back on its line: x resetPenalty
+            float progress = 0.0f;           // m along the course since the start line
+        };
+
+        void Sound(physics::World& world, RaceBot& bot, const physics::VesselHull& hull) const;
+        const physics::VesselHull* HullOf(const RenderableObject* vessel) const;
+        void StartRace(physics::World& world);
+        void StopRace(physics::World& world, const char* why);
+        void UpdateRacers();
+        // The thresholds: a boat a bot steers that is lost (far off its line, or held) is put back on the course.
+        void WatchRacers(physics::World& world, float deltaTime);
+        RaceBot* BotOf(const Racer& racer);
+        // The race still runs: nobody has finished, or the first did less than finishWindow ago.
+        bool WindowOpen() const;
+        const Racer* PlayerRacer() const;
+        int PlaceOf(const Racer& racer) const; // 1 = leading
+        float TimeOf(const Racer& racer) const; // its finish with the penalties; < 0 = still out
+        std::vector<const Racer*> Standing() const;
+
+        RaceTrack track_;
+        RaceStart start_;
+        std::string report_;
+        float soundSeconds_ = 0.0f; // since the rays were last cast: four times a second (each waits for a step in flight)
+        std::vector<physics::VesselHull> hulls_; // a frame's, kept for its capacity
+        std::vector<Entry> bots_;
+        RaceBot helmBot_;
+        RenderableObject* helmVessel_ = nullptr;
+        physics::VesselInput helmOrder_;
+        bool autopilot_ = false;
+        bool helmDriven_ = false; // somebody is at a helm this frame
+        float seaLevel_ = 0.0f;   // the water under the boats, smoothed: where the zone and the lines are drawn
+        bool seaLevelValid_ = false;
+        bool active_ = false;
+
+        Phase phase_ = Phase::Free;
+        std::vector<Racer> racers_;
+        bool playerRaces_ = false;
+        bool armed_ = false;      // the player's boat has been outside the zone since the last race
+        bool startAsked_ = false;
+        bool cameraCut_ = false;
+        bool resultsOpen_ = false;
+        bool resultsFresh_ = false; // the window's first frame: it takes the focus
+        float countdown_ = 0.0f;
+        float clock_ = 0.0f;        // the race's, from the start
+        float sinceFinish_ = 0.0f;  // since the player (or the last bot of a race without one) finished
+        float firstFinish_ = -1.0f; // the clock at the first boat's finish; < 0 = nobody yet
+        float pulse_ = 0.0f;        // the zone's glow
+        float missShown_ = 0.0f;    // s the player's last missed gate still says so on screen
+        float missShownWidths_ = 1.0f; // and how far from its middle that one was
+        int laps_ = 3;              // of the race being run
+        int raceCount_ = 0;         // races started this session: the mixed levels turn by one each
+    };
+}

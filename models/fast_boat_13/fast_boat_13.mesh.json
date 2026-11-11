@@ -60,18 +60,19 @@
     "planeTrim": 8600.0,
     "propeller": [
       -2.0,
-      0.08,
+      -0.12,
       0.0
     ],
     "reserveLift": 1.6,
     "rollDamping": 6.0,
     "rollStiffness": 36000.0,
-    "rudderForce": 40.0,
+    "rudderForce": 60.0,
     "slam": 900.0,
-    "surgeDrag": 26.0,
+    "surgeDrag": 42.0,
     "swayDrag": 700.0,
     "swayLever": 0.75,
     "swayLinear": 320.0,
+    "throttleRate": 1.6,
     "thrust": 9000.0,
     "yawDrag": 57000.0,
     "yawLinear": 4300.0

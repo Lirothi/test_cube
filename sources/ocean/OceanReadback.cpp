@@ -1,6 +1,7 @@
 #include "ocean/OceanReadback.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
@@ -21,6 +22,7 @@ namespace
 {
     constexpr UINT64 kPlacement = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT;
     constexpr std::chrono::microseconds kMinCopyInterval{ 1000000 / 30 };
+    std::atomic<float> g_copyTimeScale{ 1.0f }; // frame.timeScale: the interval above is of the WORLD's clock
     UINT64 AlignUp(UINT64 v, UINT64 a) { return (v + a - 1u) / a * a; }
 
     std::uint32_t CascadesFor(OceanSimulationSettings::ReadbackCascadesMode mode)
@@ -211,7 +213,8 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
     // rate of change (OceanBuoyancy). At 60 fps this copies every other frame, at 340 fps about one
     // frame in eleven -- the 40 us of PCIe copy stops scaling with the frame rate.
     const auto now = std::chrono::steady_clock::now();
-    if (lastCopy_ != std::chrono::steady_clock::time_point{} && now - lastCopy_ < kMinCopyInterval)
+    const auto interval = std::chrono::duration_cast<std::chrono::microseconds>(kMinCopyInterval / std::max(g_copyTimeScale.load(std::memory_order_relaxed), 0.1f));
+    if (lastCopy_ != std::chrono::steady_clock::time_point{} && now - lastCopy_ < interval)
     {
         return {};
     }
@@ -348,6 +351,8 @@ std::function<void(RenderGraphPassContext)> OceanReadback::BuildPass(RenderGraph
         pass.EndCL(token);
     };
 }
+
+void OceanReadback::SetTimeScale(float scale) { g_copyTimeScale.store(std::max(scale, 0.1f), std::memory_order_relaxed); }
 
 void OceanReadback::DropSurface()
 {

@@ -1799,13 +1799,31 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
     line.Profile([](float curvature) { return std::min(kTop, std::sqrt(0.5f / std::max(curvature, 1e-6f))); }, 1.5f);
     Check(line.SlowestSpeed() < 10.0f && line.SlowestSpeed() > 7.0f, "at 0.5 m/s2 it is some 8.7 m/s: " + std::to_string(line.SlowestSpeed()));
 
+    // ---- where a race starts: a zone before gate 1, the grid's four places in it, two abreast, bows to the line ----
+    {
+        const game::RaceStart start = game::StartOf(track);
+        const game::RaceGate& first = track.Gates().front();
+        Check(start.along.Dot(first.along) > 0.999f && start.starboard.Dot(first.across) > 0.999f, "the start zone lies along gate 1's way");
+        Check(!start.Holds(first.center) && start.Holds(start.center), "it ends before the start line");
+        for (int i = 0; i < 4; ++i)
+        {
+            const Math::float2 off = start.slots[i] - first.center;
+            Check(start.Holds(start.slots[i]) && off.Dot(first.along) < -8.0f && std::fabs(off.Dot(first.across)) < first.halfWidth - 2.0f,
+                "place " + std::to_string(i + 1) + " of the grid is in the zone, behind the line, between the marks");
+        }
+        Check((start.slots[0] - start.slots[1]).Length() > 6.0f && (start.slots[0] - start.slots[2]).Length() > 15.0f,
+            "the places are a boat's beam apart abreast and more than a boat's length in file");
+        Check((start.slots[2] - first.center).Dot(first.along) < (start.slots[0] - first.center).Dot(first.along), "the first row is the nearer to the line");
+        game::RaceTrack none;
+        Check(game::StartOf(none).halfLength == 0.0f, "no course, no zone");
+    }
+
     // ---- the bot at the helm of a toy boat: a first-order engine, a rudder that swings, a circle of 68 m at speed ----
     const auto run = [&track](bool helmBackwards, float seconds)
     {
         game::BotSettings& settings = game::BotSettingsRef();
         const game::BotSettings before = settings;
         settings = game::BotSettings{};
-        settings.startDelay = 0.0f;
         physics::VesselSettings boat; // small_yacht's numbers: a top speed of 16.1 m/s
         physics::VesselHull hull;
         hull.settings = &boat;
@@ -1840,12 +1858,73 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
     const game::RaceBot::Status wrong = run(true, 400.0f);
     Check(wrong.lap == 0, "the control arm: with its helm wired backwards the boat runs no lap, so the run above is the bot's doing");
 
+    // ---- what a boat does, from its numbers: the slide in a bend, and a heavier boat slides more ----
+    {
+        physics::VesselSettings yacht; // small_yacht's numbers
+        physics::VesselSettings heavy = yacht;
+        heavy.mass = 7500.0f;
+        const float none = game::SlipAngle(yacht, 5.1f, 3.1f, 14.0f, 0.0f);
+        const float wide = game::SlipAngle(yacht, 5.1f, 3.1f, 14.0f, 1.0f / 300.0f);
+        const float tight = game::SlipAngle(yacht, 5.1f, 3.1f, 14.0f, 1.0f / 100.0f);
+        const float heavier = game::SlipAngle(heavy, 5.1f, 3.1f, 14.0f, 1.0f / 100.0f);
+        const float most = game::SlipAngle(yacht, 5.1f, 3.1f, 14.0f, 1.0f);
+        Check(std::fabs(none) < 0.01f, "on a straight line a hull does not slide: " + std::to_string(none));
+        Check(wide > 0.02f && tight > wide && heavier > tight, "it slides more in a tighter bend, and a heavier hull more in the same one: " + std::to_string(wide) + " " +
+              std::to_string(tight) + " " + std::to_string(heavier));
+        Check(most < 0.6f && most >= tight, "a bend past its own circle counts as its circle: " + std::to_string(most));
+        const game::VesselStats stats = game::StatsOf(yacht, 5.1f, 3.1f);
+        Check(stats.topSpeed > 15.0f && stats.topSpeed < 17.5f && stats.turnRadius > 40.0f && stats.turnRadius < 75.0f && stats.toPlane > 2.0f && stats.toPlane < 7.0f,
+              "the yacht's card: " + std::to_string(stats.topSpeed) + " m/s, a circle of " + std::to_string(stats.turnRadius) + " m, 20 kn in " + std::to_string(stats.toPlane) + " s");
+    }
+
+    // ---- a missed gate costs by how far from its middle: a boat taken straight through the line of gate 2, wide of it ----
+    {
+        game::BotSettings& settings = game::BotSettingsRef();
+        const game::BotSettings before = settings;
+        settings = game::BotSettings{};
+        const auto missBy = [&track](float halfWidths)
+        {
+            physics::VesselSettings boat;
+            physics::VesselHull hull;
+            hull.settings = &boat;
+            hull.halfLength = 5.1f;
+            hull.halfBeam = 1.2f;
+            hull.up = Math::float3(0.0f, 1.0f, 0.0f);
+            game::RaceBot bot;
+            bot.Start(); // on the course from the first frame, gate 1 ahead
+            const std::vector<game::RaceGate>& gates = track.Gates();
+            // Through gate 1 between its marks, then across gate 2's line `halfWidths` of its half width from its middle.
+            for (int gate = 0; gate < 2; ++gate)
+            {
+                const game::RaceGate& g = gates[static_cast<std::size_t>(gate)];
+                const Math::float2 through = g.center + g.across * (gate == 0 ? 0.0f : halfWidths * g.halfWidth);
+                for (float along = -20.0f; along <= 20.0f; along += 0.5f)
+                {
+                    const Math::float2 at = through + g.along * along;
+                    hull.position = Math::float3(at.x, 0.0f, at.y);
+                    hull.forward = Math::float3(g.along.x, 0.0f, g.along.y);
+                    hull.speed = 15.0f;
+                    hull.velocity = Math::float3(g.along.x * 15.0f, 0.0f, g.along.y * 15.0f);
+                    bot.Tick(track, hull, 1.0f / 30.0f, false);
+                }
+            }
+            return bot.GetStatus();
+        };
+        const game::RaceBot::Status clean = missBy(0.5f);
+        const game::RaceBot::Status justOut = missBy(1.3f);
+        const game::RaceBot::Status wayOut = missBy(2.6f);
+        Check(clean.gatesMissed == 0 && clean.missedWidths == 0.0f && clean.gatesPassed == 2, "between the marks is no miss: passed " + std::to_string(clean.gatesPassed));
+        Check(justOut.gatesMissed == 1 && std::fabs(justOut.missedWidths - 1.3f) < 0.1f, "just outside a mark costs about one penalty: x" + std::to_string(justOut.missedWidths));
+        Check(wayOut.gatesMissed == 1 && std::fabs(wayOut.missedWidths - 2.6f) < 0.15f && wayOut.missedWidths <= game::kMissWidthsMost,
+              "twice as far from the gate's middle costs twice as much: x" + std::to_string(wayOut.missedWidths));
+        settings = before;
+    }
+
     // ---- the lead line: too little water where the bow will be turns it to the deeper side; none on either: astern ----
     {
         game::BotSettings& settings = game::BotSettingsRef();
         const game::BotSettings before = settings;
         settings = game::BotSettings{};
-        settings.startDelay = 0.0f;
         physics::VesselSettings boat;
         physics::VesselHull hull;
         hull.settings = &boat;
@@ -1854,12 +1933,18 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
         hull.up = Math::float3(0.0f, 1.0f, 0.0f);
         const game::RaceLine::Sample at = line.At(200.0f);
         hull.position = Math::float3(at.point.x, 0.0f, at.point.y);
-        hull.forward = Math::float3(at.tangent.x, 0.0f, at.tangent.y);
+        // In its bend as a boat is: the bow inside its way by the angle it slides at (bow along the line it would be a
+        // boat that has not begun its turn, and the helm rightly puts the rudder over).
+        const float slide = game::SlipAngle(boat, hull.halfLength, hull.rudderLever, 12.0f, at.curvature);
+        const float bow = std::atan2(at.tangent.x, at.tangent.y) + (at.curvature > 0.0f ? slide : -slide);
+        hull.forward = Math::float3(std::sin(bow), 0.0f, std::cos(bow));
         hull.speed = 12.0f;
         hull.velocity = Math::float3(at.tangent.x * 12.0f, 0.0f, at.tangent.y * 12.0f);
         game::RaceBot bot;
         const physics::VesselInput open = bot.Tick(track, hull, 1.0f / 60.0f, true);
-        Check(std::fabs(open.rudder) < 0.9f && open.throttle > 0.0f && !bot.GetStatus().shoal, "over deep water, on its line, it runs ahead with the rudder near amidships");
+        Check(std::fabs(open.rudder) < 0.9f && open.throttle > 0.0f && !bot.GetStatus().shoal,
+              "over deep water, on its line, it runs ahead with the rudder near amidships: rudder " + std::to_string(open.rudder) + ", throttle " +
+              std::to_string(open.throttle) + ", depth ahead " + std::to_string(bot.GetStatus().depthAhead));
         bot.SetSoundings(0.3f, 0.2f, 6.0f);
         const physics::VesselInput turn = bot.Tick(track, hull, 1.0f / 60.0f, true);
         Check(bot.GetStatus().shoal && turn.rudder == 1.0f && turn.throttle == 1.0f, "a shoal ahead and deep water to starboard: hard to starboard, the engine on");

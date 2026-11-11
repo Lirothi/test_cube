@@ -167,6 +167,26 @@ namespace game
         return true;
     }
 
+    RaceStart StartOf(const RaceTrack& track)
+    {
+        RaceStart start;
+        if (!track.Valid()) { return start; }
+        // From 8 m to 56 m before the start line, a little narrower than gate 1; the rows 16 m and 40 m before the line
+        // (a boat is 7-10 m long), the two of a row 0.55 of the half width to either side.
+        const RaceGate& gate = track.Gates().front();
+        start.along = gate.along;
+        start.starboard = gate.across;
+        start.halfLength = 24.0f;
+        start.halfWidth = std::max(gate.halfWidth - 2.0f, 6.0f);
+        start.center = gate.center - gate.along * (8.0f + start.halfLength);
+        const float abreast = 0.55f * start.halfWidth;
+        for (int i = 0; i < 4; ++i)
+        {
+            start.slots[i] = gate.center - gate.along * (i < 2 ? 16.0f : 40.0f) + gate.across * ((i & 1) ? abreast : -abreast);
+        }
+        return start;
+    }
+
     void RaceLine::Clear()
     {
         points_.clear();

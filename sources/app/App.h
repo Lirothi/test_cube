@@ -120,6 +120,8 @@ extern std::string g_bootDevTab;
 // "--mcp-port=<n>": this process serves the editor's MCP on that port instead of editor_state.json's mcpPort (8128) -- a
 // script's editor beside the owner's, which holds 8128. 0 = editor_state's.
 extern int g_bootMcpPort;
+// `frame.timeScale`: the world's clock runs this many times faster (App.cpp). The HUD says so while it is not 1.
+extern float g_timeScale;
 // "--editor": open the Level Editor at boot, for the same reason g_bootLogWindow exists --
 // so a headless --shot can capture a panel that otherwise needs a keypress to appear.
 // WITH_EDITOR only; ignored elsewhere.

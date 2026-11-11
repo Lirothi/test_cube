@@ -1,12 +1,18 @@
 #include "app/game/PlaySession.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cwchar>
+#include <vector>
+
+#include <DirectXMath.h>
 #include <utility>
 
 #include "imgui.h"
 
 #include "app/camera/Camera.h"
+#include "app/game/VesselStats.h"
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
 #include "input/InputManager.h"
@@ -138,6 +144,7 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
         else { SetStatus(race.ToggleAutopilot() ? "Autopilot on" : "Autopilot off", ImGui::GetTime() + 3.0); }
     }
     if (race.Autopilot()) { order = race.HelmOrder(); }
+    if (race.HoldsHelm()) { order = physics::VesselInput{}; } // on the grid, the countdown running
     world.SetHelmInput(order);
     game::VesselCamera& view = scene.VesselCameraRef();
     view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, tuning.testOrbit,
@@ -180,6 +187,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     Camera& camera = scene.CameraRef();
     physics::World& world = scene.Physics();
     scene.RaceRef().Tick(world, deltaTime); // the bots' orders, and the helm's on autopilot: before the helm reads its keys
+    if (scene.RaceRef().TakeCameraCut()) { camera.ResetHistory(); } // the boats were put on the grid: a jump, not a pan
     if (atHelm_)
     {
         TickHelm(input, scene, controls, deltaTime);
@@ -243,6 +251,102 @@ void PlaySession::SetStatus(std::string status, double untilSeconds)
 }
 
 std::wstring PlaySession::RaceHudLine(const Scene& scene) const { return playing_ ? scene.RaceRef().HudLine() : std::wstring{}; }
+
+void PlaySession::DrawBoatCard(Scene& scene)
+{
+    if (!playing_ || atHelm_ || !possessed_) { return; }
+    physics::World& world = scene.Physics();
+    const physics::PlayerState onFoot = world.GetPlayerState();
+    if (!onFoot.exists) { return; }
+    constexpr float kCardReach = 16.0f; // m from the hull: nearer than this its card is up
+    std::vector<physics::VesselHull> hulls;
+    world.CollectHulls(hulls);
+    RenderableObject* nearest = world.FindVessel(onFoot.feet, 3.0f); // the one E would take
+    int card = 0;
+    for (const physics::VesselHull& one : hulls)
+    {
+        const physics::VesselHull* hull = &one;
+        RenderableObject* vessel = one.object;
+        if (!hull->settings || !vessel) { continue; }
+        // To the rectangle of its hull on the water (World::FindVessel's distance): a boat is long.
+        const float dx = onFoot.feet.x - hull->position.x;
+        const float dz = onFoot.feet.z - hull->position.z;
+        const float pastEnds = std::max(std::fabs(dx * hull->forward.x + dz * hull->forward.z) - hull->halfLength, 0.0f);
+        const float pastSides = std::max(std::fabs(dx * hull->forward.z - dz * hull->forward.x) - hull->halfBeam, 0.0f);
+        if (pastEnds * pastEnds + pastSides * pastSides > kCardReach * kCardReach) { continue; }
+
+    // Over the boat: a point above its middle, through the frame's camera. One out of the frame has no card.
+    const Camera& camera = scene.CameraRef();
+    const Math::float3 over(hull->position.x, hull->position.y + 0.3f * hull->halfLength + 1.8f, hull->position.z);
+    DirectX::XMFLOAT4 clip{};
+    DirectX::XMStoreFloat4(&clip, DirectX::XMVector4Transform(DirectX::XMVectorSet(over.x, over.y, over.z, 1.0f), camera.GetViewProjMatrixNoJitter().xm()));
+    if (clip.w <= 0.05f) { continue; } // behind the eye
+    const ImGuiIO& io = ImGui::GetIO();
+    const ImVec2 at((clip.x / clip.w * 0.5f + 0.5f) * io.DisplaySize.x, (0.5f - clip.y / clip.w * 0.5f) * io.DisplaySize.y);
+    if (at.x < 0.0f || at.x > io.DisplaySize.x) { continue; }
+
+    // "models/fast_boat_13/fast_boat_13.mesh.json" -> "Fast Boat 13"
+    std::string name = vessel->GetGeometryPath();
+    const std::size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) { name = name.substr(slash + 1); }
+    const std::size_t dot = name.find('.');
+    if (dot != std::string::npos) { name = name.substr(0, dot); }
+    bool start = true;
+    for (char& c : name)
+    {
+        if (c == '_') { c = ' '; start = true; continue; }
+        if (start && c >= 'a' && c <= 'z') { c = static_cast<char>(c - 'a' + 'A'); }
+        start = false;
+    }
+
+    const game::VesselStats stats = game::StatsOf(*hull->settings, hull->halfLength, hull->rudderLever);
+    // Its bottom edge on that point, and the whole of it under the HUD's lines: a boat at arm's reach fills the frame.
+    const float cardHeight = ImGui::GetFrameHeightWithSpacing() * 4.0f + ImGui::GetTextLineHeightWithSpacing() * 2.0f + 40.0f;
+    ImGui::SetNextWindowPos(ImVec2(at.x, std::max(at.y, cardHeight + 110.0f)), ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.78f);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                                   ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
+    char window[32];
+    std::snprintf(window, sizeof(window), "##boat card %d", card++);
+    if (ImGui::Begin(window, nullptr, flags))
+    {
+        ImGui::TextUnformatted(name.c_str());
+        ImGui::SameLine();
+        ImGui::TextDisabled("%.1f m, %.1f t, %.0f kN", stats.length, stats.mass * 0.001f, stats.thrust * 0.001f);
+        ImGui::Separator();
+        // A bar each, on one scale for every boat: what is longer is better.
+        const float labels = ImGui::CalcTextSize("Acceleration").x + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+        const float bar = ImGui::CalcTextSize("Acceleration").x * 1.6f;
+        const auto row = [labels, bar](const char* label, float share, const char* value)
+        {
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(label);
+            ImGui::SameLine(labels);
+            ImGui::ProgressBar(std::clamp(share, 0.02f, 1.0f), ImVec2(bar, 0.0f), "");
+            ImGui::SameLine();
+            ImGui::TextUnformatted(value);
+        };
+        char value[64];
+        std::snprintf(value, sizeof(value), "%.0f kn", stats.topSpeed * 1.94384f);
+        row("Top speed", stats.topSpeed * 1.94384f / 45.0f, value);
+        std::snprintf(value, sizeof(value), "20 kn in %.1f s", stats.toPlane);
+        row("Acceleration", (7.0f - stats.toPlane) / 5.0f, value);
+        std::snprintf(value, sizeof(value), "a %.0f m circle", 2.0f * stats.turnRadius);
+        row("Handling", (95.0f - stats.turnRadius) / 75.0f, value);
+        // In a sea: how deep it sits and how heavy it is, half each. A hull is out of the water -- no keel, no rudder --
+        // when a wave has dropped away by about its draft (wind_test's open leg: 0.71 m is out 1-11 % of the time, 0.38-0.39 m
+        // 17-22 %), and a wave throws a light hull further (its roll there: 1.9 t 15 degrees, past 15 a third of the time;
+        // 5.5 and 7.5 t 9 degrees, 6-8 %). By the draft alone the light boat's bar was the yacht's.
+        const float draft = stats.draft * hull->scale.y;
+        std::snprintf(value, sizeof(value), "%.1f t, %.2f m deep", stats.mass * 0.001f, draft);
+        row("Sea keeping", 0.5f * draft / 0.8f + 0.5f * stats.mass / 8000.0f, value);
+        ImGui::Separator();
+        if (vessel == nearest) { ImGui::TextUnformatted("E   take the helm"); }
+        else { ImGui::TextDisabled("Come alongside for the helm (E)"); }
+    }
+    ImGui::End();
+    }
+}
 
 std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
 {

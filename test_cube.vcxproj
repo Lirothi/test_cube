@@ -320,8 +320,10 @@
     <ClCompile Include="sources/app/game/PlayerStart.cpp" />
     <ClCompile Include="sources/app/game/PlayerController.cpp" />
     <ClCompile Include="sources/app/game/PlaySession.cpp" />
+    <ClCompile Include="sources/app/game/Race.cpp" />
     <ClCompile Include="sources/app/game/RaceBot.cpp" />
     <ClCompile Include="sources/app/game/RaceTrack.cpp" />
+    <ClCompile Include="sources/app/game/VesselStats.cpp" />
     <ClCompile Include="sources/editor/scene/EditorPlayerStart.cpp" />
     <ClCompile Include="sources/app/camera/Camera.cpp" />
     <ClCompile Include="sources/rendering/lighting/DirectionalLight.cpp" />
@@ -597,10 +599,12 @@
     <ClInclude Include="sources/app/game/PlayerStart.h" />
     <ClInclude Include="sources/app/game/PlayerController.h" />
     <ClInclude Include="sources/app/game/PlaySession.h" />
+    <ClInclude Include="sources/app/game/Race.h" />
     <ClInclude Include="sources/app/game/RaceBot.h" />
     <ClInclude Include="sources/app/game/RaceCourse.h" />
     <ClInclude Include="sources/app/game/RaceCourseJson.h" />
     <ClInclude Include="sources/app/game/RaceTrack.h" />
+    <ClInclude Include="sources/app/game/VesselStats.h" />
     <ClInclude Include="sources/editor/scene/EditorPlayerStart.h" />
     <ClInclude Include="sources/app/game/PlayerStartJson.h" />
     <ClInclude Include="sources/app/camera/Camera.h" />

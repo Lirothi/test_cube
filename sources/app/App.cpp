@@ -54,6 +54,13 @@ float g_camFlyForward = 0.0f;
 // frame, and the next one is 1/60 s of the world later whatever the PNG cost. A real-time capture drops and doubles
 // frames; a `burst` without this lets the clocks drift apart (the wake fell behind the boat).
 float g_recordDt = 0.0f;
+// `frame.timeScale` (--set / MCP; 1 = real time): the world's clock runs this many times faster -- a three-lap race of
+// five minutes in forty seconds at 8. Everything of the world goes by the frame's dt (the ocean's and the wind's clock,
+// the physics' steps, the boats' water, the bots, the race's clock), so the dt is what is scaled, capped at 0.1 s as a
+// frame's always is: a frame too slow for the scale slows the world, it does not jump it. What a scaled run is: the game
+// at (frame rate / scale) frames a second -- at 240 fps and 4 the physics steps once a frame and the water's heights
+// land 30 times a second of the world, as at 60 fps; past frame rate / 15 the physics drops steps (physics.maxSteps).
+float g_timeScale = 1.0f;
 // "--cam-orbit=<radius>,<deg/s>": circle the start position, looking along the tangent. A
 // straight drift leaves a grove in seconds; a ring keeps crossing it, which is what churns the
 // RT wind-BLAS slots (and what leaked their retired buffers until 2026-09-03).
@@ -422,6 +429,14 @@ namespace
         if (setting == "frame.maxFps") { render::g_maxFps_game = render::ClampMaxFps(static_cast<int>(value)); return true; }
         // A film, frame by frame (g_recordDt above): seconds of the world a captured frame advances; 0 = real time.
         if (setting == "frame.recordDt") { g_recordDt = std::clamp(value, 0.0f, 0.1f); return true; }
+        // The world's clock, times this (g_timeScale above). The copies of the water's heights follow it.
+        if (setting == "frame.timeScale")
+        {
+            g_timeScale = std::clamp(value, 0.1f, 16.0f);
+            OceanReadback::SetTimeScale(g_timeScale);
+            LOG_INFO(logging::LogCategory::App, "frame.timeScale: the world's clock runs x{:.2f}", g_timeScale);
+            return true;
+        }
         // --no-hud for a running process: 0 hides the HUD's text (a film's frames), 1 shows it.
         if (setting == "debug.hud") { g_hudHidden = value == 0.0f; return true; }
         // Game thread plan G8: Scene::Render on a thread of its own; the loop takes it at the next frame's start.
@@ -450,6 +465,18 @@ namespace
         if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
         // The boats (docs/play_mode_plan.md): every vessel in the world, transient. An asset's own numbers are its mesh.json "vessel".
         if (setting.rfind("vessel.", 0) == 0 && scene.Physics().TuneVessels(setting.substr(7), value)) { return true; }
+        // The race (game::Race): its numbers by one table; a script's start and the results away.
+        if (setting.rfind("race.", 0) == 0)
+        {
+            const std::string key = setting.substr(5);
+            if (const game::RaceKey* entry = game::FindRaceKey(key))
+            {
+                game::RaceSettingsRef().*(entry->member) = std::clamp(value, entry->lo, entry->hi);
+                return true;
+            }
+            if (key == "start") { if (value != 0.0f) { scene.RaceRef().RequestStart(); } return true; }
+            if (key == "close") { if (value != 0.0f) { scene.RaceRef().CloseResults(); } return true; }
+        }
         // The race's bots (game::RaceBot): one table.
         if (setting.rfind("bot.", 0) == 0)
         {
@@ -2379,13 +2406,13 @@ namespace
                 "{\"valid\":%s,\"adaptedEv100\":%.3f,\"targetEv100\":%.3f,\"eyeEv100\":%.3f,"
                 "\"compensationEv\":%.3f,\"openSky\":%.3f,\"openNight\":%.3f,\"nightLightEv\":%.2f,\"nightEv100\":%.2f,"
                 "\"preExposure\":%.6g,"
-                "\"sunProbe\":[%.4g,%.4g,%.4g],\"sunProbeVisibleShare\":%.3f,\"fps\":%.1f,\"frame\":%llu",
+                "\"sunProbe\":[%.4g,%.4g,%.4g],\"sunProbeVisibleShare\":%.3f,\"fps\":%.1f,\"frame\":%llu,\"timeScale\":%.2f",
                 rb.valid ? "true" : "false", rb.adaptedEv100, rb.targetEv100, rb.eyeEv100,
                 rb.compensationEv, rb.openSky, rb.openNight, scene_.GetTimeOfDay().NightLightEv(),
                 scene_.GetTimeOfDay().NightEv100(),
                 static_cast<double>(render::g_preExposure),
                 rb.sunProbe[0], rb.sunProbe[1], rb.sunProbe[2], rb.sunProbeShare,
-                renderer_.GetFPS(), static_cast<unsigned long long>(renderer_.GetTotalFrameNumber()));
+                renderer_.GetFPS(), static_cast<unsigned long long>(renderer_.GetTotalFrameNumber()), g_timeScale);
             // The pixel probe, while one is asked for (`debug.probeU/probeV/probeRadius`): pre-exposed
             // HDR, a few frames old (the record's read-back ring).
             if (n > 0 && n < static_cast<int>(sizeof(text)) && settings_.debugProbeRadiusPx > 0.0f)
@@ -2445,11 +2472,17 @@ namespace
                         const float starboardY = b.up.z * b.forward.x - b.up.x * b.forward.z; // (up x forward).y
                         const float pitchDeg = std::asin(std::clamp(b.forward.y, -1.0f, 1.0f)) * 57.2957795f;
                         const float rollDeg = std::atan2(starboardY, b.up.y) * 57.2957795f;
-                        char boatItem[288];
+                        // What the boat does by its own numbers (game::StatsOf): its card's, and a bot's.
+                        const game::VesselStats stats = b.settings ? game::StatsOf(*b.settings, b.halfLength, b.rudderLever) : game::VesselStats{};
+                        char boatItem[640];
                         std::snprintf(boatItem, sizeof(boatItem),
-                                      "%s{\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s,\"anchored\":%s}",
+                                      "%s{\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s,\"anchored\":%s,"
+                                      "\"stats\":{\"topSpeed\":%.2f,\"toPlane\":%.2f,\"turnSpeed\":%.2f,\"turnRateDeg\":%.2f,\"turnRadius\":%.1f,\"lateralAccel\":%.2f,\"braking\":%.2f,"
+                                      "\"mass\":%.0f,\"thrust\":%.0f,\"length\":%.2f,\"rudderLever\":%.2f}}",
                                       i > 0 ? "," : "", b.position.x, b.position.y, b.position.z, b.forward.x, b.forward.y, b.forward.z,
-                                      pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false", b.anchored ? "true" : "false");
+                                      pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false", b.anchored ? "true" : "false",
+                                      stats.topSpeed, stats.toPlane, stats.turnSpeed, stats.turnRate * 57.2957795f, stats.turnRadius, stats.lateralAccel, stats.braking,
+                                      stats.mass, stats.thrust, stats.length, b.rudderLever);
                         out += boatItem;
                     }
                     out += "]";
@@ -2839,6 +2872,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             lastTime = now;
 
             deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
+            if (g_timeScale != 1.0f) { deltaTime = Math::Clamp(deltaTime * g_timeScale, 1e-6f, 0.1f); }
 #if WITH_EDITOR
             if (g_recordDt > 0.0f)
             {
