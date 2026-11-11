@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string_view>
+#include <vector>
+
 #include "physics/PhysicsTypes.h"
 #include "third_party/json/json.hpp"
 
@@ -14,7 +17,31 @@ namespace physics
 {
     inline nlohmann::json WriteVec3(const Math::float3& v) { return nlohmann::json::array({ v.x, v.y, v.z }); }
 
-    // The numbers of a mesh.json "vessel" block: ONE table for the file, the Mesh Editor and --set vessel.<key>.
+    // Where a number of a boat belongs: the Mesh Editor heads its rows by it, and a placed copy may say its own only for the
+    // race's groups (VesselGroupPerCopy).
+    enum class VesselGroup : unsigned char { Engine, Hull, Helm, Turn, Sea, Hydrostatics, Anchor, Look };
+    inline const char* VesselGroupName(VesselGroup group)
+    {
+        switch (group)
+        {
+        case VesselGroup::Engine: return "Engine";
+        case VesselGroup::Hull: return "Hull and planing";
+        case VesselGroup::Helm: return "Helm";
+        case VesselGroup::Turn: return "Turning";
+        case VesselGroup::Sea: return "In a sea";
+        case VesselGroup::Hydrostatics: return "How it floats";
+        case VesselGroup::Anchor: return "Anchor";
+        case VesselGroup::Look: return "Look";
+        }
+        return "";
+    }
+    // What a placed copy may say for itself (a level object's "vessel" block over its asset's: the Inspector's Boat
+    // section, MCP setVessel): how it races. How it floats stays the hull's -- the draft is what the water mask is baked
+    // for, the centre of mass where the hull lies --, and the anchor, the spray and the cameras are no race's.
+    inline bool VesselGroupPerCopy(VesselGroup group) { return group <= VesselGroup::Sea; }
+
+    // The numbers of a mesh.json "vessel" block: ONE table for the file, the Mesh Editor, the Inspector (a copy's own),
+    // MCP setVessel and --set vessel.<key>. The hint says what the hand at the helm feels and which way to turn.
     struct VesselKey
     {
         const char* key;
@@ -23,52 +50,104 @@ namespace physics
         float speed;
         float lo;
         float hi;
+        VesselGroup group;
+        const char* hint;
     };
     inline const std::vector<VesselKey>& VesselKeys()
     {
         using S = VesselSettings;
+        using G = VesselGroup;
         static const std::vector<VesselKey> keys = {
-            { "mass", "Mass (kg)", &S::mass, 10.0f, 1.0f, 1000000.0f },
-            { "centerOfMassY", "Centre of mass height (m)", &S::centerOfMassY, 0.01f, -10.0f, 20.0f },
-            { "draft", "Draft (m)", &S::draft, 0.005f, 0.01f, 20.0f },
-            { "reserveLift", "Reserve lift (of the weight)", &S::reserveLift, 0.01f, 1.0f, 50.0f },
-            { "thrust", "Thrust (N)", &S::thrust, 100.0f, 0.0f, 10000000.0f },
-            { "reverseShare", "Astern share", &S::reverseShare, 0.01f, 0.0f, 1.0f },
-            { "throttleRate", "Throttle rate (1/s)", &S::throttleRate, 0.01f, 0.01f, 20.0f },
-            { "rudderDeg", "Rudder hard over (deg)", &S::rudderDeg, 0.25f, 0.0f, 80.0f },
-            { "rudderRate", "Rudder rate (deg/s)", &S::rudderRate, 1.0f, 1.0f, 1000.0f },
-            { "rudderForce", "Rudder force", &S::rudderForce, 1.0f, 0.0f, 100000.0f },
-            { "wash", "Propeller wash (m/s)", &S::wash, 0.05f, 0.0f, 50.0f },
-            { "surgeDrag", "Drag ahead", &S::surgeDrag, 1.0f, 0.1f, 100000.0f },
-            { "swayDrag", "Drag across", &S::swayDrag, 10.0f, 0.0f, 1000000.0f },
-            { "swayLinear", "Drift damping", &S::swayLinear, 10.0f, 0.0f, 1000000.0f },
-            { "swayLever", "Keel aft of the centre (m)", &S::swayLever, 0.01f, -50.0f, 50.0f },
-            { "yawDrag", "Turn drag", &S::yawDrag, 1000.0f, 0.0f, 100000000.0f },
-            { "yawLinear", "Turn damping", &S::yawLinear, 100.0f, 0.0f, 100000000.0f },
-            { "heaveDamping", "Heave damping (1/s)", &S::heaveDamping, 0.01f, 0.0f, 50.0f },
-            { "pitchDamping", "Pitch damping (1/s)", &S::pitchDamping, 0.01f, 0.0f, 50.0f },
-            { "rollDamping", "Roll damping (1/s)", &S::rollDamping, 0.01f, 0.0f, 50.0f },
-            { "rollStiffness", "Form stability", &S::rollStiffness, 100.0f, 0.0f, 100000000.0f },
-            { "bank", "Lean into a turn (deg per m/s2)", &S::bank, 0.01f, 0.0f, 20.0f },
-            { "maxBank", "Most lean (deg)", &S::maxBank, 0.1f, 0.0f, 80.0f },
-            { "humpSpeed", "Hump speed (m/s)", &S::humpSpeed, 0.05f, 0.1f, 50.0f },
-            { "planeSpeed", "Planing speed (m/s)", &S::planeSpeed, 0.05f, 0.2f, 100.0f },
-            { "humpDrag", "Hump drag (N)", &S::humpDrag, 50.0f, 0.0f, 10000000.0f },
-            { "humpTrim", "Bow up at the hump", &S::humpTrim, 500.0f, 0.0f, 100000000.0f },
-            { "planeTrim", "Bow up on the plane", &S::planeTrim, 500.0f, 0.0f, 100000000.0f },
-            { "planingLift", "Planing lift", &S::planingLift, 0.01f, 0.0f, 2.0f },
-            { "waveForce", "Wave slope force", &S::waveForce, 0.01f, 0.0f, 5.0f },
-            { "slam", "Slam", &S::slam, 10.0f, 0.0f, 1000000.0f },
-            { "slamMax", "Slam limit (of the weight)", &S::slamMax, 0.01f, 0.0f, 10.0f },
-            { "anchorScope", "Anchor's slack (m)", &S::anchorScope, 0.1f, 0.0f, 500.0f },
-            { "anchorStiffness", "Anchor rode stiffness (N/m)", &S::anchorStiffness, 50.0f, 0.0f, 10000000.0f },
-            { "anchorDamping", "Anchor rode damping (N s/m)", &S::anchorDamping, 50.0f, 0.0f, 10000000.0f },
-            { "sprayScale", "Spray size (1 = small_yacht's)", &S::sprayScale, 0.01f, 0.1f, 4.0f },
-            { "cameraDistance", "Chase camera distance (m)", &S::cameraDistance, 0.1f, 1.0f, 500.0f },
-            { "cameraHeight", "Chase camera height (m)", &S::cameraHeight, 0.05f, -10.0f, 100.0f },
-            { "giProbeSpeed", "Out of the GI probes past (m/s, 0 = never)", &S::giProbeSpeed, 0.05f, 0.0f, 100.0f },
+            { "thrust", "Thrust (N)", &S::thrust, 100.0f, 0.0f, 10000000.0f, G::Engine,
+              "The propeller's push, full ahead. With the drag ahead it is the top speed: thrust = 0.77 x drag x speed^2, so\n"
+              "+21 % thrust = +10 % speed. More also climbs the hump onto the plane sooner." },
+            { "reverseShare", "Astern share", &S::reverseShare, 0.01f, 0.0f, 1.0f, G::Engine,
+              "Of the thrust, full astern: how hard it backs and how fast a bot brakes with the engine." },
+            { "throttleRate", "Throttle rate (1/s)", &S::throttleRate, 0.01f, 0.01f, 20.0f, G::Engine,
+              "How fast the engine answers the throttle: 1 = idle to full in a second. Lower = a heavy boat's slow pull away\n"
+              "(20 kn later), higher = a light boat's kick." },
+            { "mass", "Mass (kg)", &S::mass, 10.0f, 1.0f, 1000000.0f, G::Hull,
+              "Its weight, the body's (the Physics row's mass has no say on a boat). Heavier: slower to speed up and to slow\n"
+              "down, it slides more in a bend (a wider circle), and a wave throws it about less. The top speed does not change." },
+            { "surgeDrag", "Drag ahead", &S::surgeDrag, 1.0f, 0.1f, 100000.0f, G::Hull,
+              "The water's drag along the hull, N per (m/s)^2. Lower = a higher top speed: half the drag, +41 %." },
+            { "humpSpeed", "Hump speed (m/s)", &S::humpSpeed, 0.05f, 0.1f, 50.0f, G::Hull,
+              "Where the bow stands highest and the drag bumps. Too little throttle stays under it." },
+            { "planeSpeed", "Planing speed (m/s)", &S::planeSpeed, 0.05f, 0.2f, 100.0f, G::Hull,
+              "Past this it is up on the plane: less of it in the water, less drag." },
+            { "humpDrag", "Hump drag (N)", &S::humpDrag, 50.0f, 0.0f, 10000000.0f, G::Hull,
+              "The extra drag at the hump. Higher = a longer climb onto the plane (20 kn later); 0 = none." },
+            { "humpTrim", "Bow up at the hump", &S::humpTrim, 500.0f, 0.0f, 100000000.0f, G::Hull,
+              "N m of bow up at the hump. Too much stands it on its stern at part throttle." },
+            { "planeTrim", "Bow up on the plane", &S::planeTrim, 500.0f, 0.0f, 100000000.0f, G::Hull,
+              "N m of bow up on the plane." },
+            { "planingLift", "Planing lift", &S::planingLift, 0.01f, 0.0f, 2.0f, G::Hull,
+              "How much of its weight the speed carries on the plane: the hull rises and less of it drags." },
+            { "rudderForce", "Rudder force", &S::rudderForce, 1.0f, 0.0f, 100000.0f, G::Helm,
+              "The rudder's push per (m/s)^2 of water past it -- THE handling number: more = a tighter circle and faster\n"
+              "bends (a bot takes its bends by the boat's own circle)." },
+            { "rudderDeg", "Rudder hard over (deg)", &S::rudderDeg, 0.25f, 0.0f, 80.0f, G::Helm,
+              "How far the rudder goes. More = a tighter circle (by its sine)." },
+            { "rudderRate", "Rudder rate (deg/s)", &S::rudderRate, 1.0f, 1.0f, 1000.0f, G::Helm,
+              "How fast the rudder swings: lower = lazier into a turn and out of it, a slalom gets hard." },
+            { "wash", "Propeller wash (m/s)", &S::wash, 0.05f, 0.0f, 50.0f, G::Helm,
+              "Water the propeller throws past the rudder at full throttle: what steers a boat that hardly moves, and why\n"
+              "easing the throttle in a bend widens it." },
+            { "swayDrag", "Drag across", &S::swayDrag, 10.0f, 0.0f, 1000000.0f, G::Turn,
+              "The water's drag on the hull sliding sideways, per (m/s)^2. Higher = it slides less in a bend, its bow nearer\n"
+              "its way, and keeps more of its speed through it." },
+            { "swayLinear", "Drift damping", &S::swayLinear, 10.0f, 0.0f, 1000000.0f, G::Turn,
+              "The same at a slow drift sideways, per m/s." },
+            { "swayLever", "Keel aft of the centre (m)", &S::swayLever, 0.01f, -50.0f, 50.0f, G::Turn,
+              "Where that sideways push acts, aft of the centre of mass: the keel's. Further aft = it holds a course on\n"
+              "the waves and turns wider." },
+            { "yawDrag", "Turn drag", &S::yawDrag, 1000.0f, 0.0f, 100000000.0f, G::Turn,
+              "The water's resistance to the hull turning, per (rad/s)^2. Lower = it turns faster." },
+            { "yawLinear", "Turn damping", &S::yawLinear, 100.0f, 0.0f, 100000000.0f, G::Turn,
+              "The same at a slow turn: how soon a turn dies once the rudder is amidships." },
+            { "bank", "Lean into a turn (deg per m/s2)", &S::bank, 0.01f, 0.0f, 20.0f, G::Turn,
+              "How far it leans in, per m/s2 across its way." },
+            { "maxBank", "Most lean (deg)", &S::maxBank, 0.1f, 0.0f, 80.0f, G::Turn, "The most it leans into a turn." },
+            { "reserveLift", "Reserve lift (of the weight)", &S::reserveLift, 0.01f, 1.0f, 50.0f, G::Sea,
+              "The most the water lifts it, in its weights. Lower = it ploughs through a crest instead of flying off it (a\n"
+              "light hull in the air has no keel and no rudder)." },
+            { "heaveDamping", "Heave damping (1/s)", &S::heaveDamping, 0.01f, 0.0f, 50.0f, G::Sea,
+              "How soon its rise and fall on the waves settles." },
+            { "pitchDamping", "Pitch damping (1/s)", &S::pitchDamping, 0.01f, 0.0f, 50.0f, G::Sea,
+              "How soon bow up / bow down settles. Too little and it rocks in step with a sea met at speed." },
+            { "rollDamping", "Roll damping (1/s)", &S::rollDamping, 0.01f, 0.0f, 50.0f, G::Sea, "How soon a roll settles." },
+            { "rollStiffness", "Form stability", &S::rollStiffness, 100.0f, 0.0f, 100000000.0f, G::Sea,
+              "How hard it rights itself from a lean, N m per radian. Higher = flatter in a sea and in a turn." },
+            { "waveForce", "Wave slope force", &S::waveForce, 0.01f, 0.0f, 5.0f, G::Sea,
+              "The waves' slope pushing the hull down it: 1 = physics, 0 = none. A swell surfs it, a sea at an angle yaws it." },
+            { "slam", "Slam", &S::slam, 10.0f, 0.0f, 1000000.0f, G::Sea,
+              "The blow when the hull falls into a wave, N per (m/s)^2 of the fall." },
+            { "slamMax", "Slam limit (of the weight)", &S::slamMax, 0.01f, 0.0f, 10.0f, G::Sea, "The most one slam takes." },
+            { "centerOfMassY", "Centre of mass height (m)", &S::centerOfMassY, 0.01f, -10.0f, 20.0f, G::Hydrostatics,
+              "Over the mesh's origin. Low, or it rolls over." },
+            { "draft", "Draft (m)", &S::draft, 0.005f, 0.01f, 20.0f, G::Hydrostatics,
+              "Where still water stands on it, over the mesh's origin: the hull's hydrostatics at its weight. The water mask\n"
+              "is baked for it." },
+            { "anchorScope", "Anchor's slack (m)", &S::anchorScope, 0.1f, 0.0f, 500.0f, G::Anchor, "The rode lies slack this far round the anchor." },
+            { "anchorStiffness", "Anchor rode stiffness (N/m)", &S::anchorStiffness, 50.0f, 0.0f, 10000000.0f, G::Anchor, "Its pull per m past the slack." },
+            { "anchorDamping", "Anchor rode damping (N s/m)", &S::anchorDamping, 50.0f, 0.0f, 10000000.0f, G::Anchor,
+              "Its pull per m/s of the bow running out along it." },
+            { "sprayScale", "Spray size (1 = small_yacht's)", &S::sprayScale, 0.01f, 0.1f, 4.0f, G::Look,
+              "The spray's sprites times it, their throw times its root: the presets were made for a 10 m hull." },
+            { "cameraDistance", "Chase camera distance (m)", &S::cameraDistance, 0.1f, 1.0f, 500.0f, G::Look, "Behind the boat, at the helm." },
+            { "cameraHeight", "Chase camera height (m)", &S::cameraHeight, 0.05f, -10.0f, 100.0f, G::Look, "Over the mesh's origin." },
+            { "giProbeSpeed", "Out of the GI probes past (m/s, 0 = never)", &S::giProbeSpeed, 0.05f, 0.0f, 100.0f, G::Look,
+              "Faster than this the hull leaves the GI probes' rays (they stand in the world and it flies through them)." },
         };
         return keys;
+    }
+    inline const VesselKey* FindVesselKey(std::string_view key)
+    {
+        for (const VesselKey& entry : VesselKeys())
+        {
+            if (key == entry.key) { return &entry; }
+        }
+        return nullptr;
     }
 
     inline void ReadVec3(const nlohmann::json& block, const char* key, Math::float3& out)

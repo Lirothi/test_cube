@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 #include <chrono>
 #include <map>
@@ -40,6 +41,7 @@
 #include "editor/commands/SetBuoyantCommand.h"
 #include "editor/commands/SetCastShadowCommand.h"
 #include "editor/commands/SetRaceKeyCommand.h"
+#include "editor/commands/SetVesselTuneCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -541,6 +543,75 @@ namespace
         outStatus = (bot ? "A bot at the helm of " : "No bot at the helm of ") + CountedObjects(count);
         if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not boats)"; }
         return FoldIntoOneEntry(std::move(commands), bot ? "Bot At The Helm" : "No Bot At The Helm");
+    }
+
+    // ------------------------------------------------------------------ setVessel
+
+    // A boat's own number (the Inspector's Boat section): {key, value}; {key, reset: true} puts the asset's back, {reset: true}
+    // every one. SetVesselTuneCommand, one undo entry for every boat matched.
+    std::unique_ptr<EditorCommand> BuildSetVessel(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const std::string name = StringOr(intent.params, "key", "");
+        const physics::VesselKey* key = name.empty() ? nullptr : physics::FindVesselKey(name);
+        if (!name.empty() && (!key || !physics::VesselGroupPerCopy(key->group)))
+        {
+            outStatus = "'" + name + "' is no number a boat may say for itself:";
+            for (const physics::VesselKey& entry : physics::VesselKeys())
+            {
+                if (physics::VesselGroupPerCopy(entry.group)) { outStatus += std::string(" ") + entry.key; }
+            }
+            return nullptr;
+        }
+        const bool reset = BoolOr(intent.params, "reset", false);
+        const auto valueIt = intent.params.find("value");
+        const bool hasValue = valueIt != intent.params.end() && valueIt->is_number();
+        if (!reset && (!key || !hasValue))
+        {
+            outStatus = "setVessel takes a key and its value, or reset: true (with a key that one goes back to the asset's, without one every one)";
+            return nullptr;
+        }
+        const float asked = hasValue ? valueIt->get<float>() : 0.0f;
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t skipped = 0;
+        std::size_t unchanged = 0;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            if (!obj || !SetRaceKeyCommand::AppliesTo(*obj) || !SetVesselTuneCommand::IsVessel(*obj))
+            {
+                ++skipped;
+                continue;
+            }
+            std::unique_ptr<SetVesselTuneCommand> command = reset ? SetVesselTuneCommand::Reset(id, key) : SetVesselTuneCommand::Key(id, *key, asked);
+            if (!command->Changes(*obj))
+            {
+                ++unchanged;
+                continue;
+            }
+            commands.push_back(std::move(command));
+        }
+        if (commands.empty())
+        {
+            outStatus = unchanged > 0 ? "Nothing changes: " + CountedObjects(unchanged) + (reset ? " already as the asset's" : " already at that number")
+                                      : "No boat among them: setVessel tunes a copy of a vessel (a mesh whose asset has a \"vessel\" block)";
+            return nullptr;
+        }
+        const std::size_t count = commands.size();
+        if (reset) { outStatus = std::string(key ? key->key : "every number") + " as the asset's on " + CountedObjects(count); }
+        else
+        {
+            const float value = std::clamp(asked, key->lo, key->hi);
+            char text[96];
+            std::snprintf(text, sizeof(text), "%s = %g", key->key, static_cast<double>(value));
+            outStatus = std::string(text) + " on " + CountedObjects(count);
+            if (value != asked) { outStatus += " (clamped to its range " + std::to_string(key->lo) + " .. " + std::to_string(key->hi) + ")"; }
+        }
+        if (unchanged > 0) { outStatus += ", " + CountedObjects(unchanged) + " unchanged"; }
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not boats)"; }
+        return FoldIntoOneEntry(std::move(commands), reset ? "Boat: As The Asset's" : std::string("Boat: ") + key->label);
     }
 
     // ------------------------------------------------------------------ setPhysics, keepSimulation
@@ -3883,6 +3954,27 @@ EditorActionRegistry::EditorActionRegistry()
         { { "enabled", EditorParamKind::Bool, true, "true puts a bot at the helm, false takes it off" } },
         &BuildSetRaceBot,
     });
+
+    {
+        std::vector<std::string_view> vesselKeys;
+        for (const physics::VesselKey& key : physics::VesselKeys())
+        {
+            if (physics::VesselGroupPerCopy(key.group)) { vesselKeys.push_back(key.key); }
+        }
+        actions_.push_back({
+            "setVessel",
+            "Tune how the matching boats race -- one number of theirs, over their asset's: thrust (N, with surgeDrag the top "
+            "speed), mass (kg), throttleRate, rudderForce (how tight it turns), rudderDeg, rudderRate, wash, the drags and "
+            "the sea's dampings. The level keeps it for those copies alone; the asset's numbers stay. A race bot drives by the "
+            "boat's numbers. reset: true puts the asset's back (with a key that one, without one every one).",
+            EditorActionEffect::DocumentEdit,
+            EditorTargetKind::Objects,
+            { { "key", EditorParamKind::Enum, false, "which number", vesselKeys },
+              { "value", EditorParamKind::Number, false, "its value, in the key's units" },
+              { "reset", EditorParamKind::Bool, false, "true puts the asset's number back (every one when no key is given)" } },
+            &BuildSetVessel,
+        });
+    }
 
     actions_.push_back({
         "setCastShadow",

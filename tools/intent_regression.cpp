@@ -65,6 +65,7 @@
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
 #include "app/game/RaceBot.h"                  // TestRaceCourseAndBot
 #include "app/game/RaceCourseJson.h"
+#include "editor/commands/SetVesselTuneCommand.h" // TestRaceCourseAndBot: a boat's own numbers
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -1954,6 +1955,122 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
         const physics::VesselInput back = bot.Tick(track, hull, 1.0f / 60.0f, true);
         Check(back.throttle == -1.0f && bot.GetStatus().state == game::RaceBot::State::Reversing, "no water ahead or to either side: astern");
         settings = before;
+    }
+
+    // ---- the bot counts on ITS boat's numbers, and follows them the frame they change (a copy's own, --set vessel.*) ----
+    {
+        game::BotSettings& settings = game::BotSettingsRef();
+        const game::BotSettings before = settings;
+        settings = game::BotSettings{};
+        // A tight round course, gates 24 m wide on a circle of 60 m: its bends, not the boat's top speed, set the line's speed.
+        constexpr float kTight = 60.0f;
+        game::RaceCourse tightCourse;
+        for (int i = 0; i < 8; ++i)
+        {
+            const float bearing = 6.2831853f * static_cast<float>(i) / 8.0f;
+            for (const float r : { kTight - 12.0f, kTight + 12.0f })
+            {
+                tightCourse.marks.push_back(game::RaceMark{ Math::float3(r * std::sin(bearing), 0.0f, r * std::cos(bearing)), i + 1 });
+            }
+        }
+        game::RaceTrack tight;
+        std::string tightReport;
+        Check(tight.Build(tightCourse, tightReport), "a tight round course: " + tightReport);
+        physics::VesselSettings boat; // small_yacht's numbers
+        physics::VesselHull hull;
+        hull.settings = &boat;
+        hull.halfLength = 5.1f;
+        hull.halfBeam = 1.2f;
+        hull.up = Math::float3(0.0f, 1.0f, 0.0f);
+        hull.position = Math::float3(kTight, 0.0f, 0.0f);
+        hull.forward = Math::float3(0.0f, 0.0f, -1.0f);
+        game::RaceBot bot;
+        struct Seen
+        {
+            game::VesselStats stats;
+            float slowest = 0.0f;
+        };
+        const auto look = [&bot, &tight, &hull]()
+        {
+            bot.Tick(tight, hull, 1.0f / 60.0f, false);
+            return Seen{ bot.Stats(), bot.Line().SlowestSpeed() };
+        };
+        const Seen yacht = look();
+        Check(bot.Line().Valid() && yacht.slowest < 0.95f * yacht.stats.topSpeed && yacht.slowest > 0.5f * yacht.stats.topSpeed,
+              "on a 60 m circle the bends set the line's speed: " + std::to_string(yacht.slowest) + " of " + std::to_string(yacht.stats.topSpeed) + " m/s");
+        boat.rudderForce *= 2.0f;
+        const Seen agile = look();
+        Check(agile.stats.turnRadius < 0.9f * yacht.stats.turnRadius && agile.slowest > 1.05f * yacht.slowest,
+              "twice the rudder, the same bot the next frame: a tighter circle (" + std::to_string(agile.stats.turnRadius) + " m, was " +
+              std::to_string(yacht.stats.turnRadius) + ") and faster bends (" + std::to_string(agile.slowest) + " m/s)");
+        boat.thrust *= 1.5f;
+        const Seen strong = look();
+        Check(strong.stats.topSpeed > 1.2f * agile.stats.topSpeed && strong.slowest >= agile.slowest,
+              "half as much thrust again: a top speed of " + std::to_string(strong.stats.topSpeed) + " m/s (was " + std::to_string(agile.stats.topSpeed) + ")");
+        boat = physics::VesselSettings{};
+        const Seen again = look();
+        Check(again.stats.topSpeed == yacht.stats.topSpeed && again.slowest == yacht.slowest, "its numbers back: the line it had");
+        boat.mass *= 1.5f;
+        const Seen heavy = look();
+        Check(heavy.stats.topSpeed == yacht.stats.topSpeed && heavy.stats.braking < yacht.stats.braking && heavy.slowest < yacht.slowest,
+              "half as heavy again: the same top speed, it slows less with the engine off and takes the bends slower (it slides more): " +
+              std::to_string(heavy.slowest) + " m/s");
+        settings = before;
+    }
+
+    // ---- a copy's own numbers: setVessel writes them into the level over its asset's, key by key, and undoes ----
+    {
+        const std::string asset = "models/police_boat/police_boat.mesh.json";
+        if (!std::filesystem::exists(asset))
+        {
+            std::printf("  (police_boat not on disk: setVessel's document road skipped)\n");
+            return;
+        }
+        Check(EditorActionRegistry::Builtin().Find("setVessel") != nullptr, "setVessel is a registered action");
+        EditorObject police;
+        police.id = ctx.document.AllocateId();
+        police.name = "police_boat 001";
+        police.type = "staticMesh";
+        police.properties = nlohmann::json{ { "mesh", asset } };
+        ctx.document.Add(police);
+        const auto object = [&ctx, &police]() -> const EditorObject& { return *ctx.document.Find(police.id); };
+        const physics::VesselSettings fromAsset = SetVesselTuneCommand::AssetSettings(object());
+        Check(SetVesselTuneCommand::IsVessel(object()) && fromAsset.mass == 7500.0f && fromAsset.thrust == 25500.0f,
+              "the copy is a boat by its asset's mesh.json: " + std::to_string(fromAsset.mass) + " kg, " + std::to_string(fromAsset.thrust) + " N");
+        const auto run = [&actionCtx](const std::string& params, EditorCommandStack& stack, std::string& status)
+        {
+            std::string error;
+            EditorIntent intent;
+            const bool parsed = intentschema::ParseAnswer(
+                R"({"kind":"command","action":"setVessel","target":{"filter":["police_boat"]},"params":)" + params + "}", intent, error);
+            Check(parsed, "a setVessel answer parses: " + error);
+            const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+            return ExecuteIntent(actionCtx, stack, preview, status); // not executable: false, and the preview's problem in `status`
+        };
+        EditorCommandStack stack;
+        std::string status;
+        Check(run(R"({"key":"thrust","value":30000})", stack, status), "setVessel thrust: " + status);
+        const nlohmann::json resolved = SceneObjectFactory::ResolveMeshAsset(object().properties);
+        Check(object().properties["vessel"] == nlohmann::json{ { "thrust", 30000.0f } }, "the level keeps the one number: " + object().properties.dump());
+        Check(resolved["vessel"]["thrust"] == 30000.0f && resolved["vessel"]["mass"] == 7500.0f && resolved["vessel"].contains("propeller"),
+              "and the copy is its asset's boat with it: the rest key by key from the mesh.json");
+        Check(SetVesselTuneCommand::EffectiveSettings(object()).thrust == 30000.0f, "what it does");
+        Check(run(R"({"key":"draft","value":0.5})", stack, status) == false && status.find("thrust") != std::string::npos &&
+                  status.find("draft") == std::string::npos,
+              "how it floats is the hull's, not a copy's -- the keys a copy may say do not hold it: " + status);
+        Check(run(R"({"key":"rudderForce","value":180})", stack, status), status);
+        Check(stack.HistorySize() == 2 && object().properties["vessel"].size() == 2, "two numbers, two undo entries");
+        Check(run(R"({"key":"thrust","value":25500})", stack, status) && !object().properties["vessel"].contains("thrust"),
+              "back at the asset's number the copy says nothing of its own: " + object().properties.dump());
+        Check(run(R"({"key":"rudderForce","value":180})", stack, status) == false && status.find("Nothing changes") != std::string::npos,
+              "the same number again changes nothing and leaves no undo entry: " + status);
+        Check(run(R"({"reset":true})", stack, status) && !object().properties.contains("vessel"), "reset takes every number back: " + status);
+        Check(run(R"({"key":"mass","value":2000000})", stack, status) && object().properties["vessel"]["mass"] == 1000000.0f &&
+                  status.find("clamped") != std::string::npos,
+              "a number past its range is clamped and says so: " + status);
+        while (stack.CanUndo()) { stack.Undo(ctx); }
+        Check(!object().properties.contains("vessel"), "undo all the way: the level as it was -- " + object().properties.dump());
+        ctx.document.Remove(police.id);
     }
 }
 

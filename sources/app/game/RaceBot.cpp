@@ -90,7 +90,7 @@ namespace game
         line_.Clear();
         status_ = Status{};
         lineMargin_ = -1.0f;
-        lineKey_[0] = -1.0f;
+        std::fill(lineKey_, lineKey_ + kLineKeys, -1.0f);
         located_ = false;
         onGrid_ = false;
         joined_ = false;
@@ -152,7 +152,7 @@ namespace game
         {
             line_.Build(track.Gates(), margin);
             lineMargin_ = margin;
-            lineKey_[0] = -1.0f;
+            std::fill(lineKey_, lineKey_ + kLineKeys, -1.0f);
             located_ = false;
             gateSideValid_ = false;
         }
@@ -164,9 +164,11 @@ namespace game
         rudderLever_ = hull.rudderLever;
         stats_ = StatsOf(boat, halfLength_, rudderLever_);
         topSpeed_ = stats_.topSpeed;
-        const float key[4] = { settings.grip, settings.braking, stats_.topSpeed, stats_.turnRadius };
-        if (key[0] == lineKey_[0] && key[1] == lineKey_[1] && key[2] == lineKey_[2] && key[3] == lineKey_[3]) { return; }
-        for (int i = 0; i < 4; ++i) { lineKey_[i] = key[i]; }
+        // Every number the profile below is made of: a boat retuned (--set vessel.*, a copy's own numbers) is a new line
+        // the frame it changes. The mass alone moves the braking and not the top speed.
+        const float key[kLineKeys] = { settings.grip, settings.braking, stats_.topSpeed, stats_.lateralAccel, stats_.braking, stats_.turnRadius };
+        if (std::equal(key, key + kLineKeys, lineKey_)) { return; }
+        std::copy(key, key + kLineKeys, lineKey_);
         const float top = topSpeed_;
         // A bend is taken at the speed that asks `grip` of what the boat's own tightest turn makes across its way. Never
         // at a crawl: slower does not make a boat's circle tighter -- its turn is its own, and with the throttle eased
@@ -176,8 +178,9 @@ namespace game
                       std::max(settings.braking * stats_.braking, 0.2f));
         status_.tightestRadius = stats_.turnRadius;
         LOG_INFO(logging::LogCategory::App,
-                 "race: a line of {:.0f} m for a boat of {:.1f} m/s flat out, {:.1f} s to 20 kn, a circle of {:.0f} m at {:.1f} m/s ({:.1f} m/s2 across); the line's slowest place {:.1f} m/s",
-                 line_.Length(), top, stats_.toPlane, stats_.turnRadius, stats_.turnSpeed, stats_.lateralAccel, line_.SlowestSpeed());
+                 "race: '{}': a line of {:.0f} m for a boat of {:.1f} m/s flat out, {:.1f} s to 20 kn, a circle of {:.0f} m at {:.1f} m/s ({:.1f} m/s2 across, {:.2f} braking); the line's slowest place {:.1f} m/s",
+                 hull.object ? hull.object->GetGeometryPath() : std::string(), line_.Length(), top, stats_.toPlane, stats_.turnRadius, stats_.turnSpeed,
+                 stats_.lateralAccel, stats_.braking, line_.SlowestSpeed());
     }
 
     physics::VesselInput RaceBot::Tick(const RaceTrack& track, const physics::VesselHull& hull, float deltaTime, bool drive,

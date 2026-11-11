@@ -171,10 +171,12 @@ public:
     // A boat under way: the GI probes' rays pass through it (rt::kInstanceMaskGiProbe). The game half says, the render half's TLAS reads: a frame either way is nothing, the probes average it.
     void SetLeavesGiProbes(bool leaves) { leavesGiProbes_.store(leaves, std::memory_order_relaxed); }
     bool LeavesGiProbes() const { return leavesGiProbes_.load(std::memory_order_relaxed); }
-    // mesh.json "vessel": a powered boat. Null = not one.
-    void SetVesselSettings(std::shared_ptr<const physics::VesselSettings> settings) { vesselSettings_ = std::move(settings); }
+    // mesh.json "vessel" (with a placed copy's own numbers over it): a powered boat. Null = not one. The world takes a copy
+    // when it builds the body, so a change rebuilds it (game thread only: the editor's, the factory's).
+    void SetVesselSettings(std::shared_ptr<const physics::VesselSettings> settings);
     const physics::VesselSettings* GetVesselSettings() const { return vesselSettings_.get(); }
-    std::uint32_t GetCollisionRevision() const { return collisionRevision_; }
+    // Moves with what the body is built from: the collision settings, the vessel's numbers.
+    std::uint32_t GetBodyRevision() const { return bodyRevision_; }
     // The geometry an automatic pontoon layout analyses (StaticMesh: its .mesh.bin). Empty = none.
     virtual const std::string& GetGeometryPath() const
     {
@@ -466,7 +468,7 @@ private:
     std::uint32_t buoyancyRevision_ = 0;
     buoyancy::Settings buoyancySettings_;
     physics::Motion physicsMotion_ = physics::Motion::None;
-    std::uint32_t collisionRevision_ = 0;
+    std::uint32_t bodyRevision_ = 0;
     std::shared_ptr<const physics::VesselSettings> vesselSettings_;
     std::atomic<bool> leavesGiProbes_{ false };
     physics::CollisionSettings collisionSettings_;

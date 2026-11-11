@@ -142,6 +142,16 @@ namespace SceneObjectFactory
             if (key == "spawnScale") { continue; }
             const std::string effKey = (key == "geometry") ? std::string("model") : key;
             if (!eff.contains(effKey)) { eff[effKey] = it.value(); }
+            // A boat's numbers go key by key: a copy's "vessel" says only what it does differently (the Inspector's Boat
+            // section, physics::VesselGroupPerCopy), the rest is its asset's.
+            else if (key == "vessel" && it.value().is_object() && eff[effKey].is_object())
+            {
+                json& own = eff[effKey];
+                for (auto v = it.value().begin(); v != it.value().end(); ++v)
+                {
+                    if (!own.contains(v.key())) { own[v.key()] = v.value(); }
+                }
+            }
         }
         return eff;
     }

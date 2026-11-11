@@ -717,7 +717,7 @@ namespace physics
 
                 const bool floats = dynamicBody && object.IsBuoyant();
                 const bool same = !entry.body.IsInvalid() && entry.shapeKey == shapeKey && entry.motion == object.GetPhysicsMotion() &&
-                    entry.kinematic == kinematicBody && entry.floats == floats && entry.revision == object.GetCollisionRevision() &&
+                    entry.kinematic == kinematicBody && entry.floats == floats && entry.revision == object.GetBodyRevision() &&
                     entry.scale.x == object.GetScale().x && entry.scale.y == object.GetScale().y && entry.scale.z == object.GetScale().z;
                 if (same)
                 {
@@ -785,7 +785,7 @@ namespace physics
                 entry.motion = object.GetPhysicsMotion();
                 entry.shapeKey = w.key;
                 entry.scale = object.GetScale();
-                entry.revision = object.GetCollisionRevision();
+                entry.revision = object.GetBodyRevision();
                 entry.kinematic = entry.motion != Motion::Dynamic && object.IsBuoyant();
                 if (!built_.shape) { continue; } // nothing solid in it: only leaves
 

@@ -1763,10 +1763,24 @@ void MeshEditorPanel::DrawVesselSection()
     drawPoint("Bow's way", "forward", settings.forward);
     drawPoint("Propeller (m)", "propeller", settings.propeller);
     drawPoint("Helmsman's eyes (m)", "helmEye", settings.helmEye);
+    // The table's groups as headings; a placed copy may say the race's groups for itself (Inspector > Boat).
+    bool first = true;
+    physics::VesselGroup group = physics::VesselGroup::Engine;
     for (const physics::VesselKey& key : physics::VesselKeys())
     {
+        if (first || key.group != group)
+        {
+            group = key.group;
+            first = false;
+            ImGui::SeparatorText(physics::VesselGroupName(group));
+        }
         float value = settings.*(key.member);
         if (ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, "%.3f")) { block[key.key] = value; }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s\n\nmesh.json vessel.%s, every copy%s", key.hint, key.key,
+                physics::VesselGroupPerCopy(key.group) ? "; one copy may say its own (Inspector > Boat)" : "");
+        }
     }
 }
 

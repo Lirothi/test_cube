@@ -287,6 +287,7 @@
     <ClCompile Include="sources/editor/commands/SetBuoyantCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetCastShadowCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetRaceKeyCommand.cpp" />
+    <ClCompile Include="sources/editor/commands/SetVesselTuneCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetPhysicsCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp" />
     <ClCompile Include="sources/editor/commands/SetEnabledCommand.cpp" />
@@ -579,6 +580,7 @@
     <ClInclude Include="sources/editor/commands/SetBuoyantCommand.h" />
     <ClInclude Include="sources/editor/commands/SetCastShadowCommand.h" />
     <ClInclude Include="sources/editor/commands/SetRaceKeyCommand.h" />
+    <ClInclude Include="sources/editor/commands/SetVesselTuneCommand.h" />
     <ClInclude Include="sources/editor/commands/SetPhysicsCommand.h" />
     <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h" />
     <ClInclude Include="sources/editor/commands/SetEnabledCommand.h" />

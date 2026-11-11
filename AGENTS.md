@@ -1618,7 +1618,34 @@ it", then "teach the bot to take the characteristics into account so it drives a
 - **The bot counts on ITS boat** (`RaceBot::EnsureLine` takes `StatsOf` of the hull it holds): a bend's speed is
   `bot.grip` (0.8) of what the boat makes across its way in its own tightest turn, braking `bot.braking` (0.35) of what
   it loses with the engine off at its top speed, the rudder's order a share of the tightest it turns at this speed, the
-  join's speed its own turn's, the reach at least `bot.lookAheadCircle` (0.43) of its circle's radius.
+  join's speed its own turn's, the reach at least `bot.lookAheadCircle` (0.43) of its circle's radius. It reads them
+  every frame and rebuilds its line's speeds the frame any of them moves (the key: grip, braking, the top speed, the m/s2
+  across, the braking, the circle -- the mass alone moves the braking and not the top speed).
+- **A placed boat may race with numbers of its own** (2026-11-11, owner: "make the boats' racing characteristics
+  tunable from the Inspector and check the race bot takes them into account"). Level object `"vessel": {"thrust":
+  33000}`: `SceneObjectFactory::ResolveMeshAsset` lays it KEY BY KEY over the asset's mesh.json "vessel" (any other
+  object key still replaces the asset's whole), so the copy says only what it does differently. Inspector > Boat (on a
+  copy of a vessel asset): the card -- `StatsOf`, this boat against its asset, following a drag before it is let go --
+  and the numbers by group (Engine, Hull and planing, Helm, Turning, In a sea; `physics::VesselGroupPerCopy`), each with
+  its hint; its own in accent with a button that puts the asset's back, "All back to the asset's". How it floats
+  (draft: the water mask is baked for it; centre of mass), the anchor, the spray and the cameras stay the asset's (Mesh
+  Editor > Vessel, which heads its rows by the same groups and shows the hints: `physics::VesselKeys`, one table).
+  `SetVesselTuneCommand`: every selected boat, one undo entry, a key written only while it differs from the asset's (a
+  copy put back saves byte-identical), clamped to the key's range. MCP / command bar `run_action setVessel {key, value}`
+  ({key, reset: true}, {reset: true} = every one); `get_readouts` vessels[] carry `geometry` now. The running copy takes
+  the numbers at once: `RenderableObject::SetVesselSettings` moves `GetBodyRevision` (was the collision's alone) and the
+  physics world rebuilds the body from them -- its entry kept a copy made at the build, so before this a change reached
+  nothing until a respawn. The Physics row's "Mass (kg)" is gone from a boat: its body weighs `vessel.mass`
+  (`SetVesselBody`), the row moved nothing. Gate `intent_regression TestRaceCourseAndBot`: the same bot on a 60 m circle
+  -- twice the rudder force the next frame: circle r 52.5 -> 30.8 m and faster bends; half as much thrust again: the top
+  speed x1.22; its numbers back: the line it had; half as heavy again: the same top speed, slower bends --; setVessel
+  writes one key, the rest from the mesh.json, the asset's number takes the key away, draft is refused, a number past its
+  range is clamped and says so, undo leaves the level as it was (the bot's check made to fail: it does). Live (wind_test,
+  the four bots, one lap at `frame.timeScale` 4, through MCP; scratchpad-style `vessel_tune_live.py`): police_boat as its
+  asset 102.7 s, its bot's line slowest 14.2 m/s, circle r 64 m; with thrust 33000 and rudderForce 200 of its own (the
+  card 32.3 -> 36.7 kn, 20 kn in 5.6 -> 4.2 s, a circle of 128 -> 93 m) the bot's line 17.2 m/s slowest, r 46 m, the lap
+  92.4 s and first; undone 102.0 s (the control); the mass 9500 alone: 20 kn in 6.8 s, r 70 m, braking 3.40 -> 2.68, the
+  same top speed, the body rebuilt at 9500 kg (`physics: ... is a boat` in the log) and at 7500 after undo. No miss in any.
 - **It knows how its boat slides** (`bot.slip` 1 = whole, 0 = before). The helm pointed the BOW at its aim, and a hull
   in a turn goes bow inside its way, so the boat ran outside its line in every bend by its reach times that angle:
   police_boat (11 degrees in the coast's 140 m bend at 22 kn) 7-9 m, at any speed -- onto the outer marks; a hit spun it

@@ -112,7 +112,14 @@ void RenderableObject::SetPhysicsMotion(physics::Motion motion)
 void RenderableObject::SetCollisionSettings(physics::CollisionSettings settings)
 {
     collisionSettings_ = std::move(settings);
-    ++collisionRevision_;
+    ++bodyRevision_;
+    if (physicsRegistered_) { physics::NotifyChanged(this); }
+}
+
+void RenderableObject::SetVesselSettings(std::shared_ptr<const physics::VesselSettings> settings)
+{
+    vesselSettings_ = std::move(settings);
+    ++bodyRevision_;
     if (physicsRegistered_) { physics::NotifyChanged(this); }
 }
 

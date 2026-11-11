@@ -2474,12 +2474,12 @@ namespace
                         const float rollDeg = std::atan2(starboardY, b.up.y) * 57.2957795f;
                         // What the boat does by its own numbers (game::StatsOf): its card's, and a bot's.
                         const game::VesselStats stats = b.settings ? game::StatsOf(*b.settings, b.halfLength, b.rudderLever) : game::VesselStats{};
-                        char boatItem[640];
+                        char boatItem[900];
                         std::snprintf(boatItem, sizeof(boatItem),
-                                      "%s{\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s,\"anchored\":%s,"
+                                      "%s{\"geometry\":\"%s\",\"position\":[%.3f,%.3f,%.3f],\"forward\":[%.4f,%.4f,%.4f],\"pitchDeg\":%.3f,\"rollDeg\":%.3f,\"speed\":%.3f,\"atHelm\":%s,\"anchored\":%s,"
                                       "\"stats\":{\"topSpeed\":%.2f,\"toPlane\":%.2f,\"turnSpeed\":%.2f,\"turnRateDeg\":%.2f,\"turnRadius\":%.1f,\"lateralAccel\":%.2f,\"braking\":%.2f,"
                                       "\"mass\":%.0f,\"thrust\":%.0f,\"length\":%.2f,\"rudderLever\":%.2f}}",
-                                      i > 0 ? "," : "", b.position.x, b.position.y, b.position.z, b.forward.x, b.forward.y, b.forward.z,
+                                      i > 0 ? "," : "", b.object ? b.object->GetGeometryPath().c_str() : "", b.position.x, b.position.y, b.position.z, b.forward.x, b.forward.y, b.forward.z,
                                       pitchDeg, rollDeg, b.speed, b.atHelm ? "true" : "false", b.anchored ? "true" : "false",
                                       stats.topSpeed, stats.toPlane, stats.turnSpeed, stats.turnRate * 57.2957795f, stats.turnRadius, stats.lateralAccel, stats.braking,
                                       stats.mass, stats.thrust, stats.length, b.rudderLever);

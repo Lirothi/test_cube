@@ -121,7 +121,8 @@ namespace game
         Status status_;
         // What the line was built for.
         float lineMargin_ = -1.0f;
-        float lineKey_[4] = { -1.0f, -1.0f, -1.0f, -1.0f }; // grip, braking, the boat's top speed and circle
+        static constexpr int kLineKeys = 6;
+        float lineKey_[kLineKeys] = { -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f }; // grip, braking; the boat's top speed, m/s2 across, braking, circle
         VesselStats stats_;      // its boat's, from its settings
         float topSpeed_ = 0.0f;
         float halfLength_ = 5.0f;

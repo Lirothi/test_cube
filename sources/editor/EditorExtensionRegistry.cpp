@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -14,6 +15,7 @@
 #include <vector>
 
 #include "app/camera/Camera.h"
+#include "app/game/VesselStats.h"
 #include "app/scene/Scene.h"
 #include "app/scene/SceneObjectFactory.h"
 #include "core/math/Math.h"
@@ -25,6 +27,7 @@
 #include "editor/commands/SetPhysicsCommand.h"
 #include "editor/commands/SetCastShadowCommand.h"
 #include "editor/commands/SetRaceKeyCommand.h"
+#include "editor/commands/SetVesselTuneCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
@@ -34,6 +37,7 @@
 #include "ocean/OceanRenderable.h"
 #include "rendering/RenderLayers.h"
 #include "rendering/renderables/GBufferRenderable.h"
+#include "rendering/renderables/RenderableObject.h"
 #include "rendering/renderables/RenderableObjectBase.h"
 #include "rendering/renderables/TransparentStaticMesh.h"
 #include "vfx/ParticleEmitterObject.h"
@@ -594,10 +598,207 @@ namespace
             DrawPhysics(ctx, commandStack, obj);
             DrawBuoyancy(ctx, commandStack, obj, runtime);
             DrawRace(ctx, commandStack, obj);
+            DrawBoat(ctx, commandStack, obj, runtime);
             DrawGlowOnAt(ctx, commandStack, obj, gb);
         }
 
     private:
+        // A boat's own numbers -- how it races (physics::VesselGroupPerCopy) -- over its asset's (Mesh Editor > Vessel):
+        // the level object's "vessel" block (SetVesselTuneCommand). On top what the boat does by game::StatsOf, the model
+        // its card in Play and a race bot count on, against its asset's; it follows a drag before the drag is let go.
+        static void DrawBoat(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj, RenderableObjectBase* runtime)
+        {
+            RenderableObject* object = runtime ? runtime->AsRenderableObject() : nullptr;
+            const physics::VesselSettings* live = object ? object->GetVesselSettings() : nullptr;
+            if (!live) { return; }
+            ImGui::SeparatorText("Boat");
+            ImGui::PushID("boat");
+
+            // The asset's numbers: its mesh.json, read again every second at most (a Mesh Editor save shows within it).
+            struct AssetNumbers
+            {
+                std::uint64_t object = ~0ull;
+                int frame = 0;
+                physics::VesselSettings settings;
+            };
+            static AssetNumbers asset;
+            if (asset.object != obj.id.value || ImGui::GetFrameCount() - asset.frame > 60)
+            {
+                asset.object = obj.id.value;
+                asset.frame = ImGui::GetFrameCount();
+                asset.settings = SetVesselTuneCommand::AssetSettings(obj);
+            }
+            // A drag in progress: the number its row shows and the card counts on until it is let go (one undo entry then).
+            struct Pending
+            {
+                std::uint64_t object = 0;
+                const physics::VesselKey* key = nullptr;
+                float value = 0.0f;
+            };
+            static Pending pending;
+            if (pending.key && pending.object != obj.id.value) { pending = Pending{}; }
+            physics::VesselSettings shown = *live;
+            if (pending.key) { shown.*(pending.key->member) = pending.value; }
+
+            // The card: the hull's length and where its rudder pushes are the physics world's (its body is built in the editor too).
+            float halfLength = 0.0f;
+            float rudderLever = 0.0f;
+            {
+                std::vector<physics::VesselHull> hulls;
+                ctx.scene.Physics().CollectHulls(hulls);
+                for (const physics::VesselHull& hull : hulls)
+                {
+                    if (hull.object == object)
+                    {
+                        halfLength = hull.halfLength;
+                        rudderLever = hull.rudderLever;
+                    }
+                }
+            }
+            if (halfLength > 0.0f && ImGui::BeginTable("##boatCard", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+            {
+                const game::VesselStats now = game::StatsOf(shown, halfLength, rudderLever);
+                const game::VesselStats was = game::StatsOf(asset.settings, halfLength, rudderLever);
+                ImGui::TableSetupColumn("What it does");
+                ImGui::TableSetupColumn("This boat");
+                ImGui::TableSetupColumn("Its asset");
+                ImGui::TableHeadersRow();
+                const auto row = [](const char* what, const char* format, float value, float assetValue)
+                {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(what);
+                    ImGui::TableNextColumn();
+                    const bool differs = std::fabs(value - assetValue) > 0.0005f * std::max(std::fabs(assetValue), 1.0f);
+                    if (differs) { ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.3f, 1.0f), format, value); }
+                    else { ImGui::Text(format, value); }
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled(format, assetValue);
+                };
+                row("Top speed", "%.1f kn", now.topSpeed * 1.94384f, was.topSpeed * 1.94384f);
+                row("0 to 20 kn", "%.1f s", now.toPlane, was.toPlane);
+                row("Tightest circle", "%.0f m", 2.0f * now.turnRadius, 2.0f * was.turnRadius);
+                row("  at", "%.1f kn", now.turnSpeed * 1.94384f, was.turnSpeed * 1.94384f);
+                row("  across its way", "%.2f m/s2", now.lateralAccel, was.lateralAccel);
+                row("Engine off, it slows", "%.2f m/s2", now.braking, was.braking);
+                row("Weight", "%.2f t", now.mass * 0.001f, was.mass * 0.001f);
+                ImGui::EndTable();
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(
+                        "game::StatsOf, from the numbers below: the boat's card in Play shows the same, and a race bot at its helm\n"
+                        "counts on it -- its bends at a share of the across, its braking for them, its top speed, its circle.\n"
+                        "On the water the sea takes some of it: a light hull in the air has no keel and no rudder.");
+                }
+            }
+            else if (halfLength <= 0.0f)
+            {
+                ImGui::TextDisabled("No card: not a boat now (Body Dynamic and floating make it one).");
+            }
+
+            // The numbers, by group. Accent = this boat's own; the button before it puts the asset's back.
+            const auto selectedBoats = [&ctx, &obj]()
+            {
+                std::vector<EditorObjectId> ids;
+                for (const EditorObjectId id : ctx.selection.Ordered())
+                {
+                    const EditorObject* selected = ctx.document.Find(id);
+                    if (selected && SetPhysicsCommand::VesselAsset(ctx, id)) { ids.push_back(id); }
+                }
+                if (ids.empty()) { ids.push_back(obj.id); }
+                return ids;
+            };
+            const auto runAll = [&ctx, &commandStack](const char* label, std::vector<std::unique_ptr<SetVesselTuneCommand>> commands)
+            {
+                auto composite = std::make_unique<CompositeCommand>(label);
+                for (std::unique_ptr<SetVesselTuneCommand>& command : commands)
+                {
+                    const EditorObject* target = ctx.document.Find(command->Target());
+                    if (target && command->Changes(*target)) { composite->Add(std::move(command)); }
+                }
+                if (!composite->Empty()) { commandStack.Execute(ctx, std::move(composite)); }
+            };
+            const ImVec4 accent(1.0f, 0.78f, 0.3f, 1.0f);
+            const float resetWidth = ImGui::GetFrameHeight();
+            bool anyOwn = false;
+            for (const physics::VesselGroup group : { physics::VesselGroup::Engine, physics::VesselGroup::Hull, physics::VesselGroup::Helm,
+                     physics::VesselGroup::Turn, physics::VesselGroup::Sea })
+            {
+                ImGui::SetNextItemOpen(group <= physics::VesselGroup::Helm, ImGuiCond_Once);
+                const bool open = ImGui::TreeNode(physics::VesselGroupName(group));
+                for (const physics::VesselKey& key : physics::VesselKeys())
+                {
+                    if (key.group != group) { continue; }
+                    const bool own = SetVesselTuneCommand::HasOwn(obj, key);
+                    anyOwn = anyOwn || own;
+                    if (!open) { continue; }
+                    ImGui::PushID(key.key);
+                    if (own)
+                    {
+                        if (ImGui::Button("<", ImVec2(resetWidth, 0.0f)))
+                        {
+                            std::vector<std::unique_ptr<SetVesselTuneCommand>> commands;
+                            for (const EditorObjectId id : selectedBoats()) { commands.push_back(SetVesselTuneCommand::Reset(id, &key)); }
+                            runAll("Boat: back to the asset's", std::move(commands));
+                        }
+                        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Back to the asset's %g", static_cast<double>(asset.settings.*(key.member))); }
+                    }
+                    else
+                    {
+                        ImGui::Dummy(ImVec2(resetWidth, ImGui::GetFrameHeight()));
+                    }
+                    ImGui::SameLine();
+                    const bool editing = pending.key == &key;
+                    float value = editing ? pending.value : live->*(key.member);
+                    if (own) { ImGui::PushStyleColor(ImGuiCol_Text, accent); }
+                    if (ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, key.hi >= 1000.0f ? "%.0f" : "%.3f", ImGuiSliderFlags_AlwaysClamp))
+                    {
+                        pending = Pending{ obj.id.value, &key, value };
+                    }
+                    if (own) { ImGui::PopStyleColor(); }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("%s\n\nThe asset's: %g%s\n--set vessel.%s (every boat in Play, transient); MCP run_action setVessel {key: \"%s\", value}",
+                            key.hint, static_cast<double>(asset.settings.*(key.member)), own ? "   (this boat has its own: the button on the left puts it back)" : "",
+                            key.key, key.key);
+                    }
+                    if (ImGui::IsItemDeactivatedAfterEdit() && editing)
+                    {
+                        // Every selected boat, one undo entry.
+                        std::vector<std::unique_ptr<SetVesselTuneCommand>> commands;
+                        for (const EditorObjectId id : selectedBoats()) { commands.push_back(SetVesselTuneCommand::Key(id, key, pending.value)); }
+                        pending = Pending{};
+                        runAll((std::string("Boat: ") + key.label).c_str(), std::move(commands));
+                    }
+                    else if (editing && !ImGui::IsItemActive())
+                    {
+                        pending = Pending{}; // let go with nothing changed, or Esc
+                    }
+                    ImGui::PopID();
+                }
+                if (open) { ImGui::TreePop(); }
+            }
+            if (anyOwn)
+            {
+                if (ImGui::Button("All back to the asset's"))
+                {
+                    std::vector<std::unique_ptr<SetVesselTuneCommand>> commands;
+                    for (const EditorObjectId id : selectedBoats()) { commands.push_back(SetVesselTuneCommand::Reset(id, nullptr)); }
+                    runAll("Boat: all as the asset's", std::move(commands));
+                }
+                ImGui::SameLine();
+            }
+            ImGui::TextDisabled(anyOwn ? "This boat's own numbers are in the level." : "All its asset's (Mesh Editor > Vessel).");
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "A number set here is this copy's alone: the level object's \"vessel\" block, laid key by key over the asset's\n"
+                    "mesh.json. Every selected boat takes it (one undo entry). The asset's own numbers -- for every copy -- and how it\n"
+                    "floats (draft, centre of mass) are the Mesh Editor's. A race bot counts on these the moment they change.");
+            }
+            ImGui::PopID();
+        }
+
         // The race (app/game/RaceCourse.h): a mark's gate number; on a boat, a bot at its helm.
         static void DrawRace(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
         {
@@ -638,9 +839,10 @@ namespace
             if (ImGui::IsItemHovered())
             {
                 ImGui::SetTooltip(
-                    "In Play a bot takes this boat's helm and runs the level's race gates, lap after lap.\n"
-                    "Take the helm yourself (E) and it stands down until you leave. At any helm B hands\n"
-                    "the boat to the same bot (autopilot). Its numbers: Developer Controls > Physics, bot.*.");
+                    "In a race a bot takes this boat's helm and runs the level's race gates. Take the helm\n"
+                    "yourself (E) and it stands down until you leave. At any helm B hands the boat to the same\n"
+                    "bot (autopilot). It drives by THIS boat's numbers (Boat below: its top speed, its circle,\n"
+                    "its braking). How it drives: Developer Controls > Physics, bot.*.");
             }
         }
 
@@ -695,7 +897,8 @@ namespace
                     "(Level Editor > Play), as a convex hull of its solid slots.\n"
                     "None: no body. How it collides -- shape, slots, friction -- is the asset's: Mesh Editor > Collision.");
             }
-            if (motions[index] == physics::Motion::Dynamic)
+            // A boat's body weighs its vessel's mass (PhysicsVessel SetVesselBody): this row moved nothing on one. Boat > Mass.
+            if (motions[index] == physics::Motion::Dynamic && !vesselAsset)
             {
                 ImGui::DragFloat("Mass (kg)", &mass, 0.5f, 0.0f, 100000.0f, mass > 0.0f ? "%.1f" : "from density");
                 changed = changed || ImGui::IsItemDeactivatedAfterEdit();

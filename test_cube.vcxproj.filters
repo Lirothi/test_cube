@@ -312,6 +312,9 @@
     <ClCompile Include="sources/editor/commands/SetRaceKeyCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetVesselTuneCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -1068,6 +1071,9 @@
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetRaceKeyCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetVesselTuneCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h">
