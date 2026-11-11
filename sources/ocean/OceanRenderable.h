@@ -111,6 +111,10 @@ inline const bool g_wakeShore_knob = ::knob::Register(g_wakeShore_game, g_wakeSh
 inline float g_wakeStepHz = 30.0f;
 inline float g_wakeStepHz_game = 30.0f;
 inline const bool g_wakeStepHz_knob = ::knob::Register(g_wakeStepHz_game, g_wakeStepHz, "ocean::g_wakeStepHz");
+// --set=ocean.wakeBowBreaks:0 = a bow wave's arm runs on across a jump (OceanWake::Tuning::bowBreaks; the A/B, transient).
+inline bool g_wakeBowBreaks = true;
+inline bool g_wakeBowBreaks_game = true;
+inline const bool g_wakeBowBreaks_knob = ::knob::Register(g_wakeBowBreaks_game, g_wakeBowBreaks, "ocean::g_wakeBowBreaks");
 // The A/B of that carrying on: 0 = the surface shows each step as it stands until the next (--set=ocean.wakeExtrapolate).
 inline bool g_wakeExtrapolate = true;
 inline bool g_wakeExtrapolate_game = true;
@@ -164,6 +168,9 @@ public:
     void SetWakeHulls(std::vector<ocean::WakeHull> hulls);
     // Readouts of the wake's bow wave fronts (get_readouts `wake`): fronts alive, points on them, fronts handed to the GPU.
     void GetWakeFrontReadout(std::uint32_t& fronts, std::uint32_t& points, std::uint32_t& drawn) const;
+    // The breaks made in the arms (a bow that left the water or came back), and the last step's longest piece of an arm
+    // drawn whole, m.
+    void GetWakeFrontBreaks(std::uint32_t& breaks, float& longestLit) const;
     // The hulls the surface is not drawn inside (ocean/WaterMask.h), as Scene::Sync collects them (render half parked).
     void SetWaterMasks(std::vector<ocean::WaterMaskInstance> masks) { waterMasks_ = std::move(masks); }
     // Main_WaterMask's builder: this frame's hulls' lids (their caps and curtains) into the two nearest crossings of every

@@ -1656,6 +1656,12 @@ void OceanRenderable::GetWakeFrontReadout(std::uint32_t& fronts, std::uint32_t& 
     drawn = wake_ ? wake_->FrontsDrawn() : 0u;
 }
 
+void OceanRenderable::GetWakeFrontBreaks(std::uint32_t& breaks, float& longestLit) const
+{
+    breaks = wake_ ? wake_->FrontBreaks() : 0u;
+    longestLit = wake_ ? wake_->FrontLongestLit() : 0.0f;
+}
+
 bool OceanRenderable::WakeEnabled() const
 {
     return wake_ && GetRenderConfig().wakeEnabled;
@@ -1688,6 +1694,7 @@ std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWakePass(Rende
     tuning.bowScallop = std::clamp(render.wakeBowScallop, 0.0f, 1.0f);
     tuning.bowSpeedFull = std::clamp(render.wakeBowSpeedFull, 4.0f, 30.0f);
     tuning.bowFadeIn = std::clamp(render.wakeBowFadeIn, 0.0f, 2.0f);
+    tuning.bowBreaks = ocean::g_wakeBowBreaks;
     tuning.foamSpread = std::clamp(render.wakeFoamSpread, 0.0f, 1.0f);
     tuning.texel = std::clamp(render.wakeTexel, 0.25f, 2.0f);
     // The coast: the surf sim's window onto the shore depth map. On a frame that re-renders it (after this pass in the

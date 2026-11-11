@@ -1697,6 +1697,11 @@ namespace
             ocean::g_wakeStepHz_game = std::max(value, 0.0f);
             return true;
         }
+        if (setting == "ocean.wakeBowBreaks")
+        {
+            ocean::g_wakeBowBreaks_game = value != 0.0f;
+            return true;
+        }
         if (setting == "ocean.wakeExtrapolate")
         {
             ocean::g_wakeExtrapolate_game = value != 0.0f;
@@ -2504,8 +2509,12 @@ namespace
                 {
                     std::uint32_t fronts = 0, points = 0, drawn = 0;
                     wakeOcean->GetWakeFrontReadout(fronts, points, drawn);
-                    char wakeItem[128];
-                    std::snprintf(wakeItem, sizeof(wakeItem), ",\"wake\":{\"fronts\":%u,\"frontPoints\":%u,\"frontsDrawn\":%u}", fronts, points, drawn);
+                    std::uint32_t breaks = 0;
+                    float longestLit = 0.0f;
+                    wakeOcean->GetWakeFrontBreaks(breaks, longestLit);
+                    char wakeItem[192];
+                    std::snprintf(wakeItem, sizeof(wakeItem), ",\"wake\":{\"fronts\":%u,\"frontPoints\":%u,\"frontsDrawn\":%u,\"breaks\":%u,\"longestLit\":%.2f}",
+                                  fronts, points, drawn, breaks, longestLit);
                     out += wakeItem;
                 }
                 // The objects OceanBuoyancy floats (not the physics world's boats) and the water the CPU reads under them.

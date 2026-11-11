@@ -92,6 +92,8 @@ public:
         float bowWiden = 0.25f;    // m/s it widens
         float bowScallop = 0.2f;   // a leaving point's wave speed is 1 +- this x a short random walk
         float bowSpeedFull = 12.0f; // m/s of the hull at which the arms are whole (from kFrontSpeedOn)
+        bool bowBreaks = true;     // an arm ends where the bow leaves the water and starts anew where it comes back (false: the
+                                   // line runs on across the jump -- the A/B, ocean.wakeBowBreaks)
         float bowFadeIn = 0.3f;    // s of the hull's speed over which an arm's breaker comes in aft of the roots (0 = whole
                                    // from the hull): the surface's gate (BowGates), the residue's first points
         float foamSpread = 0.3f;   // m2/s the laid foam spreads at
@@ -166,6 +168,12 @@ public:
     std::uint32_t FrontCount() const { return frontsAlive_.load(std::memory_order_relaxed); }
     std::uint32_t FrontPointCount() const { return frontPoints_.load(std::memory_order_relaxed); }
     std::uint32_t FrontsDrawn() const { return frontsDrawn_.load(std::memory_order_relaxed); }
+    // The breaks made in the arms since the process started (a bow that left the water, or came back into it), and the
+    // longest piece of the lines the last step handed to the GPU that carried foam at BOTH its ends, m: a point leaves
+    // every 0.125 s, so 2-3 m at 17 m/s -- a piece of 10 m is an arm drawn across a jump (it stays in its line, running
+    // down, for as long as its points live: a reader that polls sees it).
+    std::uint32_t FrontBreaks() const { return frontBreaks_.load(std::memory_order_relaxed); }
+    float FrontLongestLit() const { return frontLongestLit_.load(std::memory_order_relaxed); }
 
 private:
     static constexpr std::uint32_t kMaxHulls = 16u;
@@ -261,6 +269,9 @@ private:
         float wobble = 0.0f;            // the scallops: a slow random walk a leaving point takes its speed from
         std::uint32_t random = 1u;
         bool seen = false;
+        bool open = false;              // a bow wave is leaving this side: its line runs to the hull
+        bool ending = false;            // the wave stopped a moment ago: `end` waits to see whether it is a jump
+        FrontPoint end;                 // a point of no strength made where it stopped; it runs on with the others
     };
     struct FrontSource // a hull's side this step
     {
@@ -280,6 +291,8 @@ private:
     std::atomic<std::uint32_t> frontsAlive_{ 0u };
     std::atomic<std::uint32_t> frontPoints_{ 0u };
     std::atomic<std::uint32_t> frontsDrawn_{ 0u };
+    std::atomic<std::uint32_t> frontBreaks_{ 0u };
+    std::atomic<float> frontLongestLit_{ 0.0f };
 
     // BuildPass' decisions for its record body (read, not captured: std::function keeps 48 bytes inline).
     struct HullGpu

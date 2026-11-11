@@ -131,11 +131,19 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
     for (Front& front : fronts_)
     {
         front.seen = false;
-        for (FrontPoint& point : front.points)
+        const auto run = [dt](FrontPoint& point)
         {
             const float travel = FrontTravel(point.spread, point.thrown, point.age, dt);
             point.position = Math::float2(point.position.x + point.outward.x * travel, point.position.y + point.outward.y * travel);
             point.age += dt;
+        };
+        for (FrontPoint& point : front.points)
+        {
+            run(point);
+        }
+        if (front.ending)
+        {
+            run(front.end);
         }
         while (!front.points.empty() && front.points.back().age > kFrontMaxAge)
         {
@@ -143,6 +151,7 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
         }
     }
 
+    float longestLit = 0.0f;
     r.frontCount = 0;
     const float texelFloor = 1.5f * r.texel;
     const float life = std::max(tuning.bowLife, 0.1f);
@@ -179,6 +188,15 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
         for (size_t i = 0; i < front.points.size() && written < count; ++i)
         {
             out[written++] = pack(front.points[i]);
+        }
+        for (std::uint32_t i = 0; i + 1u < written; ++i)
+        {
+            if (out[i].z > 0.02f && out[i + 1u].z > 0.02f) // foam at both ends: the whole piece is drawn
+            {
+                const float dx = out[i + 1u].x - out[i].x;
+                const float dy = out[i + 1u].y - out[i].y;
+                longestLit = std::max(longestLit, std::sqrt(dx * dx + dy * dy));
+            }
         }
         // A box a PIECE of kFrontPiece segments (its points and the next piece's first): one box round a whole arm
         // lying across the axes covered most of the window, and every texel in it walked all its segments.
@@ -233,11 +251,64 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
         }
         Front& front = *it;
         front.seen = true;
-        if (!(source.share > 0.0f) || !(dt > 0.0f))
+        // A point of NO strength in the line: where the arm ends, or begins anew. The line through a side's points is one
+        // line, and a piece of it is drawn with the foam of its two ends -- so with the bow out of the water for a second
+        // (no point leaves, and no head) and then back, the head and the last point before the jump were the two ends of
+        // ONE piece: the whole jump's length of arm appeared the step the bow landed (owner: "a part of the trail was
+        // not there and then suddenly was"). Between two such points the piece lays nothing.
+        const auto join = [&](const FrontPoint& point)
         {
+            front.points.insert(front.points.begin(), point);
+            if (front.points.size() > kMaxFrontPoints - 1u)
+            {
+                front.points.pop_back();
+            }
+            frontBreaks_.fetch_add(1u, std::memory_order_relaxed);
+        };
+        if (!tuning.bowBreaks)
+        {
+            front.ending = false;
+        }
+        if (!(source.share > 0.0f))
+        {
+            // The bow wave stops here (the bow off a crest, the boat too slow). The end is made where it stopped, and
+            // waits: a bow skips along the crests one to three times a second for a step or two, and an end for each
+            // notched the arm some 4 m for half a metre of air. Out for a point's spacing, it is a jump: the end joins.
+            if (tuning.bowBreaks && front.open && !front.points.empty() && front.points.front().strength > 0.0f)
+            {
+                front.end = BirthOf(source, tuning, 1.0f, 1.0f, 0.0f);
+                front.ending = true;
+            }
+            if (front.ending && front.end.age >= kFrontSpacing)
+            {
+                join(front.end);
+                front.ending = false;
+            }
+            front.open = false;
             emit(front, nullptr); // no bow wave now: what it threw runs on
             front.seen = false;   // (emitted; and forgotten below once its last point is gone)
             continue;
+        }
+        if (!(dt > 0.0f))
+        {
+            emit(front, nullptr); // a step of no time: nothing leaves
+            front.seen = false;
+            continue;
+        }
+        if (!front.open)
+        {
+            // It starts (again) here. Back before its end joined the line: a skip, and the line runs on as if the bow
+            // had never left. After a jump (the line ends in a point of no strength) the new arm begins with one of its own.
+            if (front.ending)
+            {
+                front.ending = false;
+            }
+            else if (tuning.bowBreaks && !front.points.empty() && front.points.front().strength <= 0.0f)
+            {
+                join(BirthOf(source, tuning, 1.0f, 1.0f, 0.0f));
+                front.sinceRelease = 0.0f;
+            }
+            front.open = true;
         }
         front.sinceRelease += dt;
         if (front.sinceRelease >= kFrontSpacing)
@@ -275,6 +346,7 @@ void OceanWake::StepFronts(float dt, bool keep, const std::vector<FrontSource>& 
     frontsAlive_.store(static_cast<std::uint32_t>(fronts_.size()), std::memory_order_relaxed);
     frontPoints_.store(points, std::memory_order_relaxed);
     frontsDrawn_.store(r.frontCount, std::memory_order_relaxed);
+    frontLongestLit_.store(longestLit, std::memory_order_relaxed);
 }
 
 void OceanWake::EnsureResources(Renderer* renderer)
