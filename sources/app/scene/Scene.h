@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include "app/game/PlayerStart.h"
+#include "app/game/RaceBot.h"
 #include "app/game/VesselCamera.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "rendering/shadows/ShadowGpuData.h"
@@ -158,10 +159,16 @@ public:
     physics::World& Physics() { return physics_; }
     const physics::World& Physics() const { return physics_; }
     game::VesselCamera& VesselCameraRef() { return vesselCamera_; }
+    // The level's race in a play session: its gates, the bots at their boats' helms (game::Race).
+    game::Race& RaceRef() { return race_; }
+    const game::Race& RaceRef() const { return race_; }
     const vfx::VesselSpray& VesselSprayRef() const { return vesselSpray_; } // readouts (written at Sync)
     // The Player Start the level loaded with, for a build without the editor; with one, the document is its truth (it moves).
     void SetLevelPlayerStart(std::optional<game::PlayerStart> start) { levelPlayerStart_ = std::move(start); }
     const std::optional<game::PlayerStart>& LevelPlayerStart() const { return levelPlayerStart_; }
+    // The race course as the level's file has it (game::RaceCourse): what a build without the editor starts Play with.
+    void SetLevelRaceCourse(game::RaceCourse course) { levelRaceCourse_ = std::move(course); }
+    const game::RaceCourse& LevelRaceCourse() const { return levelRaceCourse_; }
 
 #if WITH_EDITOR
     // Stable identity for editor-spawned objects. SceneObjectId 0 = a runtime
@@ -489,6 +496,8 @@ private:
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
     std::optional<game::PlayerStart> levelPlayerStart_;
     game::VesselCamera vesselCamera_;
+    game::Race race_;
+    game::RaceCourse levelRaceCourse_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)
     std::vector<physics::VesselHull> vesselHulls_; // Sync's scratch: the boats as this frame draws them, for their wake
     vfx::VesselSpray vesselSpray_; // the boats' spray: runtime emitters in objects_, driven at Sync

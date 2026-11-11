@@ -273,6 +273,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     if (playSession_.Playing())
     {
         playSession_.Tick(input, scene, deltaTime, developerWindow_.AnyWindowOpen(), uiCapturingMouse);
+        if (DebugDrawSystem* draw = renderer.GetDebugDrawSystem()) { scene.RaceRef().DebugDraw(*draw); } // bot.debug
     }
     else
     {
@@ -323,9 +324,11 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
         {
             game::PlayerStart start;
             const bool hasStart = !request.fromCamera && editorController_.FindPlayerStart(start);
+            game::RaceCourse course;
+            editorController_.FindRaceCourse(course);
             editorOpenBeforePlay_ = editorController_.IsOpen();
             editorController_.SetOpen(false);
-            playSession_.Begin(renderer, scene, input, hasStart ? &start : nullptr, request.takeMouse, !fromBoot);
+            playSession_.Begin(renderer, scene, input, hasStart ? &start : nullptr, &course, request.takeMouse, !fromBoot);
         }
     }
     else if (request.kind == PlayRequest::Kind::Stop || escape || editorKeyPressed || editorController_.IsOpen()) // open by F2 or Developer Controls' checkbox: opening it stops the session
@@ -356,7 +359,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
         {
             const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
             const bool fromCamera = g_bootPlay && g_camOverride;
-            playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, eject, false);
+            playSession_.Begin(renderer, scene, input, (start && !fromCamera) ? &*start : nullptr, &scene.LevelRaceCourse(), eject, false);
             g_bootPlay = false;
         }
     }
@@ -367,6 +370,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     }
 #endif
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
+    hudRaceLine_ = playSession_.RaceHudLine(scene);
 }
 
 void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input)
@@ -374,14 +378,16 @@ void AppController::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager
 #if WITH_EDITOR
     game::PlayerStart start;
     const bool hasStart = editorController_.FindPlayerStart(start);
-    if (!playSession_.OnLevelLoaded(renderer, scene, input, hasStart ? &start : nullptr))
+    game::RaceCourse course;
+    editorController_.FindRaceCourse(course);
+    if (!playSession_.OnLevelLoaded(renderer, scene, input, hasStart ? &start : nullptr, &course))
     {
         editorController_.SetOpen(editorOpenBeforePlay_);
         editorController_.SetPlaying(false);
     }
 #else
     const std::optional<game::PlayerStart>& start = scene.LevelPlayerStart();
-    playSession_.OnLevelLoaded(renderer, scene, input, start ? &*start : nullptr);
+    playSession_.OnLevelLoaded(renderer, scene, input, start ? &*start : nullptr, &scene.LevelRaceCourse());
 #endif
 }
 
@@ -435,6 +441,10 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     if (!hudPlayLine_.empty())
     {
         line(8, 8 + 32 + 18 + 18, 16.0f, float4(0.6f, 1, 0.6f, 1), L"%ls", hudPlayLine_.c_str());
+    }
+    if (!hudRaceLine_.empty())
+    {
+        line(8, 8 + 32 + 18 + 18 + 18, 16.0f, float4(1.0f, 0.9f, 0.5f, 1), L"%ls", hudRaceLine_.c_str());
     }
 
     //tb->AddTextfShadow(8, 8 + 32 + 32, 32.0f, float4(1, 1, 1, 0.99f), true, L"A quick brown fox 1234567890 ABCDEEFG");

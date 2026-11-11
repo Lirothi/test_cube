@@ -450,6 +450,15 @@ namespace
         if (setting == "physics.rollingResistance") { physics::GameSettings().rollingResistance = std::max(value, 0.0f); return true; }
         // The boats (docs/play_mode_plan.md): every vessel in the world, transient. An asset's own numbers are its mesh.json "vessel".
         if (setting.rfind("vessel.", 0) == 0 && scene.Physics().TuneVessels(setting.substr(7), value)) { return true; }
+        // The race's bots (game::RaceBot): one table.
+        if (setting.rfind("bot.", 0) == 0)
+        {
+            if (const game::BotKey* entry = game::FindBotKey(setting.substr(4)))
+            {
+                game::BotSettingsRef().*(entry->member) = std::clamp(value, entry->lo, entry->hi);
+                return true;
+            }
+        }
         // The player (docs/play_mode_plan.md): its numbers by one table, and what a script says in place of the keys.
         if (setting.rfind("player.", 0) == 0)
         {
@@ -468,6 +477,7 @@ namespace
             if (key == "testInteract") { player.testInteract = value != 0.0f; return true; }
             if (key == "testView") { player.testView = value != 0.0f; return true; }
             if (key == "testAnchor") { player.testAnchor = value != 0.0f; return true; }
+            if (key == "testAutopilot") { player.testAutopilot = value != 0.0f; return true; }
             if (key == "testThrottle") { player.testThrottle = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testRudder") { player.testRudder = std::clamp(value, -1.0f, 1.0f); return true; }
             if (key == "testOrbit") { player.testOrbit = value; return true; }
@@ -2444,6 +2454,8 @@ namespace
                     }
                     out += "]";
                 }
+                // The race (game::Race): the bots at their helms, the player's own laps.
+                out += scene_.RaceRef().ReadoutJson();
                 // The boats' spray (vfx/VesselSpray): boats with emitters, drops a second thrown now, slam bursts so far.
                 {
                     const vfx::VesselSpray& spray = scene_.VesselSprayRef();

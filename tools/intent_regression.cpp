@@ -63,6 +63,8 @@
 #include "meshoptimizer/src/meshoptimizer.h" // TestTessyClusters: the builders compared
 #include "rendering/meshes/TessyDag.h"         // TestTessyDag
 #include "physics/PhysicsWorld.h"              // TestPhysicsRoad
+#include "app/game/RaceBot.h"                  // TestRaceCourseAndBot
+#include "app/game/RaceCourseJson.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -1718,6 +1720,155 @@ void TestCastShadowIsAFlagThatUndoes(const EditorActionContext& actionCtx)
     {
         Check(object.properties.find("castShadow") == object.properties.end(),
             "undo takes the key away -- the level saves exactly as before");
+    }
+}
+
+// The race (app/game): a mark's gate number is a document key that undoes; two marks are a gate and a stray one is left
+// out and named; the line crosses every gate between its marks, clear of them by the margin; and the bot runs a course
+// on a toy boat -- one whose helm is wired backwards must not, or the run proves nothing.
+void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
+{
+    EditorContext& ctx = actionCtx.editor;
+    Check(EditorActionRegistry::Builtin().Find("setRaceGate") != nullptr, "setRaceGate is a registered action");
+    Check(EditorActionRegistry::Builtin().Find("setRaceBot") != nullptr, "setRaceBot is a registered action");
+    {
+        std::string error;
+        EditorIntent intent;
+        Check(intentschema::ParseAnswer(
+            R"({"kind":"command","action":"setRaceGate","target":{"filter":["palm"]},"params":{"gate":4}})",
+            intent, error), "a setRaceGate answer parses: " + error);
+        const EditorIntentPreview preview = BuildIntentPreview(actionCtx, intent);
+        Check(preview.executable && preview.targets.size() == 3, "setRaceGate previews the three palms: " + preview.problem);
+        EditorCommandStack stack;
+        std::string status;
+        Check(ExecuteIntent(actionCtx, stack, preview, status), status);
+        Check(stack.HistorySize() == 1, "numbering three marks is ONE history entry");
+        Check(status.find("Gate 4") != std::string::npos && status.find("TWO") != std::string::npos, "and says a gate is two marks: " + status);
+        game::RaceCourse course;
+        for (const EditorObject& object : ctx.document.Objects()) { game::ReadRaceKeys(object.properties, object.transform.position, course); }
+        Check(course.marks.size() == 3 && course.marks[0].gate == 4, "the document's marks are the course's");
+        game::RaceTrack track;
+        std::string report;
+        Check(!track.Build(course, report) && report.find("4 (3 marks)") != std::string::npos, "a gate of three marks is no gate, and the report names it: " + report);
+        stack.Undo(ctx);
+        for (const EditorObject& object : ctx.document.Objects())
+        {
+            Check(object.properties.find(game::kRaceGateKey) == object.properties.end(), "undo takes the key away -- the level saves exactly as before");
+        }
+    }
+
+    // ---- a round course, clockwise: ten gates 20 m wide on a circle of 150 m, and a stray mark ----
+    constexpr float kRadius = 150.0f;
+    constexpr int kGates = 10;
+    game::RaceCourse course;
+    for (int i = 0; i < kGates; ++i)
+    {
+        const float bearing = 6.2831853f * static_cast<float>(i) / static_cast<float>(kGates);
+        for (const float r : { kRadius - 10.0f, kRadius + 10.0f })
+        {
+            course.marks.push_back(game::RaceMark{ Math::float3(r * std::sin(bearing), 0.0f, r * std::cos(bearing)), i + 1 });
+        }
+    }
+    course.marks.push_back(game::RaceMark{ Math::float3(400.0f, 0.0f, 400.0f), 77 });
+    game::RaceTrack track;
+    std::string report;
+    Check(track.Build(course, report) && track.Gates().size() == kGates, "ten gates out of twenty marks: " + report);
+    Check(report.find("77 (1 marks)") != std::string::npos, "the stray mark is left out and named: " + report);
+    for (const game::RaceGate& gate : track.Gates())
+    {
+        const Math::float2 tangent(gate.center.y / kRadius, -gate.center.x / kRadius); // clockwise seen from above
+        Check(gate.along.Dot(tangent) > 0.99f, "a gate's way is square to its marks, toward the next gate");
+        Check(gate.a.Length() > gate.b.Length(), "running clockwise the port mark is the outer one");
+    }
+    constexpr float kMargin = 4.0f;
+    game::RaceLine line;
+    line.Build(track.Gates(), kMargin);
+    Check(line.Valid(), "the line through the gates is built");
+    const float round = 6.2831853f * kRadius;
+    Check(line.Length() > 0.9f * round && line.Length() < 1.02f * round, "its length is the circle's, a little inside it: " + std::to_string(line.Length()));
+    for (std::size_t i = 0; i < track.Gates().size(); ++i)
+    {
+        const game::RaceGate& gate = track.Gates()[i];
+        const Math::float2 off = line.At(line.GateStation(i)).point - gate.center;
+        Check(std::fabs(off.Dot(gate.along)) < 0.6f && std::fabs(off.Dot(gate.across)) <= gate.halfWidth - kMargin + 0.1f,
+            "the line crosses gate " + std::to_string(gate.number) + " between its marks, clear of them by the margin");
+    }
+    constexpr float kTop = 17.0f;
+    line.Profile([](float curvature) { return std::min(kTop, std::sqrt(3.0f / std::max(curvature, 1e-6f))); }, 1.5f);
+    Check(line.SlowestSpeed() > kTop - 0.01f, "a bend of 150 m is flat out at 3 m/s2");
+    line.Profile([](float curvature) { return std::min(kTop, std::sqrt(0.5f / std::max(curvature, 1e-6f))); }, 1.5f);
+    Check(line.SlowestSpeed() < 10.0f && line.SlowestSpeed() > 7.0f, "at 0.5 m/s2 it is some 8.7 m/s: " + std::to_string(line.SlowestSpeed()));
+
+    // ---- the bot at the helm of a toy boat: a first-order engine, a rudder that swings, a circle of 68 m at speed ----
+    const auto run = [&track](bool helmBackwards, float seconds)
+    {
+        game::BotSettings& settings = game::BotSettingsRef();
+        const game::BotSettings before = settings;
+        settings = game::BotSettings{};
+        settings.startDelay = 0.0f;
+        physics::VesselSettings boat; // small_yacht's numbers: a top speed of 16.1 m/s
+        physics::VesselHull hull;
+        hull.settings = &boat;
+        hull.halfLength = 5.1f;
+        hull.halfBeam = 1.2f;
+        hull.up = Math::float3(0.0f, 1.0f, 0.0f);
+        game::RaceBot bot;
+        float x = 20.0f, z = 120.0f, heading = 0.3f, speed = 0.0f, throttle = 0.0f, rudder = 0.0f;
+        const float dt = 1.0f / 60.0f;
+        for (float t = 0.0f; t < seconds && bot.GetStatus().lap < 2; t += dt)
+        {
+            hull.position = Math::float3(x, 0.0f, z);
+            hull.forward = Math::float3(std::sin(heading), 0.0f, std::cos(heading));
+            hull.speed = speed;
+            hull.velocity = Math::float3(hull.forward.x * speed, 0.0f, hull.forward.z * speed);
+            const physics::VesselInput order = bot.Tick(track, hull, dt, true);
+            throttle += std::clamp(order.throttle - throttle, -dt, dt);
+            rudder += std::clamp(order.rudder - rudder, -2.33f * dt, 2.33f * dt);
+            const float want = throttle >= 0.0f ? 16.1f * std::sqrt(throttle) : -6.0f * std::sqrt(-throttle);
+            speed += (want - speed) * dt / 2.5f;
+            heading += (helmBackwards ? -rudder : rudder) * 0.25f * std::clamp(speed / 6.0f, -1.0f, 1.0f) * dt;
+            x += std::sin(heading) * speed * dt;
+            z += std::cos(heading) * speed * dt;
+        }
+        settings = before;
+        return bot.GetStatus();
+    };
+    const game::RaceBot::Status ran = run(false, 400.0f);
+    Check(ran.lap >= 2, "the bot runs two laps of the course from a mooring inside it: laps " + std::to_string(ran.lap));
+    Check(ran.gatesMissed == 0 && ran.gatesPassed >= 2 * kGates, "through every gate: passed " + std::to_string(ran.gatesPassed) + ", missed " + std::to_string(ran.gatesMissed));
+    Check(ran.bestLap > 0.9f * round / 16.1f && ran.bestLap < 1.5f * round / 16.1f, "a lap takes what its length and the boat's speed say: " + std::to_string(ran.bestLap) + " s");
+    const game::RaceBot::Status wrong = run(true, 400.0f);
+    Check(wrong.lap == 0, "the control arm: with its helm wired backwards the boat runs no lap, so the run above is the bot's doing");
+
+    // ---- the lead line: too little water where the bow will be turns it to the deeper side; none on either: astern ----
+    {
+        game::BotSettings& settings = game::BotSettingsRef();
+        const game::BotSettings before = settings;
+        settings = game::BotSettings{};
+        settings.startDelay = 0.0f;
+        physics::VesselSettings boat;
+        physics::VesselHull hull;
+        hull.settings = &boat;
+        hull.halfLength = 5.1f;
+        hull.halfBeam = 1.2f;
+        hull.up = Math::float3(0.0f, 1.0f, 0.0f);
+        const game::RaceLine::Sample at = line.At(200.0f);
+        hull.position = Math::float3(at.point.x, 0.0f, at.point.y);
+        hull.forward = Math::float3(at.tangent.x, 0.0f, at.tangent.y);
+        hull.speed = 12.0f;
+        hull.velocity = Math::float3(at.tangent.x * 12.0f, 0.0f, at.tangent.y * 12.0f);
+        game::RaceBot bot;
+        const physics::VesselInput open = bot.Tick(track, hull, 1.0f / 60.0f, true);
+        Check(std::fabs(open.rudder) < 0.9f && open.throttle > 0.0f && !bot.GetStatus().shoal, "over deep water, on its line, it runs ahead with the rudder near amidships");
+        bot.SetSoundings(0.3f, 0.2f, 6.0f);
+        const physics::VesselInput turn = bot.Tick(track, hull, 1.0f / 60.0f, true);
+        Check(bot.GetStatus().shoal && turn.rudder == 1.0f && turn.throttle == 1.0f, "a shoal ahead and deep water to starboard: hard to starboard, the engine on");
+        bot.SetSoundings(0.3f, 6.0f, 0.2f);
+        Check(bot.Tick(track, hull, 1.0f / 60.0f, true).rudder == -1.0f, "deep water to port: hard to port");
+        bot.SetSoundings(0.3f, 0.2f, 0.1f);
+        const physics::VesselInput back = bot.Tick(track, hull, 1.0f / 60.0f, true);
+        Check(back.throttle == -1.0f && bot.GetStatus().state == game::RaceBot::State::Reversing, "no water ahead or to either side: astern");
+        settings = before;
     }
 }
 
@@ -4655,6 +4806,7 @@ int main(int argc, char** argv)
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestCastShadowIsAFlagThatUndoes(actionCtx);
+        TestRaceCourseAndBot(actionCtx);
         TestNightLampsSwitch();
         {
             // Plan L: the palm document with two lamps beside it (the palm one has no environment).

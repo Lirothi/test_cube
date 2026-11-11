@@ -293,6 +293,8 @@ namespace physics
             JPH::Vec3 shownForward = JPH::Vec3::sAxisX();
             JPH::Vec3 shownUp = JPH::Vec3::sAxisY();
             float shownSpeed = 0.0f; // vesselState's speed as Display saw it: the game's alone
+            float shownThrottle = 0.0f; // and its engine and rudder
+            float shownRudder = 0.0f;
             float shownImpact = 0.0f; // and its last slam (a share of the weight, fading): the spray's burst
             float shownImmersion = 0.0f; // how deep it sits (1 = at rest): no spray off a hull in the air
             float shownWaterHeight = 0.0f; // the surface under it: where its spray leaves and falls back to
@@ -303,6 +305,11 @@ namespace physics
             bool anchored = false;
             JPH::Vec3 anchorPoint = JPH::Vec3::sZero();
             JPH::Vec3 bowLocal = JPH::Vec3::sZero();
+            // A pilot other than the helm (World::SetPilot): pilotInput is the game's, stepPilotInput taken for the steps
+            // where they start, as the helm's.
+            bool piloted = false;
+            VesselInput pilotInput;
+            VesselInput stepPilotInput;
         };
 
         std::unordered_map<RenderableObjectBase*, Entry> entries;
@@ -1030,6 +1037,9 @@ namespace physics
                 if (entry.vessel)
                 {
                     entry.object->SetLeavesGiProbes(false);
+                    entry.piloted = false;
+                    entry.pilotInput = VesselInput{};
+                    entry.stepPilotInput = VesselInput{};
                     entry.vesselState = VesselState{};
                     entry.water = VesselWater{};
                     entry.shownPosition = entry.rest.position;
@@ -1126,6 +1136,13 @@ namespace physics
             }
         }
 
+        // The orders as they stand where a step starts: the step's thread owns the copies.
+        void TakeHelmInputs()
+        {
+            stepHelmInput = helmInput;
+            for (Entry* entry : vessels) { entry->stepPilotInput = entry->piloted ? entry->pilotInput : VesselInput{}; }
+        }
+
         void PushVessels(float step)
         {
             if (vessels.empty()) { return; }
@@ -1137,7 +1154,7 @@ namespace physics
                 system->GetBodyInterface().ActivateBody(entry->body); // Body's own impulses wake nothing
                 JPH::BodyLockWrite lock(locks, entry->body);
                 if (!lock.Succeeded()) { continue; }
-                PushVessel(lock.GetBody(), *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : VesselInput{}, entry->water, entry->floatFactor, gravity, step);
+                PushVessel(lock.GetBody(), *entry->vessel, entry->scale, entry->vesselState, entry == helm ? stepHelmInput : entry->stepPilotInput, entry->water, entry->floatFactor, gravity, step);
                 if (entry->anchored) { PullAnchor(lock.GetBody(), *entry->vessel, entry->bowLocal, entry->anchorPoint, step); }
             }
         }
@@ -1153,6 +1170,8 @@ namespace physics
                 entry->shownForward = forward;
                 entry->shownUp = rotation * JPH::Vec3::sAxisY();
                 entry->shownSpeed = entry->vesselState.speed;
+                entry->shownThrottle = entry->vesselState.throttle;
+                entry->shownRudder = entry->vesselState.rudder;
                 // The last step's motion, from its two poses (the step's own velocities are the step thread's).
                 const float step = static_cast<float>(StepSeconds());
                 entry->shownVelocity = (entry->current.position - entry->previous.position) / step;
@@ -1437,7 +1456,7 @@ namespace physics
             Drain();
             if (!system || !simulating) { return; }
             const bool kinematicMoved = MoveKinematics(step);
-            stepHelmInput = helmInput;
+            TakeHelmInputs();
             PushWater(step);
             PushVessels(step);
             if (!kinematicMoved && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { return; }
@@ -1492,7 +1511,7 @@ namespace physics
                     accumulator -= stepSeconds;
                     const bool kinematicMoved = MoveKinematics(step);
                     SampleWater(step);
-                    stepHelmInput = helmInput;
+                    TakeHelmInputs();
                     PushWater(step);
                     PushVessels(step);
                     if (!kinematicMoved && system->GetNumActiveBodies(JPH::EBodyType::RigidBody) == 0) { continue; }
@@ -1670,6 +1689,19 @@ namespace physics
 
     void World::SetHelmInput(const VesselInput& input) { impl_->helmInput = input; }
 
+    bool World::SetPilot(RenderableObject* vessel, const VesselInput* input)
+    {
+        // The game's own fields: no step reads them (TakeHelmInputs copies them where a step starts), so no Join.
+        for (Impl::Entry* entry : impl_->vessels)
+        {
+            if (entry->object != vessel) { continue; }
+            entry->piloted = input != nullptr;
+            entry->pilotInput = input ? *input : VesselInput{};
+            return true;
+        }
+        return false;
+    }
+
     bool World::ToggleAnchor(RenderableObject* vessel)
     {
         Impl& m = *impl_;
@@ -1720,6 +1752,11 @@ namespace physics
             hull.waterHeight = entry->shownWaterHeight;
             hull.atHelm = entry == impl_->helm;
             hull.anchored = entry->anchored;
+            hull.piloted = entry->piloted;
+            hull.halfLength = entry->halfLength;
+            hull.halfBeam = entry->halfBeam;
+            hull.throttle = entry->shownThrottle;
+            hull.rudder = entry->shownRudder;
             out.push_back(hull);
         }
     }

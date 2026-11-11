@@ -4,6 +4,7 @@
 
 #include "app/game/PlayerController.h"
 #include "app/game/PlayerStart.h"
+#include "app/game/RaceCourse.h"
 
 class InputManager;
 class Renderer;
@@ -18,7 +19,9 @@ public:
     bool Playing() const { return playing_; }
     bool Possessed() const { return playing_ && possessed_; }
     // `start` null = from where the camera stands. `takeMouse` false: a script's Play (--play, MCP) leaves the owner's mouse alone until a click in the window.
-    void Begin(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, bool takeMouse, bool stopOnLevelChange);
+    // `course`: the level's race as it stands now (its gates, the boats a bot helms); null = none.
+    void Begin(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course, bool takeMouse,
+               bool stopOnLevelChange);
     void End(Renderer& renderer, Scene& scene, InputManager& input);
     // F8: UE's Possess / Eject. The body stands and lives; back in it the camera is where the body is.
     void TogglePossess(Scene& scene);
@@ -28,10 +31,12 @@ public:
     void Tick(InputManager& input, Scene& scene, float deltaTime, bool uiWantsCursor, bool uiCapturingMouse);
     bool AtHelm() const { return playing_ && atHelm_; }
     // After a level load: the session goes on from the new level's start, or ends if it was the editor's (returns false, nothing restored: the camera is the new level's).
-    bool OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start);
+    bool OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course);
     void SetStatus(std::string status, double untilSeconds);
     // The HUD's line.
     std::wstring HudLine(const Scene& scene, double nowSeconds) const;
+    // And the race's under it: the player's laps at a helm, else the bot's. Empty without a course.
+    std::wstring RaceHudLine(const Scene& scene) const;
 
 private:
     void PlaceAtStart(Renderer& renderer, Scene& scene, const game::PlayerStart* start);

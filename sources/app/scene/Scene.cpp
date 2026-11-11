@@ -3930,6 +3930,7 @@ void Scene::Clear()
     cameraObjectSource_.Clear();
     renderQueueSourcesValid_ = false;
     vesselSpray_.Clear(); // its emitters are objects_ below
+    race_.Forget();       // its boats are
     objects_.clear();
     shoreAreaValid_ = false; // the next level's terrain sits somewhere else
     skyOcclusion_.Invalidate(); // ...and its world from above is the old level's

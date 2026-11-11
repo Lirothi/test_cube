@@ -309,6 +309,9 @@
     <ClCompile Include="sources/editor/commands/SetCastShadowCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/commands/SetRaceKeyCommand.cpp">
+      <Filter>sources\editor\commands</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/commands/SetLampSwitchCommand.cpp">
       <Filter>sources\editor\commands</Filter>
     </ClCompile>
@@ -409,6 +412,12 @@
       <Filter>sources\app\game</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/game/PlaySession.cpp">
+      <Filter>sources\app\game</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/game/RaceBot.cpp">
+      <Filter>sources\app\game</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/game/RaceTrack.cpp">
       <Filter>sources\app\game</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/scene/EditorPlayerStart.cpp">
@@ -1052,6 +1061,9 @@
     <ClInclude Include="sources/editor/commands/SetCastShadowCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
+    <ClInclude Include="sources/editor/commands/SetRaceKeyCommand.h">
+      <Filter>sources\editor\commands</Filter>
+    </ClInclude>
     <ClInclude Include="sources/editor/commands/SetLampSwitchCommand.h">
       <Filter>sources\editor\commands</Filter>
     </ClInclude>
@@ -1116,6 +1128,18 @@
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/PlaySession.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/RaceBot.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/RaceCourse.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/RaceCourseJson.h">
+      <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/game/RaceTrack.h">
       <Filter>sources\app\game</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorPlayerStart.h">

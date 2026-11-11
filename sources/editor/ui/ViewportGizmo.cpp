@@ -13,6 +13,8 @@
 #include <DirectXMath.h>
 
 #include "app/camera/Camera.h"
+#include "app/game/RaceCourseJson.h"
+#include "app/game/RaceTrack.h"
 #include "app/scene/Scene.h"
 #include "core/math/Math.h"
 #include "core/profiling/Profiler.h"
@@ -30,6 +32,7 @@
 #include "rendering/core/UploadBatch.h"
 #include "editor/commands/TransformObjectCommand.h"
 #include "editor/ui/EditorDragDrop.h"
+#include "ocean/OceanRenderable.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "editor/scene/EditorZone.h"
@@ -969,6 +972,47 @@ void ViewportGizmo::Update(EditorContext& ctx,
                     const Math::float3& p = zone.points[index];
                     dd->AddSphere(p, active ? radius * 1.35f : radius, handleColour,
                         /*wireframe=*/true);
+                }
+            }
+        }
+
+        // THE RACE COURSE (app/game/RaceCourse.h), while one of its marks or a bot's boat is selected: every gate's two
+        // marks joined (port end red, starboard end green), and the gates' middles in the order they are run, a mast
+        // on the start. A mark's number alone shows neither which buoy it pairs with nor where the course goes next.
+        // Only then: the keys are looked up in every object's properties.
+        bool raceSelected = false;
+        for (const EditorObjectId id : ctx.selection.Ordered())
+        {
+            const EditorObject* selected = ctx.document.Find(id);
+            if (selected && (selected->properties.contains(game::kRaceGateKey) || selected->properties.contains(game::kRaceBotKey)))
+            {
+                raceSelected = true;
+                break;
+            }
+        }
+        if (raceSelected)
+        {
+            game::RaceCourse course;
+            for (const EditorObject& object : ctx.document.Objects())
+            {
+                if (object.enabled) { game::ReadRaceKeys(object.properties, object.transform.position, course); }
+            }
+            game::RaceTrack track;
+            std::string report;
+            if (track.Build(course, report))
+            {
+                const OceanRenderable* ocean = ctx.scene.FindOceanRenderable();
+                const float y = (ocean ? ocean->GetWaterLevel() : 0.0f) + 1.5f;
+                const std::vector<game::RaceGate>& gates = track.Gates();
+                for (std::size_t i = 0; i < gates.size(); ++i)
+                {
+                    const game::RaceGate& gate = gates[i];
+                    const game::RaceGate& next = gates[(i + 1) % gates.size()];
+                    const Math::float3 centre(gate.center.x, y, gate.center.y);
+                    dd->AddLine(Math::float3(gate.a.x, y, gate.a.y), centre, Math::float4(1.0f, 0.2f, 0.15f, 1.0f));
+                    dd->AddLine(centre, Math::float3(gate.b.x, y, gate.b.y), Math::float4(0.15f, 1.0f, 0.25f, 1.0f));
+                    dd->AddLine(centre, Math::float3(next.center.x, y, next.center.y), Math::float4(1.0f, 0.9f, 0.3f, 0.85f));
+                    if (i == 0) { dd->AddLine(centre, Math::float3(centre.x, y + 8.0f, centre.z), Math::float4(1.0f, 0.9f, 0.3f, 1.0f)); }
                 }
             }
         }

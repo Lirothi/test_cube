@@ -37206,6 +37206,7 @@
         -0.7099999785423279,
         119.91500091552734
       ],
+      "raceBot": true,
       "rotationDeg": [
         0.0,
         -65.0,
@@ -37215,6 +37216,1056 @@
         1.0,
         1.0,
         1.0
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3136,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_5.mesh.json",
+      "name": "ocean_buoy_node_Object_5 001",
+      "position": [
+        46.08000183105469,
+        -0.30000001192092896,
+        166.08999633789063
+      ],
+      "raceGate": 1,
+      "rotationDeg": [
+        0.0,
+        121.5999984741211,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3137,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_5.mesh.json",
+      "name": "ocean_buoy_node_Object_5 002",
+      "position": [
+        30.3700008392334,
+        -0.30000001192092896,
+        140.52999877929688
+      ],
+      "raceGate": 1,
+      "rotationDeg": [
+        0.0,
+        121.5999984741211,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3138,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 001",
+      "position": [
+        103.20999908447266,
+        -0.30000001192092896,
+        129.92999267578125
+      ],
+      "raceGate": 2,
+      "rotationDeg": [
+        0.0,
+        134.39999389648438,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3139,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 001",
+      "position": [
+        86.41999816894531,
+        -0.30000001192092896,
+        112.77999877929688
+      ],
+      "raceGate": 2,
+      "rotationDeg": [
+        0.0,
+        134.39999389648438,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3140,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 002",
+      "position": [
+        137.52999877929688,
+        -0.30000001192092896,
+        71.25
+      ],
+      "raceGate": 3,
+      "rotationDeg": [
+        0.0,
+        159.89999389648438,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3141,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 002",
+      "position": [
+        114.98999786376953,
+        -0.30000001192092896,
+        63.02000045776367
+      ],
+      "raceGate": 3,
+      "rotationDeg": [
+        0.0,
+        159.89999389648438,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3142,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 003",
+      "position": [
+        147.6699981689453,
+        -0.30000001192092896,
+        9.550000190734863
+      ],
+      "raceGate": 4,
+      "rotationDeg": [
+        0.0,
+        179.6999969482422,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3143,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 003",
+      "position": [
+        123.66999816894531,
+        -0.30000001192092896,
+        9.420000076293945
+      ],
+      "raceGate": 4,
+      "rotationDeg": [
+        0.0,
+        179.6999969482422,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3144,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 004",
+      "position": [
+        138.10000610351563,
+        -0.30000001192092896,
+        -50.369998931884766
+      ],
+      "raceGate": 5,
+      "rotationDeg": [
+        0.0,
+        200.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3145,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 004",
+      "position": [
+        115.62000274658203,
+        -0.30000001192092896,
+        -41.97999954223633
+      ],
+      "raceGate": 5,
+      "rotationDeg": [
+        0.0,
+        200.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3146,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 005",
+      "position": [
+        105.80999755859375,
+        -0.30000001192092896,
+        -102.04000091552734
+      ],
+      "raceGate": 6,
+      "rotationDeg": [
+        0.0,
+        223.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3147,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 005",
+      "position": [
+        88.41000366210938,
+        -0.30000001192092896,
+        -85.51000213623047
+      ],
+      "raceGate": 6,
+      "rotationDeg": [
+        0.0,
+        223.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3148,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 006",
+      "position": [
+        55.709999084472656,
+        -0.30000001192092896,
+        -137.11000061035156
+      ],
+      "raceGate": 7,
+      "rotationDeg": [
+        0.0,
+        246.60000610351563,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3149,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 006",
+      "position": [
+        46.18000030517578,
+        -0.30000001192092896,
+        -115.08999633789063
+      ],
+      "raceGate": 7,
+      "rotationDeg": [
+        0.0,
+        246.60000610351563,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3150,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 007",
+      "position": [
+        -5.039999961853027,
+        -0.30000001192092896,
+        -149.91000366210938
+      ],
+      "raceGate": 8,
+      "rotationDeg": [
+        0.0,
+        271.1000061035156,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3151,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 007",
+      "position": [
+        -4.590000152587891,
+        -0.30000001192092896,
+        -125.91999816894531
+      ],
+      "raceGate": 8,
+      "rotationDeg": [
+        0.0,
+        271.1000061035156,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3152,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 008",
+      "position": [
+        -64.47000122070313,
+        -0.30000001192092896,
+        -135.36000061035156
+      ],
+      "raceGate": 9,
+      "rotationDeg": [
+        0.0,
+        289.29998779296875,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3153,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 008",
+      "position": [
+        -56.52000045776367,
+        -0.30000001192092896,
+        -112.70999908447266
+      ],
+      "raceGate": 9,
+      "rotationDeg": [
+        0.0,
+        289.29998779296875,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3154,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 009",
+      "position": [
+        -138.88999938964844,
+        -0.30000001192092896,
+        -103.41999816894531
+      ],
+      "raceGate": 10,
+      "rotationDeg": [
+        0.0,
+        279.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3155,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 009",
+      "position": [
+        -134.94000244140625,
+        -0.30000001192092896,
+        -79.75
+      ],
+      "raceGate": 10,
+      "rotationDeg": [
+        0.0,
+        279.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3156,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 010",
+      "position": [
+        -225.6699981689453,
+        -0.30000001192092896,
+        -108.62000274658203
+      ],
+      "raceGate": 11,
+      "rotationDeg": [
+        0.0,
+        284.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3157,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 010",
+      "position": [
+        -219.8699951171875,
+        -0.30000001192092896,
+        -85.33000183105469
+      ],
+      "raceGate": 11,
+      "rotationDeg": [
+        0.0,
+        284.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3158,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 011",
+      "position": [
+        -299.8599853515625,
+        -0.30000001192092896,
+        -63.279998779296875
+      ],
+      "raceGate": 12,
+      "rotationDeg": [
+        0.0,
+        288.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3159,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 011",
+      "position": [
+        -292.2300109863281,
+        -0.30000001192092896,
+        -40.529998779296875
+      ],
+      "raceGate": 12,
+      "rotationDeg": [
+        0.0,
+        288.5,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3160,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 012",
+      "position": [
+        -382.05999755859375,
+        -0.30000001192092896,
+        -57.2599983215332
+      ],
+      "raceGate": 13,
+      "rotationDeg": [
+        0.0,
+        284.70001220703125,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3161,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 012",
+      "position": [
+        -375.45001220703125,
+        -0.30000001192092896,
+        -32.11000061035156
+      ],
+      "raceGate": 13,
+      "rotationDeg": [
+        0.0,
+        284.70001220703125,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3162,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 013",
+      "position": [
+        -438.2799987792969,
+        -0.30000001192092896,
+        -27.149999618530273
+      ],
+      "raceGate": 14,
+      "rotationDeg": [
+        0.0,
+        314.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3163,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 013",
+      "position": [
+        -418.8299865722656,
+        -0.30000001192092896,
+        -7.010000228881836
+      ],
+      "raceGate": 14,
+      "rotationDeg": [
+        0.0,
+        314.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3164,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 014",
+      "position": [
+        -471.3399963378906,
+        -0.30000001192092896,
+        27.8700008392334
+      ],
+      "raceGate": 15,
+      "rotationDeg": [
+        0.0,
+        344.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3165,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 014",
+      "position": [
+        -444.4200134277344,
+        -0.30000001192092896,
+        35.59000015258789
+      ],
+      "raceGate": 15,
+      "rotationDeg": [
+        0.0,
+        344.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3166,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 015",
+      "position": [
+        -472.4599914550781,
+        -0.30000001192092896,
+        92.05000305175781
+      ],
+      "raceGate": 16,
+      "rotationDeg": [
+        0.0,
+        14.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3167,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 015",
+      "position": [
+        -445.2900085449219,
+        -0.30000001192092896,
+        85.2699966430664
+      ],
+      "raceGate": 16,
+      "rotationDeg": [
+        0.0,
+        14.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3168,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 016",
+      "position": [
+        -441.3399963378906,
+        -0.30000001192092896,
+        148.19000244140625
+      ],
+      "raceGate": 17,
+      "rotationDeg": [
+        0.0,
+        44.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3169,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 016",
+      "position": [
+        -421.20001220703125,
+        -0.30000001192092896,
+        128.74000549316406
+      ],
+      "raceGate": 17,
+      "rotationDeg": [
+        0.0,
+        44.0,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3170,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 017",
+      "position": [
+        -386.6499938964844,
+        -0.30000001192092896,
+        181.14999389648438
+      ],
+      "raceGate": 18,
+      "rotationDeg": [
+        0.0,
+        72.5999984741211,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3171,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 017",
+      "position": [
+        -378.2699890136719,
+        -0.30000001192092896,
+        154.42999267578125
+      ],
+      "raceGate": 18,
+      "rotationDeg": [
+        0.0,
+        72.5999984741211,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3172,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 018",
+      "position": [
+        -292.0799865722656,
+        -0.30000001192092896,
+        194.72000122070313
+      ],
+      "raceGate": 19,
+      "rotationDeg": [
+        0.0,
+        70.69999694824219,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3173,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 018",
+      "position": [
+        -284.1400146484375,
+        -0.30000001192092896,
+        172.0800018310547
+      ],
+      "raceGate": 19,
+      "rotationDeg": [
+        0.0,
+        70.69999694824219,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3174,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 019",
+      "position": [
+        -206.82000732421875,
+        -0.30000001192092896,
+        242.05999755859375
+      ],
+      "raceGate": 20,
+      "rotationDeg": [
+        0.0,
+        70.69999694824219,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3175,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 019",
+      "position": [
+        -198.8800048828125,
+        -0.30000001192092896,
+        219.41000366210938
+      ],
+      "raceGate": 20,
+      "rotationDeg": [
+        0.0,
+        70.69999694824219,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3176,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_2.mesh.json",
+      "name": "ocean_buoy_node_Object_2 020",
+      "position": [
+        -104.83000183105469,
+        -0.30000001192092896,
+        257.7699890136719
+      ],
+      "raceGate": 21,
+      "rotationDeg": [
+        0.0,
+        107.80000305175781,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
+      ],
+      "type": "staticMesh"
+    },
+    {
+      "buoyant": true,
+      "enabled": true,
+      "group": "Race Track",
+      "id": 3177,
+      "mesh": "models/ocean_buoy/ocean_buoy_node_Object_4.mesh.json",
+      "name": "ocean_buoy_node_Object_4 020",
+      "position": [
+        -112.16999816894531,
+        -0.30000001192092896,
+        234.9199981689453
+      ],
+      "raceGate": 21,
+      "rotationDeg": [
+        0.0,
+        107.80000305175781,
+        0.0
+      ],
+      "scale": [
+        2.5,
+        2.5,
+        2.5
       ],
       "type": "staticMesh"
     }

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "app/game/PlayerStart.h"
+#include "app/game/RaceCourse.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/AssetThumbnailCache.h"
 #include "editor/commands/EditorCommandStack.h"
@@ -92,6 +93,8 @@ public:
     void SetPlaying(bool playing) { playing_ = playing; }
     // The level's Player Start as the document has it now. False = none: Play starts from the camera.
     bool FindPlayerStart(game::PlayerStart& out) const;
+    // The race course as the document has it now (the marks' "raceGate", the boats' "raceBot"): what Play starts with.
+    void FindRaceCourse(game::RaceCourse& out) const;
     // K in Play, UE's Keep Simulation Changes: the selection's bodies if any of them moved, else every body that moved, one undo entry. What happened, for the HUD.
     std::string KeepSimulation(Renderer& renderer, Scene& scene, LevelManager& levelManager);
 

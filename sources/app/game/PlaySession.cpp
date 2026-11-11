@@ -32,7 +32,8 @@ void PlaySession::PlaceAtStart(Renderer& renderer, Scene& scene, const game::Pla
     LOG_INFO(logging::LogCategory::App, "play: the player at {:.2f} {:.2f} {:.2f}, {}", feet.x, feet.y, feet.z, start ? "the level's Player Start" : "from the camera");
 }
 
-void PlaySession::Begin(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, bool takeMouse, bool stopOnLevelChange)
+void PlaySession::Begin(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course, bool takeMouse,
+                        bool stopOnLevelChange)
 {
     if (playing_) { return; }
     const Camera& camera = scene.CameraRef();
@@ -48,6 +49,7 @@ void PlaySession::Begin(Renderer& renderer, Scene& scene, InputManager& input, c
     status_.clear();
     if (input.IsMouseCaptured()) { input.SetMouseCapture(false); }
     PlaceAtStart(renderer, scene, start);
+    scene.RaceRef().Begin(course ? *course : game::RaceCourse{});
 }
 
 void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
@@ -56,6 +58,7 @@ void PlaySession::End(Renderer& renderer, Scene& scene, InputManager& input)
     playing_ = false;
     possessed_ = false;
     LeaveHelm(scene, false);
+    scene.RaceRef().End(scene.Physics());
     scene.Physics().RemovePlayer();
     physics::GameSettings().player = settingsBefore_;
     input.SetMouseCapture(false);
@@ -126,6 +129,15 @@ void PlaySession::TickHelm(InputManager& input, Scene& scene, bool controls, flo
     camera.TakeOwedLook(deltaTime); // the mouse's own road, its smoothing and sensitivity: what it turned the camera by is the orbit's
     order.throttle += tuning.testThrottle;
     order.rudder += tuning.testRudder;
+    // The autopilot: B hands this helm to the race's bot (game::Race) and takes it back.
+    game::Race& race = scene.RaceRef();
+    const bool scriptAutopilot = std::exchange(tuning.testAutopilot, false);
+    if (scriptAutopilot || (controls && input.WasActionPressed("Autopilot")))
+    {
+        if (!race.HasTrack()) { SetStatus("No race course in this level", ImGui::GetTime() + 3.0); }
+        else { SetStatus(race.ToggleAutopilot() ? "Autopilot on" : "Autopilot off", ImGui::GetTime() + 3.0); }
+    }
+    if (race.Autopilot()) { order = race.HelmOrder(); }
     world.SetHelmInput(order);
     game::VesselCamera& view = scene.VesselCameraRef();
     view.Tick(camera.GetYaw() - yawBefore, camera.GetPitch() - pitchBefore, helm.vessel.speed, tuning.testOrbit,
@@ -167,6 +179,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
 
     Camera& camera = scene.CameraRef();
     physics::World& world = scene.Physics();
+    scene.RaceRef().Tick(world, deltaTime); // the bots' orders, and the helm's on autopilot: before the helm reads its keys
     if (atHelm_)
     {
         TickHelm(input, scene, controls, deltaTime);
@@ -201,7 +214,7 @@ void PlaySession::Tick(InputManager& input, Scene& scene, float deltaTime, bool 
     }
 }
 
-bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start)
+bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& input, const game::PlayerStart* start, const game::RaceCourse* course)
 {
     if (!playing_) { return true; }
     atHelm_ = false; // the boat went with the level
@@ -219,6 +232,7 @@ bool PlaySession::OnLevelLoaded(Renderer& renderer, Scene& scene, InputManager& 
         return false;
     }
     PlaceAtStart(renderer, scene, start);
+    scene.RaceRef().Begin(course ? *course : game::RaceCourse{});
     return true;
 }
 
@@ -227,6 +241,8 @@ void PlaySession::SetStatus(std::string status, double untilSeconds)
     status_ = std::move(status);
     statusUntil_ = untilSeconds;
 }
+
+std::wstring PlaySession::RaceHudLine(const Scene& scene) const { return playing_ ? scene.RaceRef().HudLine() : std::wstring{}; }
 
 std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
 {

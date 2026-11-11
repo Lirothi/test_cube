@@ -42,6 +42,7 @@
 #include "editor/commands/CreateDocumentObjectCommand.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/scene/EditorPlayerStart.h"
+#include "app/game/RaceCourseJson.h"
 #include "editor/commands/CreateEnvironmentCommand.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/DeleteObjectCommand.h"
@@ -2732,6 +2733,14 @@ bool EditorController::FindPlayerStart(game::PlayerStart& out) const
     if (!object) { return false; }
     editorplayerstart::FromObject(*object, out);
     return true;
+}
+
+void EditorController::FindRaceCourse(game::RaceCourse& out) const
+{
+    for (const EditorObject& object : document_.Objects())
+    {
+        if (object.enabled) { game::ReadRaceKeys(object.properties, object.transform.position, out); }
+    }
 }
 
 std::string EditorController::KeepSimulation(Renderer& renderer, Scene& scene, LevelManager& levelManager)

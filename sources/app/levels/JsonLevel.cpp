@@ -1,4 +1,5 @@
 #include "app/game/PlayerStartJson.h"
+#include "app/game/RaceCourseJson.h"
 #include "app/levels/JsonLevel.h"
 
 #include "core/diagnostics/BootProfile.h"
@@ -489,6 +490,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
     }
 
     ctx.scene.SetLevelPlayerStart(std::nullopt);
+    game::RaceCourse raceCourse;
     std::optional<json> freeCameraStart;
     if (j.contains("objects") && j["objects"].is_array())
     {
@@ -507,6 +509,8 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
             }
 #endif
             const std::string type = o.value("type", std::string{});
+            // The race: a mark of a gate ("raceGate"), a boat a bot helms ("raceBot") -- whatever the object is.
+            if (enabled) { game::ReadRaceKeys(o, ToFloat3(o.value("position", json::array()), float3(0.0f, 0.0f, 0.0f)), raceCourse); }
             if (IsFreeCameraStart(o))
             {
 #if WITH_EDITOR
@@ -606,6 +610,8 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
         }
 
     }
+
+    ctx.scene.SetLevelRaceCourse(std::move(raceCourse));
 
 #if WITH_EDITOR
     if (ctx.editorDocument)

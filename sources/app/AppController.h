@@ -71,6 +71,7 @@ private:
     PlaySession playSession_;
     bool editorOpenBeforePlay_ = false;
     std::wstring hudPlayLine_; // written in Tick, before the build is scheduled
+    std::wstring hudRaceLine_;
     DeveloperWindow developerWindow_;
 #if WITH_EDITOR
     EditorController editorController_;

@@ -61,6 +61,7 @@ namespace physics
         bool testInteract = false;    // one press of the helm's key, cleared when taken
         bool testView = false;        // one press of the view's key, cleared when taken
         bool testAnchor = false;      // one press of the anchor's key at the helm, cleared when taken
+        bool testAutopilot = false;   // one press of the autopilot's key at the helm, cleared when taken
         float testThrottle = 0.0f;    // what W and S say at the helm
         float testRudder = 0.0f;      // what A and D say
         float testOrbit = 0.0f;       // radians about the boat: a script's shot from the side, held while it is not 0
@@ -115,6 +116,11 @@ namespace physics
         float waterHeight = 0.0f; // the surface under it (VesselState::waterHeight)
         bool atHelm = false;
         bool anchored = false;
+        bool piloted = false;     // a pilot other than the helm orders it (World::SetPilot)
+        float halfLength = 0.0f;  // of the hull's box along its way, m
+        float halfBeam = 0.0f;
+        float throttle = 0.0f;    // where its engine and rudder have got to (VesselState)
+        float rudder = 0.0f;
     };
 
     struct PlayerState
@@ -233,6 +239,9 @@ namespace physics
         RenderableObject* FindVessel(const Math::float3& point, float reach) const;
         bool SetHelm(RenderableObject* vessel);
         void SetHelmInput(const VesselInput& input);
+        // A pilot other than the helm (game::RaceBot): what it orders this boat, held until told again; null = nobody, the
+        // engine off. The helm, while it is this boat's, wins. Stop takes every pilot off. False = no such boat.
+        bool SetPilot(RenderableObject* vessel, const VesselInput* input);
         // Drops the boat's anchor under its bow, or weighs it: what it is after (true = down). The world's, not the level's:
         // Stop weighs every anchor with the rest of the session.
         bool ToggleAnchor(RenderableObject* vessel);

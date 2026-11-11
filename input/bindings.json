@@ -35,6 +35,7 @@
     { "name": "Interact", "keys": ["E"] },
     { "name": "ToggleView", "keys": ["V"] },
     { "name": "Anchor", "keys": ["X"] },
+    { "name": "Autopilot", "keys": ["B"] },
     { "name": "SetDlssQualityOff", "keys": ["Ctrl", "1"], "allKeys": true },
     { "name": "SetDlssQualityMaxPerformance", "keys": ["Ctrl", "2"], "allKeys": true },
     { "name": "SetDlssQualityBalanced", "keys": ["Ctrl", "3"], "allKeys": true },

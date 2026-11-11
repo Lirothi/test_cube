@@ -3651,6 +3651,24 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                     ImGui::DragFloat(key.label, &(settings.player.*(key.member)), key.speed, key.lo, key.hi, key.format);
                 }
                 ImGui::TextDisabled("Height, crouched height and radius are read when the body is made. A level's Player Start says its own at Play, and what is set here during Play ends with it.");
+
+                // The race's bots (game::RaceBot): a boat that carries "raceBot" runs the level's gates in Play; B at a helm is the same bot.
+                ImGui::SeparatorText("Race bots");
+                game::BotSettings& bot = game::BotSettingsRef();
+                for (const game::BotKey& key : game::BotKeys())
+                {
+                    const bool flag = key.hi == 1.0f && key.lo == 0.0f && key.speed == 1.0f;
+                    if (flag)
+                    {
+                        bool on = bot.*(key.member) > 0.5f;
+                        if (ImGui::Checkbox(key.label, &on)) { bot.*(key.member) = on ? 1.0f : 0.0f; }
+                    }
+                    else { ImGui::DragFloat(key.label, &(bot.*(key.member)), key.speed, key.lo, key.hi, key.format); }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s\n--set bot.%s (%g .. %g)", key.hint, key.key, key.lo, key.hi); }
+                }
+                const std::wstring raceLine = scene.RaceRef().HudLine();
+                if (!raceLine.empty()) { ImGui::Text("%ls", raceLine.c_str()); }
+                else { ImGui::TextDisabled(scene.RaceRef().HasTrack() ? "The course is there; no boat runs it." : "No course in Play: mark buoys with a Race gate number (Inspector > Race)."); }
             }
 
             if (activeTab_ == Tab::Tessy)

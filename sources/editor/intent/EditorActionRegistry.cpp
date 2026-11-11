@@ -39,6 +39,7 @@
 #include "editor/scene/EditorPlayerStart.h"
 #include "editor/commands/SetBuoyantCommand.h"
 #include "editor/commands/SetCastShadowCommand.h"
+#include "editor/commands/SetRaceKeyCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetEnabledCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
@@ -486,6 +487,60 @@ namespace
         if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not meshes)"; }
         return FoldIntoOneEntry(std::move(commands),
             std::string(castShadow ? "Cast Shadow On for " : "Cast Shadow Off for ") + std::to_string(count) + " Objects");
+    }
+
+    // ------------------------------------------------------------------ setRaceGate, setRaceBot
+
+    std::unique_ptr<EditorCommand> BuildSetRaceGate(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const int gate = std::max(static_cast<int>(std::lround(NumberOr(intent.params, "gate", 0.0f))), 0);
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            if (obj && SetRaceKeyCommand::AppliesTo(*obj)) { commands.push_back(SetRaceKeyCommand::Gate(id, gate)); }
+        }
+        if (commands.empty())
+        {
+            outStatus = "Nothing to mark: a race gate's mark is a mesh (a buoy)";
+            return nullptr;
+        }
+        const std::size_t count = commands.size();
+        outStatus = gate > 0 ? "Gate " + std::to_string(gate) + ": " + CountedObjects(count) + (count == 2 ? "" : " (a gate is TWO marks)")
+                             : "No longer marks of the race: " + CountedObjects(count);
+        return FoldIntoOneEntry(std::move(commands), gate > 0 ? "Race Gate " + std::to_string(gate) : "Clear Race Gate");
+    }
+
+    std::unique_ptr<EditorCommand> BuildSetRaceBot(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        const bool bot = BoolOr(intent.params, "enabled", true);
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t skipped = 0;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            if (!obj || !SetRaceKeyCommand::AppliesTo(*obj) || !SetPhysicsCommand::VesselAsset(actionCtx.editor, id))
+            {
+                ++skipped;
+                continue;
+            }
+            commands.push_back(SetRaceKeyCommand::Bot(id, bot));
+        }
+        if (commands.empty())
+        {
+            outStatus = "No boat among them: a bot takes the helm of a vessel (a mesh whose asset has a \"vessel\" block)";
+            return nullptr;
+        }
+        const std::size_t count = commands.size();
+        outStatus = (bot ? "A bot at the helm of " : "No bot at the helm of ") + CountedObjects(count);
+        if (skipped > 0) { outStatus += " (" + CountedObjects(skipped) + " skipped: not boats)"; }
+        return FoldIntoOneEntry(std::move(commands), bot ? "Bot At The Helm" : "No Bot At The Helm");
     }
 
     // ------------------------------------------------------------------ setPhysics, keepSimulation
@@ -3647,6 +3702,11 @@ namespace
             if (const auto mass = item.find("mass"); mass != item.end()) { objectJson["mass"] = *mass; }
             if (const auto floats = item.find("buoyant"); floats != item.end()) { objectJson["buoyant"] = *floats; }
             if (const auto collision = item.find("collision"); collision != item.end()) { objectJson["collision"] = *collision; }
+            // A mark of the race (app/game/RaceCourse.h): two items with one number are a gate.
+            if (const auto gate = item.find("raceGate"); gate != item.end() && gate->is_number() && gate->get<float>() >= 1.0f)
+            {
+                objectJson["raceGate"] = static_cast<int>(std::lround(gate->get<float>()));
+            }
 
             const std::string group = groupOverride.empty() ? GroupForKind(ctx.document, kind) : groupOverride;
             if (!group.empty())
@@ -3799,6 +3859,29 @@ EditorActionRegistry::EditorActionRegistry()
         EditorTargetKind::Objects,
         { { "enabled", EditorParamKind::Bool, true, "true floats the meshes, false puts them back where the level placed them" } },
         &BuildSetBuoyant,
+    });
+
+    actions_.push_back({
+        "setRaceGate",
+        "Make the matching meshes (buoys) marks of a gate of the level's race course, or take them out of it. Two "
+        "marks with the same gate number are one gate: a boat passes between them. The gates are run in the order "
+        "of their numbers and the last leads back to gate 1, the start and the finish. Moving a mark moves the "
+        "course; the bots read it when Play starts.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "gate", EditorParamKind::Number, true, "the gate's number, 1 and up; 0 takes the meshes out of the race" } },
+        &BuildSetRaceGate,
+    });
+
+    actions_.push_back({
+        "setRaceBot",
+        "Put a bot at the helm of the matching boats, or take it off: in Play the bot runs the level's race course "
+        "(the gates marked with setRaceGate) lap after lap. The player can still take that helm; the bot stands "
+        "down while they hold it.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "enabled", EditorParamKind::Bool, true, "true puts a bot at the helm, false takes it off" } },
+        &BuildSetRaceBot,
     });
 
     actions_.push_back({
@@ -4007,7 +4090,8 @@ EditorActionRegistry::EditorActionRegistry()
         "Create new objects at EXACT positions, one per item of params.items: each item is "
         "{asset, position [x, y, z]} with an optional yawDeg, rotationDeg [pitch, yaw, roll] "
         "and scale (a number, or [x, y, z]; it multiplies the asset's own size), physics (\"dynamic\" falls when "
-        "the simulation runs, \"none\" collides with nothing), mass (kg) and buoyant (true floats it). Nothing is "
+        "the simulation runs, \"none\" collides with nothing), mass (kg), buoyant (true floats it) and raceGate (a "
+        "number: the item is a mark of that gate of the level's race, two marks a gate). Nothing is "
         "scattered, dropped onto the ground or kept apart -- the positions are used as given, "
         "height included. This is for a layout that was worked out already: numbers the "
         "designer typed, or points computed from the terrain. For \"plant twenty palms here\" "
@@ -4655,6 +4739,7 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
                         (key == "physics" && v.is_string()) ||
                         (key == "mass" && v.is_number()) ||
                         (key == "buoyant" && v.is_boolean()) ||
+                        (key == "raceGate" && v.is_number()) ||
                         (key == "collision" && v.is_object());
                     if (!ok)
                     {

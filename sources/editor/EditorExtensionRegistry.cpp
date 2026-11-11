@@ -24,6 +24,7 @@
 #include "editor/commands/SetBuoyantCommand.h"
 #include "editor/commands/SetPhysicsCommand.h"
 #include "editor/commands/SetCastShadowCommand.h"
+#include "editor/commands/SetRaceKeyCommand.h"
 #include "editor/commands/SetLampSwitchCommand.h"
 #include "editor/commands/SetMaterialCommand.h"
 #include "editor/commands/SetMaterialSlotCommand.h"
@@ -592,10 +593,57 @@ namespace
             DrawCastShadow(ctx, commandStack, obj);
             DrawPhysics(ctx, commandStack, obj);
             DrawBuoyancy(ctx, commandStack, obj, runtime);
+            DrawRace(ctx, commandStack, obj);
             DrawGlowOnAt(ctx, commandStack, obj, gb);
         }
 
     private:
+        // The race (app/game/RaceCourse.h): a mark's gate number; on a boat, a bot at its helm.
+        static void DrawRace(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
+        {
+            if (!SetRaceKeyCommand::AppliesTo(obj)) { return; }
+            ImGui::SeparatorText("Race");
+            int gate = SetRaceKeyCommand::DocumentGate(obj);
+            ImGui::SetNextItemWidth(120.0f);
+            if (ImGui::InputInt("Race gate", &gate, 1, 1, ImGuiInputTextFlags_EnterReturnsTrue) || ImGui::IsItemDeactivatedAfterEdit())
+            {
+                gate = std::max(gate, 0);
+                if (gate != SetRaceKeyCommand::DocumentGate(obj))
+                {
+                    // Every selected mesh, one undo entry: select a gate's two buoys and number them together.
+                    auto composite = std::make_unique<CompositeCommand>(gate > 0 ? "Race Gate " + std::to_string(gate) : "Clear Race Gate");
+                    for (const EditorObjectId id : ctx.selection.Ordered())
+                    {
+                        const EditorObject* selected = ctx.document.Find(id);
+                        if (selected && SetRaceKeyCommand::AppliesTo(*selected)) { composite->Add(SetRaceKeyCommand::Gate(id, gate)); }
+                    }
+                    if (composite->Empty()) { composite->Add(SetRaceKeyCommand::Gate(obj.id, gate)); }
+                    commandStack.Execute(ctx, std::move(composite));
+                }
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "0 = not part of a race. Two meshes (buoys) with the same number are a GATE: a boat passes\n"
+                    "between them. Gates are run in the order of their numbers; the last leads back to gate 1,\n"
+                    "the start and the finish. Move a buoy and the course moves: the bots and the lap clock\n"
+                    "read it when Play starts. In Play, `--set bot.debug:1` draws the gates and the bot's line.");
+            }
+            if (!SetPhysicsCommand::VesselAsset(ctx, obj.id)) { return; }
+            bool bot = SetRaceKeyCommand::DocumentBot(obj);
+            if (ImGui::Checkbox("Bot at the helm", &bot))
+            {
+                commandStack.Execute(ctx, SetRaceKeyCommand::Bot(obj.id, bot));
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip(
+                    "In Play a bot takes this boat's helm and runs the level's race gates, lap after lap.\n"
+                    "Take the helm yourself (E) and it stands down until you leave. At any helm B hands\n"
+                    "the boat to the same bot (autopilot). Its numbers: Developer Controls > Physics, bot.*.");
+            }
+        }
+
         // UE's Lighting > Cast Shadow. Every selected mesh, one undo entry.
         static void DrawCastShadow(EditorContext& ctx, EditorCommandStack& commandStack, const EditorObject& obj)
         {
