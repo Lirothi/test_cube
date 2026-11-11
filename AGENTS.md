@@ -834,8 +834,13 @@ and the preview compared the sky cube's pointer alone -- the content moves behin
 `SkyAtmosphere::EnvironmentRevision` counted only inside a commented-out log line (0 for ever); it bumps with every rebuild
 now and reaches the preview through `Skybox::EnvironmentRevision` / `PhysicalLighting::environmentRevision`, taken
 kFrameCount + 1 updates late (the render thread bumps it when it RECORDS the rebuild), and after any change every slot is
-re-rendered for 2 x kFrameCount + 1 frames (`MeshEditorPreviewScene::Update`). Four bursts of 240 frames: the preview's
-clouds follow every rebuild; a picture came back twice in one of them (not reproduced since), never in the other three.
+re-rendered once more (`MeshEditorPreviewScene::Update`). Four bursts of 240 frames: the preview's clouds follow every
+rebuild. Then the owner: "it flickers dark, rare frames" -- and only at full frame rate (a burst's PNGs take it to ~10 fps
+and it was gone): `SkyAtmosphere::BuildEnvironment` CLEARED the skybox's environment at its top every frame and set it
+again a few lines on, and the preview reads the skybox on the game thread beside it -- a read in that window took the sky
+for the file sky (no IBL, the file cube's calibration) and drew a dark slot, which the re-render after a change put on
+screen for a frame. The environment is set once a frame now, to what it is. A race of the game half against the render
+thread is invisible to a burst: reason it out from who writes what when.
 **The Mesh Editor's preview has its own camera** (2026-11-05, owner: "make its own exposure, and so it can be set"): under Level lighting it is lit by the level's sun and sky in lux, and it took the VIEWPORT's metered EV, so from the bathroom (EV 7.44) the same door came out white and from the beach (13.36) right. Now `previewLight.autoExposure` (default on, `editor_state.json`, Mesh Editor > Preview Lighting): the EV a meter reads off a grey card under the preview's own light (the sun by the preview's direction + the sky's horizontal illuminance, `log2(0.18 E / pi) + 3`) less `exposureCompensationEv`; off = `manualEv100`. Only the colour pipeline stays the level's.
 
 **When a thumbnail bakes** (`AssetThumbnailCache`, PNGs in `editor_cache/thumbnails`): when its signature changes --

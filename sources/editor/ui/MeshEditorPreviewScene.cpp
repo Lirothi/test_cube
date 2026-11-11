@@ -498,10 +498,10 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         impl_->renderedLinesRevisions[frameIndex] != linesRevision;
     // Every frame slot keeps its own picture, so a slot re-rendered after the sky's content moved and one drawn before it
     // show different clouds -- three captures in three slots, shown in turn, were the "real sky" flickering (2026-11-11,
-    // owner). After any change every slot is re-rendered for 2 x kFrameCount + 1 frames: twice each, the last ones after
-    // the GPU has run the rebuild the change came from (the render thread's frame in flight may run it after this
-    // frame's preview).
-    if (changed) { impl_->settleFrames = 2u * render::kFrameCount + 1u; }
+    // owner). After any change every slot is re-rendered once more (kFrameCount frames), so the three agree even when
+    // what changed is content the comparison above cannot see. Not more: a re-render beside the render thread waits for
+    // the GPU (RenderFrame), and the sky's revision is already taken late enough for its rebuild to have run.
+    if (changed) { impl_->settleFrames = render::kFrameCount; }
     if (changed || impl_->settleFrames > 0u)
     {
         if (impl_->settleFrames > 0u) { --impl_->settleFrames; }

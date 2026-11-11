@@ -623,9 +623,16 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
     const SkyEnvironmentOverlay* overlay, const NightSkyFrameData& nightIn, size_t nightPass)
 {
     constexpr size_t none = static_cast<size_t>(-1);
-    if (sky) sky->SetEnvironment({}, {});
+    // The skybox's environment is set ONCE a frame, to what it is (below, or here when there is none). It used to be
+    // cleared first and set again a few lines on, every frame: the game half reads it beside this thread (the Mesh
+    // Editor's preview, Skybox::HasEnvironment / EnvironmentSrv / GetExposure), and a read in between took the sky for
+    // the file sky -- no IBL, the file cube's calibration -- and drew one dark preview now and then, at full frame
+    // rate only (2026-11-11, owner: "it flickers dark, rare frames").
     if (!settings.mode || !settings.environmentLighting || failed_ || environmentFailed_ || !environmentHeap_ || !sky)
+    {
+        if (sky) sky->SetEnvironment({}, {});
         return luts;
+    }
     // One global probe at sea level, independent of viewer position/yaw and auto exposure.
     // SkyView storage uses a fixed exposure; the capture decodes it into absolute radiance.
     view.planet[0] = settings.parameters.radii[0] + 0.001f;
