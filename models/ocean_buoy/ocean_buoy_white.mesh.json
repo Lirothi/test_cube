@@ -1,0 +1,12 @@
+{
+  "bakeScale": 0.009999999776482582,
+  "geometry": "models/ocean_buoy/ocean_buoy_node_Object_5.mesh.bin",
+  "lodGroup": "SmallProp",
+  "lodNormalWeight": 0.5,
+  "material": "ocean_buoy_white",
+  "pivot": "base",
+  "source": "import_staging\\ocean_buoy\\scene.gltf#node:Object_5",
+  "uvDensity": [
+    1.2771888971328735
+  ]
+}

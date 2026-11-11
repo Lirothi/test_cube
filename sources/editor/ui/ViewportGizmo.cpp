@@ -980,15 +980,22 @@ void ViewportGizmo::Update(EditorContext& ctx,
         // marks joined (port end red, starboard end green), and the gates' middles in the order they are run, a mast
         // on the start. A mark's number alone shows neither which buoy it pairs with nor where the course goes next.
         // Only then: the keys are looked up in every object's properties.
+        // A level may hold several courses: a mark shows its own, a bot's boat all of them.
         bool raceSelected = false;
+        bool everyCourse = false;
+        std::vector<std::string> shownTracks;
         for (const EditorObjectId id : ctx.selection.Ordered())
         {
             const EditorObject* selected = ctx.document.Find(id);
-            if (selected && (selected->properties.contains(game::kRaceGateKey) || selected->properties.contains(game::kRaceBotKey)))
+            if (!selected) { continue; }
+            if (selected->properties.contains(game::kRaceGateKey))
             {
                 raceSelected = true;
-                break;
+                const auto it = selected->properties.find(game::kRaceTrackKey);
+                const std::string name = it != selected->properties.end() && it->is_string() ? it->get<std::string>() : std::string();
+                if (std::find(shownTracks.begin(), shownTracks.end(), name) == shownTracks.end()) { shownTracks.push_back(name); }
             }
+            if (selected->properties.contains(game::kRaceBotKey)) { raceSelected = everyCourse = true; }
         }
         if (raceSelected)
         {
@@ -997,39 +1004,43 @@ void ViewportGizmo::Update(EditorContext& ctx,
             {
                 if (object.enabled) { game::ReadRaceKeys(object.properties, object.transform.position, course); }
             }
-            game::RaceTrack track;
-            std::string report;
-            if (track.Build(course, report))
+            if (everyCourse) { shownTracks = course.TrackNames(); }
+            for (const std::string& shownTrack : shownTracks)
             {
-                const OceanRenderable* ocean = ctx.scene.FindOceanRenderable();
-                const float y = (ocean ? ocean->GetWaterLevel() : 0.0f) + 1.5f;
-                const std::vector<game::RaceGate>& gates = track.Gates();
-                for (std::size_t i = 0; i < gates.size(); ++i)
+                game::RaceTrack track;
+                std::string report;
+                if (track.Build(course, shownTrack, report))
                 {
-                    const game::RaceGate& gate = gates[i];
-                    const game::RaceGate& next = gates[(i + 1) % gates.size()];
-                    const Math::float3 centre(gate.center.x, y, gate.center.y);
-                    dd->AddLine(Math::float3(gate.a.x, y, gate.a.y), centre, Math::float4(1.0f, 0.2f, 0.15f, 1.0f));
-                    dd->AddLine(centre, Math::float3(gate.b.x, y, gate.b.y), Math::float4(0.15f, 1.0f, 0.25f, 1.0f));
-                    dd->AddLine(centre, Math::float3(next.center.x, y, next.center.y), Math::float4(1.0f, 0.9f, 0.3f, 0.85f));
-                    if (i == 0) { dd->AddLine(centre, Math::float3(centre.x, y + 8.0f, centre.z), Math::float4(1.0f, 0.9f, 0.3f, 1.0f)); }
-                }
-                // Where a race starts: the zone a boat drives into before gate 1, and the grid's four places in it.
-                const game::RaceStart start = game::StartOf(track);
-                const auto corner = [&](float along, float across) {
-                    const Math::float2 p = start.center + start.along * along + start.starboard * across;
-                    return Math::float3(p.x, y, p.y);
-                };
-                const Math::float4 zone(0.15f, 1.0f, 0.45f, 1.0f);
-                dd->AddLine(corner(start.halfLength, -start.halfWidth), corner(start.halfLength, start.halfWidth), zone);
-                dd->AddLine(corner(start.halfLength, start.halfWidth), corner(-start.halfLength, start.halfWidth), zone);
-                dd->AddLine(corner(-start.halfLength, start.halfWidth), corner(-start.halfLength, -start.halfWidth), zone);
-                dd->AddLine(corner(-start.halfLength, -start.halfWidth), corner(start.halfLength, -start.halfWidth), zone);
-                for (const Math::float2& slot : start.slots)
-                {
-                    const Math::float2 bow = slot + start.along * 5.0f;
-                    const Math::float2 stern = slot - start.along * 5.0f;
-                    dd->AddLine(Math::float3(bow.x, y, bow.y), Math::float3(stern.x, y, stern.y), Math::float4(1.0f, 1.0f, 1.0f, 1.0f));
+                    const OceanRenderable* ocean = ctx.scene.FindOceanRenderable();
+                    const float y = (ocean ? ocean->GetWaterLevel() : 0.0f) + 1.5f;
+                    const std::vector<game::RaceGate>& gates = track.Gates();
+                    for (std::size_t i = 0; i < gates.size(); ++i)
+                    {
+                        const game::RaceGate& gate = gates[i];
+                        const game::RaceGate& next = gates[(i + 1) % gates.size()];
+                        const Math::float3 centre(gate.center.x, y, gate.center.y);
+                        dd->AddLine(Math::float3(gate.a.x, y, gate.a.y), centre, Math::float4(1.0f, 0.2f, 0.15f, 1.0f));
+                        dd->AddLine(centre, Math::float3(gate.b.x, y, gate.b.y), Math::float4(0.15f, 1.0f, 0.25f, 1.0f));
+                        dd->AddLine(centre, Math::float3(next.center.x, y, next.center.y), Math::float4(1.0f, 0.9f, 0.3f, 0.85f));
+                        if (i == 0) { dd->AddLine(centre, Math::float3(centre.x, y + 8.0f, centre.z), Math::float4(1.0f, 0.9f, 0.3f, 1.0f)); }
+                    }
+                    // Where a race starts: the zone a boat drives into before gate 1, and the grid's four places in it.
+                    const game::RaceStart start = game::StartOf(track);
+                    const auto corner = [&](float along, float across) {
+                        const Math::float2 p = start.center + start.along * along + start.starboard * across;
+                        return Math::float3(p.x, y, p.y);
+                    };
+                    const Math::float4 zone(0.15f, 1.0f, 0.45f, 1.0f);
+                    dd->AddLine(corner(start.halfLength, -start.halfWidth), corner(start.halfLength, start.halfWidth), zone);
+                    dd->AddLine(corner(start.halfLength, start.halfWidth), corner(-start.halfLength, start.halfWidth), zone);
+                    dd->AddLine(corner(-start.halfLength, start.halfWidth), corner(-start.halfLength, -start.halfWidth), zone);
+                    dd->AddLine(corner(-start.halfLength, -start.halfWidth), corner(start.halfLength, -start.halfWidth), zone);
+                    for (const Math::float2& slot : start.slots)
+                    {
+                        const Math::float2 bow = slot + start.along * 5.0f;
+                        const Math::float2 stern = slot - start.along * 5.0f;
+                        dd->AddLine(Math::float3(bow.x, y, bow.y), Math::float3(stern.x, y, stern.y), Math::float4(1.0f, 1.0f, 1.0f, 1.0f));
+                    }
                 }
             }
         }

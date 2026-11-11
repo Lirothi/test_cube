@@ -595,6 +595,25 @@ namespace
                 ctx.document.SetDirty(true);
             }
 
+            // The object's baseColor: times the albedo texture while it is on (a tint -- a white-albedo mesh such as
+            // ocean_buoy_white takes the colour with its detail), the flat colour when "Use Albedo" is off.
+            {
+                float tint[3] = { mp.baseColor.x, mp.baseColor.y, mp.baseColor.z };
+                const bool textured = mp.texFlags.x > 0.5f;
+                if (ImGui::ColorEdit3(textured ? "Tint" : "Colour", tint, ImGuiColorEditFlags_Float))
+                {
+                    gb->SetObjectBaseColorRgb(Math::float3(tint[0], tint[1], tint[2]));
+                    obj.properties["baseColor"] = { tint[0], tint[1], tint[2] };
+                    ctx.document.SetDirty(true);
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(textured ? "Multiplied into the albedo texture: white = as the texture is. A white-albedo mesh\n"
+                                                 "(ocean_buoy_white) takes this colour with its detail. MCP: setSurface {tint: [r, g, b]}."
+                                               : "The flat colour in place of the albedo texture (Use Albedo is off).");
+                }
+            }
+
             DrawCastShadow(ctx, commandStack, obj);
             DrawPhysics(ctx, commandStack, obj);
             DrawBuoyancy(ctx, commandStack, obj, runtime);
@@ -885,6 +904,35 @@ namespace
                     "between them. Gates are run in the order of their numbers; the last leads back to gate 1,\n"
                     "the start and the finish. Move a buoy and the course moves: the bots and the lap clock\n"
                     "read it when Play starts. In Play, `--set bot.debug:1` draws the gates and the bot's line.");
+            }
+            if (SetRaceKeyCommand::DocumentGate(obj) > 0)
+            {
+                // A level may hold several courses: the mark's own, by name (empty = the level's first).
+                char track[64];
+                std::snprintf(track, sizeof(track), "%s", SetRaceKeyCommand::DocumentTrack(obj).c_str());
+                ImGui::SetNextItemWidth(160.0f);
+                if (ImGui::InputText("Race track", track, sizeof(track), ImGuiInputTextFlags_EnterReturnsTrue) || ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    const std::string name = track;
+                    if (name != SetRaceKeyCommand::DocumentTrack(obj))
+                    {
+                        auto composite = std::make_unique<CompositeCommand>(name.empty() ? "Race Track: the first" : "Race Track " + name);
+                        for (const EditorObjectId id : ctx.selection.Ordered())
+                        {
+                            const EditorObject* selected = ctx.document.Find(id);
+                            if (selected && SetRaceKeyCommand::DocumentGate(*selected) > 0) { composite->Add(SetRaceKeyCommand::Track(id, name)); }
+                        }
+                        if (composite->Empty()) { composite->Add(SetRaceKeyCommand::Track(obj.id, name)); }
+                        commandStack.Execute(ctx, std::move(composite));
+                    }
+                }
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip(
+                        "Whose course this mark is: empty = the level's first, a name = another course with its own gates\n"
+                        "1, 2, 3 ... and its own start zone. In Play every course's zone is lit: the one you drive into is\n"
+                        "raced (`race.track` picks it for a script's race.start).");
+                }
             }
             if (!SetPhysicsCommand::VesselAsset(ctx, obj.id)) { return; }
             bool bot = SetRaceKeyCommand::DocumentBot(obj);

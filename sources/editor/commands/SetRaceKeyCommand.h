@@ -16,6 +16,8 @@ class SetRaceKeyCommand : public EditorCommand
 public:
     // `gate` 0 = no mark of the race.
     static std::unique_ptr<SetRaceKeyCommand> Gate(EditorObjectId id, int gate);
+    // Whose course the mark is ("raceTrack"; "" = the level's first, the key taken away).
+    static std::unique_ptr<SetRaceKeyCommand> Track(EditorObjectId id, const std::string& track);
     static std::unique_ptr<SetRaceKeyCommand> Bot(EditorObjectId id, bool bot);
 
     bool Execute(EditorContext& ctx) override;
@@ -25,6 +27,7 @@ public:
     // A mark is any mesh; a bot's boat any mesh too (whether it is a vessel is the asset's to say: SetPhysicsCommand::VesselAsset).
     static bool AppliesTo(const EditorObject& obj) { return obj.type == "staticMesh"; }
     static int DocumentGate(const EditorObject& obj);
+    static std::string DocumentTrack(const EditorObject& obj);
     static bool DocumentBot(const EditorObject& obj);
 
 private:

@@ -12,7 +12,8 @@ namespace game
         const auto gate = object.find(kRaceGateKey);
         if (gate != object.end() && gate->is_number_integer() && gate->get<int>() > 0)
         {
-            out.marks.push_back(RaceMark{ position, gate->get<int>() });
+            const auto track = object.find(kRaceTrackKey);
+            out.marks.push_back(RaceMark{ position, gate->get<int>(), track != object.end() && track->is_string() ? track->get<std::string>() : std::string() });
         }
         const auto bot = object.find(kRaceBotKey);
         if (bot != object.end() && bot->is_boolean() && bot->get<bool>())

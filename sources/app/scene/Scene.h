@@ -496,6 +496,9 @@ private:
     OceanBuoyancy buoyancy_; // floats "buoyant" objects on the ocean (Tick, before PostTick)
     std::optional<game::PlayerStart> levelPlayerStart_;
     game::VesselCamera vesselCamera_;
+    // race.watch: the same chase camera on a bot's boat (Scene::Sync), and the boat it is on now.
+    game::VesselCamera spectatorCamera_;
+    RenderableObject* spectated_ = nullptr;
     game::Race race_;
     game::RaceCourse levelRaceCourse_;
     physics::World physics_; // the bodies (Tick, after the buoyancy: a boat's pose is this frame's)

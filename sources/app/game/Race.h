@@ -38,6 +38,10 @@ namespace game
         float resetSeconds = 8.0f;  // ... or held (aground, against something, astern) for this long: a boat a bot steers is put back on
                                     // its line, 40 m before its next gate. 0 = never
         float resetPenalty = 10.0f; // s that costs it
+        float track = 0.0f;         // the course race.start runs, by its place among the level's (the unnamed first, then by name);
+                                    // a boat driven into a course's start zone picks that one itself
+        float watch = 0.0f;         // the camera chases this racer (its place on the grid, 1..4; outside a race the N-th boat with a
+                                    // bot); 0 = off. To watch a bots' race (owner, 2026-11-11: "hang the camera on one of the bots")
     };
     RaceSettings& RaceSettingsRef();
 
@@ -68,8 +72,10 @@ namespace game
         void Forget();
         // Every frame of a session, before the helm reads its keys.
         void Tick(physics::World& world, float deltaTime);
-        bool HasTrack() const { return track_.Valid(); }
+        bool HasTrack() const { return !courses_.empty(); }
+        // The course being raced (or the last one picked): its gates.
         const RaceTrack& Track() const { return track_; }
+        const std::string& TrackName() const { return trackName_; }
         Phase GetPhase() const { return phase_; }
 
         // The player's own boat: B hands its helm to the bot and takes it back.
@@ -97,6 +103,10 @@ namespace game
         std::string ReadoutJson() const;
         // The start zone while it waits (always), the gates and a bot's line (bot.debug).
         void DebugDraw(DebugDrawSystem& draw) const;
+        // The boat race.watch names (null = none, or the player holds a helm: their own camera rules), and the last Tick's
+        // dt: the spectator's chase camera follows it (Scene::Sync).
+        RenderableObject* WatchedVessel() const;
+        float LastDeltaTime() const { return lastDelta_; }
 
     private:
         struct Entry
@@ -128,6 +138,18 @@ namespace game
             float progress = 0.0f;           // m along the course since the start line
         };
 
+        // One of the level's courses: its gates and its start zone.
+        struct Course
+        {
+            std::string name; // "" = the level's first
+            RaceTrack track;
+            RaceStart start;
+        };
+        // The course the race runs: its gates and zone become track_ / start_, and every bot looks for its line afresh.
+        void SelectCourse(std::size_t index);
+        // The course whose start zone holds the point; courses_.size() = none.
+        std::size_t ZoneAt(const Math::float2& point) const;
+
         void Sound(physics::World& world, RaceBot& bot, const physics::VesselHull& hull) const;
         const physics::VesselHull* HullOf(const RenderableObject* vessel) const;
         void StartRace(physics::World& world);
@@ -143,8 +165,11 @@ namespace game
         float TimeOf(const Racer& racer) const; // its finish with the penalties; < 0 = still out
         std::vector<const Racer*> Standing() const;
 
-        RaceTrack track_;
+        std::vector<Course> courses_;
+        std::size_t current_ = 0;
+        RaceTrack track_;        // courses_[current_]'s
         RaceStart start_;
+        std::string trackName_;
         std::string report_;
         float soundSeconds_ = 0.0f; // since the rays were last cast: four times a second (each waits for a step in flight)
         std::vector<physics::VesselHull> hulls_; // a frame's, kept for its capacity
@@ -175,5 +200,6 @@ namespace game
         float missShownWidths_ = 1.0f; // and how far from its middle that one was
         int laps_ = 3;              // of the race being run
         int raceCount_ = 0;         // races started this session: the mixed levels turn by one each
+        float lastDelta_ = 0.0f;
     };
 }

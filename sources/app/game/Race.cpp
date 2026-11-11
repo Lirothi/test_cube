@@ -85,6 +85,8 @@ namespace game
             { "resetSeconds", "Lost: for (s)", "How long it has to be lost before it is put back. 0 = never: a boat aground stays there.", &S::resetSeconds, 0.1f, 0.0f, 120.0f, "%.0f" },
             { "resetPenalty", "Put back penalty (s)", "Added to a racer's time each time it is put back on the course.", &S::resetPenalty, 0.1f, 0.0f, 120.0f, "%.0f" },
             { "missPenalty", "Missed gate penalty (s)", "Added to a racer's time for a gate it went round just outside a mark. It grows with how far from the gate's middle the boat went by: twice the gate's half width off costs twice this, five times at the most.", &S::missPenalty, 0.1f, 0.0f, 60.0f, "%.1f" },
+            { "track", "Course (race.start)", "Which of the level's courses a race started by a script runs: 0 = the first (the unnamed one), then the named ones by name. A boat driven into a course's start zone picks that course itself.", &S::track, 1.0f, 0.0f, 15.0f, "%.0f" },
+            { "watch", "Watch a bot", "The camera chases this racer -- its place on the grid, 1 to 4 (outside a race the N-th boat with a bot). 0 = off. Not while you hold a helm.", &S::watch, 1.0f, 0.0f, 4.0f, "%.0f" },
         };
         return keys;
     }
@@ -102,16 +104,25 @@ namespace game
     {
         Forget();
         active_ = true;
-        if (!course.marks.empty())
+        for (const std::string& name : course.TrackNames())
         {
-            const bool ok = track_.Build(course, report_);
-            if (ok)
+            Course one;
+            one.name = name;
+            std::string report;
+            if (one.track.Build(course, name, report))
             {
-                start_ = StartOf(track_);
-                LOG_INFO(logging::LogCategory::App, "race: {}, {} boat(s) with a bot; the start zone at {:.1f} {:.1f}", report_, course.bots.size(),
-                         start_.center.x, start_.center.y);
+                one.start = StartOf(one.track);
+                LOG_INFO(logging::LogCategory::App, "race: course '{}': {}; the start zone at {:.1f} {:.1f}", TrackDisplayName(name), report, one.start.center.x,
+                         one.start.center.y);
+                courses_.push_back(std::move(one));
             }
-            else { LOG_WARNING(logging::LogCategory::App, "race: no course -- {}", report_); }
+            else { LOG_WARNING(logging::LogCategory::App, "race: no course '{}' -- {}", TrackDisplayName(name), report); }
+            report_ += (report_.empty() ? "" : "; ") + TrackDisplayName(name) + ": " + report;
+        }
+        if (!courses_.empty())
+        {
+            SelectCourse(0);
+            LOG_INFO(logging::LogCategory::App, "race: {} course(s), {} boat(s) with a bot", courses_.size(), course.bots.size());
         }
         for (const Math::float3& where : course.bots)
         {
@@ -134,8 +145,11 @@ namespace game
     {
         bots_.clear();
         racers_.clear();
+        courses_.clear();
+        current_ = 0;
         track_.Clear();
         start_ = RaceStart{};
+        trackName_.clear();
         report_.clear();
         helmBot_.Reset();
         helmVessel_ = nullptr;
@@ -163,6 +177,30 @@ namespace game
     }
 
     void Race::CloseResults() { resultsOpen_ = false; }
+
+    void Race::SelectCourse(std::size_t index)
+    {
+        if (index >= courses_.size()) { return; }
+        const bool same = index == current_ && track_.Valid();
+        current_ = index;
+        track_ = courses_[index].track;
+        start_ = courses_[index].start;
+        trackName_ = courses_[index].name;
+        if (same) { return; }
+        // Another course: every line was the old one's.
+        helmBot_.Reset();
+        for (Entry& entry : bots_) { entry.bot.Reset(); }
+        LOG_INFO(logging::LogCategory::App, "race: the course is '{}', {} gates", TrackDisplayName(trackName_), track_.Gates().size());
+    }
+
+    std::size_t Race::ZoneAt(const Math::float2& point) const
+    {
+        for (std::size_t i = 0; i < courses_.size(); ++i)
+        {
+            if (courses_[i].start.Holds(point)) { return i; }
+        }
+        return courses_.size();
+    }
 
     const physics::VesselHull* Race::HullOf(const RenderableObject* vessel) const
     {
@@ -415,6 +453,7 @@ namespace game
     {
         if (!active_) { return; }
         CPU_SCOPE(ProfilerScopes::kRaceTick);
+        lastDelta_ = deltaTime;
         world.CollectHulls(hulls_);
         const BotSettings& settings = BotSettingsRef();
         pulse_ += deltaTime;
@@ -494,9 +533,20 @@ namespace game
         {
         case Phase::Free:
         {
-            const bool inZone = helmDriven_ && track_.Valid() && start_.Holds(helmAt);
+            // Every course's zone waits: the one the player drives into is the race's. A script's start runs race.track.
+            const std::size_t zone = helmDriven_ ? ZoneAt(helmAt) : courses_.size();
+            const bool inZone = zone < courses_.size();
             if (!inZone) { armed_ = true; }
-            if (track_.Valid() && ((inZone && armed_) || startAsked_)) { StartRace(world); }
+            if (inZone && armed_)
+            {
+                SelectCourse(zone);
+                StartRace(world);
+            }
+            else if (startAsked_ && !courses_.empty())
+            {
+                SelectCourse(std::min(static_cast<std::size_t>(std::max(std::lround(RaceSettingsRef().track), 0L)), courses_.size() - 1));
+                StartRace(world);
+            }
             startAsked_ = false;
             break;
         }
@@ -609,15 +659,18 @@ namespace game
             int rivals = 0;
             for (const Entry& entry : bots_) { rivals += entry.live && !entry.yielded ? 1 : 0; }
             rivals = std::min(rivals, 3);
+            std::wstring names;
+            for (const Course& course : courses_) { names += (names.empty() ? L"" : L", ") + Wide(TrackDisplayName(course.name)); }
             std::swprintf(line, sizeof(line) / sizeof(line[0]),
-                          L"RACE: drive into the lit zone before the yellow buoys -- %d laps against %d boat%ls   gate %d of %d   lap %ls   best %ls   %ls",
-                          static_cast<int>(std::lround(RaceSettingsRef().laps)), rivals, rivals == 1 ? L"" : L"s", mine.nextGate, gates,
-                          Wide(LapText(mine.lapSeconds)).c_str(), Wide(LapText(mine.bestLap)).c_str(),
+                          L"RACE: drive into a course's lit start zone (%ls) -- %d laps against %d boat%ls   %hs: gate %d of %d   lap %ls   best %ls   %ls",
+                          names.c_str(), static_cast<int>(std::lround(RaceSettingsRef().laps)), rivals, rivals == 1 ? L"" : L"s",
+                          TrackDisplayName(trackName_).c_str(), mine.nextGate, gates, Wide(LapText(mine.lapSeconds)).c_str(), Wide(LapText(mine.bestLap)).c_str(),
                           autopilot_ ? L"AUTOPILOT, B takes the helm back" : L"B autopilot");
             return line;
         }
         case Phase::Countdown:
-            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE: on the grid, %d boats, %d laps", static_cast<int>(racers_.size()), laps_);
+            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE '%hs': on the grid, %d boats, %d laps", TrackDisplayName(trackName_).c_str(),
+                          static_cast<int>(racers_.size()), laps_);
             return line;
         case Phase::Racing:
         case Phase::Finished:
@@ -640,11 +693,21 @@ namespace game
             const std::vector<const Racer*> order = Standing();
             if (order.empty()) { return {}; }
             const Racer& lead = *order.front();
-            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE (bots)  %hs leads   lap %d of %d   %ls   %d of %d finished", lead.name.c_str(),
-                          std::min(static_cast<int>(lead.laps.size()) + 1, laps_), laps_, Wide(LapText(clock_)).c_str(),
+            std::swprintf(line, sizeof(line) / sizeof(line[0]), L"RACE '%hs' (bots)  %hs leads   lap %d of %d   %ls   %d of %d finished",
+                          TrackDisplayName(trackName_).c_str(), lead.name.c_str(), std::min(static_cast<int>(lead.laps.size()) + 1, laps_), laps_,
+                          Wide(LapText(clock_)).c_str(),
                           static_cast<int>(std::count_if(racers_.begin(), racers_.end(), [](const Racer& r) { return r.finish >= 0.0f; })),
                           static_cast<int>(racers_.size()));
-            return line;
+            std::wstring text = line;
+            // race.watch: whose boat the camera is on, and where it lies.
+            const RenderableObject* watched = WatchedVessel();
+            for (const Racer& racer : racers_)
+            {
+                if (racer.vessel != watched || !watched) { continue; }
+                std::swprintf(line, sizeof(line) / sizeof(line[0]), L"   CAMERA: %hs, P%d, missed %d", racer.name.c_str(), PlaceOf(racer), racer.missed);
+                text += line;
+            }
+            return text;
         }
         }
         return {};
@@ -710,8 +773,9 @@ namespace game
         const RaceSettings& settings = RaceSettingsRef();
         if (ImGui::Begin("Race results", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove))
         {
-            ImGui::Text("%d laps, %d gates a lap. A gate missed at its mark costs %.0f s, further off more: up to %.0f s.", laps_,
-                        static_cast<int>(track_.Gates().size()), settings.missPenalty, settings.missPenalty * kMissWidthsMost);
+            ImGui::Text("Course '%s': %d laps, %d gates a lap. A gate missed at its mark costs %.0f s, further off more: up to %.0f s.",
+                        TrackDisplayName(trackName_).c_str(), laps_, static_cast<int>(track_.Gates().size()), settings.missPenalty,
+                        settings.missPenalty * kMissWidthsMost);
             ImGui::Separator();
             const int columns = 6 + laps_;
             if (ImGui::BeginTable("standing", columns, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
@@ -782,7 +846,7 @@ namespace game
     std::string Race::ReadoutJson() const
     {
         std::string out = ",\"race\":{";
-        char item[720];
+        char item[900];
         std::snprintf(item, sizeof(item),
                       "\"active\":%s,\"gates\":%zu,\"phase\":\"%s\",\"laps\":%d,\"countdown\":%.2f,\"clock\":%.2f,\"results\":%s,\"armed\":%s,\"autopilot\":%s,\"atHelm\":%s,"
                       "\"zone\":{\"center\":[%.2f,%.2f],\"heading\":%.4f,\"halfLength\":%.1f,\"halfWidth\":%.1f}",
@@ -790,15 +854,24 @@ namespace game
                       armed_ ? "true" : "false", autopilot_ ? "true" : "false", helmDriven_ ? "true" : "false", start_.center.x, start_.center.y,
                       std::atan2(start_.along.x, start_.along.y), start_.halfLength, start_.halfWidth);
         out += item;
+        out += ",\"track\":\"" + trackName_ + "\",\"tracks\":[";
+        for (std::size_t i = 0; i < courses_.size(); ++i)
+        {
+            const Course& course = courses_[i];
+            std::snprintf(item, sizeof(item), "%s{\"name\":\"%s\",\"gates\":%zu,\"zone\":[%.2f,%.2f]}", i > 0 ? "," : "", course.name.c_str(),
+                          course.track.Gates().size(), course.start.center.x, course.start.center.y);
+            out += item;
+        }
+        out += "]";
         const auto status = [&](const char* name, const RaceBot& bot, const Math::float3& position, bool comma)
         {
             const RaceBot::Status& s = bot.GetStatus();
             std::snprintf(item, sizeof(item),
                           "%s{\"vessel\":\"%s\",\"state\":\"%s\",\"lap\":%d,\"started\":%s,\"nextGate\":%d,\"passed\":%d,\"missed\":%d,\"station\":%.1f,\"length\":%.1f,\"speed\":%.2f,"
-                          "\"target\":%.2f,\"slowest\":%.2f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,"
+                          "\"target\":%.2f,\"slowest\":%.2f,\"lineRadius\":%.1f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,"
                           "\"lastLap\":%.2f,\"bestLap\":%.2f,\"throttle\":%.3f,\"rudder\":%.3f,\"position\":[%.2f,%.2f,%.2f]}",
                           comma ? "," : "", name, RaceBotStateName(static_cast<unsigned char>(s.state)), s.lap, s.started ? "true" : "false", s.nextGate, s.gatesPassed,
-                          s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target, bot.Line().SlowestSpeed(), s.tightestRadius, s.airborne,
+                          s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target, bot.Line().SlowestSpeed(), bot.Line().TightestRadius(), s.tightestRadius, s.airborne,
                           std::min(s.depthAhead, 999.0f), s.shoal ? "true" : "false", s.crossTrack, s.lapSeconds, s.lastLap, s.bestLap, s.order.throttle,
                           s.order.rudder, position.x, position.y, position.z);
             out += item;
@@ -839,37 +912,59 @@ namespace game
         return out;
     }
 
+    RenderableObject* Race::WatchedVessel() const
+    {
+        const int watch = static_cast<int>(std::lround(RaceSettingsRef().watch));
+        if (!active_ || watch < 1 || helmDriven_) { return nullptr; }
+        if (!racers_.empty()) { return watch <= static_cast<int>(racers_.size()) ? racers_[static_cast<std::size_t>(watch - 1)].vessel : nullptr; }
+        int index = 0;
+        for (const Entry& entry : bots_)
+        {
+            if (entry.live && ++index == watch) { return entry.vessel; }
+        }
+        return nullptr;
+    }
+
     void Race::DebugDraw(DebugDrawSystem& draw) const
     {
         if (!active_ || !track_.Valid()) { return; }
         const float y = seaLevel_ + 0.9f;
 
-        // ---- the start zone, while it waits: a sheet over the water with a low fence round it and the four places ----
+        // ---- the start zones, while they wait (every course's: the one driven into is raced), on the grid the race's ----
+        // A sheet over the water with a low fence round it and the four places.
         if (phase_ == Phase::Free || phase_ == Phase::Countdown)
         {
             const float glow = 0.5f + 0.5f * std::sin(pulse_ * 2.6f);
             const bool waits = phase_ == Phase::Free && armed_;
             const Math::float3 tint = phase_ == Phase::Countdown ? Math::float3(1.0f, 0.75f, 0.1f) : waits ? Math::float3(0.15f, 1.0f, 0.45f) : Math::float3(0.6f, 0.65f, 0.7f);
             const float strength = waits ? 0.6f + 0.4f * glow : 0.6f;
-            const Math::quat turn = Math::quat::FromAxisAngle(Math::float3(0.0f, 1.0f, 0.0f), std::atan2(start_.along.x, start_.along.y));
-            const auto at = [&](float along, float across, float up) {
-                const Math::float2 p = start_.center + start_.along * along + start_.starboard * across;
-                return Math::float3(p.x, y + up, p.y);
+            const auto zone = [&](const RaceStart& start)
+            {
+                const Math::quat turn = Math::quat::FromAxisAngle(Math::float3(0.0f, 1.0f, 0.0f), std::atan2(start.along.x, start.along.y));
+                const auto at = [&](float along, float across, float up) {
+                    const Math::float2 p = start.center + start.along * along + start.starboard * across;
+                    return Math::float3(p.x, y + up, p.y);
+                };
+                draw.AddBox(at(0.0f, 0.0f, 0.0f), Math::float3(start.halfWidth, 0.03f, start.halfLength), turn, Math::float4(tint.x, tint.y, tint.z, 0.20f * strength), false);
+                if (phase_ == Phase::Free) // on the grid the camera is inside it: the fence would tint the whole frame
+                {
+                    const float wall = 1.4f;
+                    const Math::float4 fence(tint.x, tint.y, tint.z, 0.16f * strength);
+                    draw.AddBox(at(start.halfLength, 0.0f, wall), Math::float3(start.halfWidth, wall, 0.06f), turn, fence, false);
+                    draw.AddBox(at(-start.halfLength, 0.0f, wall), Math::float3(start.halfWidth, wall, 0.06f), turn, fence, false);
+                    draw.AddBox(at(0.0f, start.halfWidth, wall), Math::float3(0.06f, wall, start.halfLength), turn, fence, false);
+                    draw.AddBox(at(0.0f, -start.halfWidth, wall), Math::float3(0.06f, wall, start.halfLength), turn, fence, false);
+                }
+                for (const Math::float2& slot : start.slots)
+                {
+                    draw.AddBox(Math::float3(slot.x, y + 0.05f, slot.y), Math::float3(2.2f, 0.03f, 6.0f), turn, Math::float4(1.0f, 1.0f, 1.0f, 0.22f * strength), false);
+                }
             };
-            draw.AddBox(at(0.0f, 0.0f, 0.0f), Math::float3(start_.halfWidth, 0.03f, start_.halfLength), turn, Math::float4(tint.x, tint.y, tint.z, 0.20f * strength), false);
-            if (phase_ == Phase::Free) // on the grid the camera is inside it: the fence would tint the whole frame
+            if (phase_ == Phase::Free)
             {
-                const float wall = 1.4f;
-                const Math::float4 fence(tint.x, tint.y, tint.z, 0.16f * strength);
-                draw.AddBox(at(start_.halfLength, 0.0f, wall), Math::float3(start_.halfWidth, wall, 0.06f), turn, fence, false);
-                draw.AddBox(at(-start_.halfLength, 0.0f, wall), Math::float3(start_.halfWidth, wall, 0.06f), turn, fence, false);
-                draw.AddBox(at(0.0f, start_.halfWidth, wall), Math::float3(0.06f, wall, start_.halfLength), turn, fence, false);
-                draw.AddBox(at(0.0f, -start_.halfWidth, wall), Math::float3(0.06f, wall, start_.halfLength), turn, fence, false);
+                for (const Course& course : courses_) { zone(course.start); }
             }
-            for (const Math::float2& slot : start_.slots)
-            {
-                draw.AddBox(Math::float3(slot.x, y + 0.05f, slot.y), Math::float3(2.2f, 0.03f, 6.0f), turn, Math::float4(1.0f, 1.0f, 1.0f, 0.22f * strength), false);
-            }
+            else { zone(start_); }
         }
 
         if (BotSettingsRef().debug < 0.5f) { return; }

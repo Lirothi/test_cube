@@ -1469,7 +1469,9 @@ section), `VesselStats.*` (what a boat does, from its numbers: the section after
   24 m WIDE (the start 30, the far turn's 28): a boat holds its line within some 5 m (it slides ~4 m wide round a long
   bend, a sea moves it more), and through gates of 18 m with a 4.5 m margin the line ran 6 m from the inside marks --
   police_boat and the yacht each brushed gate 5's inside buoy as they came onto the course, were thrown off it and
-  missed the next gates; the yacht ended on the south beach. The buoys are `ocean_buoy`'s four colours at scale 2.5 (2.2 m tall), `"buoyant": true` at y -0.3: Static
+  missed the next gates; the yacht ended on the south beach. The buoys are `ocean_buoy` at scale 2.5 (2.2 m tall) -- all
+  YELLOW (`Object_5`) since 2026-11-11, one colour a course (owner; the second course is red; `Object_3` blue and
+  `Object_4` green are lost on the turquoise water) --, `"buoyant": true` at y -0.3: Static
   floaters, so they rock in the editor too and a boat that hits one stops dead against it (a kinematic body; not
   violent). All four boats by the shore carry the bot.
 - **Measured** (2026-11-11, wind_test's 1 m sea, each boat 250 s from its mooring; scratchpad-style `bot_run.py` -- the race's readout
@@ -1561,6 +1563,54 @@ the grid, a start timer runs and off we go; three laps; after the finish a windo
   autopilot, the results' window photographed, closed, the zone armed again). No shader, pass or GPU resource changed.
 - Not there: a start signal's sound, positions shown during the race other than the HUD's line, a reset key for the
   player's own hands, more than four on the grid, a restart from the results.
+
+## Two Courses in wind_test -- "reef", One Colour a Course, Watching a Bot
+
+2026-11-11 (owner: "make one more course, harder than this one, and race the bots on it"; on the first cut, two straights
+and two hairpins: "you just made a sausage -- study race courses and do it properly"; "approve the trajectory with me";
+"hang the camera on one of the bots when you run them"; "each course its own one colour of buoys"; "one more buoy with a
+white albedo to tint later").
+
+- **A level holds several courses.** A mark's `"raceTrack": "<name>"` says whose it is (absent = the level's first, the
+  unnamed one, shown as "classic"); each numbers its gates from 1 (`RaceCourse::TrackNames`: the unnamed first, then by
+  name; `RaceTrack::Build(course, track, report)`). In Play every course's start zone is lit and the one a helm drives
+  into is raced (`Race::SelectCourse`: the lines are rebuilt); a script's `race.start:1` runs `race.track` (0, 1, ... in
+  that order). The HUD, the results and `get_readouts` race {track, tracks [{name, gates, zone}]} name it. Inspector >
+  Race "Race track" (a mark with a gate number; every selected mark, one undo entry), MCP `setRaceGate {gate, track}`,
+  `place` items' `raceTrack`; the editor's overlay draws the selected mark's course (a bot's boat: all of them).
+- **One colour a course**: classic all yellow (`ocean_buoy_node_Object_5`, 42 marks, its meshes swapped by MCP
+  `replace` -- every other key kept), reef all red (`Object_2`, 40). The start is the lit zone, not a colour.
+  **`ocean_buoy_white`** (`models/ocean_buoy/ocean_buoy_white.mesh.json`, Object_5's geometry, material
+  `ocean_buoy_white`, albedo `material_white_baseColor` -- the yellow paint made white with its wear kept, stripes black,
+  metal neutral grey: scratchpad-style `buoy_white.py`, BC7 by `test_cube.exe --import <a staging folder>`): tinted per
+  object by its `baseColor` times the texture -- Inspector "Tint" (new: the object's baseColor, "Colour" when Use Albedo is
+  off), MCP `setSurface {tint: [r, g, b]}` (keeps the texture on; `albedo` replaces it, the two at once refused).
+- **"reef"**, anticlockwise (classic is clockwise), north-east of the island in deep water, 40+ m from classic's buoys,
+  laid as a circuit is (F1H2O: 1.8-2.2 km on 5-6 pins, one long straight braking into turn 1 where the passes are, mostly
+  one way round with one or two the other; circuit design: straight braking into a slow corner, sequences that keep the
+  boats close, asymmetry): the start / finish on a ~400 m straight north -> T1 a tight left of 87 degrees (r 62) -> a
+  fast dogleg right-left along the north -> T3 a left of 116 (r 65) down onto the shore -> the shore: a long right round
+  the island's east side with a slalom of 4 gates (7 m either side every 78 m) -> a hairpin of 152 degrees in two apexes
+  back onto the straight. 20 gates, 20-22 m wide (the start 26), the line 1551-1562 m. Scratchpad-style
+  `track2_design.py` (corner vertices filleted with their radii, gates on the arcs and straights, depth / classic-buoy /
+  turning checks; `depth_map.py`: the sea floor by MCP `physics_raycast` on an 8 m grid), `present_plot.py` (the plan
+  the owner approved), `track2_race.py` (place / RELAY: delete the group and place again, races, the lines' tightest
+  places, SAVE only past MIN_R).
+- **A slalom gate on a corner's apex adds to the corner.** The first reef put its slalom gates at the shore's corners'
+  apexes: the bots' line turned at r 40 there (drawn at 150), police_boat (a 64 m circle) slowed to 9.9 m/s and still
+  missed, every race lost 4-5 gates. Laid by distance along the centreline instead, the tightest place of every line is
+  r 52 at T3 (a tight corner at the end of the fast section, the boats take it clean at 11.2-11.6 m/s). `RaceBot` logs
+  where its line turns tightest (`RaceLine::TightestRadius(where, station)`, "before gate N") and names the boat on a
+  missed gate; `get_readouts` race bots[] `lineRadius`.
+- **Harder than classic, measured** (the four bots, all hard): the line's slowest place classic 86-100 % of the boat's top
+  speed (fast_boat_13 flat out all round), reef 60-85 %; tightest line r 82-87 against 52; police_boat 16.0 against 14.4
+  m/s average. Reef, one lap at x2: police_boat 107.7 s, fast_boat_13 106.9, the yachts 111-112, no miss; two races of 3
+  laps: police_boat 311.2 / 310.9 s (first both), fast_boat_13 312.7 / 316.7, the yachts 321-333, one gate missed a
+  race (the yacht at the shore's first gate, fast_boat_13 at T1's entry, in the pack).
+- **Watching a bot: `race.watch`** (N = the N-th boat on the grid, 1-4; outside a race the N-th boat with a bot; 0 off;
+  Developer Controls > Physics "Watch a bot"): the helm's chase camera (`game::VesselCamera`) on that hull, set in
+  `Scene::Sync` from the pose the frame draws it at, a cut on a change of boat; not while the player holds a helm. The
+  bots' HUD line says "CAMERA: <boat>, P<n>". Scripts run with it on (and x2 rather than x4) for the owner to watch.
 
 ## What a Boat Does -- Its Card, the Three Roles, a Bot That Knows Its Boat
 

@@ -27,9 +27,11 @@ namespace game
     class RaceTrack
     {
     public:
-        // The gates out of the course's marks, in the order of their numbers. False (and why, in `report`) when fewer than
-        // three whole gates come out: a number with one mark or more than two is left out and named.
-        bool Build(const RaceCourse& course, std::string& report);
+        // The gates out of the course's marks of one track (RaceMark::track; "" = the level's first), in the order of their
+        // numbers. False (and why, in `report`) when fewer than three whole gates come out: a number with one mark or more
+        // than two is left out and named.
+        bool Build(const RaceCourse& course, const std::string& track, std::string& report);
+        bool Build(const RaceCourse& course, std::string& report) { return Build(course, std::string(), report); }
         void Clear() { gates_.clear(); }
         bool Valid() const { return gates_.size() >= 3; }
         const std::vector<RaceGate>& Gates() const { return gates_; }
@@ -92,6 +94,8 @@ namespace game
         float StepLength() const { return step_; }
         float SpeedAt(std::size_t sample) const { return sample < speed_.size() ? speed_[sample] : 0.0f; }
         float SlowestSpeed() const;
+        // m: the radius of its tightest place (what a course asks of a boat's circle), and where that is.
+        float TightestRadius(Math::float2* where = nullptr, float* station = nullptr) const;
 
     private:
         std::vector<Math::float2> points_;

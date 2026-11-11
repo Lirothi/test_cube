@@ -499,19 +499,25 @@ namespace
         std::string& outStatus)
     {
         const int gate = std::max(static_cast<int>(std::lround(NumberOr(intent.params, "gate", 0.0f))), 0);
+        const bool hasTrack = intent.params.contains("track") && intent.params["track"].is_string();
+        const std::string track = hasTrack ? intent.params["track"].get<std::string>() : std::string();
         std::vector<std::unique_ptr<EditorCommand>> commands;
         for (const EditorObjectId id : targets)
         {
             const EditorObject* obj = actionCtx.editor.document.Find(id);
-            if (obj && SetRaceKeyCommand::AppliesTo(*obj)) { commands.push_back(SetRaceKeyCommand::Gate(id, gate)); }
+            if (!obj || !SetRaceKeyCommand::AppliesTo(*obj)) { continue; }
+            commands.push_back(SetRaceKeyCommand::Gate(id, gate));
+            // Out of the race: its course goes with its number. Else the course named, when one is.
+            if (gate == 0 || hasTrack) { commands.push_back(SetRaceKeyCommand::Track(id, gate == 0 ? std::string() : track)); }
         }
         if (commands.empty())
         {
             outStatus = "Nothing to mark: a race gate's mark is a mesh (a buoy)";
             return nullptr;
         }
-        const std::size_t count = commands.size();
-        outStatus = gate > 0 ? "Gate " + std::to_string(gate) + ": " + CountedObjects(count) + (count == 2 ? "" : " (a gate is TWO marks)")
+        const std::size_t count = gate == 0 || hasTrack ? commands.size() / 2 : commands.size();
+        outStatus = gate > 0 ? "Gate " + std::to_string(gate) + (hasTrack ? " of course '" + game::TrackDisplayName(track) + "'" : std::string()) + ": " +
+                                   CountedObjects(count) + (count == 2 ? "" : " (a gate is TWO marks)")
                              : "No longer marks of the race: " + CountedObjects(count);
         return FoldIntoOneEntry(std::move(commands), gate > 0 ? "Race Gate " + std::to_string(gate) : "Clear Race Gate");
     }
@@ -1577,9 +1583,19 @@ namespace
         const bool hasAlbedo = albedoIt != intent.params.end() && albedoIt->is_array() &&
             albedoIt->size() == 3 && (*albedoIt)[0].is_number() && (*albedoIt)[1].is_number() &&
             (*albedoIt)[2].is_number();
-        if (!hasMetal && !hasRough && !hasNormal && !hasAlbedo)
+        // A tint: the colour multiplied INTO the albedo texture (the same baseColor, the texture kept on) -- a white-albedo
+        // mesh (ocean_buoy_white) takes it with its detail.
+        const auto tintIt = intent.params.find("tint");
+        const bool hasTint = tintIt != intent.params.end() && tintIt->is_array() && tintIt->size() == 3 && (*tintIt)[0].is_number() &&
+            (*tintIt)[1].is_number() && (*tintIt)[2].is_number();
+        if (hasTint && hasAlbedo)
         {
-            outStatus = "setSurface needs metal, roughness, normalStrength and/or albedo";
+            outStatus = "setSurface takes albedo (a flat colour instead of the texture) or tint (a colour times the texture), not both";
+            return nullptr;
+        }
+        if (!hasMetal && !hasRough && !hasNormal && !hasAlbedo && !hasTint)
+        {
+            outStatus = "setSurface needs metal, roughness, normalStrength, albedo and/or tint";
             return nullptr;
         }
 
@@ -1625,6 +1641,14 @@ namespace
                     std::clamp((*albedoIt)[1].get<float>(), 0.0f, 1.0f),
                     std::clamp((*albedoIt)[2].get<float>(), 0.0f, 1.0f) });
                 patch["useAlbedo"] = false;
+            }
+            if (hasTint)
+            {
+                patch["baseColor"] = nlohmann::json::array({
+                    std::clamp((*tintIt)[0].get<float>(), 0.0f, 1.0f),
+                    std::clamp((*tintIt)[1].get<float>(), 0.0f, 1.0f),
+                    std::clamp((*tintIt)[2].get<float>(), 0.0f, 1.0f) });
+                patch["useAlbedo"] = true;
             }
             if (std::unique_ptr<EditorCommand> edit =
                     MakeLiveObjectEdit(ctx, *object, patch, "Set Surface"))
@@ -3840,6 +3864,11 @@ namespace
             if (const auto gate = item.find("raceGate"); gate != item.end() && gate->is_number() && gate->get<float>() >= 1.0f)
             {
                 objectJson["raceGate"] = static_cast<int>(std::lround(gate->get<float>()));
+                // And whose course it is: absent or "" = the level's first.
+                if (const auto track = item.find("raceTrack"); track != item.end() && track->is_string() && !track->get<std::string>().empty())
+                {
+                    objectJson["raceTrack"] = *track;
+                }
             }
 
             const std::string group = groupOverride.empty() ? GroupForKind(ctx.document, kind) : groupOverride;
@@ -4003,7 +4032,8 @@ EditorActionRegistry::EditorActionRegistry()
         "course; the bots read it when Play starts.",
         EditorActionEffect::DocumentEdit,
         EditorTargetKind::Objects,
-        { { "gate", EditorParamKind::Number, true, "the gate's number, 1 and up; 0 takes the meshes out of the race" } },
+        { { "gate", EditorParamKind::Number, true, "the gate's number, 1 and up; 0 takes the meshes out of the race" },
+          { "track", EditorParamKind::String, false, "the course's name: a level may hold several, each with its gates 1, 2, 3 ... and its own start zone; \"\" = the level's first" } },
         &BuildSetRaceGate,
     });
 
@@ -4261,7 +4291,7 @@ EditorActionRegistry::EditorActionRegistry()
         "{asset, position [x, y, z]} with an optional yawDeg, rotationDeg [pitch, yaw, roll] "
         "and scale (a number, or [x, y, z]; it multiplies the asset's own size), physics (\"dynamic\" falls when "
         "the simulation runs, \"none\" collides with nothing), mass (kg), buoyant (true floats it) and raceGate (a "
-        "number: the item is a mark of that gate of the level's race, two marks a gate). Nothing is "
+        "number: the item is a mark of that gate of the level's race, two marks a gate; raceTrack names the course when the level has more than one). Nothing is "
         "scattered, dropped onto the ground or kept apart -- the positions are used as given, "
         "height included. This is for a layout that was worked out already: numbers the "
         "designer typed, or points computed from the terrain. For \"plant twenty palms here\" "
@@ -4509,6 +4539,7 @@ EditorActionRegistry::EditorActionRegistry()
             { "roughness", EditorParamKind::Number, false, "0 = mirror, 1 = fully rough" },
             { "normalStrength", EditorParamKind::Number, false, "normal map strength, 0 = none, 1 = as authored" },
             { "albedo", EditorParamKind::Vec3, false, "[r, g, b] 0..1, a flat colour instead of the albedo texture" },
+            { "tint", EditorParamKind::Vec3, false, "[r, g, b] 0..1 multiplied into the albedo texture, its detail kept: a white-albedo mesh such as ocean_buoy_white takes the colour" },
         },
         &BuildSetSurface,
     });
@@ -4910,6 +4941,7 @@ bool ValidateParams(const EditorActionDesc& action, nlohmann::json& params, std:
                         (key == "mass" && v.is_number()) ||
                         (key == "buoyant" && v.is_boolean()) ||
                         (key == "raceGate" && v.is_number()) ||
+                        (key == "raceTrack" && v.is_string()) ||
                         (key == "collision" && v.is_object());
                     if (!ok)
                     {

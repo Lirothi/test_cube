@@ -177,10 +177,25 @@ namespace game
         line_.Profile([top, lateral](float curvature) { return std::clamp(std::sqrt(lateral / std::max(curvature, 1e-6f)), 0.5f * top, top); },
                       std::max(settings.braking * stats_.braking, 0.2f));
         status_.tightestRadius = stats_.turnRadius;
+        // Where the line turns tightest, and the gate it comes before: a course that asks more than a boat's circle
+        // shows there.
+        Math::float2 tightAt;
+        float tightStation = 0.0f;
+        const float tightRadius = line_.TightestRadius(&tightAt, &tightStation);
+        int tightGate = track.Gates().empty() ? 0 : track.Gates()[0].number;
+        for (std::size_t i = 0; i < track.Gates().size(); ++i)
+        {
+            if (line_.GateStation(i) >= tightStation)
+            {
+                tightGate = track.Gates()[i].number;
+                break;
+            }
+        }
         LOG_INFO(logging::LogCategory::App,
-                 "race: '{}': a line of {:.0f} m for a boat of {:.1f} m/s flat out, {:.1f} s to 20 kn, a circle of {:.0f} m at {:.1f} m/s ({:.1f} m/s2 across, {:.2f} braking); the line's slowest place {:.1f} m/s",
+                 "race: '{}': a line of {:.0f} m for a boat of {:.1f} m/s flat out, {:.1f} s to 20 kn, a circle of {:.0f} m at {:.1f} m/s ({:.1f} m/s2 across, {:.2f} braking); "
+                 "the line's slowest place {:.1f} m/s, its tightest r {:.0f} m at {:.0f} {:.0f} (before gate {})",
                  hull.object ? hull.object->GetGeometryPath() : std::string(), line_.Length(), top, stats_.toPlane, stats_.turnRadius, stats_.turnSpeed,
-                 stats_.lateralAccel, stats_.braking, line_.SlowestSpeed());
+                 stats_.lateralAccel, stats_.braking, line_.SlowestSpeed(), tightRadius, tightAt.x, tightAt.y, tightGate);
     }
 
     physics::VesselInput RaceBot::Tick(const RaceTrack& track, const physics::VesselHull& hull, float deltaTime, bool drive,
@@ -287,8 +302,8 @@ namespace game
                     // How far from its middle, in its own half widths: 1 at a mark. That is what the penalty goes by.
                     status_.lastMissWidths = std::clamp(std::fabs(lateral) / std::max(gate.halfWidth, 1.0f), 1.0f, kMissWidthsMost);
                     status_.missedWidths += status_.lastMissWidths;
-                    LOG_INFO(logging::LogCategory::App, "race: gate {} missed, {:.1f} m off its middle (half width {:.1f} m): x{:.2f} of the penalty", gate.number,
-                             lateral, gate.halfWidth, status_.lastMissWidths);
+                    LOG_INFO(logging::LogCategory::App, "race: '{}' missed gate {}, {:.1f} m off its middle (half width {:.1f} m): x{:.2f} of the penalty",
+                             hull.object ? hull.object->GetGeometryPath() : std::string(), gate.number, lateral, gate.halfWidth, status_.lastMissWidths);
                 }
                 if (gateIndex_ == 0)
                 {

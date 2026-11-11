@@ -20,6 +20,18 @@ std::unique_ptr<SetRaceKeyCommand> SetRaceKeyCommand::Gate(EditorObjectId id, in
         id, game::kRaceGateKey, gate > 0 ? nlohmann::json(gate) : nlohmann::json(), gate > 0 ? "Set Race Gate " + std::to_string(gate) : "Clear Race Gate"));
 }
 
+std::unique_ptr<SetRaceKeyCommand> SetRaceKeyCommand::Track(EditorObjectId id, const std::string& track)
+{
+    return std::unique_ptr<SetRaceKeyCommand>(new SetRaceKeyCommand(id, game::kRaceTrackKey, track.empty() ? nlohmann::json() : nlohmann::json(track),
+                                                                     track.empty() ? "Race Track: the first" : "Race Track " + track));
+}
+
+std::string SetRaceKeyCommand::DocumentTrack(const EditorObject& obj)
+{
+    const auto it = obj.properties.find(game::kRaceTrackKey);
+    return it != obj.properties.end() && it->is_string() ? it->get<std::string>() : std::string();
+}
+
 std::unique_ptr<SetRaceKeyCommand> SetRaceKeyCommand::Bot(EditorObjectId id, bool bot)
 {
     return std::unique_ptr<SetRaceKeyCommand>(

@@ -116,12 +116,15 @@ namespace game
         };
     }
 
-    bool RaceTrack::Build(const RaceCourse& course, std::string& report)
+    bool RaceTrack::Build(const RaceCourse& course, const std::string& track, std::string& report)
     {
         gates_.clear();
         report.clear();
         std::map<int, std::vector<float2>> byNumber;
-        for (const RaceMark& mark : course.marks) { byNumber[mark.gate].emplace_back(mark.position.x, mark.position.z); }
+        for (const RaceMark& mark : course.marks)
+        {
+            if (mark.track == track) { byNumber[mark.gate].emplace_back(mark.position.x, mark.position.z); }
+        }
         std::string left;
         for (const auto& [number, marks] : byNumber)
         {
@@ -364,6 +367,23 @@ namespace game
         float slowest = 0.0f;
         for (std::size_t s = 0; s < speed_.size(); ++s) { slowest = s == 0 ? speed_[s] : std::min(slowest, speed_[s]); }
         return slowest;
+    }
+
+    float RaceLine::TightestRadius(Math::float2* where, float* station) const
+    {
+        float most = 0.0f;
+        std::size_t at = 0;
+        for (std::size_t i = 0; i < curvature_.size(); ++i)
+        {
+            if (std::fabs(curvature_[i]) > most)
+            {
+                most = std::fabs(curvature_[i]);
+                at = i;
+            }
+        }
+        if (where && at < points_.size()) { *where = points_[at]; }
+        if (station) { *station = static_cast<float>(at) * step_; }
+        return most > 0.0f ? 1.0f / most : 0.0f;
     }
 
     RaceLine::Sample RaceLine::At(float station) const

@@ -1757,6 +1757,48 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
             Check(object.properties.find(game::kRaceGateKey) == object.properties.end(), "undo takes the key away -- the level saves exactly as before");
         }
     }
+    {
+        // A level may hold more than one course: a mark's "raceTrack" says whose it is.
+        std::string error;
+        EditorIntent intent;
+        Check(intentschema::ParseAnswer(
+            R"({"kind":"command","action":"setRaceGate","target":{"filter":["palm"]},"params":{"gate":2,"track":"reef"}})", intent, error),
+            "a setRaceGate answer with a course parses: " + error);
+        EditorCommandStack stack;
+        std::string status;
+        Check(ExecuteIntent(actionCtx, stack, BuildIntentPreview(actionCtx, intent), status), status);
+        Check(stack.HistorySize() == 1 && status.find("course 'reef'") != std::string::npos, "one entry, and it names the course: " + status);
+        game::RaceCourse course;
+        for (const EditorObject& object : ctx.document.Objects()) { game::ReadRaceKeys(object.properties, object.transform.position, course); }
+        Check(course.marks.size() == 3 && course.marks[0].track == "reef" && course.TrackNames() == std::vector<std::string>{ "reef" },
+              "the marks are the course 'reef''s");
+        stack.Undo(ctx);
+        for (const EditorObject& object : ctx.document.Objects())
+        {
+            Check(object.properties.find(game::kRaceTrackKey) == object.properties.end() && object.properties.find(game::kRaceGateKey) == object.properties.end(),
+                  "undo takes both keys away");
+        }
+        // Two courses with the same numbers: each its own gates, the unnamed one first.
+        game::RaceCourse two;
+        for (int i = 0; i < 3; ++i)
+        {
+            const float x = 100.0f * static_cast<float>(i);
+            two.marks.push_back(game::RaceMark{ Math::float3(x, 0.0f, -10.0f), i + 1, "" });
+            two.marks.push_back(game::RaceMark{ Math::float3(x, 0.0f, 10.0f), i + 1, "" });
+            two.marks.push_back(game::RaceMark{ Math::float3(x, 0.0f, 490.0f), i + 1, "b" });
+            two.marks.push_back(game::RaceMark{ Math::float3(x, 0.0f, 510.0f), i + 1, "b" });
+        }
+        Check(two.TrackNames() == std::vector<std::string>{ "", "b" }, "the courses: the unnamed one first, then by name");
+        game::RaceTrack first, second;
+        std::string report;
+        Check(first.Build(two, "", report) && first.Gates().size() == 3 && first.Gates()[0].center.y == 0.0f, "the first course out of its own marks: " + report);
+        Check(second.Build(two, "b", report) && second.Gates().size() == 3 && second.Gates()[0].center.y == 500.0f, "the second out of its own: " + report);
+        game::Race race;
+        race.Begin(two);
+        Check(race.HasTrack() && race.TrackName().empty() && race.Track().Gates().size() == 3 && race.ReadoutJson().find("\"name\":\"b\"") != std::string::npos,
+              "a race holds both, the first picked until a zone or race.track says otherwise");
+        race.Forget();
+    }
 
     // ---- a round course, clockwise: ten gates 20 m wide on a circle of 150 m, and a stray mark ----
     constexpr float kRadius = 150.0f;
@@ -2530,6 +2572,27 @@ void TestSurfaceAndColourUndo(const EditorActionContext& actionCtx)
     {
         Check(!object.properties.contains("useAlbedo") && !object.properties.contains("baseColor"),
             "undo takes useAlbedo and baseColor away");
+    }
+
+    // tint: the colour times the texture -- baseColor written, the texture left on (a white-albedo buoy takes it).
+    EditorCommandStack tints;
+    run(R"({"kind":"command","action":"setSurface","target":{"filter":["palm"]},"params":{"tint":[0.9,0.1,0.1]}})", tints, status);
+    for (const EditorObject& object : ctx.document.Objects())
+    {
+        const bool tinted = object.properties.contains("baseColor") && object.properties.value("useAlbedo", false) == true;
+        Check(tinted == (object.id.value <= 3), "tint colours the palms over their texture and nothing else");
+    }
+    tints.Undo(ctx);
+    {
+        EditorCommandStack both;
+        std::string bothStatus;
+        std::string error;
+        EditorIntent intent;
+        Check(intentschema::ParseAnswer(R"({"kind":"command","action":"setSurface","target":{"filter":["palm"]},"params":{"tint":[1,0,0],"albedo":[1,0,0]}})",
+                                        intent, error), "parses: " + error);
+        Check(!ExecuteIntent(actionCtx, both, BuildIntentPreview(actionCtx, intent), bothStatus) && both.HistorySize() == 0 &&
+                  bothStatus.find("not both") != std::string::npos,
+              "albedo and tint at once are refused: " + bothStatus);
     }
 
     EditorCommandStack colours;

@@ -2289,6 +2289,35 @@ void Scene::Sync(Renderer* renderer)
         const OceanRenderable* ocean = FindOceanRenderable();
         vesselCamera_.Apply(camera_, physics_.GetHelm(), ocean ? ocean->GetWaterLevel() : -1.0e6f);
     }
+    else if (RenderableObject* watched = !physics::GameSettings().player.testFreeCamera ? race_.WatchedVessel() : nullptr)
+    {
+        // race.watch: a bot's boat, from the pose this frame draws it at -- the helm's chase camera, on another hull. Another
+        // boat is a cut.
+        std::vector<physics::VesselHull> hulls;
+        physics_.CollectHulls(hulls);
+        for (const physics::VesselHull& hull : hulls)
+        {
+            if (hull.object != watched || !hull.settings) { continue; }
+            if (spectated_ != watched)
+            {
+                spectatorCamera_.Begin();
+                camera_.ResetHistory();
+                spectated_ = watched;
+            }
+            spectatorCamera_.Tick(0.0f, 0.0f, hull.speed, 0.0f, 0.0f, race_.LastDeltaTime());
+            physics::HelmState view;
+            view.exists = true;
+            view.object = hull.object;
+            view.settings = hull.settings;
+            view.position = hull.position;
+            view.forward = hull.forward;
+            view.scale = hull.scale;
+            const OceanRenderable* ocean = FindOceanRenderable();
+            spectatorCamera_.Apply(camera_, view, ocean ? ocean->GetWaterLevel() : -1.0e6f);
+            break;
+        }
+    }
+    else { spectated_ = nullptr; }
     renderCameraCut_ |= renderCamera_.TakePose(camera_);
     if (renderer) { camera_.CalcMatrices(renderer); }
     // G4: every object's transform, bounds and move flag (SyncSceneState -- the step PostTick used to run), its
