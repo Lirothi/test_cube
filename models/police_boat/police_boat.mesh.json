@@ -22,12 +22,13 @@
     "police_boat_17",
     "police_boat_18",
     "police_boat_19",
-    "police_boat_20"
+    "police_boat_20",
+    "police_boat_21"
   ],
   "pivot": "base",
-  "source": "import_staging\\police_boat\\scene.gltf",
+  "source": "import_staging\\police_boat\\scene_seat.gltf",
   "uvDensity": [
-    0.6140075325965881,
+    0.25010764598846436,
     0.9471538066864014,
     0.3658531904220581,
     0.09276241064071655,
@@ -47,7 +48,8 @@
     0.26612141728401184,
     0.26611968874931335,
     0.17841041088104248,
-    0.262062132358551
+    0.262062132358551,
+    2.8268799781799316
   ],
   "vessel": {
     "anchorDamping": 7000.0,

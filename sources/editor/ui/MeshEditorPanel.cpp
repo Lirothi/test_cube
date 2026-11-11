@@ -21,6 +21,7 @@
 #include "rendering/lighting/DirectionalLight.h"
 #include "rendering/lighting/Skybox.h"
 #include "rendering/renderables/RenderableObjectBase.h"
+#include "rendering/shadows/TessySettings.h" // the Tessy section: the process's DAG prune / fold and tessy.lod
 
 #include "imgui.h"
 #include "imgui_internal.h"
@@ -509,10 +510,12 @@ void MeshEditorPanel::Open(const std::string& meshAssetPath)
     // single real slot and describe the tiles separately instead.
     chunkGrid_ = doc_.value("chunkGrid", 0);
     hoveredChunk_ = -1;
+    // The bin's numbers for every mesh (the LODs' deviation, Tessy's clusters and DAG), not only a chunked one's: it was
+    // read for a chunked mesh alone, and "Baked deviation from LOD0" below never showed for any other.
     binInfo_ = {};
-    const bool chunked = chunkGrid_ > 1 && MeshManager::DescribeMeshBinary(geometry, binInfo_) &&
-                         !binInfo_.lods.empty() && binInfo_.lods[0].submeshTris.size() > 1;
-    if (!chunked) { chunkGrid_ = 0; binInfo_ = {}; }
+    const bool described = MeshManager::DescribeMeshBinary(geometry, binInfo_);
+    const bool chunked = chunkGrid_ > 1 && described && !binInfo_.lods.empty() && binInfo_.lods[0].submeshTris.size() > 1;
+    if (!chunked) { chunkGrid_ = 0; }
     const size_t slotCount = chunked
         ? size_t{ 1 }
         : std::max<size_t>(1, MeshManager::CountSubmeshes(geometry));
@@ -1087,6 +1090,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     // Buoyancy: where the mesh floats and how it moves, for every placed instance whose "Floats on
     // the ocean" is on. Closed by default like Wind; while open the preview draws the pontoons.
     ImGui::Spacing();
+    const bool scrollToBuoyancy = expandBuoyancy_;
     if (expandBuoyancy_)
     {
         ImGui::SetNextItemOpen(true);
@@ -1095,6 +1099,7 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
     buoyancyOpen_ = ImGui::CollapsingHeader("Buoyancy");
     if (buoyancyOpen_)
     {
+        if (scrollToBuoyancy) { ImGui::SetScrollHereY(0.0f); }
         DrawBuoyancySection(hoveredPontoonThisFrame);
     }
 
@@ -1153,6 +1158,22 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
                               "1 = solid cards (the field is dropped from the file). Opaque geometry always blocks.\n"
                               "The palms: 0.8 (20 % through). Applies to placed instances on Save.");
         }
+    }
+
+    // Tessy: what the bake stored for the cluster paths (read-only).
+    ImGui::Spacing();
+    const bool scrollToTessy = expandTessy_;
+    if (expandTessy_)
+    {
+        ImGui::SetNextItemOpen(true);
+        expandTessy_ = false;
+    }
+    if (ImGui::CollapsingHeader("Tessy (clusters)"))
+    {
+        if (scrollToTessy) { ImGui::SetScrollHereY(0.0f); } // opened by --edit-mesh=...#tessy: below the slots, off screen
+        ImGui::PushTextWrapPos(0.0f); // its lines are long and the pane is narrow
+        DrawTessySection();
+        ImGui::PopTextWrapPos();
     }
 
     // Texturing (separate from Wind above — unrelated knobs, and mixing them made the wind block
@@ -1680,6 +1701,140 @@ void MeshEditorPanel::DrawVesselSection()
         float value = settings.*(key.member);
         if (ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, "%.3f")) { block[key.key] = value; }
     }
+}
+
+// Tessy (docs/tessy_plan.md): every bake stores each LOD cut into clusters (<= 128 triangles) and, from v5 on, the cluster
+// DAG over LOD0; a load cuts the clusters into meshlets (<= 64 vertices) for the mesh shaders. None of it has a switch of
+// its own per asset: the DAG takes the LOD section's weights, the process's prune and fold, and the frame's tessy.* knobs
+// decide who draws it. This section shows what the bin holds.
+void MeshEditorPanel::DrawTessySection()
+{
+    if (binInfo_.lods.empty())
+    {
+        ImGui::TextDisabled("No .mesh.bin to read yet (Save bakes it).");
+        return;
+    }
+    const MeshManager::BinaryInfo& info = binInfo_;
+    const MeshManager::BinaryDagInfo& dag = info.dag;
+    const double lod0Tris = static_cast<double>(std::max<std::uint32_t>(info.lods[0].totalTris, 1u));
+    ImGui::TextDisabled(".mesh.bin v%u, %u vertices. Every bake stores these; there is no per-asset switch.", info.version,
+                        info.vertexCount);
+
+    // The discrete LODs: what the classic paths draw, and what the cluster paths (VSM pages, the lamps' atlases, the SDSM
+    // partitions, the camera's G-buffer) draw while tessy.lod is off.
+    ImGui::PushTextWrapPos(-1.0f); // a cell does not wrap: its column fits its widest value
+    if (ImGui::BeginTable("##tessyLods", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+    {
+        ImGui::TableSetupColumn("LOD");
+        ImGui::TableSetupColumn("Triangles");
+        ImGui::TableSetupColumn("Clusters");
+        ImGui::TableSetupColumn("Tris/cluster");
+        ImGui::TableSetupColumn("Meshlets");
+        ImGui::TableSetupColumn("Deviation (m)");
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < info.lods.size(); ++i)
+        {
+            const MeshManager::BinaryLodInfo& lod = info.lods[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::Text("%zu", i);
+            ImGui::TableNextColumn(); ImGui::Text("%u", lod.totalTris);
+            ImGui::TableNextColumn();
+            if (lod.clusters > 0) { ImGui::Text("%u", lod.clusters); } else { ImGui::TextDisabled("none"); }
+            ImGui::TableNextColumn();
+            if (lod.clusters > 0) { ImGui::Text("%.1f", static_cast<double>(lod.totalTris) / lod.clusters); }
+            ImGui::TableNextColumn();
+            if (lod.meshlets > 0) { ImGui::Text("%u", lod.meshlets); }
+            ImGui::TableNextColumn();
+            if (i == 0) { ImGui::TextDisabled("-"); } else { ImGui::Text("%.4f", static_cast<double>(lod.error)); }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopTextWrapPos();
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("A cluster is a run of <= 128 triangles / 256 vertices of one LOD inside one material slot; a load\n"
+                          "cuts each into meshlets of <= 64 vertices (one mesh shader group each). Deviation = the LOD's\n"
+                          "worst distance from LOD0, object space.");
+    }
+
+    ImGui::Spacing();
+    if (dag.clusters == 0)
+    {
+        ImGui::TextDisabled(info.version < 5 ? "No cluster DAG in this file (v%u): a load builds one only under\n"
+                                               "--tessy-lod-build or mesh.json \"tessyLod\": true; --tessy-upgrade adds it."
+                                             : "No cluster DAG in this file (v%u): the bake built none (see its log line).",
+                            info.version);
+    }
+    else
+    {
+        const MeshManager::BinaryDagLevel& leaves = dag.levels.empty() ? MeshManager::BinaryDagLevel{} : dag.levels[0];
+        ImGui::Text("Cluster DAG: %u clusters in %zu levels over %u slot(s), %u meshlets", dag.clusters, dag.levels.size(),
+                    dag.submeshes, dag.meshlets);
+        ImGui::Text("Triangles over all levels %llu (x%.2f of LOD0); roots %u clusters, %llu tris (%.1f %% of LOD0) at %.4f m",
+                    static_cast<unsigned long long>(dag.triangles), static_cast<double>(dag.triangles) / lod0Tris,
+                    dag.rootClusters, static_cast<unsigned long long>(dag.rootTriangles),
+                    100.0 * static_cast<double>(dag.rootTriangles) / lod0Tris, static_cast<double>(dag.rootError));
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("The roots are the coarsest the DAG goes: under tessy.lod a far copy draws no fewer triangles\n"
+                              "than this. Leaf cards (foliage slots) leave whole once the error passes their size (prune);\n"
+                              "a surface simplifies until its borders lock it.");
+        }
+        if (leaves.triangles != static_cast<std::uint64_t>(info.lods[0].totalTris))
+        {
+            ImGui::TextDisabled("(the DAG's level 0 holds %llu triangles, LOD0 %u)",
+                                static_cast<unsigned long long>(leaves.triangles), info.lods[0].totalTris);
+        }
+        ImGui::PushTextWrapPos(-1.0f);
+        if (ImGui::BeginTable("##tessyDag", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+        {
+            ImGui::TableSetupColumn("Level");
+            ImGui::TableSetupColumn("Clusters");
+            ImGui::TableSetupColumn("Triangles");
+            ImGui::TableSetupColumn("% of LOD0");
+            ImGui::TableSetupColumn("Error (m)");
+            ImGui::TableHeadersRow();
+            for (size_t l = 0; l < dag.levels.size(); ++l)
+            {
+                const MeshManager::BinaryDagLevel& lv = dag.levels[l];
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn(); ImGui::Text("%zu", l);
+                ImGui::TableNextColumn(); ImGui::Text("%u", lv.clusters);
+                ImGui::TableNextColumn(); ImGui::Text("%llu", static_cast<unsigned long long>(lv.triangles));
+                ImGui::TableNextColumn(); ImGui::Text("%.1f", 100.0 * static_cast<double>(lv.triangles) / lod0Tris);
+                ImGui::TableNextColumn();
+                if (lv.maxError <= 0.0f) { ImGui::TextDisabled("0"); }
+                else if (lv.minError < lv.maxError * 0.999f)
+                {
+                    ImGui::Text("%.4f .. %.4f", static_cast<double>(lv.minError), static_cast<double>(lv.maxError));
+                }
+                else { ImGui::Text("%.4f", static_cast<double>(lv.maxError)); }
+            }
+            ImGui::EndTable();
+        }
+        ImGui::PopTextWrapPos();
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Level 0 = LOD0's clusters; each level simplifies groups of ~16 clusters to half. A slot's own\n"
+                              "levels are counted in the row of their depth, so a slot that stops early leaves later rows\n"
+                              "thinner. Error = the deviation each cluster of the level carries (object space): the cut takes\n"
+                              "a cluster where that error spans tessy.lodPixelError pixels.");
+        }
+    }
+
+    // What shaped it and who uses it. The weights are the LOD section's own keys (below), so a change there rebakes the
+    // DAG with the LODs on Save; prune and fold are the process's (--tessy-lod-prune / --tessy-lod-fold).
+    ImGui::Spacing();
+    size_t foliageSlots = 0;
+    for (size_t s = 0; s < slots_.size(); ++s) { foliageSlots += WindFoliageForSlot(s) > 0.0f ? 1u : 0u; }
+    ImGui::TextDisabled("Shaped by: normal weight %.2f, leaf UV weight %.2f (%zu foliage slot(s)) -- LOD generation below;",
+                        static_cast<double>(doc_.value("lodNormalWeight", 0.0f)),
+                        static_cast<double>(doc_.value("foliageUvWeight", 0.0f)), foliageSlots);
+    ImGui::TextDisabled("leaf prune %s, double-sided fold %s (this process: --tessy-lod-prune / --tessy-lod-fold).",
+                        tessy::g_lodPrune_game ? "on" : "off", tessy::g_lodFold_game ? "on" : "off");
+    ImGui::TextDisabled("Drawn: tessy.lod %s, DAG pixel error %.2f px x this asset's scale %.2f (LOD generation below).",
+                        tessy::g_lod_game ? "ON" : "off", static_cast<double>(tessy::g_lodPixelError_game),
+                        static_cast<double>(doc_.value("lodPixelErrorScale", 1.0f)));
 }
 
 void MeshEditorPanel::DrawRestPoseSection()
@@ -2214,6 +2369,9 @@ void MeshEditorPanel::Save(EditorContext& ctx, AssetRegistry& registry)
     {
         if (MeshManager* meshes = ctx.renderer.GetMeshManager()) { meshes->Clear(); }
         buoyancy::ForgetGeometry(doc_.value("geometry", std::string()));
+        // The bake's own numbers (deviation, clusters, DAG) for the sections that show them.
+        MeshManager::BinaryInfo fresh;
+        if (MeshManager::DescribeMeshBinary(doc_.value("geometry", std::string()), fresh)) { binInfo_ = std::move(fresh); }
     }
 
     // Live-apply to placed instances (must happen AFTER the file is written AND after any re-bake —

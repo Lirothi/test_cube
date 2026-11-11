@@ -1,0 +1,33 @@
+{
+  "ambientOcclusion": 1.0,
+  "indirectSpecularScale": 1.0,
+  "metalRough": [
+    0.0,
+    0.55
+  ],
+  "normal": "textures/materials/leather_normal.png",
+  "normalIsRG": false,
+  "normalStrength": 1.0,
+  "shadingModel": "defaultLit",
+  "subsurfaceColor": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "texOffsScale": [
+    0.0,
+    0.0,
+    12.0,
+    12.0
+  ],
+  "tint": [
+    0.03,
+    0.026,
+    0.023,
+    1.0
+  ],
+  "transmissionAlbedoPower": 0.6000000238418579,
+  "transmissionNormalWeight": 0.3499999940395355,
+  "transmissionStrength": 0.0,
+  "twoSided": true
+}

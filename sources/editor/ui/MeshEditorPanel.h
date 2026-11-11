@@ -40,6 +40,7 @@ public:
     {
         expandBuoyancy_ = expandBuoyancy_ || section == "buoyancy";
         expandCollision_ = expandCollision_ || section == "collision";
+        expandTessy_ = expandTessy_ || section == "tessy";
     }
 
     // Draw the window body (inside the editor's lambda panel). `open` backs the close button.
@@ -92,7 +93,11 @@ private:
     void DrawBuoyancySection(int& hoveredPontoonThisFrame);
     void DrawRestPoseSection();
     void DrawVesselSection();
-    MeshManager::BinaryInfo binInfo_{}; // per-LOD, per-submesh triangle counts; empty if not baked
+    // Tessy (clusters): what the bake stored -- each LOD's clusters and meshlets, the cluster DAG by level -- and the
+    // settings that shaped it. Read-only; `--edit-mesh=<mesh.json>#tessy` opens it.
+    void DrawTessySection();
+    bool          expandTessy_ = false;
+    MeshManager::BinaryInfo binInfo_{}; // per-LOD triangles, deviation, clusters; the DAG; empty if not baked
     std::string   status_;
     MeshEditorPreviewScene previewScene_;
     MeshEditorPreviewCamera previewCamera_;

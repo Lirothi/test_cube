@@ -1614,6 +1614,47 @@ std::string DagSummary(const tessy::DagStats& st)
                   static_cast<unsigned long long>(st.foldedTriangles), st.ms);
     return buf;
 }
+
+// What a bake tells about Tessy beside DagSummary: what shaped the DAG (the asset's weights, the process's prune and
+// fold), each LOD's clusters and the meshlets a load cuts them into, and the DAG by level -- its clusters, triangles and
+// the largest error a cluster of the level carries (object-space m; level 0 = LOD0's clusters, error 0).
+std::string TessyBakeDetail(const MeshLoadOptions& opt, const std::vector<Mesh::Cluster>& lod0Clusters,
+                            const std::vector<uint32_t>& lod0Indices, const std::vector<MeshLodCpu>& extra,
+                            const Mesh::Dag* dag)
+{
+    size_t foliageSlots = 0;
+    for (float f : opt.slotFoliage) { foliageSlots += f > 0.0f ? 1u : 0u; }
+    std::string s;
+    char buf[160];
+    std::snprintf(buf, sizeof(buf), "DAG weights: normal %.2f, foliage UV %.2f on %zu slot(s), prune %s, fold %s; ",
+                  opt.lodNormalWeight, opt.foliageUvWeight, foliageSlots, tessy::g_lodPrune ? "on" : "off",
+                  tessy::g_lodFold ? "on" : "off");
+    s += buf;
+    s += "LOD clusters (meshlets)";
+    auto addLod = [&](const std::vector<Mesh::Cluster>& clusters, const std::vector<uint32_t>& indices, size_t lod) {
+        Mesh::ClusterLocalTables local;
+        const size_t meshlets = !clusters.empty() && Mesh::BuildClusterLocal(clusters, indices, local) ? local.meshlets.size() : 0;
+        std::snprintf(buf, sizeof(buf), "%s%zu (%zu)", lod == 0 ? " " : " / ", clusters.size(), meshlets);
+        s += buf;
+    };
+    addLod(lod0Clusters, lod0Indices, 0);
+    for (size_t i = 0; i < extra.size(); ++i) { addLod(extra[i].clusters, extra[i].indices, i + 1); }
+    if (dag)
+    {
+        const MeshManager::BinaryDagInfo info = MeshManager::DescribeDag(*dag, true);
+        std::snprintf(buf, sizeof(buf), "; DAG %u meshlets over %u submesh(es), by level (clusters, tris, max error m):",
+                      info.meshlets, info.submeshes);
+        s += buf;
+        for (size_t l = 0; l < info.levels.size(); ++l)
+        {
+            const MeshManager::BinaryDagLevel& lv = info.levels[l];
+            std::snprintf(buf, sizeof(buf), "%s L%zu %u, %llu, %.4f", l == 0 ? "" : " |", l, lv.clusters,
+                          static_cast<unsigned long long>(lv.triangles), lv.maxError);
+            s += buf;
+        }
+    }
+    return s;
+}
 } // namespace
 
 bool MeshManager::UpgradeBinaryToClusters(const std::string& binPath, std::string* report)
@@ -1814,6 +1855,8 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
     const bool hasDag = BuildDagForMesh(cpu.vertices, cpu.indices, lod0Clusters, lod0Subs, opt, dag, dagStats, dagWhy);
     if (hasDag) { LOG_INFO(logging::LogCategory::Asset, "[meshbake] '{}': {}", outBinPath, DagSummary(dagStats)); }
     else { LOG_WARNING(logging::LogCategory::Asset, "[meshbake] '{}': no cluster DAG ({})", outBinPath, dagWhy); }
+    LOG_INFO(logging::LogCategory::Asset, "[meshbake] '{}': Tessy -- {}", outBinPath,
+             TessyBakeDetail(opt, lod0Clusters, cpu.indices, extra, hasDag ? &dag : nullptr));
     const bool ok = WriteMeshBinary(outBinPath, HashSourceFile(srcPath), HashOptions(opt),
         cpu.vertices, cpu.indices, lod0Subs, lod0Clusters, extra, hasDag ? &dag : nullptr);
     char msg[512];
@@ -2988,12 +3031,15 @@ bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out
     out = {};
     std::vector<VertexPNTUV> verts;
     std::vector<MeshLodCpu> lods;
+    MeshBinHeader header{};
+    Mesh::Dag dag;
     // Freshness checks skipped on purpose (same reason LoadBinaryDirect skips them): a committed
     // .bin IS the asset, there is no source to compare against.
-    if (!ReadMeshBinary(GeometryFilePart(binPath), nullptr, nullptr, verts, lods) || lods.empty())
+    if (!ReadMeshBinary(GeometryFilePart(binPath), nullptr, nullptr, verts, lods, &header, &dag) || lods.empty())
     {
         return false;
     }
+    out.version = header.version;
     out.vertexCount = static_cast<uint32_t>(verts.size());
     out.lods.reserve(lods.size());
     for (const MeshLodCpu& lod : lods)
@@ -3006,9 +3052,47 @@ bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out
         {
             info.submeshTris.push_back(sub.indexCount / 3u);
         }
+        info.clusters = static_cast<uint32_t>(lod.clusters.size());
+        Mesh::ClusterLocalTables local;
+        if (!lod.clusters.empty() && Mesh::BuildClusterLocal(lod.clusters, lod.indices, local))
+        {
+            info.meshlets = static_cast<uint32_t>(local.meshlets.size());
+        }
         out.lods.push_back(std::move(info));
     }
+    out.dag = DescribeDag(dag, true);
     return true;
+}
+
+MeshManager::BinaryDagInfo MeshManager::DescribeDag(const Mesh::Dag& dag, bool withMeshlets)
+{
+    BinaryDagInfo out;
+    out.submeshes = static_cast<uint32_t>(dag.submeshes.size());
+    out.clusters = static_cast<uint32_t>(dag.clusters.size());
+    for (size_t i = 0; i < dag.clusters.size() && i < dag.lod.size(); ++i)
+    {
+        const Mesh::Cluster& c = dag.clusters[i];
+        const Mesh::ClusterLod& l = dag.lod[i];
+        if (l.level >= out.levels.size()) { out.levels.resize(l.level + 1u); }
+        BinaryDagLevel& level = out.levels[l.level];
+        level.minError = level.clusters == 0 ? l.lodError : std::min(level.minError, l.lodError);
+        level.maxError = std::max(level.maxError, l.lodError);
+        ++level.clusters;
+        level.triangles += c.triCount;
+        out.triangles += c.triCount;
+        if (l.parentError >= 1.0e30f) // a root: nothing consumes it (FLT_MAX)
+        {
+            ++out.rootClusters;
+            out.rootTriangles += c.triCount;
+            out.rootError = std::max(out.rootError, l.lodError);
+        }
+    }
+    Mesh::ClusterLocalTables local;
+    if (withMeshlets && !dag.clusters.empty() && !dag.indices.empty() && Mesh::BuildClusterLocal(dag.clusters, dag.indices, local))
+    {
+        out.meshlets = static_cast<uint32_t>(local.meshlets.size());
+    }
+    return out;
 }
 
 size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)

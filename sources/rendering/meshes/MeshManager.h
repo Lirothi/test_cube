@@ -217,13 +217,39 @@ public:
         std::vector<uint32_t> submeshTris; // triangles per submesh at this LOD
         uint32_t totalTris = 0;
         float error = 0.0f; // v2: worst-case object-space deviation of this level from LOD0
+        uint32_t clusters = 0; // Tessy (v4+): this LOD's clusters; 0 = none (a v3 file)
+        uint32_t meshlets = 0; // ...and the meshlets the load cuts them into (Mesh::BuildClusterLocal)
+    };
+    // Tessy N7 (v5): one level of the cluster DAG, summed over the submeshes (each submesh's level i).
+    struct BinaryDagLevel
+    {
+        uint32_t clusters = 0;
+        uint64_t triangles = 0;
+        float minError = 0.0f;  // the smallest / largest lodError of its clusters (object space; 0 at the leaves)
+        float maxError = 0.0f;
+    };
+    struct BinaryDagInfo
+    {
+        uint32_t submeshes = 0;
+        uint32_t clusters = 0;
+        uint32_t meshlets = 0;
+        uint64_t triangles = 0;          // every level
+        uint32_t rootClusters = 0;
+        uint64_t rootTriangles = 0;
+        float rootError = 0.0f;          // the largest lodError a root carries
+        std::vector<BinaryDagLevel> levels; // [0] = the leaves (LOD0's clusters)
     };
     struct BinaryInfo
     {
+        uint32_t version = 0;            // the file's kMeshBinVersion
         uint32_t vertexCount = 0;
         std::vector<BinaryLodInfo> lods; // lods[0] = LOD0
+        BinaryDagInfo dag;               // dag.clusters 0 = no DAG in the file
     };
     static bool DescribeMeshBinary(const std::string& binPath, BinaryInfo& out);
+    // The DAG's numbers by level (DescribeMeshBinary's, and the bake's log line). `withMeshlets` cuts its clusters into
+    // meshlets to count them (needs the DAG's indices).
+    static BinaryDagInfo DescribeDag(const Mesh::Dag& dag, bool withMeshlets);
 
     // One LOD's triangles of a baked .mesh.bin for the collision world (docs/physics_plan.md PH1), CPU-only: the positions, that
     // LOD's indices and submeshes, nothing else of the file. A LOD past the last takes the last. `positions` is the WHOLE vertex

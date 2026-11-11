@@ -1933,6 +1933,18 @@ Done for all 148 on 2026-10-30 (owner: "bake the DAG at import and bake every me
 over all levels; the v4 files are in `D:\Programming\test_cube_backups\mesh_bin_v4_2026-10-30`. A checkout before this
 reads v4 at most and refuses them. `--tessy-lod-build` still rebuilds at load (the A/B of a builder change).
 
+**What a bake stored is readable** (2026-11-11, owner: "is Tessy always baked into the mesh, with no settings of its own? at
+least write its stats"). There is no per-asset Tessy switch: the clusters (<= 128 triangles / 256 vertices, every LOD) and
+the DAG are in every v5 file; the DAG takes the LOD section's `lodNormalWeight` and `foliageUvWeight` (foliage slots) and the
+process's `--tessy-lod-prune` / `--tessy-lod-fold`; a load cuts the clusters into meshlets (<= 64 vertices). A bake now logs
+`[meshbake] '<bin>': Tessy -- DAG weights ...; LOD clusters (meshlets) ...; DAG ... by level (clusters, tris, max error m)`
+beside its DAG summary, and Mesh Editor > "Tessy (clusters)" (`--edit-mesh=<mesh.json>#tessy` opens and scrolls to it)
+shows the same from the bin (`MeshManager::DescribeMeshBinary` / `DescribeDag`): per LOD triangles, clusters, meshlets and
+deviation; the DAG's levels with their clusters, triangles, share of LOD0 and error range; the roots (the fewest triangles a
+far copy draws under `tessy.lod`); and the knobs in force. The Mesh Editor read the bin only for a chunked mesh until then,
+so "Baked deviation from LOD0" never showed on any other. police_boat: 1750 / 904 / 474 / 205 clusters, the DAG 8 levels,
+x2.00 of LOD0 over all of them, roots 8412 triangles (4 %) at 3.04 m.
+
 - **Developer Controls > Tessy** (2026-10-30, owner: "its own tab, a master switch to turn it all off, and a cluster
   debug view"): the master switch `tessy.enabled` (default 1; `graphics_settings.json` vsm.tessyEnabled, `--set`, MCP)
   turns EVERY Tessy path off -- the VSM pages and the lamps' atlases draw whole meshes, the cluster view is off -- while
