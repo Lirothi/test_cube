@@ -1,5 +1,7 @@
 {
   "geometry": "models/police_boat/police_boat.mesh.bin",
+  "lodErrorScale": 0.1,
+  "lodGroup": "LargeProp",
   "lodNormalWeight": 0.5,
   "materials": [
     "police_boat_0",

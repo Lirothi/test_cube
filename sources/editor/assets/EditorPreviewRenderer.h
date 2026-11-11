@@ -75,6 +75,9 @@ public:
         // draw is bracketed by a transition to a pixel-readable state and back to canonical. A
         // file texture already rests pixel-readable and costs nothing. Null entries are skipped.
         std::array<ID3D12Resource*, 4> resources{};
+        // Skybox::EnvironmentRevision(): the procedural environment's CONTENT changes (the clouds re-captured as they
+        // drift) behind the same handles and resources, so a cached preview compares this too. 0 for a file sky.
+        std::uint32_t environmentRevision = 0;
         float skyIntensity = 1.0f;      // Skybox::GetExposure(): trim times physical calibration
         float skyFill = 1.0f;           // DirectionalLight::GetSkyFillIntensity()
         // The sun. The DIRECTION stays the preview's own, so the light can still be walked round

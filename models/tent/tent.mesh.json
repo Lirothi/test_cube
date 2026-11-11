@@ -1,6 +1,7 @@
 {
   "bakeScale": 0.01,
   "geometry": "models/tent/tent.mesh.bin",
+  "lodGroup": "LargeProp",
   "materials": [
     "tent_0",
     "tent_1",

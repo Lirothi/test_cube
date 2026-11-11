@@ -223,6 +223,7 @@ private:
     // async imports. Without it a re-bake was invisible to the running session until restart.
     bool pendingInvalidate_ = false;
     std::string status_;
+    std::vector<std::string> lodWarnings_; // the last import's LOD warnings, "<asset>: <what> Fix: <what to do>"
     bool statusIsError_ = false; // colors the status line red on failure, green on success
 
     // Selection. `selectedPath_` is the item the details pane shows; `detailsPath_` is the one its
@@ -275,7 +276,7 @@ private:
     float meshDialogLodError_ = 1.0f;
     bool  meshDialogLodPermissive_ = false; // meshopt_SimplifyPermissive — shreds masked foliage
     bool  meshDialogLodPrune_ = false;      // meshopt_SimplifyPrune — drops small loose components
-    bool  meshDialogLod3Aggressive_ = true; // harsh last level (solid ~5%; OFF for terrain)
+    int   meshDialogLod3Mode_ = 0;          // LOD3: 0 auto (harsh only with leaf cards), 1 aggressive, 2 normal
     float meshDialogFoliageKeep_ = 0.35f;   // LOD3 leaf-prune keep fraction (0/1 = no prune)
     float meshDialogLod3Ratio_ = 1.0f;      // LOD3-only multiplier over the 5% target
     float meshDialogLod3Error_ = 1.0f;      // LOD3-only multiplier over the 0.25 error

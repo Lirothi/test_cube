@@ -653,8 +653,13 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
         || !NearlySameNight(night, environmentNightKey_)
         || !NearlySameFog(environmentFog_, environmentFogKey_)
         || (overlayActive && overlay->dirty) || overlayActive != environmentOverlayActive_;
+    // The content's revision (EnvironmentRevision): it used to count only inside a commented-out log line, so it read 0
+    // for ever, and the Mesh Editor's preview, comparing the cube's pointer alone, kept three pictures of three cloud
+    // captures in its three frame slots and showed them in turn -- the "real sky" flickering (2026-11-11).
+    if (dirty) { ++environmentBuilds_; }
     // Select descriptors before any serial pass builder/worker consumes the frame's environment.
-    sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()});
+    sky->SetEnvironment(environmentSrv_, {environment_[0].Get(), environment_[1].Get(), environment_[2].Get()},
+                        environmentBuilds_);
     if (!dirty) return luts;
     RenderGraph<static_cast<size_t>(RenderPass::Main_Count)>::DependencyList deps;
     if (luts != none) deps.push_back(luts);
@@ -718,7 +723,7 @@ size_t SkyAtmosphere::BuildEnvironment(Renderer* renderer, RenderGraph<static_ca
             environmentFogKey_ = pass.fog;
             environmentOverlayActive_ = ov.material != nullptr;
             //LOG_DEBUG(logging::LogCategory::Render, "sky environment rebuild {}: 128 cube 8 mips, 8 GGX mips, 32 E/PI{}",
-            //          ++environmentBuilds_, ov.material ? ", cloud overlay" : "");
+            //          environmentBuilds_, ov.material ? ", cloud overlay" : "");
             return [this, renderer, points, nightMap](RenderGraphPassContext c) {
                 CPU_SCOPE(ProfilerScopes::kPassSkyEnvironment);
                 const EnvironmentPassFrame& pass = environmentPass_;

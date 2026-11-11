@@ -18,6 +18,8 @@
 #include "editor/assets/AssetRegistry.h"
 #include "editor/assets/MaterialFileGen.h" // I3: write named material files from glTF at import
 #include "rendering/meshes/MeshManager.h" // CountSubmeshes for the slot count; ParseFileCpu to size an .obj
+#include "rendering/meshes/LodSwitchReport.h" // the LOD warnings an import reports, each with its fix
+#include <mutex>
 #include "meshoptimizer.h"                // meshopt_Simplify* flags for the LOD import options
 #include "rendering/shadows/VirtualShadowMap.h" // vsm::kMaxMeshGroups: the shadow caster-group
                                                 // budget the chunk-grid control spends from
@@ -908,6 +910,33 @@ namespace
         return grid > 0 ? grid : 0;
     }
 
+    // The LOD warnings the bakes of the running import left (WriteImportedMeshAsset runs on the import's worker thread),
+    // each with what to do; the window takes them when the import ends (TakeLodWarnings) and shows them under its status,
+    // MCP's import_status lists them. Every one is also a Warning in the session log.
+    std::mutex g_lodWarningsMutex;
+    std::vector<std::string> g_lodWarnings;
+    void NoteLodWarnings(const std::string& asset, const lodreport::Report& report)
+    {
+        if (report.warnings.empty())
+        {
+            LOG_INFO(logging::LogCategory::Asset, "import {}: LOD switching sane ({} levels)", asset, report.rows.size());
+            return;
+        }
+        std::lock_guard<std::mutex> lock(g_lodWarningsMutex);
+        for (const lodreport::Warning& w : report.warnings)
+        {
+            LOG_WARNING(logging::LogCategory::Asset, "import {}: LOD: {} Fix: {}", asset, w.text, w.fix);
+            g_lodWarnings.push_back(asset + ": " + w.text + " Fix: " + w.fix);
+        }
+    }
+    std::vector<std::string> TakeLodWarnings()
+    {
+        std::lock_guard<std::mutex> lock(g_lodWarningsMutex);
+        std::vector<std::string> out = std::move(g_lodWarnings);
+        g_lodWarnings.clear();
+        return out;
+    }
+
     // W7.1b: `binGeometry` is our baked .mesh.bin under models/<name>/ (what the runtime loads;
     // mesh.json "geometry"). `sourceGltf` is the staging glTF (mesh.json "source"), used to BAKE the
     // .bin and to generate material files — the glTF is never copied into models/ anymore.
@@ -986,7 +1015,8 @@ namespace
             bakeOpt.lodSimplifyOptions =
                 (asset.value("lodPermissive", false) ? meshopt_SimplifyPermissive : 0u) |
                 (asset.value("lodDropSmallParts", false) ? meshopt_SimplifyPrune : 0u);
-            bakeOpt.lod3Aggressive = asset.value("lod3Aggressive", true);
+            if (const auto la = asset.find("lod3Aggressive"); la != asset.end() && la->is_boolean()) { bakeOpt.lod3Aggressive = la->get<bool>(); }
+            else { bakeOpt.lod3Aggressive.reset(); } // absent = harsh only with a foliage slot (Lod3AggressiveOf)
             bakeOpt.lod3RatioScale = asset.value("lod3RatioScale", 1.0f);
             bakeOpt.lod3ErrorScale = asset.value("lod3ErrorScale", 1.0f);
             bakeOpt.foliagePruneKeep = asset.value("foliagePruneKeep", 0.35f);
@@ -1191,8 +1221,8 @@ namespace
         else { asset.erase("lodPermissive"); }
         if ((bakeOpt.lodSimplifyOptions & meshopt_SimplifyPrune) != 0u) { asset["lodDropSmallParts"] = true; }
         else { asset.erase("lodDropSmallParts"); }
-        if (!bakeOpt.lod3Aggressive) { asset["lod3Aggressive"] = false; }
-        else { asset.erase("lod3Aggressive"); }
+        if (bakeOpt.lod3Aggressive.has_value()) { asset["lod3Aggressive"] = *bakeOpt.lod3Aggressive; }
+        else { asset.erase("lod3Aggressive"); } // auto: harsh only with a foliage slot
         writeLodF("lod3RatioScale", bakeOpt.lod3RatioScale, 1.0f);
         writeLodF("lod3ErrorScale", bakeOpt.lod3ErrorScale, 1.0f);
         writeLodF("foliagePruneKeep", bakeOpt.foliagePruneKeep, 0.35f);
@@ -1217,7 +1247,15 @@ namespace
         std::ofstream out(path, std::ios::trunc);
         if (!out) { return false; }
         out << asset.dump(2) << '\n';
-        return static_cast<bool>(out);
+        if (!out) { return false; }
+        // What the bake made of the LODs, with what to do about anything out of its sane range (the Mesh Editor's "LOD
+        // switching" shows the same).
+        MeshManager::BinaryInfo baked;
+        if (MeshManager::DescribeMeshBinary(binGeometry, baked))
+        {
+            NoteLodWarnings(path.filename().string(), lodreport::Build(baked, asset, lodreport::ManifestHasFoliage(asset)));
+        }
+        return true;
     }
 
     // After moving a texture set out of staging, repoint its material file(s) because the backend
@@ -1444,7 +1482,7 @@ MeshLoadOptions ImportPanel::DialogLodOptions() const
         (meshDialogLodPermissive_ ? meshopt_SimplifyPermissive : 0u) |
         (meshDialogLodPrune_ ? meshopt_SimplifyPrune : 0u);
     lodOpt.bakeScale = meshDialogBakeScale_;
-    lodOpt.lod3Aggressive = meshDialogLod3Aggressive_;
+    lodOpt.lod3Aggressive = meshDialogLod3Mode_ == 0 ? std::optional<bool>() : std::optional<bool>(meshDialogLod3Mode_ == 1);
     lodOpt.foliagePruneKeep = meshDialogFoliageKeep_;
     lodOpt.lod3RatioScale = meshDialogLod3Ratio_;
     lodOpt.lod3ErrorScale = meshDialogLod3Error_;
@@ -2065,6 +2103,7 @@ std::string ImportPanel::StatusJson() const
     out["status"] = status_;
     out["failed"] = statusIsError_;
     out["lastImported"] = lastImportedName_;
+    out["lodWarnings"] = lodWarnings_; // each "<asset>: <what> Fix: <what to do>"
     return out.dump();
 }
 
@@ -2383,7 +2422,7 @@ bool ImportPanel::LodSettingsNonDefault() const
 {
     return meshDialogLodRatio_ != 1.0f || meshDialogLodError_ != 1.0f ||
            meshDialogLodPermissive_ || meshDialogLodPrune_ ||
-           !meshDialogLod3Aggressive_ || meshDialogFoliageKeep_ != 0.35f ||
+           meshDialogLod3Mode_ != 0 || meshDialogFoliageKeep_ != 0.35f ||
            meshDialogLod3Ratio_ != 1.0f || meshDialogLod3Error_ != 1.0f ||
            meshDialogInnerRatio_ != 0.5f || meshDialogInnerError_ != 0.15f ||
            meshDialogFoliageGrow_ != 1.0f || meshDialogUvWeight_ != 0.0f ||
@@ -2579,14 +2618,14 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
         // it -- the bake succeeds and the damage only shows up as deformed dunes and low-sun
         // shadow banding much later. Stated here, next to the toggle, rather than in a comment
         // nobody reads at 2am.
-        if (meshDialogChunk_ && meshDialogLod3Aggressive_)
+        if (meshDialogChunk_ && meshDialogLod3Mode_ == 1)
         {
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.62f, 0.16f, 1.0f));
             ImGui::TextWrapped("Chunking is ON and so is Aggressive LOD3. Terrain manifests turn "
                                "LOD3 off: its loose 0.25 error budget deforms dune silhouettes, and "
                                "the far-clipmap shadow casters are tuned against low-sun banding.");
             ImGui::PopStyleColor();
-            if (ImGui::SmallButton("Turn off Aggressive LOD3")) { meshDialogLod3Aggressive_ = false; }
+            if (ImGui::SmallButton("Turn off Aggressive LOD3")) { meshDialogLod3Mode_ = 2; }
             ImGui::Spacing();
         }
 
@@ -2594,14 +2633,16 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("Triangle target", &meshDialogLodRatio_, 0.25f, 2.0f, "x%.2f");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Scales the per-level triangle targets (base 0.5 / 0.25 / 0.12).\n"
+            ImGui::SetTooltip("Scales the per-level triangle targets: 50 / 25 / 12.5 %% of LOD0 (UE's chain, an\n"
+                              "asset with no leaf cards), 50 / 25 / 12 %% (foliage, terrain).\n"
                               "Below 1 = more aggressive LODs, above 1 = keep more geometry.");
         ImGui::SetNextItemWidth(150.0f);
-        ImGui::SliderFloat("Error budget", &meshDialogLodError_, 0.25f, 4.0f, "x%.2f");
+        ImGui::SliderFloat("Error budget", &meshDialogLodError_, 0.01f, 4.0f, "x%.2f", ImGuiSliderFlags_Logarithmic);
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Scales the per-level error limits (base 0.02 / 0.05 / 0.12, relative\n"
-                              "to mesh extents). Simplification stops when the budget is spent, so a\n"
-                              "larger value reduces further at the cost of shape.");
+            ImGui::SetTooltip("UE's chain (no leaf cards): a CAP on the simplifier's error, a share of the mesh's\n"
+                              "size -- 1 = none (UE's MaxDeviation 0), 0.1 = a tenth: the cure for one collapse that\n"
+                              "ruins a level (the import's LOD warnings say when). Foliage and terrain: a multiplier\n"
+                              "over their 0.02 / 0.05 / 0.12 budgets (relative to mesh extents).");
 
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("Normal weight", &meshDialogNormalWeight_, 0.0f, 2.0f, "%.2f");
@@ -2635,16 +2676,22 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
                               "large (a palm frond is one connected 80-triangle grid, not loose cards).");
 
         ImGui::SeparatorText("LOD3 only (the last, harshest level)");
-        ImGui::Checkbox("Aggressive LOD3", &meshDialogLod3Aggressive_);
+        {
+            const char* modes[] = { "Auto (aggressive only with leaf cards)", "Aggressive", "Normal (UE-like, 12%%)" };
+            ImGui::SetNextItemWidth(260.0f);
+            ImGui::Combo("LOD3", &meshDialogLod3Mode_, modes, 3);
+        }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The LAST level cuts hard: solid slots to ~5%% of their triangles at a\n"
-                              "loose error budget, foliage slots via the leaf prune below. TURN OFF\n"
-                              "FOR TERRAIN - its far shadow casters are tuned against low-sun banding\n"
-                              "and the loose budget deforms dune silhouettes.");
+            ImGui::SetTooltip("Aggressive: the LAST level cuts hard -- solid slots to ~5%% of their triangles at a\n"
+                              "loose error budget (0.25 of the mesh's size), foliage slots via the leaf prune below.\n"
+                              "Normal: 12%% at the 0.12 budget, as LODs 1-2 (UE's chain halves to 12.5%% with no budget).\n"
+                              "Auto (the default, nothing written): aggressive only for an asset with leaf-card slots --\n"
+                              "a tree's LOD3 switches by the distance/radius curve, anything else's by its deviation,\n"
+                              "and the harsh budget put a boat's LOD3 kilometres out. Terrain: Normal.");
         // Both multipliers scale LOD3's AGGRESSIVE bases and are read nowhere else, so with the
         // toggle off they are inert. Greyed rather than hidden: the value still round-trips through
         // mesh.json, and a control that silently does nothing is worse than one that says so.
-        ImGui::BeginDisabled(!meshDialogLod3Aggressive_);
+        ImGui::BeginDisabled(meshDialogLod3Mode_ == 2);
         ImGui::SetNextItemWidth(150.0f);
         ImGui::SliderFloat("LOD3 triangle target", &meshDialogLod3Ratio_, 0.25f, 4.0f, "x%.2f");
         if (ImGui::IsItemHovered())
@@ -2724,7 +2771,7 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
                 meshDialogLodError_ = 1.0f;
                 meshDialogLodPermissive_ = false;
                 meshDialogLodPrune_ = false;
-                meshDialogLod3Aggressive_ = true;
+                meshDialogLod3Mode_ = 0;
                 meshDialogFoliageKeep_ = 0.35f;
                 meshDialogLod3Ratio_ = 1.0f;
                 meshDialogLod3Error_ = 1.0f;
@@ -2920,6 +2967,11 @@ void ImportPanel::DrawMeshDetails(AssetRegistry& registry)
                 "Recreated " + std::to_string(selectedSplitNodes.size()) +
                 " split mesh JSON files for " + meshDialogItem_.name) :
             "Failed to recreate mesh JSON for " + meshDialogItem_.name;
+        lodWarnings_ = TakeLodWarnings();
+        if (recreated && !lodWarnings_.empty())
+        {
+            status_ += "  -- " + std::to_string(lodWarnings_.size()) + " LOD warning(s), each with a fix (below)";
+        }
         statusIsError_ = !recreated;
         if (recreated)
         {
@@ -3321,6 +3373,12 @@ void ImportPanel::PollImport(AssetRegistry& registry, bool& finishedOut)
         if (detailsPath_ == activeItem_.path) { detailsPath_.clear(); }
         status_ = finalizeFailed ? ("Import FINALIZE FAILED for " + activeItem_.name) :
             ("Imported " + activeItem_.name + "  " + destLabel);
+        lodWarnings_ = TakeLodWarnings();
+        if (!lodWarnings_.empty())
+        {
+            status_ += "  -- " + std::to_string(lodWarnings_.size()) + " LOD warning(s), each with a fix (below; Mesh Editor > "
+                       "LOD switching)";
+        }
         statusIsError_ = finalizeFailed;
         lastImportedName_ = finalizeFailed ? std::string() : activeItem_.name;
         finishedOut = !finalizeFailed;
@@ -3644,6 +3702,19 @@ void ImportPanel::DrawStatusBar()
         const ImVec4 statusColor = statusIsError_ ?
             ImVec4(1.00f, 0.42f, 0.34f, 1.0f) : ImVec4(0.50f, 0.85f, 0.50f, 1.0f);
         ImGui::TextColored(statusColor, "%s", status_.c_str());
+        // The last import's LOD warnings, each with what to do (lodreport, the Mesh Editor's "LOD switching").
+        if (!lodWarnings_.empty() && ImGui::TreeNode("##lodWarnings", "LOD warnings of the last import (%zu)", lodWarnings_.size()))
+        {
+            ImGui::PushTextWrapPos(0.0f);
+            for (const std::string& w : lodWarnings_)
+            {
+                ImGui::Bullet();
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.00f, 0.62f, 0.16f, 1.0f), "%s", w.c_str());
+            }
+            ImGui::PopTextWrapPos();
+            ImGui::TreePop();
+        }
     }
     else
     {

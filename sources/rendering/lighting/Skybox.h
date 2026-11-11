@@ -1,6 +1,7 @@
 #pragma once
 #include <memory>
 #include <array>
+#include <atomic>
 #include <string>
 #include "rendering/renderables/RenderableObject.h"
 #include "materials/TextureCube.h"
@@ -36,8 +37,12 @@ public:
     bool HasIbl() const { return hasIbl_ || (HasEnvironment() && brdfLut_.GetResource()); }
     bool HasEnvironment() const { return environmentSrv_[0].ptr != 0; }
     void SetEnvironment(const std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3>& srvs,
-                        const std::array<ID3D12Resource*, 3>& resources)
-    { environmentSrv_ = srvs; environmentResource_ = resources; }
+                        const std::array<ID3D12Resource*, 3>& resources, unsigned revision = 0u)
+    { environmentSrv_ = srvs; environmentResource_ = resources; environmentRevision_.store(revision, std::memory_order_relaxed); }
+    // Bumps with every rebuild of the procedural environment's CONTENT (SkyAtmosphere::EnvironmentRevision: the clouds
+    // re-captured as they drift, the sun moving...), while its resources and descriptors stay the same -- what a reader
+    // that keeps its own copy of a picture lit by it (the Mesh Editor's preview) compares. Written on the render thread.
+    unsigned EnvironmentRevision() const { return environmentRevision_.load(std::memory_order_relaxed); }
     D3D12_CPU_DESCRIPTOR_HANDLE EnvironmentSrv() const { return HasEnvironment() ? environmentSrv_[0] : cube_.GetSRVCPU(); }
     D3D12_CPU_DESCRIPTOR_HANDLE SpecularSrv() const { return HasEnvironment() ? environmentSrv_[1] : specCube_.GetSRVCPU(); }
     D3D12_CPU_DESCRIPTOR_HANDLE IrradianceSrv() const { return HasEnvironment() ? environmentSrv_[2] : irradianceCube_.GetSRVCPU(); }
@@ -125,6 +130,7 @@ private:
 private:
     std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 3> environmentSrv_{};
     std::array<ID3D12Resource*, 3> environmentResource_{}; // owned by SkyAtmosphere; GPU-drained teardown
+    std::atomic<unsigned> environmentRevision_{ 0u };      // see EnvironmentRevision
     SkyViewFrameData skyViewFrame_{};
     NightSkyFrameData nightSky_{};
     std::array<float, 4> moonGlow_{};

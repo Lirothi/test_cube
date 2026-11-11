@@ -1,6 +1,7 @@
 {
   "bakeScale": 0.009999999776482582,
   "geometry": "models/ocean_buoy/ocean_buoy_node_Object_3.mesh.bin",
+  "lodGroup": "SmallProp",
   "lodNormalWeight": 0.5,
   "material": "ocean_buoy_Object_3_0",
   "pivot": "base",

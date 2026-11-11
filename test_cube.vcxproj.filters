@@ -1637,6 +1637,9 @@
     <ClInclude Include="sources/rendering/meshes/LodSelect.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>
+    <ClInclude Include="sources/rendering/meshes/LodSwitchReport.h">
+      <Filter>sources\rendering\meshes</Filter>
+    </ClInclude>
     <ClInclude Include="sources/rendering/meshes/TessyDag.h">
       <Filter>sources\rendering\meshes</Filter>
     </ClInclude>

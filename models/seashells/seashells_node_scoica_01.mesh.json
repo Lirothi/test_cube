@@ -24,6 +24,7 @@
     ]
   },
   "geometry": "models/seashells/seashells_node_scoica_01.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "seashells_scoica_01_0",
   "pivot": "base",
   "restRotationDeg": [

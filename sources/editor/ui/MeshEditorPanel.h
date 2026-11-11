@@ -9,6 +9,7 @@
 #include "editor/ui/CollisionEditorTab.h"
 #include "editor/ui/MeshEditorPreviewScene.h"
 #include "materials/TextureCube.h"
+#include "rendering/meshes/LodSwitchReport.h" // the LOD switching section's report
 #include "rendering/meshes/MeshManager.h" // BinaryInfo: per-LOD chunk triangle counts
 #include "third_party/json/json.hpp"
 
@@ -41,6 +42,7 @@ public:
         expandBuoyancy_ = expandBuoyancy_ || section == "buoyancy";
         expandCollision_ = expandCollision_ || section == "collision";
         expandTessy_ = expandTessy_ || section == "tessy";
+        expandLodSwitch_ = expandLodSwitch_ || section == "lod";
     }
 
     // Draw the window body (inside the editor's lambda panel). `open` backs the close button.
@@ -97,6 +99,10 @@ private:
     // settings that shaped it. Read-only; `--edit-mesh=<mesh.json>#tessy` opens it.
     void DrawTessySection();
     bool          expandTessy_ = false;
+    // LOD switching: where each LOD comes in for a copy at scale 1 on this screen, by the rule the runtime uses
+    // (RenderableObject::LodSelectionBounds), and warnings where a number leaves its sane range. `--edit-mesh=...#lod`.
+    void DrawLodSwitchSection(const lodreport::Report& report);
+    bool          expandLodSwitch_ = false;
     MeshManager::BinaryInfo binInfo_{}; // per-LOD triangles, deviation, clusters; the DAG; empty if not baked
     std::string   status_;
     MeshEditorPreviewScene previewScene_;

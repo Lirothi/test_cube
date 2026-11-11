@@ -30,6 +30,8 @@
 #include "rendering/core/MemoryReport.h"
 #include "rendering/diagnostics/RendererSubmissionStress.h"
 #include "rendering/meshes/MeshManager.h" // W7.1b: g_meshBakeMode (--bake-meshes)
+#include "rendering/meshes/LodSwitchReport.h" // --lod-report
+#include <fstream>
 #include "meshoptimizer.h"                // --reimport-drop-small= -> meshopt_SimplifyPrune
 #include "rendering/rt/AccelerationStructure.h"
 #include "rendering/rt/RtSmoke.h"
@@ -1373,6 +1375,56 @@ int WINAPI WinMain(
             }
             LOG_INFO(logging::LogCategory::Asset, "--tessy-upgrade: {} file(s), {} failed", paths.size(), failed);
             return failed;
+        }
+        // "--lod-report[=<part of a path>]": the Mesh Editor's "LOD switching" for every models/**/*.mesh.json (or those
+        // whose path holds the text) -- where each LOD comes in on UE's reference view and every warning with its fix
+        // (rendering/meshes/LodSwitchReport.h), at the compiled defaults of lod.* (graphics_settings.json is not read).
+        // Headless, read-only. Exit code = the assets with a warning.
+        if (const char* rep = std::strstr(lpCmdLine, "--lod-report")) {
+            std::string filter;
+            if (rep[std::strlen("--lod-report")] == '=') {
+                for (const char* p = rep + std::strlen("--lod-report="); *p && !std::isspace(static_cast<unsigned char>(*p)); ++p) {
+                    filter.push_back(*p);
+                }
+            }
+            std::vector<std::string> manifests;
+            std::error_code ec;
+            for (auto it = std::filesystem::recursive_directory_iterator("models", ec);
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+                const std::string p = it->path().generic_string();
+                if (it->is_regular_file(ec) && p.size() > 10 && p.compare(p.size() - 10, 10, ".mesh.json") == 0 &&
+                    (filter.empty() || p.find(filter) != std::string::npos)) { manifests.push_back(p); }
+            }
+            std::sort(manifests.begin(), manifests.end());
+            int withWarnings = 0;
+            size_t warnings = 0;
+            for (const std::string& path : manifests) {
+                std::ifstream in(path);
+                const nlohmann::json doc = nlohmann::json::parse(in, nullptr, false, true);
+                if (doc.is_discarded() || !doc.is_object()) { continue; }
+                std::string geometry = doc.value("geometry", std::string());
+                if (const size_t hash = geometry.find('#'); hash != std::string::npos) { geometry.resize(hash); }
+                MeshManager::BinaryInfo info;
+                if (geometry.empty() || !MeshManager::DescribeMeshBinary(geometry, info)) { continue; }
+                const lodreport::Report r = lodreport::Build(info, doc, lodreport::ManifestHasFoliage(doc));
+                std::string levels;
+                for (size_t i = 0; i < r.rows.size(); ++i) {
+                    char part[96];
+                    std::snprintf(part, sizeof(part), "%sLOD%zu %u tris dev %.4f from %s%s", i ? " | " : "", i, r.rows[i].tris,
+                                  static_cast<double>(r.rows[i].deviation), lodreport::Metres(r.rows[i].distance).c_str(),
+                                  r.rows[i].skipped ? " (skipped)" : "");
+                    levels += part;
+                }
+                LOG_INFO(logging::LogCategory::Asset, "--lod-report: {}: PixelError {:.1f}: {}", path, r.pixelError, levels);
+                for (const lodreport::Warning& w : r.warnings) {
+                    LOG_WARNING(logging::LogCategory::Asset, "--lod-report: {}: {} Fix: {}", path, w.text, w.fix);
+                }
+                warnings += r.warnings.size();
+                withWarnings += r.warnings.empty() ? 0 : 1;
+            }
+            LOG_INFO(logging::LogCategory::Asset, "--lod-report: {} asset(s), {} with warnings, {} warning(s)", manifests.size(),
+                     withWarnings, warnings);
+            return withWarnings;
         }
         // "--reimport --reimport-src=<glTF> --reimport-out=<.mesh.bin>": headless CPU-only bake
         // (no device/window). Reads a staging glTF, regenerates normals/tangents + LODs, writes our

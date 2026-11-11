@@ -2177,17 +2177,19 @@ bool DeveloperWindow::Draw(Renderer& renderer, Scene& scene, const InputManager&
                 if (ImGui::IsItemHovered())
                     ImGui::SetTooltip("UE's static-mesh LOD: a LOD is drawn while the object's screen size\n"
                                       "(bounding-sphere diameter / screen height) is at most that LOD's screen\n"
-                                      "size, estimated per mesh from its baked deviation (UE's automatic screen\n"
-                                      "size: the deviation spans 'Pixel error' pixels of this screen) or authored\n"
-                                      "in mesh.json \"lodScreenSize\". Off = the global distance/radius ratios below.");
+                                      "size, estimated per mesh from its measured deviation (UE's automatic screen\n"
+                                      "size: the deviation spans 'Pixel error' pixels of a 1920x1080, 90-degree\n"
+                                      "screen) or authored in mesh.json \"lodScreenSize\". Off = the global\n"
+                                      "distance/radius ratios below.");
                 ImGui::BeginDisabled(!render::g_lodUeScreenSize_game);
                 GRAPHICS_CONTROL(LodPixelError, "lodPixelError",
-                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError_game, 0.25f, 16.0f, "%.2f px"));
+                    ImGui::SliderFloat("Pixel error", &render::g_lodPixelError_game, 0.25f, 32.0f, "%.2f px"));
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("How many pixels OF THIS SCREEN a LOD's baked deviation may span at the\n"
-                                      "distance it switches in (default 1). UE's PixelError is 8 pixels of a fixed\n"
-                                      "1080p screen -- a visible pop, tuned to UE's own deviation metric. Higher =\n"
-                                      "coarser sooner. mesh.json \"lodPixelError\" overrides it per asset.");
+                    ImGui::SetTooltip("UE's PixelError (default 8): how many pixels of a 1920x1080, 90-degree screen\n"
+                                      "a LOD's measured deviation may span where it switches in -- a visible pop by\n"
+                                      "design, as in UE. Higher = coarser sooner. Per asset: mesh.json \"lodGroup\"\n"
+                                      "(UE's groups: SmallProp / LargeProp / Deco 10, LevelArchitecture 12,\n"
+                                      "HighDetail 6) or \"lodPixelError\" (the bathroom's 1: seen at arm's length).");
                 GRAPHICS_CONTROL(LodDistanceScale, "lodDistanceScale",
                     ImGui::SliderFloat("LOD distance scale", &render::g_lodDistanceScale_game, 0.1f, 8.0f, "%.2f"));
                 if (ImGui::IsItemHovered())

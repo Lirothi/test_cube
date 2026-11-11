@@ -2,6 +2,7 @@
   "geometry": "models/atoll_lagoon_floor/atoll_lagoon_floor.mesh.bin",
   "inputLayout": "PosNormTanUV",
   "lod3Aggressive": false,
+  "lodGroup": "LevelArchitecture",
   "material": "sandstone_cracks",
   "renderLayer": "Terrain",
   "source": "import_staging\\atoll_lagoon_floor\\atoll_lagoon_floor.obj",

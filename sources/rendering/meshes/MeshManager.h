@@ -1,5 +1,6 @@
 #pragma once
 #include <memory>
+#include <optional>
 #include <string>
 #include "third_party/robin_hood.h"
 #include <vector>
@@ -36,7 +37,12 @@ struct MeshLoadOptions {
     // 2026-08-21, the last level cuts hard instead of adding a fifth). false = keep the classic
     // 0.12/0.12 — what TERRAIN wants: its far-clipmap shadow casters are tuned against low-sun
     // banding and a 0.25 error deforms dune silhouettes. mesh.json "lod3Aggressive".
-    bool lod3Aggressive = true;
+    // ABSENT = harsh only for an asset with a foliage slot (2026-11-11, owner: "the aggressive LOD came in mostly for the
+    // trees"; Lod3AggressiveOf). UE has no such level (its LOD groups halve the triangles each level, 12.5 % at LOD3,
+    // with no error budget), and on anything else it bought a LOD3 whose deviation (a boat's 0.5-1 m, a sink's 0.2 m) put
+    // it hundreds of metres to kilometres out. A tree's LOD3 is selected by the global distance/radius curve, not by its
+    // deviation, and its leaf prune needs the harsh budget for the trunk beside it.
+    std::optional<bool> lod3Aggressive;
     // Tessy N7: build this asset's cluster DAG (continuous LOD, rendering/meshes/TessyDag.h) at load -- mesh.json
     // "tessyLod": true -- when its .mesh.bin carries none (N7e: a v5 bake stores it for every asset; older bins do not).
     // --tessy-lod-build rebuilds it at load whatever the bin holds, without touching the manifests.
@@ -150,6 +156,16 @@ struct MeshLoadOptions {
     unsigned int chunkGrid = 0;
 };
 
+// Whether LOD3 takes the harsh budget: the manifest's "lod3Aggressive" when it says, else only an asset with a foliage
+// slot (MeshLoadOptions::lod3Aggressive). One answer for the bake, the options hash and the editors.
+inline bool Lod3AggressiveOf(const std::optional<bool>& stated, const std::vector<float>& slotFoliage)
+{
+    if (stated.has_value()) { return *stated; }
+    for (float f : slotFoliage) { if (f > 0.0f) { return true; } }
+    return false;
+}
+inline bool Lod3AggressiveOf(const MeshLoadOptions& opt) { return Lod3AggressiveOf(opt.lod3Aggressive, opt.slotFoliage); }
+
 // CPU-side geometry prepared independently of D3D12. Thumbnail jobs parse and
 // preprocess this on worker threads, then only enqueue GPU uploads in the editor.
 struct MeshCpuData {
@@ -243,6 +259,7 @@ public:
     {
         uint32_t version = 0;            // the file's kMeshBinVersion
         uint32_t vertexCount = 0;
+        float sphereRadius = 0.0f;       // the LOD selection's radius: the farthest vertex from the box's centre (Mesh)
         std::vector<BinaryLodInfo> lods; // lods[0] = LOD0
         BinaryDagInfo dag;               // dag.clusters 0 = no DAG in the file
     };

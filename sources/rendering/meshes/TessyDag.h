@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "rendering/meshes/Mesh.h"
@@ -60,4 +61,17 @@ bool ValidateDag(const Mesh::Dag& dag, std::string* why);
 // The triangles of the cut a threshold `t` (object space, the ortho case -- no distance) selects: lodError <= t <
 // parentError. t = 0 is LOD0; a t past every error is the roots.
 uint64_t DagCutTriangles(const Mesh::Dag& dag, float t);
+
+// Double-sided geometry built of DUPLICATES (TessyDag.cpp FoldTwins): when EVERY triangle of a range has a back twin --
+// the same three positions, the opposite winding -- `fronts` holds one triangle of each pair and `backOf` each front
+// vertex's twin vertex at the same position; simplify the fronts and emit, after each front (a, b, c), its back
+// (backOf[a], backOf[c], backOf[b]). The DAG does it, and since 2026-11-11 the discrete LOD chain (BuildLodsCpu). `posOf`
+// = meshopt_generatePositionRemap over the vertex buffer.
+struct TwinFold
+{
+    bool on = false;
+    std::vector<uint32_t> fronts;                    // one triangle of each pair (mesh-VB indices)
+    std::unordered_map<uint32_t, uint32_t> backOf;   // a front vertex -> its twin's vertex at the same position
+};
+TwinFold FoldTwins(const std::vector<uint32_t>& idx, size_t first, size_t count, const std::vector<unsigned int>& posOf);
 } // namespace tessy

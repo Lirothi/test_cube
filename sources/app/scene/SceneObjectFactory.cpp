@@ -283,9 +283,15 @@ namespace SceneObjectFactory
             for (const json& v : o["lodScreenSize"]) { sizes.push_back(v.is_number() ? v.get<float>() : 0.0f); }
             mesh.SetLodScreenSizes(sizes);
         }
-        if (o.contains("lodPixelError") && o["lodPixelError"].is_number())
+        // The PixelError: the asset's own "lodPixelError", else its UE LOD group's ("lodGroup": SmallProp, LargeProp,
+        // LevelArchitecture...; render::kUeLodGroups), else the global lod.pixelError (UE's 8).
+        if (o.contains("lodPixelError") && o["lodPixelError"].is_number() && o["lodPixelError"].get<float>() > 0.0f)
         {
             mesh.SetLodPixelError(o["lodPixelError"].get<float>());
+        }
+        else if (o.contains("lodGroup") && o["lodGroup"].is_string())
+        {
+            mesh.SetLodPixelError(render::UeLodGroupPixelError(o["lodGroup"].get<std::string>()));
         }
         // A foliage asset (any "windFoliage" slot weight > 0) bakes its LODs with the leaf prune and
         // the slot drops, which its recorded deviation does not see -- see RenderableObject::

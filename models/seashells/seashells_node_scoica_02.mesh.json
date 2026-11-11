@@ -1,6 +1,7 @@
 {
   "bakeScale": 0.0001767773210303858,
   "geometry": "models/seashells/seashells_node_scoica_02.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "seashells_scoica_02_0",
   "pivot": "base",
   "restRotationDeg": [

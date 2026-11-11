@@ -90,6 +90,7 @@ bool SameLight(const MeshEditorPreviewLight& a,
         return SameHandle(a.sky, b.sky) && a.skyMips == b.skyMips &&
             SameHandle(a.specular, b.specular) && a.specularMips == b.specularMips &&
             SameHandle(a.irradiance, b.irradiance) && SameHandle(a.brdfLut, b.brdfLut) &&
+            a.environmentRevision == b.environmentRevision &&
             a.skyIntensity == b.skyIntensity && a.skyFill == b.skyFill &&
             a.sunIlluminance.x == b.sunIlluminance.x &&
             a.sunIlluminance.y == b.sunIlluminance.y &&
@@ -133,6 +134,12 @@ struct MeshEditorPreviewScene::Impl
     std::array<std::optional<EditorPreviewRenderer::PhysicalLighting>, render::kFrameCount>
         renderedPhysical{};
     std::array<std::uint64_t, render::kFrameCount> renderedLinesRevisions{};
+    std::uint32_t settleFrames = 0; // frames left re-rendering every slot after a change (Update)
+    // The sky's content revisions the last updates saw, oldest first out (Update): the preview takes the one seen
+    // kFrameCount + 1 updates ago, by when the GPU has run the rebuild it names.
+    std::array<std::uint32_t, render::kFrameCount + 2u> environmentRevisions{};
+    std::uint32_t environmentRevisionAt = 0;
+    bool environmentRevisionsFilled = false;
     std::array<bool, render::kFrameCount> cameraValid{};
     std::array<Math::mat4, render::kFrameCount> renderedViewProj{};
     std::array<Math::mat4, render::kFrameCount> renderedView{};
@@ -459,7 +466,25 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
     ID3D12Resource* const environmentResource = environment
         ? environment->GetResource()
         : nullptr;
-    if (!impl_->targets[frameIndex] || !impl_->cameraValid[frameIndex] ||
+    // The sky's content revision as of kFrameCount + 1 updates ago: the render thread bumps it when it RECORDS a rebuild,
+    // and a preview re-rendered at once could still sample the old cube on the GPU -- one slot of old clouds, back for a
+    // frame in three (1 in 28 rebuilds in a 240-frame burst, 2026-11-11).
+    EditorPreviewRenderer::PhysicalLighting physicalDelayed;
+    if (physical)
+    {
+        auto& ring = impl_->environmentRevisions;
+        if (!impl_->environmentRevisionsFilled)
+        {
+            ring.fill(physical->environmentRevision);
+            impl_->environmentRevisionsFilled = true;
+        }
+        ring[impl_->environmentRevisionAt % ring.size()] = physical->environmentRevision;
+        ++impl_->environmentRevisionAt;
+        physicalDelayed = *physical;
+        physicalDelayed.environmentRevision = ring[impl_->environmentRevisionAt % ring.size()]; // the oldest
+        physical = &physicalDelayed;
+    }
+    const bool changed = !impl_->targets[frameIndex] || !impl_->cameraValid[frameIndex] ||
         targetSizeChanged || !SameCamera(impl_->renderedCameras[frameIndex], camera) ||
         !SameLight(impl_->renderedLights[frameIndex], light) ||
         impl_->renderedModes[frameIndex] != mode ||
@@ -470,8 +495,16 @@ MeshEditorPreviewScene::View MeshEditorPreviewScene::Update(Renderer& renderer,
         impl_->renderedEnvironments[frameIndex] != environmentResource ||
         impl_->renderedEnvironmentExposures[frameIndex] != environmentExposure ||
         !SamePhysical(impl_->renderedPhysical[frameIndex], physical) ||
-        impl_->renderedLinesRevisions[frameIndex] != linesRevision)
+        impl_->renderedLinesRevisions[frameIndex] != linesRevision;
+    // Every frame slot keeps its own picture, so a slot re-rendered after the sky's content moved and one drawn before it
+    // show different clouds -- three captures in three slots, shown in turn, were the "real sky" flickering (2026-11-11,
+    // owner). After any change every slot is re-rendered for 2 x kFrameCount + 1 frames: twice each, the last ones after
+    // the GPU has run the rebuild the change came from (the render thread's frame in flight may run it after this
+    // frame's preview).
+    if (changed) { impl_->settleFrames = 2u * render::kFrameCount + 1u; }
+    if (changed || impl_->settleFrames > 0u)
     {
+        if (impl_->settleFrames > 0u) { --impl_->settleFrames; }
         if (!impl_->RenderFrame(renderer,
                 frameIndex,
                 renderWidth,

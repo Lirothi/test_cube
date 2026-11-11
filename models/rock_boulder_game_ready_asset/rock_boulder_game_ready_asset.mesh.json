@@ -4,6 +4,7 @@
     "shape": "hull"
   },
   "geometry": "models/rock_boulder_game_ready_asset/rock_boulder_game_ready_asset.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "rock_boulder_game_ready_asset_0",
   "source": "import_staging\\rock_boulder_game_ready_asset\\scene.gltf",
   "uvDensity": [

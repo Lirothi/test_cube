@@ -1,5 +1,6 @@
 {
   "geometry": "models/starfish/starfish.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "starfish_0",
   "source": "import_staging\\starfish\\scene.gltf",
   "uvDensity": [

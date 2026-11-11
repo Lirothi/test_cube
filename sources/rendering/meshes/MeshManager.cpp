@@ -24,6 +24,7 @@
 #include <unordered_set>
 #include <utility>
 #include <functional> // LOD3 foliage prune: union-find's recursive-free find lambda
+#include <thread>     // MeasureLodDeviation: the distance queries on the machine's cores
 #include "meshoptimizer.h"
 #include "rendering/meshes/TessyDag.h"         // Tessy N7: the cluster DAG at load
 #include "rendering/shadows/TessySettings.h"   // ...and --tessy-lod-build
@@ -40,12 +41,14 @@ namespace
 struct MeshLodCpu {
     std::vector<uint32_t> indices;
     std::vector<Mesh::Submesh> submeshes;
-    // Worst-case geometric deviation of this level from LOD0, in OBJECT-SPACE units, as reported by
-    // meshopt and normalized out of its relative form. This is the number Unreal has and this engine
-    // did not: it makes a LOD switch decidable WITHOUT a per-asset screen size, because a deviation
-    // projects to a pixel count and a pixel count has an obviously right threshold.
-    // 0 = unknown (a level that copied through without simplifying).
+    // Worst-case geometric deviation of this level from LOD0, in OBJECT-SPACE units: MEASURED between the two surfaces
+    // (MeasureLodDeviation) since 2026-11-11, meshopt's own number before (kept below for the log). This is the number
+    // Unreal has: it makes a LOD switch decidable WITHOUT a per-asset screen size, because a deviation projects to a
+    // pixel count and a pixel count has an obviously right threshold.
+    // 0 = unknown (a level that copied through without simplifying, or a chunked mesh's level meshopt did not report).
     float error = 0.0f;
+    // meshopt's result_error for this level in object units (the worst range), what `error` was until 2026-11-11.
+    float simplifierError = 0.0f;
     // Tessy: this level's clusters over `indices` (BuildClustersCpu reorders the indices to match).
     // Empty for a level read from a v3 .bin.
     std::vector<Mesh::Cluster> clusters;
@@ -426,6 +429,307 @@ bool PruneFoliageRange(std::vector<VertexPNTUV>& verts, const uint32_t* srcIdx, 
     return true;
 }
 
+// --- A LOD's deviation, MEASURED (2026-11-11, owner: "do it as UE: the measured deviation") ----------------------------
+// What a LOD's switch distance is computed from (render::AutoLodScreenSizes: UE's ViewDistance = MaxDeviation x pixels per
+// unit / PixelError): how far this level's surface lies from LOD0's at worst, BOTH ways -- a point of LOD0 to the nearest
+// point of the level (what the level lost or pulled in) and a point of the level to the nearest point of LOD0 (what it
+// pushed out). meshopt's result_error is not that: it is its quadric's (the distance to the PLANES of the faces a vertex
+// gathered, plus the attribute terms under lodNormalWeight), and against the surfaces it read 2-3x the real distance at
+// LOD3 -- police_boat 2.29 m against 1.10, small_yacht 1.92 against 0.56, fishing_boat 0.95 against 0.48 -- which put the
+// boats' LOD3 at 2.5-3 km. UE's MaxDeviation is its quadric too (QuadricMeshReduction.cpp:355, sqrt / 8 as a calibration);
+// a distance needs no calibration. Sampled: every vertex a side uses plus points over its triangles about `spacing` apart
+// (deterministic), each against the other side's triangles exactly (an AABB tree, Ericson's closest point on a triangle).
+namespace lodmeasure
+{
+struct V3 { float x, y, z; };
+inline V3 Sub(V3 a, V3 b) { return { a.x - b.x, a.y - b.y, a.z - b.z }; }
+inline V3 Add(V3 a, V3 b) { return { a.x + b.x, a.y + b.y, a.z + b.z }; }
+inline V3 Mul(V3 a, float s) { return { a.x * s, a.y * s, a.z * s }; }
+inline float Dot(V3 a, V3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+inline V3 Cross(V3 a, V3 b) { return { a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x }; }
+inline V3 Min(V3 a, V3 b) { return { std::min(a.x, b.x), std::min(a.y, b.y), std::min(a.z, b.z) }; }
+inline V3 Max(V3 a, V3 b) { return { std::max(a.x, b.x), std::max(a.y, b.y), std::max(a.z, b.z) }; }
+inline float Axis(V3 v, int a) { return a == 0 ? v.x : (a == 1 ? v.y : v.z); }
+
+// Real-Time Collision Detection 5.1.5: the point of triangle abc nearest p.
+V3 ClosestOnTriangle(V3 p, V3 a, V3 b, V3 c)
+{
+    const V3 ab = Sub(b, a), ac = Sub(c, a), ap = Sub(p, a);
+    const float d1 = Dot(ab, ap), d2 = Dot(ac, ap);
+    if (d1 <= 0.0f && d2 <= 0.0f) { return a; }
+    const V3 bp = Sub(p, b);
+    const float d3 = Dot(ab, bp), d4 = Dot(ac, bp);
+    if (d3 >= 0.0f && d4 <= d3) { return b; }
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) { return Add(a, Mul(ab, d1 / (d1 - d3))); }
+    const V3 cp = Sub(p, c);
+    const float d5 = Dot(ab, cp), d6 = Dot(ac, cp);
+    if (d6 >= 0.0f && d5 <= d6) { return c; }
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) { return Add(a, Mul(ac, d2 / (d2 - d6))); }
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f)
+    {
+        return Add(b, Mul(Sub(c, b), (d4 - d3) / ((d4 - d3) + (d5 - d6))));
+    }
+    const float denom = va + vb + vc;
+    if (!(denom > 0.0f)) { return a; } // degenerate
+    const float v = vb / denom, w = vc / denom;
+    return Add(a, Add(Mul(ab, v), Mul(ac, w)));
+}
+
+// An AABB tree over a triangle soup (3 corners a triangle), median split on the longest axis of the centroids, 4 a leaf.
+class TriangleTree
+{
+public:
+    explicit TriangleTree(std::vector<V3>&& corners) : corners_(std::move(corners))
+    {
+        const uint32_t n = static_cast<uint32_t>(corners_.size() / 3u);
+        order_.resize(n);
+        centroids_.resize(n);
+        for (uint32_t t = 0; t < n; ++t)
+        {
+            order_[t] = t;
+            centroids_[t] = Mul(Add(Add(corners_[3 * t], corners_[3 * t + 1]), corners_[3 * t + 2]), 1.0f / 3.0f);
+        }
+        nodes_.reserve(n / 2u + 1u);
+        if (n > 0) { Build(0, n); }
+        centroids_.clear();
+        centroids_.shrink_to_fit();
+    }
+    bool Empty() const { return nodes_.empty(); }
+    // The squared distance from p to the nearest triangle.
+    float NearestSq(V3 p) const
+    {
+        float best = FLT_MAX;
+        uint32_t stack[64];
+        int top = 0;
+        stack[top++] = 0;
+        while (top > 0)
+        {
+            const Node& node = nodes_[stack[--top]];
+            if (BoxDistSq(p, node) >= best) { continue; }
+            if (node.count > 0)
+            {
+                for (uint32_t i = node.first; i < node.first + node.count; ++i)
+                {
+                    const uint32_t t = order_[i];
+                    const V3 q = ClosestOnTriangle(p, corners_[3 * t], corners_[3 * t + 1], corners_[3 * t + 2]);
+                    const V3 d = Sub(p, q);
+                    best = std::min(best, Dot(d, d));
+                }
+                continue;
+            }
+            const float dl = BoxDistSq(p, nodes_[node.left]);
+            const float dr = BoxDistSq(p, nodes_[node.right]);
+            // The nearer child is popped first; a child as far as the best so far is never visited.
+            if (top + 2 > 64) { continue; } // cannot happen at a depth of log2(n / 4); a guard, not a path
+            if (dl < dr)
+            {
+                if (dr < best) { stack[top++] = node.right; }
+                if (dl < best) { stack[top++] = node.left; }
+            }
+            else
+            {
+                if (dl < best) { stack[top++] = node.left; }
+                if (dr < best) { stack[top++] = node.right; }
+            }
+        }
+        return best;
+    }
+
+private:
+    struct Node { V3 lo, hi; uint32_t left = 0, right = 0, first = 0, count = 0; }; // count > 0 = a leaf
+    static float BoxDistSq(V3 p, const Node& n)
+    {
+        const float dx = std::max(std::max(n.lo.x - p.x, 0.0f), p.x - n.hi.x);
+        const float dy = std::max(std::max(n.lo.y - p.y, 0.0f), p.y - n.hi.y);
+        const float dz = std::max(std::max(n.lo.z - p.z, 0.0f), p.z - n.hi.z);
+        return dx * dx + dy * dy + dz * dz;
+    }
+    uint32_t Build(uint32_t first, uint32_t count)
+    {
+        const uint32_t index = static_cast<uint32_t>(nodes_.size());
+        nodes_.push_back({});
+        V3 lo{ FLT_MAX, FLT_MAX, FLT_MAX }, hi{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        V3 clo = lo, chi = hi;
+        for (uint32_t i = first; i < first + count; ++i)
+        {
+            const uint32_t t = order_[i];
+            for (int k = 0; k < 3; ++k) { lo = Min(lo, corners_[3 * t + k]); hi = Max(hi, corners_[3 * t + k]); }
+            clo = Min(clo, centroids_[t]);
+            chi = Max(chi, centroids_[t]);
+        }
+        nodes_[index].lo = lo;
+        nodes_[index].hi = hi;
+        if (count <= 4u)
+        {
+            nodes_[index].first = first;
+            nodes_[index].count = count;
+            return index;
+        }
+        const V3 ext = Sub(chi, clo);
+        const int axis = ext.x >= ext.y && ext.x >= ext.z ? 0 : (ext.y >= ext.z ? 1 : 2);
+        const uint32_t half = count / 2u;
+        std::nth_element(order_.begin() + first, order_.begin() + first + half, order_.begin() + first + count,
+                         [this, axis](uint32_t a, uint32_t b) { return Axis(centroids_[a], axis) < Axis(centroids_[b], axis); });
+        const uint32_t left = Build(first, half);
+        const uint32_t right = Build(first + half, count - half);
+        nodes_[index].left = left;
+        nodes_[index].right = right;
+        return index;
+    }
+    std::vector<V3> corners_;
+    std::vector<uint32_t> order_;
+    std::vector<V3> centroids_;
+    std::vector<Node> nodes_;
+};
+
+inline V3 Pos(const VertexPNTUV& v) { return { v.position.x, v.position.y, v.position.z }; }
+
+std::vector<V3> Corners(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& idx)
+{
+    std::vector<V3> out;
+    out.reserve(idx.size() - idx.size() % 3u);
+    for (size_t i = 0; i + 2 < idx.size(); i += 3)
+    {
+        out.push_back(Pos(verts[idx[i]]));
+        out.push_back(Pos(verts[idx[i + 1]]));
+        out.push_back(Pos(verts[idx[i + 2]]));
+    }
+    return out;
+}
+
+// The points a side is measured at: every vertex it uses once, and points over each triangle about `spacing` apart
+// (area / spacing^2 of them, the fraction by a hash of the triangle; positions on an R2 sequence: deterministic).
+std::vector<V3> SamplePoints(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& idx, float spacing)
+{
+    std::vector<V3> out;
+    std::vector<uint8_t> seen(verts.size(), 0u);
+    for (uint32_t v : idx)
+    {
+        if (v < verts.size() && !seen[v]) { seen[v] = 1u; out.push_back(Pos(verts[v])); }
+    }
+    const float inv = 1.0f / std::max(spacing * spacing, 1e-12f);
+    constexpr float kR2a = 0.7548776662f, kR2b = 0.5698402910f; // the R2 sequence's steps
+    for (size_t i = 0; i + 2 < idx.size(); i += 3)
+    {
+        const V3 a = Pos(verts[idx[i]]), b = Pos(verts[idx[i + 1]]), c = Pos(verts[idx[i + 2]]);
+        const V3 n = Cross(Sub(b, a), Sub(c, a));
+        const float area = 0.5f * std::sqrt(Dot(n, n));
+        const float want = area * inv;
+        uint32_t h = static_cast<uint32_t>(i / 3u) * 2654435761u;
+        h ^= h >> 16;
+        const float frac = static_cast<float>(h & 0xFFFFu) / 65536.0f;
+        const uint32_t count = std::min<uint32_t>(static_cast<uint32_t>(want + frac), 4096u);
+        for (uint32_t k = 0; k < count; ++k)
+        {
+            float u = std::fmod(0.5f + kR2a * static_cast<float>(k + 1u) + frac, 1.0f);
+            float w = std::fmod(0.5f + kR2b * static_cast<float>(k + 1u), 1.0f);
+            if (u + w > 1.0f) { u = 1.0f - u; w = 1.0f - w; }
+            out.push_back(Add(a, Add(Mul(Sub(b, a), u), Mul(Sub(c, a), w))));
+        }
+    }
+    return out;
+}
+
+// The largest distance from any of `points` to `tree`'s surface, on the machine's cores.
+float MaxNearest(const TriangleTree& tree, const std::vector<V3>& points)
+{
+    if (tree.Empty() || points.empty()) { return 0.0f; }
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    const size_t threads = points.size() < 4096u ? 1u : std::min<size_t>(hw, 16u);
+    std::vector<float> best(threads, 0.0f);
+    const auto work = [&](size_t t)
+    {
+        float b = 0.0f;
+        for (size_t i = t; i < points.size(); i += threads) { b = std::max(b, tree.NearestSq(points[i])); }
+        best[t] = b;
+    };
+    if (threads == 1u) { work(0); }
+    else
+    {
+        std::vector<std::thread> pool;
+        pool.reserve(threads);
+        for (size_t t = 0; t < threads; ++t) { pool.emplace_back(work, t); }
+        for (std::thread& th : pool) { th.join(); }
+    }
+    return std::sqrt(*std::max_element(best.begin(), best.end()));
+}
+} // namespace lodmeasure
+
+// The measure against one LOD0: its tree and points made once, any number of levels measured against them.
+class LodDeviationMeter
+{
+public:
+    LodDeviationMeter(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& lod0Indices) : verts_(verts)
+    {
+        using namespace lodmeasure;
+        std::vector<V3> corners0 = Corners(verts, lod0Indices);
+        V3 lo{ FLT_MAX, FLT_MAX, FLT_MAX }, hi{ -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        double area = 0.0;
+        for (size_t i = 0; i < corners0.size(); i += 3)
+        {
+            for (int k = 0; k < 3; ++k) { lo = Min(lo, corners0[i + k]); hi = Max(hi, corners0[i + k]); }
+            const V3 n = Cross(Sub(corners0[i + 1], corners0[i]), Sub(corners0[i + 2], corners0[i]));
+            area += 0.5 * std::sqrt(static_cast<double>(Dot(n, n)));
+        }
+        const V3 ext = corners0.empty() ? V3{ 0.0f, 0.0f, 0.0f } : Sub(hi, lo);
+        diag_ = std::sqrt(Dot(ext, ext));
+        // ~1/512 of the mesh's size, coarser when the surface would take over 250k points: the measure's own grain is
+        // about half of it (a peak between two points).
+        constexpr double kMaxAreaPoints = 250000.0;
+        spacing_ = std::max(diag_ / 512.0f, static_cast<float>(std::sqrt(area / kMaxAreaPoints)));
+        tree0_ = std::make_unique<TriangleTree>(std::move(corners0));
+        points0_ = SamplePoints(verts, lod0Indices, spacing_);
+    }
+    float Diag() const { return diag_; } // LOD0's box diagonal
+    // The level's two-sided distance from LOD0. `verts` may have grown since (the foliage prune appends vertices): the
+    // indices are read against the vector as it is now.
+    float Measure(const std::vector<uint32_t>& lodIndices) const
+    {
+        using namespace lodmeasure;
+        if (lodIndices.size() < 3u) { return diag_; }
+        const TriangleTree treeL(Corners(verts_, lodIndices));
+        const float lost = MaxNearest(treeL, points0_);                                   // LOD0's surface the level left
+        const float pushed = MaxNearest(*tree0_, SamplePoints(verts_, lodIndices, spacing_)); // the level's surface off LOD0
+        return std::max(lost, pushed);
+    }
+
+private:
+    const std::vector<VertexPNTUV>& verts_;
+    float diag_ = 0.0f;
+    float spacing_ = 0.0f;
+    std::unique_ptr<lodmeasure::TriangleTree> tree0_;
+    std::vector<lodmeasure::V3> points0_;
+};
+
+// The area of a triangle list (m2): what a simplified range must keep half of (BuildLodsCpu).
+double RangeArea(const std::vector<VertexPNTUV>& verts, const uint32_t* idx, size_t count)
+{
+    double area = 0.0;
+    for (size_t i = 0; i + 2 < count; i += 3)
+    {
+        const DirectX::XMFLOAT3& a = verts[idx[i]].position;
+        const DirectX::XMFLOAT3& b = verts[idx[i + 1]].position;
+        const DirectX::XMFLOAT3& c = verts[idx[i + 2]].position;
+        const double ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
+        const double vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
+        const double cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+        area += 0.5 * std::sqrt(cx * cx + cy * cy + cz * cz);
+    }
+    return area;
+}
+
+// Every level's `error` = its measured two-sided distance from LOD0 (above); `simplifierError` keeps meshopt's.
+void MeasureLodDeviation(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& lod0Indices,
+                         std::vector<MeshLodCpu>& lods)
+{
+    if (lods.empty() || lod0Indices.size() < 3u) { return; }
+    const LodDeviationMeter meter(verts, lod0Indices);
+    for (MeshLodCpu& lod : lods) { lod.error = meter.Measure(lod.indices); }
+}
+
 // Step 6 / Part B: build coarser LODs as reduced index buffers (meshopt_simplify, over the same
 // vertices). Each submesh range is simplified INDEPENDENTLY and the LOD carries its own rebuilt
 // submesh table — simplifying the whole buffer as one blob would dissolve the per-material
@@ -440,7 +744,9 @@ bool PruneFoliageRange(std::vector<VertexPNTUV>& verts, const uint32_t* srcIdx, 
 // false and its foliage LOD3 stays plain meshopt until the asset is re-baked.
 std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
     const std::vector<uint32_t>& indices, const std::vector<Mesh::Submesh>& baseSubs,
-    const MeshLoadOptions& opt, bool chunkedSubsets = false, bool allowVertexAppend = false)
+    const MeshLoadOptions& opt, bool chunkedSubsets = false, bool allowVertexAppend = false,
+    int* outReplaced = nullptr, // UE's chain: the levels a coarser one took the place of
+    int* outAreaKept = nullptr) // the ranges re-simplified with more triangles because they lost half their area
 {
     std::vector<MeshLodCpu> out;
     const size_t baseIdx = indices.size();
@@ -449,8 +755,23 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
     if (verts.empty() || baseIdx < kMinIndicesForLod || baseSubs.empty()) { return out; }
 
     // Per-level target ratio + error budget; overridable per import (see MeshLoadOptions).
-    const float ratios[] = { 0.5f * opt.lodRatioScale, 0.25f * opt.lodRatioScale, 0.12f * opt.lodRatioScale };
-    const float errors[] = { 0.02f * opt.lodErrorScale, 0.05f * opt.lodErrorScale, 0.12f * opt.lodErrorScale };
+    //
+    // UE's chain (2026-11-11, owner: "fully UE") for an asset with no foliage slot and no chunks: every level HALF the
+    // triangles of the one before (UE's LOD groups, LODPercentTriangles=50: 50 / 25 / 12.5 % of LOD0, each reduced from
+    // LOD0, StaticMesh.cpp:3230-3254) and NO error budget (FMeshReductionSettings MaxDeviation 0, the termination by
+    // triangles): the level's deviation is measured afterwards and decides where it comes in. The budgets (0.02 / 0.05 /
+    // 0.12 of the mesh's size) stopped meshopt short of its target -- a step of 85-99 %, a LOD3 as heavy as its LOD2, two
+    // levels of one deviation that switched at one distance. Foliage keeps its own tuned chain (UE's foliage group makes
+    // no LODs at all; ours prunes leaves and drops slots), the chunked terrain its budgets. `lodErrorScale` caps the
+    // budget below 1 (the whole mesh's size) on the UE chain.
+    bool anyFoliageSlot = false;
+    for (float f : opt.slotFoliage) { anyFoliageSlot = anyFoliageSlot || f > 0.0f; }
+    const bool ueChain = !anyFoliageSlot && !chunkedSubsets;
+    const float ratios[] = { 0.5f * opt.lodRatioScale, 0.25f * opt.lodRatioScale, (ueChain ? 0.125f : 0.12f) * opt.lodRatioScale };
+    const float ueBudget = std::clamp(opt.lodErrorScale, 0.0f, 1.0f);
+    const float errors[] = { ueChain ? ueBudget : 0.02f * opt.lodErrorScale,
+                             ueChain ? ueBudget : 0.05f * opt.lodErrorScale,
+                             ueChain ? ueBudget : 0.12f * opt.lodErrorScale };
 
     // Chunked (spatially partitioned) ranges need three extra meshopt flags, and the third one
     // forces the error budget to be restated:
@@ -476,6 +797,7 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
     const float errorScale = chunkedSubsets ? simplifyScale : 1.0f;
 
     std::vector<uint32_t> simplified;
+    const bool lod3Aggressive = Lod3AggressiveOf(opt); // the manifest's word, else harsh only with a foliage slot
 
     // Attribute scratch for the normal-weighted metric: [normal.xyz, uv.xy] per vertex. Built
     // lazily and rebuilt when `verts` grows -- the foliage prune APPENDS vertices mid-loop, and a
@@ -500,23 +822,48 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
         }
     };
 
-    for (int i = 0; i < 3; ++i)
+    // Double-sided duplicates folded (tessy::FoldTwins, the DAG's, 2026-11-11, owner: "let date_palm take the DAG's
+    // method"): a range whose every triangle has a back twin simplifies its FRONT triangles -- a manifold sheet meshopt can
+    // collapse -- and emits each kept front's back. Unfolded, meshopt called every vertex of such a sheet complex and never
+    // collapsed it: date_palm's fronds held LOD1 to 4438 and LOD2 to 4148 triangles. Per base submesh, once, before the
+    // foliage prune appends vertices; off with --tessy-lod-fold=0 (the DAG's switch) and never on a chunked mesh.
+    std::vector<tessy::TwinFold> folds(baseSubs.size());
+    if (tessy::g_lodFold && !chunkedSubsets)
+    {
+        std::vector<unsigned int> posOf(verts.size());
+        meshopt_generatePositionRemap(posOf.data(), &verts[0].position.x, verts.size(), sizeof(VertexPNTUV));
+        for (size_t k = 0; k < baseSubs.size(); ++k)
+        {
+            const size_t first = std::min<size_t>(baseSubs[k].indexOffset, indices.size());
+            const size_t count = std::min<size_t>(baseSubs[k].indexCount, indices.size() - first);
+            folds[k] = tessy::FoldTwins(indices, first, count, posOf);
+        }
+    }
+
+    int areaKept = 0; // the ranges that took more triangles to keep their area (buildLevel)
+    // One level, every base submesh reduced from LOD0: `levelRatio` of its triangles within `levelBudget`, the slots in
+    // `dropSlots` empty. `lastFixed` = the fixed chain's LOD3: the harsh budget when aggressive, the foliage prune.
+    const auto buildLevel = [&](const std::vector<uint32_t>& dropSlots, float levelRatio, float levelBudget, bool lastFixed)
     {
         MeshLodCpu lod;
-        for (const Mesh::Submesh& s : baseSubs)
+        for (size_t sub = 0; sub < baseSubs.size(); ++sub)
         {
-            const uint32_t* src = indices.data() + s.indexOffset;
-            const size_t srcCount = s.indexCount;
+            const Mesh::Submesh& s = baseSubs[sub];
+            const tessy::TwinFold& fold = folds[sub];
+            const uint32_t* range = indices.data() + s.indexOffset; // the range as LOD0 has it (both sides)
+            // What meshopt reduces: the range, or a folded range's front triangles.
+            const uint32_t* src = fold.on ? fold.fronts.data() : range;
+            const size_t srcCount = fold.on ? fold.fronts.size() : s.indexCount;
             const uint32_t outOffset = static_cast<uint32_t>(lod.indices.size());
 
-            // LOD3 (i == 2) is the HARSH level (user decision 2026-08-21: no fifth level;
+            // LOD3 (lastFixed) is the HARSH level (user decision 2026-08-21: no fifth level;
             // the last one gets aggressive instead). Opt-out per asset via mesh.json
             // "lod3Aggressive": false — the terrain manifests carry it, because their
             // far-clipmap shadow casters are tuned against low-sun banding and a 0.25 error
             // deforms dune silhouettes.
-            float ratio = ratios[i];
-            float errBudget = errors[i];
-            if (i == 2 && opt.lod3Aggressive)
+            float ratio = levelRatio;
+            float errBudget = levelBudget;
+            if (lastFixed && lod3Aggressive)
             {
                 // LOD3's OWN multipliers (dialog "LOD3 triangle/error x") — deliberately NOT the
                 // whole-chain scales, so the last level is pushed without dragging LODs 1-2.
@@ -529,24 +876,21 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
             // budget can take them without eating the silhouette-critical cylinder first). An
             // EMPTY submesh keeps the table aligned; the draw skips zero-count ranges. Each
             // level's list is independent — every LOD builds from the BASE indices.
-            const std::vector<uint32_t>* dropLists[3] =
-                { &opt.lod1DropSlots, &opt.lod2DropSlots, &opt.lod3DropSlots };
-            if (std::find(dropLists[i]->begin(), dropLists[i]->end(),
-                          (uint32_t)s.materialSlot) != dropLists[i]->end())
+            if (std::find(dropSlots.begin(), dropSlots.end(), (uint32_t)s.materialSlot) != dropSlots.end())
             {
                 lod.submeshes.push_back(Mesh::Submesh{ outOffset, 0u, s.materialSlot });
                 continue;
             }
 
-            // LOD3 foliage: whole-leaf prune instead of meshopt (see PruneFoliageRange).
+            // LOD3 foliage: whole-leaf prune instead of meshopt (see PruneFoliageRange), over the range as it is.
             // Falls through to meshopt when the range has too few components.
             const bool foliageSlot = s.materialSlot < opt.slotFoliage.size() &&
                                      opt.slotFoliage[s.materialSlot] > 0.0f;
-            if (i == 2 && !chunkedSubsets && foliageSlot && allowVertexAppend &&
+            if (lastFixed && !chunkedSubsets && foliageSlot && allowVertexAppend &&
                 opt.foliagePruneKeep > 0.0f && opt.foliagePruneKeep < 1.0f)
             {
                 std::vector<uint32_t> pruned;
-                if (PruneFoliageRange(verts, src, srcCount, opt.foliagePruneKeep,
+                if (PruneFoliageRange(verts, range, s.indexCount, opt.foliagePruneKeep,
                                       opt.foliageInnerRatio, opt.foliageInnerError,
                                       opt.foliageGrow, opt.foliageUvWeight, pruned))
                 {
@@ -559,12 +903,28 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
 
             size_t n = srcCount;
             bool didSimplify = false;
-            size_t target = static_cast<size_t>(srcCount * ratio);  
+            size_t target = static_cast<size_t>(srcCount * ratio);
             target -= target % 3;
-            if (srcCount >= kMinRangeIndices && target >= 12)
+            // A folded range is simplified SPARSE, as the DAG does: meshopt classifies a vertex by every vertex at its
+            // position in the whole buffer, so each front vertex, whose twin sits at its position unreferenced, read as
+            // complex and none collapsed (date_palm's fronds: 8400 front indices in, 8400 out). Sparse looks at the
+            // vertices the range uses alone; it also bases a relative error on the range's extent, so the budget goes in
+            // absolute (the whole mesh's scale) and comes back absolute.
+            const unsigned int rangeOptions = fold.on
+                ? (simplifyOptions | meshopt_SimplifySparse | meshopt_SimplifyErrorAbsolute) : simplifyOptions;
+            const float rangeErrorScale = fold.on ? simplifyScale : errorScale;
+            // A slot must not vanish into itself (2026-11-11, owner: "on small_yacht's last LOD the glass disappears"): with no
+            // budget a thin plate is the simplifier's cheapest prey -- its two faces meet at the cost of its thickness --
+            // and the windshield went 2.9 -> 0.027 m2 at LOD3, its 186 triangles a sliver of the frame; the measured
+            // deviation could not tell (the cabin lies behind the pane). A range that keeps under half its area takes
+            // twice the triangles, until it keeps it. Not with SimplifyPrune: there a part's vanishing is the point.
+            const bool pruneEnabled = (rangeOptions & meshopt_SimplifyPrune) != 0u;
+            const double srcArea = (!pruneEnabled && !chunkedSubsets) ? RangeArea(verts, src, srcCount) : 0.0;
+            float resultError = 0.0f;
+            for (int attempt = 0; srcCount >= kMinRangeIndices / (fold.on ? 2u : 1u) && target >= 12; ++attempt)
             {
                 simplified.resize(srcCount);
-                float resultError = 0.0f;
+                resultError = 0.0f;
                 // Options are per-import (MeshLoadOptions::lodSimplifyOptions, exposed in the mesh
                 // import window) and default to 0 = meshopt's safe behaviour.
                 //
@@ -575,6 +935,7 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
                 // visually destroyed: the leaf blades collapse into spikes, because the position-only
                 // error metric is blind to what actually carries a leaf card's shape (its silhouette
                 // and UV island). Do not trust `resultError` on masked foliage; look at the wireframe.
+                // (That floor was the double-sided duplicates: folded above, the fronds collapse.)
                 if (opt.lodNormalWeight > 0.0f)
                 {
                     // Normal-weighted collapse (see MeshLoadOptions::lodNormalWeight). Kept as its
@@ -592,7 +953,7 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
                     n = meshopt_simplifyWithAttributes(simplified.data(), src, srcCount,
                         &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
                         attribs.data(), kAttrCount * sizeof(float), w, kAttrCount, nullptr,
-                        target, errBudget * errorScale, simplifyOptions, &resultError);
+                        target, errBudget * rangeErrorScale, rangeOptions, &resultError);
                 }
                 else if (foliageSlot && opt.foliageUvWeight > 0.0f)
                 {
@@ -607,47 +968,115 @@ std::vector<MeshLodCpu> BuildLodsCpu(std::vector<VertexPNTUV>& verts,
                     n = meshopt_simplifyWithAttributes(simplified.data(), src, srcCount,
                         &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
                         &verts[0].uv.x, sizeof(VertexPNTUV), uvw, 2, nullptr,
-                        target, errBudget * errorScale, simplifyOptions, &resultError);
+                        target, errBudget * rangeErrorScale, rangeOptions, &resultError);
                 }
                 else
                 {
                     n = meshopt_simplify(simplified.data(), src, srcCount,
                         &verts[0].position.x, verts.size(), sizeof(VertexPNTUV),
-                        target, errBudget * errorScale, simplifyOptions, &resultError);
+                        target, errBudget * rangeErrorScale, rangeOptions, &resultError);
                 }
                 // n == 0 is AMBIGUOUS: without SimplifyPrune it means "gave up" (keep the range
                 // as-is), but WITH it it is a legitimate verdict — every part of the range was a
                 // small disconnected piece within budget (a trunk's husk scales at LOD3), and the
                 // range should VANISH. Resurrecting it here was why "drop small parts" left the
                 // scales in place at LOD3 and bloated the level past LOD2 (user-hit 2026-08-21).
-                const bool pruneEnabled = (simplifyOptions & meshopt_SimplifyPrune) != 0u;
-                if (n == 0 && !pruneEnabled) { n = srcCount; }
-                else { didSimplify = true; }
-                // Worst case over the ranges: a LOD pops as badly as its WORST submesh does, so
-                // an average would describe a level nobody sees. Absolute already when the
-                // chunked path asked for absolute; relative to simplifyScale otherwise.
-                if (didSimplify && resultError > 0.0f)
-                {
-                    const float abs = chunkedSubsets ? resultError : resultError * simplifyScale;
-                    lod.error = std::max(lod.error, abs);
-                }
+                if (n == 0 && !pruneEnabled) { n = srcCount; didSimplify = false; break; }
+                didSimplify = true;
+                if (srcArea <= 0.0 || attempt >= 6 || RangeArea(verts, simplified.data(), n) >= 0.5 * srcArea) { break; }
+                const size_t doubled = std::min(srcCount, target * 2u);
+                if (doubled <= target) { break; }
+                target = doubled - doubled % 3u;
+                ++areaKept;
+            }
+            // Worst case over the ranges: a LOD pops as badly as its WORST submesh does, so
+            // an average would describe a level nobody sees. Absolute already when the
+            // chunked path asked for absolute; relative to simplifyScale otherwise.
+            if (didSimplify && resultError > 0.0f)
+            {
+                const float abs = (chunkedSubsets || fold.on) ? resultError : resultError * simplifyScale;
+                lod.error = std::max(lod.error, abs);
             }
 
-            const uint32_t* from = didSimplify ? simplified.data() : src;
-            lod.indices.insert(lod.indices.end(), from, from + n);
-            lod.submeshes.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(n), s.materialSlot });
+            if (fold.on && didSimplify)
+            {
+                // The kept fronts, each followed by its back: the twin of (a, b, c) is (back a, back c, back b).
+                const auto back = [&fold](uint32_t v) { const auto it = fold.backOf.find(v); return it != fold.backOf.end() ? it->second : v; };
+                for (size_t t = 0; t + 2 < n; t += 3)
+                {
+                    const uint32_t a = simplified[t], b = simplified[t + 1], c = simplified[t + 2];
+                    lod.indices.insert(lod.indices.end(), { a, b, c, back(a), back(c), back(b) });
+                }
+                lod.submeshes.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(2u * (n - n % 3u)), s.materialSlot });
+                continue;
+            }
+            // Not simplified: the range as LOD0 has it (a folded one's fronts alone would be half the sheet).
+            const uint32_t* from = didSimplify ? simplified.data() : range;
+            const size_t count = didSimplify ? n : s.indexCount;
+            lod.indices.insert(lod.indices.end(), from, from + count);
+            lod.submeshes.push_back(Mesh::Submesh{ outOffset, static_cast<uint32_t>(count), s.materialSlot });
         }
+        return lod;
+    };
 
-        // NO shrink gate: every level is emitted even when it failed to shrink (user decision
-        // 2026-08-21). The old ~10% gate silently RENUMBERED the chain — a stalled level was
-        // skipped and everything after it landed one slot up, so the harsh LOD3 showed at the
-        // LOD2 distance. The UV-aware collapse made this routine (it deliberately refuses the
-        // texture-smearing collapses, so foliage LOD2 often lands within 10% of LOD1), and a
-        // near-identical level costs only its index-buffer bytes — a stable slot->distance
-        // mapping is worth far more.
-        if (lod.indices.empty()) { break; }
-        out.push_back(std::move(lod));
+    const std::vector<uint32_t>* dropLists[3] = { &opt.lod1DropSlots, &opt.lod2DropSlots, &opt.lod3DropSlots };
+    if (!ueChain || lod3Aggressive)
+    {
+        // The fixed chain: foliage (selected by the distance/radius curve, by level NUMBER), the chunked terrain, an
+        // asset that asks for the harsh LOD3.
+        for (int i = 0; i < 3; ++i)
+        {
+            MeshLodCpu lod = buildLevel(*dropLists[i], ratios[i], errors[i], i == 2);
+            // NO shrink gate: every level is emitted even when it failed to shrink (user decision
+            // 2026-08-21). The old ~10% gate silently RENUMBERED the chain — a stalled level was
+            // skipped and everything after it landed one slot up, so the harsh LOD3 showed at the
+            // LOD2 distance. The UV-aware collapse made this routine (it deliberately refuses the
+            // texture-smearing collapses, so foliage LOD2 often lands within 10% of LOD1), and a
+            // near-identical level costs only its index-buffer bytes — a stable slot->distance
+            // mapping is worth far more.
+            if (lod.indices.empty()) { break; }
+            lod.simplifierError = lod.error;
+            out.push_back(std::move(lod));
+        }
+        // The selection's deviation, measured between the surfaces (MeasureLodDeviation). A chunked mesh keeps meshopt's:
+        // its chunks switch by distance (chunkDistance / chunkFactor), never by this, and the island is the largest mesh.
+        if (!chunkedSubsets) { MeasureLodDeviation(verts, indices, out); }
+        if (outAreaKept) { *outAreaKept = areaKept; }
+        return out;
     }
+
+    // UE's chain, its levels filled (2026-11-11, owner: "when LODs are skipped, as on some yachts, generate the missing
+    // ones: the coarser takes the skipped one's place, L3 becomes L1 and L2, L3 are made anew"). A level deviates no less
+    // than the next one only when one part both lose decides both (fast_boat_13: LOD1, LOD2 and LOD3 all 0.0213 m) -- then
+    // it comes in at the same distance and is never drawn. So the levels are made one at a time, each half the triangles
+    // of the last (from LOD0), and measured: one that deviates no more than the level before it takes that level's place,
+    // and the halving goes on until three levels differ, the simplifier stalls (under 5 % fewer triangles) or ten halvings
+    // are spent. The selection reads each level's own deviation, so a renumbered level lands where it belongs -- what the
+    // fixed chain's "no shrink gate" above guards against does not arise here.
+    const LodDeviationMeter meter(verts, indices);
+    size_t prevTris = indices.size() / 3u;
+    float ratio = std::min(0.5f * opt.lodRatioScale, 0.9f);
+    constexpr int kMaxHalvings = 10;
+    int replaced = 0;
+    for (int k = 1; k <= kMaxHalvings && out.size() < 3u; ++k, ratio *= 0.5f)
+    {
+        MeshLodCpu lod = buildLevel(*dropLists[out.size()], ratio, ueBudget, false);
+        const size_t tris = lod.indices.size() / 3u;
+        if (tris == 0u || tris * 100u > prevTris * 95u) { break; }
+        lod.simplifierError = lod.error;
+        lod.error = meter.Measure(lod.indices);
+        // "No more" within 0.1 % (the LOD switching report, LodSwitchReport.h, calls a level skipped at the same tolerance),
+        // or within 1e-4 of the mesh's size: a flat tile's levels measure float noise, hundredths of a millimetre.
+        if (!out.empty() && lod.error <= out.back().error * 1.001f + std::max(1e-6f, 1e-4f * meter.Diag()))
+        {
+            out.back() = std::move(lod);
+            ++replaced;
+        }
+        else { out.push_back(std::move(lod)); }
+        prevTris = tris;
+    }
+    if (outReplaced) { *outReplaced = replaced; }
+    if (outAreaKept) { *outAreaKept = areaKept; }
     return out;
 }
 
@@ -787,7 +1216,9 @@ uint64_t HashOptions(const MeshLoadOptions& opt)
     if (opt.lodNormalWeight != 0.0f) { h = Fnv1a(&opt.lodNormalWeight, sizeof(float), h); }
     // The prune rewrites LOD3's indices AND appends vertices; non-default only, same rule as above.
     if (opt.foliagePruneKeep != 0.35f) { h = Fnv1a(&opt.foliagePruneKeep, sizeof(float), h); }
-    if (!opt.lod3Aggressive) { const uint8_t off = 1u; h = Fnv1a(&off, 1, h); }
+    if (!Lod3AggressiveOf(opt)) { const uint8_t off = 1u; h = Fnv1a(&off, 1, h); } // resolved: absent = foliage only
+    // UE's chain (BuildLodsCpu, 2026-11-11) on a non-foliage, unchunked asset: a bin made with the budgets is stale.
+    if (pattern == 0 && opt.chunkGrid <= 1u) { const uint8_t ueChain = 0x5Eu; h = Fnv1a(&ueChain, 1, h); }
     if (opt.lod3RatioScale != 1.0f) { h = Fnv1a(&opt.lod3RatioScale, sizeof(float), h); }
     if (opt.lod3ErrorScale != 1.0f) { h = Fnv1a(&opt.lod3ErrorScale, sizeof(float), h); }
     if (opt.foliageInnerRatio != 0.5f) { h = Fnv1a(&opt.foliageInnerRatio, sizeof(float), h); }
@@ -1837,8 +2268,34 @@ bool MeshManager::BakeToBinary(const std::string& srcPath, const std::string& ou
 
     // allowVertexAppend = true: the prune's scaled leaf copies grow cpu.vertices BEFORE
     // WriteMeshBinary serialises the VB, so the bin carries them with no format change.
+    const auto lodStart = std::chrono::steady_clock::now();
+    int replacedLevels = 0, areaKeptRanges = 0;
     std::vector<MeshLodCpu> extra = BuildLodsCpu(cpu.vertices, cpu.indices, lod0Subs, opt,
-                                                 chunked, /*allowVertexAppend=*/true);
+                                                 chunked, /*allowVertexAppend=*/true, &replacedLevels, &areaKeptRanges);
+    {
+        // What the LOD selection will read (measured, MeasureLodDeviation) beside what the simplifier reported.
+        std::string line;
+        const double lod0Tris = static_cast<double>(std::max<size_t>(cpu.indices.size() / 3u, 1u));
+        for (size_t i = 0; i < extra.size(); ++i)
+        {
+            char part[112];
+            std::snprintf(part, sizeof(part), "%sLOD%zu %.1f %% %.4f (%.4f)", i == 0 ? "" : ", ", i + 1,
+                          100.0 * static_cast<double>(extra[i].indices.size() / 3u) / lod0Tris,
+                          static_cast<double>(extra[i].error), static_cast<double>(extra[i].simplifierError));
+            line += part;
+        }
+        bool foliage = false;
+        for (float f : opt.slotFoliage) { foliage = foliage || f > 0.0f; }
+        const char* chain = chunked ? "the terrain's" : (foliage ? "foliage" : (Lod3AggressiveOf(opt) ? "UE, LOD3 aggressive" : "UE"));
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - lodStart).count();
+        LOG_INFO(logging::LogCategory::Asset, "[meshbake] '{}': LOD3 {}, deviation from LOD0 in m, {} (meshopt's): {}; "
+                 "chain {}{}{}; built and measured in {:.0f} ms", outBinPath, Lod3AggressiveOf(opt) ? "aggressive" : "normal",
+                 chunked ? "meshopt's, a chunked mesh" : "measured", line.empty() ? "no LODs" : line, chain,
+                 replacedLevels > 0 ? ", " + std::to_string(replacedLevels) + " skipped level(s) replaced by coarser ones"
+                                    : std::string(),
+                 areaKeptRanges > 0 ? ", " + std::to_string(areaKeptRanges) + " range simplification(s) redone to keep half the area"
+                                    : std::string(), ms);
+    }
     // Tessy N1: every level into cluster order AFTER all of them are built -- the LODs simplify the
     // order they always did, so a v4 bake holds a v3 bake's triangles, reordered.
     const std::vector<Mesh::Cluster> lod0Clusters = BuildClustersCpu(cpu.vertices, cpu.indices, lod0Subs);
@@ -3041,6 +3498,23 @@ bool MeshManager::DescribeMeshBinary(const std::string& binPath, BinaryInfo& out
     }
     out.version = header.version;
     out.vertexCount = static_cast<uint32_t>(verts.size());
+    {
+        // Mesh::CreateGPU_PNTUV's radius, the one the LOD selection divides by.
+        float lo[3] = { FLT_MAX, FLT_MAX, FLT_MAX }, hi[3] = { -FLT_MAX, -FLT_MAX, -FLT_MAX };
+        for (const VertexPNTUV& v : verts)
+        {
+            const float p[3] = { v.position.x, v.position.y, v.position.z };
+            for (int k = 0; k < 3; ++k) { lo[k] = std::min(lo[k], p[k]); hi[k] = std::max(hi[k], p[k]); }
+        }
+        const float c[3] = { 0.5f * (lo[0] + hi[0]), 0.5f * (lo[1] + hi[1]), 0.5f * (lo[2] + hi[2]) };
+        float maxSq = 0.0f;
+        for (const VertexPNTUV& v : verts)
+        {
+            const float d[3] = { v.position.x - c[0], v.position.y - c[1], v.position.z - c[2] };
+            maxSq = std::max(maxSq, d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        }
+        out.sphereRadius = std::sqrt(maxSq);
+    }
     out.lods.reserve(lods.size());
     for (const MeshLodCpu& lod : lods)
     {
@@ -3196,7 +3670,10 @@ bool MeshManager::ApplyManifestOptions(const std::string& meshJsonPath, MeshLoad
         const auto it = doc.find("pivot");
         if (it != doc.end() && it->is_string()) { opt.pivotToBase = it->get<std::string>() == "base"; }
     }
-    boolean("lod3Aggressive", opt.lod3Aggressive);
+    {
+        const auto it = doc.find("lod3Aggressive"); // absent = resolved by the asset's foliage (Lod3AggressiveOf)
+        if (it != doc.end() && it->is_boolean()) { opt.lod3Aggressive = it->get<bool>(); }
+    }
     boolean("tessyLod", opt.tessyLod);
     uints("lod1DropSlots", opt.lod1DropSlots);
     uints("lod2DropSlots", opt.lod2DropSlots);

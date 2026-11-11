@@ -4,6 +4,7 @@
     "shape": "hull"
   },
   "geometry": "models/brain_coral/brain_coral.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "brain_coral_0",
   "source": "import_staging\\brain_coral\\scene.gltf",
   "uvDensity": [

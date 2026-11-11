@@ -1,6 +1,8 @@
 {
   "geometry": "models/fast_boat_13/fast_boat_13.mesh.bin",
+  "lodGroup": "LargeProp",
   "lodNormalWeight": 0.5,
+  "lodPermissive": true,
   "materials": [
     "fast_boat_13_0",
     "fast_boat_13_1",

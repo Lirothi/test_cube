@@ -16,6 +16,7 @@
     ]
   },
   "geometry": "models/coconut/coconut.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "coconut_0",
   "source": "import_staging\\coconut\\scene.gltf",
   "uvDensity": [

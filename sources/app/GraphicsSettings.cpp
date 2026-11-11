@@ -124,7 +124,7 @@ namespace
 
         bool lodEnabled = true;
         bool lodUeScreenSize = true; // render::g_lodUeScreenSize_game / g_lodPixelError / g_lodDistanceScale
-        float lodPixelError = 1.0f; // pixels of THIS screen (LodSelect.h); persisted as "screenPixelError"
+        float lodPixelError = 8.0f; // UE's PixelError, 1080p pixels (LodSelect.h); persisted as "uePixelError"
         float lodDistanceScale = 1.0f;
         float lodBound0 = 8.0f;  // render::g_lodBound0_game..2 (LodSelect.h says why these)
         float lodBound1 = 16.0f;
@@ -1025,7 +1025,7 @@ namespace
             { "lod", {
                 { "enabled", s.lodEnabled },
                 { "ueScreenSize", s.lodUeScreenSize },
-                { "screenPixelError", s.lodPixelError },
+                { "uePixelError", s.lodPixelError },
                 { "distanceScale", s.lodDistanceScale },
                 { "regularMeshRatios", { s.lodBound0, s.lodBound1, s.lodBound2 } },
                 { "temporalLag", s.lodTemporalLag },
@@ -1265,8 +1265,9 @@ namespace
 
         Read(lod, "enabled", s.lodEnabled);
         Read(lod, "ueScreenSize", s.lodUeScreenSize);
-        // Not the old "pixelError": that was UE's 1080p pixels (8), read now as screen pixels it would undo the fix.
-        Read(lod, "screenPixelError", s.lodPixelError);
+        // UE's PixelError again (2026-11-11), under a key of its own: "screenPixelError" held 1 px of THIS screen, the rule of
+        // 2026-10-24 .. 11-11, and read as UE's 1080p pixels it would put every LOD 8x farther. Both old keys are ignored.
+        Read(lod, "uePixelError", s.lodPixelError);
         Read(lod, "distanceScale", s.lodDistanceScale);
         const auto ratios = lod.find("regularMeshRatios");
         if (ratios != lod.end() && ratios->is_array() && ratios->size() >= 3)

@@ -4,6 +4,7 @@
     "shape": "hull"
   },
   "geometry": "models/rocks/rocks_node_Rock02.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "rocks_Rock02_0",
   "pivot": "base",
   "source": "import_staging\\rocks\\scene.gltf#node:Rock02",

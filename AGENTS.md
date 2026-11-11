@@ -827,6 +827,15 @@ from the open level: every action, query and name — read it first), `run_actio
 `thumbnails {assets: [...]}` (the Content Browser's thumbnails baked through its own cache even while the
 browser is a hidden tab -- it bakes only what it draws; poll until each answers `ready`, `png` is the cached file).
 
+**The Mesh Editor's preview keeps one picture per frame slot, and they must agree** (2026-11-11, owner: "the real sky
+flickers in the Mesh Editor", after ~10 s with the window open). Under the level's sky three pictures took turns frame by
+frame (a burst of the owner's editor: three distinct images, period 3): each slot had been drawn at another cloud capture,
+and the preview compared the sky cube's pointer alone -- the content moves behind it as the clouds drift.
+`SkyAtmosphere::EnvironmentRevision` counted only inside a commented-out log line (0 for ever); it bumps with every rebuild
+now and reaches the preview through `Skybox::EnvironmentRevision` / `PhysicalLighting::environmentRevision`, taken
+kFrameCount + 1 updates late (the render thread bumps it when it RECORDS the rebuild), and after any change every slot is
+re-rendered for 2 x kFrameCount + 1 frames (`MeshEditorPreviewScene::Update`). Four bursts of 240 frames: the preview's
+clouds follow every rebuild; a picture came back twice in one of them (not reproduced since), never in the other three.
 **The Mesh Editor's preview has its own camera** (2026-11-05, owner: "make its own exposure, and so it can be set"): under Level lighting it is lit by the level's sun and sky in lux, and it took the VIEWPORT's metered EV, so from the bathroom (EV 7.44) the same door came out white and from the beach (13.36) right. Now `previewLight.autoExposure` (default on, `editor_state.json`, Mesh Editor > Preview Lighting): the EV a meter reads off a grey card under the preview's own light (the sun by the preview's direction + the sky's horizontal illuminance, `log2(0.18 E / pi) + 3`) less `exposureCompensationEv`; off = `manualEv100`. Only the colour pipeline stays the level's.
 
 **When a thumbnail bakes** (`AssetThumbnailCache`, PNGs in `editor_cache/thumbnails`): when its signature changes --
@@ -1904,7 +1913,64 @@ a LOD comes in where its worst deviation spans one pixel of the output. The bath
 none inside 1 m (the candles at ~2 m); every model: median 1.2 -> 6.4 m. Cost on wind_test (level start, the
 grove, the bathroom; old = `lod.pixelError:6`, interleaved): GPU frame +0.009 / -0.007 / +0.015 ms, noise. A
 mesh's numbers: scratchpad-style `lod_survey.py` (the .mesh.bin LOD table: triangles, deviation, the distance
-each LOD comes in; `LOD_K` = pixels per unit / PixelError).
+each LOD comes in; `LOD_K` = pixels per unit / PixelError). **Superseded on 2026-11-11 by the paragraph below.**
+
+**UE's heuristic again, on a MEASURED deviation** (2026-11-11, owner, on boats that never reached LOD3: "do it as UE: the
+measured deviation and a normal LOD3", then "fully UE, and push the small meshes' threshold by hand so the bathroom stays
+right", "the trees keep their aggressive LOD"). Four parts:
+- **The deviation is measured** (`MeshManager.cpp MeasureLodDeviation`, every bake and the runtime parse; a chunked mesh keeps
+  meshopt's): the two-sided distance between the level's surface and LOD0's -- every vertex plus points ~1/512 of the mesh's
+  size apart, each against the other side's triangles exactly (an AABB tree). meshopt's `result_error` is its quadric's (and
+  the attribute terms under `lodNormalWeight`) and read 2-3x the real distance at LOD3: police_boat 2.29 m against 1.10. The
+  bake logs both: `[meshbake] '<bin>': LOD3 normal, deviation from LOD0 in m, measured (meshopt's): ...`.
+- **UE's chain** for every asset with no foliage slot and no chunks (`BuildLodsCpu ueChain`): each level half the
+  triangles (50 / 25 / 12.5 % of LOD0, UE's LOD groups' LODPercentTriangles=50) and no error budget (UE's MaxDeviation 0):
+  the budgets stopped meshopt short -- steps of 85-99 %, LOD3 as heavy as LOD2. `lodErrorScale` caps the budget below 1 (the
+  mesh's size); a cap of 0.1 is the cure for one collapse that ruins a level (police_boat's LOD3 1.10 -> 0.48 m,
+  Sink_002's 0.44 -> 0.056). Foliage keeps its tuned chain (UE's foliage makes no LODs) and the terrain its budgets.
+  `lod3Aggressive` absent = harsh only for an asset with a foliage slot (`Lod3AggressiveOf`); the import window says Auto /
+  Aggressive / Normal.
+- **UE's threshold**: `AutoLodScreenSizes` on UE's reference view (1920 x 1080, 90 degrees: 960 px per unit, multiple 0.889),
+  PixelError `lod.pixelError` 8 (graphics settings `lod.uePixelError`; the old `screenPixelError`, 1 px of this screen, is
+  ignored), or the asset's UE LOD group, mesh.json `"lodGroup"` (`render::kUeLodGroups`: SmallProp / LargeProp / Deco 10,
+  LevelArchitecture 12, HighDetail 6; Mesh Editor > LOD "LOD group (UE)"), or its own `"lodPixelError"`. Assigned: the boats
+  and the tent LargeProp, the beach props and the buoys SmallProp, the lagoon floor LevelArchitecture, and every
+  the_bathroom_free node `"lodPixelError": 1` (seen at arm's length): its LOD1 median 8.6 -> 9.4 m, none nearer than 2 m
+  (6 before), LOD3 77 -> 43 m. The boats' LOD3: police_boat 2.94 km -> 52 m, small_yacht 2.46 km -> 26 m, fishing_boat
+  1.22 km -> 39 m; old_boat takes `lodPermissive` (its LOD2 and LOD3 were stuck at 3530 triangles on its seams: 4179 /
+  2089 / 1043 now). The bins before: `D:\Programming\test_cube_backups\mesh_bin_v5_before_measured_lod_2026-11-11`, the
+  manifests `...\mesh_json_before_ue_lod_2026-11-11`.
+- **What is out of range, and what to do** (`rendering/meshes/LodSwitchReport.h`, one report): Mesh Editor > "LOD switching"
+  (`--edit-mesh=<mesh.json>#lod`; the header counts the warnings) -- per LOD triangles, measured deviation, UE's screen size,
+  where it comes in, the mesh's and the deviation's 1080p pixels there, "skipped" for a level the next one shadows --; the
+  importer logs every warning with its fix (`import <asset>: LOD: ... Fix: ...`), shows them under the Import window's
+  status and in MCP `import_status` (`lodWarnings`); `test_cube.exe --lod-report[=<path part>]` prints all of it for every
+  asset (exit code = assets with warnings). Warnings: a level with as many triangles or a weak step (over 1000 triangles);
+  a level that comes in under 4 px; over 2 triangles a pixel before the next level (over 1000); an authored screen size that
+  pops; a gap of x25; no measured deviation. Each names the knob (`lodErrorScale`, `lodPermissive`, `lodDropSmallParts`,
+  `lodRatioScale`, `lodGroup` / `lodPixelError`, the foliage prune).
+- **The discrete chain folds double-sided duplicates as the DAG does** (same day, owner: "let date_palm take the DAG's
+  method"; `tessy::FoldTwins`, public in TessyDag.h now): a range whose every triangle has a back twin simplifies its front
+  triangles and emits each kept front's back. It needs `meshopt_SimplifySparse` (and the budget in absolute units): meshopt
+  classifies a vertex by every vertex at its position in the whole buffer, so each front vertex, its twin unreferenced beside
+  it, read as complex -- without Sparse the folded fronds came back whole, 8400 indices in, 8400 out. date_palm LOD1 / LOD2
+  4438 / 4148 -> 1658 / 766 triangles at a measured 0.37 / 0.43 -> 0.085 / 0.27 m; curly_palm 2191 / 1221 -> 1181 / 275 at
+  0.115 / 0.118 -> 0.062 / 0.105 m; their LOD3 (the prune) as it was. `--tessy-lod-fold=0` turns it off with the DAG's.
+- **A skipped level is replaced and the chain filled** (same day, owner: "if LODs are skipped, as on some yachts, generate the
+  missing levels: L3 becomes L1 and L2, L3 are made anew"). On UE's chain the levels are made one at a time, each half the
+  last, and measured: one that deviates no more than the level before it (within 0.1 %, or 1e-4 of the mesh's size: a flat
+  tile measures float noise) takes that level's place -- it would come in at the same distance and the finer one would never
+  be drawn -- and the halving goes on until three levels differ, the simplifier stalls (under 5 % fewer triangles) or ten
+  halvings are spent, so a mesh may keep fewer than three. The bake logs `chain UE, N skipped level(s) replaced by coarser
+  ones`. fast_boat_13 (LOD1-3 all 0.0213 m before; with `lodPermissive` now): 25 / 12.5 / 6.3 % at 0.018 / 0.024 / 0.031 m;
+  Floor_tile_001 (`lodErrorScale` 0.1): one level of 18 triangles, exact. After all of it `--lod-report`: 155 assets, no
+  warning, no skipped level; every bin's LOD0 and vertices byte for byte as before.
+- **A range keeps half its area** (same day, owner: "on small_yacht's last LOD the glass disappears"). With no budget a thin
+  plate is the simplifier's cheapest prey -- its faces meet at the cost of its thickness: the windshield went 2.9 -> 0.027 m2
+  at LOD3, and the measured deviation could not tell (the cabin lies behind the pane; LOD3's 0.215 m was mostly it). A range
+  that keeps under half its area takes twice the triangles until it keeps it (`RangeArea`; not under SimplifyPrune, where a
+  part's vanishing is the point); the bake logs `N range simplification(s) redone to keep half the area`. Hit: small_yacht
+  (LOD3 0.215 -> 0.042 m, the glass whole), the tent, the bathroom's three curtains and two folded towels.
 **A mesh takes a share of the pixel error**: mesh.json `"lodPixelErrorScale"` (Mesh Editor > LOD "Pixel error scale";
 absent = 1; runtime, no rebake) multiplies the frame's pixel error for this asset -- the discrete LODs' (Mesh::
 GetLodScreenSizes) and the cluster DAG's (ShadowGpuData divides the uploaded cluster and level errors by it, so the

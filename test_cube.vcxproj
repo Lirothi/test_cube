@@ -773,6 +773,7 @@
     <ClInclude Include="sources/rendering/meshes/GpuInstancedModels.h" />
     <ClInclude Include="sources/rendering/meshes/InstanceBuffer.h" />
     <ClInclude Include="sources/rendering/meshes/LodSelect.h" />
+    <ClInclude Include="sources/rendering/meshes/LodSwitchReport.h" />
     <ClInclude Include="sources/rendering/meshes/Mesh.h" />
     <ClInclude Include="sources/rendering/meshes/TessyDag.h" />
     <ClInclude Include="sources/rendering/meshes/MeshManager.h" />

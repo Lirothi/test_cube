@@ -1160,6 +1160,38 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         }
     }
 
+    // LOD switching: where each LOD comes in on this screen and what is out of its sane range (read-only). The header
+    // carries the warnings' count, so they show with the section closed.
+    {
+        ImGui::Spacing();
+        bool foliage = false;
+        for (size_t s = 0; s < slots_.size(); ++s) { foliage = foliage || WindFoliageForSlot(s) > 0.0f; }
+        const lodreport::Report report = lodreport::Build(binInfo_, doc_, foliage);
+        char label[96];
+        if (report.warnings.empty()) { std::snprintf(label, sizeof(label), "LOD switching###lodSwitch"); }
+        else
+        {
+            std::snprintf(label, sizeof(label), "LOD switching -- %zu warning%s###lodSwitch", report.warnings.size(),
+                          report.warnings.size() == 1 ? "" : "s");
+        }
+        const bool scrollToLod = expandLodSwitch_;
+        if (expandLodSwitch_)
+        {
+            ImGui::SetNextItemOpen(true);
+            expandLodSwitch_ = false;
+        }
+        if (!report.warnings.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.62f, 0.16f, 1.0f)); }
+        const bool open = ImGui::CollapsingHeader(label);
+        if (!report.warnings.empty()) { ImGui::PopStyleColor(); }
+        if (open)
+        {
+            if (scrollToLod) { ImGui::SetScrollHereY(0.0f); }
+            ImGui::PushTextWrapPos(0.0f);
+            DrawLodSwitchSection(report);
+            ImGui::PopTextWrapPos();
+        }
+    }
+
     // Tessy: what the bake stored for the cluster paths (read-only).
     ImGui::Spacing();
     const bool scrollToTessy = expandTessy_;
@@ -1229,7 +1261,11 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         // Read from the DOC, not from chunkGrid_: that member is zeroed when the .bin on disk is
         // not chunked yet, and the warning is about the intent the manifest already states.
         const int docChunkGrid = doc_.value("chunkGrid", 0);
-        bool lod3Aggr = true;
+        // LOD3's harshness when the manifest does not say: aggressive only for an asset with a foliage slot
+        // (Lod3AggressiveOf, 2026-11-11).
+        bool foliageAsset = false;
+        for (size_t s = 0; s < slots_.size(); ++s) { foliageAsset = foliageAsset || WindFoliageForSlot(s) > 0.0f; }
+        bool lod3Aggr = foliageAsset;
         {
             const auto it = doc_.find("lod3Aggressive");
             if (it != doc_.end() && it->is_boolean()) { lod3Aggr = it->get<bool>(); }
@@ -1251,12 +1287,36 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             "Per-asset multiplier on the DISTANCE at which every LOD switch of this mesh happens.\n"
             "2 = each level starts twice as far away (keeps detail longer), 0.5 = half -- UE's\n"
             "per-component LOD factor. Applies live - no re-import.");
-        lodFloat("LOD pixel error (0 = global)", "lodPixelError", 0.0f, 0.0f, 64.0f, "%.1f px",
-            "UE's reduction PixelError for THIS mesh (0 = the global one, dev window LOD tab, default 8).\n"
-            "With 'UE screen size' on, each LOD's screen size is estimated from its baked deviation:\n"
+        // UE's LOD group (mesh.json "lodGroup", render::kUeLodGroups): its PixelError, unless "lodPixelError" says one.
+        {
+            const std::string group = doc_.value("lodGroup", std::string());
+            ImGui::SetNextItemWidth(150.0f);
+            if (ImGui::BeginCombo("LOD group (UE)", group.empty() ? "None (lod.pixelError)" : group.c_str()))
+            {
+                if (ImGui::Selectable("None (lod.pixelError)", group.empty())) { doc_.erase("lodGroup"); }
+                for (const render::UeLodGroup& g : render::kUeLodGroups)
+                {
+                    char label[64];
+                    std::snprintf(label, sizeof(label), "%s (PixelError %.0f)", g.name, static_cast<double>(g.pixelError));
+                    if (ImGui::Selectable(label, group == g.name)) { doc_["lodGroup"] = g.name; }
+                    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("%s", g.hint); }
+                }
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("UE's static-mesh LOD group (BaseEngine.ini [StaticMeshLODSettings]): the PixelError its\n"
+                                  "LODs switch at -- SmallProp / LargeProp / Deco 10, LevelArchitecture 12, HighDetail 6;\n"
+                                  "None = lod.pixelError (UE's 8). 'LOD pixel error' below overrides it. Every non-foliage\n"
+                                  "asset bakes UE's chain (each level half the triangles). Applies live - no re-import.");
+            }
+        }
+        lodFloat("LOD pixel error (0 = group / global)", "lodPixelError", 0.0f, 0.0f, 64.0f, "%.1f px",
+            "UE's reduction PixelError for THIS mesh (0 = its LOD group's, else lod.pixelError, UE's 8).\n"
+            "With 'UE screen size' on, each LOD's screen size is estimated from its measured deviation:\n"
             "the level switches in where that deviation spans this many pixels at 1080p, 90 deg.\n"
-            "Higher = coarser sooner. mesh.json \"lodScreenSize\" (authored, LOD0 first) replaces the\n"
-            "estimate altogether. Applies live - no re-import.");
+            "Higher = coarser sooner; lower = later (the bathroom's props: 1, seen at arm's length).\n"
+            "mesh.json \"lodScreenSize\" (authored, LOD0 first) replaces the estimate. Applies live.");
 
         // UE's per-LOD ScreenSize, AUTHORED (mesh.json "lodScreenSize", LOD0 first; UE's
         // bAutoComputeLODScreenSize off). Unticked, the mesh takes what the line below the box says:
@@ -1264,7 +1324,8 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
         {
             bool foliage = false;
             for (size_t s = 0; s < slots_.size(); ++s) { foliage = foliage || WindFoliageForSlot(s) > 0.0f; }
-            float pixelError = render::g_lodPixelError;
+            float pixelError = render::g_lodPixelError_game;
+            if (const float g = render::UeLodGroupPixelError(doc_.value("lodGroup", std::string())); g > 0.0f) { pixelError = g; }
             if (const auto it = doc_.find("lodPixelError"); it != doc_.end() && it->is_number() && it->get<float>() > 0.0f)
             {
                 pixelError = it->get<float>();
@@ -1370,9 +1431,12 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
 
         ImGui::SeparatorText("Every level (LOD1-3)");
         lodFloat("Triangle target", "lodRatioScale", 1.0f, 0.25f, 4.0f, "x%.2f",
-            "Chain-wide multiplier over the 0.5/0.25/0.12 per-level triangle targets.");
-        lodFloat("Error budget", "lodErrorScale", 1.0f, 0.25f, 4.0f, "x%.2f",
-            "Chain-wide multiplier over the 0.02/0.05/0.12 per-level error budgets.");
+            "Chain-wide multiplier over the per-level triangle targets: 50 / 25 / 12.5 % of LOD0 (UE's chain,\n"
+            "every asset with no foliage slot), 50 / 25 / 12 % (foliage, terrain).");
+        lodFloat("Error budget", "lodErrorScale", 1.0f, 0.01f, 4.0f, "x%.2f",
+            "UE's chain (no foliage slot): a CAP on the simplifier's error, a share of the mesh's size -- 1 = none\n"
+            "(UE's MaxDeviation 0), 0.1 = a tenth: the cure for one collapse that ruins a level (the LOD switching\n"
+            "section says when). Foliage and terrain: a multiplier over their 0.02 / 0.05 / 0.12 budgets.");
         lodFloat("Normal weight", "lodNormalWeight", 0.0f, 0.0f, 2.0f, "%.2f",
             "Attribute-aware simplification on EVERY slot, weighting the NORMAL. LODs are index\n"
             "buffers over ONE shared vertex buffer, so a surviving vertex keeps the normal that was\n"
@@ -1389,10 +1453,13 @@ void MeshEditorPanel::Draw(EditorContext& ctx, AssetRegistry& registry, bool* op
             "meshopt_SimplifyPrune. Removes whole loose components once their removal\n"
             "fits the error budget.");
         ImGui::SeparatorText("LOD3 only (the last, harshest level)");
-        lodBool("Aggressive LOD3", "lod3Aggressive", true,
-            "The LAST level cuts hard: solid slots to ~5%% at a loose budget, foliage via the\n"
-            "leaf prune. TURN OFF FOR TERRAIN - far shadow casters are tuned against\n"
-            "low-sun banding.");
+        lodBool("Aggressive LOD3", "lod3Aggressive", foliageAsset,
+            "The LAST level cuts hard: solid slots to ~5% at a loose budget (0.25 of the mesh's size),\n"
+            "foliage via the leaf prune. Off: 12% at the 0.12 budget, as LODs 1-2 (UE's chain halves to\n"
+            "12.5% with no budget). Unticked by default unless the asset has leaf-card slots (a tree's\n"
+            "LOD3 switches by the distance/radius curve; anything else's by its deviation, and the harsh\n"
+            "budget put a boat's LOD3 kilometres out). Matching the default writes nothing.\n"
+            "Terrain: off.");
         // Both scale LOD3's AGGRESSIVE bases and are read nowhere else, so with the toggle off they
         // are inert. Greyed rather than hidden: the value still round-trips through mesh.json.
         ImGui::BeginDisabled(!lod3Aggr);
@@ -1701,6 +1768,98 @@ void MeshEditorPanel::DrawVesselSection()
         float value = settings.*(key.member);
         if (ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, "%.3f")) { block[key.key] = value; }
     }
+}
+
+// LOD switching: the report (rendering/meshes/LodSwitchReport.h, the importer's too) as a table and its warnings with what
+// to do about each.
+void MeshEditorPanel::DrawLodSwitchSection(const lodreport::Report& report)
+{
+    if (report.rows.empty())
+    {
+        ImGui::TextDisabled("No LODs: the mesh is under 128 triangles, or not baked yet (Save bakes it).");
+        return;
+    }
+    ImGui::TextWrapped("%s", report.method.c_str());
+    ImGui::TextDisabled("%s", report.context.c_str());
+    ImGui::PushTextWrapPos(-1.0f);
+    if (ImGui::BeginTable("##lodSwitch", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit))
+    {
+        ImGui::TableSetupColumn("LOD");
+        ImGui::TableSetupColumn("Tris");
+        ImGui::TableSetupColumn("Dev, m");
+        ImGui::TableSetupColumn("Screen");
+        ImGui::TableSetupColumn("From");
+        ImGui::TableSetupColumn("Mesh px");
+        ImGui::TableSetupColumn("Dev px");
+        ImGui::TableHeadersRow();
+        for (size_t i = 0; i < report.rows.size(); ++i)
+        {
+            const lodreport::Row& row = report.rows[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::Text("%zu", i);
+            ImGui::TableNextColumn(); ImGui::Text("%u", row.tris);
+            if (i > 0 && report.rows[0].tris > 0 && ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%.0f %% of LOD0, %.0f %% of LOD%zu", 100.0 * row.tris / report.rows[0].tris,
+                                  report.rows[i - 1].tris ? 100.0 * row.tris / report.rows[i - 1].tris : 0.0, i - 1);
+            }
+            ImGui::TableNextColumn();
+            if (i == 0) { ImGui::TextDisabled("-"); } else { ImGui::Text("%.4f", static_cast<double>(row.deviation)); }
+            ImGui::TableNextColumn();
+            if (i == 0 || row.screenSize <= 0.0f) { ImGui::TextDisabled("-"); }
+            else { ImGui::Text("%.4f", static_cast<double>(row.screenSize)); }
+            ImGui::TableNextColumn();
+            if (i == 0 || !report.switches) { ImGui::TextDisabled(i == 0 ? "0" : "per chunk"); }
+            else if (row.skipped)
+            {
+                ImGui::TextDisabled("skipped");
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("LOD%zu comes in at %s together with LOD%zu, so it is never drawn: both deviate alike (a part\n"
+                                      "both lose decides it, or they are the same triangles). Harmless -- it costs its index\n"
+                                      "buffer only.", i, lodreport::Metres(row.distance).c_str(), i + 1);
+                }
+            }
+            else { ImGui::TextUnformatted(lodreport::Metres(row.distance).c_str()); }
+            ImGui::TableNextColumn();
+            if (i == 0 || !report.switches || row.meshPx <= 0.0f) { ImGui::TextDisabled("-"); }
+            else { ImGui::Text("%.1f", static_cast<double>(row.meshPx)); }
+            ImGui::TableNextColumn();
+            if (i == 0 || !report.switches || row.meshPx <= 0.0f) { ImGui::TextDisabled("-"); }
+            else { ImGui::Text("%.2f", static_cast<double>(row.popPx)); }
+        }
+        ImGui::EndTable();
+    }
+    ImGui::PopTextWrapPos();
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("One copy at scale 1 (a larger copy switches proportionally farther), on UE's reference view\n"
+                          "(1920 x 1080, 90 degrees). Dev = how far this LOD's surface lies from LOD0's at worst (measured\n"
+                          "at the bake). Screen = UE's screen size. From = the camera's distance to the copy's centre where\n"
+                          "this LOD is first drawn (UE's temporal dither fades it in over lod.temporalLag). Mesh px = the\n"
+                          "bounding sphere's diameter there, 1080p pixels; Dev px = the deviation there -- the pop.");
+    }
+    if (report.warnings.empty())
+    {
+        ImGui::TextDisabled("No warnings.");
+        return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.62f, 0.16f, 1.0f));
+    for (const lodreport::Warning& w : report.warnings)
+    {
+        ImGui::Bullet();
+        ImGui::SameLine();
+        ImGui::TextUnformatted(w.text.c_str());
+        if (!w.fix.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::Indent();
+            ImGui::TextUnformatted(("Fix: " + w.fix).c_str());
+            ImGui::Unindent();
+            ImGui::PopStyleColor();
+        }
+    }
+    ImGui::PopStyleColor();
 }
 
 // Tessy (docs/tessy_plan.md): every bake stores each LOD cut into clusters (<= 128 triangles) and, from v5 on, the cluster
@@ -2029,6 +2188,7 @@ bool MeshEditorPanel::BuildPreviewLighting(EditorContext& ctx,
         if (skybox->HasEnvironment())
         {
             for (ID3D12Resource* resource : skybox->EnvironmentResources()) { addResource(resource); }
+            out.environmentRevision = skybox->EnvironmentRevision(); // its content moves behind the same resources
         }
         else
         {

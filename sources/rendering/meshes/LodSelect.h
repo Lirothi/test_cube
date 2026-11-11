@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include "core/math/AABB.h"
 #include "core/math/Math.h"
 #include "core/threading/Knob.h" // game thread plan G5: knobs with a game twin
@@ -243,28 +244,48 @@ inline void UpdateLodFovScale(float hfovRadians)
 // Both methods feed the SAME selector below as per-object distance/radius BOUNDS:
 //     SS <= T  <=>  D / R >= 2 * M / T,   M = max(0.5 P[0][0], 0.5 P[1][1]).
 //
-// THE SCREEN IS THE ONE BEING LOOKED AT (2026-10-24). UE fixes the projection of that estimate at 1920x1080 / 90
-// degrees (the 960 above) and PixelError at 8: eight pixels of a 1080p screen, a visible pop by design, and calibrated
-// against UE's own deviation metric, which reads small. Ours is meshopt's distance, and at 8 the_bathroom_free's props
-// switched in arm's reach -- LOD1 from a median 1.6 m, 36 of its 100 meshes inside 1 m, the candles at 0.37 m, where
-// their 0.9 mm is 3 pixels of a 1440p screen (owner: "the LODs in the room still switch very close"). So the
-// deviation is projected through THIS frame's camera onto THIS screen -- pixels per unit at depth 1 =
-// 0.5 * output width * P[0][0] (g_lodPixelsPerUnit: 1280 at 2560 wide and 90 degrees, UE's 960 at 1920) -- the
-// screen size is taken with this frame's multiple too, so the switch lands at exactly ViewDistance + R whatever
-// the field of view, and lod.pixelError is in those pixels, default 1: a LOD comes in where its worst deviation
-// spans one pixel of the screen it is seen on. The OUTPUT width, not DLSS's input: a pop is seen on the output.
+// UE'S REFERENCE SCREEN AGAIN (2026-11-11, owner: "fully UE, and push the small meshes' threshold by hand so the bathroom
+// stays right"). From 2026-10-24 to 2026-11-11 the deviation was projected through THIS frame's camera onto THIS screen
+// at 1 px (g_lodPixelsPerUnit), because at UE's 8 the_bathroom_free's props switched in arm's reach -- with meshopt's
+// error then. Now the estimate is UE's: 1920 x 1080 at 90 degrees (960 px per unit, screen multiple 0.889), PixelError
+// in those pixels -- g_lodPixelError (lod.pixelError) 8, UE's FMeshReductionSettings default, or the asset's LOD group's
+// (UeLodGroupPixelError: UE's BaseEngine.ini [StaticMeshLODSettings]), or its own "lodPixelError" (the bathroom's 1:
+// its rooms are seen at arm's length). The deviation is MEASURED (MeshManager.cpp MeasureLodDeviation), where UE's is
+// sqrt(quadric) / 8. The selection still takes the frame's own screen multiple, as UE's ComputeBoundsScreenSize does,
+// so the switch distance follows the field of view and not the resolution.
 inline bool g_lodUeScreenSize = true;       // false = the global distance/radius bounds g_lodBound0..2
 inline bool g_lodUeScreenSize_game = true;
 inline const bool g_lodUeScreenSize_knob = ::knob::Register(g_lodUeScreenSize_game, g_lodUeScreenSize, "render::g_lodUeScreenSize");
-inline float g_lodPixelError = 1.0f;        // pixels of THIS screen (UE's PixelError: 1080p pixels, 8)
-inline float g_lodPixelError_game = 1.0f;
+inline float g_lodPixelError = 8.0f;        // UE's PixelError: pixels of a 1920 x 1080, 90-degree screen (UE's default 8)
+inline float g_lodPixelError_game = 8.0f;
 inline const bool g_lodPixelError_knob = ::knob::Register(g_lodPixelError_game, g_lodPixelError, "render::g_lodPixelError");
 inline float g_lodDistanceScale = 1.0f;     // UE r.StaticMeshLODDistanceScale
 inline float g_lodDistanceScale_game = 1.0f;
 inline const bool g_lodDistanceScale_knob = ::knob::Register(g_lodDistanceScale_game, g_lodDistanceScale, "render::g_lodDistanceScale");
 inline float g_lodScreenMultiple = 0.8889f; // max(0.5 P[0][0], 0.5 P[1][1]) of this frame's camera
-inline float g_lodPixelsPerUnit = 960.0f;   // 0.5 * output width * P[0][0] of this frame (UE's fixed 960)
+inline float g_lodPixelsPerUnit = 960.0f;   // 0.5 * output width * P[0][0] of this frame (the DAG's cut; the UI's px)
 inline constexpr unsigned int kLodScreenSizes = 4u; // LOD0..3, the most any mesh bakes
+// UE's reference screen for the automatic screen sizes (StaticMesh.cpp CalculateViewDistance / ResolveSectionInfo):
+// 1920 x 1080 at a 90-degree horizontal field of view.
+inline constexpr float kUeLodPixelsPerUnit = 960.0f;   // 0.5 x 1920 x P[0][0] (1)
+inline constexpr float kUeLodScreenMultiple = 0.8889f; // max(0.5 x 1, 0.5 x 1920 / 1080)
+
+// UE's LOD groups (BaseEngine.ini [StaticMeshLODSettings]): mesh.json "lodGroup" names one and takes its PixelError; every
+// group halves the triangles a level (LODPercentTriangles=50), which the bake does for every non-foliage asset anyway.
+// Returns 0 for an unknown or empty name (the global PixelError). Foliage and Vista generate no LODs in UE and are not here.
+struct UeLodGroup { const char* name; float pixelError; const char* hint; };
+inline constexpr UeLodGroup kUeLodGroups[] = {
+    { "SmallProp", 10.0f, "Small props seen from a distance (UE: LODPercentTriangles 50, PixelError 10)" },
+    { "LargeProp", 10.0f, "Large props: boats, furniture, vehicles (UE: PixelError 10)" },
+    { "Deco", 10.0f, "Decoration (UE: PixelError 10)" },
+    { "LevelArchitecture", 12.0f, "Walls, floors, buildings (UE: PixelError 12, SilhouetteImportance 4)" },
+    { "HighDetail", 6.0f, "Hero assets seen close (UE: PixelError 6)" },
+};
+inline float UeLodGroupPixelError(const std::string& name)
+{
+    for (const UeLodGroup& g : kUeLodGroups) { if (name == g.name) { return g.pixelError; } }
+    return 0.0f;
+}
 
 // Once per frame from the camera's projection (unjittered), before selection -- UpdateLodFovScale's
 // sibling.
@@ -328,9 +349,9 @@ inline void AutoLodScreenSizes(const float* deviation, unsigned int count, float
             if (deviation[i] <= 0.0f || sphereRadius <= 1e-6f) { ss = std::pow(kPowerBase, static_cast<float>(i)); }
             else
             {
-                // This screen's pixels and this frame's multiple (see the block above): switches at viewDistance + R.
-                const float viewDistance = deviation[i] * g_lodPixelsPerUnit / pe;
-                ss = 2.0f * g_lodScreenMultiple * sphereRadius / std::max(viewDistance + sphereRadius, 1e-2f);
+                // UE's reference screen (see the block above): ComputeBoundsScreenSize at ViewDistance + R, 1920 x 1080.
+                const float viewDistance = deviation[i] * kUeLodPixelsPerUnit / pe;
+                ss = 2.0f * kUeLodScreenMultiple * sphereRadius / std::max(viewDistance + sphereRadius, 1e-2f);
             }
             if (ss > out[i - 1u]) { ss = out[i - 1u] * 0.5f; } // screen-size coherence between LODs
         }

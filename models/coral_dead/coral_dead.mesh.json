@@ -1,6 +1,7 @@
 {
   "bakeScale": 0.04779484495520592,
   "geometry": "models/coral_dead/coral_dead.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "coral_dead_0",
   "source": "import_staging\\coral_dead\\scene.gltf",
   "uvDensity": [

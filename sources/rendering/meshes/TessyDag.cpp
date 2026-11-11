@@ -84,6 +84,8 @@ Mesh::Cluster MakeCluster(const std::vector<VertexPNTUV>& verts, const std::vect
     return c;
 }
 
+} // namespace
+
 // Double-sided geometry built of DUPLICATES: every triangle has a back twin -- the same three positions, the opposite
 // winding (date_palm's and curly_palm's fronds, curly_palm's frond boots: Sketchfab's exporter doubles a two-sided
 // card). meshoptimizer sees every edge of such a sheet shared by four triangles, calls its vertices complex and never
@@ -91,18 +93,11 @@ Mesh::Cluster MakeCluster(const std::vector<VertexPNTUV>& verts, const std::vect
 // once at 1.05 m of error, and the camera drew all 5600 triangles out to ~1.3 km. Folded, the DAG grows over the front
 // triangles alone (a manifold sheet, collapsed like coconut_palm's single-sided fronds) and every emitted cluster carries
 // the twins of its triangles, rebuilt from each front vertex's back vertex at the same position.
-struct Fold
-{
-    bool on = false;
-    std::vector<uint32_t> fronts;                    // one triangle of each pair (mesh-VB indices)
-    std::unordered_map<uint32_t, uint32_t> backOf;   // a front vertex -> its twin's vertex at the same position
-};
-
 // Folds [first, first + count) of `idx` when EVERY triangle has a back twin (a sheet only partly doubled stays as it is:
 // a twin rebuilt for an unpaired triangle would be a face the asset does not have).
-Fold FoldTwins(const std::vector<uint32_t>& idx, size_t first, size_t count, const std::vector<unsigned int>& posOf)
+TwinFold FoldTwins(const std::vector<uint32_t>& idx, size_t first, size_t count, const std::vector<unsigned int>& posOf)
 {
-    Fold f;
+    TwinFold f;
     const size_t tris = count / 3u;
     if (tris < 2u) { return f; }
     // Per oriented triangle (its positions rotated to start at the smallest), the triangles still waiting for a twin.
@@ -141,7 +136,6 @@ Fold FoldTwins(const std::vector<uint32_t>& idx, size_t first, size_t count, con
     }
     return f;
 }
-} // namespace
 
 bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>& lod0Indices,
               const std::vector<Mesh::Cluster>& lod0Clusters, const std::vector<Mesh::Submesh>& lod0Submeshes,
@@ -197,7 +191,7 @@ bool BuildDag(const std::vector<VertexPNTUV>& verts, const std::vector<uint32_t>
         ds.firstLevel = static_cast<uint32_t>(out.levels.size());
         const size_t subFirst = std::min<size_t>(s.indexOffset, lod0Indices.size());
         const size_t subCount = std::min<size_t>(s.indexCount, lod0Indices.size() - subFirst);
-        const Fold fold = params.foldTwins ? FoldTwins(lod0Indices, subFirst, subCount, posOf) : Fold{};
+        const TwinFold fold = params.foldTwins ? FoldTwins(lod0Indices, subFirst, subCount, posOf) : TwinFold{};
         CutLimits lim;
         if (fold.on)
         {

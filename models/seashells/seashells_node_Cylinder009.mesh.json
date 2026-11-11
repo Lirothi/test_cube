@@ -1,6 +1,7 @@
 {
   "bakeScale": 0.0001767773210303858,
   "geometry": "models/seashells/seashells_node_Cylinder009.mesh.bin",
+  "lodGroup": "SmallProp",
   "material": "seashells_Cylinder009_0",
   "pivot": "base",
   "restRotationDeg": [

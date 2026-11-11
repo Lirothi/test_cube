@@ -1,5 +1,6 @@
 {
   "geometry": "models/fishing_boat/fishing_boat.mesh.bin",
+  "lodGroup": "LargeProp",
   "materials": [
     "fishing_boat_0",
     "fishing_boat_1",
