@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -628,75 +629,21 @@ namespace
                 asset.frame = ImGui::GetFrameCount();
                 asset.settings = SetVesselTuneCommand::AssetSettings(obj);
             }
-            // A drag in progress: the number its row shows and the card counts on until it is let go (one undo entry then).
+            // A drag in progress, one number (`key`) or one bar of the card (`bar` >= 0, with the numbers SolveCard found): what
+            // the rows show and the card counts on until it is let go (one undo entry then).
             struct Pending
             {
                 std::uint64_t object = 0;
                 const physics::VesselKey* key = nullptr;
                 float value = 0.0f;
+                int bar = -1;
+                physics::VesselSettings solved;
             };
             static Pending pending;
-            if (pending.key && pending.object != obj.id.value) { pending = Pending{}; }
-            physics::VesselSettings shown = *live;
+            if ((pending.key || pending.bar >= 0) && pending.object != obj.id.value) { pending = Pending{}; }
+            physics::VesselSettings shown = pending.bar >= 0 ? pending.solved : *live;
             if (pending.key) { shown.*(pending.key->member) = pending.value; }
 
-            // The card: the hull's length and where its rudder pushes are the physics world's (its body is built in the editor too).
-            float halfLength = 0.0f;
-            float rudderLever = 0.0f;
-            {
-                std::vector<physics::VesselHull> hulls;
-                ctx.scene.Physics().CollectHulls(hulls);
-                for (const physics::VesselHull& hull : hulls)
-                {
-                    if (hull.object == object)
-                    {
-                        halfLength = hull.halfLength;
-                        rudderLever = hull.rudderLever;
-                    }
-                }
-            }
-            if (halfLength > 0.0f && ImGui::BeginTable("##boatCard", 3, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
-            {
-                const game::VesselStats now = game::StatsOf(shown, halfLength, rudderLever);
-                const game::VesselStats was = game::StatsOf(asset.settings, halfLength, rudderLever);
-                ImGui::TableSetupColumn("What it does");
-                ImGui::TableSetupColumn("This boat");
-                ImGui::TableSetupColumn("Its asset");
-                ImGui::TableHeadersRow();
-                const auto row = [](const char* what, const char* format, float value, float assetValue)
-                {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn();
-                    ImGui::TextUnformatted(what);
-                    ImGui::TableNextColumn();
-                    const bool differs = std::fabs(value - assetValue) > 0.0005f * std::max(std::fabs(assetValue), 1.0f);
-                    if (differs) { ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.3f, 1.0f), format, value); }
-                    else { ImGui::Text(format, value); }
-                    ImGui::TableNextColumn();
-                    ImGui::TextDisabled(format, assetValue);
-                };
-                row("Top speed", "%.1f kn", now.topSpeed * 1.94384f, was.topSpeed * 1.94384f);
-                row("0 to 20 kn", "%.1f s", now.toPlane, was.toPlane);
-                row("Tightest circle", "%.0f m", 2.0f * now.turnRadius, 2.0f * was.turnRadius);
-                row("  at", "%.1f kn", now.turnSpeed * 1.94384f, was.turnSpeed * 1.94384f);
-                row("  across its way", "%.2f m/s2", now.lateralAccel, was.lateralAccel);
-                row("Engine off, it slows", "%.2f m/s2", now.braking, was.braking);
-                row("Weight", "%.2f t", now.mass * 0.001f, was.mass * 0.001f);
-                ImGui::EndTable();
-                if (ImGui::IsItemHovered())
-                {
-                    ImGui::SetTooltip(
-                        "game::StatsOf, from the numbers below: the boat's card in Play shows the same, and a race bot at its helm\n"
-                        "counts on it -- its bends at a share of the across, its braking for them, its top speed, its circle.\n"
-                        "On the water the sea takes some of it: a light hull in the air has no keel and no rudder.");
-                }
-            }
-            else if (halfLength <= 0.0f)
-            {
-                ImGui::TextDisabled("No card: not a boat now (Body Dynamic and floating make it one).");
-            }
-
-            // The numbers, by group. Accent = this boat's own; the button before it puts the asset's back.
             const auto selectedBoats = [&ctx, &obj]()
             {
                 std::vector<EditorObjectId> ids;
@@ -719,12 +666,121 @@ namespace
                 if (!composite->Empty()) { commandStack.Execute(ctx, std::move(composite)); }
             };
             const ImVec4 accent(1.0f, 0.78f, 0.3f, 1.0f);
+
+            // The card's four bars, as the player reads them over the boat in Play -- and dragged as they read (owner: "I
+            // want to drag these characteristics; if one moves a set of parameters, that must happen by itself"). Each has
+            // its number (game::SolveCard), the other three are held: a heavier boat gets the thrust and the rudder that
+            // keep its acceleration and its circle.
+            SetVesselTuneCommand::HullShape shape;
+            if (!SetVesselTuneCommand::ShapeOf(ctx, obj.id, shape))
+            {
+                ImGui::TextDisabled("No card: not a boat now (Body Dynamic and floating make it one).");
+            }
+            else if (ImGui::BeginTable("##boatCard", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg))
+            {
+                const game::VesselCard now = game::CardOf(shown, shape.halfLength, shape.rudderLever, shape.draft);
+                const game::VesselCard live0 = game::CardOf(*live, shape.halfLength, shape.rudderLever, shape.draft);
+                const game::VesselCard was = game::CardOf(asset.settings, shape.halfLength, shape.rudderLever, shape.draft);
+                // The Inspector is narrow: the names keep their width, the values are short (the tooltip says what each is).
+                ImGui::TableSetupColumn("The card", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Sea keeping").x + 4.0f);
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthStretch, 0.6f);
+                ImGui::TableSetupColumn("This boat", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableSetupColumn("Asset", ImGuiTableColumnFlags_WidthStretch, 0.7f);
+                ImGui::TableHeadersRow();
+                struct Bar
+                {
+                    const char* name;
+                    unsigned bit;
+                    float scale;     // the card's unit per the model's
+                    float lo, hi, speed;
+                    const char* format;
+                    const char* hint;
+                };
+                const float leastSea = 100.0f * (game::SeaKeeping(150.0f, shape.draft));
+                const Bar bars[] = {
+                    { "Top speed", SetVesselTuneCommand::kCardTopSpeed, 1.94384f, 22.0f, 80.0f, 0.05f, "%.1f kn",
+                      "Flat out. Moves the drag ahead (and the thrust, to keep its acceleration). The bot runs its straights at it." },
+                    { "Acceleration", SetVesselTuneCommand::kCardToPlane, 1.0f, 1.0f, 30.0f, 0.01f, "%.1f s",
+                      "Seconds from rest to 20 kn, full ahead (the card: \"20 kn in ... s\"). Moves the thrust (and the drag ahead\n"
+                      "with it, to keep its top speed): more power, a quicker start, harder braking for the bends." },
+                    { "Handling", SetVesselTuneCommand::kCardCircle, 1.0f, 15.0f, 400.0f, 0.2f, "%.0f m",
+                      "Metres across its tightest circle, hard over, full ahead (the card: \"a ... m circle\"). Moves the rudder\n"
+                      "force. The bot takes its bends at a share of what this circle asks across its way: tighter, faster bends." },
+                    { "Sea keeping", SetVesselTuneCommand::kCardSeaKeeping, 100.0f, leastSea, 200.0f, 0.2f, "%.0f %%",
+                      "Half its draft (the hull's: Mesh Editor), half its weight. Moves the mass -- a heavier boat is thrown\n"
+                      "about less by the waves -- and the thrust and the rudder with it, to keep the other three bars." },
+                };
+                const float values[] = { now.topSpeed, now.toPlane, now.circle, now.seaKeeping };
+                const float current[] = { live0.topSpeed, live0.toPlane, live0.circle, live0.seaKeeping };
+                const float assets[] = { was.topSpeed, was.toPlane, was.circle, was.seaKeeping };
+                const float shares[] = { game::TopSpeedBar(now.topSpeed), game::AccelerationBar(now.toPlane), game::HandlingBar(now.circle), now.seaKeeping };
+                for (int i = 0; i < 4; ++i)
+                {
+                    const Bar& bar = bars[i];
+                    ImGui::PushID(i);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::AlignTextToFramePadding();
+                    ImGui::TextUnformatted(bar.name);
+                    ImGui::TableNextColumn();
+                    ImGui::ProgressBar(std::clamp(shares[i], 0.02f, 1.0f), ImVec2(-FLT_MIN, 0.0f), "");
+                    ImGui::TableNextColumn();
+                    float value = values[i] * bar.scale;
+                    const bool differs = std::fabs(values[i] - assets[i]) > 0.002f * std::max(std::fabs(assets[i]), 0.01f);
+                    if (differs) { ImGui::PushStyleColor(ImGuiCol_Text, accent); }
+                    ImGui::SetNextItemWidth(-FLT_MIN);
+                    if (ImGui::DragFloat("##bar", &value, bar.speed, bar.lo, bar.hi, bar.format, ImGuiSliderFlags_AlwaysClamp))
+                    {
+                        // Solve again only when the bar moved: SolveCard runs the model some 50 times.
+                        game::VesselCard want{ current[0], current[1], current[2], current[3] };
+                        float* const slot[] = { &want.topSpeed, &want.toPlane, &want.circle, &want.seaKeeping };
+                        *slot[i] = value / bar.scale;
+                        pending = Pending{};
+                        pending.object = obj.id.value;
+                        pending.bar = i;
+                        pending.value = value / bar.scale;
+                        pending.solved = *live;
+                        game::SolveCard(pending.solved, shape.halfLength, shape.rudderLever, shape.draft, want);
+                    }
+                    if (differs) { ImGui::PopStyleColor(); }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("%s\n\nCtrl+click types a number. MCP: run_action setBoatCard {topSpeedKn, secondsTo20Kn, circleM, seaKeeping}", bar.hint);
+                    }
+                    if (ImGui::IsItemDeactivatedAfterEdit() && pending.bar == i)
+                    {
+                        // Every selected boat, each solved from its own numbers, one undo entry.
+                        game::VesselCard want;
+                        float* const slot[] = { &want.topSpeed, &want.toPlane, &want.circle, &want.seaKeeping };
+                        *slot[i] = pending.value;
+                        std::vector<std::unique_ptr<SetVesselTuneCommand>> commands;
+                        for (const EditorObjectId id : selectedBoats())
+                        {
+                            for (std::unique_ptr<SetVesselTuneCommand>& command : SetVesselTuneCommand::Card(ctx, id, want, bar.bit)) { commands.push_back(std::move(command)); }
+                        }
+                        pending = Pending{};
+                        runAll((std::string("Boat: ") + bar.name).c_str(), std::move(commands));
+                    }
+                    else if (pending.bar == i && !ImGui::IsItemActive())
+                    {
+                        pending = Pending{};
+                    }
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled(bar.format, static_cast<double>(assets[i] * bar.scale));
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+                ImGui::TextDisabled("%.2f t, %.0f kN, %.2f m deep", shown.mass * 0.001f, shown.thrust * 0.001f, shape.draft);
+            }
+
+            // The numbers themselves, by group. Accent = this boat's own; the button before it puts the asset's back.
+            ImGui::TextDisabled("The numbers behind it");
             const float resetWidth = ImGui::GetFrameHeight();
             bool anyOwn = false;
             for (const physics::VesselGroup group : { physics::VesselGroup::Engine, physics::VesselGroup::Hull, physics::VesselGroup::Helm,
                      physics::VesselGroup::Turn, physics::VesselGroup::Sea })
             {
-                ImGui::SetNextItemOpen(group <= physics::VesselGroup::Helm, ImGuiCond_Once);
+                ImGui::SetNextItemOpen(false, ImGuiCond_Once); // the card above is the casual edit
                 const bool open = ImGui::TreeNode(physics::VesselGroupName(group));
                 for (const physics::VesselKey& key : physics::VesselKeys())
                 {
@@ -749,7 +805,7 @@ namespace
                     }
                     ImGui::SameLine();
                     const bool editing = pending.key == &key;
-                    float value = editing ? pending.value : live->*(key.member);
+                    float value = editing ? pending.value : shown.*(key.member); // a bar dragged above: what it moves, live
                     if (own) { ImGui::PushStyleColor(ImGuiCol_Text, accent); }
                     if (ImGui::DragFloat(key.label, &value, key.speed, key.lo, key.hi, key.hi >= 1000.0f ? "%.0f" : "%.3f", ImGuiSliderFlags_AlwaysClamp))
                     {

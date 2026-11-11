@@ -328,18 +328,18 @@ void PlaySession::DrawBoatCard(Scene& scene)
         };
         char value[64];
         std::snprintf(value, sizeof(value), "%.0f kn", stats.topSpeed * 1.94384f);
-        row("Top speed", stats.topSpeed * 1.94384f / 45.0f, value);
+        row("Top speed", game::TopSpeedBar(stats.topSpeed), value);
         std::snprintf(value, sizeof(value), "20 kn in %.1f s", stats.toPlane);
-        row("Acceleration", (7.0f - stats.toPlane) / 5.0f, value);
+        row("Acceleration", game::AccelerationBar(stats.toPlane), value);
         std::snprintf(value, sizeof(value), "a %.0f m circle", 2.0f * stats.turnRadius);
-        row("Handling", (95.0f - stats.turnRadius) / 75.0f, value);
+        row("Handling", game::HandlingBar(2.0f * stats.turnRadius), value);
         // In a sea: how deep it sits and how heavy it is, half each. A hull is out of the water -- no keel, no rudder --
         // when a wave has dropped away by about its draft (wind_test's open leg: 0.71 m is out 1-11 % of the time, 0.38-0.39 m
         // 17-22 %), and a wave throws a light hull further (its roll there: 1.9 t 15 degrees, past 15 a third of the time;
         // 5.5 and 7.5 t 9 degrees, 6-8 %). By the draft alone the light boat's bar was the yacht's.
         const float draft = stats.draft * hull->scale.y;
         std::snprintf(value, sizeof(value), "%.1f t, %.2f m deep", stats.mass * 0.001f, draft);
-        row("Sea keeping", 0.5f * draft / 0.8f + 0.5f * stats.mass / 8000.0f, value);
+        row("Sea keeping", game::SeaKeeping(stats.mass, draft), value);
         ImGui::Separator();
         if (vessel == nearest) { ImGui::TextUnformatted("E   take the helm"); }
         else { ImGui::TextDisabled("Come alongside for the helm (E)"); }

@@ -80,6 +80,49 @@ physics::VesselSettings SetVesselTuneCommand::EffectiveSettings(const EditorObje
     return Resolved(obj.properties, nullptr);
 }
 
+bool SetVesselTuneCommand::ShapeOf(EditorContext& ctx, EditorObjectId id, HullShape& out)
+{
+    RenderableObjectBase* base = ctx.scene.FindEditorObject(id.value);
+    const RenderableObject* object = base ? base->AsRenderableObject() : nullptr;
+    if (!object) { return false; }
+    std::vector<physics::VesselHull> hulls;
+    ctx.scene.Physics().CollectHulls(hulls);
+    for (const physics::VesselHull& hull : hulls)
+    {
+        if (hull.object != object || !hull.settings) { continue; }
+        out.halfLength = hull.halfLength;
+        out.rudderLever = hull.rudderLever;
+        out.draft = hull.settings->draft * hull.scale.y;
+        return true;
+    }
+    return false;
+}
+
+std::vector<std::unique_ptr<SetVesselTuneCommand>> SetVesselTuneCommand::Card(EditorContext& ctx, EditorObjectId id, const game::VesselCard& want,
+                                                                                unsigned which, game::VesselCard* reached)
+{
+    std::vector<std::unique_ptr<SetVesselTuneCommand>> commands;
+    if (reached) { *reached = game::VesselCard{}; }
+    const EditorObject* obj = ctx.document.Find(id);
+    HullShape shape;
+    if (!obj || !ShapeOf(ctx, id, shape)) { return commands; }
+    const physics::VesselSettings now = EffectiveSettings(*obj);
+    game::VesselCard target = game::CardOf(now, shape.halfLength, shape.rudderLever, shape.draft);
+    if (which & kCardTopSpeed) { target.topSpeed = want.topSpeed; }
+    if (which & kCardToPlane) { target.toPlane = want.toPlane; }
+    if (which & kCardCircle) { target.circle = want.circle; }
+    if (which & kCardSeaKeeping) { target.seaKeeping = want.seaKeeping; }
+    physics::VesselSettings solved = now;
+    const game::VesselCard got = game::SolveCard(solved, shape.halfLength, shape.rudderLever, shape.draft, target);
+    if (reached) { *reached = got; }
+    for (const char* name : { "mass", "thrust", "surgeDrag", "rudderForce" })
+    {
+        const physics::VesselKey* key = physics::FindVesselKey(name);
+        if (key && solved.*(key->member) != now.*(key->member)) { commands.push_back(Key(id, *key, solved.*(key->member))); }
+    }
+    return commands;
+}
+
 void SetVesselTuneCommand::Apply(EditorContext& ctx, EditorObjectId id, const nlohmann::json& block)
 {
     EditorObject* obj = ctx.document.Find(id);

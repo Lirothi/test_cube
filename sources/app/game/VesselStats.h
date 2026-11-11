@@ -27,6 +27,29 @@ namespace game
     // `halfLength`: of the hull's box. `rudderLever`: m the propeller (where the rudder pushes) lies aft of the centre of
     // mass, physics::VesselHull's; 0 or less = not known, 0.65 of the half length stands in.
     VesselStats StatsOf(const physics::VesselSettings& boat, float halfLength, float rudderLever);
+
+    // The four bars of the boat's card in Play (PlaySession::DrawBoatCard) -- and the casual edit of Inspector > Boat.
+    struct VesselCard
+    {
+        float topSpeed = 0.0f;   // m/s
+        float toPlane = 0.0f;    // s from rest to 20 kn
+        float circle = 0.0f;     // m across its tightest circle (2 x turnRadius)
+        float seaKeeping = 0.0f; // the bar's share: half its draft against 0.8 m, half its weight against 8 t
+    };
+    // `draft`: as the hull floats, m (the settings' times the copy's scale).
+    float SeaKeeping(float mass, float draft);
+    // The bars' lengths, one scale for every boat, longer = better (the card's and the Inspector's).
+    inline float TopSpeedBar(float topSpeed) { return topSpeed * 1.94384f / 45.0f; }
+    inline float AccelerationBar(float toPlane) { return (7.0f - toPlane) / 5.0f; }
+    inline float HandlingBar(float circle) { return (95.0f - 0.5f * circle) / 75.0f; }
+    VesselCard CardOf(const physics::VesselSettings& boat, float halfLength, float rudderLever, float draft);
+    // The other way (owner, 2026-11-11: "I want to drag the card's characteristics; if one moves a set of parameters,
+    // that must happen by itself"): the numbers that make the card read `want`, from `boat` as it is. Each bar has its
+    // number -- sea keeping the mass, the acceleration the thrust, the top speed the drag ahead (tied to the thrust:
+    // thrust = 0.77 drag v^2), the circle the rudder force -- solved in that order, each against what the ones before it
+    // say, so one bar dragged leaves the other three where they were (the heavier boat gets the thrust and the rudder that
+    // keep its acceleration and its circle). A bar out of reach stops at its number's range. Returns what it reached.
+    VesselCard SolveCard(physics::VesselSettings& boat, float halfLength, float rudderLever, float draft, const VesselCard& want);
     // The rate (rad/s) it turns at in a steady turn at a speed, full ahead and hard over.
     float SteadyTurnRate(const physics::VesselSettings& boat, float halfLength, float rudderLever, float speed);
     // The angle (rad) between its bow and its way in a steady turn of that curvature (1/m) at a speed: the hull slides,

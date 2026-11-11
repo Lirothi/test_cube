@@ -4,6 +4,9 @@
 #include <memory>
 #include <string>
 
+#include <vector>
+
+#include "app/game/VesselStats.h"             // VesselCard, SolveCard
 #include "editor/commands/EditorCommand.h"
 #include "editor/scene/EditorSceneDocument.h" // EditorObject, EditorObjectId
 #include "physics/CollisionJson.h"            // VesselKey
@@ -40,6 +43,21 @@ public:
     // What its asset says (the object's own numbers left out), and what it does (its own over the asset's).
     static physics::VesselSettings AssetSettings(const EditorObject& obj);
     static physics::VesselSettings EffectiveSettings(const EditorObject& obj);
+
+    // The card's casual edit (Inspector > Boat, MCP setBoatCard): the bars named in `which` (kCard* bits) as `want` says,
+    // the others held where the boat reads them now; game::SolveCard finds the numbers, and every one that moves is a
+    // Key command. Empty when nothing moves or the boat has no hull in the physics world (not a boat now: `reached` 0s).
+    enum : unsigned { kCardTopSpeed = 1, kCardToPlane = 2, kCardCircle = 4, kCardSeaKeeping = 8 };
+    struct HullShape
+    {
+        float halfLength = 0.0f;
+        float rudderLever = 0.0f;
+        float draft = 0.0f; // m, as the copy floats (the settings' times its scale)
+    };
+    // The physics world's hull of the placed copy (its body is built in the editor too). False = none.
+    static bool ShapeOf(EditorContext& ctx, EditorObjectId id, HullShape& out);
+    static std::vector<std::unique_ptr<SetVesselTuneCommand>> Card(EditorContext& ctx, EditorObjectId id, const game::VesselCard& want, unsigned which,
+                                                                    game::VesselCard* reached = nullptr);
 
 private:
     enum class Kind : unsigned char { Set, ResetKey, ResetAll };

@@ -1646,6 +1646,23 @@ it", then "teach the bot to take the characteristics into account so it drives a
   card 32.3 -> 36.7 kn, 20 kn in 5.6 -> 4.2 s, a circle of 128 -> 93 m) the bot's line 17.2 m/s slowest, r 46 m, the lap
   92.4 s and first; undone 102.0 s (the control); the mass 9500 alone: 20 kn in 6.8 s, r 70 m, braking 3.40 -> 2.68, the
   same top speed, the body rebuilt at 9500 kg (`physics: ... is a boat` in the log) and at 7500 after undo. No miss in any.
+- **The card is dragged as it reads** (same day, owner: "where is the top speed? I see the card over the boat in the
+  game -- I want to drag these; if one moves a set of parameters, that must happen by itself; a separate zone for casual
+  editing"). Inspector > Boat opens on the card's four bars -- Top speed (kn), Acceleration (s to 20 kn), Handling (m
+  across its circle), Sea keeping (%) -- each a drag against its asset's value, the numbers behind it in collapsed
+  groups below (showing what a bar drag moves, live). `game::SolveCard` (VesselStats.cpp): each bar has ONE number,
+  solved in order so the others hold -- sea keeping -> the mass (the draft is the hull's), acceleration -> the thrust,
+  with the drag ahead tied to it by the top speed (surgeDrag = thrust / (0.77 v^2)), the circle -> the rudder force --
+  by bisection on the log (48 rounds; `ToTwentyKnots` now finds its crossing inside its 0.02 s step, so the model is
+  smooth), each number kept in its key's range and to four figures. Every selected boat is solved from its own numbers,
+  one undo entry. `game::SeaKeeping` and the bars' scales (`TopSpeedBar` ...) are the card's in Play and the Inspector's
+  alike. MCP `run_action setBoatCard {topSpeedKn, secondsTo20Kn, circleM, seaKeeping}` (any of them; the status says
+  what the boat reads after). Gate: from the yacht's numbers each bar moved alone (+10 % top speed, a second sooner, a
+  circle 30 % tighter, +10 points of sea keeping) reaches its value with the other three within 0.5-1 %; heavier gets
+  more thrust and rudder; a bar out of reach stops at its range with the rest held. Live (police_boat): 36 kn -> thrust
+  25500 -> 24590 N, drag 120 -> 99, 5.6 s and 128 m held; sea keeping 91 -> 100 % -> 8900 kg, 28130 N, the rudder up,
+  the three held; a 100 m circle -> the rudder alone; the bots' race on it 96.5 s, first, no miss; three undos back to
+  the asset's.
 - **It knows how its boat slides** (`bot.slip` 1 = whole, 0 = before). The helm pointed the BOW at its aim, and a hull
   in a turn goes bow inside its way, so the boat ran outside its line in every bend by its reach times that angle:
   police_boat (11 degrees in the coast's 140 m bend at 22 kn) 7-9 m, at any speed -- onto the outer marks; a hit spun it

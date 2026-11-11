@@ -614,6 +614,69 @@ namespace
         return FoldIntoOneEntry(std::move(commands), reset ? "Boat: As The Asset's" : std::string("Boat: ") + key->label);
     }
 
+    // The card's bars as the player reads them (Inspector > Boat, the casual edit): any of {topSpeedKn, secondsTo20Kn,
+    // circleM, seaKeeping (%)}; the bars not named are held; game::SolveCard finds the numbers.
+    std::unique_ptr<EditorCommand> BuildSetBoatCard(const EditorActionContext& actionCtx,
+        const std::vector<EditorObjectId>& targets,
+        const EditorIntent& intent,
+        std::string& outStatus)
+    {
+        game::VesselCard want;
+        unsigned which = 0;
+        const auto read = [&intent, &which](const char* name, unsigned bit, float scale, float& out)
+        {
+            const auto it = intent.params.find(name);
+            if (it == intent.params.end() || !it->is_number()) { return; }
+            out = it->get<float>() / scale;
+            which |= bit;
+        };
+        read("topSpeedKn", SetVesselTuneCommand::kCardTopSpeed, 1.94384f, want.topSpeed);
+        read("secondsTo20Kn", SetVesselTuneCommand::kCardToPlane, 1.0f, want.toPlane);
+        read("circleM", SetVesselTuneCommand::kCardCircle, 1.0f, want.circle);
+        read("seaKeeping", SetVesselTuneCommand::kCardSeaKeeping, 100.0f, want.seaKeeping);
+        if (which == 0)
+        {
+            outStatus = "setBoatCard takes at least one of topSpeedKn, secondsTo20Kn, circleM, seaKeeping";
+            return nullptr;
+        }
+        std::vector<std::unique_ptr<EditorCommand>> commands;
+        std::size_t notBoats = 0;
+        std::string reachedText;
+        for (const EditorObjectId id : targets)
+        {
+            const EditorObject* obj = actionCtx.editor.document.Find(id);
+            game::VesselCard reached;
+            std::vector<std::unique_ptr<SetVesselTuneCommand>> boat =
+                obj && SetRaceKeyCommand::AppliesTo(*obj) ? SetVesselTuneCommand::Card(actionCtx.editor, id, want, which, &reached)
+                                                          : std::vector<std::unique_ptr<SetVesselTuneCommand>>{};
+            if (reached.topSpeed <= 0.0f)
+            {
+                ++notBoats;
+                continue;
+            }
+            if (reachedText.empty())
+            {
+                char text[200];
+                std::snprintf(text, sizeof(text), "%s reads %.1f kn, 20 kn in %.1f s, a %.0f m circle, sea keeping %.0f %%", obj->name.c_str(),
+                              reached.topSpeed * 1.94384f, reached.toPlane, reached.circle, reached.seaKeeping * 100.0f);
+                reachedText = text;
+            }
+            for (std::unique_ptr<SetVesselTuneCommand>& command : boat)
+            {
+                if (command->Changes(*obj)) { commands.push_back(std::move(command)); } // one that does not would fail the whole entry
+            }
+        }
+        if (commands.empty())
+        {
+            outStatus = !reachedText.empty() ? "Nothing changes: " + reachedText
+                                             : "No boat among them: the card is a boat's in the physics world (a vessel copy, Body Dynamic and floating)";
+            return nullptr;
+        }
+        outStatus = reachedText + " (" + std::to_string(commands.size()) + " numbers moved)";
+        if (notBoats > 0) { outStatus += " (" + CountedObjects(notBoats) + " skipped: not boats now)"; }
+        return FoldIntoOneEntry(std::move(commands), "Boat: Card");
+    }
+
     // ------------------------------------------------------------------ setPhysics, keepSimulation
 
     std::unique_ptr<EditorCommand> BuildSetPhysics(const EditorActionContext& actionCtx,
@@ -3975,6 +4038,21 @@ EditorActionRegistry::EditorActionRegistry()
             &BuildSetVessel,
         });
     }
+
+    actions_.push_back({
+        "setBoatCard",
+        "Tune the matching boats by their card, the four bars a player reads over a boat in Play: topSpeedKn (flat out), "
+        "secondsTo20Kn (acceleration), circleM (its tightest circle across), seaKeeping (%). Name any of them; the others "
+        "stay where they are, and the boat's numbers (mass, thrust, drag ahead, rudder force) are found to match. The level "
+        "keeps them for those copies alone; a race bot drives by them.",
+        EditorActionEffect::DocumentEdit,
+        EditorTargetKind::Objects,
+        { { "topSpeedKn", EditorParamKind::Number, false, "knots flat out" },
+          { "secondsTo20Kn", EditorParamKind::Number, false, "seconds from rest to 20 knots, full ahead" },
+          { "circleM", EditorParamKind::Number, false, "metres across its tightest circle, hard over" },
+          { "seaKeeping", EditorParamKind::Number, false, "percent: half its draft against 0.8 m, half its weight against 8 t" } },
+        &BuildSetBoatCard,
+    });
 
     actions_.push_back({
         "setCastShadow",

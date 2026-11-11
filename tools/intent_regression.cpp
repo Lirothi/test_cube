@@ -2018,6 +2018,60 @@ void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
         settings = before;
     }
 
+    // ---- the card dragged: one bar to a new value, the boat's numbers found for it, the other three bars held ----
+    {
+        Check(EditorActionRegistry::Builtin().Find("setBoatCard") != nullptr, "setBoatCard is a registered action");
+        const physics::VesselSettings yacht; // small_yacht's numbers
+        constexpr float kHalf = 5.1f, kLever = 3.1f, kDraft = 0.38f;
+        const game::VesselCard card = game::CardOf(yacht, kHalf, kLever, kDraft);
+        const auto within = [](float a, float b, float share) { return std::fabs(a - b) <= share * std::max(std::fabs(b), 1e-3f); };
+        const auto describe = [](const game::VesselCard& c)
+        {
+            return std::to_string(c.topSpeed * 1.94384f) + " kn, " + std::to_string(c.toPlane) + " s, " + std::to_string(c.circle) + " m, " +
+                   std::to_string(c.seaKeeping * 100.0f) + " %";
+        };
+        Check(within(game::SeaKeeping(yacht.mass, kDraft), card.seaKeeping, 1e-6f) && within(card.circle, 2.0f * game::StatsOf(yacht, kHalf, kLever).turnRadius, 1e-5f),
+              "the card is the stats' and the sea keeping bar's: " + describe(card));
+        struct Arm
+        {
+            const char* what;
+            float game::VesselCard::* bar;
+            float to;
+        };
+        const Arm arms[] = {
+            { "the top speed +10 %", &game::VesselCard::topSpeed, card.topSpeed * 1.1f },
+            { "20 kn a second sooner", &game::VesselCard::toPlane, card.toPlane - 1.0f },
+            { "a circle 30 % tighter", &game::VesselCard::circle, card.circle * 0.7f },
+            { "sea keeping +10 points (heavier)", &game::VesselCard::seaKeeping, card.seaKeeping + 0.1f },
+        };
+        for (const Arm& arm : arms)
+        {
+            physics::VesselSettings boat = yacht;
+            game::VesselCard want = card;
+            want.*(arm.bar) = arm.to;
+            const game::VesselCard got = game::SolveCard(boat, kHalf, kLever, kDraft, want);
+            const game::VesselCard again = game::CardOf(boat, kHalf, kLever, kDraft);
+            Check(within(got.topSpeed, want.topSpeed, 0.005f) && within(got.toPlane, want.toPlane, 0.01f) && within(got.circle, want.circle, 0.01f) &&
+                      within(got.seaKeeping, want.seaKeeping, 0.005f) && within(again.toPlane, got.toPlane, 1e-5f),
+                  std::string(arm.what) + ": that bar moves, the other three stay -- wanted " + describe(want) + ", got " + describe(got));
+        }
+        {
+            physics::VesselSettings heavy = yacht;
+            game::VesselCard want = card;
+            want.seaKeeping += 0.1f;
+            game::SolveCard(heavy, kHalf, kLever, kDraft, want);
+            Check(heavy.mass > yacht.mass * 1.25f && heavy.thrust > yacht.thrust && heavy.rudderForce > yacht.rudderForce,
+                  "a heavier boat gets the thrust and the rudder that keep its acceleration and its circle: " + std::to_string(heavy.mass) + " kg, " +
+                      std::to_string(heavy.thrust) + " N, rudder " + std::to_string(heavy.rudderForce));
+            physics::VesselSettings rocket = yacht;
+            want = card;
+            want.toPlane = 0.05f;
+            const game::VesselCard got = game::SolveCard(rocket, kHalf, kLever, kDraft, want);
+            Check(std::isfinite(got.toPlane) && got.toPlane > 0.05f && rocket.thrust <= 1.0e7f && within(got.topSpeed, card.topSpeed, 0.005f),
+                  "a bar out of reach stops where its number's range does, the others held: " + describe(got));
+        }
+    }
+
     // ---- a copy's own numbers: setVessel writes them into the level over its asset's, key by key, and undoes ----
     {
         const std::string asset = "models/police_boat/police_boat.mesh.json";
