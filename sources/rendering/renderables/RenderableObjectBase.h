@@ -167,6 +167,9 @@ public:
     // by Main_Translucent (Scene::PrepareView adds it to translucentComplex), where RenderObjectBatch calls
     // RenderTranslucent instead of Render. A transparent object's RenderTranslucent is its Render.
     virtual bool HasTranslucentSlots() const { return false; }
+    // The material slots one sees straight through (glass with no opaque texel: GBufferRenderable::SlotIsGlassOnly). The
+    // water mask's lid closes a basin with them (ocean/WaterMask).
+    virtual void SeeThroughSlots(std::vector<int>& out) const { out.clear(); }
     virtual void RenderTranslucent(Renderer* renderer, ID3D12GraphicsCommandList* cl, const Camera& camera,
                                    D3D12_GPU_VIRTUAL_ADDRESS viewCB)
     {

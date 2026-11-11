@@ -1380,6 +1380,84 @@ int WINAPI WinMain(
         // whose path holds the text) -- where each LOD comes in on UE's reference view and every warning with its fix
         // (rendering/meshes/LodSwitchReport.h), at the compiled defaults of lod.* (graphics_settings.json is not read).
         // Headless, read-only. Exit code = the assets with a warning.
+        // "--water-mask-lid=<geometry .mesh.bin>[,<out.obj>[,<glass slot;slot...>]]": a hull's water mask (ocean/WaterMask.h)
+        // built as the frame builds it the first time it meets the hull -- its basins and their lids in the log -- and its lid
+        // written as an OBJ to look at (per basin a group of the cap and one of the curtains and glass faces). The glass slots
+        // are what the object would report (its thinTranslucent slots with no alpha test); none given = none. Headless,
+        // read-only. Exit code 0 = a lid, 1 = none, 2 = the geometry could not be read.
+        if (const char* wm = std::strstr(lpCmdLine, "--water-mask-lid=")) {
+            std::string arg;
+            for (const char* p = wm + std::strlen("--water-mask-lid="); *p && !std::isspace(static_cast<unsigned char>(*p)); ++p) {
+                arg.push_back(*p);
+            }
+            std::string out;
+            std::vector<int> glass;
+            if (const size_t comma = arg.find(','); comma != std::string::npos) {
+                out = arg.substr(comma + 1);
+                arg.resize(comma);
+            }
+            if (const size_t comma = out.find(','); comma != std::string::npos) {
+                std::string list = out.substr(comma + 1);
+                out.resize(comma);
+                for (size_t at = 0; at < list.size();) {
+                    const size_t end = std::min(list.find(';', at), list.size());
+                    if (end > at) { glass.push_back(std::atoi(list.substr(at, end - at).c_str())); }
+                    at = end + 1;
+                }
+            }
+            // Where still water stands on it, as the object knows: the manifest beside the geometry, its vessel's draft.
+            float waterline = 3.0e38f;
+            if (const size_t bin = arg.rfind(".mesh.bin"); bin != std::string::npos) {
+                std::ifstream manifest(arg.substr(0, bin) + ".mesh.json");
+                const nlohmann::json doc = nlohmann::json::parse(manifest, nullptr, false, true);
+                if (!doc.is_discarded() && doc.contains("vessel") && doc["vessel"].is_object()) {
+                    waterline = doc["vessel"].value("draft", 0.38f);
+                }
+            }
+            const std::shared_ptr<const ocean::WaterMaskField> field = ocean::watermask::BuildField(arg, glass, waterline);
+            if (!field) { return 2; }
+            // The bake's round trip (ocean/WaterMask.h, THE BAKE): what a frame would read back from the file is this field,
+            // byte for byte, and a key that differs is refused.
+            {
+                ocean::WaterMaskBakeKey key;
+                std::string why;
+                const bool keyed = ocean::watermask::MakeBakeKey(arg, glass, waterline, -3.0e38f, key);
+                const std::vector<std::uint8_t> bytes = ocean::watermask::SerializeField(*field, key);
+                const std::shared_ptr<ocean::WaterMaskField> back = ocean::watermask::DeserializeField(bytes.data(), bytes.size(), &key, why);
+                ocean::WaterMaskBakeKey other = key;
+                other.waterline += 0.01f;
+                std::string otherWhy;
+                const bool refused = !ocean::watermask::DeserializeField(bytes.data(), bytes.size(), &other, otherWhy);
+                if (keyed && back && ocean::watermask::SameField(*field, *back) && refused) {
+                    LOG_INFO(logging::LogCategory::Ocean, "--water-mask-lid: the bake round-trips ({} KB, identical), another draft refused ({})",
+                             bytes.size() / 1024u, otherWhy);
+                } else {
+                    LOG_ERROR(logging::LogCategory::Ocean, "--water-mask-lid: the bake does NOT round-trip (keyed {}, read back {}, identical {}, other refused {}): {}",
+                              keyed, back != nullptr, back && ocean::watermask::SameField(*field, *back), refused, why);
+                    return 3;
+                }
+            }
+            if (!out.empty()) {
+                std::ofstream obj(out);
+                for (const Math::float3& v : field->lidVertices) { obj << "v " << v.x << ' ' << v.y << ' ' << v.z << '\n'; }
+                for (size_t b = 0; b < field->basins.size(); ++b) {
+                    const ocean::WaterMaskBasin& basin = field->basins[b];
+                    const size_t capEnd = static_cast<size_t>(basin.firstIndex) + basin.capIndexCount;
+                    const size_t end = b + 1 < field->basins.size() ? field->basins[b + 1].firstIndex : field->lidIndices.size();
+                    const auto faces = [&](size_t from, size_t to) {
+                        for (size_t t = from; t + 2 < to; t += 3) {
+                            obj << "f " << field->lidIndices[t] + 1 << ' ' << field->lidIndices[t + 1] + 1 << ' ' << field->lidIndices[t + 2] + 1 << '\n';
+                        }
+                    };
+                    obj << "g cap" << b << '\n';
+                    faces(basin.firstIndex, capEnd);
+                    obj << "g curtains" << b << '\n';
+                    faces(capEnd, end);
+                }
+                LOG_INFO(logging::LogCategory::Ocean, "--water-mask-lid: wrote {}", out);
+            }
+            return field->lidIndices.empty() ? 1 : 0;
+        }
         if (const char* rep = std::strstr(lpCmdLine, "--lod-report")) {
             std::string filter;
             if (rep[std::strlen("--lod-report")] == '=') {

@@ -96,6 +96,9 @@ enum class RenderPass : uint16_t {
     Main_RTDebug,
     Main_GlassReflGbuffer,
     Main_GlassReflections,
+    // The water masks' lids (ocean/WaterMask.h): every hull's caps and curtains into the two nearest crossings of each
+    // pixel, which the ocean surface in Main_Transparent counts in front of its point. Only while a marked hull is in view.
+    Main_WaterMask,
     // B6.1, UE's order (DeferredShadingRenderer.cpp:3230 water, then 3262 sky+fog, then translucency):
     // Main_Transparent draws only the transparents that WRITE DEPTH -- the ocean, our SingleLayerWater
     // -- so that by the time the screen-space fog runs, the water is in the depth buffer and is fogged
@@ -216,6 +219,7 @@ inline std::wstring_view RenderPassToWString(RenderPass pass)
     case RenderPass::Main_GlassReflGbuffer: return L"GlassReflGbuffer";
     case RenderPass::Main_GlassReflections: return L"GlassReflections";
     case RenderPass::Main_RTDebug: return L"RTDebug";
+    case RenderPass::Main_WaterMask: return L"WaterMask";
     case RenderPass::Main_Transparent: return L"Transparent";
     case RenderPass::Main_WaterReflection: return L"WaterReflection";
     case RenderPass::Main_TransparentFog: return L"TransparentFog";

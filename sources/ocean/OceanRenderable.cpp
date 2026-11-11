@@ -16,7 +16,11 @@
 #include "core/profiling/ProfilerScopes.h"
 #include "rendering/lighting/DirectionalLight.h"
 #include "core/Helpers.h" // ThrowIfFailed
+#include "materials/Material.h"
 #include "rendering/core/GpuAlloc.h"
+#include "rendering/core/RenderContextPool.h"
+#include "rendering/core/RenderGraph.h"
+#include "rendering/core/RenderStats.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/UploadBatch.h"
 #include "core/logging/Log.h"
@@ -937,7 +941,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     // overrun that hands the table a garbage descriptor — it showed up as the ocean sampling sand.
     // Slots 17/18 = the surf sim height and foam fields (surf sim injection): declared by the
     // LEGACY RS only; the modern RS still says 16 and simply never addresses the extras.
-    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 30> srvs{};
+    std::array<D3D12_CPU_DESCRIPTOR_HANDLE, 31> srvs{};
     size_t srvCount = 0;
 
     auto pushSrv = [&](D3D12_CPU_DESCRIPTOR_HANDLE srv)
@@ -1082,17 +1086,23 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
     pushSrv(wakeRead && wake_->GetSrv().ptr != 0 ? wake_->GetSrv() : fallbackSrv);
     // t27: its foam, this frame's of the two (the same frames, the same gate).
     pushSrv(wakeRead && wake_->GetFoamSrv().ptr != 0 ? wake_->GetFoamSrv() : fallbackSrv);
-    // t28: the water masks' columns (read only under WaterMaskCB's hull count); before the first mask the inert dummy BUFFER.
+    // t28: the water masks' columns -- the plan, for ocean.waterMask:3 (read only under WaterMaskCB's hull count); before the
+    // first mask the inert dummy BUFFER.
     pushSrv(waterMaskSrv_.ptr != 0 ? waterMaskSrv_ : renderer->VsmDummyBufferSrv());
     // t29: the boat wake's foam detail (the lace it thins into, the churned white water's relief): a file texture.
     pushTexture(wakeFoamDetailTexture_);
+    // t30: the lids' two nearest crossings a pixel (Main_WaterMask, left pixel-readable there and declared so by
+    // Main_Transparent); read only under WaterMaskCB's w bit 1, which is set only on a frame that drew them.
+    pushSrv((waterMaskLidFlags_ & 2u) != 0u && waterMaskCrossingsSrv_.ptr != 0 ? waterMaskCrossingsSrv_ : fallbackSrv);
 
     auto tbl = renderer->StageSrvUavTable(srvs, srvCount);
     ctx.srvTable[0] = tbl.gpu;
 
     // b2: the hulls the surface is not drawn inside (ocean/WaterMask.h; shaders/ocean_surface_surf_sim.hlsli WaterMaskCB):
-    // per hull the world-to-model rows (the model's x y z = dot(row.xyz, world) + row.w), its grid (origin x z, 1 / cell,
-    // its first cell in t28) and its span (the mesh's lowest and highest y, nx, nz). Bound every frame, 0 hulls without one.
+    // whether this frame's lids are in t30 and whether the camera stands inside a basin (w), and, for ocean.waterMask:3's
+    // plan, per hull the world-to-model rows (the model's x y z = dot(row.xyz, world) + row.w), its grid (origin x z,
+    // 1 / cell, its first cell in t28) and its span (the mesh's lowest and highest y, nx, nz). Bound every frame, 0 hulls
+    // without one.
     {
         struct WaterMaskCB
         {
@@ -1110,6 +1120,7 @@ bool OceanRenderable::RecordGraphics(Renderer* renderer, ID3D12GraphicsCommandLi
         std::memcpy(m.hulls, frame.rows, sizeof(float) * 4u * 5u * hulls);
         m.count[0] = hulls;
         m.count[1] = static_cast<std::uint32_t>(ocean::g_waterMask); // 2 = paint instead of discard
+        m.count[3] = ocean::g_waterMask != 0 ? waterMaskLidFlags_ : 0u;
         // Where each boat's bow wave breakers come in this frame (OceanWake::BowGates).
         const OceanRenderConfig& wakeRender = GetRenderConfig();
         m.count[2] = WakeEnabled() && wake_->IsReady() && wakeRender.wakeBowFoam > 0.0f
@@ -1334,7 +1345,7 @@ void OceanRenderable::EnsureWaterMaskColumns(Renderer* renderer)
         srvDesc.Buffer.NumElements = ocean::kWaterMaskMaxCells;
         srvDesc.Buffer.StructureByteStride = sizeof(Math::float4);
         device->CreateShaderResourceView(waterMaskColumns_.Get(), &srvDesc, waterMaskSrv_);
-        LOG_INFO(logging::LogCategory::Ocean, "water mask: room for {} float4 of the hulls' columns, three a cell ({:.1f} MB)",
+        LOG_INFO(logging::LogCategory::Ocean, "water mask: room for {} float4 of the hulls' plans, one a cell ({:.1f} MB)",
                  ocean::kWaterMaskMaxCells, static_cast<double>(desc.Width) / (1024.0 * 1024.0));
     }
     for (const ocean::WaterMaskInstance& mask : waterMasks_)
@@ -1379,6 +1390,253 @@ void OceanRenderable::EnsureWaterMaskColumns(Renderer* renderer)
         std::memcpy(&rows[4][2], &field.nx, sizeof(float));
         std::memcpy(&rows[4][3], &field.nz, sizeof(float));
         ++frame.hulls;
+    }
+    EnsureWaterMaskLids(renderer);
+}
+
+void OceanRenderable::EnsureWaterMaskLids(Renderer* renderer)
+{
+    if (waterMaskLidFailed_) { return; }
+    ID3D12Device* device = renderer->GetDevice();
+    if (!waterMaskLidVb_)
+    {
+        // Upload buffers, as the columns: written by the CPU once per field, read by the input assembler -- GENERIC_READ for
+        // their whole life, no state the graph tracks.
+        D3D12_HEAP_PROPERTIES upload{};
+        upload.Type = D3D12_HEAP_TYPE_UPLOAD;
+        D3D12_RESOURCE_DESC desc{};
+        desc.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        desc.Height = 1;
+        desc.DepthOrArraySize = 1;
+        desc.MipLevels = 1;
+        desc.SampleDesc.Count = 1;
+        desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        const D3D12_RANGE none{ 0, 0 };
+        void* mapped = nullptr;
+        desc.Width = static_cast<UINT64>(ocean::kWaterMaskLidMaxVertices) * sizeof(Math::float3);
+        ThrowIfFailed(gpu::CreateCommittedResource(device, &upload, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::Ocean, L"Ocean.WaterMaskLidVertices", IID_PPV_ARGS(&waterMaskLidVb_)));
+        ThrowIfFailed(waterMaskLidVb_->Map(0, &none, &mapped));
+        waterMaskLidVbMapped_ = static_cast<Math::float3*>(mapped);
+        desc.Width = static_cast<UINT64>(ocean::kWaterMaskLidMaxIndices) * sizeof(std::uint32_t);
+        ThrowIfFailed(gpu::CreateCommittedResource(device, &upload, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, MemTag::Ocean, L"Ocean.WaterMaskLidIndices", IID_PPV_ARGS(&waterMaskLidIb_)));
+        ThrowIfFailed(waterMaskLidIb_->Map(0, &none, &mapped));
+        waterMaskLidIbMapped_ = static_cast<std::uint32_t*>(mapped);
+
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc{};
+        heapDesc.NumDescriptors = 2u;
+        heapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+        ThrowIfFailed(gpu::CreateDescriptorHeap(device, &heapDesc, MemTag::Ocean, L"Ocean.WaterMaskCrossingsHeap", IID_PPV_ARGS(&waterMaskCrossingsHeap_)));
+        waterMaskCrossingsUav_ = waterMaskCrossingsHeap_->GetCPUDescriptorHandleForHeapStart();
+        waterMaskCrossingsSrv_ = waterMaskCrossingsUav_;
+        waterMaskCrossingsSrv_.ptr += device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        // Both faces, no depth, no colour: the pixel shader's atomics are the whole output (water_mask_lid.hlsl).
+        Material::GraphicsDesc gd{};
+        gd.shaderFile = L"shaders/water_mask_lid.hlsl";
+        gd.vsEntry = "VSMain";
+        gd.psEntry = "PSMain";
+        gd.inputLayoutKey = "PosOnly";
+        gd.numRT = 0;
+        gd.dsvFormat = DXGI_FORMAT_UNKNOWN;
+        gd.topologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        gd.raster.CullMode = D3D12_CULL_MODE_NONE;
+        gd.raster.FillMode = D3D12_FILL_MODE_SOLID;
+        gd.raster.DepthClipEnable = TRUE; // with z = w / 2: only what is behind the eye
+        gd.depth.DepthEnable = FALSE;
+        gd.depth.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        gd.depth.StencilEnable = FALSE;
+        for (int i = 0; i < 8; ++i) { gd.blend.RenderTarget[i].RenderTargetWriteMask = 0; }
+        waterMaskLidMaterial_ = renderer->GetMaterialManager()->GetOrCreateGraphics(renderer, gd);
+        if (!waterMaskLidMaterial_ || !waterMaskLidMaterial_->GetPipelineState())
+        {
+            LOG_ERROR(logging::LogCategory::Ocean, "water mask: water_mask_lid.hlsl built no PSO -- no water is kept out of any hull");
+            waterMaskLidFailed_ = true;
+            return;
+        }
+        LOG_INFO(logging::LogCategory::Ocean, "water mask: room for {} lid vertices and {} indices ({:.1f} MB)",
+                 ocean::kWaterMaskLidMaxVertices, ocean::kWaterMaskLidMaxIndices,
+                 static_cast<double>(ocean::kWaterMaskLidMaxVertices * sizeof(Math::float3) +
+                                     ocean::kWaterMaskLidMaxIndices * sizeof(std::uint32_t)) / (1024.0 * 1024.0));
+    }
+
+    // Each field's lid once, when first met, into room no draw has read yet.
+    for (const ocean::WaterMaskInstance& mask : waterMasks_)
+    {
+        if (!mask.field || mask.field->lidIndices.empty() || waterMaskLidFirst_.count(mask.field.get()) != 0u) { continue; }
+        const ocean::WaterMaskField& field = *mask.field;
+        const std::uint32_t vertices = static_cast<std::uint32_t>(field.lidVertices.size());
+        const std::uint32_t indices = static_cast<std::uint32_t>(field.lidIndices.size());
+        if (waterMaskLidVertexCount_ + vertices > ocean::kWaterMaskLidMaxVertices ||
+            waterMaskLidIndexCount_ + indices > ocean::kWaterMaskLidMaxIndices)
+        {
+            LOG_WARNING_ONCE(logging::LogCategory::Ocean, "water mask: no room for more lids ({} of {} vertices, {} of {} indices used; this one needs {} / {}) -- the rest keep no water out",
+                             waterMaskLidVertexCount_, ocean::kWaterMaskLidMaxVertices, waterMaskLidIndexCount_,
+                             ocean::kWaterMaskLidMaxIndices, vertices, indices);
+            continue;
+        }
+        std::memcpy(waterMaskLidVbMapped_ + waterMaskLidVertexCount_, field.lidVertices.data(), vertices * sizeof(Math::float3));
+        std::memcpy(waterMaskLidIbMapped_ + waterMaskLidIndexCount_, field.lidIndices.data(), indices * sizeof(std::uint32_t));
+        waterMaskLidFirst_.emplace(mask.field.get(), WaterMaskLidRange{ waterMaskLidVertexCount_, waterMaskLidIndexCount_, indices });
+        waterMaskKeep_.push_back(mask.field);
+        waterMaskLidVertexCount_ += vertices;
+        waterMaskLidIndexCount_ += indices;
+    }
+    if (waterMaskLidFirst_.empty()) { return; }
+
+    // The crossings, at the size the water draws at (Renderer::BindWaterTargets' viewport).
+    const std::uint32_t width = renderer->GetRenderWidth();
+    const std::uint32_t height = renderer->GetRenderHeight();
+    if (waterMaskCrossings_.Get() && width == waterMaskCrossingsWidth_ && height == waterMaskCrossingsHeight_) { return; }
+    if (width == 0u || height == 0u) { return; }
+    if (waterMaskCrossings_.Get())
+    {
+        renderer->WaitForPreviousFrame(); // the frames in flight read the old one
+        waterMaskCrossings_.Reset();
+    }
+    D3D12_HEAP_PROPERTIES heap{};
+    heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+    D3D12_RESOURCE_DESC texDesc{};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.DepthOrArraySize = 2;
+    texDesc.MipLevels = 1;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+    texDesc.Format = DXGI_FORMAT_R32_UINT;
+    Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+    ThrowIfFailed(gpu::CreateCommittedTexture(device, heap, D3D12_HEAP_FLAG_NONE, texDesc,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, MemTag::Ocean, L"Ocean.WaterMaskCrossings", &texture));
+    waterMaskCrossings_.Attach(renderer->Declarations(), std::move(texture), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                               L"Ocean.WaterMaskCrossings");
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
+    uav.Format = DXGI_FORMAT_R32_UINT;
+    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+    uav.Texture2DArray.ArraySize = 2;
+    device->CreateUnorderedAccessView(waterMaskCrossings_.Get(), nullptr, &uav, waterMaskCrossingsUav_);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+    srv.Format = DXGI_FORMAT_R32_UINT;
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv.Texture2DArray.MipLevels = 1;
+    srv.Texture2DArray.ArraySize = 2;
+    device->CreateShaderResourceView(waterMaskCrossings_.Get(), &srv, waterMaskCrossingsSrv_);
+    waterMaskCrossingsWidth_ = width;
+    waterMaskCrossingsHeight_ = height;
+    LOG_INFO(logging::LogCategory::Ocean, "water mask: the lids' crossings at {} x {} ({:.1f} MB)", width, height,
+             static_cast<double>(width) * height * 8.0 / (1024.0 * 1024.0));
+}
+
+std::function<void(RenderGraphPassContext)> OceanRenderable::BuildWaterMaskPass(RenderGraphPassContext& ctx, const Camera& camera)
+{
+    waterMaskLidFlags_ = 0u;
+    waterMaskLidDrawCount_ = 0u;
+    if (ocean::g_waterMask == 0 || waterMasks_.empty() || !waterMaskCrossings_.Get() || !waterMaskLidMaterial_ ||
+        !waterMaskLidMaterial_->GetPipelineState())
+    {
+        return {};
+    }
+    // The water's own projection (OceanCB's viewProj, view): the same pixels, the same view depth.
+    const Math::mat4& viewProj = camera.GetViewProjMatrix();
+    const Math::mat4& view = camera.GetViewMatrix();
+    const Math::float3& eye = camera.GetPosition();
+    std::uint32_t inside = 0u;
+    for (const ocean::WaterMaskInstance& mask : waterMasks_)
+    {
+        if (!mask.field || mask.field->basins.empty()) { continue; }
+        const auto found = waterMaskLidFirst_.find(mask.field.get());
+        if (found == waterMaskLidFirst_.end()) { continue; }
+        // Where the count starts: the camera inside a basin flips every pixel's.
+        const auto& w = mask.worldToModel.m.m;
+        const Math::float3 local(eye.x * w[0][0] + eye.y * w[1][0] + eye.z * w[2][0] + w[3][0],
+                                 eye.x * w[0][1] + eye.y * w[1][1] + eye.z * w[2][1] + w[3][1],
+                                 eye.x * w[0][2] + eye.y * w[1][2] + eye.z * w[2][2] + w[3][2]);
+        if (ocean::watermask::InsideLid(*mask.field, local)) { inside ^= 1u; }
+        if (waterMaskLidDrawCount_ >= waterMaskLidDraws_.size()) { continue; }
+        WaterMaskLidDraw& draw = waterMaskLidDraws_[waterMaskLidDrawCount_++];
+        draw.modelViewProj = mask.modelToWorld * viewProj;
+        const Math::mat4 modelView = mask.modelToWorld * view;
+        draw.modelViewZ = Math::float4(modelView.m.m[0][2], modelView.m.m[1][2], modelView.m.m[2][2], modelView.m.m[3][2]);
+        draw.range = found->second;
+    }
+    if (waterMaskLidDrawCount_ == 0u) { return {}; }
+
+    ctx.NextPoint();
+    waterMaskLidPoint_ = ctx.usePoint ? *ctx.usePoint : 0u;
+    ctx.Use(waterMaskCrossings_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    ctx.NextPoint();
+    ctx.Use(waterMaskCrossings_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    waterMaskLidFlags_ = 2u | inside;
+    return [this](RenderGraphPassContext c)
+    {
+        Renderer* renderer = c.renderer;
+        auto t = c.BeginCL();
+        SetCommandListName(t.cl, c.pass);
+        ID3D12GraphicsCommandList* cl = t.cl;
+        {
+            GPU_SCOPE(cl, ProfilerScopes::kOceanWaterMask);
+            renderer->EmitPoint(cl, waterMaskLidPoint_);
+            renderer->BindDescriptorHeaps(cl);
+            // No crossing anywhere: the largest value (no view depth's bits reach it).
+            const UINT none[4] = { ~0u, ~0u, ~0u, ~0u };
+            cl->ClearUnorderedAccessViewUint(renderer->StageSrvUavTable({ waterMaskCrossingsUav_ }).gpu, waterMaskCrossingsUav_,
+                                             waterMaskCrossings_.Get(), none, 0, nullptr);
+            renderer->UAVBarrier(cl, waterMaskCrossings_.Get());
+
+            cl->OMSetRenderTargets(0, nullptr, FALSE, nullptr);
+            const D3D12_VIEWPORT viewport{ 0.0f, 0.0f, static_cast<float>(waterMaskCrossingsWidth_), static_cast<float>(waterMaskCrossingsHeight_), 0.0f, 1.0f };
+            const D3D12_RECT scissor{ 0, 0, static_cast<LONG>(waterMaskCrossingsWidth_), static_cast<LONG>(waterMaskCrossingsHeight_) };
+            cl->RSSetViewports(1, &viewport);
+            cl->RSSetScissorRects(1, &scissor);
+            D3D12_VERTEX_BUFFER_VIEW vbv{};
+            vbv.BufferLocation = waterMaskLidVb_->GetGPUVirtualAddress();
+            vbv.SizeInBytes = waterMaskLidVertexCount_ * static_cast<UINT>(sizeof(Math::float3));
+            vbv.StrideInBytes = sizeof(Math::float3);
+            D3D12_INDEX_BUFFER_VIEW ibv{};
+            ibv.BufferLocation = waterMaskLidIb_->GetGPUVirtualAddress();
+            ibv.SizeInBytes = waterMaskLidIndexCount_ * static_cast<UINT>(sizeof(std::uint32_t));
+            ibv.Format = DXGI_FORMAT_R32_UINT;
+            cl->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+            cl->IASetVertexBuffers(0, 1, &vbv);
+            cl->IASetIndexBuffer(&ibv);
+
+            const D3D12_GPU_DESCRIPTOR_HANDLE uavTable = renderer->StageSrvUavTable({ waterMaskCrossingsUav_ }).gpu;
+            struct LidCB
+            {
+                Math::mat4 modelViewProj;
+                Math::float4 modelViewZ;
+            };
+            static_assert(sizeof(LidCB) == 80, "LidCB must match water_mask_lid.hlsl WaterMaskLidCB");
+            for (std::uint32_t d = 0; d < waterMaskLidDrawCount_; ++d)
+            {
+                const WaterMaskLidDraw& draw = waterMaskLidDraws_[d];
+                auto cb = renderer->GetFrameResource()->AllocDynamic(sizeof(LidCB), render::kConstantBufferAlignment);
+                if (!cb.cpu || cb.gpu == 0) { continue; }
+                LidCB k{ draw.modelViewProj, draw.modelViewZ };
+                std::memcpy(cb.cpu, &k, sizeof(k));
+                auto h = renderer->GetRenderContextPool()->Acquire();
+                RenderContext& rc = h.ref();
+                rc.cbv[0] = cb.gpu;
+                rc.uavTable[0] = uavTable;
+                if (!waterMaskLidMaterial_->Bind(cl, rc)) { continue; }
+                cl->DrawIndexedInstanced(draw.range.indexCount, 1, draw.range.firstIndex, static_cast<INT>(draw.range.firstVertex), 0);
+                render::g_renderStats.AddDraw(draw.range.indexCount, 1u);
+            }
+            renderer->EmitPoint(cl, waterMaskLidPoint_ + 1u); // the crossings pixel-readable for the surface
+        }
+        c.EndCL(t);
+    };
+}
+
+void OceanRenderable::DeclareWaterMaskRead(RenderGraphPassContext& ctx) const
+{
+    if ((waterMaskLidFlags_ & 2u) != 0u && waterMaskCrossings_.Get())
+    {
+        ctx.Use(waterMaskCrossings_.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     }
 }
 

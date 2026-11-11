@@ -243,6 +243,7 @@ extern const Profiler::ScopeNameKey kTransparentDriver;
 extern const Profiler::ScopeNameKey kOceanRender;
 extern const Profiler::ScopeNameKey kOceanSurfSim;
 extern const Profiler::ScopeNameKey kOceanWake;
+extern const Profiler::ScopeNameKey kOceanWaterMask; // Main_WaterMask: the hulls' lids into the crossings the surface reads
 extern const Profiler::ScopeNameKey kPrepareTransparentBuckets;
 extern const Profiler::ScopeNameKey kAddPass;
 extern const Profiler::ScopeNameKey kPrepareViews;

@@ -12,7 +12,7 @@
 // ContactFoamTex stays at t10 (today's slot 10 carries the same ContactFoam.dds, loaded linear
 // rather than sRGB). The C++ table stages the same 26 entries for both surfaces; t22-t25, s4 and the
 // transparent pass's GlassView CB (b1) are the sun's shadow (ocean_surface_common.hlsli OceanSunShadow).
-#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=30, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
+#define OCEAN_SURFACE_RS "RootFlags(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT), CBV(b0), CBV(b1), CBV(b2), DescriptorTable(SRV(t0, numDescriptors=31, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(UAV(u0, flags=DESCRIPTORS_VOLATILE | DATA_VOLATILE)), DescriptorTable(Sampler(s0, numDescriptors=5, flags=DESCRIPTORS_VOLATILE))"
 #pragma pack_matrix(row_major)
 
 #include "utils.hlsli" // renamed since June; the only include fix
@@ -160,21 +160,24 @@ SamplerState PointSampler : register(s2);
 SamplerState AnisotropicWrapSampler : register(s3);
 
 // The hulls the surface is not drawn inside (ocean/WaterMask.h, mesh.json "waterMask"; OceanRenderable fills it every
-// frame): COLUMNS, the mesh rasterized from above on a grid in its model's xz, each cell keeping the water out between the
-// hull's skin under it (four samples a cell, interpolated) and its top (its rim, a cockpit filled to its lowest edge).
-// Five rows a hull (water_mask_columns.hlsli).
+// frame). What keeps the water out is the hulls' LIDS -- their caps and curtains, drawn by Main_WaterMask into the two
+// nearest crossings of every pixel (water_mask_lid.hlsl, t30): with the hull's walls they close its basins, so the water is
+// inside where the crossings in front of it, counted from the camera's own place, are odd. The hulls' rows and their
+// columns (t28, water_mask_columns.hlsli) are the PLAN, only for ocean.waterMask:3.
 #define WATER_MASK_MAX_HULLS 4
 cbuffer WaterMaskCB : register(b2)
 {
     uint4 waterMaskCount; // x hulls this frame, y 1 = discard, 2 = paint the kept-out water magenta (ocean.waterMask:2),
                           // 3 = discard, and paint red the water drawn OVER a hull's plan (a leak, a wave over the deck);
-                          // z the boats whose bow wave breakers come in over a gate (wakeBowGate)
+                          // z the boats whose bow wave breakers come in over a gate (wakeBowGate);
+                          // w bit 1: the lids were drawn this frame (t30 holds them), bit 0: the camera is inside a basin
     float4 waterMaskHull[WATER_MASK_MAX_HULLS * 5];
     // OceanWake::BowGates, two a boat: (the bow wave's roots' midpoint x z, the hull's forward x z), (the gate's length m,
     // half its lane m, 0, 0).
     float4 wakeBowGate[WATER_MASK_MAX_HULLS * 2];
 };
 StructuredBuffer<float4> WaterMaskColumns : register(t28);
+Texture2DArray<uint> WaterMaskCrossings : register(t30);
 #include "water_mask_columns.hlsli"
 
 // How much of the bow waves' breakers (the foam field's w) the water at a point shows: nothing on the line a boat's arms
@@ -199,17 +202,17 @@ float WakeBowGate(float2 xz)
     return gate;
 }
 
-bool InsideWaterMask(float3 worldPos)
+// Is this pixel's water inside a hull's basin? The lids' crossings in front of it (of the two nearest; a third in front is
+// taken as none -- a ray through two basins to a third), plus the camera's own place, odd. Its depth is the view depth the
+// lids wrote with (water_mask_lid.hlsl), compared as the bits of a positive float.
+bool InsideWaterMask(float4 svPosition, float viewDepth)
 {
-    for (uint h = 0u; h < min(waterMaskCount.x, (uint)WATER_MASK_MAX_HULLS); ++h)
-    {
-        if (HullKeepsWaterOut(worldPos, waterMaskHull[h * 5u + 0u], waterMaskHull[h * 5u + 1u], waterMaskHull[h * 5u + 2u],
-                              waterMaskHull[h * 5u + 3u], waterMaskHull[h * 5u + 4u], WaterMaskColumns))
-        {
-            return true;
-        }
-    }
-    return false;
+    const int2 pixel = int2(svPosition.xy);
+    const uint depth = asuint(max(viewDepth, 0.0f));
+    const uint first = WaterMaskCrossings.Load(int4(pixel, 0, 0));
+    const uint second = WaterMaskCrossings.Load(int4(pixel, 1, 0));
+    const uint inFront = (first < depth ? 1u : 0u) + (second < depth ? 1u : 0u);
+    return ((inFront + waterMaskCount.w) & 1u) != 0u;
 }
 
 // ocean.waterMask:3 -- the point is over a hull's plan and not under its lowest surface there: water drawn here is IN the
@@ -1292,14 +1295,23 @@ struct PSOut
     float4 gbAux : SV_Target5;
 };
 
-[earlydepthstencil]
+// No [earlydepthstencil] (2026-11-11): with it a pixel discarded below kept its depth -- the water's height inside a hull's
+// cockpit -- and whatever reads the depth after the water took the floor for water: fog_apply, which fogs what changed the
+// depth, fogged the floor a second time (owner, at police_boat's helm: "the water is just in the boat" -- a wavy band a
+// few levels lighter where the sea stood over the floor, gone with fog.enabled:0), DLSS and the particles' soft fade read
+// the wrong surface. Without it a discard writes no depth. What it was there for -- the shore wetness stamp (the UAV
+// below) must not run for a pixel the opaque scene hides, nor the whole shader -- is the first test now: the opaque depth
+// as it stood before the water (SceneDepthTexture), reverse-Z, the depth test's own rule.
 [RootSignature(OCEAN_SURFACE_RS)]
 PSOut PSMain(VSOutput input)
 {
-    // The water a marked hull keeps out (WaterMaskCB): not drawn there, the hull's own floor and walls show. The depth was
-    // written already ([earlydepthstencil]: the stamp UAV below must not run for a hidden pixel): what draws after the
-    // ocean and tests depth there meets the water's height, not the floor's.
-    const bool keptOut = waterMaskCount.x > 0u && InsideWaterMask(input.worldPos);
+    if (input.position.z < SceneDepthTexture.Load(int3(int2(input.position.xy), 0)).r)
+    {
+        discard;
+    }
+    // The water a marked hull keeps out (WaterMaskCB): not drawn there -- no colour, no G-buffer, no depth -- the hull's own
+    // floor and walls show.
+    const bool keptOut = (waterMaskCount.w & 2u) != 0u && InsideWaterMask(input.position, input.viewDepth);
     const bool leaked = waterMaskCount.y == 3u && !keptOut && OverWaterMaskPlan(input.worldPos);
     [branch] if (keptOut && waterMaskCount.y != 2u)
     {

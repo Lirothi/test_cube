@@ -1101,7 +1101,7 @@ A mesh.json `"vessel"` block makes the asset a powered boat (2026-11-05, owner: 
   - **"The left edge of the foam jerks to and fro"** (owner, watching the first build): which side of a front's line is outward was read off its first piece, and that piece has no length on the step a point leaves the hull -- the cross product was 0, read as "left", right for starboard and wrong for port: the port arm's toe and tail swapped every eighth of a second. The side is the front's own now (port: the line's right). And a HITCH forgot both arms: a frame that took long moved the hull further than the step's capped time allows, which the wash reads as a jump (no foam that step, as before) -- the fronts are kept unless the hull is over 8 m from where the last step had it (placed, put back by Stop) or the field was cleared.
   - PHOTOGRAPHING A SERIES: `screenshot {burst}` is useless here -- every frame stalls on its PNG, the physics runs on (4 steps a frame at most) while the ocean's clock does not keep up, the wash reads every step as a jump and the trail falls behind the boat (frames 4-11 of a burst of 12 showed no foam under the hull). Single shots 0.12-0.15 s apart instead (scratchpad-style `wakeseries.py`: 8 frames from 60 m up, `KEEP=1` leaves the boat at the helm for `shot.py` / `perf.py`).
   - Cost: the fronts are walked by PIECES of 16 segments with a box each (`FrontBounds`, 8 a front): one box round a whole arm lying across the axes covered most of the window and `Ocean.Wake` read 0.17-0.25 ms; by pieces 0.107-0.114 with the arms, 0.110-0.117 with `wakeBowFoam:0` (alternated twice, the mid view, 16 m/s) -- nothing. WakeCB is 18 KB (three copies a step, 30 steps a second).
-- **The wake's foam has its own texture and no repeat** (same day, owner: "even the tile shows on the current trail", then "pick a better foam texture if you can", then "play with the tile size"). The tile was three grids: the lace was the contact foam's noise at a 1.8 m tile (its streaks 6.3 m), the churn's relief the same texture at 0.7 and 0.3 m, the foam's albedo a 1 m tile -- and the lace read as paint splatter, hard-edged blobs. `textures/ocean/WakeFoam.png` (ours: `tools/gen_wake_foam.py`, numpy, a fixed seed; t29, the surface's table is 30; `textures/**` is gitignored: force-add it): R the LACE -- filaments at three scales (cells a fifth, an eleventh and a twenty-fourth of the tile) with rafts of bubbles between them, domain-warped, equalised to a flat histogram (a foam value v covers the share v, exactly) and stored GAUSSIANISED (0.5 + z / 6); G the churned white water's height (billows with rounded creases), BA its slope (0.5 + slope / 320, heights a tile). `ocean_surface_surf_sim.hlsli WakeFoamCoverage` reads it through a HEX TILING (Mikkelsen 2022): hexagons 0.475 of the tile across, each its own window of the tile (a random offset, drifting 6 cm/s its own way: neighbours slide and the foam boils), a pixel blends the three nearest with weights^4 -- the lace as Heitz & Neyret blend (2018: gaussian values, the variance kept), so a blend has the tile's own contrast and the share stays the value. A window is drawn out 3.5 times along the way the foam at ITS HEXAGON was laid, a pure stretch along that way (S = I + k way way^T), no turn: nothing shears where the way bends, nothing pops when a hexagon's first foam gives it a way. The cover is the normal CDF (a logistic) of (the value's rank - the lace) / spread, spread^2 = 0.14^2 + the variance the mips have lost (measured on the tile's chain: its deviation 1 / 0.93 / 0.75 / 0.45 / 0.18 at mips 0 / 2 / 4 / 6 / 8, fitted 1 - (lod / 8.5)^1.6): far away the cover goes to the value itself, the share. The relief's height and slope come from the same three taps (their mips flatten a far pixel's by themselves), and the wake's foam is plain white under them, not the whitecaps' 1 m albedo tile. 7 taps a wake pixel (4 of the 512^2 foam field, 3 of the detail) where the lace and the churn took 14: `Ocean.Surface` with `ocean.wakeFoam` 1 / 0, alternated twice: chase 0.299-0.305 / 0.287-0.288 ms, mid 0.339-0.355 / 0.329-0.330.
+- **The wake's foam has its own texture and no repeat** (same day, owner: "even the tile shows on the current trail", then "pick a better foam texture if you can", then "play with the tile size"). The tile was three grids: the lace was the contact foam's noise at a 1.8 m tile (its streaks 6.3 m), the churn's relief the same texture at 0.7 and 0.3 m, the foam's albedo a 1 m tile -- and the lace read as paint splatter, hard-edged blobs. `textures/ocean/WakeFoam.png` (ours: `tools/gen_wake_foam.py`, numpy, a fixed seed; t29, the surface's table was 30, 31 with the water mask's crossings at t30; `textures/**` is gitignored: force-add it): R the LACE -- filaments at three scales (cells a fifth, an eleventh and a twenty-fourth of the tile) with rafts of bubbles between them, domain-warped, equalised to a flat histogram (a foam value v covers the share v, exactly) and stored GAUSSIANISED (0.5 + z / 6); G the churned white water's height (billows with rounded creases), BA its slope (0.5 + slope / 320, heights a tile). `ocean_surface_surf_sim.hlsli WakeFoamCoverage` reads it through a HEX TILING (Mikkelsen 2022): hexagons 0.475 of the tile across, each its own window of the tile (a random offset, drifting 6 cm/s its own way: neighbours slide and the foam boils), a pixel blends the three nearest with weights^4 -- the lace as Heitz & Neyret blend (2018: gaussian values, the variance kept), so a blend has the tile's own contrast and the share stays the value. A window is drawn out 3.5 times along the way the foam at ITS HEXAGON was laid, a pure stretch along that way (S = I + k way way^T), no turn: nothing shears where the way bends, nothing pops when a hexagon's first foam gives it a way. The cover is the normal CDF (a logistic) of (the value's rank - the lace) / spread, spread^2 = 0.14^2 + the variance the mips have lost (measured on the tile's chain: its deviation 1 / 0.93 / 0.75 / 0.45 / 0.18 at mips 0 / 2 / 4 / 6 / 8, fitted 1 - (lod / 8.5)^1.6): far away the cover goes to the value itself, the share. The relief's height and slope come from the same three taps (their mips flatten a far pixel's by themselves), and the wake's foam is plain white under them, not the whitecaps' 1 m albedo tile. 7 taps a wake pixel (4 of the 512^2 foam field, 3 of the detail) where the lace and the churn took 14: `Ocean.Surface` with `ocean.wakeFoam` 1 / 0, alternated twice: chase 0.299-0.305 / 0.287-0.288 ms, mid 0.339-0.355 / 0.329-0.330.
   - `wakeFoamTile` (m of water a tile covers, 0.2-16, default 3; its floor was 1 m for no reason -- owner: "why on earth is it clamped at 1 m"; "Pattern size (m)" in both windows, `--set ocean.wakeFoamTile`): the lace's scale and the lumps'. Looked at 2 / 3 / 4 / 6 / 8 / 12 m from the chase camera and from 45 m: 2-3 is the fine feathery lace of the aerial photographs, 4 reads best from the helm, 8-12 are slabs with metre-wide holes. The soft white blobs over the wake in a shot are the spray's MIST puffs, not the foam.
   - **Every number of the foam and the arms is a knob, in ONE table** (same day, owner: "bring out everything that can be tuned, with hints one can understand"): `ocean/OceanWakeKnobs.h` -- per knob the key (the ocean preset's JSON key and `--set ocean.<key>`), the `OceanRenderConfig` field, its range, the drag's speed, and the LABEL and HINT both windows draw (the Ocean window, the Inspector's "Boat wake"; three headings: "Wake foam: how much, how long", "Wake foam: the pattern", "Bow wave arms"; a tooltip ends with its `--set` line and range). `OceanRenderConfigJson`, `--set` (App.cpp, past "ocean.") and both windows walk the table: a knob added there is saved, loaded, settable and drawn, and nothing else lists these keys (the field's physics knobs -- strength, damping, breaking, texel -- stay as they were). A hint says what the eye sees and which way to turn, not how the term is computed. Brought out of the code with it: `wakeFoamStretch` (3.5, "Streak stretch"), `wakeFoamSoftness` (0.14, "Edge softness"), `wakeFoamBoil` (0.06 m/s, "Boil speed"), `wakeAeration` (0.4, "Bubble scar") -- the surface's `wakeParams4` --, `wakeFoamSpread` (0.3 m2/s, "Foam spreading": the field's diffusion, capped at 0.24 of the stability limit; at 0 the arms and the trail are three crisp stripes), `wakeBowThrow` (0.09 s, "Arms shoulder"), `wakeBowWidth` (0.9 m) / `wakeBowWiden` (0.25 m/s), `wakeBowScallop` (0.2, "Arms raggedness"), `wakeBowSpeedFull` (12 m/s: the arms come in from 3 m/s to it -- the wake's own gate now; `VesselSpray::BowWaveOf` hands over the bow's immersion alone, and a boat under 3 m/s keeps no front). NOT a knob: the hexagons' spacing (0.475 of the tile -- a window is then just under one tile across: larger shows the repeat inside a window, smaller is a mush of blends). Each proven to move the picture at its two ends (scratchpad-style `knobsweep.py`: the boat running, low / high / back to the default, from 45 m and from the chase camera); the boil's speed cannot be seen in a still.
   - **The white water behind a turning hull read as plaster** (same day, owner at 18:00, full throttle, the rudder hard over, the camera behind the stern: "fix this cringe patch with the bump"). A hull that slides sideways in a turn stamps its whole footprint: a slab of foam at the field's cap, one white, and the relief on it was a grain of centimetres under a low sun -- the height rode the lace's tile (a fortieth of 3 m), and the texture's height had only the two small scales. Now (1) the relief has ITS OWN scale, `wakeChurnSize` ("Relief size (m)", 4 m a tile, at least the lace's; `wakeParams3.w`): a second tap of the detail texture a hexagon, read only where the pixel is fresh white water (foam over 0.4 and `wakeChurn` on) -- `Ocean.Surface` from the chase camera at 16 m/s with `wakeChurn` 1 / 0, alternated twice: 0.371-0.376 / 0.372-0.375 ms; (2) the texture's height is mostly BOILS (a fifth to a twelfth of the tile: 0.3-0.8 m at 4 m) with the lumps and a little grain on them (`gen_wake_foam.py`; the lace's channel is the same bytes: its random draws come first); (3) `wakeFoamCap` ("Solid white limit", 0.93; `wakeParams5.x`; 1 = before): the densest foam covers that share at most, so the clearest few per cent of the lace stay holes with milky water in them -- froth, not paint. On the owner's frame (scratchpad-style `turnshot.py`: 18:00, the turn, arms of settings): soft boils under the stern where the slab was; `wakeChurnSize:1` with `wakeFoamTile:1` brings the grain back (the control).
@@ -1225,93 +1225,143 @@ objects' SyncSceneState; `Scene::Clear` forgets them with the level.
 2026-11-09 (owner, on a frame where the cockpit stood in the sea: "the water floods the inside of the boat; make a mask for
 marked meshes so the water is not drawn inside them"). A mesh asset with `"waterMask": true` (Mesh Editor > Water "Keeps the
 water out"; `RenderableObject::SetWaterMask`, read by the factory like every folded asset key) keeps the ocean's surface out of
-a volume made from its LOD 0: COLUMNS, the mesh rasterized from above. small_yacht carries it.
+its cockpits: whatever water poured on the boat would hold before it spilled. small_yacht, police_boat and fast_boat_13 carry it.
 
-- **Not its convex hull** (the first cut, the same day; owner on its frame: "your method artefacts, better a mask by
-  rasterization"). A convex hull bridges every concavity: behind the transom it closed a wedge from the swim platform up to
-  the deck, and the sea over the platform ended in a straight edge. Rasterizing that hull into the frame would have drawn the
-  same wedge -- the volume was wrong, not the test; and a screen-space interval (the nearest front face to the farthest back
-  face) masks the water between the platform and the transom seen from the side, so the test stays the water's own point.
-- **The columns** (`ocean/WaterMask.cpp BuildField`, `physics::ReadSolidTriangles`): a grid over the model's xz,
-  `kWaterMaskCellsAlong` (256) cells along its long side (small_yacht: 4 cm, 284 x 88 with the padding, 263 k triangles,
-  built once a geometry when first collected, ~tens of ms, kept for the process). Per cell its rim (the highest surface,
-  each triangle clipped to the cell exactly, so a wall with no top face counts) and, at four points, the lowest and highest
-  surface over each. The rim's openings narrower than `kWaterMaskGap` (1 m) are closed (a grey-scale closing, never below
-  the rim), then a priority flood from outside fills every depression to the height water poured on the boat would stand
-  at before it spilled over its lowest edge. A cell keeps water out (a cell the mesh does not cover whole keeps nothing)
-  from the hull's SKIN -- the lowest surface over each of its four points, interpolated by the shader (below, "The mask
-  follows the skin"; until 2026-11-10 one number, the highest of the four) -- up to, a quarter of the cell at a time: in a
-  depression, its level -- the cockpit's air to its gunwale; elsewhere the quarter's own highest surface, lifted to the
-  level where it touches a filled quarter (a cell on a cockpit wall half over its floor leaves no band of water along the
-  wall). Without the closing the cockpit drained
-  through its walkthrough to the platform and the water stood in its aft half; taking the cell's whole rim as the top
-  (instead of the column its points share) cut slivers of sea along the waterline beside a spray rail. small_yacht: 11 488
-  cells keep water out, 8 082 of them in filled depressions. A cell is float4 (bottom, the water's top, the SOLID's top, the PLAN):
-  the solid's is the water's but in a filled depression, where it is the cell's own highest surface; the plan (2026-11-10)
-  is the lowest surface over the cell wherever the mesh touches it at all, +big where it does not -- what a particle with
-  `collideHulls` is tested against, at any height (above, "Making a Staged Boat a Vessel": no particle in or over a boat).
-- **One packing for every reader**: `OceanRenderable::EnsureWaterMaskColumns`, every frame before the render graph, packs the
-  frame's hulls (5 rows each) and the columns' SRV into `ocean::g_waterMaskFrame`; the surface's b2 copies it (gated by
-  `ocean.waterMask`), the particles' emitter CB too (whatever that switch says: Scene::Sync collects the masks always).
-- **The test is the water's own point**: the surf-sim surface's pixel shader (`ocean_surface_surf_sim.hlsli InsideWaterMask`,
-  at the top of PSMain) takes its world position into each hull's model space and discards it between the skin under
-  the point and the top of its quarter of its cell. No view ray, so the same volume holds from above, beside and at the
-  helm inside the hull.
-- **The frame**: `ocean/WaterMask` keeps a registry (no scene walk; the destructor unregisters); `Scene::Sync`, after the
-  physics poses, collects every visible marked object with the inverse of the matrix the frame draws it at (its render
-  offset: the waves, the physics) and hands them to the ocean (`OceanRenderable::SetWaterMasks`). The columns live in an
-  upload buffer (`Ocean.WaterMaskColumns`, `kWaterMaskMaxCells` (2^19) float4 = 8 MB, three a cell -- the column, the
-  skin under its four points, its four quarters' tops; wind_test's three boats take 283 k --, made with the first mask in
-  `EnsureSimulationResources`), each geometry written once into room no draw has read yet, read at t28 (the surface's table
-  was 29 with it; 30 with the wake foam's detail at t29); the draw fills b2 (`WaterMaskCB`: 4 hulls of 5 rows -- the transform, the grid, the span), 0 hulls without
-  one. The run-up surface does not read it (as it reads no wake). `--set ocean.waterMask:0` = drawn inside, the A/B;
-  `:2` = the kept-out water painted magenta instead of discarded, to see the volume; `:3` = the mask, and the water still
-  drawn over a hull's plan painted RED -- a leak in the volume, or a wave over the deck (transient).
-- **The mask follows the skin** (2026-11-10, owner: "review the method of cutting the water out of the boats; in the police
-  boat I see a leak"). Found with `ocean.waterMask:3` (made for it) on 30 held frames of police_boat (rest, four moments
-  full ahead, a turn; five views; scratchpad-style `police_look.py` + `redcount.py`): a line of water one cell wide along
-  the foot of the cockpit's inner wall and under the transom, and a stair of three cells on the floor. Two causes, read
-  off a dump of the build's arrays (temporary; `wm_section.py` / `wm_odd.py` printed sections of it): (1) the BOTTOM was
-  one number a cell, the highest of its four samples' lowest surfaces, "so the mask stops inside the skin" -- up to a cell
-  (3.8 cm) of water inside the skin. small_yacht hides it behind its inner liner; police_boat is single-skinned (the
-  floor at 0.69 m, the waterline at 0.71), and where the lowest surface JUMPS inside a cell (the floor at 0.69 beside the
-  underside of an overhanging side deck at 1.43, the transom) the whole cell kept water out only from 1.43. (2) the TOP
-  of a cell with something standing in it (a cabin pillar crossing the floor aslant: its rim is the pillar's, so it is no
-  depression) was lifted to a filled neighbour's level only when a direct neighbour was a depression; along the pillar
-  the neighbours are such cells too, and they kept their floor's slab alone. Now: the skin is kept per SAMPLE (four a
-  cell, a float4 behind the columns) and `water_mask_columns.hlsli HullKeepsWaterOut` interpolates it between the four
-  samples round the point, less 1 cm -- the water ends on the skin itself; a jump of more than `kWaterMaskJump` (0.12 m
-  between two samples 1.9 cm apart: a wall, no slope) carries the lower side one sample across (a strip of sea cut under an
-  overhang is not seen, a strip of water on a cockpit's floor is). The top is per QUARTER of a cell (a third float4; the
-  rim is clipped per quarter): the level goes from a depression through the open quarters (their rim under it) of the
-  cells whose own rim reaches it, highest level first, and a quarter the level did not enter beside one it did takes the
-  higher of the level and its own highest surface. After: the same 30 frames, mode 3's red equals the red the plain
-  frame holds (the dash's lamp) in every one; fast_boat_13 and small_yacht the same (what stays red there is the sea over
-  small_yacht's swim platform under way, as meant). From outside, low over the water at rest and under way, mask on / off:
-  the waterline the same, no sliver cut. `Ocean.Surface` at the helm, mask 1 / 0, alternated twice: 0.379-0.393 /
-  0.364-0.375 ms (five reads a water pixel in a hull's box where one was). Not changed, by design: water over a deck or a
-  platform is drawn (a bow stuffed into a wave is green water over the foredeck), and a wave higher than a cockpit's
-  lowest edge stands in it. GBV (`OceanWake,OceanReadback,Transparent,Transparent.Water,Translucent,ObjectCompute,Skybox` + the Skybox self-test, the Debug editor on a desktop of its own, Play, police_boat's helm, 40 s at 14-17 m/s with a hard turn, 2 fronts / 198 points and 1400 drops alive, `ocean.waterMask` 3 / 2 / 0 / 1 and the arms' gate 0 / 1 s / off / 0.3 switched in it; scratchpad-style `gbv_mask.py`): only id=935.
-- **What it does not do**: the depth. The surface is `[earlydepthstencil]` (the wetness stamp UAV must not run for a hidden
-  pixel), so a discarded pixel still wrote the water's depth: what draws after the ocean and tests or reads depth there
-  meets the water's height, not the floor's -- `fog_apply` fogs those pixels over the camera-to-water distance once more
-  (wind_test's 0.00055 / m over 15 m: 0.4 %), a particle below that level inside the hull is hidden. Not seen; a depth
-  restore pass after the water is the fix if it is.
-- **Measured** (the owner's way: in the editor, where the world stands, the yacht moved 1.2 m down -- an unsaved edit --, the
-  wind frozen, scratchpad-style `water_mask_check3.py`): from above the cockpit's floor under waves and foam with 0, dry
-  wood with 1, the pairs differing only there (0.78 % of the frame; beside it 0.06 %, the DLSS floor); from the stern the
-  seats dry, the water over the sunk platform kept. Under way (planing) the cockpit stands over the water and nothing
-  changes. `Ocean.Surface` (alternated twice): 0.30-0.33 vs 0.29-0.35 ms from above, 0.18 vs 0.19 close -- the discarded
-  pixels pay for the test. GBV (`Transparent,Transparent.Water,Skybox` + the Skybox self-test, the yacht sunk, the mask
-  live): only id=935, twice; once the FIRST frame also reported id=1358 (`Ocean.ShoreDepth` in COPY_SOURCE in the ocean's
-  VS) and id=1387 (a particle draw in `Translucent.Simple` whose t0 held `SkyAtmosphere.Transmittance`) -- before any edit,
-  not in the two runs after it; see the GBV section's first-frame reports.
-- **Measured, the columns** (the owner's stern view at 18:08, cam 60.51 2.59 113.58, his level's yacht sitting deep in the
-  editor, the wind frozen; scratchpad-style `stern_mask_repro.py`, arms 1 / 0 / 2): the cockpit dry to its walls, the sea
-  over the awash platform behind the transom drawn with no straight edge, nothing outside the hull kept out (with `:2` no
-  magenta on the sea; a few single pixels at the waterline). `Ocean.Surface` in Play 0.055-0.061 vs 0.057-0.061 ms off,
-  0.108-0.111 vs 0.108 from low beside the hull (alternated twice). GBV (`Transparent,Transparent.Water,OceanReadback,
-  SurfSim,Skybox` + the Skybox self-test, the Debug editor on a desktop of its own, the stern view, then Play 30 s): only id=935.
+- **A LID, rasterized** (2026-11-11, owner: "the water cutting is still so-so, artefacts all the time -- go classic, mask
+  rasterization"; on a mask mesh made by hand: "then you are needed at every import -- make a smart heuristic that generates
+  it"). Until then the test was the water's own point against the COLUMNS (below) -- the mesh rasterized from above on a 4 cm
+  grid, each cell keeping the water out from the skin up to a level --, and every wall the grid crossed was up to a cell wrong
+  one way or the other: sea cut outside a single-skinned hull along its waterline (police_boat), or a line of water inside it
+  (the 2026-11-10 skin fix moved the error, it could not remove it). Before them a convex hull (the first cut, 2026-11-09)
+  bridged every concavity: a wedge from the swim platform up to the deck. The lid takes its walls from the HULL ITSELF and is
+  generated from LOD 0 with nothing but the asset (`ocean/WaterMask.cpp BuildField`; baked beside the geometry and read by
+  the frame, below "The bake"):
+  1. **Basins**: the columns' flood (the rim's openings narrower than `kWaterMaskGap` 1 m shut, a priority flood from outside)
+     gives every depression and its level -- where water poured on the boat stands before it spills. Depressions within
+     0.15 m of level and 5 cells of each other are one basin at the lower level (a ladder's rungs had cut a cockpit into
+     slivers with seams), taken lowest first; a higher one whose water the cap passes under is taken in.
+  2. **The cap's height**: the basin's level less 5 mm, and no higher than `kWaterMaskReach` (1 m) over the hull's still
+     waterline (the vessel's `draft`; a buoyant object that is no vessel: its buoyancy draft over its lowest point). A foredeck
+     in its rails, a roof, a helm under a hardtop never meet the sea, and a cap up there only had more to go wrong (glass,
+     frames, rails lying in the plane). A basin whose floor is over the cap gets none (police_boat's two on the roof: `over the
+     sea's reach`).
+  3. **The outline**, on a 1 cm raster (`kWaterMaskLidSub` 4 pixels a cell side): WALLS are the plane's exact cross-section
+     through every triangle (walked through the pixels, Amanatides-Woo); SUPPORT is a pixel some triangle under the plane
+     covers (a cap never overhangs the sea where nothing is under it -- the bow rail's did); a smooth field of the cells (+ in
+     the basin, + in a basin not capped yet, + where the cell's own top is over the plane) says where the cap may go. A flood
+     from the basin's cells under the plane fills it to the walls; it reaches through a door into an enclosed space under a
+     deck or a roof (police_boat's wheelhouse), and a reached space that meets open, unwalled air is dropped -- it opens on the
+     outside. The basin's own cells and their ring are never dropped.
+  4. **The mesh**: marching squares on the pixel centres, a vertex on a wall moved onto the cross-section's segment exactly,
+     then `meshopt_simplify` with the border locked (small_yacht's aft cap 41 918 -> 1 023 triangles).
+  5. **Curtains**: where the outline crosses an opening instead of a wall (a walkthrough to the swim platform, a notch in the
+     rim) a vertical quad hangs from it to the sill -- the floor inside, or the top beyond if that is under the cap and has
+     something under it -- less 3 cm.
+  6. **Glass**: a see-through slot (`RenderableObjectBase::SeeThroughSlots`: thinTranslucent without an alpha test --
+     small_yacht 7, police_boat 13, fast_boat_13 2) is a wall for the flood and the cut, and where it parts the cap's side from
+     the outside under the plane (a wall pixel between them) its faces, clipped to the plane, join the lid: a view ray through
+     a windshield crosses it as it crosses a curtain. Without them the cockpit's water showed through the glass; with every
+     glass face (the first try) the windshield's wings were counted twice and the sea showed there.
+  The cap, the curtains and the glass with the hull's opaque walls enclose the basin. The log: one Info line a basin (`water
+  mask: <path> -- basin N (cells, level, cap, taken in): segments of the cut, enclosed spaces reached beyond it, open ones
+  dropped, pixels under the cap, cap triangles, curtain quads, glass faces`) and one a geometry; Debug lists every depression.
+  On wind_test: small_yacht caps at 0.442 m (the aft cockpit) and 1.380 (the helm, at the reach), 3548 triangles; police_boat
+  1.710 (the deck and the wheelhouse, at the reach, no curtain) and 1.526 (the bow), 2838; fast_boat_13 0.896 (no curtain) and
+  0.912 twice, 4947.
+- **The test is the parity of the lid's crossings**, the classic way: `Main_WaterMask` (`--gbv-passes` WaterMask, before
+  Main_Transparent; GPU scope `Ocean.WaterMask`) clears `Ocean.WaterMaskCrossings` (R32_UINT, two slices, the render size:
+  9.5 MB at DLSS Balanced's 1485 x 835, 28 MB at 2560 x 1440) and draws every hull's lid with no target, no depth test and no
+  culling (`shaders/water_mask_lid.hlsl`): each pixel keeps the two NEAREST view depths of the lid by atomics. The surface's
+  pixel shader (`ocean_surface_surf_sim.hlsli InsideWaterMask`, t30; its table is 31) counts the ones in front of its own
+  point -- odd = inside, discarded. The camera's side starts the count: `watermask::InsideLid` on the CPU (under a cap, over
+  its floor, inside its outline) flips it (`WaterMaskCB.count.w` bit 0; bit 1 = lids drawn this frame). The hull's walls are
+  never approximated, so nothing is cut outside the hull however its skin leans and nothing is left inside it; the lid's own
+  surfaces are see-through, so the parity holds from above, from beside, through the glass and from the helm. Two crossings
+  a pixel suffice while a ray meets at most two lid surfaces before the water (a cap and a pane under it); a third, nearer,
+  would flip the answer. The lids live in upload buffers (`Ocean.WaterMaskLidVertices` 2^17 float3, `...LidIndices` 2^19),
+  each geometry written once, drawn with the matrix the frame draws its object at.
+- **The columns stay for the particles** (`physics::ReadSolidTriangles`, a grid over the model's xz, `kWaterMaskCellsAlong`
+  (256) cells along its long side -- small_yacht 4 cm, 284 x 88 with the padding): a cell is float4, `.w` the PLAN -- the
+  lowest surface over the cell wherever the mesh touches it at all, +big where it does not; what a particle with
+  `collideHulls` is tested against at any height and what its sprite's pixels are clipped by ("Making a Staged Boat a
+  Vessel": no particle in or over a boat). `OceanRenderable::EnsureWaterMaskColumns`, every frame before the render graph,
+  packs the frame's hulls (5 rows each) and the columns' SRV into `ocean::g_waterMaskFrame`; the particles' emitter CB reads
+  it whatever `ocean.waterMask` says (Scene::Sync collects the masks always), the surface's b2 for mode 3. `Ocean.WaterMaskColumns`:
+  `kWaterMaskMaxCells` (2^18) float4, 4 MB, one a cell; wind_test's three boats take 94 k. The registry: `ocean/WaterMask`,
+  no scene walk (the destructor unregisters); `Scene::Sync`, after the physics poses, collects every visible marked object
+  with the matrix the frame draws it at (its render offset: the waves, the physics) and its inverse, and hands them to the
+  ocean (`OceanRenderable::SetWaterMasks`). The run-up surface reads none of it (as it reads no wake).
+- **Knobs and tools**: `--set ocean.waterMask:0` = drawn inside, the A/B; `:2` = the kept-out water painted magenta instead of
+  discarded (the lid's volume); `:3` = the mask, and the water still drawn over a hull's plan painted RED -- a wave over the
+  deck, or a leak (transient). `test_cube.exe --water-mask-lid=<x.mesh.bin>[,<out.obj>[,<slot;slot>]]` builds one mask
+  without a window (the vessel's draft from the mesh.json beside the geometry; the glass slots as given), checks the bake's
+  round trip (below) and writes the lid as an OBJ, a group per basin's cap and its curtains (exit 0; 1 = no lid, 2 = the
+  geometry unreadable, 3 = the bake does not round-trip; it writes no bake) -- what scratchpad-style `lid_plot.py` (the caps
+  over the hull from above) and `glass_plot.py` (a pane's faces in the lid or not) drew to find each step above.
+- **The bake** (2026-11-11, owner: "why does the mask take so long?", then "why can't this mesh be generated at import?").
+  It was built the first time a boat was seen, ON THE GAME THREAD: Release_Editor 106 / 125 / 317 ms for small_yacht /
+  police_boat / fast_boat_13, Debug 1.1-2.7 s, every launch. A field depends on what is set after the import -- the vessel's
+  draft, the glass slots -- so it is baked where those are known: `models/<name>/<name>.watermask.bin` beside the
+  `.mesh.bin` (gitignored with it; 370 / 457 / 666 KB), holding its KEY -- the `.mesh.bin`'s size and last write, the draft
+  (or the buoyancy draft), the glass slots, `kWaterMaskBakeVersion` (WaterMask.h) -- and the field (the plan, the lid, the
+  basins with their floors). `watermask::Collect` makes the key from the OBJECT (`SeeThroughSlots`, its vessel / buoyancy) the
+  first time it meets one; the bake read when the key matches (0.6 ms Release_Editor, ~1 ms Debug; `water mask: ... read the
+  bake`), else the field is built on a worker (`TaskSystem::SubmitDetach`; `the bake does not serve (no bake file | made for
+  another draft | made for other glass slots | made from another bake of the geometry | made by version N)`): the hull keeps
+  no water out until it lands (100-210 ms Release, 0.8 s Debug), and a build with the editor writes the file (temp + rename:
+  two editors never leave half a file; `built on a worker in N ms, baked into ...`). A Release build only reads. So a Mesh
+  Editor Save that changes the draft or a material's glass (its placed copies come back with the new key), a re-bake of the
+  geometry and the first sight of a new hull rebake it by themselves; nothing is baked at the import (no draft, no glass, no
+  `waterMask` yet then). BUMP `kWaterMaskBakeVersion` WITH ANY CHANGE TO WHAT BuildField MAKES, or the frames keep the old
+  masks. The registry keeps one field per geometry AND key (two copies share it). The build's own cost went with it, by its
+  phases in the log (`water mask: ... in N ms (read, grid, basins, support, lids)` and each basin's `ms: cut, support, flood,
+  floors, mesh (simplify)`): the hull was read twice (all slots, then the glass) -- once now; every cap rasterized the whole
+  hull for its support (108 ms of fast_boat_13's 317 for three caps) -- one raster for all of them now
+  (`SupportLowest`: the lowest triangle over each pixel centre, a cap's support is what lies under its plane); every cap walked
+  every triangle again for its floors (42 ms) -- the grid pass keeps every surface over its samples now and a floor is a
+  look-up. 107 / 127 / 320 -> 98 / 109 / 201 ms; what is left is the grid (27-68 ms) and meshoptimizer on the caps' raster
+  (36-42 ms on the two big caps). The lids against the old build: the same indices in every group, 8 of small_yacht's 3093
+  vertices moved by 9 um (curtains' bottoms). Checked: `--water-mask-lid` on the three boats (Release and Debug): the field
+  read back from its bytes is the field, a key with another draft is refused; my editor (port 8131) run 1 -- no bakes,
+  three workers, three files; run 2 -- three reads; run 3 with police_boat's key poked (draft + 1 cm) and small_yacht's file
+  deleted -- `made for another draft` and `no bake file`, both rebuilt and rewritten, fast_boat_13 read; the boats sunk (an
+  unsaved edit) and shot from above with `ocean.waterMask:2`: the kept-out water (magenta by hue) of a rebuilt mask and a read
+  one differs on 1.2-1.4 % of its pixels, the same mask read twice 1.1 % -- the waves' floor; mode 1 none. A Release run of
+  wind_test read all three and wrote nothing; the Debug editor on a desktop of its own built the missing one on a worker in
+  790 ms, no assert. No shader or GPU resource changed: no GBV run.
+- **Measured** (2026-11-11, wind_test, the editor and Play; scratchpad-style `wm_look.py`, `police_look.py` +
+  `magenta_sheet.py`): mode 2 on low views along the waterline of all three boats, at rest, full ahead and in turns -- no
+  magenta outside a hull (police_boat's cut along its waterline was the complaint); the boats sunk 1.2 m in the editor (an
+  unsaved edit) -- the cockpits dry to their walls, through the open transom and through the glass; the camera inside
+  (police_boat at eye heights 1.2 / 1.6 / 2.2 m, fast_boat_13 0.55 / 0.75) -- the sea outside drawn, the inside kept.
+  `Ocean.WaterMask` ~0.025 ms; `Ocean.Surface` at police_boat's helm under way, mask 1 / 0: 0.272 / 0.264 ms (the columns'
+  five reads a pixel cost 0.379-0.393 / 0.364-0.375). GBV (`WaterMask,Transparent,Transparent.Water,Skybox` + the Skybox
+  self-test, Debug, police_boat in the frame): only id=935, `live objects at exit: none`.
+- **Not done, and by design**: small_yacht's aft cockpit floor lies at its spill level (0.447 m: its transom is open), so its
+  cap keeps out only what is under 0.442 -- a wave over the transom stands in it, as it did with the columns. A wave higher
+  than a cockpit's lowest edge stands in it, and water over a deck or a platform is drawn (a bow stuffed into a wave is green
+  water over the foredeck). A new hull needs nothing: a basin the heuristic gets wrong shows in mode 2 and in
+  `--water-mask-lid`'s OBJ.
+- **A kept-out pixel writes no depth** (2026-11-11, owner at police_boat's helm in the editor, cam 44.89 1.57 120.47, 18:00:
+  "the water is just in the boat"). The surface was `[earlydepthstencil]` (the shore wetness stamp UAV must not run for a
+  hidden pixel), so a discarded pixel still wrote the water's depth, and `fog_apply` -- it fogs the pixels whose depth the
+  transparent pass changed (`z != zPrev`) -- fogged the cockpit floor a second time wherever the live sea stood over it: a
+  band a few levels lighter with the waves' own wavy edge, crawling with them, on the black floor at 2 m. Frozen water hid
+  it (a frozen moment had the sea under the floor); found by sweeping the frozen clock (`wind.freezeAt` 0..60 s) for the most
+  magenta (`ocean.waterMask:2`) on the floor, then knob by knob, each arm against the same knob with `ocean.visible:0` inside
+  the water's band (scratchpad-style `owner_bisect.py`): 5.95 levels in the band with every knob but `fog.enabled:0` (0.15).
+  Now `ocean_surface_surf_sim.hlsli PSMain` has no `[earlydepthstencil]` -- a discard writes no colour, G-buffer or depth --
+  and its first line discards a fragment the opaque scene hides (`SceneDepthTexture`, the opaque depth before the water,
+  reverse-Z), which is what the stamp needed. The band: 5.95 -> 0.28 levels (the fog-off control 0.14); the owner's view
+  live 30 s after the launch, 16 frames: no band. The price is the hardware's early depth test on the hidden water:
+  `Ocean.Surface` (alternated twice) cockpit 0.068-0.069 -> 0.081-0.082 ms, grove 0.10-0.12 -> 0.15, shore 0.22-0.26 ->
+  0.27, from above the island the same (0.22-0.28 / 0.25-0.26). DLSS and the particles' soft fade read the floor there too
+  now. A body-only shader change: no GBV run.
+- **The columns' own history** (the surface's test until 2026-11-11): 2026-11-09 a cell kept the water out from its skin to
+  its depression's level (the cockpit's air to its gunwale); 2026-11-10 (owner: "in the police boat I see a leak") the skin
+  per sample and the top per quarter cell (`kWaterMaskJump`, gone) took police_boat's line of water along its cockpit wall,
+  found with mode 3 on 30 held frames; `Ocean.Surface` then 0.379-0.393 ms at its helm. Both GBV runs then: only id=935
+  (once the first frame also reported id=1358 / id=1387, see the GBV section's first-frame reports).
 ## A Race Course and Its Bot -- Buoys, Gates, a Helmsman
 
 2026-11-10 (owner: "design a water course, mark it with buoys (ocean_buoy) and write a bot that runs it; part of it along

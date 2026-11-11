@@ -12,24 +12,31 @@
 
 namespace physics
 {
-    bool ReadSolidGeometry(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots, SolidGeometry& out)
+    namespace
     {
-        out = SolidGeometry{};
-        std::vector<Math::float3> positions;
-        std::vector<std::uint32_t> indices;
-        std::vector<Mesh::Submesh> submeshes;
+        // A mesh on disk at a LOD as it lies in the file: every vertex, the LOD's indices, its submeshes.
+        struct RawGeometry
+        {
+            std::vector<Math::float3> positions;
+            std::vector<std::uint32_t> indices;
+            std::vector<Mesh::Submesh> submeshes;
+            std::uint32_t lodUsed = 0;
+            std::uint32_t lodCount = 0;
+        };
 
-        MeshManager::CollisionGeometry baked;
-        if (MeshManager::ReadCollisionGeometry(geometryPath, lod, baked))
+        bool ReadRawGeometry(const std::string& geometryPath, int lod, RawGeometry& raw)
         {
-            positions = std::move(baked.positions);
-            indices = std::move(baked.indices);
-            submeshes = std::move(baked.submeshes);
-            out.lodUsed = baked.lodUsed;
-            out.lodCount = baked.lodCount;
-        }
-        else
-        {
+            raw = RawGeometry{};
+            MeshManager::CollisionGeometry baked;
+            if (MeshManager::ReadCollisionGeometry(geometryPath, lod, baked))
+            {
+                raw.positions = std::move(baked.positions);
+                raw.indices = std::move(baked.indices);
+                raw.submeshes = std::move(baked.submeshes);
+                raw.lodUsed = baked.lodUsed;
+                raw.lodCount = baked.lodCount;
+                return true;
+            }
             // Not a .mesh.bin (an OBJ, a glTF node): the importer's own parse, LOD0, as the buoyancy's analysis does. A local
             // manager: its cache is the frame's.
             MeshCpuData cpu;
@@ -40,20 +47,45 @@ namespace physics
             {
                 return false;
             }
-            positions.resize(cpu.vertices.size());
+            raw.positions.resize(cpu.vertices.size());
             for (size_t i = 0; i < cpu.vertices.size(); ++i)
             {
-                positions[i] = Math::float3(cpu.vertices[i].position);
+                raw.positions[i] = Math::float3(cpu.vertices[i].position);
             }
-            indices = std::move(cpu.indices);
-            submeshes = std::move(cpu.submeshes);
-            out.lodUsed = 0;
-            out.lodCount = 1;
+            raw.indices = std::move(cpu.indices);
+            raw.submeshes = std::move(cpu.submeshes);
+            raw.lodUsed = 0;
+            raw.lodCount = 1;
+            return true;
         }
 
-        const auto excluded = [&excludeSlots](std::uint32_t slot)
+        void TakeSlots(const RawGeometry& raw, const std::vector<int>& excludeSlots, bool onlyListed, SolidGeometry& out);
+    }
+
+    bool ReadSolidGeometry(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots, SolidGeometry& out, bool onlyListed)
+    {
+        out = SolidGeometry{};
+        RawGeometry raw;
+        if (!ReadRawGeometry(geometryPath, lod, raw)) { return false; }
+        TakeSlots(raw, excludeSlots, onlyListed, out);
+        return true;
+    }
+
+    namespace
+    {
+    void TakeSlots(const RawGeometry& raw, const std::vector<int>& excludeSlots, bool onlyListed, SolidGeometry& out)
+    {
+        out = SolidGeometry{};
+        out.lodUsed = raw.lodUsed;
+        out.lodCount = raw.lodCount;
+        const std::vector<Math::float3>& positions = raw.positions;
+        const std::vector<std::uint32_t>& indices = raw.indices;
+        const std::vector<Mesh::Submesh>& submeshes = raw.submeshes;
+
+        const auto excluded = [&excludeSlots, onlyListed](std::uint32_t slot)
         {
-            return std::find(excludeSlots.begin(), excludeSlots.end(), static_cast<int>(slot)) != excludeSlots.end();
+            const bool listed = std::find(excludeSlots.begin(), excludeSlots.end(), static_cast<int>(slot)) != excludeSlots.end();
+            return onlyListed ? !listed : listed;
         };
 
         // The triangles left, and only the vertices they use: a bake's vertex buffer can carry LOD3 prune copies past LOD0's
@@ -88,8 +120,8 @@ namespace physics
                 if (!excluded(submesh.materialSlot)) { take(submesh.indexOffset, submesh.indexCount); }
             }
         }
-        return true;
     }
+    } // namespace
 
     ShapeKind ResolveShapeKind(ShapeKind requested, bool dynamicBody)
     {
@@ -480,6 +512,30 @@ namespace physics
         out.yawDeg = JPH::RadiansToDegrees(best.yaw);
         out.valid = true;
         return out;
+    }
+
+    bool ReadSolidAndSlotTriangles(const std::string& geometryPath, const std::vector<int>& slots, std::vector<Math::float3>& positions,
+                                   std::vector<std::uint32_t>& indices, std::vector<Math::float3>& slotPositions,
+                                   std::vector<std::uint32_t>& slotIndices)
+    {
+        positions.clear();
+        indices.clear();
+        slotPositions.clear();
+        slotIndices.clear();
+        RawGeometry raw;
+        if (!ReadRawGeometry(geometryPath, 0, raw)) { return false; }
+        SolidGeometry geometry;
+        TakeSlots(raw, {}, false, geometry);
+        if (geometry.indices.size() < 3) { return false; }
+        positions = std::move(geometry.positions);
+        indices = std::move(geometry.indices);
+        if (!slots.empty())
+        {
+            TakeSlots(raw, slots, true, geometry);
+            slotPositions = std::move(geometry.positions);
+            slotIndices = std::move(geometry.indices);
+        }
+        return true;
     }
 
     bool ReadSolidTriangles(const std::string& geometryPath, std::vector<Math::float3>& positions, std::vector<std::uint32_t>& indices)

@@ -166,6 +166,11 @@ public:
     void GetWakeFrontReadout(std::uint32_t& fronts, std::uint32_t& points, std::uint32_t& drawn) const;
     // The hulls the surface is not drawn inside (ocean/WaterMask.h), as Scene::Sync collects them (render half parked).
     void SetWaterMasks(std::vector<ocean::WaterMaskInstance> masks) { waterMasks_ = std::move(masks); }
+    // Main_WaterMask's builder: this frame's hulls' lids (their caps and curtains) into the two nearest crossings of every
+    // pixel, which the surface reads (t30) -- before Main_Transparent. Empty return = no lid this frame (no water kept out).
+    std::function<void(RenderGraphPassContext)> BuildWaterMaskPass(RenderGraphPassContext& ctx, const Camera& camera);
+    // Main_Transparent's: the crossings pixel-readable for the surface, on a frame that drew them.
+    void DeclareWaterMaskRead(RenderGraphPassContext& ctx) const;
     // Main_OceanReadback's builder: the surface to the CPU, only on a frame someone asked for it.
     std::function<void(RenderGraphPassContext)> BuildReadbackPass(RenderGraphPassContext& ctx)
     {
@@ -377,10 +382,45 @@ private:
     std::unique_ptr<OceanWake> wake_;
     bool wakeHasHulls_ = false; // the last hand-over had a boat: the field's resources are made only then
     std::vector<ocean::WaterMaskInstance> waterMasks_; // this frame's, from Scene::Sync
-    // The masks' columns on the GPU (t28): an upload buffer of ocean::kWaterMaskMaxCells float4, each field written once,
-    // when first met, into room no draw has read yet; made with the first mask. And this frame's hulls packed into
-    // ocean::g_waterMaskFrame. Every frame, before the render graph (EnsureSimulationResources).
+    // The masks' columns on the GPU (t28, the plan): an upload buffer of ocean::kWaterMaskMaxCells float4, each field written
+    // once, when first met, into room no draw has read yet; made with the first mask. And this frame's hulls packed into
+    // ocean::g_waterMaskFrame. Every frame, before the render graph (EnsureSimulationResources); the lids with them.
     void EnsureWaterMaskColumns(Renderer* renderer);
+    // The lids: their vertices and indices in two upload buffers (each field written once, as the columns), the crossings
+    // (two slices of R32_UINT at the render size, made with the first lid and remade when that size changes), the PSO, and
+    // what this frame's Main_WaterMask draws.
+    void EnsureWaterMaskLids(Renderer* renderer);
+    struct WaterMaskLidRange
+    {
+        std::uint32_t firstVertex = 0;
+        std::uint32_t firstIndex = 0;
+        std::uint32_t indexCount = 0;
+    };
+    struct WaterMaskLidDraw
+    {
+        Math::mat4 modelViewProj;
+        Math::float4 modelViewZ;
+        WaterMaskLidRange range;
+    };
+    Microsoft::WRL::ComPtr<ID3D12Resource> waterMaskLidVb_;
+    Microsoft::WRL::ComPtr<ID3D12Resource> waterMaskLidIb_;
+    Math::float3* waterMaskLidVbMapped_ = nullptr;
+    std::uint32_t* waterMaskLidIbMapped_ = nullptr;
+    std::uint32_t waterMaskLidVertexCount_ = 0;
+    std::uint32_t waterMaskLidIndexCount_ = 0;
+    std::unordered_map<const ocean::WaterMaskField*, WaterMaskLidRange> waterMaskLidFirst_;
+    GpuResource waterMaskCrossings_;
+    std::uint32_t waterMaskCrossingsWidth_ = 0;
+    std::uint32_t waterMaskCrossingsHeight_ = 0;
+    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> waterMaskCrossingsHeap_;
+    D3D12_CPU_DESCRIPTOR_HANDLE waterMaskCrossingsUav_{};
+    D3D12_CPU_DESCRIPTOR_HANDLE waterMaskCrossingsSrv_{};
+    std::shared_ptr<Material> waterMaskLidMaterial_;
+    bool waterMaskLidFailed_ = false;
+    std::array<WaterMaskLidDraw, 16> waterMaskLidDraws_{}; // the lids drawn a frame (every visible hull's, up to 16)
+    std::uint32_t waterMaskLidDrawCount_ = 0;
+    std::uint32_t waterMaskLidPoint_ = 0;
+    std::uint32_t waterMaskLidFlags_ = 0; // the surface's WaterMaskCB w: bit 1 the lids were drawn, bit 0 the camera is inside a basin
     Microsoft::WRL::ComPtr<ID3D12Resource> waterMaskColumns_;
     Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> waterMaskHeap_;
     D3D12_CPU_DESCRIPTOR_HANDLE waterMaskSrv_{};

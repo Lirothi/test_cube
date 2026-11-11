@@ -210,6 +210,14 @@ public:
         return md && md->IsGlassOnly();
     }
     bool AllSlotsGlassOnly() const;
+    void SeeThroughSlots(std::vector<int>& out) const override
+    {
+        out.clear();
+        for (size_t slot = 0; slot < slotGlassMaterials_.size(); ++slot)
+        {
+            if (SlotIsGlassOnly(slot)) { out.push_back(static_cast<int>(slot)); }
+        }
+    }
 
     // RT (S10): augment the base instance with this object's albedo texture +
     // base-color tint so ray hits can be shaded with the real material color.

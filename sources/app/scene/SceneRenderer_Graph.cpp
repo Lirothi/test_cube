@@ -2359,9 +2359,18 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
     // prereqs and mtDeps and NOT from resource declarations, so this entry is what makes the wait
     // exist at all. Dropping it as "already covered by the barriers" would be a read of maps the
     // compute queue is still writing.
-    const std::initializer_list<size_t> transpDeps = decisions_.glassRefl
-        ? std::initializer_list<size_t>{ gb.pCompose, gb.pGlassReflect, gb.pObjectCompute }
-        : std::initializer_list<size_t>{ gb.pCompose, gb.pObjectCompute };
+    // The water masks' lids (ocean/WaterMask.h): the hulls' caps and curtains into the crossings the ocean surface counts,
+    // drawn before it. Only on a frame a marked hull is in view (its builder returns nothing otherwise).
+    const size_t pWaterMask = rg.AddPass2(RenderPass::Main_WaterMask, { gb.pCompose },
+        [this](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
+            if (!frame_->ocean || !frame_->camera || !WaterDrawsThisFrame()) { return {}; }
+            return frame_->ocean->BuildWaterMaskPass(ctx, *frame_->camera);
+        });
+    RenderGraph<kMainRenderGraphPassCount>::DependencyList transpDeps;
+    transpDeps.push_back(gb.pCompose);
+    if (decisions_.glassRefl) { transpDeps.push_back(gb.pGlassReflect); }
+    transpDeps.push_back(gb.pObjectCompute);
+    transpDeps.push_back(pWaterMask);
 
     // Buoyancy: the first 1-2 FFT cascades and the shore depth map into a readback ring, read by
     // the CPU the first frame the GPU is known done with it -- never waited on. After the sim (the
@@ -2384,7 +2393,7 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
             return frame_->ocean->BuildReadbackPass(ctx);
         });
 
-    auto pTransp = rg.AddPass2(RenderPass::Main_Transparent, transpDeps,
+    auto pTransp = rg.AddPass2(RenderPass::Main_Transparent, transpDeps, /*mtDeps=*/{}, /*declares=*/{},
         [this, renderer](RenderGraphPassContext& ctx) -> std::function<void(RenderGraphPassContext)> {
         RenderGraphPassContext& p = ctx;
         const auto& DT = p.renderer->GetDeferredForFrame();
@@ -2413,6 +2422,8 @@ void SceneRenderer::BuildForwardAndEditor(Renderer* renderer, GraphBuild& gb)
         if (ID3D12Resource* pool = LocalShadowPoolResource()) { p.Use(pool, render::LocalShadowCache::kRestState); }
         p.Use(DT.sceneOpaque.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         p.Use(DT.depthCopy.Get(), D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        // The water masks' crossings (Main_WaterMask left them there; the surface reads them at t30).
+        if (frame_->ocean) { frame_->ocean->DeclareWaterMaskRead(p); }
         // Volumetric fog (plan A5): the ocean, glass and particles bind the integrated volume EVERY
         // frame (their tables must stay populated; the shaders gate on fogVolumeParams.x), so it is
         // declared PS-readable every frame too -- a descriptor over a NON_PIXEL resource is what GBV

@@ -309,6 +309,11 @@ namespace physics
     // A mesh asset's LOD 0 triangles (every slot) in the model's space, only the vertices they use. The water mask's columns
     // (ocean/WaterMask). False if the geometry cannot be read.
     bool ReadSolidTriangles(const std::string& geometryPath, std::vector<Math::float3>& positions, std::vector<std::uint32_t>& indices);
+    // Both from one read of the file: every slot's triangles, and the listed material slots' alone (the water mask's lid: the
+    // glass that closes a basin; empty slots = none).
+    bool ReadSolidAndSlotTriangles(const std::string& geometryPath, const std::vector<int>& slots, std::vector<Math::float3>& positions,
+                                   std::vector<std::uint32_t>& indices, std::vector<Math::float3>& slotPositions,
+                                   std::vector<std::uint32_t>& slotIndices);
 
     // The gates (docs/physics_plan.md section 5), no window and no scene: `name` empty = all of them. Each logs
     // `physics gate: <name> PASS|FAIL|SKIP ...`; returns the number that failed. --physics-gate and intent_regression run this.

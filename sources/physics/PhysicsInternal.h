@@ -74,7 +74,9 @@ namespace physics
         std::uint32_t lodUsed = 0;
         std::uint32_t lodCount = 0;
     };
-    bool ReadSolidGeometry(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots, SolidGeometry& out);
+    // onlyListed: the slots listed are the ONLY ones taken (the water mask's glass), not the ones left out.
+    bool ReadSolidGeometry(const std::string& geometryPath, int lod, const std::vector<int>& excludeSlots, SolidGeometry& out,
+                           bool onlyListed = false);
 
     // The kind a request means for this motion, and the fallback where a kind cannot serve it. Auto on a body that does not move stays
     // Auto: the geometry's size decides (BuildShape).
