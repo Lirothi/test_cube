@@ -66,6 +66,8 @@
 #include "app/game/RaceBot.h"                  // TestRaceCourseAndBot
 #include "app/game/RaceCourseJson.h"
 #include "editor/commands/SetVesselTuneCommand.h" // TestRaceCourseAndBot: a boat's own numbers
+#include "editor/commands/SetRaceKeyCommand.h"    // TestEditorRaceTracks
+#include "editor/scene/EditorRaceTracks.h"        // TestEditorRaceTracks
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -1727,6 +1729,93 @@ void TestCastShadowIsAFlagThatUndoes(const EditorActionContext& actionCtx)
 // The race (app/game): a mark's gate number is a document key that undoes; two marks are a gate and a stray one is left
 // out and named; the line crosses every gate between its marks, clear of them by the margin; and the bot runs a course
 // on a toy boat -- one whose helm is wired backwards must not, or the run proves nothing.
+// The race courses as the editor shows them (EditorRaceTracks.h): a course and a gate are views over their marks, and
+// editing one edits the marks, one undo entry each.
+void TestEditorRaceTracks(const EditorActionContext& actionCtx)
+{
+    EditorSceneDocument document;
+    uint64_t nextId = 900;
+    const auto mark = [&](float x, float z, int gate, const char* track)
+    {
+        const std::string name = "Buoy_" + std::to_string(nextId);
+        EditorObject object = MakeMesh(nextId++, name.c_str(), "models/ocean_buoy/ocean_buoy.mesh.json", { x, -0.3f, z });
+        object.properties[game::kRaceGateKey] = gate;
+        if (track[0] != '\0') { object.properties[game::kRaceTrackKey] = track; }
+        object.transform.rotationDeg.y = 30.0f;
+        document.Objects().push_back(object);
+        return object.id;
+    };
+    // Course "t": three gates 20 m wide across z = 0, 50, 100 and a lone mark numbered 4; the unnamed course: one gate.
+    const EditorObjectId a1 = mark(-10.0f, 0.0f, 1, "t");
+    const EditorObjectId b1 = mark(10.0f, 0.0f, 1, "t");
+    const EditorObjectId a2 = mark(-10.0f, 50.0f, 2, "t");
+    const EditorObjectId b2 = mark(10.0f, 50.0f, 2, "t");
+    const EditorObjectId a3 = mark(-10.0f, 100.0f, 3, "t");
+    const EditorObjectId b3 = mark(10.0f, 100.0f, 3, "t");
+    const EditorObjectId lone = mark(0.0f, 200.0f, 4, "t");
+    mark(-10.0f, 500.0f, 1, "");
+    mark(10.0f, 500.0f, 1, "");
+    EditorSelection selection;
+    EditorContext ctx{ actionCtx.editor.renderer, actionCtx.editor.scene, actionCtx.editor.levelManager, document, selection };
+    EditorCommandStack stack;
+    const auto gateOf = [&](EditorObjectId id) { return SetRaceKeyCommand::DocumentGate(*document.Find(id)); };
+    const auto closeTo = [](float a, float b) { return std::fabs(a - b) < 1e-3f; };
+
+    std::vector<editorrace::Track> tracks = editorrace::Collect(document);
+    Check(tracks.size() == 2 && tracks[0].name.empty() && tracks[1].name == "t", "two courses, the unnamed one first");
+    Check(tracks[1].gates.size() == 4 && tracks[1].gates[1].marks.size() == 2 && tracks[1].gates[3].marks.size() == 1,
+          "course t: four numbers, gate 2 two marks, the fourth a lone mark");
+    Check(closeTo(editorrace::TrackLength(document, tracks[1]), 400.0f), "its length through the gates' middles and back to gate 1: 400 m");
+
+    std::string course;
+    int gate = 0;
+    EditorObjectId ga{};
+    EditorObjectId gb{};
+    selection.SetOrdered({ a2, b2 }, a2);
+    Check(editorrace::SelectedGate(ctx, &course, &gate, &ga, &gb) && course == "t" && gate == 2 && ga.value == a2.value && gb.value == b2.value,
+          "the two marks of gate 2 are gate 2");
+    selection.SetOrdered({ a2, b3 }, a2);
+    Check(!editorrace::SelectedGate(ctx, nullptr, nullptr, nullptr, nullptr), "marks of two gates are no gate");
+    selection.SetOrdered(editorrace::TrackMarks(tracks[1]), a1);
+    Check(editorrace::SelectedTrack(ctx, &course) && course == "t", "every mark of t is the course t");
+    selection.Remove(b3);
+    Check(!editorrace::SelectedTrack(ctx, nullptr), "one mark short of it is not the course");
+    Check(editorrace::GateMarksOf(document, b2).size() == 2 && editorrace::GateMarksOf(document, b2)[1].value == a2.value, "a mark's gate: itself and its partner");
+
+    // Width, turn: the marks on the gate's line at its width, the middle kept, their yaws turned with the gate.
+    const editorrace::Frame before = editorrace::FrameOf(document.Find(a2)->transform, document.Find(b2)->transform);
+    Check(closeTo(before.width, 20.0f) && closeTo(before.bearingDeg, 90.0f) && closeTo(before.center.z, 50.0f) && closeTo(before.center.y, -0.3f),
+          "a gate across x: 20 m, its line at 90 degrees, its middle between the marks");
+    editorrace::Frame wide = before;
+    wide.width = 40.0f;
+    editorrace::MoveGate(ctx, stack, a2, b2, wide, "Race Gate Width");
+    Check(closeTo(document.Find(a2)->transform.position.x, -20.0f) && closeTo(document.Find(b2)->transform.position.x, 20.0f) &&
+          closeTo(document.Find(a2)->transform.position.z, 50.0f) && closeTo(document.Find(a2)->transform.position.y, -0.3f),
+          "40 m wide about its middle, the marks' height kept");
+    editorrace::MoveGate(ctx, stack, a2, b2, editorrace::FrameWith(wide, 0.0f), "Race Gate Turn");
+    Check(closeTo(document.Find(a2)->transform.position.x, 0.0f) && closeTo(document.Find(a2)->transform.position.z, 30.0f) &&
+          closeTo(document.Find(b2)->transform.position.z, 70.0f) && closeTo(document.Find(a2)->transform.rotationDeg.y, -60.0f),
+          "turned 90 degrees about its middle, each mark's yaw with it");
+    Check(stack.HistorySize() == 2, "each edit of a gate is one undo entry");
+    stack.Undo(ctx);
+    stack.Undo(ctx);
+    Check(closeTo(document.Find(a2)->transform.position.x, -10.0f) && closeTo(document.Find(a2)->transform.position.z, 50.0f) &&
+          closeTo(document.Find(a2)->transform.rotationDeg.y, 30.0f), "undo puts the marks back");
+
+    // A course renamed, a course run the other way round.
+    editorrace::RenameTrack(ctx, stack, "t", "u");
+    tracks = editorrace::Collect(document);
+    Check(tracks.size() == 2 && tracks[1].name == "u" && tracks[1].gates.size() == 4, "renamed: every mark of it");
+    stack.Undo(ctx);
+    Check(editorrace::Collect(document)[1].name == "t", "undo gives the name back");
+    editorrace::ReverseTrack(ctx, stack, "t");
+    Check(gateOf(a1) == 1 && gateOf(b1) == 1 && gateOf(a2) == 4 && gateOf(a3) == 3 && gateOf(lone) == 2,
+          "reversed: gate 1 stays the start, 2 3 4 become 4 3 2");
+    Check(stack.HistorySize() == 1, "the reverse is one undo entry");
+    stack.Undo(ctx);
+    Check(gateOf(a2) == 2 && gateOf(lone) == 4, "undo numbers them as before");
+}
+
 void TestRaceCourseAndBot(const EditorActionContext& actionCtx)
 {
     EditorContext& ctx = actionCtx.editor;
@@ -5283,6 +5372,7 @@ int main(int argc, char** argv)
         TestPlaceIsExact(actionCtx);
         TestBuoyancyIsAFlagThatUndoes(actionCtx);
         TestCastShadowIsAFlagThatUndoes(actionCtx);
+        TestEditorRaceTracks(actionCtx);
         TestRaceCourseAndBot(actionCtx);
         TestNightLampsSwitch();
         {

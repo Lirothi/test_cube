@@ -255,6 +255,9 @@
     <ClCompile Include="sources/editor/scene/EditorZone.cpp">
       <Filter>sources\editor\scene</Filter>
     </ClCompile>
+    <ClCompile Include="sources/editor/scene/EditorRaceTracks.cpp">
+      <Filter>sources\editor\scene</Filter>
+    </ClCompile>
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp">
       <Filter>sources\editor\scene</Filter>
     </ClCompile>
@@ -1017,6 +1020,9 @@
       <Filter>sources\editor\ui</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorZone.h">
+      <Filter>sources\editor\scene</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/scene/EditorRaceTracks.h">
       <Filter>sources\editor\scene</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h">

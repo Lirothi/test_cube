@@ -21,6 +21,7 @@
 #include "editor/EditorExtensionRegistry.h"
 #include "editor/scene/EnvironmentRuntime.h"
 #include "editor/scene/EditorZone.h"
+#include "editor/scene/EditorRaceTracks.h"
 #include "editor/assets/AssetRegistry.h"
 #include "editor/commands/CompositeCommand.h"
 #include "editor/commands/EditEnvironmentCommand.h"
@@ -4718,6 +4719,9 @@ void InspectorPanel::Draw(EditorContext& ctx,
         DrawSharedEnabled(ctx, history);
         ImGui::Separator();
     }
+    // A race gate or course selected (its marks): the gate's or the course's own section first (EditorRaceTracks.h);
+    // the marks' shared properties follow as for any selection.
+    editorrace::DrawInspector(ctx, history);
 
     const bool sharedProperties = multiEdit_.Begin(ctx, history);
     if (multiSelection && !sharedProperties)

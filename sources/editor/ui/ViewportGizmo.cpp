@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -37,6 +38,7 @@
 #include "rendering/core/UploadBatch.h"
 #include "editor/scene/EditorZone.h"
 #include "editor/scene/EditorPlayerStart.h"
+#include "editor/scene/EditorRaceTracks.h"
 #include "rendering/debug/DebugDraw.h"
 #include "rendering/renderables/RenderableObject.h"
 #include "imgui.h"
@@ -630,14 +632,37 @@ void ViewportGizmo::Update(EditorContext& ctx,
     struct IconHit { ImVec2 mn; ImVec2 mx; EditorObjectId id; };
     std::vector<IconHit> iconHits;
 
+    // A click on a race mark selects its GATE, both marks (Alt+click: the mark alone): a gate is what is edited, and the
+    // gizmo then moves it as one.
+    const auto selectPicked = [&](EditorObjectId id, bool toggle, bool single)
+    {
+        const std::vector<EditorObjectId> gate = single ? std::vector<EditorObjectId>{} : editorrace::GateMarksOf(ctx.document, id);
+        if (gate.size() != 2)
+        {
+            if (toggle) { ctx.selection.Toggle(id); }
+            else { ctx.selection.Replace(id); }
+            return;
+        }
+        if (toggle)
+        {
+            const bool had = ctx.selection.Contains(id);
+            for (const EditorObjectId mark : gate)
+            {
+                if (had) { ctx.selection.Remove(mark); }
+                else { ctx.selection.Add(mark); }
+            }
+            return;
+        }
+        ctx.selection.SetOrdered(gate, id);
+    };
+
     uint32_t pickedObjectId = 0;
     if (ctx.renderer.ConsumeObjectIdPick(pickedObjectId))
     {
         EditorObjectId id{ static_cast<std::uint64_t>(pickedObjectId) };
         if (pickedObjectId != 0 && ctx.document.Find(id) && ctx.scene.FindEditorObject(id.value))
         {
-            if (pendingPickToggle_) { ctx.selection.Toggle(id); }
-            else { ctx.selection.Replace(id); }
+            selectPicked(id, pendingPickToggle_, pendingPickSingle_);
         }
         else if (!pendingPickToggle_)
         {
@@ -1014,6 +1039,20 @@ void ViewportGizmo::Update(EditorContext& ctx,
                     const OceanRenderable* ocean = ctx.scene.FindOceanRenderable();
                     const float y = (ocean ? ocean->GetWaterLevel() : 0.0f) + 1.5f;
                     const std::vector<game::RaceGate>& gates = track.Gates();
+                    // Each gate's number over its middle, and the selected gate drawn bold with the way through it: which
+                    // buoy pairs with which and which gate is which cannot be read off the lines alone.
+                    std::string selectedTrack;
+                    int selectedGate = 0;
+                    editorrace::SelectedGate(ctx, &selectedTrack, &selectedGate, nullptr, nullptr);
+                    ImDrawList* labels = ImGui::GetBackgroundDrawList();
+                    const auto toScreen = [&](const Math::float3& p, ImVec2& s)
+                    {
+                        const DirectX::XMVECTOR clip = DirectX::XMVector4Transform(DirectX::XMVectorSet(p.x, p.y, p.z, 1.0f), iconViewProjection.xm());
+                        const float w = DirectX::XMVectorGetW(clip);
+                        if (w <= 1e-3f) { return false; }
+                        s = ImVec2((DirectX::XMVectorGetX(clip) / w * 0.5f + 0.5f) * width, (0.5f - DirectX::XMVectorGetY(clip) / w * 0.5f) * height);
+                        return s.x > -50.0f && s.x < width + 50.0f && s.y > -50.0f && s.y < height + 50.0f;
+                    };
                     for (std::size_t i = 0; i < gates.size(); ++i)
                     {
                         const game::RaceGate& gate = gates[i];
@@ -1023,6 +1062,32 @@ void ViewportGizmo::Update(EditorContext& ctx,
                         dd->AddLine(centre, Math::float3(gate.b.x, y, gate.b.y), Math::float4(0.15f, 1.0f, 0.25f, 1.0f));
                         dd->AddLine(centre, Math::float3(next.center.x, y, next.center.y), Math::float4(1.0f, 0.9f, 0.3f, 0.85f));
                         if (i == 0) { dd->AddLine(centre, Math::float3(centre.x, y + 8.0f, centre.z), Math::float4(1.0f, 0.9f, 0.3f, 1.0f)); }
+                        const bool chosen = selectedGate == gate.number && selectedTrack == shownTrack;
+                        ImVec2 s;
+                        if (toScreen(Math::float3(centre.x, y + 3.0f, centre.z), s))
+                        {
+                            char text[16];
+                            std::snprintf(text, sizeof(text), "%d", gate.number);
+                            const ImVec2 size = ImGui::CalcTextSize(text);
+                            const ImVec2 at(s.x - size.x * 0.5f, s.y - size.y * 0.5f);
+                            labels->AddRectFilled(ImVec2(at.x - 4.0f, at.y - 2.0f), ImVec2(at.x + size.x + 4.0f, at.y + size.y + 2.0f),
+                                chosen ? IM_COL32(255, 200, 40, 230) : IM_COL32(0, 0, 0, 160), 3.0f);
+                            labels->AddText(at, chosen ? IM_COL32(0, 0, 0, 255) : IM_COL32(255, 235, 120, 255), text);
+                        }
+                        ImVec2 sa;
+                        ImVec2 sb;
+                        if (chosen && toScreen(Math::float3(gate.a.x, y, gate.a.y), sa) && toScreen(Math::float3(gate.b.x, y, gate.b.y), sb))
+                        {
+                            labels->AddLine(sa, sb, IM_COL32(255, 200, 40, 255), 3.0f);
+                            // The way through it: a boat crosses toward the next gate.
+                            ImVec2 tip;
+                            const Math::float2 ahead = gate.center + gate.along * std::max(6.0f, gate.halfWidth);
+                            if (toScreen(Math::float3(ahead.x, y, ahead.y), tip) && toScreen(centre, s))
+                            {
+                                labels->AddLine(s, tip, IM_COL32(255, 200, 40, 255), 3.0f);
+                                labels->AddCircleFilled(tip, 5.0f, IM_COL32(255, 200, 40, 255));
+                            }
+                        }
                     }
                     // Where a race starts: the zone a boat drives into before gate 1, and the grid's four places in it.
                     const game::RaceStart start = game::StartOf(track);
@@ -1238,7 +1303,91 @@ void ViewportGizmo::Update(EditorContext& ctx,
         (primaryObject && !primaryRenderable) ? primaryObject : nullptr;
 
     bool gizmoHandled = false;
-    if (gizmoVisible && (primaryRenderable || primaryEnvironment || primaryTransformOnly))
+
+    // A RACE GATE (its two marks selected, EditorRaceTracks.h) takes one gizmo of its own, at its middle with its X axis
+    // along the line between the marks: Translate moves it, Rotate turns it about the vertical through its middle (each
+    // mark's yaw turning with it), Scale (X) widens it -- the marks slide along the line, the middle stays. Live while
+    // dragging; one undo entry when the drag ends.
+    const auto commitGateDrag = [&]()
+    {
+        const EditorObject* markA = ctx.document.Find(gateDragA_);
+        const EditorObject* markB = ctx.document.Find(gateDragB_);
+        if (markA && markB && (!TransformMatches(gateBeforeA_, markA->transform) || !TransformMatches(gateBeforeB_, markB->transform)))
+        {
+            auto composite = std::make_unique<CompositeCommand>(
+                op_ == Op::Rotate ? "Turn Race Gate" : op_ == Op::Scale ? "Widen Race Gate" : "Move Race Gate");
+            composite->Add(std::make_unique<TransformObjectCommand>(gateDragA_, gateBeforeA_, markA->transform));
+            composite->Add(std::make_unique<TransformObjectCommand>(gateDragB_, gateBeforeB_, markB->transform));
+            commandStack.Execute(ctx, std::move(composite));
+        }
+        gateDragging_ = false;
+    };
+    {
+        EditorObjectId gateA{};
+        EditorObjectId gateB{};
+        const bool gateSelected = gizmoVisible && editorrace::SelectedGate(ctx, nullptr, nullptr, &gateA, &gateB);
+        const EditorObject* markA = gateSelected ? ctx.document.Find(gateA) : nullptr;
+        const EditorObject* markB = gateSelected ? ctx.document.Find(gateB) : nullptr;
+        if (markA && markB)
+        {
+            if (wasUsing_)
+            {
+                commitDrag();
+                wasUsing_ = false;
+            }
+            const editorrace::Frame live = editorrace::FrameOf(markA->transform, markB->transform);
+            if ((live.center - camera.GetPosition()).Dot(camera.GetDirection()) > 0.0f)
+            {
+                // Row-major, rows = the axes (X along the line, Y up, Z = X x Y), then the middle.
+                float model[16] = {
+                    live.across.x, 0.0f, live.across.y, 0.0f,
+                    0.0f, 1.0f, 0.0f, 0.0f,
+                    -live.across.y, 0.0f, live.across.x, 0.0f,
+                    live.center.x, live.center.y, live.center.z, 1.0f };
+                const ImGuizmo::OPERATION operation =
+                    op_ == Op::Rotate ? ImGuizmo::ROTATE_Y : op_ == Op::Scale ? ImGuizmo::SCALE_X : ImGuizmo::TRANSLATE;
+                float snapValues[3];
+                ImGuizmo::Manipulate(view, proj, operation, ImGuizmo::LOCAL, model, nullptr,
+                    snapForOperation(op_ == Op::Rotate ? ImGuizmo::ROTATE : op_ == Op::Scale ? ImGuizmo::SCALE : ImGuizmo::TRANSLATE, snapValues));
+                const bool usingNow = ImGuizmo::IsUsing();
+                if (usingNow && !gateDragging_)
+                {
+                    gateDragging_ = true;
+                    gateDragA_ = gateA;
+                    gateDragB_ = gateB;
+                    gateBeforeA_ = markA->transform;
+                    gateBeforeB_ = markB->transform;
+                }
+                if (usingNow && gateDragging_)
+                {
+                    const editorrace::Frame before = editorrace::FrameOf(gateBeforeA_, gateBeforeB_);
+                    editorrace::Frame after = before;
+                    after.center = Math::float3(model[12], model[13], model[14]);
+                    if (op_ == Op::Scale)
+                    {
+                        // ImGuizmo scales the matrix it had when the drag began (unit axes): X's length is the factor.
+                        const float factor = std::sqrt(model[0] * model[0] + model[1] * model[1] + model[2] * model[2]);
+                        after.width = std::max(2.0f, before.width * factor);
+                    }
+                    else if (op_ == Op::Rotate)
+                    {
+                        after = editorrace::FrameWith(after, std::atan2(model[0], model[2]) * 57.2957795f);
+                    }
+                    EditorTransform newA = gateBeforeA_;
+                    EditorTransform newB = gateBeforeB_;
+                    editorrace::Place(before, after, newA, newB);
+                    TransformObjectCommand::ApplyTransform(ctx, gateDragA_, newA);
+                    TransformObjectCommand::ApplyTransform(ctx, gateDragB_, newB);
+                }
+                if (!usingNow && gateDragging_) { commitGateDrag(); }
+                gizmoBusy = usingNow || ImGuizmo::IsOver();
+                gizmoHandled = true;
+            }
+        }
+    }
+    if (!gizmoHandled && gateDragging_) { commitGateDrag(); }
+
+    if (!gizmoHandled && gizmoVisible && (primaryRenderable || primaryEnvironment || primaryTransformOnly))
     {
         bool primaryHasPosition = false;
         bool primaryHasDirection = false;
@@ -1473,6 +1622,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
     if (ctx.renderer.RequestObjectIdPick(io.MousePos.x, io.MousePos.y))
     {
         pendingPickToggle_ = io.KeyCtrl;
+        pendingPickSingle_ = io.KeyAlt;
         return;
     }
 
@@ -1488,9 +1638,7 @@ void ViewportGizmo::Update(EditorContext& ctx,
     const Scene::SceneObjectId hit = ctx.scene.RaycastEditorObject(origin, dir);
     if (hit != 0)
     {
-        const EditorObjectId id{ hit };
-        if (io.KeyCtrl) { ctx.selection.Toggle(id); }
-        else { ctx.selection.Replace(id); }
+        selectPicked(EditorObjectId{ hit }, io.KeyCtrl, io.KeyAlt);
     }
     else if (!io.KeyCtrl)
     {

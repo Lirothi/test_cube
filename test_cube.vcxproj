@@ -269,6 +269,7 @@
     <ClCompile Include="sources/editor/assets/MeshRestPose.cpp" />
     <ClCompile Include="sources/editor/ui/CommandHistoryPanel.cpp" />
     <ClCompile Include="sources/editor/scene/EditorZone.cpp" />
+    <ClCompile Include="sources/editor/scene/EditorRaceTracks.cpp" />
     <ClCompile Include="sources/editor/scene/EditorSceneDocument.cpp" />
     <ClCompile Include="sources/editor/scene/EnvironmentRuntime.cpp" />
     <ClCompile Include="sources/editor/serialization/LevelDocumentSerializer.cpp" />
@@ -563,6 +564,7 @@
     <ClInclude Include="sources/editor/ui/EditorDragDrop.h" />
     <ClInclude Include="sources/editor/ui/EditorLightDirection.h" />
     <ClInclude Include="sources/editor/scene/EditorZone.h" />
+    <ClInclude Include="sources/editor/scene/EditorRaceTracks.h" />
     <ClInclude Include="sources/editor/scene/EditorSceneDocument.h" />
     <ClInclude Include="sources/editor/scene/EnvironmentRuntime.h" />
     <ClInclude Include="sources/editor/serialization/LevelDocumentSerializer.h" />

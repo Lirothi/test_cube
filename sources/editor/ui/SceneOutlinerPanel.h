@@ -116,6 +116,11 @@ private:
     std::vector<OutlinerRowRef> scratchPostProcess_;
     std::vector<OutlinerRowRef> scratchOther_;
     std::vector<EditorObjectId> scratchDisplayedOrder_;
+    // Race marks ("raceGate" > 0) are listed under "Race Tracks", by course and gate (EditorRaceTracks.h), not in their
+    // named group: a course is a thing of its own, and a gate a pair of its marks. Course name -> gate -> its marks' rows.
+    std::map<std::string, std::map<int, std::vector<OutlinerRowRef>>> scratchRace_;
+    bool raceGroupOpen_ = true;
+    std::map<std::string, bool> raceNodeOpen_; // a course's node by its name, a gate's by "<course>#<number>"
 
     // Filtered-bucket cache. The buckets hold EditorObject* into the document's
     // vectors, so the key snapshots those vectors' storage identity (data + size)

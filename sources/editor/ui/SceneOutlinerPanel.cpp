@@ -8,8 +8,11 @@
 #include <string>
 #include <vector>
 
+#include "app/game/RaceCourse.h"
 #include "core/StringMatch.h"
 #include "editor/EditorObjectMatch.h"
+#include "editor/commands/SetRaceKeyCommand.h"
+#include "editor/scene/EditorRaceTracks.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "imgui.h"
@@ -485,6 +488,14 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         case OutlinerGroup::PostProcess: postProcessGroupOpen_ = true; break;
         case OutlinerGroup::Other:       otherGroupOpen_ = true; break;
         }
+        // A race mark is listed under its course and gate: open the way to it.
+        if (const int gate = SetRaceKeyCommand::DocumentGate(*selectedObject); gate > 0)
+        {
+            const std::string course = SetRaceKeyCommand::DocumentTrack(*selectedObject);
+            raceGroupOpen_ = true;
+            raceNodeOpen_[course] = true;
+            raceNodeOpen_[course + "#" + std::to_string(gate)] = true;
+        }
     }
 
     const int totalRows = static_cast<int>(document.Objects().size() + document.Environment().size());
@@ -499,6 +510,7 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     std::vector<OutlinerRowRef>& environmentRows = scratchEnvironment_;
     std::vector<OutlinerRowRef>& postProcessRows = scratchPostProcess_;
     std::vector<OutlinerRowRef>& other = scratchOther_;
+    std::map<std::string, std::map<int, std::vector<OutlinerRowRef>>>& race = scratchRace_;
 
     // Rebuild the filtered row buckets only when something they depend on changed.
     // Snapshotting the vectors' storage (data + size) makes stale EditorObject*
@@ -531,12 +543,22 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         environmentRows.clear();
         postProcessRows.clear();
         other.clear();
+        race.clear();
         const auto addVisibleRow = [&](EditorObject& object, bool environment)
         {
             std::vector<OutlinerRowRef>* group = nullptr;
             // J: an object with a missing asset goes to Bad Assets regardless of its normal group.
             const OutlinerGroup dest = (!environment && assetErrors.count(object.id.value) != 0)
                 ? OutlinerGroup::BadAssets : GroupForObject(object);
+            // A race mark: under its course and gate, whatever group it is in.
+            if (!environment && dest != OutlinerGroup::BadAssets)
+            {
+                if (const int gate = SetRaceKeyCommand::DocumentGate(object); gate > 0)
+                {
+                    race[SetRaceKeyCommand::DocumentTrack(object)][gate].push_back(OutlinerRowRef{ &object, false });
+                    return;
+                }
+            }
             switch (dest)
             {
             case OutlinerGroup::BadAssets:   group = &badAssets; break;
@@ -609,6 +631,10 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
     for (const auto& entry : namedGroups)
     {
         groupedRows += entry.second.size();
+    }
+    for (const auto& course : race)
+    {
+        for (const auto& gate : course.second) { groupedRows += gate.second.size(); }
     }
     const int visibleRows = static_cast<int>(
         groupedRows +
@@ -693,6 +719,17 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         // In the SAME order they are drawn below, because this list is what the up/down
         // keys walk: a keyboard order that disagrees with the screen order is a cursor that
         // jumps.
+        if (raceGroupOpen_)
+        {
+            for (const auto& course : race)
+            {
+                if (!raceNodeOpen_[course.first]) { continue; }
+                for (const auto& gate : course.second)
+                {
+                    appendDisplayedRows(gate.second, raceNodeOpen_[course.first + "#" + std::to_string(gate.first)]);
+                }
+            }
+        }
         for (const auto& entry : namedGroups)
         {
             appendDisplayedRows(entry.second, namedGroupOpen_[entry.first]);
@@ -1158,6 +1195,139 @@ OutlinerAction SceneOutlinerPanel::Draw(EditorSceneDocument& document, EditorSel
         };
 
         drawGroup("##badAssetsGroup", "Bad Assets", badAssets, badAssetsGroupOpen_);
+
+        // RACE TRACKS (owner, 2026-11-13: "make the tracks entities in the editor"): every course, its gates in the order
+        // they are run, each gate's two marks. Clicking a course selects all its marks, a gate its two -- the Inspector then
+        // shows the course's or the gate's own section and the viewport gizmo moves the gate as one (EditorRaceTracks.h).
+        if (!race.empty())
+        {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemOpen(raceGroupOpen_, ImGuiCond_Always);
+            const ImGuiTreeNodeFlags headerFlags = ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_LabelSpanAllColumns |
+                ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_NoTreePushOnOpen;
+            const bool raceOpen = ImGui::TreeNodeEx("##raceTracksGroup", headerFlags, "Race Tracks (%zu)", race.size());
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("The level's race courses: their marks are the meshes with a race gate number.\n"
+                                  "Click a course to select every mark of it, a gate to select its two marks: the Inspector\n"
+                                  "shows the course or the gate, and the gizmo moves, turns (Rotate) and widens (Scale) a gate.");
+            }
+            if (ImGui::IsItemToggledOpen()) { raceGroupOpen_ = raceOpen; }
+            if (raceOpen)
+            {
+                const ImGuiTreeNodeFlags nodeFlags = ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_OpenOnArrow |
+                    ImGuiTreeNodeFlags_OpenOnDoubleClick;
+                const std::vector<editorrace::Track> courses = editorrace::Collect(document);
+                const auto selectionIs = [&](const std::vector<EditorObjectId>& ids)
+                {
+                    if (ids.empty() || ids.size() != selection.Size()) { return false; }
+                    for (const EditorObjectId id : ids)
+                    {
+                        if (!selection.Contains(id)) { return false; }
+                    }
+                    return true;
+                };
+                const auto selectIds = [&](const std::vector<EditorObjectId>& ids)
+                {
+                    if (ids.empty()) { return; }
+                    if (ImGui::GetIO().KeyCtrl)
+                    {
+                        for (const EditorObjectId id : ids) { selection.Add(id); }
+                    }
+                    else
+                    {
+                        selection.SetOrdered(ids, ids.front());
+                    }
+                    rangeAnchor_ = ids.front();
+                };
+                for (const auto& course : race)
+                {
+                    const std::string& courseName = course.first;
+                    std::vector<EditorObjectId> courseMarks;
+                    float courseLength = 0.0f;
+                    std::size_t courseGates = 0;
+                    for (const editorrace::Track& track : courses)
+                    {
+                        if (track.name != courseName) { continue; }
+                        courseMarks = editorrace::TrackMarks(track);
+                        courseLength = editorrace::TrackLength(document, track);
+                        courseGates = track.gates.size();
+                    }
+                    bool& courseOpen = raceNodeOpen_[courseName];
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::PushID(("race:" + courseName).c_str());
+                    ImGui::SetNextItemOpen(courseOpen, ImGuiCond_Always);
+                    const std::string display = game::TrackDisplayName(courseName);
+                    const bool courseNodeOpen = ImGui::TreeNodeEx("##course",
+                        nodeFlags | (selectionIs(courseMarks) ? ImGuiTreeNodeFlags_Selected : 0), "%s", display.c_str());
+                    if (ImGui::IsItemToggledOpen()) { courseOpen = courseNodeOpen; }
+                    else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) { selectIds(courseMarks); }
+                    if (ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("Course '%s': %zu gates, %.0f m through their middles.\nClick: select all its marks.",
+                            display.c_str(), courseGates, courseLength);
+                    }
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("%zu gates", courseGates);
+                    if (courseNodeOpen)
+                    {
+                        for (const auto& gate : course.second)
+                        {
+                            std::vector<EditorObjectId> gateMarks;
+                            for (const editorrace::Track& track : courses)
+                            {
+                                if (track.name != courseName) { continue; }
+                                for (const editorrace::Gate& g : track.gates)
+                                {
+                                    if (g.number == gate.first) { gateMarks = g.marks; }
+                                }
+                            }
+                            bool& gateOpen = raceNodeOpen_[courseName + "#" + std::to_string(gate.first)];
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(gate.first);
+                            ImGui::SetNextItemOpen(gateOpen, ImGuiCond_Always);
+                            const bool odd = gateMarks.size() != 2;
+                            if (odd) { ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.55f, 0.3f, 1.0f)); }
+                            const bool gateNodeOpen = ImGui::TreeNodeEx("##gate",
+                                nodeFlags | (selectionIs(gateMarks) ? ImGuiTreeNodeFlags_Selected : 0),
+                                gate.first == 1 ? "Gate %d (start)" : "Gate %d", gate.first);
+                            if (odd) { ImGui::PopStyleColor(); }
+                            if (ImGui::IsItemToggledOpen()) { gateOpen = gateNodeOpen; }
+                            else if (ImGui::IsItemClicked(ImGuiMouseButton_Left)) { selectIds(gateMarks); }
+                            if (ImGui::IsItemHovered())
+                            {
+                                ImGui::SetTooltip(odd ? "Gate %d has %zu marks: a gate is two, so the race leaves it out."
+                                                      : "Gate %d. Click: select its two marks -- the gizmo then moves, turns (Rotate) and widens (Scale) it.",
+                                    gate.first, gateMarks.size());
+                            }
+                            ImGui::TableNextColumn();
+                            const EditorObject* markA = gateMarks.size() == 2 ? document.Find(gateMarks[0]) : nullptr;
+                            const EditorObject* markB = gateMarks.size() == 2 ? document.Find(gateMarks[1]) : nullptr;
+                            if (markA && markB)
+                            {
+                                ImGui::TextDisabled("%.1f m wide", editorrace::FrameOf(markA->transform, markB->transform).width);
+                            }
+                            else
+                            {
+                                ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.3f, 1.0f), "%zu marks", gateMarks.size());
+                            }
+                            if (gateNodeOpen)
+                            {
+                                for (const OutlinerRowRef& row : gate.second) { drawRow(row); }
+                                ImGui::TreePop();
+                            }
+                            ImGui::PopID();
+                        }
+                        ImGui::TreePop();
+                    }
+                    ImGui::PopID();
+                }
+            }
+        }
+
         // The designer's own groups first: they are the folders somebody made on purpose,
         // and "Meshes" below them is what is left over.
         for (auto& entry : namedGroups)

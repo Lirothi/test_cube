@@ -78,6 +78,14 @@ private:
     nlohmann::json splinePropertiesBeforeDrag_;
     std::vector<DragSnapshot> dragSnapshots_;
     bool pendingPickToggle_ = false;
+    bool pendingPickSingle_ = false; // Alt held at the click: a race mark alone, not its gate
+    // A race GATE selected (its two marks, EditorRaceTracks.h) takes one gizmo of its own: its middle, its line's turn
+    // (Rotate, about the vertical) and its width (Scale, along the line). The marks as they were when the drag began.
+    bool gateDragging_ = false;
+    EditorObjectId gateDragA_{};
+    EditorObjectId gateDragB_{};
+    EditorTransform gateBeforeA_{};
+    EditorTransform gateBeforeB_{};
 
     // Editor icon billboards for world-positioned editor entities: screen-space,
     // always-on-top ImGui overlay images drawn from the icon atlas, clickable to

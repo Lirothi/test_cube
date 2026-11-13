@@ -1644,6 +1644,29 @@ white albedo to tint later").
   `Scene::Sync` from the pose the frame draws it at, a cut on a change of boat; not while the player holds a helm. The
   bots' HUD line says "CAMERA: <boat>, P<n>". Scripts run with it on (and x2 rather than x4) for the owner to watch.
 
+## Race Tracks in the Editor -- a Course and a Gate Are Their Marks
+
+2026-11-13 (owner: "make the tracks entities in the editor: in the outliner, a section in the Inspector, the gates edited
+in the viewport"). Nothing new is saved: a course is still its marks ("raceGate", "raceTrack"), and the editor shows views
+over them (`editor/scene/EditorRaceTracks.*`: `Collect`, `SelectedGate`, `SelectedTrack`, `FrameOf` / `Place`, the edits).
+
+- **Outliner**: "Race Tracks" above the groups -- each course ("classic" for the unnamed one, its gates and length), each
+  gate in the order it is run (gate 1 "start", a number with other than two marks orange, "left out"), each gate's marks.
+  A mark is listed there whatever group it carries. Clicking a course selects every mark of it, a gate its two (Ctrl adds).
+- **Viewport**: a click on a mark selects its GATE (Alt+click: the mark alone). A selected gate takes one gizmo of its own
+  at its middle, X along the line between the marks: Translate moves it, Rotate turns it about the vertical (each mark's yaw
+  with it), Scale (X) widens it about its middle. Live while dragging, one undo entry. While a mark is selected every gate
+  of its course shows its number over its middle; the selected gate is drawn bold with an arrow the way a boat passes.
+- **Inspector**: a selected gate -- its width, its line's turn and its middle as drags (live, one undo entry a drag), the
+  distances to the gates either side, previous / next / whole course, "Insert a gate after" (copies of its two marks
+  halfway to the next gate, the later gates renumbered, the new gate selected) and "Delete gate" (the later ones renumbered
+  back). A selected course -- its name (a name another course has is refused), length, gaps and odd gates, "Reverse
+  direction" (gate 1 stays the start, 2..n become n..2) and its gates as a table to pick from. One mark -- buttons that select
+  its gate or its course.
+- Gate: `intent_regression TestEditorRaceTracks` (the courses and their gates collected, a gate and a course recognised in the
+  selection, width and turn about the middle with the yaws, rename, reverse, each one undo entry that puts it back). Insert
+  and delete make and remove runtime objects (DuplicateObjectCommand's road) and are not in the gate.
+
 ## What a Boat Does -- Its Card, the Three Roles, a Bot That Knows Its Boat
 
 2026-11-11 (owner: "which characteristics of a boat affect its handling? try to balance the boats -- one heavier but more
@@ -1897,7 +1920,7 @@ not learn each course", then "make the bot on sight of the gates, knowledge of i
   now, r coming round, j joining), `planSeconds`, `planPenalty`, `planOffset`; `bot.debug:1` draws every bot's plan (cyan,
   lighter where fast). Knobs (`--set bot.*`, Developer Controls > Physics "Race bots"): plan (1; 0 = its line, the A/B),
   planGates, planMargin, planEvery, planTurns (0), planBrake, rivalClearance, planLead (0.5), steerByRudder (0), turnPower
-  (0.6), turnPowerOver (3), gripLearn (1), planBrakeBend (0).
+  (0.6), turnPowerOver (3), gripLearn (1), planBrakeBend (0), stepSteer (1), markRule (1), turnWash (0), planSwitch (0).
 - **Measured** (wind_test's 1 m sea, the four bots, one lap at x4, the camera on a bot; scratchpad-style `race_trace.py`
   (MAXMISS stops a run that has gone wrong), `why_stats.py`, `misses.py`, `knocks.py`): reef v2 -- 0 / 1 / 0 missed (fast /
   police / yacht), laps 168 / 181 / 172 s, two knocks, nothing in recovery long (the first plan of the day: 9 misses on four
@@ -1956,6 +1979,38 @@ not learn each course", then "make the bot on sight of the gates, knowledge of i
   RacePlan's PlanBoat::turnAt, a table by speed from the speed table): A/B (the same series' shape) 0 / 1 / planBrake 0.4 --
   misses a lap 1.05 / 0.78 / 1.06, gate 4 missed 5 / 2 / 2 times in six trials, laps 2+ 173 / 182 / 183 s (the yacht faster
   with it, 181 -> 173, fast_boat_13 and police_boat 15-19 s slower). Off by default; the miss there is a cost of its speed.
+- **The helm steers in every physics step** (`bot.stepSteer` 1; 2026-11-13, owner: "the bot's algorithm must not depend on the
+  frame rate"). It decided once a frame: at x4 under vsync (60 fps) it steered 15 times a second of the world, at 500 fps 125 --
+  two different helmsmen. Now it hands its pure pursuit (the aim, the reach, the slide's angle, the gain, the yaw damping, the
+  avoidance's offset) to the step in `physics::VesselInput` (`steer`), and `PushVessel` orders the rudder from the hull's pose
+  in each step; the throttle and the plan stay the frame's. 0 = before. MEASURING FAST: `time_trial.py` FAST =
+  `frame.vsync:0;dlss.mode:1;cloud.enabled:0;gi.enabled:0;skyVis.enabled:0` at `--window=1280x720`, 480-560 fps, so x12 is
+  1.3-1.5 physics steps a frame. The HUD's fps had counted the SCALED dt (465 shown as 39 at x12): `Renderer::Tick` takes the
+  real one.
+- **What the bot sees, on screen** (`bot.debug:1`; owner: "draw the bot's vision and decisions when you run for me"): its plan
+  coloured by its limit (red slow, green fast) with a fence every third point 0.25 m tall a m/s, the speed it expects (white),
+  the rivals it plans round (marks orange rings, boats pink with their next 6 s), its aim (a mast and a line), its bow and its
+  velocity; a card over each racing bot (`Race::DrawBotCards`; the watched one docked bottom-left): speed and target, throttle
+  and WHY (`throttleBy`), rudder and why (`rudderBy`). Readout bots[] `throttleBy`, `rudderBy`, `plan` [[x, z, limit, speed]].
+- **The corner drill** (`race.drill:N`; owner: "why so many runs?" -- a whole race's spread drowned every change): the race's
+  boats are put at rest `race.drillRun` (220) m before gate N, run `race.drillGates` (3) gates and are put back, again and
+  again (`race.drillTimeout` 60 s a passage). Readout `race.drill` {gate, boats [{passages, clean, contacts, timeouts, resets,
+  meanSeconds, sdSeconds, meanEntry (m/s across gate N), missed[]}]}. Scratchpad-style `drill_ab.py`: arms alternated in blocks
+  of 20 passages, 40 an arm and boat -- one corner in ~15 minutes at x12.
+- **Tried on it**: `bot.turnWash` (the least throttle whose wash brings the rudder's turn to the grip, held in a hard turn) --
+  whole laps at x12 2.0 misses a lap for the yacht and police_boat against 0.83 / 0.33; `bot.planSwitch` (a warm plan kept
+  unless a new one is cheaper by that many seconds) -- no gain; both 0. `bot.planBrakeBend` on the drill: T1 (gate 3) misses a
+  passage 0.25 -> 0.05 (the yacht), 0.225 -> 0.05 (police_boat, 1.9 s faster, 7.5 m/s across the gate against 9.6); the
+  hairpin (gate 16) worse, more timeouts -- still 0: it wants choosing by the corner.
+- **The helm's own buoy rule only for a contact about to happen** (`bot.markRule` 1, 2026-11-13; 0 = before). With a plan
+  the marks are already rivals it keeps clear of, and it crosses a narrow gate 4.5 m from a mark on purpose; the helm's rule
+  kept its line's 6 m (`bot.margin`) from every buoy 2.5 s ahead and fought the plan: through reef's shore slalom police_boat
+  went hard over one way and the other, 15-20 m each side at 5-8 m/s, "round a buoy" at every one of 25 contacts logged. Now,
+  with a plan, it steers round a mark only within its half beam + 1.5 m, 1.2 s ahead. Drill, 40 passages an arm and boat
+  (yacht / fast_boat_13 / police_boat): the hairpin (gate 16, 4 gates) clean 47.5 / 77.5 / 45 -> 65 / 80 / 65 %, contacts a
+  passage 0.58 / 0.25 / 0.30 -> 0.30 / 0.23 / 0.18, 2.3 / 1.4 / 2.8 s faster; T1 (gate 3) clean 57.5 / 70 / 55 -> 67.5 / 55 /
+  67.5 %, misses a passage 0.23 / 0.13 / 0.28 -> 0.15 / 0.33 / 0.10. The light boat lost at T1 (contacts 0.20 -> 0.48): it
+  slides wider than 1.5 m past its half beam there -- the rule's room should follow the boat's slide.
 - **Gates**: `intent_regression TestRaceCourseAndBot` -- the planner: a straight row straight through; a right angle faster
   through the gates' width than their middles; from 16 m/s it brakes for it; into a hairpin it cannot brake for at 16 m/s a
   penalty, at 8 less; a boat lying in the next gate's middle passed on one side, one far off costs nothing; the toy boat's two
