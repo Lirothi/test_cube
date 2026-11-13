@@ -415,9 +415,9 @@ void Profiler::EmitOverlay(TextManager* tm, int x, int y, int maxLines) {
 
 void Profiler::Tick()
 {
-#if PROF_ENABLED
+#if PROF_ENABLED && !TC_SHIPPING
     auto& input = Systems::GetInput();
-    if (input.WasActionPressed("CaptureTrace")) {
+    if (input.WasActionPressed("CaptureTrace")) { // F11; not in a shipped build (§7)
         constexpr uint32_t kTraceFrames = 120;
         RequestTraceCapture(kTraceFrames);
     }

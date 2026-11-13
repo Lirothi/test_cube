@@ -307,16 +307,39 @@ namespace vfs
         return (text_.size() >= 2 && text_[1] == ':') || (!text_.empty() && text_[0] == '/');
     }
 
+    namespace
+    {
+        std::filesystem::path& RootStorage()
+        {
+            static std::filesystem::path root;
+            return root;
+        }
+        std::filesystem::path& UserStorage()
+        {
+            static std::filesystem::path user;
+            return user;
+        }
+    }
+
     const std::filesystem::path& ContentRoot()
     {
-        static const std::filesystem::path root = []
+        static const std::filesystem::path& root = []() -> const std::filesystem::path&
         {
-            std::error_code error;
-            std::filesystem::path current = std::filesystem::current_path(error);
-            return error ? std::filesystem::path(L".") : current;
+            std::filesystem::path& r = RootStorage();
+            if (r.empty())
+            {
+                std::error_code error;
+                const std::filesystem::path current = std::filesystem::current_path(error);
+                r = error ? std::filesystem::path(L".") : current;
+            }
+            return r;
         }();
         return root;
     }
+
+    void SetContentRoot(const std::filesystem::path& folder) { RootStorage() = folder; }
+    void SetUserDirectory(const std::filesystem::path& folder) { UserStorage() = folder; }
+    const std::filesystem::path& UserDirectory() { return UserStorage(); }
 
     std::filesystem::path OsPath(const Path& path)
     {
@@ -405,6 +428,16 @@ namespace vfs
             }
         }
 
+        // The user overlay's file for a content path under its prefix (case-insensitive), or empty.
+        std::wstring OverlayWide(const detail::Mounts& mounts, const Path& path)
+        {
+            if (mounts.overlayPrefix.empty() || path.IsAbsolute()) { return {}; }
+            const std::string folded = pak::FoldKey(path.Utf8());
+            const std::string prefix = pak::FoldKey(mounts.overlayPrefix);
+            if (folded.size() <= prefix.size() || folded.compare(0, prefix.size(), prefix) != 0) { return {}; }
+            return (mounts.overlayFolder / ToWide(path.Utf8().substr(prefix.size()))).wstring();
+        }
+
         // The order a path is looked for in: the loose files first (or last), the packages by priority.
         template <typename LooseFn, typename PackageFn>
         bool Visit(const detail::Mounts& mounts, LooseFn&& loose, PackageFn&& package)
@@ -458,6 +491,10 @@ namespace vfs
                 return stat;
             }
             std::optional<Stat> found;
+            if (const std::wstring overlay = OverlayWide(mounts, path); !overlay.empty())
+            {
+                if ((found = OsStat(overlay))) { return found; }
+            }
             bool hidden = false; // a patch's "deleted" record: the packages below it are not asked
             Visit(mounts,
                 [&]
@@ -503,6 +540,8 @@ namespace vfs
             else
             {
                 bool hidden = false;
+                if (const std::wstring overlay = OverlayWide(mounts, path); !overlay.empty()) { file = OsOpen(overlay); }
+                if (!file.IsOpen())
                 Visit(mounts,
                     [&]
                     {
@@ -570,6 +609,10 @@ namespace vfs
                 return;
             }
             const std::wstring looseFolder = directory.Empty() ? ContentRoot().wstring() : OsWide(directory);
+            if (const std::wstring overlay = OverlayWide(mounts, prefix + "x"); !overlay.empty())
+            {
+                listLoose(std::filesystem::path(overlay).parent_path().wstring()); // what the user saved, over the rest
+            }
             if (mounts.loose && mounts.looseFirst) { listLoose(looseFolder); }
             for (const std::unique_ptr<pak::Package>& p : mounts.packages)
             {
@@ -593,6 +636,7 @@ namespace vfs
         bool LooseServesIn(const Mounts& mounts, const Path& path)
         {
             if (path.IsAbsolute()) { return true; }
+            if (const std::wstring overlay = OverlayWide(mounts, path); !overlay.empty() && OsStat(overlay)) { return true; }
             bool loose = false;
             bool hidden = false;
             Visit(mounts,
@@ -791,6 +835,9 @@ namespace vfs
         detail::Mounts mounts;
         mounts.loose = config.mode != Config::Mode::Packages;
         mounts.looseFirst = true;
+        mounts.overlayPrefix = config.overlayPrefix;
+        mounts.overlayFolder = config.overlayFolder;
+        if (!mounts.overlayPrefix.empty() && mounts.overlayPrefix.back() != '/') { mounts.overlayPrefix.push_back('/'); }
         if (config.mode != Config::Mode::Loose)
         {
             const std::filesystem::path folder = config.packageDir.empty() ? ContentRoot() / L"content" : config.packageDir;
@@ -848,8 +895,20 @@ namespace vfs
 
     std::filesystem::path WritablePath(Writable kind, std::string_view relative)
     {
-        (void)kind; // dev builds: everything stays where it was, under the content root
-        return ContentRoot() / ToWide(Normalise(std::string(relative)));
+        const std::string rel = Normalise(std::string(relative));
+        const std::filesystem::path& user = UserDirectory();
+        if (user.empty())
+        {
+            return ContentRoot() / ToWide(rel); // dev builds: everything stays where it was, under the content root
+        }
+        switch (kind)
+        {
+        case Writable::Settings: return user / L"settings" / ToWide(rel);
+        case Writable::Cache:    return user / L"cache" / ToWide(rel);
+        case Writable::Saved:    break;
+        }
+        // "data/bot_memory/x.json" -> <user>/bot_memory/x.json: the user overlay maps "data/bot_memory/" back to it.
+        return rel.rfind("data/", 0) == 0 ? user / ToWide(rel.substr(5)) : user / L"saved" / ToWide(rel);
     }
 
     std::wstring Widen(std::string_view utf8) { return ToWide(utf8); }

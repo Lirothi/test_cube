@@ -410,6 +410,33 @@ namespace vfs
                 t.Expect(std::find(merged.begin(), merged.end(), "empty.bin") == merged.end() &&
                          std::count(merged.begin(), merged.end(), std::string("one.bin")) == 1,
                          "a merged list: the deleted file gone, the replaced one once");
+
+                // The user overlay (§2.1, Shipping's data/bot_memory/): what the player saved under the prefix, over
+                // every package; nothing outside the prefix is looked for there (the control: one.bin in the folder).
+                const std::filesystem::path overlay = root / L"overlay";
+                const std::vector<std::uint8_t> saved = Pattern(123, 11, true);
+                t.Expect(WriteBytes(overlay / L"edge.bin", saved) && WriteBytes(overlay / L"new.bin", saved) &&
+                         WriteBytes(overlay / L"one.bin", saved), "writing the overlay's files");
+                mounts.overlayPrefix = "dir/Sub/";
+                mounts.overlayFolder = overlay;
+                const std::optional<Stat> over = detail::StatIn(mounts, Path("DIR/sub/edge.bin"));
+                t.Expect(over && over->size == saved.size(), "the overlay's file wins over the package's (any case)");
+                std::vector<std::uint8_t> back;
+                File overFile = detail::OpenIn(mounts, Path("dir/Sub/edge.bin"));
+                back.resize(static_cast<std::size_t>(overFile.Size()));
+                t.Expect(overFile && overFile.Read(0, back.data(), back.size()) && back == saved, "the overlay's bytes are read");
+                const std::optional<Stat> under = detail::StatIn(mounts, Path("dir/Sub/edge_minus.bin"));
+                t.Expect(under && under->size == cases[2].size, "a file the overlay lacks comes from the package");
+                const std::optional<Stat> outside = detail::StatIn(mounts, Path("dir/one.bin"));
+                t.Expect(outside && outside->size == replaced.size(), "outside the prefix the overlay is not asked (control)");
+                t.Expect(detail::LooseServesIn(mounts, Path("dir/Sub/edge.bin")) &&
+                         !detail::LooseServesIn(mounts, Path("dir/Sub/edge_minus.bin")), "the overlay's file is loose, the package's not");
+                std::vector<std::string> overList;
+                detail::ListIn(mounts, Path("dir/Sub"), "*.bin", [&](const ListEntry& e) { overList.push_back(e.name); });
+                t.Expect(std::count(overList.begin(), overList.end(), std::string("new.bin")) == 1 &&
+                         std::count(overList.begin(), overList.end(), std::string("edge.bin")) == 1 && overList.size() == 5,
+                         "a list under the prefix: the overlay's files (its one.bin is dir/Sub/one.bin), the shared one once");
+                mounts.overlayPrefix.clear();
             }
             package.reset();
 

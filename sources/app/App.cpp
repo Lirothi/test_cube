@@ -1,5 +1,7 @@
 #include "app/game/PlayerStart.h"
 #include "app/App.h"
+#include "app/AppResources.h"
+#include "app/BuildVersion.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposureEnabled
 #include "rendering/core/MemoryReport.h"    // the memory line in the session log
 #include "rendering/core/DlssHandler.h"     // --set dlss.preset (g_dlssPresetOverride)
@@ -2100,6 +2102,9 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     wc.lpfnWndProc = App::WndProc;
     wc.hInstance = hInstance;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hIcon = LoadIconW(hInstance, MAKEINTRESOURCEW(TC_IDI_APP));
+    wc.hIconSm = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(TC_IDI_APP), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+                                               GetSystemMetrics(SM_CYSMICON), 0));
     wc.lpszClassName = L"D3D12WindowClass";
 
     RegisterClassEx(&wc);
@@ -2139,9 +2144,13 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
         LOG_INFO(logging::LogCategory::App, "window: borderless {}x{} (--window)", windowWidth, windowHeight);
     }
 
+    // A shipped build names itself and its version (docs/distribution_build_plan.md §7); dev builds keep their title.
+    const std::wstring windowTitle = build::Shipping()
+        ? vfs::Widen(std::string(build::ProductName()) + " " + build::VersionString())
+        : std::wstring(L"D3D12 Multi-Mesh Renderer");
     hWnd_ = CreateWindow(
         wc.lpszClassName,
-        L"D3D12 Multi-Mesh Renderer",
+        windowTitle.c_str(),
         windowStyle,
         posX, posY,
         windowWidth,
@@ -3353,7 +3362,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         };
 
         // main read the flag before the settings file set the knob.
-        if (std::strstr(GetCommandLineA(), "--no-async-compute"))
+        if (!build::Shipping() && std::strstr(GetCommandLineA(), "--no-async-compute")) // a shipped build's switches: main.cpp
         {
             render::g_noAsyncCompute_game = true;
         }

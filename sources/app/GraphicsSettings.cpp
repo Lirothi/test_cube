@@ -1,4 +1,5 @@
 #include "app/GraphicsSettings.h"
+#include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
 
 #include <algorithm>
@@ -1399,6 +1400,57 @@ namespace
         return vfs::WritablePath(vfs::Writable::Settings, GraphicsSettingsManager::kPath);
     }
 
+    // The defaults a file's values are taken against (docs/distribution_build_plan.md §6). A shipped build: the curated
+    // config/graphics_defaults.json its packages carry (tools/dist/graphics_defaults.json), so a patch that fixes a default
+    // reaches every player who did not change that knob. Dev builds: the compiled defaults.
+    json DefaultsJson()
+    {
+#if TC_SHIPPING
+        std::string text;
+        if (vfs::ReadText("config/graphics_defaults.json", text))
+        {
+            const json parsed = json::parse(text, nullptr, false, /*ignore_comments=*/true);
+            if (parsed.is_object())
+            {
+                try
+                {
+                    return ToJson(FromJson(parsed));
+                }
+                catch (const std::exception&)
+                {
+                }
+            }
+        }
+        LOG_WARNING(logging::LogCategory::App, "graphics settings: no usable config/graphics_defaults.json -- the compiled defaults");
+#endif
+        return ToJson(GraphicsSettingsSnapshot{});
+    }
+
+    // `full` less what equals `base`, through objects key by key (an array or a value is one): what a shipped build keeps
+    // of the player's settings.
+    json Difference(const json& base, const json& full)
+    {
+        json out = json::object();
+        for (auto it = full.begin(); it != full.end(); ++it)
+        {
+            const auto b = base.find(it.key());
+            if (b == base.end())
+            {
+                out[it.key()] = it.value();
+            }
+            else if (it.value().is_object() && b->is_object())
+            {
+                json d = Difference(*b, it.value());
+                if (!d.empty()) { out[it.key()] = std::move(d); }
+            }
+            else if (it.value() != *b)
+            {
+                out[it.key()] = it.value();
+            }
+        }
+        return out;
+    }
+
     bool LoadSnapshot(GraphicsSettingsSnapshot& out, std::string& error)
     {
         std::ifstream file(SettingsFile(), std::ios::binary); // vfs-ok: the user's settings file
@@ -1407,12 +1459,18 @@ namespace
             error = "file not found";
             return false;
         }
-        const json root = json::parse(file, nullptr, false, /*ignore_comments=*/true);
+        json root = json::parse(file, nullptr, false, /*ignore_comments=*/true);
         if (!root.is_object())
         {
             error = "invalid JSON root";
             return false;
         }
+#if TC_SHIPPING
+        // The player's file holds only what differs from the defaults.
+        json merged = DefaultsJson();
+        merged.merge_patch(root);
+        root = std::move(merged);
+#endif
         try
         {
             out = FromJson(root);
@@ -1425,18 +1483,39 @@ namespace
         return true;
     }
 
+    // Written whole to <file>.tmp and renamed over the file: a crash or a full disk mid-write leaves the old settings, not
+    // half a JSON (§6). A shipped build writes only what differs from the defaults.
     bool SaveSnapshot(const GraphicsSettingsSnapshot& snapshot, std::string& error)
     {
-        std::ofstream file(SettingsFile(), std::ios::binary | std::ios::trunc);
-        if (!file)
+        json content = ToJson(snapshot);
+#if TC_SHIPPING
+        content = Difference(DefaultsJson(), content);
+#endif
+        const std::filesystem::path target = SettingsFile();
+        std::error_code ec;
+        if (target.has_parent_path()) { std::filesystem::create_directories(target.parent_path(), ec); }
+        std::filesystem::path temp = target;
+        temp += L".tmp";
         {
-            error = "cannot open file for writing";
-            return false;
+            std::ofstream file(temp, std::ios::binary | std::ios::trunc);
+            if (!file)
+            {
+                error = "cannot open file for writing";
+                return false;
+            }
+            file << content.dump(2) << '\n';
+            file.flush();
+            if (!file.good())
+            {
+                error = "write failed";
+                return false;
+            }
         }
-        file << ToJson(snapshot).dump(2) << '\n';
-        if (!file.good())
+        std::filesystem::rename(temp, target, ec);
+        if (ec)
         {
-            error = "write failed";
+            error = "cannot replace the file: " + ec.message();
+            std::filesystem::remove(temp, ec);
             return false;
         }
         return true;
@@ -1460,6 +1539,12 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
         const bool exists = std::filesystem::exists(SettingsFile(), existsError); // vfs-ok: the user's settings file
         if (!exists && !existsError)
         {
+#if TC_SHIPPING
+            // No file yet: the defaults, and nothing written until the player changes something.
+            loaded = FromJson(DefaultsJson());
+            ApplyAll(loaded, renderer, scene, settings);
+            status_ = "Defaults (config/graphics_defaults.json)";
+#else
             ApplyAll(loaded, renderer, scene, settings);
             if (SaveSnapshot(Capture(renderer, scene, settings), error))
             {
@@ -1469,9 +1554,17 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
             {
                 status_ = std::string("Could not create ") + kPath + ": " + error;
             }
+#endif
         }
         else
         {
+#if TC_SHIPPING
+            // A damaged file: a Warning and the defaults (§6); the next save writes a good one.
+            LOG_WARNING(logging::LogCategory::App, "graphics settings: {} could not be read ({}) -- the defaults",
+                        vfs::Narrow(SettingsFile().wstring()), error);
+            loaded = FromJson(DefaultsJson());
+            ApplyAll(loaded, renderer, scene, settings);
+#endif
             status_ = std::string("Could not load ") + kPath + ": " + error;
         }
     }

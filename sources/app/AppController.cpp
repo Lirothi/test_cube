@@ -51,7 +51,14 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     const bool uiCapturingMouse = renderer.ImGuiWantsMouse();
     const bool uiCapturingKeyboard = renderer.ImGuiWantsKeyboard();
     const bool uiCapturingInput = uiCapturingMouse || uiCapturingKeyboard;
-    const bool toggleDeveloperWindow =
+    // A shipped build has no developer keys (docs/distribution_build_plan.md §7): no Developer Controls (F1), texture
+    // inspector (F4), ocean window (F7), profiler overlay (F9), A/B toggles (F2-F10, Ctrl+I/G/V), DLSS modes (Ctrl+1..7).
+#if TC_SHIPPING
+    constexpr bool kDeveloperKeys = false;
+#else
+    constexpr bool kDeveloperKeys = true;
+#endif
+    const bool toggleDeveloperWindow = kDeveloperKeys &&
         (input.WasActionPressed("ToggleDeveloperPanel") ||
         input.WasActionPressed("ToggleBindings") ||
         ImGui::IsKeyPressed(ImGuiKey_F1, false)) &&
@@ -59,12 +66,12 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
 #if WITH_EDITOR
     const bool toggleLevelEditor = ImGui::IsKeyPressed(ImGuiKey_F2, false);
 #endif
-    const bool toggleTextureInspector =
-        input.WasActionPressed("ToggleTextureInspector") ||
-        ImGui::IsKeyPressed(ImGuiKey_F4, false);
-    const bool toggleOceanControls =
-        input.WasActionPressed("ToggleOceanControls") ||
-        ImGui::IsKeyPressed(ImGuiKey_F7, false);
+    const bool toggleTextureInspector = kDeveloperKeys &&
+        (input.WasActionPressed("ToggleTextureInspector") ||
+        ImGui::IsKeyPressed(ImGuiKey_F4, false));
+    const bool toggleOceanControls = kDeveloperKeys &&
+        (input.WasActionPressed("ToggleOceanControls") ||
+        ImGui::IsKeyPressed(ImGuiKey_F7, false));
 
     if (toggleDeveloperWindow)
     {
@@ -116,7 +123,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     // WantCaptureKeyboard -- true whenever an ImGui window has the focus, i.e. nearly always with the editor's panels
     // open -- F9 (the profiler overlay), F3, F5, F6, F10 and F12 did nothing in the editor (2026-11-03, owner: "F9 does
     // not work for the overlay"). The Ctrl combinations below still yield to any keyboard focus (Ctrl+V pastes).
-    if (!renderer.ImGuiWantsTextInput())
+    if (kDeveloperKeys && !renderer.ImGuiWantsTextInput())
     {
         if (input.WasActionPressed("ToggleProfiler"))
         {
@@ -160,7 +167,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
         }
     }
 
-    if (!uiCapturingKeyboard)
+    if (kDeveloperKeys && !uiCapturingKeyboard)
     {
         if (input.WasActionPressed("ToggleIndirectShadows"))
         {

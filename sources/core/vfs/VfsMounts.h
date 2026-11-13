@@ -17,6 +17,8 @@ namespace vfs::detail
         bool loose = true;          // the loose files under ContentRoot()
         bool looseFirst = true;     // --vfs=both: loose files over the packages
         std::vector<std::unique_ptr<pak::Package>> packages; // highest priority first
+        std::string overlayPrefix;  // the user overlay: "data/bot_memory/" -> overlayFolder, over every mount
+        std::filesystem::path overlayFolder;
     };
 
     // The process's table: loose only until Configure says otherwise.

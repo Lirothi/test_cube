@@ -194,6 +194,17 @@ std::atomic<uint32_t> g_notCooked{ 0 };
 // While a cook compiles (§5 item 2): Release flags in any build, no dev cache of Debug blobs, no cooked set to read from.
 std::atomic<bool> g_cookingShaders{ false };
 
+// A shipped build has no FXC fallback (§7): a shader DXC cannot compile is an Error and its pass goes, as with a mesh shader.
+bool FxcFallbackAllowed()
+{
+#if TC_SHIPPING
+    LOG_ERROR(logging::LogCategory::Render, "shader: no SM5 fallback in a shipped build -- the material is not made");
+    return false;
+#else
+    return true;
+#endif
+}
+
 bool UseDebugShaderFlags()
 {
 #ifdef _DEBUG
@@ -1611,6 +1622,9 @@ HRESULT Material::CompileWithIncludes(const std::wstring& file,
 // ===== Watch utilities =====
 void Material::RefreshWatchTimes_()
 {
+#if TC_SHIPPING
+    return; // nothing on disk to watch (FSProbeAndFlagPending)
+#endif
     std::lock_guard<std::mutex> lk(watchMtx_);
     watchedTimes_.resize(watchedFiles_.size());
     for (size_t i = 0; i < watchedFiles_.size(); ++i) {
@@ -1621,6 +1635,9 @@ void Material::RefreshWatchTimes_()
 
 bool Material::FSProbeAndFlagPending()
 {
+#if TC_SHIPPING
+    return false; // a shipped build's shaders come from its package: nothing on disk to watch (§5 item 1)
+#endif
     CPU_SCOPE(ProfilerScopes::kMaterialFSProbe);
     std::lock_guard<std::mutex> lk(watchMtx_);
     if (watchedFiles_.empty()) { return false; }
@@ -2116,6 +2133,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
     else if (FAILED(CompileDXC(gd.shaderFile, gd.vsEntry, "vs", r->GetDevice(), gd.defines, vs, incVS))) {
         LOG_WARNING(logging::LogCategory::Render, "DXC VS compile failed for {} ({}); falling back to D3DCompile SM5",
                     gd.shaderFile, gd.vsEntry);
+        if (!FxcFallbackAllowed()) { return false; }
         UINT cf =
 #ifdef _DEBUG
         (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
@@ -2129,6 +2147,7 @@ bool Material::BuildGraphicsPSO(Renderer* r, const GraphicsDesc& gdIn,
     if (FAILED(CompileDXC(gd.shaderFile, gd.psEntry, "ps", r->GetDevice(), gd.defines, ps, incPS))) {
         LOG_WARNING(logging::LogCategory::Render, "DXC PS compile failed for {} ({}); falling back to D3DCompile SM5",
                     gd.shaderFile, gd.psEntry);
+        if (!FxcFallbackAllowed()) { return false; }
         UINT cf =
 #ifdef _DEBUG
         (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);
@@ -2267,6 +2286,7 @@ bool Material::BuildComputePSO(Renderer* r, const ComputeDesc& cd,
     if (FAILED(CompileDXC(cd.shaderFile, cd.csEntry, "cs", r->GetDevice(), cd.defines, cs, incCS))) {
         LOG_WARNING(logging::LogCategory::Render, "DXC CS compile failed for {} ({}); falling back to D3DCompile SM5",
                     cd.shaderFile, cd.csEntry);
+        if (!FxcFallbackAllowed()) { return false; }
         UINT cf =
 #ifdef _DEBUG
         (D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION);

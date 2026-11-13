@@ -1,5 +1,6 @@
 #include "rendering/core/Renderer.h"
 #include <unordered_set>
+#include "core/diagnostics/CrashHandler.h"
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/streaming/TextureStreaming.h" // A2: the subsystem behind the unique_ptr member
 
@@ -589,6 +590,7 @@ void Renderer::ReportDeviceRemovalOnce()
         return;
     }
     s_deviceRemovalReported = true;
+    crash::NoteDeviceRemoved(static_cast<unsigned>(reason)); // a shipped build's crash box names the driver
     diag::ArtifactFile f("device_removed.log", diag::ArtifactMode::Append);
     if (f) {
         // The reason CLASS is most of the answer: DXGI_ERROR_DEVICE_HUNG (0x887A0006) is a wait

@@ -219,6 +219,18 @@
     <ClCompile Include="sources/pch.cpp">
       <Filter>sources</Filter>
     </ClCompile>
+    <ClCompile Include="sources/app/AgilitySdk.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/BuildVersion.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/GpuRequirements.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/Shipping.cpp">
+      <Filter>sources\app</Filter>
+    </ClCompile>
     <ClCompile Include="sources/app/AppController.cpp">
       <Filter>sources\app</Filter>
     </ClCompile>
@@ -534,6 +546,9 @@
     <ClCompile Include="sources/core/diagnostics/ArtifactWriter.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/diagnostics/CrashHandler.cpp">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
@@ -724,6 +739,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/Renderer.cpp">
+      <Filter>sources\rendering\core</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/rendering/core/StreamlineSignature.cpp">
       <Filter>sources\rendering\core</Filter>
     </ClCompile>
     <ClCompile Include="sources/rendering/core/RhiQueue.cpp">
@@ -931,6 +949,18 @@
   <ItemGroup>
     <ClInclude Include="sources/pch.h">
       <Filter>sources</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/AppResources.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/BuildVersion.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/GpuRequirements.h">
+      <Filter>sources\app</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/Shipping.h">
+      <Filter>sources\app</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/AppController.h">
       <Filter>sources\app</Filter>
@@ -1289,6 +1319,9 @@
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/diagnostics/CrashHandler.h">
+      <Filter>sources\core\diagnostics</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/diagnostics/BootProfile.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
@@ -1584,6 +1617,9 @@
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/Renderer.h">
+      <Filter>sources\rendering\core</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/rendering/core/StreamlineSignature.h">
       <Filter>sources\rendering\core</Filter>
     </ClInclude>
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h">
@@ -2392,5 +2428,15 @@
     <Manifest Include="sources/app/test_cube.manifest">
       <Filter>sources\app</Filter>
     </Manifest>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="sources/app/test_cube.rc">
+      <Filter>sources\app</Filter>
+    </ResourceCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="sources/app/test_cube.ico">
+      <Filter>sources\app</Filter>
+    </Image>
   </ItemGroup>
 </Project>

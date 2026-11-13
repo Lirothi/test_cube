@@ -7,7 +7,12 @@
 // operator new/delete are replaced in core/memory/MemNew.cpp (mimalloc + per-thread counters,
 // memory profiling plan M0); this file no longer includes mimalloc-new-delete.h.
 #include "app/App.h"
+#include "app/BuildVersion.h"
+#include "app/GpuRequirements.h"
+#include "app/Shipping.h"
 #include "app/dist/Cook.h"
+#include "core/diagnostics/CrashHandler.h"
+#include "rendering/core/StreamlineSignature.h"
 
 #include "assets/AssetImporter.h"
 #include "editor/assets/MaterialFileGen.h" // --seam-ratio (empty outside WITH_EDITOR)
@@ -291,6 +296,31 @@ int WINAPI WinMain(
     _In_ int nShowCmd
 )
 {
+#if TC_SHIPPING
+    // A shipped build (docs/distribution_build_plan.md §6, §7), before anything else: DLLs only from the exe's folder and
+    // System32; the switches a player's build keeps; the content at the exe's folder and everything written in the user's
+    // (%LOCALAPPDATA%\test_cube, --user-dir), which becomes the current directory -- the log, imgui.ini, the caches and the
+    // crash dumps land there.
+    SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    std::vector<std::string> droppedSwitches;
+    static std::string shippingCommandLine = shipping::FilterCommandLine(GetCommandLineW(), droppedSwitches);
+    lpCmdLine = shippingCommandLine.data();
+    std::filesystem::path shippingUserFolder;
+    {
+        const std::string userDir = ExtractArgValue(lpCmdLine, "--user-dir");
+        std::error_code ec;
+        shippingUserFolder = userDir.empty() ? shipping::DefaultUserFolder(L"test_cube")
+                                             : std::filesystem::absolute(std::filesystem::path(vfs::Widen(userDir)), ec);
+        vfs::SetContentRoot(shipping::ExeFolder());
+        std::wstring why;
+        if (!shipping::PrepareUserFolder(shippingUserFolder, why)) {
+            shipping::ShowMessage(L"test_cube", L"test_cube cannot start: " + why);
+            return 1;
+        }
+        vfs::SetUserDirectory(shippingUserFolder);
+    }
+#endif
+
     // "--log-stress" runs the logging stress harness instead of the app; exit code is the number
     // of failed checks. It owns the logger's lifetime itself (repeated Initialize/Shutdown is one
     // of the things it tests), so it is dispatched BEFORE the normal session below.
@@ -307,6 +337,8 @@ int WINAPI WinMain(
             MEM_SCOPE(MemTag::Log); // the logger's rings and tables (memory profiling M3)
             logging::LogConfig config;
             logging::ApplyCommandLine(commandLine, config);
+            config.commandLine = commandLine;
+            config.version = build::VersionString();
             logging::Initialize(config);
             logging::SetCurrentThreadName("Main");
 #if defined(_DEBUG)
@@ -344,6 +376,86 @@ int WINAPI WinMain(
         ~LogSession() { logging::Shutdown(); }
     } logSession(lpCmdLine);
 
+    // --crash-selftest=<arm> (any build; §9): a crash of that kind, its minidump and -- in Shipping -- the message box.
+    if (lpCmdLine) {
+        if (const std::string arm = ExtractArgValue(lpCmdLine, "--crash-selftest"); !arm.empty()) {
+            crash::Options options;
+            options.dumpFolder = build::Shipping() ? L"crashes" : L"logs/crashes";
+            options.messageBox = build::Shipping();
+            return crash::SelfTest(arm, options);
+        }
+    }
+    // --gpu-check (any build but Shipping, which runs it anyway): what the card has against what a shipped build needs.
+    if (!build::Shipping() && lpCmdLine && std::strstr(lpCmdLine, "--gpu-check")) {
+        const gpu::RequirementCheck check = gpu::CheckRequirements();
+        LOG_INFO(logging::LogCategory::Render, "gpu check: {} -- {} (driver {}){}", check.ok ? "PASS" : "FAIL", check.adapter,
+                 check.driver, check.ok ? std::string() : ": " + vfs::Narrow(gpu::RequirementMessage(check, L"test_cube")));
+        return check.ok ? 0 : 1;
+    }
+
+#if TC_SHIPPING
+    for (const std::string& dropped : droppedSwitches) {
+        LOG_WARNING(logging::LogCategory::App, "a shipped build ignores {}", dropped);
+    }
+    {
+        crash::Options options;
+        options.messageBox = true;
+        crash::Install(options);
+    }
+    // The packages beside the exe, and what the player saved over them (§2.1, §6).
+    {
+        vfs::Config config;
+        config.mode = vfs::Config::Mode::Packages;
+        config.packageDir = shipping::ExeFolder() / L"content";
+        config.overlayPrefix = "data/bot_memory/";
+        config.overlayFolder = shippingUserFolder / L"bot_memory";
+        std::string error;
+        if (!vfs::Configure(config, error)) {
+            LOG_ERROR(logging::LogCategory::Vfs, "vfs: the game's content does not open: {}", error);
+            shipping::ShowMessage(L"test_cube", L"The game's content is missing or damaged:\n\n" + vfs::Widen(error) +
+                                  L"\n\nCopy the whole game folder again (the content folder beside test_cube.exe).");
+            return 1;
+        }
+        for (const std::string& mount : vfs::DescribeMounts()) {
+            LOG_INFO(logging::LogCategory::Vfs, "vfs: mounted {}", mount);
+        }
+    }
+    // The D3D12 runtime the build asks for (AgilitySdk.cpp: 619, from D3D12\ beside the exe). Without the file no device is
+    // made where the system's own runtime is older -- every Windows 10, and Windows 11 26100 too (measured): the player is
+    // told the file is missing, not that the card cannot.
+    {
+        std::error_code ec;
+        const std::filesystem::path core = shipping::ExeFolder() / L"D3D12" / L"D3D12Core.dll";
+        if (!std::filesystem::is_regular_file(core, ec)) { // vfs-ok: a runtime DLL beside the exe, not content
+            LOG_ERROR(logging::LogCategory::Render, "d3d12: {} is missing", vfs::Narrow(core.wstring()));
+            shipping::ShowMessage(L"test_cube", L"A file of the game is missing:\n\n" + core.wstring() +
+                                  L"\n\nCopy the whole game folder again.");
+            return 1;
+        }
+    }
+    // The card, before a window exists (§7).
+    {
+        const gpu::RequirementCheck check = gpu::CheckRequirements();
+        LOG_INFO(logging::LogCategory::Render, "gpu check: {} -- {} (driver {})", check.ok ? "PASS" : "FAIL", check.adapter, check.driver);
+        if (!check.ok) {
+            const std::wstring message = gpu::RequirementMessage(check, L"test_cube");
+            LOG_ERROR(logging::LogCategory::Render, "gpu check: {}", vfs::Narrow(message));
+            shipping::ShowMessage(L"test_cube", message);
+            return 1;
+        }
+    }
+    // NVIDIA's signature on the Streamline interposer, before it is loaded (delay-loaded in Shipping): a file that is not
+    // NVIDIA's is never loaded -- the game runs without DLSS.
+    {
+        std::string why;
+        if (!render::VerifyStreamlineSignature(shipping::ExeFolder() / L"sl.interposer.dll", why)) {
+            LOG_WARNING(logging::LogCategory::Render, "streamline: sl.interposer.dll {} -- not loaded, no DLSS", why);
+            render::g_noStreamline_game = true;
+        } else {
+            LOG_INFO(logging::LogCategory::Render, "streamline: sl.interposer.dll is signed by NVIDIA");
+        }
+    }
+#else
     // The file system the content comes through (docs/distribution_build_plan.md §2.3): --vfs=loose|packages|both,
     // --pak-dir and --vfs-record mount before anything reads; --pak-build / --pak-list / --pak-verify / --vfs-selftest
     // run here, no window, the exit code their failures.
@@ -388,6 +500,7 @@ int WINAPI WinMain(
             return cookExit;
         }
     }
+#endif
 
     // "--tasksystem-stress" runs the task-system stress harness instead of the
     // app; exit code is the number of failed checks. With "--stress-overflow"
@@ -1688,6 +1801,21 @@ int WINAPI WinMain(
             return baked ? 0 : 1;
         }
     }
+
+#if TC_SHIPPING
+    // What the build starts (config/boot.json, from the profile): its level, and Play from the level's Player Start.
+    {
+        shipping::BootConfig boot;
+        std::string error;
+        if (!shipping::ReadBootConfig(boot, error)) {
+            LOG_WARNING(logging::LogCategory::App, "boot: {} -- the default level, free camera", error);
+        } else {
+            if (g_bootLevelPath.empty()) { g_bootLevelPath = boot.bootLevel; }
+            if (boot.startMode == "play") { g_bootPlay = true; }
+            LOG_INFO(logging::LogCategory::App, "boot: {} {} -- {} ({})", boot.product, boot.version, g_bootLevelPath, boot.startMode);
+        }
+    }
+#endif
 
     App app;
     app.Run(hInstance, nShowCmd);

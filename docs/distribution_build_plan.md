@@ -3,7 +3,7 @@
 Написан 2026-11-13 по просьбе владельца («сделай систему сборки билда для дистрибуции. упаковка ресов в пекедж, наша
 файловая система которая будет поддерживать пекеджи и прямые пути к файлам. пекеджи должны поддерживать шифрование.
 подумай что там еще надо для полноценного дистрибутива»; потом «UI для начала кука с выбором уровней», «сделай ревью плана»).
-**Статус: редакция 2 утверждена владельцем 2026-11-13 («Утверждаю, начинай D1»; решения §11 — рекомендации). D1-D5
+**Статус: редакция 2 утверждена владельцем 2026-11-13 («Утверждаю, начинай D1»; решения §11 — рекомендации). D1-D6
 сделаны — §13.**
 
 Цитаты из кода сверены с деревом на HEAD `7d55b4ca` плюс незакоммиченная замена шрифта ImGui (`ImGuiLayer.cpp`). Перед
@@ -824,6 +824,70 @@ Debug-редакторе) собирается тот же пакет, что и
   днём 3.84, ночью 0.44, лодки 0.07, сверху 0.20 % при поле «та же рука дважды» 2.44 / 2.92 / 0.22 / 0.28 / 0.55 % (ванная днём
   гуляет 0.1-3.8 % между любыми двумя прогонами; разница — в стеклянном шкафу, тем же рисунком, что у пола). Новые
   предупреждения в пакетах — редакторские пермутации (`EDITOR_OBJECT_ID`) и иконки редактора: в Shipping их нет.
+
+### D6 — конфигурация Shipping (2026-11-13)
+
+- **`Shipping|x64`** = блоки Release + `TC_SHIPPING=1`, mimalloc `lib\Release`, `/DELAYLOAD:sl.interposer.dll` +
+  `delayimp.lib`, выход `x64/Shipping/` (exe 9.4 МБ); третьи библиотеки — строка конфигурации; в sln Shipping собирает движок и
+  четыре библиотеки, `model_reaper` — нет. `TC_SHIPPING` не трогает рендер (кадр — ниже).
+- **Старт** (`main.cpp`, `app/Shipping.{h,cpp}`), до лога: `SetDefaultDllDirectories(APPLICATION_DIR | SYSTEM32)`; **белый
+  список ключей** (`--window --level --log-level --user-dir --shot --shot-delay --cam-pos --cam-rot --wind-freeze --time --play
+  --crash-selftest`), разбор как у Windows (`CommandLineToArgvW` от `GetCommandLineW`: аргумент с пробелом приходит в кавычках
+  целиком — первая версия резала по пробелам и выбросила `--user-dir` с «Пользователь игры»), остальное — Warning «a shipped
+  build ignores …»; **корень контента = папка exe** (`vfs::SetContentRoot`), **папка пользователя** `%LOCALAPPDATA%\test_cube`
+  (`SHGetKnownFolderPath`, широкая) или `--user-dir`, с `settings cache logs crashes bot_memory`, — **становится текущей
+  папкой**: лог, `imgui.ini` (`settings/`), артефакты, дампы, `--shot` пишутся туда без правок их кода. VFS в Shipping:
+  пакеты из `<exe>\content`, рыхлых файлов нет; **оверлей пользователя** (`Config::overlayPrefix/overlayFolder`,
+  `data/bot_memory/` → `<user>\bot_memory\`) — над всеми монтированиями в Stat / Open / List / LooseServes;
+  `WritablePath`: Settings → `<user>\settings`, Cache → `<user>\cache`, Saved `data/<rel>` → `<user>\<rel>`. Сборщик пишет
+  `config/boot.json` (продукт, версия, `bootLevel`, `startMode` профиля; `play` / `free`) — Shipping стартует по нему.
+- **Вырезано** в Shipping: Developer Controls (F1), инспектор текстур (F4), окно океана (F7), профайлер-оверлей (F9),
+  A/B-тумблеры (F2-F10, Ctrl+I/G/V), режимы DLSS Ctrl+1..7, захват трассы F11, опрос файлов шейдеров (горячая перезагрузка
+  — сам путь пересборки PSO остался), FXC-откат (`FxcFallbackAllowed`: Error, материал не создаётся), `--memtrack` /
+  `--no-async-compute` из `GetCommandLine`, все харнессы — белым списком. **Отступления**: `PROF_ENABLED=0` не собирается
+  (в `Profiler.h` члены под `#if`, а встроенные методы — нет, 218 ошибок): профайлер остался; x86 из sln не удалён; HUD остаётся
+  (в нём строка Play и клавиши).
+- **Настройки** (`GraphicsSettings.cpp`): запись во ВСЕХ сборках атомарная (`.tmp` + rename); в Shipping дефолты —
+  `config/graphics_defaults.json` из пакета, файл игрока — только отличия (рекурсивная разница объектов), чтение = дефолты +
+  `merge_patch`; без файла ничего не пишется; битый — Warning и дефолты. Проверено: прогон без изменений файла не создаёт;
+  файл `{"frame": {"vsync": true}}` читается поверх дефолтов (лог `vsync=on`) и после прогонов остаётся тем же.
+- **Падения** (`core/diagnostics/CrashHandler.{h,cpp}`): фильтр необработанных исключений, векторный для переполнения стека,
+  `SIGABRT` (abort и `std::terminate` на любом потоке — CRT-шный кончается abort), purecall, invalid parameter, terminate на
+  потоках с `InstallThisThread`; дамп пишет поток, созданный при установке (`MiniDumpWithIndirectlyReferencedMemory |
+  ScanMemory | ThreadInfo | UnloadedModules`), Fatal с модулем+смещением, окно с путями дампа и лога (`MessageBoxTimeoutW`;
+  `TEST_CUBE_MESSAGE_TIMEOUT_MS` закрывает любое окно игры — путь гейтов мимо некликнутого окна). Рендерер при потере
+  устройства отмечает это (`crash::NoteDeviceRemoved`) — окно говорит про драйвер. В Shipping включено всегда, в dev — только
+  `--crash-selftest=<рука>` (дампы в `logs/crashes`, без окна).
+- **Версия**: `sources/app/generated/BuildVersion.g.h` (не в git) — пишет `build_dist.py` (D7), без него проект сам кладёт
+  dev-значения (цель `TcEnsureBuildVersionHeader`, `0.0.0-dev`); `build::VersionString()` — в заголовке сессии лога
+  (`version=`), тег сборки лога `shipping`, заголовок окна Shipping `test_cube <версия>`. `test_cube.rc`: VERSIONINFO и иконка
+  (`sources/app/test_cube.ico`, сгенерирована: куб на морском фоне) — во всех конфигурациях. Манифест всех конфигураций:
+  `PerMonitorV2`, `longPathAware`, `supportedOS` Win10/11 (плюс UTF-8 из D1).
+- **Проверка железа** (`app/GpuRequirements.{h,cpp}`, до окна): устройство на адаптере рендерера, SM 6.6, binding tier 3, DXR
+  1.1 — иначе MessageBox со списком нехваток, адаптером и драйвером; `--gpu-check` в dev-сборках. Здесь: PASS, RTX 4090,
+  32.0.16.2101.
+- **Streamline**: Shipping грузит `sl.interposer.dll` отложенно и до первого вызова проверяет подпись NVIDIA
+  (`rendering/core/StreamlineSignature.cpp`, `sl_security.h`); не подписан или нет файла — не грузится, игра без DLSS.
+- **Windows 10 и Agility SDK** (§11 п.7): встроенный рантайм Windows 10 SM 6.6 не даёт (документированный путь — Agility SDK,
+  Win10 1909+). Подключён **Agility SDK 1.619.6** (`Microsoft.Direct3D.D3D12`, NuGet, вышел 2026-09-14; 1.620.2 четырёхдневной
+  давности не взят): `third_party/agility/x64/D3D12Core.dll` (5 МБ, распространяемый по `distributable files.txt`) + лицензия;
+  экспорт `D3D12SDKVersion = 619`, `D3D12SDKPath = ".\D3D12\"` только в Shipping (`app/AgilitySdk.cpp`; dev-сборки — системный
+  рантайм и его отладочный слой, GBV как был). Проверено по модулям живого процесса: грузится `D3D12\D3D12Core.dll` из
+  дистрибутива. **Без папки `D3D12` устройство не создаётся и на этой Windows 11 (26100, встроенный рантайм старше 619)** —
+  поэтому отдельная проверка файла с сообщением «не хватает файла игры», а не «видеокарта не подходит». На Windows 10
+  не проверено — нет машины (Windows Sandbox запускает ту же сборку ОС, что хост).
+- **Гейт** (`scratchpad ship_test.py`: Shipping-exe + DLL + `content\` из сборщика + `D3D12\` в папке
+  `…\Дистрибутив проверка\test_cube`, `--user-dir=…\Пользователь игры`): запуск в уровень — выход 0, 18 с, Play от Player
+  Start, первый кадр 5.0-5.2 с (13 с на самом первом — пустые кэши), **0 Error, 0 «not cooked»**, 10 Warning — те же, что у dev
+  Release (PNG без DDS, лимит таблицы альбедо теней); без `content\` — сообщение, выход 1; без `D3D12Core.dll` — сообщение,
+  выход 1; падения: av `0xC0000005` (дамп 172 КБ), stack `0xC00000FD` (1.1 МБ), abort / terminate на чужом потоке /
+  purecall / invalidparam — `3`, необработанное C++-исключение `0xE06D7363` — у каждой дамп, строка Fatal и окно; fastfail —
+  `0xC0000409`, ничего (как заявлено в §7). Символизация: `tools/symbolize.py x64/Shipping/test_cube.exe "test_cube.exe+0x…"` →
+  `crash::SelfTest CrashHandler.cpp:292`. `--vfs-selftest` PASS (115: +7 на оверлей, с контролем вне префикса).
+- **Кадр**: Shipping против dev Release на тех же пакетах (Play, ветер заморожен, 15:00): сначала 20-22 % — Release читает
+  рабочий `graphics_settings.json` владельца (vsync вкл), Shipping — закоммиченные дефолты (vsync выкл): другая фаза джиттера
+  DLSS; с файлом-отличием `vsync: true` у Shipping — 2.2 / 8.7 % при поле Release–Release 1.4 %, Shipping–Shipping 9.2 %; на
+  Agility-рантайме против Release на системном — 3.8-4.6 %. В шуме.
 - **Гейт D4 на собранных пакетах**: Release `--vfs=packages` по шести рукам записи — **0 «not cooked», 0 Error**; кадр против
   файлов под 6.6: день 0.46 %, ночь 0.01, сумерки 0.11, 1080p без DLSS 8.49, 4K 0.34, Play 6.65 % (шум headless-снимков между
   процессами D4: 4.04 / ? / ? / 7.92 / 1.00 / 5.52 %). `check_file_io` / `check_logging` / `check_render_knobs` /

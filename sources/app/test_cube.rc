@@ -1,0 +1,35 @@
+// The exe's resources (docs/distribution_build_plan.md §7): the icon and the version the build was given.
+#include <winres.h>
+#include "AppResources.h"
+#include "generated/BuildVersion.g.h"
+
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+TC_IDI_APP ICON "test_cube.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION TC_VERSION_MAJOR, TC_VERSION_MINOR, TC_VERSION_PATCH, TC_VERSION_BUILD
+ PRODUCTVERSION TC_VERSION_MAJOR, TC_VERSION_MINOR, TC_VERSION_PATCH, TC_VERSION_BUILD
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "ProductName", TC_PRODUCT_NAME
+            VALUE "FileDescription", TC_PRODUCT_NAME
+            VALUE "FileVersion", TC_VERSION_STRING
+            VALUE "ProductVersion", TC_VERSION_STRING
+            VALUE "InternalName", "test_cube"
+            VALUE "OriginalFilename", "test_cube.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

@@ -192,6 +192,7 @@ namespace
         std::string version = "0.0.0";
         std::vector<std::string> levels;
         std::string bootLevel;
+        std::string startMode = "play";
         std::vector<std::string> include;
         std::string graphicsDefaults;
         std::string shaderList = "tools/dist/shader_list.txt";
@@ -946,7 +947,17 @@ namespace
         {
             Warning("named only in code, opened by no record run: " + path + " (" + *where.begin() + ")");
         }
-        // 5. The curated settings.
+        // 5. What a shipped build starts (Shipping reads it: main.cpp), and the curated settings.
+        {
+            const Json boot = { { "product", profile_.product }, { "version", profile_.version },
+                                { "bootLevel", profile_.bootLevel }, { "startMode", profile_.startMode } };
+            const std::string text = boot.dump(2) + "\n";
+            FileRecord& record = files_["config/boot.json"];
+            record.bytes = std::make_shared<const std::vector<std::uint8_t>>(text.begin(), text.end());
+            record.size = text.size();
+            record.referencedBy.insert("profile bootLevel / startMode");
+            record.roads.insert("profile");
+        }
         if (!profile_.graphicsDefaults.empty())
         {
             const std::optional<vfs::Stat> stat = vfs::GetStat(profile_.graphicsDefaults);
@@ -1058,6 +1069,12 @@ namespace
         p.version = json.value("version", p.version);
         p.levels = json.value("levels", std::vector<std::string>{});
         p.bootLevel = json.value("bootLevel", std::string());
+        p.startMode = json.value("startMode", p.startMode);
+        if (p.startMode != "play" && p.startMode != "free")
+        {
+            error = "startMode \"" + p.startMode + "\": play or free";
+            return std::nullopt;
+        }
         p.include = json.value("include", std::vector<std::string>{});
         p.graphicsDefaults = json.value("graphicsDefaults", std::string());
         p.shaderList = json.value("shaderList", p.shaderList);

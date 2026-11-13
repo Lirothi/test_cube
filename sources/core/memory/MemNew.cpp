@@ -110,6 +110,10 @@ constinit std::atomic<int> g_trackState{ 0 };
 
 __declspec(noinline) bool ReadTrackSwitch() noexcept
 {
+#if TC_SHIPPING
+    g_trackState.store(1, std::memory_order_relaxed); // no memory tracking in a shipped build (plan §7: no harness switches)
+    return false;
+#endif
     const wchar_t* cmd = GetCommandLineW();
     // A CPU memory trace (M4) and the leak readout's per-tag verdict (M6) need the map as much as --memtrack does.
     const bool on = cmd != nullptr && (std::wcsstr(cmd, L"--memtrack") != nullptr || std::wcsstr(cmd, L"--mem-readout") != nullptr ||

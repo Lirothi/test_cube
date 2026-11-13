@@ -77,6 +77,7 @@ namespace logging
         wchar_t filePath[512] = {};
         // Recorded in the session header (not owned; must outlive Initialize).
         const char* commandLine = nullptr;
+        const char* version = nullptr;          // the build's version (app/BuildVersion.h)
     };
 
     // Applies the logging switches found in a command line:

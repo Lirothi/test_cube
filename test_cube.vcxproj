@@ -29,6 +29,10 @@
       <Configuration>Cook</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Shipping|x64">
+      <Configuration>Shipping</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -88,6 +92,16 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <!-- Shipping|x64 (docs/distribution_build_plan.md §7): Release's build plus TC_SHIPPING=1, which changes no rendering
+       (the shader record runs Release): it cuts the harnesses and the developer UI, roots the content at the exe's folder
+       and the writable files at the user's, checks the GPU, writes crash dumps. Output x64/Shipping/. -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Shipping|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -112,6 +126,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Cook|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Shipping|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -237,6 +254,29 @@
       <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Shipping|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;TC_SHIPPING=1;%(PreprocessorDefinitions);NOMINMAX;WIN32_LEAN_AND_MEAN;</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\meshoptimizer\src;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\Release;$(ProjectDir)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Shipping checks NVIDIA's signature on the interposer before anything of it runs (StreamlineSignature.h). -->
+      <DelayLoadDLLs>sl.interposer.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -268,6 +308,10 @@
     <ClCompile Include="sources/app/App.cpp" />
     <ClCompile Include="sources/app/diagnostics/SceneStress.cpp" />
     <ClCompile Include="sources/app/diagnostics/RtAudit.cpp" />
+    <ClCompile Include="sources/app/AgilitySdk.cpp" />
+    <ClCompile Include="sources/app/BuildVersion.cpp" />
+    <ClCompile Include="sources/app/GpuRequirements.cpp" />
+    <ClCompile Include="sources/app/Shipping.cpp" />
     <ClCompile Include="sources/app/AppController.cpp" />
     <ClCompile Include="sources/editor/EditorController.cpp" />
     <ClCompile Include="sources/editor/EditorExtensionRegistry.cpp" />
@@ -375,6 +419,7 @@
     <ClCompile Include="sources/app/Systems.cpp" />
     <ClCompile Include="sources/app/main.cpp" />
     <ClCompile Include="sources/core/diagnostics/ArtifactWriter.cpp" />
+    <ClCompile Include="sources/core/diagnostics/CrashHandler.cpp" />
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp" />
     <ClCompile Include="sources/core/vfs/Pak.cpp" />
     <ClCompile Include="sources/core/vfs/PakCrypto.cpp" />
@@ -437,6 +482,7 @@
     <ClCompile Include="sources/rendering/core/TextureCreate.cpp" />
     <ClCompile Include="sources/rendering/core/ExposureMetering.cpp" />
     <ClCompile Include="sources/rendering/core/Renderer.cpp" />
+    <ClCompile Include="sources/rendering/core/StreamlineSignature.cpp" />
     <ClCompile Include="sources/rendering/core/RhiQueue.cpp" />
     <ClCompile Include="sources/rendering/core/Screenshot.cpp" />
     <ClCompile Include="sources/rendering/core/RendererInvariantFailure.cpp" />
@@ -545,6 +591,10 @@
     <ClInclude Include="sources/app/diagnostics/SceneStress.h" />
     <ClInclude Include="sources/app/diagnostics/RtAudit.h" />
     <ClInclude Include="sources/app/diagnostics/CullBenchmark.h" />
+    <ClInclude Include="sources/app/AppResources.h" />
+    <ClInclude Include="sources/app/BuildVersion.h" />
+    <ClInclude Include="sources/app/GpuRequirements.h" />
+    <ClInclude Include="sources/app/Shipping.h" />
     <ClInclude Include="sources/app/AppController.h" />
     <ClInclude Include="sources/editor/EditorContext.h" />
     <ClInclude Include="sources/editor/EditorSelection.h" />
@@ -666,6 +716,7 @@
     <ClInclude Include="sources/core/profiling/Profiler.h" />
     <ClInclude Include="sources/core/profiling/ProfilerScopes.h" />
     <ClInclude Include="sources/core/diagnostics/ArtifactWriter.h" />
+    <ClInclude Include="sources/core/diagnostics/CrashHandler.h" />
     <ClInclude Include="sources/core/diagnostics/BootProfile.h" />
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h" />
     <ClInclude Include="sources/core/vfs/Pak.h" />
@@ -750,6 +801,7 @@
     <ClInclude Include="sources/rendering/core/PhotographicSettings.h" />
     <ClInclude Include="sources/rendering/core/PhotographicSettingsJson.h" />
     <ClInclude Include="sources/rendering/core/Renderer.h" />
+    <ClInclude Include="sources/rendering/core/StreamlineSignature.h" />
     <ClInclude Include="sources/rendering/core/Screenshot.h" />
     <ClInclude Include="sources/rendering/core/RendererInvariantFailure.h" />
     <ClInclude Include="sources/rendering/diagnostics/RendererSubmissionStress.h" />
@@ -1059,6 +1111,23 @@
   <ItemGroup>
     <Manifest Include="sources/app/test_cube.manifest" />
   </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="sources/app/test_cube.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="sources/app/test_cube.ico" />
+  </ItemGroup>
+  <!-- The build's version (docs/distribution_build_plan.md §7): sources/app/generated/BuildVersion.g.h, which
+       tools/build_dist.py writes for a distribution. A tree without one gets the dev values here, before anything
+       compiles that includes it (BuildVersion.cpp, test_cube.rc). The folder is not in git. -->
+  <PropertyGroup>
+    <TcBuildVersionHeader>$(ProjectDir)sources\app\generated\BuildVersion.g.h</TcBuildVersionHeader>
+    <TcDevVersionLines>// The dev build's version: written by test_cube.vcxproj because the file was missing (tools/build_dist.py writes a real one).;#pragma once;#define TC_PRODUCT_NAME &quot;test_cube&quot;;#define TC_VERSION_STRING &quot;0.0.0-dev&quot;;#define TC_VERSION_MAJOR 0;#define TC_VERSION_MINOR 0;#define TC_VERSION_PATCH 0;#define TC_VERSION_BUILD 0;#define TC_GIT_HASH &quot;&quot;;#define TC_BUILD_DATE &quot;&quot;</TcDevVersionLines>
+  </PropertyGroup>
+  <Target Name="TcEnsureBuildVersionHeader" BeforeTargets="ClCompile;ResourceCompile" Condition="!Exists('$(TcBuildVersionHeader)')">
+    <MakeDir Directories="$(ProjectDir)sources\app\generated" />
+    <WriteLinesToFile File="$(TcBuildVersionHeader)" Lines="$(TcDevVersionLines)" Overwrite="true" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
@@ -1084,7 +1153,7 @@
   <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <RuntimeDll Include="$(ProjectDir)deps\tbb12_debug.dll" />
   </ItemGroup>
-  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' or '$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64'">
+  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' or '$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64' or '$(Configuration)|$(Platform)'=='Shipping|x64'">
     <RuntimeDll Include="$(ProjectDir)deps\tbb12.dll" />
   </ItemGroup>
   <Target Name="CopyRuntimeDllsToOutput" AfterTargets="Build" Condition="'$(Platform)'=='x64'">

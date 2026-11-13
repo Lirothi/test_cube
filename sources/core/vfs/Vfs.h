@@ -129,7 +129,8 @@ namespace vfs
     };
 
     // Where a file the game writes lives. Dev builds: the content root, as before (graphics_settings.json,
-    // data/bot_memory/...). Shipping (D6) maps each kind to its folder under %LOCALAPPDATA%.
+    // data/bot_memory/...). With a user folder set (Shipping, --user-dir, §6): <user>/settings/<rel>, <user>/cache/<rel>,
+    // and a saved "data/<rel>" at <user>/<rel> -- the user overlay below reads it back.
     enum class Writable
     {
         Settings, // graphics_settings.json, imgui.ini
@@ -138,9 +139,14 @@ namespace vfs
     };
     [[nodiscard]] std::filesystem::path WritablePath(Writable kind, std::string_view relative);
 
-    // The loose mount's folder (the current directory at the first call) and where a content path lies on disk,
-    // for code that must hand an OS path to a writer or a tool beside it. Not for reading: use the calls above.
+    // The loose mount's folder and where a content path lies on disk, for code that must hand an OS path to a writer or
+    // a tool beside it. Not for reading: use the calls above. The current directory at the first call, unless
+    // SetContentRoot named one before it (Shipping: the exe's folder; the current directory is then the user's).
     [[nodiscard]] const std::filesystem::path& ContentRoot();
+    void SetContentRoot(const std::filesystem::path& folder);
+    // The user's folder (§6), empty in a dev run: set before anything writes.
+    void SetUserDirectory(const std::filesystem::path& folder);
+    [[nodiscard]] const std::filesystem::path& UserDirectory();
     [[nodiscard]] std::filesystem::path OsPath(const Path& path);
 
     // UTF-8 <-> UTF-16 for the Win32 / WIC code that keeps wide strings -- not std::wstring(s.begin(), s.end()),
@@ -174,6 +180,10 @@ namespace vfs
         std::filesystem::path packageDir;   // every *.tcpak in it is mounted
         std::filesystem::path recordFile;   // --vfs-record: each content file found, once, as it is first found
         std::vector<std::filesystem::path> keyFiles; // --pak-key: keys for encrypted packages (besides the embedded one)
+        // The user overlay (§2.1): a content path under `overlayPrefix` is looked for in `overlayFolder` first, over
+        // every mount -- what the game saved (WritablePath(Saved, ...)) over what shipped. Empty = none.
+        std::string overlayPrefix;
+        std::filesystem::path overlayFolder;
     };
     // Before the first read. False (and why) when a package does not open; nothing is mounted then.
     bool Configure(const Config& config, std::string& error);
