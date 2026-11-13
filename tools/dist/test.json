@@ -1,0 +1,29 @@
+{
+  "_comment": "docs/distribution_build_plan.md §8.0: a quick build to see that it cooks -- no encryption, fast compression, no zip, no symbols.",
+  "product": "test_cube",
+  "version": "0.1.0",
+  "levels": ["data/levels/wind_test.json"],
+  "bootLevel": "data/levels/wind_test.json",
+  "startMode": "play",
+  "include": [
+    "fonts/*.json",
+    "fonts/*.tga",
+    "fonts/JetBrainsMono-Regular.ttf",
+    "input/bindings.json",
+    "data/loading_screen.jpg",
+    "data/materials/*.json"
+  ],
+  "graphicsDefaults": "tools/dist/graphics_defaults.json",
+  "shaderList": "tools/dist/shader_list.txt",
+  "vfsRecord": "tools/dist/vfs_record.txt",
+  "shaderModel": "6.6",
+  "recordArms": {"resolutions": ["1920x1080", "2560x1440", "3840x2160"], "dlss": ["off", "balanced", "dlaa"], "play": true},
+  "compression": "zstd:3",
+  "encrypt": false,
+  "shaderSources": true,
+  "strictLicences": false,
+  "allowLoose": false,
+  "zip": false,
+  "symbols": false,
+  "out": "dist"
+}

@@ -286,9 +286,23 @@ public:
     static void SetShaderModelCap(unsigned shaderModel);
     // --shader-record: every compile request, once -- file|entry|stage|defines -- the list a cook compiles.
     static void SetShaderRecordFile(const std::wstring& file);
-    // --shader-cook: the recorded list compiled at the cap into `outPackage` (shaders/dxil/<id>.dxil, the HLSL sources
-    // beside them as the safety net, shaders/dxil/cooked.txt naming the target). The number of failed compiles.
-    static int CookShaders(const std::wstring& listFile, const std::wstring& outPackage, const vfs::pak::Key* key, int level);
+    // --shader-cook / --cook: the recorded list compiled at the cap into `outPackage` (shaders/dxil/<id>.dxil, the HLSL
+    // sources beside them as the safety net unless `withSources` is false, shaders/dxil/cooked.txt naming the target), with
+    // Release flags whatever this exe was built as (§5 item 2: a Debug cook would otherwise compile -Od). The number of
+    // failed compiles; `result` says what was built.
+    struct ShaderCookResult
+    {
+        uint32_t records = 0;          // lines of the list
+        uint32_t permutations = 0;     // distinct blobs in the package
+        uint32_t failed = 0;
+        uint64_t files = 0;            // in the package (blobs, the marker, the sources)
+        uint64_t packageBytes = 0;
+        double compileSeconds = 0.0;
+        bool built = false;            // the package was written
+        std::string error;
+    };
+    static int CookShaders(const std::wstring& listFile, const std::wstring& outPackage, const vfs::pak::Key* key, int level,
+                           bool withSources = true, ShaderCookResult* result = nullptr);
     struct DistributionShaderStats
     {
         uint32_t cookedHits = 0;   // blobs taken from a shaders package

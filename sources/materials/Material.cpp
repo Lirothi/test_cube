@@ -191,6 +191,17 @@ void CacheHashWString(uint64_t& hash, const std::wstring& value)
 std::atomic<unsigned> g_shaderModelCap{ 0 };
 std::atomic<uint32_t> g_cookedHits{ 0 };
 std::atomic<uint32_t> g_notCooked{ 0 };
+// While a cook compiles (§5 item 2): Release flags in any build, no dev cache of Debug blobs, no cooked set to read from.
+std::atomic<bool> g_cookingShaders{ false };
+
+bool UseDebugShaderFlags()
+{
+#ifdef _DEBUG
+    return !g_cookingShaders.load(std::memory_order_relaxed);
+#else
+    return false;
+#endif
+}
 
 struct ShaderRecorder
 {
@@ -393,11 +404,7 @@ uint64_t BuildShaderCacheIdentity(const std::filesystem::path& shaderPath,
     CacheHashString(hash, entry);
     CacheHashString(hash, stage4cc);
     CacheHashWString(hash, target);
-#ifdef _DEBUG
-    CacheHashString(hash, "debug:-Zi,-Qembed_debug,-Od");
-#else
-    CacheHashString(hash, "release:-O3,-Qstrip_debug");
-#endif
+    CacheHashString(hash, UseDebugShaderFlags() ? "debug:-Zi,-Qembed_debug,-Od" : "release:-O3,-Qstrip_debug");
     CacheHashString(hash, "row-major;hlsl-2021");
     const ShaderDependencyFingerprint& compiler = DxcCompilerFingerprint();
     CacheHashBytes(hash, &compiler.size, sizeof(compiler.size));
@@ -1350,13 +1357,14 @@ static HRESULT CompileDXC(const std::wstring& file,
     RecordShader(virtualPath, entry, stage4cc, materialDefines);
     // The target: the device's highest, at most the cap (--shader-model, Shipping) or what a mounted cooked set was built for.
     unsigned cap = g_shaderModelCap.load(std::memory_order_relaxed);
-    if (Cooked().present) { cap = Cooked().shaderModel; }
+    const bool cooking = g_cookingShaders.load(std::memory_order_relaxed);
+    if (Cooked().present && !cooking) { cap = Cooked().shaderModel; }
     D3D_SHADER_MODEL sm = device ? QueryMaxShaderModel(device) : static_cast<D3D_SHADER_MODEL>(cap != 0 ? cap : 0x66u);
     if (cap != 0 && static_cast<unsigned>(sm) > cap) { sm = static_cast<D3D_SHADER_MODEL>(cap); }
     const std::wstring target = BuildProfile(stage4cc, sm);
     const auto shaderBegin = std::chrono::steady_clock::now();
     const std::string shaderLabel = NarrowForLog(path.filename().wstring()) + ":" + entry;
-    if (Cooked().present)
+    if (Cooked().present && !cooking)
     {
         const uint64_t cookedId = CookedShaderIdentity(virtualPath, entry, stage4cc, target, defines);
         std::vector<std::uint8_t> cooked;
@@ -1428,15 +1436,15 @@ static HRESULT CompileDXC(const std::wstring& file,
     owned.push_back(L"-Zpr");         // 4 (row-major)
     owned.push_back(L"-HV");          // 5
     owned.push_back(L"2021");         // 6
-#ifdef _DEBUG
-    owned.push_back(L"-Zi");          // 7
-    owned.push_back(L"-Qembed_debug");// 8
-    owned.push_back(L"-Od");          // 9
-#else
-    owned.push_back(L"-O3");
-    owned.push_back(L"-Qstrip_debug");
-    //owned.push_back(L"-Qstrip_reflect");
-#endif
+    if (UseDebugShaderFlags()) {
+        owned.push_back(L"-Zi");          // 7
+        owned.push_back(L"-Qembed_debug");// 8
+        owned.push_back(L"-Od");          // 9
+    } else {
+        owned.push_back(L"-O3");
+        owned.push_back(L"-Qstrip_debug");
+        //owned.push_back(L"-Qstrip_reflect");
+    }
 
     // Defines
     for (auto& kv : defines) {
@@ -2760,14 +2768,21 @@ Material::DistributionShaderStats Material::GetDistributionShaderStats()
     return s;
 }
 
-int Material::CookShaders(const std::wstring& listFile, const std::wstring& outPackage, const vfs::pak::Key* key, int level)
+int Material::CookShaders(const std::wstring& listFile, const std::wstring& outPackage, const vfs::pak::Key* key, int level,
+                          bool withSources, ShaderCookResult* result)
 {
+    ShaderCookResult local;
+    ShaderCookResult& out = result ? *result : local;
+    out = ShaderCookResult{};
     std::string text;
     if (!vfs::ReadText(listFile, text))
     {
-        LOG_ERROR(logging::LogCategory::Render, "shader cook: cannot read the list {}", NarrowForLog(listFile));
+        out.error = "cannot read the list " + NarrowForLog(listFile);
+        LOG_ERROR(logging::LogCategory::Render, "shader cook: {}", out.error);
         return 1;
     }
+    g_cookingShaders.store(true);
+    struct CookingFlag { ~CookingFlag() { g_cookingShaders.store(false); } } cookingFlag;
     if (g_shaderModelCap.load() == 0) { g_shaderModelCap.store(0x66u); }
     const unsigned cap = g_shaderModelCap.load();
 
@@ -2869,6 +2884,7 @@ int Material::CookShaders(const std::wstring& listFile, const std::wstring& outP
     // The safety net: the sources, so a permutation the record missed still compiles (plan §5 item 4).
     for (const char* pattern : { "*.hlsl", "*.hlsli" })
     {
+        if (!withSources) { break; }
         vfs::List("shaders", pattern, [&](const vfs::ListEntry& e)
         {
             if (e.directory) { return; }
@@ -2883,11 +2899,19 @@ int Material::CookShaders(const std::wstring& listFile, const std::wstring& outP
     options.level = level;
     options.key = key;
     const vfs::pak::BuildResult built = vfs::pak::Build(std::filesystem::path(outPackage), std::move(files), options);
+    out.records = static_cast<uint32_t>(jobs.size());
+    out.permutations = static_cast<uint32_t>(ids.size());
+    out.failed = static_cast<uint32_t>(failures.load());
+    out.compileSeconds = compileSeconds;
     if (!built.ok)
     {
+        out.error = built.error;
         LOG_ERROR(logging::LogCategory::Render, "shader cook: FAIL {}", built.error);
         return failures.load() + 1;
     }
+    out.built = true;
+    out.files = built.files;
+    out.packageBytes = built.packageBytes;
     LOG_INFO(logging::LogCategory::Render,
              "shader cook: {} -- {} records, {} permutations at 6_{} ({} failed) in {:.1f} s, {} files, {:.1f} MB{}",
              NarrowForLog(outPackage), jobs.size(), ids.size(), cap & 0xFu, failures.load(), compileSeconds, built.files,

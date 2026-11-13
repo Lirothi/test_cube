@@ -25,6 +25,10 @@
       <Configuration>Release_Editor</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Cook|x64">
+      <Configuration>Cook</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -74,6 +78,16 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <!-- Cook|x64 (docs/distribution_build_plan.md §7): Release_Editor's build (WITH_EDITOR, so it writes water masks and
+       has DXC) with an output of its own, x64/Cook/. The content cook always runs this exe: an open editor
+       does not hold it (LNK1104), it is never Debug, and it builds from the same tree as Shipping. -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Cook|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -95,6 +109,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Release_Editor|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Cook|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -220,7 +237,7 @@
       <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release_Editor|x64'">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -323,6 +340,7 @@
     <ClCompile Include="sources/app/game/PlayerController.cpp" />
     <ClCompile Include="sources/app/game/PlaySession.cpp" />
     <ClCompile Include="sources/app/game/Race.cpp" />
+    <ClCompile Include="sources/app/dist/Cook.cpp" />
     <ClCompile Include="sources/app/game/BotMemory.cpp" />
     <ClCompile Include="sources/app/game/RaceBot.cpp" />
     <ClCompile Include="sources/app/game/RacePlanner.cpp" />
@@ -610,6 +628,7 @@
     <ClInclude Include="sources/app/game/PlayerController.h" />
     <ClInclude Include="sources/app/game/PlaySession.h" />
     <ClInclude Include="sources/app/game/Race.h" />
+    <ClInclude Include="sources/app/dist/Cook.h" />
     <ClInclude Include="sources/app/game/BotMemory.h" />
     <ClInclude Include="sources/app/game/RaceBot.h" />
     <ClInclude Include="sources/app/game/RacePlanner.h" />
@@ -1065,7 +1084,7 @@
   <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <RuntimeDll Include="$(ProjectDir)deps\tbb12_debug.dll" />
   </ItemGroup>
-  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' or '$(Configuration)|$(Platform)'=='Release_Editor|x64'">
+  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' or '$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64'">
     <RuntimeDll Include="$(ProjectDir)deps\tbb12.dll" />
   </ItemGroup>
   <Target Name="CopyRuntimeDllsToOutput" AfterTargets="Build" Condition="'$(Platform)'=='x64'">

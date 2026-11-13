@@ -46,6 +46,9 @@
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\app\dist">
+      <UniqueIdentifier>{d5c00c0a-7a5e-4b8e-9f3b-2c1d6e8f0a51}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\game">
       <UniqueIdentifier>{c2afbd32-4240-4f92-903d-a566cb3727fc}</UniqueIdentifier>
     </Filter>
@@ -425,6 +428,9 @@
     </ClCompile>
     <ClCompile Include="sources/app/game/Race.cpp">
       <Filter>sources\app\game</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/app/dist/Cook.cpp">
+      <Filter>sources\app\dist</Filter>
     </ClCompile>
     <ClCompile Include="sources/app/game/BotMemory.cpp">
       <Filter>sources\app\game</Filter>
@@ -1171,6 +1177,9 @@
     </ClInclude>
     <ClInclude Include="sources/app/game/Race.h">
       <Filter>sources\app\game</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/app/dist/Cook.h">
+      <Filter>sources\app\dist</Filter>
     </ClInclude>
     <ClInclude Include="sources/app/game/BotMemory.h">
       <Filter>sources\app\game</Filter>

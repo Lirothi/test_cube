@@ -7,6 +7,7 @@
 // operator new/delete are replaced in core/memory/MemNew.cpp (mimalloc + per-thread counters,
 // memory profiling plan M0); this file no longer includes mimalloc-new-delete.h.
 #include "app/App.h"
+#include "app/dist/Cook.h"
 
 #include "assets/AssetImporter.h"
 #include "editor/assets/MaterialFileGen.h" // --seam-ratio (empty outside WITH_EDITOR)
@@ -381,6 +382,10 @@ int WINAPI WinMain(
             const std::string level = ExtractArgValue(lpCmdLine, "--pak-level");
             return Material::CookShaders(vfs::Widen(cook.substr(0, comma)), vfs::Widen(cook.substr(comma + 1)),
                                          key ? &*key : nullptr, level.empty() ? 19 : std::atoi(level.c_str()));
+        }
+        // The content cook (plan §8.1): --cook=<profile.json> --cook-out=<folder> [--cook-check] -- no window.
+        if (const int cookExit = dist::RunCook(lpCmdLine); cookExit >= 0) {
+            return cookExit;
         }
     }
 

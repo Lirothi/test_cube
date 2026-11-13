@@ -1517,6 +1517,31 @@ namespace watermask
         return bytes;
     }
 
+    bool RekeyBakeForPackage(std::vector<std::uint8_t>& bytes, std::uint64_t looseBytes, std::uint64_t looseVersion,
+                             std::uint64_t packagedVersion, std::string& why)
+    {
+        ByteReader r{ bytes.data(), bytes.data() + bytes.size() };
+        if (r.Get<std::uint32_t>() != kBakeMagic || !r.ok) { why = "not a water mask bake"; return false; }
+        const std::uint32_t version = r.Get<std::uint32_t>();
+        if (version != kWaterMaskBakeVersion)
+        {
+            why = "made by version " + std::to_string(version) + ", this is " + std::to_string(kWaterMaskBakeVersion);
+            return false;
+        }
+        const std::uint64_t geometryBytes = r.Get<std::uint64_t>();
+        const std::size_t timeAt = static_cast<std::size_t>(r.at - bytes.data());
+        const std::int64_t geometryTime = r.Get<std::int64_t>();
+        if (!r.ok) { why = "cut short"; return false; }
+        if (geometryBytes != looseBytes || geometryTime != static_cast<std::int64_t>(looseVersion))
+        {
+            why = "made from another bake of the geometry";
+            return false;
+        }
+        const std::int64_t packaged = static_cast<std::int64_t>(packagedVersion);
+        std::memcpy(bytes.data() + timeAt, &packaged, sizeof(packaged));
+        return DeserializeField(bytes.data(), bytes.size(), nullptr, why) != nullptr;
+    }
+
     std::shared_ptr<WaterMaskField> DeserializeField(const std::uint8_t* bytes, std::size_t size, const WaterMaskBakeKey* expect,
                                                      std::string& why)
     {

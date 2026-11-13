@@ -137,6 +137,12 @@ namespace watermask
     std::vector<std::uint8_t> SerializeField(const WaterMaskField& field, const WaterMaskBakeKey& key);
     std::shared_ptr<WaterMaskField> DeserializeField(const std::uint8_t* bytes, std::size_t size, const WaterMaskBakeKey* expect,
                                                      std::string& why);
+    // The content cook (docs/distribution_build_plan.md §8.1 item 4): a bake made for the loose geometry (`looseBytes`,
+    // `looseVersion` = its vfs::Stat) is re-keyed for the same geometry in a package, whose vfs::Stat::version is its content
+    // hash -- only the key's geometry version changes, so the frame reads it there as it reads it from the files. False (and
+    // why) when the bytes are no bake of this version or were made from another bake of the geometry.
+    bool RekeyBakeForPackage(std::vector<std::uint8_t>& bytes, std::uint64_t looseBytes, std::uint64_t looseVersion,
+                             std::uint64_t packagedVersion, std::string& why);
     // The bytes the GPU and the tests read of a field (the plan, the lid, the basins), to compare two fields exactly.
     bool SameField(const WaterMaskField& a, const WaterMaskField& b);
 

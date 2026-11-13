@@ -303,3 +303,19 @@ Font Information:
 Font License:
 * license type:	SIL Open Font License 1.1 (https://openfontlicense.org); the full text is fonts/JetBrainsMono-OFL.txt
 * used for:	the ImGui UI font (Level Editor, Developer Controls, the command bar)
+
+## atoll_island
+Generated for this project by tools/gen_island.py (the island ring).
+License: own work
+
+## atoll_lagoon_floor
+Generated for this project by tools/gen_island.py (the lagoon floor).
+License: own work
+
+## box
+A unit cube made for this project (3ds Max export, import_staging/box/box.obj).
+License: own work
+
+## sphere
+A unit sphere made for this project (3ds Max export, import_staging/sphere/sphere.obj).
+License: own work

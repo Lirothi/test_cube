@@ -25,6 +25,7 @@ namespace logging
         Profiling,
         Physics,
         Vfs,
+        Cook,
         Count
     };
 
@@ -55,7 +56,8 @@ namespace logging
             "ocean",
             "profiling",
             "physics",
-            "vfs"
+            "vfs",
+            "cook"
         };
         return IsValid(category) ? names[static_cast<std::size_t>(category)] : "invalid";
     }

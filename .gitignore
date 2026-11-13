@@ -410,3 +410,6 @@ bckp/
 
 # The package key a Shipping build embeds (docs/distribution_build_plan.md section 4): never committed
 sources/core/vfs/generated/
+# The distribution build (docs/distribution_build_plan.md §8.2): its output and the symbol archive.
+/dist/
+/dist_symbols/
