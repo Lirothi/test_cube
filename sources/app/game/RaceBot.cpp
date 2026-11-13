@@ -73,6 +73,10 @@ namespace game
             { "planEvery", "Plan every (s)", "Seconds between plans.", &S::planEvery, 0.01f, 0.02f, 1.0f, "%.2f" },
             { "turnPower", "Power in a hard turn", "Hard over under its grip speed, its throttle is never under this while it is no more than 'Power over its speed' past the speed it wants: these boats turn by the propeller's wash past the rudder, and coasting hard over at 6-9 m/s the yacht made circles of 55-180 m where with the power on it makes 27-44 m. 0 = it coasts down to the speed it wants (before).", &S::turnPower, 0.05f, 0.0f, 1.0f, "%.2f" },
             { "turnPowerOver", "Power over its speed (m/s)", "How far over the speed it wants a boat hard over still keeps 'Power in a hard turn' on; past it it coasts to slow down first.", &S::turnPowerOver, 0.1f, 0.0f, 10.0f, "%.1f" },
+            { "markRule", "Buoys: last moment only", "1 = with a plan (which keeps clear of the buoys itself) the helm steers round a buoy only when a contact is about to happen: within its half beam and 1.5 m, 1.2 s ahead. 0 = it keeps its line's room ('Room at a mark') from every buoy ahead, fighting a plan that crosses a narrow gate near a mark on purpose.", &S::markRule, 1.0f, 0.0f, 1.0f, "%.0f" },
+            { "stepSteer", "Steer in the physics steps", "1 = its steering law (a pure pursuit of its aim, damped by the hull's turn) is evaluated in every physics step from the hull as that step has it: the same helm at any frame rate and time scale. 0 = once a frame, the rudder standing for every step the frame holds (4 at 60 fps and x4).", &S::stepSteer, 1.0f, 0.0f, 1.0f, "%.0f" },
+            { "turnWash", "Wash to the grip", "1 = with its rudder hard over its throttle is never under the share whose propeller wash takes the rudder to what the boat's grip holds at that speed (coasting, a rudder without wash turned the yacht on an 86 m circle where its grip allows 35). 0 = it may coast hard over (before).", &S::turnWash, 1.0f, 0.0f, 1.0f, "%.0f" },
+            { "planSwitch", "Plan switch margin (s)", "A new plan replaces the last one (run on from where the boat is) only when it is that many seconds cheaper: two near-equal ways through a gate swapped every tenth of a second and the rudder went from one side to the other. 0 = the cheapest plan every time (before).", &S::planSwitch, 0.05f, 0.0f, 2.0f, "%.2f" },
             { "steerByRudder", "Steer by its rudder", "Its rudder's order is a share of the turn it makes at this speed: 1 = what its rudder turns it, 0 = what its grip lets it (past its grip speed a couple of degrees off then asked for full rudder: it sawed from side to side on a straight), between them in log.", &S::steerByRudder, 0.05f, 0.0f, 1.0f, "%.2f" },
             { "planLead", "Plan ahead of its engine", "1 = it brakes as early as its engine needs: the least its plan allows over the stretch it covers in half the time its throttle takes from full ahead to astern (police_boat 1.9 s, the yacht 0.85 s): the braking ramps in as the engine swings. 0 = the plan's limit half a second on.", &S::planLead, 0.05f, 0.0f, 2.0f, "%.2f" },
             { "planTurns", "Plan its way through a gate", "1 = its plan chooses which way it crosses each gate too (up to 20 degrees off the line through its neighbours): a wide entry and a late apex. 0 = only where it crosses.", &S::planTurns, 1.0f, 0.0f, 1.0f, "%.0f" },
@@ -176,8 +180,10 @@ namespace game
         onGrid_ = true;
     }
 
-    void RaceBot::PutBack(float station)
+    void RaceBot::PutBack(float station, std::size_t gateAhead)
     {
+        if (gateAhead != static_cast<std::size_t>(-1)) { gateIndex_ = gateAhead; }
+        recovering_ = false;
         status_.station = station;
         status_.crossTrack = 0.0f;
         located_ = true;
@@ -252,6 +258,30 @@ namespace game
         }
     }
 
+    float RaceBot::WashToGrip(const physics::VesselSettings& boat, float speed) const
+    {
+        // The rudder's turn (SteadyTurnRate) with its wash at the root of the throttle, against the grip's turn at the share it
+        // has measured: the least throttle at which the first reaches the second (bisection; the rudder's turn grows with it).
+        const float v = std::max(speed, 0.5f);
+        const float grip = gripSeen_ * GripAccel(boat, v) / v;
+        const auto rudderAt = [&](float throttle)
+        {
+            physics::VesselSettings eased = boat;
+            eased.wash *= std::sqrt(std::max(throttle, 0.0f));
+            return SteadyTurnRate(eased, halfLength_, rudderLever_, v);
+        };
+        if (rudderAt(1.0f) <= grip) { return 1.0f; }
+        if (rudderAt(0.0f) >= grip) { return 0.0f; }
+        float low = 0.0f;
+        float high = 1.0f;
+        for (int i = 0; i < 12; ++i)
+        {
+            const float mid = 0.5f * (low + high);
+            (rudderAt(mid) >= grip ? high : low) = mid;
+        }
+        return high;
+    }
+
     float RaceBot::TurnAtSpeed(float speed) const
     {
         const float at = std::clamp(speed / std::max(topSpeed_, 1.0f), 0.0f, 1.0f) * static_cast<float>(kTurnTable - 1);
@@ -322,6 +352,7 @@ namespace game
         boat.drag = settings.planBrake * 0.77f * hull.settings->surgeDrag / mass;
         boat.reach = reachCurvature_;
         boat.turnMost = settings.planTurns >= 0.5f ? kPlanTurnMost : 0.0f;
+        boat.switchCost = std::max(settings.planSwitch, 0.0f);
         boat.speedFor = [this](float curvature) { return SpeedFor(curvature); };
         if (settings.planBrakeBend >= 0.5f)
         {
@@ -367,6 +398,7 @@ namespace game
             warm.assign(plan_.offsets.begin() + 1, plan_.offsets.end());
             warmTurns.assign(plan_.turns.begin() + 1, plan_.turns.end());
         }
+        planRivals_ = rivals;
         plan_ = PlanThroughGates(boat, ahead, rivals, warm, warmTurns);
         planValid_ = plan_.valid;
         planAge_ = 0.0f;
@@ -776,14 +808,24 @@ namespace game
         const float rudderCurve = std::max(SteadyTurnRate(*hull.settings, halfLength_, rudderLever_, pace) / pace, tightest);
         const float by = std::clamp(settings.steerByRudder, 0.0f, 1.0f);
         const float steerBy = std::exp((1.0f - by) * std::log(std::max(tightest, 1e-4f)) + by * std::log(std::max(rudderCurve, 1e-4f)));
-        order.rudder = settings.steerGain * arc / std::max(steerBy, 1e-4f) - settings.yawDamping * yawRate_;
+        const float steerGainNow = settings.steerGain / std::max(steerBy, 1e-4f);
+        order.rudder = steerGainNow * arc - settings.yawDamping * yawRate_;
+        const char* rudderBy = recovering_ ? "coming round" : (planned ? "its plan" : "its line");
+        const float rudderAimed = order.rudder;
         // The marks are seen. One ahead that the bow would brush -- the line keeps clear of them, the boat is not always
         // on its line: coming onto the course from outside it, thrown by a sea -- is steered round, on the side its
         // gate's middle lies (dead ahead: away from the mark). A buoy is a kinematic body: hitting one stops the boat.
         {
             const float2 starboard(forward.y, -forward.x);
-            const float look = std::max(25.0f, 2.5f * std::fabs(speed));
-            const float clear = hull.halfBeam + settings.margin;
+            // With a plan the marks are already its to keep clear of (rivals that stand still, all along its path), and it
+            // crosses a gate 4.5 m from a mark on purpose; this rule then catches only a contact about to happen -- the hull's
+            // half beam and 1.5 m, 1.2 s of its speed ahead (bot.markRule). Held to its line's 6 m (bot.margin) it fought the
+            // plan at every narrow gate: hard over one way and the other at reef's gate 16 at 13.8 m/s, the boat swung 15-20 m
+            // each side through the slalom at 5-8 m/s, and it was steering "round a buoy" at every one of 25 contacts logged
+            // (2026-11-13).
+            const bool emergency = planned && settings.markRule >= 0.5f;
+            const float look = emergency ? std::max(10.0f, 1.2f * std::fabs(speed)) : std::max(25.0f, 2.5f * std::fabs(speed));
+            const float clear = hull.halfBeam + (emergency ? 1.5f : settings.margin);
             for (int ahead = 0; ahead < 2; ++ahead)
             {
                 const RaceGate& gate = gates[(gateIndex_ + static_cast<std::size_t>(ahead)) % gates.size()];
@@ -807,6 +849,7 @@ namespace game
                     order.rudder += way * 2.5f * (1.0f - std::fabs(side) / clear);
                 }
             }
+            if (order.rudder != rudderAimed) { rudderBy = "round a buoy"; }
         }
         // Another boat in its way that the bow is about to reach -- within two seconds at the speed the two close at:
         // round it, on the side it does not lie on. Not "ahead and a little slower": four equal boats run one line nose
@@ -826,9 +869,24 @@ namespace game
                 const float gap = along - halfLength_ - other.halfLength; // bow to stern
                 if (along <= 0.0f || std::fabs(side) >= clear || closing < 0.5f || gap > 2.0f * closing) { continue; }
                 order.rudder += (side > 0.0f ? -1.0f : 1.0f) * 2.0f * (1.0f - std::fabs(side) / clear);
+                rudderBy = "round a boat";
             }
         }
+        const float rudderAvoid = order.rudder - rudderAimed; // round a buoy, round a boat
         order.rudder = std::clamp(order.rudder, -1.0f, 1.0f);
+        // The law itself goes to the physics steps (bot.stepSteer): they evaluate it from the hull as each step has it, at their
+        // fixed rate. The frame keeps its own evaluation for its rules (the throttle's "hard over") and the readout.
+        if (settings.stepSteer >= 0.5f)
+        {
+            order.steer = true;
+            order.aimX = status_.aim.x;
+            order.aimZ = status_.aim.y;
+            order.reach = std::max(reach, 1.0f);
+            order.slip = recovering_ ? 0.0f : (bend > 0.0f ? slide : -slide);
+            order.gain = steerGainNow;
+            order.yawDamping = settings.yawDamping;
+            order.rudderOffset = rudderAvoid;
+        }
         // The lead line. Too little water where the bow will be (or a hull, a beach: a depth of nothing): hard over toward
         // the deeper side, the engine on -- it steers by its wash; no water on either side: astern. The line never asks
         // for this; a boat knocked off it does (the yacht, off a buoy, sat on the east beach till Stop).
@@ -837,7 +895,12 @@ namespace game
         status_.shoal = soundings_[0] < need;
         if (status_.shoal && reverseSeconds_ <= 0.0f)
         {
-            if (std::max(soundings_[1], soundings_[2]) >= need) { order.rudder = soundings_[2] > soundings_[1] ? 1.0f : -1.0f; }
+            if (std::max(soundings_[1], soundings_[2]) >= need)
+            {
+                order.rudder = soundings_[2] > soundings_[1] ? 1.0f : -1.0f;
+                order.steer = false;
+                rudderBy = "shoal: to deeper water";
+            }
             else
             {
                 reverseSeconds_ = 3.0f;
@@ -845,8 +908,19 @@ namespace game
             }
         }
         const float hold = (target / std::max(topSpeed_, 1.0f)) * (target / std::max(topSpeed_, 1.0f));
+        const char* throttleBy = "flat out";
         if (target >= 0.97f * topSpeed_) { order.throttle = 1.0f; }
-        else { order.throttle = std::clamp(hold + 0.5f * (target - speed), -0.7f, 1.0f); }
+        else
+        {
+            order.throttle = std::clamp(hold + 0.5f * (target - speed), -0.7f, 1.0f);
+            throttleBy = order.throttle < -0.05f ? "brake: astern" : (order.throttle > 0.95f ? "speed up" : "hold the speed");
+        }
+        // Which rule moved it last: the card says why the throttle is what it is.
+        float throttleWas = order.throttle;
+        const auto because = [&](const char* rule) {
+            if (order.throttle != throttleWas) { throttleBy = rule; }
+            throttleWas = order.throttle;
+        };
         // With the rudder asked for much it is never put astern: the rudder works by the water past it, the boat's speed AND
         // the propeller's wash -- astern at 23 kn took four fifths of the rudder's push, and police_boat, hard over, went on
         // out of the far turn. At the line's speed or under it the engine is not eased under what holds that speed; over it
@@ -857,6 +931,7 @@ namespace game
             const float steering = std::clamp((std::fabs(order.rudder) - 0.25f) / 0.35f, 0.0f, 1.0f);
             const float least = speed > target + 0.5f ? 0.0f : std::min(hold, 1.0f);
             order.throttle = std::max(order.throttle, -0.7f + (least + 0.7f) * steering);
+            because(least <= 0.0f ? "rudder over: coast, no astern" : "rudder over: hold, no less");
         }
         // Coming round slowly: power on for the wash past the rudder -- what turns a boat at a crawl (coasting at 3.5 m/s with
         // the rudder hard over, police_boat sat 5 s against its turn) -- and nothing past a little over that speed.
@@ -864,6 +939,7 @@ namespace game
         {
             if (speed > target + 2.0f) { order.throttle = std::min(order.throttle, 0.0f); }
             else if (std::fabs(order.rudder) > 0.8f) { order.throttle = std::max(order.throttle, 0.5f); }
+            because("coming round");
         }
         // The rudder hard over and still not enough, under gripSpeed: the engine's wash past it is what turns the boat
         // (measured: a circle of 55 m full ahead, 60-69 m at 0.45 throttle), so easing the throttle there only runs it
@@ -874,6 +950,7 @@ namespace game
             (speed <= 1.05f * stats_.gripSpeed || status_.shoal))
         {
             order.throttle = 1.0f;
+            because("full: rudder short of its grip");
         }
         // And a little over the plan's speed, still not coasting (bot.turnPower): under gripSpeed what turns these boats is
         // the wash, (speed + wash sqrt(throttle))^2 -- the yacht coasting at 6-9 m/s hard over made circles of 55-180 m, at
@@ -885,6 +962,19 @@ namespace game
                  speed < target + settings.turnPowerOver)
         {
             order.throttle = std::max(order.throttle, std::min(settings.turnPower, 1.0f));
+            because("power in the turn");
+        }
+        // Hard over, at any speed: never less throttle than takes its rudder to what its grip holds here (bot.turnWash). Its
+        // plan counts on that turn -- the rudder at full wash or the grip, the less -- and gripSpeed is where the two meet AT
+        // FULL THROTTLE: coasting, the rudder has no wash and runs out long before the grip does. The yacht came out of reef's
+        // T1 straight at 9-10 m/s, the plan asking 4 and the throttle at 0, its circle 86 m where the grip allows 35, and missed
+        // gate 4 (2026-11-13). The least throttle that does it turns as tight as the boat can at this speed; more only speeds
+        // it up (and widens a grip-limited circle), less leaves the turn to a rudder without wash.
+        status_.washThrottle = settings.turnWash > 0.0f || settings.debug >= 0.5f ? WashToGrip(*hull.settings, speed) : 0.0f;
+        if (!recovering_ && settings.turnWash > 0.0f && std::fabs(order.rudder) > 0.92f && speed > 0.0f && reverseSeconds_ <= 0.0f)
+        {
+            order.throttle = std::max(order.throttle, std::min(status_.washThrottle, 1.0f));
+            because("wash to its grip");
         }
         // Aground or against something: astern for a while, the stern swung so the bow comes round to the aim.
         if (reverseSeconds_ > 0.0f)
@@ -892,14 +982,21 @@ namespace game
             reverseSeconds_ -= deltaTime;
             order.throttle = -1.0f;
             order.rudder = reverseRudder_;
+            order.steer = false;
             status_.state = State::Reversing;
+            throttleBy = "astern: held or aground";
+            rudderBy = "astern: stern round";
         }
         else
         {
             status_.state = State::Racing;
             // A hand holding the throttle down (bot.holdThrottle): the bot steers, the engine is flat out whatever the bend --
             // what a player does, to measure a course against.
-            if (settings.holdThrottle >= 0.5f) { order.throttle = 1.0f; }
+            if (settings.holdThrottle >= 0.5f)
+            {
+                order.throttle = 1.0f;
+                throttleBy = "held flat out (bot.holdThrottle)";
+            }
             const bool held = order.throttle > 0.4f && std::fabs(speed) < 0.5f && elapsed_ > 4.0f;
             stuckSeconds_ = held ? stuckSeconds_ + deltaTime : 0.0f;
             if (stuckSeconds_ > 3.0f)
@@ -911,6 +1008,8 @@ namespace game
             }
         }
         status_.order = order;
+        status_.throttleBy = throttleBy;
+        status_.rudderBy = rudderBy;
         return order;
     }
 }

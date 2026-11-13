@@ -153,7 +153,18 @@ namespace physics
         // The helm answers at its own pace: an engine spools, a rudder swings.
         state.throttle = MoveToward(state.throttle, std::clamp(input.throttle, -1.0f, 1.0f), settings.throttleRate * dt);
         const float rudderStep = settings.rudderDeg > 0.0f ? settings.rudderRate / settings.rudderDeg * dt : 1.0f;
-        state.rudder = MoveToward(state.rudder, std::clamp(input.rudder, -1.0f, 1.0f), rudderStep);
+        float rudderAsked = input.rudder;
+        if (input.steer) // an autopilot's law, this step (VesselInput::steer)
+        {
+            const JPH::Vec3 nose = body.GetRotation() * ToJolt(settings.forward).Normalized();
+            const JPH::RVec3 at = body.GetPosition();
+            const float heading = std::atan2(nose.GetX(), nose.GetZ());
+            const float bearing = std::atan2(input.aimX - static_cast<float>(at.GetX()), input.aimZ - static_cast<float>(at.GetZ()));
+            float error = std::remainder(bearing + input.slip - heading, 6.2831853f);
+            const float arc = 2.0f * (std::fabs(error) < 1.5707963f ? std::sin(error) : (error > 0.0f ? 1.0f : -1.0f)) / std::max(input.reach, 1.0f);
+            rudderAsked = input.gain * arc + input.rudderOffset - input.yawDamping * body.GetAngularVelocity().GetY();
+        }
+        state.rudder = MoveToward(state.rudder, std::clamp(rudderAsked, -1.0f, 1.0f), rudderStep);
 
         const JPH::RVec3 centre = body.GetCenterOfMassPosition();
         const float weight = settings.mass * -gravity.GetY();

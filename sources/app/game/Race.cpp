@@ -87,6 +87,10 @@ namespace game
             { "missPenalty", "Missed gate penalty (s)", "Added to a racer's time for a gate it went round just outside a mark. It grows with how far from the gate's middle the boat went by: twice the gate's half width off costs twice this, five times at the most.", &S::missPenalty, 0.1f, 0.0f, 60.0f, "%.1f" },
             { "track", "Course (race.start)", "Which of the level's courses a race started by a script runs: 0 = the first (the unnamed one), then the named ones by name. A boat driven into a course's start zone picks that course itself.", &S::track, 1.0f, 0.0f, 15.0f, "%.0f" },
             { "watch", "Watch a bot", "The camera chases this racer -- its place on the grid, 1 to 4 (outside a race the N-th boat with a bot). 0 = off. Not while you hold a helm.", &S::watch, 1.0f, 0.0f, 4.0f, "%.0f" },
+            { "drill", "Corner drill: gate", "A gate's number: in a race every bot is put 'Drill run-in' metres before that gate, at rest, runs through 'Drill gates' gates and is put back, again and again -- one corner measured a hundred times (the readout's drill: passages, clean ones, misses at each gate, buoy contacts, the time). 0 = off.", &S::drill, 1.0f, 0.0f, 64.0f, "%.0f" },
+            { "drillRun", "Drill run-in (m)", "How far along its line before the drill's gate a bot starts, at rest.", &S::drillRun, 5.0f, 20.0f, 1000.0f, "%.0f" },
+            { "drillGates", "Drill gates", "How many gates a drill passage runs through.", &S::drillGates, 1.0f, 1.0f, 8.0f, "%.0f" },
+            { "drillTimeout", "Drill timeout (s)", "A passage taking longer counts as lost and starts again.", &S::drillTimeout, 1.0f, 5.0f, 600.0f, "%.0f" },
             { "solo", "Time trial: one boat", "1 to 4: the next race puts only that boat with a bot on the grid (fastest first, as the grid would have them) -- a time trial, its laps with no rivals in its way; the others go back where the level has them. 0 = everyone.", &S::solo, 1.0f, 0.0f, 4.0f, "%.0f" },
         };
         return keys;
@@ -247,6 +251,7 @@ namespace game
     {
         const RaceSettings& settings = RaceSettingsRef();
         racers_.clear();
+        drillStats_.clear();
         laps_ = std::clamp(static_cast<int>(std::lround(settings.laps)), 1, 20);
         playerRaces_ = helmDriven_;
         const float heading = std::atan2(start_.along.x, start_.along.y);
@@ -391,6 +396,134 @@ namespace game
             if (racer.bot == &entry.bot) { return &entry.bot; }
         }
         return nullptr;
+    }
+
+    Race::DrillStats& Race::DrillOf(const std::string& vessel)
+    {
+        for (DrillStats& stats : drillStats_)
+        {
+            if (stats.vessel == vessel) { return stats; }
+        }
+        drillStats_.push_back(DrillStats{});
+        drillStats_.back().vessel = vessel;
+        return drillStats_.back();
+    }
+
+    void Race::Drill(physics::World& world, float deltaTime)
+    {
+        const RaceSettings& settings = RaceSettingsRef();
+        const std::vector<RaceGate>& gates = track_.Gates();
+        const int first = static_cast<int>(std::lround(settings.drill));
+        if (first < 1 || first > static_cast<int>(gates.size()) || gates.size() < 2) { return; }
+        const std::size_t count = gates.size();
+        const std::size_t firstIndex = static_cast<std::size_t>(first - 1);
+        const int span = std::clamp(static_cast<int>(std::lround(settings.drillGates)), 1, std::min(static_cast<int>(count) - 1, 8));
+        const auto drillGate = [&](int number) {
+            for (int k = 0; k < span; ++k)
+            {
+                if (gates[(firstIndex + static_cast<std::size_t>(k)) % count].number == number) { return k; }
+            }
+            return -1;
+        };
+        const int after = gates[(firstIndex + static_cast<std::size_t>(span)) % count].number;
+        const int entryGate = gates[firstIndex].number;
+        bool moved = false;
+        for (Racer& racer : racers_)
+        {
+            if (racer.player || racer.finish >= 0.0f) { continue; }
+            RaceBot* bot = BotOf(racer);
+            const physics::VesselHull* hull = HullOf(racer.vessel);
+            if (!bot || !hull || !bot->Line().Valid()) { continue; }
+            const RaceBot::Status& s = bot->GetStatus();
+            DrillStats& stats = DrillOf(racer.name);
+            bool restart = racer.drillStart < 0.0f;
+            if (!restart)
+            {
+                if (s.gatesMissed > racer.drillPrevMissed)
+                {
+                    const int k = drillGate(racer.drillPrevGate);
+                    if (k >= 0)
+                    {
+                        ++racer.drillMisses;
+                        ++stats.missed[k];
+                    }
+                }
+                if (racer.drillPrevGate == entryGate && s.nextGate != entryGate) { racer.drillEntry = s.speed; }
+                // A buoy contact: the speed falling 2.5 m/s under its half-second average with a mark within 7 m of the hull.
+                if (racer.drillSpeedAvg - s.speed > 2.5f && clock_ - racer.drillContactAt > 3.0f)
+                {
+                    float nearest = 1.0e9f;
+                    for (const RaceGate& gate : gates)
+                    {
+                        for (const Math::float2& mark : { gate.a, gate.b })
+                        {
+                            const Math::float2 d(mark.x - hull->position.x, mark.y - hull->position.z);
+                            nearest = std::min(nearest, std::sqrt(d.Dot(d)));
+                        }
+                    }
+                    if (nearest < 7.0f)
+                    {
+                        ++racer.drillContacts;
+                        racer.drillContactAt = clock_;
+                    }
+                }
+                racer.drillSpeedAvg += (s.speed - racer.drillSpeedAvg) * (1.0f - std::exp(-deltaTime / 0.5f));
+                const bool done = racer.drillPrevGate != after && s.nextGate == after;
+                const bool lost = clock_ - racer.drillStart > settings.drillTimeout;
+                if (done || lost)
+                {
+                    const float seconds = clock_ - racer.drillStart;
+                    const int resets = racer.resets - racer.drillResetsAt;
+                    ++stats.passages;
+                    stats.contacts += racer.drillContacts;
+                    stats.resets += resets;
+                    if (done)
+                    {
+                        ++stats.finished;
+                        stats.seconds += seconds;
+                        stats.seconds2 += static_cast<double>(seconds) * seconds;
+                        stats.entry += racer.drillEntry;
+                        if (racer.drillMisses == 0 && racer.drillContacts == 0 && resets == 0) { ++stats.clean; }
+                    }
+                    else { ++stats.timeouts; }
+                    LOG_DEBUG(logging::LogCategory::App, "race: drill at gate {}: {} {} in {:.1f} s, {:.1f} m/s across it, {} missed, {} contacts", first, racer.name,
+                              done ? "through" : "lost", seconds, racer.drillEntry, racer.drillMisses, racer.drillContacts);
+                    restart = true;
+                }
+            }
+            racer.drillPrevGate = s.nextGate;
+            racer.drillPrevMissed = s.gatesMissed;
+            if (!restart) { continue; }
+            // To the drill's start: drillRun m along its line before the first gate, its gate ahead the one after that place.
+            const RaceLine& line = bot->Line();
+            const float length = line.Length();
+            const float station = std::fmod(line.GateStation(firstIndex) - settings.drillRun + 2.0f * length, length);
+            std::size_t ahead = firstIndex;
+            float nearestAhead = length;
+            for (std::size_t g = 0; g < count; ++g)
+            {
+                const float d = std::fmod(line.GateStation(g) - station + 2.0f * length, length);
+                if (d > 0.5f && d < nearestAhead)
+                {
+                    nearestAhead = d;
+                    ahead = g;
+                }
+            }
+            const RaceLine::Sample at = line.At(station);
+            const float draft = hull->settings ? hull->settings->draft * hull->scale.y : 0.4f;
+            if (!world.PlaceVessel(racer.vessel, Math::float3(at.point.x, seaLevel_ - draft, at.point.y), std::atan2(at.tangent.x, at.tangent.y))) { continue; }
+            bot->PutBack(station, ahead);
+            racer.drillStart = clock_;
+            racer.drillPrevGate = gates[ahead].number;
+            racer.drillMisses = 0;
+            racer.drillContacts = 0;
+            racer.drillEntry = 0.0f;
+            racer.drillSpeedAvg = 0.0f;
+            racer.drillContactAt = -10.0f;
+            racer.drillResetsAt = racer.resets;
+            moved = true;
+        }
+        if (moved) { world.CollectHulls(hulls_); }
     }
 
     void Race::WatchRacers(physics::World& world, float deltaTime)
@@ -599,6 +732,7 @@ namespace game
         {
             clock_ += deltaTime;
             UpdateRacers();
+            Drill(world, deltaTime);
             if (playerRaces_ && !helmDriven_)
             {
                 StopRace(world, "the helm was left");
@@ -779,6 +913,83 @@ namespace game
         }
     }
 
+    void Race::DrawBotCards(const Camera& camera) const
+    {
+        if (!active_ || BotSettingsRef().debug < 0.5f) { return; }
+        ImDrawList* list = ImGui::GetForegroundDrawList();
+        const ImGuiIO& io = ImGui::GetIO();
+        ImFont* font = ImGui::GetFont();
+        const float size = ImGui::GetFontSize();
+        const float line = size + 2.0f;
+        const auto slowedText = [](char by) {
+            switch (by)
+            {
+            case 'c': return "its cap";
+            case 'p': return "its plan";
+            case 'l': return "its line";
+            case 'a': return "the turn it needs";
+            case 'r': return "coming round";
+            case 'j': return "joining";
+            default: return "";
+            }
+        };
+        const RenderableObject* watched = WatchedVessel();
+        const auto card = [&](const RaceBot& bot, const physics::VesselHull& hull, const std::string& name, bool docked)
+        {
+            const RaceBot::Status& s = bot.GetStatus();
+            const Math::float3 over(hull.position.x, hull.position.y + 0.3f * hull.halfLength + 4.0f, hull.position.z);
+            DirectX::XMFLOAT4 clip{};
+            DirectX::XMStoreFloat4(&clip, DirectX::XMVector4Transform(DirectX::XMVectorSet(over.x, over.y, over.z, 1.0f), camera.GetViewProjMatrixNoJitter().xm()));
+            if (clip.w <= 0.05f) { return; }
+            ImVec2 at((clip.x / clip.w * 0.5f + 0.5f) * io.DisplaySize.x, (0.5f - clip.y / clip.w * 0.5f) * io.DisplaySize.y);
+            char text[7][128];
+            int lines = 0;
+            std::snprintf(text[lines++], 128, "%s  gate %d  lap %d", name.c_str(), s.nextGate, s.lap);
+            std::snprintf(text[lines++], 128, "%.1f m/s -> %.1f  (%s)", s.speed, s.target, slowedText(s.slowedBy));
+            std::snprintf(text[lines++], 128, "throttle %+.2f  %s", s.order.throttle, s.throttleBy);
+            std::snprintf(text[lines++], 128, "rudder %+.2f  %s", s.order.rudder, s.rudderBy);
+            std::snprintf(text[lines++], 128, "grip %.2f  wash to grip %.2f  off line %+.1f m", s.gripSeen, s.washThrottle, s.crossTrack);
+            if (s.planned) { std::snprintf(text[lines++], 128, "plan %.1f s + %.1f s it cannot do, gate at %+.1f m", s.planSeconds, s.planPenalty, s.planOffset); }
+            const char* alarm = s.state == RaceBot::State::Reversing ? "ASTERN" : (s.recovering ? "COMING ROUND" : (s.shoal ? "SHOAL AHEAD" : nullptr));
+            if (alarm) { std::snprintf(text[lines++], 128, "%s", alarm); }
+            float width = 0.0f;
+            for (int i = 0; i < lines; ++i) { width = std::max(width, font->CalcTextSizeA(size, FLT_MAX, 0.0f, text[i]).x); }
+            width += 16.0f;
+            const float height = line * static_cast<float>(lines) + 30.0f;
+            // The watched bot's in the bottom-left corner (the chase camera has its boat in the middle, where the card would
+            // cover the water ahead); the others' over their boats, under the HUD's lines.
+            if (docked) { at = ImVec2(0.5f * width + 12.0f, io.DisplaySize.y - 12.0f); }
+            at.x = std::clamp(at.x, 0.5f * width + 4.0f, io.DisplaySize.x - 0.5f * width - 4.0f);
+            at.y = std::clamp(at.y, height + 130.0f, io.DisplaySize.y - 4.0f);
+            const ImVec2 corner(at.x - 0.5f * width, at.y - height);
+            list->AddRectFilled(corner, ImVec2(corner.x + width, corner.y + height), IM_COL32(15, 22, 30, 185), 4.0f);
+            for (int i = 0; i < lines; ++i)
+            {
+                const bool isAlarm = alarm && i == lines - 1;
+                const ImU32 colour = i == 0 ? IM_COL32(255, 255, 255, 255) : (isAlarm ? IM_COL32(255, 150, 60, 255) : IM_COL32(215, 225, 235, 255));
+                list->AddText(font, size, ImVec2(corner.x + 8.0f, corner.y + 4.0f + line * static_cast<float>(i)), colour, text[i]);
+            }
+            // Two bars: the throttle (green ahead, red astern) and the rudder (port left, starboard right), from the middle.
+            const float barY = corner.y + 8.0f + line * static_cast<float>(lines);
+            const float mid = corner.x + 0.5f * width;
+            const float half = 0.5f * width - 12.0f;
+            list->AddRectFilled(ImVec2(corner.x + 12.0f, barY), ImVec2(corner.x + width - 12.0f, barY + 6.0f), IM_COL32(60, 70, 80, 220));
+            const float t = std::clamp(s.order.throttle, -1.0f, 1.0f);
+            list->AddRectFilled(ImVec2(std::min(mid, mid + t * half), barY), ImVec2(std::max(mid, mid + t * half), barY + 6.0f),
+                                t >= 0.0f ? IM_COL32(90, 220, 110, 255) : IM_COL32(240, 80, 70, 255));
+            list->AddRectFilled(ImVec2(corner.x + 12.0f, barY + 10.0f), ImVec2(corner.x + width - 12.0f, barY + 16.0f), IM_COL32(60, 70, 80, 220));
+            const float rd = std::clamp(s.order.rudder, -1.0f, 1.0f);
+            list->AddRectFilled(ImVec2(std::min(mid, mid + rd * half), barY + 10.0f), ImVec2(std::max(mid, mid + rd * half), barY + 16.0f), IM_COL32(250, 210, 80, 255));
+            list->AddLine(ImVec2(mid, barY - 2.0f), ImVec2(mid, barY + 18.0f), IM_COL32(255, 255, 255, 200));
+        };
+        // The race's own: a boat that waits at its mooring (race.solo, or not on the grid) has nothing to decide.
+        for (const Racer& racer : racers_)
+        {
+            if (!racer.bot || racer.bot->GetStatus().state == RaceBot::State::Idle) { continue; } // a hand at its helm decides for it
+            if (const physics::VesselHull* hull = HullOf(racer.vessel)) { card(*racer.bot, *hull, racer.name, racer.vessel == watched); }
+        }
+    }
+
     std::wstring Race::BigText() const
     {
         if (!active_) { return {}; }
@@ -901,13 +1112,26 @@ namespace game
             const RaceBot::Status& s = bot.GetStatus();
             std::snprintf(item, sizeof(item),
                           "%s{\"vessel\":\"%s\",\"state\":\"%s\",\"lap\":%d,\"started\":%s,\"nextGate\":%d,\"passed\":%d,\"missed\":%d,\"station\":%.1f,\"length\":%.1f,\"speed\":%.2f,"
-                          "\"target\":%.2f,\"slowest\":%.2f,\"lineRadius\":%.1f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"gripSeen\":%.3f,\"memoryTrusted\":%d,\"planned\":%s,\"recovering\":%s,\"slowedBy\":\"%c\",\"planSeconds\":%.2f,\"planPenalty\":%.2f,\"planOffset\":%.2f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,"
+                          "\"target\":%.2f,\"slowest\":%.2f,\"lineRadius\":%.1f,\"tightestRadius\":%.1f,\"airborne\":%.3f,\"gripSeen\":%.3f,\"memoryTrusted\":%d,\"planned\":%s,\"recovering\":%s,\"throttleBy\":\"%s\",\"rudderBy\":\"%s\",\"slowedBy\":\"%c\",\"planSeconds\":%.2f,\"planPenalty\":%.2f,\"planOffset\":%.2f,\"depthAhead\":%.1f,\"shoal\":%s,\"crossTrack\":%.2f,\"lapSeconds\":%.2f,"
                           "\"lastLap\":%.2f,\"bestLap\":%.2f,\"throttle\":%.3f,\"rudder\":%.3f,\"position\":[%.2f,%.2f,%.2f]}",
                           comma ? "," : "", name, RaceBotStateName(static_cast<unsigned char>(s.state)), s.lap, s.started ? "true" : "false", s.nextGate, s.gatesPassed,
-                          s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target, bot.Line().SlowestSpeed(), bot.Line().TightestRadius(), s.tightestRadius, s.airborne, s.gripSeen, s.memoryTrusted, s.planned ? "true" : "false", s.recovering ? "true" : "false", s.slowedBy, s.planSeconds, s.planPenalty, s.planOffset,
+                          s.gatesMissed, s.station, bot.Line().Length(), s.speed, s.target, bot.Line().SlowestSpeed(), bot.Line().TightestRadius(), s.tightestRadius, s.airborne, s.gripSeen, s.memoryTrusted, s.planned ? "true" : "false", s.recovering ? "true" : "false", s.throttleBy, s.rudderBy, s.slowedBy, s.planSeconds, s.planPenalty, s.planOffset,
                           std::min(s.depthAhead, 999.0f), s.shoal ? "true" : "false", s.crossTrack, s.lapSeconds, s.lastLap, s.bestLap, s.order.throttle,
                           s.order.rudder, position.x, position.y, position.z);
             out += item;
+            // Its plan as it stands (every 10 m, the first 400 m): where it means to go, the most it may have there and the
+            // speed it expects -- what a trace needs to tell a wrong line from a late brake.
+            if (const RacePlan* plan = bot.Plan(); plan && !plan->points.empty())
+            {
+                out.pop_back();
+                out += ",\"plan\":[";
+                for (std::size_t k = 0, n = 0; k < plan->points.size() && n < 40; k += 4, ++n)
+                {
+                    std::snprintf(item, sizeof(item), "%s[%.1f,%.1f,%.1f,%.1f]", n > 0 ? "," : "", plan->points[k].x, plan->points[k].y, plan->limit[k], plan->speed[k]);
+                    out += item;
+                }
+                out += "]}";
+            }
         };
         if (helmDriven_)
         {
@@ -941,7 +1165,28 @@ namespace game
                           racer.resets, racer.progress, laps.c_str());
             out += item;
         }
-        out += "]}";
+        out += "]";
+        if (RaceSettingsRef().drill >= 1.0f)
+        {
+            std::snprintf(item, sizeof(item), ",\"drill\":{\"gate\":%d,\"run\":%.0f,\"gates\":%d,\"boats\":[", static_cast<int>(std::lround(RaceSettingsRef().drill)),
+                          RaceSettingsRef().drillRun, static_cast<int>(std::lround(RaceSettingsRef().drillGates)));
+            out += item;
+            for (std::size_t i = 0; i < drillStats_.size(); ++i)
+            {
+                const DrillStats& d = drillStats_[i];
+                const double n = std::max(d.finished, 1);
+                const double mean = d.seconds / n;
+                const double sd = std::sqrt(std::max(d.seconds2 / n - mean * mean, 0.0));
+                std::snprintf(item, sizeof(item),
+                              "%s{\"vessel\":\"%s\",\"passages\":%d,\"finished\":%d,\"clean\":%d,\"contacts\":%d,\"timeouts\":%d,\"resets\":%d,\"meanSeconds\":%.2f,\"sdSeconds\":%.2f,"
+                              "\"meanEntry\":%.2f,\"missed\":[%d,%d,%d,%d,%d,%d,%d,%d]}",
+                              i > 0 ? "," : "", d.vessel.c_str(), d.passages, d.finished, d.clean, d.contacts, d.timeouts, d.resets, mean, sd, d.entry / n, d.missed[0], d.missed[1],
+                              d.missed[2], d.missed[3], d.missed[4], d.missed[5], d.missed[6], d.missed[7]);
+                out += item;
+            }
+            out += "]}";
+        }
+        out += "}";
         return out;
     }
 
@@ -1027,29 +1272,62 @@ namespace game
             const Math::float2& a = points[i];
             const Math::float2& b = points[(i + 1) % points.size()];
             const float fast = std::clamp(line.SpeedAt(i) / top, 0.0f, 1.0f);
-            draw.AddLine(Math::float3(a.x, y, a.y), Math::float3(b.x, y, b.y), Math::float4(1.0f - fast, fast, 0.1f, 1.0f));
+            draw.AddLine(Math::float3(a.x, y, a.y), Math::float3(b.x, y, b.y), Math::float4(0.5f + 0.3f * (1.0f - fast), 0.5f + 0.3f * fast, 0.55f, 0.35f)); // its line, dim: the plan drives
         }
-        // Every bot's plan (RacePlanner): what it sees ahead, cyan, lighter where it is fast.
-        const auto planOf = [&draw, y](const RaceBot& planner)
+        // Every bot's vision (RacePlanner): its plan coloured by the MOST it may have there (red slow, green fast, from 4 m/s to
+        // its top speed), a fence of that speed every 7.5 m (0.25 m a m/s) and over it the speed it expects to have (white): where
+        // the white line meets the fence tops it brakes. The marks and boats it keeps clear of (orange rings, the boats' 6 s
+        // ahead), its aim (yellow, a line from the bow and a mast), its bow (white) and the way it moves (cyan): the slide.
+        const auto visionOf = [&](const RaceBot& planner, const physics::VesselHull* hull)
         {
-            const RacePlan* plan = planner.Plan();
-            if (!plan) { return; }
-            float fastest = 1.0f;
-            for (const float v : plan->speed) { fastest = std::max(fastest, v); }
-            for (std::size_t i = 0; i + 1 < plan->points.size(); ++i)
+            const float topSpeed = std::max(planner.Stats().topSpeed, 5.0f);
+            constexpr float kFence = 0.25f;
+            if (const RacePlan* plan = planner.Plan())
             {
-                const float fast = std::clamp(plan->speed[i] / fastest, 0.0f, 1.0f);
-                const Math::float2& a = plan->points[i];
-                const Math::float2& b = plan->points[i + 1];
-                draw.AddLine(Math::float3(a.x, y + 0.3f, a.y), Math::float3(b.x, y + 0.3f, b.y), Math::float4(0.1f, 0.4f + 0.6f * fast, 1.0f, 1.0f));
+                for (std::size_t i = 0; i + 1 < plan->points.size(); ++i)
+                {
+                    const float fast = std::clamp((plan->limit[i] - 4.0f) / (topSpeed - 4.0f), 0.0f, 1.0f);
+                    const Math::float4 colour(1.0f - fast, 0.25f + 0.75f * fast, 0.15f, 1.0f);
+                    const Math::float2& a = plan->points[i];
+                    const Math::float2& b = plan->points[i + 1];
+                    draw.AddLine(Math::float3(a.x, y + 0.3f, a.y), Math::float3(b.x, y + 0.3f, b.y), colour);
+                    draw.AddLine(Math::float3(a.x, y + 0.3f + kFence * plan->speed[i], a.y), Math::float3(b.x, y + 0.3f + kFence * plan->speed[i + 1], b.y),
+                                 Math::float4(1.0f, 1.0f, 1.0f, 0.9f));
+                    if (i % 3 == 0) { draw.AddLine(Math::float3(a.x, y + 0.3f, a.y), Math::float3(a.x, y + 0.3f + kFence * plan->limit[i], a.y), colour); }
+                }
+            }
+            for (const PlanRival& rival : planner.PlanRivals())
+            {
+                const Math::float4 ring = rival.mark ? Math::float4(1.0f, 0.55f, 0.1f, 0.9f) : Math::float4(1.0f, 0.3f, 0.8f, 0.9f);
+                for (int k = 0; k < 20; ++k)
+                {
+                    const float a0 = 6.2831853f * static_cast<float>(k) / 20.0f;
+                    const float a1 = 6.2831853f * static_cast<float>(k + 1) / 20.0f;
+                    draw.AddLine(Math::float3(rival.position.x + rival.clearance * std::cos(a0), y + 0.2f, rival.position.y + rival.clearance * std::sin(a0)),
+                                 Math::float3(rival.position.x + rival.clearance * std::cos(a1), y + 0.2f, rival.position.y + rival.clearance * std::sin(a1)), ring);
+                }
+                if (!rival.mark)
+                {
+                    const Math::float2 there = rival.position + rival.velocity * 6.0f;
+                    draw.AddLine(Math::float3(rival.position.x, y + 0.2f, rival.position.y), Math::float3(there.x, y + 0.2f, there.y), ring);
+                }
+            }
+            const Math::float2 aim = planner.GetStatus().aim;
+            draw.AddLine(Math::float3(aim.x, y, aim.y), Math::float3(aim.x, y + 3.0f, aim.y), Math::float4(1.0f, 1.0f, 0.2f, 1.0f));
+            if (hull)
+            {
+                const Math::float3 at(hull->position.x, y + 0.5f, hull->position.z);
+                draw.AddLine(at, Math::float3(aim.x, y + 0.5f, aim.y), Math::float4(1.0f, 1.0f, 0.2f, 0.7f));
+                const Math::float2 bow = Math::float2(hull->forward.x, hull->forward.z).Normalized();
+                draw.AddLine(at, Math::float3(at.x + bow.x * 10.0f, at.y, at.z + bow.y * 10.0f), Math::float4(1.0f, 1.0f, 1.0f, 1.0f));
+                const Math::float2 way(hull->velocity.x, hull->velocity.z);
+                draw.AddLine(at, Math::float3(at.x + way.x * 0.8f, at.y, at.z + way.y * 0.8f), Math::float4(0.2f, 0.9f, 1.0f, 1.0f));
             }
         };
-        if (helmDriven_) { planOf(helmBot_); }
+        if (helmDriven_) { visionOf(helmBot_, HullOf(helmVessel_)); }
         for (const Entry& entry : bots_)
         {
-            if (entry.live) { planOf(entry.bot); }
+            if (entry.live) { visionOf(entry.bot, HullOf(entry.vessel)); }
         }
-        const Math::float2 aim = bot->GetStatus().aim;
-        draw.AddLine(Math::float3(aim.x, y, aim.y), Math::float3(aim.x, y + 3.0f, aim.y), Math::float4(1.0f, 1.0f, 0.2f, 1.0f));
     }
 }

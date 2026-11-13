@@ -42,6 +42,12 @@ namespace game
                                     // a boat driven into a course's start zone picks that one itself
         float watch = 0.0f;         // the camera chases this racer (its place on the grid, 1..4; outside a race the N-th boat with a
                                     // bot); 0 = off. To watch a bots' race (owner, 2026-11-11: "hang the camera on one of the bots")
+        float drill = 0.0f;         // a gate's number: a corner drill (owner, 2026-11-13): in a race every bot is put drillRun m before that
+                                    // gate, at rest, runs through drillGates gates and is put back, again and again -- a corner measured
+                                    // a hundred times in minutes where a lap shows it once. 0 = off
+        float drillRun = 220.0f;    // m along its line before the drill's first gate it starts at (from rest: room to reach its speed)
+        float drillGates = 3.0f;    // gates a passage runs through
+        float drillTimeout = 60.0f; // s a passage may take before it counts as lost and starts again
         float solo = 0.0f;          // 1-4: the next race puts only that boat with a bot on the grid (fastest first, as the grid would): a time
                                     // trial, no rivals; the others go back where the level has them. 0 = everyone (owner, 2026-11-12: "build the time trial")
     };
@@ -102,6 +108,9 @@ namespace game
         void DrawResults();
         // On the grid and in the race's first seconds: over every boat who it is -- "YOU", or a bot's level (ImGui).
         void DrawLabels(const Camera& camera) const;
+        // bot.debug: over every bot what it decides and why -- speed and the speed it wants (and who set that), the throttle's
+        // and the rudder's rule, its grip, its plan's time and penalty (ImGui).
+        void DrawBotCards(const Camera& camera) const;
         std::string ReadoutJson() const;
         // The start zone while it waits (always), the gates and a bot's line (bot.debug).
         void DebugDraw(DebugDrawSystem& draw) const;
@@ -138,7 +147,35 @@ namespace game
             int difficulty = -1;             // a bot's level (BotDifficulty); -1 = the player
             int resets = 0;                  // times it was put back on its line: x resetPenalty
             float progress = 0.0f;           // m along the course since the start line
+            // race.drill: this passage's
+            float drillStart = -1.0f;        // the race's clock when it was put at the drill's start; < 0 = not yet
+            int drillPrevGate = 0;           // its gate ahead last frame, its misses then
+            int drillPrevMissed = 0;
+            int drillMisses = 0;
+            int drillContacts = 0;
+            int drillResetsAt = 0;
+            float drillEntry = 0.0f;         // m/s across the drill's first gate
+            float drillSpeedAvg = 0.0f;      // over the last half second: a contact is the speed falling far under it next to a mark
+            float drillContactAt = -10.0f;
         };
+        // race.drill: what each boat did in it since the race started.
+        struct DrillStats
+        {
+            std::string vessel;
+            int passages = 0;
+            int finished = 0;  // not timed out
+            int clean = 0;     // no miss, no contact, not put back
+            int contacts = 0;
+            int timeouts = 0;
+            int resets = 0;
+            double seconds = 0.0;  // the finished passages'
+            double seconds2 = 0.0;
+            double entry = 0.0;
+            int missed[8] = {};    // at each drill gate
+        };
+        std::vector<DrillStats> drillStats_;
+        DrillStats& DrillOf(const std::string& vessel);
+        void Drill(physics::World& world, float deltaTime);
 
         // One of the level's courses: its gates and its start zone.
         struct Course

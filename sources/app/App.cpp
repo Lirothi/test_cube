@@ -2819,6 +2819,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
         double frameStart = GetTimeSeconds();
         double now = lastTime;
         float deltaTime = 0.0f;
+        float realDeltaTime = 0.0f; // the wall clock's: what the fps counter and the shader watcher go by (the world's is deltaTime)
         // The frame's phases (plan sections 3.2-3.4). The loop runs as the GAME half; the render half's calls take the
         // Render role, the hand-over between them the Sync role. On one thread (frame.renderThread 0) a frame is: its
         // start, the messages, the UI, Scene::Tick, the hand-over, Scene::Render, the work after Present. With a render
@@ -2882,6 +2883,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             lastTime = now;
 
             deltaTime = Math::Clamp(deltaTime, 1e-6f, 0.1f);
+            realDeltaTime = deltaTime;
             if (g_timeScale != 1.0f) { deltaTime = Math::Clamp(deltaTime * g_timeScale, 1e-6f, 0.1f); }
 #if WITH_EDITOR
             if (g_recordDt > 0.0f)
@@ -2942,7 +2944,7 @@ void App::Run(HINSTANCE hInstance, int nCmdShow) {
             threading::RoleScope renderRole(threading::ThreadRole::Render);
             {
                 MEM_SCOPE(MemTag::Renderer);
-                renderer.Tick(deltaTime);
+                renderer.Tick(realDeltaTime); // the wall clock: frame.timeScale x12 read 465 fps as 39, frame.recordDt as a million
             }
             // The memory line (rendering/core/MemoryReport.h): every 5 s, after the previous
             // frame's work is joined so the providers read settled state.

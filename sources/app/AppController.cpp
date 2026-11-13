@@ -257,6 +257,7 @@ void AppController::Tick(InputManager& input, Renderer& renderer, Scene& scene, 
     {
         scene.RaceRef().DrawResults();
         scene.RaceRef().DrawLabels(scene.CameraRef()); // on the grid: who is who, a bot's level over its boat
+        scene.RaceRef().DrawBotCards(scene.CameraRef()); // bot.debug: what each bot decides and why
         playSession_.DrawBoatCard(scene); // on foot beside a boat: what it does
     }
     const bool raceResults = playSession_.Playing() && scene.RaceRef().ResultsOpen();

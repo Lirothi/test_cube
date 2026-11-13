@@ -290,9 +290,15 @@ namespace game
         const auto cost = [](const RacePlan& plan) { return plan.seconds + plan.penalty; };
         RacePlan best = evaluate(x);
         if (!best.valid) { return best; }
+        // The last plan, run on from where the boat is now: kept unless another is cheaper by switchCost. Two crossings of a gate
+        // that cost within a tenth of a second of each other swapped every plan (0.1 s), the aim jumped 7 m across reef's narrow
+        // gate 4 and the rudder went -1, +1, -1 at its entry (2026-11-13: the yacht ran wide of it, the plan's offset -2.7, +4.5,
+        // 0.3, 3.0 in successive plans).
+        const bool warmed = !warm.empty() && boat.switchCost > 0.0f;
+        const RacePlan kept = warmed ? best : RacePlan{};
         {
             RacePlan middle = evaluate(std::vector<float>(2 * n, 0.0f));
-            if (cost(middle) < cost(best))
+            if (cost(middle) < cost(best) - (warmed ? boat.switchCost : 0.0f))
             {
                 best = std::move(middle);
                 std::fill(x.begin(), x.end(), 0.0f);
@@ -323,6 +329,7 @@ namespace game
             }
             step *= 0.5f;
         }
+        if (warmed && cost(best) > cost(kept) - boat.switchCost) { return kept; }
         return best;
     }
 }

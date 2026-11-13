@@ -113,6 +113,21 @@ namespace physics
     {
         float throttle = 0.0f;
         float rudder = 0.0f;
+        // An autopilot's steering law, evaluated in every physics step from the hull as that step has it, so the helm answers
+        // at the steps' fixed rate whatever the frame rate or the world's time scale (game::RaceBot; owner, 2026-11-13: "the
+        // bot's algorithm must not depend on the fps" -- ordered once a frame, its rudder stood for the 4 steps a 60 fps frame
+        // holds at x4). With `steer` the rudder asked for is
+        //   gain x 2 sin(error) / reach + rudderOffset - yawDamping x the yaw rate,
+        // error = the bearing of (aimX, aimZ) from the hull + slip - its heading (bearings atan2(x, z)): a pure pursuit of the aim.
+        // `rudder` is then what the frame's own evaluation gave.
+        bool steer = false;
+        float aimX = 0.0f;
+        float aimZ = 0.0f;
+        float reach = 1.0f;        // m to the aim along its line
+        float slip = 0.0f;         // rad the bow is pointed inside the aim (the hull slides)
+        float gain = 0.0f;         // rudder per 1/m of the pursuit's arc
+        float yawDamping = 0.0f;   // rudder taken back per rad/s of turn
+        float rudderOffset = 0.0f; // what the frame added round a buoy or a boat
     };
 
     // Where the helm and the hull have got to.

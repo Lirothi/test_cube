@@ -43,6 +43,10 @@ namespace game
         float planMargin = 4.5f;    // m between the hull's side and a mark where its plan crosses a gate (its line keeps `margin`): what the helm and the sea take off it
         float planEvery = 0.1f;     // s between plans
         float gripLearn = 1.0f;     // 1 = its grip share measured hard over (gripSeen); 0 = the model's still-water grip
+        float markRule = 1.0f;      // 1 = with a plan, the helm's buoy avoidance only for a contact about to happen; 0 = its line's margin (before)
+        float stepSteer = 1.0f;     // 1 = its steering law evaluated in every physics step (VesselInput::steer); 0 = once a frame
+        float turnWash = 0.0f;      // 1 = hard over, at least the throttle whose wash takes the rudder to the grip (WashToGrip)
+        float planSwitch = 0.0f;    // s a new plan must save to replace the last one (0 = the cheapest every time)
         float turnPower = 0.6f;     // hard over under its grip speed, the throttle never under this (the wash past the rudder); 0 = it coasts (before)
         float turnPowerOver = 3.0f; // ... while no more than this over the speed it wants (m/s)
         float steerByRudder = 0.0f; // its rudder's order a share of what the rudder turns it (1), of its grip's circle (0), between in log: no winner over 3 boats, 0 kept
@@ -113,6 +117,9 @@ namespace game
                                          // a sea throws the hull out of the water and takes some (wind_test's 1 m sea: ~0.75)
             float depthAhead = 0.0f;     // m of water where the bow will be in a couple of seconds (the sounding)
             bool shoal = false;          // too little: it is turning from it
+            const char* throttleBy = ""; // the rule that set the throttle this frame (bot.debug's card, the readout)
+            const char* rudderBy = "";   // what set the rudder: its aim, a buoy, a boat, a shoal, astern
+            float washThrottle = 0.0f;   // WashToGrip at its speed (bot.debug / bot.turnWash)
             physics::VesselInput order;
             Math::float2 aim;
         };
@@ -126,7 +133,7 @@ namespace game
         // Its place on the line is looked for afresh (it was not steering for a while); the laps stay.
         void Relocate();
         // The race put its boat back on the line, at this station: it is on the course, its gate ahead as it was.
-        void PutBack(float station);
+        void PutBack(float station, std::size_t gateAhead = static_cast<std::size_t>(-1)); // gateAhead: its gate index from now on (the drill)
         // m along the line where the gate ahead is crossed.
         float NextGateStation() const { return line_.GateStation(gateIndex_); }
         // What lies under the water ahead, port and starboard of the bow's way (game::Race casts the rays): the water's
@@ -140,6 +147,8 @@ namespace game
         const Status& GetStatus() const { return status_; }
         const RaceLine& Line() const { return line_; }
         const RacePlan* Plan() const { return planValid_ ? &plan_ : nullptr; }
+        // What its last plan kept clear of: the other boats (run on at their velocity) and the gates' marks.
+        const std::vector<PlanRival>& PlanRivals() const { return planRivals_; }
         const VesselStats& Stats() const { return stats_; }
         // What it learns into and plans by (game::Race hands every bot its boat's, by the level; nullptr = the model alone).
         void SetMemory(BotMemory* memory);
@@ -172,10 +181,13 @@ namespace game
         static constexpr int kTurnTable = 32;
         float turnTable_[kTurnTable] = {};
         float TurnAtSpeed(float speed) const;
+        // The least throttle (0..1) whose wash takes its rudder's turn to its grip's at this speed; 1 = the rudder never gets there.
+        float WashToGrip(const physics::VesselSettings& boat, float speed) const;
         // The plan (RacePlanner): what it sees ahead, made every bot.planEvery from where it is.
         void MakePlan(const physics::VesselHull& hull, const std::vector<RaceGate>& gates, const std::vector<physics::VesselHull>* others,
                       float cap);
         RacePlan plan_;
+        std::vector<PlanRival> planRivals_;
         bool planValid_ = false;
         float planAge_ = 0.0f;           // s since it was made
         std::size_t planGate_ = 0;       // gateIndex_ it was made for

@@ -42,6 +42,7 @@ namespace game
         float drag = 0.0f;       // ...plus this x v^2 (1/m): its hull's drag, which is most of it fast and little slow
         float reach = 0.0f;      // 1/m: the tightest curvature it makes at any speed
         float turnMost = 0.35f;  // rad its crossing direction may be turned at a gate (0 = Catmull-Rom's, from its neighbours)
+        float switchCost = 0.0f; // s: a plan other than the warm one (the last, run on from where the boat is) must be that much cheaper
         std::function<float(float)> speedFor; // the fastest it takes a curvature (1/m) at
         // The tightest it turns (1/m, its plan's share) at a speed. Given, its engine brakes only where the helm's rudder is not
         // over yet: the bend within its reach (leadMetres, leadSeconds of its speed) asking over 0.17 of that (the rudder past
