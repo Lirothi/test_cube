@@ -38272,30 +38272,6 @@
       "type": "staticMesh"
     },
     {
-      "enabled": true,
-      "group": "Boats",
-      "id": 3297,
-      "mesh": "models/small_yacht/small_yacht.mesh.json",
-      "name": "small_yacht 002",
-      "position": [
-        36.5,
-        -0.3799999952316284,
-        124.9000015258789
-      ],
-      "raceBot": true,
-      "rotationDeg": [
-        0.0,
-        -65.0,
-        0.0
-      ],
-      "scale": [
-        1.0,
-        1.0,
-        1.0
-      ],
-      "type": "staticMesh"
-    },
-    {
       "buoyant": true,
       "enabled": true,
       "group": "Race Track Reef",
