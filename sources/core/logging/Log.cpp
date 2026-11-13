@@ -857,7 +857,7 @@ namespace logging
             wchar_t directory[512] = {};
             GetCurrentDirectoryW(static_cast<DWORD>(std::size(directory)), directory);
             LOG_INFO(LogCategory::Core, "session start: build={} pid={} exe={}", kBuildTag, GetCurrentProcessId(), executable);
-            LOG_INFO(LogCategory::Core, "session cwd={}", directory);
+            LOG_INFO(LogCategory::Core, "session cwd={} acp={}", directory, GetACP());
             LOG_INFO(LogCategory::Core, "session cmdline={}", config.commandLine != nullptr ? config.commandLine : GetCommandLineA());
             if (state->file.IsOpen())
             {

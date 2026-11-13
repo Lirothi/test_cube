@@ -1,6 +1,7 @@
 #include "rendering/core/RenderGraph.h"
 #include "rendering/lighting/Skybox.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h" // P16.1 g_preExposure
 #include "rendering/core/Renderer.h"
@@ -34,21 +35,16 @@ namespace
 // calibration rather than scaling by a guess.
 float MeasureCubeUpIlluminance(const std::wstring& diffPath)
 {
-    std::FILE* f = nullptr;
-    if (_wfopen_s(&f, diffPath.c_str(), L"rb") != 0 || !f) { return 0.0f; }
-    struct Closer { std::FILE* f; ~Closer() { if (f) { std::fclose(f); } } } closer{ f };
+    const vfs::File f = vfs::Open(diffPath);
+    if (!f) { return 0.0f; }
 
     // DDS magic + 124-byte header + 20-byte DX10 header, then face 0. The +Y face is index 2.
     constexpr long kHeader = 4 + 124 + 20;
     constexpr int  kFace = 32;
     constexpr long kFaceBytes = (long)kFace * kFace * 4 * (long)sizeof(uint16_t);
-    if (std::fseek(f, kHeader + 2 * kFaceBytes + ((long)kFace / 2 * kFace + kFace / 2) * 4 * (long)sizeof(uint16_t),
-                   SEEK_SET) != 0)
-    {
-        return 0.0f;
-    }
+    const long texelOffset = kHeader + 2 * kFaceBytes + ((long)kFace / 2 * kFace + kFace / 2) * 4 * (long)sizeof(uint16_t);
     uint16_t texel[4]{};
-    if (std::fread(texel, sizeof(uint16_t), 4, f) != 4) { return 0.0f; }
+    if (!f.Read(static_cast<std::uint64_t>(texelOffset), texel, sizeof(texel))) { return 0.0f; }
 
     // half -> float, the plain way: this runs once per level load.
     const auto half = [](uint16_t h) -> float
@@ -225,17 +221,12 @@ void Skybox::Init(Renderer* renderer,
         // Scene independent and shared, so it normally lives in the textures root -- but look
         // beside the cube first, so a sky folder straight out of the importer (or a staging
         // directory) is self-contained and testable without installing anything.
-        std::error_code ec;
         const std::wstring lutBeside = (base.parent_path() / L"brdf_lut.dds").wstring();
-        const std::wstring lutPath = std::filesystem::exists(lutBeside, ec)
+        const std::wstring lutPath = vfs::Exists(lutBeside)
             ? lutBeside
             : std::wstring(L"textures/brdf_lut.dds");
 
-        ec.clear();
-        const bool filesPresent =
-            std::filesystem::exists(specPath, ec) &&
-            std::filesystem::exists(diffPath, ec) &&
-            std::filesystem::exists(lutPath, ec);
+        const bool filesPresent = vfs::Exists(specPath) && vfs::Exists(diffPath) && vfs::Exists(lutPath);
 
         if (filesPresent)
         {

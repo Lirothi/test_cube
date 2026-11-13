@@ -9,6 +9,7 @@
 
 #include "core/logging/Log.h"
 #include "core/math/Math.h"
+#include "core/vfs/Vfs.h"
 #include "ocean/BuoyancyJson.h"
 #include "physics/CollisionJson.h"
 #include "rendering/RenderLayers.h"
@@ -74,7 +75,7 @@ namespace SceneObjectFactory
 {
     static json ParseJsonFile(const std::string& path)
     {
-        std::ifstream f(path);
+        vfs::InStream f(path, /*binary*/ false);
         if (!f) { return json{}; }
         std::stringstream ss;
         ss << f.rdbuf();
@@ -169,8 +170,7 @@ namespace SceneObjectFactory
                 auto it = cache->fileExists.find(p);
                 if (it != cache->fileExists.end()) { return it->second; }
             }
-            std::error_code ec;
-            const bool present = fs::exists(fs::path(p), ec);
+            const bool present = vfs::Exists(p);
             if (cache) { cache->fileExists.emplace(p, present); }
             return present;
         };

@@ -10,6 +10,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "core/vfs/Vfs.h"
+
 namespace streaming {
 
 // One mip of a stream-in: where it sits in the file (tight rows) and where it lands in the ring
@@ -43,7 +45,8 @@ struct IoRequest
 
 // Plan A2.2: one worker thread reads mip ranges from DDS files straight into the upload ring
 // (a tight read, then rows laid out at the D3D pitch). Cancel is honoured before the read starts;
-// a read already running finishes and the requester discards it. Files stay open in a 64-entry LRU.
+// a read already running finishes and the requester discards it. Files stay open in a 64-entry LRU, read
+// through the VFS at their offsets.
 class TextureStreamingIo
 {
 public:
@@ -59,7 +62,7 @@ public:
 private:
     static constexpr std::size_t kMaxOpenFiles = 64;
     void Run_();
-    void* OpenCached_(const std::wstring& path); // HANDLE, or INVALID_HANDLE_VALUE
+    const vfs::File* OpenCached_(const std::wstring& path); // null when it cannot be opened
     void CloseAll_();
 
     std::thread thread_;
@@ -68,7 +71,7 @@ private:
     std::deque<IoRequest*> queue_;
     bool stop_ = false;
 
-    struct Cached { void* handle = nullptr; std::uint64_t lastUse = 0; };
+    struct Cached { vfs::File file; std::uint64_t lastUse = 0; };
     std::unordered_map<std::wstring, Cached> files_; // worker thread only
     std::uint64_t useTick_ = 0;
     std::atomic<std::uint64_t> bytesRead_{ 0 };

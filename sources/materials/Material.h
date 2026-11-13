@@ -231,7 +231,7 @@ private:
     // Paths, not wstrings: last_write_time takes a path, and converting a wstring built one per file per probe
     // (~600 allocations a second on wind_test).
     std::vector<std::filesystem::path>            watchedFiles_;
-    std::vector<std::filesystem::file_time_type>  watchedTimes_;
+    std::vector<std::uint64_t>                    watchedTimes_; // vfs::Stat::version (a loose file's last write time)
     mutable std::mutex                            watchMtx_;
     std::atomic<bool> pendingReload_{ false };
 

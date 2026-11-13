@@ -23,6 +23,7 @@
 #include "app/Systems.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "core/memory/MemScope.h"
 #include "core/profiling/Profiler.h"
 #include "core/profiling/ProfilerScopes.h"
@@ -672,9 +673,8 @@ namespace physics
         {
             const auto it = geometryStamps.find(path);
             if (it != geometryStamps.end()) { return it->second; }
-            std::error_code error;
-            const auto written = std::filesystem::last_write_time(path, error);
-            return geometryStamps.emplace(path, error ? std::string() : std::to_string(written.time_since_epoch().count())).first->second;
+            const std::optional<vfs::Stat> stat = vfs::GetStat(path);
+            return geometryStamps.emplace(path, stat ? std::to_string(static_cast<std::int64_t>(stat->version)) : std::string()).first->second;
         }
 
         // A compound takes a uniform scale and a sphere nothing else: on those Jolt would quietly use the nearest it can, a palm mirrored or stretched lying on its side or a third

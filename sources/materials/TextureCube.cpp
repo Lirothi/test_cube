@@ -1,5 +1,6 @@
 #include "materials/TextureCube.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/BarrierTranslation.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/core/TextureCreate.h"
@@ -244,18 +245,7 @@ D3D12_GPU_DESCRIPTOR_HANDLE TextureCube::GetSRVForFrame(Renderer* r)
 
 bool TextureCube::LoadFileToMemory_(const std::wstring& path, std::vector<uint8_t>& data)
 {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) {
-        return false;
-    }
-    f.seekg(0, std::ios::end);
-    const auto size = size_t(f.tellg());
-    f.seekg(0, std::ios::beg);
-    data.resize(size);
-    if (size > 0) {
-        f.read(reinterpret_cast<char*>(data.data()), size);
-    }
-    return true;
+    return vfs::ReadAll(path, data);
 }
 
 bool TextureCube::ParseDDS_(const uint8_t* bytes, size_t size,

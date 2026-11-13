@@ -1,5 +1,6 @@
 #include "text/FontManager.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/Renderer.h"
 #include "text/FontGenerator.h"
 #include "input/InputManager.h"
@@ -9,8 +10,7 @@
 using Microsoft::WRL::ComPtr;
 
 static bool FileExistsW_(const std::wstring& path) {
-    const DWORD a = GetFileAttributesW(path.c_str());
-    return (a != INVALID_FILE_ATTRIBUTES) && ((a & FILE_ATTRIBUTE_DIRECTORY) == 0);
+    return vfs::IsFile(path);
 }
 
 namespace {
@@ -40,31 +40,21 @@ void FontManager::LoadFromFolder(Renderer* r,
     renderer_ = r;
     fontsFolder_ = folder;
 
-    std::wstring pattern = folder;
-    if (!pattern.empty() && pattern.back() != L'\\' && pattern.back() != L'/') {
-        pattern += L'\\';
-    }
-    pattern += L"*.json";
-
-    WIN32_FIND_DATAW fd{};
-    HANDLE h = FindFirstFileW(pattern.c_str(), &fd);
-    if (h == INVALID_HANDLE_VALUE) {
-        return;
-    }
-
-    do {
-        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0) {
-            continue;
+    // The folder's *.json in the order the file system lists them (the order FindFirstFileW gave).
+    vfs::List(folder, "*.json", [&](const vfs::ListEntry& entry) {
+        if (entry.directory) {
+            return;
         }
+        const std::wstring fileName = vfs::Widen(entry.name);
 
         std::wstring json = folder;
         if (!json.empty() && json.back() != L'\\' && json.back() != L'/') {
             json += L'\\';
         }
-        json += fd.cFileName;
+        json += fileName;
 
         // basename without the extension
-        std::wstring base = fd.cFileName;
+        std::wstring base = fileName;
         size_t dot = base.find_last_of(L'.');
         if (dot != std::wstring::npos) {
             base.erase(dot);
@@ -77,7 +67,7 @@ void FontManager::LoadFromFolder(Renderer* r,
         tga += base + L".tga";
         if (!FileExistsW_(tga)) {
             // no matching .tga file—skip it
-            continue;
+            return;
         }
 
         auto atlas = std::make_unique<FontAtlas>();
@@ -93,9 +83,7 @@ void FontManager::LoadFromFolder(Renderer* r,
                 }
             }
         }
-    } while (FindNextFileW(h, &fd));
-
-    FindClose(h);
+    });
 }
 
 FontAtlas* FontManager::Get(const std::wstring& name) {

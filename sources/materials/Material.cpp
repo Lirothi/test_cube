@@ -1,5 +1,6 @@
 #include "materials/Material.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
@@ -225,7 +226,7 @@ bool ShaderCacheEnabled()
 
 bool FingerprintShaderFile(const std::filesystem::path& path, ShaderDependencyFingerprint& out)
 {
-    std::ifstream file(path, std::ios::binary);
+    vfs::InStream file(path);
     if (!file)
     {
         return false;
@@ -310,7 +311,7 @@ std::filesystem::path ShaderCachePath(uint64_t identity)
 }
 
 template<typename T>
-bool ReadCacheValue(std::ifstream& file, T& value)
+bool ReadCacheValue(std::ifstream& file, T& value) // vfs-ok: the DXIL cache is a writable cache
 {
     return static_cast<bool>(file.read(reinterpret_cast<char*>(&value), sizeof(value)));
 }
@@ -330,7 +331,7 @@ bool TryLoadShaderCache(uint64_t identity, ComPtr<ID3DBlob>& outBlob,
     }
 
     g_shaderCacheAttempts.fetch_add(1, std::memory_order_relaxed);
-    std::ifstream file(ShaderCachePath(identity), std::ios::binary);
+    std::ifstream file(ShaderCachePath(identity), std::ios::binary); // vfs-ok: the DXIL cache is a writable cache, not content
     if (!file)
     {
         return false;
@@ -573,12 +574,12 @@ const std::filesystem::path& PipelineCacheDirectory(ID3D12Device* device)
         const std::wstring key = PipelineCacheDriverKey(device);
         const std::filesystem::path dir = root / key;
         std::error_code ec;
-        const bool fresh = !std::filesystem::exists(dir, ec);
+        const bool fresh = !std::filesystem::exists(dir, ec); // vfs-ok: the PSO cache is a writable cache
         std::filesystem::create_directories(dir, ec);
         std::uintmax_t removed = 0;
         std::uint32_t moved = 0;
-        for (auto it = std::filesystem::directory_iterator(root, ec);
-             !ec && it != std::filesystem::directory_iterator(); it.increment(ec))
+        for (auto it = std::filesystem::directory_iterator(root, ec); // vfs-ok: the PSO cache is a writable cache
+             !ec && it != std::filesystem::directory_iterator(); it.increment(ec)) // vfs-ok: the same walk
         {
             const std::filesystem::path entry = it->path();
             std::error_code entryEc;
@@ -832,7 +833,7 @@ std::string NarrowForLog(const std::wstring& w)
 bool TryLoadPipelineBlob(ID3D12Device* device, const std::wstring& name, std::vector<uint8_t>& outBytes)
 {
     outBytes.clear();
-    std::ifstream file(PipelineCachePath(device, name), std::ios::binary);
+    std::ifstream file(PipelineCachePath(device, name), std::ios::binary); // vfs-ok: the PSO cache is a writable cache
     if (!file)
     {
         return false;
@@ -1208,8 +1209,11 @@ struct IncludeCaptureDXC : public IDxcIncludeHandler
         full = full.lexically_normal();
         outFiles.push_back(full.wstring());
 
+        // Through the VFS; the blob's encoding is left unknown, as LoadFile without a code page left it.
+        std::vector<std::uint8_t> bytes;
+        if (!vfs::ReadAll(full, bytes)) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         Microsoft::WRL::ComPtr<IDxcBlobEncoding> enc;
-        HRESULT hr = utils->LoadFile(full.c_str(), nullptr, &enc);
+        HRESULT hr = utils->CreateBlob(bytes.data(), static_cast<UINT32>(bytes.size()), DXC_CP_ACP, &enc);
         if (FAILED(hr)) return hr;
         *ppIncludeSource = enc.Detach();
         return S_OK;
@@ -1255,10 +1259,14 @@ static HRESULT CompileDXC(const std::wstring& file,
     hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
     if (FAILED(hr)) return hr;
 
-    // Load the source file
+    // Load the source file (through the VFS; the encoding unknown, as LoadFile without a code page had it)
     ComPtr<IDxcBlobEncoding> src;
-    hr = utils->LoadFile(path.c_str(), nullptr, &src);
-    if (FAILED(hr)) return hr;
+    {
+        std::vector<std::uint8_t> sourceBytes;
+        if (!vfs::ReadAll(path, sourceBytes)) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        hr = utils->CreateBlob(sourceBytes.data(), static_cast<UINT32>(sourceBytes.size()), DXC_CP_ACP, &src);
+        if (FAILED(hr)) return hr;
+    }
 
     // Include handler that tracks loaded files
     IncludeCaptureDXC* inc = new IncludeCaptureDXC(utils.Get(), path.parent_path(), outIncludes);
@@ -1378,10 +1386,8 @@ struct IncludeCapture : public ID3DInclude {
         std::filesystem::path req = Widen(pFileName);
         std::filesystem::path full = (req.is_absolute() ? req : (base / req)).lexically_normal();
 
-        std::ifstream f(full, std::ios::binary);
-        if (!f) { return E_FAIL; }
-
-        std::string bytes((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::vector<std::uint8_t> bytes;
+        if (!vfs::ReadAll(full, bytes)) { return E_FAIL; }
         char* mem = (char*)::malloc(bytes.size());
         if (!mem) { return E_OUTOFMEMORY; }
         std::memcpy(mem, bytes.data(), bytes.size());
@@ -1436,7 +1442,11 @@ HRESULT Material::CompileWithIncludes(const std::wstring& file,
     std::vector<std::string>      macroStorage;
     BuildMacros(WithEngineDefines(defines), macros, macroStorage); // S10a: the engine's layout counts first
 
-    HRESULT hr = D3DCompileFromFile(p.c_str(), macros.empty() ? nullptr : macros.data(),
+    // The source through the VFS and D3DCompile, as D3DCompileFromFile read it (its includes: the handler above).
+    std::vector<std::uint8_t> source;
+    if (!vfs::ReadAll(p, source)) { return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND); }
+    const std::string sourceName = vfs::Narrow(p.wstring());
+    HRESULT hr = D3DCompile(source.data(), source.size(), sourceName.c_str(), macros.empty() ? nullptr : macros.data(),
         &inc, entry, target, flags, 0, &outBlob, &errs);
     if (FAILED(hr) && errs) {
         logging::WriteRawLines(logging::LogLevel::Error, logging::LogCategory::Render,
@@ -1451,8 +1461,8 @@ void Material::RefreshWatchTimes_()
     std::lock_guard<std::mutex> lk(watchMtx_);
     watchedTimes_.resize(watchedFiles_.size());
     for (size_t i = 0; i < watchedFiles_.size(); ++i) {
-        std::error_code ec{};
-        watchedTimes_[i] = std::filesystem::last_write_time(watchedFiles_[i], ec);
+        const std::optional<vfs::Stat> stat = vfs::GetStat(watchedFiles_[i]);
+        watchedTimes_[i] = stat ? stat->version : 0;
     }
 }
 
@@ -1464,10 +1474,9 @@ bool Material::FSProbeAndFlagPending()
 
     bool changed = false;
     for (size_t i = 0; i < watchedFiles_.size(); ++i) {
-        std::error_code ec{};
-        auto t = std::filesystem::last_write_time(watchedFiles_[i], ec);
-        if (!ec && i < watchedTimes_.size()) {
-            if (t != watchedTimes_[i]) {
+        const std::optional<vfs::Stat> stat = vfs::GetStat(watchedFiles_[i]);
+        if (stat && i < watchedTimes_.size()) {
+            if (stat->version != watchedTimes_[i]) {
                 changed = true; break;
             }
         }

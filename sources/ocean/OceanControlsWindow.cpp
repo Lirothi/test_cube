@@ -15,6 +15,7 @@
 
 #include "app/Systems.h"
 #include "core/math/Math.h"
+#include "core/vfs/Vfs.h"
 #include "imgui.h"
 #include "ocean/OceanRenderable.h"
 #include "ocean/OceanSimulation.h"
@@ -2081,21 +2082,13 @@ void OceanControlsWindow::RefreshConfigFiles(const OceanSimulation& ocean)
 
     configPaths_.clear();
     const std::filesystem::path configDir = L"data/ocean";
-    std::error_code ec;
-    if (std::filesystem::exists(configDir, ec))
+    vfs::List(configDir, "*.json", [&](const vfs::ListEntry& entry)
     {
-        for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(configDir, ec))
+        if (!entry.directory)
         {
-            if (ec)
-            {
-                break;
-            }
-            if (entry.is_regular_file(ec) && entry.path().extension() == L".json")
-            {
-                configPaths_.push_back(entry.path().wstring());
-            }
+            configPaths_.push_back((configDir / vfs::Widen(entry.name)).wstring());
         }
-    }
+    });
 
     std::sort(configPaths_.begin(), configPaths_.end());
 

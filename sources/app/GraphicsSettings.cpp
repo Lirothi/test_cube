@@ -1,4 +1,5 @@
 #include "app/GraphicsSettings.h"
+#include "core/vfs/Vfs.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1392,9 +1393,15 @@ namespace
         return s;
     }
 
+    // The user's settings file, not content: a real OS path from the VFS (dev builds: the repo root, as before).
+    std::filesystem::path SettingsFile()
+    {
+        return vfs::WritablePath(vfs::Writable::Settings, GraphicsSettingsManager::kPath);
+    }
+
     bool LoadSnapshot(GraphicsSettingsSnapshot& out, std::string& error)
     {
-        std::ifstream file(GraphicsSettingsManager::kPath, std::ios::binary);
+        std::ifstream file(SettingsFile(), std::ios::binary); // vfs-ok: the user's settings file
         if (!file)
         {
             error = "file not found";
@@ -1420,7 +1427,7 @@ namespace
 
     bool SaveSnapshot(const GraphicsSettingsSnapshot& snapshot, std::string& error)
     {
-        std::ofstream file(GraphicsSettingsManager::kPath, std::ios::binary | std::ios::trunc);
+        std::ofstream file(SettingsFile(), std::ios::binary | std::ios::trunc);
         if (!file)
         {
             error = "cannot open file for writing";
@@ -1450,7 +1457,7 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
     else
     {
         std::error_code existsError;
-        const bool exists = std::filesystem::exists(kPath, existsError);
+        const bool exists = std::filesystem::exists(SettingsFile(), existsError); // vfs-ok: the user's settings file
         if (!exists && !existsError)
         {
             ApplyAll(loaded, renderer, scene, settings);

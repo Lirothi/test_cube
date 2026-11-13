@@ -1352,10 +1352,10 @@ int WINAPI WinMain(
             std::vector<std::string> paths;
             if (list == "all") {
                 std::error_code ec;
-                for (auto it = std::filesystem::recursive_directory_iterator("models", ec);
-                     !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+                for (auto it = std::filesystem::recursive_directory_iterator("models", ec); // vfs-ok: --tessy-upgrade rewrites the loose models/
+                     !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) { // vfs-ok: the same walk
                     const std::string p = it->path().generic_string();
-                    if (it->is_regular_file(ec) && p.size() > 9 && p.compare(p.size() - 9, 9, ".mesh.bin") == 0) { paths.push_back(p); }
+                    if (it->is_regular_file(ec) && p.size() > 9 && p.compare(p.size() - 9, 9, ".mesh.bin") == 0) { paths.push_back(p); } // vfs-ok: the same walk
                 }
                 std::sort(paths.begin(), paths.end());
             } else {
@@ -1408,7 +1408,7 @@ int WINAPI WinMain(
             // Where still water stands on it, as the object knows: the manifest beside the geometry, its vessel's draft.
             float waterline = 3.0e38f;
             if (const size_t bin = arg.rfind(".mesh.bin"); bin != std::string::npos) {
-                std::ifstream manifest(arg.substr(0, bin) + ".mesh.json");
+                std::ifstream manifest(arg.substr(0, bin) + ".mesh.json"); // vfs-ok: --water-mask-lid, a tool on the loose asset
                 const nlohmann::json doc = nlohmann::json::parse(manifest, nullptr, false, true);
                 if (!doc.is_discarded() && doc.contains("vessel") && doc["vessel"].is_object()) {
                     waterline = doc["vessel"].value("draft", 0.38f);
@@ -1467,17 +1467,17 @@ int WINAPI WinMain(
             }
             std::vector<std::string> manifests;
             std::error_code ec;
-            for (auto it = std::filesystem::recursive_directory_iterator("models", ec);
-                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            for (auto it = std::filesystem::recursive_directory_iterator("models", ec); // vfs-ok: --lod-report scans the loose models/
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) { // vfs-ok: the same walk
                 const std::string p = it->path().generic_string();
-                if (it->is_regular_file(ec) && p.size() > 10 && p.compare(p.size() - 10, 10, ".mesh.json") == 0 &&
+                if (it->is_regular_file(ec) && p.size() > 10 && p.compare(p.size() - 10, 10, ".mesh.json") == 0 && // vfs-ok: the same walk
                     (filter.empty() || p.find(filter) != std::string::npos)) { manifests.push_back(p); }
             }
             std::sort(manifests.begin(), manifests.end());
             int withWarnings = 0;
             size_t warnings = 0;
             for (const std::string& path : manifests) {
-                std::ifstream in(path);
+                std::ifstream in(path); // vfs-ok: --lod-report, a tool on the loose assets
                 const nlohmann::json doc = nlohmann::json::parse(in, nullptr, false, true);
                 if (doc.is_discarded() || !doc.is_object()) { continue; }
                 std::string geometry = doc.value("geometry", std::string());

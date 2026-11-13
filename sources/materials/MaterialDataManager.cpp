@@ -1,5 +1,6 @@
 #include "materials/MaterialDataManager.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/Renderer.h"
 #include "rendering/meshes/MeshManager.h" // GltfMaterialDesc + DescribeGltfMaterial (A3)
 
@@ -147,7 +148,7 @@ void MaterialDataManager::RegisterPreset(const std::string& name, const Material
 
 bool MaterialDataManager::LoadPresetsFromJsonFile(const std::wstring& path)
 {
-    std::ifstream f(path);
+    vfs::InStream f(path, /*binary*/ false);
     if (!f) {
         return false;
     }
@@ -169,33 +170,25 @@ bool MaterialDataManager::LoadPresetsFromJsonFile(const std::wstring& path)
 
 bool MaterialDataManager::LoadPresetsFromDirectory(const std::wstring& directory)
 {
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    if (!fs::is_directory(directory, ec)) {
+    if (!vfs::IsDirectory(directory)) {
         return false;
     }
 
     size_t loaded = 0;
-    for (const fs::directory_entry& entry : fs::directory_iterator(directory, ec)) {
-        if (ec) { break; }
-        std::error_code fileEc;
-        if (!entry.is_regular_file(fileEc)) { continue; }
-        const fs::path& p = entry.path();
-        std::string ext = p.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(),
-            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (ext != ".json") { continue; }
-
-        std::ifstream f(p);
-        if (!f) { continue; }
+    // The order the file system lists them in -- the order directory_iterator gave: a later file of the
+    // same name (there is none) would win, as before.
+    vfs::List(directory, "*.json", [&](const vfs::ListEntry& entry) {
+        if (entry.directory) { return; }
+        vfs::InStream f(entry.path, /*binary*/ false);
+        if (!f) { return; }
         std::stringstream ss;
         ss << f.rdbuf();
         const nlohmann::json j = nlohmann::json::parse(ss.str(), nullptr, false, /*ignore_comments=*/true);
-        if (j.is_discarded() || !j.is_object()) { continue; }
+        if (j.is_discarded() || !j.is_object()) { return; }
 
-        RegisterPreset(p.stem().string(), ParseMaterialPresetJson(j));
+        RegisterPreset(entry.name.substr(0, entry.name.rfind('.')), ParseMaterialPresetJson(j));
         ++loaded;
-    }
+    });
     return loaded > 0;
 }
 
@@ -203,8 +196,7 @@ bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path, const std
 {
     namespace fs = std::filesystem;
     const fs::path materialPath(path);
-    std::error_code ec;
-    if (!fs::is_regular_file(materialPath, ec))
+    if (!vfs::IsFile(path))
     {
         return false;
     }
@@ -217,7 +209,7 @@ bool MaterialDataManager::LoadPresetFromFile(const std::wstring& path, const std
         return false;
     }
 
-    std::ifstream file(materialPath);
+    vfs::InStream file(path, /*binary*/ false);
     if (!file)
     {
         return false;
@@ -349,7 +341,6 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     if (!d.mrPath.empty())
     {
         namespace fs = std::filesystem;
-        std::error_code ec;
         fs::path mrPath(d.mrPath);
         std::string ext = mrPath.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(),
@@ -362,7 +353,7 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
         {
             fs::path sibling = mrPath;
             sibling.replace_extension(".dds");
-            mrIsEngineLayoutDds = fs::exists(sibling, ec);
+            mrIsEngineLayoutDds = vfs::Exists(sibling);
         }
     }
     md->mrLayoutGltf = !mrIsEngineLayoutDds; // raw glTF MR packs B=metal, G=rough
@@ -402,12 +393,11 @@ std::shared_ptr<MaterialData> MaterialDataManager::GetOrCreateFromGltf(Renderer*
     if (!d.albedoPath.empty())
     {
         namespace fs = std::filesystem;
-        std::error_code ec;
         fs::path albedoPath(d.albedoPath);
         std::string ext = albedoPath.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(),
             [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if (ext == ".dds" || fs::exists(albedoPath.replace_extension(".dds"), ec))
+        if (ext == ".dds" || vfs::Exists(albedoPath.replace_extension(".dds")))
         {
             p.baseColor = float4(1.0f, 1.0f, 1.0f, d.baseColor[3]);
         }

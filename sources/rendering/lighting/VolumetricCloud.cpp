@@ -5,6 +5,7 @@
 #include <cstring>
 #include <vector>
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "core/profiling/ProfilerScopes.h"
 #include "materials/Material.h"
 #include "materials/Texture2D.h"
@@ -211,7 +212,7 @@ bool ReadbackToDds(Renderer* renderer, ID3D12Resource* texture, const std::wstri
     }
     const D3D12_RANGE noWrite{0, 0};
     readback->Unmap(0, &noWrite);
-    HANDLE out = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE out = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr); // vfs-ok: the cloud dump WRITES a file
     if (out == INVALID_HANDLE_VALUE) { return false; }
     DWORD written = 0;
     const bool ok = WriteFile(out, file.data(), static_cast<DWORD>(file.size()), &written, nullptr) && written == file.size();
@@ -424,17 +425,14 @@ bool VolumetricCloud::LoadVolumeDds(Renderer* renderer, const std::wstring& path
         LOG_WARNING(logging::LogCategory::Render, "volumetric clouds: volume '{}' not used: {}", path, why);
         return false;
     };
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
-    if (file == INVALID_HANDLE_VALUE) { return refuse("cannot open"); }
-    LARGE_INTEGER size{};
+    const vfs::File file = vfs::Open(path);
+    if (!file) { return refuse("cannot open"); }
     std::vector<std::uint8_t> bytes;
-    if (GetFileSizeEx(file, &size) && size.QuadPart > 148 && size.QuadPart < (1ll << 31))
+    if (file.Size() > 148 && file.Size() < (1ull << 31))
     {
-        bytes.resize(static_cast<size_t>(size.QuadPart));
-        DWORD read = 0;
-        if (!ReadFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &read, nullptr) || read != bytes.size()) { bytes.clear(); }
+        bytes.resize(static_cast<size_t>(file.Size()));
+        if (!file.Read(0, bytes.data(), bytes.size())) { bytes.clear(); }
     }
-    CloseHandle(file);
     const auto u32 = [&bytes](size_t at) { std::uint32_t v = 0; std::memcpy(&v, bytes.data() + at, 4); return v; };
     if (bytes.empty() || std::memcmp(bytes.data(), "DDS ", 4) != 0 || std::memcmp(bytes.data() + 84, "DX10", 4) != 0)
     { return refuse("not a DX10 DDS"); }

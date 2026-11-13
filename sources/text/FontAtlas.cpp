@@ -1,4 +1,5 @@
 #include "text/FontAtlas.h"
+#include "core/vfs/Vfs.h"
 #include <fstream>
 #include <sstream>
 #include <cwchar>
@@ -33,7 +34,7 @@ void UpdatePackedUv(FontGlyph& glyph) {
 
 // VERY small TGA reader (8-bit)
 static bool LoadTGA8(const std::wstring& path, int& w, int& h, std::vector<uint8_t>& out) {
-    std::ifstream f(path, std::ios::binary);
+    vfs::InStream f(path);
     if (!f) { return false; }
     unsigned char hdr[18];
     f.read((char*)hdr, 18);
@@ -49,7 +50,7 @@ static bool LoadTGA8(const std::wstring& path, int& w, int& h, std::vector<uint8
 }
 
 static std::string ReadAllUtf8(const std::wstring& path) {
-    std::ifstream f(path);
+    vfs::InStream f(path, /*binary*/ false);
     std::stringstream ss; ss << f.rdbuf();
     return ss.str();
 }

@@ -31,6 +31,7 @@
 #include "third_party/cgltf/cgltf.h"
 #include <Windows.h> // Win32 file/time helpers (load diagnostics now go through core/logging)
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 
 using namespace DirectX;
 
@@ -1175,10 +1176,41 @@ std::string GeometryFilePart(const std::string& path)
 
 uint64_t HashSourceFile(const std::string& pathWithFragment)
 {
-    std::ifstream f(GeometryFilePart(pathWithFragment), std::ios::binary);
-    if (!f) { return 0; }
-    std::vector<char> buf((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> buf;
+    if (!vfs::ReadAll(GeometryFilePart(pathWithFragment), buf)) { return 0; }
     return buf.empty() ? 0 : Fnv1a(buf.data(), buf.size());
+}
+
+// cgltf reads its files -- the .gltf / .glb and any external .bin -- through the VFS, as all content does
+// (docs/distribution_build_plan.md §2). The buffer is malloc'ed: cgltf hands it back to the release below.
+cgltf_result VfsCgltfRead(const cgltf_memory_options*, const cgltf_file_options*, const char* path, cgltf_size* size,
+                          void** data)
+{
+    const vfs::File file = vfs::Open(path);
+    if (!file) { return cgltf_result_file_not_found; }
+    void* bytes = std::malloc(file.Size() > 0 ? static_cast<size_t>(file.Size()) : 1u);
+    if (!bytes) { return cgltf_result_out_of_memory; }
+    if (!file.Read(0, bytes, static_cast<size_t>(file.Size())))
+    {
+        std::free(bytes);
+        return cgltf_result_io_error;
+    }
+    *size = static_cast<cgltf_size>(file.Size());
+    *data = bytes;
+    return cgltf_result_success;
+}
+
+void VfsCgltfRelease(const cgltf_memory_options*, const cgltf_file_options*, void* data)
+{
+    std::free(data);
+}
+
+cgltf_options VfsCgltfOptions()
+{
+    cgltf_options options{};
+    options.file.read = &VfsCgltfRead;
+    options.file.release = &VfsCgltfRelease;
+    return options;
 }
 
 uint64_t HashOptions(const MeshLoadOptions& opt)
@@ -1254,7 +1286,7 @@ template <typename T> void WriteBinVector(std::ofstream& f, const std::vector<T>
     f.write(reinterpret_cast<const char*>(&n), sizeof(n));
     f.write(reinterpret_cast<const char*>(v.data()), static_cast<std::streamsize>(n * sizeof(T)));
 }
-template <typename T> bool ReadBinVector(std::ifstream& f, std::vector<T>& v, uint32_t cap)
+template <typename T> bool ReadBinVector(std::istream& f, std::vector<T>& v, uint32_t cap)
 {
     uint32_t n = 0;
     f.read(reinterpret_cast<char*>(&n), sizeof(n));
@@ -1319,7 +1351,7 @@ bool ReadMeshBinary(const std::string& binPath, const uint64_t* expectSourceHash
     const uint64_t* expectOptionsHash, std::vector<VertexPNTUV>& verts, std::vector<MeshLodCpu>& lods,
     MeshBinHeader* outHeader = nullptr, Mesh::Dag* outDag = nullptr)
 {
-    std::ifstream f(binPath, std::ios::binary);
+    vfs::InStream f(binPath);
     if (!f) { return false; }
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
@@ -1994,7 +2026,7 @@ void BakeWindWeightsCpu(std::vector<VertexPNTUV>& verts, const std::vector<uint3
 
 bool MeshManager::BinaryNeedsRebake(const std::string& binPath, const MeshLoadOptions& opt)
 {
-    std::ifstream f(binPath, std::ios::binary);
+    vfs::InStream f(binPath);
     if (!f) { return true; }
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
@@ -2792,7 +2824,7 @@ bool MeshManager::ParseTextFile(const std::string& path,
     std::vector<uint32_t>& outIndices,
     const MeshLoadOptions& opt)
 {
-    std::ifstream in(path.c_str());
+    vfs::InStream in(path, /*binary*/ false);
     if (!in) {
         return false;
     }
@@ -2884,7 +2916,7 @@ bool MeshManager::ParseOBJFile(const std::string& path,
     std::vector<uint32_t>& outIndices,
     const MeshLoadOptions& opt)
 {
-    std::ifstream in(path.c_str());
+    vfs::InStream in(path, /*binary*/ false);
     if (!in) {
         return false;
     }
@@ -3139,9 +3171,9 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
 
     const GltfSelector sel = ParseGltfSelector(fullPath);
 
-    cgltf_options options{};
+    cgltf_options options = VfsCgltfOptions();
     cgltf_data* data = nullptr;
-    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) {
+    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) { // vfs-ok: VfsCgltfOptions reads through the VFS
         GltfLog(logging::LogLevel::Error, "parse failed: " + sel.file);
         return false;
     }
@@ -3280,7 +3312,7 @@ bool MeshManager::ParseGltfFile(const std::string& fullPath,
 namespace {
 
 struct GltfMaterialCacheEntry {
-    std::filesystem::file_time_type stamp{};
+    std::uint64_t stamp = 0; // vfs::Stat::version: the last write time of a loose file
     std::vector<GltfMaterialDesc> byGroup; // index = resolved group ordinal
 };
 
@@ -3298,11 +3330,10 @@ bool EndsWithNoCase(const std::string& s, const char* suffix)
     return true;
 }
 
-std::filesystem::file_time_type FileStamp(const std::string& file)
+std::uint64_t FileStamp(const std::string& file)
 {
-    std::error_code ec;
-    const auto t = std::filesystem::last_write_time(file, ec);
-    return ec ? std::filesystem::file_time_type{} : t;
+    const std::optional<vfs::Stat> stat = vfs::GetStat(file);
+    return stat ? stat->version : 0;
 }
 
 } // namespace
@@ -3329,7 +3360,7 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
     }
 
     // Cache hit: the file has not changed since it was described, so every group is already known.
-    const std::filesystem::file_time_type stamp = FileStamp(sel.file);
+    const std::uint64_t stamp = FileStamp(sel.file);
     {
         std::lock_guard<std::mutex> lk(gGltfMaterialCacheMtx);
         const auto it = gGltfMaterialCache.find(pathWithFragment);
@@ -3343,9 +3374,9 @@ GltfMaterialDesc MeshManager::DescribeGltfMaterial(const std::string& pathWithFr
         }
     }
 
-    cgltf_options options{};
+    cgltf_options options = VfsCgltfOptions();
     cgltf_data* data = nullptr;
-    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) {
+    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) { // vfs-ok: VfsCgltfOptions reads through the VFS
         GltfLog(logging::LogLevel::Error, "material parse failed: " + sel.file);
         return out; // valid=false
     }
@@ -3439,7 +3470,7 @@ bool MeshManager::ReadCollisionGeometry(const std::string& binPath, int lod, Col
     {
         return false;
     }
-    std::ifstream f(binPath, std::ios::binary);
+    vfs::InStream f(binPath); // seeks past the LODs it does not want: only the wanted one is read
     if (!f) { return false; }
     MeshBinHeader h{};
     f.read(reinterpret_cast<char*>(&h), sizeof(h));
@@ -3605,9 +3636,9 @@ size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)
         return 1; // .obj / .mesh.txt / .txt = a single material slot
     }
 
-    cgltf_options options{};
+    cgltf_options options = VfsCgltfOptions();
     cgltf_data* data = nullptr;
-    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success)
+    if (cgltf_parse_file(&options, sel.file.c_str(), &data) != cgltf_result_success) // vfs-ok: VfsCgltfOptions reads through the VFS
     {
         return 1;
     }
@@ -3628,7 +3659,7 @@ size_t MeshManager::CountSubmeshes(const std::string& pathWithFragment)
 // ---------- mesh.json -> MeshLoadOptions (the one authoritative reader; see the header) ----------
 bool MeshManager::ApplyManifestOptions(const std::string& meshJsonPath, MeshLoadOptions& opt)
 {
-    std::ifstream f(meshJsonPath);
+    vfs::InStream f(meshJsonPath, /*binary*/ false);
     if (!f) { return false; }
     nlohmann::json doc;
     try { f >> doc; } catch (...) { return false; }
@@ -3792,7 +3823,7 @@ std::vector<float> MeshManager::ComputeUvDensitiesForManifest(const std::string&
 {
     std::string geometry;
     {
-        std::ifstream f(meshJsonPath);
+        vfs::InStream f(meshJsonPath, /*binary*/ false);
         if (!f) { return {}; }
         nlohmann::json doc;
         try { f >> doc; } catch (...) { return {}; }
@@ -3828,7 +3859,7 @@ bool MeshManager::WriteManifestUvDensity(const std::string& meshJsonPath, const 
 {
     nlohmann::json doc;
     {
-        std::ifstream f(meshJsonPath);
+        std::ifstream f(meshJsonPath); // vfs-ok: --uv-density rewrites this loose file in place (a tool, not the game)
         if (!f) { return false; }
         try { f >> doc; } catch (...) { return false; }
         if (!doc.is_object()) { return false; }

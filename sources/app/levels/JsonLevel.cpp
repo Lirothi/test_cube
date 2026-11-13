@@ -4,6 +4,7 @@
 
 #include "core/diagnostics/BootProfile.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 
 #include <chrono>
 
@@ -229,7 +230,7 @@ void JsonLevel::Load(const LevelLoadContext& ctx)
 
     json j;
     {
-        std::ifstream f(sourcePath_);
+        vfs::InStream f(sourcePath_, /*binary*/ false);
         if (!f)
         {
             assert(false && "Level source file not found!");

@@ -1,4 +1,5 @@
 #include "vfx/ParticlePresets.h"
+#include "core/vfs/Vfs.h"
 
 #include <fstream>
 #include <sstream>
@@ -98,7 +99,7 @@ EmitterDesc ResolveEmitterDesc(const nlohmann::json& o)
     // 1) preset file (relative to the working dir, like ocean/material presets).
     if (const auto it = o.find("preset"); it != o.end() && it->is_string())
     {
-        std::ifstream f(it->get<std::string>());
+        vfs::InStream f(it->get<std::string>(), /*binary*/ false);
         if (f)
         {
             std::stringstream ss;

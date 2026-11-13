@@ -1,5 +1,6 @@
 #include "input/ActionMap.h"
 #include "input/InputManager.h"
+#include "core/vfs/Vfs.h"
 #include <fstream>
 #include <sstream>
 
@@ -66,7 +67,7 @@ static bool IsMouseButtonDownCompat(int mb, const InputManager& in)
 }
 
 bool ActionMap::LoadFromJsonFile(const std::wstring& path) {
-    std::ifstream f(path);
+    vfs::InStream f(path, /*binary*/ false);
     if (!f) {
         return false;
     }

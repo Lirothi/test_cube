@@ -294,3 +294,12 @@ Model License:
 If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
 This work is based on "Ocean Buoy v.1" (https://sketchfab.com/3d-models/ocean-buoy-v1-aaefa03d11df434f8ed04f96c7e3f8e2) by TSB3DMODELS (https://sketchfab.com/TSB3DMODELS) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
 
+## JetBrains Mono (fonts/JetBrainsMono-Regular.ttf)
+Font Information:
+* title:	JetBrains Mono Regular, version 2.305
+* source:	https://github.com/JetBrains/JetBrainsMono
+* author:	The JetBrains Mono Project Authors
+
+Font License:
+* license type:	SIL Open Font License 1.1 (https://openfontlicense.org); the full text is fonts/JetBrainsMono-OFL.txt
+* used for:	the ImGui UI font (Level Editor, Developer Controls, the command bar)

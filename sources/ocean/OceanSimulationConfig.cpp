@@ -1,5 +1,6 @@
 #include "ocean/OceanSimulationConfig.h"
 #include "ocean/OceanRenderConfigJson.h"
+#include "core/vfs/Vfs.h"
 
 #include <algorithm>
 #include <cctype>
@@ -797,7 +798,7 @@ OceanSimulationConfig CloneOceanSimulationConfig(const OceanSimulationConfig& co
 
 bool LoadOceanSimulationConfigFromFile(const std::wstring& path, OceanSimulationConfig& outConfig)
 {
-    std::ifstream f(path);
+    vfs::InStream f(path, /*binary*/ false);
     if (!f)
     {
         return false;

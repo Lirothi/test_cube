@@ -11,6 +11,7 @@
 
 #include "rendering/post/BloomRenderer.h"
 #include "rendering/core/RenderStats.h"
+#include "core/vfs/Vfs.h"
 
 #include <algorithm>
 #include <array>
@@ -663,10 +664,8 @@ bool BloomRenderer::ReadKernelPixels(const wchar_t* path)
     bloomKernelPixelDim_ = 0u;
     bloomSurveyRatio_ = -1.0f;
 
-    std::ifstream f(path, std::ios::binary);
-    if (!f) { return false; }
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
-                                std::istreambuf_iterator<char>());
+    std::vector<uint8_t> bytes;
+    if (!vfs::ReadAll(path, bytes)) { return false; }
     constexpr size_t kHeaderBytes = 148u; // 4 magic + 124 DDS_HEADER + 20 DDS_HEADER_DXT10
     if (bytes.size() < kHeaderBytes) { return false; }
 

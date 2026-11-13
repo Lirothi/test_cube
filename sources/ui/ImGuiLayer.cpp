@@ -12,6 +12,7 @@
 #include "backends/imgui_impl_dx12.h"
 #include "backends/imgui_impl_win32.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "rendering/core/GpuAlloc.h"
 #include "rendering/core/RenderConstants.h"
 #include "rendering/core/Renderer.h"
@@ -29,9 +30,17 @@ constexpr uint32_t kSrvDescriptorCapacity = 512;
 constexpr uint32_t kSrvDescriptorCapacity = 64;
 #endif
 constexpr float kUiScale = 1.5f;
-// Shipped with the repo, and picked over a system font for that reason. Covers Latin,
-// Greek and U+0400-U+052F, which is what the command bar and the model chat need.
-constexpr const char* kUiFontPath = "fonts/consolas.ttf";
+// Shipped with the repo (SIL OFL 1.1, fonts/JetBrainsMono-OFL.txt), and picked over a system
+// font for that reason. Covers Latin, Greek and the Russian / Ukrainian / Belarusian /
+// Serbian Cyrillic the command bar and the model chat need (U+0400-U+045F but for the four
+// grave-accented Bulgarian/Macedonian letters), and the punctuation they print. Consolas,
+// the font before it, is Microsoft's and may not be redistributed (owner, 2026-11-13).
+constexpr const char* kUiFontPath = "fonts/JetBrainsMono-Regular.ttf";
+// ImGui sizes a font by its ascender-to-descender height, and JetBrains Mono's is 1.32 em
+// where Consolas' is 1.0: at the same 13 px its glyphs would be 18 % smaller. The extra
+// raster scale brings its capitals to Consolas' height (8.3 px at 13) without changing the
+// line height ImGui lays rows out by, so no panel's layout moves.
+constexpr float kUiFontGlyphScale = 1.15f;
 
 #if WITH_EDITOR
 void SubmitEditorDockSpace()
@@ -141,14 +150,20 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
     // and come back with the right answer, and the headless harness has been running
     // Russian through this layer all along. Only the atlas was missing the glyphs.
     //
-    // fonts/consolas.ttf already ships with the repo and covers U+0400-U+052F, so this
-    // needs no system font path and no download. It is monospace like the built-in font,
-    // so the editor's metrics do not shift; 13.0f is that font's own size, and
-    // FontScaleMain above still does the UI scaling. ImGui 1.92 rasterises glyphs on
+    // The font ships with the repo (kUiFontPath), so this needs no system font path and no
+    // download. It is monospace like the built-in font, so the editor's metrics do not shift;
+    // 13.0f is the built-in font's own size (the line height), kUiFontGlyphScale the glyphs',
+    // and FontScaleMain above still does the UI scaling. ImGui 1.92 rasterises glyphs on
     // demand, so the glyph-range tables older versions required are not needed here.
-    if (::GetFileAttributesA(kUiFontPath) != INVALID_FILE_ATTRIBUTES)
+    // Read through the VFS; the atlas owns the copy (IM_ALLOC, freed by ImGui) and rasterises from it on demand.
+    std::vector<std::uint8_t> fontBytes;
+    if (vfs::ReadAll(kUiFontPath, fontBytes) && !fontBytes.empty())
     {
-        io.Fonts->AddFontFromFileTTF(kUiFontPath, 13.0f);
+        void* fontData = IM_ALLOC(fontBytes.size());
+        std::memcpy(fontData, fontBytes.data(), fontBytes.size());
+        ImFontConfig fontConfig;
+        fontConfig.ExtraSizeScale = kUiFontGlyphScale;
+        io.Fonts->AddFontFromMemoryTTF(fontData, static_cast<int>(fontBytes.size()), 13.0f, &fontConfig);
     }
     else
     {

@@ -6,6 +6,7 @@
 #include "rendering/core/GpuAlloc.h"        // gpu::SetCreationExcludesSubmission
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
+#include "core/vfs/Vfs.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
@@ -257,9 +258,20 @@ namespace
             return nullptr;
         }
 
+        // Through the VFS, decoded from memory; `bytes` outlives every WIC object below.
+        std::vector<std::uint8_t> bytes;
+        if (!vfs::ReadAll(path, bytes) || bytes.empty())
+        {
+            return nullptr;
+        }
+        Microsoft::WRL::ComPtr<IWICStream> stream;
+        if (FAILED(factory->CreateStream(stream.GetAddressOf())) ||
+            FAILED(stream->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size()))))
+        {
+            return nullptr;
+        }
         Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
-        hr = factory->CreateDecoderFromFilename(
-            path, nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, decoder.GetAddressOf());
+        hr = factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, decoder.GetAddressOf());
         if (FAILED(hr))
         {
             return nullptr;
@@ -359,7 +371,7 @@ namespace
         if (k < 2u || levelPath.empty()) { return; }
         nlohmann::json level;
         {
-            std::ifstream in(levelPath);
+            vfs::InStream in(levelPath, /*binary*/ false);
             if (!in)
             {
                 LOG_WARNING(logging::LogCategory::App, "scene.replicate: cannot open level {}", levelPath);
@@ -2237,8 +2249,7 @@ void App::InitScene()
         {
             bootLevel = "data/levels/demo.json";
         }
-        std::error_code levelError;
-        if (!std::filesystem::exists(bootLevel, levelError))
+        if (!vfs::Exists(bootLevel))
         {
             // JsonLevel::Load's assert is Debug's: Release went on with no scene, and died in the first target it recreated with the device removed and not a word why.
             LOG_FATAL(logging::LogCategory::Scene, "the boot level '{}' does not exist", bootLevel);
@@ -2447,6 +2458,18 @@ namespace
             }
             std::string out(text, static_cast<size_t>(n)); // without the closing brace
             out += LocalShadowsJson(scene_.GetLightManager(), scene_.GetLocalShadowCache());
+            // The file system the content comes through (docs/distribution_build_plan.md §2): counts since the start.
+            {
+                const vfs::Counters vc = vfs::GetCounters();
+                const std::string root = vfs::Narrow(vfs::ContentRoot().generic_wstring());
+                char vfsItem[512];
+                std::snprintf(vfsItem, sizeof(vfsItem),
+                              ",\"vfs\":{\"mounts\":[\"loose\"],\"root\":\"%s\",\"opens\":%llu,\"misses\":%llu,\"stats\":%llu,\"lists\":%llu,\"reads\":%llu,\"bytesRead\":%llu}",
+                              root.c_str(), static_cast<unsigned long long>(vc.opens), static_cast<unsigned long long>(vc.misses),
+                              static_cast<unsigned long long>(vc.stats), static_cast<unsigned long long>(vc.lists),
+                              static_cast<unsigned long long>(vc.reads), static_cast<unsigned long long>(vc.bytesRead));
+                out += vfsItem;
+            }
             // The physics world (docs/physics_plan.md).
             {
                 const physics::Stats ps = scene_.Physics().GetStats();

@@ -85,6 +85,9 @@
     <Filter Include="sources\core\threading">
       <UniqueIdentifier>{3f6c2a71-9b4e-4d8a-a5c2-7e1d0b9f4c36}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\core\vfs">
+      <UniqueIdentifier>{ed371c37-c607-5551-822c-ba572a48fb37}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\input">
       <UniqueIdentifier>{849f6304-d894-4dd4-9d93-005e85a0b4e2}</UniqueIdentifier>
     </Filter>
@@ -527,6 +530,9 @@
     </ClCompile>
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp">
       <Filter>sources\core\diagnostics</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/vfs/Vfs.cpp">
+      <Filter>sources\core\vfs</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/logging/Log.cpp">
       <Filter>sources\core\logging</Filter>
@@ -1270,6 +1276,9 @@
     </ClInclude>
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h">
       <Filter>sources\core\diagnostics</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/vfs/Vfs.h">
+      <Filter>sources\core\vfs</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/logging/Log.h">
       <Filter>sources\core\logging</Filter>
@@ -2351,5 +2360,10 @@
     <Natvis Include="third_party\robin_hood.natvis">
       <Filter>third_party</Filter>
     </Natvis>
+  </ItemGroup>
+  <ItemGroup>
+    <Manifest Include="sources/app/test_cube.manifest">
+      <Filter>sources\app</Filter>
+    </Manifest>
   </ItemGroup>
 </Project>

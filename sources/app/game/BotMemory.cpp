@@ -9,6 +9,7 @@
 #include <system_error>
 
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "third_party/json/json.hpp"
 
 namespace game
@@ -99,12 +100,12 @@ namespace game
     bool BotMemory::Load(const std::string& path)
     {
         path_ = path;
-        std::error_code ec;
-        if (path.empty() || !std::filesystem::exists(path, ec)) { return false; }
+        // Content (D6: the shipped package, under the user's own saves): through the VFS.
+        if (path.empty() || !vfs::Exists(path)) { return false; }
         nlohmann::json j;
         try
         {
-            std::ifstream file(path);
+            vfs::InStream file(path, /*binary*/ false);
             file >> j;
         }
         catch (const std::exception& e)
@@ -149,19 +150,21 @@ namespace game
             seconds.push_back(std::round(seconds_[b] * 10.0f) / 10.0f);
         }
         j["turn"] = { { "bin", kTurnBin }, { "curvature", curvature }, { "seconds", seconds } };
+        // The user's file: where the game keeps what it learns (dev: the same path under the repo root).
         std::error_code ec;
-        std::filesystem::create_directories(std::filesystem::path(path_).parent_path(), ec);
-        const std::string temp = path_ + ".tmp";
+        const std::filesystem::path target = vfs::WritablePath(vfs::Writable::Saved, path_);
+        std::filesystem::create_directories(target.parent_path(), ec);
+        const std::filesystem::path temp = std::filesystem::path(target).concat(L".tmp");
         {
             std::ofstream file(temp, std::ios::binary | std::ios::trunc);
             if (!file)
             {
-                LOG_WARNING(logging::LogCategory::App, "bot memory: cannot write {}", temp);
+                LOG_WARNING(logging::LogCategory::App, "bot memory: cannot write {}", temp.string());
                 return false;
             }
             file << j.dump(1) << "\n";
         }
-        std::filesystem::rename(temp, path_, ec);
+        std::filesystem::rename(temp, target, ec);
         if (ec)
         {
             LOG_WARNING(logging::LogCategory::App, "bot memory: cannot put {} in place ({})", path_, ec.message());
@@ -217,8 +220,9 @@ namespace game
     {
         // The level's files, the boats not read yet among them, and the ones read: emptied.
         std::error_code ec;
-        const std::filesystem::path folder = std::filesystem::path(BotMemoryPath(level, "x")).parent_path();
-        for (const std::filesystem::directory_entry& file : std::filesystem::directory_iterator(folder, ec))
+        const std::filesystem::path folder =
+            vfs::WritablePath(vfs::Writable::Saved, BotMemoryPath(level, "x")).parent_path();
+        for (const std::filesystem::directory_entry& file : std::filesystem::directory_iterator(folder, ec)) // vfs-ok: the user's own saves
         {
             if (file.path().extension() == ".json") { std::filesystem::remove(file.path(), ec); }
         }

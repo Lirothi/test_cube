@@ -19,6 +19,7 @@
 #include "meshoptimizer.h"
 
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "core/task/TaskSystem.h"
 #include "physics/PhysicsWorld.h"
 #include "rendering/renderables/RenderableObject.h"
@@ -98,13 +99,9 @@ namespace
         if (!bakePath.empty())
         {
             const auto started = std::chrono::steady_clock::now();
-            std::ifstream in(bakePath, std::ios::binary | std::ios::ate);
-            if (in)
+            std::vector<std::uint8_t> bytes;
+            if (vfs::ReadAll(bakePath, bytes))
             {
-                std::vector<std::uint8_t> bytes(static_cast<std::size_t>(std::max<std::streamoff>(in.tellg(), 0)));
-                in.seekg(0);
-                in.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-                if (!in) { bytes.clear(); }
                 std::shared_ptr<WaterMaskField> field = watermask::DeserializeField(bytes.data(), bytes.size(), &bakeKey, why);
                 if (field)
                 {
@@ -1409,14 +1406,13 @@ namespace watermask
     bool MakeBakeKey(const std::string& geometryPath, const std::vector<int>& seeThroughSlots, float waterline, float draftOverLowest,
                      WaterMaskBakeKey& out)
     {
-        std::error_code ec;
-        const std::uintmax_t bytes = std::filesystem::file_size(geometryPath, ec);
-        if (ec) { return false; }
-        const std::filesystem::file_time_type time = std::filesystem::last_write_time(geometryPath, ec);
-        if (ec) { return false; }
+        // The geometry's size and vfs::Stat::version: a loose file's last write time, the same FILETIME ticks
+        // std::filesystem::last_write_time gave the bakes already on disk, so their keys still match.
+        const std::optional<vfs::Stat> stat = vfs::GetStat(geometryPath);
+        if (!stat || stat->directory) { return false; }
         out = WaterMaskBakeKey{};
-        out.geometryBytes = static_cast<std::uint64_t>(bytes);
-        out.geometryTime = static_cast<std::int64_t>(time.time_since_epoch().count());
+        out.geometryBytes = stat->size;
+        out.geometryTime = static_cast<std::int64_t>(stat->version);
         out.waterline = waterline;
         out.draftOverLowest = draftOverLowest;
         out.glassSlots = seeThroughSlots;

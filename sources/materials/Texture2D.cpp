@@ -1,5 +1,6 @@
 #include "materials/Texture2D.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 
 #include "core/diagnostics/BootProfile.h"
 
@@ -150,8 +151,7 @@ static std::wstring DdsSiblingPath(const std::wstring& path)
 
 static bool FileExistsW(const std::wstring& path)
 {
-    const DWORD attrs = GetFileAttributesW(path.c_str());
-    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    return vfs::IsFile(path);
 }
 
 // ========================= WIC loader (to RGBA8) =========================
@@ -164,9 +164,18 @@ bool Texture2D::LoadRGBA8_WIC_(const std::wstring& path, std::vector<uint8_t>& o
         return false;
     }
 
+    // The file comes through the VFS and WIC decodes it from memory; `bytes` outlives every WIC object below.
+    std::vector<uint8_t> bytes;
+    if (!vfs::ReadAll(path, bytes) || bytes.empty()) {
+        return false;
+    }
+    ComPtr<IWICStream> stream;
+    if (FAILED(factory->CreateStream(&stream)) ||
+        FAILED(stream->InitializeFromMemory(bytes.data(), static_cast<DWORD>(bytes.size())))) {
+        return false;
+    }
     ComPtr<IWICBitmapDecoder> decoder;
-    HRESULT hr = factory->CreateDecoderFromFilename(
-        path.c_str(), nullptr, GENERIC_READ, WICDecodeMetadataCacheOnDemand, &decoder);
+    HRESULT hr = factory->CreateDecoderFromStream(stream.Get(), nullptr, WICDecodeMetadataCacheOnDemand, &decoder);
     if (FAILED(hr)) {
         return false;
     }
@@ -288,7 +297,7 @@ bool Texture2D::CreateFromDDS_(Renderer* r, ID3D12GraphicsCommandList* uploadCmd
     std::vector<ComPtr<ID3D12Resource>>* keepAlive)
 {
     // 1) Read the entire file
-    std::ifstream f(desc.path, std::ios::binary);
+    vfs::InStream f(desc.path);
     if (!f) {
         return false;
     }

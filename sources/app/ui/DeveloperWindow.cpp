@@ -1,5 +1,6 @@
 #include "app/game/PlayerStart.h"
 #include "app/ui/DeveloperWindow.h"
+#include "core/vfs/Vfs.h"
 
 #include <algorithm>
 #include <array>
@@ -73,11 +74,7 @@ namespace
             return false;
         }
 
-        std::error_code ec;
-        const std::filesystem::path fsPath(normalizedPath);
-        const bool exists = std::filesystem::exists(fsPath, ec);
-        const bool regularFile = exists && std::filesystem::is_regular_file(fsPath, ec);
-        return !ec && regularFile;
+        return vfs::IsFile(normalizedPath);
     }
 
     struct DlssModeOption
@@ -232,31 +229,18 @@ void DeveloperWindow::RefreshLevelList()
     levelChangeStatus_.clear();
     levelListScanned_ = true;
 
-    std::error_code ec;
-    std::filesystem::directory_iterator it("data/levels", ec);
-    if (ec)
+    if (!vfs::IsDirectory("data/levels"))
     {
         levelChangeStatus_ = "Cannot scan data/levels";
         return;
     }
-
-    const std::filesystem::directory_iterator end;
-    while (it != end)
+    vfs::List("data/levels", "*.json", [&](const vfs::ListEntry& entry)
     {
-        const std::filesystem::directory_entry& entry = *it;
-        std::error_code entryEc;
-        if (entry.is_regular_file(entryEc) && !entryEc && entry.path().extension() == ".json")
+        if (!entry.directory)
         {
-            availableLevelPaths_.push_back(LevelPathString(entry.path()));
+            availableLevelPaths_.push_back(LevelPathString(std::filesystem::path(vfs::Widen(entry.path))));
         }
-
-        it.increment(ec);
-        if (ec)
-        {
-            levelChangeStatus_ = "Cannot scan all level files";
-            break;
-        }
-    }
+    });
 
     std::sort(availableLevelPaths_.begin(), availableLevelPaths_.end());
     if (availableLevelPaths_.empty())
