@@ -143,6 +143,8 @@ namespace watermask
     // why) when the bytes are no bake of this version or were made from another bake of the geometry.
     bool RekeyBakeForPackage(std::vector<std::uint8_t>& bytes, std::uint64_t looseBytes, std::uint64_t looseVersion,
                              std::uint64_t packagedVersion, std::string& why);
+    // A bake's key as it stands in the file (the draft, the glass slots the frame built it for), without its field.
+    bool ReadBakeKey(const std::uint8_t* bytes, std::size_t size, WaterMaskBakeKey& out, std::string& why);
     // The bytes the GPU and the tests read of a field (the plan, the lid, the basins), to compare two fields exactly.
     bool SameField(const WaterMaskField& a, const WaterMaskField& b);
 

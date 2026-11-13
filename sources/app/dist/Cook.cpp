@@ -697,12 +697,38 @@ namespace
                 else
                 {
                     const std::uint64_t hash = vfs::pak::ContentHash(mesh.data(), mesh.size());
+                    std::vector<std::uint8_t> original = bake;
                     if (ocean::watermask::RekeyBakeForPackage(bake, stat->size, stat->version, hash, why))
                     {
                         record.bytes = std::make_shared<const std::vector<std::uint8_t>>(std::move(bake));
                         entry["status"] = "re-keyed";
                         waterMasksReport_.push_back(std::move(entry));
                         continue;
+                    }
+                    // Made for another write of the geometry (a copied tree, a checkout: other file times, the same
+                    // bytes) -- the field is built again here with the draft and glass slots the frame keyed it with, as
+                    // the editor's Collect builds it, and keyed for the package. Deterministic: the same geometry gives
+                    // the same bytes as the editor's bake.
+                    ocean::WaterMaskBakeKey stored;
+                    std::string readWhy;
+                    if (why == "made from another bake of the geometry" &&
+                        ocean::watermask::ReadBakeKey(original.data(), original.size(), stored, readWhy))
+                    {
+                        const std::shared_ptr<const ocean::WaterMaskField> field =
+                            ocean::watermask::BuildField(geometry, stored.glassSlots, stored.waterline, stored.draftOverLowest);
+                        if (field)
+                        {
+                            ocean::WaterMaskBakeKey packaged = stored;
+                            packaged.geometryBytes = stat->size;
+                            packaged.geometryTime = static_cast<std::int64_t>(hash);
+                            record.bytes = std::make_shared<const std::vector<std::uint8_t>>(ocean::watermask::SerializeField(*field, packaged));
+                            entry["status"] = "rebuilt (the bake was made for another write of the geometry)";
+                            Warning("water mask " + path + " was made for another write of its geometry: rebuilt by the cook "
+                                    "(open a level with it in the editor once to bake it again)");
+                            waterMasksReport_.push_back(std::move(entry));
+                            continue;
+                        }
+                        why = "made for another write of the geometry, and building it again failed";
                     }
                 }
                 entry["status"] = why;

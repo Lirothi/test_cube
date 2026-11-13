@@ -1542,6 +1542,26 @@ namespace watermask
         return DeserializeField(bytes.data(), bytes.size(), nullptr, why) != nullptr;
     }
 
+    bool ReadBakeKey(const std::uint8_t* bytes, std::size_t size, WaterMaskBakeKey& out, std::string& why)
+    {
+        ByteReader r{ bytes, bytes + size };
+        if (r.Get<std::uint32_t>() != kBakeMagic || !r.ok) { why = "not a water mask bake"; return false; }
+        const std::uint32_t version = r.Get<std::uint32_t>();
+        if (version != kWaterMaskBakeVersion)
+        {
+            why = "made by version " + std::to_string(version) + ", this is " + std::to_string(kWaterMaskBakeVersion);
+            return false;
+        }
+        out = WaterMaskBakeKey{};
+        out.geometryBytes = r.Get<std::uint64_t>();
+        out.geometryTime = r.Get<std::int64_t>();
+        out.waterline = r.Get<float>();
+        out.draftOverLowest = r.Get<float>();
+        r.GetArray(out.glassSlots, 1024u);
+        if (!r.ok) { why = "cut short"; return false; }
+        return true;
+    }
+
     std::shared_ptr<WaterMaskField> DeserializeField(const std::uint8_t* bytes, std::size_t size, const WaterMaskBakeKey* expect,
                                                      std::string& why)
     {

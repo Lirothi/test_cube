@@ -685,6 +685,74 @@ loads 343 -> 167, 172-191 -> 96-100 ms; the boot 4056-4315 -> 3876 ms; 50 switch
 the bathroom 1.25-2.38 % of pixels over 8 levels against the same arm across processes 1.21 % (within a process up to 2.31 %,
 its candles), the grove 0.10-0.40 % against 0.50 %.
 
+## Distribution -- VFS, Packages, Shipping
+
+Plan and every measurement: `docs/distribution_build_plan.md` (§13, D1-D9; owner, 2026-11-13: "a build system for
+distribution: packages, our file system over packages and direct paths, encryption, whatever else it needs").
+
+- **Every runtime read goes through `core/vfs/Vfs.h`** (`vfs::ReadAll / ReadText / InStream / Open / GetStat / Exists / List`),
+  never `std::ifstream`, `_wfopen`, `CreateFile`, WIC from a file name, `std::filesystem::exists` on content.
+  `python tools/check_file_io.py` (exit = findings) gates it; a line that must touch the disk (the user's settings, a cache, a
+  tool rewriting an asset) says why with `// vfs-ok: <reason>`. Paths are virtual: forward slashes from the content root
+  (`vfs::ContentRoot()`, the cwd in dev); an absolute path goes straight to the OS. `GetStat().version` is a loose file's
+  write time and a packaged file's CONTENT HASH -- a key built from it (the water mask bake, a physics shape) must not
+  assume FILETIME. A derived file is written beside its source only when `vfs::IsLooseFile` says a loose file serves it.
+- **Mounts**: `--vfs=loose|packages|both`, `--pak-dir=<folder>` (every `*.tcpak`, by priority then name), `--pak-key=<key.json>`
+  (or `TC_PAK_KEY`), `--vfs-record=<file>` (each content file found, once). `.tcpak` (`core/vfs/Pak.h`): 64 KB blocks, zstd
+  or stored, CRC32C each, AES-256-GCM through CNG when encrypted (HKDF sub-keys, synthetic nonce, AAD per block), TOC at the
+  end, deterministic (same files -> same bytes), "deleted" records for patches. Tools (no window): `--pak-build=<out>
+  --pak-files=<list>`, `--pak-list=`, `--pak-verify=`, `--pak-keygen=<key.json>` (never over a file), `--pak-key-header=
+  <key.json>,<out.h>`, `--vfs-selftest` (115 checks with their controls).
+- **Shaders**: `--shader-model=6.6` caps the target (a mounted `shaders.tcpak` sets its own: `shaders/dxil/cooked.txt`);
+  `--shader-record=<file>` lists every compile request; cooked DXIL is looked up first (`shaders/dxil/<id>.dxil`, the id
+  without absolute paths, Release flags), a miss logs `shader permutation not cooked` once and compiles from the packaged
+  HLSL. `tools/dist/record_shaders.py` re-records `tools/dist/shader_list.txt` (264) and `vfs_record.txt`: run it (or
+  `build_dist.py --mode=record`) after adding a shader permutation a shipped level can reach, and review the diff.
+- **The cook** (`Cook|x64`, `x64/Cook/test_cube.exe --cook=tools/dist/<profile>.json --cook-out=<dir> [--cook-check]
+  [--levels= --boot-level= --version= --no-encrypt --pak-key=]`, `sources/app/dist/Cook.cpp`): walks the profile's levels
+  (strings with a slash and a content extension, bare names as `data/materials/<name>.json`, derived files), the
+  `include`, the record list and string literals of `sources/` outside the editor; re-keys water mask bakes for the
+  package (a bake made for another write of the geometry is REBUILT from its stored draft and glass slots); errors on a
+  missing file, a hull without a bake, and -- with `strictLicences` -- an asset without a licence in CREDITS.md (a
+  `## <asset>` section with `license type:` or `License:`). It writes `cook_report.json` (every file, who named it, sizes,
+  per level, licences) and `base.tcpak` + `shaders.tcpak`. While it compiles shaders, a Debug exe uses Release flags too.
+- **Shipping|x64** (`TC_SHIPPING=1`, no rendering change): content from `<exe>\content\*.tcpak` only; the user's folder
+  (`%LOCALAPPDATA%\test_cube` or `--user-dir`) is created and becomes the CURRENT DIRECTORY before the log opens, so
+  everything written relative (logs/, `settings/imgui.ini`, artifacts, `crashes/`, `--shot`) lands there;
+  `WritablePath` maps Settings / Cache / Saved (`data/bot_memory/` read back through the user overlay). Switches: only
+  `--window --level --log-level --user-dir --shot --shot-delay --cam-pos --cam-rot --wind-freeze --time --play
+  --crash-selftest` (the rest is logged as ignored). No developer keys or windows. Starts by `config/boot.json` (the
+  profile's `bootLevel` / `startMode`). Graphics settings: defaults from `config/graphics_defaults.json`
+  (`tools/dist/graphics_defaults.json`), the player's file holds only the differences; every build saves it atomically.
+  Before the window: `D3D12\D3D12Core.dll` present (the Agility SDK 1.619.6 runtime it exports `D3D12SDKVersion = 619` for:
+  Windows 10 has no SM 6.6 in-box, and without the file no device is made even on Windows 11 26100), the GPU check (SM 6.6,
+  binding tier 3, DXR 1.1 -- `gpu::CheckRequirements`, `--gpu-check` in dev), NVIDIA's signature on the delay-loaded
+  `sl.interposer.dll`. Crash reports (`core/diagnostics/CrashHandler.h`): a minidump in `crashes\`, a Fatal line, a box;
+  `--crash-selftest=av|stack|abort|terminate|throw|purecall|invalidparam|fastfail` (fastfail: no report -- nothing in the
+  process runs). `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any of the game's message boxes (the gates' way past them).
+- **Generated headers ALWAYS exist** (`sources/app/generated/BuildVersion.g.h`, `sources/core/vfs/generated/PakKey.g.h`,
+  not in git): the project writes dev / no-key ones when missing. Not `__has_include`: MSBuild does not see a header that
+  was absent at the last compile, and the first encrypted build's exe shipped without its key.
+- **`python tools/build_dist.py --profile=<test|release|path> --mode=check|record|content|full`** (`--levels --boot-level
+  --version --no-encrypt --skip-build --out --key --progress=json --keep-temp`): `full` = MSBuild Cook + Shipping with the
+  version (`0.1.0+<build> (<git>[-dirty])`, the build number from `<out>/build_history.json`) and the embedded key, the
+  cook, the folder (exe, the DLLs it LOADS -- sampled from a run, NGX's over-the-air copies mapped back to the local
+  `sl.*.dll` they stand in for --, `D3D12\`, the VC++ runtime app-local), a check run of the staged game (exit 0, no Error,
+  nothing compiled, Streamline up), CREDITS / THIRD_PARTY_NOTICES / README / manifest.json (SHA-256 per file), zip,
+  `dist_symbols/<version>/` (exe + PDB + report). Staged in `.dist_tmp` beside the output and renamed whole: a cancelled
+  build leaves nothing in `dist/`. The key: `%USERPROFILE%\.test_cube\pak_key.json`, made on the first encrypted build --
+  KEEP A COPY; a lost key leaves its packages unreadable. `release` needs `versionMustGrow` and every licence known (until
+  the owner settles `rocks` and three textures in `import_staging/`, it does not build).
+- **The window and MCP**: Level Editor > File > Build Distribution... (`--build-dist` opens it), MCP `build_dist {profile,
+  mode, levels, bootLevel, version, encrypt}` -> `{id}`, `build_dist_status {id}`, `build_dist_cancel` -- one job
+  (`dist::TheBuildJob`, a job object: Cancel and the editor closing end the whole tree). The window and the console give
+  the same bytes (checked from Release_Editor and Debug). content / full write `dist/`, record rewrites `tools/dist/*.txt`:
+  only when the person asked.
+- **Measuring a distribution**: parity harness `parity_shots.py` with `PARITY_EXTRA="--vfs=packages --pak-dir=<dir>"`
+  (scratchpad-style), Release on packages over the record arms (0 `not cooked` is the gate). Compare Shipping with dev
+  Release only at the SAME settings: dev reads the developer's own `graphics_settings.json`, Shipping the committed
+  defaults (vsync alone moved 20 % of the pixels through DLSS's jitter phase).
+
 ## Reproducing a Camera View From a Screenshot
 
 The on-screen HUD prints the camera POSITION and its ORIENTATION QUATERNION:

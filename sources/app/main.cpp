@@ -1810,15 +1810,26 @@ int WINAPI WinMain(
 #if TC_SHIPPING
     // What the build starts (config/boot.json, from the profile): its level, and Play from the level's Player Start.
     {
+        // Without it, or without its level, the content is not whole (a package missing, a damaged one): the player is told,
+        // where a missing level used to end in a Fatal and exit code 3 with nothing on screen (the clean-place gate's arm
+        // "base.tcpak gone, shaders.tcpak there").
         shipping::BootConfig boot;
         std::string error;
         if (!shipping::ReadBootConfig(boot, error)) {
-            LOG_WARNING(logging::LogCategory::App, "boot: {} -- the default level, free camera", error);
-        } else {
-            if (g_bootLevelPath.empty()) { g_bootLevelPath = boot.bootLevel; }
-            if (boot.startMode == "play") { g_bootPlay = true; }
-            LOG_INFO(logging::LogCategory::App, "boot: {} {} -- {} ({})", boot.product, boot.version, g_bootLevelPath, boot.startMode);
+            LOG_ERROR(logging::LogCategory::App, "boot: {}", error);
+            shipping::ShowMessage(L"test_cube", L"The game's content is missing or damaged:\n\n" + vfs::Widen(error) +
+                                  L"\n\nCopy the whole game folder again (the content folder beside test_cube.exe).");
+            return 1;
         }
+        if (g_bootLevelPath.empty()) { g_bootLevelPath = boot.bootLevel; }
+        if (!vfs::IsFile(g_bootLevelPath)) {
+            LOG_ERROR(logging::LogCategory::App, "boot: the level {} is not in the game's content", g_bootLevelPath);
+            shipping::ShowMessage(L"test_cube", L"The level " + vfs::Widen(g_bootLevelPath) +
+                                  L" is not in the game's content.\n\nCopy the whole game folder again.");
+            return 1;
+        }
+        if (boot.startMode == "play") { g_bootPlay = true; }
+        LOG_INFO(logging::LogCategory::App, "boot: {} {} -- {} ({})", boot.product, boot.version, g_bootLevelPath, boot.startMode);
     }
 #endif
 
