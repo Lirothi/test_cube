@@ -46,6 +46,9 @@
     <Filter Include="sources\app\scene">
       <UniqueIdentifier>{c3a9a9e2-1a4c-48d3-9b46-0a0401bc9c86}</UniqueIdentifier>
     </Filter>
+    <Filter Include="sources\editor\dist">
+      <UniqueIdentifier>{e7b1c3d2-5a4f-4c8e-9d21-3f6a8b0c4e72}</UniqueIdentifier>
+    </Filter>
     <Filter Include="sources\app\dist">
       <UniqueIdentifier>{d5c00c0a-7a5e-4b8e-9f3b-2c1d6e8f0a51}</UniqueIdentifier>
     </Filter>
@@ -266,6 +269,12 @@
     </ClCompile>
     <ClCompile Include="sources/editor/ui/ImportPanel.cpp">
       <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/ui/BuildDistributionPanel.cpp">
+      <Filter>sources\editor\ui</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/editor/dist/DistBuildJob.cpp">
+      <Filter>sources\editor\dist</Filter>
     </ClCompile>
     <ClCompile Include="sources/editor/ui/CommandHistoryPanel.cpp">
       <Filter>sources\editor\ui</Filter>
@@ -1060,6 +1069,12 @@
     </ClInclude>
     <ClInclude Include="sources/editor/ui/ImportPanel.h">
       <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/ui/BuildDistributionPanel.h">
+      <Filter>sources\editor\ui</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/editor/dist/DistBuildJob.h">
+      <Filter>sources\editor\dist</Filter>
     </ClInclude>
     <ClInclude Include="sources/editor/ui/CommandHistoryPanel.h">
       <Filter>sources\editor\ui</Filter>

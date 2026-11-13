@@ -21,6 +21,8 @@
 #include "editor/ui/ContentBrowserPanel.h"
 #include "editor/intent/LlmReaper.h"
 #include "editor/ui/ImportPanel.h"
+#include "editor/ui/BuildDistributionPanel.h"
+#include "editor/dist/DistBuildJob.h"
 #include "editor/ui/InspectorPanel.h"
 #include "editor/ui/MaterialEditorPanel.h"
 #include "editor/ui/MeshEditorPanel.h"
@@ -182,6 +184,7 @@ private:
     bool modelWarmed_ = false;
     int modelWarmupFrames_ = 0;
     bool showImportPanel_ = false; // H3: import_staging -> engine assets window
+    bool showBuildDistPanel_ = false; // File > Build Distribution... (docs/distribution_build_plan.md §8.4)
     bool showMeshEditor_ = false;  // J: dedicated Mesh Editor window (edits a .mesh.json)
     bool showMaterialEditor_ = false; // I2: Material Editor window (edits a data/materials/<name>.json)
     bool showLevelErrors_ = false; // J: level-errors window (missing geometry/material/textures)
@@ -208,6 +211,7 @@ private:
     AssetThumbnailCache thumbnailCache_;
     ContentBrowserPanel contentBrowser_;
     ImportPanel importPanel_;
+    BuildDistributionPanel buildDistPanel_;
     MeshEditorPanel meshEditor_;
     MaterialEditorPanel materialEditor_;
     SceneOutlinerPanel outliner_;
@@ -255,6 +259,39 @@ private:
         bool openedWindow_ = false;
     };
     McpImportHost mcpImportHost_{ *this };
+
+    // build_dist / build_dist_status: the Build Distribution window's job; a start opens the window, where it shows.
+    class McpDistHost final : public editormcp::DistHost
+    {
+    public:
+        explicit McpDistHost(EditorController& owner) : owner_(owner) {}
+        ~McpDistHost() override { editormcp::SetDistHost(nullptr); }
+        bool Start(const dist::BuildRequest& request, std::string& outText) override
+        {
+            if (!dist::TheBuildJob().Start(request, outText)) { return false; }
+            owner_.showBuildDistPanel_ = true;
+            const dist::BuildStatus status = dist::TheBuildJob().Status();
+            outText = "{\"id\":" + std::to_string(status.id) + ",\"mode\":\"" + request.mode + "\",\"profile\":\"" +
+                      request.profile + "\",\"started\":true}";
+            return true;
+        }
+        std::string Status(int id) override { return dist::TheBuildJob().StatusJson(id); }
+        bool Cancel(std::string& outText) override
+        {
+            if (!dist::TheBuildJob().Running())
+            {
+                outText = "no build is running";
+                return false;
+            }
+            dist::TheBuildJob().Cancel();
+            outText = "cancelled build #" + std::to_string(dist::TheBuildJob().Status().id);
+            return true;
+        }
+
+    private:
+        EditorController& owner_;
+    };
+    McpDistHost mcpDistHost_{ *this };
 
     // save_level: the open level written as Ctrl+S writes it, minus the per-level camera state
     // (MCP moves the camera for screenshots). Registered next to the import host every frame.

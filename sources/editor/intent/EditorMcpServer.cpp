@@ -28,6 +28,8 @@
 #include <iterator>
 
 #include "app/camera/Camera.h"
+#include "editor/dist/DistBuildJob.h"
+#include "editor/ui/BuildDistributionPanel.h"
 #include "app/game/Race.h"
 #include "app/game/RaceCourse.h"
 #include "app/scene/Scene.h"
@@ -359,6 +361,7 @@ namespace editormcp
     namespace
     {
         ImportHost* g_importHost = nullptr; // frame thread only, like every document tool
+        DistHost* g_distHost = nullptr;     // the same
         RuntimeHost* g_runtimeHost = nullptr; // the same
         LevelHost* g_levelHost = nullptr; // the same
         PlayHost* g_playHost = nullptr; // the same
@@ -382,6 +385,11 @@ namespace editormcp
     void SetImportHost(ImportHost* host)
     {
         g_importHost = host;
+    }
+
+    void SetDistHost(DistHost* host)
+    {
+        g_distHost = host;
     }
 
     void SetThumbnailHost(ThumbnailHost* host)
@@ -749,6 +757,39 @@ namespace editormcp
                   "status line (\"Imported <name> ...\" or \"Import FAILED ... see "
                   "asset_import.log\"), and the name of the last import that finished." },
                 { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "build_dist" },
+                { "description",
+                  "Starts a distribution build (docs/distribution_build_plan.md §8): tools/build_dist.py with a profile "
+                  "(tools/dist/<name>.json) -- the Build Distribution window's road, one build at a time. mode: check (the "
+                  "dependency walk and its report, seconds), record (Release runs -> shader_list.txt, minutes), content (cook + "
+                  "the folder from the Shipping exe as built, ~1 min), full (MSBuild Cook + Shipping first). levels / bootLevel / "
+                  "version / encrypt override the profile for this build. Refused while the level plays, while a build runs, for a "
+                  "level that is not a file, a bootLevel outside levels. Answers {id}; poll build_dist_status. content / full write "
+                  "dist/ and the record mode rewrites tools/dist/*.txt: only when the person asked." },
+                { "inputSchema", ObjectSchema({
+                    { "profile", { { "type", "string" }, { "description", "a profile name in tools/dist (default test)" } } },
+                    { "mode", { { "type", "string" }, { "description", "check | record | content | full (default check)" } } },
+                    { "levels", { { "type", "array" }, { "items", { { "type", "string" } } },
+                        { "description", "the shipped levels, e.g. [\"data/levels/wind_test.json\"] (default: the profile's)" } } },
+                    { "bootLevel", { { "type", "string" }, { "description", "the level the build starts in (one of levels)" } } },
+                    { "version", { { "type", "string" }, { "description", "e.g. 0.1.1 (default: the profile's)" } } },
+                    { "encrypt", { { "type", "boolean" }, { "description", "false = this build unencrypted" } } } }) },
+            },
+            {
+                { "name", "build_dist_cancel" },
+                { "description",
+                  "Cancels the running distribution build: its whole process tree (python, MSBuild, the cook, the staged game) "
+                  "ends; nothing reaches the output folder (it is built in .dist_tmp and renamed only when finished)." },
+                { "inputSchema", ObjectSchema() },
+            },
+            {
+                { "name", "build_dist_status" },
+                { "description",
+                  "The distribution build's state: running, stage, fraction, the stages' times, errors, the last 12 events and, "
+                  "when it is done, the folder / zip / report / version / bytes. id: build_dist's (0 = the last)." },
+                { "inputSchema", ObjectSchema({ { "id", { { "type", "integer" } } } }) },
             },
         });
     }
@@ -1229,6 +1270,75 @@ namespace editormcp
             }
             ToolResult result;
             result.text = g_thumbnailHost->Request(assets);
+            return result;
+        }
+
+        if (name == "build_dist" || name == "build_dist_status" || name == "build_dist_cancel")
+        {
+            if (name == "build_dist_cancel")
+            {
+                if (!g_distHost) { return Error("There is no Build Distribution window here."); }
+                std::string text;
+                if (!g_distHost->Cancel(text)) { return Error(text); }
+                ToolResult result;
+                result.text = text;
+                return result;
+            }
+            if (name == "build_dist_status")
+            {
+                if (!g_distHost) { return Error("There is no Build Distribution window here."); }
+                ToolResult result;
+                result.text = g_distHost->Status(arguments.is_object() ? arguments.value("id", 0) : 0);
+                return result;
+            }
+            dist::BuildRequest request;
+            if (arguments.is_object())
+            {
+                request.profile = arguments.value("profile", std::string("test"));
+                request.mode = arguments.value("mode", std::string("check"));
+                request.bootLevel = arguments.value("bootLevel", std::string());
+                request.version = arguments.value("version", std::string());
+                request.noEncrypt = arguments.contains("encrypt") && arguments["encrypt"].is_boolean() && !arguments["encrypt"].get<bool>();
+                if (arguments.contains("levels"))
+                {
+                    if (!arguments["levels"].is_array()) { return Error("build_dist `levels` is an array of level paths."); }
+                    for (const json& level : arguments["levels"])
+                    {
+                        if (level.is_string()) { request.levels.push_back(level.get<std::string>()); }
+                    }
+                }
+            }
+            else
+            {
+                request.profile = "test";
+                request.mode = "check";
+            }
+            // Its check and record runs put the game on this GPU, and a cook reads what the session may be changing.
+            if (g_playHost && g_playHost->Playing())
+            {
+                outRecord.failed = true;
+                outRecord.verdict = "refused: the level is playing";
+                return Error("The level is playing: call stop first.");
+            }
+            std::string why;
+            if (!BuildDistributionPanel::ValidateRequest(request, why))
+            {
+                outRecord.failed = true;
+                outRecord.verdict = "refused: " + why;
+                return Error("build_dist refused: " + why);
+            }
+            if (!g_distHost) { return Error("There is no Build Distribution window here to build with."); }
+            std::string text;
+            if (!g_distHost->Start(request, text))
+            {
+                outRecord.failed = true;
+                outRecord.verdict = "refused: " + text;
+                return Error("build_dist refused: " + text);
+            }
+            ToolResult result;
+            result.text = text;
+            outRecord.verdict = text;
+            outRecord.show = true;
             return result;
         }
 

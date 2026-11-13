@@ -14,6 +14,7 @@
 #include "editor/scene/EditorSceneDocument.h" // nlohmann::json
 
 struct EditorActionContext;
+namespace dist { struct BuildRequest; }
 class Camera;
 class EditorCommandStack;
 class Renderer;
@@ -87,6 +88,20 @@ namespace editormcp
         virtual std::string Status() = 0;           // JSON object
     };
     void SetImportHost(ImportHost* host);
+
+    // build_dist / build_dist_status (docs/distribution_build_plan.md §8.4): the Build Distribution window's road -- the
+    // same tools/build_dist.py run (dist::TheBuildJob). The request is checked here first (BuildDistributionPanel::
+    // ValidateRequest, Play); a host without one (the gate) refuses after that. Frame thread only.
+    class DistHost
+    {
+    public:
+        virtual ~DistHost() = default;
+        // False + the reason (a build is running, no python); the text of a start is {"id": N, ...}.
+        virtual bool Start(const dist::BuildRequest& request, std::string& outText) = 0;
+        virtual std::string Status(int id) = 0;      // JSON object
+        virtual bool Cancel(std::string& outText) = 0; // the running build's whole process tree; false = none runs
+    };
+    void SetDistHost(DistHost* host);
 
     // The Content Browser's thumbnails, for `thumbnails`: the named assets' previews baked exactly as the
     // browser bakes them (AssetThumbnailCache, the PNGs under editor_cache/thumbnails) -- also while the

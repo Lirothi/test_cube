@@ -52,6 +52,7 @@
 #include "editor/intent/EditorSceneQuery.h"
 #include "editor/intent/IntentSchema.h"
 #include "editor/intent/EditorMcpServer.h"
+#include "editor/dist/DistBuildJob.h"
 #include "editor/intent/LlmIntentSource.h"
 #include "editor/serialization/LevelDocumentSerializer.h"
 #include "editor/scene/EnvironmentRuntime.h"
@@ -1142,6 +1143,82 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
     const std::optional<json> noOpen = call(1300, "tools/call", { { "name", "open_level" },
         { "arguments", { { "path", "data/levels/demo.json" } } } });
     Check((*noOpen)["result"]["isError"].get<bool>(), "open_level without a level host is refused: " + text(noOpen));
+
+    // build_dist (docs/distribution_build_plan.md §8.4): listed; what it refuses is refused BEFORE the host (no process
+    // is ever started here); a good request reaches the host as given; refused while the level plays; status and cancel
+    // are the host's answers.
+    {
+        bool listsBuild = false, listsStatus = false, listsCancel = false;
+        for (const json& tool : (*list)["result"]["tools"])
+        {
+            listsBuild = listsBuild || tool.value("name", "") == "build_dist";
+            listsStatus = listsStatus || tool.value("name", "") == "build_dist_status";
+            listsCancel = listsCancel || tool.value("name", "") == "build_dist_cancel";
+        }
+        Check(listsBuild && listsStatus && listsCancel, "the tool list offers build_dist, build_dist_status, build_dist_cancel");
+        const json good = { { "profile", "test" }, { "mode", "check" }, { "levels", json::array({ "data/levels/wind_test.json" }) },
+                            { "bootLevel", "data/levels/wind_test.json" } };
+        const std::optional<json> noHost = call(1200, "tools/call", { { "name", "build_dist" }, { "arguments", good } });
+        Check((*noHost)["result"]["isError"].get<bool>() && text(noHost).find("no Build Distribution window") != std::string::npos,
+              "build_dist without the editor's window is refused: " + text(noHost));
+        struct FakeDistHost final : editormcp::DistHost
+        {
+            int starts = 0;
+            dist::BuildRequest last;
+            bool Start(const dist::BuildRequest& request, std::string& outText) override
+            {
+                ++starts;
+                last = request;
+                outText = "{\"id\":7,\"started\":true}";
+                return true;
+            }
+            std::string Status(int id) override { return "{\"id\":" + std::to_string(id) + ",\"running\":false}"; }
+            bool Cancel(std::string& outText) override { outText = "cancelled build #7"; return true; }
+        } distHost;
+        editormcp::SetDistHost(&distHost);
+        const auto refused = [&](int id, json arguments, const char* expect, const std::string& what)
+        {
+            const std::optional<json> reply = call(id, "tools/call", { { "name", "build_dist" }, { "arguments", std::move(arguments) } });
+            Check((*reply)["result"]["isError"].get<bool>() && text(reply).find(expect) != std::string::npos && distHost.starts == 0,
+                  what + ", before the host: " + text(reply));
+        };
+        json badBoot = good;
+        badBoot["bootLevel"] = "data/levels/demo.json";
+        refused(1201, badBoot, "is not one of the shipped levels", "a bootLevel outside the levels is refused");
+        json missing = good;
+        missing["levels"] = json::array({ "data/levels/no_such_level.json" });
+        refused(1202, missing, "no level", "a level that is not a file is refused");
+        json badMode = good;
+        badMode["mode"] = "deploy";
+        refused(1203, badMode, "mode", "a mode that is not one is refused");
+        json badProfile = good;
+        badProfile["profile"] = "no_such_profile";
+        refused(1204, badProfile, "no profile", "a profile that is not in tools/dist is refused");
+        const std::optional<json> started = call(1205, "tools/call", { { "name", "build_dist" }, { "arguments", good } });
+        Check(!(*started)["result"]["isError"].get<bool>() && distHost.starts == 1 && distHost.last.mode == "check" &&
+              distHost.last.profile == "test" && distHost.last.levels == std::vector<std::string>{ "data/levels/wind_test.json" } &&
+              distHost.last.bootLevel == "data/levels/wind_test.json" && !distHost.last.noEncrypt,
+              "a good build_dist reaches the host as given: " + text(started));
+        json unencrypted = good;
+        unencrypted["encrypt"] = false;
+        call(1206, "tools/call", { { "name", "build_dist" }, { "arguments", unencrypted } });
+        Check(distHost.starts == 2 && distHost.last.noEncrypt, "encrypt:false asks for an unencrypted build");
+        struct PlayingHost final : editormcp::PlayHost
+        {
+            bool Playing() const override { return true; }
+            void Request(bool, bool) override {}
+        } playing;
+        editormcp::SetPlayHost(&playing);
+        const std::optional<json> inPlay = call(1207, "tools/call", { { "name", "build_dist" }, { "arguments", good } });
+        Check((*inPlay)["result"]["isError"].get<bool>() && text(inPlay).find("playing") != std::string::npos && distHost.starts == 2,
+              "build_dist is refused while the level plays: " + text(inPlay));
+        editormcp::SetPlayHost(nullptr);
+        const std::optional<json> status = call(1208, "tools/call", { { "name", "build_dist_status" }, { "arguments", { { "id", 7 } } } });
+        Check(text(status) == "{\"id\":7,\"running\":false}", "build_dist_status answers the host's JSON: " + text(status));
+        const std::optional<json> cancel = call(1209, "tools/call", { { "name", "build_dist_cancel" } });
+        Check(!(*cancel)["result"]["isError"].get<bool>() && text(cancel) == "cancelled build #7", "build_dist_cancel asks the host");
+        editormcp::SetDistHost(nullptr);
+    }
 
     // thumbnails: listed; refused without the editor's thumbnail host and without assets; with one, the asset
     // list reaches it as given and its answer comes back verbatim.

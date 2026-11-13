@@ -3175,6 +3175,7 @@ void EditorController::Draw(
             EditorContext closedCtx{ renderer, scene, levelManager, document_, selection_ };
             const EditorActionContext closedActionCtx{ closedCtx, assetRegistry_, extensions_ };
             editormcp::SetImportHost(&mcpImportHost_);
+            editormcp::SetDistHost(&mcpDistHost_);
             mcpLevelHost_.levelManager = &levelManager;
             editormcp::SetLevelHost(&mcpLevelHost_);
             editormcp::SetPlayHost(&mcpPlayHost_);
@@ -3218,6 +3219,13 @@ void EditorController::Draw(
         ctx.openMeshEditor(g_bootEditMesh);
         LOG_INFO(logging::LogCategory::Editor, "--edit-mesh: opened {}", g_bootEditMesh);
         g_bootEditMesh.clear();
+    }
+    // "--build-dist": once, the Build Distribution window open (a headless capture of it).
+    if (g_bootBuildDist)
+    {
+        showBuildDistPanel_ = true;
+        g_bootBuildDist = false;
+        LOG_INFO(logging::LogCategory::Editor, "--build-dist: opened Build Distribution");
     }
     // "--show-import[=<name>]": once, the Import Assets window open with <name> selected.
     if (g_bootShowImport)
@@ -3438,6 +3446,24 @@ void EditorController::Draw(
                 // I2: edit a data/materials/<name>.json (textures/params/flags/shader). Save
                 // re-registers the preset, evicts its cache, and respawns referencing objects.
                 materialEditor_.Draw(panelCtx, assetRegistry_, &showMaterialEditor_);
+            }));
+
+        extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
+            "buildDistribution",
+            "Build Distribution",
+            &showBuildDistPanel_,
+            true,
+            [this](EditorContext& /*panelCtx*/)
+            {
+                BuildDistributionPanel::Hooks hooks;
+                hooks.levelDirty = [this] { return document_.IsDirty(); };
+                hooks.saveLevel = [this](std::string& why)
+                {
+                    if (!mcpLevelHost_.levelManager) { why = "the level manager is not up yet"; return false; }
+                    return mcpLevelHost_.Save(why);
+                };
+                hooks.playing = [this] { return playing_; };
+                buildDistPanel_.Draw(&showBuildDistPanel_, hooks);
             }));
 
         extensions_.RegisterPanel(std::make_unique<EditorLambdaPanel>(
@@ -3915,6 +3941,12 @@ void EditorController::Draw(
                     ImGui::EndMenu();
                 }
                 ShowDisabledItemTooltip(!hasRecentLevels, "No recently opened levels.");
+                ImGui::Separator();
+                // docs/distribution_build_plan.md §8.4: a profile, its levels, a build of the game (tools/build_dist.py).
+                if (ImGui::MenuItem("Build Distribution...", nullptr, showBuildDistPanel_))
+                {
+                    showBuildDistPanel_ = !showBuildDistPanel_;
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Edit"))
@@ -4191,6 +4223,7 @@ void EditorController::Draw(
                 drawPanelMenuItem("meshEditor");
                 drawPanelMenuItem("materialEditor");
                 drawPanelMenuItem("levelErrors");
+                drawPanelMenuItem("buildDistribution");
                 ImGui::Separator();
                 if (ImGui::MenuItem("Session Log", nullptr, logWindowOpen))
                 {
@@ -4487,6 +4520,7 @@ void EditorController::Draw(
     // Claude Code's calls (MCP), every frame. Here rather than in the command bar's Draw so a
     // closed panel cannot leave a caller waiting out its timeout for a frame that never comes.
     editormcp::SetImportHost(&mcpImportHost_);
+    editormcp::SetDistHost(&mcpDistHost_);
     mcpLevelHost_.levelManager = &levelManager;
     editormcp::SetLevelHost(&mcpLevelHost_);
     editormcp::SetPlayHost(&mcpPlayHost_);
@@ -4671,6 +4705,7 @@ void EditorController::Draw(
     drawPanel("meshEditor");
     drawPanel("materialEditor");
     drawPanel("levelErrors");
+    drawPanel("buildDistribution");
     constexpr float kOpenDirtyConfirmContentWidth = 440.0f;
     if (confirmOpenLevelPopupRequested_)
     {

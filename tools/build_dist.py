@@ -7,7 +7,8 @@ dist/<Product>-<version>/ (and its zip), the same for the console, the editor's 
     python tools/build_dist.py --profile=test --mode=check       # the dependency walk and its report, nothing built
     python tools/build_dist.py --profile=test --mode=record      # Release record runs -> shader_list.txt / vfs_record.txt
 
-    --levels=a.json,b.json  --version=1.2.3  --no-encrypt   override the profile for this build (named in the report)
+    --levels=a.json,b.json  --boot-level=a.json  --version=1.2.3  --no-encrypt
+                            override the profile for this build (named in the report)
     --skip-build            content/full: take the exes as they are
     --key=<key.json>        the package key (default %USERPROFILE%\.test_cube\pak_key.json; made there if missing)
     --out=<folder>          instead of the profile's "out" (dist)
@@ -359,6 +360,7 @@ def main():
     ap.add_argument("--profile", default="test")
     ap.add_argument("--mode", choices=["check", "record", "content", "full"], default="content")
     ap.add_argument("--levels")
+    ap.add_argument("--boot-level")
     ap.add_argument("--version")
     ap.add_argument("--no-encrypt", action="store_true")
     ap.add_argument("--skip-build", action="store_true")
@@ -389,6 +391,8 @@ def build(args, progress):
     overrides = []
     if args.levels:
         overrides.append(f"--levels={args.levels}")
+    if args.boot_level:
+        overrides.append(f"--boot-level={args.boot_level}")
     if args.version:
         overrides.append(f"--version={args.version}")
     if args.no_encrypt:
@@ -447,17 +451,16 @@ def build(args, progress):
             cook_out = work / "check"
             code = run([str(cook_exe), f"--cook={profile['_path']}", f"--cook-out={cook_out}", "--cook-check"] + overrides,
                        progress, log_path=logs / "cook.log")
+            if not (cook_out / "cook_report.json").exists():
+                raise BuildError(f"the check wrote no report (exit {code}); the log: {logs / 'cook.log'}")
             report = json.loads((cook_out / "cook_report.json").read_text(encoding="utf-8"))
             summarise_report(report, progress)
-            progress.begin("finish", "check done" if code == 0 else f"check: {len(report['errors'])} error(s)")
-            progress.emit("done", event="done", report=str(cook_out / "cook_report.json"), errors=len(report["errors"]),
-                          warnings=len(report["warnings"]))
-            if args.keep_temp:
-                return 0 if code == 0 else 3
             keep = out_dir / f"check_{profile['_name']}_report.json"
             out_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(cook_out / "cook_report.json", keep)
-            progress.emit(f"report kept: {keep}")
+            progress.begin("finish", "check done" if code == 0 else f"check: {len(report['errors'])} error(s)")
+            progress.emit("done", event="done", report=str(keep), errors=len(report["errors"]),
+                          warnings=len(report["warnings"]))
             return 0 if code == 0 else 3
 
         # ---- the key (§4) ----
@@ -606,8 +609,9 @@ def build(args, progress):
                     shutil.copy2(ship_dir / name, symbols / name)
             shutil.copy2(report_kept, symbols / "cook_report.json")
             progress.emit(str(symbols))
+        kept_report = symbols / "cook_report.json" if symbols else out_dir / f"{folder_name}.cook_report.json"
         if not symbols:
-            shutil.copy2(report_kept, out_dir / f"{folder_name}.cook_report.json")
+            shutil.copy2(report_kept, kept_report)
 
         progress.begin("finish", f"built {final}")
         packages = {p["name"]: p.get("packageBytes") for p in report.get("packages", [])}
@@ -617,6 +621,7 @@ def build(args, progress):
                         "packages": packages, "levels": report.get("levels", []), "encrypted": encrypt})
         save_history(out_dir, history)
         progress.emit("done", event="done", folder=str(final), zip=str(zip_path) if zip_path else None, bytes=total,
+                      report=str(kept_report),
                       version=version_text, warnings=len(report.get("warnings", [])))
         return 0
     finally:

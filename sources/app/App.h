@@ -135,6 +135,7 @@ extern std::string g_bootEditMesh;
 // --editor). Its details pane is otherwise reachable only by clicking a row in a window that is
 // itself behind a menu, and the pane is judged by LOOKING at it.
 extern bool g_bootShowImport;
+extern bool g_bootBuildDist; // "--build-dist": the Level Editor's Build Distribution window open at boot (implies --editor)
 extern std::string g_bootImportItem;
 // "--inspect=<environment type>[#<group>]": select the level's environment object of that type at boot and scroll
 // the Inspector to the group (its JSON key: timeOfDay#fog, timeOfDay#lamps, postProcess#heightFog; implies --editor).

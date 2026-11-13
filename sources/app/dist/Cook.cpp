@@ -1134,6 +1134,11 @@ int RunCook(const char* cmd)
         }
         overrides.push_back("--levels=" + levels);
     }
+    if (const std::string boot = ArgValue(cmd, "--boot-level="); !boot.empty())
+    {
+        if (const std::optional<std::string> n = Normalise(boot)) { profile->bootLevel = *n; }
+        overrides.push_back("--boot-level=" + boot);
+    }
     if (const std::string version = ArgValue(cmd, "--version="); !version.empty())
     {
         profile->version = version;

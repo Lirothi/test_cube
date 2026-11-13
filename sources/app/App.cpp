@@ -97,6 +97,7 @@ bool g_bootEditor = false;
 bool g_bootPlay = false;
 std::string g_bootEditMesh;
 bool g_bootShowImport = false;
+bool g_bootBuildDist = false;
 std::string g_bootImportItem;
 std::string g_bootInspect;
 std::string g_intentPhrase;
