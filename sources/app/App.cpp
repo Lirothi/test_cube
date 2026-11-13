@@ -7,6 +7,7 @@
 #include "rendering/visibility/OcclusionHistory.h" // occlusion plan S3a: --set=vis.*
 #include "core/math/Math.h"
 #include "core/vfs/Vfs.h"
+#include "materials/Material.h"
 #include "core/diagnostics/BootProfile.h"
 #include "core/memory/MemScope.h"           // memory profiling M3: MEM_SCOPE on the frame's owners
 #include "core/memory/MemTrace.h"           // memory profiling M4: frame markers, the trace's stop
@@ -2477,6 +2478,11 @@ namespace
                               static_cast<unsigned long long>(vc.reads), static_cast<unsigned long long>(vc.bytesRead),
                               static_cast<unsigned long long>(vc.blocksDecoded), static_cast<unsigned long long>(vc.damagedBlocks));
                 out += vfsItem;
+                const Material::DistributionShaderStats shaders = Material::GetDistributionShaderStats();
+                char shaderItem[128];
+                std::snprintf(shaderItem, sizeof(shaderItem), ",\"shaders\":{\"cooked\":%u,\"notCooked\":%u}",
+                              shaders.cookedHits, shaders.notCooked);
+                out += shaderItem;
             }
             // The physics world (docs/physics_plan.md).
             {

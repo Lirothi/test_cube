@@ -100,8 +100,9 @@ namespace vfs::pak
     struct BuildFile
     {
         std::string path;                   // virtual: forward slashes from the content root
-        std::filesystem::path source;       // where its bytes are (ignored for a deleted record)
+        std::filesystem::path source;       // where its bytes are (ignored for a deleted record or when `bytes` is set)
         bool deleted = false;
+        std::shared_ptr<const std::vector<std::uint8_t>> bytes; // the content itself (a compiled shader), instead of `source`
     };
 
     struct BuildOptions

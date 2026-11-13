@@ -1,6 +1,9 @@
 #include "materials/Material.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
+#include "core/vfs/Pak.h"
+#include <thread>
+#include <unordered_set>
 
 #include "core/diagnostics/BootProfile.h"
 #include "rendering/core/GBufferBindingGuard.h"
@@ -184,6 +187,113 @@ void CacheHashWString(uint64_t& hash, const std::wstring& value)
     CacheHashBytes(hash, &separator, sizeof(separator));
 }
 
+// ---- Distribution (docs/distribution_build_plan.md §5) ----
+std::atomic<unsigned> g_shaderModelCap{ 0 };
+std::atomic<uint32_t> g_cookedHits{ 0 };
+std::atomic<uint32_t> g_notCooked{ 0 };
+
+struct ShaderRecorder
+{
+    std::mutex mutex;
+    std::FILE* file = nullptr;
+    std::unordered_set<std::string> seen;
+};
+ShaderRecorder& TheShaderRecorder()
+{
+    static ShaderRecorder recorder;
+    return recorder;
+}
+
+// A shader's content path -- "shaders/x.hlsl" as the code names it, also when given absolute under the content root:
+// what the VFS finds it by in a package, and what a cooked blob's identity holds instead of this machine's folder.
+std::string ShaderVirtualPath(const std::wstring& file)
+{
+    std::filesystem::path p = std::filesystem::path(file).lexically_normal();
+    if (p.is_absolute())
+    {
+        const std::filesystem::path rel = p.lexically_relative(vfs::ContentRoot().lexically_normal());
+        if (!rel.empty() && rel.native().rfind(L"..", 0) != 0) { p = rel; }
+    }
+    return vfs::Path(p).Utf8();
+}
+
+std::string DefinesText(const Material::DefineList& defines)
+{
+    std::string text;
+    for (const auto& [name, value] : defines)
+    {
+        if (!text.empty()) { text += ';'; }
+        text += name + "=" + value;
+    }
+    return text;
+}
+
+void RecordShader(const std::string& virtualPath, const char* entry, const char* stage, const Material::DefineList& materialDefines)
+{
+    ShaderRecorder& r = TheShaderRecorder();
+    if (!r.file) { return; }
+    const std::string line = virtualPath + "|" + entry + "|" + stage + "|" + DefinesText(materialDefines);
+    std::lock_guard<std::mutex> lock(r.mutex);
+    if (r.seen.insert(line).second)
+    {
+        std::fprintf(r.file, "%s\n", line.c_str());
+        std::fflush(r.file);
+    }
+}
+
+// The cooked set a mounted shaders.tcpak brings: "shaders/dxil/cooked.txt" names its target ("target=6_6").
+struct CookedSet
+{
+    bool present = false;
+    unsigned shaderModel = 0;
+};
+const CookedSet& Cooked()
+{
+    static const CookedSet set = []
+    {
+        CookedSet s;
+        std::string text;
+        if (vfs::ReadText("shaders/dxil/cooked.txt", text))
+        {
+            const size_t at = text.find("target=6_");
+            if (at != std::string::npos)
+            {
+                s.present = true;
+                s.shaderModel = 0x60u + static_cast<unsigned>(std::atoi(text.c_str() + at + 9));
+            }
+        }
+        return s;
+    }();
+    return set;
+}
+
+// A cooked blob's identity: the content path, not this machine's folder, and not the compiler's hash (the compiler
+// ships with the blobs). Release flags always: the cook compiles what Shipping runs.
+uint64_t CookedShaderIdentity(const std::string& virtualPath, const char* entry, const char* stage4cc,
+                              const std::wstring& target, const Material::DefineList& defines)
+{
+    uint64_t hash = kFnvOffset;
+    CacheHashString(hash, "cooked dxil v1");
+    CacheHashString(hash, virtualPath.c_str());
+    CacheHashString(hash, entry);
+    CacheHashString(hash, stage4cc);
+    CacheHashWString(hash, target);
+    CacheHashString(hash, "release:-O3,-Qstrip_debug;row-major;hlsl-2021");
+    for (const auto& define : defines)
+    {
+        CacheHashString(hash, define.first.c_str());
+        CacheHashString(hash, define.second.c_str());
+    }
+    return hash;
+}
+
+std::string CookedShaderPath(uint64_t identity)
+{
+    char name[64];
+    std::snprintf(name, sizeof(name), "shaders/dxil/%016llx.dxil", static_cast<unsigned long long>(identity));
+    return name;
+}
+
 std::filesystem::path NormalizeShaderPath(const std::filesystem::path& source)
 {
     std::error_code ec;
@@ -207,7 +317,7 @@ const std::filesystem::path& ShaderCacheDirectory()
         {
             return std::filesystem::path(std::wstring(overridePath.data(), length));
         }
-        return std::filesystem::path(L"shader_cache");
+        return vfs::WritablePath(vfs::Writable::Cache, "shader_cache");
     }();
     return directory;
 }
@@ -1176,12 +1286,14 @@ HRESULT CreateMeshPipelineStateCached(ID3D12Device* device,
 struct IncludeCaptureDXC : public IDxcIncludeHandler
 {
     std::atomic<ULONG> refcnt{ 1 };
-    std::filesystem::path baseDir;
+    std::filesystem::path baseDir;      // the OS folder: what the watchers and the dev cache's dependency list hold
+    std::filesystem::path virtualBase;  // the content folder ("shaders"): what the VFS reads, a package included
     Microsoft::WRL::ComPtr<IDxcUtils> utils;
     std::vector<std::wstring>& outFiles;
 
-    IncludeCaptureDXC(IDxcUtils* u, const std::filesystem::path& base, std::vector<std::wstring>& out)
-        : baseDir(base), utils(u), outFiles(out) {
+    IncludeCaptureDXC(IDxcUtils* u, const std::filesystem::path& base, const std::filesystem::path& virtualFolder,
+                      std::vector<std::wstring>& out)
+        : baseDir(base), virtualBase(virtualFolder), utils(u), outFiles(out) {
     }
 
     // IUnknown
@@ -1209,9 +1321,10 @@ struct IncludeCaptureDXC : public IDxcIncludeHandler
         full = full.lexically_normal();
         outFiles.push_back(full.wstring());
 
-        // Through the VFS; the blob's encoding is left unknown, as LoadFile without a code page left it.
+        // Through the VFS by its content path; the blob's encoding is left unknown, as LoadFile without a code page left it.
+        const std::filesystem::path virtualFile = req.is_absolute() ? req : (virtualBase / req).lexically_normal();
         std::vector<std::uint8_t> bytes;
-        if (!vfs::ReadAll(full, bytes)) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        if (!vfs::ReadAll(virtualFile, bytes)) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         Microsoft::WRL::ComPtr<IDxcBlobEncoding> enc;
         HRESULT hr = utils->CreateBlob(bytes.data(), static_cast<UINT32>(bytes.size()), DXC_CP_ACP, &enc);
         if (FAILED(hr)) return hr;
@@ -1233,12 +1346,43 @@ static HRESULT CompileDXC(const std::wstring& file,
     const Material::DefineList defines = WithEngineDefines(materialDefines); // S10a: and the key below takes them
 
     const std::filesystem::path path = NormalizeShaderPath(file);
-    const D3D_SHADER_MODEL sm = QueryMaxShaderModel(device);
+    const std::string virtualPath = ShaderVirtualPath(file);
+    RecordShader(virtualPath, entry, stage4cc, materialDefines);
+    // The target: the device's highest, at most the cap (--shader-model, Shipping) or what a mounted cooked set was built for.
+    unsigned cap = g_shaderModelCap.load(std::memory_order_relaxed);
+    if (Cooked().present) { cap = Cooked().shaderModel; }
+    D3D_SHADER_MODEL sm = device ? QueryMaxShaderModel(device) : static_cast<D3D_SHADER_MODEL>(cap != 0 ? cap : 0x66u);
+    if (cap != 0 && static_cast<unsigned>(sm) > cap) { sm = static_cast<D3D_SHADER_MODEL>(cap); }
     const std::wstring target = BuildProfile(stage4cc, sm);
-    const uint64_t cacheIdentity = BuildShaderCacheIdentity(
-        path, entry, stage4cc, target, defines);
     const auto shaderBegin = std::chrono::steady_clock::now();
     const std::string shaderLabel = NarrowForLog(path.filename().wstring()) + ":" + entry;
+    if (Cooked().present)
+    {
+        const uint64_t cookedId = CookedShaderIdentity(virtualPath, entry, stage4cc, target, defines);
+        std::vector<std::uint8_t> cooked;
+        if (vfs::ReadAll(CookedShaderPath(cookedId), cooked) && !cooked.empty())
+        {
+            ComPtr<ID3DBlob> blob;
+            ThrowIfFailed(D3DCreateBlob(cooked.size(), &blob));
+            std::memcpy(blob->GetBufferPointer(), cooked.data(), cooked.size());
+            outBlob = blob;
+            g_cookedHits.fetch_add(1, std::memory_order_relaxed);
+            boot::AddBucket("shader cooked", ElapsedMicroseconds(shaderBegin) / 1000.0,
+                            shaderLabel + " (" + std::to_string(cooked.size() / 1024) + " KB DXIL)");
+            return S_OK;
+        }
+        g_notCooked.fetch_add(1, std::memory_order_relaxed);
+        static std::mutex missMutex;
+        static std::unordered_set<uint64_t> missed;
+        std::lock_guard<std::mutex> lock(missMutex);
+        if (missed.insert(cookedId).second)
+        {
+            LOG_WARNING(logging::LogCategory::Render, "shader permutation not cooked: {}:{} {} [{}] -- compiled from the sources",
+                        virtualPath, entry, NarrowForLog(target), DefinesText(materialDefines));
+        }
+    }
+    const uint64_t cacheIdentity = BuildShaderCacheIdentity(
+        path, entry, stage4cc, target, defines);
     if (TryLoadShaderCache(cacheIdentity, outBlob, outIncludes))
     {
         // DXIL SIZE is in the label because it is the thing GBV's cost tracks: GBV rewrites the
@@ -1263,13 +1407,14 @@ static HRESULT CompileDXC(const std::wstring& file,
     ComPtr<IDxcBlobEncoding> src;
     {
         std::vector<std::uint8_t> sourceBytes;
-        if (!vfs::ReadAll(path, sourceBytes)) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        if (!vfs::ReadAll(virtualPath, sourceBytes)) return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
         hr = utils->CreateBlob(sourceBytes.data(), static_cast<UINT32>(sourceBytes.size()), DXC_CP_ACP, &src);
         if (FAILED(hr)) return hr;
     }
 
     // Include handler that tracks loaded files
-    IncludeCaptureDXC* inc = new IncludeCaptureDXC(utils.Get(), path.parent_path(), outIncludes);
+    IncludeCaptureDXC* inc = new IncludeCaptureDXC(utils.Get(), path.parent_path(),
+                                                   std::filesystem::path(vfs::Widen(virtualPath)).parent_path(), outIncludes);
 
     // Build the argument list safely: keep wchar strings alive until the end of the function
     std::wstring wEntry(entry, entry + std::strlen(entry));
@@ -2589,4 +2734,163 @@ void Material::ReflectShaderBlob(ID3DBlob* blob,
             return;
         }
     }
+}
+
+// ===================== Distribution: the shader model cap, the record, the cook (plan §5) =====================
+
+void Material::SetShaderModelCap(unsigned shaderModel)
+{
+    g_shaderModelCap.store(shaderModel, std::memory_order_relaxed);
+}
+
+void Material::SetShaderRecordFile(const std::wstring& file)
+{
+    ShaderRecorder& r = TheShaderRecorder();
+    std::lock_guard<std::mutex> lock(r.mutex);
+    if (r.file) { std::fclose(r.file); r.file = nullptr; }
+    if (_wfopen_s(&r.file, file.c_str(), L"wN") != 0) { r.file = nullptr; } // vfs-ok: --shader-record WRITES its list
+    if (!r.file) { LOG_ERROR(logging::LogCategory::Render, "--shader-record: cannot write {}", NarrowForLog(file)); }
+}
+
+Material::DistributionShaderStats Material::GetDistributionShaderStats()
+{
+    DistributionShaderStats s;
+    s.cookedHits = g_cookedHits.load(std::memory_order_relaxed);
+    s.notCooked = g_notCooked.load(std::memory_order_relaxed);
+    return s;
+}
+
+int Material::CookShaders(const std::wstring& listFile, const std::wstring& outPackage, const vfs::pak::Key* key, int level)
+{
+    std::string text;
+    if (!vfs::ReadText(listFile, text))
+    {
+        LOG_ERROR(logging::LogCategory::Render, "shader cook: cannot read the list {}", NarrowForLog(listFile));
+        return 1;
+    }
+    if (g_shaderModelCap.load() == 0) { g_shaderModelCap.store(0x66u); }
+    const unsigned cap = g_shaderModelCap.load();
+
+    struct Job
+    {
+        std::string file, entry, stage;
+        DefineList defines;
+        std::shared_ptr<std::vector<std::uint8_t>> dxil;
+        uint64_t id = 0;
+    };
+    std::vector<Job> jobs;
+    size_t start = 0;
+    while (start < text.size())
+    {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) { end = text.size(); }
+        std::string line = text.substr(start, end - start);
+        start = end + 1;
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) { line.pop_back(); }
+        if (line.empty() || line[0] == '#') { continue; }
+        std::vector<std::string> parts;
+        size_t at = 0;
+        for (int i = 0; i < 3; ++i)
+        {
+            const size_t bar = line.find('|', at);
+            if (bar == std::string::npos) { break; }
+            parts.push_back(line.substr(at, bar - at));
+            at = bar + 1;
+        }
+        if (parts.size() != 3)
+        {
+            LOG_ERROR(logging::LogCategory::Render, "shader cook: not a record line: {}", line);
+            continue;
+        }
+        Job job{ parts[0], parts[1], parts[2], {}, nullptr, 0 };
+        const std::string defines = line.substr(at);
+        size_t d = 0;
+        while (d < defines.size())
+        {
+            size_t semi = defines.find(';', d);
+            if (semi == std::string::npos) { semi = defines.size(); }
+            const std::string pair = defines.substr(d, semi - d);
+            const size_t eq = pair.find('=');
+            if (!pair.empty()) { job.defines.emplace_back(pair.substr(0, eq), eq == std::string::npos ? std::string() : pair.substr(eq + 1)); }
+            d = semi + 1;
+        }
+        jobs.push_back(std::move(job));
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    std::atomic<size_t> next{ 0 };
+    std::atomic<int> failures{ 0 };
+    const auto worker = [&]()
+    {
+        for (size_t i = next.fetch_add(1); i < jobs.size(); i = next.fetch_add(1))
+        {
+            Job& job = jobs[i];
+            ComPtr<ID3DBlob> blob;
+            std::vector<std::wstring> includes;
+            const HRESULT hr = CompileDXC(vfs::Widen(job.file), job.entry.c_str(), job.stage.c_str(), nullptr, job.defines, blob, includes);
+            if (FAILED(hr) || !blob)
+            {
+                failures.fetch_add(1);
+                LOG_ERROR(logging::LogCategory::Render, "shader cook: {}:{} [{}] did not compile (0x{:08x})", job.file, job.entry,
+                          DefinesText(job.defines), static_cast<unsigned>(hr));
+                continue;
+            }
+            const auto* bytes = static_cast<const std::uint8_t*>(blob->GetBufferPointer());
+            job.dxil = std::make_shared<std::vector<std::uint8_t>>(bytes, bytes + blob->GetBufferSize());
+            job.id = CookedShaderIdentity(ShaderVirtualPath(vfs::Widen(job.file)), job.entry.c_str(), job.stage.c_str(),
+                                          BuildProfile(job.stage.c_str(), static_cast<D3D_SHADER_MODEL>(cap)), WithEngineDefines(job.defines));
+        }
+    };
+    const unsigned threads = std::max(1u, std::thread::hardware_concurrency() / 2);
+    std::vector<std::thread> pool;
+    for (unsigned t = 1; t < threads; ++t) { pool.emplace_back(worker); }
+    worker();
+    for (std::thread& t : pool) { t.join(); }
+    const double compileSeconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+
+    std::vector<vfs::pak::BuildFile> files;
+    std::unordered_set<uint64_t> ids;
+    for (const Job& job : jobs)
+    {
+        if (!job.dxil || !ids.insert(job.id).second) { continue; }
+        vfs::pak::BuildFile f;
+        f.path = CookedShaderPath(job.id);
+        f.bytes = job.dxil;
+        files.push_back(std::move(f));
+    }
+    char target[32];
+    std::snprintf(target, sizeof(target), "target=6_%u\npermutations=%zu\n", cap & 0xFu, ids.size());
+    {
+        vfs::pak::BuildFile marker;
+        marker.path = "shaders/dxil/cooked.txt";
+        marker.bytes = std::make_shared<std::vector<std::uint8_t>>(target, target + std::strlen(target));
+        files.push_back(std::move(marker));
+    }
+    // The safety net: the sources, so a permutation the record missed still compiles (plan §5 item 4).
+    for (const char* pattern : { "*.hlsl", "*.hlsli" })
+    {
+        vfs::List("shaders", pattern, [&](const vfs::ListEntry& e)
+        {
+            if (e.directory) { return; }
+            vfs::pak::BuildFile f;
+            f.path = e.path;
+            f.source = vfs::OsPath(e.path);
+            files.push_back(std::move(f));
+        });
+    }
+    vfs::pak::BuildOptions options;
+    options.name = "shaders";
+    options.level = level;
+    options.key = key;
+    const vfs::pak::BuildResult built = vfs::pak::Build(std::filesystem::path(outPackage), std::move(files), options);
+    if (!built.ok)
+    {
+        LOG_ERROR(logging::LogCategory::Render, "shader cook: FAIL {}", built.error);
+        return failures.load() + 1;
+    }
+    LOG_INFO(logging::LogCategory::Render,
+             "shader cook: {} -- {} records, {} permutations at 6_{} ({} failed) in {:.1f} s, {} files, {:.1f} MB{}",
+             NarrowForLog(outPackage), jobs.size(), ids.size(), cap & 0xFu, failures.load(), compileSeconds, built.files,
+             built.packageBytes / 1048576.0, key ? ", encrypted" : "");
+    return failures.load();
 }

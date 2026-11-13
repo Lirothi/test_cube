@@ -16,6 +16,8 @@
 #include "app/scene/SceneRenderQueue.h"
 #include "core/logging/Log.h"
 #include "core/vfs/Vfs.h"
+#include "core/vfs/PakCrypto.h"
+#include "materials/Material.h"
 #include "core/logging/diagnostics/LogStress.h"
 #include "core/memory/diagnostics/MemBench.h"
 #include "core/memory/MemTrace.h"
@@ -347,6 +349,38 @@ int WINAPI WinMain(
     if (lpCmdLine) {
         if (const int vfsExit = vfs::RunCommandLine(lpCmdLine); vfsExit >= 0) {
             return vfsExit;
+        }
+        // Shaders for a distribution (plan §5): --shader-model=6.6 caps every compile's target (a mounted shaders.tcpak
+        // sets its own), --shader-record=<file> lists every compile request, --shader-cook=<list>,<out.tcpak> compiles a
+        // list into a shaders package (no window; --pak-level, --pak-encrypt --pak-key=<key.json> as for --pak-build).
+        if (const std::string model = ExtractArgValue(lpCmdLine, "--shader-model"); !model.empty()) {
+            const size_t dot = model.find_first_of("._");
+            const unsigned major = static_cast<unsigned>(std::atoi(model.c_str()));
+            const unsigned minor = dot == std::string::npos ? 0u : static_cast<unsigned>(std::atoi(model.c_str() + dot + 1));
+            Material::SetShaderModelCap((major << 4) | (minor & 0xFu));
+        }
+        if (const std::string record = ExtractArgValue(lpCmdLine, "--shader-record"); !record.empty()) {
+            Material::SetShaderRecordFile(vfs::Widen(record));
+        }
+        if (const std::string cook = ExtractArgValue(lpCmdLine, "--shader-cook"); !cook.empty()) {
+            const size_t comma = cook.find(',');
+            if (comma == std::string::npos) {
+                LOG_ERROR(logging::LogCategory::Render, "--shader-cook=<list>,<out.tcpak>");
+                return 1;
+            }
+            std::optional<vfs::pak::Key> key;
+            if (std::strstr(lpCmdLine, "--pak-encrypt")) {
+                std::string why;
+                const std::string keyFile = ExtractArgValue(lpCmdLine, "--pak-key");
+                key = keyFile.empty() ? std::nullopt : vfs::pak::LoadKeyFile(vfs::Widen(keyFile), why);
+                if (!key) {
+                    LOG_ERROR(logging::LogCategory::Render, "--shader-cook --pak-encrypt needs --pak-key=<key.json> ({})", why);
+                    return 1;
+                }
+            }
+            const std::string level = ExtractArgValue(lpCmdLine, "--pak-level");
+            return Material::CookShaders(vfs::Widen(cook.substr(0, comma)), vfs::Widen(cook.substr(comma + 1)),
+                                         key ? &*key : nullptr, level.empty() ? 19 : std::atoi(level.c_str()));
         }
     }
 

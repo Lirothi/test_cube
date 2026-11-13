@@ -14,6 +14,11 @@
 #include "rendering/core/RenderContext.h"
 #include "robin_hood.h"
 #include <cassert>
+
+namespace vfs::pak
+{
+    struct Key;
+}
 #include <algorithm>
 
 using namespace Microsoft::WRL;
@@ -274,6 +279,22 @@ private:
 
     bool EnsureWireframePipeline_() const;
     void RefreshWatchTimes_();
+
+public:
+    // Distribution (docs/distribution_build_plan.md §5). The highest shader model a compile targets (0x66 = 6.6; 0 = the
+    // device's highest; a mounted shaders.tcpak sets its own): one set of blobs for every GPU.
+    static void SetShaderModelCap(unsigned shaderModel);
+    // --shader-record: every compile request, once -- file|entry|stage|defines -- the list a cook compiles.
+    static void SetShaderRecordFile(const std::wstring& file);
+    // --shader-cook: the recorded list compiled at the cap into `outPackage` (shaders/dxil/<id>.dxil, the HLSL sources
+    // beside them as the safety net, shaders/dxil/cooked.txt naming the target). The number of failed compiles.
+    static int CookShaders(const std::wstring& listFile, const std::wstring& outPackage, const vfs::pak::Key* key, int level);
+    struct DistributionShaderStats
+    {
+        uint32_t cookedHits = 0;   // blobs taken from a shaders package
+        uint32_t notCooked = 0;    // permutations a mounted package lacked (compiled from the sources)
+    };
+    static DistributionShaderStats GetDistributionShaderStats();
 };
 
 // -------- Manager --------

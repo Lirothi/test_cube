@@ -821,7 +821,7 @@ namespace vfs
             std::lock_guard<std::mutex> lock(r.mutex);
             if (r.file) { std::fclose(r.file); }
             r.file = nullptr;
-            if (_wfopen_s(&r.file, config.recordFile.c_str(), L"w") != 0) { r.file = nullptr; }
+            if (_wfopen_s(&r.file, config.recordFile.c_str(), L"wN") != 0) { r.file = nullptr; }
             g_recording.store(r.file != nullptr, std::memory_order_relaxed);
             if (!r.file)
             {

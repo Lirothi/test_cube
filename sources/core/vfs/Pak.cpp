@@ -159,6 +159,7 @@ namespace vfs::pak
             std::string key;
             std::filesystem::path source;
             bool deleted = false;
+            std::shared_ptr<const std::vector<std::uint8_t>> bytes;
         };
         std::vector<Item> items;
         items.reserve(files.size());
@@ -170,6 +171,7 @@ namespace vfs::pak
             item.key = FoldKey(item.path);
             item.source = std::move(f.source);
             item.deleted = f.deleted;
+            item.bytes = std::move(f.bytes);
             items.push_back(std::move(item));
         }
         std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) { return a.key < b.key; });
@@ -222,7 +224,11 @@ namespace vfs::pak
             while (next < items.size() && (batch.empty() || batchBytes < (256ull << 20)))
             {
                 std::vector<std::uint8_t> bytes;
-                if (!items[next].deleted && !vfs::ReadAll(items[next].source, bytes))
+                if (items[next].bytes)
+                {
+                    bytes = *items[next].bytes;
+                }
+                else if (!items[next].deleted && !vfs::ReadAll(items[next].source, bytes))
                 {
                     file.close();
                     std::error_code ignored;
