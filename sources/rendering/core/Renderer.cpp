@@ -284,6 +284,15 @@ void Renderer::InitD3D12(HWND window, UINT width, UINT height) {
                                        : slInit(pref, sl::kSDKVersion);
     }
     streamlineInitialized_ = (slRes == sl::Result::eOk);
+    // Whether DLSS can run at all: a distribution that lost a Streamline plugin (sl.common, sl.dlss) shows it here, not as
+    // a quietly unscaled frame (docs/distribution_build_plan.md §7).
+    if (streamlineInitialized_) {
+        LOG_INFO(logging::LogCategory::Render, "streamline: initialized (DLSS can run)");
+    } else if (render::g_noStreamline) {
+        LOG_INFO(logging::LogCategory::Render, "streamline: off (--no-streamline, or the interposer is not NVIDIA's)");
+    } else {
+        LOG_WARNING(logging::LogCategory::Render, "streamline: slInit failed (result {}) -- no DLSS", static_cast<int>(slRes));
+    }
 
     // --- Device (debug layer enabled inside, in debug builds) ---
     {

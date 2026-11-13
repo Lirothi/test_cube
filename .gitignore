@@ -413,5 +413,6 @@ sources/core/vfs/generated/
 # The distribution build (docs/distribution_build_plan.md §8.2): its output and the symbol archive.
 /dist/
 /dist_symbols/
+/.dist_tmp/
 # The build's version header (test_cube.vcxproj writes the dev one, tools/build_dist.py a real one)
 sources/app/generated/

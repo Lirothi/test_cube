@@ -2,6 +2,7 @@
   "_comment": "docs/distribution_build_plan.md §8.0: what ships -- encrypted packages, every asset's licence known, zip and symbols.",
   "product": "test_cube",
   "version": "0.1.0",
+  "versionMustGrow": true,
   "levels": ["data/levels/wind_test.json"],
   "bootLevel": "data/levels/wind_test.json",
   "startMode": "play",

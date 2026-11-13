@@ -1128,6 +1128,17 @@
     <MakeDir Directories="$(ProjectDir)sources\app\generated" />
     <WriteLinesToFile File="$(TcBuildVersionHeader)" Lines="$(TcDevVersionLines)" Overwrite="true" />
   </Target>
+  <!-- The package key a build embeds (§4): sources/core/vfs/generated/PakKey.g.h, which test_cube.exe pak-key-header writes
+       (tools/build_dist.py before a Shipping build). Without one, a header that says so: PakCrypto.cpp includes it always,
+       so MSBuild sees a key written later and recompiles. Not in git. -->
+  <PropertyGroup>
+    <TcPakKeyHeader>$(ProjectDir)sources\core\vfs\generated\PakKey.g.h</TcPakKeyHeader>
+    <TcNoKeyLines>// No package key: written by test_cube.vcxproj because the file was missing. Encrypted packages need pak-key then.;#pragma once;#define TC_PAK_HAS_EMBEDDED_KEY 0</TcNoKeyLines>
+  </PropertyGroup>
+  <Target Name="TcEnsurePakKeyHeader" BeforeTargets="ClCompile" Condition="!Exists('$(TcPakKeyHeader)')">
+    <MakeDir Directories="$(ProjectDir)sources\core\vfs\generated" />
+    <WriteLinesToFile File="$(TcPakKeyHeader)" Lines="$(TcNoKeyLines)" Overwrite="true" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
