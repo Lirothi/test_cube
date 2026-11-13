@@ -205,6 +205,11 @@ namespace
         bool encrypt = false;
         bool shaderSources = true;
         bool strictLicences = false;
+        // "shipping" or "development" (docs/scalability_plan.md §7.5): a Development distribution also carries `devInclude`,
+        // what only its developer windows read (the ocean window's presets). No literal path here: the literal scan of
+        // sources/ would take it for this file's reference and ship it in both (the reset icons go by DeveloperWindow's).
+        std::string flavour = "shipping";
+        std::vector<std::string> devInclude = { "data/ocean/*.json" };
     };
 
     struct FileRecord
@@ -839,6 +844,7 @@ namespace
             report["levels"] = profile_.levels;
             report["bootLevel"] = profile_.bootLevel;
             report["encrypt"] = profile_.encrypt;
+            report["flavour"] = profile_.flavour;
             if (profile_.encrypt) { report["key"] = keyPath_; }
             report["errors"] = errors_;
             report["warnings"] = warnings_;
@@ -981,6 +987,10 @@ namespace
         walked_.clear();
         // 2. The profile's include, as it is.
         for (const std::string& pattern : profile_.include) { AddPattern(pattern); }
+        if (profile_.flavour == "development")
+        {
+            for (const std::string& pattern : profile_.devInclude) { AddPattern(pattern); }
+        }
         // 3. The record runs' list; 4. the literals in code (the record first: a literal it opened is no warning).
         AddRecord();
         AddLiterals();
@@ -1124,6 +1134,13 @@ namespace
         p.encrypt = json.value("encrypt", false);
         p.shaderSources = json.value("shaderSources", true);
         p.strictLicences = json.value("strictLicences", false);
+        p.flavour = json.value("flavour", p.flavour);
+        if (p.flavour != "shipping" && p.flavour != "development")
+        {
+            error = "flavour \"" + p.flavour + "\": shipping or development";
+            return std::nullopt;
+        }
+        p.devInclude = json.value("devInclude", p.devInclude);
         const std::string compression = json.value("compression", std::string("zstd:19"));
         if (StartsWith(compression, "zstd:")) { p.level = std::clamp(std::atoi(compression.c_str() + 5), 1, 22); }
         else if (compression != "zstd")
@@ -1189,6 +1206,16 @@ int RunCook(const char* cmd)
     {
         profile->encrypt = false;
         overrides.push_back("--no-encrypt");
+    }
+    if (const std::string flavour = ArgValue(cmd, "--flavour="); !flavour.empty())
+    {
+        if (flavour != "shipping" && flavour != "development")
+        {
+            LOG_ERROR(logging::LogCategory::Cook, "cook: --flavour={}: shipping or development", flavour);
+            return 1;
+        }
+        profile->flavour = flavour;
+        overrides.push_back("--flavour=" + flavour);
     }
     Cooker cooker(std::move(*profile), std::filesystem::path(vfs::Widen(out)), check, std::move(overrides));
     cooker.keyFile_ = ArgValue(cmd, "--pak-key=");

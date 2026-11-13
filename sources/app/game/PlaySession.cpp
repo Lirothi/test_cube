@@ -459,7 +459,7 @@ std::wstring PlaySession::HudLine(const Scene& scene, double nowSeconds) const
     // read as an anchor for this session (owner, 2026-11-09), and the yacht stayed where it was kept after Stop.
     text += atHelm_ ? L"   Esc stop   K write the poses to the level   Shift+F1 mouse"
                     : L"   Esc stop   F8 eject   K write the poses to the level   Shift+F1 mouse";
-#elif TC_SHIPPING
+#elif TC_PACKAGED
     text += atHelm_ ? L"   Esc menu" : L"   Esc menu   F8 eject";
 #else
     text += atHelm_ ? L"   Esc mouse" : L"   Esc mouse   F8 eject";

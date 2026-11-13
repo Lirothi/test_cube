@@ -143,6 +143,11 @@ bool BuildDistributionPanel::ValidateRequest(const dist::BuildRequest& request, 
             return false;
         }
     }
+    if (!request.flavour.empty() && request.flavour != "shipping" && request.flavour != "development")
+    {
+        why = "flavour \"" + request.flavour + "\": shipping or development";
+        return false;
+    }
     for (const std::string& level : request.levels)
     {
         if (!vfs::IsFile(level))
@@ -271,6 +276,7 @@ void BuildDistributionPanel::LoadProfile(const std::string& name)
     profile_ = nlohmann::json::parse(ReadFileText(RepoPath("tools/dist/" + name + ".json")), nullptr, false, true);
     if (!profile_.is_object()) { profile_ = nlohmann::json::object(); }
     saved_ = profile_;
+    flavour_ = profile_.value("flavour", std::string("shipping")) == "development" ? "development" : "shipping";
     includeLoaded_ = false;
     selectionChecked_ = false;
     checkErrors_.clear();
@@ -352,6 +358,7 @@ void BuildDistributionPanel::StartRun(const std::string& mode, const Hooks& hook
     dist::BuildRequest request;
     request.profile = profileName_;
     request.mode = mode;
+    request.flavour = flavour_;
     std::string why;
     if (!ValidateRequest(request, why) || !dist::TheBuildJob().Start(request, why))
     {
@@ -552,7 +559,11 @@ void BuildDistributionPanel::DrawOptions()
     ImGui::SeparatorText("Options");
     CheckboxKey("Encrypt the packages", profile_, "encrypt", false);
     ImGui::SameLine();
-    if (keyGuid_.empty())
+    if (flavour_ == "development")
+    {
+        ImGui::TextDisabled("(Shipping only: a Development build is never encrypted)");
+    }
+    else if (keyGuid_.empty())
     {
         ImGui::TextColored(LevelColour("warning"), "no key at %s", keyPath_.c_str());
         ImGui::SameLine();
@@ -613,13 +624,15 @@ void BuildDistributionPanel::DrawChecks(const Hooks& hooks)
                         (gitChanged_.size() > 1 ? ", ..." : "") + "): the version gets -dirty");
     }
     else { line("info", "the tree is committed"); }
-    if (profile_.value("encrypt", false) && keyGuid_.empty()) { line("error", "encryption is on and there is no key"); }
+    const bool development = flavour_ == "development";
+    if (!development && profile_.value("encrypt", false) && keyGuid_.empty()) { line("error", "encryption is on and there is no key"); }
     std::error_code ec;
+    const char* exeConfig = development ? "Development" : "Shipping";
     const bool cook = fs::is_regular_file(vfs::ContentRoot() / L"x64" / L"Cook" / L"test_cube.exe", ec);
-    const bool ship = fs::is_regular_file(vfs::ContentRoot() / L"x64" / L"Shipping" / L"test_cube.exe", ec);
+    const bool ship = fs::is_regular_file(vfs::ContentRoot() / L"x64" / vfs::Widen(exeConfig) / L"test_cube.exe", ec);
     if (!cook || !ship)
     {
-        line("warning", std::string("not built: ") + (cook ? "" : "Cook ") + (ship ? "" : "Shipping") + " -- Full build builds them");
+        line("warning", std::string("not built: ") + (cook ? "" : "Cook ") + (ship ? "" : exeConfig) + " -- Full build builds them");
     }
     ULARGE_INTEGER freeBytes{};
     if (GetDiskFreeSpaceExW(vfs::ContentRoot().c_str(), &freeBytes, nullptr, nullptr) && freeBytes.QuadPart < (3ull << 30))
@@ -643,9 +656,33 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
     ImGui::SeparatorText("Build");
     dist::BuildJob& job = dist::TheBuildJob();
     const bool running = job.Running();
-    const bool blocked = (selectionChecked_ && !checkErrors_.empty()) || (profile_.value("encrypt", false) && keyGuid_.empty());
+    const bool development = flavour_ == "development";
+    const bool blocked = (selectionChecked_ && !checkErrors_.empty()) ||
+                         (!development && profile_.value("encrypt", false) && keyGuid_.empty());
     const char* save = Dirty() ? "Save & " : "";
     ImGui::BeginDisabled(running);
+    // The two builds of the game (docs/scalability_plan.md §7): the same packages, a different exe.
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Build type");
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Shipping", !development)) { flavour_ = "shipping"; }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("The game for players: x64/Shipping, the developer features compiled out (no F1, no --set),\n"
+                          "the folder %s-<version>, encrypted when the profile says so.",
+                          profile_.value("product", std::string("test_cube")).c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Development", development)) { flavour_ = "development"; }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("The same packaged game for the team: x64/Development with Developer Controls (F1), the F keys and\n"
+                          "the whole command line, \"DEVELOPMENT BUILD\" on screen, its PDB beside the exe, never encrypted,\n"
+                          "the profile's devInclude cooked too (the ocean presets, ...). The folder %s-<version>-dev;\n"
+                          "its files at %%LOCALAPPDATA%%\\test_cube_dev, apart from Shipping's.",
+                          profile_.value("product", std::string("test_cube")).c_str());
+    }
+    const std::string exe = development ? "Development" : "Shipping";
     if (ImGui::Button((std::string(save) + "Check").c_str())) { StartRun("check", hooks); }
     ImGui::SameLine();
     if (ImGui::Button((std::string(save) + "Update record").c_str())) { StartRun("record", hooks); }
@@ -653,10 +690,17 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
     ImGui::SameLine();
     ImGui::BeginDisabled(blocked);
     if (ImGui::Button((std::string(save) + "Build content").c_str())) { StartRun("content", hooks); }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Cook, the folder from the Shipping exe as built, its check run, the notices"); }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("Cook, the folder from the %s exe as built, its check run, the notices", exe.c_str());
+    }
     ImGui::SameLine();
     if (ImGui::Button((std::string(save) + "Full build").c_str())) { StartRun("full", hooks); }
-    if (ImGui::IsItemHovered()) { ImGui::SetTooltip("MSBuild Cook + Shipping with the version and key, then Build content, zip, symbols"); }
+    if (ImGui::IsItemHovered())
+    {
+        ImGui::SetTooltip("MSBuild Cook + %s with the version%s, then Build content, zip, symbols", exe.c_str(),
+                          development ? "" : " and key");
+    }
     ImGui::EndDisabled();
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -674,7 +718,8 @@ void BuildDistributionPanel::DrawRun(const Hooks& hooks)
         sizesJob_ = false;
         Refresh();
     }
-    const std::string title = "#" + std::to_string(status.id) + " " + status.request.mode + " " + status.request.profile + ": " +
+    const std::string title = "#" + std::to_string(status.id) + " " + status.request.mode + " " + status.request.profile +
+                              (status.request.flavour == "development" ? " (Development)" : "") + ": " +
                               (status.running ? status.stage : status.cancelled ? "cancelled" : status.exitCode == 0 ? "done" :
                                                                                   "FAILED (exit " + std::to_string(status.exitCode) + ")");
     ImGui::ProgressBar(static_cast<float>(status.running ? status.fraction : 1.0), ImVec2(-FLT_MIN, 0.0f), title.c_str());
@@ -723,7 +768,8 @@ void BuildDistributionPanel::DrawResult()
         wchar_t temp[MAX_PATH] = {};
         GetTempPathW(MAX_PATH, temp);
         const fs::path exe = fs::path(vfs::Widen(status.folder)) / L"test_cube.exe";
-        std::wstring cmd = L"\"" + exe.wstring() + L"\" \"--user-dir=" + (fs::path(temp) / L"test_cube_try").wstring() + L"\"";
+        const wchar_t* tryFolder = status.request.flavour == "development" ? L"test_cube_try_dev" : L"test_cube_try";
+        std::wstring cmd = L"\"" + exe.wstring() + L"\" \"--user-dir=" + (fs::path(temp) / tryFolder).wstring() + L"\"";
         STARTUPINFOW startup{ sizeof(startup) };
         PROCESS_INFORMATION info{};
         if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE, 0, nullptr, exe.parent_path().c_str(), &startup, &info))
@@ -746,11 +792,12 @@ void BuildDistributionPanel::DrawHistory()
 {
     if (history_.empty()) { return; }
     if (!ImGui::CollapsingHeader("History")) { return; }
-    if (ImGui::BeginTable("history", 6, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY,
+    if (ImGui::BeginTable("history", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY,
                           ImVec2(0.0f, 120.0f)))
     {
         ImGui::TableSetupColumn("Build", ImGuiTableColumnFlags_WidthFixed, 45.0f);
         ImGui::TableSetupColumn("Version");
+        ImGui::TableSetupColumn("Type", ImGuiTableColumnFlags_WidthFixed, 85.0f);
         ImGui::TableSetupColumn("Profile", ImGuiTableColumnFlags_WidthFixed, 70.0f);
         ImGui::TableSetupColumn("Date", ImGuiTableColumnFlags_WidthFixed, 120.0f);
         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80.0f);
@@ -764,6 +811,9 @@ void BuildDistributionPanel::DrawHistory()
             ImGui::Text("%d", h.value("build", 0));
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(h.value("versionString", std::string()).c_str());
+            ImGui::TableNextColumn();
+            // Builds before the flavour existed were all Shipping.
+            ImGui::TextUnformatted(h.value("flavour", std::string("shipping")) == "development" ? "Development" : "Shipping");
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(h.value("profile", std::string()).c_str());
             ImGui::TableNextColumn();

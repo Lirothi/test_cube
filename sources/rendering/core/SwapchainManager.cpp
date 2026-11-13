@@ -34,6 +34,9 @@ void SwapchainManager::Create(ID3D12Device* device, ID3D12CommandQueue* queue, H
     ThrowIfFailed(factory->CreateSwapChainForHwnd(
         queue, hwnd, &scd, nullptr, nullptr, &swap1));
     ThrowIfFailed(swap1.As(&swapChain_));
+    // No DXGI Alt+Enter: it would switch the flip-model swapchain to exclusive fullscreen, where Present with the tearing
+    // flag (vsync off, the default) is invalid -- a player's Alt+Enter ending the game. The window's modes are ours.
+    factory->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER);
 
     // RTV heap
     D3D12_DESCRIPTOR_HEAP_DESC rtvDesc{};

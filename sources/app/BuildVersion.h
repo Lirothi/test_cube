@@ -11,6 +11,24 @@ namespace build
     [[nodiscard]] const char* VersionString();  // "0.1.0+12 (abc1234)" or "0.0.0-dev"
     [[nodiscard]] const char* GitHash();        // empty in a dev build
     [[nodiscard]] const char* BuildDate();      // empty in a dev build
+    // Packaged = Shipping or Development (docs/scalability_plan.md §7): the content from the exe's packages, the writable
+    // files in the user's folder. Shipping strips the developer features; Development keeps them.
+    [[nodiscard]] constexpr bool Packaged()
+    {
+#if TC_PACKAGED
+        return true;
+#else
+        return false;
+#endif
+    }
+    [[nodiscard]] constexpr bool Development()
+    {
+#if TC_PACKAGED && !TC_SHIPPING
+        return true;
+#else
+        return false;
+#endif
+    }
     [[nodiscard]] constexpr bool Shipping()
     {
 #if TC_SHIPPING

@@ -297,20 +297,23 @@ int WINAPI WinMain(
     _In_ int nShowCmd
 )
 {
-#if TC_SHIPPING
-    // A shipped build (docs/distribution_build_plan.md §6, §7), before anything else: DLLs only from the exe's folder and
-    // System32; the switches a player's build keeps; the content at the exe's folder and everything written in the user's
-    // (%LOCALAPPDATA%\test_cube, --user-dir), which becomes the current directory -- the log, imgui.ini, the caches and the
-    // crash dumps land there.
+#if TC_PACKAGED
+    // A packaged build -- Shipping, and Development, the same with every developer feature kept (docs/scalability_plan.md
+    // §7) -- before anything else: DLLs only from the exe's folder and System32; the content at the exe's folder and
+    // everything written in the user's (%LOCALAPPDATA%\test_cube, Development's test_cube_dev, --user-dir), which becomes
+    // the current directory -- the log, imgui.ini, the caches and the crash dumps land there. Shipping also keeps only the
+    // switches a player's build has (Shipping.cpp).
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+#if TC_SHIPPING
     std::vector<std::string> droppedSwitches;
     static std::string shippingCommandLine = shipping::FilterCommandLine(GetCommandLineW(), droppedSwitches);
     lpCmdLine = shippingCommandLine.data();
+#endif
     std::filesystem::path shippingUserFolder;
     {
         const std::string userDir = ExtractArgValue(lpCmdLine, "--user-dir");
         std::error_code ec;
-        shippingUserFolder = userDir.empty() ? shipping::DefaultUserFolder(L"test_cube")
+        shippingUserFolder = userDir.empty() ? shipping::DefaultUserFolder(build::Shipping() ? L"test_cube" : L"test_cube_dev")
                                              : std::filesystem::absolute(std::filesystem::path(vfs::Widen(userDir)), ec);
         vfs::SetContentRoot(shipping::ExeFolder());
         std::wstring why;
@@ -381,8 +384,8 @@ int WINAPI WinMain(
     if (lpCmdLine) {
         if (const std::string arm = ExtractArgValue(lpCmdLine, "--crash-selftest"); !arm.empty()) {
             crash::Options options;
-            options.dumpFolder = build::Shipping() ? L"crashes" : L"logs/crashes";
-            options.messageBox = build::Shipping();
+            options.dumpFolder = build::Packaged() ? L"crashes" : L"logs/crashes";
+            options.messageBox = build::Packaged();
             return crash::SelfTest(arm, options);
         }
     }
@@ -394,10 +397,22 @@ int WINAPI WinMain(
         return check.ok ? 0 : 1;
     }
 
+#if TC_PACKAGED
 #if TC_SHIPPING
     for (const std::string& dropped : droppedSwitches) {
         LOG_WARNING(logging::LogCategory::App, "a shipped build ignores {}", dropped);
     }
+#else
+    // Development: the tools that rewrite or walk the loose tree have nothing to work on over packages.
+    for (const char* tool : { "--tessy-upgrade", "--lod-report", "--water-mask-lid", "--reimport", "--import", "--uv-density",
+                              "--cook", "--shader-cook", "--shader-record", "--pak-build", "--vfs-selftest" }) {
+        if (lpCmdLine && std::strstr(lpCmdLine, tool)) {
+            LOG_ERROR(logging::LogCategory::App, "{} needs the loose tree (a dev checkout's Release), not a packaged build", tool);
+            return 2;
+        }
+    }
+    LOG_INFO(logging::LogCategory::App, "a Development build: packaged content, the developer features on");
+#endif
     {
         crash::Options options;
         options.messageBox = true;
@@ -410,6 +425,17 @@ int WINAPI WinMain(
         config.packageDir = shipping::ExeFolder() / L"content";
         config.overlayPrefix = "data/bot_memory/";
         config.overlayFolder = shippingUserFolder / L"bot_memory";
+#if !TC_SHIPPING
+        // Development takes a package key besides the one built in (an encrypted build made with another): --pak-key or
+        // TC_PAK_KEY, as a dev build does.
+        if (const std::string keyFile = ExtractArgValue(lpCmdLine, "--pak-key="); !keyFile.empty()) {
+            config.keyFiles.push_back(std::filesystem::path(vfs::Widen(keyFile)));
+        } else if (const DWORD n = GetEnvironmentVariableW(L"TC_PAK_KEY", nullptr, 0); n > 1) {
+            std::wstring value(n, L'\0');
+            value.resize(GetEnvironmentVariableW(L"TC_PAK_KEY", value.data(), n));
+            config.keyFiles.push_back(std::filesystem::path(value));
+        }
+#endif
         std::string error;
         if (!vfs::Configure(config, error)) {
             LOG_ERROR(logging::LogCategory::Vfs, "vfs: the game's content does not open: {}", error);
@@ -506,8 +532,8 @@ int WINAPI WinMain(
     // "--tasksystem-stress" runs the task-system stress harness instead of the
     // app; exit code is the number of failed checks. With "--stress-overflow"
     // the process is expected to abort (dependents_ overflow death test).
-    if (lpCmdLine && std::strstr(lpCmdLine, "tasksystem-stress") != nullptr) {
-        const bool overflow = std::strstr(lpCmdLine, "stress-overflow") != nullptr;
+    if (lpCmdLine && std::strstr(lpCmdLine, "--tasksystem-stress") != nullptr) {
+        const bool overflow = std::strstr(lpCmdLine, "--stress-overflow") != nullptr;
         return RunTaskSystemStress(overflow);
     }
 
@@ -534,51 +560,51 @@ int WINAPI WinMain(
     // stress harness instead of the app; exit code is the number of failed
     // checks. Its death-test sub-flags (--stress-*) intentionally abort and
     // are spawned by the harness itself in child processes.
-    if (lpCmdLine && std::strstr(lpCmdLine, "renderer-submission-stress") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--renderer-submission-stress") != nullptr) {
         return RunRendererSubmissionStress(lpCmdLine);
     }
 
-    if (lpCmdLine && std::strstr(lpCmdLine, "textmanager-benchmark") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--textmanager-benchmark") != nullptr) {
         return RunTextManagerBenchmark(diag::LogPath("textmanager_benchmark.csv").c_str());
     }
 
     // "--cull-benchmark" times the per-object frustum intersect (legacy DirectXMath vs the
     // precomputed-plane path) over a fixed AABB set; results in cull_benchmark.txt.
-    if (lpCmdLine && std::strstr(lpCmdLine, "cull-benchmark") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--cull-benchmark") != nullptr) {
         return RunCullBenchmark(diag::LogPath("cull_benchmark.txt").c_str());
     }
 
     // "--cull-nofuse" forces the split Bucketize()+Cull() path for self-culling views, for an
     // in-engine A/B against the default fused BucketizeCull. Benchmark-only.
-    if (lpCmdLine && std::strstr(lpCmdLine, "cull-nofuse") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--cull-nofuse") != nullptr) {
         g_useFusedBucketizeCull = false;
     }
 
     // "--rt-smoke" runs the headless DXR smoke harness (device + RT caps + a
     // trivial BLAS/TLAS build) instead of the app; verdict in rt_smoke.txt,
     // exit code 0 on PASS/SKIP, non-zero on FAIL.
-    if (lpCmdLine && std::strstr(lpCmdLine, "rt-smoke") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--rt-smoke") != nullptr) {
         return RunRtSmoke(diag::LogPath("rt_smoke.txt").c_str());
     }
 
     // "--hzb-cull-selftest" (occlusion plan S2) runs the headless box -> HZB visibility self-test
     // instead of the app: a synthetic pyramid, hand-set verdicts, the GPU held equal to the CPU
     // mirror. Per-case lines and the verdict go to the session log; exit code = failed checks.
-    if (lpCmdLine && std::strstr(lpCmdLine, "hzb-cull-selftest") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--hzb-cull-selftest") != nullptr) {
         return RunHzbCullSelfTest();
     }
 
     // "--tod-selftest" (time-of-day plan T1): the sun, the moon, the star frame and the simple paths
     // against reference values. Per-case lines and the verdict go to the session log; exit code =
     // failed checks. No renderer.
-    if (lpCmdLine && std::strstr(lpCmdLine, "tod-selftest") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--tod-selftest") != nullptr) {
         return astro::RunSelfTest();
     }
 
     // "--rt-force-as-fail" (S13 test hook): make every acceleration-structure
     // allocation fail, so the graceful RT-disable → SSR-fallback path can be
     // exercised in the live app without actually exhausting VRAM.
-    if (lpCmdLine && std::strstr(lpCmdLine, "rt-force-as-fail") != nullptr) {
+    if (lpCmdLine && std::strstr(lpCmdLine, "--rt-force-as-fail") != nullptr) {
         rt::AccelerationStructureManager::SetForceAllocFailureForTest(true);
     }
 
@@ -1800,7 +1826,7 @@ int WINAPI WinMain(
         }
     }
 
-#if TC_SHIPPING
+#if TC_PACKAGED
     // What the build starts (config/boot.json, from the profile): its level, and Play from the level's Player Start.
     {
         // Without it, or without its level, the content is not whole (a package missing, a damaged one): the player is told,

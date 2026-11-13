@@ -2147,8 +2147,9 @@ void App::InitWindow(HINSTANCE hInstance, int nCmdShow) {
     }
 
     // A shipped build names itself and its version (docs/distribution_build_plan.md §7); dev builds keep their title.
-    const std::wstring windowTitle = build::Shipping()
-        ? vfs::Widen(std::string(build::ProductName()) + " " + build::VersionString())
+    const std::wstring windowTitle = build::Packaged()
+        ? vfs::Widen(std::string(build::ProductName()) + " " + build::VersionString() +
+                     (build::Shipping() ? "" : " [Development]"))
         : std::wstring(L"D3D12 Multi-Mesh Renderer");
     hWnd_ = CreateWindow(
         wc.lpszClassName,

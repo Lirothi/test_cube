@@ -310,7 +310,7 @@ Authenticode, отправка крэшей на сервер, DirectStorage, м
 | `graphics_settings.json` | `settings\graphics_settings.json` — **только отличия от значений по умолчанию** (иначе первый запуск заморозит дефолты, и исправленные дефолты патча до игрока не дойдут); дефолты — курированный `config/graphics_defaults.json` из пакета (в репо — `tools/dist/graphics_defaults.json`), а не рабочий файл владельца; сохранение атомарное (временный файл + rename), битый файл — Warning и дефолты |
 | `imgui.ini` | `settings\imgui.ini` |
 | `logs/` | `logs\` (та же ротация 10 файлов / 100 МБ, уровень Info) и `logs\device_removed.log` — этот артефакт остаётся и в Shipping |
-| `shader_cache/` | `cache\shaders\`, `cache\pso\<драйвер>\` |
+| `shader_cache/` | `cache\shader_cache\` (DXIL) и `cache\shader_cache\pso\<драйвер>\` (так в коде: `WritablePath(Cache, "shader_cache")`; ETW-аудит 2026-11-13) |
 | `data/bot_memory/**` | `bot_memory\**` — оверлей `User` с префиксом: выученные карты из пакета читаются, новые пишутся сюда |
 | минидампы | `crashes\` (§7) |
 | `traces/`, прочие артефакты диагностики | только в dev |

@@ -6,6 +6,7 @@
     <ProjectConfiguration Include="Release_Editor|x64"><Configuration>Release_Editor</Configuration><Platform>x64</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Cook|x64"><Configuration>Cook</Configuration><Platform>x64</Platform></ProjectConfiguration>
     <ProjectConfiguration Include="Shipping|x64"><Configuration>Shipping</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Development|x64"><Configuration>Development</Configuration><Platform>x64</Platform></ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>

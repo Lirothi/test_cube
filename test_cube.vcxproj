@@ -33,6 +33,10 @@
       <Configuration>Shipping</Configuration>
       <Platform>x64</Platform>
     </ProjectConfiguration>
+    <ProjectConfiguration Include="Development|x64">
+      <Configuration>Development</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
@@ -92,10 +96,22 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-  <!-- Shipping|x64 (docs/distribution_build_plan.md §7): Release's build plus TC_SHIPPING=1, which changes no rendering
-       (the shader record runs Release): it cuts the harnesses and the developer UI, roots the content at the exe's folder
-       and the writable files at the user's, checks the GPU, writes crash dumps. Output x64/Shipping/. -->
+  <!-- Shipping|x64 (docs/distribution_build_plan.md §7): Release's build plus TC_PACKAGED=1 (the content rooted at the
+       exe's folder, the writable files at the user's, the GPU check, crash dumps: shared with Development) and
+       TC_SHIPPING=1 (the harnesses and the developer UI cut). Neither changes rendering (the shader record runs
+       Release). Output x64/Shipping/. -->
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Shipping|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <!-- Development|x64 (docs/scalability_plan.md §7): Shipping's packaged build (the content from the exe's packages,
+       the writable files at the user's test_cube_dev, the Agility SDK, the crash reports, the GPU and Streamline
+       checks) with every developer feature kept: TC_PACKAGED=1 without TC_SHIPPING. Chosen in the Build Distribution
+       window or build_dist.py flavour development, not by hand. Output x64/Development/. -->
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v143</PlatformToolset>
@@ -129,6 +145,9 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Shipping|x64'">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
@@ -260,7 +279,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_CONSOLE;TC_SHIPPING=1;%(PreprocessorDefinitions);NOMINMAX;WIN32_LEAN_AND_MEAN;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;TC_PACKAGED=1;TC_SHIPPING=1;%(PreprocessorDefinitions);NOMINMAX;WIN32_LEAN_AND_MEAN;</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
       <LanguageStandard>stdcpp20</LanguageStandard>
@@ -274,6 +293,29 @@
       <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\Release;$(ProjectDir)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <!-- Shipping checks NVIDIA's signature on the interposer before anything of it runs (StreamlineSignature.h). -->
+      <DelayLoadDLLs>sl.interposer.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <SDLCheck>true</SDLCheck>
+      <PreprocessorDefinitions>NDEBUG;_CONSOLE;TC_PACKAGED=1;%(PreprocessorDefinitions);NOMINMAX;WIN32_LEAN_AND_MEAN;</PreprocessorDefinitions>
+      <ConformanceMode>true</ConformanceMode>
+      <FavorSizeOrSpeed>Speed</FavorSizeOrSpeed>
+      <LanguageStandard>stdcpp20</LanguageStandard>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <AdditionalIncludeDirectories>$(ProjectDir);$(ProjectDir)sources;$(ProjectDir)third_party;$(ProjectDir)third_party\meshoptimizer\src;$(ProjectDir)third_party\imgui;$(ProjectDir)third_party\imgui\backends;$(ProjectDir)third_party\mimalloc\include;$(ProjectDir)third_party\tbb\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <DisableSpecificWarnings>%(DisableSpecificWarnings)</DisableSpecificWarnings>
+    </ClCompile>
+    <Link>
+      <SubSystem>Windows</SubSystem>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalLibraryDirectories>$(ProjectDir)third_party\tbb\lib;$(ProjectDir)third_party\mimalloc\lib\Release;$(ProjectDir)third_party\streamline\lib\x64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>mimalloc.lib;tbb12.lib;gdi32.lib;sl.interposer.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <!-- Development checks NVIDIA's signature, as Shipping does, on the interposer before anything of it runs (StreamlineSignature.h). -->
       <DelayLoadDLLs>sl.interposer.dll;%(DelayLoadDLLs)</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
@@ -1177,7 +1219,7 @@
   <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <RuntimeDll Include="$(ProjectDir)deps\tbb12_debug.dll" />
   </ItemGroup>
-  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' or '$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64' or '$(Configuration)|$(Platform)'=='Shipping|x64'">
+  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64' or '$(Configuration)|$(Platform)'=='Release_Editor|x64' or '$(Configuration)|$(Platform)'=='Cook|x64' or '$(Configuration)|$(Platform)'=='Shipping|x64' or '$(Configuration)|$(Platform)'=='Development|x64'">
     <RuntimeDll Include="$(ProjectDir)deps\tbb12.dll" />
   </ItemGroup>
   <Target Name="CopyRuntimeDllsToOutput" AfterTargets="Build" Condition="'$(Platform)'=='x64'">

@@ -1405,7 +1405,7 @@ namespace
     // reaches every player who did not change that knob. Dev builds: the compiled defaults.
     json DefaultsJson()
     {
-#if TC_SHIPPING
+#if TC_PACKAGED
         std::string text;
         if (vfs::ReadText("config/graphics_defaults.json", text))
         {
@@ -1425,6 +1425,10 @@ namespace
 #endif
         return ToJson(GraphicsSettingsSnapshot{});
     }
+
+    // What Reset goes back to: the defaults this build reads -- a packaged build's config/graphics_defaults.json (Reset
+    // used the compiled defaults, which a packaged build does not ship with), a dev build's compiled ones.
+    GraphicsSettingsSnapshot DefaultSnapshot() { return FromJson(DefaultsJson()); }
 
     // `full` less what equals `base`, through objects key by key (an array or a value is one): what a shipped build keeps
     // of the player's settings.
@@ -1465,7 +1469,7 @@ namespace
             error = "invalid JSON root";
             return false;
         }
-#if TC_SHIPPING
+#if TC_PACKAGED
         // The player's file holds only what differs from the defaults.
         json merged = DefaultsJson();
         merged.merge_patch(root);
@@ -1488,7 +1492,7 @@ namespace
     bool SaveSnapshot(const GraphicsSettingsSnapshot& snapshot, std::string& error)
     {
         json content = ToJson(snapshot);
-#if TC_SHIPPING
+#if TC_PACKAGED
         content = Difference(DefaultsJson(), content);
 #endif
         const std::filesystem::path target = SettingsFile();
@@ -1539,7 +1543,7 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
         const bool exists = std::filesystem::exists(SettingsFile(), existsError); // vfs-ok: the user's settings file
         if (!exists && !existsError)
         {
-#if TC_SHIPPING
+#if TC_PACKAGED
             // No file yet: the defaults, and nothing written until the player changes something.
             loaded = FromJson(DefaultsJson());
             ApplyAll(loaded, renderer, scene, settings);
@@ -1558,7 +1562,7 @@ void GraphicsSettingsManager::Initialize(Renderer& renderer, Scene& scene,
         }
         else
         {
-#if TC_SHIPPING
+#if TC_PACKAGED
             // A damaged file: a Warning and the defaults (§6); the next save writes a good one.
             LOG_WARNING(logging::LogCategory::App, "graphics settings: {} could not be read ({}) -- the defaults",
                         vfs::Narrow(SettingsFile().wstring()), error);
@@ -1643,7 +1647,7 @@ bool GraphicsSettingsManager::Reload(Renderer& renderer, Scene& scene,
 bool GraphicsSettingsManager::ResetAll(Renderer& renderer, Scene& scene,
                                        SceneRenderSettings& settings)
 {
-    GraphicsSettingsSnapshot defaults{};
+    const GraphicsSettingsSnapshot defaults = DefaultSnapshot();
     ApplyAll(defaults, renderer, scene, settings);
     return SaveCurrent(renderer, scene, settings);
 }
@@ -1652,7 +1656,7 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
                                            Scene& scene, SceneRenderSettings& settings)
 {
     GraphicsSettingsSnapshot current = Capture(renderer, scene, settings);
-    const GraphicsSettingsSnapshot defaults{};
+    const GraphicsSettingsSnapshot defaults = DefaultSnapshot();
 
     switch (control)
     {
@@ -1926,48 +1930,48 @@ bool GraphicsSettingsManager::ResetControl(GraphicsControl control, Renderer& re
 bool GraphicsSettingsManager::ResetUpscale(Renderer& renderer, const Scene& scene,
                                            SceneRenderSettings& settings)
 {
-    ApplyUpscale(GraphicsSettingsSnapshot{}, renderer, settings);
+    ApplyUpscale(DefaultSnapshot(), renderer, settings);
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetVisibility(Renderer& renderer, const Scene& scene,
                                               const SceneRenderSettings& settings)
 {
-    ApplyVisibility(GraphicsSettingsSnapshot{});
+    ApplyVisibility(DefaultSnapshot());
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetReflections(Renderer& renderer, const Scene& scene,
                                                SceneRenderSettings& settings)
 {
-    ApplyReflections(GraphicsSettingsSnapshot{}, renderer, settings);
+    ApplyReflections(DefaultSnapshot(), renderer, settings);
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetFog(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
-    ApplyFog(GraphicsSettingsSnapshot{});
+    ApplyFog(DefaultSnapshot());
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetLod(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
-    ApplyLod(GraphicsSettingsSnapshot{});
+    ApplyLod(DefaultSnapshot());
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetStreaming(Renderer& renderer, const Scene& scene,
                                              const SceneRenderSettings& settings)
 {
-    ApplyStreaming(GraphicsSettingsSnapshot{});
+    ApplyStreaming(DefaultSnapshot());
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetGi(Renderer& renderer, const Scene& scene, SceneRenderSettings& settings)
 {
-    ApplyGi(GraphicsSettingsSnapshot{}, settings);
+    ApplyGi(DefaultSnapshot(), settings);
     return SaveCurrent(renderer, scene, settings);
 }
 
@@ -1982,13 +1986,13 @@ bool GraphicsSettingsManager::ResetCsm(Renderer& renderer, Scene& scene,
 bool GraphicsSettingsManager::ResetContactShadows(Renderer& renderer, const Scene& scene,
                                                    const SceneRenderSettings& settings)
 {
-    ApplyContact(GraphicsSettingsSnapshot{});
+    ApplyContact(DefaultSnapshot());
     return SaveCurrent(renderer, scene, settings);
 }
 
 bool GraphicsSettingsManager::ResetVsm(Renderer& renderer, const Scene& scene,
                                        const SceneRenderSettings& settings)
 {
-    ApplyVsm(GraphicsSettingsSnapshot{});
+    ApplyVsm(DefaultSnapshot());
     return SaveCurrent(renderer, scene, settings);
 }

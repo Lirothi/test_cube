@@ -2,6 +2,7 @@
 #include "core/memory/MemScope.h"
 
 #include "app/App.h" // g_hudHidden (--no-hud)
+#include "app/BuildVersion.h" // the Development build's mark
 #include "app/levels/LevelManager.h"
 #include "app/scene/Scene.h"
 #include "core/logging/Log.h"
@@ -392,13 +393,13 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
     else
     {
         if (eject) { playSession_.TogglePossess(scene); }
-#if TC_SHIPPING
+#if TC_PACKAGED
         if (freeMouse) { playSession_.ToggleFreeMouse(); }
 #else
         if (escape || freeMouse) { playSession_.ToggleFreeMouse(); }
 #endif
     }
-#if TC_SHIPPING
+#if TC_PACKAGED
     // Esc is the game's menu here, on foot, at a helm or with the camera free; the mouse is the menu's while it is up and
     // the game's again when Esc or Continue closes it.
     if (escape)
@@ -413,7 +414,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
 #endif
 #endif
     hudPlayLine_ = playSession_.HudLine(scene, ImGui::GetTime());
-#if TC_SHIPPING
+#if TC_PACKAGED
     if (!playSession_.Playing()) { hudPlayLine_ = L"FREE CAMERA: right mouse look, WASD, wheel speed   F8 walk from here   Esc menu"; }
 #endif
     hudRaceLine_ = playSession_.RaceHudLine(scene);
@@ -422,7 +423,7 @@ void AppController::TickPlay(InputManager& input, Renderer& renderer, Scene& sce
 
 void AppController::DrawGameMenu(LevelManager& levelManager)
 {
-#if TC_SHIPPING
+#if TC_PACKAGED
     // The levels are the packages' (the cook puts in only the profile's): data/levels/*.json, read once.
     if (!gameMenuOpen_) { return; }
     if (gameMenuLevels_.empty())
@@ -529,7 +530,13 @@ void AppController::BuildHud(Renderer& renderer, const Scene& scene)
     }
     const float fps = renderer.GetFPS();
     const float frameMs = fps > 0.0f ? 1000.0f / fps : 0.0f;
+#if TC_PACKAGED && !TC_SHIPPING
+    // A Development build says so on every frame: its screenshots are not the shipped game's.
+    line(8, 8, 32.0f, float4(1, 1, 1, 0.6f), L"FPS:%.0f MS:%0.2f Scale:%0.2f   DEVELOPMENT BUILD %hs", fps, frameMs,
+         renderer.GetRenderResolutionScale(), build::VersionString());
+#else
     line(8, 8, 32.0f, float4(1, 1, 1, 0.6f), L"FPS:%.0f MS:%0.2f Scale:%0.2f", fps, frameMs, renderer.GetRenderResolutionScale());
+#endif
     const Camera& camera = scene.CameraRef();
     const auto& camPos = camera.GetPosition();
     // Orientation as a QUATERNION next to the position: the pair is everything needed to reproduce

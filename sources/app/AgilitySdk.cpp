@@ -5,7 +5,7 @@
 // the system's runtime is newer, the system keeps it. Dev builds export nothing: the system's runtime and its debug layer
 // (GBV) as before -- an Agility runtime needs the matching d3d12SDKLayers.dll beside it.
 
-#if TC_SHIPPING
+#if TC_PACKAGED
 extern "C"
 {
     __declspec(dllexport) extern const unsigned int D3D12SDKVersion = 619;

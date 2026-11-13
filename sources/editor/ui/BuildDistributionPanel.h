@@ -57,6 +57,9 @@ private:
     bool refreshed_ = false;
     std::vector<std::string> profiles_;   // names in tools/dist
     std::string profileName_;
+    // shipping | development (docs/scalability_plan.md §7): which exe the folder gets. The profile's "flavour" when it is
+    // loaded, then this window's choice -- passed with each run, never written into the profile.
+    std::string flavour_ = "shipping";
     nlohmann::json profile_;
     nlohmann::json saved_;
     char saveAsName_[64] = {};

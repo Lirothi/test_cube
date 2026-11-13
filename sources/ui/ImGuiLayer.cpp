@@ -138,7 +138,7 @@ void ImGuiLayer::Init(HWND hwnd, Renderer& renderer)
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 #endif
     io.ConfigWindowsMoveFromTitleBarOnly = true;
-#if TC_SHIPPING
+#if TC_PACKAGED
     io.IniFilename = "settings/imgui.ini"; // the current directory is the user's folder (main.cpp, plan §6)
 #endif
 

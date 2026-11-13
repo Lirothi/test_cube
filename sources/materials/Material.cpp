@@ -1625,7 +1625,7 @@ HRESULT Material::CompileWithIncludes(const std::wstring& file,
 // ===== Watch utilities =====
 void Material::RefreshWatchTimes_()
 {
-#if TC_SHIPPING
+#if TC_PACKAGED
     return; // nothing on disk to watch (FSProbeAndFlagPending)
 #endif
     std::lock_guard<std::mutex> lk(watchMtx_);
@@ -1638,8 +1638,8 @@ void Material::RefreshWatchTimes_()
 
 bool Material::FSProbeAndFlagPending()
 {
-#if TC_SHIPPING
-    return false; // a shipped build's shaders come from its package: nothing on disk to watch (§5 item 1)
+#if TC_PACKAGED
+    return false; // a packaged build's shaders come from its package: nothing on disk to watch (§5 item 1)
 #endif
     CPU_SCOPE(ProfilerScopes::kMaterialFSProbe);
     std::lock_guard<std::mutex> lk(watchMtx_);

@@ -9,6 +9,12 @@ dist/<Product>-<version>/ (and its zip), the same for the console, the editor's 
 
     --levels=a.json,b.json  --boot-level=a.json  --version=1.2.3  --no-encrypt
                             override the profile for this build (named in the report)
+    --flavour=shipping|development
+                            which exe goes into the folder (docs/scalability_plan.md §7): Shipping (the game, the developer
+                            features stripped) or Development (the same packaged game with Developer Controls, the F keys,
+                            the whole command line; x64/Development, the folder <product>-<version>-dev, its PDB beside the
+                            exe, never encrypted, the profile's "devInclude" cooked too). Default: the profile's "flavour",
+                            else shipping.
     --skip-build            content/full: take the exes as they are
     --key=<key.json>        the package key (default %USERPROFILE%\.test_cube\pak_key.json; made there if missing)
     --out=<folder>          instead of the profile's "out" (dist)
@@ -352,12 +358,21 @@ def notices_text():
     return "".join(parts)
 
 
-def readme_text(product, version_text, profile, report):
+def readme_text(product, version_text, profile, report, flavour="shipping"):
     levels = ", ".join(pathlib.Path(l).stem for l in report.get("levels", []))
+    user_folder = product if flavour == "shipping" else f"{product}_dev"
+    development = "" if flavour == "shipping" else f"""
+DEVELOPMENT BUILD
+  This is the packaged game with the developer features left in -- not for players. The screen says DEVELOPMENT BUILD.
+  F1 opens Developer Controls, F9 the profiler overlay, F11 a trace (there is no level editor in it); the whole command
+  line works (--set=<key>:<value>, --sweep, --log-level=debug, the harnesses).
+  The tools that rewrite content (--import, --reimport, --cook, ...) need the source tree and refuse here.
+  Its files are kept apart from the Shipping build's (below), so the two never share settings.
+"""
     return f"""{product} {version_text}
 
 Start {EXE_NAME}. Shipped levels: {levels}.
-
+{development}
 REQUIREMENTS
   Windows 10 (version 1909 or newer) or Windows 11, 64-bit.
   A DirectX 12 graphics card with hardware ray tracing (DXR 1.1) and shader model 6.6: NVIDIA GeForce RTX 20 series or
@@ -365,7 +380,7 @@ REQUIREMENTS
   A recent graphics driver. The game says so at start when the card or driver falls short.
 
 WHERE THINGS ARE
-  The game writes nothing beside the exe. Its files are in %LOCALAPPDATA%\\{product}:
+  The game writes nothing beside the exe. Its files are in %LOCALAPPDATA%\\{user_folder}:
     settings\\graphics_settings.json   what you changed from the defaults
     logs\\                             the session logs (logs\\latest.txt names the newest)
     crashes\\                          crash reports (minidumps) -- send one with the log if the game stops
@@ -386,6 +401,7 @@ def main():
     ap.add_argument("--boot-level")
     ap.add_argument("--version")
     ap.add_argument("--no-encrypt", action="store_true")
+    ap.add_argument("--flavour", choices=["shipping", "development"])
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--out")
     ap.add_argument("--progress", choices=["text", "json"], default="text")
@@ -430,7 +446,12 @@ def build(args, progress):
     # It becomes a folder name, a C string (BuildVersion.g.h, the .rc) and a command-line value: digits, dots, a suffix.
     if not VERSION_RE.match(version):
         raise BuildError(f"version {version!r}: digits a.b.c, optionally -suffix of letters, digits, dots and dashes")
-    encrypt = bool(profile.get("encrypt", False)) and not args.no_encrypt
+    flavour = args.flavour or profile.get("flavour", "shipping")
+    if flavour not in ("shipping", "development"):
+        raise BuildError(f"flavour {flavour!r}: shipping or development")
+    # A Development distribution is the team's, never the players': no encryption (docs/scalability_plan.md §10 item 11).
+    encrypt = bool(profile.get("encrypt", False)) and not args.no_encrypt and flavour == "shipping"
+    exe_config = "Shipping" if flavour == "shipping" else "Development"
     out_dir = pathlib.Path(args.out) if args.out else ROOT / profile.get("out", "dist")
     if not out_dir.is_absolute():
         out_dir = ROOT / out_dir
@@ -443,9 +464,13 @@ def build(args, progress):
         overrides.append(f"--version={args.version}")
     if args.no_encrypt:
         overrides.append("--no-encrypt")
+    if args.flavour:
+        overrides.append(f"--flavour={args.flavour}")
 
-    progress.begin("prepare", f"profile {profile['_name']} ({profile['_path']}), mode {args.mode}, version {version}"
+    progress.begin("prepare", f"profile {profile['_name']} ({profile['_path']}), mode {args.mode}, {flavour}, version {version}"
                               f"{', encrypted' if encrypt else ''}{' ' + ' '.join(overrides) if overrides else ''}")
+    if flavour == "development" and profile.get("encrypt", False) and not args.no_encrypt:
+        progress.emit("a Development build is not encrypted (the profile's \"encrypt\" is for Shipping)")
     # The staging beside the output (the same volume: the folder is renamed into place whole). A killed build left one:
     # nothing of it is a distribution.
     tmp_root = out_dir.parent / ".dist_tmp"
@@ -456,7 +481,7 @@ def build(args, progress):
     logs = work / "logs"
     logs.mkdir()
     cook_exe = ROOT / "x64" / "Cook" / EXE_NAME
-    ship_dir = ROOT / "x64" / "Shipping"
+    ship_dir = ROOT / "x64" / exe_config  # the exe that goes into the folder: Shipping or Development
     try:
         if args.mode == "record":
             if not args.skip_build:
@@ -478,7 +503,9 @@ def build(args, progress):
         history = load_history(out_dir)
         build_number = 1 + max([h.get("build", 0) for h in history] + [0])
         if profile.get("versionMustGrow") and args.mode in ("content", "full"):
-            shipped = [h for h in history if h.get("profile") == profile["_name"] and h.get("result") == "built"]
+            # Each flavour its own: a Development build of 1.2.0 does not use up 1.2.0 for Shipping.
+            shipped = [h for h in history if h.get("profile") == profile["_name"] and h.get("result") == "built"
+                       and h.get("flavour", "shipping") == flavour]
             if any(h.get("version") == version for h in shipped):
                 raise BuildError(f"profile {profile['_name']}: version {version} was built before -- raise it (--version=)")
         date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -532,13 +559,14 @@ def build(args, progress):
                     raise BuildError("cannot write the embedded key header")
 
         if args.mode == "full" and not args.skip_build:
-            progress.begin("build", f"MSBuild Shipping (version {version_text})")
-            msbuild("Shipping", progress, logs, generated)
+            progress.begin("build", f"MSBuild {exe_config} (version {version_text})")
+            msbuild(exe_config, progress, logs, generated)
         if not (ship_dir / EXE_NAME).exists():
-            raise BuildError(f"no {ship_dir / EXE_NAME}: build the Shipping configuration (or --mode=full)")
+            raise BuildError(f"no {ship_dir / EXE_NAME}: build the {exe_config} configuration (or --mode=full)")
 
         # ---- the content ----
-        folder_name = f"{product}-{version}"
+        # -dev: a Development build of a version must not replace the Shipping one of the same version.
+        folder_name = f"{product}-{version}" + ("" if flavour == "shipping" else "-dev")
         stage = work / folder_name
         content = stage / "content"
         progress.begin("cook", f"cook {profile['_name']} -> {content}")
@@ -558,6 +586,9 @@ def build(args, progress):
         # ---- the folder ----
         progress.begin("stage", f"the folder {folder_name}")
         shutil.copy2(ship_dir / EXE_NAME, stage / EXE_NAME)
+        if flavour == "development" and (ship_dir / "test_cube.pdb").exists():
+            # Its crash reports and traces read with names at once (Shipping keeps the PDB in dist_symbols/).
+            shutil.copy2(ship_dir / "test_cube.pdb", stage / "test_cube.pdb")
         for dll in sorted(ship_dir.glob("*.dll")):
             shutil.copy2(dll, stage / dll.name)
         (stage / "D3D12").mkdir()
@@ -617,7 +648,7 @@ def build(args, progress):
         progress.begin("notices", "CREDITS.txt, THIRD_PARTY_NOTICES.txt, README.txt, manifest.json")
         (stage / "CREDITS.txt").write_text((ROOT / "CREDITS.md").read_text(encoding="utf-8"), encoding="utf-8")
         (stage / "THIRD_PARTY_NOTICES.txt").write_text(notices_text(), encoding="utf-8")
-        (stage / "README.txt").write_text(readme_text(product, version_text, profile, report), encoding="utf-8")
+        (stage / "README.txt").write_text(readme_text(product, version_text, profile, report, flavour), encoding="utf-8")
         files = {}
         for path in sorted(stage.rglob("*")):
             if path.is_file():
@@ -625,7 +656,7 @@ def build(args, progress):
                 files[rel] = {"size": path.stat().st_size, "sha256": sha256(path)}
         manifest = {"product": product, "version": version, "build": build_number, "versionString": version_text,
                     "git": git_hash + ("-dirty" if dirty else ""), "date": date, "profile": profile["_name"],
-                    "encrypted": encrypt, "files": files}
+                    "flavour": flavour, "encrypted": encrypt, "files": files}
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         total = sum(f["size"] for f in files.values())
         progress.emit(f"{len(files)} files, {total / 1048576:.1f} MB")
@@ -648,7 +679,7 @@ def build(args, progress):
         symbols = None
         if profile.get("symbols", False):
             progress.begin("symbols", "the PDB and the cook report into dist_symbols/")
-            symbols = ROOT / "dist_symbols" / version_text.split(" ")[0]
+            symbols = ROOT / "dist_symbols" / (version_text.split(" ")[0] + ("" if flavour == "shipping" else "-dev"))
             symbols.mkdir(parents=True, exist_ok=True)
             for name in (EXE_NAME, "test_cube.pdb"):
                 if (ship_dir / name).exists():
@@ -668,12 +699,13 @@ def build(args, progress):
         progress.begin("finish", f"built {final}")
         packages = {p["name"]: p.get("packageBytes") for p in report.get("packages", [])}
         history.append({"product": product, "version": version, "build": build_number, "versionString": version_text,
-                        "profile": profile["_name"], "git": git_hash, "dirty": dirty, "date": date, "result": "built",
+                        "profile": profile["_name"], "flavour": flavour, "git": git_hash, "dirty": dirty, "date": date,
+                        "result": "built",
                         "folder": str(final), "bytes": total, "zip": str(zip_path) if zip_path else None,
                         "packages": packages, "levels": report.get("levels", []), "encrypted": encrypt})
         save_history(out_dir, history)
         progress.emit("done", event="done", folder=str(final), zip=str(zip_path) if zip_path else None, bytes=total,
-                      report=str(kept_report),
+                      report=str(kept_report), flavour=flavour,
                       version=version_text, warnings=len(report.get("warnings", [])))
         return 0
     finally:

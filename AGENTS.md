@@ -719,7 +719,7 @@ distribution: packages, our file system over packages and direct paths, encrypti
   on a missing file and -- with `strictLicences` -- an asset without a licence in CREDITS.md (a
   `## <asset>` section with `license type:` or `License:`). It writes `cook_report.json` (every file, who named it, sizes,
   per level, licences) and `base.tcpak` + `shaders.tcpak`. While it compiles shaders, a Debug exe uses Release flags too.
-- **Shipping|x64** (`TC_SHIPPING=1`, no rendering change): content from `<exe>\content\*.tcpak` only; the user's folder
+- **Shipping|x64** (`TC_PACKAGED=1; TC_SHIPPING=1`, no rendering change): content from `<exe>\content\*.tcpak` only; the user's folder
   (`%LOCALAPPDATA%\test_cube` or `--user-dir`) is created and becomes the CURRENT DIRECTORY before the log opens, so
   everything written relative (logs/, `settings/imgui.ini`, artifacts, `crashes/`, `--shot`) lands there;
   `WritablePath` maps Settings / Cache / Saved (`data/bot_memory/` read back through the user overlay). Switches: only
@@ -738,6 +738,24 @@ distribution: packages, our file system over packages and direct paths, encrypti
   `sl.interposer.dll`. Crash reports (`core/diagnostics/CrashHandler.h`): a minidump in `crashes\`, a Fatal line, a box;
   `--crash-selftest=av|stack|abort|terminate|throw|purecall|invalidparam|fastfail` (fastfail: no report -- nothing in the
   process runs). `TEST_CUBE_MESSAGE_TIMEOUT_MS` closes any of the game's message boxes (the gates' way past them).
+- **Development|x64 = the packaged game WITH the developer features** (`TC_PACKAGED=1` without `TC_SHIPPING`; owner,
+  2026-11-13: "two kinds of build, dev and shipping"; docs/scalability_plan.md §7). Picked at BUILD time, not by hand:
+  the Build Distribution window's "Build type" Shipping / Development, `build_dist.py --flavour=development`, MCP
+  `build_dist {flavour}`, a profile's `"flavour"`. Everything packaged is Shipping's (content from the exe's packages, the
+  Agility SDK, the GPU / Streamline checks, crash reports, boot.json and the level rule, settings as differences, the Esc
+  menu); everything stripped is kept: F1 Developer Controls and the F keys, the whole command line (`--set`, `--sweep`,
+  harnesses, `--log-level=debug`), the FXC fallback, shader hot reload off (the packages do not change), absolute paths
+  allowed, `--pak-key` / `TC_PAK_KEY` for an encrypted package. The tools that need the source tree (`--import`,
+  `--reimport`, `--cook`, `--pak-build`, `--tessy-upgrade`, `--lod-report`, `--water-mask-lid`, `--uv-density`,
+  `--shader-cook/-record`, `--vfs-selftest`) refuse with an Error, exit 2. It says so: "DEVELOPMENT BUILD <version>" on the
+  HUD's first line, " [Development]" in the title, `development` in the log's name; its user folder is
+  `%LOCALAPPDATA%\test_cube_dev` (never Shipping's). The distribution: x64/Development's exe AND its PDB in the folder
+  `<product>-<version>-dev`, never encrypted, the profile's `devInclude` cooked too (default `data/ocean/*.json`, the
+  ocean window's presets; not a literal path in `Cook.cpp`: the cook's literal scan would ship it in both), `flavour` in
+  the history, the manifest and
+  the cook report; `versionMustGrow` counts each flavour apart. Reset (every button) in a packaged build goes back to the
+  package's `config/graphics_defaults.json`, not the compiled defaults. `build::Packaged()` / `Development()` /
+  `Shipping()` (BuildVersion.h) for code that must tell them apart.
 - **Generated headers ALWAYS exist** (`sources/app/generated/BuildVersion.g.h`, `sources/core/vfs/generated/PakKey.g.h`,
   not in git): the project writes dev / no-key ones when missing. Not `__has_include`: MSBuild does not see a header that
   was absent at the last compile, and the first encrypted build's exe shipped without its key. The tree's are ALWAYS the
@@ -746,7 +764,8 @@ distribution: packages, our file system over packages and direct paths, encrypti
   tree, a killed or cancelled build left the release KEY in every dev build after it. `build_dist.py` repairs a stale
   stamp it finds.
 - **`python tools/build_dist.py --profile=<test|release|path> --mode=check|record|content|full`** (`--levels --boot-level
-  --version --no-encrypt --skip-build --out --key --progress=json --keep-temp`): `full` = MSBuild Cook + Shipping with the
+  --version --no-encrypt --flavour=shipping|development --skip-build --out --key --progress=json --keep-temp`): `full` =
+  MSBuild Cook + Shipping (or Development) with the
   version (`0.1.0+<build> (<git>[-dirty])`, the build number from `<out>/build_history.json`) and the embedded key, the
   cook, the folder (exe, the DLLs it LOADS -- sampled from a run, NGX's over-the-air copies mapped back to the local
   `sl.*.dll` they stand in for --, `D3D12\`, the VC++ runtime app-local), a check run of the staged game (exit 0, no Error,
@@ -759,7 +778,7 @@ distribution: packages, our file system over packages and direct paths, encrypti
   KEEP A COPY; a lost key leaves its packages unreadable. `release` needs `versionMustGrow` and every licence known (until
   the owner settles `rocks` and three textures in `import_staging/`, it does not build).
 - **The window and MCP**: Level Editor > File > Build Distribution... (`--build-dist` opens it), MCP `build_dist {profile,
-  mode, levels, bootLevel, version, encrypt}` -> `{id}`, `build_dist_status {id}`, `build_dist_cancel` -- one job
+  mode, levels, bootLevel, version, encrypt, flavour}` -> `{id}`, `build_dist_status {id}`, `build_dist_cancel` -- one job
   (`dist::TheBuildJob`, a job object: Cancel and the editor closing end the whole tree). The window and the console give
   the same bytes (checked from Release_Editor and Debug). content / full write `dist/`, record rewrites `tools/dist/*.txt`:
   only when the person asked.

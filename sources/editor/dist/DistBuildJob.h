@@ -18,6 +18,8 @@ namespace dist
         std::vector<std::string> levels;     // empty = the profile's
         std::string bootLevel;               // empty = the profile's (or the first of `levels`)
         std::string version;                 // empty = the profile's
+        // shipping | development (docs/scalability_plan.md §7): which exe the folder gets; empty = the profile's (shipping).
+        std::string flavour;
         bool noEncrypt = false;
         bool skipBuild = false;
     };

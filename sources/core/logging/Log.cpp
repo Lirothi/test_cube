@@ -36,6 +36,8 @@ namespace logging
         constexpr const char* kBuildTag = "release_editor";
 #elif defined(TC_SHIPPING) && TC_SHIPPING
         constexpr const char* kBuildTag = "shipping";
+#elif defined(TC_PACKAGED) && TC_PACKAGED
+        constexpr const char* kBuildTag = "development";
 #else
         constexpr const char* kBuildTag = "release";
 #endif

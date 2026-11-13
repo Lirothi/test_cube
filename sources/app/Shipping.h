@@ -5,7 +5,8 @@
 #include <vector>
 
 // What a shipped build does differently at its start (docs/distribution_build_plan.md §6, §7). Compiled in every
-// configuration (the pieces are testable in a dev build); main.cpp calls them under TC_SHIPPING.
+// configuration (the pieces are testable in a dev build); main.cpp calls them under TC_PACKAGED (Shipping and Development),
+// the switch filter under TC_SHIPPING alone.
 namespace shipping
 {
     // The switches a shipped build keeps (§7, §11 item 6): --window, --level, --log-level, --user-dir, and for the gates

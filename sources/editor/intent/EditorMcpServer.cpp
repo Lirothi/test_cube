@@ -765,7 +765,9 @@ namespace editormcp
                   "(tools/dist/<name>.json) -- the Build Distribution window's road, one build at a time. mode: check (the "
                   "dependency walk and its report, seconds), record (Release runs -> shader_list.txt, minutes), content (cook + "
                   "the folder from the Shipping exe as built, ~1 min), full (MSBuild Cook + Shipping first). levels / bootLevel / "
-                  "version / encrypt override the profile for this build. Refused while the level plays, while a build runs, for a "
+                  "version / encrypt override the profile for this build; flavour picks the exe: shipping (the game) or development "
+                  "(the same packaged game with Developer Controls and the whole command line, folder <product>-<version>-dev, "
+                  "never encrypted). Refused while the level plays, while a build runs, for a "
                   "level that is not a file, a bootLevel outside levels. Answers {id}; poll build_dist_status. content / full write "
                   "dist/ and the record mode rewrites tools/dist/*.txt: only when the person asked." },
                 { "inputSchema", ObjectSchema({
@@ -775,7 +777,9 @@ namespace editormcp
                         { "description", "the shipped levels, e.g. [\"data/levels/wind_test.json\"] (default: the profile's)" } } },
                     { "bootLevel", { { "type", "string" }, { "description", "the level the build starts in (one of levels)" } } },
                     { "version", { { "type", "string" }, { "description", "e.g. 0.1.1 (default: the profile's)" } } },
-                    { "encrypt", { { "type", "boolean" }, { "description", "false = this build unencrypted" } } } }) },
+                    { "encrypt", { { "type", "boolean" }, { "description", "false = this build unencrypted" } } },
+                    { "flavour", { { "type", "string" },
+                        { "description", "shipping | development (default: the profile's, else shipping)" } } } }) },
             },
             {
                 { "name", "build_dist_cancel" },
@@ -1298,6 +1302,7 @@ namespace editormcp
                 request.mode = arguments.value("mode", std::string("check"));
                 request.bootLevel = arguments.value("bootLevel", std::string());
                 request.version = arguments.value("version", std::string());
+                request.flavour = arguments.value("flavour", std::string());
                 request.noEncrypt = arguments.contains("encrypt") && arguments["encrypt"].is_boolean() && !arguments["encrypt"].get<bool>();
                 if (arguments.contains("levels"))
                 {

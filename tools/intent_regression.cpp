@@ -1194,15 +1194,25 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         json badProfile = good;
         badProfile["profile"] = "no_such_profile";
         refused(1204, badProfile, "no profile", "a profile that is not in tools/dist is refused");
+        json badFlavour = good;
+        badFlavour["flavour"] = "debug";
+        refused(1210, badFlavour, "flavour", "a flavour that is not shipping or development is refused");
         const std::optional<json> started = call(1205, "tools/call", { { "name", "build_dist" }, { "arguments", good } });
         Check(!(*started)["result"]["isError"].get<bool>() && distHost.starts == 1 && distHost.last.mode == "check" &&
               distHost.last.profile == "test" && distHost.last.levels == std::vector<std::string>{ "data/levels/wind_test.json" } &&
-              distHost.last.bootLevel == "data/levels/wind_test.json" && !distHost.last.noEncrypt,
-              "a good build_dist reaches the host as given: " + text(started));
+              distHost.last.bootLevel == "data/levels/wind_test.json" && !distHost.last.noEncrypt &&
+              distHost.last.flavour.empty(),
+              "a good build_dist reaches the host as given (no flavour = the profile's): " + text(started));
         json unencrypted = good;
         unencrypted["encrypt"] = false;
         call(1206, "tools/call", { { "name", "build_dist" }, { "arguments", unencrypted } });
         Check(distHost.starts == 2 && distHost.last.noEncrypt, "encrypt:false asks for an unencrypted build");
+        json development = good;
+        development["flavour"] = "development";
+        call(1211, "tools/call", { { "name", "build_dist" }, { "arguments", development } });
+        Check(distHost.starts == 3 && distHost.last.flavour == "development", "flavour:development asks for the Development exe");
+        Check(dist::BuildCommandLine(L"python", distHost.last).find(L" --flavour=development") != std::wstring::npos,
+              "the Development request reaches build_dist.py as --flavour=development");
         struct PlayingHost final : editormcp::PlayHost
         {
             bool Playing() const override { return true; }
@@ -1210,7 +1220,7 @@ void TestMcpDrivesTheSameRoad(const EditorActionContext& actionCtx)
         } playing;
         editormcp::SetPlayHost(&playing);
         const std::optional<json> inPlay = call(1207, "tools/call", { { "name", "build_dist" }, { "arguments", good } });
-        Check((*inPlay)["result"]["isError"].get<bool>() && text(inPlay).find("playing") != std::string::npos && distHost.starts == 2,
+        Check((*inPlay)["result"]["isError"].get<bool>() && text(inPlay).find("playing") != std::string::npos && distHost.starts == 3,
               "build_dist is refused while the level plays: " + text(inPlay));
         editormcp::SetPlayHost(nullptr);
         const std::optional<json> status = call(1208, "tools/call", { { "name", "build_dist_status" }, { "arguments", { { "id", 7 } } } });

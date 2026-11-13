@@ -64,6 +64,7 @@ std::wstring BuildCommandLine(const std::wstring& python, const BuildRequest& re
     }
     if (!request.bootLevel.empty()) { cmd += L" " + Quote(L"--boot-level=" + vfs::Widen(request.bootLevel)); }
     if (!request.version.empty()) { cmd += L" " + Quote(L"--version=" + vfs::Widen(request.version)); }
+    if (!request.flavour.empty()) { cmd += L" --flavour=" + vfs::Widen(request.flavour); }
     if (request.noEncrypt) { cmd += L" --no-encrypt"; }
     if (request.skipBuild) { cmd += L" --skip-build"; }
     return cmd;
@@ -302,6 +303,7 @@ std::string BuildJob::StatusJson(int id) const
     out["exitCode"] = s.exitCode;
     out["mode"] = s.request.mode;
     out["profile"] = s.request.profile;
+    out["flavour"] = s.request.flavour.empty() ? "profile's" : s.request.flavour;
     out["stage"] = s.stage;
     out["fraction"] = s.fraction;
     out["seconds"] = s.seconds;

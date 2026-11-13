@@ -50,7 +50,7 @@
       16.0,
       32.0
     ],
-    "screenPixelError": 1.0,
+    "uePixelError": 8.0,
     "temporalLag": 0.5,
     "ueScreenSize": true
   },
