@@ -15,6 +15,7 @@
 #include "app/diagnostics/RtAudit.h" // game thread plan G9: --rt-audit
 #include "app/scene/SceneRenderQueue.h"
 #include "core/logging/Log.h"
+#include "core/vfs/Vfs.h"
 #include "core/logging/diagnostics/LogStress.h"
 #include "core/memory/diagnostics/MemBench.h"
 #include "core/memory/MemTrace.h"
@@ -339,6 +340,15 @@ int WINAPI WinMain(
         }
         ~LogSession() { logging::Shutdown(); }
     } logSession(lpCmdLine);
+
+    // The file system the content comes through (docs/distribution_build_plan.md §2.3): --vfs=loose|packages|both,
+    // --pak-dir and --vfs-record mount before anything reads; --pak-build / --pak-list / --pak-verify / --vfs-selftest
+    // run here, no window, the exit code their failures.
+    if (lpCmdLine) {
+        if (const int vfsExit = vfs::RunCommandLine(lpCmdLine); vfsExit >= 0) {
+            return vfsExit;
+        }
+    }
 
     // "--tasksystem-stress" runs the task-system stress harness instead of the
     // app; exit code is the number of failed checks. With "--stress-overflow"

@@ -2462,12 +2462,20 @@ namespace
             {
                 const vfs::Counters vc = vfs::GetCounters();
                 const std::string root = vfs::Narrow(vfs::ContentRoot().generic_wstring());
-                char vfsItem[512];
+                std::string mounts;
+                for (const std::string& m : vfs::DescribeMounts())
+                {
+                    mounts += (mounts.empty() ? "\"" : ",\"") + m + "\"";
+                }
+                char vfsItem[768];
                 std::snprintf(vfsItem, sizeof(vfsItem),
-                              ",\"vfs\":{\"mounts\":[\"loose\"],\"root\":\"%s\",\"opens\":%llu,\"misses\":%llu,\"stats\":%llu,\"lists\":%llu,\"reads\":%llu,\"bytesRead\":%llu}",
-                              root.c_str(), static_cast<unsigned long long>(vc.opens), static_cast<unsigned long long>(vc.misses),
+                              ",\"vfs\":{\"mounts\":[%s],\"root\":\"%s\",\"opens\":%llu,\"packageOpens\":%llu,\"misses\":%llu,\"stats\":%llu,\"lists\":%llu,"
+                              "\"reads\":%llu,\"bytesRead\":%llu,\"blocksDecoded\":%llu,\"damagedBlocks\":%llu}",
+                              mounts.c_str(), root.c_str(), static_cast<unsigned long long>(vc.opens),
+                              static_cast<unsigned long long>(vc.packageOpens), static_cast<unsigned long long>(vc.misses),
                               static_cast<unsigned long long>(vc.stats), static_cast<unsigned long long>(vc.lists),
-                              static_cast<unsigned long long>(vc.reads), static_cast<unsigned long long>(vc.bytesRead));
+                              static_cast<unsigned long long>(vc.reads), static_cast<unsigned long long>(vc.bytesRead),
+                              static_cast<unsigned long long>(vc.blocksDecoded), static_cast<unsigned long long>(vc.damagedBlocks));
                 out += vfsItem;
             }
             // The physics world (docs/physics_plan.md).

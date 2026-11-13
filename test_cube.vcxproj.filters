@@ -531,7 +531,13 @@
     <ClCompile Include="sources/core/diagnostics/BootProfile.cpp">
       <Filter>sources\core\diagnostics</Filter>
     </ClCompile>
+    <ClCompile Include="sources/core/vfs/Pak.cpp">
+      <Filter>sources\core\vfs</Filter>
+    </ClCompile>
     <ClCompile Include="sources/core/vfs/Vfs.cpp">
+      <Filter>sources\core\vfs</Filter>
+    </ClCompile>
+    <ClCompile Include="sources/core/vfs/VfsTools.cpp">
       <Filter>sources\core\vfs</Filter>
     </ClCompile>
     <ClCompile Include="sources/core/logging/Log.cpp">
@@ -1277,7 +1283,13 @@
     <ClInclude Include="sources/core/diagnostics/DiagPaths.h">
       <Filter>sources\core\diagnostics</Filter>
     </ClInclude>
+    <ClInclude Include="sources/core/vfs/Pak.h">
+      <Filter>sources\core\vfs</Filter>
+    </ClInclude>
     <ClInclude Include="sources/core/vfs/Vfs.h">
+      <Filter>sources\core\vfs</Filter>
+    </ClInclude>
+    <ClInclude Include="sources/core/vfs/VfsMounts.h">
       <Filter>sources\core\vfs</Filter>
     </ClInclude>
     <ClInclude Include="sources/core/logging/Log.h">

@@ -129,6 +129,13 @@ namespace
             std::string note = head;
             if (!field) { note += ", no mask -- the water is drawn inside it"; }
 #if WITH_EDITOR
+            else if (!bakePath.empty() && !vfs::IsLooseFile(path))
+            {
+                // A packaged geometry's key is its content hash, not a loose file's time: a bake written for it would be
+                // stale for the loose file beside it, and the next run on loose files would write it back. The cook
+                // (docs/distribution_build_plan.md §8.1) writes the package's bakes.
+                note += ", not baked: the geometry comes from a package";
+            }
             else if (!bakePath.empty())
             {
                 const std::vector<std::uint8_t> bytes = watermask::SerializeField(*field, bakeKey);

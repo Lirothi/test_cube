@@ -4,9 +4,10 @@
 //
 // A path is VIRTUAL when relative -- forward slashes from the content root, the way levels, mesh.json and materials
 // already write them -- and goes to the mounts; an ABSOLUTE path (a drive or a UNC path) goes straight to the OS, so
-// `--level=C:/x.json` and a scratch level keep working. Today there is one mount: the loose files under the content
-// root, which is the process's current directory at the first call (the repo root in every dev build), so nothing
-// reads differently than before. Packages (D2) mount in front of it later; callers do not change.
+// `--level=C:/x.json` and a scratch level keep working. The mounts (§2.3): the loose files under the content root --
+// the process's current directory at the first call, the repo root in every dev build -- and .tcpak packages
+// (core/vfs/Pak.h), highest priority first. `--vfs=loose` (the default) / `packages` / `both` (loose files over the
+// packages) and `--pak-dir=<folder>` choose them before the first read (Configure / RunCommandLine).
 //
 // What WRITES does not come through here: a file the game writes is the user's, not content, and gets a real OS path
 // from WritablePath. tools/check_file_io.py keeps direct reads out of runtime code.
@@ -22,6 +23,11 @@
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace vfs::pak
+{
+    class Package;
+}
 
 namespace vfs
 {
@@ -87,15 +93,20 @@ namespace vfs
         File(const File&) = delete;
         File& operator=(const File&) = delete;
 
-        [[nodiscard]] bool IsOpen() const noexcept { return handle_ != nullptr; }
+        [[nodiscard]] bool IsOpen() const noexcept { return handle_ != nullptr || package_ != nullptr; }
         explicit operator bool() const noexcept { return IsOpen(); }
         [[nodiscard]] std::uint64_t Size() const noexcept { return size_; }
         // Exactly `bytes` from `offset`, or false.
         bool Read(std::uint64_t offset, void* destination, std::size_t bytes) const;
 
+        // A loose file's OS handle, or a package's entry.
+        static File FromHandle(void* handle, std::uint64_t size);
+        static File FromPackage(const pak::Package& package, int entry, std::uint64_t size);
+
     private:
-        friend File Open(const Path& path);
         void* handle_ = nullptr;
+        const pak::Package* package_ = nullptr;
+        int entry_ = -1;
         std::uint64_t size_ = 0;
     };
     [[nodiscard]] File Open(const Path& path);
@@ -108,6 +119,7 @@ namespace vfs
     {
     public:
         explicit InStream(const Path& path, bool binary = true);
+        explicit InStream(File file); // binary, over a file already open (a package entry in the self-test)
         ~InStream() override;
         [[nodiscard]] bool is_open() const noexcept { return open_; }
 
@@ -138,12 +150,39 @@ namespace vfs
 
     struct Counters
     {
-        std::uint64_t opens = 0;     // files opened (ReadAll, Open, InStream)
-        std::uint64_t misses = 0;    // opens and stats of a path that is not there
-        std::uint64_t stats = 0;     // GetStat / Exists / IsFile / IsDirectory
+        std::uint64_t opens = 0;          // files opened (ReadAll, Open, InStream)
+        std::uint64_t packageOpens = 0;   // ...of them, served by a package
+        std::uint64_t misses = 0;         // opens and stats of a path that is not there
+        std::uint64_t stats = 0;          // GetStat / Exists / IsFile / IsDirectory
         std::uint64_t lists = 0;
-        std::uint64_t reads = 0;     // read calls that reached the OS
-        std::uint64_t bytesRead = 0;
+        std::uint64_t reads = 0;          // read calls that reached a file or a package
+        std::uint64_t bytesRead = 0;      // bytes handed out (a package's: decoded)
+        std::uint64_t blocksDecoded = 0;  // package blocks decompressed (a cache hit is not counted)
+        std::uint64_t damagedBlocks = 0;  // package blocks whose CRC or decode failed
     };
     [[nodiscard]] Counters GetCounters();
+
+    struct Config
+    {
+        enum class Mode
+        {
+            Loose,     // the loose files only (every dev build's default)
+            Packages,  // the packages only: a dev build reads what a shipped one would
+            Both,      // loose files over the packages
+        };
+        Mode mode = Mode::Loose;
+        std::filesystem::path packageDir;   // every *.tcpak in it is mounted
+        std::filesystem::path recordFile;   // --vfs-record: each content file found, once, as it is first found
+    };
+    // Before the first read. False (and why) when a package does not open; nothing is mounted then.
+    bool Configure(const Config& config, std::string& error);
+    // "loose" and "<name> (<file>, N files)" for each package, in lookup order.
+    [[nodiscard]] std::vector<std::string> DescribeMounts();
+    // Whether a loose file (or an absolute path) serves this path -- not a package. What writes a derived file beside
+    // its source (a water mask bake) does so only then.
+    [[nodiscard]] bool IsLooseFile(const Path& path);
+
+    // The command line: --vfs / --pak-dir / --vfs-record configure the mounts; --pak-build / --pak-list / --pak-verify /
+    // --vfs-selftest run a tool (no window). The tool's exit code, or -1 when the command line names none.
+    int RunCommandLine(const char* commandLine);
 }
