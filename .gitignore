@@ -405,3 +405,5 @@ import_staging/
 bckp/
 # Films rendered out of the running game (AGENTS.md "A FILM IS RENDERED FRAME BY FRAME"): large, not source
 /videos/
+# the race bots' turn maps (game::BotMemory): learned in Play, rewritten after every race
+/data/bot_memory/
